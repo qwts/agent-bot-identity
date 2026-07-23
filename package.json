@@ -1,0 +1,11 @@
+{
+  "name": "agent-bot-identity",
+  "version": "0.1.0",
+  "description": "Per-harness GitHub App bot identities for coding agents — commits and PRs authored by the right bot for the IDE that made them, via git-native hooks.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/agent-bot.test.mjs"
+  }
+}

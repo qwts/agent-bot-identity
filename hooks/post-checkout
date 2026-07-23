@@ -1,0 +1,29 @@
+#!/bin/sh
+# post-checkout hook — configure the agent-bot identity on a new worktree.
+# Git runs this on `git worktree add` regardless of which tool created the
+# worktree (Codex, Cursor, VS Code, Claude Code, a plain terminal), so it is
+# the tool-agnostic trigger. The bot identity is auto-detected from the
+# creating tool's own environment (see src/detect-harness.mjs) and mapped
+# through ~/.config/agent-bot/config.json — no per-tool or per-repo setup.
+#
+# The setup script is resolved relative to THIS hook's own location, so the
+# hook works no matter where this repo is cloned or what $HOME is.
+#
+# It never blocks a checkout: any failure is swallowed. setup-worktree.mjs
+# self-guards (only linked worktrees, only when an identity resolves), so
+# running it on every checkout is safe.
+
+HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SETUP="$HOOK_DIR/../src/setup-worktree.mjs"
+if [ -f "$SETUP" ] && command -v node >/dev/null 2>&1; then
+  node "$SETUP" || true
+fi
+
+# Because this hook is installed via a global core.hooksPath, it shadows each
+# repo's own hooks/post-checkout. Chain through to a repo-local one if present
+# (and not this same file), so installing this never silently disables
+# another repo's hook.
+LOCAL="$(git rev-parse --git-path hooks 2>/dev/null)/post-checkout"
+if [ -x "$LOCAL" ] && [ "$LOCAL" != "$HOOK_DIR/post-checkout" ]; then
+  "$LOCAL" "$@"
+fi
