@@ -147,6 +147,18 @@ a checkout to one identity regardless of which tool opens it.
 - **EMU / restricted orgs:** App creation or installation may need an org
   owner's approval (or be policy-blocked). Clear that first.
 
+## Debugging
+
+One command diagnoses the whole chain — runtime, hook installation, config,
+live mints for every configured App, and the current worktree's state — with
+a fix hint on every failing line:
+
+```bash
+node src/doctor.mjs
+```
+
+Run it from inside the misbehaving worktree for the repo checks to apply.
+
 ## Failure modes
 
 - `no app config for "<slug>"` — step 2 missing for that App.
