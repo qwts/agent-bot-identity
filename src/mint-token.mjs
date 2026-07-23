@@ -92,7 +92,9 @@ export async function mint({ slug, env = process.env } = {}) {
         : null;
     if (!pick) {
       throw new Error(
-        `could not pick an installation (found ${installations.length}) — set "owner" in the config or GH_APP_INSTALLATION_ID`,
+        installations.length === 0
+          ? 'the App is not installed on any account — the key is valid, but creation is not installation: open the App page -> Install App and install it on the account whose repos agents work in (in a managed org this may require admin approval)'
+          : `the App is installed on ${installations.length} accounts — set "owner" in the config (or GH_APP_INSTALLATION_ID) to pick one`,
       );
     }
     installationId = pick.id;
