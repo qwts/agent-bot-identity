@@ -75,8 +75,12 @@ disposable runtime copies.
 { "prefix": "you" }
 ```
 
-That maps detected harnesses to `you-claude-agent`, `you-codex-agent`,
-`you-cursor-agent`, `you-vscode-agent`. Options:
+`"you"` is a placeholder — the prefix must reproduce how *you named your
+Apps* in step 1: it maps detected harnesses to `<prefix>-claude-agent`,
+`<prefix>-codex-agent`, and so on, and those must match each App's URL slug
+character-for-character. If your App names don't follow that pattern, use the
+`apps` map with the exact slugs instead. `doctor` prints the resolved
+`harness -> slug` table so you can compare. Options:
 
 ```json
 {
