@@ -117,3 +117,17 @@ test('parses git credential key=value request lines, keeping = in values', () =>
   const request = parseCredentialRequest('protocol=https\nhost=github.com\npassword=a=b\n\n');
   assert.deepEqual(request, { protocol: 'https', host: 'github.com', password: 'a=b' });
 });
+
+test('a present-but-invalid config fails loudly instead of reading as absent', () => {
+  const home = mkdtempSync(join(tmpdir(), 'abi-'));
+  mkdirSync(join(home, '.config', 'agent-bot'), { recursive: true });
+  writeFileSync(join(home, '.config', 'agent-bot', 'config.json'), '{ prefix: "oops", }');
+  assert.throws(() => loadConfig({ home, env: {} }), /not valid JSON/);
+});
+
+test('a BOM-prefixed but valid config still parses', () => {
+  const home = mkdtempSync(join(tmpdir(), 'abi-'));
+  mkdirSync(join(home, '.config', 'agent-bot'), { recursive: true });
+  writeFileSync(join(home, '.config', 'agent-bot', 'config.json'), '﻿{ "prefix": "ok" }');
+  assert.deepEqual(loadConfig({ home, env: {} }), { prefix: 'ok' });
+});

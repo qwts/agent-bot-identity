@@ -67,7 +67,15 @@ async function main() {
   }
 
   process.stdout.write('\n-- config --\n');
-  const config = loadConfig();
+  let config;
+  try {
+    config = loadConfig();
+  } catch (err) {
+    fail(err.message, 'fix the JSON — plain double quotes, quoted keys, no trailing commas');
+    process.stdout.write(`\n${failures} problem(s) found\n`);
+    process.exitCode = 1;
+    return;
+  }
   if (Object.keys(config).length === 0) {
     fail(
       'no config at ~/.config/agent-bot/config.json (tool is inert without it)',

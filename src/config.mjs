@@ -20,10 +20,18 @@ import { detectHarness } from './detect-harness.mjs';
 
 export function loadConfig({ home = homedir(), env = process.env } = {}) {
   const path = env.AGENT_BOT_CONFIG ?? join(home, '.config', 'agent-bot', 'config.json');
+  let raw;
   try {
-    return JSON.parse(readFileSync(path, 'utf8'));
+    raw = readFileSync(path, 'utf8');
   } catch {
-    return {};
+    return {}; // genuinely absent — the tools stay inert
+  }
+  try {
+    return JSON.parse(raw.replace(/^\uFEFF/, ''));
+  } catch (err) {
+    // A present-but-broken config must fail loudly: silently treating it as
+    // "no config" makes a typo indistinguishable from a missing file.
+    throw new Error(`${path} exists but is not valid JSON: ${err.message}`);
   }
 }
 
