@@ -139,9 +139,13 @@ a checkout to one identity regardless of which tool opens it.
   settings; set `owner` in the config.
 - **App installation tokens are exempt from SAML/SSO enforcement** — unlike
   PATs, no per-org authorization dance.
+- **EMU / managed accounts live on github.com** — do *not* set `apiBase` for
+  them; it is only for GHE Server / data-residency hosts, where commit
+  noreply emails also follow the host.
+- **Externally invisible Apps are handled**: the bot-UID lookup retries
+  authenticated as the App itself when the anonymous lookup 404s.
 - **EMU / restricted orgs:** App creation or installation may need an org
   owner's approval (or be policy-blocked). Clear that first.
-- **GHE Server:** set `apiBase`; commit noreply emails follow the host.
 
 ## Failure modes
 

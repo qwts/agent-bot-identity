@@ -28,6 +28,7 @@ import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadConfig, apiBase, resolveSlug } from './config.mjs';
+import { mint } from './mint-token.mjs';
 
 function git(...args) {
   return execFileSync('git', args, { encoding: 'utf8' }).trim();
@@ -40,9 +41,17 @@ async function botUid(slug, base) {
   } catch {
     /* not cached yet */
   }
-  const res = await fetch(`${base}/users/${encodeURIComponent(`${slug}[bot]`)}`, {
-    headers: { accept: 'application/vnd.github+json', 'user-agent': 'agent-bot-identity' },
-  });
+  const lookup = (headers = {}) =>
+    fetch(`${base}/users/${encodeURIComponent(`${slug}[bot]`)}`, {
+      headers: { accept: 'application/vnd.github+json', 'user-agent': 'agent-bot-identity', ...headers },
+    });
+  let res = await lookup();
+  if (!res.ok) {
+    // Enterprise-owned Apps can be externally invisible (EMU); the App can
+    // always see its own bot user, so retry authenticated as the App.
+    const { token } = await mint({ slug });
+    res = await lookup({ authorization: `Bearer ${token}` });
+  }
   if (!res.ok) throw new Error(`could not resolve ${slug}[bot]'s user id (HTTP ${res.status})`);
   const uid = String((await res.json()).id);
   mkdirSync(dirname(cachePath), { recursive: true });
