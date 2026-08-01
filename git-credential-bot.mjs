@@ -16,8 +16,8 @@
 import process from 'node:process';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { loadConfig, apiBase } from './config.mjs';
 import { mint } from './mint-token.mjs';
+import { loadConfig, githubHost } from './config.mjs';
 
 export function parseCredentialRequest(text) {
   const request = {};
@@ -33,9 +33,9 @@ async function main() {
   if (!slug) throw new Error('usage: git-credential-bot.mjs <app-slug> <get|store|erase>');
   if (operation !== 'get') return;
 
-  const host = new URL(apiBase(loadConfig())).host.replace(/^api\./, '');
   const request = parseCredentialRequest(readFileSync(0, 'utf8'));
-  // Stay silent for anything that is not our GitHub host over HTTPS; git moves on.
+  const host = githubHost(loadConfig());
+  // Stay silent for anything that is not GitHub-over-HTTPS; git moves on.
   if (request.protocol !== 'https' || request.host !== host) return;
 
   const { token } = await mint({ slug });

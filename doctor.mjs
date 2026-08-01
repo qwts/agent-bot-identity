@@ -2,24 +2,26 @@
 // Self-diagnosis for the whole identity chain. Run it on any machine — ideally
 // from inside the worktree that misbehaves — and read the FAIL lines:
 //
-//   node src/doctor.mjs
+//   agent-bot doctor
 //
-// Checks, in dependency order: runtime, hook installation, config, per-App
-// credentials with a LIVE mint against GitHub, bot-user resolution (with the
-// enterprise authenticated fallback), and the state of the current repo /
-// worktree. Exit code 1 if anything configured is broken.
+// Checks, in dependency order: runtime, hook installation, gh shim, config,
+// per-App credentials with a LIVE mint against GitHub, bot-user resolution,
+// and the state of the current repo / worktree. Exit code 1 if anything
+// configured is broken.
 
 import process from 'node:process';
-import { accessSync, constants, readFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { loadConfig, apiBase, slugForHarness, resolveSlug } from './config.mjs';
+import { join } from 'node:path';
+import { loadConfig, apiBase, slugForHarness } from './config.mjs';
 import { detectHarness, HARNESSES } from './detect-harness.mjs';
 import { mint } from './mint-token.mjs';
+import { resolveAgentSlug } from './resolve-agent.mjs';
+import { installationPaths } from './install.mjs';
 
-const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'hooks');
+const INSTALLED = installationPaths();
+const HOOKS_DIR = INSTALLED.hooksDir;
 let failures = 0;
 
 function ok(msg) {
@@ -33,7 +35,7 @@ function fail(msg, fix) {
   process.stdout.write(`  FAIL  ${msg}\n        fix: ${fix}\n`);
 }
 function git(...args) {
-  return execFileSync('git', args, { encoding: 'utf8' }).trim();
+  return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
 async function main() {
@@ -44,6 +46,8 @@ async function main() {
   } catch {
     fail('git not found on PATH', 'install git / fix PATH for the environment that runs hooks');
   }
+  if (existsSync(INSTALLED.executable)) ok(`agent-bot -> ${INSTALLED.executable}`);
+  else fail('agent-bot is not installed', 'run: node install.mjs');
 
   process.stdout.write('\n-- hook installation --\n');
   let hooksPath = '';
@@ -53,9 +57,9 @@ async function main() {
     /* unset */
   }
   if (!hooksPath) {
-    fail('core.hooksPath is not set globally', 'run: node install.mjs (from this clone)');
+    fail('core.hooksPath is not set globally', 'run: agent-bot install');
   } else if (hooksPath !== HOOKS_DIR) {
-    warn(`core.hooksPath -> ${hooksPath} (not this clone's hooks/; fine only if that copy is current)`);
+    warn(`core.hooksPath -> ${hooksPath} (not the installed agent-bot hooks)`);
   } else {
     ok(`core.hooksPath -> ${hooksPath}`);
   }
@@ -65,6 +69,15 @@ async function main() {
   } catch {
     fail('hooks/post-checkout is not executable', `run: chmod +x ${join(HOOKS_DIR, 'post-checkout')}`);
   }
+  for (const name of ['pre-commit', 'prepare-commit-msg', 'post-commit']) {
+    if (existsSync(join(HOOKS_DIR, name))) ok(`hooks/${name} present`);
+    else fail(`hooks/${name} missing`, 're-clone or restore from the agent-bot-identity release');
+  }
+
+  process.stdout.write('\n-- gh shim --\n');
+  const shim = join(homedir(), '.config', 'agent-bot', 'bin', 'gh');
+  if (existsSync(shim)) ok(`gh shim -> ${shim}`);
+  else warn('gh shim not installed (optional) — run: agent-bot install-gh-shim');
 
   process.stdout.write('\n-- config --\n');
   let config;
@@ -82,7 +95,7 @@ async function main() {
       'write it — e.g. { "prefix": "you" } or { "apps": { "claude": "<app-slug>" } }; see README',
     );
   } else {
-    ok(`config loaded: ${JSON.stringify(config)}`);
+    ok(`config loaded (${Object.keys(config).sort().join(', ') || 'no named settings'})`);
   }
   ok(`api base: ${apiBase(config)}`);
   const slugs = new Map();
@@ -95,7 +108,7 @@ async function main() {
   }
   for (const [key, slug] of slugs) process.stdout.write(`        ${key} -> ${slug}\n`);
   const here = detectHarness();
-  const hereSlug = resolveSlug({ argv: [], env: process.env, config });
+  const hereSlug = resolveAgentSlug({ env: process.env, config });
   if (here) ok(`current environment detects harness "${here}"${hereSlug ? ` -> ${hereSlug}` : ''}`);
   else warn('no harness detected in the current environment (a bare terminal is a deliberate no-op)');
 
@@ -113,7 +126,10 @@ async function main() {
       const grant = await mint({ slug });
       ok(`[${slug}] mint ok (installation ${grant.installation_id}, expires ${grant.expires_at})`);
     } catch (err) {
-      fail(`[${slug}] mint failed: ${err.message}`, '401 = app-id/key mismatch or revoked key; "could not pick an installation" = set "owner" in the config; not installed = install the App on the account');
+      fail(
+        `[${slug}] mint failed: ${err.message}`,
+        '401 = app-id/key mismatch or revoked key; multi-install = set "owner" in the config; not installed = install the App on the account',
+      );
     }
   }
 
@@ -135,8 +151,20 @@ async function main() {
       else
         fail(
           'worktree not configured (created before install, or no identity resolved at creation)',
-          'run: node src/setup-worktree.mjs <app-slug>   (from this worktree)',
+          'run: agent-bot setup-worktree <app-slug>   (from this worktree)',
         );
+      let agentId = '';
+      try {
+        agentId = git('config', '--worktree', '--get', 'agentBot.agentId');
+      } catch {
+        try {
+          agentId = git('config', '--worktree', '--get', 'qwts.agentId');
+        } catch {
+          /* unset */
+        }
+      }
+      if (agentId) ok(`Agent ID ${agentId}`);
+      else if (name) warn('no Agent ID pinned — run setup-worktree to mint an execution identity');
       try {
         const origin = git('remote', 'get-url', 'origin');
         if (/^(ssh:\/\/)?git@/.test(origin)) {
