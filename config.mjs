@@ -1,6 +1,6 @@
-// User configuration and bot-slug resolution.
+// User configuration and harness → bot-slug mapping.
 //
-// Config lives at ~/.config/agent-bot/config.json (override the path with
+// Config lives at ~/.config/agent-bot/config.json (override with
 // AGENT_BOT_CONFIG). Everything is optional — with no config the tools are
 // inert no-ops, so cloning this repo can never hijack a machine's identity.
 //
@@ -8,7 +8,6 @@
 //     "prefix": "yourname",              // slug = <prefix>-<harness>-agent
 //     "apps": { "claude": "custom" },    // per-harness overrides of that pattern
 //     "owner": "your-org",               // pick the App installation by account
-//                                        // when the App is installed on several
 //     "apiBase": "https://api.github.com"  // GitHub Enterprise Server / ghe.com
 //   }
 
@@ -16,7 +15,6 @@ import process from 'node:process';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { detectHarness } from './detect-harness.mjs';
 
 export function loadConfig({ home = homedir(), env = process.env } = {}) {
   const path = env.AGENT_BOT_CONFIG ?? join(home, '.config', 'agent-bot', 'config.json');
@@ -39,27 +37,34 @@ export function apiBase(config = loadConfig()) {
   return (config.apiBase ?? process.env.GITHUB_API_URL ?? 'https://api.github.com').replace(/\/+$/, '');
 }
 
-export function slugForHarness(harness, config) {
+export function githubHost(config = loadConfig()) {
+  return new URL(apiBase(config)).host.replace(/^api\./, '');
+}
+
+export function slugForHarness(harness, config = loadConfig()) {
   if (!harness) return null;
   if (config.apps?.[harness]) return config.apps[harness];
   if (config.prefix) return `${config.prefix}-${harness}-agent`;
   return null;
 }
 
-// Resolve which bot identity applies right now. First hit wins:
-//   1. an explicit --app <slug> argument
-//   2. GH_AGENT_APP in the environment
-//   3. gitConfigSlug, when the caller passes one (setup-worktree reads
-//      `git config agentBot.app` so a checkout can pin its identity)
-//   4. harness auto-detection mapped through the user config
-// Returns null when nothing resolves — callers treat that as "do nothing".
-export function resolveSlug({ argv = process.argv, env = process.env, config, gitConfigSlug = null } = {}) {
-  const flag = argv.indexOf('--app');
-  if (flag !== -1) {
-    if (!argv[flag + 1]) throw new Error('--app requires a slug, e.g. --app yourname-claude-agent');
-    return argv[flag + 1];
+// Map an App slug back to its harness key. Used by execution-identity records
+// when there is no local agents roster (standalone clone).
+export function harnessForSlug(appSlug, config = loadConfig()) {
+  if (!appSlug) return null;
+  for (const [key, slug] of Object.entries(config.apps ?? {})) {
+    if (slug === appSlug) return key === 'claude' ? 'claude-code' : key;
   }
-  if (env.GH_AGENT_APP) return env.GH_AGENT_APP;
-  if (gitConfigSlug) return gitConfigSlug;
-  return slugForHarness(detectHarness(env), config ?? loadConfig({ env }));
+  const prefix = config.prefix;
+  if (prefix && appSlug.startsWith(`${prefix}-`) && appSlug.endsWith('-agent')) {
+    const mid = appSlug.slice(prefix.length + 1, -('-agent'.length));
+    const harness = mid.split('-')[0];
+    if (['claude', 'codex', 'cursor', 'vscode'].includes(harness)) {
+      return harness === 'claude' ? 'claude-code' : harness;
+    }
+  }
+  // Best-effort for unconfigured / pinned model Apps: <anything>-claude-…-agent
+  const m = appSlug.match(/(?:^|-)(claude|codex|cursor|vscode)(?:-|$)/);
+  if (!m) return null;
+  return m[1] === 'claude' ? 'claude-code' : m[1];
 }

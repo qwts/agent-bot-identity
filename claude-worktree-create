@@ -1,0 +1,52 @@
+#!/bin/sh
+# Wrapper for the Claude Code WorktreeCreate hook (ENG-0016, ENG-0045).
+#
+# The hook is spawned by the Claude Code desktop app, not by a login shell, so
+# a node installed through nvm may be absent from its PATH. Rather than source
+# nvm.sh — which is written for bash/zsh, misbehaves under a POSIX /bin/sh such
+# as dash, and only exports a node when a default alias happens to resolve —
+# this reads nvm's own on-disk layout directly: the `default` alias if it
+# names an installed version, else the newest installed one. Nothing is
+# sourced, so /bin/sh stays /bin/sh.
+#
+# stdout is reserved: it IS the worktree path Claude Code consumes.
+set -eu
+
+DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+nvm_node() {
+  nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+  versions="$nvm_dir/versions/node"
+  [ -d "$versions" ] || return 1
+
+  if [ -r "$nvm_dir/alias/default" ]; then
+    default=$(cat "$nvm_dir/alias/default")
+    # The alias may be `v24.18.0`, `24.18.0`, a line-prefix like `24`, or a
+    # symbolic `lts/*` — only the ones naming a real directory are used here;
+    # anything else falls through to the newest installed version.
+    for candidate in "$versions/$default" "$versions/v$default" "$versions/v$default".*; do
+      if [ -x "$candidate/bin/node" ]; then
+        echo "$candidate/bin/node"
+        return 0
+      fi
+    done
+  fi
+
+  newest=$(ls -1 "$versions" 2>/dev/null | sort -t. -k1.2,1n -k2,2n -k3,3n | tail -n 1)
+  if [ -n "$newest" ] && [ -x "$versions/$newest/bin/node" ]; then
+    echo "$versions/$newest/bin/node"
+    return 0
+  fi
+  return 1
+}
+
+if command -v node >/dev/null 2>&1; then
+  NODE=node
+elif NODE=$(nvm_node); then
+  :
+else
+  echo "claude-worktree-create: no node on PATH, and none installed under ${NVM_DIR:-$HOME/.nvm}" >&2
+  exit 127
+fi
+
+exec "$NODE" "$DIR/claude-worktree-create.mjs" "$@"

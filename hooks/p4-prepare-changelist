@@ -1,0 +1,3 @@
+#!/bin/sh
+HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+"$HOOK_DIR/chain-hook" p4-prepare-changelist "$@"

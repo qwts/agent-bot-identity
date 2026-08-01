@@ -1,0 +1,36 @@
+#!/bin/sh
+# Run the hook path that core.hooksPath resolved to before agent identity setup
+# pinned this directory. With no displaced path, preserve the historical
+# fallback to the repository's common hooks directory.
+
+HOOK_NAME=$1
+shift
+HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+CHAINED=$(git config --worktree --path --get agentBot.chainedHooksPath 2>/dev/null || true)
+if [ -z "$CHAINED" ]; then
+  CHAINED=$(git config --worktree --path --get qwts.chainedHooksPath 2>/dev/null || true)
+fi
+if [ -z "$CHAINED" ]; then
+  CHAINED=$(git config --global --path --get agentBot.chainedHooksPath 2>/dev/null || true)
+fi
+if [ -z "$CHAINED" ]; then
+  CHAINED=$(git config --global --path --get qwts.chainedHooksPath 2>/dev/null || true)
+fi
+if [ -n "$CHAINED" ]; then
+  case "$CHAINED" in
+    /* | [A-Za-z]:/*) TARGET="$CHAINED/$HOOK_NAME" ;;
+    *)
+      ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
+      [ -n "$ROOT" ] || exit 0
+      TARGET="$ROOT/$CHAINED/$HOOK_NAME"
+      ;;
+  esac
+else
+  TARGET="$(git rev-parse --git-common-dir 2>/dev/null)/hooks/$HOOK_NAME"
+fi
+
+[ -x "$TARGET" ] || exit 0
+TARGET_DIR=$(CDPATH= cd -- "$(dirname -- "$TARGET")" 2>/dev/null && pwd) || exit 0
+[ "$TARGET_DIR/$HOOK_NAME" = "$HOOK_DIR/$HOOK_NAME" ] && exit 0
+"$TARGET_DIR/$HOOK_NAME" "$@"

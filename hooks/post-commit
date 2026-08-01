@@ -1,0 +1,22 @@
+#!/bin/sh
+# Record the new commit against its transcript-bound identity (ENG-0081).
+# A post-commit failure cannot undo a commit, so report loudly and preserve the
+# commit; the trailer remains a durable lookup key for later repair.
+
+HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+IDENTITY_TOOL="$HOOK_DIR/../agent-identity.mjs"
+if [ -f "$IDENTITY_TOOL" ] && command -v node >/dev/null 2>&1; then
+  ID=$(node "$IDENTITY_TOOL" current 2>/dev/null || true)
+  if [ -n "$ID" ]; then
+    SHA=$(git rev-parse HEAD 2>/dev/null || true)
+    if [ -n "$SHA" ]; then
+      if node "$IDENTITY_TOOL" show "$ID" >/dev/null 2>&1; then
+        node "$IDENTITY_TOOL" record "$ID" --artifact "commit:$SHA" >/dev/null 2>&1 || {
+          echo "warning: could not record commit $SHA for Agent-Identity $ID" >&2
+        }
+      fi
+    fi
+  fi
+fi
+
+"$HOOK_DIR/chain-hook" post-commit "$@"

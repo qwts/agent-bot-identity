@@ -1,0 +1,26 @@
+#!/bin/sh
+# Attach the private execution-identity lookup key to bot commits (ENG-0081).
+# The Git author remains the exact GitHub App bot; this trailer adds finer
+# provenance without changing GitHub attribution or exposing the transcript.
+
+HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+"$HOOK_DIR/chain-hook" prepare-commit-msg "$@" || exit $?
+
+IDENTITY_TOOL="$HOOK_DIR/../agent-identity.mjs"
+[ -f "$IDENTITY_TOOL" ] && command -v node >/dev/null 2>&1 || exit 0
+
+ID=$(node "$IDENTITY_TOOL" current) || {
+  echo "agent identity lookup failed; refusing an unresolvable provenance trailer" >&2
+  exit 1
+}
+[ -n "$ID" ] || exit 0
+node "$IDENTITY_TOOL" show "$ID" >/dev/null || {
+  echo "Agent-Identity $ID has no valid private registry record" >&2
+  exit 1
+}
+
+MESSAGE_FILE=$1
+grep -q "^Agent-Identity: $ID$" "$MESSAGE_FILE" 2>/dev/null || {
+  printf '\nAgent-Identity: %s\n' "$ID" >>"$MESSAGE_FILE"
+}
+exit 0
