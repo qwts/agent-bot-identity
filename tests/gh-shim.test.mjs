@@ -71,6 +71,14 @@ function runWhoami(options = {}) {
   return result.stdout.trim();
 }
 
+test('generated shim contains valid shell parameter expansions', () => {
+  const shim = buildGhShim('/tmp/agent-bot');
+  assert.match(shim, /\$\{AGENT_SLUG:-detected agent\}/);
+  assert.match(shim, /\$\{TERRITORY_SLUG\}\[bot\]/);
+  assert.doesNotMatch(shim, /\$\\\{/);
+  assert.doesNotMatch(shim, /\x7f/);
+});
+
 test('a matching explicit bot token is accepted in bot territory', () => {
   assert.equal(
     runWhoami({

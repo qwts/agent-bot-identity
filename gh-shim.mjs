@@ -77,7 +77,7 @@ fi
 # fail before stock gh can exercise the human's stored credentials. A real
 # human shell has no agent-only marker and keeps the stock passthrough.
 if [ -n "$AGENT_CONTEXT" ] && [ -z "$TERRITORY_SLUG" ]; then
-  echo "agent-bot: $\{AGENT_SLUG:-detected agent} is outside bot territory — refusing stock human gh" >&2
+  echo "agent-bot: \${AGENT_SLUG:-detected agent} is outside bot territory — refusing stock human gh" >&2
   echo "Create or use a linked bot worktree, then retry." >&2
   exit 1
 fi
@@ -88,8 +88,8 @@ if [ -n "$GH_TOKEN" ] && [ -n "$TERRITORY_SLUG" ]; then
     echo "agent-bot: could not resolve explicit GH_TOKEN identity" >&2
     exit 1
   }
-  if [ "$TOKEN_LOGIN" != "$\{TERRITORY_SLUG}[bot]" ]; then
-    echo "agent-bot: explicit GH_TOKEN is $TOKEN_LOGIN, expected $\{TERRITORY_SLUG}[bot] — refusing identity crossover" >&2
+  if [ "$TOKEN_LOGIN" != "\${TERRITORY_SLUG}[bot]" ]; then
+    echo "agent-bot: explicit GH_TOKEN is $TOKEN_LOGIN, expected \${TERRITORY_SLUG}[bot] — refusing identity crossover" >&2
     exit 1
   fi
 fi
@@ -114,7 +114,7 @@ if [ "$1" = "whoami" ]; then
     exit 0
   fi
   if [ -n "$TERRITORY_SLUG" ]; then
-    echo "$\{TERRITORY_SLUG}[bot] — bot territory"
+    echo "\${TERRITORY_SLUG}[bot] — bot territory"
     exit 0
   fi
   echo "$("$REAL" api user --jq .login 2>/dev/null || echo 'unknown') — human territory, gh is stock"
