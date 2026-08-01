@@ -114,3 +114,27 @@ test('pre-commit blocks a bot-attributed agent commit until its Agent ID resolve
       stdio: ['ignore', 'pipe', 'pipe'],
     }));
 });
+
+test('pre-commit recognizes explicit App and Claude entrypoint markers', () => {
+  for (const [name, marker] of [
+    ['app-marker', { GH_AGENT_APP: 'you-codex-agent' }],
+    ['claude-entrypoint', { CLAUDE_CODE_ENTRYPOINT: 'cli' }],
+  ]) {
+    const { repo, git } = fixture(name);
+    git('config', 'user.name', 'Human Developer');
+    git('config', 'user.email', 'human@example.com');
+    git('remote', 'add', 'origin', 'https://github.com/example/repo.git');
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith('CODEX_')),
+    );
+    assert.throws(
+      () => execFileSync(preCommit, {
+        cwd: repo,
+        env: { ...env, ...marker },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
+      /Command failed/,
+    );
+  }
+});

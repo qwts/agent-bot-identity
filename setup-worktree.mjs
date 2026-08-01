@@ -71,6 +71,37 @@ export function normalizeGitBashPath(value) {
   return value.replaceAll('\\', '/');
 }
 
+export function httpsRemoteUrl(value) {
+  const match = value.match(/^(?:ssh:\/\/)?[^@/\s]+@([^:/\s]+)[:/](.+?)(?:\.git)?$/);
+  if (match) return `https://${match[1]}/${match[2]}`;
+  if (/^(?:ssh:\/\/|[^/@\s]+@[^:\s]+:)/.test(value)) {
+    throw new Error(`cannot safely rewrite SSH remote URL: ${value}`);
+  }
+  return value;
+}
+
+function rewriteOriginUrls() {
+  let origin;
+  try {
+    origin = git('remote', 'get-url', 'origin');
+  } catch {
+    return; // no origin remote
+  }
+  const fetchUrl = httpsRemoteUrl(origin);
+  if (fetchUrl !== origin) git('remote', 'set-url', 'origin', fetchUrl);
+
+  let pushUrls = [];
+  try {
+    pushUrls = git('config', '--get-all', 'remote.origin.pushurl').split('\n').filter(Boolean);
+  } catch {
+    return; // pushes use the fetch URL, which is already safe
+  }
+  const safePushUrls = pushUrls.map(httpsRemoteUrl);
+  if (safePushUrls.every((url, index) => url === pushUrls[index])) return;
+  git('config', '--unset-all', 'remote.origin.pushurl');
+  for (const url of safePushUrls) git('config', '--add', 'remote.origin.pushurl', url);
+}
+
 async function botUid(slug, base) {
   const cachePath = join(homedir(), '.config', slug, 'bot-uid');
   try {
@@ -109,6 +140,10 @@ async function main() {
     return; // not inside a git repository — nothing to do
   }
   if (gitDir === commonDir) return; // primary checkout, not an agent worktree
+  // Eliminate every SSH push path before applying bot attribution. If an SSH
+  // form cannot be made safe, setup fails while the commit guard still sees
+  // the human identity and blocks agent commits in this linked worktree.
+  rewriteOriginUrls();
 
   const slug = validateAppSlug(resolvedSlug);
   try {
@@ -171,14 +206,6 @@ async function main() {
     'credential.helper',
     credentialHelperCommand(helper, slug, { subcommand: 'credential' }),
   );
-
-  try {
-    const origin = git('remote', 'get-url', 'origin');
-    const sshMatch = origin.match(/^(?:ssh:\/\/)?git@([^:/]+)[:/](.+?)(?:\.git)?$/);
-    if (sshMatch) git('remote', 'set-url', 'origin', `https://${sshMatch[1]}/${sshMatch[2]}`);
-  } catch {
-    /* no origin remote — fine */
-  }
 
   const transcriptState = executionIdentity.transcript ? 'transcript bound' : 'transcript pending';
   process.stdout.write(

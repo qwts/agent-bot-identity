@@ -48,6 +48,9 @@ function fixture() {
   execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo, env });
   execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo, env });
   execFileSync('git', ['config', 'core.hooksPath', '/dev/null'], { cwd: repo, env });
+  execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:example/repo.git'], { cwd: repo, env });
+  execFileSync('git', ['config', '--add', 'remote.origin.pushurl', 'git@github.com:example/repo.git'], { cwd: repo, env });
+  execFileSync('git', ['config', '--add', 'remote.origin.pushurl', 'ssh://git@github.example/example/repo.git'], { cwd: repo, env });
   writeFileSync(join(repo, 'README.md'), '# fixture\n');
   execFileSync('git', ['add', '.'], { cwd: repo, env });
   execFileSync('git', ['commit', '--quiet', '-m', 'initial'], { cwd: repo, env });
@@ -73,6 +76,16 @@ test('Codex startup repairs identity through the installed stable CLI', () => {
   assert.equal(helperSlug(helpers), app);
   assert.match(helpers, /\.local\/bin\/agent-bot.*credential/);
   assert.equal(read('core.hooksPath'), join(env.HOME, '.local', 'share', 'agent-bot', 'hooks'));
+  assert.equal(
+    execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: worktree, env, encoding: 'utf8' }).trim(),
+    'https://github.com/example/repo',
+  );
+  assert.deepEqual(
+    execFileSync('git', ['remote', 'get-url', '--push', '--all', 'origin'], {
+      cwd: worktree, env, encoding: 'utf8',
+    }).trim().split('\n'),
+    ['https://github.com/example/repo', 'https://github.example/example/repo'],
+  );
   assert.deepEqual(readAgentIdentity(id, { stateDir }).transcript, {
     provider: 'codex', id: 'thread-test-1', sha256: null,
   });

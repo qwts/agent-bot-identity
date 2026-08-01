@@ -62,6 +62,19 @@ export function parseHookInput(text) {
   return { baseRepo, name: validateWorktreeName(payload?.name), sessionId };
 }
 
+export function claudeTranscriptEnvironment(sessionId, env = process.env) {
+  const {
+    QWTS_AGENT_TRANSCRIPT_PROVIDER: _legacyProvider,
+    QWTS_AGENT_TRANSCRIPT_ID: _legacyId,
+    ...canonicalEnv
+  } = env;
+  return {
+    ...canonicalEnv,
+    AGENT_BOT_TRANSCRIPT_PROVIDER: 'claude',
+    AGENT_BOT_TRANSCRIPT_ID: sessionId,
+  };
+}
+
 // Where the desktop app records a relocated worktree directory. Reading it
 // keeps hook-created worktrees in the same place the app's own listing and
 // cleanup look for them.
@@ -173,15 +186,7 @@ async function main() {
       cwd: path,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        AGENT_BOT_TRANSCRIPT_PROVIDER: 'claude',
-        AGENT_BOT_TRANSCRIPT_ID: sessionId,
-        // Playbook launchers still set the QWTS_ names; keep both so either
-        // clone of the toolkit binds the same session.
-        QWTS_AGENT_TRANSCRIPT_PROVIDER: 'claude',
-        QWTS_AGENT_TRANSCRIPT_ID: sessionId,
-      },
+      env: claudeTranscriptEnvironment(sessionId),
     });
   } catch (err) {
     process.stderr.write(`bot identity not applied to ${path}: ${err.message}\n`);

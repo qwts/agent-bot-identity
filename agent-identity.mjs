@@ -420,8 +420,15 @@ export function ensureAgentIdentity({
   return withRegistryLock(stateDir, () => {
     let identity = null;
     if (currentId) {
-      const current = readAgentIdentity(currentId, { stateDir });
-      if (current.github.appSlug === appSlug) {
+      let current = null;
+      try {
+        current = readAgentIdentity(currentId, { stateDir });
+      } catch (error) {
+        console.warn(`agent-identity: ignoring invalid current identity ${currentId}: ${error.message}`);
+      }
+      // A corrupt pin is repairable metadata. The registry scan below can
+      // reuse a healthy transcript match or mint a replacement.
+      if (current?.github.appSlug === appSlug) {
         if (transcript && sameTranscript(current.transcript, transcript)) identity = current;
         else if (transcript && !current.transcript) {
           identity = findTranscriptIdentity(appSlug, transcript, stateDir)

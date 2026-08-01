@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   branchName,
+  claudeTranscriptEnvironment,
   desktopConfigPath,
   parseHookInput,
   pickBaseRef,
@@ -46,6 +47,19 @@ test('reads the base repo and name out of the hook payload', () => {
     () => parseHookInput('{"cwd":"/repo","name":"topic-1a2b"}'),
     /no valid session_id/,
   );
+});
+
+test('Claude startup emits only canonical transcript environment names', () => {
+  const env = claudeTranscriptEnvironment('session-1', {
+    KEEP_ME: 'yes',
+    QWTS_AGENT_TRANSCRIPT_PROVIDER: 'legacy',
+    QWTS_AGENT_TRANSCRIPT_ID: 'legacy-session',
+  });
+  assert.equal(env.KEEP_ME, 'yes');
+  assert.equal(env.AGENT_BOT_TRANSCRIPT_PROVIDER, 'claude');
+  assert.equal(env.AGENT_BOT_TRANSCRIPT_ID, 'session-1');
+  assert.equal('QWTS_AGENT_TRANSCRIPT_PROVIDER' in env, false);
+  assert.equal('QWTS_AGENT_TRANSCRIPT_ID' in env, false);
 });
 
 test('places worktrees in bot territory, honoring a relocated worktree directory', () => {

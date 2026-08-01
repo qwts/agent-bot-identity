@@ -101,6 +101,19 @@ test('resolution order: pin picks WHICH bot, only inside territory', () => {
   );
 });
 
+test('the shared resolver selection outranks a stale worktree pin inside territory', () => {
+  assert.equal(
+    resolveSlug({
+      selected: 'you-codex-agent',
+      pinned: 'you-claude-agent',
+      toplevel: '/Users/u/.codex/worktrees/1/r',
+      helperLines: '',
+      config: cfg,
+    }),
+    'you-codex-agent',
+  );
+});
+
 test('the last bot helper line wins when several exist', () => {
   const helpers = '!node /a/git-credential-bot.mjs old-slug\n!node /b/git-credential-bot.mjs new-slug';
   assert.equal(worktreeSlug(helpers, null), 'new-slug');

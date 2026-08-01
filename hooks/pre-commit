@@ -14,6 +14,8 @@
 AGENT=""
 [ "$CLAUDECODE" = "1" ] && AGENT=1
 [ -n "$AI_AGENT" ] && AGENT=1
+[ -n "$GH_AGENT_APP" ] && AGENT=1
+[ -n "$CLAUDE_CODE_ENTRYPOINT" ] && AGENT=1
 if [ -z "$AGENT" ]; then env | grep -q '^CODEX_' && AGENT=1; fi
 
 HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)

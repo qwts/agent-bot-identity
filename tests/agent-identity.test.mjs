@@ -135,6 +135,27 @@ test('a corrupt audit record is warned about but cannot brick new identity setup
   assert.match(warnings[0], /ignoring invalid registry record/);
 });
 
+test('a corrupt currently pinned identity is replaced during setup', () => {
+  const stateDir = state();
+  const corruptId = id(99);
+  writeFileSync(path.join(stateDir, `${corruptId}.json`), '{"half-written":');
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(message);
+  try {
+    const record = ensureAgentIdentity(mintOptions(stateDir, {
+      currentId: corruptId,
+      transcript: { provider: 'codex', id: 'repair-thread' },
+      idFactory: () => id(1),
+    }));
+    assert.equal(record.id, id(1));
+    assert.equal(record.transcript.id, 'repair-thread');
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.ok(warnings.some((message) => /ignoring invalid current identity/.test(message)));
+});
+
 test('initial publication is exclusive and leaves no partial target or temp file', () => {
   const stateDir = state();
   mintAgentIdentity(mintOptions(stateDir));

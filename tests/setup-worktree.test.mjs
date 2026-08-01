@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   credentialHelperCommand,
+  httpsRemoteUrl,
   normalizeGitBashPath,
   validateAppSlug,
 } from '../setup-worktree.mjs';
@@ -52,4 +53,20 @@ test('preserves Unix credential-helper paths, including spaces and apostrophes',
     "!node '/Users/Agent O'\"'\"'Neil/Code/agent-bot-identity/git-credential-bot.mjs' you-codex-agent",
   );
   assert.equal(helperSlug(command), 'you-codex-agent');
+});
+
+test('rewrites fetch and explicit push SSH URLs to HTTPS', () => {
+  assert.equal(
+    httpsRemoteUrl('git@github.com:example/repo.git'),
+    'https://github.com/example/repo',
+  );
+  assert.equal(
+    httpsRemoteUrl('ssh://git@github.example/example/repo.git'),
+    'https://github.example/example/repo',
+  );
+  assert.equal(httpsRemoteUrl('https://github.com/example/repo.git'), 'https://github.com/example/repo.git');
+  assert.throws(
+    () => httpsRemoteUrl('ssh://github.com/example/repo.git'),
+    /cannot safely rewrite SSH remote URL/,
+  );
 });

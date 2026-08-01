@@ -25,7 +25,7 @@ import { desktopConfigPath, worktreeRoot } from './claude-worktree-create.mjs';
 import { mint } from './mint-token.mjs';
 import { detectAgentHarness, HARNESSES } from './detect-harness.mjs';
 import { loadConfig, slugForHarness } from './config.mjs';
-import { PIN_KEYS } from './resolve-agent.mjs';
+import { resolveAgentSlug } from './resolve-agent.mjs';
 
 const KNOWN_TOOLS = new Set(HARNESSES.map((h) => h.key));
 
@@ -77,13 +77,21 @@ export function helperSlug(helperLines) {
 // territory; the directory is the primary territory signal; the helper line
 // covers configured worktrees outside the directory pattern. A stray pin in a
 // normal clone still never makes the shim mint — a pin alone is not territory.
-export function resolveSlug({ pinned, toplevel, helperLines, configuredRoot = null, home = null, config = loadConfig() }) {
+export function resolveSlug({
+  selected = null,
+  pinned = null,
+  toplevel,
+  helperLines,
+  configuredRoot = null,
+  home = null,
+  config = loadConfig(),
+}) {
   const territory =
     pathSlug(toplevel, config) ??
     configuredRootSlug(toplevel, configuredRoot, home, config) ??
     helperSlug(helperLines);
   if (!territory) return null;
-  return pinned || territory;
+  return selected || pinned || territory;
 }
 
 // Back-compat name used by the gh shim's earlier tests.
@@ -106,15 +114,6 @@ async function main() {
     gitDir = git('rev-parse', '--absolute-git-dir');
   } catch {
     return; // not a repository — human context, print nothing
-  }
-  let pinned = null;
-  for (const key of PIN_KEYS) {
-    try {
-      pinned = git('config', '--get', key) || null;
-      if (pinned) break;
-    } catch {
-      /* unset */
-    }
   }
   let helpers = '';
   try {
@@ -141,7 +140,8 @@ async function main() {
     /* a malformed preference must never break identity resolution */
   }
   const config = loadConfig();
-  const slug = resolveSlug({ pinned, toplevel, helperLines: helpers, configuredRoot, home: homedir(), config });
+  const selected = resolveAgentSlug({ cwd: toplevel ?? process.cwd(), config });
+  const slug = resolveSlug({ selected, toplevel, helperLines: helpers, configuredRoot, home: homedir(), config });
   // --slug: identity only, no mint, no network — the gh shim's `whoami`.
   if (process.argv.includes('--slug')) {
     if (slug) process.stdout.write(`${slug}\n`);
