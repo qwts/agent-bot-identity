@@ -1,4 +1,5 @@
 name: CI
+run-name: CI ${{ github.event_name == 'workflow_dispatch' && format('purpose={0}', inputs.purpose) || 'lifecycle' }}
 
 on:
   pull_request:
@@ -82,7 +83,7 @@ jobs:
           TARGET_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?event=workflow_dispatch&head_sha=$TARGET_SHA&per_page=100" \
-            --jq 'first(.workflow_runs[] | select(.name == "CI" and .path == ".github/workflows/ci.yml" and .display_title == "CI workflow_dispatch purpose=exact-sha-preflight" and .conclusion == "success") | .id) // empty')
+            --jq 'first(.workflow_runs[] | select(.name == "CI" and .path == ".github/workflows/ci.yml" and .display_title == "CI purpose=exact-sha-preflight" and .conclusion == "success") | .id) // empty')
           validated=false
           if [ -n "$run_id" ]; then
             validated=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?filter=latest&per_page=100" \
