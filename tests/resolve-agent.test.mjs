@@ -59,6 +59,18 @@ test('worktree territory preserves a same-harness model pin and rejects cross-ha
   );
 });
 
+test('Claude territory accepts Claude Apps and favors a compatible launcher over a pin', () => {
+  const worktree = repo('.claude/worktrees/model/repo', 'you-claude-fable-agent');
+  assert.equal(
+    resolveAgentSlug({ env: { GH_AGENT_APP: 'you-claude-opus-agent' }, cwd: worktree, config: cfg, worktree: true }),
+    'you-claude-opus-agent',
+  );
+  assert.equal(
+    resolveAgentSlug({ explicit: 'you-claude-sonnet-agent', cwd: worktree, config: cfg, worktree: true }),
+    'you-claude-sonnet-agent',
+  );
+});
+
 test('worktree territory respects a custom configured App mapping', () => {
   const worktree = repo('.codex/worktrees/custom/repo', 'you-claude-agent');
   assert.equal(

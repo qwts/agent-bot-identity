@@ -70,6 +70,11 @@ export function pinnedSlug(cwd = process.cwd()) {
   return readGitConfig(cwd, PIN_KEYS);
 }
 
+function harnessOwnsTerritory(appSlug, territory, config) {
+  const harness = harnessForSlug(appSlug, config);
+  return (harness === 'claude-code' ? 'claude' : harness) === territory;
+}
+
 export function resolveAgentSlug({
   explicit = null,
   env = process.env,
@@ -83,15 +88,15 @@ export function resolveAgentSlug({
     const territorySlug = slugForHarness(territory, cfg);
     if (!territorySlug) return null;
     if (explicit) {
-      if (harnessForSlug(explicit, cfg) !== territory) {
+      if (!harnessOwnsTerritory(explicit, territory, cfg)) {
         throw new Error(`explicit App ${explicit} conflicts with ${territory} worktree territory`);
       }
       return explicit;
     }
-    const pinned = pinnedSlug(cwd);
-    if (pinned && harnessForSlug(pinned, cfg) === territory) return pinned;
     const launched = env.GH_AGENT_APP;
-    if (launched && harnessForSlug(launched, cfg) === territory) return launched;
+    if (launched && harnessOwnsTerritory(launched, territory, cfg)) return launched;
+    const pinned = pinnedSlug(cwd);
+    if (pinned && harnessOwnsTerritory(pinned, territory, cfg)) return pinned;
     return territorySlug;
   }
   if (explicit) return explicit;
