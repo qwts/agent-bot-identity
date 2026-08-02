@@ -15,14 +15,24 @@
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { detectHarness } from './detect-harness.mjs';
-import { loadConfig, slugForHarness } from './config.mjs';
+import { detectHarness, HARNESSES } from './detect-harness.mjs';
+import { harnessForSlug, loadConfig, slugForHarness } from './config.mjs';
 
 // Pin keys written by setup-worktree. Prefer the standalone name; accept the
 // playbook-engineering name so a migrated machine keeps working.
 export const PIN_KEYS = ['agentBot.app', 'qwts.agentApp'];
 export const AGENT_ID_KEYS = ['agentBot.agentId', 'qwts.agentId'];
 export const CHAINED_HOOKS_KEYS = ['agentBot.chainedHooksPath', 'qwts.chainedHooksPath'];
+
+const KNOWN_HARNESSES = new Set(HARNESSES.map(({ key }) => key));
+
+// A worktree directory is an ownership boundary, not merely a convenience for
+// discovering credentials. A launcher can inherit another tool's environment,
+// but it cannot make a Claude worktree out of .codex/worktrees.
+export function territoryHarness(cwd = process.cwd()) {
+  const match = cwd.match(/(?:^|\/)\.([a-z]+)\/worktrees\//);
+  return match && KNOWN_HARNESSES.has(match[1]) ? match[1] : null;
+}
 
 export function readGitConfig(cwd, keys) {
   for (const key of keys) {
@@ -65,11 +75,28 @@ export function resolveAgentSlug({
   env = process.env,
   cwd = process.cwd(),
   config,
+  worktree = false,
 } = {}) {
+  const cfg = config ?? loadConfig({ env });
+  const territory = worktree ? territoryHarness(cwd) : null;
+  if (territory) {
+    const territorySlug = slugForHarness(territory, cfg);
+    if (!territorySlug) return null;
+    if (explicit) {
+      if (harnessForSlug(explicit, cfg) !== territory) {
+        throw new Error(`explicit App ${explicit} conflicts with ${territory} worktree territory`);
+      }
+      return explicit;
+    }
+    const pinned = pinnedSlug(cwd);
+    if (pinned && harnessForSlug(pinned, cfg) === territory) return pinned;
+    const launched = env.GH_AGENT_APP;
+    if (launched && harnessForSlug(launched, cfg) === territory) return launched;
+    return territorySlug;
+  }
   if (explicit) return explicit;
   if (env.GH_AGENT_APP) return env.GH_AGENT_APP;
   const pinned = pinnedSlug(cwd);
   if (pinned) return pinned;
-  const cfg = config ?? loadConfig({ env });
   return slugForHarness(detectHarness(env), cfg);
 }

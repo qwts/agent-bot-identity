@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { loadConfig, apiBase, slugForHarness } from './config.mjs';
 import { detectHarness, HARNESSES } from './detect-harness.mjs';
 import { mint } from './mint-token.mjs';
-import { resolveAgentSlug } from './resolve-agent.mjs';
+import { resolveAgentSlug, territoryHarness } from './resolve-agent.mjs';
 import { installationPaths } from './install.mjs';
 
 const INSTALLED = installationPaths();
@@ -108,9 +108,11 @@ async function main() {
   }
   for (const [key, slug] of slugs) process.stdout.write(`        ${key} -> ${slug}\n`);
   const here = detectHarness();
-  const hereSlug = resolveAgentSlug({ env: process.env, config });
+  const hereSlug = resolveAgentSlug({ env: process.env, config, worktree: true });
   if (here) ok(`current environment detects harness "${here}"${hereSlug ? ` -> ${hereSlug}` : ''}`);
   else warn('no harness detected in the current environment (a bare terminal is a deliberate no-op)');
+  const territory = territoryHarness();
+  if (territory) ok(`worktree territory is owned by "${territory}"`);
 
   process.stdout.write('\n-- per-App credentials (live) --\n');
   for (const [, slug] of slugs) {
