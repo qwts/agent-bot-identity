@@ -140,7 +140,7 @@ async function main() {
     /* a malformed preference must never break identity resolution */
   }
   const config = loadConfig();
-  const selected = resolveAgentSlug({ cwd: toplevel ?? process.cwd(), config });
+  const selected = resolveAgentSlug({ cwd: toplevel ?? process.cwd(), config, worktree: true });
   const slug = resolveSlug({ selected, toplevel, helperLines: helpers, configuredRoot, home: homedir(), config });
   // --slug: identity only, no mint, no network — the gh shim's `whoami`.
   if (process.argv.includes('--slug')) {

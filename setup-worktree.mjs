@@ -32,7 +32,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { resolveAgentSlug, AGENT_ID_KEYS } from './resolve-agent.mjs';
+import { resolveAgentSlug, pinnedSlug, territoryHarness, AGENT_ID_KEYS } from './resolve-agent.mjs';
 import { loadConfig, apiBase, githubHost, harnessForSlug } from './config.mjs';
 import { mint } from './mint-token.mjs';
 import { ensurePrivateKey } from './ensure-private-key.mjs';
@@ -129,9 +129,6 @@ async function botUid(slug, base) {
 
 async function main() {
   const config = loadConfig();
-  const resolvedSlug = resolveAgentSlug({ explicit: process.argv[2], config });
-  if (!resolvedSlug) return; // no identity resolved for this checkout — nothing to do
-
   let gitDir; let commonDir;
   try {
     gitDir = git('rev-parse', '--absolute-git-dir');
@@ -140,12 +137,19 @@ async function main() {
     return; // not inside a git repository — nothing to do
   }
   if (gitDir === commonDir) return; // primary checkout, not an agent worktree
+  const previousSlug = pinnedSlug();
+  const resolvedSlug = resolveAgentSlug({ explicit: process.argv[2], config, worktree: true });
+  if (!resolvedSlug) return; // no identity resolved for this checkout — nothing to do
   // Eliminate every SSH push path before applying bot attribution. If an SSH
   // form cannot be made safe, setup fails while the commit guard still sees
   // the human identity and blocks agent commits in this linked worktree.
   rewriteOriginUrls();
 
   const slug = validateAppSlug(resolvedSlug);
+  const territory = territoryHarness();
+  if (previousSlug && previousSlug !== slug && territory) {
+    process.stderr.write(`setup-worktree: repaired ${previousSlug} to ${slug} for ${territory} territory\n`);
+  }
   try {
     const key = ensurePrivateKey({ slug });
     if (key.downloaded) process.stdout.write(`private key restored for ${slug}\n`);

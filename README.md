@@ -195,9 +195,16 @@ never continue as the human.
 
 Detection can be overridden, first match wins: `--app <slug>` on any tool,
 `GH_AGENT_APP` in the environment, or `git config agentBot.app <slug>` to pin
-a checkout to one identity (e.g. a model-level App) regardless of which tool
-opens it. Setup persists the resolved App as the worktree pin so later token
+a checkout to one compatible identity (e.g. a model-level App for that
+harness). Setup persists the resolved App as the worktree pin so later token
 minters cannot disagree with commit authorship.
+
+**Worktree territory is authoritative.** A checkout under
+`.<tool>/worktrees/**` belongs to that tool: `.codex/worktrees/**` always uses
+a Codex App, and likewise for Claude, Cursor, and VS Code. A pin for another
+harness is corrupt metadata. Startup repairs it, its author/helper settings,
+and its execution identity; an explicit cross-harness `setup-worktree` request
+is rejected.
 
 ## Claude Code worktrees
 

@@ -5,7 +5,7 @@ import { appendFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { pinnedSlug, resolveAgentSlug } from '../resolve-agent.mjs';
+import { pinnedSlug, resolveAgentSlug, territoryHarness } from '../resolve-agent.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'resolve-agent-'));
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -25,6 +25,58 @@ test('the pin refines what detection resolved', () => {
   const pinned = repo('pinned', 'you-claude-fable-agent');
   assert.equal(pinnedSlug(pinned), 'you-claude-fable-agent');
   assert.equal(resolveAgentSlug({ env: CLAUDE, cwd: pinned, config: cfg }), 'you-claude-fable-agent');
+});
+
+test('worktree territory repairs conflicting launcher and pin identities', () => {
+  const worktree = repo('.codex/worktrees/session/repo', 'you-claude-agent');
+  assert.equal(territoryHarness(worktree), 'codex');
+  for (const env of [
+    { CLAUDECODE: '1' },
+    { GH_AGENT_APP: 'you-claude-agent' },
+    { CLAUDECODE: '1', GH_AGENT_APP: 'you-claude-agent' },
+  ]) {
+    assert.equal(resolveAgentSlug({ env, cwd: worktree, config: cfg, worktree: true }), 'you-codex-agent');
+  }
+});
+
+test('every supported worktree territory owns conflicting pins', () => {
+  for (const harness of ['claude', 'codex', 'cursor', 'vscode']) {
+    const worktree = repo(`.${harness}/worktrees/owner/repo`, 'you-claude-agent');
+    assert.equal(resolveAgentSlug({ env: { GH_AGENT_APP: 'you-claude-agent' }, cwd: worktree, config: cfg, worktree: true }), `you-${harness}-agent`);
+  }
+});
+
+test('worktree territory preserves a same-harness model pin and rejects cross-harness explicit Apps', () => {
+  const worktree = repo('.codex/worktrees/model/repo', 'you-codex-sol-agent');
+  assert.equal(resolveAgentSlug({ env: {}, cwd: worktree, config: cfg, worktree: true }), 'you-codex-sol-agent');
+  assert.throws(
+    () => resolveAgentSlug({ explicit: 'you-claude-agent', cwd: worktree, config: cfg, worktree: true }),
+    /conflicts with codex worktree territory/,
+  );
+  assert.throws(
+    () => resolveAgentSlug({ explicit: 'custom-agent', cwd: worktree, config: cfg, worktree: true }),
+    /conflicts with codex worktree territory/,
+  );
+});
+
+test('Claude territory accepts Claude Apps and favors a compatible launcher over a pin', () => {
+  const worktree = repo('.claude/worktrees/model/repo', 'you-claude-fable-agent');
+  assert.equal(
+    resolveAgentSlug({ env: { GH_AGENT_APP: 'you-claude-opus-agent' }, cwd: worktree, config: cfg, worktree: true }),
+    'you-claude-opus-agent',
+  );
+  assert.equal(
+    resolveAgentSlug({ explicit: 'you-claude-sonnet-agent', cwd: worktree, config: cfg, worktree: true }),
+    'you-claude-sonnet-agent',
+  );
+});
+
+test('worktree territory respects a custom configured App mapping', () => {
+  const worktree = repo('.codex/worktrees/custom/repo', 'you-claude-agent');
+  assert.equal(
+    resolveAgentSlug({ env: { CLAUDECODE: '1' }, cwd: worktree, config: { apps: { codex: 'special-bot' } }, worktree: true }),
+    'special-bot',
+  );
 });
 
 test('detection stands when nothing is pinned', () => {
