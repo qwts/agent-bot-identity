@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "S=\"$HOME/.local/bin/playbook-claude-worktree-create\"; [ -x \"$S\" ] || { echo \"agent-bot: playbook launcher not installed — run playbook-engineering install from a clean qwts/playbook-engineering checkout\" >&2; exit 127; }; exec \"$S\"",
+            "timeout": 180,
+            "statusMessage": "Creating worktree with its bot identity…"
+          }
+        ]
+      }
+    ]
+  }
+}
