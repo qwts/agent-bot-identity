@@ -21,23 +21,23 @@ if [[ "$git_dir" == "$common_dir" ]]; then
   fail "agents must use a linked worktree; refusing to configure a primary checkout"
 fi
 
-if command -v agent-bot >/dev/null 2>&1; then
-  agent-bot setup-worktree
-elif [[ -n "${AGENT_BOT_HOME:-}" && -f "$AGENT_BOT_HOME/setup-worktree.mjs" ]]; then
-  node "$AGENT_BOT_HOME/setup-worktree.mjs"
-elif [[ -n "${PLAYBOOK_HOME:-}" && -f "$PLAYBOOK_HOME/tools/agent-bot/setup-worktree.mjs" ]]; then
-  node "$PLAYBOOK_HOME/tools/agent-bot/setup-worktree.mjs"
-elif [[ -f "$HOME/.config/agent-bot/playbook-home" ]]; then
-  legacy_home="$(tr -d '\n' < "$HOME/.config/agent-bot/playbook-home")"
-  node "$legacy_home/tools/agent-bot/setup-worktree.mjs"
-else
-  fail "agent-bot is not installed; run node install.mjs from agent-bot-identity"
-fi
+setup="${HOME}/.local/bin/agent-bot"
+[[ -x "$setup" ]] ||
+  fail "agent-bot is not installed; install it from the agent-bot-identity runtime repository"
 
-agent_id="$(git config --worktree --get agentBot.agentId 2>/dev/null ||
-  git config --worktree --get qwts.agentId 2>/dev/null || true)"
-agent_app="$(git config --worktree --get agentBot.app 2>/dev/null ||
-  git config --worktree --get qwts.agentApp 2>/dev/null || true)"
+"$setup" setup-worktree
+
+read_identity_config() {
+  local value
+  value="$(git config --worktree --get "$1" 2>/dev/null || true)"
+  if [[ -z "$value" ]]; then
+    value="$(git config --worktree --get "$2" 2>/dev/null || true)"
+  fi
+  printf '%s' "$value"
+}
+
+agent_id="$(read_identity_config agentBot.agentId qwts.agentId)"
+agent_app="$(read_identity_config agentBot.app qwts.agentApp)"
 author="$(git config --worktree --get user.name 2>/dev/null || true)"
 helper="$(git config --worktree --get-all credential.helper 2>/dev/null | tail -n 1 || true)"
 hooks="$(git config --worktree --path --get core.hooksPath 2>/dev/null || true)"
