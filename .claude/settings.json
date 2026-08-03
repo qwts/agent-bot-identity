@@ -20,21 +20,6 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR\"/tools/agent-guard/guard-agent-command.mjs --protocol=claude"
-          },
-          {
-            "type": "command",
-            "command": "B=\"${AGENT_BOT_BIN:-agent-bot}\"; command -v \"$B\" >/dev/null 2>&1 || exit 0; exec \"$B\" agent-hook --dialect claude --event pre-command",
-            "timeout": 15
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "B=\"${AGENT_BOT_BIN:-agent-bot}\"; command -v \"$B\" >/dev/null 2>&1 || exit 0; exec \"$B\" agent-hook --dialect claude --event pre-file-write",
-            "timeout": 15
           }
         ]
       }
