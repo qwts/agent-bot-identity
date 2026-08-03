@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { generateKeyPairSync, createVerify } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -78,6 +79,52 @@ test('GH_AGENT_APP resolves the same lookup without a flag', () => {
     config: {},
   });
   assert.equal(config.appId, '98765');
+});
+
+// A worktree in one harness's territory carrying another harness's pin. Nobody
+// sets that on purpose — it is what an earlier session leaves behind — and
+// before territory rules reached this path it minted a token for the pinned
+// App while commits were attributed to the territory's App. Credentials for one
+// identity, authorship for another.
+function pinnedWorktree(tool, pin) {
+  const root = mkdtempSync(join(tmpdir(), 'agent-bot-territory-'));
+  const repo = join(root, `.${tool}`, 'worktrees', 'session', 'repo');
+  mkdirSync(repo, { recursive: true });
+  const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' });
+  git('init', '--quiet', '--initial-branch=main');
+  git('config', 'agentBot.app', pin);
+  return repo;
+}
+
+test('an inferred mint obeys territory, not a stale pin from another harness', () => {
+  const home = fakeHome('you-codex-agent');
+  const cwd = pinnedWorktree('codex', 'you-claude-opus-agent');
+  const config = appConfig({
+    argv: ['node', 'mint-token.mjs'],
+    env: {},
+    home,
+    cwd,
+    config: { prefix: 'you' },
+  });
+  // you-claude-opus-agent has no key material in this fake home, so resolving
+  // to it would throw. Reaching the codex App's key proves the eviction.
+  assert.equal(config.slug, 'you-codex-agent');
+  assert.equal(config.appId, '98765');
+});
+
+test('a deliberate --app still mints from inside another harness territory', () => {
+  // doctor mints every configured App in turn from whatever worktree it runs
+  // in; territory must not second-guess an explicit request.
+  const home = fakeHome('you-copilot-agent');
+  const cwd = pinnedWorktree('claude', 'you-claude-agent');
+  const config = appConfig({
+    argv: ['node', 'mint-token.mjs', '--app', 'you-copilot-agent'],
+    env: {},
+    home,
+    cwd,
+    config: { prefix: 'you' },
+  });
+  assert.equal(config.slug, 'you-copilot-agent');
 });
 
 test('harness detection through config resolves without --app', () => {
