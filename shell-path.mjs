@@ -18,8 +18,18 @@
 // first. Both registrations are therefore needed, and neither replaces the
 // other.
 
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+
+// Where zsh actually reads its startup files. With ZDOTDIR exported — the
+// XDG-style `~/.config/zsh` layout is common — zsh reads `$ZDOTDIR/.zshenv` and
+// never looks at `$HOME/.zshenv`. Writing to the home copy in that case
+// registers PATH in a file nothing reads, which is indistinguishable from not
+// having fixed anything.
+export function zshStartupDir(home, env = process.env) {
+  const zdotdir = typeof env.ZDOTDIR === 'string' ? env.ZDOTDIR.trim() : '';
+  return zdotdir === '' ? home : zdotdir;
+}
 
 // Appends one marker-guarded line, once. The marker is matched against the
 // whole file rather than line by line so a hand-moved line is still recognised
@@ -29,14 +39,18 @@ import { join } from 'node:path';
 // dotfile means we cannot tell whether the line is already there, and appending
 // blindly is how a PATH ends up with the same entry five times.
 export function ensurePathLine({
-  home,
+  dir,
   filename,
   line,
   marker,
   read = readFileSync,
   append = appendFileSync,
+  mkdir = mkdirSync,
 }) {
-  const path = join(home, filename);
+  // A configured ZDOTDIR that does not exist yet is still where zsh will look,
+  // so create it rather than silently writing nowhere.
+  mkdir(dir, { recursive: true });
+  const path = join(dir, filename);
   let body = '';
   try {
     body = read(path, 'utf8');

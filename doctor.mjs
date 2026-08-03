@@ -49,10 +49,16 @@ function reportHarnessShellPath() {
   // probe that inherits it passes trivially and reports on nothing. Handing zsh
   // a bare PATH makes .zshenv the only thing that can put our directory back —
   // which is precisely the question.
+  // ZDOTDIR must survive: with it set, zsh reads $ZDOTDIR/.zshenv and never the
+  // home copy. Dropping it would have the probe read different startup files
+  // than the shell being diagnosed — masking exactly the case where the
+  // registration went to a file nothing reads.
+  const probeEnv = { HOME: homedir(), PATH: '/usr/bin:/bin' };
+  if (process.env.ZDOTDIR) probeEnv.ZDOTDIR = process.env.ZDOTDIR;
   const probe = spawnSync('zsh', ['-c', 'command -v agent-bot'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
-    env: { HOME: homedir(), PATH: '/usr/bin:/bin' },
+    env: probeEnv,
   });
   if (probe.error) {
     // No zsh is not a failure — plenty of machines do not have it, and the
@@ -60,8 +66,11 @@ function reportHarnessShellPath() {
     ok('zsh not present — skipped the harness PATH check');
     return;
   }
-  const resolved = (probe.stdout ?? '').trim();
-  if (resolved) {
+  // The exit status is the answer; stdout is only the detail. A startup file
+  // that prints anything of its own would otherwise make a failed lookup read
+  // as a successful one.
+  const resolved = (probe.stdout ?? '').trim().split('\n').pop().trim();
+  if (probe.status === 0 && resolved) {
     ok(`harness shells resolve agent-bot -> ${resolved}`);
     return;
   }
