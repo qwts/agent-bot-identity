@@ -170,7 +170,14 @@ export function runHooks({ dialectKey, event, payload, dir, env = process.env })
       results.push({ name, decision: 'error', reason: `timed out after ${timeout}ms` });
       continue;
     }
-    if (run.error) {
+    // EPIPE means the hook exited before reading the envelope we were writing.
+    // That is the NORMAL case, not a failure: the common hook is five lines of
+    // sh that reads the env mirror and never touches stdin. The process still
+    // ran and still returned a status, so honour it — otherwise every such hook
+    // reports an internal error instead of its own reason. (Only Linux
+    // surfaces this; macOS buffers the write away, which is why it took CI to
+    // find.)
+    if (run.error && !(run.error.code === 'EPIPE' && typeof run.status === 'number')) {
       results.push({ name, decision: 'error', reason: run.error.message });
       continue;
     }

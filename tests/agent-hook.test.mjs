@@ -64,6 +64,24 @@ test('a denying hook blocks, in each dialect its own way', () => {
   assert.equal(invoke(dir, { dialect: 'devin-desktop', event: 'pre-command' }).status, 2);
 });
 
+// The common hook is five lines of sh that reads the env mirror and exits
+// without ever touching stdin. Writing the envelope into a pipe nobody is
+// reading raises EPIPE on Linux (macOS buffers it away). If that is treated as
+// a hook failure, every such hook reports an internal error instead of its own
+// reason. The payload here is deliberately large enough to overflow the pipe
+// buffer, so the race is forced rather than hoped for.
+test('a hook that never reads stdin still reports its own reason', () => {
+  const dir = hooksDir({ 'pre-command/50-deny': DENY });
+  const result = invoke(dir, {
+    dialect: 'claude',
+    event: 'pre-command',
+    payload: { bulk: 'x'.repeat(1024 * 1024) },
+  });
+  const reason = JSON.parse(result.stdout).hookSpecificOutput.permissionDecisionReason;
+  assert.match(reason, /blocked by policy/);
+  assert.doesNotMatch(reason, /EPIPE/);
+});
+
 test('hooks run in lexicographic order and the first denial wins', () => {
   const dir = hooksDir({
     'pre-command/10-allow': ALLOW,
