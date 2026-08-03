@@ -15,6 +15,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildGhShim } from './gh-shim.mjs';
+import { ensurePathLine, zshStartupDir } from './shell-path.mjs';
 
 function optionalStat(path, lstat) {
   try {
@@ -25,21 +26,9 @@ function optionalStat(path, lstat) {
   }
 }
 
-function ensurePathLine({ home, filename, line, marker, read, append }) {
-  const path = join(home, filename);
-  let body = '';
-  try {
-    body = read(path, 'utf8');
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-  }
-  const updated = !body.includes(marker);
-  if (updated) append(path, `${body === '' || body.endsWith('\n') ? '' : '\n'}${line}\n`);
-  return { path, updated };
-}
-
 export function installGhShim({
   home = homedir(),
+  env = process.env,
   mkdir = mkdirSync,
   write = writeFileSync,
   read = readFileSync,
@@ -69,8 +58,9 @@ export function installGhShim({
     remove(localShim, { force: true });
   }
   symlink(shimPath, localShim);
+  const dir = zshStartupDir(home, env);
   const zshenv = ensurePathLine({
-    home,
+    dir,
     filename: '.zshenv',
     line: 'export PATH="$HOME/.config/agent-bot/bin:$PATH"  # agent-bot gh shim',
     marker: '.config/agent-bot/bin',
@@ -78,7 +68,7 @@ export function installGhShim({
     append,
   });
   const zprofile = ensurePathLine({
-    home,
+    dir,
     filename: '.zprofile',
     line: 'path=("$HOME/.local/bin" "${(@)path:#$HOME/.local/bin}")  # agent-bot gh shim login priority',
     marker: '# agent-bot gh shim login priority',
