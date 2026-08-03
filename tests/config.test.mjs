@@ -77,6 +77,40 @@ test('harnessForSlug reverse-looks up apps and prefix shapes', () => {
   assert.equal(harnessForSlug(null, config), null);
 });
 
+// SLUG_HARNESSES is kept in step with detect-harness.mjs by a test rather than
+// by an import, since detect-harness imports this module. That claim is only
+// true if every key is actually exercised here.
+test('harnessForSlug covers every harness key, including the new Apps', () => {
+  const config = { prefix: 'you' };
+  const expected = {
+    'you-claude-agent': 'claude-code',
+    'you-codex-agent': 'codex',
+    'you-cursor-agent': 'cursor',
+    'you-copilot-agent': 'copilot',
+    'you-devin-agent': 'devin',
+    'you-vscode-agent': 'vscode',
+  };
+  for (const [slug, harness] of Object.entries(expected)) {
+    assert.equal(harnessForSlug(slug, config), harness, `${slug} did not map to ${harness}`);
+  }
+  // Model-pinned variants resolve to the same harness.
+  assert.equal(harnessForSlug('you-cursor-kimi-agent', config), 'cursor');
+  assert.equal(harnessForSlug('you-copilot-x-agent', config), 'copilot');
+  // And the unconfigured best-effort path knows them too.
+  assert.equal(harnessForSlug('other-copilot-agent', {}), 'copilot');
+  assert.equal(harnessForSlug('other-devin-agent', {}), 'devin');
+});
+
+test('every detect-harness key is recognized by harnessForSlug', async () => {
+  const { HARNESSES } = await import('../detect-harness.mjs');
+  const config = { prefix: 'you' };
+  for (const { key } of HARNESSES) {
+    const harness = harnessForSlug(`you-${key}-agent`, config);
+    const expected = key === 'claude' ? 'claude-code' : key;
+    assert.equal(harness, expected, `detect-harness knows "${key}" but config.mjs does not`);
+  }
+});
+
 test('apiBase and githubHost honor config and defaults', () => {
   assert.equal(apiBase({}), 'https://api.github.com');
   assert.equal(githubHost({}), 'github.com');

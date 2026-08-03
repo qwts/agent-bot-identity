@@ -1,10 +1,14 @@
 #!/bin/sh
 # pre-commit guard: agents may only commit inside bot territory. Installed
 # machine-wide via core.hooksPath, it blocks a commit when ALL three hold:
-#   - the process carries agent-only environment markers (CLAUDECODE,
-#     CURSOR_AGENT, COPILOT_AGENT, AI_AGENT, CODEX_*) — never editor markers
-#     like VSCODE_*/CURSOR_TRACE_ID/WINDSURF_*, so a human in an editor
-#     terminal is never evaluated at all;
+#   - the process carries agent-only environment markers — CLAUDECODE,
+#     CURSOR_AGENT, COPILOT_AGENT, DEVIN_AGENT, WINDSURF_AGENT,
+#     CLAUDE_CODE_ENTRYPOINT, AI_AGENT, GH_AGENT_APP, CODEX_* — never editor
+#     markers like VSCODE_*/CURSOR_TRACE_ID/WINDSURF_IDE_TYPE, so a human in an
+#     editor terminal is never evaluated at all. This list must stay in step
+#     with detectAgentHarness in detect-harness.mjs: a marker recognized there
+#     but missing here means the resolver calls the session an agent while this
+#     guard waves it through as a human;
 #   - the commit would be attributed to the human (identity did not resolve
 #     to a *[bot]* — i.e. no bot worktree config applies here);
 #   - any remote points at GitHub (a remoteless scratch repo cannot
@@ -17,6 +21,7 @@ AGENT=""
 [ "$CURSOR_AGENT" = "1" ] && AGENT=1
 [ "$COPILOT_AGENT" = "1" ] && AGENT=1
 [ "$DEVIN_AGENT" = "1" ] && AGENT=1
+[ "$WINDSURF_AGENT" = "1" ] && AGENT=1
 [ -n "$AI_AGENT" ] && AGENT=1
 [ -n "$GH_AGENT_APP" ] && AGENT=1
 [ -n "$CLAUDE_CODE_ENTRYPOINT" ] && AGENT=1
