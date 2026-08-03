@@ -81,6 +81,12 @@ export function discoverTranscript(env = process.env) {
   if (env.CLAUDE_SESSION_ID) {
     return { provider: 'claude', id: requiredText('CLAUDE_SESSION_ID', env.CLAUDE_SESSION_ID) };
   }
+  if (env.CURSOR_CONVERSATION_ID) {
+    return {
+      provider: 'cursor',
+      id: requiredText('CURSOR_CONVERSATION_ID', env.CURSOR_CONVERSATION_ID),
+    };
+  }
   return null;
 }
 
