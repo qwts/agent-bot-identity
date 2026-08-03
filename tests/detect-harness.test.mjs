@@ -91,6 +91,16 @@ test('Copilot is not mistaken for VS Code despite "vscode" inside AI_AGENT', () 
   assert.equal(detectAgentHarness({ AI_AGENT: 'github_copilot_vscode_agent' }, cfg), 'you-copilot-agent');
 });
 
+// The rule: agent detection keys on <NAME>_AGENT markers only. A human terminal
+// never carries one, so every harness must be reachable by its own marker and by
+// nothing ambient.
+test('every harness is an agent via its own <NAME>_AGENT marker alone', () => {
+  assert.equal(detectAgentHarness({ CLAUDECODE: '1' }, cfg), 'you-claude-agent');
+  assert.equal(detectAgentHarness({ CURSOR_AGENT: '1' }, cfg), 'you-cursor-agent');
+  assert.equal(detectAgentHarness({ COPILOT_AGENT: '1' }, cfg), 'you-copilot-agent');
+  assert.equal(detectAgentHarness({ DEVIN_AGENT: '1' }, cfg), 'you-devin-agent');
+});
+
 test('Devin is detected from its Codeium-era markers but keyed devin', () => {
   assert.equal(detectHarness({ WINDSURF_IDE_TYPE: 'windsurf' }), 'devin');
   assert.equal(detectHarness({ ACP_BACKEND: 'windsurf', VSCODE_PID: '1' }), 'devin');

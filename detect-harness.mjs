@@ -71,7 +71,14 @@ export function detectHarness(env = process.env) {
 }
 
 // Deliberately narrower than detectHarness: these markers identify an agent
-// process, not merely a human terminal opened inside an editor. Security
+// process, not merely a human terminal opened inside an editor.
+//
+// THE RULE for adding a harness here: key on that tool's `<NAME>_AGENT`-shaped
+// marker (CLAUDECODE=1, CURSOR_AGENT=1, COPILOT_AGENT=1, DEVIN_AGENT=1) and
+// nothing else. A human terminal never carries one. Ambient editor variables —
+// VSCODE_*, CURSOR_TRACE_ID, WINDSURF_*, TERM_PROGRAM — say only that an editor
+// is open, and keying on them would attribute a human's commits to a bot.
+// Security
 // guards use this resolver when allowing stock human credentials would cross
 // the agent/human identity boundary. Returns a bot slug (via config) or null.
 export function detectAgentHarness(env = process.env, config = loadConfig({ env })) {
@@ -96,12 +103,17 @@ export function detectAgentHarness(env = process.env, config = loadConfig({ env 
     // commits to the vscode App.
   } else if (env.COPILOT_AGENT === '1' || aiAgent.includes('copilot')) {
     key = 'copilot';
-  } else if (aiAgent.includes('devin') || aiAgent.includes('windsurf')) {
-    // Devin reaches this resolver only by explicit AI_AGENT/GH_AGENT_APP. Its
-    // ambient markers (WINDSURF_*, ACP_BACKEND) were measured from the IDE
-    // extension host — they prove the editor is open, not that an agent is
-    // running, and treating them as agent markers would misattribute a human's
-    // commits. Add a marker here once an agent-session env confirms one.
+    // DEVIN_AGENT/WINDSURF_AGENT follow the rule above; neither is confirmed
+    // from a Devin agent session yet, but an unset marker simply never matches,
+    // whereas the ambient WINDSURF_*/ACP_BACKEND markers deliberately do NOT
+    // appear here — those were measured from the IDE extension host and mean
+    // the editor is open, not that an agent is running.
+  } else if (
+    env.DEVIN_AGENT === '1' ||
+    env.WINDSURF_AGENT === '1' ||
+    aiAgent.includes('devin') ||
+    aiAgent.includes('windsurf')
+  ) {
     key = 'devin';
   } else if (aiAgent.includes('vscode')) {
     key = 'vscode';
