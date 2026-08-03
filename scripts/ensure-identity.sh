@@ -27,8 +27,16 @@ if [[ "$git_dir" == "$common_dir" ]]; then
   fail "agents must use a linked worktree; refusing to configure a primary checkout"
 fi
 
+# The installed location is checked as well as PATH because harness startup runs
+# in a non-login, non-interactive shell, which reads .zshenv and nothing else. A
+# machine installed before .zshenv registration existed — or running any shell
+# other than zsh, which gets no registration at all — has the symlink but not
+# the PATH entry.
+installed_agent_bot="$HOME/.local/bin/agent-bot"
 if command -v agent-bot >/dev/null 2>&1; then
   agent-bot setup-worktree
+elif [[ -x "$installed_agent_bot" ]]; then
+  "$installed_agent_bot" setup-worktree
 elif [[ -n "${AGENT_BOT_HOME:-}" && -f "$AGENT_BOT_HOME/setup-worktree.mjs" ]]; then
   node "$AGENT_BOT_HOME/setup-worktree.mjs"
 elif [[ -n "${PLAYBOOK_HOME:-}" && -f "$PLAYBOOK_HOME/tools/agent-bot/setup-worktree.mjs" ]]; then
