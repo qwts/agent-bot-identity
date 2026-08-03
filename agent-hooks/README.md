@@ -45,6 +45,19 @@ drift and an exit-code channel that cannot fail open. **Policy that must hold
 everywhere belongs in a harness event *and* in one of those two** — that is what
 covers Devin Desktop's weak channel and Devin cloud's absent one.
 
+### What is wired today
+
+Only `.claude/settings.json`, and only for `session-start`, `pre-command` and
+`pre-file-write`. The remaining events, the other five harness configs, and the
+git-layer dispatch from `hooks/pre-commit` / `hooks/pre-push` are generated and
+wired in follow-up changes.
+
+Until then a hook in `agent-hooks/pre-commit/` or `agent-hooks/pre-push/` **will
+not run**, and a hook in an unwired event folder runs on Claude only. The
+dialect table declares the full contract; the generator is what delivers it. If
+that gap matters to you now, set the config by hand — the runner is complete and
+`agent-bot agent-hook --dialect <d> --event <e>` is stable.
+
 ## The contract
 
 Your script gets these, so a five-line `sh` hook never parses JSON:

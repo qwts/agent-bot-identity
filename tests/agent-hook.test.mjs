@@ -1,13 +1,15 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { CANONICAL_EVENTS } from '../hook-dialects.mjs';
-import { combine, discoverHooks, readVerdict, runHooks } from '../agent-hook.mjs';
+import {
+  combine, discoverHooks, hooksDir as resolveHooksDir, readVerdict, runHooks,
+} from '../agent-hook.mjs';
 
 const root = mkdtempSync(path.join(tmpdir(), 'agent-hook-'));
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -202,12 +204,96 @@ test('a bad invocation never blocks the agent', () => {
   assert.match(run.stderr, /unknown event/);
 });
 
+// A hook that prints allow and then dies has not allowed anything — a failing
+// cleanup step or a `set -e` trap after the verdict must not be readable as
+// success. The exit status outranks the printed line, always.
+test('a printed allow cannot soften a nonzero exit', () => {
+  const dir = hooksDir({
+    'pre-command/50-liar': '#!/bin/sh\necho \'agent-hook: {"decision":"allow"}\'\necho "cleanup failed" >&2\nexit 7\n',
+    'pre-command/60-deny-after-allow': '#!/bin/sh\nexit 0\n',
+  });
+  const out = JSON.parse(invoke(dir, { dialect: 'claude', event: 'pre-command' }).stdout);
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /exited 7/);
+});
+
+test('a printed allow alongside exit 2 is still a deny', () => {
+  const dir = hooksDir({
+    'pre-command/50-confused': '#!/bin/sh\necho \'agent-hook: {"decision":"allow","reason":"r"}\'\nexit 2\n',
+  });
+  const out = JSON.parse(invoke(dir, { dialect: 'claude', event: 'pre-command' }).stdout);
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+});
+
+// One budget for the whole run, not one per hook: n slow hooks must not take
+// n × budget and sail past the vendor's own timer into its fail-open path.
+test('the timeout budget covers the whole run, not each hook', () => {
+  const slow = '#!/bin/sh\nsleep 30\n';
+  const dir = hooksDir({
+    'pre-command/10-slow': slow,
+    'pre-command/20-slow': slow,
+    'pre-command/30-slow': slow,
+  });
+  const started = process.hrtime.bigint();
+  const result = spawnSync(
+    process.execPath,
+    [runner, '--dialect', 'copilot', '--event', 'pre-command'],
+    {
+      input: '{}',
+      encoding: 'utf8',
+      timeout: 20000,
+      env: { ...process.env, AGENT_BOT_HOOKS_DIR: dir, AGENT_HOOK_TIMEOUT_MS: '1200' },
+    },
+  );
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  // Three hooks under a per-hook budget would take ~3.6s; one shared deadline
+  // keeps the whole run inside it.
+  assert.ok(elapsedMs < 2600, `run took ${elapsedMs}ms — budget is not shared`);
+  assert.equal(JSON.parse(result.stdout).permissionDecision, 'deny');
+});
+
+test('an unknown dialect is refused at parse time, and never blocks', () => {
+  const run = spawnSync(process.execPath, [runner, '--dialect', 'nonesuch', '--event', 'pre-command'], {
+    input: '{}', encoding: 'utf8', env: { ...process.env, AGENT_BOT_HOOKS_DIR: hooksDir() },
+  });
+  assert.equal(run.status, 0);
+  assert.equal(run.stdout, '');
+  assert.match(run.stderr, /unknown dialect/);
+});
+
 test('verdict reading maps the exit codes a hook author actually uses', () => {
   assert.deepEqual(readVerdict({ status: 0 }), { decision: 'allow', reason: '' });
   assert.equal(readVerdict({ status: 2, stderr: 'why' }).decision, 'deny');
   assert.equal(readVerdict({ status: 2, stderr: 'why' }).reason, 'why');
   assert.equal(readVerdict({ status: 1 }).decision, 'error');
   assert.equal(readVerdict({ status: 0, stdout: 'agent-hook: {"decision":"nope"}' }).decision, 'error');
+  const ALLOW_LINE = 'agent-hook: {"decision":"allow"}';
+  assert.equal(readVerdict({ status: 0, stdout: ALLOW_LINE }).decision, 'allow');
+  assert.equal(readVerdict({ status: 2, stdout: ALLOW_LINE }).decision, 'deny');
+  assert.equal(readVerdict({ status: 1, stdout: ALLOW_LINE }).decision, 'error');
+});
+
+// agent-bot is normally a ~/.local/bin symlink into one clone, so resolving
+// relative to the module would look inside the toolkit and silently find
+// nothing when the project carries its own agent-hooks/.
+test('hooks are found in the working repo, not only beside the module', () => {
+  const repo = path.join(root, `proj${(seq += 1)}`);
+  mkdirSync(path.join(repo, 'agent-hooks', 'pre-command'), { recursive: true });
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  const hook = path.join(repo, 'agent-hooks', 'pre-command', '50-deny');
+  writeFileSync(hook, DENY);
+  chmodSync(hook, 0o755);
+
+  const env = { ...process.env };
+  delete env.AGENT_BOT_HOOKS_DIR;
+  // git rev-parse returns the realpath, and on macOS the temp dir arrives via
+  // the /var -> /private/var symlink.
+  assert.equal(resolveHooksDir(env, repo), path.join(realpathSync(repo), 'agent-hooks'));
+
+  const run = spawnSync(process.execPath, [runner, '--dialect', 'claude', '--event', 'pre-command'], {
+    input: '{}', encoding: 'utf8', cwd: repo, env,
+  });
+  assert.equal(JSON.parse(run.stdout).hookSpecificOutput.permissionDecision, 'deny');
 });
 
 test('combine short-circuits on deny and keeps ask below it', () => {

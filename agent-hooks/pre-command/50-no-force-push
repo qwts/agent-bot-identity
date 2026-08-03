@@ -2,9 +2,32 @@
 # Force-pushing rewrites history other agents and CI are already building on.
 # The reason reaches the agent verbatim, so it can correct itself rather than
 # retry the same command.
+#
+# --force-with-lease is deliberately allowed: it refuses when the remote moved,
+# which is the check that makes a rewrite safe. The first version of this hook
+# matched the substring --force*, so it blocked --force-with-lease while its own
+# message recommended it — leaving an agent no legal way to do what it was told.
+#
+# Matching is on whole arguments for the same reason, and because a
+# trailing-space test misses `git push -f` when -f is the final argument.
+
 case "$AGENT_HOOK_TOOL_COMMAND" in
-  *"git push"*--force*|*"git push"*" -f "*)
-    echo "agents may not force-push; open a PR or use --force-with-lease after checking the remote" >&2
-    exit 2
-    ;;
+  *"git push"*) ;;
+  *) exit 0 ;;
 esac
+
+refuse() {
+  echo "agents may not force-push ($1): it rewrites history CI and other agents build on." >&2
+  echo "Use --force-with-lease, which refuses if the remote moved since you last fetched." >&2
+  exit 2
+}
+
+for arg in $AGENT_HOOK_TOOL_COMMAND; do
+  case "$arg" in
+    --force-with-lease|--force-with-lease=*|--force-if-includes) ;;
+    --force) refuse "$arg" ;;
+    --*) ;;
+    -*f*) refuse "$arg" ;;
+  esac
+done
+exit 0

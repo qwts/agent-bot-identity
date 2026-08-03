@@ -20,6 +20,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   CANONICAL_EVENTS,
+  DIALECTS,
   budgetMs,
   encodeDecision,
   envelopeEnv,
@@ -29,8 +30,41 @@ import {
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 
-export function hooksDir(env = process.env) {
-  return env.AGENT_BOT_HOOKS_DIR || join(ROOT, 'agent-hooks');
+// Injectable so the deadline is testable without sleeping through it.
+const now = () => Date.now();
+
+// Where the hooks actually live, in priority order:
+//   1. AGENT_BOT_HOOKS_DIR — explicit wins.
+//   2. The repo being worked in. `agent-bot` is normally a symlink in
+//      ~/.local/bin pointing at one clone, so resolving relative to this
+//      module would look inside the *toolkit* and silently find nothing when a
+//      project carries its own agent-hooks/. Hooks that never run are the
+//      failure mode this whole layer exists to avoid, so the working tree is
+//      asked first.
+//   3. This module's own directory, which is the right answer when the toolkit
+//      repo is itself the project.
+export function hooksDir(env = process.env, cwd = process.cwd()) {
+  if (env.AGENT_BOT_HOOKS_DIR) return env.AGENT_BOT_HOOKS_DIR;
+  const repo = repoRoot(cwd);
+  if (repo) {
+    const candidate = join(repo, 'agent-hooks');
+    if (existsSync(candidate)) return candidate;
+  }
+  return join(ROOT, 'agent-hooks');
+}
+
+function repoRoot(cwd) {
+  try {
+    const out = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const root = (out.stdout ?? '').trim();
+    return root === '' ? null : root;
+  } catch {
+    return null;
+  }
 }
 
 export function parseArgs(argv) {
@@ -50,6 +84,13 @@ export function parseArgs(argv) {
   if (!parsed.event) throw new Error('--event is required');
   if (!CANONICAL_EVENTS.includes(parsed.event)) {
     throw new Error(`unknown event: ${parsed.event}`);
+  }
+  // Validate here rather than letting budgetMs/encodeDecision throw further in.
+  // A generated config naming a dialect we do not know is our bug, and main()
+  // turns a parse error into exit 0 — an unknown dialect must not become a
+  // stack trace and a nonzero exit that the harness reads as a verdict.
+  if (!DIALECTS.some((d) => d.key === parsed.dialect)) {
+    throw new Error(`unknown dialect: ${parsed.dialect}`);
   }
   return parsed;
 }
@@ -109,7 +150,19 @@ export function readVerdict({ status, stdout = '', stderr = '' }) {
       const parsed = JSON.parse(line.slice('agent-hook:'.length).trim());
       const decision = parsed?.decision;
       if (['allow', 'deny', 'ask'].includes(decision)) {
-        return { decision, reason: parsed.reason ?? stderr.trim() };
+        // The exit status outranks the line. A hook that prints allow and then
+        // dies -- a failing cleanup step, a `set -e` trap after the verdict --
+        // has not allowed anything; it has failed while claiming success. Only
+        // an exit 0 may say allow, and a printed allow can never soften a
+        // nonzero exit.
+        if (status === 0) return { decision, reason: parsed.reason ?? stderr.trim() };
+        if (status === 2) {
+          return { decision: 'deny', reason: parsed.reason ?? (stderr.trim() || 'denied by hook') };
+        }
+        return {
+          decision: 'error',
+          reason: `hook printed "${decision}" then exited ${status}: ${stderr.trim()}`.trim(),
+        };
       }
       return { decision: 'error', reason: `hook returned an unknown decision: ${decision}` };
     } catch {
@@ -151,15 +204,29 @@ export function runHooks({ dialectKey, event, payload, dir, env = process.env })
   // vendor's window, so an operator can be stricter but never leak past a
   // dialect that fails open on its own timer.
   const requested = Number(env.AGENT_HOOK_TIMEOUT_MS) || 10000;
-  const timeout = budgetMs(dialectKey, event, requested);
+  // ONE budget for the whole run, not one per hook. A per-hook timeout meant
+  // n slow hooks could take n × budget, so two hooks under Claude's 15s outer
+  // timeout could reach 20s and two under Copilot could sail past the 30s cap
+  // into its fail-open path — defeating the very thing answering on our own
+  // clock is meant to guarantee. Each hook gets what is left of the deadline.
+  const budget = budgetMs(dialectKey, event, requested);
+  const deadline = now() + budget;
   const results = [];
 
   for (const file of discoverHooks(dir, event)) {
     const name = file.slice(dir.length + 1);
+    const remaining = deadline - now();
+    if (remaining <= 0) {
+      // Out of time before this hook ran at all. On a blocking event that is a
+      // deny, via the same fail mode as any other error — silently skipping
+      // the tail of the list would be a guard that stopped guarding.
+      results.push({ name, decision: 'error', reason: 'budget exhausted before this hook ran' });
+      continue;
+    }
     const run = spawnSync(file, [], {
       input: stdin,
       encoding: 'utf8',
-      timeout,
+      timeout: remaining,
       env: { ...env, ...envelopeEnv(envelope) },
       cwd: envelope.cwd && existsSync(envelope.cwd) ? envelope.cwd : undefined,
     });
@@ -167,7 +234,7 @@ export function runHooks({ dialectKey, event, payload, dir, env = process.env })
       // We answer on our own clock, strictly inside the vendor's window. On
       // Copilot that is the whole point: its preToolUse fails OPEN on a vendor
       // timeout, so the vendor's timer must never be the one that fires.
-      results.push({ name, decision: 'error', reason: `timed out after ${timeout}ms` });
+      results.push({ name, decision: 'error', reason: `timed out after ${remaining}ms` });
       continue;
     }
     // EPIPE means the hook exited before reading the envelope we were writing.
