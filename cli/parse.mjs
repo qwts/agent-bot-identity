@@ -13,6 +13,8 @@ const INTERNAL_COMMANDS = new Set([
   'worktree-token',
   'claude-worktree-create',
   'hook',
+  // Called by every harness's generated hook config, never by a person.
+  'agent-hook',
 ]);
 
 export function parseAgentBotArgs(argv) {

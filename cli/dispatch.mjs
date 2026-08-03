@@ -15,6 +15,7 @@ const MODULES = new Map([
   ['credential', 'git-credential-bot.mjs'],
   ['worktree-token', 'worktree-token.mjs'],
   ['claude-worktree-create', 'claude-worktree-create.mjs'],
+  ['agent-hook', 'agent-hook.mjs'],
 ]);
 
 const HOOK_PATTERN = /^[a-z][a-z0-9-]*$/;
