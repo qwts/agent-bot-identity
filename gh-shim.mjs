@@ -30,6 +30,8 @@ IFS=$OLDIFS
 
 AGENT_CONTEXT=""
 [ "$CLAUDECODE" = "1" ] && AGENT_CONTEXT=1
+[ "$CURSOR_AGENT" = "1" ] && AGENT_CONTEXT=1
+[ "$COPILOT_AGENT" = "1" ] && AGENT_CONTEXT=1
 [ -n "$CLAUDE_CODE_ENTRYPOINT" ] && AGENT_CONTEXT=1
 [ -n "$AI_AGENT" ] && AGENT_CONTEXT=1
 [ -n "$GH_AGENT_APP" ] && AGENT_CONTEXT=1
@@ -43,7 +45,8 @@ TERRITORY_HINT=""
 # says nothing about who owns the work.
 case "$PWD" in
   */.claude/worktrees/*|*/.codex/worktrees/*|\
-  */.cursor/worktrees/*|*/.vscode/worktrees/*)
+  */.cursor/worktrees/*|*/.copilot/worktrees/*|\
+  */.devin/worktrees/*|*/.vscode/worktrees/*)
     TERRITORY_HINT=1
     ;;
 esac
