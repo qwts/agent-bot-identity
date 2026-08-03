@@ -25,7 +25,9 @@ import {
   mintAgentIdentity,
   readAgentIdentity,
   recordAgentEvidence,
+  reclaimStaleLock,
   validateIdentity,
+  withLock,
 } from '../agent-identity.mjs';
 
 const roots = [];
@@ -474,4 +476,103 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
   }).trim();
   assert.notEqual(secondId, firstId);
   assert.equal(readAgentIdentity(secondId, { stateDir }).transcript.id, 'thread-2');
+});
+
+// --- lock safety (issue #15) -------------------------------------------------
+// Both of these fail deterministically against the previous implementation; the
+// 12-writer concurrency test above only fails intermittently, which is why the
+// bug survived so long.
+
+test('releasing a lock never deletes a successor that reclaimed it', () => {
+  const root = state();
+  const lock = path.join(root, 'takeover.lock');
+  let successorToken = null;
+
+  withLock(lock, 'takeover', () => {
+    // Stand in for the reclaim race: while we are inside the critical section,
+    // another waiter judges this lock stale, carries it off, and acquires its
+    // own at the same path.
+    rmSync(lock, { recursive: true, force: true });
+    mkdirSync(lock, { mode: 0o700 });
+    successorToken = 'successor';
+    writeFileSync(path.join(lock, 'owner'), successorToken, 'utf8');
+  });
+
+  // The old release removed whatever sat at the path, so the successor's lock
+  // vanished while it was still working — one stolen lock became a cascade.
+  assert.equal(readFileSync(path.join(lock, 'owner'), 'utf8'), successorToken);
+});
+
+test('reclaiming refuses to carry off a lock that is not the one judged stale', () => {
+  const root = state();
+  const lock = path.join(root, 'fresh.lock');
+  mkdirSync(lock, { mode: 0o700 });
+  writeFileSync(path.join(lock, 'owner'), 'live-holder', 'utf8');
+
+  // What a reclaimer holds is a reading taken *before* this lock existed: a
+  // stale directory that has since been released, with a different inode.
+  reclaimStaleLock(lock, { ino: statSync(lock).ino + 1_000_000, mtimeMs: 0 });
+
+  assert.equal(readFileSync(path.join(lock, 'owner'), 'utf8'), 'live-holder');
+});
+
+test('a genuinely stale lock is still reclaimed', () => {
+  const root = state();
+  const lock = path.join(root, 'stale.lock');
+  mkdirSync(lock, { mode: 0o700 });
+  utimesSync(lock, new Date(0), new Date(0));
+
+  const observed = statSync(lock);
+  reclaimStaleLock(lock, observed);
+
+  assert.throws(() => statSync(lock), /ENOENT/);
+});
+
+test('a lock is never left behind when stamping its owner fails', () => {
+  const root = state();
+  const lock = path.join(root, 'unstampable.lock');
+  // A directory where the owner file cannot be created stands in for any
+  // failure between mkdir and stamp. An unstamped lock belongs to nobody and
+  // would block every writer until the staleness window expired.
+  assert.throws(() => withLock(lock, 'unstampable', () => {
+    mkdirSync(path.join(lock, 'owner'));
+    throw new Error('unreachable');
+  }));
+  assert.throws(() => statSync(lock), /ENOENT/);
+});
+
+test('reclaim and release cannot run at the same time', () => {
+  const root = state();
+  const lock = path.join(root, 'serialized.lock');
+  const takeover = `${lock}.takeover`;
+  mkdirSync(lock, { mode: 0o700 });
+  writeFileSync(path.join(lock, 'owner'), 'live-holder', 'utf8');
+  utimesSync(lock, new Date(0), new Date(0));
+
+  // Somebody else holds the takeover mutex, so this stale lock must be left
+  // alone rather than swapped out from under its holder.
+  mkdirSync(takeover, { mode: 0o700 });
+  try {
+    assert.equal(reclaimStaleLock(lock, statSync(lock)), false);
+    assert.equal(readFileSync(path.join(lock, 'owner'), 'utf8'), 'live-holder');
+  } finally {
+    rmSync(takeover, { recursive: true, force: true });
+  }
+
+  // With the mutex free, the same stale lock is collected.
+  assert.equal(reclaimStaleLock(lock, statSync(lock)), true);
+  assert.throws(() => statSync(lock), /ENOENT/);
+});
+
+test('a takeover mutex left by a dead process does not wedge the lock forever', () => {
+  const root = state();
+  const lock = path.join(root, 'wedged.lock');
+  const takeover = `${lock}.takeover`;
+  mkdirSync(lock, { mode: 0o700 });
+  utimesSync(lock, new Date(0), new Date(0));
+  mkdirSync(takeover, { mode: 0o700 });
+  utimesSync(takeover, new Date(0), new Date(0));
+
+  assert.equal(reclaimStaleLock(lock, statSync(lock)), true);
+  assert.throws(() => statSync(lock), /ENOENT/);
 });
