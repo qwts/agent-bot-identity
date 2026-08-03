@@ -2,10 +2,8 @@
 
 import process from 'node:process';
 import {
-  appendFileSync,
   lstatSync,
   mkdirSync,
-  readFileSync,
   readlinkSync,
   rmSync,
   symlinkSync,
@@ -15,6 +13,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildGhShim } from './gh-shim.mjs';
+import { ensureExecutablePath } from './shell-path.mjs';
 
 function optionalStat(path, lstat) {
   try {
@@ -29,12 +28,11 @@ export function installGhShim({
   home = homedir(),
   mkdir = mkdirSync,
   write = writeFileSync,
-  read = readFileSync,
-  append = appendFileSync,
   symlink = symlinkSync,
   remove = rmSync,
   lstat = lstatSync,
   readlink = readlinkSync,
+  installPath = ensureExecutablePath,
 } = {}) {
   const binDir = join(home, '.config', 'agent-bot', 'bin');
   mkdir(binDir, { recursive: true });
@@ -56,31 +54,20 @@ export function installGhShim({
     remove(localShim, { force: true });
   }
   symlink(shimPath, localShim);
-
-  const zshenv = join(home, '.zshenv');
-  const pathLine = 'export PATH="$HOME/.config/agent-bot/bin:$PATH"  # agent-bot gh shim';
-  let body = '';
-  try {
-    body = read(zshenv, 'utf8');
-  } catch {
-    /* no file yet */
-  }
-  const zshenvUpdated = !body.includes('.config/agent-bot/bin');
-  if (zshenvUpdated) {
-    append(zshenv, `${body === '' || body.endsWith('\n') ? '' : '\n'}${pathLine}\n`);
-  }
-  return { shimPath, localShim, zshenv, zshenvUpdated };
+  const pathRegistration = installPath({ home });
+  return { shimPath, localShim, pathRegistration };
 }
 
 export function main() {
   const result = installGhShim();
   process.stdout.write(`gh shim -> ${result.shimPath}\n`);
   process.stdout.write(`PATH shim -> ${result.localShim}\n`);
-  process.stdout.write(
-    result.zshenvUpdated
-      ? `PATH line appended to ${result.zshenv}\n`
-      : `PATH line already present in ${result.zshenv}\n`,
-  );
+  if (result.pathRegistration.updated) {
+    process.stdout.write(`PATH line appended to ${result.pathRegistration.path}\n`);
+  }
+  for (const path of result.pathRegistration.migrated) {
+    process.stdout.write(`Removed legacy PATH line from ${path}\n`);
+  }
   return result;
 }
 
