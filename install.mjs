@@ -17,7 +17,7 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { ensurePathLine } from './shell-path.mjs';
+import { ensurePathLine, zshStartupDir } from './shell-path.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const ENTRYPOINT = join(ROOT, 'agent-bot.mjs');
@@ -85,13 +85,15 @@ export function installExecutable({
 // blind. Both, or neither works.
 export function ensureExecutablePath({
   home = homedir(),
+  env = process.env,
   read = readFileSync,
   append = appendFileSync,
 } = {}) {
+  const dir = zshStartupDir(home, env);
   // Distinct from install-gh-shim's `.config/agent-bot/bin` marker, which is a
   // loose substring the .zprofile line below also contains.
   const zshenv = ensurePathLine({
-    home,
+    dir,
     filename: '.zshenv',
     line: 'export PATH="$HOME/.local/bin:$PATH"  # agent-bot CLI',
     marker: '# agent-bot CLI',
@@ -100,16 +102,22 @@ export function ensureExecutablePath({
   });
   const marker = '# agent-bot installed commands';
   const zprofile = ensurePathLine({
-    home,
+    dir,
     filename: '.zprofile',
     line: `export PATH="$HOME/.config/agent-bot/bin:$HOME/.local/bin:$PATH"  ${marker}`,
     marker,
     read,
     append,
   });
-  // `path`/`updated` stay on the .zprofile registration so existing callers and
-  // output keep their meaning; the new one is reported alongside.
-  return { ...zprofile, zshenv };
+  // `updated` answers "did this run change anything", which is what the caller
+  // prints. Reporting only .zprofile made an upgrade from the old .zprofile-only
+  // install look like a no-op while .zshenv was quietly written.
+  return {
+    path: zprofile.path,
+    updated: zshenv.updated || zprofile.updated,
+    zshenv,
+    zprofile,
+  };
 }
 
 function hookWrapper(name) {

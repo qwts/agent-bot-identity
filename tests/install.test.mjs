@@ -53,18 +53,70 @@ test('the two installers do not mistake each other for themselves', () => {
   assert.equal(installGhShim({ home }).zshenv.updated, false);
 });
 
+// With ZDOTDIR exported — the XDG-style ~/.config/zsh layout — zsh reads
+// $ZDOTDIR/.zshenv and never looks at $HOME/.zshenv. Registering the home copy
+// there writes to a file nothing reads, which looks identical to having fixed
+// nothing.
+test('registration follows ZDOTDIR when zsh reads its startup files elsewhere', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-zdotdir-'));
+  const zdotdir = join(home, '.config', 'zsh');
+  ensureExecutablePath({ home, env: { ZDOTDIR: zdotdir } });
+
+  // Created even though it did not exist: it is still where zsh will look.
+  assert.match(readFileSync(join(zdotdir, '.zshenv'), 'utf8'), /agent-bot CLI/);
+  assert.match(readFileSync(join(zdotdir, '.zprofile'), 'utf8'), /# agent-bot installed commands$/m);
+  assert.throws(() => readFileSync(join(home, '.zshenv'), 'utf8'), /ENOENT/);
+
+  // The gh shim installer writes the same two files and must agree.
+  installGhShim({ home, env: { ZDOTDIR: zdotdir } });
+  assert.match(readFileSync(join(zdotdir, '.zshenv'), 'utf8'), /agent-bot gh shim/);
+  assert.throws(() => readFileSync(join(home, '.zshenv'), 'utf8'), /ENOENT/);
+});
+
+// Upgrading from the .zprofile-only install writes .zshenv while .zprofile is
+// already registered. Reporting only .zprofile made that look like a no-op, so
+// the installer printed nothing about a file it had just changed.
+test('an upgrade reports that something changed', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-upgrade-'));
+  writeFileSync(
+    join(home, '.zprofile'),
+    'export PATH="$HOME/.config/agent-bot/bin:$HOME/.local/bin:$PATH"  # agent-bot installed commands\n',
+  );
+
+  const upgrade = ensureExecutablePath({ home, env: {} });
+  assert.equal(upgrade.zprofile.updated, false, 'the existing line is left alone');
+  assert.equal(upgrade.zshenv.updated, true, 'the missing one is added');
+  assert.equal(upgrade.updated, true, 'and the caller is told the run changed something');
+});
+
 // The test that would have prevented the bug. The existing zsh integration test
 // resolves `gh`, never `agent-bot`, which is exactly why this slipped through.
 test('a non-login, non-interactive zsh finds agent-bot after install', { skip: !HAS_ZSH }, () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-zsh-'));
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
   writeFileSync(join(home, '.local', 'bin', 'agent-bot'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  ensureExecutablePath({ home });
+  ensureExecutablePath({ home, env: {} });
 
   // A bare PATH, so .zshenv is the only thing that can put the directory back.
   const resolved = execFileSync('zsh', ['-c', 'command -v agent-bot'], {
     encoding: 'utf8',
     env: { HOME: home, ZDOTDIR: home, PATH: '/usr/bin:/bin' },
+  }).trim();
+  assert.equal(resolved, join(home, '.local', 'bin', 'agent-bot'));
+});
+
+// Same shell, but with zsh reading its startup files from ZDOTDIR — the case a
+// home-only registration silently misses.
+test('a ZDOTDIR zsh finds agent-bot after install', { skip: !HAS_ZSH }, () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-zsh-xdg-'));
+  const zdotdir = join(home, '.config', 'zsh');
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  writeFileSync(join(home, '.local', 'bin', 'agent-bot'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  ensureExecutablePath({ home, env: { ZDOTDIR: zdotdir } });
+
+  const resolved = execFileSync('zsh', ['-c', 'command -v agent-bot'], {
+    encoding: 'utf8',
+    env: { HOME: home, ZDOTDIR: zdotdir, PATH: '/usr/bin:/bin' },
   }).trim();
   assert.equal(resolved, join(home, '.local', 'bin', 'agent-bot'));
 });
