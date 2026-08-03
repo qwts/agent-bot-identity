@@ -48,6 +48,12 @@ export function slugForHarness(harness, config = loadConfig()) {
   return null;
 }
 
+// Harness keys recognised in an App slug. Kept local rather than imported from
+// detect-harness.mjs, which imports this module — the two lists are tied
+// together by a test instead of by a cycle. `vscode` is retained for the
+// pre-copilot Apps that still carry it.
+const SLUG_HARNESSES = ['claude', 'codex', 'cursor', 'copilot', 'devin', 'vscode'];
+
 // Map an App slug back to its harness key. Used by execution-identity records
 // when there is no local agents roster (standalone clone).
 export function harnessForSlug(appSlug, config = loadConfig()) {
@@ -59,12 +65,12 @@ export function harnessForSlug(appSlug, config = loadConfig()) {
   if (prefix && appSlug.startsWith(`${prefix}-`) && appSlug.endsWith('-agent')) {
     const mid = appSlug.slice(prefix.length + 1, -('-agent'.length));
     const harness = mid.split('-')[0];
-    if (['claude', 'codex', 'cursor', 'vscode'].includes(harness)) {
+    if (SLUG_HARNESSES.includes(harness)) {
       return harness === 'claude' ? 'claude-code' : harness;
     }
   }
   // Best-effort for unconfigured / pinned model Apps: <anything>-claude-…-agent
-  const m = appSlug.match(/(?:^|-)(claude|codex|cursor|vscode)(?:-|$)/);
+  const m = appSlug.match(new RegExp(`(?:^|-)(${SLUG_HARNESSES.join('|')})(?:-|$)`));
   if (!m) return null;
   return m[1] === 'claude' ? 'claude-code' : m[1];
 }

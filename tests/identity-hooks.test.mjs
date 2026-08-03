@@ -115,17 +115,35 @@ test('pre-commit blocks a bot-attributed agent commit until its Agent ID resolve
     }));
 });
 
-test('pre-commit recognizes explicit App and Claude entrypoint markers', () => {
+// CURSOR_AGENT and COPILOT_AGENT are the measured agent-session markers. Before
+// they were listed here, a Cursor agent set none of the markers this guard knew
+// about and committed as the human — the exact attribution the guard exists to
+// prevent.
+test('pre-commit recognizes explicit App and per-harness agent markers', () => {
   for (const [name, marker] of [
     ['app-marker', { GH_AGENT_APP: 'you-codex-agent' }],
     ['claude-entrypoint', { CLAUDE_CODE_ENTRYPOINT: 'cli' }],
+    ['cursor-agent', { CURSOR_AGENT: '1' }],
+    ['copilot-agent', { COPILOT_AGENT: '1' }],
+    ['devin-agent', { DEVIN_AGENT: '1' }],
+    ['windsurf-agent', { WINDSURF_AGENT: '1' }],
   ]) {
     const { repo, git } = fixture(name);
     git('config', 'user.name', 'Human Developer');
     git('config', 'user.email', 'human@example.com');
     git('remote', 'add', 'origin', 'https://github.com/example/repo.git');
+    // Every marker the guard knows must be stripped, not just the ones that
+    // predate this test. Running the suite inside a Cursor or Copilot session
+    // would otherwise leave an ambient marker that trips the guard on its own,
+    // so the marker under test could stop working and this would still pass.
+    const AMBIENT = [
+      'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'AI_AGENT', 'GH_AGENT_APP',
+      'CURSOR_AGENT', 'COPILOT_AGENT', 'DEVIN_AGENT', 'WINDSURF_AGENT',
+    ];
     const env = Object.fromEntries(
-      Object.entries(process.env).filter(([key]) => !key.startsWith('CODEX_')),
+      Object.entries(process.env).filter(
+        ([key]) => !key.startsWith('CODEX_') && !AMBIENT.includes(key),
+      ),
     );
     assert.throws(
       () => execFileSync(preCommit, {

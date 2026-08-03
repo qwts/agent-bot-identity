@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { detectAgentHarness, detectHarness } from '../detect-harness.mjs';
+import { HARNESSES, detectAgentHarness, detectHarness } from '../detect-harness.mjs';
 
 const cfg = { prefix: 'you' };
 
@@ -61,4 +61,60 @@ test('agent-process detection ignores editor-only terminals', () => {
   assert.equal(detectAgentHarness({ TERM_PROGRAM: 'vscode' }, cfg), null);
   assert.equal(detectAgentHarness({ VSCODE_CWD: '/tmp' }, cfg), null);
   assert.equal(detectAgentHarness({ CURSOR_TRACE_ID: 'human-terminal' }, cfg), null);
+  // Devin Desktop's ambient markers come from the IDE extension host, not from
+  // an agent — measured, not assumed. See the WINDSURF_*/ACP_BACKEND dump.
+  assert.equal(detectAgentHarness({ WINDSURF_IDE_TYPE: 'windsurf' }, cfg), null);
+  assert.equal(detectAgentHarness({ ACP_BACKEND: 'windsurf' }, cfg), null);
+});
+
+// `vscode` is the fallback for "a human in an editor terminal". Every other
+// harness forks or embeds VS Code, so a row appended after it could never match.
+test('the vscode row stays last so no harness is shadowed by it', () => {
+  assert.equal(HARNESSES.at(-1).key, 'vscode');
+});
+
+// Measured from a live Cursor agent session: CURSOR_AGENT=1 marks the agent,
+// while CURSOR_TRACE_ID/CURSOR_LAYOUT mark a human's editor.
+test('a Cursor agent session is an agent; a Cursor editor terminal is not', () => {
+  assert.equal(detectHarness({ CURSOR_AGENT: '1' }), 'cursor');
+  assert.equal(detectAgentHarness({ CURSOR_AGENT: '1' }, cfg), 'you-cursor-agent');
+  assert.equal(detectAgentHarness({ CURSOR_TRACE_ID: 'x', CURSOR_LAYOUT: 'y' }, cfg), null);
+});
+
+// Measured from a live Copilot agent session. AI_AGENT=github_copilot_vscode_agent
+// contains the substring "vscode", so an ordering slip here silently attributes
+// Copilot's commits to the vscode App.
+test('Copilot is not mistaken for VS Code despite "vscode" inside AI_AGENT', () => {
+  const env = { COPILOT_AGENT: '1', AI_AGENT: 'github_copilot_vscode_agent', TERM_PROGRAM: 'vscode' };
+  assert.equal(detectHarness(env), 'copilot');
+  assert.equal(detectAgentHarness(env, cfg), 'you-copilot-agent');
+  assert.equal(detectAgentHarness({ AI_AGENT: 'github_copilot_vscode_agent' }, cfg), 'you-copilot-agent');
+});
+
+// The rule: agent detection keys on <NAME>_AGENT markers only. A human terminal
+// never carries one, so every harness must be reachable by its own marker and by
+// nothing ambient.
+test('every harness is an agent via its own <NAME>_AGENT marker alone', () => {
+  assert.equal(detectAgentHarness({ CLAUDECODE: '1' }, cfg), 'you-claude-agent');
+  assert.equal(detectAgentHarness({ CURSOR_AGENT: '1' }, cfg), 'you-cursor-agent');
+  assert.equal(detectAgentHarness({ COPILOT_AGENT: '1' }, cfg), 'you-copilot-agent');
+  assert.equal(detectAgentHarness({ DEVIN_AGENT: '1' }, cfg), 'you-devin-agent');
+});
+
+test('Devin is detected from its Codeium-era markers but keyed devin', () => {
+  assert.equal(detectHarness({ WINDSURF_IDE_TYPE: 'windsurf' }), 'devin');
+  assert.equal(detectHarness({ ACP_BACKEND: 'windsurf', VSCODE_PID: '1' }), 'devin');
+  assert.equal(
+    detectHarness({ __CFBundleIdentifier: 'com.exafunction.windsurf' }),
+    'devin',
+  );
+  assert.equal(detectAgentHarness({ AI_AGENT: 'devin-agent' }, cfg), 'you-devin-agent');
+});
+
+test('a plain VS Code terminal still resolves to vscode, not to a forked harness', () => {
+  assert.equal(detectHarness({ TERM_PROGRAM: 'vscode', VSCODE_PID: '9' }), 'vscode');
+  assert.equal(
+    detectHarness({ __CFBundleIdentifier: 'com.microsoft.VSCode' }),
+    'vscode',
+  );
 });
