@@ -209,17 +209,26 @@ function sleep(milliseconds) {
 }
 
 const STALE_LOCK_MS = 30_000;
+// The takeover mutex only ever spans a stat, a rename and an rmdir, so an old
+// one means a process died mid-swap rather than a slow neighbour.
+const STALE_TAKEOVER_MS = 5_000;
 
-// A directory rename is NOT a compare-and-swap. `renameSync(lock, …)` moves
-// whatever occupies that path at the instant it runs, which need not be the
-// directory the caller judged stale a moment earlier: a legitimate waiter can
-// acquire in between, and the reclaimer then carries off a live lock. Both
-// processes go on believing they hold it, both read-modify-write the record,
-// and one update is lost — silently, since neither sees an error.
+// A directory rename is NOT a compare-and-swap: `renameSync(lock, …)` moves
+// whatever occupies the path when it runs, not the directory the caller judged
+// stale a moment earlier. Checking an inode afterwards does not fix that — by
+// then a third waiter can already be inside its critical section, and the
+// rollback can fail with ENOTEMPTY once that waiter stamps its own owner file.
+// Verifying after acting is always too late.
 //
-// The identity is the inode, not the path. Every step that could act on the
-// wrong directory therefore checks it, and the reclaim is undone if the
-// directory that moved was not the one judged stale. See issue #15.
+// So the mutual exclusion rests on one invariant instead:
+//
+//   `lock` is removed or renamed ONLY while holding `<lock>.takeover`.
+//
+// Acquisition does not need the mutex, because `mkdirSync` only succeeds when
+// the path is free, and the path can only become free through a release or a
+// reclaim — both of which hold it. That makes a reclaimer's stat→rename window
+// safe: while it holds the mutex nothing can release the lock, so nothing can
+// replace it, so what it renames is what it inspected. See issue #15.
 function ownerToken(lock) {
   try {
     return readFileSync(path.join(lock, 'owner'), 'utf8');
@@ -228,31 +237,76 @@ function ownerToken(lock) {
   }
 }
 
-export function reclaimStaleLock(lock, observed) {
-  // Re-read immediately before the swap. This does not close the window on its
-  // own — the inode check below is what does — but it drops the common case of
-  // acting on a reading that is already tens of milliseconds old.
-  let current;
-  try {
-    current = statSync(lock);
-  } catch (error) {
-    if (error.code === 'ENOENT') return;
-    throw error;
+// Runs `mutate` while holding the takeover mutex, or returns false without
+// running it. Callers must treat false as "try again later" — never as
+// permission to proceed unguarded.
+function withTakeover(lock, mutate) {
+  const takeover = `${lock}.takeover`;
+  for (let attempt = 0; attempt < 200; attempt++) {
+    try {
+      mkdirSync(takeover, { mode: 0o700 });
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      try {
+        // A mutex this old belongs to a process that died holding it. Its
+        // critical section touches only the lock path, so collecting it plainly
+        // is bounded: the worst case is two reclaimers, which is the situation
+        // that existed everywhere before this change.
+        if (Date.now() - statSync(takeover).mtimeMs > STALE_TAKEOVER_MS) {
+          rmSync(takeover, { recursive: true, force: true });
+          continue;
+        }
+      } catch (staleError) {
+        if (staleError.code !== 'ENOENT') throw staleError;
+      }
+      sleep(5);
+      continue;
+    }
+    try {
+      mutate();
+      return true;
+    } finally {
+      rmSync(takeover, { recursive: true, force: true });
+    }
   }
-  if (current.ino !== observed.ino) return;
-  if (Date.now() - current.mtimeMs <= STALE_LOCK_MS) return;
+  return false;
+}
 
-  const stale = `${lock}.stale.${process.pid}.${randomUUID()}`;
-  renameSync(lock, stale);
-  const moved = statSync(stale);
-  if (moved.ino !== observed.ino) {
-    // We carried off a lock somebody acquired fairly while we were deciding.
-    // Put it back rather than deleting it: its holder is mid-operation and is
-    // about to check that it still owns this path.
-    renameSync(stale, lock);
-    return;
-  }
-  rmSync(stale, { recursive: true, force: true });
+export function reclaimStaleLock(lock, observed) {
+  return withTakeover(lock, () => {
+    // Re-read under the mutex. Nothing can remove or replace `lock` from here
+    // until the mutex is dropped, so this reading stays true for the rename.
+    let current;
+    try {
+      current = statSync(lock);
+    } catch (error) {
+      if (error.code === 'ENOENT') return;
+      throw error;
+    }
+    if (current.ino !== observed.ino) return;
+    if (Date.now() - current.mtimeMs <= STALE_LOCK_MS) return;
+
+    const stale = `${lock}.stale.${process.pid}.${randomUUID()}`;
+    renameSync(lock, stale);
+    let moved;
+    try {
+      moved = statSync(stale);
+    } catch {
+      return;
+    }
+    if (moved.ino !== observed.ino) {
+      // Unreachable while the invariant holds; kept because getting this wrong
+      // costs a live holder its lock. Restoring is best-effort: if a waiter has
+      // already taken the free path, leave both alone rather than throwing.
+      try {
+        renameSync(stale, lock);
+      } catch (restoreError) {
+        if (!['EEXIST', 'ENOTEMPTY'].includes(restoreError.code)) throw restoreError;
+      }
+      return;
+    }
+    rmSync(stale, { recursive: true, force: true });
+  });
 }
 
 export function withLock(lock, label, operation) {
@@ -261,12 +315,6 @@ export function withLock(lock, label, operation) {
   for (let attempt = 0; attempt < 200; attempt++) {
     try {
       mkdirSync(lock, { mode: 0o700 });
-      // Written after the exclusive mkdir, so it can only ever describe the
-      // holder. Absent means "acquired but not yet stamped", which is treated
-      // as not-ours everywhere below.
-      writeFileSync(path.join(lock, 'owner'), token, { encoding: 'utf8', mode: 0o600 });
-      acquired = true;
-      break;
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
       try {
@@ -280,16 +328,32 @@ export function withLock(lock, label, operation) {
         /* another writer released or took over the observed lock */
       }
       sleep(10);
+      continue;
     }
+    try {
+      // Stamped after the exclusive mkdir, so it can only ever describe the
+      // holder. If stamping fails the directory must not be left behind: an
+      // unstamped lock is owned by nobody and would block every writer until
+      // the staleness window expired.
+      writeFileSync(path.join(lock, 'owner'), token, { encoding: 'utf8', mode: 0o600 });
+    } catch (error) {
+      rmSync(lock, { recursive: true, force: true });
+      throw error;
+    }
+    acquired = true;
+    break;
   }
   if (!acquired) throw new Error(`timed out waiting for ${label}`);
   try {
     return operation();
   } finally {
-    // Release only what is still ours. The previous unconditional remove would
-    // delete a successor's lock if this one had been reclaimed mid-operation,
-    // turning one stolen lock into a cascade of them.
-    if (ownerToken(lock) === token) rmSync(lock, { recursive: true, force: true });
+    // Under the mutex, so the directory whose token we read is the one we
+    // remove. Reading the token and then removing the path as two separate
+    // steps would delete a successor's lock whenever ours had been reclaimed
+    // mid-operation — one stolen lock becoming a cascade.
+    withTakeover(lock, () => {
+      if (ownerToken(lock) === token) rmSync(lock, { recursive: true, force: true });
+    });
   }
 }
 

@@ -527,3 +527,52 @@ test('a genuinely stale lock is still reclaimed', () => {
 
   assert.throws(() => statSync(lock), /ENOENT/);
 });
+
+test('a lock is never left behind when stamping its owner fails', () => {
+  const root = state();
+  const lock = path.join(root, 'unstampable.lock');
+  // A directory where the owner file cannot be created stands in for any
+  // failure between mkdir and stamp. An unstamped lock belongs to nobody and
+  // would block every writer until the staleness window expired.
+  assert.throws(() => withLock(lock, 'unstampable', () => {
+    mkdirSync(path.join(lock, 'owner'));
+    throw new Error('unreachable');
+  }));
+  assert.throws(() => statSync(lock), /ENOENT/);
+});
+
+test('reclaim and release cannot run at the same time', () => {
+  const root = state();
+  const lock = path.join(root, 'serialized.lock');
+  const takeover = `${lock}.takeover`;
+  mkdirSync(lock, { mode: 0o700 });
+  writeFileSync(path.join(lock, 'owner'), 'live-holder', 'utf8');
+  utimesSync(lock, new Date(0), new Date(0));
+
+  // Somebody else holds the takeover mutex, so this stale lock must be left
+  // alone rather than swapped out from under its holder.
+  mkdirSync(takeover, { mode: 0o700 });
+  try {
+    assert.equal(reclaimStaleLock(lock, statSync(lock)), false);
+    assert.equal(readFileSync(path.join(lock, 'owner'), 'utf8'), 'live-holder');
+  } finally {
+    rmSync(takeover, { recursive: true, force: true });
+  }
+
+  // With the mutex free, the same stale lock is collected.
+  assert.equal(reclaimStaleLock(lock, statSync(lock)), true);
+  assert.throws(() => statSync(lock), /ENOENT/);
+});
+
+test('a takeover mutex left by a dead process does not wedge the lock forever', () => {
+  const root = state();
+  const lock = path.join(root, 'wedged.lock');
+  const takeover = `${lock}.takeover`;
+  mkdirSync(lock, { mode: 0o700 });
+  utimesSync(lock, new Date(0), new Date(0));
+  mkdirSync(takeover, { mode: 0o700 });
+  utimesSync(takeover, new Date(0), new Date(0));
+
+  assert.equal(reclaimStaleLock(lock, statSync(lock)), true);
+  assert.throws(() => statSync(lock), /ENOENT/);
+});
