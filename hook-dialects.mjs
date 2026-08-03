@@ -52,6 +52,12 @@ const FIELD_KEYS = {
   cwd: ['cwd', 'workspace_root', 'workspaceRoot', 'working_directory'],
   toolName: ['tool_name', 'toolName', 'agent_action_name'],
   prompt: ['prompt', 'user_prompt', 'transformed_prompt'],
+  // Coverage is partial by nature: Codex and Cursor document a model field
+  // (Cursor sends both `model` and `model_id`), Windsurf sends `model_name`,
+  // and Claude's documented common fields do not include one. A hook that
+  // wants the model must therefore tolerate its absence — which is the same
+  // contract as every other optional field here.
+  model: ['model', 'model_id', 'modelId', 'model_name'],
 };
 
 // Nested places a shell command may hide, by dialect family.
@@ -298,6 +304,7 @@ export function normalizeEnvelope({ dialectKey, event, payload = {} }) {
     command: firstPath(payload, COMMAND_KEYS) ?? null,
     file_path: firstPath(payload, PATH_KEYS) ?? null,
     prompt: firstKey(payload, FIELD_KEYS.prompt) ?? null,
+    model: firstKey(payload, FIELD_KEYS.model) ?? null,
     blocking: isBlocking(event),
     raw: payload,
   };
@@ -317,6 +324,7 @@ export function envelopeEnv(envelope) {
     AGENT_HOOK_TOOL_COMMAND: envelope.command,
     AGENT_HOOK_TOOL_PATH: envelope.file_path,
     AGENT_HOOK_PROMPT: envelope.prompt,
+    AGENT_HOOK_MODEL: envelope.model,
   };
   for (const [key, value] of Object.entries(optional)) if (value) env[key] = value;
   return env;

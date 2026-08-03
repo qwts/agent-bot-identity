@@ -178,6 +178,37 @@ test('an unmodelled payload yields nulls and keeps raw, rather than throwing', (
   assert.deepEqual(envelope.raw, payload, 'raw must survive verbatim for hooks to dig');
 });
 
+// Model coverage is partial by nature — Codex and Cursor document a model
+// field, Windsurf sends model_name, Claude Code sends none. A consumer must
+// therefore treat it as optional, which is exactly what the null does.
+test('the model is normalized where a dialect sends one, and null where none does', () => {
+  const cases = [
+    [{ model: 'gpt-5-codex' }, 'gpt-5-codex'],
+    [{ model_id: 'kimi-k3' }, 'kimi-k3'],
+    [{ model_name: 'claude-opus-5' }, 'claude-opus-5'],
+    [{ session_id: 'x' }, null],
+  ];
+  for (const [payload, expected] of cases) {
+    const envelope = normalizeEnvelope({ dialectKey: 'cursor', event: 'session-start', payload });
+    assert.equal(envelope.model, expected);
+  }
+  // Cursor sends both; the human-readable name wins over the id.
+  assert.equal(
+    normalizeEnvelope({
+      dialectKey: 'cursor',
+      event: 'session-start',
+      payload: { model: 'kimi-k3', model_id: 'moonshot/kimi-k3' },
+    }).model,
+    'kimi-k3',
+  );
+  assert.equal(
+    envelopeEnv(normalizeEnvelope({
+      dialectKey: 'codex', event: 'session-start', payload: { model: 'gpt-5-codex' },
+    })).AGENT_HOOK_MODEL,
+    'gpt-5-codex',
+  );
+});
+
 test('the env mirror omits absent fields instead of exporting empty strings', () => {
   const env = envelopeEnv(normalizeEnvelope({
     dialectKey: 'claude', event: 'pre-command', payload: { tool_input: { command: 'ls' } },

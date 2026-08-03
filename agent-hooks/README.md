@@ -60,6 +60,7 @@ Your script gets these, so a five-line `sh` hook never parses JSON:
 | `AGENT_HOOK_TOOL_COMMAND` | set when the tool is a shell tool |
 | `AGENT_HOOK_TOOL_PATH` | set when the tool is a file tool |
 | `AGENT_HOOK_PROMPT` | set on `prompt-submit` |
+| `AGENT_HOOK_MODEL` | where the harness sends one — Codex and Cursor do, Claude Code does not |
 
 The normalized envelope also arrives as JSON on stdin, including `raw` — the
 verbatim vendor payload, for the day a vendor ships a field the table does not
