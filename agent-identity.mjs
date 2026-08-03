@@ -208,23 +208,71 @@ function sleep(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
-function withLock(lock, label, operation) {
+const STALE_LOCK_MS = 30_000;
+
+// A directory rename is NOT a compare-and-swap. `renameSync(lock, …)` moves
+// whatever occupies that path at the instant it runs, which need not be the
+// directory the caller judged stale a moment earlier: a legitimate waiter can
+// acquire in between, and the reclaimer then carries off a live lock. Both
+// processes go on believing they hold it, both read-modify-write the record,
+// and one update is lost — silently, since neither sees an error.
+//
+// The identity is the inode, not the path. Every step that could act on the
+// wrong directory therefore checks it, and the reclaim is undone if the
+// directory that moved was not the one judged stale. See issue #15.
+function ownerToken(lock) {
+  try {
+    return readFileSync(path.join(lock, 'owner'), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+export function reclaimStaleLock(lock, observed) {
+  // Re-read immediately before the swap. This does not close the window on its
+  // own — the inode check below is what does — but it drops the common case of
+  // acting on a reading that is already tens of milliseconds old.
+  let current;
+  try {
+    current = statSync(lock);
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+  if (current.ino !== observed.ino) return;
+  if (Date.now() - current.mtimeMs <= STALE_LOCK_MS) return;
+
+  const stale = `${lock}.stale.${process.pid}.${randomUUID()}`;
+  renameSync(lock, stale);
+  const moved = statSync(stale);
+  if (moved.ino !== observed.ino) {
+    // We carried off a lock somebody acquired fairly while we were deciding.
+    // Put it back rather than deleting it: its holder is mid-operation and is
+    // about to check that it still owns this path.
+    renameSync(stale, lock);
+    return;
+  }
+  rmSync(stale, { recursive: true, force: true });
+}
+
+export function withLock(lock, label, operation) {
+  const token = `${process.pid}.${randomUUID()}`;
   let acquired = false;
   for (let attempt = 0; attempt < 200; attempt++) {
     try {
       mkdirSync(lock, { mode: 0o700 });
+      // Written after the exclusive mkdir, so it can only ever describe the
+      // holder. Absent means "acquired but not yet stamped", which is treated
+      // as not-ours everywhere below.
+      writeFileSync(path.join(lock, 'owner'), token, { encoding: 'utf8', mode: 0o600 });
       acquired = true;
       break;
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
       try {
-        if (Date.now() - statSync(lock).mtimeMs > 30_000) {
-          const stale = `${lock}.stale.${process.pid}.${randomUUID()}`;
-          // Rename is the compare-and-swap: exactly one waiter can move the
-          // observed stale lock. Removing by its unique name cannot delete a
-          // fresh lock another waiter acquired at the original path.
-          renameSync(lock, stale);
-          rmSync(stale, { recursive: true, force: true });
+        const observed = statSync(lock);
+        if (Date.now() - observed.mtimeMs > STALE_LOCK_MS) {
+          reclaimStaleLock(lock, observed);
           continue;
         }
       } catch (lockError) {
@@ -238,7 +286,10 @@ function withLock(lock, label, operation) {
   try {
     return operation();
   } finally {
-    rmSync(lock, { recursive: true, force: true });
+    // Release only what is still ours. The previous unconditional remove would
+    // delete a successor's lock if this one had been reclaimed mid-operation,
+    // turning one stolen lock into a cascade of them.
+    if (ownerToken(lock) === token) rmSync(lock, { recursive: true, force: true });
   }
 }
 
