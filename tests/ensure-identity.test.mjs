@@ -27,4 +27,7 @@ test('scripts/ensure-identity.sh falls back to the installed location', () => {
   assert.match(body, /elif \[\[ -x "\$installed_agent_bot" \]\]; then/);
   // Ordering matters — PATH first, so an explicitly chosen agent-bot still wins.
   assert.ok(body.indexOf('command -v agent-bot') < body.indexOf('-x "$installed_agent_bot"'));
+  // Explicit configuration outranks the fixed path: a stale ~/.local/bin
+  // symlink must not run a different setup-worktree than the one configured.
+  assert.ok(body.indexOf('AGENT_BOT_HOME:-') < body.indexOf('-x "$installed_agent_bot"'));
 });
