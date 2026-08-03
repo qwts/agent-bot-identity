@@ -153,9 +153,18 @@ dispatchers under `~/.local/share/agent-bot/hooks`, and points global
 `core.hooksPath` there. A displaced non-agent hooks path is recorded in
 `agentBot.chainedHooksPath`, so repository and Husky hooks keep running.
 Re-running the installer is idempotent and foreign files are never replaced.
-The gh shim installer keeps the shim on PATH for non-login zsh processes via
-`.zshenv`. It also re-prepends `~/.local/bin` without duplication at the end of
-`.zprofile`, after existing login-shell setup such as Homebrew has run.
+PATH is registered in two files because zsh reads them in different situations.
+`.zshenv` is read by *every* zsh, including the non-login, non-interactive
+shells a harness spawns for its startup scripts — so both `~/.local/bin` and the
+gh shim directory are registered there. `.zprofile` is read by login shells only
+and is appended after existing setup such as Homebrew, which is what makes our
+directories resolve first in a normal session. Both are needed: without
+`.zshenv` a harness cannot find `agent-bot` at all; without `.zprofile` a login
+shell finds Homebrew's `gh` first.
+
+Shells other than zsh get no registration. The identity scripts fall back to
+`~/.local/bin/agent-bot` directly for that case, and `agent-bot doctor` probes a
+non-login shell so a missing registration is reported rather than assumed.
 
 ### 5. Verify
 

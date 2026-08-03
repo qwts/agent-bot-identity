@@ -11,7 +11,7 @@
 
 import process from 'node:process';
 import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig, apiBase, slugForHarness } from './config.mjs';
@@ -38,6 +38,39 @@ function git(...args) {
   return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
+// `existsSync` answers "is it installed", which is green in exactly the state
+// that breaks harnesses: the symlink present, but invisible to the shell a
+// harness spawns. Startup scripts run non-login and non-interactive, so they
+// read .zshenv alone — and doctor itself runs in an interactive shell, so it
+// can never observe that environment without spawning it.
+function reportHarnessShellPath() {
+  // The environment must be sanitized, not inherited. doctor is normally run
+  // from an interactive shell whose PATH already contains ~/.local/bin, so a
+  // probe that inherits it passes trivially and reports on nothing. Handing zsh
+  // a bare PATH makes .zshenv the only thing that can put our directory back —
+  // which is precisely the question.
+  const probe = spawnSync('zsh', ['-c', 'command -v agent-bot'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    env: { HOME: homedir(), PATH: '/usr/bin:/bin' },
+  });
+  if (probe.error) {
+    // No zsh is not a failure — plenty of machines do not have it, and the
+    // fallback in ensure-identity.sh covers them.
+    ok('zsh not present — skipped the harness PATH check');
+    return;
+  }
+  const resolved = (probe.stdout ?? '').trim();
+  if (resolved) {
+    ok(`harness shells resolve agent-bot -> ${resolved}`);
+    return;
+  }
+  fail(
+    'agent-bot is installed but not on PATH for non-login shells',
+    'harness startup scripts will report the runtime missing — run: node install.mjs',
+  );
+}
+
 async function main() {
   process.stdout.write('agent-bot doctor\n\n-- runtime --\n');
   ok(`node ${process.version}`);
@@ -48,6 +81,7 @@ async function main() {
   }
   if (existsSync(INSTALLED.executable)) ok(`agent-bot -> ${INSTALLED.executable}`);
   else fail('agent-bot is not installed', 'run: node install.mjs');
+  reportHarnessShellPath();
 
   process.stdout.write('\n-- hook installation --\n');
   let hooksPath = '';

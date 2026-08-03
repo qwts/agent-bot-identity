@@ -17,6 +17,7 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { ensurePathLine } from './shell-path.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const ENTRYPOINT = join(ROOT, 'agent-bot.mjs');
@@ -71,23 +72,44 @@ export function installExecutable({
   return paths.executable;
 }
 
+// Two registrations, because they answer different questions.
+//
+// .zshenv is read by EVERY zsh, including the non-login non-interactive shells
+// a harness spawns for its startup scripts. Without it `command -v agent-bot`
+// fails there and the runtime looks uninstalled while its symlink is present —
+// hooks that fail closed abort, and hooks that fail open vanish silently.
+//
+// .zprofile is login-only, but it is appended after Homebrew's shellenv, so it
+// is what puts our directory *first* for an interactive session. Dropping it
+// would reintroduce the ordering bug; dropping .zshenv leaves every harness
+// blind. Both, or neither works.
 export function ensureExecutablePath({
   home = homedir(),
   read = readFileSync,
   append = appendFileSync,
 } = {}) {
-  const zprofile = join(home, '.zprofile');
-  let body = '';
-  try {
-    body = read(zprofile, 'utf8');
-  } catch {
-    /* no file yet */
-  }
+  // Distinct from install-gh-shim's `.config/agent-bot/bin` marker, which is a
+  // loose substring the .zprofile line below also contains.
+  const zshenv = ensurePathLine({
+    home,
+    filename: '.zshenv',
+    line: 'export PATH="$HOME/.local/bin:$PATH"  # agent-bot CLI',
+    marker: '# agent-bot CLI',
+    read,
+    append,
+  });
   const marker = '# agent-bot installed commands';
-  if (body.includes(marker)) return { path: zprofile, updated: false };
-  const line = `export PATH="$HOME/.config/agent-bot/bin:$HOME/.local/bin:$PATH"  ${marker}`;
-  append(zprofile, `${body === '' || body.endsWith('\n') ? '' : '\n'}${line}\n`);
-  return { path: zprofile, updated: true };
+  const zprofile = ensurePathLine({
+    home,
+    filename: '.zprofile',
+    line: `export PATH="$HOME/.config/agent-bot/bin:$HOME/.local/bin:$PATH"  ${marker}`,
+    marker,
+    read,
+    append,
+  });
+  // `path`/`updated` stay on the .zprofile registration so existing callers and
+  // output keep their meaning; the new one is reported alongside.
+  return { ...zprofile, zshenv };
 }
 
 function hookWrapper(name) {

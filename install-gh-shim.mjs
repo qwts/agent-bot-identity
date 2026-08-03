@@ -15,6 +15,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildGhShim } from './gh-shim.mjs';
+import { ensurePathLine } from './shell-path.mjs';
 
 function optionalStat(path, lstat) {
   try {
@@ -23,19 +24,6 @@ function optionalStat(path, lstat) {
     if (error.code === 'ENOENT') return null;
     throw error;
   }
-}
-
-function ensurePathLine({ home, filename, line, marker, read, append }) {
-  const path = join(home, filename);
-  let body = '';
-  try {
-    body = read(path, 'utf8');
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-  }
-  const updated = !body.includes(marker);
-  if (updated) append(path, `${body === '' || body.endsWith('\n') ? '' : '\n'}${line}\n`);
-  return { path, updated };
 }
 
 export function installGhShim({
