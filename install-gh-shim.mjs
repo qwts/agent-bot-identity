@@ -25,6 +25,19 @@ function optionalStat(path, lstat) {
   }
 }
 
+function ensurePathLine({ home, filename, line, marker, read, append }) {
+  const path = join(home, filename);
+  let body = '';
+  try {
+    body = read(path, 'utf8');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  const updated = !body.includes(marker);
+  if (updated) append(path, `${body === '' || body.endsWith('\n') ? '' : '\n'}${line}\n`);
+  return { path, updated };
+}
+
 export function installGhShim({
   home = homedir(),
   mkdir = mkdirSync,
@@ -56,31 +69,35 @@ export function installGhShim({
     remove(localShim, { force: true });
   }
   symlink(shimPath, localShim);
-
-  const zshenv = join(home, '.zshenv');
-  const pathLine = 'export PATH="$HOME/.config/agent-bot/bin:$PATH"  # agent-bot gh shim';
-  let body = '';
-  try {
-    body = read(zshenv, 'utf8');
-  } catch {
-    /* no file yet */
-  }
-  const zshenvUpdated = !body.includes('.config/agent-bot/bin');
-  if (zshenvUpdated) {
-    append(zshenv, `${body === '' || body.endsWith('\n') ? '' : '\n'}${pathLine}\n`);
-  }
-  return { shimPath, localShim, zshenv, zshenvUpdated };
+  const zshenv = ensurePathLine({
+    home,
+    filename: '.zshenv',
+    line: 'export PATH="$HOME/.config/agent-bot/bin:$PATH"  # agent-bot gh shim',
+    marker: '.config/agent-bot/bin',
+    read,
+    append,
+  });
+  const zprofile = ensurePathLine({
+    home,
+    filename: '.zprofile',
+    line: 'path=("$HOME/.local/bin" "${(@)path:#$HOME/.local/bin}")  # agent-bot gh shim login priority',
+    marker: '# agent-bot gh shim login priority',
+    read,
+    append,
+  });
+  return { shimPath, localShim, zshenv, zprofile };
 }
 
 export function main() {
   const result = installGhShim();
   process.stdout.write(`gh shim -> ${result.shimPath}\n`);
   process.stdout.write(`PATH shim -> ${result.localShim}\n`);
-  process.stdout.write(
-    result.zshenvUpdated
-      ? `PATH line appended to ${result.zshenv}\n`
-      : `PATH line already present in ${result.zshenv}\n`,
-  );
+  process.stdout.write(result.zshenv.updated
+    ? `PATH line appended to ${result.zshenv.path}\n`
+    : `PATH line already present in ${result.zshenv.path}\n`);
+  process.stdout.write(result.zprofile.updated
+    ? `Login PATH line appended to ${result.zprofile.path}\n`
+    : `Login PATH line already present in ${result.zprofile.path}\n`);
   return result;
 }
 

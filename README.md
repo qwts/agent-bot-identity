@@ -153,8 +153,9 @@ dispatchers under `~/.local/share/agent-bot/hooks`, and points global
 `core.hooksPath` there. A displaced non-agent hooks path is recorded in
 `agentBot.chainedHooksPath`, so repository and Husky hooks keep running.
 Re-running the installer is idempotent and foreign files are never replaced.
-The installer also registers the command and shim directories at the front of
-the PATH for new zsh login sessions.
+The gh shim installer keeps the shim on PATH for non-login zsh processes via
+`.zshenv`. It also re-prepends `~/.local/bin` without duplication at the end of
+`.zprofile`, after existing login-shell setup such as Homebrew has run.
 
 ### 5. Verify
 
