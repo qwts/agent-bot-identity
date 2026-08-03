@@ -2,8 +2,10 @@
 
 import process from 'node:process';
 import {
+  appendFileSync,
   lstatSync,
   mkdirSync,
+  readFileSync,
   readlinkSync,
   rmSync,
   symlinkSync,
@@ -13,7 +15,6 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildGhShim } from './gh-shim.mjs';
-import { ensureExecutablePath } from './shell-path.mjs';
 
 function optionalStat(path, lstat) {
   try {
@@ -24,15 +25,29 @@ function optionalStat(path, lstat) {
   }
 }
 
+function ensurePathLine({ home, filename, line, marker, read, append }) {
+  const path = join(home, filename);
+  let body = '';
+  try {
+    body = read(path, 'utf8');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  const updated = !body.includes(marker);
+  if (updated) append(path, `${body === '' || body.endsWith('\n') ? '' : '\n'}${line}\n`);
+  return { path, updated };
+}
+
 export function installGhShim({
   home = homedir(),
   mkdir = mkdirSync,
   write = writeFileSync,
+  read = readFileSync,
+  append = appendFileSync,
   symlink = symlinkSync,
   remove = rmSync,
   lstat = lstatSync,
   readlink = readlinkSync,
-  installPath = ensureExecutablePath,
 } = {}) {
   const binDir = join(home, '.config', 'agent-bot', 'bin');
   mkdir(binDir, { recursive: true });
@@ -54,20 +69,35 @@ export function installGhShim({
     remove(localShim, { force: true });
   }
   symlink(shimPath, localShim);
-  const pathRegistration = installPath({ home });
-  return { shimPath, localShim, pathRegistration };
+  const zshenv = ensurePathLine({
+    home,
+    filename: '.zshenv',
+    line: 'export PATH="$HOME/.config/agent-bot/bin:$PATH"  # agent-bot gh shim',
+    marker: '.config/agent-bot/bin',
+    read,
+    append,
+  });
+  const zprofile = ensurePathLine({
+    home,
+    filename: '.zprofile',
+    line: 'path=("$HOME/.local/bin" "${(@)path:#$HOME/.local/bin}")  # agent-bot gh shim login priority',
+    marker: '# agent-bot gh shim login priority',
+    read,
+    append,
+  });
+  return { shimPath, localShim, zshenv, zprofile };
 }
 
 export function main() {
   const result = installGhShim();
   process.stdout.write(`gh shim -> ${result.shimPath}\n`);
   process.stdout.write(`PATH shim -> ${result.localShim}\n`);
-  if (result.pathRegistration.updated) {
-    process.stdout.write(`PATH line appended to ${result.pathRegistration.path}\n`);
-  }
-  for (const path of result.pathRegistration.migrated) {
-    process.stdout.write(`Removed legacy PATH line from ${path}\n`);
-  }
+  process.stdout.write(result.zshenv.updated
+    ? `PATH line appended to ${result.zshenv.path}\n`
+    : `PATH line already present in ${result.zshenv.path}\n`);
+  process.stdout.write(result.zprofile.updated
+    ? `Login PATH line appended to ${result.zprofile.path}\n`
+    : `Login PATH line already present in ${result.zprofile.path}\n`);
   return result;
 }
 

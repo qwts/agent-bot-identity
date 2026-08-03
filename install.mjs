@@ -3,6 +3,7 @@
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import {
+  appendFileSync,
   chmodSync,
   lstatSync,
   mkdirSync,
@@ -16,7 +17,6 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { ensureExecutablePath } from './shell-path.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const ENTRYPOINT = join(ROOT, 'agent-bot.mjs');
@@ -69,6 +69,25 @@ export function installExecutable({
   }
   symlink(entrypoint, paths.executable);
   return paths.executable;
+}
+
+export function ensureExecutablePath({
+  home = homedir(),
+  read = readFileSync,
+  append = appendFileSync,
+} = {}) {
+  const zprofile = join(home, '.zprofile');
+  let body = '';
+  try {
+    body = read(zprofile, 'utf8');
+  } catch {
+    /* no file yet */
+  }
+  const marker = '# agent-bot installed commands';
+  if (body.includes(marker)) return { path: zprofile, updated: false };
+  const line = `export PATH="$HOME/.config/agent-bot/bin:$HOME/.local/bin:$PATH"  ${marker}`;
+  append(zprofile, `${body === '' || body.endsWith('\n') ? '' : '\n'}${line}\n`);
+  return { path: zprofile, updated: true };
 }
 
 function hookWrapper(name) {
@@ -166,9 +185,6 @@ export function main(argv = process.argv.slice(2)) {
   process.stdout.write(`core.hooksPath -> ${result.hooksPath}\n`);
   if (result.pathRegistration.updated) {
     process.stdout.write(`PATH line appended to ${result.pathRegistration.path}\n`);
-  }
-  for (const path of result.pathRegistration.migrated) {
-    process.stdout.write(`Removed legacy PATH line from ${path}\n`);
   }
   if (result.chainedHooksPath) {
     process.stdout.write(`chained hooks -> ${result.chainedHooksPath}\n`);

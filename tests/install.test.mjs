@@ -8,37 +8,6 @@ import { join } from 'node:path';
 import {
   installAgentBot, installExecutable, installHookWrappers, installationPaths,
 } from '../install.mjs';
-import { ensureExecutablePath } from '../shell-path.mjs';
-
-test('PATH registration follows zprofile setup and migrates legacy zshenv lines', () => {
-  const home = mkdtempSync(join(tmpdir(), 'agent-bot-path-'));
-  writeFileSync(join(home, '.zshenv'), [
-    'export KEEP_ENV=1',
-    'export PATH="$HOME/.config/agent-bot/bin:$PATH"  # agent-bot gh shim (ENG-0045)',
-    'export PATH="$HOME/.local/bin:$PATH"  # agent-bot CLI',
-    '',
-  ].join('\n'));
-  writeFileSync(join(home, '.zprofile'), [
-    'export PATH="$HOME/.config/agent-bot/bin:$HOME/.local/bin:$PATH"  # agent-bot installed commands',
-    'eval "$(brew shellenv)"',
-    'export KEEP_PROFILE=1',
-    '',
-  ].join('\n'));
-
-  const first = ensureExecutablePath({ home });
-  assert.deepEqual(first.migrated, [join(home, '.zshenv')]);
-  assert.equal(readFileSync(join(home, '.zshenv'), 'utf8'), 'export KEEP_ENV=1\n');
-  assert.equal(readFileSync(join(home, '.zprofile'), 'utf8'), [
-    'eval "$(brew shellenv)"',
-    'export KEEP_PROFILE=1',
-    'export PATH="$HOME/.local/bin:$PATH"  # agent-bot installed commands',
-    '',
-  ].join('\n'));
-
-  const second = ensureExecutablePath({ home });
-  assert.equal(second.updated, false);
-  assert.deepEqual(second.migrated, []);
-});
 
 test('installExecutable creates an idempotent ~/.local/bin/agent-bot symlink', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-install-'));
