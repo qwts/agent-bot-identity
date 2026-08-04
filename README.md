@@ -113,6 +113,30 @@ chmod 600 ~/.config/you-claude-agent/private-key.pem
 Keep an escrow copy of each key in your password manager; the files here are
 disposable runtime copies.
 
+`app-id` may hold either the numeric **App ID** or the **client ID** — GitHub
+accepts both as the JWT issuer and now recommends the latter. Note that neither
+is recoverable from the REST API afterwards: `/apps/{slug}` and every `/app/*`
+route require a JWT you cannot build without this value, and
+`/user/installations` needs a GitHub App user-to-server token, which a `gh`
+OAuth token is not. Read it off the App's settings page once and keep it
+somewhere durable.
+
+With **pass-cli** (Proton Pass) both halves can be restored instead of copied by
+hand. Store the key as a `private-key.pem` attachment on an item titled with the
+App slug, in a vault named `Agent Identities`, and put the issuer on the same
+item — either as an `app-id` / `client-id` custom field or as an
+`app-id: <value>` line in the note:
+
+```bash
+agent-bot ensure-private-key --app you-claude-agent
+```
+
+One `item view` provisions whichever of the two files is missing, so a fresh
+machine needs no manual copying. `setup-worktree` calls this on every bot
+worktree, which means a deleted key or app-id self-heals. A missing issuer is a
+warning rather than a failure — the key still lands, and `doctor` reports the
+gap.
+
 ### 3. Write the config
 
 `~/.config/agent-bot/config.json`:

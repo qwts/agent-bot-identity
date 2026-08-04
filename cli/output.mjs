@@ -12,7 +12,7 @@ Commands:
   identity           Manage transcript-bound execution identities
   install            Install the CLI and Git hooks
   install-gh-shim    Install the fail-closed gh shim
-  ensure-private-key Restore an App private key with pass-cli
+  ensure-private-key Restore an App private key and app-id with pass-cli
 `;
 }
 
