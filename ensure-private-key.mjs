@@ -2,7 +2,7 @@
 
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -19,6 +19,10 @@ function requireSlug(slug) {
 
 export function privateKeyPath(slug, home = homedir()) {
   return join(home, '.config', requireSlug(slug), 'private-key.pem');
+}
+
+export function appIdPath(slug, home = homedir()) {
+  return join(home, '.config', requireSlug(slug), 'app-id');
 }
 
 export function parseCliArgs(argv = process.argv.slice(2)) {
@@ -58,6 +62,8 @@ export function parsePassItemView(text) {
   const item = data?.item && typeof data.item === 'object' ? data.item : data;
   const shareId = pickString(data?.shareId, data?.share_id, item?.shareId, item?.share_id);
   const itemId = pickString(data?.itemId, data?.item_id, item?.id, item?.itemId, item?.item_id);
+  const content = item?.content && typeof item.content === 'object' ? item.content : {};
+  const note = pickString(content.note, item?.note) ?? '';
   const source = Array.isArray(data?.attachments)
     ? data.attachments
     : Array.isArray(item?.attachments)
@@ -76,7 +82,76 @@ export function parsePassItemView(text) {
       ) ?? '',
     }))
     .filter((entry) => entry.id);
-  return { shareId, itemId, attachments };
+  return { shareId, itemId, attachments, fields: collectFields(content), note };
+}
+
+// Proton Pass exposes custom fields in two places depending on item type:
+// `content.content.Custom.sections[].fields[]` for custom items, and a flat
+// `content.extra_fields[]` elsewhere. Read both rather than betting on one.
+function collectFields(content) {
+  const entries = [];
+  const sections = content?.content?.Custom?.sections;
+  if (Array.isArray(sections)) {
+    for (const section of sections) {
+      if (Array.isArray(section?.fields)) entries.push(...section.fields);
+    }
+  }
+  if (Array.isArray(content?.extra_fields)) entries.push(...content.extra_fields);
+  const fields = new Map();
+  for (const entry of entries) {
+    const name = pickString(entry?.field_name, entry?.fieldName, entry?.name, entry?.label);
+    if (!name) continue;
+    const value = pickString(
+      typeof entry?.value === 'string' ? entry.value : null,
+      entry?.value?.text,
+      entry?.value?.content,
+      entry?.field_value,
+      entry?.data?.value,
+    );
+    if (value === null) continue;
+    const key = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!fields.has(key)) fields.set(key, value.trim());
+  }
+  return fields;
+}
+
+// GitHub accepts either the numeric App ID or the client ID as the JWT `iss`.
+// Anything else would produce an undecodable JWT and a confusing 401 at mint
+// time, so reject it here where the message can name the vault item.
+//
+// Client IDs come in two shapes and both remain valid issuers: the current
+// `Iv23liq8jJy0gS7h1nUg` form, and the legacy dotted `Iv1.8a61f9b3a7aba766`
+// still shown in GitHub's own API docs.
+export function validateIssuer(value) {
+  const trimmed = (value ?? '').trim();
+  if (/^\d{2,12}$/.test(trimmed)) return trimmed;
+  if (/^Iv\d+\.[0-9A-Za-z]{8,}$/.test(trimmed)) return trimmed;
+  if (/^Iv[0-9A-Za-z]{6,}$/.test(trimmed)) return trimmed;
+  return null;
+}
+
+const ISSUER_FIELD_KEYS = ['appid', 'githubappid', 'clientid', 'githubclientid'];
+
+// Field first, then a `app-id: <value>` line in the note — the note is the only
+// place a read-only vault session can be extended without the desktop app.
+export function selectIssuer({ fields = new Map(), note = '' } = {}) {
+  for (const key of ISSUER_FIELD_KEYS) {
+    const found = validateIssuer(fields.get(key));
+    if (found) return found;
+  }
+  for (const line of note.split(/\r?\n/)) {
+    const match = line.match(/^\s*(app[-_ ]?id|client[-_ ]?id)\s*[:=]\s*(\S+)\s*$/i);
+    if (!match) continue;
+    const found = validateIssuer(match[2]);
+    if (found) return found;
+  }
+  return null;
+}
+
+// An issuer can also arrive as a plain-text attachment beside the key, which is
+// the only way to add one when the vault session is read-only for item fields.
+export function selectAppIdAttachment(attachments) {
+  return (attachments ?? []).find((entry) => /^app[-_]?id(\.txt)?$/i.test(entry.name)) ?? null;
 }
 
 export function selectPrivateKeyAttachment(attachments) {
@@ -99,6 +174,9 @@ function runPass(args) {
   }
 }
 
+// Both halves of an App's credentials come from one `item view`. A mint needs
+// the key *and* the issuer, so provisioning only one of them leaves the App
+// unusable — restore whichever is missing on the same trip.
 export function ensurePrivateKey({
   slug,
   force = false,
@@ -106,10 +184,16 @@ export function ensurePrivateKey({
   run = runPass,
   exists = existsSync,
   mkdir = mkdirSync,
+  write = writeFileSync,
+  read = readFileSync,
+  remove = rmSync,
   chmod = chmodSync,
 } = {}) {
   const path = privateKeyPath(slug, home);
-  if (!force && exists(path)) return { path, downloaded: false };
+  const idPath = appIdPath(slug, home);
+  const needKey = force || !exists(path);
+  const needId = force || !exists(idPath);
+  if (!needKey && !needId) return { path, downloaded: false, idPath, appIdWritten: false };
   const view = run([
     'item',
     'view',
@@ -120,9 +204,37 @@ export function ensurePrivateKey({
     '--output',
     'json',
   ]);
-  const { shareId, itemId, attachments } = parsePassItemView(view);
-  const attachment = selectPrivateKeyAttachment(attachments);
+  const { shareId, itemId, attachments, fields, note } = parsePassItemView(view);
   mkdir(dirname(path), { recursive: true });
+  // The issuer is not a secret, so a vault that has not been taught it yet is a
+  // warning rather than a failure — the key restore below still has to happen.
+  let appIdWritten = false;
+  let issuer = needId ? selectIssuer({ fields, note }) : null;
+  // Fields and note lines are free; the attachment costs a second download, so
+  // only reach for it when the cheap sources came up empty.
+  const idAttachment = needId && !issuer ? selectAppIdAttachment(attachments) : null;
+  if (idAttachment) {
+    run([
+      'item', 'attachment', 'download',
+      '--share-id', shareId,
+      '--item-id', itemId,
+      '--attachment-id', idAttachment.id,
+      '--output', idPath,
+    ]);
+    // Validate what actually landed. An attachment is opaque until read, and a
+    // stray newline or a wrong file would otherwise become the JWT `iss` and
+    // surface as an unexplained 401 at mint time.
+    issuer = validateIssuer(read(idPath, 'utf8'));
+    if (!issuer) remove(idPath, { force: true });
+  }
+  if (issuer) {
+    write(idPath, `${issuer}\n`);
+    appIdWritten = true;
+  }
+  if (!needKey) {
+    return { path, downloaded: false, idPath, appIdWritten, issuerMissing: needId && !issuer };
+  }
+  const attachment = selectPrivateKeyAttachment(attachments);
   run([
     'item',
     'attachment',
@@ -137,7 +249,7 @@ export function ensurePrivateKey({
     path,
   ]);
   chmod(path, 0o600);
-  return { path, downloaded: true };
+  return { path, downloaded: true, idPath, appIdWritten, issuerMissing: needId && !issuer };
 }
 
 export function main(argv = process.argv.slice(2)) {
@@ -146,6 +258,14 @@ export function main(argv = process.argv.slice(2)) {
   if (!slug) throw new Error('no App resolves; pass --app, set GH_AGENT_APP, or configure a pin');
   const result = ensurePrivateKey({ slug, force });
   process.stdout.write(`${result.downloaded ? 'fetched' : 'already present'} ${result.path}\n`);
+  if (result.appIdWritten) process.stdout.write(`fetched ${result.idPath}\n`);
+  if (result.issuerMissing) {
+    process.stderr.write(
+      `ensure-private-key: no app-id/client-id on the "${slug}" vault item — `
+        + `add it as a custom field, an "app-id: <value>" note line, or an "app-id" `
+        + `attachment, or write ${result.idPath} by hand\n`,
+    );
+  }
   return result;
 }
 
