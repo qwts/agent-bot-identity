@@ -45,18 +45,17 @@ drift and an exit-code channel that cannot fail open. **Policy that must hold
 everywhere belongs in a harness event *and* in one of those two** — that is what
 covers Devin Desktop's weak channel and Devin cloud's absent one.
 
-### What is wired today
+### Generated adapters
 
-Only `.claude/settings.json`, and only for `session-start`, `pre-command` and
-`pre-file-write`. The remaining events, the other five harness configs, and the
-git-layer dispatch from `hooks/pre-commit` / `hooks/pre-push` are generated and
-wired in follow-up changes.
+`hook-dialects.mjs` declares the vendor spellings and `sync-hooks.mjs` generates
+the checked-in Claude, Codex, Cursor, Copilot, and Devin Desktop adapters. Devin
+CLI consumes the Claude adapter natively; generating a second Devin CLI file
+would fire each hook twice. `npm test` runs `node sync-hooks.mjs --check`, so a
+hand-edited adapter cannot drift from the shared table.
 
-Until then a hook in `agent-hooks/pre-commit/` or `agent-hooks/pre-push/` **will
-not run**, and a hook in an unwired event folder runs on Claude only. The
-dialect table declares the full contract; the generator is what delivers it. If
-that gap matters to you now, set the config by hand — the runner is complete and
-`agent-bot agent-hook --dialect <d> --event <e>` is stable.
+Generated entries are marker-scoped. Regeneration replaces entries containing
+`agent-bot agent-hook` and preserves foreign entries such as repository memory
+guards and Claude's `WorktreeCreate` hook.
 
 ## The contract
 
@@ -74,6 +73,7 @@ Your script gets these, so a five-line `sh` hook never parses JSON:
 | `AGENT_HOOK_TOOL_PATH` | set when the tool is a file tool |
 | `AGENT_HOOK_PROMPT` | set on `prompt-submit` |
 | `AGENT_HOOK_MODEL` | where the harness sends one — Codex and Cursor do, Claude Code does not |
+| `AGENT_HOOK_GIT_STDIN` | raw ref-update lines on `pre-push` |
 
 The normalized envelope also arrives as JSON on stdin, including `raw` — the
 verbatim vendor payload, for the day a vendor ships a field the table does not
@@ -119,4 +119,3 @@ That is the honest division of labour: this layer is the **fast, informative**
 one, and the git layer (`pre-commit`, `pre-push`) is the one that actually
 holds, because it needs no harness config and cannot be skipped by a harness
 that ignores its hooks. Policy that must hold belongs in both.
-

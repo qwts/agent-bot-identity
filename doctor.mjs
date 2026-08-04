@@ -14,11 +14,13 @@ import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { loadConfig, apiBase, slugForHarness } from './config.mjs';
 import { detectHarness, HARNESSES } from './detect-harness.mjs';
 import { mint } from './mint-token.mjs';
 import { resolveAgentSlug, territoryHarness } from './resolve-agent.mjs';
 import { installationPaths } from './install.mjs';
+import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
 
 const INSTALLED = installationPaths();
 const HOOKS_DIR = INSTALLED.hooksDir;
@@ -36,6 +38,26 @@ function fail(msg, fix) {
 }
 function git(...args) {
   return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+}
+
+export function hookCoverage(today = new Date()) {
+  return DIALECTS.map((row) => {
+    const events = row.key === 'git'
+      ? ['pre-commit', 'pre-push']
+      : CANONICAL_EVENTS.filter((event) => !['pre-commit', 'pre-push'].includes(event));
+    const covered = events.filter((event) => vendorEvent(row.key, event)).length;
+    const verified = new Date(`${row.verifiedOn}T00:00:00Z`);
+    const ageDays = Math.floor((today.getTime() - verified.getTime()) / 86_400_000);
+    return {
+      key: row.key,
+      label: [row.key, ...(row.alsoServes ?? [])].join(' + '),
+      covered,
+      total: events.length,
+      status: row.status,
+      verifiedOn: row.verifiedOn,
+      stale: ageDays > 90,
+    };
+  });
 }
 
 // `existsSync` answers "is it installed", which is green in exactly the state
@@ -115,6 +137,15 @@ async function main() {
   for (const name of ['pre-commit', 'prepare-commit-msg', 'post-commit']) {
     if (existsSync(join(HOOKS_DIR, name))) ok(`hooks/${name} present`);
     else fail(`hooks/${name} missing`, 're-clone or restore from the agent-bot-identity release');
+  }
+  if (existsSync(INSTALLED.agentHook)) ok(`agent-hook fast path -> ${INSTALLED.agentHook}`);
+  else fail('agent-hook fast path is missing', 'run: agent-bot install');
+
+  process.stdout.write('\n-- harness hook coverage --\n');
+  for (const row of hookCoverage()) {
+    const detail = `${row.covered}/${row.total} events, ${row.status}, verified ${row.verifiedOn}`;
+    if (row.status === 'verified' && !row.stale) ok(`${row.label}: ${detail}`);
+    else warn(`${row.label}: ${detail}${row.stale ? ' (stale)' : ''}`);
   }
 
   process.stdout.write('\n-- gh shim --\n');
@@ -227,7 +258,9 @@ async function main() {
   process.exitCode = failures ? 1 : 0;
 }
 
-main().catch((err) => {
-  console.error(`doctor: ${err.message}`);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error(`doctor: ${err.message}`);
+    process.exit(1);
+  });
+}

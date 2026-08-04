@@ -167,7 +167,7 @@ export const DIALECTS = [
       'prompt-submit': 'beforeSubmitPrompt',
       'pre-tool-use': 'preToolUse',
       'pre-command': 'beforeShellExecution',
-      'pre-file-write': 'beforeReadFile',
+      'pre-file-write': { event: 'preToolUse', matcher: 'Write|Edit' },
       'post-tool-use': 'postToolUse',
       'agent-stop': 'stop',
       'session-end': 'sessionEnd',
@@ -199,8 +199,8 @@ export const DIALECTS = [
       'session-end': 'sessionEnd',
       'prompt-submit': 'userPromptSubmitted',
       'pre-tool-use': 'preToolUse',
-      'pre-command': { event: 'preToolUse', matcher: 'shell|bash' },
-      'pre-file-write': { event: 'preToolUse', matcher: 'write|edit|create' },
+      'pre-command': { event: 'preToolUse', matcher: 'bash|powershell' },
+      'pre-file-write': { event: 'preToolUse', matcher: 'create|edit' },
       'post-tool-use': 'postToolUse',
       'agent-stop': 'agentStop',
     },
@@ -325,6 +325,7 @@ export function envelopeEnv(envelope) {
     AGENT_HOOK_TOOL_PATH: envelope.file_path,
     AGENT_HOOK_PROMPT: envelope.prompt,
     AGENT_HOOK_MODEL: envelope.model,
+    AGENT_HOOK_GIT_STDIN: envelope.raw?.git_stdin,
   };
   for (const [key, value] of Object.entries(optional)) if (value) env[key] = value;
   return env;

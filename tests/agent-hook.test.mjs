@@ -1,7 +1,9 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -311,4 +313,35 @@ test('runHooks is callable in-process for every canonical event', () => {
   for (const event of CANONICAL_EVENTS) {
     assert.equal(runHooks({ dialectKey: 'claude', event, payload: {}, dir }).decision, 'allow');
   }
+});
+
+test('the git pre-push backstop rejects rewrites and allows fast-forwards', () => {
+  const work = path.join(root, `git-push${(seq += 1)}`);
+  mkdirSync(work, { recursive: true });
+  execFileSync('git', ['init', '--quiet'], { cwd: work });
+  execFileSync('git', ['config', 'user.name', 'test-agent[bot]'], { cwd: work });
+  execFileSync('git', ['config', 'user.email', 'test-agent@users.noreply.github.com'], { cwd: work });
+  writeFileSync(path.join(work, 'a'), 'one\n');
+  execFileSync('git', ['add', 'a'], { cwd: work });
+  execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'commit', '--quiet', '-m', 'one'], { cwd: work });
+  const first = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: work, encoding: 'utf8' }).trim();
+  writeFileSync(path.join(work, 'a'), 'two\n');
+  execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'commit', '--quiet', '-am', 'two'], { cwd: work });
+  const second = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: work, encoding: 'utf8' }).trim();
+  const line = (local, remote) => `refs/heads/main ${local} refs/heads/main ${remote}\n`;
+  const run = (input) => spawnSync(
+    process.execPath,
+    [runner, '--dialect', 'git', '--event', 'pre-push'],
+    {
+      cwd: work,
+      input,
+      encoding: 'utf8',
+      env: { ...process.env, AGENT_BOT_HOOKS_DIR: path.join(repo, 'agent-hooks') },
+    },
+  );
+
+  assert.equal(run(line(second, first)).status, 0, 'fast-forward push was rejected');
+  const rewrite = run(`${line(second, first)}${line(first, second)}`);
+  assert.equal(rewrite.status, 2);
+  assert.match(rewrite.stderr, /may not rewrite/);
 });

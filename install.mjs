@@ -18,6 +18,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensurePathLine, zshStartupDir } from './shell-path.mjs';
+import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const ENTRYPOINT = join(ROOT, 'agent-bot.mjs');
@@ -27,6 +28,7 @@ export function installationPaths(home = homedir()) {
   return {
     binDir: join(home, '.local', 'bin'),
     executable: join(home, '.local', 'bin', 'agent-bot'),
+    agentHook: join(home, '.local', 'share', 'agent-bot', 'agent-hook'),
     hooksDir: join(home, '.local', 'share', 'agent-bot', 'hooks'),
   };
 }
@@ -124,6 +126,57 @@ function hookWrapper(name) {
   return `#!/bin/sh\n# Managed by agent-bot install.\nexec "\${HOME}/.local/bin/agent-bot" hook ${name} "$@"\n`;
 }
 
+export function agentHookFastPath() {
+  return `#!/bin/sh
+# Managed by agent-bot install. Avoid Node when this repo has no hook for the
+# requested event; generated harness adapters call this path unconditionally.
+EVENT=""
+PREV=""
+for ARG in "$@"; do
+  if [ "$PREV" = "--event" ]; then EVENT=$ARG; break; fi
+  PREV=$ARG
+done
+[ -n "$EVENT" ] || exit 0
+RUNNER=\${AGENT_BOT_BIN:-"$HOME/.local/bin/agent-bot"}
+[ -x "$RUNNER" ] || exit 0
+DIR=\${AGENT_BOT_HOOKS_DIR:-}
+if [ -z "$DIR" ]; then
+  ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "$ROOT" ] && [ -d "$ROOT/agent-hooks" ]; then
+    DIR="$ROOT/agent-hooks"
+  else
+    TARGET=$(readlink "$RUNNER" 2>/dev/null || true)
+    [ -n "$TARGET" ] || TARGET=$RUNNER
+    case "$TARGET" in
+      /*) ;;
+      *) TARGET=$(dirname "$RUNNER")/$TARGET ;;
+    esac
+    DIR=$(dirname "$TARGET")/agent-hooks
+  fi
+fi
+[ -d "$DIR/$EVENT" ] || exit 0
+FOUND=""
+for FILE in "$DIR/$EVENT"/*; do
+  [ -f "$FILE" ] && [ -x "$FILE" ] && { FOUND=1; break; }
+done
+[ -n "$FOUND" ] || exit 0
+exec "$RUNNER" agent-hook "$@"
+`;
+}
+
+export function installAgentHook({
+  home = homedir(),
+  mkdir = mkdirSync,
+  write = writeFileSync,
+  chmod = chmodSync,
+} = {}) {
+  const path = installationPaths(home).agentHook;
+  mkdir(dirname(path), { recursive: true });
+  write(path, agentHookFastPath(), { mode: 0o755 });
+  chmod(path, 0o755);
+  return path;
+}
+
 export function installHookWrappers({
   home = homedir(),
   sourceHooks = SOURCE_HOOKS,
@@ -136,7 +189,10 @@ export function installHookWrappers({
 } = {}) {
   const hooksDir = installationPaths(home).hooksDir;
   mkdir(hooksDir, { recursive: true });
-  const hooks = list(sourceHooks).filter((name) => name !== 'chain-hook');
+  const available = new Set(list(sourceHooks));
+  const missing = GIT_HOOK_NAMES.filter((name) => !available.has(name));
+  if (missing.length) throw new Error(`missing source Git hooks: ${missing.join(', ')}`);
+  const hooks = [...GIT_HOOK_NAMES];
   for (const name of list(hooksDir)) {
     if (hooks.includes(name)) continue;
     const stale = join(hooksDir, name);
@@ -178,10 +234,12 @@ export function installAgentBot({
   home = homedir(),
   run = (args) => execFileSync('git', args, { encoding: 'utf8' }).trim(),
   installCli = installExecutable,
+  installAgentHooks = installAgentHook,
   installHooks = installHookWrappers,
   installPath = ensureExecutablePath,
 } = {}) {
   const executable = installCli({ home });
+  const agentHook = installAgentHooks({ home });
   const pathRegistration = installPath({ home });
   const hooksPath = installHooks({ home });
   const previous = getGlobal(run, 'core.hooksPath');
@@ -204,7 +262,7 @@ export function installAgentBot({
     }
   }
   run(['config', '--global', 'core.hooksPath', hooksPath]);
-  return { executable, hooksPath, previous, chainedHooksPath, pathRegistration };
+  return { executable, agentHook, hooksPath, previous, chainedHooksPath, pathRegistration };
 }
 
 export function main(argv = process.argv.slice(2)) {

@@ -16,4 +16,8 @@ CLAUDE.md   @qwts
 .claude/    @qwts
 .codex/     @qwts
 .cursor/    @qwts
+.windsurf/  @qwts
+agent-hooks/ @qwts
+hook-dialects.mjs @qwts
+sync-hooks.mjs @qwts
 .mcp.json   @qwts
