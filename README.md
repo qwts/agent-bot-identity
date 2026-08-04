@@ -124,8 +124,12 @@ somewhere durable.
 With **pass-cli** (Proton Pass) both halves can be restored instead of copied by
 hand. Store the key as a `private-key.pem` attachment on an item titled with the
 App slug, in a vault named `Agent Identities`, and put the issuer on the same
-item — either as an `app-id` / `client-id` custom field or as an
-`app-id: <value>` line in the note:
+item in whichever form your vault session allows — an `app-id` / `client-id`
+custom field, an `app-id: <value>` line in the note, or a plain-text `app-id`
+attachment. Fields are checked first and cost nothing extra; the attachment is
+downloaded only when no field or note carries the value, and its contents are
+validated before use. An agent token with read-only item access can still add an
+attachment, which is why all three are accepted:
 
 ```bash
 agent-bot ensure-private-key --app you-claude-agent

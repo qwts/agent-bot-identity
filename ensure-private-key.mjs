@@ -2,7 +2,7 @@
 
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -117,10 +117,16 @@ function collectFields(content) {
 
 // GitHub accepts either the numeric App ID or the client ID as the JWT `iss`.
 // Anything else would produce an undecodable JWT and a confusing 401 at mint
-// time, so reject it here where the message can name the vault field.
+// time, so reject it here where the message can name the vault item.
+//
+// Client IDs come in two shapes and both remain valid issuers: the current
+// `Iv23liq8jJy0gS7h1nUg` form, and the legacy dotted `Iv1.8a61f9b3a7aba766`
+// still shown in GitHub's own API docs.
 export function validateIssuer(value) {
   const trimmed = (value ?? '').trim();
-  if (/^\d{2,12}$/.test(trimmed) || /^Iv[0-9A-Za-z]{6,}$/.test(trimmed)) return trimmed;
+  if (/^\d{2,12}$/.test(trimmed)) return trimmed;
+  if (/^Iv\d+\.[0-9A-Za-z]{8,}$/.test(trimmed)) return trimmed;
+  if (/^Iv[0-9A-Za-z]{6,}$/.test(trimmed)) return trimmed;
   return null;
 }
 
@@ -140,6 +146,12 @@ export function selectIssuer({ fields = new Map(), note = '' } = {}) {
     if (found) return found;
   }
   return null;
+}
+
+// An issuer can also arrive as a plain-text attachment beside the key, which is
+// the only way to add one when the vault session is read-only for item fields.
+export function selectAppIdAttachment(attachments) {
+  return (attachments ?? []).find((entry) => /^app[-_]?id(\.txt)?$/i.test(entry.name)) ?? null;
 }
 
 export function selectPrivateKeyAttachment(attachments) {
@@ -173,6 +185,8 @@ export function ensurePrivateKey({
   exists = existsSync,
   mkdir = mkdirSync,
   write = writeFileSync,
+  read = readFileSync,
+  remove = rmSync,
   chmod = chmodSync,
 } = {}) {
   const path = privateKeyPath(slug, home);
@@ -195,7 +209,24 @@ export function ensurePrivateKey({
   // The issuer is not a secret, so a vault that has not been taught it yet is a
   // warning rather than a failure — the key restore below still has to happen.
   let appIdWritten = false;
-  const issuer = needId ? selectIssuer({ fields, note }) : null;
+  let issuer = needId ? selectIssuer({ fields, note }) : null;
+  // Fields and note lines are free; the attachment costs a second download, so
+  // only reach for it when the cheap sources came up empty.
+  const idAttachment = needId && !issuer ? selectAppIdAttachment(attachments) : null;
+  if (idAttachment) {
+    run([
+      'item', 'attachment', 'download',
+      '--share-id', shareId,
+      '--item-id', itemId,
+      '--attachment-id', idAttachment.id,
+      '--output', idPath,
+    ]);
+    // Validate what actually landed. An attachment is opaque until read, and a
+    // stray newline or a wrong file would otherwise become the JWT `iss` and
+    // surface as an unexplained 401 at mint time.
+    issuer = validateIssuer(read(idPath, 'utf8'));
+    if (!issuer) remove(idPath, { force: true });
+  }
   if (issuer) {
     write(idPath, `${issuer}\n`);
     appIdWritten = true;
@@ -231,7 +262,8 @@ export function main(argv = process.argv.slice(2)) {
   if (result.issuerMissing) {
     process.stderr.write(
       `ensure-private-key: no app-id/client-id on the "${slug}" vault item — `
-        + `add it as a custom field (or an "app-id: <value>" note line), or write ${result.idPath} by hand\n`,
+        + `add it as a custom field, an "app-id: <value>" note line, or an "app-id" `
+        + `attachment, or write ${result.idPath} by hand\n`,
     );
   }
   return result;
