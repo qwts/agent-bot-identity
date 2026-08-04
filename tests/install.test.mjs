@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  mkdirSync, mkdtempSync, readFileSync, readlinkSync, writeFileSync,
+  mkdirSync, mkdtempSync, readFileSync, readlinkSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -171,6 +171,32 @@ test('the agent-hook fast path skips Node until an executable hook exists', () =
   writeFileSync(join(hooks, '50-live'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   assert.equal(spawnSync(fast, ['--dialect', 'claude', '--event', 'pre-command'], { env }).status, 0);
   assert.equal(readFileSync(calls, 'utf8').trim(), 'agent-hook --dialect claude --event pre-command');
+});
+
+test('the agent-hook fast path falls back to toolkit hooks in a consumer repo', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-fast-fallback-home-'));
+  const toolkit = mkdtempSync(join(tmpdir(), 'agent-bot-fast-fallback-toolkit-'));
+  const consumer = mkdtempSync(join(tmpdir(), 'agent-bot-fast-fallback-consumer-'));
+  const calls = join(home, 'calls');
+  const runner = join(toolkit, 'agent-bot.mjs');
+  const hook = join(toolkit, 'agent-hooks', 'pre-push', '50-policy');
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  mkdirSync(join(toolkit, 'agent-hooks', 'pre-push'), { recursive: true });
+  writeFileSync(runner, `#!/bin/sh\nprintf '%s\\n' "$*" >"${calls}"\n`, { mode: 0o755 });
+  writeFileSync(hook, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  symlinkSync(runner, join(home, '.local', 'bin', 'agent-bot'));
+  execFileSync('git', ['init', '--quiet'], { cwd: consumer });
+  const fast = installAgentHook({ home });
+  const env = { ...process.env, HOME: home };
+  delete env.AGENT_BOT_BIN;
+  delete env.AGENT_BOT_HOOKS_DIR;
+
+  const run = spawnSync(fast, ['--dialect', 'git', '--event', 'pre-push'], {
+    cwd: consumer,
+    env,
+  });
+  assert.equal(run.status, 0);
+  assert.equal(readFileSync(calls, 'utf8').trim(), 'agent-hook --dialect git --event pre-push');
 });
 
 test('the installed fast path is the managed POSIX implementation', () => {

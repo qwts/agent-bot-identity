@@ -341,7 +341,7 @@ test('the git pre-push backstop rejects rewrites and allows fast-forwards', () =
   );
 
   assert.equal(run(line(second, first)).status, 0, 'fast-forward push was rejected');
-  const rewrite = run(line(first, second));
+  const rewrite = run(`${line(second, first)}${line(first, second)}`);
   assert.equal(rewrite.status, 2);
   assert.match(rewrite.stderr, /may not rewrite/);
 });

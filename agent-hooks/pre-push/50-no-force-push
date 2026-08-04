@@ -9,7 +9,6 @@ case "$(git config user.name 2>/dev/null || true)" in
 esac
 
 ZERO=0000000000000000000000000000000000000000
-printf '%s\n' "$AGENT_HOOK_GIT_STDIN" |
 while read -r LOCAL_REF LOCAL_OID REMOTE_REF REMOTE_OID; do
   [ -n "$LOCAL_REF" ] || continue
   if [ "$LOCAL_OID" = "$ZERO" ]; then
@@ -21,4 +20,6 @@ while read -r LOCAL_REF LOCAL_OID REMOTE_REF REMOTE_OID; do
     echo "agent-bot guard: bot pushes may not rewrite $REMOTE_REF" >&2
     exit 2
   fi
-done
+done <<EOF
+$AGENT_HOOK_GIT_STDIN
+EOF

@@ -137,11 +137,22 @@ for ARG in "$@"; do
   PREV=$ARG
 done
 [ -n "$EVENT" ] || exit 0
+RUNNER=\${AGENT_BOT_BIN:-"$HOME/.local/bin/agent-bot"}
+[ -x "$RUNNER" ] || exit 0
 DIR=\${AGENT_BOT_HOOKS_DIR:-}
 if [ -z "$DIR" ]; then
   ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
-  [ -n "$ROOT" ] || exit 0
-  DIR="$ROOT/agent-hooks"
+  if [ -n "$ROOT" ] && [ -d "$ROOT/agent-hooks" ]; then
+    DIR="$ROOT/agent-hooks"
+  else
+    TARGET=$(readlink "$RUNNER" 2>/dev/null || true)
+    [ -n "$TARGET" ] || TARGET=$RUNNER
+    case "$TARGET" in
+      /*) ;;
+      *) TARGET=$(dirname "$RUNNER")/$TARGET ;;
+    esac
+    DIR=$(dirname "$TARGET")/agent-hooks
+  fi
 fi
 [ -d "$DIR/$EVENT" ] || exit 0
 FOUND=""
@@ -149,8 +160,6 @@ for FILE in "$DIR/$EVENT"/*; do
   [ -f "$FILE" ] && [ -x "$FILE" ] && { FOUND=1; break; }
 done
 [ -n "$FOUND" ] || exit 0
-RUNNER=\${AGENT_BOT_BIN:-"$HOME/.local/bin/agent-bot"}
-[ -x "$RUNNER" ] || exit 0
 exec "$RUNNER" agent-hook "$@"
 `;
 }
