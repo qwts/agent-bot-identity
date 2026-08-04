@@ -1,0 +1,34 @@
+{
+  "hooks": {
+    "post_setup_worktree": [
+      {
+        "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect devin-desktop --event session-start # agent-bot agent-hook",
+        "show_output": false
+      }
+    ],
+    "pre_run_command": [
+      {
+        "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect devin-desktop --event pre-command # agent-bot agent-hook",
+        "show_output": false
+      }
+    ],
+    "pre_write_code": [
+      {
+        "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect devin-desktop --event pre-file-write # agent-bot agent-hook",
+        "show_output": false
+      }
+    ],
+    "post_run_command": [
+      {
+        "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect devin-desktop --event post-tool-use # agent-bot agent-hook",
+        "show_output": false
+      }
+    ],
+    "post_cascade_response": [
+      {
+        "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect devin-desktop --event agent-stop # agent-bot agent-hook",
+        "show_output": false
+      }
+    ]
+  }
+}

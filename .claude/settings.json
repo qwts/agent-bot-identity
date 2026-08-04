@@ -22,6 +22,35 @@
             "command": "node \"$CLAUDE_PROJECT_DIR\"/tools/agent-guard/guard-agent-command.mjs --protocol=claude"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect claude --event pre-tool-use # agent-bot agent-hook",
+            "timeout": 60
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect claude --event pre-command # agent-bot agent-hook",
+            "timeout": 60
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect claude --event pre-file-write # agent-bot agent-hook",
+            "timeout": 60
+          }
+        ]
       }
     ],
     "SessionStart": [
@@ -29,7 +58,51 @@
         "hooks": [
           {
             "type": "command",
-            "command": "B=\"${AGENT_BOT_BIN:-agent-bot}\"; command -v \"$B\" >/dev/null 2>&1 || exit 0; exec \"$B\" agent-hook --dialect claude --event session-start",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect claude --event session-start # agent-bot agent-hook",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect claude --event session-end # agent-bot agent-hook",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect claude --event prompt-submit # agent-bot agent-hook",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect claude --event post-tool-use # agent-bot agent-hook",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect claude --event agent-stop # agent-bot agent-hook",
             "timeout": 60
           }
         ]

@@ -1,3 +1,12 @@
 #!/bin/sh
 HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-"$HOOK_DIR/chain-hook" pre-push "$@"
+INPUT=$(mktemp "${TMPDIR:-/tmp}/agent-bot-pre-push.XXXXXX") || exit 1
+trap 'rm -f "$INPUT"' EXIT HUP INT TERM
+cat >"$INPUT"
+
+AGENT_HOOK="$HOME/.local/share/agent-bot/agent-hook"
+if [ -x "$AGENT_HOOK" ]; then
+  "$AGENT_HOOK" --dialect git --event pre-push <"$INPUT" || exit $?
+fi
+
+"$HOOK_DIR/chain-hook" pre-push "$@" <"$INPUT"

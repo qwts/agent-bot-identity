@@ -12,6 +12,90 @@
             "statusMessage": "Checking the command against the machine memory budget"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect codex --event pre-tool-use # agent-bot agent-hook",
+            "timeout": 60
+          }
+        ]
+      },
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect codex --event pre-command # agent-bot agent-hook",
+            "timeout": 60
+          }
+        ]
+      },
+      {
+        "matcher": "^(Write|Edit)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect codex --event pre-file-write # agent-bot agent-hook",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect codex --event session-start # agent-bot agent-hook",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect codex --event session-end # agent-bot agent-hook",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect codex --event prompt-submit # agent-bot agent-hook",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect codex --event post-tool-use # agent-bot agent-hook",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect codex --event agent-stop # agent-bot agent-hook",
+            "timeout": 60
+          }
+        ]
       }
     ]
   }

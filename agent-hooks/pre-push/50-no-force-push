@@ -1,0 +1,24 @@
+#!/bin/sh
+# Bot-attributed pushes may add branches and fast-forward existing ones, but
+# may not delete or rewrite a remote ref. This is the git-native twin of the
+# pre-command guard and covers harnesses with absent or weak lifecycle hooks.
+
+case "$(git config user.name 2>/dev/null || true)" in
+  *"[bot]"*) ;;
+  *) exit 0 ;;
+esac
+
+ZERO=0000000000000000000000000000000000000000
+printf '%s\n' "$AGENT_HOOK_GIT_STDIN" |
+while read -r LOCAL_REF LOCAL_OID REMOTE_REF REMOTE_OID; do
+  [ -n "$LOCAL_REF" ] || continue
+  if [ "$LOCAL_OID" = "$ZERO" ]; then
+    echo "agent-bot guard: bot pushes may not delete $REMOTE_REF" >&2
+    exit 2
+  fi
+  [ "$REMOTE_OID" = "$ZERO" ] && continue
+  if ! git merge-base --is-ancestor "$REMOTE_OID" "$LOCAL_OID" 2>/dev/null; then
+    echo "agent-bot guard: bot pushes may not rewrite $REMOTE_REF" >&2
+    exit 2
+  fi
+done

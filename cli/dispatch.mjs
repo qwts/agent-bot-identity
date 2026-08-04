@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { GIT_HOOK_NAMES } from '../git-hooks.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const MODULES = new Map([
@@ -30,7 +31,7 @@ export function dispatchAgentBot(parsed) {
   if (parsed.command === 'hook') {
     if (!HOOK_PATTERN.test(parsed.hook)) throw new Error(`invalid hook name: ${parsed.hook}`);
     const hook = join(ROOT, 'hooks', parsed.hook);
-    if (!existsSync(hook) || parsed.hook === 'chain-hook') {
+    if (!GIT_HOOK_NAMES.includes(parsed.hook) || !existsSync(hook)) {
       throw new Error(`unsupported hook: ${parsed.hook}`);
     }
     return run(hook, parsed.args);

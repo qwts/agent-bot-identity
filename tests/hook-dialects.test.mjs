@@ -11,6 +11,7 @@ import {
   normalizeEnvelope,
   vendorEvent,
 } from '../hook-dialects.mjs';
+import { hookCoverage } from '../doctor.mjs';
 
 // A dialect answers "allow" the same way everywhere: exit 0 with no stdout.
 // So a deny that produces exactly that is a guard which silently passed.
@@ -216,4 +217,15 @@ test('the env mirror omits absent fields instead of exporting empty strings', ()
   assert.equal(env.AGENT_HOOK_TOOL_COMMAND, 'ls');
   assert.equal(env.AGENT_HOOK_BLOCKING, '1');
   assert.equal('AGENT_HOOK_TOOL_PATH' in env, false);
+});
+
+test('doctor exposes declared gaps, unverified rows, and stale evidence', () => {
+  const current = hookCoverage(new Date('2026-08-04T00:00:00Z'));
+  assert.equal(current.find((row) => row.key === 'claude').covered, 8);
+  assert.equal(current.find((row) => row.key === 'devin-desktop').covered, 5);
+  assert.equal(current.find((row) => row.key === 'cursor').status, 'unverified');
+  assert.equal(current.some((row) => row.stale), false);
+
+  const stale = hookCoverage(new Date('2027-01-01T00:00:00Z'));
+  assert.equal(stale.every((row) => row.stale), true);
 });

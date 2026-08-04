@@ -7,9 +7,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
-  ensureExecutablePath, installAgentBot, installExecutable, installHookWrappers, installationPaths,
+  agentHookFastPath, ensureExecutablePath, installAgentBot, installAgentHook, installExecutable,
+  installHookWrappers, installationPaths,
 } from '../install.mjs';
 import { installGhShim } from '../install-gh-shim.mjs';
+import { GIT_HOOK_NAMES } from '../git-hooks.mjs';
 
 const HAS_ZSH = spawnSync('zsh', ['-c', ':'], { stdio: 'ignore' }).status === 0;
 
@@ -135,16 +137,46 @@ test('installExecutable refuses a foreign executable', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-install-'));
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
   writeFileSync(join(home, '.local', 'bin', 'agent-bot'), 'foreign\n');
-  assert.throws(() => installExecutable({ home }), /not an agent-bot symlink/);
+  assert.throws(() => installExecutable({ home, chmod: () => {} }), /not an agent-bot symlink/);
 });
 
 test('hook wrappers dispatch through the stable executable', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-hooks-'));
   const source = mkdtempSync(join(tmpdir(), 'agent-bot-source-'));
-  writeFileSync(join(source, 'pre-commit'), '#!/bin/sh\n');
+  for (const name of GIT_HOOK_NAMES) writeFileSync(join(source, name), '#!/bin/sh\n');
   writeFileSync(join(source, 'chain-hook'), '#!/bin/sh\n');
   const hooks = installHookWrappers({ home, sourceHooks: source });
   assert.match(readFileSync(join(hooks, 'pre-commit'), 'utf8'), /agent-bot.*hook pre-commit/);
+});
+
+test('the agent-hook fast path skips Node until an executable hook exists', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-fast-hook-'));
+  const repo = mkdtempSync(join(tmpdir(), 'agent-bot-fast-repo-'));
+  const hooks = join(repo, 'agent-hooks', 'pre-command');
+  const calls = join(home, 'calls');
+  const runner = join(home, 'runner');
+  mkdirSync(hooks, { recursive: true });
+  writeFileSync(runner, `#!/bin/sh\nprintf '%s\\n' "$*" >"${calls}"\n`, { mode: 0o755 });
+  const fast = installAgentHook({ home });
+  const env = {
+    ...process.env,
+    AGENT_BOT_BIN: runner,
+    AGENT_BOT_HOOKS_DIR: join(repo, 'agent-hooks'),
+    HOME: home,
+  };
+
+  assert.equal(spawnSync(fast, ['--dialect', 'claude', '--event', 'pre-command'], { env }).status, 0);
+  assert.throws(() => readFileSync(calls), /ENOENT/);
+
+  writeFileSync(join(hooks, '50-live'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  assert.equal(spawnSync(fast, ['--dialect', 'claude', '--event', 'pre-command'], { env }).status, 0);
+  assert.equal(readFileSync(calls, 'utf8').trim(), 'agent-hook --dialect claude --event pre-command');
+});
+
+test('the installed fast path is the managed POSIX implementation', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-fast-install-'));
+  const path = installAgentHook({ home });
+  assert.equal(readFileSync(path, 'utf8'), agentHookFastPath());
 });
 
 test('installer chains displaced hooks and replaces legacy agent-bot hooks', () => {

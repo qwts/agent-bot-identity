@@ -1,0 +1,6 @@
+#!/bin/sh
+# Repair or establish the worktree identity at the first lifecycle event every
+# supported harness exposes. The runtime is optional for ordinary contributors.
+
+command -v agent-bot >/dev/null 2>&1 || exit 0
+agent-bot setup-worktree

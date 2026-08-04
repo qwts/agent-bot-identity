@@ -126,7 +126,10 @@ function readStdin() {
   }
 }
 
-export function parsePayload(text) {
+export function parsePayload(text, { dialectKey, event } = {}) {
+  // Git's pre-push hook sends ref updates as plain text, not JSON. Preserve it
+  // verbatim in the normalized envelope and env mirror for the git backstop.
+  if (dialectKey === 'git' && event === 'pre-push') return { git_stdin: text };
   if (!text || text.trim() === '') return {};
   try {
     const value = JSON.parse(text);
@@ -266,7 +269,7 @@ export function main(argv = process.argv.slice(2), env = process.env) {
   const { decision, reason } = runHooks({
     dialectKey,
     event,
-    payload: parsePayload(readStdin()),
+    payload: parsePayload(readStdin(), { dialectKey, event }),
     dir: hooksDir(env),
     env,
   });

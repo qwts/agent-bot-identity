@@ -12,7 +12,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test tests/*.mjs",
+    "test": "node sync-hooks.mjs --check && node --test tests/*.mjs",
+    "sync:hooks": "node sync-hooks.mjs",
     "doctor": "node doctor.mjs",
     "install-hooks": "node install.mjs",
     "install-gh-shim": "node install-gh-shim.mjs",

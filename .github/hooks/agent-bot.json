@@ -1,0 +1,59 @@
+{
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect copilot --event session-start # agent-bot agent-hook",
+        "timeoutSec": 30
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect copilot --event session-end # agent-bot agent-hook",
+        "timeoutSec": 30
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect copilot --event prompt-submit # agent-bot agent-hook",
+        "timeoutSec": 30
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect copilot --event pre-tool-use # agent-bot agent-hook",
+        "timeoutSec": 30
+      },
+      {
+        "type": "command",
+        "bash": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect copilot --event pre-command # agent-bot agent-hook",
+        "matcher": "bash|powershell",
+        "timeoutSec": 30
+      },
+      {
+        "type": "command",
+        "bash": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect copilot --event pre-file-write # agent-bot agent-hook",
+        "matcher": "create|edit",
+        "timeoutSec": 30
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect copilot --event post-tool-use # agent-bot agent-hook",
+        "timeoutSec": 30
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect copilot --event agent-stop # agent-bot agent-hook",
+        "timeoutSec": 30
+      }
+    ]
+  },
+  "version": 1
+}

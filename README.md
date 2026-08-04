@@ -176,9 +176,11 @@ node install.mjs
 node install.mjs --with-gh-shim
 ```
 
-The installer symlinks the CLI into `~/.local/bin`, installs stable hook
-dispatchers under `~/.local/share/agent-bot/hooks`, and points global
-`core.hooksPath` there. A displaced non-agent hooks path is recorded in
+The installer symlinks the CLI into `~/.local/bin`, installs the no-op fast path
+at `~/.local/share/agent-bot/agent-hook`, installs stable Git hook dispatchers
+under `~/.local/share/agent-bot/hooks`, and points global `core.hooksPath`
+there. The fast path starts Node only when the current repository has an
+executable hook for the event. A displaced non-agent hooks path is recorded in
 `agentBot.chainedHooksPath`, so repository and Husky hooks keep running.
 Re-running the installer is idempotent and foreign files are never replaced.
 PATH is registered in two files because zsh reads them in different situations.
@@ -282,6 +284,18 @@ The checked-in `scripts/ensure-identity.sh` adds verification of the pin,
 author, credential helper, and execution-identity hooks. `AGENT_BOT_HOME` is
 only a fallback for harnesses whose startup environment cannot find the
 installed executable.
+
+All harness lifecycle adapters are generated from `hook-dialects.mjs`:
+
+```bash
+npm run sync:hooks       # refresh checked-in adapters
+node sync-hooks.mjs --check
+```
+
+The adapters call one vendor-neutral runner. Claude's adapter also serves Devin
+CLI; Codex, Cursor, Copilot, and Devin Desktop receive their native JSON shape.
+The Git `pre-commit` and `pre-push` hooks provide the common backstop for
+harnesses or cloud surfaces that do not expose every lifecycle event.
 
 ## Execution identities (Agent IDs)
 
