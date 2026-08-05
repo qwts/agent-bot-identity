@@ -5,6 +5,12 @@
 # startup files, then export its directory for child hooks such as post-checkout.
 set -eu
 
+# POSIX permits an implementation-defined command search when PATH is absent,
+# but `set -u` makes our later prepend fail outright. Establish the same small
+# system fallback desktop apps normally inherit before running any utilities.
+PATH=${PATH:-/usr/bin:/bin}
+export PATH
+
 resolve_self() {
   source=$1
   while [ -L "$source" ]; do

@@ -147,6 +147,22 @@ test('installExecutable migrates the legacy .mjs symlink to the launcher', () =>
   assert.equal(readlinkSync(installed), entrypoint);
 });
 
+test('installExecutable refuses a foreign same-basename symlink', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-install-'));
+  const root = mkdtempSync(join(tmpdir(), 'agent-bot-root-'));
+  const foreignRoot = mkdtempSync(join(tmpdir(), 'foreign-agent-bot-root-'));
+  const entrypoint = join(root, 'agent-bot');
+  const foreign = join(foreignRoot, 'agent-bot');
+  const installed = join(home, '.local', 'bin', 'agent-bot');
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  writeFileSync(entrypoint, '#!/bin/sh\n');
+  writeFileSync(foreign, '#!/bin/sh\n');
+  symlinkSync(foreign, installed);
+
+  assert.throws(() => installExecutable({ home, entrypoint }), /not an agent-bot symlink/);
+  assert.equal(readlinkSync(installed), foreign);
+});
+
 test('installExecutable refuses a foreign executable', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-install-'));
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });

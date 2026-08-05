@@ -38,6 +38,13 @@ test('portable launcher finds an nvm Node with a desktop-app PATH', () => {
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /^0\.2\.0\n$/);
 
+  const noPath = spawnSync(LAUNCHER, ['--version'], {
+    encoding: 'utf8',
+    env: { AGENT_BOT_NODE: process.execPath, HOME: home },
+  });
+  assert.equal(noPath.status, 0, noPath.stderr);
+  assert.match(noPath.stdout, /^0\.2\.0\n$/);
+
   // Finding Node only for the CLI is insufficient: post-checkout and other
   // dispatched shell hooks invoke `node` again from the inherited PATH.
   mkdirSync(join(hooks, 'pre-command'), { recursive: true });
@@ -52,6 +59,12 @@ test('portable launcher finds an nvm Node with a desktop-app PATH', () => {
   });
   assert.equal(child.status, 0, child.stderr);
   assert.equal(readFileSync(childPath, 'utf8').trim(), node);
+});
+
+test('update failures identify the invoked command', () => {
+  const run = spawnSync(process.execPath, [CLI, 'update', '--unknown'], { encoding: 'utf8' });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /^update: unknown option: --unknown\n$/);
 });
 
 test('CLI parsing rejects unknown commands and malformed hook dispatch', () => {
