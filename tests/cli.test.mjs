@@ -15,6 +15,7 @@ test('stable CLI exposes version and documented commands', () => {
   for (const command of [
     'setup-worktree', 'mint-token', 'doctor', 'identity', 'install',
     'install-gh-shim', 'ensure-private-key',
+    'signed-commit',
   ]) assert.match(help.stdout, new RegExp(command));
 });
 

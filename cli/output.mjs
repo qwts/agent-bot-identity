@@ -13,6 +13,7 @@ Commands:
   install            Install the CLI and Git hooks
   install-gh-shim    Install the fail-closed gh shim
   ensure-private-key Restore an App private key and app-id with pass-cli
+  signed-commit      Replay local commits with GitHub-verified signatures
 `;
 }
 

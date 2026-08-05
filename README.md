@@ -39,6 +39,7 @@ agent-bot identity <ensure|spawn|bind|record|finalize|show|current>
 agent-bot install [--with-gh-shim]
 agent-bot install-gh-shim
 agent-bot ensure-private-key --app <slug> [--force]
+agent-bot signed-commit [--base <ref>] [--branch <name>] [--repo <owner/name>] [--dry-run]
 ```
 
 `mint-token --json` writes one secret-bearing object to stdout:
@@ -49,6 +50,17 @@ agent-bot ensure-private-key --app <slug> [--force]
 
 Treat that stdout as a credential. Errors, diagnostics, identity records, and
 logs never contain tokens, JWTs, or private keys.
+
+`signed-commit` replays a clean, linear local commit range through GitHub's Git
+Data API so each result is App-authored and GitHub-verified. It checks the
+remote branch before and after replay, verifies every returned signature and
+tree, then resets the local branch to the published signed history. Start with
+`agent-bot signed-commit --dry-run`; the preview is network-free.
+
+The repository also ships an official progressive-disclosure skill at
+`skills/agent-bot`. Its main `SKILL.md` routes setup, verified publishing, and
+execution-provenance requests into focused references while all executable
+behavior remains in this zero-dependency runtime.
 
 ## How it works
 

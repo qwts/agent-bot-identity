@@ -6,6 +6,7 @@ const PUBLIC_COMMANDS = new Set([
   'install',
   'install-gh-shim',
   'ensure-private-key',
+  'signed-commit',
 ]);
 
 const INTERNAL_COMMANDS = new Set([
