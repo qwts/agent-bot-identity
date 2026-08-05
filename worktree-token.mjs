@@ -13,7 +13,9 @@
 // The worktree's identity is whatever setup-worktree baked into it — the same
 // config.worktree that governs commits, so git and gh can never disagree.
 // Tokens are cached per worktree inside the private git dir (never in the
-// working tree) and reused until 5 minutes before expiry.
+// working tree) and reused until 5 minutes before expiry. Scratchpad
+// territory has no git dir; its cache lives inside the session-private
+// scratchpad itself.
 
 import process from 'node:process';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -63,6 +65,30 @@ export function configuredRootSlug(toplevel, root, home, config = loadConfig()) 
   return slugForHarness('claude', config);
 }
 
+// Claude Code hands each session a private scratchpad directory —
+// `<tmp>/claude-<uid>/<munged-project>/<session-uuid>/scratchpad` — and tells
+// the agent to do its temporary file work there. It is harness-created and
+// session-scoped: bot land by construction, though it is not a repository and
+// no worktree signal can ever appear in it. As with `.<tool>/worktrees`, the
+// segment chain is the signal and the root above it is not (macOS says
+// /private/tmp where Linux says /tmp). Claude-only: no other supported
+// harness documents a scratchpad convention, and an unknown chain must not
+// invent territory.
+const SCRATCHPAD_RE =
+  /(?:^|\/)claude-\d+\/[^/]+\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/scratchpad(?=\/|$)/;
+
+export function scratchpadRoot(cwd) {
+  if (!cwd) return null;
+  const m = cwd.match(SCRATCHPAD_RE);
+  if (!m) return null;
+  return cwd.slice(0, m.index + m[0].length);
+}
+
+export function scratchpadSlug(cwd, config = loadConfig()) {
+  if (!scratchpadRoot(cwd)) return null;
+  return slugForHarness('claude', config);
+}
+
 // The credential-helper line baked in by setup-worktree marks territory the
 // path rule cannot see (an explicitly configured worktree elsewhere).
 export function helperSlug(helperLines) {
@@ -75,8 +101,10 @@ export function helperSlug(helperLines) {
 
 // Resolution order: an explicit pin overrides WHICH bot but only inside
 // territory; the directory is the primary territory signal; the helper line
-// covers configured worktrees outside the directory pattern. A stray pin in a
-// normal clone still never makes the shim mint — a pin alone is not territory.
+// covers configured worktrees outside the directory pattern; the scratchpad
+// chain is the last fallback, for the one bot place with no repository at
+// all. A stray pin in a normal clone still never makes the shim mint — a pin
+// alone is not territory.
 export function resolveSlug({
   selected = null,
   pinned = null,
@@ -84,12 +112,14 @@ export function resolveSlug({
   helperLines,
   configuredRoot = null,
   home = null,
+  cwd = null,
   config = loadConfig(),
 }) {
   const territory =
     pathSlug(toplevel, config) ??
     configuredRootSlug(toplevel, configuredRoot, home, config) ??
-    helperSlug(helperLines);
+    helperSlug(helperLines) ??
+    scratchpadSlug(cwd, config);
   if (!territory) return null;
   return selected || pinned || territory;
 }
@@ -109,18 +139,25 @@ async function main() {
     return;
   }
 
-  let gitDir;
+  let gitDir = null;
   try {
     gitDir = git('rev-parse', '--absolute-git-dir');
   } catch {
-    return; // not a repository — human context, print nothing
+    // Not a repository. Once this meant human context unconditionally; the
+    // scratchpad rule is the one territory signal that needs no repo, so
+    // resolution continues with every repo-derived signal absent.
   }
   let helpers = '';
-  try {
-    helpers = git('config', '--get-all', 'credential.helper');
-  } catch {
-    /* none configured */
+  if (gitDir) {
+    try {
+      helpers = git('config', '--get-all', 'credential.helper');
+    } catch {
+      /* none configured */
+    }
   }
+  // The gate matters: outside a repo `git config --get-all` reads the global
+  // scope, and a bot helper line there must not turn every non-repo
+  // directory into territory.
   let toplevel = null;
   try {
     toplevel = git('rev-parse', '--show-toplevel');
@@ -140,8 +177,17 @@ async function main() {
     /* a malformed preference must never break identity resolution */
   }
   const config = loadConfig();
-  const selected = resolveAgentSlug({ cwd: toplevel ?? process.cwd(), config, worktree: true });
-  const slug = resolveSlug({ selected, toplevel, helperLines: helpers, configuredRoot, home: homedir(), config });
+  const cwd = process.cwd();
+  const selected = resolveAgentSlug({ cwd: toplevel ?? cwd, config, worktree: true });
+  const slug = resolveSlug({
+    selected,
+    toplevel,
+    helperLines: helpers,
+    configuredRoot,
+    home: homedir(),
+    cwd,
+    config,
+  });
   // --slug: identity only, no mint, no network — the gh shim's `whoami`.
   if (process.argv.includes('--slug')) {
     if (slug) process.stdout.write(`${slug}\n`);
@@ -149,7 +195,11 @@ async function main() {
   }
   if (!slug) return; // human worktree — print nothing
 
-  const cachePath = join(gitDir, 'agent-bot-token.json');
+  // Scratchpad territory has no private git dir; the cache lives inside the
+  // scratchpad itself — session-private, 0600, gone with the session's tmp.
+  const cachePath = gitDir
+    ? join(gitDir, 'agent-bot-token.json')
+    : join(scratchpadRoot(cwd), '.agent-bot-token.json');
   try {
     const cached = JSON.parse(readFileSync(cachePath, 'utf8'));
     if (cached.slug === slug && Date.parse(cached.expires_at) - Date.now() > 5 * 60 * 1000) {

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { worktreeSlug, pathSlug, resolveSlug, configuredRootSlug } from '../worktree-token.mjs';
+import { worktreeSlug, pathSlug, resolveSlug, configuredRootSlug, scratchpadSlug, scratchpadRoot } from '../worktree-token.mjs';
 
 const cfg = { prefix: 'you' };
 
@@ -117,4 +117,45 @@ test('the shared resolver selection outranks a stale worktree pin inside territo
 test('the last bot helper line wins when several exist', () => {
   const helpers = '!node /a/git-credential-bot.mjs old-slug\n!node /b/git-credential-bot.mjs new-slug';
   assert.equal(worktreeSlug(helpers, null), 'new-slug');
+});
+
+test('a Claude Code session scratchpad is territory, at any root (#26)', () => {
+  // The harness creates <tmp>/claude-<uid>/<munged-project>/<session-uuid>/
+  // scratchpad and tells the agent to work there. Bot land by construction —
+  // and like the worktrees rule, the chain is the signal, not the root
+  // (macOS says /private/tmp where Linux says /tmp).
+  const pad =
+    '/private/tmp/claude-502/-Users-u-Code-repo--claude-worktrees-x/f3fe0864-f97d-4393-a9ef-8dac1cf89a27/scratchpad';
+  assert.equal(scratchpadSlug(pad, cfg), 'you-claude-agent');
+  assert.equal(scratchpadSlug(`${pad}/issues/drafts`, cfg), 'you-claude-agent');
+  assert.equal(
+    scratchpadSlug('/tmp/claude-0/p/00000000-0000-0000-0000-000000000000/scratchpad', cfg),
+    'you-claude-agent',
+  );
+  assert.equal(scratchpadRoot(`${pad}/issues/drafts`), pad);
+});
+
+test('a broken scratchpad chain never invents territory (#26)', () => {
+  const uuid = 'f3fe0864-f97d-4393-a9ef-8dac1cf89a27';
+  assert.equal(scratchpadSlug(`/tmp/claude-abc/p/${uuid}/scratchpad`, cfg), null); // uid not digits
+  assert.equal(scratchpadSlug(`/tmp/claude/p/${uuid}/scratchpad`, cfg), null); // no uid at all
+  assert.equal(scratchpadSlug('/tmp/claude-502/p/not-a-uuid/scratchpad', cfg), null);
+  assert.equal(scratchpadSlug(`/tmp/claude-502/p/${uuid}/other`, cfg), null); // wrong tail
+  assert.equal(scratchpadSlug(`/tmp/claude-502/p/${uuid}/scratchpad2/x`, cfg), null); // not a segment
+  assert.equal(scratchpadSlug(`/tmp/codex-502/p/${uuid}/scratchpad`, cfg), null); // unknown tool
+  assert.equal(scratchpadSlug('/Users/u/Code/repo', cfg), null); // primary checkout
+  assert.equal(scratchpadSlug(null, cfg), null);
+});
+
+test('scratchpad territory resolves with no repository signals at all (#26)', () => {
+  const pad = '/tmp/claude-502/p/f3fe0864-f97d-4393-a9ef-8dac1cf89a27/scratchpad';
+  assert.equal(
+    resolveSlug({ toplevel: null, helperLines: '', cwd: pad, config: cfg }),
+    'you-claude-agent',
+  );
+  // A pin still needs territory — a non-scratchpad cwd grants nothing.
+  assert.equal(
+    resolveSlug({ pinned: 'you-claude-agent', toplevel: null, helperLines: '', cwd: '/tmp/somewhere', config: cfg }),
+    null,
+  );
 });

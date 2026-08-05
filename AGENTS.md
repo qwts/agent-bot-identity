@@ -53,8 +53,10 @@ npm run doctor
 - Fail closed on mint / credential / pin failures — never fall back to the
   human GitHub login.
 - Identity resolution for commits and tokens must share `resolve-agent.mjs`.
-- Bot territory is the `.<tool>/worktrees` path segment at any root; primary
-  checkouts stay human.
+- Bot territory is the `.<tool>/worktrees` path segment at any root, plus the
+  Claude Code session scratchpad chain
+  (`claude-<uid>/<project>/<session-uuid>/scratchpad`); primary checkouts
+  stay human.
 - Worktree git config keys: `agentBot.app`, `agentBot.agentId`,
   `agentBot.chainedHooksPath` (still read the legacy `qwts.*` names).
 - User config at `~/.config/agent-bot/config.json` maps harness → App slug;

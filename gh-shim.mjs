@@ -52,6 +52,14 @@ case "$PWD" in
     TERRITORY_HINT=1
     ;;
 esac
+# Claude Code session scratchpads are bot territory too — a loose glob is fine
+# here: the hint only decides whether a MISSING token tool fails closed, never
+# who gets a token (worktree-token owns the strict rule).
+case "$PWD" in
+  */claude-[0-9]*/*/scratchpad|*/claude-[0-9]*/*/scratchpad/*)
+    TERRITORY_HINT=1
+    ;;
+esac
 if [ -z "$TERRITORY_HINT" ] && command -v git >/dev/null 2>&1; then
   HELPERS=$(git config --get-all credential.helper 2>/dev/null || true)
   case "$HELPERS" in
