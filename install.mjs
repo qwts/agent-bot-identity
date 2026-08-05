@@ -136,14 +136,24 @@ export function agentHookFastPath() {
 # Managed by agent-bot install. Avoid Node when this repo has no hook for the
 # requested event; generated harness adapters call this path unconditionally.
 EVENT=""
+DIALECT=""
 PREV=""
 for ARG in "$@"; do
-  if [ "$PREV" = "--event" ]; then EVENT=$ARG; break; fi
+  case "$PREV" in
+    --dialect) DIALECT=$ARG ;;
+    --event) EVENT=$ARG ;;
+  esac
   PREV=$ARG
 done
-[ -n "$EVENT" ] || exit 0
+allow() {
+  # Cursor rejects empty stdout when failClosed is enabled. An empty JSON
+  # object is its neutral response and leaves the normal permission path intact.
+  [ "$DIALECT" = "cursor" ] && printf '%s' '{}'
+  exit 0
+}
+[ -n "$EVENT" ] || allow
 RUNNER=\${AGENT_BOT_BIN:-"$HOME/.local/bin/agent-bot"}
-[ -x "$RUNNER" ] || exit 0
+[ -x "$RUNNER" ] || allow
 DIR=\${AGENT_BOT_HOOKS_DIR:-}
 if [ -z "$DIR" ]; then
   ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
@@ -159,12 +169,12 @@ if [ -z "$DIR" ]; then
     DIR=$(dirname "$TARGET")/agent-hooks
   fi
 fi
-[ -d "$DIR/$EVENT" ] || exit 0
+[ -d "$DIR/$EVENT" ] || allow
 FOUND=""
 for FILE in "$DIR/$EVENT"/*; do
   [ -f "$FILE" ] && [ -x "$FILE" ] && { FOUND=1; break; }
 done
-[ -n "$FOUND" ] || exit 0
+[ -n "$FOUND" ] || allow
 exec "$RUNNER" agent-hook "$@"
 `;
 }

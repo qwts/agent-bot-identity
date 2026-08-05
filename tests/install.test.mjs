@@ -195,7 +195,12 @@ test('the agent-hook fast path skips Node until an executable hook exists', () =
     HOME: home,
   };
 
-  assert.equal(spawnSync(fast, ['--dialect', 'claude', '--event', 'pre-command'], { env }).status, 0);
+  const cursor = spawnSync(fast, ['--dialect', 'cursor', '--event', 'pre-command'], {
+    env,
+    encoding: 'utf8',
+  });
+  assert.equal(cursor.status, 0);
+  assert.equal(cursor.stdout, '{}');
   assert.throws(() => readFileSync(calls), /ENOENT/);
 
   writeFileSync(join(hooks, '50-live'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });

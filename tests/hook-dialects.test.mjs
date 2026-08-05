@@ -13,10 +13,11 @@ import {
 } from '../hook-dialects.mjs';
 import { hookCoverage } from '../doctor.mjs';
 
-// A dialect answers "allow" the same way everywhere: exit 0 with no stdout.
-// So a deny that produces exactly that is a guard which silently passed.
-function readsAsAllow({ stdout, exitCode }) {
-  return exitCode === 0 && stdout === '';
+// A deny that is encoded exactly like the dialect's allow response is a guard
+// which silently passed.
+function readsAsAllow(dialectKey, event, { stdout, exitCode }) {
+  const allow = encodeDecision({ dialectKey, event, decision: 'allow' });
+  return exitCode === allow.exitCode && stdout === allow.stdout;
 }
 
 test('a denial is never encoded as an allow, in any dialect, on any event', () => {
@@ -24,18 +25,18 @@ test('a denial is never encoded as an allow, in any dialect, on any event', () =
     for (const event of CANONICAL_EVENTS) {
       if (!vendorEvent(key, event)) continue;
       const encoded = encodeDecision({ dialectKey: key, event, decision: 'deny', reason: 'nope' });
-      assert.equal(readsAsAllow(encoded), false, `${key}/${event} encoded a deny as an allow`);
+      assert.equal(readsAsAllow(key, event, encoded), false, `${key}/${event} encoded a deny as an allow`);
     }
   }
 });
 
-test('an allow is the same empty answer everywhere, so the sh fast path can give it', () => {
+test('an allow uses the dialect-specific neutral response', () => {
   for (const { key } of DIALECTS) {
     for (const event of CANONICAL_EVENTS) {
       if (!vendorEvent(key, event)) continue;
       assert.deepEqual(
         encodeDecision({ dialectKey: key, event, decision: 'allow' }),
-        { stdout: '', stderr: '', exitCode: 0 },
+        { stdout: key === 'cursor' ? '{}' : '', stderr: '', exitCode: 0 },
       );
     }
   }
