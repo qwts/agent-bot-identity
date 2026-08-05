@@ -29,9 +29,30 @@ const KNOWN_HARNESSES = new Set(HARNESSES.map(({ key }) => key));
 // A worktree directory is an ownership boundary, not merely a convenience for
 // discovering credentials. A launcher can inherit another tool's environment,
 // but it cannot make a Claude worktree out of .codex/worktrees.
+//
+// The Claude Code session scratchpad chain —
+// `<tmp>/claude-<uid>/<munged-project>/<session-uuid>/scratchpad` — is the
+// same kind of boundary: harness-created, session-scoped, Claude's by
+// construction. It lives here rather than in worktree-token so token minting
+// and every other consumer answer ownership identically (ENG-0079) — an
+// inherited CODEX_*/GH_AGENT_APP marker must no more mint a Codex token from
+// a Claude scratchpad than from a Claude worktree. Root-agnostic like the
+// worktrees rule: macOS says /private/tmp where Linux says /tmp.
+const SCRATCHPAD_RE =
+  /(?:^|\/)claude-\d+\/[^/]+\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/scratchpad(?=\/|$)/;
+
+export function scratchpadRoot(cwd) {
+  if (!cwd) return null;
+  const m = cwd.match(SCRATCHPAD_RE);
+  if (!m) return null;
+  return cwd.slice(0, m.index + m[0].length);
+}
+
 export function territoryHarness(cwd = process.cwd()) {
   const match = cwd.match(/(?:^|\/)\.([a-z]+)\/worktrees\//);
-  return match && KNOWN_HARNESSES.has(match[1]) ? match[1] : null;
+  if (match && KNOWN_HARNESSES.has(match[1])) return match[1];
+  if (scratchpadRoot(cwd)) return 'claude';
+  return null;
 }
 
 export function readGitConfig(cwd, keys) {

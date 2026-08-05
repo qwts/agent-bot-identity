@@ -27,7 +27,7 @@ import { desktopConfigPath, worktreeRoot } from './claude-worktree-create.mjs';
 import { mint } from './mint-token.mjs';
 import { detectAgentHarness, HARNESSES } from './detect-harness.mjs';
 import { loadConfig, slugForHarness } from './config.mjs';
-import { resolveAgentSlug } from './resolve-agent.mjs';
+import { resolveAgentSlug, scratchpadRoot } from './resolve-agent.mjs';
 
 const KNOWN_TOOLS = new Set(HARNESSES.map((h) => h.key));
 
@@ -65,24 +65,13 @@ export function configuredRootSlug(toplevel, root, home, config = loadConfig()) 
   return slugForHarness('claude', config);
 }
 
-// Claude Code hands each session a private scratchpad directory —
-// `<tmp>/claude-<uid>/<munged-project>/<session-uuid>/scratchpad` — and tells
-// the agent to do its temporary file work there. It is harness-created and
-// session-scoped: bot land by construction, though it is not a repository and
-// no worktree signal can ever appear in it. As with `.<tool>/worktrees`, the
-// segment chain is the signal and the root above it is not (macOS says
-// /private/tmp where Linux says /tmp). Claude-only: no other supported
-// harness documents a scratchpad convention, and an unknown chain must not
-// invent territory.
-const SCRATCHPAD_RE =
-  /(?:^|\/)claude-\d+\/[^/]+\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/scratchpad(?=\/|$)/;
-
-export function scratchpadRoot(cwd) {
-  if (!cwd) return null;
-  const m = cwd.match(SCRATCHPAD_RE);
-  if (!m) return null;
-  return cwd.slice(0, m.index + m[0].length);
-}
+// Claude Code hands each session a private scratchpad directory and tells the
+// agent to do its temporary file work there — bot land by construction,
+// though it is not a repository and no worktree signal can ever appear in it.
+// The chain rule itself lives in resolve-agent.mjs (territoryHarness /
+// scratchpadRoot) so that token minting and agent selection answer scratchpad
+// ownership identically; this module only maps the territory to its App slug.
+export { scratchpadRoot };
 
 export function scratchpadSlug(cwd, config = loadConfig()) {
   if (!scratchpadRoot(cwd)) return null;
