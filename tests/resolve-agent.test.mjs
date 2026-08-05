@@ -179,3 +179,28 @@ test('every consumer that mints or commits shares this resolver', async () => {
     assert.doesNotMatch(text, /detectHarness\(/, `${path} does not call detection directly`);
   }
 });
+
+import { mkdirSync } from 'node:fs';
+
+test('a Claude scratchpad is claude territory that repairs foreign launcher identity (#26)', () => {
+  // Codex review on #27: without this, an inherited CODEX_*/GH_AGENT_APP
+  // marker selected the foreign bot and outranked the scratchpad's own slug.
+  const pad = join(root, 'claude-502/p/f3fe0864-f97d-4393-a9ef-8dac1cf89a27/scratchpad');
+  mkdirSync(pad, { recursive: true });
+  assert.equal(territoryHarness(pad), 'claude');
+  // A foreign launcher identity cannot mint from Claude's scratchpad...
+  assert.equal(
+    resolveAgentSlug({ env: { GH_AGENT_APP: 'you-codex-agent' }, cwd: pad, config: cfg, worktree: true }),
+    'you-claude-agent',
+  );
+  // ...an ambient foreign harness marker cannot either...
+  assert.equal(
+    resolveAgentSlug({ env: { CODEX_SANDBOX: '1' }, cwd: pad, config: cfg, worktree: true }),
+    'you-claude-agent',
+  );
+  // ...while a claude-owned launcher identity (model-variant App) is honored.
+  assert.equal(
+    resolveAgentSlug({ env: { GH_AGENT_APP: 'you-claude-fable-agent' }, cwd: pad, config: cfg, worktree: true }),
+    'you-claude-fable-agent',
+  );
+});
