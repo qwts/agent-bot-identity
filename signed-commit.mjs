@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { apiBase, githubHost, loadConfig } from './config.mjs';
 import { mint } from './mint-token.mjs';
-import { resolveAgentSlug } from './resolve-agent.mjs';
+import { resolveAgentSlug, territoryHarness } from './resolve-agent.mjs';
 
 const MAX_BUFFER = 256 * 1024 * 1024;
 
@@ -49,6 +49,10 @@ export function assertLease(remoteSha, trackingSha, branch) {
       `Recover with: git fetch origin ${branch} && git rebase origin/${branch}`,
     );
   }
+}
+
+export function encodeRefPath(ref) {
+  return ref.split('/').map(encodeURIComponent).join('/');
 }
 
 function git(args, { cwd, encoding = 'utf8' } = {}) {
@@ -146,6 +150,9 @@ export async function runSignedCommit(options, {
   let defaultBranch = localDefaultBranch(cwd);
   let api = null;
   if (!options.dryRun) {
+    if (!territoryHarness(cwd)) {
+      throw new Error('refusing signed publishing outside bot territory');
+    }
     const slug = resolveAgentSlug({ env, cwd, config, worktree: true });
     if (!slug) throw new Error('no agent App identity resolved for this worktree');
     const { token } = await mintImpl({ slug, env });
@@ -172,7 +179,8 @@ export async function runSignedCommit(options, {
     if (parents.length > 1) throw new Error(`${sha.slice(0, 8)} is a merge commit — rebase into linear history first`);
   }
 
-  const refPath = `heads/${branch}`;
+  const refName = `heads/${branch}`;
+  const refPath = encodeRefPath(refName);
   const readRemote = async () => {
     try { return (await api(`repos/${repo}/git/ref/${refPath}`)).object.sha; }
     catch (error) { if (error.status === 404) return null; throw error; }
@@ -232,7 +240,7 @@ export async function runSignedCommit(options, {
     throw new Error(`${branch} moved on the remote during replay — nothing was pushed`);
   }
   if (remoteBefore === null) {
-    await api(`repos/${repo}/git/refs`, 'POST', { ref: `refs/${refPath}`, sha: apiParent });
+    await api(`repos/${repo}/git/refs`, 'POST', { ref: `refs/${refName}`, sha: apiParent });
   } else {
     await api(`repos/${repo}/git/refs/${refPath}`, 'PATCH', { sha: apiParent, force: true });
   }

@@ -7,6 +7,7 @@ import { join } from 'node:path';
 
 import {
   assertLease,
+  encodeRefPath,
   parseSignedCommitArgs,
   repositoryFromRemote,
   runSignedCommit,
@@ -33,6 +34,33 @@ test('the remote lease fails closed on unseen work', () => {
   assert.doesNotThrow(() => assertLease(null, null, 'feature'));
   assert.doesNotThrow(() => assertLease('a'.repeat(40), 'a'.repeat(40), 'feature'));
   assert.throws(() => assertLease('a'.repeat(40), 'b'.repeat(40), 'feature'), /someone else pushed/);
+});
+
+test('encodes legal ref characters without losing path structure', () => {
+  assert.equal(encodeRefPath('heads/feature#123'), 'heads/feature%23123');
+  assert.equal(encodeRefPath('heads/team/topic name'), 'heads/team/topic%20name');
+});
+
+test('non-dry publishing refuses a primary checkout before minting', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'agent-bot-primary-'));
+  const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  git('init', '-b', 'feature');
+  git('config', 'user.name', 'Test');
+  git('config', 'user.email', 'test@example.com');
+  git('config', 'commit.gpgsign', 'false');
+  git('config', 'core.hooksPath', '/dev/null');
+  writeFileSync(join(cwd, 'file.txt'), 'content\n');
+  git('add', 'file.txt');
+  git('commit', '-m', 'fixture');
+  let minted = false;
+  await assert.rejects(
+    runSignedCommit(parseSignedCommitArgs(['--repo', 'acme/widgets']), {
+      cwd,
+      mintImpl: async () => { minted = true; return { token: 'secret' }; },
+    }),
+    /outside bot territory/,
+  );
+  assert.equal(minted, false);
 });
 
 test('dry-run previews a linear range without minting or network access', async () => {
