@@ -11,6 +11,7 @@ const MODULES = new Map([
   ['doctor', 'doctor.mjs'],
   ['identity', 'agent-identity.mjs'],
   ['install', 'install.mjs'],
+  ['update', 'update.mjs'],
   ['install-gh-shim', 'install-gh-shim.mjs'],
   ['ensure-private-key', 'ensure-private-key.mjs'],
   ['signed-commit', 'signed-commit.mjs'],

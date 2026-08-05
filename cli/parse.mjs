@@ -4,6 +4,7 @@ const PUBLIC_COMMANDS = new Set([
   'doctor',
   'identity',
   'install',
+  'update',
   'install-gh-shim',
   'ensure-private-key',
   'signed-commit',

@@ -15,13 +15,13 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensurePathLine, zshStartupDir } from './shell-path.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const ENTRYPOINT = join(ROOT, 'agent-bot.mjs');
+const ENTRYPOINT = join(ROOT, 'agent-bot');
 const SOURCE_HOOKS = join(ROOT, 'hooks');
 
 export function installationPaths(home = homedir()) {
@@ -42,10 +42,15 @@ function optionalLstat(path, lstat = lstatSync) {
   }
 }
 
-function isManagedExecutable(path, stat, readlink = readlinkSync) {
+function isManagedExecutable(path, stat, entrypoint, readlink = readlinkSync) {
   if (!stat?.isSymbolicLink()) return false;
-  const target = readlink(path);
-  return basename(target) === 'agent-bot.mjs';
+  const target = resolve(dirname(path), readlink(path));
+  const current = resolve(entrypoint);
+  // `agent-bot.mjs` is the pre-launcher install target. Continue recognizing
+  // it so `agent-bot update` can migrate an existing installation in place.
+  // Both accepted targets must belong to this checkout: a foreign executable
+  // with the same basename is not ours to replace.
+  return target === current || target === join(dirname(current), 'agent-bot.mjs');
 }
 
 export function installExecutable({
@@ -63,7 +68,7 @@ export function installExecutable({
   chmod(entrypoint, 0o755);
   const stat = optionalLstat(paths.executable, lstat);
   if (stat) {
-    if (!isManagedExecutable(paths.executable, stat, readlink)) {
+    if (!isManagedExecutable(paths.executable, stat, entrypoint, readlink)) {
       throw new Error(`${paths.executable} exists and is not an agent-bot symlink`);
     }
     const current = resolve(dirname(paths.executable), readlink(paths.executable));

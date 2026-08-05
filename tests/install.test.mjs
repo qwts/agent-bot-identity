@@ -126,11 +126,41 @@ test('a ZDOTDIR zsh finds agent-bot after install', { skip: !HAS_ZSH }, () => {
 test('installExecutable creates an idempotent ~/.local/bin/agent-bot symlink', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-install-'));
   const root = mkdtempSync(join(tmpdir(), 'agent-bot-root-'));
-  const entrypoint = join(root, 'agent-bot.mjs');
-  writeFileSync(entrypoint, '#!/usr/bin/env node\n');
+  const entrypoint = join(root, 'agent-bot');
+  writeFileSync(entrypoint, '#!/bin/sh\n');
   const installed = installExecutable({ home, entrypoint });
   assert.equal(readlinkSync(installed), entrypoint);
   assert.equal(installExecutable({ home, entrypoint }), installed);
+});
+
+test('installExecutable migrates the legacy .mjs symlink to the launcher', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-install-'));
+  const root = mkdtempSync(join(tmpdir(), 'agent-bot-root-'));
+  const legacy = join(root, 'agent-bot.mjs');
+  const entrypoint = join(root, 'agent-bot');
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  writeFileSync(legacy, '#!/usr/bin/env node\n');
+  writeFileSync(entrypoint, '#!/bin/sh\n');
+  symlinkSync(legacy, join(home, '.local', 'bin', 'agent-bot'));
+
+  const installed = installExecutable({ home, entrypoint });
+  assert.equal(readlinkSync(installed), entrypoint);
+});
+
+test('installExecutable refuses a foreign same-basename symlink', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-install-'));
+  const root = mkdtempSync(join(tmpdir(), 'agent-bot-root-'));
+  const foreignRoot = mkdtempSync(join(tmpdir(), 'foreign-agent-bot-root-'));
+  const entrypoint = join(root, 'agent-bot');
+  const foreign = join(foreignRoot, 'agent-bot');
+  const installed = join(home, '.local', 'bin', 'agent-bot');
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  writeFileSync(entrypoint, '#!/bin/sh\n');
+  writeFileSync(foreign, '#!/bin/sh\n');
+  symlinkSync(foreign, installed);
+
+  assert.throws(() => installExecutable({ home, entrypoint }), /not an agent-bot symlink/);
+  assert.equal(readlinkSync(installed), foreign);
 });
 
 test('installExecutable refuses a foreign executable', () => {

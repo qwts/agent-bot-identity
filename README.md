@@ -188,6 +188,13 @@ node install.mjs
 node install.mjs --with-gh-shim
 ```
 
+After the first install, refresh the machine-wide CLI and Git hook wrappers
+from the current agent-bot checkout with:
+
+```bash
+agent-bot update
+```
+
 The installer symlinks the CLI into `~/.local/bin`, installs the no-op fast path
 at `~/.local/share/agent-bot/agent-hook`, installs stable Git hook dispatchers
 under `~/.local/share/agent-bot/hooks`, and points global `core.hooksPath`
@@ -195,6 +202,11 @@ there. The fast path starts Node only when the current repository has an
 executable hook for the event. A displaced non-agent hooks path is recorded in
 `agentBot.chainedHooksPath`, so repository and Husky hooks keep running.
 Re-running the installer is idempotent and foreign files are never replaced.
+The installed CLI points at a portable shell launcher in this checkout. It
+uses `AGENT_BOT_NODE` when set, then searches PATH, nvm, and common version
+manager and system locations. This lets GUI-launched Git hooks find Node
+without sourcing a user shell; the selected Node directory is exported for
+child hooks such as `post-checkout`.
 PATH is registered in two files because zsh reads them in different situations.
 `.zshenv` is read by *every* zsh, including the non-login, non-interactive
 shells a harness spawns for its startup scripts — so both `~/.local/bin` and the
