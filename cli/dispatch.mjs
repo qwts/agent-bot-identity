@@ -13,6 +13,7 @@ const MODULES = new Map([
   ['install', 'install.mjs'],
   ['install-gh-shim', 'install-gh-shim.mjs'],
   ['ensure-private-key', 'ensure-private-key.mjs'],
+  ['signed-commit', 'signed-commit.mjs'],
   ['credential', 'git-credential-bot.mjs'],
   ['worktree-token', 'worktree-token.mjs'],
   ['claude-worktree-create', 'claude-worktree-create.mjs'],
