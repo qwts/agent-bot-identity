@@ -21,7 +21,7 @@ import { ensurePathLine, zshStartupDir } from './shell-path.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const ENTRYPOINT = join(ROOT, 'agent-bot.mjs');
+const ENTRYPOINT = join(ROOT, 'agent-bot');
 const SOURCE_HOOKS = join(ROOT, 'hooks');
 
 export function installationPaths(home = homedir()) {
@@ -45,7 +45,9 @@ function optionalLstat(path, lstat = lstatSync) {
 function isManagedExecutable(path, stat, readlink = readlinkSync) {
   if (!stat?.isSymbolicLink()) return false;
   const target = readlink(path);
-  return basename(target) === 'agent-bot.mjs';
+  // `agent-bot.mjs` is the pre-launcher install target. Continue recognizing
+  // it so `agent-bot update` can migrate an existing installation in place.
+  return ['agent-bot', 'agent-bot.mjs'].includes(basename(target));
 }
 
 export function installExecutable({

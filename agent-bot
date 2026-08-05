@@ -1,0 +1,90 @@
+#!/bin/sh
+# Stable agent-bot launcher. Git hooks and desktop harnesses frequently invoke
+# this without starting the user's shell, so PATH may not contain a Node.js
+# installed by a version manager. Resolve the runtime without sourcing shell
+# startup files, then export its directory for child hooks such as post-checkout.
+set -eu
+
+resolve_self() {
+  source=$1
+  while [ -L "$source" ]; do
+    source_dir=$(CDPATH= cd -- "$(dirname -- "$source")" && pwd)
+    target=$(readlink "$source")
+    case "$target" in
+      /*) source=$target ;;
+      *) source=$source_dir/$target ;;
+    esac
+  done
+  source_dir=$(CDPATH= cd -- "$(dirname -- "$source")" && pwd)
+  printf '%s/%s\n' "$source_dir" "$(basename -- "$source")"
+}
+
+nvm_node() {
+  nvm_dir=${NVM_DIR:-"$HOME/.nvm"}
+  versions=$nvm_dir/versions/node
+  [ -d "$versions" ] || return 1
+
+  if [ -r "$nvm_dir/alias/default" ]; then
+    default=$(cat "$nvm_dir/alias/default")
+    for candidate in "$versions/$default" "$versions/v$default" "$versions/v$default".*; do
+      if [ -x "$candidate/bin/node" ]; then
+        printf '%s\n' "$candidate/bin/node"
+        return 0
+      fi
+    done
+  fi
+
+  newest=$(ls -1 "$versions" 2>/dev/null | sort -t. -k1.2,1n -k2,2n -k3,3n | tail -n 1)
+  if [ -n "$newest" ] && [ -x "$versions/$newest/bin/node" ]; then
+    printf '%s\n' "$versions/$newest/bin/node"
+    return 0
+  fi
+  return 1
+}
+
+find_node() {
+  if [ -n "${AGENT_BOT_NODE:-}" ]; then
+    if [ ! -x "$AGENT_BOT_NODE" ]; then
+      echo "agent-bot: AGENT_BOT_NODE is not executable: $AGENT_BOT_NODE" >&2
+      return 1
+    fi
+    printf '%s\n' "$AGENT_BOT_NODE"
+    return 0
+  fi
+
+  if command -v node >/dev/null 2>&1; then
+    command -v node
+    return 0
+  fi
+
+  if nvm_node; then
+    return 0
+  fi
+
+  for candidate in \
+    "$HOME/.volta/bin/node" \
+    "$HOME/.local/share/fnm/aliases/default/bin/node" \
+    "$HOME/.local/share/mise/shims/node" \
+    "$HOME/.asdf/shims/node" \
+    "$HOME/.nodenv/shims/node" \
+    /opt/homebrew/bin/node \
+    /usr/local/bin/node
+  do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+self=$(resolve_self "$0")
+root=$(dirname -- "$self")
+if ! node=$(find_node); then
+  echo "agent-bot: Node.js is required; install Node >= 20 or set AGENT_BOT_NODE" >&2
+  exit 127
+fi
+
+PATH=$(dirname -- "$node"):$PATH
+export PATH
+exec "$node" "$root/agent-bot.mjs" "$@"

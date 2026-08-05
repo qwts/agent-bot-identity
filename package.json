@@ -6,7 +6,7 @@
   "license": "MIT",
   "private": true,
   "bin": {
-    "agent-bot": "./agent-bot.mjs"
+    "agent-bot": "./agent-bot"
   },
   "engines": {
     "node": ">=20"
