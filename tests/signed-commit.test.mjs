@@ -41,6 +41,7 @@ test('dry-run previews a linear range without minting or network access', async 
   git('init', '-b', 'main');
   git('config', 'user.name', 'Test');
   git('config', 'user.email', 'test@example.com');
+  git('config', 'commit.gpgsign', 'false');
   git('config', 'core.hooksPath', '/dev/null');
   writeFileSync(join(cwd, 'file.txt'), 'base\n');
   git('add', 'file.txt');
