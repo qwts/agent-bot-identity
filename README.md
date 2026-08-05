@@ -68,9 +68,12 @@ API_KEY=$(agent-bot secret get \
 export API_KEY
 ```
 
-Collection and item names are exact and must identify one active item. Field
-labels are exact except for case and surrounding whitespace: `api key` matches
-`API Key`, but not `api_key`. An unqualified label that exists in more than one
+An agent-bot config with a harness-to-App mapping must already exist; without
+it, retrieval is inert. Collection and item names are exact and must identify
+one active item. The requested field selector is trimmed, then matched exactly
+and case-insensitively against the provider label; provider-label whitespace
+and punctuation remain significant. Thus `api key` matches `API Key`, but not
+` API Key ` or `api_key`. An unqualified label that exists in more than one
 section is rejected; use a qualified label such as `Production.api key`.
 Success writes only the unchanged field value to stdout, with no added newline.
 Every error exits nonzero with empty stdout and a non-secret diagnostic on

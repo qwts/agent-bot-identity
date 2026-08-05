@@ -63,10 +63,12 @@ VALUE=$(agent-bot secret get \
 export VALUE
 ```
 
-Collection and item names must resolve exactly and uniquely. Field names are
-case-insensitive exact matches after trimming surrounding whitespace; punctuation
-is significant. Qualify a repeated section field, for example
-`Production.api key`.
+The agent-bot config must already map a harness to an App; without that opt-in,
+retrieval remains inert. Collection and item names must resolve exactly and
+uniquely. The requested field selector is trimmed, then matched exactly and
+case-insensitively against provider labels; whitespace in provider labels and
+all punctuation remain significant. Qualify a repeated section field, for
+example `Production.api key`.
 
 Always supply a concrete `--reason`. The Proton adapter passes it to the
 audited item read as `PROTON_PASS_AGENT_REASON`, without adding it to argv.

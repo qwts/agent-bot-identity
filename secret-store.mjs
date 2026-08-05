@@ -32,8 +32,12 @@ function requireSelector(name, value) {
   return value;
 }
 
-function foldedLabel(value) {
+function foldedRequestedLabel(value) {
   return value.trim().toLowerCase();
+}
+
+function foldedProviderLabel(value) {
+  return value.toLowerCase();
 }
 
 function fieldLabels(candidate) {
@@ -71,13 +75,13 @@ export function createSecretProviderRegistry(providers) {
 }
 
 export function selectSecretField(fields, requestedField) {
-  const requested = foldedLabel(requireSelector('field', requestedField));
+  const requested = foldedRequestedLabel(requireSelector('field', requestedField));
   if (!Array.isArray(fields)) {
     throw new SecretStoreError('secret provider returned malformed field data', 'MALFORMED_PROVIDER_DATA');
   }
   const matches = fields.filter((candidate) => {
     const labels = fieldLabels(candidate);
-    return labels.some((label) => foldedLabel(label) === requested);
+    return labels.some((label) => foldedProviderLabel(label) === requested);
   });
   if (matches.length === 0) {
     throw new SecretStoreError('secret field was not found', 'FIELD_NOT_FOUND');

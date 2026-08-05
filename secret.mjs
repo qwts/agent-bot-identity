@@ -2,6 +2,7 @@
 
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { loadConfig } from './config.mjs';
 import { createSecretProviderRegistry, getSecret } from './secret-store.mjs';
 import { protonPassAdapter } from './secret-providers/proton-pass.mjs';
 
@@ -43,14 +44,25 @@ export function parseSecretArgs(argv = process.argv.slice(2)) {
   };
 }
 
+function hasAgentConfiguration(config) {
+  const apps = config?.apps;
+  return (typeof config?.prefix === 'string' && config.prefix.length > 0)
+    || (apps && typeof apps === 'object' && !Array.isArray(apps)
+      && Object.values(apps).some((slug) => typeof slug === 'string' && slug.length > 0));
+}
+
 export function main(argv = process.argv.slice(2), {
   registry = createSecretProviderRegistry(BUILTIN_SECRET_PROVIDERS),
   stdout = process.stdout,
+  config = loadConfig(),
 } = {}) {
   const parsed = parseSecretArgs(argv);
   if (parsed.kind === 'help') {
     stdout.write(secretHelpText());
     return 0;
+  }
+  if (!hasAgentConfiguration(config)) {
+    throw new Error('agent-bot configuration is required for secret retrieval');
   }
   stdout.write(getSecret(parsed, { registry }));
   return 0;

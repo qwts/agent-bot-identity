@@ -131,6 +131,7 @@ test('field lookup is exact and case-insensitive without normalizing secret valu
   assert.equal(selectSecretField(fields, 'api key'), value);
   assert.equal(selectSecretField(fields, ' API KEY '), value);
   assert.throws(() => selectSecretField(fields, 'api_key'), /not found/u);
+  assert.throws(() => selectSecretField([{ name: ' API Key ', value }], 'api key'), /not found/u);
   assert.throws(() => selectSecretField([{ name: 'Empty', value: '' }], 'empty'), /empty/u);
 });
 
@@ -401,6 +402,10 @@ test('stable CLI writes only the exact secret and does not persist retrieval sta
   mkdirSync(home);
   mkdirSync(state);
   mkdirSync(cwd);
+  const configDir = join(home, '.config', 'agent-bot');
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, 'config.json'), JSON.stringify({ prefix: 'test' }));
+  const homeBefore = readdirSync(home, { recursive: true }).sort();
   const fake = join(fakeBin, 'pass-cli');
   const vaults = { vaults: [{ name: 'Agent Identities', vault_id: 'vault-1', share_id: 'share-1' }] };
   const items = { items: [{ id: 'item-1', share_id: 'share-1', title: 'anthropic', state: 'Active' }] };
@@ -431,7 +436,7 @@ else process.exit(2);
   assert.equal(success.status, 0, success.stderr);
   assert.equal(success.stdout, '  exact\nvalue  ');
   assert.equal(success.stderr, '');
-  assert.deepEqual(readdirSync(home), []);
+  assert.deepEqual(readdirSync(home, { recursive: true }).sort(), homeBefore);
   assert.deepEqual(readdirSync(state), []);
   assert.deepEqual(readdirSync(cwd), []);
 
@@ -451,4 +456,16 @@ else process.exit(2);
   assert.notEqual(reflected.status, 0);
   assert.equal(reflected.stdout, '');
   assert.doesNotMatch(reflected.stderr, /accidental-secret-marker/u);
+
+  const inertHome = join(dir, 'inert-home');
+  mkdirSync(inertHome);
+  const inert = spawnSync(process.execPath, [
+    CLI, 'secret', 'get', '--provider', 'proton-pass', '--collection', 'Agent Identities',
+    '--item', 'anthropic', '--field', 'api key', '--reason', 'Use the Anthropic API',
+  ], { cwd, encoding: 'utf8', env: { ...env, HOME: inertHome, PASS_CLI_FAIL: '1' } });
+  assert.notEqual(inert.status, 0);
+  assert.equal(inert.stdout, '');
+  assert.match(inert.stderr, /^secret: agent-bot configuration is required for secret retrieval\n$/u);
+  assert.doesNotMatch(inert.stderr, /child-secret-marker/u);
+  assert.deepEqual(readdirSync(inertHome), []);
 });
