@@ -331,18 +331,23 @@ export function envelopeEnv(envelope) {
   return env;
 }
 
-// Canonical decision -> what this dialect understands. Allow is always
-// empty-stdout-exit-0, which every dialect reads as "no opinion" — that is what
-// lets the sh fast path answer without starting Node.
+// Canonical decision -> what this dialect understands. Most dialects read an
+// empty stdout with exit 0 as "no opinion". Cursor rejects empty stdout when
+// failClosed is enabled, so its neutral response must be a valid JSON object.
 export function encodeDecision({ dialectKey, event, decision, reason = '' }) {
   const d = dialect(dialectKey);
-  if (decision === 'allow') return { stdout: '', stderr: '', exitCode: 0 };
+  const allow = {
+    stdout: d.decision === 'cursor-json' ? '{}' : '',
+    stderr: '',
+    exitCode: 0,
+  };
+  if (decision === 'allow') return allow;
 
   // `ask` is inexpressible on an exit-code-only dialect. Degrade toward closed
   // on blocking events rather than quietly toward open.
   let verdict = decision;
   if (verdict === 'ask' && d.decision === 'exit-code') verdict = isBlocking(event) ? 'deny' : 'allow';
-  if (verdict === 'allow') return { stdout: '', stderr: '', exitCode: 0 };
+  if (verdict === 'allow') return allow;
 
   const vendor = vendorEvent(dialectKey, event);
   switch (d.decision) {

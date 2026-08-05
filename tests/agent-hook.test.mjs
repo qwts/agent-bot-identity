@@ -45,10 +45,14 @@ function invoke(dir, { dialect, event, payload = {} }) {
   return { status: run.status, stdout: run.stdout, stderr: run.stderr };
 }
 
-test('an empty folder allows, so every event can be wired unconditionally', () => {
+test('an empty folder returns the dialect-specific neutral response', () => {
   const result = invoke(hooksDir(), { dialect: 'claude', event: 'pre-command' });
   assert.equal(result.status, 0);
   assert.equal(result.stdout, '');
+
+  const cursor = invoke(hooksDir(), { dialect: 'cursor', event: 'pre-command' });
+  assert.equal(cursor.status, 0);
+  assert.equal(cursor.stdout, '{}');
 });
 
 test('a denying hook blocks, in each dialect its own way', () => {
