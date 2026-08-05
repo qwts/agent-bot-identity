@@ -40,7 +40,7 @@ agent-bot install [--with-gh-shim]
 agent-bot install-gh-shim
 agent-bot ensure-private-key --app <slug> [--force]
 agent-bot signed-commit [--base <ref>] [--branch <name>] [--repo <owner/name>] [--dry-run]
-agent-bot secret get --provider <id> --collection <name> --item <title> --field <name>
+agent-bot secret get --provider <id> --collection <name> --item <title> --field <name> --reason <text>
 ```
 
 `mint-token --json` writes one secret-bearing object to stdout:
@@ -63,7 +63,8 @@ API_KEY=$(agent-bot secret get \
   --provider proton-pass \
   --collection "Agent Identities" \
   --item anthropic \
-  --field "api key") || exit 1
+  --field "api key" \
+  --reason "Use the Anthropic API for this task") || exit 1
 export API_KEY
 ```
 
@@ -75,6 +76,13 @@ Success writes only the unchanged field value to stdout, with no added newline.
 Every error exits nonzero with empty stdout and a non-secret diagnostic on
 stderr. Shell command substitution removes trailing newlines, so use the raw
 stdout stream when those bytes are significant.
+
+`--reason` is required and is passed to Proton as `PROTON_PASS_AGENT_REASON`
+only for the audited item read. It must describe why the agent needs the value.
+For a least-privilege Proton session granted one item instead of its parent
+vault, use the explicit virtual collection `--collection @item-shares`; the
+item title must still identify exactly one direct item share. Vault-backed
+reads require list access to the named vault and its active item summaries.
 
 This password/API-key path is separate from `ensure-private-key`, which
 provisions GitHub App key files and issuers.

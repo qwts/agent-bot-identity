@@ -25,6 +25,7 @@ test('skill delegates executable behavior to the stable runtime', () => {
   const publish = readFileSync(join(SKILL, 'references', 'verified-publish.md'), 'utf8');
   assert.match(main, /password\/API-key retrieval/u);
   assert.match(operations, /agent-bot secret get/u);
+  assert.match(operations, /--reason <text>/u);
   assert.match(operations, /does not replace or call\n`ensure-private-key`/u);
   assert.match(publish, /agent-bot signed-commit --dry-run/u);
   assert.match(publish, /force-with-lease/u);

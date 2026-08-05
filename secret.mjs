@@ -8,8 +8,9 @@ import { protonPassAdapter } from './secret-providers/proton-pass.mjs';
 export const BUILTIN_SECRET_PROVIDERS = Object.freeze([protonPassAdapter]);
 
 export function secretHelpText() {
-  return `Usage: agent-bot secret get --provider <id> --collection <name> --item <title> --field <name>\n\n` +
+  return `Usage: agent-bot secret get --provider <id> --collection <name> --item <title> --field <name> --reason <text>\n\n` +
     `Reads one password or API-key field from an already-authorized secure store.\n` +
+    `The reason is sent to providers that audit agent access.\n` +
     `Success writes only the exact field value to stdout, without a trailing newline.\n`;
 }
 
@@ -23,10 +24,10 @@ export function parseSecretArgs(argv = process.argv.slice(2)) {
     const token = tokens[index];
     if (!token.startsWith('--')) throw new Error('unexpected positional argument');
     const name = token.slice(2);
-    if (!['provider', 'collection', 'item', 'field'].includes(name)) {
-      throw new Error(`unknown option: ${token}`);
+    if (!['provider', 'collection', 'item', 'field', 'reason'].includes(name)) {
+      throw new Error('unknown option');
     }
-    if (flags.has(name)) throw new Error(`duplicate option: ${token}`);
+    if (flags.has(name)) throw new Error('duplicate option');
     const value = tokens[index + 1];
     if (value === undefined || value.startsWith('--')) throw new Error(`${token} requires a value`);
     flags.set(name, value);
@@ -38,6 +39,7 @@ export function parseSecretArgs(argv = process.argv.slice(2)) {
     collection: flags.get('collection'),
     item: flags.get('item'),
     field: flags.get('field'),
+    reason: flags.get('reason'),
   };
 }
 

@@ -8,6 +8,19 @@ export class SecretStoreError extends Error {
 
 const PROVIDER_ID_PATTERN = /^[a-z][a-z0-9-]*$/u;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u;
+const PROVIDER_ERROR_MESSAGES = new Map([
+  ['COLLECTION_NOT_FOUND', 'secret collection was not found'],
+  ['AMBIGUOUS_COLLECTION', 'secret collection name is ambiguous'],
+  ['ITEM_NOT_FOUND', 'secret item was not found'],
+  ['AMBIGUOUS_ITEM', 'secret item name is ambiguous'],
+  ['MALFORMED_PROVIDER_DATA', 'secret provider returned malformed data'],
+  ['PROVIDER_ITEM_MISMATCH', 'secret provider returned an unexpected item'],
+  ['PROVIDER_UNAVAILABLE', 'secret provider is unavailable'],
+  ['PROVIDER_TIMEOUT', 'secret provider request timed out'],
+  ['PROVIDER_OUTPUT_LIMIT', 'secret provider response exceeded the safe output limit'],
+  ['PROVIDER_START_FAILED', 'secret provider could not start'],
+  ['PROVIDER_REQUEST_FAILED', 'secret provider request failed'],
+]);
 
 function requireSelector(name, value) {
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -78,24 +91,26 @@ export function selectSecretField(fields, requestedField) {
   return matches[0].value;
 }
 
-export function getSecret({ provider, collection, item, field } = {}, { registry } = {}) {
+export function getSecret({ provider, collection, item, field, reason } = {}, { registry } = {}) {
   const providerId = requireSelector('provider', provider);
   const collectionName = requireSelector('collection', collection);
   const itemName = requireSelector('item', item);
   const fieldName = requireSelector('field', field);
+  const auditReason = requireSelector('reason', reason);
   if (!(registry instanceof Map)) {
     throw new SecretStoreError('secret provider registry is unavailable', 'INVALID_PROVIDER_REGISTRY');
   }
   const adapter = registry.get(providerId);
   if (!adapter) {
-    throw new SecretStoreError(`unsupported secret provider: "${providerId}"`, 'UNSUPPORTED_PROVIDER');
+    throw new SecretStoreError('unsupported secret provider', 'UNSUPPORTED_PROVIDER');
   }
   let fields;
   try {
-    fields = adapter.readFields({ collection: collectionName, item: itemName });
+    fields = adapter.readFields({ collection: collectionName, item: itemName, reason: auditReason });
   } catch (error) {
-    if (error instanceof SecretStoreError) throw error;
-    throw new SecretStoreError(`secret provider "${providerId}" failed`, 'PROVIDER_FAILED');
+    const code = error instanceof SecretStoreError ? error.code : 'PROVIDER_FAILED';
+    const message = PROVIDER_ERROR_MESSAGES.get(code) ?? 'secret provider failed';
+    throw new SecretStoreError(message, code);
   }
   return selectSecretField(fields, fieldName);
 }

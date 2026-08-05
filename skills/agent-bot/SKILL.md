@@ -36,8 +36,8 @@ verified publishing, and transcript provenance.
 5. Keep executable behavior in the repository runtime and keep this skill as
    workflow guidance. Do not create a second copy of runtime logic here.
 6. Secret retrieval uses one explicitly selected provider and an existing
-   authorized session. Never search another provider, automate provider login,
-   or persist the result.
+   authorized session, plus a concrete audit reason. Never search another
+   provider, automate provider login, or persist the result.
 
 ## Verify the outcome
 
