@@ -13,6 +13,7 @@ Use this reference for setup, minting, diagnostics, and identity repair.
 | Install the CLI and hooks | `agent-bot install [--with-gh-shim]` |
 | Install only the fail-closed `gh` shim | `agent-bot install-gh-shim` |
 | Restore an App key and issuer from pass-cli | `agent-bot ensure-private-key --app <slug> [--force]` |
+| Read an authorized password/API key | `agent-bot secret get --provider <id> --collection <name> --item <title> --field <name>` |
 
 ## Configure safely
 
@@ -45,6 +46,35 @@ stored human `gh` login from an agent session.
 
 Treat JSON mint output as secret-bearing. Never echo, persist, or include the
 token in issue comments, PR bodies, logs, or summaries.
+
+## Read an authorized secret
+
+Use an explicit secure-store provider and selectors. The first provider is
+`proton-pass`, which requires an installed, already-authenticated `pass-cli`
+session:
+
+```bash
+VALUE=$(agent-bot secret get \
+  --provider proton-pass \
+  --collection "Agent Identities" \
+  --item anthropic \
+  --field "api key") || exit 1
+export VALUE
+```
+
+Collection and item names must resolve exactly and uniquely. Field names are
+case-insensitive exact matches after trimming surrounding whitespace; punctuation
+is significant. Qualify a repeated section field, for example
+`Production.api key`.
+
+Only successful stdout contains the value, with no added newline. Every failure
+has empty stdout and a non-secret stderr diagnostic. Never echo, log, cache,
+write, or include the value in agent output. Do not ask `agent-bot` to log in to
+the provider or try another store. Shell command substitution strips trailing
+newlines; use the raw stdout stream when exact multiline bytes matter.
+
+This command reads password/API-key fields only. It does not replace or call
+`ensure-private-key`, whose job is GitHub App key-file provisioning.
 
 ## Diagnose mismatches
 

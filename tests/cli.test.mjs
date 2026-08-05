@@ -19,7 +19,7 @@ test('stable CLI exposes version and documented commands', () => {
   for (const command of [
     'setup-worktree', 'mint-token', 'doctor', 'identity', 'install', 'update',
     'install-gh-shim', 'ensure-private-key',
-    'signed-commit',
+    'signed-commit', 'secret',
   ]) assert.match(help.stdout, new RegExp(command));
 });
 
@@ -75,6 +75,9 @@ test('CLI parsing rejects unknown commands and malformed hook dispatch', () => {
   });
   assert.deepEqual(parseAgentBotArgs(['update']), {
     kind: 'command', command: 'update', args: [],
+  });
+  assert.deepEqual(parseAgentBotArgs(['secret', 'get', '--provider', 'proton-pass']), {
+    kind: 'command', command: 'secret', args: ['get', '--provider', 'proton-pass'],
   });
 });
 

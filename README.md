@@ -40,6 +40,7 @@ agent-bot install [--with-gh-shim]
 agent-bot install-gh-shim
 agent-bot ensure-private-key --app <slug> [--force]
 agent-bot signed-commit [--base <ref>] [--branch <name>] [--repo <owner/name>] [--dry-run]
+agent-bot secret get --provider <id> --collection <name> --item <title> --field <name>
 ```
 
 `mint-token --json` writes one secret-bearing object to stdout:
@@ -50,6 +51,33 @@ agent-bot signed-commit [--base <ref>] [--branch <name>] [--repo <owner/name>] [
 
 Treat that stdout as a credential. Errors, diagnostics, identity records, and
 logs never contain tokens, JWTs, or private keys.
+
+`secret get` provides the same narrow stdout boundary for a password or API key
+that an agent is already authorized to read. The first built-in provider is
+`proton-pass`, backed by `pass-cli`; install and authenticate that CLI before
+calling `agent-bot`. The command never performs provider login, searches another
+provider, or persists a retrieved value:
+
+```bash
+API_KEY=$(agent-bot secret get \
+  --provider proton-pass \
+  --collection "Agent Identities" \
+  --item anthropic \
+  --field "api key") || exit 1
+export API_KEY
+```
+
+Collection and item names are exact and must identify one active item. Field
+labels are exact except for case and surrounding whitespace: `api key` matches
+`API Key`, but not `api_key`. An unqualified label that exists in more than one
+section is rejected; use a qualified label such as `Production.api key`.
+Success writes only the unchanged field value to stdout, with no added newline.
+Every error exits nonzero with empty stdout and a non-secret diagnostic on
+stderr. Shell command substitution removes trailing newlines, so use the raw
+stdout stream when those bytes are significant.
+
+This password/API-key path is separate from `ensure-private-key`, which
+provisions GitHub App key files and issuers.
 
 `signed-commit` replays a clean, linear local commit range through GitHub's Git
 Data API so each result is App-authored and GitHub-verified. It checks the
