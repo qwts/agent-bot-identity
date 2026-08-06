@@ -1,6 +1,6 @@
 ---
 name: agent-bot
-description: Configure and operate per-harness GitHub App identities and authorized secure-store reads for coding agents. Use when setting up or diagnosing agent-bot, minting bot credentials, retrieving a password or API key, checking identity attribution, publishing local commits as GitHub-verified bot commits, or working with transcript-bound Agent IDs. Do not use to turn a primary human checkout into bot territory, broaden password-manager access, or fall back to human credentials.
+description: Configure and operate per-harness GitHub App identities and authorized secure-store reads for coding agents. Use when setting up or diagnosing agent-bot, minting bot credentials, retrieving a password or API key, checking identity attribution, publishing local commits as GitHub-verified bot commits, or working with transcript-bound Agent IDs, Agent Spaces, and the workstation-local soul population. Do not use to turn a primary human checkout into bot territory, broaden password-manager access, or fall back to human credentials.
 ---
 
 # Agent Bot

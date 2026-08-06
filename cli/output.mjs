@@ -11,6 +11,7 @@ Commands:
   doctor             Diagnose installation and identity state
   identity           Manage transcript-bound execution identities
   space              Manage durable per-soul Agent Spaces
+  population         List the workstation-local census of souls
   install            Install the CLI and Git hooks
   update             Refresh the CLI and global Git hooks from this checkout
   install-gh-shim    Install the fail-closed gh shim
