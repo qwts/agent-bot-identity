@@ -80,7 +80,9 @@ function normalizeSoul(record, { defaultLastSeen = null } = {}) {
   return {
     id: agentId(record.id),
     appSlug: appSlug(record.appSlug),
-    parentId: record.parentId ? agentId(record.parentId, 'parentId') : null,
+    parentId: record.parentId === undefined || record.parentId === null
+      ? null
+      : agentId(record.parentId, 'parentId'),
     status: printableText('status', record.status, { max: 80 }),
     spacePath: root,
     transcriptLocator: transcriptLocator(record.transcriptLocator),

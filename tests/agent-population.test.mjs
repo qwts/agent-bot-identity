@@ -103,7 +103,12 @@ test('list filters souls by status and App slug', () => {
   assert.deepEqual(showSoul(SECOND_ID, { file }), second);
 });
 
-test('writes project a strict secret-free record and reads ignore unknown future fields', () => {
+test('upsert rejects an empty parent ID instead of treating it as absent', () => {
+  const file = path.join(scratch(), 'population.json');
+  assert.throws(() => upsertSoul(fixture({ parentId: '' }), { file }), /parentId/);
+});
+
+test('writes only a strict secret-free record and reads ignore unknown future fields', () => {
   const file = path.join(scratch(), 'population.json');
   upsertSoul(fixture({
     token: 'token-sentinel',
