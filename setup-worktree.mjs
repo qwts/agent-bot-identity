@@ -45,7 +45,7 @@ import {
   stateDirectory,
 } from './agent-identity.mjs';
 import { initAgentSpace } from './agent-space.mjs';
-import { upsertSoul } from './agent-population.mjs';
+import { upsertIdentitySoul } from './agent-population.mjs';
 
 function git(...args) {
   return execFileSync('git', args, {
@@ -196,20 +196,7 @@ async function main() {
   // corrupt, or mismatched space or census fails closed without leaving the
   // worktree partially bound.
   const space = initAgentSpace(executionIdentity.id);
-  upsertSoul({
-    id: executionIdentity.id,
-    appSlug: executionIdentity.github.appSlug,
-    parentId: executionIdentity.parentId,
-    status: executionIdentity.status,
-    spacePath: space.path,
-    transcriptLocator: executionIdentity.transcript
-      ? {
-          provider: executionIdentity.transcript.provider,
-          id: executionIdentity.transcript.id,
-        }
-      : null,
-    lastSeen: new Date().toISOString(),
-  });
+  upsertIdentitySoul(executionIdentity.id, space.path);
   git('config', '--worktree', 'agentBot.app', slug);
   git('config', '--worktree', 'agentBot.agentId', executionIdentity.id);
   git('config', '--worktree', 'user.name', `${slug}[bot]`);

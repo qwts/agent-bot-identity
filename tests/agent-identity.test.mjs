@@ -311,6 +311,33 @@ test('identity finalize synchronizes a registered population row', () => {
     showSoul(record.id, { file: populationPath }).lastSeen,
     '2000-01-01T00:00:00.000Z',
   );
+
+  const second = mintAgentIdentity(mintOptions(stateDir, {
+    transcript: { provider: 'codex', id: 'thread-2' },
+    idFactory: () => id(2),
+  }));
+  upsertSoul({
+    id: second.id,
+    appSlug: second.github.appSlug,
+    parentId: second.parentId,
+    status: second.status,
+    spacePath: path.join(root, 'spaces', second.id),
+    transcriptLocator: second.transcript,
+    lastSeen: '2000-01-01T00:00:00.000Z',
+  }, { file: populationPath });
+  writeFileSync(populationPath, 'not valid JSON\n');
+
+  const failed = spawnSync(process.execPath, [cli, 'finalize', second.id], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      AGENT_BOT_STATE_HOME: stateDir,
+      AGENT_BOT_POPULATION_PATH: populationPath,
+    },
+  });
+
+  assert.notEqual(failed.status, 0);
+  assert.equal(readAgentIdentity(second.id, { stateDir }).status, 'active');
 });
 
 test('concurrent evidence writers do not lose one another', async () => {
