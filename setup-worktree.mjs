@@ -21,6 +21,7 @@
 //   - rewrites an SSH origin URL to HTTPS (SSH would push as the human)
 //   - pins core.hooksPath here while chaining any previous hooks path
 //   - mints/binds a transcript-bound Agent ID (ENG-0081)
+//   - initializes that soul's durable Agent Space
 //
 // Guard: it only touches LINKED worktrees (git-dir != common-dir). A session
 // in a primary checkout is left alone, so a human's own clone never silently
@@ -42,6 +43,7 @@ import {
   identityFieldsFromEnv,
   stateDirectory,
 } from './agent-identity.mjs';
+import { initAgentSpace } from './agent-space.mjs';
 
 function git(...args) {
   return execFileSync('git', args, {
@@ -188,6 +190,9 @@ async function main() {
     fields: identityFieldsFromEnv(),
     stateDir: stateDirectory(),
   });
+  // Initialize before writing any worktree attribution. A missing, corrupt, or
+  // mismatched space fails closed without leaving the worktree partially bound.
+  const space = initAgentSpace(executionIdentity.id);
   git('config', '--worktree', 'agentBot.app', slug);
   git('config', '--worktree', 'agentBot.agentId', executionIdentity.id);
   git('config', '--worktree', 'user.name', `${slug}[bot]`);
@@ -212,8 +217,9 @@ async function main() {
   );
 
   const transcriptState = executionIdentity.transcript ? 'transcript bound' : 'transcript pending';
+  const spaceState = space.created ? 'space created' : 'space ready';
   process.stdout.write(
-    `worktree configured for ${slug}[bot] as ${executionIdentity.id} (${transcriptState})\n`,
+    `worktree configured for ${slug}[bot] as ${executionIdentity.id} (${transcriptState}, ${spaceState})\n`,
   );
 }
 

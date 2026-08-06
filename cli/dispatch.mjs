@@ -10,6 +10,7 @@ const MODULES = new Map([
   ['mint-token', 'mint-token.mjs'],
   ['doctor', 'doctor.mjs'],
   ['identity', 'agent-identity.mjs'],
+  ['space', 'agent-space.mjs'],
   ['install', 'install.mjs'],
   ['update', 'update.mjs'],
   ['install-gh-shim', 'install-gh-shim.mjs'],

@@ -17,7 +17,7 @@ test('stable CLI exposes version and documented commands', () => {
   assert.match(version.stdout, /^0\.2\.0\n$/);
   const help = spawnSync(process.execPath, [CLI, '--help'], { encoding: 'utf8' });
   for (const command of [
-    'setup-worktree', 'mint-token', 'doctor', 'identity', 'install', 'update',
+    'setup-worktree', 'mint-token', 'doctor', 'identity', 'space', 'install', 'update',
     'install-gh-shim', 'ensure-private-key',
     'signed-commit', 'secret',
   ]) assert.match(help.stdout, new RegExp(command));

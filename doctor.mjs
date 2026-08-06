@@ -6,8 +6,8 @@
 //
 // Checks, in dependency order: runtime, hook installation, gh shim, config,
 // per-App credentials with a LIVE mint against GitHub, bot-user resolution,
-// and the state of the current repo / worktree. Exit code 1 if anything
-// configured is broken.
+// and the state of the current repo / worktree — including its Agent Space.
+// Exit code 1 if anything configured is broken.
 
 import process from 'node:process';
 import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
@@ -19,6 +19,7 @@ import { loadConfig, apiBase, slugForHarness } from './config.mjs';
 import { detectHarness, HARNESSES } from './detect-harness.mjs';
 import { mint } from './mint-token.mjs';
 import { resolveAgentSlug, territoryHarness } from './resolve-agent.mjs';
+import { inspectAgentSpace } from './agent-space.mjs';
 import { installationPaths } from './install.mjs';
 import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
 
@@ -239,8 +240,46 @@ async function main() {
           /* unset */
         }
       }
-      if (agentId) ok(`Agent ID ${agentId}`);
-      else if (name) warn('no Agent ID pinned — run setup-worktree to mint an execution identity');
+      if (!agentId) {
+        if (name) warn('no Agent ID pinned — run setup-worktree to mint an execution identity');
+      } else {
+        let space = null;
+        try {
+          space = inspectAgentSpace(agentId);
+        } catch {
+          // Never reflect an invalid pin: it may be secret-shaped material
+          // accidentally pasted into git config instead of an Agent ID.
+          fail(
+            'pinned Agent ID is invalid',
+            'run setup-worktree to bind a valid execution identity',
+          );
+        }
+        if (space) {
+          ok(`Agent ID ${agentId}`);
+          if (space.status === 'ok') {
+            ok(`Agent Space ${space.path}`);
+          } else if (space.status === 'missing') {
+            fail(
+              `no Agent Space marker for ${agentId} at ${space.path}`,
+              space.directoryPresent
+                ? 'move the unmarked directory aside, then run: agent-bot space init'
+                : 'run: agent-bot space init   (or re-run: agent-bot setup-worktree)',
+            );
+          } else if (space.status === 'mismatch') {
+            fail(
+              `Agent Space at ${space.path} is bound to ${space.boundTo}, not ${agentId}`,
+              'inspect the space and resolve the ownership conflict; doctor will not rebind it',
+            );
+          } else {
+            // Parser errors may quote marker contents, so this diagnostic is
+            // deliberately generic and secret-safe.
+            fail(
+              `Agent Space marker for ${agentId} at ${space.path} is invalid`,
+              'inspect space.json and repair it manually; doctor will not modify it',
+            );
+          }
+        }
+      }
       try {
         const origin = git('remote', 'get-url', 'origin');
         if (/^(ssh:\/\/)?git@/.test(origin)) {

@@ -10,6 +10,7 @@ Commands:
   mint-token         Mint a GitHub App installation token
   doctor             Diagnose installation and identity state
   identity           Manage transcript-bound execution identities
+  space              Manage durable per-soul Agent Spaces
   install            Install the CLI and Git hooks
   update             Refresh the CLI and global Git hooks from this checkout
   install-gh-shim    Install the fail-closed gh shim
