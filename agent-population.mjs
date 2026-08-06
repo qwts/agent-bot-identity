@@ -138,7 +138,8 @@ function readDocument(file) {
 }
 
 function ensurePrivateDirectory(directory) {
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const created = mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (created === undefined) return;
   try {
     chmodSync(directory, 0o700);
   } catch {

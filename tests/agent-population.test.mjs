@@ -84,6 +84,16 @@ test('upsert is idempotent by Agent ID and publishes private files', () => {
   assert.deepEqual(listSouls({ file }), [updated]);
 });
 
+test('upsert does not change permissions on an existing override parent', () => {
+  const root = scratch();
+  const file = path.join(root, 'population.json');
+  if (process.platform !== 'win32') chmodSync(root, 0o755);
+
+  upsertSoul(fixture(), { file });
+
+  if (process.platform !== 'win32') assert.equal(statSync(root).mode & 0o777, 0o755);
+});
+
 test('list filters souls by status and App slug', () => {
   const file = path.join(scratch(), 'population.json');
   const first = upsertSoul(fixture(), { file });
