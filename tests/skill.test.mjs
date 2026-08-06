@@ -31,3 +31,12 @@ test('skill delegates executable behavior to the stable runtime', () => {
   assert.match(publish, /force-with-lease/u);
   assert.match(publish, /Verified/u);
 });
+
+test('Agent Space guidance links the canonical contract and keeps operations local', () => {
+  const agents = readFileSync(join(ROOT, 'AGENTS.md'), 'utf8');
+  const identities = readFileSync(join(SKILL, 'references', 'execution-identities.md'), 'utf8');
+  const contract = /ENG-0172-agent-space-is-durable-per-soul-storage\.md/u;
+  assert.match(agents, contract);
+  assert.match(identities, contract);
+  assert.match(identities, /agent-bot space ensure/u);
+});

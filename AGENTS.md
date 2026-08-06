@@ -28,8 +28,10 @@ inherit by default, vary by explicit delta).
 ## What is specific to this repository
 
 This repository is the sole runtime owner of the agent-bot toolkit (ENG-0016 /
-ENG-0045 / ENG-0079 / ENG-0081) and transcript-bound execution identities.
-Governance repositories may consume its CLI but must not carry runtime copies.
+ENG-0045 / ENG-0079 / ENG-0081), transcript-bound execution identities, and
+Agent Space mechanics. The canonical Agent Space contract lives in
+[ENG-0172](https://github.com/qwts/playbook-engineering/blob/main/docs/decisions/ENG-0172-agent-space-is-durable-per-soul-storage.md).
+Governance repositories may consume the CLI but must not carry runtime copies.
 Zero npm dependencies. Node ≥ 20.
 
 ### Validate before push
