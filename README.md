@@ -226,13 +226,35 @@ use the `apps` map with the exact slugs instead. `doctor` prints the resolved
   "prefix": "you",
   "apps": { "claude": "some-custom-name" },
   "owner": "your-org",
-  "apiBase": "https://ghe.example.com/api/v3"
+  "apiBase": "https://ghe.example.com/api/v3",
+  "settings": {
+    "spacesRoot": "/absolute/path/to/agent-bot/spaces",
+    "daemonPreference": "off"
+  }
 }
 ```
 
 - `apps` — per-harness overrides of the prefix pattern.
 - `owner` — required when an App is installed on more than one account.
 - `apiBase` — GitHub Enterprise Server / data-residency hosts.
+- `settings.spacesRoot` — an absolute, durable Agent Space root.
+- `settings.daemonPreference` — `off`, `prefer`, or `required`; the default is
+  `off`.
+
+Settings precedence is environment override, then user setting, then default.
+`AGENT_BOT_SPACES_HOME` overrides `settings.spacesRoot`; without either, the
+root follows the XDG data default. `AGENT_BOT_DAEMON_PREFERENCE` overrides
+`settings.daemonPreference`. The modes reserve direct-only (`off`),
+daemon-with-local-fallback (`prefer`), and daemon-only (`required`) policy.
+They are stored and validated now, but no mode changes execution until the
+daemon and integration work in
+[#41](https://github.com/qwts/agent-bot-identity/issues/41) and
+[#43](https://github.com/qwts/agent-bot-identity/issues/43) ships; in particular,
+`required` is not enforced yet.
+
+This config is policy, not a secret store: never put tokens, credentials, or
+private keys in it. Agent Space lifetime and path ownership remain defined by
+[ENG-0172](https://github.com/qwts/playbook-engineering/blob/main/docs/decisions/ENG-0172-agent-space-is-durable-per-soul-storage.md).
 
 ### 4. Install the hooks (and optionally the gh shim)
 
