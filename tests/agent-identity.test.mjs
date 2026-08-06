@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   utimesSync,
@@ -367,6 +368,7 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
   const repo = path.join(root, 'repo');
   const worktree = path.join(root, 'worktree');
   const stateDir = path.join(root, 'state');
+  const spacesDir = path.join(root, 'spaces');
   const globalConfig = path.join(root, 'gitconfig');
   const app = 'you-codex-agent';
   mkdirSync(path.join(home, '.config', app), { recursive: true });
@@ -406,11 +408,13 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
       ...cleanEnv,
       HOME: home,
       AGENT_BOT_STATE_HOME: stateDir,
+      AGENT_BOT_SPACES_HOME: spacesDir,
       CODEX_THREAD_ID: thread,
     },
   });
 
-  runSetup('thread-1');
+  const firstSetup = runSetup('thread-1');
+  assert.match(firstSetup, /space created/);
   const firstId = execFileSync('git', ['config', '--get', 'agentBot.agentId'], {
     cwd: worktree,
     env: cleanEnv,
@@ -448,8 +452,13 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
     env: cleanEnv,
     encoding: 'utf8',
   }), /308462948/);
+  assert.equal(
+    JSON.parse(readFileSync(path.join(spacesDir, firstId, 'space.json'), 'utf8')).agentId,
+    firstId,
+  );
 
-  runSetup('thread-1');
+  const repeatedSetup = runSetup('thread-1');
+  assert.match(repeatedSetup, /space ready/);
   assert.equal(
     execFileSync('git', ['config', '--get', 'agentBot.agentId'], {
       cwd: worktree,
@@ -468,6 +477,22 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
     'idempotent setup retains the displaced repository hooks path',
   );
 
+  const savedSpaces = `${spacesDir}.saved`;
+  renameSync(spacesDir, savedSpaces);
+  writeFileSync(spacesDir, 'not a directory\n');
+  assert.throws(() => runSetup('thread-with-broken-space-root'));
+  assert.equal(
+    execFileSync('git', ['config', '--worktree', '--get', 'agentBot.agentId'], {
+      cwd: worktree,
+      env: cleanEnv,
+      encoding: 'utf8',
+    }).trim(),
+    firstId,
+    'space initialization failure must not partially bind the new Agent ID',
+  );
+  rmSync(spacesDir, { force: true });
+  renameSync(savedSpaces, spacesDir);
+
   runSetup('thread-2');
   const secondId = execFileSync('git', ['config', '--get', 'agentBot.agentId'], {
     cwd: worktree,
@@ -476,6 +501,15 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
   }).trim();
   assert.notEqual(secondId, firstId);
   assert.equal(readAgentIdentity(secondId, { stateDir }).transcript.id, 'thread-2');
+  assert.equal(
+    JSON.parse(readFileSync(path.join(spacesDir, secondId, 'space.json'), 'utf8')).agentId,
+    secondId,
+  );
+  assert.equal(
+    JSON.parse(readFileSync(path.join(spacesDir, firstId, 'space.json'), 'utf8')).agentId,
+    firstId,
+    'rotating the worktree identity does not retire the prior soul space',
+  );
 });
 
 // --- lock safety (issue #15) -------------------------------------------------

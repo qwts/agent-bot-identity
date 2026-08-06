@@ -3,6 +3,7 @@ const PUBLIC_COMMANDS = new Set([
   'mint-token',
   'doctor',
   'identity',
+  'space',
   'install',
   'update',
   'install-gh-shim',
