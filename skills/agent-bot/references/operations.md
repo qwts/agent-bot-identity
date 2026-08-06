@@ -13,6 +13,7 @@ Use this reference for setup, minting, diagnostics, and identity repair.
 | Install the CLI and hooks | `agent-bot install [--with-gh-shim]` |
 | Install only the fail-closed `gh` shim | `agent-bot install-gh-shim` |
 | Restore an App key and issuer from pass-cli | `agent-bot ensure-private-key --app <slug> [--force]` |
+| Read an authorized password/API key | `agent-bot secret get --provider <id> --collection <name> --item <title> --field <name> --reason <text>` |
 
 ## Configure safely
 
@@ -45,6 +46,45 @@ stored human `gh` login from an agent session.
 
 Treat JSON mint output as secret-bearing. Never echo, persist, or include the
 token in issue comments, PR bodies, logs, or summaries.
+
+## Read an authorized secret
+
+Use an explicit secure-store provider and selectors. The first provider is
+`proton-pass`, which requires an installed, already-authenticated `pass-cli`
+session:
+
+```bash
+VALUE=$(agent-bot secret get \
+  --provider proton-pass \
+  --collection "Agent Identities" \
+  --item anthropic \
+  --field "api key" \
+  --reason "Use the Anthropic API for this task") || exit 1
+export VALUE
+```
+
+The agent-bot config must already map a harness to an App; without that opt-in,
+retrieval remains inert. Collection and item names must resolve exactly and
+uniquely. The requested field selector is trimmed, then matched exactly and
+case-insensitively against provider labels; whitespace in provider labels and
+all punctuation remain significant. Qualify a repeated section field, for
+example `Production.api key`.
+
+Always supply a concrete `--reason`. The Proton adapter passes it to the
+audited item read as `PROTON_PASS_AGENT_REASON`, without adding it to argv.
+For a Proton session with an item-only grant, select the explicit virtual
+collection `--collection @item-shares`; the item title must uniquely identify
+one direct share. A normal collection requires permission to list the named
+vault and its active item summaries.
+
+Only successful stdout contains the value, with no added newline. Every failure
+has empty stdout and a non-secret stderr diagnostic. Never echo, log, cache,
+write, or include the value in agent output. Do not ask `agent-bot` to log in to
+the provider or try another store. Shell command substitution strips trailing
+newlines; use the raw stdout stream when exact multiline bytes matter.
+
+This command reads password/API-key fields only. It does not replace or call
+`ensure-private-key`, whose job is GitHub App key-file provisioning.
 
 ## Diagnose mismatches
 

@@ -40,6 +40,7 @@ agent-bot install [--with-gh-shim]
 agent-bot install-gh-shim
 agent-bot ensure-private-key --app <slug> [--force]
 agent-bot signed-commit [--base <ref>] [--branch <name>] [--repo <owner/name>] [--dry-run]
+agent-bot secret get --provider <id> --collection <name> --item <title> --field <name> --reason <text>
 ```
 
 `mint-token --json` writes one secret-bearing object to stdout:
@@ -50,6 +51,44 @@ agent-bot signed-commit [--base <ref>] [--branch <name>] [--repo <owner/name>] [
 
 Treat that stdout as a credential. Errors, diagnostics, identity records, and
 logs never contain tokens, JWTs, or private keys.
+
+`secret get` provides the same narrow stdout boundary for a password or API key
+that an agent is already authorized to read. The first built-in provider is
+`proton-pass`, backed by `pass-cli`; install and authenticate that CLI before
+calling `agent-bot`. The command never performs provider login, searches another
+provider, or persists a retrieved value:
+
+```bash
+API_KEY=$(agent-bot secret get \
+  --provider proton-pass \
+  --collection "Agent Identities" \
+  --item anthropic \
+  --field "api key" \
+  --reason "Use the Anthropic API for this task") || exit 1
+export API_KEY
+```
+
+An agent-bot config with a harness-to-App mapping must already exist; without
+it, retrieval is inert. Collection and item names are exact and must identify
+one active item. The requested field selector is trimmed, then matched exactly
+and case-insensitively against the provider label; provider-label whitespace
+and punctuation remain significant. Thus `api key` matches `API Key`, but not
+` API Key ` or `api_key`. An unqualified label that exists in more than one
+section is rejected; use a qualified label such as `Production.api key`.
+Success writes only the unchanged field value to stdout, with no added newline.
+Every error exits nonzero with empty stdout and a non-secret diagnostic on
+stderr. Shell command substitution removes trailing newlines, so use the raw
+stdout stream when those bytes are significant.
+
+`--reason` is required and is passed to Proton as `PROTON_PASS_AGENT_REASON`
+only for the audited item read. It must describe why the agent needs the value.
+For a least-privilege Proton session granted one item instead of its parent
+vault, use the explicit virtual collection `--collection @item-shares`; the
+item title must still identify exactly one direct item share. Vault-backed
+reads require list access to the named vault and its active item summaries.
+
+This password/API-key path is separate from `ensure-private-key`, which
+provisions GitHub App key files and issuers.
 
 `signed-commit` replays a clean, linear local commit range through GitHub's Git
 Data API so each result is App-authored and GitHub-verified. It checks the

@@ -1,4 +1,4 @@
 interface:
   display_name: "Agent Bot"
-  short_description: "Operate bot identities and publish verified commits"
-  default_prompt: "Use $agent-bot to configure an agent worktree and publish its commits with verified bot attribution."
+  short_description: "Operate bot identity, credentials, and verified publishing"
+  default_prompt: "Use $agent-bot to configure an agent worktree, retrieve only explicitly authorized secrets, and publish with verified bot attribution."
