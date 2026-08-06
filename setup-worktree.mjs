@@ -22,6 +22,7 @@
 //   - pins core.hooksPath here while chaining any previous hooks path
 //   - mints/binds a transcript-bound Agent ID (ENG-0081)
 //   - initializes that soul's durable Agent Space
+//   - registers the soul in the workstation population census
 //
 // Guard: it only touches LINKED worktrees (git-dir != common-dir). A session
 // in a primary checkout is left alone, so a human's own clone never silently
@@ -44,6 +45,7 @@ import {
   stateDirectory,
 } from './agent-identity.mjs';
 import { initAgentSpace } from './agent-space.mjs';
+import { upsertSoul } from './agent-population.mjs';
 
 function git(...args) {
   return execFileSync('git', args, {
@@ -190,9 +192,24 @@ async function main() {
     fields: identityFieldsFromEnv(),
     stateDir: stateDirectory(),
   });
-  // Initialize before writing any worktree attribution. A missing, corrupt, or
-  // mismatched space fails closed without leaving the worktree partially bound.
+  // Initialize and register before writing any worktree attribution. A missing,
+  // corrupt, or mismatched space or census fails closed without leaving the
+  // worktree partially bound.
   const space = initAgentSpace(executionIdentity.id);
+  upsertSoul({
+    id: executionIdentity.id,
+    appSlug: executionIdentity.github.appSlug,
+    parentId: executionIdentity.parentId,
+    status: 'active',
+    spacePath: space.path,
+    transcriptLocator: executionIdentity.transcript
+      ? {
+          provider: executionIdentity.transcript.provider,
+          id: executionIdentity.transcript.id,
+        }
+      : null,
+    lastSeen: new Date().toISOString(),
+  });
   git('config', '--worktree', 'agentBot.app', slug);
   git('config', '--worktree', 'agentBot.agentId', executionIdentity.id);
   git('config', '--worktree', 'user.name', `${slug}[bot]`);
