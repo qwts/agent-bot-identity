@@ -35,3 +35,24 @@ a distinct execution identity intentionally.
 Do not expose private identity records, transcript URLs, session tokens, or
 provider metadata in public issue or PR comments. Report only the Agent ID
 when the user explicitly requests it and the destination is appropriate.
+
+## Resolve the Agent Space
+
+An Agent Space is durable, secret-free storage for one Agent ID. It lives
+under `$XDG_DATA_HOME/agent-bot/spaces/<agent_<uuid>>` (default
+`~/.local/share/agent-bot/spaces/...`) and may be relocated only through the
+user-controlled `AGENT_BOT_SPACES_HOME` setting.
+
+Hooks and scripts should resolve and initialize the current soul's space with:
+
+```bash
+agent-bot space ensure
+```
+
+On success, stdout contains only the absolute space path. Use `--json` when
+the caller needs marker metadata or whether the space was created. `ensure`
+accepts no positional Agent ID: it resolves the environment identity first,
+then the worktree pin, and fails non-zero if neither is present. It also
+refuses to create from a human primary checkout even when an Agent ID is
+injected. Do not use Agent Space as a credential store or treat its path as
+new bot territory.

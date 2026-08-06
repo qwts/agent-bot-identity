@@ -209,7 +209,7 @@ test('inspect is read-only and distinguishes present, missing, mismatch, and inv
   });
 });
 
-test('space CLI exposes init, path, and show without ensure', () => {
+test('space CLI exposes init, path, and show', () => {
   const root = scratch();
   const env = { AGENT_BOT_SPACES_HOME: root, AGENT_BOT_ID: ID };
   const pathResult = runCli(['space', 'path'], env);
@@ -248,10 +248,106 @@ test('space CLI exposes init, path, and show without ensure', () => {
   const malformed = runCli(['space', 'show', ID], env);
   assert.notEqual(malformed.status, 0);
   assert.doesNotMatch(malformed.stderr, /must-not-print/);
+});
 
-  const ensure = runCli(['space', 'ensure', ID], env);
-  assert.notEqual(ensure.status, 0);
-  assert.match(ensure.stderr, /usage: agent-bot space <init\|path\|show>/);
+test('space ensure resolves the worktree pin and keeps stdout path-only', () => {
+  const root = scratch();
+  const spaces = path.join(root, 'spaces');
+  const repo = path.join(root, '.codex', 'worktrees', 'pinned', 'repo');
+  const globalConfig = path.join(root, 'global.gitconfig');
+  mkdirSync(repo, { recursive: true });
+  writeFileSync(globalConfig, '');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['config', 'agentBot.agentId', ID], { cwd: repo });
+  const env = { AGENT_BOT_SPACES_HOME: spaces, GIT_CONFIG_GLOBAL: globalConfig };
+
+  const first = runCli(['space', 'ensure'], env, repo);
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(first.stdout, `${path.join(spaces, ID)}\n`);
+  assert.match(first.stderr, /^agent-space: created for agent_[0-9a-f-]+\n$/);
+  assert.equal(JSON.parse(readFileSync(path.join(spaces, ID, 'space.json'), 'utf8')).agentId, ID);
+
+  const json = runCli(['space', 'ensure', '--json'], env, repo);
+  assert.equal(json.status, 0, json.stderr);
+  assert.equal(json.stderr, '');
+  const result = JSON.parse(json.stdout);
+  assert.deepEqual(result, {
+    agentId: ID,
+    path: path.join(spaces, ID),
+    created: false,
+    schemaVersion: 1,
+    createdAt: result.createdAt,
+  });
+});
+
+test('space ensure prefers the environment Agent ID and is idempotent', () => {
+  const root = scratch();
+  const spaces = path.join(root, 'spaces');
+  const repo = path.join(root, '.codex', 'worktrees', 'environment', 'repo');
+  const globalConfig = path.join(root, 'global.gitconfig');
+  mkdirSync(repo, { recursive: true });
+  writeFileSync(globalConfig, '');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['config', 'agentBot.agentId', OTHER_ID], { cwd: repo });
+  const env = {
+    AGENT_BOT_ID: ID,
+    AGENT_BOT_SPACES_HOME: spaces,
+    GIT_CONFIG_GLOBAL: globalConfig,
+  };
+
+  const first = runCli(['space', 'ensure'], env, repo);
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(first.stdout, `${path.join(spaces, ID)}\n`);
+  assert.match(first.stderr, /created/);
+  assert.equal(existsSync(path.join(spaces, OTHER_ID)), false, 'the pin must not outrank the environment');
+
+  const second = runCli(['space', 'ensure'], env, repo);
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(second.stdout, `${path.join(spaces, ID)}\n`);
+  assert.match(second.stderr, /ready/);
+});
+
+test('space ensure fails closed without a current Agent ID', () => {
+  const root = scratch();
+  const spaces = path.join(root, 'spaces');
+  const repo = path.join(root, '.codex', 'worktrees', 'missing', 'repo');
+  const globalConfig = path.join(root, 'global.gitconfig');
+  mkdirSync(repo, { recursive: true });
+  writeFileSync(globalConfig, '');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+
+  const result = runCli(['space', 'ensure'], {
+    AGENT_BOT_SPACES_HOME: spaces,
+    GIT_CONFIG_GLOBAL: globalConfig,
+  }, repo);
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /no Agent ID/);
+  assert.equal(existsSync(spaces), false);
+});
+
+test('space ensure rejects primary checkouts and positional Agent IDs before creating', () => {
+  const root = scratch();
+  const spaces = path.join(root, 'spaces');
+  const primary = path.join(root, 'primary');
+  mkdirSync(primary);
+  execFileSync('git', ['init', '--quiet'], { cwd: primary });
+  const env = { AGENT_BOT_ID: ID, AGENT_BOT_SPACES_HOME: spaces };
+
+  const human = runCli(['space', 'ensure'], env, primary);
+  assert.notEqual(human.status, 0);
+  assert.equal(human.stdout, '');
+  assert.match(human.stderr, /requires bot territory/);
+  assert.equal(existsSync(spaces), false);
+
+  const botCwd = path.join(root, '.codex', 'worktrees', 'positional', 'repo');
+  mkdirSync(botCwd, { recursive: true });
+  const positional = runCli(['space', 'ensure', OTHER_ID], env, botCwd);
+  assert.notEqual(positional.status, 0);
+  assert.equal(positional.stdout, '');
+  assert.match(positional.stderr, /does not accept an Agent ID/);
+  assert.doesNotMatch(positional.stderr, new RegExp(OTHER_ID));
+  assert.equal(existsSync(spaces), false);
 });
 
 test('space CLI fails closed without an explicit or current Agent ID', () => {

@@ -18,7 +18,8 @@ minted; never continue with an ambient human GitHub login.
 - Read [verified-publish.md](references/verified-publish.md) before publishing
   commits that must show GitHub's **Verified** badge.
 - Read [execution-identities.md](references/execution-identities.md) for Agent
-  ID creation, binding, recording, lookup, or transcript provenance.
+  ID creation, binding, recording, lookup, transcript provenance, or Agent
+  Space resolution.
 
 Load only the reference needed for the current request. Load all three when
 diagnosing a cross-cutting mismatch among commit attribution, credentials,
