@@ -17,7 +17,7 @@
 //   }
 
 import process from 'node:process';
-import { readFileSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
@@ -29,7 +29,14 @@ export function loadConfig({ home = homedir(), env = process.env } = {}) {
   try {
     raw = readFileSync(path, 'utf8');
   } catch (err) {
-    if (err?.code === 'ENOENT') return {}; // genuinely absent — identity stays inert
+    if (err?.code === 'ENOENT') {
+      try {
+        lstatSync(path);
+      } catch (lstatError) {
+        if (lstatError?.code === 'ENOENT') return {}; // genuinely absent — identity stays inert
+        throw new Error(`${path} could not be inspected: ${lstatError.message}`);
+      }
+    }
     throw new Error(`${path} exists but could not be read: ${err.message}`);
   }
   let config;

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -49,6 +49,19 @@ test('present config read failures are not treated as missing', () => {
   const path = writeConfig(home, { prefix: 'you' });
   assert.throws(
     () => loadConfig({ home, env: { AGENT_BOT_CONFIG: `${path}/child` } }),
+    /exists but could not be read/,
+  );
+});
+
+test('dangling config symlinks fail closed instead of looking absent', () => {
+  const home = tempHome();
+  const dir = join(home, '.config', 'agent-bot');
+  const path = join(dir, 'config.json');
+  mkdirSync(dir, { recursive: true });
+  symlinkSync(join(home, 'missing-config.json'), path);
+
+  assert.throws(
+    () => loadConfig({ home, env: {} }),
     /exists but could not be read/,
   );
 });
