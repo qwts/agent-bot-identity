@@ -1,6 +1,6 @@
 import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
   mkdirSync,
   mkdtempSync,
@@ -30,6 +30,7 @@ import {
   validateIdentity,
   withLock,
 } from '../agent-identity.mjs';
+import { showSoul, upsertSoul } from '../agent-population.mjs';
 
 const roots = [];
 afterEach(() => {
@@ -274,6 +275,71 @@ test('evidence is deduplicated and finalization can seal a transcript digest', (
   assert.ok(finalized.finalizedAt);
 });
 
+test('identity finalize synchronizes a registered population row', () => {
+  const root = state();
+  const stateDir = path.join(root, 'identities');
+  const populationPath = path.join(root, 'population.json');
+  const record = mintAgentIdentity(mintOptions(stateDir));
+  upsertSoul({
+    id: record.id,
+    appSlug: record.github.appSlug,
+    parentId: record.parentId,
+    status: record.status,
+    spacePath: path.join(root, 'spaces', record.id),
+    transcriptLocator: record.transcript,
+    lastSeen: '2000-01-01T00:00:00.000Z',
+  }, { file: populationPath });
+  const cli = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'agent-identity.mjs',
+  );
+
+  const finalized = spawnSync(process.execPath, [cli, 'finalize', record.id], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      AGENT_BOT_STATE_HOME: stateDir,
+      AGENT_BOT_POPULATION_PATH: populationPath,
+    },
+  });
+
+  assert.equal(finalized.status, 0, finalized.stderr);
+  assert.equal(readAgentIdentity(record.id, { stateDir }).status, 'finalized');
+  assert.equal(showSoul(record.id, { file: populationPath }).status, 'finalized');
+  assert.notEqual(
+    showSoul(record.id, { file: populationPath }).lastSeen,
+    '2000-01-01T00:00:00.000Z',
+  );
+
+  const second = mintAgentIdentity(mintOptions(stateDir, {
+    transcript: { provider: 'codex', id: 'thread-2' },
+    idFactory: () => id(2),
+  }));
+  upsertSoul({
+    id: second.id,
+    appSlug: second.github.appSlug,
+    parentId: second.parentId,
+    status: second.status,
+    spacePath: path.join(root, 'spaces', second.id),
+    transcriptLocator: second.transcript,
+    lastSeen: '2000-01-01T00:00:00.000Z',
+  }, { file: populationPath });
+  writeFileSync(populationPath, 'not valid JSON\n');
+
+  const failed = spawnSync(process.execPath, [cli, 'finalize', second.id], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      AGENT_BOT_STATE_HOME: stateDir,
+      AGENT_BOT_POPULATION_PATH: populationPath,
+    },
+  });
+
+  assert.notEqual(failed.status, 0);
+  assert.equal(readAgentIdentity(second.id, { stateDir }).status, 'active');
+});
+
 test('concurrent evidence writers do not lose one another', async () => {
   const stateDir = state();
   const record = mintAgentIdentity(mintOptions(stateDir));
@@ -369,6 +435,7 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
   const worktree = path.join(root, 'worktree');
   const stateDir = path.join(root, 'state');
   const spacesDir = path.join(root, 'spaces');
+  const populationPath = path.join(root, 'population.json');
   const globalConfig = path.join(root, 'gitconfig');
   const app = 'you-codex-agent';
   mkdirSync(path.join(home, '.config', app), { recursive: true });
@@ -409,6 +476,8 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
       HOME: home,
       AGENT_BOT_STATE_HOME: stateDir,
       AGENT_BOT_SPACES_HOME: spacesDir,
+      AGENT_BOT_POPULATION_PATH: populationPath,
+      AGENT_BOT_PARENT_ID: id(42),
       CODEX_THREAD_ID: thread,
     },
   });
@@ -456,6 +525,23 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
     JSON.parse(readFileSync(path.join(spacesDir, firstId, 'space.json'), 'utf8')).agentId,
     firstId,
   );
+  const firstPopulation = JSON.parse(readFileSync(populationPath, 'utf8'));
+  assert.deepEqual(firstPopulation.souls[firstId], {
+    id: firstId,
+    appSlug: app,
+    parentId: id(42),
+    status: 'active',
+    spacePath: path.join(spacesDir, firstId),
+    transcriptLocator: { provider: 'codex', id: 'thread-1' },
+    lastSeen: firstPopulation.souls[firstId].lastSeen,
+  });
+  assert.equal(
+    new Date(firstPopulation.souls[firstId].lastSeen).toISOString(),
+    firstPopulation.souls[firstId].lastSeen,
+  );
+
+  firstPopulation.souls[firstId].lastSeen = '2000-01-01T00:00:00.000Z';
+  writeFileSync(populationPath, `${JSON.stringify(firstPopulation, null, 2)}\n`);
 
   const repeatedSetup = runSetup('thread-1');
   assert.match(repeatedSetup, /space ready/);
@@ -476,6 +562,19 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
     '.husky/_',
     'idempotent setup retains the displaced repository hooks path',
   );
+  const repeatedPopulation = JSON.parse(readFileSync(populationPath, 'utf8'));
+  assert.deepEqual(Object.keys(repeatedPopulation.souls), [firstId]);
+  assert.notEqual(repeatedPopulation.souls[firstId].lastSeen, '2000-01-01T00:00:00.000Z');
+
+  finalizeAgentIdentity(firstId, { stateDir });
+  repeatedPopulation.souls[firstId].status = 'active';
+  writeFileSync(populationPath, `${JSON.stringify(repeatedPopulation, null, 2)}\n`);
+  runSetup('thread-1');
+  assert.equal(
+    JSON.parse(readFileSync(populationPath, 'utf8')).souls[firstId].status,
+    'finalized',
+    'setup projects the resolved identity status instead of reviving a finalized soul',
+  );
 
   const savedSpaces = `${spacesDir}.saved`;
   renameSync(spacesDir, savedSpaces);
@@ -492,6 +591,22 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
   );
   rmSync(spacesDir, { force: true });
   renameSync(savedSpaces, spacesDir);
+
+  const savedPopulation = `${populationPath}.saved`;
+  renameSync(populationPath, savedPopulation);
+  writeFileSync(populationPath, 'not valid JSON\n');
+  assert.throws(() => runSetup('thread-with-broken-population'));
+  assert.equal(
+    execFileSync('git', ['config', '--worktree', '--get', 'agentBot.agentId'], {
+      cwd: worktree,
+      env: cleanEnv,
+      encoding: 'utf8',
+    }).trim(),
+    firstId,
+    'population registration failure must not partially bind the new Agent ID',
+  );
+  rmSync(populationPath, { force: true });
+  renameSync(savedPopulation, populationPath);
 
   runSetup('thread-2');
   const secondId = execFileSync('git', ['config', '--get', 'agentBot.agentId'], {
@@ -510,6 +625,12 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
     firstId,
     'rotating the worktree identity does not retire the prior soul space',
   );
+  const rotatedPopulation = JSON.parse(readFileSync(populationPath, 'utf8'));
+  assert.deepEqual(Object.keys(rotatedPopulation.souls).sort(), [firstId, secondId].sort());
+  assert.deepEqual(rotatedPopulation.souls[secondId].transcriptLocator, {
+    provider: 'codex',
+    id: 'thread-2',
+  });
 });
 
 // --- lock safety (issue #15) -------------------------------------------------

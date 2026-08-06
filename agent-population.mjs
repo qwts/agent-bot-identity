@@ -18,7 +18,13 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import { validateAgentId, withLock } from './agent-identity.mjs';
+import {
+  finalizeAgentIdentity,
+  readAgentIdentity,
+  stateDirectory,
+  validateAgentId,
+  withLock,
+} from './agent-identity.mjs';
 
 const SCHEMA_VERSION = 1;
 const APP_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
@@ -181,6 +187,89 @@ export function upsertSoul(
     writeDocument(file, souls);
     return candidate;
   });
+}
+
+export function updateSoulStatus(
+  id,
+  status,
+  { file = populationFile(), now = () => new Date() } = {},
+) {
+  const target = agentId(id);
+  const nextStatus = printableText('status', status, { max: 80 });
+  ensurePrivateDirectory(path.dirname(file));
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) {
+      throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
+    }
+    const existing = current.souls[target];
+    if (!existing) return null;
+    const candidate = normalizeSoul({
+      ...existing,
+      status: nextStatus,
+      lastSeen: now().toISOString(),
+    });
+    const souls = { ...current.souls, [target]: candidate };
+    writeDocument(file, souls);
+    return candidate;
+  });
+}
+
+function withSoulLifecycleLock(id, stateDir, operation) {
+  const target = agentId(id);
+  return withLock(
+    path.join(stateDir, `.${target}.lifecycle.lock`),
+    `Agent lifecycle ${target}`,
+    operation,
+  );
+}
+
+export function upsertIdentitySoul(
+  id,
+  spacePath,
+  {
+    file = populationFile(),
+    stateDir = stateDirectory(),
+    now = () => new Date(),
+  } = {},
+) {
+  const target = agentId(id);
+  return withSoulLifecycleLock(target, stateDir, () => {
+    // Identity resolution may have completed before a concurrent finalizer.
+    // Re-read under the shared lifecycle lock so setup cannot revive a soul.
+    const identity = readAgentIdentity(target, { stateDir });
+    return upsertSoul({
+      id: identity.id,
+      appSlug: identity.github.appSlug,
+      parentId: identity.parentId,
+      status: identity.status,
+      spacePath,
+      transcriptLocator: identity.transcript
+        ? { provider: identity.transcript.provider, id: identity.transcript.id }
+        : null,
+      lastSeen: now().toISOString(),
+    }, { file, now });
+  });
+}
+
+export function finalizeIdentityWithPopulation(
+  id,
+  {
+    transcriptSha256 = null,
+    file = populationFile(),
+    stateDir = stateDirectory(),
+    now = () => new Date(),
+  } = {},
+) {
+  const target = agentId(id);
+  return withSoulLifecycleLock(target, stateDir, () => finalizeAgentIdentity(target, {
+    transcriptSha256,
+    stateDir,
+    now,
+    // mutateIdentity restores the provenance record if this synchronized
+    // census write fails, so the CLI cannot report failure after partial state.
+    onFinalized: (identity) => updateSoulStatus(identity.id, identity.status, { file, now }),
+  }));
 }
 
 function filterValue(name, value, { app = false } = {}) {

@@ -468,7 +468,7 @@ function findTranscriptIdentity(appSlug, transcript, stateDir) {
   return null;
 }
 
-function mutateIdentity(id, stateDir, now, mutator) {
+function mutateIdentity(id, stateDir, now, mutator, { afterWrite = null } = {}) {
   return withIdentityLock(stateDir, id, () => {
     const current = readAgentIdentity(id, { stateDir });
     const next = mutator(structuredClone(current));
@@ -476,6 +476,16 @@ function mutateIdentity(id, stateDir, now, mutator) {
     const errors = validateIdentity(next);
     if (errors.length > 0) throw new Error(`invalid identity update: ${errors.join('; ')}`);
     replaceIdentity(stateDir, next);
+    try {
+      afterWrite?.(next);
+    } catch (error) {
+      try {
+        replaceIdentity(stateDir, current);
+      } catch {
+        throw new Error('identity rollback failed after lifecycle synchronization failure');
+      }
+      throw error;
+    }
     return next;
   });
 }
@@ -513,7 +523,11 @@ export function finalizeAgentIdentity(id, {
   transcriptSha256 = null,
   stateDir = stateDirectory(),
   now = () => new Date(),
+  onFinalized = null,
 } = {}) {
+  if (onFinalized !== null && typeof onFinalized !== 'function') {
+    throw new Error('onFinalized must be a function or null');
+  }
   return mutateIdentity(id, stateDir, now, (record) => {
     if (!record.transcript) throw new Error(`Agent ID ${id} has no transcript to finalize`);
     const digest = optionalText('transcriptSha256', transcriptSha256, { max: 64 });
@@ -522,7 +536,7 @@ export function finalizeAgentIdentity(id, {
     record.status = 'finalized';
     record.finalizedAt = now().toISOString();
     return record;
-  });
+  }, { afterWrite: onFinalized });
 }
 
 export function ensureAgentIdentity({
@@ -725,10 +739,14 @@ async function main() {
     case 'finalize': {
       const id = targetId();
       if (!id) throw new Error('finalize requires an Agent ID');
-      printRecord(finalizeAgentIdentity(id, {
+      // Loaded only for this command because population validation imports the
+      // identity primitives above. The coordinator owns the cross-store lock.
+      const { finalizeIdentityWithPopulation } = await import('./agent-population.mjs');
+      const identity = finalizeIdentityWithPopulation(id, {
         transcriptSha256: args.one('sha256'),
         stateDir,
-      }), args.json);
+      });
+      printRecord(identity, args.json);
       break;
     }
     case 'show': {
