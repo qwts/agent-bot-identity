@@ -39,7 +39,7 @@ when the user explicitly requests it and the destination is appropriate.
 ## Resolve the Agent Space
 
 An Agent Space is durable, secret-free storage for one Agent ID. It lives
-under `$XDG_DATA_HOME/agent-bot/spaces/<agent_<uuid>>` (default
+under `$XDG_DATA_HOME/agent-bot/spaces/agent_<uuid>` (default
 `~/.local/share/agent-bot/spaces/...`) and may be relocated only through the
 user-controlled `AGENT_BOT_SPACES_HOME` setting.
 

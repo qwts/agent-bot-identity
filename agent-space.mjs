@@ -187,10 +187,10 @@ function parseCli(argv) {
     else if (token.startsWith('-')) throw new Error(`unknown option: ${token}`);
     else positional.push(token);
   }
-  if (positional.length > 1) throw new Error(`${command} accepts at most one Agent ID`);
   if (command === 'ensure' && positional.length > 0) {
     throw new Error('space ensure does not accept an Agent ID; it resolves the current context');
   }
+  if (positional.length > 1) throw new Error(`${command} accepts at most one Agent ID`);
   return { command, agentId: positional[0] ?? null, json };
 }
 
@@ -269,7 +269,10 @@ async function main() {
       break;
     }
     default:
-      throw new Error('usage: agent-bot space <init|ensure|path|show> [agent-id] [--json]');
+      throw new Error(
+        'usage: agent-bot space <init|path|show> [agent-id] [--json]\n' +
+          '       agent-bot space ensure [--json]',
+      );
   }
 }
 

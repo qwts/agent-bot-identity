@@ -348,6 +348,15 @@ test('space ensure rejects primary checkouts and positional Agent IDs before cre
   assert.match(positional.stderr, /does not accept an Agent ID/);
   assert.doesNotMatch(positional.stderr, new RegExp(OTHER_ID));
   assert.equal(existsSync(spaces), false);
+
+  const multiple = runCli(['space', 'ensure', OTHER_ID, ID], env, botCwd);
+  assert.notEqual(multiple.status, 0);
+  assert.equal(multiple.stdout, '');
+  assert.match(multiple.stderr, /does not accept an Agent ID/);
+  assert.doesNotMatch(multiple.stderr, /accepts at most one Agent ID/);
+  assert.doesNotMatch(multiple.stderr, new RegExp(OTHER_ID));
+  assert.doesNotMatch(multiple.stderr, new RegExp(ID));
+  assert.equal(existsSync(spaces), false);
 });
 
 test('space CLI fails closed without an explicit or current Agent ID', () => {
