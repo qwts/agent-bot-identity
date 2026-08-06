@@ -69,17 +69,29 @@ after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
-test('space root follows override, XDG data, then the home default', () => {
+test('space root follows environment, user setting, then XDG and home defaults', () => {
   assert.equal(
-    spacesHome({ env: { AGENT_BOT_SPACES_HOME: '/override', XDG_DATA_HOME: '/xdg' }, home: '/home/u' }),
+    spacesHome({
+      env: { AGENT_BOT_SPACES_HOME: '/override', XDG_DATA_HOME: '/xdg' },
+      home: '/home/u',
+      config: { settings: { spacesRoot: 'invalid-lower-precedence-root' } },
+    }),
     '/override',
   );
   assert.equal(
-    spacesHome({ env: { XDG_DATA_HOME: '/xdg' }, home: '/home/u' }),
+    spacesHome({
+      env: { XDG_DATA_HOME: '/xdg' },
+      home: '/home/u',
+      config: { settings: { spacesRoot: '/configured' } },
+    }),
+    '/configured',
+  );
+  assert.equal(
+    spacesHome({ env: { XDG_DATA_HOME: '/xdg' }, home: '/home/u', config: {} }),
     path.join('/xdg', 'agent-bot', 'spaces'),
   );
   assert.equal(
-    spacesHome({ env: {}, home: '/home/u' }),
+    spacesHome({ env: {}, home: '/home/u', config: {} }),
     path.join('/home/u', '.local', 'share', 'agent-bot', 'spaces'),
   );
   assert.equal(
@@ -87,6 +99,67 @@ test('space root follows override, XDG data, then the home default', () => {
     path.join('/override', ID),
   );
   assert.throws(() => spacePath('not-an-agent-id'), /invalid Agent ID/);
+});
+
+test('space path, init, and ensure honor the durable configured root', () => {
+  const root = scratch();
+  const spaces = path.join(root, 'durable-spaces');
+  const configPath = path.join(root, 'config.json');
+  const repo = path.join(root, '.codex', 'worktrees', 'configured', 'repo');
+  const globalConfig = path.join(root, 'global.gitconfig');
+  writeFileSync(configPath, `${JSON.stringify({
+    settings: { spacesRoot: spaces, daemonPreference: 'required' },
+  })}\n`);
+  mkdirSync(repo, { recursive: true });
+  writeFileSync(globalConfig, '');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  const env = {
+    AGENT_BOT_CONFIG: configPath,
+    AGENT_BOT_ID: ID,
+    GIT_CONFIG_GLOBAL: globalConfig,
+  };
+
+  const pathResult = runCli(['space', 'path'], env, repo);
+  assert.equal(pathResult.status, 0, pathResult.stderr);
+  assert.equal(pathResult.stdout, `${path.join(spaces, ID)}\n`);
+  assert.equal(existsSync(spaces), false, 'path must remain calculation-only');
+
+  const init = runCli(['space', 'init', '--json'], env, repo);
+  assert.equal(init.status, 0, init.stderr);
+  assert.equal(JSON.parse(init.stdout).path, path.join(spaces, ID));
+
+  const ensure = runCli(['space', 'ensure', '--json'], env, repo);
+  assert.equal(ensure.status, 0, ensure.stderr);
+  assert.equal(JSON.parse(ensure.stdout).path, path.join(spaces, ID));
+  assert.equal(JSON.parse(ensure.stdout).created, false);
+});
+
+test('space path, init, and ensure fail closed on an invalid configured root', () => {
+  const root = scratch();
+  const configPath = path.join(root, 'config.json');
+  const repo = path.join(root, '.codex', 'worktrees', 'invalid-root', 'repo');
+  const globalConfig = path.join(root, 'global.gitconfig');
+  writeFileSync(
+    configPath,
+    `${JSON.stringify({ settings: { spacesRoot: 'relative/secret-root' } })}\n`,
+  );
+  mkdirSync(repo, { recursive: true });
+  writeFileSync(globalConfig, '');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  const env = {
+    AGENT_BOT_CONFIG: configPath,
+    AGENT_BOT_ID: ID,
+    GIT_CONFIG_GLOBAL: globalConfig,
+  };
+
+  for (const args of [['space', 'path'], ['space', 'init'], ['space', 'ensure']]) {
+    const result = runCli(args, env, repo);
+    assert.notEqual(result.status, 0, `${args.join(' ')} unexpectedly succeeded`);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /invalid settings\.spacesRoot/);
+    assert.doesNotMatch(result.stderr, /secret-root/);
+  }
+  assert.equal(existsSync(path.join(repo, 'relative')), false);
 });
 
 test('init atomically creates a private, secret-free marker and is idempotent', () => {

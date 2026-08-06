@@ -70,8 +70,9 @@ npm run doctor
   stay human.
 - Worktree git config keys: `agentBot.app`, `agentBot.agentId`,
   `agentBot.chainedHooksPath` (still read the legacy `qwts.*` names).
-- User config at `~/.config/agent-bot/config.json` maps harness → App slug;
-  without it the toolkit is inert.
+- User config at `~/.config/agent-bot/config.json` maps harness → App slug and
+  carries secret-free runtime settings; without App mapping the toolkit stays
+  inert.
 - Do not hard-code a playbook-engineering checkout path. Installed consumers
   call `~/.local/bin/agent-bot`; `AGENT_BOT_HOME` exists only for harness
   startup discovery fallback.

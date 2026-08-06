@@ -49,6 +49,9 @@ Hooks and scripts should resolve and initialize the current soul's space with:
 agent-bot space ensure
 ```
 
+Do not invent or pass a root. `ensure` applies the user's configured policy and
+environment override before the governed default.
+
 On success, stdout contains only the absolute space path. Use `--json` when
 the caller needs marker metadata or whether the space was created. `ensure`
 accepts no positional Agent ID: it resolves the environment identity first,

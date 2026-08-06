@@ -21,13 +21,17 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 import { currentAgentId, validateAgentId, withLock } from './agent-identity.mjs';
+import { loadConfig, spacesRootSetting } from './config.mjs';
 import { territoryHarness } from './resolve-agent.mjs';
 
 const SCHEMA_VERSION = 1;
 const MARKER_NAME = 'space.json';
 
-export function spacesHome({ env = process.env, home = homedir() } = {}) {
+export function spacesHome({ env = process.env, home = homedir(), config } = {}) {
   if (env.AGENT_BOT_SPACES_HOME) return path.resolve(env.AGENT_BOT_SPACES_HOME);
+  const loaded = config === undefined ? loadConfig({ home, env }) : config;
+  const configured = spacesRootSetting(loaded);
+  if (configured) return path.resolve(configured);
   const dataHome = env.XDG_DATA_HOME
     ? path.resolve(env.XDG_DATA_HOME)
     : path.join(home, '.local', 'share');
@@ -106,11 +110,11 @@ function writeMarker(root, marker) {
 
 export function initAgentSpace(
   agentId,
-  { env = process.env, home = homedir(), now = () => new Date() } = {},
+  { env = process.env, home = homedir(), config, now = () => new Date() } = {},
 ) {
   const id = validateAgentId(agentId);
-  const spacesRoot = spacesHome({ env, home });
-  const root = spacePath(id, { env, home });
+  const spacesRoot = spacesHome({ env, home, config });
+  const root = path.join(spacesRoot, id);
   ensurePrivateDirectory(spacesRoot);
 
   return withLock(path.join(spacesRoot, `.${id}.lock`), `Agent Space ${id}`, () => {
@@ -153,10 +157,10 @@ export function showAgentSpace(agentId, options = {}) {
 // arbitrary marker fields because either may contain secret material.
 export function inspectAgentSpace(
   agentId,
-  { env = process.env, home = homedir() } = {},
+  { env = process.env, home = homedir(), config } = {},
 ) {
   const id = validateAgentId(agentId);
-  const root = spacePath(id, { env, home });
+  const root = spacePath(id, { env, home, config });
   if (!existsSync(markerPath(root))) {
     let directoryPresent = false;
     try {

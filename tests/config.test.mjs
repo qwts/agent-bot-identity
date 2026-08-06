@@ -6,10 +6,12 @@ import { join } from 'node:path';
 
 import {
   apiBase,
+  daemonPreference,
   githubHost,
   harnessForSlug,
   loadConfig,
   slugForHarness,
+  spacesRootSetting,
 } from '../config.mjs';
 
 function tempHome(name = 'agent-bot-config-') {
@@ -42,11 +44,88 @@ test('broken JSON fails loudly with the config path', () => {
   );
 });
 
+test('present config read failures are not treated as missing', () => {
+  const home = tempHome();
+  const path = writeConfig(home, { prefix: 'you' });
+  assert.throws(
+    () => loadConfig({ home, env: { AGENT_BOT_CONFIG: `${path}/child` } }),
+    /exists but could not be read/,
+  );
+});
+
 test('AGENT_BOT_CONFIG points loadConfig at an explicit file', () => {
   const home = tempHome();
   const path = join(home, 'alt.json');
   writeFileSync(path, JSON.stringify({ prefix: 'alt' }));
   assert.deepEqual(loadConfig({ home, env: { AGENT_BOT_CONFIG: path } }), { prefix: 'alt' });
+});
+
+test('space root setting accepts only a non-empty absolute path', () => {
+  assert.equal(spacesRootSetting({}), null);
+  assert.equal(
+    spacesRootSetting({ settings: { spacesRoot: '/srv/agent-spaces' } }),
+    '/srv/agent-spaces',
+  );
+  for (const spacesRoot of ['', 'relative/spaces', 42, '/tmp/invalid\0root']) {
+    assert.throws(
+      () => spacesRootSetting({ settings: { spacesRoot } }),
+      /expected a non-empty absolute path/,
+    );
+  }
+  for (const settings of [null, [], 'invalid']) {
+    assert.throws(() => spacesRootSetting({ settings }), /settings must be an object/);
+  }
+});
+
+test('daemon preference follows environment, user setting, then off default', () => {
+  assert.equal(daemonPreference({ env: {}, config: {} }), 'off');
+  assert.equal(
+    daemonPreference({ env: {}, config: { settings: { daemonPreference: 'prefer' } } }),
+    'prefer',
+  );
+  assert.equal(
+    daemonPreference({
+      env: { AGENT_BOT_DAEMON_PREFERENCE: 'required' },
+      config: { settings: { daemonPreference: 'invalid-lower-precedence-value' } },
+    }),
+    'required',
+  );
+  assert.equal(
+    daemonPreference({
+      env: { AGENT_BOT_DAEMON_PREFERENCE: '' },
+      config: { settings: { daemonPreference: 'prefer' } },
+    }),
+    'prefer',
+  );
+});
+
+test('loadConfig validates settings while allowing settings-only identity inertia', () => {
+  const home = tempHome();
+  writeConfig(home, { settings: { spacesRoot: '/srv/spaces', daemonPreference: 'prefer' } });
+  const config = loadConfig({ home, env: {} });
+  assert.equal(slugForHarness('codex', config), null);
+  assert.equal(spacesRootSetting(config), '/srv/spaces');
+  assert.equal(daemonPreference({ env: {}, config }), 'prefer');
+
+  writeConfig(home, { settings: { daemonPreference: 'sometimes' } });
+  assert.throws(() => loadConfig({ home, env: {} }), /expected off, prefer, or required/);
+});
+
+test('invalid daemon preferences fail closed without reflecting the value', () => {
+  const invalid = 'must-not-print-invalid-daemon-policy';
+  for (const options of [
+    { env: { AGENT_BOT_DAEMON_PREFERENCE: invalid }, config: {} },
+    { env: {}, config: { settings: { daemonPreference: invalid } } },
+  ]) {
+    assert.throws(
+      () => daemonPreference(options),
+      (error) => {
+        assert.match(error.message, /expected off, prefer, or required/);
+        assert.doesNotMatch(error.message, new RegExp(invalid));
+        return true;
+      },
+    );
+  }
 });
 
 test('prefix pattern builds <prefix>-<harness>-agent slugs', () => {
