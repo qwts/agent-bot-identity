@@ -21,6 +21,7 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 import { currentAgentId, validateAgentId, withLock } from './agent-identity.mjs';
+import { territoryHarness } from './resolve-agent.mjs';
 
 const SCHEMA_VERSION = 1;
 const MARKER_NAME = 'space.json';
@@ -186,6 +187,9 @@ function parseCli(argv) {
     else if (token.startsWith('-')) throw new Error(`unknown option: ${token}`);
     else positional.push(token);
   }
+  if (command === 'ensure' && positional.length > 0) {
+    throw new Error('space ensure does not accept an Agent ID; it resolves the current context');
+  }
   if (positional.length > 1) throw new Error(`${command} accepts at most one Agent ID`);
   return { command, agentId: positional[0] ?? null, json };
 }
@@ -208,6 +212,20 @@ function resolveTargetId(args) {
   return current;
 }
 
+function resolveEnsureId() {
+  if (!territoryHarness(process.cwd())) {
+    throw new Error('space ensure requires bot territory; refusing to create from a human primary checkout');
+  }
+  let current;
+  try {
+    current = currentAgentId();
+  } catch {
+    throw new Error('invalid Agent ID in this context');
+  }
+  if (!current) throw new Error('no Agent ID in this context');
+  return current;
+}
+
 function spaceJson(space, { includeCreated = false } = {}) {
   return {
     agentId: space.id,
@@ -227,6 +245,16 @@ async function main() {
       else process.stdout.write(`${space.path}\n`);
       break;
     }
+    case 'ensure': {
+      const space = initAgentSpace(resolveEnsureId());
+      if (args.json) {
+        process.stdout.write(`${JSON.stringify(spaceJson(space, { includeCreated: true }), null, 2)}\n`);
+      } else {
+        process.stderr.write(`agent-space: ${space.created ? 'created' : 'ready'} for ${space.id}\n`);
+        process.stdout.write(`${space.path}\n`);
+      }
+      break;
+    }
     case 'path': {
       const id = resolveTargetId(args);
       const root = spacePath(id);
@@ -241,7 +269,10 @@ async function main() {
       break;
     }
     default:
-      throw new Error('usage: agent-bot space <init|path|show> [agent-id] [--json]');
+      throw new Error(
+        'usage: agent-bot space <init|path|show> [agent-id] [--json]\n' +
+          '       agent-bot space ensure [--json]',
+      );
   }
 }
 
