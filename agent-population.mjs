@@ -183,6 +183,32 @@ export function upsertSoul(
   });
 }
 
+export function updateSoulStatus(
+  id,
+  status,
+  { file = populationFile(), now = () => new Date() } = {},
+) {
+  const target = agentId(id);
+  const nextStatus = printableText('status', status, { max: 80 });
+  ensurePrivateDirectory(path.dirname(file));
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) {
+      throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
+    }
+    const existing = current.souls[target];
+    if (!existing) return null;
+    const candidate = normalizeSoul({
+      ...existing,
+      status: nextStatus,
+      lastSeen: now().toISOString(),
+    });
+    const souls = { ...current.souls, [target]: candidate };
+    writeDocument(file, souls);
+    return candidate;
+  });
+}
+
 function filterValue(name, value, { app = false } = {}) {
   if (value === undefined || value === null) return null;
   return app ? appSlug(value) : printableText(name, value, { max: 80 });

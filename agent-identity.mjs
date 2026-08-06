@@ -725,10 +725,16 @@ async function main() {
     case 'finalize': {
       const id = targetId();
       if (!id) throw new Error('finalize requires an Agent ID');
-      printRecord(finalizeAgentIdentity(id, {
+      const identity = finalizeAgentIdentity(id, {
         transcriptSha256: args.one('sha256'),
         stateDir,
-      }), args.json);
+      });
+      // Keep a registered census row aligned with provenance. Dynamic import
+      // avoids a module cycle because the population validator reuses identity
+      // validation and locking primitives from this module.
+      const { updateSoulStatus } = await import('./agent-population.mjs');
+      updateSoulStatus(identity.id, identity.status);
+      printRecord(identity, args.json);
       break;
     }
     case 'show': {

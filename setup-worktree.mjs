@@ -200,7 +200,7 @@ async function main() {
     id: executionIdentity.id,
     appSlug: executionIdentity.github.appSlug,
     parentId: executionIdentity.parentId,
-    status: 'active',
+    status: executionIdentity.status,
     spacePath: space.path,
     transcriptLocator: executionIdentity.transcript
       ? {

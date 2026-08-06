@@ -17,6 +17,7 @@ import {
   listSouls,
   populationFile,
   showSoul,
+  updateSoulStatus,
   upsertSoul,
 } from '../agent-population.mjs';
 
@@ -82,6 +83,24 @@ test('upsert is idempotent by Agent ID and publishes private files', () => {
   const updated = upsertSoul(fixture({ status: 'finalized', lastSeen: '2026-08-06T13:00:00.000Z' }), { file });
   assert.equal(updated.status, 'finalized');
   assert.deepEqual(listSouls({ file }), [updated]);
+});
+
+test('status updates preserve registered soul fields and ignore unregistered identities', () => {
+  const file = path.join(scratch(), 'population.json');
+  assert.equal(updateSoulStatus(FIRST_ID, 'finalized', { file }), null);
+
+  const first = upsertSoul(fixture(), { file });
+  const updated = updateSoulStatus(FIRST_ID, 'finalized', {
+    file,
+    now: () => new Date('2026-08-06T14:00:00.000Z'),
+  });
+
+  assert.deepEqual(updated, {
+    ...first,
+    status: 'finalized',
+    lastSeen: '2026-08-06T14:00:00.000Z',
+  });
+  assert.deepEqual(showSoul(FIRST_ID, { file }), updated);
 });
 
 test('upsert does not change permissions on an existing override parent', () => {

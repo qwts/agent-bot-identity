@@ -1,6 +1,6 @@
 import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
   mkdirSync,
   mkdtempSync,
@@ -30,6 +30,7 @@ import {
   validateIdentity,
   withLock,
 } from '../agent-identity.mjs';
+import { showSoul, upsertSoul } from '../agent-population.mjs';
 
 const roots = [];
 afterEach(() => {
@@ -274,6 +275,44 @@ test('evidence is deduplicated and finalization can seal a transcript digest', (
   assert.ok(finalized.finalizedAt);
 });
 
+test('identity finalize synchronizes a registered population row', () => {
+  const root = state();
+  const stateDir = path.join(root, 'identities');
+  const populationPath = path.join(root, 'population.json');
+  const record = mintAgentIdentity(mintOptions(stateDir));
+  upsertSoul({
+    id: record.id,
+    appSlug: record.github.appSlug,
+    parentId: record.parentId,
+    status: record.status,
+    spacePath: path.join(root, 'spaces', record.id),
+    transcriptLocator: record.transcript,
+    lastSeen: '2000-01-01T00:00:00.000Z',
+  }, { file: populationPath });
+  const cli = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'agent-identity.mjs',
+  );
+
+  const finalized = spawnSync(process.execPath, [cli, 'finalize', record.id], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      AGENT_BOT_STATE_HOME: stateDir,
+      AGENT_BOT_POPULATION_PATH: populationPath,
+    },
+  });
+
+  assert.equal(finalized.status, 0, finalized.stderr);
+  assert.equal(readAgentIdentity(record.id, { stateDir }).status, 'finalized');
+  assert.equal(showSoul(record.id, { file: populationPath }).status, 'finalized');
+  assert.notEqual(
+    showSoul(record.id, { file: populationPath }).lastSeen,
+    '2000-01-01T00:00:00.000Z',
+  );
+});
+
 test('concurrent evidence writers do not lose one another', async () => {
   const stateDir = state();
   const record = mintAgentIdentity(mintOptions(stateDir));
@@ -499,6 +538,16 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
   const repeatedPopulation = JSON.parse(readFileSync(populationPath, 'utf8'));
   assert.deepEqual(Object.keys(repeatedPopulation.souls), [firstId]);
   assert.notEqual(repeatedPopulation.souls[firstId].lastSeen, '2000-01-01T00:00:00.000Z');
+
+  finalizeAgentIdentity(firstId, { stateDir });
+  repeatedPopulation.souls[firstId].status = 'active';
+  writeFileSync(populationPath, `${JSON.stringify(repeatedPopulation, null, 2)}\n`);
+  runSetup('thread-1');
+  assert.equal(
+    JSON.parse(readFileSync(populationPath, 'utf8')).souls[firstId].status,
+    'finalized',
+    'setup projects the resolved identity status instead of reviving a finalized soul',
+  );
 
   const savedSpaces = `${spacesDir}.saved`;
   renameSync(spacesDir, savedSpaces);
