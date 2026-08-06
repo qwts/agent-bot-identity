@@ -39,4 +39,5 @@ test('Agent Space guidance links the canonical contract and keeps operations loc
   assert.match(agents, contract);
   assert.match(identities, contract);
   assert.match(identities, /agent-bot space ensure/u);
+  assert.match(identities, /agent-bot population list/u);
 });

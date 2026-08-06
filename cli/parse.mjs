@@ -4,6 +4,7 @@ const PUBLIC_COMMANDS = new Set([
   'doctor',
   'identity',
   'space',
+  'population',
   'install',
   'update',
   'install-gh-shim',

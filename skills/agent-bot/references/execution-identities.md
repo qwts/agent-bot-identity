@@ -55,3 +55,18 @@ accepts no positional Agent ID: it resolves the environment identity first,
 then the worktree pin, and fails non-zero if neither is present. It also
 refuses to create from a human primary checkout even when an Agent ID is
 injected.
+
+## Inspect the local population
+
+The population census is a secret-free aggregate index; identity JSON remains
+the provenance source of truth. List the census or inspect one known soul with:
+
+```bash
+agent-bot population list [--status <status>] [--app <slug>] [--json]
+agent-bot population show <agent-id>
+```
+
+Do not put credentials, private key material, transcript contents, or arbitrary
+identity fields into population records. The public row contains only the
+Agent ID, App slug, parent ID, status, Agent Space path, optional transcript
+locator, and last-seen timestamp.

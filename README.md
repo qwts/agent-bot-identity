@@ -36,6 +36,8 @@ agent-bot setup-worktree [app-slug]
 agent-bot mint-token --app <slug> [--json]
 agent-bot doctor
 agent-bot identity <ensure|spawn|bind|record|finalize|show|current>
+agent-bot space <init|ensure|path|show> [agent-id]
+agent-bot population <list|show> [agent-id] [--json]
 agent-bot install [--with-gh-shim]
 agent-bot install-gh-shim
 agent-bot ensure-private-key --app <slug> [--force]
@@ -95,6 +97,19 @@ Data API so each result is App-authored and GitHub-verified. It checks the
 remote branch before and after replay, verifies every returned signature and
 tree, then resets the local branch to the published signed history. Start with
 `agent-bot signed-commit --dry-run`; the preview is network-free.
+
+`population` reads the workstation-local census at
+`$XDG_STATE_HOME/agent-bot/population.json` (or
+`$AGENT_BOT_POPULATION_PATH`). Records contain only the Agent ID, App slug,
+parent ID, status, Agent Space path, optional transcript locator, and last-seen
+timestamp. Identity JSON remains the provenance source of truth; this census
+is a separate aggregate index. Filter the population with `--status` or
+`--app`, and use `--json` for machine-readable output:
+
+```bash
+agent-bot population list --status active --app you-codex-agent --json
+agent-bot population show agent_00000000-0000-4000-8000-000000000000
+```
 
 The repository also ships an official progressive-disclosure skill at
 `skills/agent-bot`. Its main `SKILL.md` routes setup, verified publishing, and

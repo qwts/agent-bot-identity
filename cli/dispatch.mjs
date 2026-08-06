@@ -11,6 +11,7 @@ const MODULES = new Map([
   ['doctor', 'doctor.mjs'],
   ['identity', 'agent-identity.mjs'],
   ['space', 'agent-space.mjs'],
+  ['population', 'agent-population.mjs'],
   ['install', 'install.mjs'],
   ['update', 'update.mjs'],
   ['install-gh-shim', 'install-gh-shim.mjs'],
