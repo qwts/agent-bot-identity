@@ -12,6 +12,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
@@ -19,7 +20,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import { currentAgentId, validateAgentId } from './agent-identity.mjs';
+import { currentAgentId, validateAgentId, withLock } from './agent-identity.mjs';
 
 const SCHEMA_VERSION = 1;
 const MARKER_NAME = 'space.json';
@@ -66,12 +67,16 @@ function readMarker(root) {
   } catch {
     throw new Error('space marker has an invalid Agent ID');
   }
-  if (typeof record.createdAt !== 'string' || Number.isNaN(Date.parse(record.createdAt))) {
+  let createdAt;
+  try {
+    createdAt = new Date(record.createdAt).toISOString();
+  } catch {
     throw new Error('space marker has an invalid createdAt');
   }
+  if (createdAt !== record.createdAt) throw new Error('space marker has an invalid createdAt');
   // Return only the public schema. A hand-edited marker must not smuggle
   // arbitrary or secret material into `space show` or doctor output.
-  return { schemaVersion: SCHEMA_VERSION, agentId, createdAt: record.createdAt };
+  return { schemaVersion: SCHEMA_VERSION, agentId, createdAt };
 }
 
 function ensurePrivateDirectory(root) {
@@ -107,27 +112,29 @@ export function initAgentSpace(
   const root = spacePath(id, { env, home });
   ensurePrivateDirectory(spacesRoot);
 
-  if (existsSync(markerPath(root))) {
-    const marker = readMarker(root);
-    if (marker.agentId !== id) {
-      throw new Error(`agent space at ${root} is bound to ${marker.agentId}, not ${id}`);
+  return withLock(path.join(spacesRoot, `.${id}.lock`), `Agent Space ${id}`, () => {
+    if (existsSync(markerPath(root))) {
+      const marker = readMarker(root);
+      if (marker.agentId !== id) {
+        throw new Error(`agent space at ${root} is bound to ${marker.agentId}, not ${id}`);
+      }
+      return { id, path: root, created: false, marker };
     }
-    return { id, path: root, created: false, marker };
-  }
-  if (existsSync(root)) {
-    throw new Error(
-      `agent space path ${root} already exists without ${MARKER_NAME}; refusing to claim it`,
-    );
-  }
+    if (existsSync(root)) {
+      throw new Error(
+        `agent space path ${root} already exists without ${MARKER_NAME}; refusing to claim it`,
+      );
+    }
 
-  ensurePrivateDirectory(root);
-  const marker = {
-    schemaVersion: SCHEMA_VERSION,
-    agentId: id,
-    createdAt: now().toISOString(),
-  };
-  writeMarker(root, marker);
-  return { id, path: root, created: true, marker };
+    ensurePrivateDirectory(root);
+    const marker = {
+      schemaVersion: SCHEMA_VERSION,
+      agentId: id,
+      createdAt: now().toISOString(),
+    };
+    writeMarker(root, marker);
+    return { id, path: root, created: true, marker };
+  });
 }
 
 export function showAgentSpace(agentId, options = {}) {
@@ -150,7 +157,13 @@ export function inspectAgentSpace(
   const id = validateAgentId(agentId);
   const root = spacePath(id, { env, home });
   if (!existsSync(markerPath(root))) {
-    return { status: 'missing', id, path: root, directoryPresent: existsSync(root) };
+    let directoryPresent = false;
+    try {
+      directoryPresent = statSync(root).isDirectory();
+    } catch {
+      /* A missing, unreadable, or non-directory path is not an unmarked directory. */
+    }
+    return { status: 'missing', id, path: root, directoryPresent };
   }
   let marker;
   try {
@@ -178,8 +191,19 @@ function parseCli(argv) {
 }
 
 function resolveTargetId(args) {
-  if (args.agentId) return validateAgentId(args.agentId);
-  const current = currentAgentId();
+  if (args.agentId) {
+    try {
+      return validateAgentId(args.agentId);
+    } catch {
+      throw new Error('invalid Agent ID in this context');
+    }
+  }
+  let current;
+  try {
+    current = currentAgentId();
+  } catch {
+    throw new Error('invalid Agent ID in this context');
+  }
   if (!current) throw new Error('no Agent ID in this context; pass agent_<uuid> explicitly');
   return current;
 }

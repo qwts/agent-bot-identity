@@ -12,7 +12,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -41,10 +41,27 @@ function cleanAgentEnv(extra = {}) {
   return { ...env, ...extra };
 }
 
-function runCli(args, env = {}) {
+function runCli(args, env = {}, cwd = undefined) {
   return spawnSync(process.execPath, [CLI, ...args], {
+    cwd,
     encoding: 'utf8',
     env: cleanAgentEnv(env),
+  });
+}
+
+function runCliAsync(args, env = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [CLI, ...args], {
+      encoding: 'utf8',
+      env: cleanAgentEnv(env),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
   });
 }
 
@@ -106,6 +123,27 @@ test('init atomically creates a private, secret-free marker and is idempotent', 
   });
 });
 
+test('concurrent first-time init publishes one marker and every caller succeeds', async () => {
+  const root = scratch();
+  const env = { AGENT_BOT_SPACES_HOME: root };
+  const runs = await Promise.all(
+    Array.from({ length: 12 }, () => runCliAsync(['space', 'init', ID, '--json'], env)),
+  );
+  for (const run of runs) assert.equal(run.status, 0, run.stderr);
+  const results = runs.map((run) => JSON.parse(run.stdout));
+  assert.equal(results.filter(({ created }) => created).length, 1);
+  assert.equal(results.filter(({ created }) => !created).length, 11);
+  assert.equal(new Set(results.map(({ createdAt }) => createdAt)).size, 1);
+  assert.deepEqual(
+    JSON.parse(readFileSync(path.join(root, ID, 'space.json'), 'utf8')),
+    {
+      schemaVersion: 1,
+      agentId: ID,
+      createdAt: results[0].createdAt,
+    },
+  );
+});
+
 test('init refuses unmarked, malformed, and differently bound spaces', () => {
   const unmarkedRoot = scratch();
   const unmarkedEnv = { AGENT_BOT_SPACES_HOME: unmarkedRoot };
@@ -139,6 +177,10 @@ test('inspect is read-only and distinguishes present, missing, mismatch, and inv
     directoryPresent: false,
   });
   assert.equal(existsSync(path.join(root, ID)), false, 'inspection must not create the space');
+
+  writeFileSync(path.join(root, ID), 'not a directory\n');
+  assert.equal(inspectAgentSpace(ID, { env }).directoryPresent, false);
+  rmSync(path.join(root, ID), { force: true });
 
   initAgentSpace(ID, { env, now: () => new Date('2026-08-06T00:00:00.000Z') });
   assert.deepEqual(inspectAgentSpace(ID, { env }), {
@@ -193,6 +235,15 @@ test('space CLI exposes init, path, and show without ensure', () => {
   assert.equal(JSON.parse(show.stdout).agentId, ID);
   assert.doesNotMatch(show.stdout, /must-not-print/);
 
+  writeFileSync(markerPath, `${JSON.stringify({
+    ...marker,
+    createdAt: 'Thu, 06 Aug 2026 00:00:00 GMT (must-not-print)',
+  })}\n`);
+  const noncanonical = runCli(['space', 'show', ID], env);
+  assert.notEqual(noncanonical.status, 0);
+  assert.match(noncanonical.stderr, /invalid createdAt/);
+  assert.doesNotMatch(noncanonical.stderr, /must-not-print/);
+
   writeFileSync(markerPath, 'not-json must-not-print\n');
   const malformed = runCli(['space', 'show', ID], env);
   assert.notEqual(malformed.status, 0);
@@ -218,4 +269,32 @@ test('space CLI fails closed without an explicit or current Agent ID', () => {
   assert.notEqual(run.status, 0);
   assert.equal(run.stdout, '');
   assert.match(run.stderr, /no Agent ID/);
+});
+
+test('space CLI never echoes invalid explicit, environment, or pinned Agent IDs', () => {
+  const root = scratch();
+  const secret = 'must-not-print-invalid-agent-id';
+  const baseEnv = { AGENT_BOT_SPACES_HOME: path.join(root, 'spaces') };
+  for (const run of [
+    runCli(['space', 'path', secret], baseEnv),
+    runCli(['space', 'path'], { ...baseEnv, AGENT_BOT_ID: secret }),
+  ]) {
+    assert.notEqual(run.status, 0);
+    assert.match(run.stderr, /invalid Agent ID in this context/);
+    assert.doesNotMatch(run.stderr, new RegExp(secret));
+  }
+
+  const repo = path.join(root, 'repo');
+  const globalConfig = path.join(root, 'invalid-id.gitconfig');
+  mkdirSync(repo);
+  writeFileSync(globalConfig, '');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['config', 'agentBot.agentId', secret], { cwd: repo });
+  const pinned = runCli(['space', 'path'], {
+    ...baseEnv,
+    GIT_CONFIG_GLOBAL: globalConfig,
+  }, repo);
+  assert.notEqual(pinned.status, 0);
+  assert.match(pinned.stderr, /invalid Agent ID in this context/);
+  assert.doesNotMatch(pinned.stderr, new RegExp(secret));
 });
