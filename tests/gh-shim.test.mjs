@@ -186,6 +186,19 @@ test('an agent fails closed when the installed token-helper path is stale', () =
   assert.match(result.stderr, /token helper or Node is unavailable.*refusing stock human gh/);
 });
 
+test('Codex desktop passes through unchanged without a configured App mapping', () => {
+  const args = [
+    'pr', 'list', '--head', 'codex/topic', '--author', '@me', '--state', 'all',
+    '--json', 'number,url,state,headRefName', '--repo', 'qwts/example',
+  ];
+  const result = runShim({
+    agentEnv: { AGENT_BOT_CODEX_DESKTOP: '1', CODEX_SANDBOX: 'seatbelt' },
+    args,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.stdout.trim().split('\n'), args.map((arg) => `<${arg}>`));
+});
+
 test('Codex desktop broadens only the native PR inbox searchQuery argument', () => {
   const original = 'searchQuery=is:pr is:merged author:@me sort:updated-desc';
   const expanded = 'searchQuery=is:pr is:merged sort:updated-desc';

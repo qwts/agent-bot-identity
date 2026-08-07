@@ -151,10 +151,9 @@ WORKTREE_SLUG="$TERRITORY_SLUG"
 # The native desktop UI is bot territory by caller identity rather than cwd.
 # Its App slug still comes from the user's normal Codex mapping.
 if [ -n "$CODEX_DESKTOP_CONTEXT" ]; then
-  [ -n "$AGENT_SLUG" ] || {
-    echo "agent-bot: Codex desktop has no configured GitHub App identity" >&2
-    exit 1
-  }
+  # Installing the toolkit must remain inert until Codex has an App mapping.
+  # Delegate unchanged so the native desktop UI keeps its existing identity.
+  [ -n "$AGENT_SLUG" ] || exec "$REAL" "$@"
   TERRITORY_SLUG="$AGENT_SLUG"
 fi
 

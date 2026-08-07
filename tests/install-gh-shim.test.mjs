@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, symlinkSync, writeFileSync,
+  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, symlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -132,6 +133,30 @@ test('Codex desktop interposition refuses ambiguous or unrecoverable states', ()
     () => installGhInterposer({ path: nonExecutable, shimPath }),
     /does not resolve to an executable file/,
   );
+});
+
+test('Codex desktop restore preserves the shim when its backup is unusable', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const shimPath = join(home, 'shim');
+  writeFileSync(shimPath, '#!/bin/sh\n', { mode: 0o755 });
+
+  for (const [name, createBackup] of [
+    ['non-executable', (path) => writeFileSync(path, '#!/bin/sh\n', { mode: 0o644 })],
+    ['dangling', (path) => symlinkSync(join(home, 'missing-gh'), path)],
+  ]) {
+    const bin = join(home, name);
+    const ghPath = join(bin, 'gh');
+    mkdirSync(bin);
+    symlinkSync(shimPath, ghPath);
+    createBackup(`${ghPath}.agent-bot-real`);
+
+    assert.throws(
+      () => restoreGhInterposer({ path: ghPath, shimPath }),
+      /no longer resolves to an executable gh/,
+    );
+    assert.equal(readlinkSync(ghPath), shimPath);
+    assert.doesNotThrow(() => lstatSync(`${ghPath}.agent-bot-real`));
+  }
 });
 
 test('zsh resolves the shim in non-login and login shells', { skip: !HAS_ZSH }, () => {

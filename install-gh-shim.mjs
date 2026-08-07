@@ -117,6 +117,7 @@ export function restoreGhInterposer({
   path,
   shimPath,
   lstat = lstatSync,
+  stat = statSync,
   readlink = readlinkSync,
   rename = renameSync,
 } = {}) {
@@ -131,6 +132,9 @@ export function restoreGhInterposer({
     throw new Error(`${backupPath} is missing; refusing an unrecoverable restore`);
   }
   if (backup.isDirectory()) throw new Error(`${backupPath} is not a saved gh executable`);
+  if (!isExecutableFile(backupPath, stat)) {
+    throw new Error(`${backupPath} no longer resolves to an executable gh`);
+  }
   // POSIX rename replaces the managed symlink atomically with the saved
   // executable or symlink, leaving no interval where gh is absent.
   rename(backupPath, ghPath);
