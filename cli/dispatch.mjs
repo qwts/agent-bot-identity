@@ -20,6 +20,8 @@ const MODULES = new Map([
   ['secret', 'secret.mjs'],
   ['credential', 'git-credential-bot.mjs'],
   ['worktree-token', 'worktree-token.mjs'],
+  ['gh-inbox-query', 'gh-inbox-query.mjs'],
+  ['gh-pr-view-json', 'gh-pr-view-json.mjs'],
   ['claude-worktree-create', 'claude-worktree-create.mjs'],
   ['agent-hook', 'agent-hook.mjs'],
 ]);
