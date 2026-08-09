@@ -16,6 +16,8 @@ const PUBLIC_COMMANDS = new Set([
 const INTERNAL_COMMANDS = new Set([
   'credential',
   'worktree-token',
+  'gh-inbox-query',
+  'gh-pr-view-json',
   'claude-worktree-create',
   'hook',
   // Called by every harness's generated hook config, never by a person.

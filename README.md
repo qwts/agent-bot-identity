@@ -296,6 +296,57 @@ Shells other than zsh get no registration. The identity scripts fall back to
 `~/.local/bin/agent-bot` directly for that case, and `agent-bot doctor` probes a
 non-login shell so a missing registration is reported rather than assumed.
 
+#### Experimental Codex desktop Pull Requests UI
+
+The normal gh-shim install covers agent shells but does not necessarily cover
+GitHub commands launched directly by the Codex desktop app. Codex currently
+resolves a `gh` executable from its own host PATH for the built-in Pull Requests
+and environment UI. That executable can be explicitly and reversibly
+interposed:
+
+```bash
+# First identify the system gh selected by the desktop host. Common macOS paths:
+type -a gh
+agent-bot install-gh-shim --codex-desktop-gh /opt/homebrew/bin/gh
+
+# Restore the exact executable or symlink that was preserved during install:
+agent-bot install-gh-shim --restore-codex-desktop-gh /opt/homebrew/bin/gh
+```
+
+The explicit install moves the selected `gh` to an adjacent
+`gh.agent-bot-real` backup and replaces only that path with a symlink to the
+managed shim. It refuses existing backups, foreign replacements, missing
+originals, relative paths, and unrecoverable restores. The ordinary
+`agent-bot install-gh-shim` command never modifies a system or Homebrew path.
+Because a package-manager upgrade may replace either link, verify the selected
+`gh` path after upgrading GitHub CLI and restore or reinstall the interposer if
+needed.
+
+When a direct Codex desktop call is detected, the shim mints the configured
+Codex App token and adapts only the observed native request shapes:
+
+- REST `/user` falls back to the App's real `<slug>[bot]` user object because
+  installation tokens cannot use the authenticated-user endpoint.
+- Pull Request inbox searches replace only the `author:@me`, `reviewed-by:@me`,
+  or `review-requested:@me` identity predicate with repeated `repo:` qualifiers
+  discovered from the App installation. The secret-free repository list is
+  cached privately for ten minutes; native PR/state/sort filters remain, but
+  these three broadened lanes can overlap.
+- The exact branch PR lookup drops only `--author @me`, retaining its head
+  branch and repository constraints so PRs created by another agent App appear.
+- PR detail JSON fills missing App avatars from the exact App profile cached by
+  `setup-worktree`, or from a numeric local App ID, without adding a network
+  request to Codex's five-second detail deadline.
+
+Everything else passes through to the preserved `gh`. This affects only local
+desktop CLI traffic; it does not replace or reconfigure the ChatGPT GitHub
+connector and has no effect on Codex cloud. The native request shapes and
+desktop parent-process detection are observed implementation details, not a
+documented Codex extension API, so this compatibility mode is deliberately
+labelled experimental and may need adjustment after a desktop update. The
+branch PR row remains branch-scoped; this adapter does not turn it into a
+repository-wide PR list.
+
 ### 5. Verify
 
 ```bash

@@ -125,9 +125,13 @@ async function botUid(slug, base) {
     res = await lookup({ authorization: `Bearer ${token}` });
   }
   if (!res.ok) throw new Error(`could not resolve ${slug}[bot]'s user id (HTTP ${res.status})`);
-  const uid = String((await res.json()).id);
+  const profile = await res.json();
+  const uid = String(profile.id);
   mkdirSync(dirname(cachePath), { recursive: true });
   writeFileSync(cachePath, `${uid}\n`);
+  if (typeof profile.avatar_url === 'string' && /^https:\/\//.test(profile.avatar_url)) {
+    writeFileSync(join(dirname(cachePath), 'bot-avatar-url'), `${profile.avatar_url}\n`);
+  }
   return uid;
 }
 

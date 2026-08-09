@@ -14,7 +14,7 @@ Commands:
   population         List the workstation-local census of souls
   install            Install the CLI and Git hooks
   update             Refresh the CLI and global Git hooks from this checkout
-  install-gh-shim    Install the fail-closed gh shim
+  install-gh-shim    Install the fail-closed gh shim and optional desktop adapter
   ensure-private-key Restore an App private key and app-id with pass-cli
   signed-commit      Replay local commits with GitHub-verified signatures
   secret             Read a password or API key from a secure-store provider
