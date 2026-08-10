@@ -83,7 +83,7 @@ function runGit(args, { cwd = process.cwd(), env = process.env } = {}) {
     env,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-  }).trim();
+  }).replace(/[\r\n]+$/, '');
 }
 
 function optionalLstat(path, lstat = lstatSync) {
@@ -432,6 +432,11 @@ function getGit(git, cwd, env, args) {
   }
 }
 
+export function credentialHelperSequenceReady(helpers, expectedHelper) {
+  if (!expectedHelper || helpers.length !== 2 || helpers[0] !== '') return false;
+  return helpers[1].replaceAll('\\', '/') === expectedHelper.replaceAll('\\', '/');
+}
+
 function isSshRemote(value) {
   return /^(?:ssh:\/\/)?[^/@\s]+@[^:/\s]+[:/]/.test(value ?? '');
 }
@@ -652,13 +657,14 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
   const expectedHelper = slug
     ? credentialHelperCommand(installationPaths(home).executable, slug, { subcommand: 'credential' })
     : null;
-  const helperReady = expectedHelper
-    && helpers.some((helper) => helper.replaceAll('\\', '/') === expectedHelper.replaceAll('\\', '/'));
+  const helperReady = credentialHelperSequenceReady(helpers, expectedHelper);
   checks.push(readinessCheck({
     id: 'worktree.credential_helper',
     status: helperReady ? 'ready' : 'failed',
     code: helperReady ? null : 'credential-helper-mismatch',
-    message: helperReady ? 'credential helper is bound to the worktree App' : 'credential helper is missing or bound to another App',
+    message: helperReady
+      ? 'credential helper reset is followed by the worktree App helper'
+      : 'credential helper reset/App binding is missing, reordered, or contains fallback helpers',
     action: helperReady ? null : 'run: agent-bot setup-worktree',
   }));
 

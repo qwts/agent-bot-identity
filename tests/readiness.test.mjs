@@ -10,6 +10,7 @@ import { main as doctorMain } from '../doctor.mjs';
 import {
   READINESS_SCHEMA_VERSION,
   collectReadiness,
+  credentialHelperSequenceReady,
   renderReadinessJson,
   renderReadinessReport,
   requireReadinessSchema,
@@ -290,6 +291,19 @@ test('linked-worktree readiness verifies the complete identity boundary', async 
     'origin-ssh',
   );
   assert.doesNotMatch(JSON.stringify(unsafe), /git@github\.com/);
+});
+
+test('credential helper readiness requires the exact fail-closed reset sequence', () => {
+  const expected = "!'/home/test/.local/bin/agent-bot' credential org-codex-agent";
+  assert.equal(credentialHelperSequenceReady(['', expected], expected), true);
+  assert.equal(credentialHelperSequenceReady([expected], expected), false);
+  assert.equal(credentialHelperSequenceReady([expected, ''], expected), false);
+  assert.equal(credentialHelperSequenceReady(['', expected, 'osxkeychain'], expected), false);
+  assert.equal(credentialHelperSequenceReady(['', 'osxkeychain', expected], expected), false);
+  assert.equal(
+    credentialHelperSequenceReady(['', "!'/other/agent-bot' credential org-codex-agent"], expected),
+    false,
+  );
 });
 
 test('primary checkout is explicitly not applicable for diagnostic worktree readiness', async () => {
