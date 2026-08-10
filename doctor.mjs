@@ -27,6 +27,12 @@ const INSTALLED = installationPaths();
 const HOOKS_DIR = INSTALLED.hooksDir;
 let failures = 0;
 
+export function parseDoctorArgs(argv = process.argv.slice(2)) {
+  if (argv.length === 0) return { machineOnly: false };
+  if (argv.length === 1 && argv[0] === '--machine-only') return { machineOnly: true };
+  throw new Error('usage: doctor [--machine-only]');
+}
+
 function ok(msg) {
   process.stdout.write(`  ok    ${msg}\n`);
 }
@@ -103,7 +109,9 @@ function reportHarnessShellPath() {
   );
 }
 
-async function main() {
+export async function main(argv = process.argv.slice(2)) {
+  const { machineOnly } = parseDoctorArgs(argv);
+  failures = 0;
   process.stdout.write('agent-bot doctor\n\n-- runtime --\n');
   ok(`node ${process.version}`);
   try {
@@ -208,6 +216,12 @@ async function main() {
         '401 = app-id/key mismatch or revoked key; multi-install = set "owner" in the config; not installed = install the App on the account',
       );
     }
+  }
+
+  if (machineOnly) {
+    process.stdout.write(failures ? `\n${failures} problem(s) found\n` : '\nall checks passed\n');
+    process.exitCode = failures ? 1 : 0;
+    return;
   }
 
   process.stdout.write('\n-- current repo --\n');

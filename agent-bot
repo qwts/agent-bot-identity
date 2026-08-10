@@ -48,22 +48,37 @@ nvm_node() {
   return 1
 }
 
+supported_node() {
+  candidate=$1
+  [ -x "$candidate" ] || return 1
+  major=$("$candidate" -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)
+  case "$major" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$major" -ge 20 ]
+}
+
 find_node() {
   if [ -n "${AGENT_BOT_NODE:-}" ]; then
     if [ ! -x "$AGENT_BOT_NODE" ]; then
       echo "agent-bot: AGENT_BOT_NODE is not executable: $AGENT_BOT_NODE" >&2
       return 1
     fi
+    if ! supported_node "$AGENT_BOT_NODE"; then
+      echo "agent-bot: AGENT_BOT_NODE must be Node.js >= 20: $AGENT_BOT_NODE" >&2
+      return 1
+    fi
     printf '%s\n' "$AGENT_BOT_NODE"
     return 0
   fi
 
-  if command -v node >/dev/null 2>&1; then
-    command -v node
+  if candidate=$(command -v node 2>/dev/null) && supported_node "$candidate"; then
+    printf '%s\n' "$candidate"
     return 0
   fi
 
-  if nvm_node; then
+  if candidate=$(nvm_node) && supported_node "$candidate"; then
+    printf '%s\n' "$candidate"
     return 0
   fi
 
@@ -76,7 +91,7 @@ find_node() {
     /opt/homebrew/bin/node \
     /usr/local/bin/node
   do
-    if [ -x "$candidate" ]; then
+    if supported_node "$candidate"; then
       printf '%s\n' "$candidate"
       return 0
     fi
@@ -87,7 +102,7 @@ find_node() {
 self=$(resolve_self "$0")
 root=$(dirname -- "$self")
 if ! node=$(find_node); then
-  echo "agent-bot: Node.js is required; install Node >= 20 or set AGENT_BOT_NODE" >&2
+  echo "agent-bot: Node.js >= 20 is required; install it or set AGENT_BOT_NODE" >&2
   exit 127
 fi
 
