@@ -6,6 +6,7 @@ import { GIT_HOOK_NAMES } from '../git-hooks.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const MODULES = new Map([
+  ['bootstrap', 'bootstrap.mjs'],
   ['setup-worktree', 'setup-worktree.mjs'],
   ['mint-token', 'mint-token.mjs'],
   ['doctor', 'doctor.mjs'],
