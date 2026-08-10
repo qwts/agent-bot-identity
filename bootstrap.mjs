@@ -209,7 +209,10 @@ export function bootstrap(options, {
   if (options.phase !== 'machine') {
     run(executable, ['setup-worktree'], { env });
   }
-  run(executable, options.phase === 'machine' ? ['doctor', '--machine-only'] : ['doctor'], { env });
+  const doctorArgs = ['doctor'];
+  if (options.phase === 'machine') doctorArgs.push('--machine-only');
+  for (const slug of options.apps) doctorArgs.push('--app', slug);
+  run(executable, doctorArgs, { env });
   return { config, credentials, executable, phase: options.phase };
 }
 

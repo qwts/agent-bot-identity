@@ -28,9 +28,21 @@ const HOOKS_DIR = INSTALLED.hooksDir;
 let failures = 0;
 
 export function parseDoctorArgs(argv = process.argv.slice(2)) {
-  if (argv.length === 0) return { machineOnly: false };
-  if (argv.length === 1 && argv[0] === '--machine-only') return { machineOnly: true };
-  throw new Error('usage: doctor [--machine-only]');
+  const options = { apps: [], machineOnly: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--machine-only') {
+      options.machineOnly = true;
+    } else if (arg === '--app') {
+      const slug = argv[index + 1];
+      if (!slug || slug.startsWith('--')) throw new Error('--app requires a slug');
+      options.apps.push(slug);
+      index += 1;
+    } else {
+      throw new Error('usage: doctor [--machine-only] [--app <slug>]');
+    }
+  }
+  return options;
 }
 
 function ok(msg) {
@@ -110,7 +122,7 @@ function reportHarnessShellPath() {
 }
 
 export async function main(argv = process.argv.slice(2)) {
-  const { machineOnly } = parseDoctorArgs(argv);
+  const { apps, machineOnly } = parseDoctorArgs(argv);
   failures = 0;
   process.stdout.write('agent-bot doctor\n\n-- runtime --\n');
   ok(`node ${process.version}`);
@@ -186,6 +198,7 @@ export async function main(argv = process.argv.slice(2)) {
     const slug = slugForHarness(key, config);
     if (slug) slugs.set(key, slug);
   }
+  for (const slug of apps) slugs.set(`explicit:${slug}`, slug);
   if (slugs.size === 0 && Object.keys(config).length > 0) {
     fail('config resolves no harness to any slug', 'set "prefix" or an "apps" map in the config');
   }

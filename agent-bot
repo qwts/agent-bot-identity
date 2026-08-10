@@ -33,7 +33,7 @@ nvm_node() {
   if [ -r "$nvm_dir/alias/default" ]; then
     default=$(cat "$nvm_dir/alias/default")
     for candidate in "$versions/$default" "$versions/v$default" "$versions/v$default".*; do
-      if [ -x "$candidate/bin/node" ]; then
+      if supported_node "$candidate/bin/node"; then
         printf '%s\n' "$candidate/bin/node"
         return 0
       fi

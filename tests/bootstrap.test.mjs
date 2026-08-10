@@ -49,8 +49,12 @@ test('bootstrap CLI parses explicit phases and rejects ignored machine options',
 });
 
 test('doctor exposes a machine-only verification phase', () => {
-  assert.deepEqual(parseDoctorArgs([]), { machineOnly: false });
-  assert.deepEqual(parseDoctorArgs(['--machine-only']), { machineOnly: true });
+  assert.deepEqual(parseDoctorArgs([]), { apps: [], machineOnly: false });
+  assert.deepEqual(parseDoctorArgs(['--machine-only']), { apps: [], machineOnly: true });
+  assert.deepEqual(parseDoctorArgs(['--app', 'explicit-agent']), {
+    apps: ['explicit-agent'],
+    machineOnly: false,
+  });
   assert.throws(() => parseDoctorArgs(['--repair']), /usage/);
 });
 
@@ -157,7 +161,7 @@ test('full bootstrap follows config, install, credentials, shim, worktree, docto
       ['credential', 'explicit-agent'],
       ['shim'],
       ['run', '/home/test/.local/bin/agent-bot', 'setup-worktree'],
-      ['run', '/home/test/.local/bin/agent-bot', 'doctor'],
+      ['run', '/home/test/.local/bin/agent-bot', 'doctor', '--app', 'explicit-agent'],
     ],
   );
 });
