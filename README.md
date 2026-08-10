@@ -31,6 +31,7 @@ transcript-bound execution identity system. Clone and install it directly;
 Installation provides one executable at `~/.local/bin/agent-bot`:
 
 ```bash
+agent-bot bootstrap [--config <path>] [--app <slug>] [--with-gh-shim]
 agent-bot --version
 agent-bot setup-worktree [app-slug]
 agent-bot mint-token --app <slug> [--json]
@@ -148,6 +149,28 @@ are never touched. No config file → the whole thing is inert.
 An unverifiable pin fails closed — it never falls through to harness detection.
 
 ## Setup
+
+### Bootstrap from a source checkout
+
+Once the GitHub Apps and their escrowed credentials exist, the source launcher
+can perform the whole machine setup without an already-installed CLI or an npm
+command:
+
+```bash
+./agent-bot bootstrap --config /path/to/config.json --with-gh-shim
+```
+
+The bootstrap installs the stable CLI and hooks, refuses a conflicting existing
+config, restores every App resolved by the config through `pass-cli`, optionally
+installs the managed `gh` shim, configures the current checkout only when it is
+a linked worktree, and finishes with `doctor`. It never interposes a system or
+Homebrew `gh`; that remains a separate explicit operation.
+
+Use `--machine-only` from a primary checkout when preparing the machine without
+binding a worktree. Use `--worktree-only` later from a linked worktree to run
+only identity setup and verification. The latter requires the machine install
+to point at the same source checkout and rejects machine-setup options rather
+than silently ignoring them.
 
 ### 1. Create a GitHub App per agent tool you use (~5 min each)
 

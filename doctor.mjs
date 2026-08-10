@@ -27,6 +27,24 @@ const INSTALLED = installationPaths();
 const HOOKS_DIR = INSTALLED.hooksDir;
 let failures = 0;
 
+export function parseDoctorArgs(argv = process.argv.slice(2)) {
+  const options = { apps: [], machineOnly: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--machine-only') {
+      options.machineOnly = true;
+    } else if (arg === '--app') {
+      const slug = argv[index + 1];
+      if (!slug || slug.startsWith('--')) throw new Error('--app requires a slug');
+      options.apps.push(slug);
+      index += 1;
+    } else {
+      throw new Error('usage: doctor [--machine-only] [--app <slug>]');
+    }
+  }
+  return options;
+}
+
 function ok(msg) {
   process.stdout.write(`  ok    ${msg}\n`);
 }
@@ -103,7 +121,9 @@ function reportHarnessShellPath() {
   );
 }
 
-async function main() {
+export async function main(argv = process.argv.slice(2)) {
+  const { apps, machineOnly } = parseDoctorArgs(argv);
+  failures = 0;
   process.stdout.write('agent-bot doctor\n\n-- runtime --\n');
   ok(`node ${process.version}`);
   try {
@@ -178,6 +198,7 @@ async function main() {
     const slug = slugForHarness(key, config);
     if (slug) slugs.set(key, slug);
   }
+  for (const slug of apps) slugs.set(`explicit:${slug}`, slug);
   if (slugs.size === 0 && Object.keys(config).length > 0) {
     fail('config resolves no harness to any slug', 'set "prefix" or an "apps" map in the config');
   }
@@ -208,6 +229,12 @@ async function main() {
         '401 = app-id/key mismatch or revoked key; multi-install = set "owner" in the config; not installed = install the App on the account',
       );
     }
+  }
+
+  if (machineOnly) {
+    process.stdout.write(failures ? `\n${failures} problem(s) found\n` : '\nall checks passed\n');
+    process.exitCode = failures ? 1 : 0;
+    return;
   }
 
   process.stdout.write('\n-- current repo --\n');

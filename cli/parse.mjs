@@ -1,4 +1,5 @@
 const PUBLIC_COMMANDS = new Set([
+  'bootstrap',
   'setup-worktree',
   'mint-token',
   'doctor',

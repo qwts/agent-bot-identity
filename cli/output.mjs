@@ -6,6 +6,7 @@ Usage:
   agent-bot --version
 
 Commands:
+  bootstrap          Install and verify machine identity tooling from source
   setup-worktree     Configure the current linked worktree
   mint-token         Mint a GitHub App installation token
   doctor             Diagnose installation and identity state
