@@ -14,11 +14,21 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
-import { loadConfig, slugForHarness } from './config.mjs';
-import { HARNESSES } from './detect-harness.mjs';
+import { loadConfig } from './config.mjs';
 import { reconcileAppCredentials } from './credential-reconciler.mjs';
 import { installAgentBot, installationPaths, isManagedExecutable } from './install.mjs';
 import { installGhShim } from './install-gh-shim.mjs';
+import {
+  buildReadinessReport,
+  collectReadiness,
+  configuredAppSlugs,
+  readinessCheck,
+  renderReadinessJson,
+  renderReadinessReport,
+  requireReadinessSchema,
+} from './readiness.mjs';
+
+export { configuredAppSlugs };
 
 export const BOOTSTRAP_USAGE = `usage: agent-bot bootstrap [options]
 
@@ -28,6 +38,9 @@ Options:
   --with-gh-shim    Install the managed fail-closed gh shim
   --machine-only    Install and verify machine state; do not bind this worktree
   --worktree-only   Bind and verify this linked worktree; do not mutate machine setup
+  --json            Emit readiness schema JSON only
+  --require-schema-version <n>
+                    Require at least readiness schema version n
   -h, --help        Show this help
 `;
 
@@ -38,24 +51,33 @@ export function parseBootstrapArgs(argv = process.argv.slice(2)) {
     apps: [],
     configPath: null,
     help: false,
+    json: false,
     phase: 'all',
+    requireSchemaVersion: null,
     withGhShim: false,
   };
   let selectedPhase = null;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === '--config' || arg === '--app') {
+    if (arg === '--config' || arg === '--app' || arg === '--require-schema-version') {
       const value = argv[index + 1];
       if (!value || value.startsWith('--')) throw new Error(`${arg} requires a value`);
       if (arg === '--config') {
         if (options.configPath) throw new Error('--config may be passed only once');
         options.configPath = value;
-      } else {
+      } else if (arg === '--app') {
         options.apps.push(value);
+      } else {
+        if (options.requireSchemaVersion !== null) {
+          throw new Error('--require-schema-version may be passed only once');
+        }
+        options.requireSchemaVersion = Number(value);
       }
       index += 1;
     } else if (arg === '--with-gh-shim') {
       options.withGhShim = true;
+    } else if (arg === '--json') {
+      options.json = true;
     } else if (arg === '--machine-only' || arg === '--worktree-only') {
       if (selectedPhase) throw new Error(`${arg} conflicts with ${selectedPhase}`);
       selectedPhase = arg;
@@ -128,15 +150,6 @@ export function installBootstrapConfig({
   return { config, path: destination, updated: true };
 }
 
-export function configuredAppSlugs(config, explicit = []) {
-  const slugs = new Set(explicit);
-  for (const { key } of HARNESSES) {
-    const slug = slugForHarness(key, config);
-    if (slug) slugs.add(slug);
-  }
-  return [...slugs].sort();
-}
-
 export function assertInstalledRuntime({
   executable,
   entrypoint = SOURCE_ENTRYPOINT,
@@ -153,7 +166,11 @@ export function assertInstalledRuntime({
 }
 
 function runInstalled(executable, args, { env = process.env } = {}) {
-  execFileSync(executable, args, { env, stdio: 'inherit' });
+  execFileSync(executable, args, {
+    env,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
 }
 
 export async function bootstrap(options, {
@@ -165,62 +182,207 @@ export async function bootstrap(options, {
   reconcileCredentials = reconcileAppCredentials,
   verifyInstalled = assertInstalledRuntime,
   run = runInstalled,
-  output = process.stdout,
+  collect = collectReadiness,
 } = {}) {
   if (options.help) {
-    output.write(BOOTSTRAP_USAGE);
     return { help: true, phase: options.phase };
+  }
+
+  const scope = options.phase === 'machine'
+    ? 'machine'
+    : options.phase === 'worktree'
+      ? 'worktree'
+      : 'all';
+  try {
+    requireReadinessSchema(options.requireSchemaVersion);
+  } catch {
+    const check = readinessCheck({
+      id: 'runtime.readiness_schema',
+      status: 'failed',
+      code: 'readiness-schema-unsupported',
+      message: 'the installed readiness schema does not satisfy the requested minimum',
+      action: 'update agent-bot to a runtime with the required readiness schema',
+    });
+    return buildReadinessReport({
+      command: 'bootstrap',
+      scope,
+      machineChecks: scope === 'worktree' ? [] : [check],
+      worktreeStatus: scope === 'worktree' ? 'not_ready' : 'not_requested',
+      worktreeChecks: scope === 'worktree' ? [check] : [],
+    });
   }
 
   let executable = installationPaths(home).executable;
   let config = null;
-  const credentials = [];
+  let credentialResults = null;
+  let operationFailure = null;
+  let reachedCredentialPhase = false;
+
+  const fail = (failureScope, id, code, message, action) => {
+    operationFailure = {
+      scope: failureScope,
+      check: readinessCheck({ id, status: 'failed', code, message, action }),
+    };
+  };
 
   if (options.phase !== 'worktree') {
-    const configResult = installConfig({ sourcePath: options.configPath, home, env });
-    config = configResult.config;
-    if (options.configPath) {
-      output.write(
-        `${configResult.updated ? 'config installed' : 'config already current'} -> ${configResult.path}\n`,
+    try {
+      const configResult = installConfig({ sourcePath: options.configPath, home, env });
+      config = configResult.config;
+    } catch {
+      fail(
+        'machine',
+        'bootstrap.config',
+        'config-apply-failed',
+        'bootstrap could not apply the secret-free runtime config',
+        'resolve the config conflict or permissions, then retry bootstrap',
       );
     }
 
-    const installed = installRuntime({ home });
-    executable = installed.executable;
-    output.write(`agent-bot installed -> ${executable}\n`);
-
-    const reconciled = await reconcileCredentials({
-      slugs: configuredAppSlugs(config, options.apps),
-      home,
-    });
-    for (const result of reconciled) {
-      credentials.push(result);
-      const restored = result.local.restored.length > 0
-        ? ` (restored ${result.local.restored.join(', ')})`
-        : '';
-      output.write(`credential ready -> ${result.slug}${restored}\n`);
+    if (!operationFailure) {
+      try {
+        const installed = installRuntime({ home });
+        executable = installed.executable;
+      } catch {
+        fail(
+          'machine',
+          'bootstrap.runtime',
+          'runtime-install-failed',
+          'bootstrap could not install the managed CLI and hooks',
+          'move conflicting installed files aside or repair permissions, then retry bootstrap',
+        );
+      }
     }
 
-    if (options.withGhShim) {
-      const shim = installShim({ home, env });
-      output.write(`gh shim installed -> ${shim.shimPath}\n`);
+    if (!operationFailure) {
+      reachedCredentialPhase = true;
+      try {
+        credentialResults = await reconcileCredentials({
+          slugs: configuredAppSlugs(config, options.apps),
+          home,
+        });
+      } catch (error) {
+        credentialResults = Array.isArray(error?.results) ? error.results : null;
+        if (!credentialResults) {
+          fail(
+            'machine',
+            'bootstrap.credentials',
+            'credential-reconciliation-failed',
+            'bootstrap could not reconcile the configured App credentials',
+            'run doctor for secret-free credential diagnostics, then retry bootstrap',
+          );
+        }
+      }
+    }
+
+    const credentialsFailed = credentialResults?.some((result) =>
+      result.local.status === 'failed' || result.live.status === 'failed');
+    if (!operationFailure && !credentialsFailed && options.withGhShim) {
+      try {
+        installShim({ home, env });
+      } catch {
+        fail(
+          'machine',
+          'bootstrap.gh_shim',
+          'gh-shim-install-failed',
+          'bootstrap could not install the managed fail-closed gh shim',
+          'repair the shim target or permissions, then retry bootstrap',
+        );
+      }
     }
   } else {
-    verifyInstalled({ executable });
+    try {
+      verifyInstalled({ executable });
+    } catch {
+      fail(
+        'worktree',
+        'bootstrap.runtime',
+        'installed-runtime-required',
+        'worktree-only bootstrap requires the managed runtime to be installed first',
+        'run bootstrap without --worktree-only before binding the worktree',
+      );
+    }
   }
 
-  if (options.phase !== 'machine') {
-    run(executable, ['setup-worktree'], { env });
+  const credentialsFailed = credentialResults?.some((result) =>
+    result.local.status === 'failed' || result.live.status === 'failed');
+  if (!operationFailure && !credentialsFailed && options.phase !== 'machine') {
+    try {
+      run(executable, ['setup-worktree'], { env });
+    } catch {
+      fail(
+        'worktree',
+        'bootstrap.worktree',
+        'worktree-setup-failed',
+        'bootstrap could not bind the current linked worktree identity',
+        'run doctor and repair the first reported worktree failure, then retry bootstrap',
+      );
+    }
   }
-  const doctorArgs = ['doctor'];
-  if (options.phase === 'machine') doctorArgs.push('--machine-only');
-  for (const slug of options.apps) doctorArgs.push('--app', slug);
-  run(executable, doctorArgs, { env });
-  return { config, credentials, executable, phase: options.phase };
+
+  try {
+    const report = await collect({
+      command: 'bootstrap',
+      scope,
+      explicitApps: options.apps,
+      home,
+      env,
+      expectedGhShim: options.withGhShim,
+      appResults: credentialResults,
+      operationFailure,
+      verifyApps: options.phase === 'worktree'
+        || credentialResults !== null
+        || (reachedCredentialPhase && !operationFailure),
+    });
+    if (scope !== 'machine' && report.worktree.status === 'not_applicable') {
+      const check = readinessCheck({
+        id: 'bootstrap.worktree',
+        status: 'failed',
+        code: 'linked-worktree-required',
+        message: 'bootstrap cannot bind bot identity in a primary checkout or outside a repository',
+        action: 'create or enter a linked agent worktree, then retry bootstrap',
+      });
+      return buildReadinessReport({
+        command: 'bootstrap',
+        scope,
+        machineChecks: report.machine.checks,
+        apps: report.machine.apps,
+        worktreeStatus: 'not_ready',
+        worktreeChecks: [check, ...report.worktree.checks],
+      });
+    }
+    return report;
+  } catch {
+    const check = readinessCheck({
+      id: 'bootstrap.verification',
+      status: 'failed',
+      code: 'readiness-collection-failed',
+      message: 'bootstrap completed its ordered operations but readiness could not be collected safely',
+      action: 'run agent-bot doctor separately and repair its first reported failure',
+    });
+    return buildReadinessReport({
+      command: 'bootstrap',
+      scope,
+      machineChecks: scope === 'worktree' ? [] : [check],
+      worktreeStatus: scope === 'worktree' ? 'not_ready' : 'not_requested',
+      worktreeChecks: scope === 'worktree' ? [check] : [],
+    });
+  }
 }
 
-export function main(argv = process.argv.slice(2)) {
-  return bootstrap(parseBootstrapArgs(argv));
+export async function main(
+  argv = process.argv.slice(2),
+  { output = process.stdout, runBootstrap = bootstrap } = {},
+) {
+  const options = parseBootstrapArgs(argv);
+  if (options.help) {
+    output.write(BOOTSTRAP_USAGE);
+    return { help: true };
+  }
+  const report = await runBootstrap(options);
+  output.write(options.json ? renderReadinessJson(report) : renderReadinessReport(report));
+  process.exitCode = report.ready ? 0 : 1;
+  return report;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
