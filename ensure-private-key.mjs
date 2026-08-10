@@ -149,6 +149,9 @@ export function validateIssuer(value) {
 }
 
 const ISSUER_FIELD_KEYS = ['appid', 'githubappid', 'clientid', 'githubclientid'];
+const TRANSACTION_FILE = '.agent-bot-credential-transaction.json';
+const ISSUER_BACKUP = '.app-id.agent-bot-backup';
+const KEY_BACKUP = '.private-key.pem.agent-bot-backup';
 
 // Field first, then a `app-id: <value>` line in the note — the note is the only
 // place a read-only vault session can be extended without the desktop app.
@@ -314,6 +317,79 @@ export function validatePrivateKey(value) {
   }
 }
 
+function credentialTransactionPaths(directory) {
+  return {
+    journal: join(directory, TRANSACTION_FILE),
+    issuerBackup: join(directory, ISSUER_BACKUP),
+    keyBackup: join(directory, KEY_BACKUP),
+  };
+}
+
+export function recoverCredentialTransaction({
+  slug,
+  directory,
+  exists = existsSync,
+  read = readFileSync,
+  rename = renameSync,
+  remove = rmSync,
+} = {}) {
+  const paths = credentialTransactionPaths(directory);
+  if (!exists(paths.journal)) {
+    // The journal is removed only after both new files are published. Backups
+    // left after that point are obsolete residue from a completed transaction.
+    remove(paths.issuerBackup, { force: true });
+    remove(paths.keyBackup, { force: true });
+    return false;
+  }
+  let record;
+  try {
+    record = JSON.parse(read(paths.journal, 'utf8'));
+  } catch (error) {
+    throw preparationError(
+      'credential-transaction-invalid',
+      slug,
+      'the credential transaction marker is invalid; inspect the App directory before retrying',
+      error,
+    );
+  }
+  if (
+    record?.version !== 1
+    || typeof record.issuerExisted !== 'boolean'
+    || typeof record.keyExisted !== 'boolean'
+  ) {
+    throw preparationError(
+      'credential-transaction-invalid',
+      slug,
+      'the credential transaction marker is invalid; inspect the App directory before retrying',
+    );
+  }
+  const issuer = join(directory, 'app-id');
+  const key = join(directory, 'private-key.pem');
+  try {
+    if (record.issuerExisted) {
+      if (exists(paths.issuerBackup)) rename(paths.issuerBackup, issuer);
+    } else {
+      remove(issuer, { force: true });
+    }
+    if (record.keyExisted) {
+      if (exists(paths.keyBackup)) rename(paths.keyBackup, key);
+    } else {
+      remove(key, { force: true });
+    }
+    remove(paths.journal, { force: true });
+    remove(paths.issuerBackup, { force: true });
+    remove(paths.keyBackup, { force: true });
+  } catch (error) {
+    throw preparationError(
+      'credential-transaction-recovery-failed',
+      slug,
+      'the previous credential publication could not be rolled back; repair file permissions and retry',
+      error,
+    );
+  }
+  return true;
+}
+
 // Both halves of an App's credentials come from one `item view`. A mint needs
 // the key *and* the issuer, so provisioning only one of them leaves the App
 // unusable — restore whichever is missing on the same trip.
@@ -334,6 +410,8 @@ export function ensurePrivateKey({
 } = {}) {
   const path = privateKeyPath(slug, home);
   const idPath = appIdPath(slug, home);
+  const directory = dirname(path);
+  recoverCredentialTransaction({ slug, directory, exists, read, rename, remove });
   let needKey = force || !exists(path);
   let needId = force || !exists(idPath);
   if (!needId) {
@@ -365,7 +443,7 @@ export function ensurePrivateKey({
     };
   }
 
-  mkdir(dirname(path), { recursive: true });
+  mkdir(directory, { recursive: true });
   const suffix = `${process.pid}.${randomUUID()}.tmp`;
   const issuerTemporary = needId ? `${idPath}.${suffix}` : null;
   const keyTemporary = needKey ? `${path}.${suffix}` : null;
@@ -399,11 +477,29 @@ export function ensurePrivateKey({
       }
       chmod(keyTemporary, 0o600);
     }
+    const transaction = credentialTransactionPaths(directory);
+    const issuerExisted = issuerTemporary ? exists(idPath) : false;
+    const keyExisted = keyTemporary ? exists(path) : false;
+    write(transaction.journal, `${JSON.stringify({
+      version: 1,
+      issuerExisted,
+      keyExisted,
+    })}\n`, { flag: 'wx', mode: 0o600 });
+    if (issuerTemporary && issuerExisted) rename(idPath, transaction.issuerBackup);
+    if (keyTemporary && keyExisted) rename(path, transaction.keyBackup);
     if (issuerTemporary) rename(issuerTemporary, idPath);
     if (keyTemporary) rename(keyTemporary, path);
+    remove(transaction.journal, { force: true });
+    remove(transaction.issuerBackup, { force: true });
+    remove(transaction.keyBackup, { force: true });
   } catch (error) {
     if (issuerTemporary) remove(issuerTemporary, { force: true });
     if (keyTemporary) remove(keyTemporary, { force: true });
+    try {
+      recoverCredentialTransaction({ slug, directory, exists, read, rename, remove });
+    } catch (recoveryError) {
+      throw recoveryError;
+    }
     if (error instanceof CredentialPreparationError) throw error;
     throw preparationError(
       'provider-failure',

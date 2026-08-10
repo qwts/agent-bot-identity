@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -12,6 +12,7 @@ import {
   appIdPath,
   ensurePrivateKey,
   privateKeyPath,
+  recoverCredentialTransaction,
 } from '../ensure-private-key.mjs';
 
 function tempHome() {
@@ -79,6 +80,53 @@ test('provider or validation failure leaves existing credential files untouched'
   }), /restored App ID\/client ID is malformed/);
   assert.equal(readFileSync(appIdPath('broken-agent', home), 'utf8'), 'not-an-id\n');
   assert.equal(readFileSync(privateKeyPath('broken-agent', home), 'utf8'), 'old malformed key');
+});
+
+test('a second publication rename failure rolls both credential halves back', () => {
+  const home = tempHome();
+  const slug = 'rollback-agent';
+  const issuer = appIdPath(slug, home);
+  const key = privateKeyPath(slug, home);
+  writeCredential(home, slug, 'not-an-id', 'old malformed key');
+  let failKeyPublication = true;
+  assert.throws(() => ensurePrivateKey({
+    slug,
+    home,
+    validateKey: (value) => value === 'new valid key',
+    provider: {
+      restore: ({ issuerDestination, privateKeyDestination }) => {
+        writeFileSync(issuerDestination, '4394024\n');
+        writeFileSync(privateKeyDestination, 'new valid key');
+      },
+    },
+    rename: (source, destination) => {
+      if (failKeyPublication && destination === key && source.endsWith('.tmp')) {
+        failKeyPublication = false;
+        throw new Error('simulated second publication failure');
+      }
+      renameSync(source, destination);
+    },
+  }), /credential provider could not restore/);
+  assert.equal(readFileSync(issuer, 'utf8'), 'not-an-id\n');
+  assert.equal(readFileSync(key, 'utf8'), 'old malformed key');
+});
+
+test('the next reconciliation recovers a process interrupted between pair renames', () => {
+  const home = tempHome();
+  const slug = 'interrupted-agent';
+  const directory = dirname(appIdPath(slug, home));
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, 'app-id'), 'new-issuer\n');
+  writeFileSync(join(directory, '.app-id.agent-bot-backup'), '4376641\n');
+  writeFileSync(join(directory, '.private-key.pem.agent-bot-backup'), 'old key');
+  writeFileSync(join(directory, '.agent-bot-credential-transaction.json'), JSON.stringify({
+    version: 1,
+    issuerExisted: true,
+    keyExisted: true,
+  }));
+  assert.equal(recoverCredentialTransaction({ slug, directory }), true);
+  assert.equal(readFileSync(appIdPath(slug, home), 'utf8'), '4376641\n');
+  assert.equal(readFileSync(privateKeyPath(slug, home), 'utf8'), 'old key');
 });
 
 test('roster reconciliation is sorted, deduplicated, and skips all minting after a local failure', async () => {

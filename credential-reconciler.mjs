@@ -32,6 +32,8 @@ function localFailure(error) {
     'unreadable-issuer': 'repair permissions on the local app-id file and retry',
     'unreadable-private-key': 'repair permissions on the local private-key.pem file and retry',
     'provider-failure': 'restore provider access and retry credential reconciliation',
+    'credential-transaction-invalid': 'inspect the App credential directory and repair its transaction marker',
+    'credential-transaction-recovery-failed': 'repair App credential file permissions and retry recovery',
   };
   const code = error?.code ?? 'credential-restore-failed';
   return {
