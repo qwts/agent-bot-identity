@@ -117,10 +117,10 @@ test('configured App slugs are unique and deterministic', () => {
   );
 });
 
-test('full bootstrap follows config, install, credentials, shim, worktree, doctor order', () => {
+test('full bootstrap follows config, install, credentials, shim, worktree, doctor order', async () => {
   const calls = [];
   const output = { write: (value) => calls.push(['output', value.trim()]) };
-  const result = bootstrap(
+  const result = await bootstrap(
     parseBootstrapArgs(['--config', '/profile.json', '--app', 'explicit-agent', '--with-gh-shim']),
     {
       home: '/home/test',
@@ -137,9 +137,13 @@ test('full bootstrap follows config, install, credentials, shim, worktree, docto
         calls.push(['install']);
         return { executable: '/home/test/.local/bin/agent-bot' };
       },
-      ensureCredential: ({ slug }) => {
-        calls.push(['credential', slug]);
-        return { path: `/home/test/.config/${slug}/private-key.pem` };
+      reconcileCredentials: async ({ slugs }) => {
+        calls.push(['credentials', ...slugs]);
+        return slugs.map((slug) => ({
+          slug,
+          local: { status: 'ready', restored: [] },
+          live: { status: 'ready', installationId: 1, expiresAt: 'later' },
+        }));
       },
       installShim: () => {
         calls.push(['shim']);
@@ -156,9 +160,7 @@ test('full bootstrap follows config, install, credentials, shim, worktree, docto
     [
       ['config', '/profile.json'],
       ['install'],
-      ['credential', 'claude-agent'],
-      ['credential', 'codex-agent'],
-      ['credential', 'explicit-agent'],
+      ['credentials', 'claude-agent', 'codex-agent', 'explicit-agent'],
       ['shim'],
       ['run', '/home/test/.local/bin/agent-bot', 'setup-worktree'],
       ['run', '/home/test/.local/bin/agent-bot', 'doctor', '--app', 'explicit-agent'],
@@ -166,9 +168,9 @@ test('full bootstrap follows config, install, credentials, shim, worktree, docto
   );
 });
 
-test('machine-only and worktree-only phases do not cross their mutation boundary', () => {
+test('machine-only and worktree-only phases do not cross their mutation boundary', async () => {
   const machineCalls = [];
-  bootstrap(parseBootstrapArgs(['--machine-only']), {
+  await bootstrap(parseBootstrapArgs(['--machine-only']), {
     home: '/home/test',
     installConfig: () => ({ config: {}, path: '/config', updated: false }),
     installRuntime: () => ({ executable: '/installed/agent-bot' }),
@@ -178,7 +180,7 @@ test('machine-only and worktree-only phases do not cross their mutation boundary
   assert.deepEqual(machineCalls, [['doctor', '--machine-only']]);
 
   const worktreeCalls = [];
-  bootstrap(parseBootstrapArgs(['--worktree-only']), {
+  await bootstrap(parseBootstrapArgs(['--worktree-only']), {
     home: '/home/test',
     verifyInstalled: () => {},
     installConfig: () => assert.fail('worktree phase installed config'),
@@ -189,9 +191,9 @@ test('machine-only and worktree-only phases do not cross their mutation boundary
   assert.deepEqual(worktreeCalls, [['setup-worktree'], ['doctor']]);
 });
 
-test('worktree-only fails before setup when the runtime is absent', () => {
-  assert.throws(
-    () => bootstrap(parseBootstrapArgs(['--worktree-only']), {
+test('worktree-only fails before setup when the runtime is absent', async () => {
+  await assert.rejects(
+    bootstrap(parseBootstrapArgs(['--worktree-only']), {
       home: '/home/test',
       verifyInstalled: () => {
         throw new Error('agent-bot is not installed from this checkout');
@@ -202,16 +204,18 @@ test('worktree-only fails before setup when the runtime is absent', () => {
   );
 });
 
-test('bootstrap refuses to call an incomplete credential ready', () => {
-  assert.throws(
-    () => bootstrap(parseBootstrapArgs(['--machine-only', '--app', 'missing-id-agent']), {
+test('bootstrap refuses to continue after credential reconciliation fails', async () => {
+  await assert.rejects(
+    bootstrap(parseBootstrapArgs(['--machine-only', '--app', 'missing-id-agent']), {
       home: '/home/test',
       installConfig: () => ({ config: {}, path: '/config', updated: false }),
       installRuntime: () => ({ executable: '/installed/agent-bot' }),
-      ensureCredential: () => ({ issuerMissing: true }),
+      reconcileCredentials: async () => {
+        throw new Error('[missing-id-agent] missing-issuer');
+      },
       run: () => assert.fail('doctor ran after an incomplete credential'),
       output: { write: () => {} },
     }),
-    /credential incomplete for missing-id-agent/,
+    /missing-id-agent.*missing-issuer/,
   );
 });

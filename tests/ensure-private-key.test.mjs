@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -28,6 +28,10 @@ function viewWith({ sections, extraFields, note } = {}) {
   });
 }
 
+function writeDownload(args, content) {
+  writeFileSync(args[args.indexOf('--output') + 1], content);
+}
+
 test('private key CLI accepts positional/flag slugs and force', () => {
   assert.deepEqual(parseCliArgs(['bot-app']), { force: false, explicit: 'bot-app' });
   assert.deepEqual(parseCliArgs(['--force', '--app', 'bot-app']), {
@@ -43,26 +47,19 @@ test('pass-cli JSON selects only an unambiguous pem attachment', () => {
   assert.throws(() => selectPrivateKeyAttachment([]), /no unambiguous/);
 });
 
-test('ensurePrivateKey is idempotent and downloads without reading key contents', () => {
+test('ensurePrivateKey fails closed when the provider item has no issuer', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-key-'));
   const path = privateKeyPath('bot-app', home);
-  const calls = [];
-  const result = ensurePrivateKey({
+  assert.throws(() => ensurePrivateKey({
     slug: 'bot-app', home,
     run: (args) => {
-      calls.push(args);
       if (args[1] === 'view') return VIEW;
-      writeFileSync(path, 'fixture material\n');
+      writeDownload(args, 'fixture material\n');
       return '';
     },
-  });
-  assert.equal(result.downloaded, true);
-  assert.equal(calls.length, 2);
-  assert.equal(readFileSync(path, 'utf8').length > 0, true);
-  // No issuer in the vault item is a warning, not a failure: the key still lands.
-  assert.equal(result.issuerMissing, true);
-  writeFileSync(appIdPath('bot-app', home), '4376641\n');
-  assert.equal(ensurePrivateKey({ slug: 'bot-app', home }).downloaded, false);
+    validateKey: () => true,
+  }), /no App ID\/client ID/);
+  assert.equal(existsSync(path), false);
 });
 
 test('an issuer is accepted only as a numeric App ID or a client ID', () => {
@@ -113,16 +110,17 @@ test('ensurePrivateKey writes the app-id beside the key from one item view', () 
       if (args[1] === 'view') {
         return viewWith({ sections: [{ fields: [{ field_name: 'App ID', value: '4376641' }] }] });
       }
-      writeFileSync(privateKeyPath('bot-app', home), 'fixture material\n');
+      writeDownload(args, 'fixture material\n');
       return '';
     },
+    validateKey: () => true,
   });
   assert.equal(result.appIdWritten, true);
-  assert.equal(result.issuerMissing, false);
   assert.equal(readFileSync(appIdPath('bot-app', home), 'utf8'), '4376641\n');
+  assert.equal(statSync(privateKeyPath('bot-app', home)).mode & 0o777, 0o600);
   // Both present -> fully idempotent, no pass-cli call at all.
   const before = calls.length;
-  assert.equal(ensurePrivateKey({ slug: 'bot-app', home }).downloaded, false);
+  assert.equal(ensurePrivateKey({ slug: 'bot-app', home, validateKey: () => true }).downloaded, false);
   assert.equal(calls.length, before);
 });
 
@@ -147,14 +145,14 @@ test('an app-id attachment is downloaded and validated when no field carries it'
       writeFileSync(out, id === 'attachment-2' ? '4376641\n' : 'fixture material\n');
       return '';
     },
+    validateKey: () => true,
   });
   assert.equal(result.appIdWritten, true);
-  assert.equal(result.issuerMissing, false);
   assert.equal(readFileSync(appIdPath('bot-app', home), 'utf8'), '4376641\n');
   assert.deepEqual(downloads, ['attachment-2', 'attachment-1']);
 });
 
-test('an app-id attachment holding junk is discarded, not written to the JWT iss', () => {
+test('an app-id attachment holding junk fails without installing either credential half', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-key-'));
   const view = JSON.stringify({
     item: { id: 'item-1', share_id: 'share-1' },
@@ -163,7 +161,7 @@ test('an app-id attachment holding junk is discarded, not written to the JWT iss
       { id: 'attachment-2', content: { name: 'app-id' } },
     ],
   });
-  const result = ensurePrivateKey({
+  assert.throws(() => ensurePrivateKey({
     slug: 'bot-app', home,
     run: (args) => {
       if (args[1] === 'view') return view;
@@ -172,12 +170,10 @@ test('an app-id attachment holding junk is discarded, not written to the JWT iss
       writeFileSync(out, id === 'attachment-2' ? '-----BEGIN RSA PRIVATE KEY-----\n' : 'key\n');
       return '';
     },
-  });
-  assert.equal(result.appIdWritten, false);
-  assert.equal(result.issuerMissing, true);
+    validateKey: () => true,
+  }), /restored App ID\/client ID is malformed/);
   assert.equal(existsSync(appIdPath('bot-app', home)), false);
-  // The key still lands — a bad issuer must not block the half that is correct.
-  assert.equal(result.downloaded, true);
+  assert.equal(existsSync(privateKeyPath('bot-app', home)), false);
 });
 
 test('a field beats an attachment, so no second download happens', () => {
@@ -202,6 +198,7 @@ test('a field beats an attachment, so no second download happens', () => {
       writeFileSync(args[args.indexOf('--output') + 1], 'fixture material\n');
       return '';
     },
+    validateKey: () => true,
   });
   assert.equal(readFileSync(appIdPath('bot-app', home), 'utf8'), '4394024\n');
   assert.deepEqual(downloads, ['attachment-1']);
@@ -218,6 +215,7 @@ test('a present key with a missing app-id still triggers the issuer restore', ()
       calls.push(args);
       return viewWith({ note: 'app-id: 4469551' });
     },
+    validateKey: () => true,
   });
   assert.equal(result.downloaded, false);
   assert.equal(result.appIdWritten, true);

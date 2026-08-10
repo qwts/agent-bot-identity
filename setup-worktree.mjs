@@ -36,8 +36,7 @@ import { join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { resolveAgentSlug, pinnedSlug, territoryHarness, AGENT_ID_KEYS } from './resolve-agent.mjs';
 import { loadConfig, apiBase, githubHost, harnessForSlug } from './config.mjs';
-import { mint } from './mint-token.mjs';
-import { ensurePrivateKey } from './ensure-private-key.mjs';
+import { reconcileAppCredentials } from './credential-reconciler.mjs';
 import {
   discoverTranscript,
   ensureAgentIdentity,
@@ -106,7 +105,7 @@ function rewriteOriginUrls() {
   for (const url of safePushUrls) git('config', '--add', 'remote.origin.pushurl', url);
 }
 
-async function botUid(slug, base) {
+async function botUid(slug, base, verifiedToken) {
   const cachePath = join(homedir(), '.config', slug, 'bot-uid');
   try {
     return readFileSync(cachePath, 'utf8').trim();
@@ -121,8 +120,7 @@ async function botUid(slug, base) {
   if (!res.ok) {
     // Enterprise-owned Apps can be externally invisible (EMU); the App can
     // always see its own bot user, so retry authenticated as the App.
-    const { token } = await mint({ slug });
-    res = await lookup({ authorization: `Bearer ${token}` });
+    res = await lookup({ authorization: `Bearer ${verifiedToken}` });
   }
   if (!res.ok) throw new Error(`could not resolve ${slug}[bot]'s user id (HTTP ${res.status})`);
   const profile = await res.json();
@@ -135,7 +133,11 @@ async function botUid(slug, base) {
   return uid;
 }
 
-async function main() {
+export async function main({
+  reconcileCredentials = reconcileAppCredentials,
+  rewriteOrigins = rewriteOriginUrls,
+  resolveBotUid = botUid,
+} = {}) {
   const config = loadConfig();
   let gitDir; let commonDir;
   try {
@@ -148,24 +150,27 @@ async function main() {
   const previousSlug = pinnedSlug();
   const resolvedSlug = resolveAgentSlug({ explicit: process.argv[2], config, worktree: true });
   if (!resolvedSlug) return; // no identity resolved for this checkout — nothing to do
-  // Eliminate every SSH push path before applying bot attribution. If an SSH
-  // form cannot be made safe, setup fails while the commit guard still sees
-  // the human identity and blocks agent commits in this linked worktree.
-  rewriteOriginUrls();
-
   const slug = validateAppSlug(resolvedSlug);
   const territory = territoryHarness();
   if (previousSlug && previousSlug !== slug && territory) {
     process.stderr.write(`setup-worktree: repaired ${previousSlug} to ${slug} for ${territory} territory\n`);
   }
-  try {
-    const key = ensurePrivateKey({ slug });
-    if (key.downloaded) process.stdout.write(`private key restored for ${slug}\n`);
-  } catch (error) {
-    process.stderr.write(`setup-worktree: private-key restore skipped: ${error.message}\n`);
+  let verifiedToken = null;
+  const [credential] = await reconcileCredentials({
+    slugs: [slug],
+    onVerified: (_verifiedSlug, grant) => {
+      verifiedToken = grant.token;
+    },
+  });
+  if (credential.local.status === 'restored') {
+    process.stdout.write(`credential restored for ${slug}\n`);
   }
+  // Eliminate every SSH push path only after the App credential is locally
+  // ready and live-verified. A credential failure leaves the worktree wholly
+  // untouched and still guarded as human territory.
+  rewriteOrigins();
   const base = apiBase(config);
-  const uid = await botUid(slug, base);
+  const uid = await resolveBotUid(slug, base, verifiedToken);
   const host = githubHost(config);
   const installedRoot = join(homedir(), '.local');
   const helper = join(installedRoot, 'bin', 'agent-bot');
