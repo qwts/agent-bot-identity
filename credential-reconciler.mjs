@@ -1,5 +1,13 @@
 import { homedir } from 'node:os';
-import { ensurePrivateKey } from './ensure-private-key.mjs';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import {
+  appIdPath,
+  ensurePrivateKey,
+  privateKeyPath,
+  validateIssuer,
+  validatePrivateKey,
+} from './ensure-private-key.mjs';
 import { mint } from './mint-token.mjs';
 
 export class CredentialReconciliationError extends Error {
@@ -33,6 +41,7 @@ function localFailure(error) {
     'unreadable-private-key': 'repair permissions on the local private-key.pem file and retry',
     'provider-failure': 'restore provider access and retry credential reconciliation',
     'credential-transaction-invalid': 'inspect the App credential directory and repair its transaction marker',
+    'credential-transaction-pending': 'run explicit credential reconciliation to recover the interrupted publication',
     'credential-transaction-recovery-failed': 'repair App credential file permissions and retry recovery',
   };
   const code = error?.code ?? 'credential-restore-failed';
@@ -41,6 +50,117 @@ function localFailure(error) {
     code,
     action: actions[code] ?? 'repair the App credential in the configured provider and retry',
   };
+}
+
+function validateRoster(slugs = []) {
+  if (slugs.some((slug) =>
+    typeof slug !== 'string'
+    || !/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(slug))) {
+    throw new Error('invalid GitHub App slug in credential roster');
+  }
+  return [...new Set(slugs)].sort();
+}
+
+function inspectComponent({ component, path, read, validate }) {
+  let value;
+  try {
+    value = read(path, 'utf8');
+  } catch (error) {
+    return {
+      component,
+      status: error?.code === 'ENOENT' ? 'missing' : 'unreadable',
+    };
+  }
+  return {
+    component,
+    status: validate(value) ? 'ready' : 'malformed',
+  };
+}
+
+function componentFailure(component) {
+  const suffix = component.component === 'app-id' ? 'issuer' : 'private-key';
+  const code = `${component.status}-${suffix}`;
+  return localFailure({ code });
+}
+
+// Read-only counterpart to ensurePrivateKey. It deliberately does not recover
+// interrupted transactions or contact a provider: doctor must report those
+// states without changing the machine it is diagnosing.
+export function inspectLocalAppCredential({
+  slug,
+  home = homedir(),
+  read = readFileSync,
+  exists = existsSync,
+  validateKey = validatePrivateKey,
+} = {}) {
+  const issuerPath = appIdPath(slug, home);
+  const keyPath = privateKeyPath(slug, home);
+  const journal = join(dirname(issuerPath), '.agent-bot-credential-transaction.json');
+  if (exists(journal)) {
+    return {
+      status: 'failed',
+      code: 'credential-transaction-pending',
+      action: localFailure({ code: 'credential-transaction-pending' }).action,
+      evidence: { components: [] },
+    };
+  }
+  const components = [
+    inspectComponent({ component: 'app-id', path: issuerPath, read, validate: validateIssuer }),
+    inspectComponent({ component: 'private-key', path: keyPath, read, validate: validateKey }),
+  ];
+  const deficiency = components.find((component) => component.status !== 'ready');
+  if (deficiency) {
+    return {
+      ...componentFailure(deficiency),
+      evidence: { components },
+    };
+  }
+  return {
+    status: 'ready',
+    restored: [],
+    evidence: { components },
+  };
+}
+
+// Diagnose a complete roster with the same fail-closed live boundary as the
+// repairing reconciler. One local failure suppresses every mint; when local
+// state is complete, all Apps are live-tested and no token enters the result.
+export async function inspectAppCredentials({
+  slugs,
+  home = homedir(),
+  inspect = inspectLocalAppCredential,
+  verify = async (slug) => mint({ slug }),
+} = {}) {
+  const roster = validateRoster(slugs ?? []);
+  const results = roster.map((slug) => ({
+    slug,
+    local: inspect({ slug, home }),
+    live: { status: 'skipped', code: 'local-roster-incomplete' },
+  }));
+  if (results.some((result) => result.local.status === 'failed')) return results;
+  if (verify === null) {
+    for (const result of results) {
+      result.live = { status: 'skipped', code: 'verification-not-run' };
+    }
+    return results;
+  }
+
+  for (const result of results) {
+    try {
+      const grant = await verify(result.slug);
+      if (!grant || typeof grant.token !== 'string' || grant.token.length === 0) {
+        throw new Error('live verification returned no token');
+      }
+      result.live = {
+        status: 'ready',
+        installationId: Number(grant.installation_id),
+        expiresAt: grant.expires_at,
+      };
+    } catch (error) {
+      result.live = liveFailure(error);
+    }
+  }
+  return results;
 }
 
 function liveFailure(error) {
@@ -81,13 +201,7 @@ export async function reconcileAppCredentials({
   verify = async (slug) => mint({ slug }),
   onVerified = () => {},
 } = {}) {
-  const requested = slugs ?? [];
-  if (requested.some((slug) =>
-    typeof slug !== 'string'
-    || !/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(slug))) {
-    throw new Error('invalid GitHub App slug in credential roster');
-  }
-  const roster = [...new Set(requested)].sort();
+  const roster = validateRoster(slugs ?? []);
   const results = [];
   for (const slug of roster) {
     try {

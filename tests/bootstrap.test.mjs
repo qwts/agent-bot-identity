@@ -15,12 +15,32 @@ import {
   bootstrapConfigPath,
   configuredAppSlugs,
   installBootstrapConfig,
+  main as bootstrapMain,
   parseBootstrapArgs,
 } from '../bootstrap.mjs';
 import { parseDoctorArgs } from '../doctor.mjs';
 
 function tempHome() {
   return mkdtempSync(join(tmpdir(), 'agent-bot-bootstrap-'));
+}
+
+function readyReport(scope = 'all') {
+  return {
+    schema_version: 1,
+    command: 'bootstrap',
+    scope,
+    ready: true,
+    machine: {
+      status: scope === 'worktree' ? 'not_requested' : 'ready',
+      checks: [],
+      apps: [],
+    },
+    worktree: {
+      status: scope === 'machine' ? 'not_requested' : 'ready',
+      checks: [],
+    },
+    first_actionable_failure: null,
+  };
 }
 
 test('bootstrap CLI parses explicit phases and rejects ignored machine options', () => {
@@ -30,9 +50,16 @@ test('bootstrap CLI parses explicit phases and rejects ignored machine options',
       apps: ['two-agent', 'one-agent'],
       configPath: '/tmp/config.json',
       help: false,
+      json: false,
       phase: 'all',
+      requireSchemaVersion: null,
       withGhShim: true,
     },
+  );
+  assert.equal(parseBootstrapArgs(['--json', '--require-schema-version', '1']).json, true);
+  assert.equal(
+    parseBootstrapArgs(['--require-schema-version', '1']).requireSchemaVersion,
+    1,
   );
   assert.equal(parseBootstrapArgs(['--machine-only']).phase, 'machine');
   assert.equal(parseBootstrapArgs(['--worktree-only']).phase, 'worktree');
@@ -49,13 +76,28 @@ test('bootstrap CLI parses explicit phases and rejects ignored machine options',
 });
 
 test('doctor exposes a machine-only verification phase', () => {
-  assert.deepEqual(parseDoctorArgs([]), { apps: [], machineOnly: false });
-  assert.deepEqual(parseDoctorArgs(['--machine-only']), { apps: [], machineOnly: true });
-  assert.deepEqual(parseDoctorArgs(['--app', 'explicit-agent']), {
-    apps: ['explicit-agent'],
+  assert.deepEqual(parseDoctorArgs([]), {
+    apps: [],
+    help: false,
+    json: false,
     machineOnly: false,
+    requireSchemaVersion: null,
   });
-  assert.throws(() => parseDoctorArgs(['--repair']), /usage/);
+  assert.deepEqual(parseDoctorArgs(['--machine-only', '--json']), {
+    apps: [],
+    help: false,
+    json: true,
+    machineOnly: true,
+    requireSchemaVersion: null,
+  });
+  assert.deepEqual(parseDoctorArgs(['--app', 'explicit-agent', '--require-schema-version', '1']), {
+    apps: ['explicit-agent'],
+    help: false,
+    json: false,
+    machineOnly: false,
+    requireSchemaVersion: 1,
+  });
+  assert.throws(() => parseDoctorArgs(['--repair']), /diagnostic only/);
 });
 
 test('explicit config installation is normalized, private, and idempotent', () => {
@@ -117,9 +159,8 @@ test('configured App slugs are unique and deterministic', () => {
   );
 });
 
-test('full bootstrap follows config, install, credentials, shim, worktree, doctor order', async () => {
+test('full bootstrap follows config, install, credentials, shim, worktree, readiness order', async () => {
   const calls = [];
-  const output = { write: (value) => calls.push(['output', value.trim()]) };
   const result = await bootstrap(
     parseBootstrapArgs(['--config', '/profile.json', '--app', 'explicit-agent', '--with-gh-shim']),
     {
@@ -150,20 +191,23 @@ test('full bootstrap follows config, install, credentials, shim, worktree, docto
         return { shimPath: '/home/test/.config/agent-bot/bin/gh' };
       },
       run: (executable, args) => calls.push(['run', executable, ...args]),
-      output,
+      collect: (options) => {
+        calls.push(['collect', options.scope, ...options.appResults.map(({ slug }) => slug)]);
+        return readyReport(options.scope);
+      },
     },
   );
 
-  assert.equal(result.phase, 'all');
+  assert.equal(result.ready, true);
   assert.deepEqual(
-    calls.filter(([kind]) => kind !== 'output'),
+    calls,
     [
       ['config', '/profile.json'],
       ['install'],
       ['credentials', 'claude-agent', 'codex-agent', 'explicit-agent'],
       ['shim'],
       ['run', '/home/test/.local/bin/agent-bot', 'setup-worktree'],
-      ['run', '/home/test/.local/bin/agent-bot', 'doctor', '--app', 'explicit-agent'],
+      ['collect', 'all', 'claude-agent', 'codex-agent', 'explicit-agent'],
     ],
   );
 });
@@ -174,10 +218,13 @@ test('machine-only and worktree-only phases do not cross their mutation boundary
     home: '/home/test',
     installConfig: () => ({ config: {}, path: '/config', updated: false }),
     installRuntime: () => ({ executable: '/installed/agent-bot' }),
+    collect: (options) => {
+      machineCalls.push(['collect', options.scope]);
+      return readyReport(options.scope);
+    },
     run: (_executable, args) => machineCalls.push(args),
-    output: { write: () => {} },
   });
-  assert.deepEqual(machineCalls, [['doctor', '--machine-only']]);
+  assert.deepEqual(machineCalls, [['collect', 'machine']]);
 
   const worktreeCalls = [];
   await bootstrap(parseBootstrapArgs(['--worktree-only']), {
@@ -186,36 +233,109 @@ test('machine-only and worktree-only phases do not cross their mutation boundary
     installConfig: () => assert.fail('worktree phase installed config'),
     installRuntime: () => assert.fail('worktree phase installed runtime'),
     run: (_executable, args) => worktreeCalls.push(args),
-    output: { write: () => {} },
+    collect: (options) => {
+      worktreeCalls.push(['collect', options.scope]);
+      return readyReport(options.scope);
+    },
   });
-  assert.deepEqual(worktreeCalls, [['setup-worktree'], ['doctor']]);
+  assert.deepEqual(worktreeCalls, [['setup-worktree'], ['collect', 'worktree']]);
 });
 
 test('worktree-only fails before setup when the runtime is absent', async () => {
-  await assert.rejects(
-    bootstrap(parseBootstrapArgs(['--worktree-only']), {
-      home: '/home/test',
-      verifyInstalled: () => {
-        throw new Error('agent-bot is not installed from this checkout');
-      },
-      output: { write: () => {} },
-    }),
-    /not installed/,
-  );
+  let observed;
+  const report = await bootstrap(parseBootstrapArgs(['--worktree-only']), {
+    home: '/home/test',
+    verifyInstalled: () => {
+      throw new Error('agent-bot is not installed from this checkout');
+    },
+    run: () => assert.fail('setup ran without the installed runtime'),
+    collect: (options) => {
+      observed = options.operationFailure;
+      return {
+        ...readyReport('worktree'),
+        ready: false,
+        worktree: { status: 'not_ready', checks: [options.operationFailure.check] },
+      };
+    },
+  });
+  assert.equal(report.ready, false);
+  assert.equal(observed.check.code, 'installed-runtime-required');
 });
 
 test('bootstrap refuses to continue after credential reconciliation fails', async () => {
-  await assert.rejects(
-    bootstrap(parseBootstrapArgs(['--machine-only', '--app', 'missing-id-agent']), {
+  let observedResults;
+  const failureResults = [{
+    slug: 'missing-id-agent',
+    local: { status: 'failed', code: 'missing-issuer', action: 'repair issuer' },
+    live: { status: 'skipped' },
+  }];
+  const report = await bootstrap(
+    parseBootstrapArgs(['--machine-only', '--app', 'missing-id-agent']),
+    {
       home: '/home/test',
       installConfig: () => ({ config: {}, path: '/config', updated: false }),
       installRuntime: () => ({ executable: '/installed/agent-bot' }),
       reconcileCredentials: async () => {
-        throw new Error('[missing-id-agent] missing-issuer');
+        const error = new Error('secret-shaped provider detail');
+        error.results = failureResults;
+        throw error;
       },
-      run: () => assert.fail('doctor ran after an incomplete credential'),
-      output: { write: () => {} },
-    }),
-    /missing-id-agent.*missing-issuer/,
+      run: () => assert.fail('worktree setup ran after an incomplete credential'),
+      collect: (options) => {
+        observedResults = options.appResults;
+        return {
+          ...readyReport('machine'),
+          ready: false,
+          machine: { status: 'not_ready', checks: [], apps: [] },
+        };
+      },
+    },
   );
+  assert.equal(report.ready, false);
+  assert.deepEqual(observedResults, failureResults);
+});
+
+test('unsupported schema fails before every bootstrap mutation', async () => {
+  const report = await bootstrap(parseBootstrapArgs(['--require-schema-version', '2']), {
+    installConfig: () => assert.fail('config mutated before schema preflight'),
+    installRuntime: () => assert.fail('runtime mutated before schema preflight'),
+    reconcileCredentials: () => assert.fail('credentials mutated before schema preflight'),
+    installShim: () => assert.fail('shim mutated before schema preflight'),
+    run: () => assert.fail('worktree mutated before schema preflight'),
+    collect: () => assert.fail('probes ran before schema preflight'),
+  });
+  assert.equal(report.ready, false);
+  assert.equal(report.first_actionable_failure.code, 'readiness-schema-unsupported');
+});
+
+test('full bootstrap requires a linked worktree while leaving machine readiness visible', async () => {
+  const report = await bootstrap(parseBootstrapArgs([]), {
+    home: '/home/test',
+    installConfig: () => ({ config: {}, path: '/config', updated: false }),
+    installRuntime: () => ({ executable: '/installed/agent-bot' }),
+    run: () => {},
+    collect: () => ({
+      ...readyReport('all'),
+      worktree: { status: 'not_applicable', checks: [] },
+    }),
+  });
+  assert.equal(report.machine.status, 'ready');
+  assert.equal(report.worktree.status, 'not_ready');
+  assert.equal(report.first_actionable_failure.code, 'linked-worktree-required');
+});
+
+test('bootstrap JSON mode emits exactly one report object', async () => {
+  let stdout = '';
+  const previous = process.exitCode;
+  try {
+    const report = await bootstrapMain(['--json'], {
+      output: { write: (value) => { stdout += value; } },
+      runBootstrap: async () => readyReport('all'),
+    });
+    assert.equal(report.ready, true);
+    assert.equal(JSON.parse(stdout).schema_version, 1);
+    assert.equal(stdout.trim().split('\n').filter((line) => line.startsWith('{')).length, 1);
+  } finally {
+    process.exitCode = previous;
+  }
 });

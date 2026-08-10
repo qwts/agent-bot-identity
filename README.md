@@ -31,11 +31,11 @@ transcript-bound execution identity system. Clone and install it directly;
 Installation provides one executable at `~/.local/bin/agent-bot`:
 
 ```bash
-agent-bot bootstrap [--config <path>] [--app <slug>] [--with-gh-shim]
+agent-bot bootstrap [--config <path>] [--app <slug>] [--with-gh-shim] [--json]
 agent-bot --version
 agent-bot setup-worktree [app-slug]
 agent-bot mint-token --app <slug> [--json]
-agent-bot doctor
+agent-bot doctor [--machine-only] [--app <slug>] [--json]
 agent-bot identity <ensure|spawn|bind|record|finalize|show|current>
 agent-bot space <init|ensure|path|show> [agent-id]
 agent-bot population <list|show> [agent-id] [--json]
@@ -54,6 +54,26 @@ agent-bot secret get --provider <id> --collection <name> --item <title> --field 
 
 Treat that stdout as a credential. Errors, diagnostics, identity records, and
 logs never contain tokens, JWTs, or private keys.
+
+`doctor --json` and `bootstrap --json` emit the same secret-free readiness
+contract. Unlike mint output, this object is safe to retain in automation:
+
+```json
+{
+  "schema_version": 1,
+  "command": "doctor",
+  "scope": "machine",
+  "ready": true,
+  "machine": { "status": "ready", "checks": [], "apps": [] },
+  "worktree": { "status": "not_requested", "checks": [] },
+  "first_actionable_failure": null
+}
+```
+
+Each check has fixed `id`, `status`, `code`, `message`, `action`, and
+`evidence` fields. App rows contain separate `credential` and `live_mint`
+checks. Consumers can pass `--require-schema-version <n>`; bootstrap rejects an
+unsupported minimum before changing config, credentials, tools, or worktrees.
 
 `secret get` provides the same narrow stdout boundary for a password or API key
 that an agent is already authorized to read. The first built-in provider is
@@ -165,14 +185,21 @@ config, reconciles every App resolved by the config through `pass-cli`, and
 live-verifies every App before it installs the optional managed `gh` shim or
 configures a linked worktree. A local failure is reported for every affected
 App before any live mint is attempted; a revoked or mismatched App ID/private
-key fails during the live phase. It finishes with `doctor` and never interposes
-a system or Homebrew `gh`; that remains a separate explicit operation.
+key fails during the live phase. It finishes by collecting the same readiness
+report as `doctor` and never interposes a system or Homebrew `gh`; that remains
+a separate explicit operation.
 
 Use `--machine-only` from a primary checkout when preparing the machine without
 binding a worktree. Use `--worktree-only` later from a linked worktree to run
 only identity setup and verification. The latter requires the machine install
 to point at the same source checkout and rejects machine-setup options rather
 than silently ignoring them.
+
+`doctor` is always read-only and continues to reject `--repair`. Bootstrap is
+the explicit repair boundary: it performs only the documented idempotent setup
+operations, stops after the first failed mutation phase, and reports later live
+verification as skipped. A full bootstrap requires a linked worktree; use
+`--machine-only` deliberately from a primary checkout.
 
 ### 1. Create a GitHub App per agent tool you use (~5 min each)
 
@@ -513,11 +540,15 @@ passes the session id; other launchers set `AGENT_BOT_TRANSCRIPT_PROVIDER` and
 
 ```bash
 agent-bot doctor
+agent-bot doctor --json --require-schema-version 1
 ```
 
-One command diagnoses runtime, hooks, gh shim, config, live mints, and the
-current worktree (including Agent ID). Run it from inside the misbehaving
-worktree for the repo checks to apply.
+The diagnostic reports Node and Git, the managed CLI and harness PATH, config,
+every configured App credential and live mint, hooks, optional gh shim, the
+runtime-owned skill, and current worktree identity. Machine and worktree status
+are separate; a primary checkout is `not_applicable`, not silently converted to
+bot territory. Human output prints one action for the earliest failure, while
+JSON retains secret-free status for every check and App.
 
 ## Failure modes
 

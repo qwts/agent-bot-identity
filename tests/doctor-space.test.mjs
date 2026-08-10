@@ -52,12 +52,12 @@ function fixture() {
   return { root, repo, worktree, home, spaces, globalConfig };
 }
 
-function doctor(cwd, fx) {
+function doctor(cwd, fx, args = []) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
     if (/^(AGENT_BOT|QWTS_AGENT|GH_AGENT_APP)/.test(key)) delete env[key];
   }
-  return spawnSync(process.execPath, [DOCTOR], {
+  return spawnSync(process.execPath, [DOCTOR, ...args], {
     cwd,
     encoding: 'utf8',
     env: {
@@ -100,7 +100,9 @@ test('doctor reports a missing marker and does not create or repair the space', 
   const expected = path.join(fx.spaces, ID);
   const run = doctor(fx.worktree, fx);
   assert.match(run.stdout, new RegExp(`FAIL  no Agent Space marker for ${ID} at ${expected}`));
-  assert.match(run.stdout, /fix: run: agent-bot space init/);
+  const report = JSON.parse(doctor(fx.worktree, fx, ['--json']).stdout);
+  const space = report.worktree.checks.find((check) => check.id === 'worktree.agent_space');
+  assert.match(space.action, /run: agent-bot space init/);
   assert.equal(existsSync(expected), false, 'doctor must remain read-only');
 });
 
@@ -118,7 +120,9 @@ test('doctor reports a marker bound to another Agent ID', () => {
     run.stdout,
     new RegExp(`FAIL  Agent Space at ${path.join(fx.spaces, ID)} is bound to ${OTHER_ID}, not ${ID}`),
   );
-  assert.match(run.stdout, /doctor will not rebind it/);
+  const report = JSON.parse(doctor(fx.worktree, fx, ['--json']).stdout);
+  const space = report.worktree.checks.find((check) => check.id === 'worktree.agent_space');
+  assert.match(space.action, /doctor will not rebind it/);
 });
 
 test('doctor reports malformed and unsupported markers generically without leaking contents', () => {

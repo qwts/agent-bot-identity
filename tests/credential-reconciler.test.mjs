@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
   CredentialReconciliationError,
+  inspectAppCredentials,
+  inspectLocalAppCredential,
   reconcileAppCredentials,
 } from '../credential-reconciler.mjs';
 import {
@@ -40,6 +42,50 @@ test('valid local credentials are preserved without contacting the provider', ()
   assert.deepEqual(result.restored, []);
   assert.equal(readFileSync(appIdPath('ready-agent', home), 'utf8'), beforeId);
   assert.equal(readFileSync(privateKeyPath('ready-agent', home), 'utf8'), beforeKey);
+});
+
+test('read-only local inspection reports every component without repair', () => {
+  const home = tempHome();
+  const missing = inspectLocalAppCredential({
+    slug: 'missing-agent',
+    home,
+    validateKey: () => true,
+  });
+  assert.equal(missing.status, 'failed');
+  assert.equal(missing.code, 'missing-issuer');
+  assert.deepEqual(missing.evidence.components, [
+    { component: 'app-id', status: 'missing' },
+    { component: 'private-key', status: 'missing' },
+  ]);
+
+  writeCredential(home, 'malformed-agent', 'not-an-id', 'secret-private-key');
+  const before = readFileSync(privateKeyPath('malformed-agent', home), 'utf8');
+  const malformed = inspectLocalAppCredential({
+    slug: 'malformed-agent',
+    home,
+    validateKey: () => false,
+  });
+  assert.equal(malformed.code, 'malformed-issuer');
+  assert.equal(readFileSync(privateKeyPath('malformed-agent', home), 'utf8'), before);
+  assert.doesNotMatch(JSON.stringify(malformed), /secret-private-key/);
+});
+
+test('diagnostic roster inspection gates live verification and never repairs', async () => {
+  const verified = [];
+  const results = await inspectAppCredentials({
+    slugs: ['ready-agent', 'broken-agent'],
+    inspect: ({ slug }) => slug === 'ready-agent'
+      ? { status: 'ready', evidence: { components: [] } }
+      : { status: 'failed', code: 'missing-private-key', action: 'repair key', evidence: { components: [] } },
+    verify: async (slug) => {
+      verified.push(slug);
+      return { token: 'secret-token', installation_id: 1, expires_at: 'later' };
+    },
+  });
+  assert.deepEqual(verified, []);
+  assert.deepEqual(results.map(({ slug }) => slug), ['broken-agent', 'ready-agent']);
+  assert.ok(results.every(({ live }) => live.status === 'skipped'));
+  assert.doesNotMatch(JSON.stringify(results), /secret-token/);
 });
 
 test('a fake provider repairs malformed files only after both replacements validate', () => {
