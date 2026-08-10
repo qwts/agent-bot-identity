@@ -9,7 +9,8 @@ Use this reference for setup, minting, diagnostics, and identity repair.
 | Inspect available commands | `agent-bot --help` |
 | Configure the current linked worktree | `agent-bot setup-worktree [app-slug]` |
 | Mint a short-lived App installation token | `agent-bot mint-token [--app <slug>] [--json]` |
-| Diagnose the installation and mapped identities | `agent-bot doctor` |
+| Diagnose the installation and mapped identities | `agent-bot doctor [--json]` |
+| Explicitly repair and verify documented setup | `agent-bot bootstrap [--machine-only\|--worktree-only] [--json]` |
 | Install the CLI and hooks | `agent-bot install [--with-gh-shim]` |
 | Install only the fail-closed `gh` shim | `agent-bot install-gh-shim` |
 | Restore an App key and issuer from pass-cli | `agent-bot ensure-private-key --app <slug> [--force]` |
@@ -99,3 +100,10 @@ Run `agent-bot doctor`, then compare:
 
 Repair the earliest divergent layer. Do not patch later commands with a
 different App slug, because that creates split attribution.
+
+`doctor` is a read-only query and has no repair mode. Use `bootstrap` for the
+explicit, idempotent repair boundary. Automation should use
+`doctor --json --require-schema-version 1` or the equivalent bootstrap flags;
+the report separates machine from worktree readiness and contains no mint
+token or key material. A primary checkout is intentionally not applicable for
+worktree identity and must never be claimed by a repair command.
