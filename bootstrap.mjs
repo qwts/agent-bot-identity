@@ -16,7 +16,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { loadConfig, slugForHarness } from './config.mjs';
 import { HARNESSES } from './detect-harness.mjs';
-import { ensurePrivateKey } from './ensure-private-key.mjs';
+import { reconcileAppCredentials } from './credential-reconciler.mjs';
 import { installAgentBot, installationPaths, isManagedExecutable } from './install.mjs';
 import { installGhShim } from './install-gh-shim.mjs';
 
@@ -156,13 +156,13 @@ function runInstalled(executable, args, { env = process.env } = {}) {
   execFileSync(executable, args, { env, stdio: 'inherit' });
 }
 
-export function bootstrap(options, {
+export async function bootstrap(options, {
   home = homedir(),
   env = process.env,
   installConfig = installBootstrapConfig,
   installRuntime = installAgentBot,
   installShim = installGhShim,
-  ensureCredential = ensurePrivateKey,
+  reconcileCredentials = reconcileAppCredentials,
   verifyInstalled = assertInstalledRuntime,
   run = runInstalled,
   output = process.stdout,
@@ -189,13 +189,16 @@ export function bootstrap(options, {
     executable = installed.executable;
     output.write(`agent-bot installed -> ${executable}\n`);
 
-    for (const slug of configuredAppSlugs(config, options.apps)) {
-      const result = ensureCredential({ slug, home });
-      if (result.issuerMissing) {
-        throw new Error(`credential incomplete for ${slug}: no app-id or client-id was restored`);
-      }
-      credentials.push({ slug, ...result });
-      output.write(`credential ready -> ${slug}\n`);
+    const reconciled = await reconcileCredentials({
+      slugs: configuredAppSlugs(config, options.apps),
+      home,
+    });
+    for (const result of reconciled) {
+      credentials.push(result);
+      const restored = result.local.restored.length > 0
+        ? ` (restored ${result.local.restored.join(', ')})`
+        : '';
+      output.write(`credential ready -> ${result.slug}${restored}\n`);
     }
 
     if (options.withGhShim) {
@@ -221,10 +224,8 @@ export function main(argv = process.argv.slice(2)) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  try {
-    main();
-  } catch (error) {
+  main().catch((error) => {
     process.stderr.write(`bootstrap: ${error.message}\n`);
     process.exit(1);
-  }
+  });
 }

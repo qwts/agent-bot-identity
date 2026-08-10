@@ -31,6 +31,7 @@ import {
   withLock,
 } from '../agent-identity.mjs';
 import { showSoul, upsertSoul } from '../agent-population.mjs';
+import { startMockGitHubApp } from './helpers/mock-github-app.mjs';
 
 const roots = [];
 afterEach(() => {
@@ -428,7 +429,7 @@ test('current identity prefers the child process environment over worktree confi
   assert.equal(currentAgentId({ env: { AGENT_BOT_ID: id(2) }, cwd: root }), id(2));
 });
 
-test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation reuses the worktree', () => {
+test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation reuses the worktree', (t) => {
   const root = state();
   const home = path.join(root, 'home');
   const repo = path.join(root, 'repo');
@@ -438,9 +439,17 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
   const populationPath = path.join(root, 'population.json');
   const globalConfig = path.join(root, 'gitconfig');
   const app = 'you-codex-agent';
+  const github = startMockGitHubApp(root);
+  t.after(() => github.stop());
   mkdirSync(path.join(home, '.config', app), { recursive: true });
+  mkdirSync(path.join(home, '.config', 'agent-bot'), { recursive: true });
   writeFileSync(path.join(home, '.config', app, 'bot-uid'), '308462948\n');
-  writeFileSync(path.join(home, '.config', app, 'private-key.pem'), '');
+  writeFileSync(path.join(home, '.config', app, 'app-id'), '12345\n');
+  writeFileSync(path.join(home, '.config', app, 'private-key.pem'), github.privateKeyPem);
+  writeFileSync(path.join(home, '.config', 'agent-bot', 'config.json'), JSON.stringify({
+    apiBase: github.apiBase,
+    owner: 'test-owner',
+  }));
   mkdirSync(repo);
   execFileSync('git', ['init', '--quiet', '--initial-branch=main'], { cwd: repo });
   execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo });

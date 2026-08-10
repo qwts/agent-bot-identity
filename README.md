@@ -161,10 +161,12 @@ command:
 ```
 
 The bootstrap installs the stable CLI and hooks, refuses a conflicting existing
-config, restores every App resolved by the config through `pass-cli`, optionally
-installs the managed `gh` shim, configures the current checkout only when it is
-a linked worktree, and finishes with `doctor`. It never interposes a system or
-Homebrew `gh`; that remains a separate explicit operation.
+config, reconciles every App resolved by the config through `pass-cli`, and
+live-verifies every App before it installs the optional managed `gh` shim or
+configures a linked worktree. A local failure is reported for every affected
+App before any live mint is attempted; a revoked or mismatched App ID/private
+key fails during the live phase. It finishes with `doctor` and never interposes
+a system or Homebrew `gh`; that remains a separate explicit operation.
 
 Use `--machine-only` from a primary checkout when preparing the machine without
 binding a worktree. Use `--worktree-only` later from a linked worktree to run
@@ -224,11 +226,14 @@ attachment, which is why all three are accepted:
 agent-bot ensure-private-key --app you-claude-agent
 ```
 
-One `item view` provisions whichever of the two files is missing, so a fresh
-machine needs no manual copying. `setup-worktree` calls this on every bot
-worktree, which means a deleted key or app-id self-heals. A missing issuer is a
-warning rather than a failure — the key still lands, and `doctor` reports the
-gap.
+One `item view` provisions whichever of the two files is missing or malformed,
+so a fresh machine needs no manual copying. Restored files are staged,
+validated, and atomically installed with private permissions; valid existing
+files are preserved without contacting the provider. `setup-worktree` performs
+the same reconciliation and a live mint before changing the remote, resolving
+the bot UID, or writing worktree identity. Missing, ambiguous, malformed,
+revoked, or mismatched credentials therefore fail closed with the App slug and
+operator action instead of leaving a partially configured worktree.
 
 ### 3. Write the config
 

@@ -2,13 +2,31 @@
 
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createPrivateKey, randomUUID } from 'node:crypto';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 
 export const AGENT_IDENTITIES_VAULT = 'Agent Identities';
+
+export class CredentialPreparationError extends Error {
+  constructor(code, slug, message) {
+    super(`[${slug}] ${message}`);
+    this.name = 'CredentialPreparationError';
+    this.code = code;
+    this.slug = slug;
+  }
+}
 
 function requireSlug(slug) {
   if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(slug ?? '')) {
@@ -131,6 +149,9 @@ export function validateIssuer(value) {
 }
 
 const ISSUER_FIELD_KEYS = ['appid', 'githubappid', 'clientid', 'githubclientid'];
+const TRANSACTION_FILE = '.agent-bot-credential-transaction.json';
+const ISSUER_BACKUP = '.app-id.agent-bot-backup';
+const KEY_BACKUP = '.private-key.pem.agent-bot-backup';
 
 // Field first, then a `app-id: <value>` line in the note — the note is the only
 // place a read-only vault session can be extended without the desktop app.
@@ -151,12 +172,15 @@ export function selectIssuer({ fields = new Map(), note = '' } = {}) {
 // An issuer can also arrive as a plain-text attachment beside the key, which is
 // the only way to add one when the vault session is read-only for item fields.
 export function selectAppIdAttachment(attachments) {
-  return (attachments ?? []).find((entry) => /^app[-_]?id(\.txt)?$/i.test(entry.name)) ?? null;
+  const matches = (attachments ?? []).filter((entry) => /^app[-_]?id(\.txt)?$/i.test(entry.name));
+  if (matches.length > 1) throw new Error('pass-cli item has ambiguous app-id attachments');
+  return matches[0] ?? null;
 }
 
 export function selectPrivateKeyAttachment(attachments) {
-  const exact = attachments?.find((entry) => entry.name === 'private-key.pem');
-  if (exact) return exact;
+  const exact = (attachments ?? []).filter((entry) => entry.name === 'private-key.pem');
+  if (exact.length === 1) return exact[0];
+  if (exact.length > 1) throw new Error('pass-cli item has ambiguous private-key.pem attachments');
   const pem = (attachments ?? []).filter((entry) => entry.name.toLowerCase().endsWith('.pem'));
   if (pem.length === 1) return pem[0];
   throw new Error('pass-cli item has no unambiguous private-key.pem attachment');
@@ -169,9 +193,201 @@ function runPass(args) {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    const detail = [error.stderr, error.stdout, error.message].filter(Boolean).join('\n').trim();
-    throw new Error(`pass-cli failed: ${detail}`);
+    const reason = /not found|no item/i.test(String(error.stderr ?? ''))
+      ? 'item not found'
+      : /ambiguous|multiple/i.test(String(error.stderr ?? ''))
+        ? 'item selection is ambiguous'
+        : 'provider command failed';
+    throw new Error(`pass-cli ${reason}`);
   }
+}
+
+function issuerSourcePresent({ fields, note }) {
+  if (ISSUER_FIELD_KEYS.some((key) => fields.has(key))) return true;
+  return note.split(/\r?\n/).some((line) =>
+    /^\s*(app[-_ ]?id|client[-_ ]?id)\s*[:=]/i.test(line));
+}
+
+function preparationError(code, slug, message, cause) {
+  const error = new CredentialPreparationError(code, slug, message);
+  if (cause) error.cause = cause;
+  return error;
+}
+
+export function createProtonPassCredentialProvider({ run = runPass, write = writeFileSync } = {}) {
+  return {
+    id: 'proton-pass',
+    restore({ slug, issuerDestination, privateKeyDestination }) {
+      let parsed;
+      try {
+        parsed = parsePassItemView(run([
+          'item',
+          'view',
+          '--vault-name',
+          AGENT_IDENTITIES_VAULT,
+          '--item-title',
+          requireSlug(slug),
+          '--output',
+          'json',
+        ]));
+      } catch (error) {
+        const code = /not found/i.test(error.message)
+          ? 'missing-item'
+          : /ambiguous/i.test(error.message)
+            ? 'ambiguous-item'
+            : 'provider-failure';
+        throw preparationError(code, slug, `credential provider could not read the App item (${code})`, error);
+      }
+
+      const { shareId, itemId, attachments, fields, note } = parsed;
+      if (issuerDestination) {
+        const issuer = selectIssuer({ fields, note });
+        if (issuer) {
+          write(issuerDestination, `${issuer}\n`, { mode: 0o600 });
+        } else {
+          if (issuerSourcePresent({ fields, note })) {
+            throw preparationError(
+              'malformed-issuer',
+              slug,
+              'the provider App ID/client ID is malformed; replace it with a GitHub App ID or client ID',
+            );
+          }
+          let attachment;
+          try {
+            attachment = selectAppIdAttachment(attachments);
+          } catch (error) {
+            throw preparationError(
+              'ambiguous-issuer',
+              slug,
+              'the provider item has multiple app-id attachments; keep exactly one',
+              error,
+            );
+          }
+          if (!attachment) {
+            throw preparationError(
+              'missing-issuer',
+              slug,
+              'the provider item has no App ID/client ID; add a field, note line, or app-id attachment',
+            );
+          }
+          run([
+            'item', 'attachment', 'download',
+            '--share-id', shareId,
+            '--item-id', itemId,
+            '--attachment-id', attachment.id,
+            '--output', issuerDestination,
+          ]);
+        }
+      }
+
+      if (privateKeyDestination) {
+        let attachment;
+        try {
+          attachment = selectPrivateKeyAttachment(attachments);
+        } catch (error) {
+          const code = /ambiguous/i.test(error.message) ? 'ambiguous-private-key' : 'missing-private-key';
+          throw preparationError(
+            code,
+            slug,
+            code === 'ambiguous-private-key'
+              ? 'the provider item has multiple private-key.pem candidates; keep exactly one'
+              : 'the provider item has no private-key.pem attachment',
+            error,
+          );
+        }
+        run([
+          'item', 'attachment', 'download',
+          '--share-id', shareId,
+          '--item-id', itemId,
+          '--attachment-id', attachment.id,
+          '--output', privateKeyDestination,
+        ]);
+      }
+      return { provider: 'proton-pass' };
+    },
+  };
+}
+
+export function validatePrivateKey(value) {
+  try {
+    createPrivateKey(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function credentialTransactionPaths(directory) {
+  return {
+    journal: join(directory, TRANSACTION_FILE),
+    issuerBackup: join(directory, ISSUER_BACKUP),
+    keyBackup: join(directory, KEY_BACKUP),
+  };
+}
+
+export function recoverCredentialTransaction({
+  slug,
+  directory,
+  exists = existsSync,
+  read = readFileSync,
+  rename = renameSync,
+  remove = rmSync,
+} = {}) {
+  const paths = credentialTransactionPaths(directory);
+  if (!exists(paths.journal)) {
+    // The journal is removed only after both new files are published. Backups
+    // left after that point are obsolete residue from a completed transaction.
+    remove(paths.issuerBackup, { force: true });
+    remove(paths.keyBackup, { force: true });
+    return false;
+  }
+  let record;
+  try {
+    record = JSON.parse(read(paths.journal, 'utf8'));
+  } catch (error) {
+    throw preparationError(
+      'credential-transaction-invalid',
+      slug,
+      'the credential transaction marker is invalid; inspect the App directory before retrying',
+      error,
+    );
+  }
+  if (
+    record?.version !== 1
+    || typeof record.issuerExisted !== 'boolean'
+    || typeof record.keyExisted !== 'boolean'
+  ) {
+    throw preparationError(
+      'credential-transaction-invalid',
+      slug,
+      'the credential transaction marker is invalid; inspect the App directory before retrying',
+    );
+  }
+  const issuer = join(directory, 'app-id');
+  const key = join(directory, 'private-key.pem');
+  try {
+    if (record.issuerExisted) {
+      if (exists(paths.issuerBackup)) rename(paths.issuerBackup, issuer);
+    } else {
+      remove(issuer, { force: true });
+    }
+    if (record.keyExisted) {
+      if (exists(paths.keyBackup)) rename(paths.keyBackup, key);
+    } else {
+      remove(key, { force: true });
+    }
+    remove(paths.journal, { force: true });
+    remove(paths.issuerBackup, { force: true });
+    remove(paths.keyBackup, { force: true });
+  } catch (error) {
+    throw preparationError(
+      'credential-transaction-recovery-failed',
+      slug,
+      'the previous credential publication could not be rolled back; repair file permissions and retry',
+      error,
+    );
+  }
+  return true;
 }
 
 // Both halves of an App's credentials come from one `item view`. A mint needs
@@ -188,68 +404,119 @@ export function ensurePrivateKey({
   read = readFileSync,
   remove = rmSync,
   chmod = chmodSync,
+  rename = renameSync,
+  validateKey = validatePrivateKey,
+  provider,
 } = {}) {
   const path = privateKeyPath(slug, home);
   const idPath = appIdPath(slug, home);
-  const needKey = force || !exists(path);
-  const needId = force || !exists(idPath);
-  if (!needKey && !needId) return { path, downloaded: false, idPath, appIdWritten: false };
-  const view = run([
-    'item',
-    'view',
-    '--vault-name',
-    AGENT_IDENTITIES_VAULT,
-    '--item-title',
-    requireSlug(slug),
-    '--output',
-    'json',
-  ]);
-  const { shareId, itemId, attachments, fields, note } = parsePassItemView(view);
-  mkdir(dirname(path), { recursive: true });
-  // The issuer is not a secret, so a vault that has not been taught it yet is a
-  // warning rather than a failure — the key restore below still has to happen.
-  let appIdWritten = false;
-  let issuer = needId ? selectIssuer({ fields, note }) : null;
-  // Fields and note lines are free; the attachment costs a second download, so
-  // only reach for it when the cheap sources came up empty.
-  const idAttachment = needId && !issuer ? selectAppIdAttachment(attachments) : null;
-  if (idAttachment) {
-    run([
-      'item', 'attachment', 'download',
-      '--share-id', shareId,
-      '--item-id', itemId,
-      '--attachment-id', idAttachment.id,
-      '--output', idPath,
-    ]);
-    // Validate what actually landed. An attachment is opaque until read, and a
-    // stray newline or a wrong file would otherwise become the JWT `iss` and
-    // surface as an unexplained 401 at mint time.
-    issuer = validateIssuer(read(idPath, 'utf8'));
-    if (!issuer) remove(idPath, { force: true });
-  }
-  if (issuer) {
-    write(idPath, `${issuer}\n`);
-    appIdWritten = true;
+  const directory = dirname(path);
+  recoverCredentialTransaction({ slug, directory, exists, read, rename, remove });
+  let needKey = force || !exists(path);
+  let needId = force || !exists(idPath);
+  if (!needId) {
+    let current;
+    try {
+      current = read(idPath, 'utf8');
+    } catch (error) {
+      throw preparationError('unreadable-issuer', slug, 'the existing app-id file cannot be read', error);
+    }
+    needId = !validateIssuer(current);
   }
   if (!needKey) {
-    return { path, downloaded: false, idPath, appIdWritten, issuerMissing: needId && !issuer };
+    let current;
+    try {
+      current = read(path, 'utf8');
+    } catch (error) {
+      throw preparationError('unreadable-private-key', slug, 'the existing private key cannot be read', error);
+    }
+    needKey = !validateKey(current);
   }
-  const attachment = selectPrivateKeyAttachment(attachments);
-  run([
-    'item',
-    'attachment',
-    'download',
-    '--share-id',
-    shareId,
-    '--item-id',
-    itemId,
-    '--attachment-id',
-    attachment.id,
-    '--output',
+  if (!needKey && !needId) {
+    return {
+      path,
+      downloaded: false,
+      idPath,
+      appIdWritten: false,
+      localStatus: 'ready',
+      restored: [],
+    };
+  }
+
+  mkdir(directory, { recursive: true });
+  const suffix = `${process.pid}.${randomUUID()}.tmp`;
+  const issuerTemporary = needId ? `${idPath}.${suffix}` : null;
+  const keyTemporary = needKey ? `${path}.${suffix}` : null;
+  const activeProvider = provider ?? createProtonPassCredentialProvider({ run, write });
+  try {
+    activeProvider.restore({
+      slug,
+      issuerDestination: issuerTemporary,
+      privateKeyDestination: keyTemporary,
+    });
+    if (issuerTemporary) {
+      const issuer = validateIssuer(read(issuerTemporary, 'utf8'));
+      if (!issuer) {
+        throw preparationError(
+          'malformed-issuer',
+          slug,
+          'the restored App ID/client ID is malformed; replace it in the credential provider',
+        );
+      }
+      write(issuerTemporary, `${issuer}\n`, { mode: 0o600 });
+      chmod(issuerTemporary, 0o600);
+    }
+    if (keyTemporary) {
+      const key = read(keyTemporary, 'utf8');
+      if (!validateKey(key)) {
+        throw preparationError(
+          'malformed-private-key',
+          slug,
+          'the restored private key is malformed; replace the provider attachment',
+        );
+      }
+      chmod(keyTemporary, 0o600);
+    }
+    const transaction = credentialTransactionPaths(directory);
+    const issuerExisted = issuerTemporary ? exists(idPath) : false;
+    const keyExisted = keyTemporary ? exists(path) : false;
+    write(transaction.journal, `${JSON.stringify({
+      version: 1,
+      issuerExisted,
+      keyExisted,
+    })}\n`, { flag: 'wx', mode: 0o600 });
+    if (issuerTemporary && issuerExisted) rename(idPath, transaction.issuerBackup);
+    if (keyTemporary && keyExisted) rename(path, transaction.keyBackup);
+    if (issuerTemporary) rename(issuerTemporary, idPath);
+    if (keyTemporary) rename(keyTemporary, path);
+    remove(transaction.journal, { force: true });
+    remove(transaction.issuerBackup, { force: true });
+    remove(transaction.keyBackup, { force: true });
+  } catch (error) {
+    if (issuerTemporary) remove(issuerTemporary, { force: true });
+    if (keyTemporary) remove(keyTemporary, { force: true });
+    try {
+      recoverCredentialTransaction({ slug, directory, exists, read, rename, remove });
+    } catch (recoveryError) {
+      throw recoveryError;
+    }
+    if (error instanceof CredentialPreparationError) throw error;
+    throw preparationError(
+      'provider-failure',
+      slug,
+      'the credential provider could not restore the requested credential files',
+      error,
+    );
+  }
+  const restored = [needId ? 'app-id' : null, needKey ? 'private-key' : null].filter(Boolean);
+  return {
     path,
-  ]);
-  chmod(path, 0o600);
-  return { path, downloaded: true, idPath, appIdWritten, issuerMissing: needId && !issuer };
+    downloaded: needKey,
+    idPath,
+    appIdWritten: needId,
+    localStatus: 'restored',
+    restored,
+  };
 }
 
 export function main(argv = process.argv.slice(2)) {
@@ -259,13 +526,6 @@ export function main(argv = process.argv.slice(2)) {
   const result = ensurePrivateKey({ slug, force });
   process.stdout.write(`${result.downloaded ? 'fetched' : 'already present'} ${result.path}\n`);
   if (result.appIdWritten) process.stdout.write(`fetched ${result.idPath}\n`);
-  if (result.issuerMissing) {
-    process.stderr.write(
-      `ensure-private-key: no app-id/client-id on the "${slug}" vault item — `
-        + `add it as a custom field, an "app-id: <value>" note line, or an "app-id" `
-        + `attachment, or write ${result.idPath} by hand\n`,
-    );
-  }
   return result;
 }
 

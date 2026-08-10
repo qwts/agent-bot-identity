@@ -7,12 +7,17 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ensureAgentIdentity, readAgentIdentity } from '../agent-identity.mjs';
 import { helperSlug } from '../worktree-token.mjs';
+import { startMockGitHubApp } from './helpers/mock-github-app.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const STARTUP = join(ROOT, 'scripts', 'ensure-identity.sh');
 const WORKTREE_TOKEN = join(ROOT, 'worktree-token.mjs');
 const roots = [];
-afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
+const servers = [];
+afterEach(() => {
+  servers.splice(0).forEach((server) => server.stop());
+  roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true }));
+});
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'agent-startup-'));
@@ -24,16 +29,22 @@ function fixture() {
   const globalConfig = join(root, 'gitconfig');
   const app = 'test-codex-agent';
   const claudeApp = 'test-claude-agent';
+  const github = startMockGitHubApp(root);
+  servers.push(github);
   for (const slug of [app, claudeApp]) mkdirSync(join(home, '.config', slug), { recursive: true });
   mkdirSync(join(home, '.config', 'agent-bot'), { recursive: true });
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
   mkdirSync(join(home, '.local', 'share', 'agent-bot', 'hooks'), { recursive: true });
   writeFileSync(join(home, '.config', app, 'bot-uid'), '123456\n');
-  writeFileSync(join(home, '.config', app, 'private-key.pem'), '');
+  writeFileSync(join(home, '.config', app, 'app-id'), '12345\n');
+  writeFileSync(join(home, '.config', app, 'private-key.pem'), github.privateKeyPem);
   writeFileSync(join(home, '.config', claudeApp, 'bot-uid'), '654321\n');
-  writeFileSync(join(home, '.config', claudeApp, 'private-key.pem'), '');
+  writeFileSync(join(home, '.config', claudeApp, 'app-id'), '12346\n');
+  writeFileSync(join(home, '.config', claudeApp, 'private-key.pem'), github.privateKeyPem);
   writeFileSync(join(home, '.config', 'agent-bot', 'config.json'), JSON.stringify({
     apps: { codex: app, claude: claudeApp },
+    apiBase: github.apiBase,
+    owner: 'test-owner',
   }));
   writeFileSync(join(home, '.local', 'bin', 'agent-bot'),
     `#!/bin/sh\nexec node ${JSON.stringify(join(ROOT, 'agent-bot.mjs'))} "$@"\n`, { mode: 0o755 });
