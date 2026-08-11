@@ -55,14 +55,23 @@ export function territoryHarness(cwd = process.cwd()) {
   return null;
 }
 
-export function readGitConfig(cwd, keys) {
+// Default pin reader: inherits the caller's full process environment, which is
+// correct for the CLI entrypoints (the runtime *should* see the real machine).
+// Probes that must be hermetic — readiness, tests — pass their own `git`
+// runner so every subprocess sees one consistent environment instead of a mix
+// of injected and ambient state.
+function defaultGitRunner(args, { cwd }) {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+export function readGitConfig(cwd, keys, { git = defaultGitRunner } = {}) {
   for (const key of keys) {
     try {
-      const value = execFileSync('git', ['config', '--get', key], {
-        cwd,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      }).trim();
+      const value = (git(['config', '--get', key], { cwd }) ?? '').trim();
       if (value) return value;
     } catch (error) {
       if (error.status === 1) continue; // unset for this key
@@ -74,6 +83,7 @@ export function readGitConfig(cwd, keys) {
       throw new Error(
         `could not read the ${key} pin in ${cwd}: ${detail}. ` +
           'Refusing to fall back to harness detection — an unverifiable pin is not an absent one.',
+        { cause: error },
       );
     }
   }
@@ -87,8 +97,8 @@ export function readGitConfig(cwd, keys) {
 // exists to prevent: commits authored as the pinned agent, tokens minted for
 // the harness. Those fail closed. Only `git config` exit 1, the key genuinely
 // not being set, returns null.
-export function pinnedSlug(cwd = process.cwd()) {
-  return readGitConfig(cwd, PIN_KEYS);
+export function pinnedSlug(cwd = process.cwd(), options = {}) {
+  return readGitConfig(cwd, PIN_KEYS, options);
 }
 
 function harnessOwnsTerritory(appSlug, territory, config) {
@@ -102,6 +112,7 @@ export function resolveAgentSlug({
   cwd = process.cwd(),
   config,
   worktree = false,
+  git,
 } = {}) {
   const cfg = config ?? loadConfig({ env });
   const territory = worktree ? territoryHarness(cwd) : null;
@@ -116,13 +127,13 @@ export function resolveAgentSlug({
     }
     const launched = env.GH_AGENT_APP;
     if (launched && harnessOwnsTerritory(launched, territory, cfg)) return launched;
-    const pinned = pinnedSlug(cwd);
+    const pinned = pinnedSlug(cwd, { git });
     if (pinned && harnessOwnsTerritory(pinned, territory, cfg)) return pinned;
     return territorySlug;
   }
   if (explicit) return explicit;
   if (env.GH_AGENT_APP) return env.GH_AGENT_APP;
-  const pinned = pinnedSlug(cwd);
+  const pinned = pinnedSlug(cwd, { git });
   if (pinned) return pinned;
   return slugForHarness(detectHarness(env), cfg);
 }
