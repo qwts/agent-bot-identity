@@ -30,10 +30,12 @@ import {
 
 export { configuredAppSlugs };
 
-export const BOOTSTRAP_USAGE = `usage: agent-bot bootstrap [options]
+export const BOOTSTRAP_USAGE = `usage:
+  ./agent-bot bootstrap [options]  (source checkout)
+  agent-bot bootstrap [options]    (installed CLI)
 
 Options:
-  --config <path>   Install an explicit secret-free config file
+  --config <path>   Install an explicit secret-free config file; never discovers organization policy
   --app <slug>      Restore one App credential (repeatable)
   --with-gh-shim    Install the managed fail-closed gh shim
   --machine-only    Install and verify machine state; do not bind this worktree

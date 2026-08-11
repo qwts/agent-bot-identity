@@ -1,4 +1,4 @@
 interface:
   display_name: "Agent Bot"
-  short_description: "Operate bot identity, credentials, and verified publishing"
-  default_prompt: "Use $agent-bot to configure an agent worktree, retrieve only explicitly authorized secrets, and publish with verified bot attribution."
+  short_description: "Bootstrap and operate bot identities safely"
+  default_prompt: "Use $agent-bot to bootstrap all configured agent identities from source or the installed CLI, operate linked-worktree identity, retrieve only explicitly authorized secrets, and publish with verified bot attribution."

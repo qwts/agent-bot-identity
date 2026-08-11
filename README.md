@@ -24,7 +24,50 @@ Why you'd want this:
 
 This repository is the sole runtime owner of the agent-bot and
 transcript-bound execution identity system. Clone and install it directly;
-`playbook-engineering` is a governance consumer, not a runtime provider.
+organization governance may supply the roster, compatible configuration, and
+shared harness tooling, but it is not a runtime provider. For `qwts`, those
+organization-owned inputs and their acquisition procedure are governed from
+[`playbook-engineering`](https://github.com/qwts/playbook-engineering/blob/main/docs/reference/agent-bot-operations.md);
+if that procedure does not yet publish compatible input, bootstrap must stop.
+
+## Cold start: “install agent bot identities”
+
+From a fresh clone, begin with the source launcher. Do not require an installed
+CLI to install itself, and do not configure only the harness currently running.
+For a governed organization, first obtain its explicit secret-free
+configuration/profile and shared-tooling procedure. Never search for or assume
+a local governance checkout; follow its canonical HTTPS guidance instead.
+
+From a primary checkout, prepare machine state without claiming that checkout
+as bot territory:
+
+```bash
+./agent-bot bootstrap --config /path/to/config.json --with-gh-shim --machine-only
+```
+
+Then enter a linked agent worktree and bind it through the installed runtime:
+
+```bash
+agent-bot bootstrap --worktree-only
+```
+
+When already working from a linked agent worktree, omit `--machine-only` from
+the source command to perform both phases. Bootstrap reconciles and
+live-verifies every App resolved by the configuration, not merely the current
+harness. Afterward, complete the organization-owned shared skills and harness
+tooling from its governance procedure.
+
+Finish with the secret-free readiness contract:
+
+```bash
+agent-bot doctor --machine-only --json --require-schema-version 1
+agent-bot doctor --json --require-schema-version 1  # linked worktree
+```
+
+Do not report the organization install complete until every expected App row
+and requested harness tool is ready. A missing organization input or tool is a
+blocking dependency, not permission to fall back to a human GitHub login or a
+partial current-harness setup.
 
 ## Stable CLI
 
@@ -170,10 +213,11 @@ An unverifiable pin fails closed — it never falls through to harness detection
 
 ## Setup
 
-### Bootstrap from a source checkout
+### Bootstrap details
 
-Once the GitHub Apps and their escrowed credentials exist, the source launcher
-can perform the whole machine setup without an already-installed CLI or an npm
+The cold-start route above is the supported source-to-installed handoff. Once
+the GitHub Apps and their escrowed credentials exist, the source launcher can
+perform the whole runtime setup without an already-installed CLI or an npm
 command:
 
 ```bash
@@ -200,6 +244,10 @@ the explicit repair boundary: it performs only the documented idempotent setup
 operations, stops after the first failed mutation phase, and reports later live
 verification as skipped. A full bootstrap requires a linked worktree; use
 `--machine-only` deliberately from a primary checkout.
+
+The numbered sections below document standalone operator provisioning and the
+runtime's underlying components. They are not a substitute for an
+organization-owned profile, roster, or shared-tooling workflow.
 
 ### 1. Create a GitHub App per agent tool you use (~5 min each)
 
