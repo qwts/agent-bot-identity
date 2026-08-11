@@ -26,7 +26,10 @@ test('stable CLI exposes version and documented commands', () => {
 test('stable CLI dispatches bootstrap from the source checkout', () => {
   const run = spawnSync(process.execPath, [CLI, 'bootstrap', '--help'], { encoding: 'utf8' });
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /^usage: agent-bot bootstrap/m);
+  assert.match(run.stdout, /^usage:/m);
+  assert.match(run.stdout, /\.\/agent-bot bootstrap \[options\].*source checkout/);
+  assert.match(run.stdout, /agent-bot bootstrap \[options\].*installed CLI/);
+  assert.match(run.stdout, /never discovers organization policy/);
   assert.match(run.stdout, /--machine-only/);
   assert.match(run.stdout, /--worktree-only/);
 });

@@ -6,7 +6,7 @@ Usage:
   agent-bot --version
 
 Commands:
-  bootstrap          Install and verify machine identity tooling from source
+  bootstrap          Bootstrap from source or repair installed machine setup
   setup-worktree     Configure the current linked worktree
   mint-token         Mint a GitHub App installation token
   doctor             Diagnose installation and identity state
@@ -19,6 +19,10 @@ Commands:
   ensure-private-key Restore an App private key and app-id with pass-cli
   signed-commit      Replay local commits with GitHub-verified signatures
   secret             Read a password or API key from a secure-store provider
+
+Cold start:
+  ./agent-bot bootstrap --config <path> [options]  Run from a fresh source checkout
+  agent-bot bootstrap [options]                    Use after installation
 `;
 }
 

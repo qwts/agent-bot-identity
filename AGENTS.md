@@ -46,6 +46,31 @@ Optional live diagnosis (needs App credentials configured on the machine):
 npm run doctor
 ```
 
+### Cold-start intent
+
+When the owner says **“install agent bot identities,”** treat it as an
+organization-wide bootstrap request, not as permission to configure only the
+current harness:
+
+1. From this source checkout, use `./agent-bot bootstrap` when the stable CLI
+   is absent. After installation, use `agent-bot` as the stable entrypoint.
+2. Obtain the explicit secret-free organization configuration/profile and the
+   shared-tooling procedure from the governance owner's
+   [agent bot organization operations](https://github.com/qwts/playbook-engineering/blob/main/docs/reference/agent-bot-operations.md).
+   Never assume or search for a local Playbook checkout, and never synthesize a
+   roster from the currently running harness.
+3. A primary checkout may run only machine preparation with `--machine-only`.
+   Bind identity later from a linked agent worktree; never claim the primary
+   checkout as bot territory.
+4. Reconcile and live-verify the complete configured App roster, install the
+   requested fail-closed runtime tooling, then complete the organization-owned
+   harness skills/tooling from the governance procedure. Missing compatible
+   governance input is a blocking dependency, not permission to perform a
+   partial current-harness install.
+5. Finish with structured readiness verification. Never fall back to a human
+   GitHub login, and do not report success until every configured identity and
+   requested harness tool is ready.
+
 ### Layout
 
 | Path | Role |
