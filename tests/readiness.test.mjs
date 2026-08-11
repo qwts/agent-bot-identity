@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installationPaths } from '../install.mjs';
 import { main as doctorMain } from '../doctor.mjs';
+import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
 import {
   READINESS_SCHEMA_VERSION,
   collectReadiness,
@@ -23,6 +24,22 @@ function tempRoot() {
   const root = mkdtempSync(join(tmpdir(), 'agent-readiness-'));
   roots.push(root);
   return root;
+}
+
+// Secret-free failure summary: check IDs, codes, and git error evidence only —
+// never messages, paths, or credential material.
+function failedChecks(report) {
+  return [
+    ...report.machine.checks,
+    ...report.machine.apps.flatMap((app) => [app.credential, app.live_mint]),
+    ...report.worktree.checks,
+  ]
+    .filter((check) => check.status === 'failed')
+    .map((check) => {
+      const gitError = check.evidence?.git_error;
+      return `${check.id}:${check.code ?? 'no-code'}${gitError ? `:${gitError}` : ''}`;
+    })
+    .join(', ') || 'none';
 }
 
 function machineDependencies(home, { shim = false, inspectCredentials } = {}) {
@@ -221,15 +238,21 @@ test('bootstrap evidence must cover the exact roster and restored credentials ar
   );
 });
 
-test('linked-worktree readiness verifies the complete identity boundary', async () => {
+// A private linked-worktree repository with a complete, correct bot identity
+// boundary. Hermetic by construction: the fixture's own git subprocesses and
+// everything collectReadiness probes run with the same clean environment, so
+// ambient GIT_CONFIG_* pairs or the host's global config cannot answer for it.
+function linkedWorktreeFixture() {
   const root = tempRoot();
   const repo = join(root, 'repo');
   const worktree = join(root, 'worktree');
   const home = join(root, 'home');
   mkdirSync(repo);
   mkdirSync(home);
+  const env = hermeticGitEnv({ PATH: process.env.PATH }, { HOME: home });
   const git = (...args) => execFileSync('git', args, {
-    cwd: args[0] === '-C' ? undefined : repo,
+    cwd: repo,
+    env,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
@@ -241,6 +264,7 @@ test('linked-worktree readiness verifies the complete identity boundary', async 
   git('worktree', 'add', '--quiet', '--detach', worktree);
   const worktreeGit = (...args) => execFileSync('git', args, {
     cwd: worktree,
+    env,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
@@ -261,36 +285,138 @@ test('linked-worktree readiness verifies the complete identity boundary', async 
     `!'${installationPaths(home).executable}' credential ${slug}`,
   );
   worktreeGit('remote', 'add', 'origin', 'https://github.com/qwts/example.git');
-
-  const report = await collectReadiness({
+  const collectOptions = {
     command: 'doctor',
     scope: 'worktree',
     cwd: worktree,
     home,
-    env: { HOME: home },
+    env,
     load: () => ({ apps: { codex: slug } }),
     inspectSpace: () => ({ status: 'ok', id, path: join(home, 'space') }),
-  });
-  assert.equal(report.ready, true);
+  };
+  return { root, home, worktree, slug, id, env, worktreeGit, collectOptions };
+}
+
+test('linked-worktree readiness verifies the complete identity boundary', async () => {
+  const { collectOptions, worktreeGit } = linkedWorktreeFixture();
+  const report = await collectReadiness(collectOptions);
+  assert.equal(report.ready, true, `worktree not ready; failed checks: ${failedChecks(report)}`);
   assert.equal(report.worktree.status, 'ready');
   assert.ok(report.worktree.checks.every(({ status }) => status !== 'failed'));
 
   worktreeGit('remote', 'set-url', 'origin', 'git@github.com:qwts/example.git');
-  const unsafe = await collectReadiness({
-    command: 'doctor',
-    scope: 'worktree',
-    cwd: worktree,
-    home,
-    env: { HOME: home },
-    load: () => ({ apps: { codex: slug } }),
-    inspectSpace: () => ({ status: 'ok', id, path: join(home, 'space') }),
-  });
+  const unsafe = await collectReadiness(collectOptions);
   assert.equal(unsafe.ready, false);
   assert.equal(
     unsafe.worktree.checks.find(({ id: checkId }) => checkId === 'worktree.remote').code,
     'origin-ssh',
   );
   assert.doesNotMatch(JSON.stringify(unsafe), /git@github\.com/);
+});
+
+test('worktree readiness ignores ambient GIT_CONFIG_* and global identity', async () => {
+  const { collectOptions } = linkedWorktreeFixture();
+  // Simulate an agent container that injects command-scope Git config into
+  // every inherited environment: a conflicting App pin, a human identity, and
+  // an insteadOf rewrite. None of it may reach the probe's subprocesses.
+  const poison = {
+    GIT_CONFIG_COUNT: '4',
+    GIT_CONFIG_KEY_0: 'agentBot.app',
+    GIT_CONFIG_VALUE_0: 'ambient-wrong-agent',
+    GIT_CONFIG_KEY_1: 'user.name',
+    GIT_CONFIG_VALUE_1: 'Ambient Human',
+    GIT_CONFIG_KEY_2: 'commit.gpgsign',
+    GIT_CONFIG_VALUE_2: 'true',
+    GIT_CONFIG_KEY_3: 'url.https://github.com/.insteadOf',
+    GIT_CONFIG_VALUE_3: 'git@github.com:',
+  };
+  const saved = new Map(Object.keys(poison).map((key) => [key, process.env[key]]));
+  try {
+    Object.assign(process.env, poison);
+    const report = await collectReadiness(collectOptions);
+    assert.equal(report.ready, true, `worktree not ready; failed checks: ${failedChecks(report)}`);
+    assert.doesNotMatch(JSON.stringify(report), /ambient-wrong-agent|Ambient Human/);
+  } finally {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('parallel worktree probes stay stable and independent', async () => {
+  // Regression for the intermittent parallel-suite failure: several complete
+  // fixtures probed concurrently, each spawning its own git subprocesses. Any
+  // cross-contamination or silently swallowed subprocess failure surfaces
+  // here as a named check and code instead of a bare `false !== true`.
+  const fixtures = Array.from({ length: 6 }, () => linkedWorktreeFixture());
+  const reports = await Promise.all(
+    fixtures.map(({ collectOptions }) => collectReadiness(collectOptions)),
+  );
+  for (const report of reports) {
+    assert.equal(report.ready, true, `worktree not ready; failed checks: ${failedChecks(report)}`);
+  }
+});
+
+test('an abnormal git failure fails closed with the check ID and a safe error code', async () => {
+  const { collectOptions } = linkedWorktreeFixture();
+  // Spawn-level failures (EAGAIN/ENOMEM under parallel load) must not read as
+  // "missing" or "mismatched" identity: the check names itself, carries the
+  // errno, and the report stays not-ready.
+  const transient = (message, code) => Object.assign(new Error(message), {
+    code,
+    errno: -11,
+    syscall: 'spawn git',
+  });
+  const failing = (matcher, error) => (args, options) => {
+    if (args.join(' ').includes(matcher)) throw error;
+    return execFileSync('git', args, {
+      cwd: options.cwd,
+      env: options.env,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).replace(/[\r\n]+$/, '');
+  };
+
+  const attribution = await collectReadiness({
+    ...collectOptions,
+    git: failing('--get user.email', transient('spawn EAGAIN', 'EAGAIN')),
+  });
+  assert.equal(attribution.ready, false);
+  const attributionCheck = attribution.worktree.checks
+    .find(({ id: checkId }) => checkId === 'worktree.attribution');
+  assert.equal(attributionCheck.code, 'worktree-attribution-unreadable');
+  assert.equal(attributionCheck.evidence.git_error, 'EAGAIN');
+
+  const pin = await collectReadiness({
+    ...collectOptions,
+    git: failing('--get agentBot.app', transient('spawn ENOMEM', 'ENOMEM')),
+  });
+  assert.equal(pin.ready, false);
+  const appCheck = pin.worktree.checks.find(({ id: checkId }) => checkId === 'worktree.app');
+  assert.equal(appCheck.code, 'worktree-app-unreadable');
+  assert.equal(appCheck.evidence.git_error, 'ENOMEM');
+  assert.equal(
+    pin.worktree.checks.filter(({ id: checkId }) => checkId === 'worktree.app').length,
+    1,
+  );
+
+  const agentId = await collectReadiness({
+    ...collectOptions,
+    git: failing('--get agentBot.agentId', transient('spawn EAGAIN', 'EAGAIN')),
+  });
+  assert.equal(agentId.ready, false);
+  const agentIdCheck = agentId.worktree.checks
+    .find(({ id: checkId }) => checkId === 'worktree.agent_id');
+  assert.equal(agentIdCheck.code, 'agent-id-unreadable');
+  assert.equal(agentIdCheck.evidence.git_error, 'EAGAIN');
+
+  for (const report of [attribution, pin, agentId]) {
+    assert.doesNotMatch(
+      JSON.stringify(report),
+      /spawn EAGAIN|spawn ENOMEM|token|BEGIN PRIVATE KEY/,
+    );
+  }
 });
 
 test('credential helper readiness requires the exact fail-closed reset sequence', () => {

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { ensureAgentIdentity, readAgentIdentity } from '../agent-identity.mjs';
 import { helperSlug } from '../worktree-token.mjs';
 import { startMockGitHubApp } from './helpers/mock-github-app.mjs';
+import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const STARTUP = join(ROOT, 'scripts', 'ensure-identity.sh');
@@ -52,13 +53,12 @@ function fixture() {
     '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   writeFileSync(globalConfig, '');
   mkdirSync(repo);
-  const env = {
-    ...process.env,
+  const env = hermeticGitEnv(process.env, {
     HOME: home,
     GIT_CONFIG_GLOBAL: globalConfig,
     AGENT_BOT_STATE_HOME: stateDir,
     PATH: `${join(home, '.local', 'bin')}:${process.env.PATH}`,
-  };
+  });
   for (const key of Object.keys(env)) {
     if (/^(CODEX|CLAUDE|AI_AGENT|QWTS_AGENT|GH_AGENT_APP)/.test(key)) delete env[key];
   }

@@ -424,12 +424,41 @@ function resultRosterMatches(results, roster) {
     && normalized.every((slug, index) => slug === roster[index]);
 }
 
-function getGit(git, cwd, env, args) {
-  try {
-    return git(args, { cwd, env });
-  } catch {
-    return null;
-  }
+// Reduce a failed git invocation to a secret-free code: an exit status, an
+// errno name (EAGAIN, ENOMEM, ENOENT — the transient spawn failures parallel
+// load produces), or a signal name. Never stderr, messages, or paths.
+function safeGitErrorCode(error) {
+  const cause = error?.cause ?? error;
+  if (Number.isInteger(cause?.status)) return `exit-${cause.status}`;
+  if (typeof cause?.code === 'string' && /^[A-Z][A-Z0-9_]{1,31}$/.test(cause.code)) return cause.code;
+  if (typeof cause?.signal === 'string' && /^SIG[A-Z0-9]{1,12}$/.test(cause.signal)) return cause.signal;
+  return 'unknown';
+}
+
+// A probe distinguishes three answers the old getGit collapsed into one:
+// a value, a deterministic absence (the exit statuses git documents for
+// "not set" / "no such remote"), and an abnormal failure — which returns a
+// safe error code so the dependent check can fail closed *and* say why.
+function gitProbe(git, cwd, env) {
+  return (args, { absentStatuses = [1] } = {}) => {
+    try {
+      return { value: git(args, { cwd, env }), error: null };
+    } catch (error) {
+      if (absentStatuses.includes(error?.status)) return { value: null, error: null };
+      return { value: null, error: safeGitErrorCode(error) };
+    }
+  };
+}
+
+function unreadableCheck(id, code, gitError) {
+  return readinessCheck({
+    id,
+    status: 'failed',
+    code,
+    message: 'a Git probe for this check failed abnormally; the state could not be verified',
+    action: 'rerun doctor; if this persists, inspect Git and system load',
+    evidence: { git_error: gitError },
+  });
 }
 
 export function credentialHelperSequenceReady(helpers, expectedHelper) {
@@ -479,35 +508,56 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
     status: 'ready',
     message: 'linked worktree',
   })];
+  // Every subprocess in this probe — including the pin reads inside
+  // resolve-agent.mjs — must run through the injected runner with the caller's
+  // env. Mixing in ambient process.env lets a host's injected GIT_CONFIG_*
+  // pairs or global config answer for the worktree being probed.
+  const run = (args, { cwd: probeCwd = cwd } = {}) => git(args, { cwd: probeCwd, env });
+  const probe = gitProbe(git, cwd, env);
   let slug = null;
+  let slugFailed = false;
   try {
-    slug = resolveAgentSlug({ env, cwd, config, worktree: true });
-  } catch {
+    slug = resolveAgentSlug({ env, cwd, config, worktree: true, git: run });
+  } catch (error) {
+    slugFailed = true;
     checks.push(readinessCheck({
       id: 'worktree.app',
       status: 'failed',
       code: 'worktree-app-unreadable',
       message: 'the worktree App identity could not be resolved safely',
       action: 'repair the worktree App pin, then run: agent-bot setup-worktree',
+      evidence: { git_error: safeGitErrorCode(error) },
     }));
   }
   if (!slug) {
-    checks.push(readinessCheck({
-      id: 'worktree.app',
-      status: 'failed',
-      code: 'worktree-app-missing',
-      message: 'linked worktree has no resolved App identity',
-      action: 'run: agent-bot setup-worktree <app-slug>',
-    }));
+    if (!slugFailed) {
+      checks.push(readinessCheck({
+        id: 'worktree.app',
+        status: 'failed',
+        code: 'worktree-app-missing',
+        message: 'linked worktree has no resolved App identity',
+        action: 'run: agent-bot setup-worktree <app-slug>',
+      }));
+    }
   } else {
     let pin = null;
+    let pinError = null;
     try {
-      pin = pinnedSlug(cwd);
-    } catch {
-      /* resolveAgentSlug already emitted the fail-closed check */
+      pin = pinnedSlug(cwd, { git: run });
+    } catch (error) {
+      pinError = safeGitErrorCode(error);
     }
     const territory = territoryHarness(cwd);
-    if (pin !== slug) {
+    if (pinError) {
+      checks.push(readinessCheck({
+        id: 'worktree.app',
+        status: 'failed',
+        code: 'worktree-pin-unreadable',
+        message: 'the worktree App pin could not be read',
+        action: 'rerun doctor; if this persists, repair the worktree App pin',
+        evidence: { app_slug: slug, territory, git_error: pinError },
+      }));
+    } else if (pin !== slug) {
       checks.push(readinessCheck({
         id: 'worktree.app',
         status: 'failed',
@@ -526,28 +576,35 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
     }
   }
 
-  const name = getGit(git, cwd, env, ['config', '--worktree', '--get', 'user.name']);
-  const email = getGit(git, cwd, env, ['config', '--worktree', '--get', 'user.email']);
+  const name = probe(['config', '--worktree', '--get', 'user.name']);
+  const email = probe(['config', '--worktree', '--get', 'user.email']);
+  const attributionError = name.error ?? email.error;
   const escapedSlug = slug?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const identityReady = slug
-    && name === `${slug}[bot]`
-    && new RegExp(`^\\d+\\+${escapedSlug}\\[bot\\]@users\\.noreply\\.`).test(email ?? '');
-  checks.push(readinessCheck({
-    id: 'worktree.attribution',
-    status: identityReady ? 'ready' : 'failed',
-    code: identityReady ? null : 'worktree-attribution-mismatch',
-    message: identityReady ? `configured as ${name}` : 'worktree bot author or email is missing or mismatched',
-    action: identityReady ? null : 'run: agent-bot setup-worktree',
-    evidence: identityReady ? { app_slug: slug } : {},
-  }));
+  const identityReady = !attributionError
+    && slug
+    && name.value === `${slug}[bot]`
+    && new RegExp(`^\\d+\\+${escapedSlug}\\[bot\\]@users\\.noreply\\.`).test(email.value ?? '');
+  checks.push(attributionError
+    ? unreadableCheck('worktree.attribution', 'worktree-attribution-unreadable', attributionError)
+    : readinessCheck({
+      id: 'worktree.attribution',
+      status: identityReady ? 'ready' : 'failed',
+      code: identityReady ? null : 'worktree-attribution-mismatch',
+      message: identityReady ? `configured as ${name.value}` : 'worktree bot author or email is missing or mismatched',
+      action: identityReady ? null : 'run: agent-bot setup-worktree',
+      evidence: identityReady ? { app_slug: slug } : {},
+    }));
 
   let agentId = null;
+  let agentIdError = null;
   try {
-    agentId = readGitConfig(cwd, AGENT_ID_KEYS);
-  } catch {
-    /* reported generically below */
+    agentId = readGitConfig(cwd, AGENT_ID_KEYS, { git: run });
+  } catch (error) {
+    agentIdError = safeGitErrorCode(error);
   }
-  if (!agentId) {
+  if (agentIdError) {
+    checks.push(unreadableCheck('worktree.agent_id', 'agent-id-unreadable', agentIdError));
+  } else if (!agentId) {
     checks.push(readinessCheck({
       id: 'worktree.agent_id',
       status: 'failed',
@@ -612,61 +669,72 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
     }
   }
 
-  const fetchUrls = getGit(git, cwd, env, ['remote', 'get-url', '--all', 'origin']);
-  const pushUrls = getGit(git, cwd, env, ['remote', 'get-url', '--push', '--all', 'origin']);
-  const urls = [fetchUrls, pushUrls].filter(Boolean).flatMap((value) => value.split('\n'));
+  // `git remote get-url` exits 2 for a remote that does not exist; that is the
+  // deterministic "no origin" answer, not an abnormal failure.
+  const fetchUrls = probe(['remote', 'get-url', '--all', 'origin'], { absentStatuses: [1, 2] });
+  const pushUrls = probe(['remote', 'get-url', '--push', '--all', 'origin'], { absentStatuses: [1, 2] });
+  const remoteError = fetchUrls.error ?? pushUrls.error;
+  const urls = [fetchUrls.value, pushUrls.value].filter(Boolean).flatMap((value) => value.split('\n'));
   const remoteReady = urls.length > 0 && urls.every(isHttpsRemote);
   const hasSsh = urls.some(isSshRemote);
-  checks.push(readinessCheck({
-    id: 'worktree.remote',
-    status: urls.length === 0 ? 'warning' : remoteReady ? 'ready' : 'failed',
-    code: urls.length === 0 ? 'origin-missing' : remoteReady ? null : hasSsh ? 'origin-ssh' : 'origin-not-https',
-    message: urls.length === 0
-      ? 'no origin remote'
-      : remoteReady
-        ? 'origin fetch and push URLs use HTTPS'
-        : hasSsh
-          ? 'origin has an SSH URL that could authenticate as the human'
-          : 'origin fetch or push URL is not HTTPS',
-    action: remoteReady || urls.length === 0 ? null : 'run setup-worktree to rewrite origin URLs to HTTPS',
-    evidence: { url_count: urls.length },
-  }));
+  checks.push(remoteError
+    ? unreadableCheck('worktree.remote', 'worktree-remote-unreadable', remoteError)
+    : readinessCheck({
+      id: 'worktree.remote',
+      status: urls.length === 0 ? 'warning' : remoteReady ? 'ready' : 'failed',
+      code: urls.length === 0 ? 'origin-missing' : remoteReady ? null : hasSsh ? 'origin-ssh' : 'origin-not-https',
+      message: urls.length === 0
+        ? 'no origin remote'
+        : remoteReady
+          ? 'origin fetch and push URLs use HTTPS'
+          : hasSsh
+            ? 'origin has an SSH URL that could authenticate as the human'
+            : 'origin fetch or push URL is not HTTPS',
+      action: remoteReady || urls.length === 0 ? null : 'run setup-worktree to rewrite origin URLs to HTTPS',
+      evidence: { url_count: urls.length },
+    }));
 
-  const signing = getGit(git, cwd, env, ['config', '--worktree', '--get', 'commit.gpgsign']);
-  checks.push(readinessCheck({
-    id: 'worktree.signing',
-    status: signing === 'false' ? 'ready' : 'failed',
-    code: signing === 'false' ? null : 'worktree-signing-enabled',
-    message: signing === 'false' ? 'human commit signing is disabled' : 'human commit signing is not disabled',
-    action: signing === 'false' ? null : 'run: agent-bot setup-worktree',
-  }));
+  const signing = probe(['config', '--worktree', '--get', 'commit.gpgsign']);
+  checks.push(signing.error
+    ? unreadableCheck('worktree.signing', 'worktree-signing-unreadable', signing.error)
+    : readinessCheck({
+      id: 'worktree.signing',
+      status: signing.value === 'false' ? 'ready' : 'failed',
+      code: signing.value === 'false' ? null : 'worktree-signing-enabled',
+      message: signing.value === 'false' ? 'human commit signing is disabled' : 'human commit signing is not disabled',
+      action: signing.value === 'false' ? null : 'run: agent-bot setup-worktree',
+    }));
 
   const expectedHooks = installationPaths(home).hooksDir.replaceAll('\\', '/');
-  const worktreeHooks = getGit(git, cwd, env, ['config', '--worktree', '--path', '--get', 'core.hooksPath'])
-    ?.replaceAll('\\', '/');
-  checks.push(readinessCheck({
-    id: 'worktree.hooks',
-    status: worktreeHooks === expectedHooks ? 'ready' : 'failed',
-    code: worktreeHooks === expectedHooks ? null : 'worktree-hooks-mismatch',
-    message: worktreeHooks === expectedHooks ? 'worktree uses installed agent-bot hooks' : 'worktree hooks path is missing or mismatched',
-    action: worktreeHooks === expectedHooks ? null : 'run: agent-bot setup-worktree',
-  }));
+  const hooksProbe = probe(['config', '--worktree', '--path', '--get', 'core.hooksPath']);
+  const worktreeHooks = hooksProbe.value?.replaceAll('\\', '/');
+  checks.push(hooksProbe.error
+    ? unreadableCheck('worktree.hooks', 'worktree-hooks-unreadable', hooksProbe.error)
+    : readinessCheck({
+      id: 'worktree.hooks',
+      status: worktreeHooks === expectedHooks ? 'ready' : 'failed',
+      code: worktreeHooks === expectedHooks ? null : 'worktree-hooks-mismatch',
+      message: worktreeHooks === expectedHooks ? 'worktree uses installed agent-bot hooks' : 'worktree hooks path is missing or mismatched',
+      action: worktreeHooks === expectedHooks ? null : 'run: agent-bot setup-worktree',
+    }));
 
-  const helpers = getGit(git, cwd, env, ['config', '--worktree', '--get-all', 'credential.helper'])
-    ?.split('\n') ?? [];
+  const helpersProbe = probe(['config', '--worktree', '--get-all', 'credential.helper']);
+  const helpers = helpersProbe.value?.split('\n') ?? [];
   const expectedHelper = slug
     ? credentialHelperCommand(installationPaths(home).executable, slug, { subcommand: 'credential' })
     : null;
   const helperReady = credentialHelperSequenceReady(helpers, expectedHelper);
-  checks.push(readinessCheck({
-    id: 'worktree.credential_helper',
-    status: helperReady ? 'ready' : 'failed',
-    code: helperReady ? null : 'credential-helper-mismatch',
-    message: helperReady
-      ? 'credential helper reset is followed by the worktree App helper'
-      : 'credential helper reset/App binding is missing, reordered, or contains fallback helpers',
-    action: helperReady ? null : 'run: agent-bot setup-worktree',
-  }));
+  checks.push(helpersProbe.error
+    ? unreadableCheck('worktree.credential_helper', 'credential-helper-unreadable', helpersProbe.error)
+    : readinessCheck({
+      id: 'worktree.credential_helper',
+      status: helperReady ? 'ready' : 'failed',
+      code: helperReady ? null : 'credential-helper-mismatch',
+      message: helperReady
+        ? 'credential helper reset is followed by the worktree App helper'
+        : 'credential helper reset/App binding is missing, reordered, or contains fallback helpers',
+      action: helperReady ? null : 'run: agent-bot setup-worktree',
+    }));
 
   return {
     status: checks.some((check) => check.status === 'failed') ? 'not_ready' : 'ready',
