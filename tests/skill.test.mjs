@@ -86,5 +86,6 @@ test('CLI help documents source and installed bootstrap entrypoints', () => {
     assert.match(output, /\.\/agent-bot bootstrap/u);
     assert.match(output, /agent-bot bootstrap/u);
   }
+  assert.match(helpText(), /\.\/agent-bot bootstrap \[--config <path>\] \[options\]/u);
   assert.match(BOOTSTRAP_USAGE, /never discovers organization policy/u);
 });
