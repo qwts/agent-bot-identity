@@ -307,6 +307,7 @@ export async function bootstrap(options, {
   let executable = installationPaths(home).executable;
   let config = null;
   let credentialResults = null;
+  let credentialSlugs = null;
   let operationFailure = null;
   let reachedCredentialPhase = false;
 
@@ -350,6 +351,20 @@ export async function bootstrap(options, {
 
     if (!operationFailure) {
       try {
+        credentialSlugs = configuredAppSlugs(config, options.apps);
+      } catch {
+        fail(
+          'machine',
+          'bootstrap.credentials',
+          'profile-app-retired',
+          'bootstrap rejected an explicitly selected retired App',
+          'remove the retired --app selection, then retry bootstrap',
+        );
+      }
+    }
+
+    if (!operationFailure) {
+      try {
         const installed = installRuntime({ home });
         executable = installed.executable;
       } catch {
@@ -367,7 +382,7 @@ export async function bootstrap(options, {
       reachedCredentialPhase = true;
       try {
         credentialResults = await reconcileCredentials({
-          slugs: configuredAppSlugs(config, options.apps),
+          slugs: credentialSlugs,
           home,
         });
       } catch (error) {

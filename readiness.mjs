@@ -17,7 +17,12 @@ import { detectHarness, HARNESSES } from './detect-harness.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
 import { installationPaths, isManagedExecutable } from './install.mjs';
-import { profileAppSlugs, runtimeProfileInfo } from './organization-profile.mjs';
+import {
+  OrganizationProfileError,
+  profileAppSlugs,
+  profileStatusForSlug,
+  runtimeProfileInfo,
+} from './organization-profile.mjs';
 import {
   AGENT_ID_KEYS,
   pinnedSlug,
@@ -50,6 +55,12 @@ export function readinessCheck({
 }
 
 export function configuredAppSlugs(config, explicit = []) {
+  if (explicit.some((slug) => profileStatusForSlug(slug, config) === 'retired')) {
+    throw new OrganizationProfileError(
+      'profile-app-retired',
+      'an explicitly selected App is retired by the installed organization profile',
+    );
+  }
   const slugs = new Set([...profileAppSlugs(config), ...explicit]);
   for (const { key } of HARNESSES) {
     const slug = slugForHarness(key, config);
@@ -887,9 +898,17 @@ export async function collectReadiness({
       if (Object.keys(config).length > 0) {
         machineChecks.push(organizationProfileCheck(config));
       }
-    } catch {
+    } catch (error) {
       configValid = false;
-      machineChecks.push(failedConfigCheck());
+      machineChecks.push(error?.code === 'profile-app-retired'
+        ? readinessCheck({
+          id: 'credential.roster',
+          status: 'failed',
+          code: 'profile-app-retired',
+          message: 'an explicitly selected App is retired by the installed organization profile',
+          action: 'remove the retired --app selection, then retry',
+        })
+        : failedConfigCheck());
     }
     machineChecks.push(hooksCheck({ home, cwd, env, git, access }));
     machineChecks.push(coverageCheck(now));

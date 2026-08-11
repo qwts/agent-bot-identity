@@ -277,6 +277,18 @@ test('configured roster includes every active profile App and excludes retired A
   );
 });
 
+test('configured roster rejects an explicitly selected retired profile App without reflecting it', () => {
+  const config = organizationProfileToConfig(organizationProfile());
+  assert.throws(
+    () => configuredAppSlugs(config, ['example-old-agent']),
+    (error) => {
+      assert.equal(error.code, 'profile-app-retired');
+      assert.doesNotMatch(error.message, /example-old-agent/);
+      return true;
+    },
+  );
+});
+
 test('full bootstrap follows config, install, credentials, shim, worktree, readiness order', async () => {
   const calls = [];
   const result = await bootstrap(
@@ -407,6 +419,33 @@ test('invalid profile failure stops every downstream bootstrap mutation with a s
   assert.equal(report.ready, false);
   assert.equal(report.first_actionable_failure.code, 'profile-invalid');
   assert.doesNotMatch(JSON.stringify(report), new RegExp(sentinel));
+});
+
+test('retired explicit App stops bootstrap before runtime or credential mutation', async () => {
+  const config = organizationProfileToConfig(organizationProfile());
+  const report = await bootstrap(
+    parseBootstrapArgs(['--app', 'example-old-agent', '--machine-only']),
+    {
+      installConfig: () => ({ config, path: '/config', updated: false }),
+      installRuntime: () => assert.fail('runtime installed after retired App selection'),
+      reconcileCredentials: () => assert.fail('retired App credentials were reconciled'),
+      collect: (options) => ({
+        ...readyReport('machine'),
+        ready: false,
+        machine: { status: 'not_ready', checks: [options.operationFailure.check], apps: [] },
+        first_actionable_failure: {
+          scope: 'machine',
+          check_id: options.operationFailure.check.id,
+          app_slug: null,
+          code: options.operationFailure.check.code,
+          message: options.operationFailure.check.message,
+          action: options.operationFailure.check.action,
+        },
+      }),
+    },
+  );
+  assert.equal(report.first_actionable_failure.code, 'profile-app-retired');
+  assert.doesNotMatch(JSON.stringify(report), /example-old-agent/);
 });
 
 test('machine-only and worktree-only phases do not cross their mutation boundary', async () => {

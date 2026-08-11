@@ -158,6 +158,34 @@ test('machine readiness reports profile compatibility and the complete active ro
   ]);
 });
 
+test('doctor rejects an explicit retired App before credential inspection', async () => {
+  const home = tempRoot();
+  const config = organizationProfileToConfig({
+    schema_version: 1,
+    organization: 'example-engineering',
+    account_owner: 'example',
+    minimum_runtime_interface_version: 1,
+    defaults: { codex: 'example-codex-agent' },
+    identities: [
+      { slug: 'example-codex-agent', harness: 'codex', status: 'active' },
+      { slug: 'example-retired-agent', harness: 'codex', status: 'retired' },
+    ],
+  });
+  const report = await collectReadiness({
+    command: 'doctor',
+    scope: 'machine',
+    ...machineDependencies(home, {
+      inspectCredentials: () => assert.fail('retired App credentials were inspected'),
+    }),
+    explicitApps: ['example-retired-agent'],
+    load: () => config,
+  });
+  const failure = report.machine.checks.find(({ code }) => code === 'profile-app-retired');
+  assert.equal(failure.status, 'failed');
+  assert.equal(report.machine.apps.length, 0);
+  assert.doesNotMatch(JSON.stringify(report), /example-retired-agent/);
+});
+
 test('machine report identifies the exact App and suppresses all live evidence after a local failure', async () => {
   const home = tempRoot();
   const report = await collectReadiness({
