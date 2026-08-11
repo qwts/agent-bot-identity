@@ -3,7 +3,9 @@
 // Config lives at ~/.config/agent-bot/config.json (override with
 // AGENT_BOT_CONFIG). Everything is optional — with no App mapping the identity
 // tools are inert no-ops, so cloning this repo can never hijack a machine's
-// identity. Secret-free settings may still select local runtime policy.
+// identity. A validated organization profile projects into this same runtime
+// representation and adds lifecycle/model metadata under `profile`.
+// Secret-free settings may still select local runtime policy.
 //
 //   {
 //     "prefix": "yourname",              // slug = <prefix>-<harness>-agent
@@ -20,6 +22,11 @@ import process from 'node:process';
 import { lstatSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
+import {
+  profileStatusForSlug,
+  runtimeProfileInfo,
+  slugForProfileModel,
+} from './organization-profile.mjs';
 
 const DAEMON_PREFERENCES = new Set(['off', 'prefer', 'required']);
 
@@ -48,6 +55,7 @@ export function loadConfig({ home = homedir(), env = process.env } = {}) {
     throw new Error(`${path} exists but is not valid JSON: ${err.message}`);
   }
   validateSettings(config);
+  runtimeProfileInfo(config);
   return config;
 }
 
@@ -117,6 +125,14 @@ export function slugForHarness(harness, config = loadConfig()) {
   return null;
 }
 
+export function slugForModel(harness, model, config = loadConfig()) {
+  return slugForProfileModel(harness, model, config);
+}
+
+export function appLifecycleStatus(appSlug, config = loadConfig()) {
+  return profileStatusForSlug(appSlug, config);
+}
+
 // Harness keys recognised in an App slug. Kept local rather than imported from
 // detect-harness.mjs, which imports this module — the two lists are tied
 // together by a test instead of by a cycle. `vscode` is retained for the
@@ -129,6 +145,12 @@ export function harnessForSlug(appSlug, config = loadConfig()) {
   if (!appSlug) return null;
   for (const [key, slug] of Object.entries(config.apps ?? {})) {
     if (slug === appSlug) return key === 'claude' ? 'claude-code' : key;
+  }
+  const profileIdentity = runtimeProfileInfo(config)?.identities
+    .find(({ slug }) => slug === appSlug);
+  if (profileIdentity) {
+    if (profileIdentity.status !== 'active') return null;
+    return profileIdentity.harness === 'claude' ? 'claude-code' : profileIdentity.harness;
   }
   const prefix = config.prefix;
   if (prefix && appSlug.startsWith(`${prefix}-`) && appSlug.endsWith('-agent')) {

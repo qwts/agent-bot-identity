@@ -11,8 +11,10 @@ import {
   harnessForSlug,
   loadConfig,
   slugForHarness,
+  slugForModel,
   spacesRootSetting,
 } from '../config.mjs';
+import { organizationProfileToConfig } from '../organization-profile.mjs';
 
 function tempHome(name = 'agent-bot-config-') {
   return mkdtempSync(join(tmpdir(), name));
@@ -153,6 +155,42 @@ test('apps overrides beat the prefix pattern', () => {
   const config = { prefix: 'you', apps: { claude: 'custom-claude-bot' } };
   assert.equal(slugForHarness('claude', config), 'custom-claude-bot');
   assert.equal(slugForHarness('codex', config), 'you-codex-agent');
+});
+
+test('installed organization profile exposes active model mappings and rejects inconsistent metadata', () => {
+  const config = organizationProfileToConfig({
+    schema_version: 1,
+    organization: 'example-engineering',
+    account_owner: 'example',
+    minimum_runtime_interface_version: 1,
+    defaults: { codex: 'example-codex-agent' },
+    identities: [
+      { slug: 'example-codex-agent', harness: 'codex', status: 'active' },
+      {
+        slug: 'example-codex-sol-agent',
+        harness: 'codex',
+        status: 'active',
+        models: ['gpt-5.6-sol'],
+      },
+      {
+        slug: 'example-retired-agent',
+        harness: 'codex',
+        status: 'retired',
+        models: ['legacy'],
+      },
+    ],
+  });
+  assert.equal(slugForModel('codex', 'gpt-5.6-sol', config), 'example-codex-sol-agent');
+  assert.equal(slugForModel('codex', 'legacy', config), null);
+  assert.equal(harnessForSlug('example-codex-sol-agent', config), 'codex');
+  assert.equal(harnessForSlug('example-retired-agent', config), null);
+
+  const home = tempHome();
+  writeConfig(home, config);
+  assert.deepEqual(loadConfig({ home, env: {} }), config);
+  config.profile.accountOwner = 'different-owner';
+  writeConfig(home, config);
+  assert.throws(() => loadConfig({ home, env: {} }), /owner is inconsistent/);
 });
 
 test('harnessForSlug reverse-looks up apps and prefix shapes', () => {

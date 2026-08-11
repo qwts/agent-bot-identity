@@ -54,7 +54,7 @@ current harness:
 
 1. From this source checkout, use `./agent-bot bootstrap` when the stable CLI
    is absent. After installation, use `agent-bot` as the stable entrypoint.
-2. Obtain the explicit secret-free organization configuration/profile and the
+2. Obtain the explicit secret-free versioned organization profile and the
    shared-tooling procedure from the governance owner's
    [agent bot organization operations](https://github.com/qwts/playbook-engineering/blob/main/docs/reference/agent-bot-operations.md).
    Never assume or search for a local Playbook checkout, and never synthesize a

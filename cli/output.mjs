@@ -21,8 +21,8 @@ Commands:
   secret             Read a password or API key from a secure-store provider
 
 Cold start:
-  ./agent-bot bootstrap [--config <path>] [options]  Run from a fresh source checkout
-  agent-bot bootstrap [options]                    Use after installation
+  ./agent-bot bootstrap --profile <path|-> [options]  Run from a fresh source checkout
+  agent-bot bootstrap [options]                       Use after installation
 `;
 }
 

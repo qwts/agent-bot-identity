@@ -6,7 +6,7 @@ Use this reference for setup, minting, diagnostics, and identity repair.
 
 | Intent | Command |
 |---|---|
-| Bootstrap from a fresh source checkout | `./agent-bot bootstrap [--config <path>] [--machine-only] [--with-gh-shim] [--json]` |
+| Bootstrap from a fresh source checkout | `./agent-bot bootstrap --profile <path\|-> [--machine-only] [--with-gh-shim] [--json]` |
 | Inspect available commands | `agent-bot --help` |
 | Configure the current linked worktree | `agent-bot setup-worktree [app-slug]` |
 | Mint a short-lived App installation token | `agent-bot mint-token [--app <slug>] [--json]` |
@@ -27,13 +27,13 @@ the identity for the agent currently running.
    [agent bot organization operations](https://github.com/qwts/playbook-engineering/blob/main/docs/reference/agent-bot-operations.md)
    over HTTPS. Do not assume, search for, or hard-code a local governance
    checkout.
-2. Obtain an explicit, secret-free configuration/profile from that owner. If
+2. Obtain an explicit, secret-free versioned profile from that owner. If
    it is missing, incompatible, or incomplete, stop before mutation; do not
    infer a roster from the current harness or copy secret material into it.
 3. From a primary source checkout, prepare only machine state:
 
    ```bash
-   ./agent-bot bootstrap --config <path> --with-gh-shim --machine-only
+   ./agent-bot bootstrap --profile <path> --with-gh-shim --machine-only
    ```
 
    From a linked agent worktree, the same source launcher may perform the full
@@ -56,6 +56,11 @@ the identity for the agent currently running.
    agent-bot doctor --machine-only --json --require-schema-version 1
    agent-bot doctor --json --require-schema-version 1
    ```
+
+The profile must validate before mutation, every active harness must have an
+active default, and retired identities must not appear in the reconciliation
+roster. `--profile -` reads JSON from stdin. Use the mutually exclusive
+`--config` option only for a legacy already-projected runtime config.
 
 Confirm that every expected App row is ready and separately confirm the
 organization-owned tooling inventory. Do not report an organization install as
