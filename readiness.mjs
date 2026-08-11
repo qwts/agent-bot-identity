@@ -18,6 +18,12 @@ import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
 import { installationPaths, isManagedExecutable } from './install.mjs';
 import {
+  OrganizationProfileError,
+  profileAppSlugs,
+  profileStatusForSlug,
+  runtimeProfileInfo,
+} from './organization-profile.mjs';
+import {
   AGENT_ID_KEYS,
   pinnedSlug,
   readGitConfig,
@@ -49,12 +55,46 @@ export function readinessCheck({
 }
 
 export function configuredAppSlugs(config, explicit = []) {
-  const slugs = new Set(explicit);
+  if (explicit.some((slug) => profileStatusForSlug(slug, config) === 'retired')) {
+    throw new OrganizationProfileError(
+      'profile-app-retired',
+      'an explicitly selected App is retired by the installed organization profile',
+    );
+  }
+  const slugs = new Set([...profileAppSlugs(config), ...explicit]);
   for (const { key } of HARNESSES) {
     const slug = slugForHarness(key, config);
     if (slug) slugs.add(slug);
   }
   return [...slugs].sort();
+}
+
+function organizationProfileCheck(config) {
+  const info = runtimeProfileInfo(config);
+  if (!info) {
+    return readinessCheck({
+      id: 'config.profile',
+      status: 'warning',
+      code: 'profile-not-installed',
+      message: 'runtime config was not projected from a versioned organization profile',
+      action: 'run bootstrap with: --profile <path>',
+      evidence: { source: 'runtime-config' },
+    });
+  }
+  return readinessCheck({
+    id: 'config.profile',
+    status: 'ready',
+    message: `organization profile ${info.organization} schema v${info.schemaVersion}`,
+    evidence: {
+      source: 'organization-profile',
+      organization: info.organization,
+      account_owner: info.accountOwner,
+      profile_schema_version: info.schemaVersion,
+      runtime_interface_version: info.minimumRuntimeInterfaceVersion,
+      active_apps: info.active.length,
+      retired_apps: info.retired.length,
+    },
+  });
 }
 
 export function hookCoverage(today = new Date()) {
@@ -855,9 +895,20 @@ export async function collectReadiness({
           mappings,
         }));
       }
-    } catch {
+      if (Object.keys(config).length > 0) {
+        machineChecks.push(organizationProfileCheck(config));
+      }
+    } catch (error) {
       configValid = false;
-      machineChecks.push(failedConfigCheck());
+      machineChecks.push(error?.code === 'profile-app-retired'
+        ? readinessCheck({
+          id: 'credential.roster',
+          status: 'failed',
+          code: 'profile-app-retired',
+          message: 'an explicitly selected App is retired by the installed organization profile',
+          action: 'remove the retired --app selection, then retry',
+        })
+        : failedConfigCheck());
     }
     machineChecks.push(hooksCheck({ home, cwd, env, git, access }));
     machineChecks.push(coverageCheck(now));

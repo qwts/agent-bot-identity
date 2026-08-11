@@ -19,6 +19,11 @@ import { reconcileAppCredentials } from './credential-reconciler.mjs';
 import { installAgentBot, installationPaths, isManagedExecutable } from './install.mjs';
 import { installGhShim } from './install-gh-shim.mjs';
 import {
+  OrganizationProfileError,
+  organizationProfileToConfig,
+  readOrganizationProfile,
+} from './organization-profile.mjs';
+import {
   buildReadinessReport,
   collectReadiness,
   configuredAppSlugs,
@@ -35,6 +40,8 @@ export const BOOTSTRAP_USAGE = `usage:
   agent-bot bootstrap [options]    (installed CLI)
 
 Options:
+  --profile <path|->
+                    Apply a versioned organization profile from a file or stdin
   --config <path>   Install an explicit secret-free config file; never discovers organization policy
   --app <slug>      Restore one App credential (repeatable)
   --with-gh-shim    Install the managed fail-closed gh shim
@@ -52,6 +59,7 @@ export function parseBootstrapArgs(argv = process.argv.slice(2)) {
   const options = {
     apps: [],
     configPath: null,
+    profilePath: null,
     help: false,
     json: false,
     phase: 'all',
@@ -61,10 +69,18 @@ export function parseBootstrapArgs(argv = process.argv.slice(2)) {
   let selectedPhase = null;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === '--config' || arg === '--app' || arg === '--require-schema-version') {
+    if (
+      arg === '--profile'
+      || arg === '--config'
+      || arg === '--app'
+      || arg === '--require-schema-version'
+    ) {
       const value = argv[index + 1];
       if (!value || value.startsWith('--')) throw new Error(`${arg} requires a value`);
-      if (arg === '--config') {
+      if (arg === '--profile') {
+        if (options.profilePath) throw new Error('--profile may be passed only once');
+        options.profilePath = value;
+      } else if (arg === '--config') {
         if (options.configPath) throw new Error('--config may be passed only once');
         options.configPath = value;
       } else if (arg === '--app') {
@@ -90,9 +106,12 @@ export function parseBootstrapArgs(argv = process.argv.slice(2)) {
       throw new Error(`unknown option: ${arg}`);
     }
   }
+  if (options.profilePath && options.configPath) {
+    throw new Error('--profile conflicts with --config');
+  }
   if (
     options.phase === 'worktree'
-    && (options.configPath || options.apps.length > 0 || options.withGhShim)
+    && (options.profilePath || options.configPath || options.apps.length > 0 || options.withGhShim)
   ) {
     throw new Error('--worktree-only does not accept machine setup options');
   }
@@ -112,8 +131,10 @@ export function bootstrapConfigPath(home = homedir()) {
   return join(home, '.config', 'agent-bot', 'config.json');
 }
 
-export function installBootstrapConfig({
-  sourcePath,
+function publishBootstrapConfig({
+  config,
+  sourceDescription,
+  conflictCode = null,
   home = homedir(),
   env = process.env,
   lstat = lstatSync,
@@ -123,19 +144,28 @@ export function installBootstrapConfig({
   write = writeFileSync,
 } = {}) {
   const destination = bootstrapConfigPath(home);
-  if (!sourcePath) {
-    return { config: loadConfig({ home, env }), path: destination, updated: false };
-  }
-  const source = resolve(sourcePath);
-  const config = loadConfig({ home, env: { ...env, AGENT_BOT_CONFIG: source } });
   const existing = optionalLstat(destination, lstat);
   if (existing) {
     if (existing.isSymbolicLink() || !existing.isFile()) {
+      if (conflictCode) {
+        throw new OrganizationProfileError(
+          conflictCode,
+          'installed runtime config conflicts with the organization profile',
+        );
+      }
       throw new Error(`${destination} exists and is not a regular agent-bot config file`);
     }
     const current = loadConfig({ home, env: { ...env, AGENT_BOT_CONFIG: destination } });
     if (!isDeepStrictEqual(current, config)) {
-      throw new Error(`${destination} conflicts with ${source}; move it aside or reconcile it explicitly`);
+      if (conflictCode) {
+        throw new OrganizationProfileError(
+          conflictCode,
+          'installed runtime config conflicts with the organization profile',
+        );
+      }
+      throw new Error(
+        `${destination} conflicts with ${sourceDescription}; move it aside or reconcile it explicitly`,
+      );
     }
     return { config: current, path: destination, updated: false };
   }
@@ -150,6 +180,48 @@ export function installBootstrapConfig({
     throw error;
   }
   return { config, path: destination, updated: true };
+}
+
+export function installBootstrapConfig({
+  sourcePath,
+  home = homedir(),
+  env = process.env,
+  ...dependencies
+} = {}) {
+  const destination = bootstrapConfigPath(home);
+  if (!sourcePath) {
+    return { config: loadConfig({ home, env }), path: destination, updated: false };
+  }
+  const source = resolve(sourcePath);
+  const config = loadConfig({ home, env: { ...env, AGENT_BOT_CONFIG: source } });
+  return publishBootstrapConfig({
+    config,
+    sourceDescription: source,
+    home,
+    env,
+    ...dependencies,
+  });
+}
+
+export function installBootstrapProfile({
+  sourcePath,
+  home = homedir(),
+  env = process.env,
+  read,
+  stdin,
+  ...dependencies
+} = {}) {
+  const profile = readOrganizationProfile({ sourcePath, read, stdin });
+  const config = organizationProfileToConfig(profile);
+  const result = publishBootstrapConfig({
+    config,
+    sourceDescription: 'organization profile',
+    conflictCode: 'profile-config-conflict',
+    home,
+    env,
+    ...dependencies,
+  });
+  return { ...result, profile };
 }
 
 export function assertInstalledRuntime({
@@ -175,10 +247,28 @@ function runInstalled(executable, args, { env = process.env } = {}) {
   });
 }
 
+function safeProfileFailure(error) {
+  const code = error instanceof OrganizationProfileError
+    ? error.code
+    : 'profile-apply-failed';
+  const messages = {
+    'profile-read-failed': 'bootstrap could not read the organization profile',
+    'profile-invalid': 'bootstrap rejected an invalid or incomplete organization profile',
+    'profile-schema-unsupported': 'bootstrap does not support the organization profile schema version',
+    'profile-runtime-incompatible': 'the organization profile requires a newer runtime interface',
+    'profile-config-conflict': 'the organization profile conflicts with the installed runtime config',
+  };
+  return {
+    code: Object.hasOwn(messages, code) ? code : 'profile-apply-failed',
+    message: messages[code] ?? 'bootstrap could not apply the organization profile',
+  };
+}
+
 export async function bootstrap(options, {
   home = homedir(),
   env = process.env,
   installConfig = installBootstrapConfig,
+  installProfile = installBootstrapProfile,
   installRuntime = installAgentBot,
   installShim = installGhShim,
   reconcileCredentials = reconcileAppCredentials,
@@ -217,6 +307,7 @@ export async function bootstrap(options, {
   let executable = installationPaths(home).executable;
   let config = null;
   let credentialResults = null;
+  let credentialSlugs = null;
   let operationFailure = null;
   let reachedCredentialPhase = false;
 
@@ -229,16 +320,47 @@ export async function bootstrap(options, {
 
   if (options.phase !== 'worktree') {
     try {
-      const configResult = installConfig({ sourcePath: options.configPath, home, env });
+      const configResult = options.profilePath
+        ? installProfile({ sourcePath: options.profilePath, home, env })
+        : installConfig({ sourcePath: options.configPath, home, env });
       config = configResult.config;
-    } catch {
-      fail(
-        'machine',
-        'bootstrap.config',
-        'config-apply-failed',
-        'bootstrap could not apply the secret-free runtime config',
-        'resolve the config conflict or permissions, then retry bootstrap',
-      );
+    } catch (error) {
+      if (options.profilePath) {
+        const profileFailure = safeProfileFailure(error);
+        fail(
+          'machine',
+          'bootstrap.profile',
+          profileFailure.code,
+          profileFailure.message,
+          profileFailure.code === 'profile-runtime-incompatible'
+            ? 'update agent-bot to a compatible runtime, then retry bootstrap'
+            : profileFailure.code === 'profile-config-conflict'
+              ? 'reconcile or move aside the installed runtime config, then retry bootstrap'
+              : 'obtain a complete compatible secret-free organization profile, then retry bootstrap',
+        );
+      } else {
+        fail(
+          'machine',
+          'bootstrap.config',
+          'config-apply-failed',
+          'bootstrap could not apply the secret-free runtime config',
+          'resolve the config conflict or permissions, then retry bootstrap',
+        );
+      }
+    }
+
+    if (!operationFailure) {
+      try {
+        credentialSlugs = configuredAppSlugs(config, options.apps);
+      } catch {
+        fail(
+          'machine',
+          'bootstrap.credentials',
+          'profile-app-retired',
+          'bootstrap rejected an explicitly selected retired App',
+          'remove the retired --app selection, then retry bootstrap',
+        );
+      }
     }
 
     if (!operationFailure) {
@@ -260,7 +382,7 @@ export async function bootstrap(options, {
       reachedCredentialPhase = true;
       try {
         credentialResults = await reconcileCredentials({
-          slugs: configuredAppSlugs(config, options.apps),
+          slugs: credentialSlugs,
           home,
         });
       } catch (error) {

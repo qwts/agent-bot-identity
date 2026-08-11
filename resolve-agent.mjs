@@ -16,7 +16,12 @@ import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { detectHarness, HARNESSES } from './detect-harness.mjs';
-import { harnessForSlug, loadConfig, slugForHarness } from './config.mjs';
+import {
+  appLifecycleStatus,
+  harnessForSlug,
+  loadConfig,
+  slugForHarness,
+} from './config.mjs';
 
 // Pin keys written by setup-worktree. Prefer the standalone name; accept the
 // playbook-engineering name so a migrated machine keeps working.
@@ -106,6 +111,13 @@ function harnessOwnsTerritory(appSlug, territory, config) {
   return (harness === 'claude-code' ? 'claude' : harness) === territory;
 }
 
+function requireActiveProfileApp(appSlug, config) {
+  if (appLifecycleStatus(appSlug, config) === 'retired') {
+    throw new Error('selected App is retired by the installed organization profile');
+  }
+  return appSlug;
+}
+
 export function resolveAgentSlug({
   explicit = null,
   env = process.env,
@@ -120,20 +132,23 @@ export function resolveAgentSlug({
     const territorySlug = slugForHarness(territory, cfg);
     if (!territorySlug) return null;
     if (explicit) {
+      requireActiveProfileApp(explicit, cfg);
       if (!harnessOwnsTerritory(explicit, territory, cfg)) {
         throw new Error(`explicit App ${explicit} conflicts with ${territory} worktree territory`);
       }
       return explicit;
     }
     const launched = env.GH_AGENT_APP;
+    if (launched) requireActiveProfileApp(launched, cfg);
     if (launched && harnessOwnsTerritory(launched, territory, cfg)) return launched;
     const pinned = pinnedSlug(cwd, { git });
+    if (pinned) requireActiveProfileApp(pinned, cfg);
     if (pinned && harnessOwnsTerritory(pinned, territory, cfg)) return pinned;
     return territorySlug;
   }
-  if (explicit) return explicit;
-  if (env.GH_AGENT_APP) return env.GH_AGENT_APP;
+  if (explicit) return requireActiveProfileApp(explicit, cfg);
+  if (env.GH_AGENT_APP) return requireActiveProfileApp(env.GH_AGENT_APP, cfg);
   const pinned = pinnedSlug(cwd, { git });
-  if (pinned) return pinned;
+  if (pinned) return requireActiveProfileApp(pinned, cfg);
   return slugForHarness(detectHarness(env), cfg);
 }

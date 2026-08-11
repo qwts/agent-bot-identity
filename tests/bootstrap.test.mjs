@@ -15,13 +15,39 @@ import {
   bootstrapConfigPath,
   configuredAppSlugs,
   installBootstrapConfig,
+  installBootstrapProfile,
   main as bootstrapMain,
   parseBootstrapArgs,
 } from '../bootstrap.mjs';
 import { parseDoctorArgs } from '../doctor.mjs';
+import {
+  OrganizationProfileError,
+  organizationProfileToConfig,
+} from '../organization-profile.mjs';
 
 function tempHome() {
   return mkdtempSync(join(tmpdir(), 'agent-bot-bootstrap-'));
+}
+
+function organizationProfile(overrides = {}) {
+  return {
+    schema_version: 1,
+    organization: 'example-engineering',
+    account_owner: 'example',
+    minimum_runtime_interface_version: 1,
+    defaults: { codex: 'example-codex-agent' },
+    identities: [
+      { slug: 'example-codex-agent', harness: 'codex', status: 'active' },
+      {
+        slug: 'example-codex-sol-agent',
+        harness: 'codex',
+        status: 'active',
+        models: ['gpt-5.6-sol'],
+      },
+      { slug: 'example-old-agent', harness: 'codex', status: 'retired' },
+    ],
+    ...overrides,
+  };
 }
 
 function readyReport(scope = 'all') {
@@ -49,6 +75,7 @@ test('bootstrap CLI parses explicit phases and rejects ignored machine options',
     {
       apps: ['two-agent', 'one-agent'],
       configPath: '/tmp/config.json',
+      profilePath: null,
       help: false,
       json: false,
       phase: 'all',
@@ -63,6 +90,7 @@ test('bootstrap CLI parses explicit phases and rejects ignored machine options',
   );
   assert.equal(parseBootstrapArgs(['--machine-only']).phase, 'machine');
   assert.equal(parseBootstrapArgs(['--worktree-only']).phase, 'worktree');
+  assert.equal(parseBootstrapArgs(['--profile', '-']).profilePath, '-');
   assert.throws(
     () => parseBootstrapArgs(['--machine-only', '--worktree-only']),
     /conflicts/,
@@ -72,6 +100,14 @@ test('bootstrap CLI parses explicit phases and rejects ignored machine options',
     /does not accept machine setup options/,
   );
   assert.throws(() => parseBootstrapArgs(['--config']), /requires a value/);
+  assert.throws(
+    () => parseBootstrapArgs(['--profile', '/profile.json', '--config', '/config.json']),
+    /conflicts/,
+  );
+  assert.throws(
+    () => parseBootstrapArgs(['--worktree-only', '--profile', '/profile.json']),
+    /does not accept machine setup options/,
+  );
   assert.throws(() => parseBootstrapArgs(['--unknown']), /unknown option/);
 });
 
@@ -140,6 +176,76 @@ test('explicit config refuses different content and foreign symlinks', () => {
   );
 });
 
+test('organization profile installation is private, projected, and idempotent', () => {
+  const home = tempHome();
+  const source = join(home, 'organization-profile.json');
+  writeFileSync(source, JSON.stringify(organizationProfile()));
+
+  const first = installBootstrapProfile({ sourcePath: source, home, env: {} });
+  assert.equal(first.updated, true);
+  assert.equal(first.profile.schema_version, 1);
+  assert.deepEqual(first.config.apps, { codex: 'example-codex-agent' });
+  assert.equal(first.config.profile.identities.length, 3);
+  assert.equal(statSync(bootstrapConfigPath(home)).mode & 0o777, 0o600);
+
+  const second = installBootstrapProfile({ sourcePath: source, home, env: {} });
+  assert.equal(second.updated, false);
+  assert.deepEqual(second.config, first.config);
+});
+
+test('organization profile accepts stdin and validates before any mutation', () => {
+  const home = tempHome();
+  const stdin = installBootstrapProfile({
+    sourcePath: '-',
+    home,
+    env: {},
+    stdin: 17,
+    read: (source, encoding) => {
+      assert.equal(source, 17);
+      assert.equal(encoding, 'utf8');
+      return JSON.stringify(organizationProfile());
+    },
+  });
+  assert.equal(stdin.updated, true);
+
+  for (const [overrides, code] of [
+    [{ schema_version: 99 }, 'profile-schema-unsupported'],
+    [{ minimum_runtime_interface_version: 99 }, 'profile-runtime-incompatible'],
+  ]) {
+    const invalidHome = tempHome();
+    assert.throws(
+      () => installBootstrapProfile({
+        sourcePath: '-',
+        home: invalidHome,
+        env: {},
+        read: () => JSON.stringify(organizationProfile(overrides)),
+        lstat: () => assert.fail('profile destination inspected before validation'),
+        mkdir: () => assert.fail('profile directories created before validation'),
+        write: () => assert.fail('profile config written before validation'),
+      }),
+      (error) => error.code === code,
+    );
+  }
+});
+
+test('profile conflict leaves the installed runtime config untouched', () => {
+  const home = tempHome();
+  const destination = bootstrapConfigPath(home);
+  mkdirSync(dirname(destination), { recursive: true });
+  writeFileSync(destination, '{"apps":{"codex":"existing-agent"}}\n', { mode: 0o600 });
+  const before = readFileSync(destination, 'utf8');
+  assert.throws(
+    () => installBootstrapProfile({
+      sourcePath: '-',
+      home,
+      env: {},
+      read: () => JSON.stringify(organizationProfile()),
+    }),
+    (error) => error.code === 'profile-config-conflict',
+  );
+  assert.equal(readFileSync(destination, 'utf8'), before);
+});
+
 test('configured App slugs are unique and deterministic', () => {
   assert.deepEqual(
     configuredAppSlugs(
@@ -156,6 +262,30 @@ test('configured App slugs are unique and deterministic', () => {
       'org-vscode-agent',
       'z-agent',
     ],
+  );
+});
+
+test('configured roster includes every active profile App and excludes retired Apps', () => {
+  const config = organizationProfileToConfig(organizationProfile());
+  assert.deepEqual(
+    configuredAppSlugs(config, ['explicit-agent', 'example-codex-agent']),
+    [
+      'example-codex-agent',
+      'example-codex-sol-agent',
+      'explicit-agent',
+    ],
+  );
+});
+
+test('configured roster rejects an explicitly selected retired profile App without reflecting it', () => {
+  const config = organizationProfileToConfig(organizationProfile());
+  assert.throws(
+    () => configuredAppSlugs(config, ['example-old-agent']),
+    (error) => {
+      assert.equal(error.code, 'profile-app-retired');
+      assert.doesNotMatch(error.message, /example-old-agent/);
+      return true;
+    },
   );
 });
 
@@ -210,6 +340,112 @@ test('full bootstrap follows config, install, credentials, shim, worktree, readi
       ['collect', 'all', 'claude-agent', 'codex-agent', 'explicit-agent'],
     ],
   );
+});
+
+test('profile bootstrap validates and applies the complete active roster before runtime mutation', async () => {
+  const calls = [];
+  const config = {
+    owner: 'example',
+    apps: { codex: 'example-codex-agent' },
+    profile: {
+      schemaVersion: 1,
+      organization: 'example-engineering',
+      accountOwner: 'example',
+      minimumRuntimeInterfaceVersion: 1,
+      identities: organizationProfile().identities.map((identity) => ({
+        ...identity,
+        models: identity.models ?? [],
+      })),
+    },
+  };
+  const report = await bootstrap(
+    parseBootstrapArgs(['--profile', '-', '--machine-only']),
+    {
+      home: '/home/test',
+      installConfig: () => assert.fail('legacy config adapter handled a profile'),
+      installProfile: ({ sourcePath }) => {
+        calls.push(['profile', sourcePath]);
+        return { config, path: '/config', updated: true };
+      },
+      installRuntime: () => {
+        calls.push(['runtime']);
+        return { executable: '/installed/agent-bot' };
+      },
+      reconcileCredentials: async ({ slugs }) => {
+        calls.push(['credentials', ...slugs]);
+        return slugs.map((slug) => ({
+          slug,
+          local: { status: 'ready', restored: [] },
+          live: { status: 'ready', installationId: 1, expiresAt: 'later' },
+        }));
+      },
+      collect: (options) => {
+        calls.push(['collect', ...options.appResults.map(({ slug }) => slug)]);
+        return readyReport('machine');
+      },
+    },
+  );
+  assert.equal(report.ready, true);
+  assert.deepEqual(calls, [
+    ['profile', '-'],
+    ['runtime'],
+    ['credentials', 'example-codex-agent', 'example-codex-sol-agent'],
+    ['collect', 'example-codex-agent', 'example-codex-sol-agent'],
+  ]);
+});
+
+test('invalid profile failure stops every downstream bootstrap mutation with a safe result', async () => {
+  const sentinel = 'SENTINEL_PRIVATE_KEY_OR_TOKEN';
+  const report = await bootstrap(parseBootstrapArgs(['--profile', '-', '--machine-only']), {
+    installProfile: () => {
+      throw new OrganizationProfileError('profile-invalid', sentinel);
+    },
+    installRuntime: () => assert.fail('runtime installed after invalid profile'),
+    reconcileCredentials: () => assert.fail('credentials reconciled after invalid profile'),
+    collect: (options) => ({
+      ...readyReport('machine'),
+      ready: false,
+      machine: { status: 'not_ready', checks: [options.operationFailure.check], apps: [] },
+      first_actionable_failure: {
+        scope: 'machine',
+        check_id: options.operationFailure.check.id,
+        app_slug: null,
+        code: options.operationFailure.check.code,
+        message: options.operationFailure.check.message,
+        action: options.operationFailure.check.action,
+      },
+    }),
+  });
+  assert.equal(report.ready, false);
+  assert.equal(report.first_actionable_failure.code, 'profile-invalid');
+  assert.doesNotMatch(JSON.stringify(report), new RegExp(sentinel));
+});
+
+test('retired explicit App stops bootstrap before runtime or credential mutation', async () => {
+  const config = organizationProfileToConfig(organizationProfile());
+  const report = await bootstrap(
+    parseBootstrapArgs(['--app', 'example-old-agent', '--machine-only']),
+    {
+      installConfig: () => ({ config, path: '/config', updated: false }),
+      installRuntime: () => assert.fail('runtime installed after retired App selection'),
+      reconcileCredentials: () => assert.fail('retired App credentials were reconciled'),
+      collect: (options) => ({
+        ...readyReport('machine'),
+        ready: false,
+        machine: { status: 'not_ready', checks: [options.operationFailure.check], apps: [] },
+        first_actionable_failure: {
+          scope: 'machine',
+          check_id: options.operationFailure.check.id,
+          app_slug: null,
+          code: options.operationFailure.check.code,
+          message: options.operationFailure.check.message,
+          action: options.operationFailure.check.action,
+        },
+      }),
+    },
+  );
+  assert.equal(report.first_actionable_failure.code, 'profile-app-retired');
+  assert.doesNotMatch(JSON.stringify(report), /example-old-agent/);
 });
 
 test('machine-only and worktree-only phases do not cross their mutation boundary', async () => {

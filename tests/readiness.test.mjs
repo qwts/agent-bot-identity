@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installationPaths } from '../install.mjs';
 import { main as doctorMain } from '../doctor.mjs';
+import { organizationProfileToConfig } from '../organization-profile.mjs';
 import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
 import {
   READINESS_SCHEMA_VERSION,
@@ -113,6 +114,76 @@ test('schema v1 is deterministic, secret-free, and warnings do not fail readines
     renderReadinessJson(report),
     /token|private-key\.pem|BEGIN PRIVATE KEY|secret-user|secret-password|private-path/,
   );
+});
+
+test('machine readiness reports profile compatibility and the complete active roster', async () => {
+  const home = tempRoot();
+  const config = organizationProfileToConfig({
+    schema_version: 1,
+    organization: 'example-engineering',
+    account_owner: 'example',
+    minimum_runtime_interface_version: 1,
+    defaults: { codex: 'example-codex-agent' },
+    identities: [
+      { slug: 'example-codex-agent', harness: 'codex', status: 'active' },
+      {
+        slug: 'example-codex-sol-agent',
+        harness: 'codex',
+        status: 'active',
+        models: ['gpt-5.6-sol'],
+      },
+      { slug: 'example-retired-agent', harness: 'codex', status: 'retired' },
+    ],
+  });
+  const report = await collectReadiness({
+    command: 'doctor',
+    scope: 'machine',
+    ...machineDependencies(home),
+    load: () => config,
+  });
+  const profile = report.machine.checks.find(({ id }) => id === 'config.profile');
+  assert.equal(profile.status, 'ready');
+  assert.deepEqual(profile.evidence, {
+    source: 'organization-profile',
+    organization: 'example-engineering',
+    account_owner: 'example',
+    profile_schema_version: 1,
+    runtime_interface_version: 1,
+    active_apps: 2,
+    retired_apps: 1,
+  });
+  assert.deepEqual(report.machine.apps.map(({ slug }) => slug), [
+    'example-codex-agent',
+    'example-codex-sol-agent',
+  ]);
+});
+
+test('doctor rejects an explicit retired App before credential inspection', async () => {
+  const home = tempRoot();
+  const config = organizationProfileToConfig({
+    schema_version: 1,
+    organization: 'example-engineering',
+    account_owner: 'example',
+    minimum_runtime_interface_version: 1,
+    defaults: { codex: 'example-codex-agent' },
+    identities: [
+      { slug: 'example-codex-agent', harness: 'codex', status: 'active' },
+      { slug: 'example-retired-agent', harness: 'codex', status: 'retired' },
+    ],
+  });
+  const report = await collectReadiness({
+    command: 'doctor',
+    scope: 'machine',
+    ...machineDependencies(home, {
+      inspectCredentials: () => assert.fail('retired App credentials were inspected'),
+    }),
+    explicitApps: ['example-retired-agent'],
+    load: () => config,
+  });
+  const failure = report.machine.checks.find(({ code }) => code === 'profile-app-retired');
+  assert.equal(failure.status, 'failed');
+  assert.equal(report.machine.apps.length, 0);
+  assert.doesNotMatch(JSON.stringify(report), /example-retired-agent/);
 });
 
 test('machine report identifies the exact App and suppresses all live evidence after a local failure', async () => {

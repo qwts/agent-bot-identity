@@ -42,8 +42,9 @@ verified publishing, and transcript provenance.
    authorized session, plus a concrete audit reason. Never search another
    provider, automate provider login, or persist the result.
 7. Treat an organization-wide install request as governance discovery plus
-   runtime bootstrap. Require the complete configured identity roster and
-   organization-owned harness tooling; never reduce it to the current harness.
+   runtime bootstrap. Prefer the versioned `--profile` contract, require the
+   complete active identity roster and organization-owned harness tooling, and
+   never reduce it to the current harness or reactivate a retired identity.
 
 ## Verify the outcome
 

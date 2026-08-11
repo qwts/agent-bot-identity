@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { pinnedSlug, resolveAgentSlug, territoryHarness } from '../resolve-agent.mjs';
+import { organizationProfileToConfig } from '../organization-profile.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'resolve-agent-'));
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -104,6 +105,32 @@ test('an explicit slug outranks the environment, which outranks the pin', () => 
     }),
     'you-codex-agent',
   );
+});
+
+test('retired profile identities fail closed for explicit, launcher, and pinned resolution', () => {
+  const config = organizationProfileToConfig({
+    schema_version: 1,
+    organization: 'example-engineering',
+    account_owner: 'example',
+    minimum_runtime_interface_version: 1,
+    defaults: { codex: 'example-codex-agent' },
+    identities: [
+      { slug: 'example-codex-agent', harness: 'codex', status: 'active' },
+      { slug: 'example-old-codex-agent', harness: 'codex', status: 'retired' },
+    ],
+  });
+  const pinned = repo('retired', 'example-old-codex-agent');
+  for (const options of [
+    { explicit: 'example-old-codex-agent', env: {} },
+    { env: { GH_AGENT_APP: 'example-old-codex-agent' } },
+    { env: {}, cwd: pinned },
+  ]) {
+    assert.throws(
+      () => resolveAgentSlug({ cwd: root, config, ...options }),
+      /selected App is retired/,
+    );
+  }
+  assert.equal(resolveAgentSlug({ explicit: 'example-codex-agent', config }), 'example-codex-agent');
 });
 
 test('a directory that is not a repository resolves quietly rather than throwing', () => {

@@ -34,15 +34,15 @@ if that procedure does not yet publish compatible input, bootstrap must stop.
 
 From a fresh clone, begin with the source launcher. Do not require an installed
 CLI to install itself, and do not configure only the harness currently running.
-For a governed organization, first obtain its explicit secret-free
-configuration/profile and shared-tooling procedure. Never search for or assume
+For a governed organization, first obtain its explicit secret-free versioned
+profile and shared-tooling procedure. Never search for or assume
 a local governance checkout; follow its canonical HTTPS guidance instead.
 
 From a primary checkout, prepare machine state without claiming that checkout
 as bot territory:
 
 ```bash
-./agent-bot bootstrap --config /path/to/config.json --with-gh-shim --machine-only
+./agent-bot bootstrap --profile /path/to/organization-profile.json --with-gh-shim --machine-only
 ```
 
 Then enter a linked agent worktree and bind it through the installed runtime:
@@ -74,7 +74,7 @@ partial current-harness setup.
 Installation provides one executable at `~/.local/bin/agent-bot`:
 
 ```bash
-agent-bot bootstrap [--config <path>] [--app <slug>] [--with-gh-shim] [--json]
+agent-bot bootstrap [--profile <path|->] [--config <path>] [--app <slug>] [--with-gh-shim] [--json]
 agent-bot --version
 agent-bot setup-worktree [app-slug]
 agent-bot mint-token --app <slug> [--json]
@@ -88,6 +88,72 @@ agent-bot ensure-private-key --app <slug> [--force]
 agent-bot signed-commit [--base <ref>] [--branch <name>] [--repo <owner/name>] [--dry-run]
 agent-bot secret get --provider <id> --collection <name> --item <title> --field <name> --reason <text>
 ```
+
+### Organization profile v1
+
+`--profile` is the governed cold-start input. It accepts a JSON file or `-`
+for stdin, validates the complete document before any machine mutation, and
+projects it into the existing private runtime config. Profile schema version
+and runtime interface version are independent from readiness schema version.
+
+```json
+{
+  "schema_version": 1,
+  "organization": "example-engineering",
+  "account_owner": "example",
+  "minimum_runtime_interface_version": 1,
+  "defaults": {
+    "claude": "example-claude-agent",
+    "codex": "example-codex-agent"
+  },
+  "identities": [
+    {
+      "slug": "example-claude-agent",
+      "harness": "claude",
+      "status": "active"
+    },
+    {
+      "slug": "example-codex-agent",
+      "harness": "codex",
+      "status": "active"
+    },
+    {
+      "slug": "example-codex-sol-agent",
+      "harness": "codex",
+      "status": "active",
+      "models": ["gpt-5.6-sol"]
+    },
+    {
+      "slug": "example-retired-agent",
+      "harness": "codex",
+      "status": "retired"
+    }
+  ]
+}
+```
+
+Every active harness must have one active default. Active App slugs, including
+model-specific identities, enter roster-wide credential reconciliation;
+retired identities remain as lifecycle evidence but are never reconciled or
+live-minted and cannot be selected explicitly, by launcher environment, or by
+a stale worktree pin. Duplicate slugs, ambiguous active model mappings, invalid or
+partial profiles, unknown schema versions, and incompatible runtime
+requirements fail before the config, runtime, credentials, shim, or worktree
+is changed. Reapplying the same profile is a no-op; a different installed
+config is a conflict that requires explicit reconciliation.
+
+Optional `api_base` must be a credential-free HTTPS URL. Optional `settings`
+may contain `spaces_root` and `daemon_preference` (`off`, `prefer`, or
+`required`). Unknown fields are rejected under schema v1 instead of being
+silently ignored.
+
+```bash
+./agent-bot bootstrap --profile - --machine-only < organization-profile.json
+```
+
+`--config` remains the compatibility path for an already projected runtime
+config. It is mutually exclusive with `--profile` and does not carry the
+versioned organization roster contract.
 
 `mint-token --json` writes one secret-bearing object to stdout:
 
@@ -221,11 +287,11 @@ perform the whole runtime setup without an already-installed CLI or an npm
 command:
 
 ```bash
-./agent-bot bootstrap --config /path/to/config.json --with-gh-shim
+./agent-bot bootstrap --profile /path/to/organization-profile.json --with-gh-shim
 ```
 
 The bootstrap installs the stable CLI and hooks, refuses a conflicting existing
-config, reconciles every App resolved by the config through `pass-cli`, and
+config, reconciles every active App resolved by the profile through `pass-cli`, and
 live-verifies every App before it installs the optional managed `gh` shim or
 configures a linked worktree. A local failure is reported for every affected
 App before any live mint is attempted; a revoked or mismatched App ID/private

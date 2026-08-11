@@ -31,9 +31,9 @@ test('skill delegates executable behavior to the stable runtime', () => {
   assert.match(main, /password\/API-key retrieval/u);
   assert.match(main, /\.\/agent-bot bootstrap/u);
   assert.doesNotMatch(main, /installed `agent-bot` CLI as the only runtime entrypoint/u);
-  assert.match(main, /complete configured identity roster/u);
+  assert.match(main, /complete active identity roster/u);
   assert.match(operations, /install agent bot identities/u);
-  assert.match(operations, /\.\/agent-bot bootstrap --config <path>/u);
+  assert.match(operations, /\.\/agent-bot bootstrap --profile <path\\\|->/u);
   assert.match(operations, /agent-bot bootstrap --worktree-only/u);
   assert.match(operations, /playbook-engineering\/blob\/main\/docs\/reference\/agent-bot-operations\.md/u);
   assert.match(operations, /agent-bot secret get/u);
@@ -74,7 +74,7 @@ test('README presents the source cold start before installed and manual setup', 
   const stableCli = readme.indexOf('## Stable CLI');
   const manualApps = readme.indexOf('### 1. Create a GitHub App');
   assert.ok(coldStart >= 0 && coldStart < stableCli && stableCli < manualApps);
-  assert.match(readme, /\.\/agent-bot bootstrap --config \/path\/to\/config\.json --with-gh-shim --machine-only/u);
+  assert.match(readme, /\.\/agent-bot bootstrap --profile \/path\/to\/organization-profile\.json --with-gh-shim --machine-only/u);
   assert.match(readme, /agent-bot bootstrap --worktree-only/u);
   assert.match(readme, /every expected App row\s+and requested harness tool is ready/u);
   assert.ok(readme.includes(PLAYBOOK_OPERATIONS));
@@ -86,6 +86,6 @@ test('CLI help documents source and installed bootstrap entrypoints', () => {
     assert.match(output, /\.\/agent-bot bootstrap/u);
     assert.match(output, /agent-bot bootstrap/u);
   }
-  assert.match(helpText(), /\.\/agent-bot bootstrap \[--config <path>\] \[options\]/u);
+  assert.match(helpText(), /\.\/agent-bot bootstrap --profile <path\|-> \[options\]/u);
   assert.match(BOOTSTRAP_USAGE, /never discovers organization policy/u);
 });
