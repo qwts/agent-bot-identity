@@ -24,17 +24,61 @@ Why you'd want this:
 
 This repository is the sole runtime owner of the agent-bot and
 transcript-bound execution identity system. Clone and install it directly;
-`playbook-engineering` is a governance consumer, not a runtime provider.
+organization governance may supply the roster, compatible configuration, and
+shared harness tooling, but it is not a runtime provider. For `qwts`, those
+organization-owned inputs and their acquisition procedure are governed from
+[`playbook-engineering`](https://github.com/qwts/playbook-engineering/blob/main/docs/reference/agent-bot-operations.md);
+if that procedure does not yet publish compatible input, bootstrap must stop.
+
+## Cold start: “install agent bot identities”
+
+From a fresh clone, begin with the source launcher. Do not require an installed
+CLI to install itself, and do not configure only the harness currently running.
+For a governed organization, first obtain its explicit secret-free
+configuration/profile and shared-tooling procedure. Never search for or assume
+a local governance checkout; follow its canonical HTTPS guidance instead.
+
+From a primary checkout, prepare machine state without claiming that checkout
+as bot territory:
+
+```bash
+./agent-bot bootstrap --config /path/to/config.json --with-gh-shim --machine-only
+```
+
+Then enter a linked agent worktree and bind it through the installed runtime:
+
+```bash
+agent-bot bootstrap --worktree-only
+```
+
+When already working from a linked agent worktree, omit `--machine-only` from
+the source command to perform both phases. Bootstrap reconciles and
+live-verifies every App resolved by the configuration, not merely the current
+harness. Afterward, complete the organization-owned shared skills and harness
+tooling from its governance procedure.
+
+Finish with the secret-free readiness contract:
+
+```bash
+agent-bot doctor --machine-only --json --require-schema-version 1
+agent-bot doctor --json --require-schema-version 1  # linked worktree
+```
+
+Do not report the organization install complete until every expected App row
+and requested harness tool is ready. A missing organization input or tool is a
+blocking dependency, not permission to fall back to a human GitHub login or a
+partial current-harness setup.
 
 ## Stable CLI
 
 Installation provides one executable at `~/.local/bin/agent-bot`:
 
 ```bash
+agent-bot bootstrap [--config <path>] [--app <slug>] [--with-gh-shim] [--json]
 agent-bot --version
 agent-bot setup-worktree [app-slug]
 agent-bot mint-token --app <slug> [--json]
-agent-bot doctor
+agent-bot doctor [--machine-only] [--app <slug>] [--json]
 agent-bot identity <ensure|spawn|bind|record|finalize|show|current>
 agent-bot space <init|ensure|path|show> [agent-id]
 agent-bot population <list|show> [agent-id] [--json]
@@ -53,6 +97,26 @@ agent-bot secret get --provider <id> --collection <name> --item <title> --field 
 
 Treat that stdout as a credential. Errors, diagnostics, identity records, and
 logs never contain tokens, JWTs, or private keys.
+
+`doctor --json` and `bootstrap --json` emit the same secret-free readiness
+contract. Unlike mint output, this object is safe to retain in automation:
+
+```json
+{
+  "schema_version": 1,
+  "command": "doctor",
+  "scope": "machine",
+  "ready": true,
+  "machine": { "status": "ready", "checks": [], "apps": [] },
+  "worktree": { "status": "not_requested", "checks": [] },
+  "first_actionable_failure": null
+}
+```
+
+Each check has fixed `id`, `status`, `code`, `message`, `action`, and
+`evidence` fields. App rows contain separate `credential` and `live_mint`
+checks. Consumers can pass `--require-schema-version <n>`; bootstrap rejects an
+unsupported minimum before changing config, credentials, tools, or worktrees.
 
 `secret get` provides the same narrow stdout boundary for a password or API key
 that an agent is already authorized to read. The first built-in provider is
@@ -149,6 +213,42 @@ An unverifiable pin fails closed — it never falls through to harness detection
 
 ## Setup
 
+### Bootstrap details
+
+The cold-start route above is the supported source-to-installed handoff. Once
+the GitHub Apps and their escrowed credentials exist, the source launcher can
+perform the whole runtime setup without an already-installed CLI or an npm
+command:
+
+```bash
+./agent-bot bootstrap --config /path/to/config.json --with-gh-shim
+```
+
+The bootstrap installs the stable CLI and hooks, refuses a conflicting existing
+config, reconciles every App resolved by the config through `pass-cli`, and
+live-verifies every App before it installs the optional managed `gh` shim or
+configures a linked worktree. A local failure is reported for every affected
+App before any live mint is attempted; a revoked or mismatched App ID/private
+key fails during the live phase. It finishes by collecting the same readiness
+report as `doctor` and never interposes a system or Homebrew `gh`; that remains
+a separate explicit operation.
+
+Use `--machine-only` from a primary checkout when preparing the machine without
+binding a worktree. Use `--worktree-only` later from a linked worktree to run
+only identity setup and verification. The latter requires the machine install
+to point at the same source checkout and rejects machine-setup options rather
+than silently ignoring them.
+
+`doctor` is always read-only and continues to reject `--repair`. Bootstrap is
+the explicit repair boundary: it performs only the documented idempotent setup
+operations, stops after the first failed mutation phase, and reports later live
+verification as skipped. A full bootstrap requires a linked worktree; use
+`--machine-only` deliberately from a primary checkout.
+
+The numbered sections below document standalone operator provisioning and the
+runtime's underlying components. They are not a substitute for an
+organization-owned profile, roster, or shared-tooling workflow.
+
 ### 1. Create a GitHub App per agent tool you use (~5 min each)
 
 GitHub → Settings → Developer settings → GitHub Apps → **New GitHub App**
@@ -201,11 +301,14 @@ attachment, which is why all three are accepted:
 agent-bot ensure-private-key --app you-claude-agent
 ```
 
-One `item view` provisions whichever of the two files is missing, so a fresh
-machine needs no manual copying. `setup-worktree` calls this on every bot
-worktree, which means a deleted key or app-id self-heals. A missing issuer is a
-warning rather than a failure — the key still lands, and `doctor` reports the
-gap.
+One `item view` provisions whichever of the two files is missing or malformed,
+so a fresh machine needs no manual copying. Restored files are staged,
+validated, and atomically installed with private permissions; valid existing
+files are preserved without contacting the provider. `setup-worktree` performs
+the same reconciliation and a live mint before changing the remote, resolving
+the bot UID, or writing worktree identity. Missing, ambiguous, malformed,
+revoked, or mismatched credentials therefore fail closed with the App slug and
+operator action instead of leaving a partially configured worktree.
 
 ### 3. Write the config
 
@@ -295,6 +398,57 @@ shell finds Homebrew's `gh` first.
 Shells other than zsh get no registration. The identity scripts fall back to
 `~/.local/bin/agent-bot` directly for that case, and `agent-bot doctor` probes a
 non-login shell so a missing registration is reported rather than assumed.
+
+#### Experimental Codex desktop Pull Requests UI
+
+The normal gh-shim install covers agent shells but does not necessarily cover
+GitHub commands launched directly by the Codex desktop app. Codex currently
+resolves a `gh` executable from its own host PATH for the built-in Pull Requests
+and environment UI. That executable can be explicitly and reversibly
+interposed:
+
+```bash
+# First identify the system gh selected by the desktop host. Common macOS paths:
+type -a gh
+agent-bot install-gh-shim --codex-desktop-gh /opt/homebrew/bin/gh
+
+# Restore the exact executable or symlink that was preserved during install:
+agent-bot install-gh-shim --restore-codex-desktop-gh /opt/homebrew/bin/gh
+```
+
+The explicit install moves the selected `gh` to an adjacent
+`gh.agent-bot-real` backup and replaces only that path with a symlink to the
+managed shim. It refuses existing backups, foreign replacements, missing
+originals, relative paths, and unrecoverable restores. The ordinary
+`agent-bot install-gh-shim` command never modifies a system or Homebrew path.
+Because a package-manager upgrade may replace either link, verify the selected
+`gh` path after upgrading GitHub CLI and restore or reinstall the interposer if
+needed.
+
+When a direct Codex desktop call is detected, the shim mints the configured
+Codex App token and adapts only the observed native request shapes:
+
+- REST `/user` falls back to the App's real `<slug>[bot]` user object because
+  installation tokens cannot use the authenticated-user endpoint.
+- Pull Request inbox searches replace only the `author:@me`, `reviewed-by:@me`,
+  or `review-requested:@me` identity predicate with repeated `repo:` qualifiers
+  discovered from the App installation. The secret-free repository list is
+  cached privately for ten minutes; native PR/state/sort filters remain, but
+  these three broadened lanes can overlap.
+- The exact branch PR lookup drops only `--author @me`, retaining its head
+  branch and repository constraints so PRs created by another agent App appear.
+- PR detail JSON fills missing App avatars from the exact App profile cached by
+  `setup-worktree`, or from a numeric local App ID, without adding a network
+  request to Codex's five-second detail deadline.
+
+Everything else passes through to the preserved `gh`. This affects only local
+desktop CLI traffic; it does not replace or reconfigure the ChatGPT GitHub
+connector and has no effect on Codex cloud. The native request shapes and
+desktop parent-process detection are observed implementation details, not a
+documented Codex extension API, so this compatibility mode is deliberately
+labelled experimental and may need adjustment after a desktop update. The
+branch PR row remains branch-scoped; this adapter does not turn it into a
+repository-wide PR list.
 
 ### 5. Verify
 
@@ -434,11 +588,15 @@ passes the session id; other launchers set `AGENT_BOT_TRANSCRIPT_PROVIDER` and
 
 ```bash
 agent-bot doctor
+agent-bot doctor --json --require-schema-version 1
 ```
 
-One command diagnoses runtime, hooks, gh shim, config, live mints, and the
-current worktree (including Agent ID). Run it from inside the misbehaving
-worktree for the repo checks to apply.
+The diagnostic reports Node and Git, the managed CLI and harness PATH, config,
+every configured App credential and live mint, hooks, optional gh shim, the
+runtime-owned skill, and current worktree identity. Machine and worktree status
+are separate; a primary checkout is `not_applicable`, not silently converted to
+bot territory. Human output prints one action for the earliest failure, while
+JSON retains secret-free status for every check and App.
 
 ## Failure modes
 

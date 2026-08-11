@@ -6,14 +6,60 @@ Use this reference for setup, minting, diagnostics, and identity repair.
 
 | Intent | Command |
 |---|---|
+| Bootstrap from a fresh source checkout | `./agent-bot bootstrap [--config <path>] [--machine-only] [--with-gh-shim] [--json]` |
 | Inspect available commands | `agent-bot --help` |
 | Configure the current linked worktree | `agent-bot setup-worktree [app-slug]` |
 | Mint a short-lived App installation token | `agent-bot mint-token [--app <slug>] [--json]` |
-| Diagnose the installation and mapped identities | `agent-bot doctor` |
+| Diagnose the installation and mapped identities | `agent-bot doctor [--json]` |
+| Repair and verify an installed setup | `agent-bot bootstrap [--machine-only\|--worktree-only] [--json]` |
 | Install the CLI and hooks | `agent-bot install [--with-gh-shim]` |
 | Install only the fail-closed `gh` shim | `agent-bot install-gh-shim` |
 | Restore an App key and issuer from pass-cli | `agent-bot ensure-private-key --app <slug> [--force]` |
 | Read an authorized password/API key | `agent-bot secret get --provider <id> --collection <name> --item <title> --field <name> --reason <text>` |
+
+## Bootstrap a fresh machine
+
+Treat **“install agent bot identities”** as a request for the complete
+configured identity roster and organization-owned harness tooling, not only
+the identity for the agent currently running.
+
+1. Determine who owns organization policy. For `qwts`, read the canonical
+   [agent bot organization operations](https://github.com/qwts/playbook-engineering/blob/main/docs/reference/agent-bot-operations.md)
+   over HTTPS. Do not assume, search for, or hard-code a local governance
+   checkout.
+2. Obtain an explicit, secret-free configuration/profile from that owner. If
+   it is missing, incompatible, or incomplete, stop before mutation; do not
+   infer a roster from the current harness or copy secret material into it.
+3. From a primary source checkout, prepare only machine state:
+
+   ```bash
+   ./agent-bot bootstrap --config <path> --with-gh-shim --machine-only
+   ```
+
+   From a linked agent worktree, the same source launcher may perform the full
+   machine and worktree flow by omitting `--machine-only`. Never bind a primary
+   checkout as bot territory.
+4. After installation, use the stable CLI. If machine preparation happened in
+   the primary checkout, enter a linked worktree and finish its binding:
+
+   ```bash
+   agent-bot bootstrap --worktree-only
+   ```
+
+5. Complete the organization-owned shared skills and harness tooling through
+   its governance procedure. The runtime installs its own CLI, hooks, optional
+   `gh` shim, credentials, and worktree identity; it does not invent or vendor
+   an organization's shared tool catalog.
+6. Verify machine readiness and, from a linked worktree, worktree readiness:
+
+   ```bash
+   agent-bot doctor --machine-only --json --require-schema-version 1
+   agent-bot doctor --json --require-schema-version 1
+   ```
+
+Confirm that every expected App row is ready and separately confirm the
+organization-owned tooling inventory. Do not report an organization install as
+complete when only the current harness is usable.
 
 ## Configure safely
 
@@ -99,3 +145,10 @@ Run `agent-bot doctor`, then compare:
 
 Repair the earliest divergent layer. Do not patch later commands with a
 different App slug, because that creates split attribution.
+
+`doctor` is a read-only query and has no repair mode. Use `bootstrap` for the
+explicit, idempotent repair boundary. Automation should use
+`doctor --json --require-schema-version 1` or the equivalent bootstrap flags;
+the report separates machine from worktree readiness and contains no mint
+token or key material. A primary checkout is intentionally not applicable for
+worktree identity and must never be claimed by a repair command.

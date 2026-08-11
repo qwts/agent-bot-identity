@@ -42,7 +42,7 @@ function optionalLstat(path, lstat = lstatSync) {
   }
 }
 
-function isManagedExecutable(path, stat, entrypoint, readlink = readlinkSync) {
+export function isManagedExecutable(path, stat, entrypoint, readlink = readlinkSync) {
   if (!stat?.isSymbolicLink()) return false;
   const target = resolve(dirname(path), readlink(path));
   const current = resolve(entrypoint);

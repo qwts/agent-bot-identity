@@ -17,10 +17,21 @@ test('stable CLI exposes version and documented commands', () => {
   assert.match(version.stdout, /^0\.2\.0\n$/);
   const help = spawnSync(process.execPath, [CLI, '--help'], { encoding: 'utf8' });
   for (const command of [
-    'setup-worktree', 'mint-token', 'doctor', 'identity', 'space', 'population', 'install', 'update',
+    'bootstrap', 'setup-worktree', 'mint-token', 'doctor', 'identity', 'space', 'population', 'install', 'update',
     'install-gh-shim', 'ensure-private-key',
     'signed-commit', 'secret',
   ]) assert.match(help.stdout, new RegExp(command));
+});
+
+test('stable CLI dispatches bootstrap from the source checkout', () => {
+  const run = spawnSync(process.execPath, [CLI, 'bootstrap', '--help'], { encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /^usage:/m);
+  assert.match(run.stdout, /\.\/agent-bot bootstrap \[options\].*source checkout/);
+  assert.match(run.stdout, /agent-bot bootstrap \[options\].*installed CLI/);
+  assert.match(run.stdout, /never discovers organization policy/);
+  assert.match(run.stdout, /--machine-only/);
+  assert.match(run.stdout, /--worktree-only/);
 });
 
 test('portable launcher finds an nvm Node with a desktop-app PATH', () => {
@@ -59,6 +70,40 @@ test('portable launcher finds an nvm Node with a desktop-app PATH', () => {
   });
   assert.equal(child.status, 0, child.stderr);
   assert.equal(readFileSync(childPath, 'utf8').trim(), node);
+});
+
+test('portable launcher skips an old PATH Node for a supported nvm Node', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-launcher-version-'));
+  const oldBin = join(home, 'old-bin');
+  const oldNode = join(oldBin, 'node');
+  const nvmNode = join(home, '.nvm', 'versions', 'node', 'v-current', 'bin', 'node');
+  mkdirSync(oldBin, { recursive: true });
+  mkdirSync(dirname(nvmNode), { recursive: true });
+  writeFileSync(
+    oldNode,
+    '#!/bin/sh\n[ "$1" = "-p" ] && { echo 18; exit 0; }\nexit 91\n',
+    { mode: 0o755 },
+  );
+  symlinkSync(process.execPath, nvmNode);
+
+  const run = spawnSync(LAUNCHER, ['--version'], {
+    encoding: 'utf8',
+    env: { HOME: home, PATH: `${oldBin}:/usr/bin:/bin` },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /^0\.2\.0\n$/);
+});
+
+test('portable launcher fails closed on an explicit unsupported Node', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-launcher-version-'));
+  const oldNode = join(home, 'node');
+  writeFileSync(oldNode, '#!/bin/sh\necho 18\n', { mode: 0o755 });
+  const run = spawnSync(LAUNCHER, ['--version'], {
+    encoding: 'utf8',
+    env: { AGENT_BOT_NODE: oldNode, HOME: home, PATH: '/usr/bin:/bin' },
+  });
+  assert.equal(run.status, 127);
+  assert.match(run.stderr, /AGENT_BOT_NODE must be Node\.js >= 20/);
 });
 
 test('update failures identify the invoked command', () => {
