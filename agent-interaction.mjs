@@ -51,6 +51,11 @@ const MAX_ATTACHMENT_REF_LENGTH = 256;
 
 export const UNCONFIGURED_EXECUTOR_ERROR = 'no executor is configured for this daemon';
 
+// The only failure text an arbitrary executor exception may leave in the job
+// record and events. Exception messages can quote paths, provider output, or
+// stack context; those details stay in the server-side log.
+export const EXECUTION_FAILED_ERROR = 'job execution failed';
+
 // Documented v1 default: accepting messages is contractually complete even
 // when no harness executor has been wired in. The invocation fails with a
 // stable, secret-free error after recording why.
@@ -137,6 +142,9 @@ export function createInteractionService({
   config,
   executor = unconfiguredExecutor,
   now = () => new Date(),
+  // Server-side diagnostics only: whatever this writes never reaches the job
+  // store, events, or clients.
+  log = (line) => process.stderr.write(`agent-interaction: ${line}\n`),
 } = {}) {
   void config; // reserved for executor policy; the store paths are env/home-driven
   const storeOptions = { env, home, now };
@@ -195,12 +203,6 @@ export function createInteractionService({
     appendEvent(invocationId, 'status', { status, ...data }, storeOptions);
   }
 
-  function stableErrorText(error) {
-    const text = typeof error?.message === 'string' ? error.message : '';
-    const cleaned = text.replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 256);
-    return cleaned === '' ? 'invocation failed' : cleaned;
-  }
-
   async function runInvocation(invocation, message, attachments, controller) {
     const id = invocation.invocationId;
     // Cancellation can land between submission and dispatch.
@@ -228,7 +230,13 @@ export function createInteractionService({
         transitionInvocation(id, 'cancelled', storeOptions);
         recordStatus(id, 'cancelled');
       } else {
-        const text = stableErrorText(error);
+        // Executor exception text is an internal detail and may leak paths or
+        // provider output; persist only a fixed public failure reason. The
+        // default executor's refusal is itself a fixed documented constant.
+        const text = executor === unconfiguredExecutor
+          ? UNCONFIGURED_EXECUTOR_ERROR
+          : EXECUTION_FAILED_ERROR;
+        log(`invocation ${id} failed: ${typeof error?.message === 'string' ? error.message : String(error)}`);
         transitionInvocation(id, 'failed', { ...storeOptions, error: text });
         recordStatus(id, 'failed', { error: text });
       }

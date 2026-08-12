@@ -483,8 +483,9 @@ export async function runDaemon({
     throw new Error(`daemon already running (pid ${existing.pid}, port ${existing.port})`);
   }
   // Reconcile jobs orphaned by a previous daemon before accepting new work
-  // (#56 req 8): running work becomes failed, pending cancellations become
-  // cancelled, queued submissions stay queued.
+  // (#56 req 8): executing work becomes failed, never-dispatched queued work
+  // becomes failed with its own stable reason, and pending cancellations
+  // become cancelled — nothing is silently stranded.
   recoverInteractionStore({ env, home, now });
   const server = createDaemonServer({ env, home, config });
   await new Promise((resolve, reject) => {
