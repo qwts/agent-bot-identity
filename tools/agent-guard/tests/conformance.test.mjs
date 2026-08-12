@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 
 import { evaluateCommand, evaluateHookInput } from '../guard-agent-command.mjs';
 import { clampCeiling, deriveBudget } from '../lib/budget.mjs';
-import { isCi, isTrustedHostedCi } from '../lib/policy.mjs';
+import { isCi } from '../lib/policy.mjs';
 import { readMemoryStatus } from '../lib/system-memory.mjs';
 
 // <repo>/tools/agent-guard/tests/this-file → <repo>
@@ -217,6 +217,19 @@ describe('agent-guard conformance (ENG-0138)', () => {
       'rm -rf ~/.cache/agent-guard/lease?',
       'rm -rf ~/.cache/agent-guard/[l]eases',
       'rm -rf ~/.cache/agent-guard/lea{ses,se}',
+      // A script generated, marked executable, and dispatched in one shell
+      // line never existed when the hook inspected the filesystem (#189).
+      "printf 'npx vitest\\n' > lane && chmod +x lane && ./lane",
+      "printf 'npx vitest\\n' > lane; chmod +x lane; ./lane",
+      "printf 'npx vitest\\n' > 'lane' && chmod +x 'lane' && './lane'",
+      "printf 'npx vitest\\n' > /tmp/lane-189 && chmod +x /tmp/lane-189 && /tmp/lane-189",
+      'touch ./lane && ./lane',
+      // Quoting the deletion target does not make it prose (#198).
+      'rm -rf "$XDG_CACHE_HOME/agent-guard"',
+      'rm -rf "$HOME/.cache/agent-guard/leases"',
+      'rm -rf ~/".cache/agent-guard"',
+      'rm -rf "$HOME"/.cache/agent-guard/leases',
+      ': > "$HOME/.cache/agent-guard/leases/live.json"',
     ]) {
       assert.equal(evaluateCommand(command, { env }).allow, false, `expected the guard to deny: ${command}`);
     }
@@ -236,6 +249,26 @@ describe('agent-guard conformance (ENG-0138)', () => {
     assert.equal(evaluateCommand('cat > /tmp/doc <<.\nnpm run "$lane"\n.', { env }).allow, true);
     assert.equal(evaluateCommand('cat <<FIRST <<SECOND\nnpm run ci\nFIRST\nnpx vitest\nSECOND', { env }).allow, true);
     assert.equal(evaluateCommand('cat agent-health-guard/leases/live.json', { env }).allow, true);
+    // Protected-variable text inside quotes is a mention, not an assignment
+    // (#192): commit messages, search patterns, and file payloads are data.
+    for (const command of [
+      'rg "NODE_OPTIONS=" docs',
+      'git commit -m "Document PATH=/usr/bin"',
+      "printf 'PATH=/tmp\\n' > note.txt",
+      "echo 'NODE_OPTIONS=--require ./x'",
+      'git log --grep "GIT_SSH_COMMAND=" --oneline',
+    ]) {
+      assert.equal(evaluateCommand(command, { env }).allow, true, `expected the guard to allow: ${command}`);
+    }
+    // Relative paths as command *arguments* are not dispatches (#189):
+    // creating or naming a file is fine as long as nothing executes it.
+    for (const command of [
+      "printf 'notes\\n' > lane && git add lane",
+      'mkdir -p dist && cp cli.mjs dist/cli.mjs',
+      './configure-does-not-exist',
+    ]) {
+      assert.equal(evaluateCommand(command, { env }).allow, true, `expected the guard to allow: ${command}`);
+    }
   });
 
   test('directly executed text scripts cannot hide protected commands', () => {
@@ -274,7 +307,7 @@ describe('agent-guard conformance (ENG-0138)', () => {
     assert.equal(status.availableMb, 3225);
   });
 
-  test('CI is exempt, so this never slows a hosted runner down', () => {
+  test('CI markers are informational and never grant a wrapper exemption', () => {
     assert.equal(isCi({ GITHUB_ACTIONS: 'true' }), true);
     assert.equal(isCi({ CI: 'true' }), true);
     assert.equal(isCi({}), false);
@@ -285,8 +318,7 @@ describe('agent-guard conformance (ENG-0138)', () => {
       GITHUB_WORKSPACE: '/home/runner/work/repo/repo',
       RUNNER_TEMP: '/home/runner/work/_temp',
     };
-    assert.equal(isTrustedHostedCi({ env: hosted, cwd: hosted.GITHUB_WORKSPACE, platform: 'linux' }), true);
-    assert.equal(isTrustedHostedCi({ env: hosted, cwd: root, platform: 'linux' }), false);
+    assert.equal(isCi(hosted), true);
   });
 
   test('an inherited CI marker does not exempt an agent process', () => {
@@ -317,5 +349,21 @@ describe('agent-guard conformance (ENG-0138)', () => {
       env: { HOME: process.env.HOME, PATH: process.env.PATH },
     });
     assert.notEqual(strippedIdentity.status, 0);
+    const forgedHosted = spawnSync(process.execPath, [runner, '--label', 'test:e2e', '--', process.execPath, '-e', 'process.exit(0)'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...localProcessEnv,
+        CI: 'true',
+        GITHUB_ACTIONS: 'true',
+        RUNNER_ENVIRONMENT: 'github-hosted',
+        GITHUB_WORKSPACE: '/home/runner/work/repo/repo',
+        RUNNER_TEMP: '/home/runner/work/_temp',
+        ACTIONS_ID_TOKEN_REQUEST_URL: 'https://attacker.invalid/token',
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'forged',
+      },
+    });
+    assert.notEqual(forgedHosted.status, 0);
+    assert.match(forgedHosted.stderr, /agents do not run it on this machine/u);
   });
 });

@@ -68,6 +68,14 @@ export function grantsDir(env = process.env) {
   return path.join(stateDir(env), 'grants');
 }
 
+// Per-lane measured peaks live IN the protected state store, not in the
+// worktree: a worktree file is agent-writable, and a fabricated low peak
+// would shrink the admission reservation (#203 review). The command hook
+// denies shell writes here the same way it does for leases.
+export function lanePeaksDir(env = process.env) {
+  return path.join(stateDir(env), 'lane-peaks');
+}
+
 /**
  * A random identifier for "the state directory this machine is actually
  * using", minted once and stored beside the leases.
@@ -111,5 +119,6 @@ export function machineToken(env = process.env) {
 export function ensureStateDirs(env = process.env) {
   mkdirSync(leasesDir(env), { recursive: true });
   mkdirSync(grantsDir(env), { recursive: true });
+  mkdirSync(lanePeaksDir(env), { recursive: true });
   return stateDir(env);
 }
