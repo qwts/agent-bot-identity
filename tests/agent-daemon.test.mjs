@@ -247,3 +247,96 @@ test('start, status, client operations, and stop round-trip through the real CLI
   }
   assert.equal(existsSync(env.AGENT_BOT_DAEMON_STATE_PATH), false);
 });
+
+test('stop refuses to signal a recorded PID that fails the authenticated probe', async () => {
+  const { env } = scratchEnv();
+  // Simulate PID reuse after a crash: the record names a live process (this
+  // test process) that is not the daemon. stop must remove the stale record
+  // without sending it a signal.
+  writeFileSync(env.AGENT_BOT_DAEMON_STATE_PATH, JSON.stringify({
+    schemaVersion: 1,
+    pid: process.pid,
+    port: 1,
+    token: 'a'.repeat(64),
+    startedAt: '2026-08-12T08:00:00.000Z',
+  }));
+  const result = await stopDaemon({ env, home: '/nonexistent' });
+  assert.equal(result.stopped, false);
+  assert.match(result.reason, /health probe.*removed stale state/);
+  assert.equal(existsSync(env.AGENT_BOT_DAEMON_STATE_PATH), false);
+});
+
+test('probes and clients dial the loopback host recorded in the state file', async () => {
+  const { env } = scratchEnv();
+  const server = createDaemonServer({ env, home: '/nonexistent', config: {} });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '::1', resolve);
+  });
+  try {
+    writeFileSync(env.AGENT_BOT_DAEMON_STATE_PATH, JSON.stringify({
+      schemaVersion: 1,
+      pid: process.pid,
+      host: '::1',
+      port: server.address().port,
+      token: server.token,
+      startedAt: '2026-08-12T08:00:00.000Z',
+    }));
+    const status = await daemonStatus({ env, home: '/nonexistent' });
+    assert.equal(status.running, true);
+    const client = daemonClient({ env, home: '/nonexistent' });
+    assert.equal(await client.available(), true);
+  } finally {
+    await new Promise((resolve) => { server.close(resolve); });
+  }
+});
+
+test('a non-loopback host in the state file is refused as unsupported', async () => {
+  const { env } = scratchEnv();
+  writeFileSync(env.AGENT_BOT_DAEMON_STATE_PATH, JSON.stringify({
+    schemaVersion: 1,
+    pid: process.pid,
+    host: '192.168.1.10',
+    port: 80,
+    token: 'a'.repeat(64),
+    startedAt: '2026-08-12T08:00:00.000Z',
+  }));
+  const status = await daemonStatus({ env, home: '/nonexistent' });
+  assert.equal(status.running, false);
+  assert.match(status.reason, /unsupported shape/);
+});
+
+test('the client follows a daemon restart to its new port and token', async () => {
+  const { env } = scratchEnv();
+  const client = daemonClient({ env, home: '/nonexistent' });
+
+  async function serve() {
+    const server = createDaemonServer({ env, home: '/nonexistent', config: {} });
+    await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+    writeFileSync(env.AGENT_BOT_DAEMON_STATE_PATH, JSON.stringify({
+      schemaVersion: 1,
+      pid: process.pid,
+      host: '127.0.0.1',
+      port: server.address().port,
+      token: server.token,
+      startedAt: '2026-08-12T08:00:00.000Z',
+    }));
+    return server;
+  }
+
+  const first = await serve();
+  assert.equal(await client.available(), true);
+  const before = await client.population();
+  assert.deepEqual(before, []);
+  await new Promise((resolve) => { first.close(resolve); });
+
+  // New daemon, new port, new per-start token — same long-lived client.
+  const second = await serve();
+  try {
+    assert.equal(await client.available(), true);
+    const after = await client.population();
+    assert.deepEqual(after, []);
+  } finally {
+    await new Promise((resolve) => { second.close(resolve); });
+  }
+});
