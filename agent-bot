@@ -87,12 +87,21 @@ find_node() {
     "$HOME/.local/share/fnm/aliases/default/bin/node" \
     "$HOME/.local/share/mise/shims/node" \
     "$HOME/.asdf/shims/node" \
-    "$HOME/.nodenv/shims/node" \
-    /opt/homebrew/bin/node \
-    /usr/local/bin/node
+    "$HOME/.nodenv/shims/node"
   do
     if supported_node "$candidate"; then
       printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  # The version-manager candidates above follow $HOME, so tests can isolate
+  # them; these system prefixes are absolute and cannot be. Hermetic tests set
+  # AGENT_BOT_SYSTEM_NODE_DIRS (space-separated, may be empty) to simulate a
+  # machine without a system Node. Unset keeps today's default search.
+  for dir in ${AGENT_BOT_SYSTEM_NODE_DIRS-/opt/homebrew/bin /usr/local/bin}; do
+    if supported_node "$dir/node"; then
+      printf '%s\n' "$dir/node"
       return 0
     fi
   done

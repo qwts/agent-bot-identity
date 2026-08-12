@@ -15,6 +15,7 @@ import {
   validateAppSlug,
 } from '../setup-worktree.mjs';
 import { helperSlug } from '../worktree-token.mjs';
+import { buildControlledPath } from './helpers/cold-home.mjs';
 import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
 
 const SETUP = fileURLToPath(new URL('../setup-worktree.mjs', import.meta.url));
@@ -97,7 +98,14 @@ test('credential failure leaves the linked worktree and SSH remote untouched', (
     apps: { codex: slug },
   }));
   writeFileSync(globalConfig, '');
-  const env = hermeticGitEnv(process.env, { HOME: home, GIT_CONFIG_GLOBAL: globalConfig });
+  // The malformed local credentials force a provider restore, so the PATH
+  // must resolve the hermetic fake pass-cli — never the host's real one,
+  // which would touch the developer's vault and emit keychain errors.
+  const env = hermeticGitEnv(process.env, {
+    HOME: home,
+    GIT_CONFIG_GLOBAL: globalConfig,
+    ...buildControlledPath(root).envOverrides,
+  });
   execFileSync('git', ['init', '--quiet', '--initial-branch=main'], { cwd: repo, env });
   execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo, env });
   execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo, env });
