@@ -13,6 +13,7 @@ Commands:
   identity           Manage transcript-bound execution identities
   space              Manage durable per-soul Agent Spaces
   population         List the workstation-local census of souls
+  principal          Enroll and authorize messaging principals (owner ceremony)
   daemon             Run or control the loopback daemon over the same stores
   install            Install the CLI and Git hooks
   update             Refresh the CLI and global Git hooks from this checkout
