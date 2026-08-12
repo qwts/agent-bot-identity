@@ -40,9 +40,16 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { consumeBindToken, createBindingRegistry } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
 import { listSouls, upsertIdentitySoul } from './agent-population.mjs';
-import { stateDirectory, validateAgentId } from './agent-identity.mjs';
+import {
+  bindAgentLineage,
+  ensureAgentIdentity,
+  readAgentIdentity,
+  stateDirectory,
+  validateAgentId,
+} from './agent-identity.mjs';
 import { createInteractionService } from './agent-interaction.mjs';
 import { recoverInteractionStore } from './agent-jobs.mjs';
 import { appendAuditReceipt, principalsFile, resolvePrincipal } from './agent-principals.mjs';
@@ -207,6 +214,11 @@ export function createDaemonServer({
   // One interaction service per server so in-flight executions and their
   // cancellation controllers live exactly as long as the daemon.
   const interaction = createInteractionService({ env, home, config, executor, now });
+  // Live connection bindings (#94) exist only in this process, like the
+  // per-start bearer token: a restart drops them all, and re-binding takes a
+  // fresh worktree mint. Identity is derived from the binding on every
+  // request — never from a request parameter.
+  const bindings = createBindingRegistry({ now });
   // The private web client (#59) rides the same server and the same loopback
   // peer check; it authenticates browsers with its own pairing-code cookie
   // sessions instead of the bearer token, which never reaches page script.
@@ -263,6 +275,16 @@ export function createDaemonServer({
           sendJson(res, 200, { soul });
           return;
         }
+        case 'POST /v0/bind': {
+          const body = parseJsonBody(await readBody(req));
+          sendJson(res, 200, bindWorktreeConversation({ body, bindings, env, home, config, now }));
+          return;
+        }
+        case 'GET /v0/binding': {
+          const binding = requireBinding(req, bindings);
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, binding });
+          return;
+        }
         case 'GET /v0/population': {
           const souls = listSouls({
             status: url.searchParams.get('status'),
@@ -282,6 +304,102 @@ export function createDaemonServer({
   });
   server.token = token;
   return server;
+}
+
+// Surrender-and-enforce (#94): the caller presents the bind token that
+// setup-worktree minted into the worktree's private git dir, together with
+// what only the conversation knows — transcript locator, harness, parent.
+// The daemon verifies the token against the file on disk, consumes it, and
+// joins the two halves into one identity. The body carries NO Agent ID: who
+// is binding is derived entirely from the consumed token record, so no caller
+// can bind as a worktree it cannot read.
+function bindWorktreeConversation({ body, bindings, env, home, config, now }) {
+  // Validate the conversation half BEFORE consuming: a bind rejected for a
+  // malformed request must leave the single-use token in place so the caller
+  // can retry, while a wrong or replayed token still fails without consuming.
+  const transcript = body.transcript;
+  if (!transcript || typeof transcript !== 'object' || Array.isArray(transcript)
+    || typeof transcript.id !== 'string' || transcript.id === '') {
+    throw Object.assign(
+      new Error('bind requires a transcript locator ({provider, id})'),
+      { statusCode: 400 },
+    );
+  }
+  const locator = { provider: typeof transcript.provider === 'string' && transcript.provider !== '' ? transcript.provider : 'custom', id: transcript.id };
+  const parentId = body.parentId === undefined || body.parentId === null
+    ? null
+    : requireAgentId(body.parentId);
+  const record = consumeBindToken({ gitDir: body.gitDir, token: body.token });
+  const stateDir = stateDirectory({ env, home });
+  let pinned;
+  try {
+    pinned = readAgentIdentity(record.agentId, { stateDir });
+  } catch {
+    throw Object.assign(new Error('bind token names an unknown Agent ID'), { statusCode: 409 });
+  }
+  const harness = typeof body.harness === 'string' && body.harness !== '' ? body.harness : pinned.harness;
+  // The existing reuse policy decides whether the pinned identity binds this
+  // transcript, an earlier identity already owns it, or a fresh one is minted
+  // (a later conversation reusing the worktree). parentId only applies on a
+  // mint; a reused identity's missing lineage is repaired below.
+  const identity = ensureAgentIdentity({
+    currentId: record.agentId,
+    appSlug: pinned.github.appSlug,
+    botUid: pinned.github.botUid,
+    harness,
+    transcript: locator,
+    fields: {
+      team: pinned.team,
+      squad: pinned.squad,
+      type: pinned.type,
+      level: pinned.level,
+      parentId,
+    },
+    stateDir,
+    now,
+  });
+  let bound = identity;
+  if (parentId && !identity.parentId) {
+    bound = bindAgentLineage(identity.id, parentId, { stateDir, now });
+  } else if (parentId && identity.parentId !== parentId) {
+    throw Object.assign(
+      new Error('identity already records a different parent'),
+      { statusCode: 409 },
+    );
+  }
+  // Binding is the one moment place and conversation are both in view; the
+  // census row picks up the provenance (#91) through the refreshed identity.
+  const space = initAgentSpace(bound.id, { env, home, config });
+  const soul = upsertIdentitySoul(bound.id, space.path, {
+    file: populationOverride(env, home),
+    stateDir,
+  });
+  const secret = bindings.bind({
+    agentId: bound.id,
+    worktree: record.worktree,
+    transcript: locator,
+    harness: bound.harness,
+  });
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    secret,
+    agentId: bound.id,
+    worktree: record.worktree,
+    boundAt: soul.lastSeen,
+    // The worktree pin still names the token's original identity when the
+    // reuse policy resolved elsewhere; the caller owns repinning because the
+    // daemon never reaches into worktrees.
+    repinRequired: bound.id !== record.agentId,
+    soul,
+  };
+}
+
+function requireBinding(req, bindings) {
+  const binding = bindings.resolve(req.headers['x-agent-binding'] ?? '');
+  if (!binding) {
+    throw Object.assign(new Error('missing or invalid agent binding'), { statusCode: 401 });
+  }
+  return binding;
 }
 
 // Versioned /v1 interaction routes (#55). The transport adapter authenticates
@@ -407,7 +525,7 @@ export function daemonClient({
   fetchImpl = fetch,
   timeoutMs = HEALTH_TIMEOUT_MS,
 } = {}) {
-  async function request(method, pathname, body) {
+  async function request(method, pathname, body, headers = {}) {
     // Re-read the state file on every request: a long-running adapter must
     // follow a daemon restart to its new port and per-start token instead of
     // failing forever against a cached endpoint.
@@ -418,6 +536,7 @@ export function daemonClient({
       headers: {
         authorization: `Bearer ${state.token}`,
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...headers,
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(timeoutMs),
@@ -452,6 +571,18 @@ export function daemonClient({
       const query = params.toString();
       const { souls } = await request('GET', `/v0/population${query ? `?${query}` : ''}`);
       return souls;
+    },
+    // Surrender-and-enforce binding (#94). The secret in the response exists
+    // only in daemon memory and the caller's process — it must never be
+    // written to disk, logged, or returned to the conversation.
+    async bind({ gitDir, token, transcript, parentId = null, harness = null }) {
+      return request('POST', '/v0/bind', { gitDir, token, transcript, parentId, harness });
+    },
+    async binding(secret) {
+      const { binding } = await request('GET', '/v0/binding', undefined, {
+        'x-agent-binding': secret,
+      });
+      return binding;
     },
     // v1 interaction contract (#55). Adapters authenticate their provider
     // identity and pass the normalized pair on every call; the daemon owns

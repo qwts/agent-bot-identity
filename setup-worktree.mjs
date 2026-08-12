@@ -37,6 +37,7 @@ import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { resolveAgentSlug, pinnedSlug, territoryHarness, AGENT_ID_KEYS } from './resolve-agent.mjs';
+import { mintBindToken } from './agent-binding.mjs';
 import { loadConfig, apiBase, daemonPreference, githubHost, harnessForSlug } from './config.mjs';
 import { daemonClient } from './agent-daemon.mjs';
 import { reconcileAppCredentials } from './credential-reconciler.mjs';
@@ -293,10 +294,22 @@ export async function main({
     credentialHelperCommand(helper, slug, { subcommand: 'credential' }),
   );
 
+  // Proof of place for the MCP bind flow (#94). Inert until surrendered to
+  // the daemon; re-minting on a later checkout replaces the file and is a
+  // no-op for identity. Best-effort like the token cache above: a sandboxed
+  // harness that cannot write the (shared) private git dir still gets a fully
+  // configured worktree — it simply cannot bind until a mint succeeds.
+  let bindState = 'bind token minted';
+  try {
+    mintBindToken({ gitDir, worktree: git('rev-parse', '--show-toplevel'), agentId: executionIdentity.id });
+  } catch {
+    bindState = 'bind token unavailable';
+  }
+
   const transcriptState = executionIdentity.transcript ? 'transcript bound' : 'transcript pending';
   const spaceState = `${space.created ? 'space created' : 'space ready'}${space.via === 'daemon' ? ' via daemon' : ''}`;
   process.stdout.write(
-    `worktree configured for ${slug}[bot] as ${executionIdentity.id} (${transcriptState}, ${spaceState})\n`,
+    `worktree configured for ${slug}[bot] as ${executionIdentity.id} (${transcriptState}, ${spaceState}, ${bindState})\n`,
   );
 }
 

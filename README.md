@@ -86,6 +86,7 @@ agent-bot space import <pack|gist:id|gist-url> [--force]
 agent-bot space retire <agent-id> [--delete-space]
 agent-bot population <list|show> [agent-id] [--json]
 agent-bot daemon <run|start|status|stop> [--json]
+agent-bot mcp
 agent-bot web open [--principal <principal-id>] [--no-browser] [--json]
 agent-bot telegram <run|status> [--json]
 agent-bot install [--with-gh-shim]
@@ -260,6 +261,42 @@ shared machine out. `run` serves in the foreground for supervised launches;
 registers and ensures space through the daemon: `prefer` falls back to the
 in-process path only when the daemon is unreachable, and `required` fails
 closed rather than diverging from the daemon-owned stores.
+
+### MCP server: bind a conversation to its identity
+
+`agent-bot mcp` serves the sanctioned agent-bot MCP tools over stdio, so any
+MCP-capable harness can mount them with zero dependencies. It augments the
+worktree scripts rather than replacing them: `setup-worktree` still configures
+everything it always did, and additionally mints a **single-use bind token**
+into the worktree's private git dir — an inert claim of *place* that confers
+nothing until surrendered.
+
+Mount it in the harness (for Claude Code, `.mcp.json` in the repo or project):
+
+```json
+{ "mcpServers": { "agent-bot": { "command": "agent-bot", "args": ["mcp"] } } }
+```
+
+At conversation start the agent calls the `bind` tool with what only the
+conversation knows — its session/thread identifier, and its parent agent when
+it was spawned by one. The server reads the minted token from the worktree it
+is running in and surrenders it to the daemon, which verifies the token
+against the file on disk, **consumes it**, joins place and conversation into
+one identity, and answers with a per-connection binding secret the MCP server
+holds in memory only. The secret is never written down, logged, or shown to
+the conversation.
+
+From then on identity is a property of the connection, not a parameter of any
+request: `whoami` and `space_path` carry no Agent ID, and the daemon derives
+who is asking from the binding alone. A consumed token cannot be replayed —
+after binding there is no token left to steal — and a daemon restart drops
+every binding, so re-binding takes a fresh mint from the same worktree
+(re-running `setup-worktree` or any later checkout re-mints; a re-mint is a
+fresh proof of place, never a fresh identity).
+
+Binding is also the moment provenance lands in the census: the row picks up
+the transcript locator and parent lineage that pre-bind rows lack. Tools:
+`bind`, `whoami`, `population`, `space_path`.
 
 ### Private web client
 
