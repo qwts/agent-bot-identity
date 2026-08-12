@@ -6,10 +6,11 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { mintAgentIdentity } from '../agent-identity.mjs';
+import { ensureAgentIdentity, mintAgentIdentity, readAgentIdentity } from '../agent-identity.mjs';
 import {
   finalizeIdentityWithPopulation,
   showSoul,
+  upsertIdentitySoul,
   upsertSoul,
 } from '../agent-population.mjs';
 import { initAgentSpace } from '../agent-space.mjs';
@@ -32,6 +33,7 @@ after(() => {
 function fixture(root, id = ID) {
   const spaces = path.join(root, 'spaces');
   const file = path.join(root, 'population.json');
+  const stateDir = path.join(root, 'state');
   const space = initAgentSpace(id, { env: { AGENT_BOT_SPACES_HOME: spaces } });
   writeFileSync(path.join(space.path, 'belongings.md'), 'kept unless explicitly deleted\n');
   upsertSoul({
@@ -43,16 +45,21 @@ function fixture(root, id = ID) {
     transcriptLocator: null,
     lastSeen: '2026-08-06T12:00:00.000Z',
   }, { file });
-  return { spaces, file, space };
+  return { spaces, file, stateDir, space };
 }
 
-function runCli(args, { spaces, file }) {
+function runCli(args, { spaces, file, stateDir }) {
   const env = { ...process.env };
   delete env.AGENT_BOT_ID;
   delete env.QWTS_AGENT_ID;
   return spawnSync(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
-    env: { ...env, AGENT_BOT_SPACES_HOME: spaces, AGENT_BOT_POPULATION_PATH: file },
+    env: {
+      ...env,
+      AGENT_BOT_SPACES_HOME: spaces,
+      AGENT_BOT_POPULATION_PATH: file,
+      AGENT_BOT_STATE_HOME: stateDir,
+    },
   });
 }
 
@@ -113,6 +120,91 @@ test('retire fails closed on unknown and invalid Agent IDs', () => {
   assert.match(missing.stderr, /requires exactly one Agent ID/);
 
   assert.equal(showSoul(ID, { file: context.file }).status, 'active');
+});
+
+test('retirement marks the identity record and setup-style reuse fails closed', () => {
+  const root = scratch();
+  const stateDir = path.join(root, 'state');
+  const spaces = path.join(root, 'spaces');
+  const file = path.join(root, 'population.json');
+  const transcript = { provider: 'claude', id: 'session-retire' };
+  const identity = mintAgentIdentity({ appSlug: 'you-claude-agent', transcript, stateDir });
+  const space = initAgentSpace(identity.id, { env: { AGENT_BOT_SPACES_HOME: spaces } });
+  upsertIdentitySoul(identity.id, space.path, { file, stateDir });
+
+  const retired = runCli(
+    ['space', 'retire', identity.id, '--delete-space'],
+    { spaces, file, stateDir },
+  );
+  assert.equal(retired.status, 0, retired.stderr);
+  assert.equal(existsSync(space.path), false);
+  assert.equal(
+    readAgentIdentity(identity.id, { stateDir }).status,
+    'retired',
+    'retirement is recorded in the authoritative identity record, not only the census',
+  );
+
+  // A worktree still pinned to the retired id re-runs setup: the pin path
+  // must fail closed, never silently reuse or mint over the retirement.
+  assert.throws(
+    () => ensureAgentIdentity({
+      currentId: identity.id,
+      appSlug: 'you-claude-agent',
+      transcript,
+      stateDir,
+    }),
+    /is retired; remove the worktree pin/,
+  );
+  // The transcript registry scan reaches the same record without a pin.
+  assert.throws(
+    () => ensureAgentIdentity({ appSlug: 'you-claude-agent', transcript, stateDir }),
+    /is retired/,
+  );
+  // Even a caller holding the id directly cannot re-register the census row.
+  assert.throws(
+    () => upsertIdentitySoul(identity.id, space.path, { file, stateDir }),
+    /retired; refusing to register/,
+  );
+  // And a retired soul cannot be finalized back to life.
+  assert.throws(
+    () => finalizeIdentityWithPopulation(identity.id, { file, stateDir }),
+    /retired and cannot be finalized/,
+  );
+
+  assert.equal(showSoul(identity.id, { file }).status, 'retired', 'the tombstone survives');
+  assert.equal(
+    existsSync(space.path),
+    false,
+    'the refused reuse paths never recreate the deleted space',
+  );
+});
+
+test('a retired census tombstone refuses revival even without a retired identity record', () => {
+  const root = scratch();
+  const stateDir = path.join(root, 'state');
+  const file = path.join(root, 'population.json');
+  const identity = mintAgentIdentity({
+    appSlug: 'you-claude-agent',
+    transcript: { provider: 'claude', id: 'session-tombstone' },
+    stateDir,
+  });
+  // Simulate a census retired elsewhere while a stale identity record still
+  // says active (e.g. a state dir restored from backup): the tombstone wins.
+  upsertSoul({
+    id: identity.id,
+    appSlug: 'you-claude-agent',
+    parentId: null,
+    status: 'retired',
+    spacePath: `/spaces/${identity.id}`,
+    transcriptLocator: null,
+    lastSeen: '2026-08-06T12:00:00.000Z',
+  }, { file });
+
+  assert.throws(
+    () => upsertIdentitySoul(identity.id, `/spaces/${identity.id}`, { file, stateDir }),
+    /retired in the population census; refusing to revive/,
+  );
+  assert.equal(showSoul(identity.id, { file }).status, 'retired');
 });
 
 test('identity finalize does not retire the soul or touch its space', () => {

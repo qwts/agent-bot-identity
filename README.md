@@ -455,12 +455,17 @@ policy may forbid unsanctioned gists entirely — nothing uses this transport
 unless you ask for it.
 
 `agent-bot space retire <agent-id>` is the explicit end of a soul's local
-lifecycle: it marks the soul `retired` in the population census and, by
-default, keeps the space directory on disk as a tombstone.
-`--delete-space` removes the directory, and only when its marker is present
-and bound to that id. Retirement never runs implicitly — identity finalize
-and worktree teardown do not call it — and `population list` shows retired
-souls in a separate `RETIRED` section.
+lifecycle: it marks the soul `retired` in the authoritative identity record
+*and* the population census (under the shared lifecycle lock), and by
+default keeps the space directory on disk as a tombstone. `--delete-space`
+removes the directory, and only when its marker is present and bound to
+that id. Retirement is permanent for that identity: a worktree still pinned
+to a retired Agent ID fails setup closed with instructions to unpin or
+start fresh, a retired census record refuses to be overwritten, and a
+retired identity cannot be finalized — so re-running `setup-worktree` can
+never resurrect the soul or recreate a deleted space. Retirement never runs
+implicitly — identity finalize and worktree teardown do not call it — and
+`population list` shows retired souls in a separate `RETIRED` section.
 
 ### 4. Install the hooks (and optionally the gh shim)
 

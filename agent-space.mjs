@@ -242,7 +242,15 @@ export function recordSpaceHandoff(
 // never a half-restored space, and never clobbering without --force.
 export function importAgentSpacePack(
   pack,
-  { force = false, env = process.env, home = homedir(), config } = {},
+  {
+    force = false,
+    env = process.env,
+    home = homedir(),
+    config,
+    // Injection seam for tests only: proving the backup/restore path needs a
+    // rename that fails on demand, which the filesystem cannot simulate.
+    rename = renameSync,
+  } = {},
 ) {
   const id = validateAgentId(pack.agentId);
   const markerEntry = pack.entries.find((entry) => entry.path === MARKER_NAME);
@@ -273,8 +281,32 @@ export function importAgentSpacePack(
       if (staged.agentId !== id) {
         throw new Error(`pack marker is bound to ${staged.agentId}, not ${id}`);
       }
-      if (existsSync(root)) rmSync(root, { recursive: true, force: true });
-      renameSync(staging, root);
+      // Replacement must be recoverable: never delete the existing space
+      // before its successor is in place. Move it aside on the same
+      // filesystem, promote the staged tree, and only then discard the
+      // backup — a failure between the renames restores the original.
+      const backup = `${root}.${process.pid}.${randomUUID()}.replaced`;
+      let backedUp = false;
+      if (existsSync(root)) {
+        rename(root, backup);
+        backedUp = true;
+      }
+      try {
+        rename(staging, root);
+      } catch (error) {
+        if (backedUp) {
+          try {
+            rename(backup, root);
+          } catch {
+            throw new Error(
+              `import failed and the original space could not be restored automatically; ` +
+                `it is preserved at ${backup}: ${error.message}`,
+            );
+          }
+        }
+        throw error;
+      }
+      if (backedUp) rmSync(backup, { recursive: true, force: true });
     } finally {
       rmSync(staging, { recursive: true, force: true });
     }
@@ -522,7 +554,7 @@ async function main() {
       }
       // Loaded on demand like identity finalize: the census is only needed
       // for lifecycle commands, and it fails closed on unknown ids.
-      const { showSoul, updateSoulStatus } = await import('./agent-population.mjs');
+      const { retireIdentityWithPopulation, showSoul } = await import('./agent-population.mjs');
       showSoul(id); // throws "no population record for <id>" — fail closed
       const root = spacePath(id);
       let deletable = false;
@@ -536,7 +568,10 @@ async function main() {
           );
         }
       }
-      const updated = updateSoulStatus(id, 'retired');
+      // Retire both stores under the lifecycle lock: the identity record is
+      // the authority reuse paths consult, so marking it retired is what
+      // keeps a stale worktree pin from resurrecting the soul via setup.
+      const { soul: updated } = retireIdentityWithPopulation(id);
       if (!updated) throw new Error(`no population record for ${id}`);
       let spaceDeleted = false;
       if (deletable) {

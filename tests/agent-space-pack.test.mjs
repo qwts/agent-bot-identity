@@ -6,6 +6,8 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -14,7 +16,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { initAgentSpace } from '../agent-space.mjs';
+import { importAgentSpacePack, initAgentSpace } from '../agent-space.mjs';
 import {
   buildSpacePack,
   packContentHash,
@@ -238,6 +240,51 @@ test('import refuses to clobber an existing space without --force', () => {
   const forced = runCli(['space', 'import', out, '--force'], env);
   assert.equal(forced.status, 0, forced.stderr);
   assert.equal(existsSync(path.join(spacesB, ID, 'local-only.txt')), false);
+  assert.equal(
+    readFileSync(path.join(spacesB, ID, 'notes.md'), 'utf8'),
+    'remember the suitcase\n',
+  );
+});
+
+test('a failed promotion rename restores the original space (--force is recoverable)', () => {
+  const root = scratch();
+  const spacesA = path.join(root, 'spaces-a');
+  const spacesB = path.join(root, 'spaces-b');
+  const seeded = seededSpace(spacesA);
+  const { pack } = buildSpacePack(seeded.path, ID);
+  const env = { AGENT_BOT_SPACES_HOME: spacesB };
+
+  importAgentSpacePack(pack, { env });
+  writeFileSync(path.join(spacesB, ID, 'precious.txt'), 'irreplaceable\n');
+
+  // Fail only the staged-tree promotion; the backup and restore renames run.
+  const failingRename = (from, to) => {
+    if (from.endsWith('.import')) throw new Error('simulated rename failure');
+    renameSync(from, to);
+  };
+  assert.throws(
+    () => importAgentSpacePack(pack, { env, force: true, rename: failingRename }),
+    /simulated rename failure/,
+  );
+
+  // The original space survives intact — including the file the pack lacks.
+  assert.equal(
+    readFileSync(path.join(spacesB, ID, 'precious.txt'), 'utf8'),
+    'irreplaceable\n',
+  );
+  assert.equal(
+    readFileSync(path.join(spacesB, ID, 'notes.md'), 'utf8'),
+    'remember the suitcase\n',
+  );
+  const litter = readdirSync(spacesB).filter(
+    (name) => name !== ID && !name.startsWith('.'),
+  );
+  assert.deepEqual(litter, [], 'no staging or backup directories are left behind');
+
+  // The same replacement succeeds once the rename works.
+  const restored = importAgentSpacePack(pack, { env, force: true });
+  assert.equal(restored.path, path.join(spacesB, ID));
+  assert.equal(existsSync(path.join(spacesB, ID, 'precious.txt')), false);
   assert.equal(
     readFileSync(path.join(spacesB, ID, 'notes.md'), 'utf8'),
     'remember the suitcase\n',

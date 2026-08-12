@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -21,6 +22,7 @@ import { pathToFileURL } from 'node:url';
 import {
   finalizeAgentIdentity,
   readAgentIdentity,
+  retireAgentIdentity,
   stateDirectory,
   validateAgentId,
   withLock,
@@ -238,6 +240,25 @@ export function upsertIdentitySoul(
     // Identity resolution may have completed before a concurrent finalizer.
     // Re-read under the shared lifecycle lock so setup cannot revive a soul.
     const identity = readAgentIdentity(target, { stateDir });
+    if (identity.status === 'retired') {
+      throw new Error(
+        `agent identity ${target} is retired; refusing to register it in the population census`,
+      );
+    }
+    // A retired census record is a tombstone even when the identity record is
+    // gone or stale (issue #46): there is no un-retire flow, so nothing may
+    // overwrite it back to life.
+    let existing = null;
+    try {
+      existing = showSoul(target, { file });
+    } catch {
+      /* no census record yet — a fresh soul is fine */
+    }
+    if (existing?.status === 'retired') {
+      throw new Error(
+        `soul ${target} is retired in the population census; refusing to revive it`,
+      );
+    }
     return upsertSoul({
       id: identity.id,
       appSlug: identity.github.appSlug,
@@ -270,6 +291,43 @@ export function finalizeIdentityWithPopulation(
     // census write fails, so the CLI cannot report failure after partial state.
     onFinalized: (identity) => updateSoulStatus(identity.id, identity.status, { file, now }),
   }));
+}
+
+// Retire a soul in BOTH stores under the shared lifecycle lock, mirroring
+// finalizeIdentityWithPopulation: the authoritative identity record is marked
+// retired (with rollback if the census write fails), so a stale worktree pin
+// or transcript match can never resurrect the soul through setup (issue #46).
+// A soul may outlive its identity record (pruned state dir); retirement then
+// falls back to the census tombstone alone.
+export function retireIdentityWithPopulation(
+  id,
+  {
+    file = populationFile(),
+    stateDir = stateDirectory(),
+    now = () => new Date(),
+  } = {},
+) {
+  const target = agentId(id);
+  // The lifecycle lock lives in the state dir; a census-only retirement may
+  // run on a machine that never minted an identity record locally.
+  ensurePrivateDirectory(stateDir);
+  return withSoulLifecycleLock(target, stateDir, () => {
+    if (!existsSync(path.join(stateDir, `${target}.json`))) {
+      const soul = updateSoulStatus(target, 'retired', { file, now });
+      return { identity: null, soul };
+    }
+    let soul = null;
+    const identity = retireAgentIdentity(target, {
+      stateDir,
+      now,
+      // mutateIdentity restores the provenance record if this synchronized
+      // census write fails, exactly like the finalize path.
+      onRetired: (record) => {
+        soul = updateSoulStatus(record.id, record.status, { file, now });
+      },
+    });
+    return { identity, soul };
+  });
 }
 
 function filterValue(name, value, { app = false } = {}) {
