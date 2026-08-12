@@ -22,10 +22,24 @@ minted; never continue with an ambient human GitHub login.
 - Read [execution-identities.md](references/execution-identities.md) for Agent
   ID creation, binding, recording, lookup, transcript provenance, or Agent
   Space resolution.
+- Read [storage-surfaces.md](references/storage-surfaces.md) when deciding
+  where a file belongs among worktree, scratchpad, and Agent Space.
 
 Load only the reference needed for the current request. Load all three when
 diagnosing a cross-cutting mismatch among commit attribution, credentials,
 verified publishing, and transcript provenance.
+
+## Choose the storage surface
+
+<!-- conformance: keep this three-surface distinction and its ENG-0172-backed
+     reference intact in every skill edit. tests/skill.test.mjs enforces it. -->
+
+Worktree files are Git work that ships in commits and PRs. Scratchpad files
+are session-ephemeral and die with the context. Agent Space is the durable
+per-soul store for belongings that must outlive both; resolve it only through
+`agent-bot space ensure` and `agent-bot space path`, never a raw filesystem
+path. Details and the governing contract link live in
+[storage-surfaces.md](references/storage-surfaces.md).
 
 ## Preserve the invariants
 
