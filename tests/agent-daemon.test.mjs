@@ -15,6 +15,12 @@ import {
   stopDaemon,
 } from '../agent-daemon.mjs';
 import { ensureAgentIdentity, stateDirectory } from '../agent-identity.mjs';
+import {
+  authorizeSouls,
+  bindTransport,
+  enrollPrincipal,
+  setOperations,
+} from '../agent-principals.mjs';
 
 const AGENT_ID = 'agent_33333333-3333-4333-8333-333333333333';
 const roots = [];
@@ -31,6 +37,8 @@ function scratchEnv() {
     AGENT_BOT_SPACES_HOME: path.join(root, 'spaces'),
     AGENT_BOT_POPULATION_PATH: path.join(root, 'population.json'),
     AGENT_BOT_DAEMON_STATE_PATH: path.join(root, 'daemon.json'),
+    AGENT_BOT_PRINCIPALS_PATH: path.join(root, 'principals.json'),
+    AGENT_BOT_INTERACTION_HOME: path.join(root, 'interaction'),
   };
   return { root, env };
 }
@@ -241,6 +249,38 @@ test('start, status, client operations, and stop round-trip through the real CLI
     assert.equal(soul.id, AGENT_ID);
     const souls = await client.population();
     assert.equal(souls.length, 1);
+
+    // v1 interaction contract through the same daemon: enroll locally, then
+    // create a session, submit a message, and watch it fail on the
+    // documented unconfigured executor.
+    const principalOptions = { file: env.AGENT_BOT_PRINCIPALS_PATH, env, home: '/nonexistent' };
+    const principal = enrollPrincipal({ label: 'owner' }, principalOptions);
+    bindTransport(principal.principalId, { transport: 'cli', providerId: 'owner-local' }, principalOptions);
+    authorizeSouls(principal.principalId, [AGENT_ID], principalOptions);
+    setOperations(principal.principalId, ['message', 'observe', 'cancel'], principalOptions);
+
+    const requester = { transport: 'cli', providerId: 'owner-local' };
+    const { session } = await client.createSession({ ...requester, agentId: AGENT_ID });
+    assert.match(session.sessionId, /^session_/);
+    const { invocation } = await client.submitMessage(session.sessionId, {
+      ...requester,
+      message: 'hello from the client',
+      idempotencyKey: 'client-1',
+    });
+    const deadline = Date.now() + 5_000;
+    let final = null;
+    while (Date.now() < deadline) {
+      const { invocation: current } = await client.invocation(invocation.invocationId, requester);
+      if (current.status === 'failed') { final = current; break; }
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+    }
+    assert.equal(final?.error, 'no executor is configured for this daemon');
+    const { events } = await client.events(invocation.invocationId, { ...requester, afterSeq: 0 });
+    assert.equal(events.at(-1).data.status, 'failed');
+    const cancelled = await client.cancel(invocation.invocationId, requester);
+    assert.equal(cancelled.alreadyFinished, true);
+    const { artifacts } = await client.artifacts(invocation.invocationId, requester);
+    assert.deepEqual(artifacts, []);
   } finally {
     const stopped = await stopDaemon({ env: childEnv, home: '/nonexistent' });
     assert.equal(stopped.stopped, true);
