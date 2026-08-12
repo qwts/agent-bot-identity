@@ -16,6 +16,7 @@ const MODULES = new Map([
   ['principal', 'agent-principals.mjs'],
   ['daemon', 'agent-daemon.mjs'],
   ['web', 'agent-web.mjs'],
+  ['telegram', 'telegram-adapter.mjs'],
   ['install', 'install.mjs'],
   ['update', 'update.mjs'],
   ['install-gh-shim', 'install-gh-shim.mjs'],

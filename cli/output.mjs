@@ -16,6 +16,7 @@ Commands:
   principal          Enroll and authorize messaging principals (owner ceremony)
   daemon             Run or control the loopback daemon over the same stores
   web                Pair a browser with the daemon's private web client
+  telegram           Long-poll Telegram as a thin transport over the daemon
   install            Install the CLI and Git hooks
   update             Refresh the CLI and global Git hooks from this checkout
   install-gh-shim    Install the fail-closed gh shim and optional desktop adapter

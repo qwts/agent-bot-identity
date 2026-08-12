@@ -9,6 +9,7 @@ const PUBLIC_COMMANDS = new Set([
   'principal',
   'daemon',
   'web',
+  'telegram',
   'install',
   'update',
   'install-gh-shim',

@@ -406,6 +406,73 @@ export function setDefaultSoul(
   return updated;
 }
 
+// Atomic multi-facet authorization update, used by `principal allow`. The
+// COMPLETE request is validated before the store is touched and applied as
+// one locked read-modify-write, so a request whose later element is invalid
+// can never leave the store half-updated: a rejection leaves the file
+// byte-identical. `souls`/`operations` are replacement lists when present;
+// `defaultSoul` is an Agent ID, or null to clear, or undefined to keep.
+export function applyAuthorizationChanges(
+  principalId,
+  { souls = undefined, operations = undefined, defaultSoul = undefined } = {},
+  { file = principalsFile(), env = process.env, home = homedir(), now = () => new Date() } = {},
+) {
+  const wantedId = validatePrincipalId(principalId);
+  const nextSouls = souls === undefined ? undefined : normalizeSouls(souls);
+  const nextOperations = operations === undefined ? undefined : normalizeOperations(operations);
+  const nextDefault = defaultSoul === undefined || defaultSoul === null
+    ? defaultSoul
+    : agentIdOrThrow(defaultSoul, 'defaultSoul');
+  if (nextSouls === undefined && nextOperations === undefined && nextDefault === undefined) {
+    throw new Error('principal allow requires at least one authorization change');
+  }
+  const updated = mutateStore(file, (principals) => {
+    const existing = requirePrincipal(principals, wantedId);
+    if (existing.status !== 'active') throw new Error('principal is revoked');
+    const soulsAfter = nextSouls ?? existing.authorizations.souls;
+    let defaultAfter = nextDefault === undefined ? existing.defaultSoul : nextDefault;
+    if (
+      nextDefault !== undefined && nextDefault !== null
+      && !soulsAfter.includes('*') && !soulsAfter.includes(nextDefault)
+    ) {
+      // The requested default is checked against the soul list as it will be
+      // AFTER this same request — the two facets commit or fail together.
+      throw new Error('default soul must already be authorized for this principal');
+    }
+    // Narrowing the soul list must not leave a stale default pointing at a
+    // soul the principal can no longer reach.
+    if (defaultAfter !== null && !soulsAfter.includes('*') && !soulsAfter.includes(defaultAfter)) {
+      defaultAfter = null;
+    }
+    const candidate = normalizePrincipal({
+      ...existing,
+      authorizations: {
+        souls: soulsAfter,
+        operations: nextOperations ?? existing.authorizations.operations,
+      },
+      defaultSoul: defaultAfter,
+    });
+    return { principals: { ...principals, [candidate.principalId]: candidate }, result: candidate };
+  });
+  // Receipts keep the per-facet audit vocabulary and are appended only after
+  // the single store write succeeded.
+  const receiptOptions = { env, home, now };
+  if (nextSouls !== undefined) {
+    appendAuditReceipt({ event: 'allow-souls', principalId: updated.principalId }, receiptOptions);
+  }
+  if (nextOperations !== undefined) {
+    appendAuditReceipt({ event: 'allow-operations', principalId: updated.principalId }, receiptOptions);
+  }
+  if (nextDefault !== undefined) {
+    appendAuditReceipt({
+      event: 'set-default-soul',
+      principalId: updated.principalId,
+      ...(nextDefault === null ? {} : { agentId: nextDefault }),
+    }, receiptOptions);
+  }
+  return updated;
+}
+
 export function revokePrincipal(
   principalId,
   { file = principalsFile(), env = process.env, home = homedir(), now = () => new Date() } = {},
@@ -556,22 +623,22 @@ async function main() {
     }
     case 'allow': {
       if (args.positional.length !== 1) throw new Error('principal allow requires one principal ID');
-      const principalId = args.positional[0];
       const souls = args.multi.get('soul');
-      let principal = null;
-      if (args.flags.has('all-souls')) {
-        if (souls.length > 0) throw new Error('--all-souls cannot be combined with --soul');
-        principal = authorizeSouls(principalId, ['*']);
-      } else if (souls.length > 0) {
-        principal = authorizeSouls(principalId, souls);
+      if (args.flags.has('all-souls') && souls.length > 0) {
+        throw new Error('--all-souls cannot be combined with --soul');
       }
       const operations = args.multi.get('operation');
-      if (operations.length > 0) principal = setOperations(principalId, operations);
-      if (args.flags.has('clear-default')) principal = setDefaultSoul(principalId, null);
-      else if (args.flags.has('default-soul')) {
-        principal = setDefaultSoul(principalId, args.flags.get('default-soul'));
-      }
-      if (!principal) throw new Error('principal allow requires at least one authorization change');
+      // All requested facets are validated together and applied as one store
+      // mutation; a request that is invalid anywhere changes nothing.
+      const principal = applyAuthorizationChanges(args.positional[0], {
+        ...(args.flags.has('all-souls') ? { souls: ['*'] } : {}),
+        ...(!args.flags.has('all-souls') && souls.length > 0 ? { souls } : {}),
+        ...(operations.length > 0 ? { operations } : {}),
+        ...(args.flags.has('clear-default') ? { defaultSoul: null } : {}),
+        ...(!args.flags.has('clear-default') && args.flags.has('default-soul')
+          ? { defaultSoul: args.flags.get('default-soul') }
+          : {}),
+      });
       process.stdout.write(`${JSON.stringify(principal, null, 2)}\n`);
       break;
     }
