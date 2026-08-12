@@ -40,6 +40,7 @@ const SKILL_FILES = [
   'skills/agent-bot/references/operations.md',
   'skills/agent-bot/references/verified-publish.md',
   'skills/agent-bot/references/execution-identities.md',
+  'skills/agent-bot/references/storage-surfaces.md',
 ];
 const APP_SLUG_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
 
