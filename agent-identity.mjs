@@ -506,6 +506,24 @@ export function bindAgentTranscript(id, transcript, {
   });
 }
 
+// Lineage is written once. Bind time is the first moment a parent is reliably
+// observable (#91): the spawning conversation names it as a tool argument, so
+// a null parentId can be repaired there — but an already-recorded parent is
+// provenance and must never be rewritten.
+export function bindAgentLineage(id, parentId, {
+  stateDir = stateDirectory(),
+  now = () => new Date(),
+} = {}) {
+  const normalized = validateAgentId(parentId);
+  return mutateIdentity(id, stateDir, now, (record) => {
+    if (record.parentId && record.parentId !== normalized) {
+      throw new Error(`Agent ID ${id} already records a different parent`);
+    }
+    record.parentId = normalized;
+    return record;
+  });
+}
+
 export function recordAgentEvidence(id, {
   subjects = [],
   artifacts = [],

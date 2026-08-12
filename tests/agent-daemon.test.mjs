@@ -1,6 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -15,6 +15,7 @@ import {
   stopDaemon,
 } from '../agent-daemon.mjs';
 import { ensureAgentIdentity, stateDirectory } from '../agent-identity.mjs';
+import { mintBindToken } from '../agent-binding.mjs';
 import {
   authorizeSouls,
   bindTransport,
@@ -59,12 +60,13 @@ async function withServer(env, run) {
   const server = createDaemonServer({ env, home: '/nonexistent', config: {} });
   await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
   const port = server.address().port;
-  const call = (pathname, { method = 'GET', body, token = server.token } = {}) =>
+  const call = (pathname, { method = 'GET', body, token = server.token, headers = {} } = {}) =>
     fetch(`http://127.0.0.1:${port}${pathname}`, {
       method,
       headers: {
         ...(token === null ? {} : { authorization: `Bearer ${token}` }),
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...headers,
       },
       ...(body === undefined ? {} : { body: typeof body === 'string' ? body : JSON.stringify(body) }),
     });
@@ -379,4 +381,196 @@ test('the client follows a daemon restart to its new port and token', async () =
   } finally {
     await new Promise((resolve) => { second.close(resolve); });
   }
+});
+
+// --- surrender-and-enforce binding (#94) ---
+
+function mintWorktreeToken(env, root, { id = AGENT_ID } = {}) {
+  const identity = mintIdentity(env, { id });
+  const gitDir = path.join(root, 'gitdir');
+  mkdirSync(gitDir, { recursive: true });
+  const worktree = path.join(root, 'worktree');
+  const record = mintBindToken({ gitDir, worktree, agentId: identity.id });
+  return { identity, gitDir, worktree, record };
+}
+
+test('bind consumes the worktree token and exchanges it for a live binding', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, worktree, record } = mintWorktreeToken(env, root);
+  await withServer(env, async ({ call }) => {
+    const res = await call('/v0/bind', {
+      method: 'POST',
+      body: {
+        gitDir,
+        token: record.token,
+        transcript: { provider: 'codex', id: 'thread-daemon' },
+      },
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.agentId, AGENT_ID);
+    assert.equal(body.worktree, worktree);
+    assert.equal(body.repinRequired, false);
+    assert.match(body.secret, /^[0-9a-f]{64}$/);
+    // Consumed: the file is gone and a replay finds nothing to present.
+    assert.equal(existsSync(path.join(gitDir, 'agent-bind-token.json')), false);
+    const replay = await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
+    });
+    assert.equal(replay.status, 403);
+  });
+});
+
+test('binding whoami answers only to the connection secret', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, worktree, record } = mintWorktreeToken(env, root);
+  await withServer(env, async ({ call }) => {
+    const bound = await (await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
+    })).json();
+
+    const anonymous = await call('/v0/binding');
+    assert.equal(anonymous.status, 401);
+
+    const forged = await call('/v0/binding', { headers: { 'x-agent-binding': 'f'.repeat(64) } });
+    assert.equal(forged.status, 401);
+
+    const who = await call('/v0/binding', { headers: { 'x-agent-binding': bound.secret } });
+    assert.equal(who.status, 200);
+    const { binding } = await who.json();
+    assert.equal(binding.agentId, AGENT_ID);
+    assert.equal(binding.worktree, worktree);
+    assert.equal(binding.transcript.id, 'thread-daemon');
+  });
+});
+
+test('bind refuses a wrong token and leaves the minted token in place', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir } = mintWorktreeToken(env, root);
+  await withServer(env, async ({ call }) => {
+    const res = await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: 'f'.repeat(64), transcript: { provider: 'codex', id: 't' } },
+    });
+    assert.equal(res.status, 403);
+    assert.equal(existsSync(path.join(gitDir, 'agent-bind-token.json')), true);
+  });
+});
+
+test('bind requires a transcript locator — the conversation half is not optional', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  await withServer(env, async ({ call }) => {
+    const res = await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token },
+    });
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.match(body.error, /transcript locator/);
+    // Refusal happens after consumption would be wrong; the token must survive
+    // a rejected bind so the conversation can retry with a locator.
+    assert.equal(existsSync(path.join(gitDir, 'agent-bind-token.json')), true);
+  });
+});
+
+test('bind records provenance on the census row (#91)', async () => {
+  const { root, env } = scratchEnv();
+  const parentId = 'agent_22222222-2222-4222-8222-222222222222';
+  mintIdentity(env, { id: parentId });
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  await withServer(env, async ({ call }) => {
+    const bound = await (await call('/v0/bind', {
+      method: 'POST',
+      body: {
+        gitDir,
+        token: record.token,
+        transcript: { provider: 'codex', id: 'thread-daemon' },
+        parentId,
+      },
+    })).json();
+    assert.equal(bound.soul.transcriptLocator.provider, 'codex');
+    assert.equal(bound.soul.transcriptLocator.id, 'thread-daemon');
+    assert.equal(bound.soul.parentId, parentId);
+  });
+});
+
+test('bind refuses to rewrite recorded lineage', async () => {
+  const { root, env } = scratchEnv();
+  const parentId = 'agent_22222222-2222-4222-8222-222222222222';
+  const otherParent = 'agent_44444444-4444-4444-8444-444444444444';
+  mintIdentity(env, { id: parentId });
+  mintIdentity(env, { id: otherParent });
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  await withServer(env, async ({ call }) => {
+    await call('/v0/bind', {
+      method: 'POST',
+      body: {
+        gitDir,
+        token: record.token,
+        transcript: { provider: 'codex', id: 'thread-daemon' },
+        parentId,
+      },
+    });
+    // Fresh mint, same worktree, different asserted parent: refused.
+    const again = mintBindToken({ gitDir, worktree: path.join(root, 'worktree'), agentId: AGENT_ID });
+    const res = await call('/v0/bind', {
+      method: 'POST',
+      body: {
+        gitDir,
+        token: again.token,
+        transcript: { provider: 'codex', id: 'thread-daemon' },
+        parentId: otherParent,
+      },
+    });
+    assert.equal(res.status, 409);
+  });
+});
+
+test('a new conversation reusing the worktree binds a fresh identity and asks for a repin', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, worktree, record } = mintWorktreeToken(env, root);
+  await withServer(env, async ({ call }) => {
+    await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
+    });
+    const again = mintBindToken({ gitDir, worktree, agentId: AGENT_ID });
+    const res = await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: again.token, transcript: { provider: 'codex', id: 'thread-later' } },
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.notEqual(body.agentId, AGENT_ID);
+    assert.equal(body.repinRequired, true);
+    assert.equal(body.soul.transcriptLocator.id, 'thread-later');
+  });
+});
+
+test('a daemon restart drops every binding — re-binding takes a fresh mint', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, worktree, record } = mintWorktreeToken(env, root);
+  let secret;
+  await withServer(env, async ({ call }) => {
+    const bound = await (await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
+    })).json();
+    secret = bound.secret;
+  });
+  await withServer(env, async ({ call }) => {
+    const stale = await call('/v0/binding', { headers: { 'x-agent-binding': secret } });
+    assert.equal(stale.status, 401);
+    // Fresh mint from the same worktree re-establishes the binding.
+    const again = mintBindToken({ gitDir, worktree, agentId: AGENT_ID });
+    const rebound = await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: again.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
+    });
+    assert.equal(rebound.status, 200);
+    assert.equal((await rebound.json()).agentId, AGENT_ID);
+  });
 });
