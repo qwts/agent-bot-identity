@@ -195,6 +195,39 @@ test('population CLI lists, filters, and shows records', () => {
   assert.equal(JSON.parse(shown.stdout).id, SECOND_ID);
 });
 
+test('population list shows retired souls in a separate section', () => {
+  const file = path.join(scratch(), 'population.json');
+  upsertSoul(fixture(), { file });
+  upsertSoul(fixture({
+    id: SECOND_ID,
+    status: 'retired',
+    spacePath: `/spaces/${SECOND_ID}`,
+    transcriptLocator: null,
+  }), { file });
+
+  const table = runCli(['population', 'list'], file);
+  assert.equal(table.status, 0, table.stderr);
+  const lines = table.stdout.trimEnd().split('\n');
+  const divider = lines.indexOf('RETIRED');
+  assert.notEqual(divider, -1, 'a RETIRED section separates tombstones from the living census');
+  assert.ok(
+    lines.slice(1, divider).some((line) => line.startsWith(FIRST_ID)),
+    'active souls appear above the divider',
+  );
+  assert.ok(
+    lines.slice(divider + 1).some((line) => line.startsWith(SECOND_ID)),
+    'retired souls appear below the divider',
+  );
+
+  const none = runCli(['population', 'list', '--status', 'active'], file);
+  assert.equal(none.status, 0, none.stderr);
+  assert.doesNotMatch(none.stdout, /RETIRED/, 'no section when nothing retired matches');
+
+  const json = runCli(['population', 'list', '--json'], file);
+  assert.equal(json.status, 0, json.stderr);
+  assert.equal(JSON.parse(json.stdout).length, 2, 'JSON output is unchanged by the section');
+});
+
 test('population errors never reflect invalid record or store contents', () => {
   const file = path.join(scratch(), 'population.json');
   const secret = 'not-an-agent-id-secret-sentinel';
