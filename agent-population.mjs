@@ -320,21 +320,32 @@ function parseCli(argv) {
   return { command, positional, flags };
 }
 
+function formatRow(record) {
+  const transcript = record.transcriptLocator
+    ? `${record.transcriptLocator.provider}:${record.transcriptLocator.id}`
+    : '-';
+  return [
+    record.id,
+    record.appSlug,
+    record.status,
+    record.parentId ?? '-',
+    record.lastSeen,
+    record.spacePath,
+    transcript,
+  ].join('\t');
+}
+
 function formatPopulation(records) {
+  // Retired souls are tombstones, not census peers: list them in their own
+  // section so an operator scanning the living population never mistakes a
+  // retired soul for an active one (issue #46).
+  const active = records.filter((record) => record.status !== 'retired');
+  const retired = records.filter((record) => record.status === 'retired');
   const lines = ['ID\tAPP\tSTATUS\tPARENT\tLAST SEEN\tSPACE\tTRANSCRIPT'];
-  for (const record of records) {
-    const transcript = record.transcriptLocator
-      ? `${record.transcriptLocator.provider}:${record.transcriptLocator.id}`
-      : '-';
-    lines.push([
-      record.id,
-      record.appSlug,
-      record.status,
-      record.parentId ?? '-',
-      record.lastSeen,
-      record.spacePath,
-      transcript,
-    ].join('\t'));
+  for (const record of active) lines.push(formatRow(record));
+  if (retired.length > 0) {
+    lines.push('', 'RETIRED');
+    for (const record of retired) lines.push(formatRow(record));
   }
   return `${lines.join('\n')}\n`;
 }
