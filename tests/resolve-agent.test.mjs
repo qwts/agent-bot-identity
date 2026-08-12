@@ -194,7 +194,7 @@ test('every consumer that mints or commits shares this resolver', async () => {
   // identity their own way. Import-level check, so a future consumer that
   // rolls its own chain shows up here rather than in production attribution.
   const sources = await Promise.all(
-    ['../setup-worktree.mjs', '../mint-token.mjs'].map(async (path) => ({
+    ['../setup-worktree.mjs', '../mint-token.mjs', '../ensure-private-key.mjs', '../agent-identity.mjs'].map(async (path) => ({
       path,
       text: await import('node:fs').then((fs) =>
         fs.readFileSync(new URL(path, import.meta.url), 'utf8'),
@@ -204,6 +204,12 @@ test('every consumer that mints or commits shares this resolver', async () => {
   for (const { path, text } of sources) {
     assert.match(text, /resolve-agent\.mjs/, `${path} resolves identity through the shared order`);
     assert.doesNotMatch(text, /detectHarness\(/, `${path} does not call detection directly`);
+    // The shared policy from #20: every inferred resolution asks the territory
+    // question. A call site is either explicit-exempt (worktree: !explicit) or
+    // always inferred (worktree: true) — never a bare resolveAgentSlug().
+    for (const call of text.match(/resolveAgentSlug\((?:[^()]|\([^()]*\))*\)/g) ?? []) {
+      assert.match(call, /worktree:/, `${path} passes worktree at every resolveAgentSlug call site`);
+    }
   }
 });
 
