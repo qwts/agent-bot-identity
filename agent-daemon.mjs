@@ -23,7 +23,7 @@ import { createServer } from 'node:http';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { initAgentSpace, spacePath } from './agent-space.mjs';
 import { listSouls, upsertIdentitySoul } from './agent-population.mjs';
@@ -72,6 +72,7 @@ function readStateFile(file) {
     // JSON parser messages may quote file contents; never reflect them.
     throw new Error('daemon state file is not valid JSON');
   }
+  const host = parsed?.host ?? '127.0.0.1';
   if (
     !parsed || typeof parsed !== 'object' || Array.isArray(parsed)
     || parsed.schemaVersion !== SCHEMA_VERSION
@@ -79,10 +80,18 @@ function readStateFile(file) {
     || !Number.isSafeInteger(parsed.port) || parsed.port <= 0 || parsed.port > 65535
     || typeof parsed.token !== 'string' || parsed.token.length < 32
     || typeof parsed.startedAt !== 'string'
+    || !LOOPBACK_HOSTS.has(host)
   ) {
     throw new Error('daemon state file has an unsupported shape');
   }
-  return { schemaVersion: SCHEMA_VERSION, pid: parsed.pid, port: parsed.port, token: parsed.token, startedAt: parsed.startedAt };
+  return { schemaVersion: SCHEMA_VERSION, pid: parsed.pid, host, port: parsed.port, token: parsed.token, startedAt: parsed.startedAt };
+}
+
+// The daemon may legitimately bind ::1; probes and clients must dial whatever
+// the state file records instead of assuming IPv4.
+function baseUrl(state) {
+  const host = state.host === '::1' ? '[::1]' : state.host;
+  return `http://${host}:${state.port}`;
 }
 
 function writeStateFile(file, state) {
@@ -252,7 +261,7 @@ function populationOverride(env, home) {
 
 async function probeHealth(state, { fetchImpl = fetch, timeoutMs = HEALTH_TIMEOUT_MS } = {}) {
   try {
-    const res = await fetchImpl(`http://127.0.0.1:${state.port}/v0/health`, {
+    const res = await fetchImpl(`${baseUrl(state)}/v0/health`, {
       headers: { authorization: `Bearer ${state.token}` },
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -293,13 +302,13 @@ export function daemonClient({
   fetchImpl = fetch,
   timeoutMs = HEALTH_TIMEOUT_MS,
 } = {}) {
-  let state = null;
   async function request(method, pathname, body) {
-    if (!state) {
-      state = readStateFile(daemonStateFile({ env, home }));
-      if (!state) throw new Error('daemon is not running (no state file)');
-    }
-    const res = await fetchImpl(`http://127.0.0.1:${state.port}${pathname}`, {
+    // Re-read the state file on every request: a long-running adapter must
+    // follow a daemon restart to its new port and per-start token instead of
+    // failing forever against a cached endpoint.
+    const state = readStateFile(daemonStateFile({ env, home }));
+    if (!state) throw new Error('daemon is not running (no state file)');
+    const res = await fetchImpl(`${baseUrl(state)}${pathname}`, {
       method,
       headers: {
         authorization: `Bearer ${state.token}`,
@@ -369,6 +378,7 @@ export async function runDaemon({
   const state = {
     schemaVersion: SCHEMA_VERSION,
     pid: process.pid,
+    host,
     port: server.address().port,
     token: server.token,
     startedAt: now().toISOString(),
@@ -402,7 +412,10 @@ function sleep(ms) {
 export async function startDaemon({ env = process.env, home = homedir(), moduleUrl = import.meta.url } = {}) {
   const existing = await daemonStatus({ env, home });
   if (existing.running) return { ...existing, alreadyRunning: true };
-  const child = spawn(process.execPath, [new URL(moduleUrl).pathname, 'run'], {
+  // fileURLToPath, not URL.pathname: a checkout path with spaces stays
+  // percent-encoded in the pathname and the child exits module-not-found
+  // (and drive letters break on Windows).
+  const child = spawn(process.execPath, [fileURLToPath(moduleUrl), 'run'], {
     detached: true,
     stdio: 'ignore',
     env,
@@ -417,10 +430,21 @@ export async function startDaemon({ env = process.env, home = homedir(), moduleU
   throw new Error('daemon did not become healthy within the startup deadline');
 }
 
-export async function stopDaemon({ env = process.env, home = homedir() } = {}) {
+export async function stopDaemon({ env = process.env, home = homedir(), fetchImpl = fetch } = {}) {
   const file = daemonStateFile({ env, home });
   const state = readStateFile(file);
   if (!state) return { stopped: false, reason: 'no daemon state file' };
+  // A recorded PID can be reused by an unrelated process after a crash or
+  // reboot. Only the token-authenticated health probe proves the record still
+  // names our daemon, so a failed probe removes the stale record and signals
+  // nothing.
+  if (!(await probeHealth(state, { fetchImpl }))) {
+    rmSync(file, { force: true });
+    return {
+      stopped: false,
+      reason: 'recorded daemon did not answer the authenticated health probe; removed stale state',
+    };
+  }
   try {
     process.kill(state.pid, 'SIGTERM');
   } catch (error) {
