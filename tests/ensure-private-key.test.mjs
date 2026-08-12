@@ -1,8 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   appIdPath, ensurePrivateKey, parseCliArgs, parsePassItemView, privateKeyPath,
   selectAppIdAttachment, selectIssuer, selectPrivateKeyAttachment, validateIssuer,
@@ -38,6 +41,48 @@ test('private key CLI accepts positional/flag slugs and force', () => {
     force: true, explicit: 'bot-app',
   });
   assert.throws(() => parseCliArgs(['--app']), /requires a slug/);
+});
+
+test('the CLI corrects a cross-territory GH_AGENT_APP to the territory App (#20)', () => {
+  // Same policy as mint-token's appConfig: GH_AGENT_APP is a launcher-level
+  // default, corrected inside bot territory; only --app is taken at face
+  // value. The claude App has no key material in this fake home, so resolving
+  // to it would reach for the provider and fail — a clean "already present"
+  // for the codex App's key proves the territory slug won.
+  const root = mkdtempSync(join(tmpdir(), 'agent-key-territory-'));
+  const repo = join(root, '.codex', 'worktrees', 'session', 'repo');
+  mkdirSync(repo, { recursive: true });
+  execFileSync('git', ['init', '--quiet', repo]);
+  const home = join(root, 'home');
+  const dir = join(home, '.config', 'you-codex-agent');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'app-id'), '12345\n');
+  writeFileSync(
+    join(dir, 'private-key.pem'),
+    generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey
+      .export({ type: 'pkcs8', format: 'pem' }),
+  );
+  const configPath = join(root, 'config.json');
+  writeFileSync(configPath, JSON.stringify({ prefix: 'you' }));
+  const emptyGitConfig = join(root, 'gitconfig');
+  writeFileSync(emptyGitConfig, '');
+  const output = execFileSync(
+    process.execPath,
+    [fileURLToPath(new URL('../ensure-private-key.mjs', import.meta.url))],
+    {
+      cwd: repo,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        HOME: home,
+        AGENT_BOT_CONFIG: configPath,
+        GH_AGENT_APP: 'you-claude-agent',
+        GIT_CONFIG_GLOBAL: emptyGitConfig,
+        GIT_CONFIG_SYSTEM: '/dev/null',
+      },
+    },
+  );
+  assert.match(output, /already present .*you-codex-agent/);
 });
 
 test('pass-cli JSON selects only an unambiguous pem attachment', () => {
