@@ -31,12 +31,15 @@ the stable commands, which apply the user's configured root policy:
 
 ```bash
 agent-bot space ensure   # resolve and initialize the current soul's space
-agent-bot space path     # print the existing space path without creating it
+agent-bot space path     # calculate and print the configured path only
 agent-bot space show     # inspect marker metadata for a known space
 ```
 
-`ensure` prints only the absolute space path on success and fails non-zero
-from a human primary checkout or when no Agent ID is resolvable. See
+`path` is calculation-only: it prints where the space would live under the
+configured policy without verifying that the directory or its marker exists.
+When the space must actually exist, run `ensure`, which prints only the
+absolute space path on success and fails non-zero from a human primary
+checkout or when no Agent ID is resolvable. See
 [execution-identities.md](execution-identities.md) for identity resolution and
 the population census.
 
