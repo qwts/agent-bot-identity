@@ -105,30 +105,54 @@ function rewriteOriginUrls() {
   for (const url of safePushUrls) git('config', '--add', 'remote.origin.pushurl', url);
 }
 
-async function botUid(slug, base, verifiedToken) {
-  const cachePath = join(homedir(), '.config', slug, 'bot-uid');
+export async function botUid(slug, base, verifiedToken, {
+  home = homedir(),
+  fetchImpl = fetch,
+} = {}) {
+  const configDir = join(home, '.config', slug);
+  const cachePath = join(configDir, 'bot-uid');
+  const avatarPath = join(configDir, 'bot-avatar-url');
+  let cachedUid = null;
   try {
-    return readFileSync(cachePath, 'utf8').trim();
+    cachedUid = readFileSync(cachePath, 'utf8').trim() || null;
   } catch {
     /* not cached yet */
   }
+  let cachedAvatar = null;
+  try {
+    cachedAvatar = readFileSync(avatarPath, 'utf8').trim() || null;
+  } catch {
+    /* not cached yet */
+  }
+  // An upgraded installation can hold a UID cached before the avatar cache
+  // existed, and a non-numeric app-id (client ID) gives gh-pr-view-json no
+  // fallback. Only a complete cache skips the profile lookup.
+  if (cachedUid && cachedAvatar && /^https:\/\//.test(cachedAvatar)) return cachedUid;
   const lookup = (headers = {}) =>
-    fetch(`${base}/users/${encodeURIComponent(`${slug}[bot]`)}`, {
+    fetchImpl(`${base}/users/${encodeURIComponent(`${slug}[bot]`)}`, {
       headers: { accept: 'application/vnd.github+json', 'user-agent': 'agent-bot-identity', ...headers },
     });
-  let res = await lookup();
-  if (!res.ok) {
-    // Enterprise-owned Apps can be externally invisible (EMU); the App can
-    // always see its own bot user, so retry authenticated as the App.
-    res = await lookup({ authorization: `Bearer ${verifiedToken}` });
+  let profile = null;
+  try {
+    let res = await lookup();
+    if (!res.ok) {
+      // Enterprise-owned Apps can be externally invisible (EMU); the App can
+      // always see its own bot user, so retry authenticated as the App.
+      res = await lookup({ authorization: `Bearer ${verifiedToken}` });
+    }
+    if (!res.ok) throw new Error(`could not resolve ${slug}[bot]'s user id (HTTP ${res.status})`);
+    profile = await res.json();
+  } catch (error) {
+    // The avatar is presentation, not identity: with a cached UID the worktree
+    // is already bindable, so a failed refresh must not break setup.
+    if (cachedUid) return cachedUid;
+    throw error;
   }
-  if (!res.ok) throw new Error(`could not resolve ${slug}[bot]'s user id (HTTP ${res.status})`);
-  const profile = await res.json();
-  const uid = String(profile.id);
-  mkdirSync(dirname(cachePath), { recursive: true });
-  writeFileSync(cachePath, `${uid}\n`);
+  const uid = cachedUid ?? String(profile.id);
+  mkdirSync(configDir, { recursive: true });
+  if (!cachedUid) writeFileSync(cachePath, `${uid}\n`);
   if (typeof profile.avatar_url === 'string' && /^https:\/\//.test(profile.avatar_url)) {
-    writeFileSync(join(dirname(cachePath), 'bot-avatar-url'), `${profile.avatar_url}\n`);
+    writeFileSync(avatarPath, `${profile.avatar_url}\n`);
   }
   return uid;
 }

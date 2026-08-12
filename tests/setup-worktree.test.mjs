@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  botUid,
   credentialHelperCommand,
   httpsRemoteUrl,
   normalizeGitBashPath,
@@ -123,4 +124,85 @@ test('credential failure leaves the linked worktree and SSH remote untouched', (
     env,
   });
   assert.notEqual(pin.status, 0);
+});
+
+function fakeProfileFetch(profile, { fail = false } = {}) {
+  const calls = [];
+  const impl = async (url, options) => {
+    calls.push({ url, options });
+    if (fail) return { ok: false, status: 503, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => profile };
+  };
+  impl.calls = calls;
+  return impl;
+}
+
+function uidFixture(slug, { uid = null, avatar = null } = {}) {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-uid-'));
+  const configDir = join(home, '.config', slug);
+  mkdirSync(configDir, { recursive: true });
+  if (uid) writeFileSync(join(configDir, 'bot-uid'), `${uid}\n`);
+  if (avatar) writeFileSync(join(configDir, 'bot-avatar-url'), `${avatar}\n`);
+  return { home, configDir };
+}
+
+test('botUid skips the profile lookup only when UID and avatar are both cached', async () => {
+  const { home } = uidFixture('you-codex-agent', {
+    uid: '111',
+    avatar: 'https://avatars.githubusercontent.com/in/42?v=4',
+  });
+  const fetchImpl = fakeProfileFetch({ id: 999 });
+
+  const uid = await botUid('you-codex-agent', 'https://api.github.com', null, { home, fetchImpl });
+
+  assert.equal(uid, '111');
+  assert.equal(fetchImpl.calls.length, 0);
+});
+
+test('botUid backfills the avatar cache on the cached-UID path', async () => {
+  const { home, configDir } = uidFixture('you-codex-agent', { uid: '111' });
+  const fetchImpl = fakeProfileFetch({
+    id: 999,
+    avatar_url: 'https://avatars.githubusercontent.com/in/42?v=4',
+  });
+
+  const uid = await botUid('you-codex-agent', 'https://api.github.com', null, { home, fetchImpl });
+
+  assert.equal(uid, '111'); // the cached UID stays authoritative
+  assert.equal(
+    readFileSync(join(configDir, 'bot-avatar-url'), 'utf8'),
+    'https://avatars.githubusercontent.com/in/42?v=4\n',
+  );
+  assert.equal(readFileSync(join(configDir, 'bot-uid'), 'utf8'), '111\n');
+});
+
+test('botUid keeps a cached UID working when the avatar refresh fails', async () => {
+  const { home, configDir } = uidFixture('you-codex-agent', { uid: '111' });
+  const fetchImpl = fakeProfileFetch({}, { fail: true });
+
+  const uid = await botUid('you-codex-agent', 'https://api.github.com', 'token', { home, fetchImpl });
+
+  assert.equal(uid, '111');
+  assert.equal(existsSync(join(configDir, 'bot-avatar-url')), false);
+});
+
+test('botUid writes both caches on a fresh lookup and rejects non-https avatars', async () => {
+  const { home, configDir } = uidFixture('you-codex-agent');
+  const fetchImpl = fakeProfileFetch({ id: 999, avatar_url: 'http://insecure.example/a.png' });
+
+  const uid = await botUid('you-codex-agent', 'https://api.github.com', null, { home, fetchImpl });
+
+  assert.equal(uid, '999');
+  assert.equal(readFileSync(join(configDir, 'bot-uid'), 'utf8'), '999\n');
+  assert.equal(existsSync(join(configDir, 'bot-avatar-url')), false);
+});
+
+test('botUid still fails closed when nothing is cached and the lookup fails', async () => {
+  const { home } = uidFixture('you-codex-agent');
+  const fetchImpl = fakeProfileFetch({}, { fail: true });
+
+  await assert.rejects(
+    botUid('you-codex-agent', 'https://api.github.com', 'token', { home, fetchImpl }),
+    /could not resolve you-codex-agent\[bot\]'s user id \(HTTP 503\)/,
+  );
 });
