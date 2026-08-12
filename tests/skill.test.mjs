@@ -18,7 +18,7 @@ test('official skill is a progressive router over focused references', () => {
   assert.match(frontmatter, /fresh-clone/u);
   assert.match(frontmatter, /install agent bot identities/u);
   assert.equal(frontmatter.split('\n').filter((line) => /^[a-z_]+:/u.test(line)).length, 2);
-  for (const reference of ['operations.md', 'verified-publish.md', 'execution-identities.md']) {
+  for (const reference of ['operations.md', 'verified-publish.md', 'execution-identities.md', 'storage-surfaces.md']) {
     assert.match(main, new RegExp(`references/${reference.replace('.', '\\.')}`));
     assert.match(readFileSync(join(SKILL, 'references', reference), 'utf8'), /agent-bot/u);
   }
@@ -52,6 +52,26 @@ test('Agent Space guidance links the canonical contract and keeps operations loc
   assert.match(identities, contract);
   assert.match(identities, /agent-bot space ensure/u);
   assert.match(identities, /agent-bot population list/u);
+});
+
+test('skill keeps the three-surface storage distinction with a conformance note', () => {
+  const main = readFileSync(join(SKILL, 'SKILL.md'), 'utf8');
+  const surfaces = readFileSync(join(SKILL, 'references', 'storage-surfaces.md'), 'utf8');
+  const contract = /ENG-0172-agent-space-is-durable-per-soul-storage\.md/u;
+  const conformance = /<!-- conformance:/u;
+  assert.match(main, /Choose the storage surface/u);
+  for (const text of [main, surfaces]) {
+    assert.match(text, /[Ww]orktree/u);
+    assert.match(text, /[Ss]cratchpad/u);
+    assert.match(text, /Agent Space/u);
+    assert.match(text, conformance);
+  }
+  assert.match(main, /agent-bot space ensure/u);
+  assert.match(main, /agent-bot space path/u);
+  assert.match(surfaces, /agent-bot space ensure/u);
+  assert.match(surfaces, /agent-bot space path/u);
+  assert.match(surfaces, contract);
+  assert.doesNotMatch(surfaces, /(?:~\/\.local\/share|\$XDG_DATA_HOME|\/Users\/)/u);
 });
 
 test('canonical agent guidance defines organization-wide cold-start intent', () => {
