@@ -22,9 +22,9 @@
 //     deployment (Tailscale / reverse proxy) documented in the README, never
 //     a wider listener here.
 
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { createReadStream, readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -301,7 +301,12 @@ export function createWebLayer({
     res.end(req.method === 'HEAD' ? undefined : bytes);
   }
 
-  function streamArtifact(res, resolved) {
+  // Serve an artifact only if the on-disk bytes still match the recorded
+  // metadata end to end: size cap first (from metadata, before any read),
+  // then exact size, then the sha256 digest over the very buffer that is
+  // sent — a corrupted or substituted file is refused, never served as
+  // authentic, and there is no window between hashing and streaming.
+  function sendArtifact(res, resolved) {
     const { artifact, path: filePath } = resolved;
     if (artifact.bytes > MAX_ARTIFACT_DOWNLOAD_BYTES) {
       throw failure(413, 'artifact exceeds the download size cap');
@@ -315,9 +320,19 @@ export function createWebLayer({
     if (!stats.isFile() || stats.size !== artifact.bytes || stats.size > MAX_ARTIFACT_DOWNLOAD_BYTES) {
       throw failure(409, 'artifact does not match its recorded metadata');
     }
+    let bytes;
+    try {
+      bytes = readFileSync(filePath);
+    } catch {
+      throw failure(404, 'artifact is not available');
+    }
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    if (bytes.length !== artifact.bytes || !tokensMatch(artifact.sha256, digest)) {
+      throw failure(409, 'artifact does not match its recorded metadata');
+    }
     res.writeHead(200, {
       'content-type': 'application/octet-stream',
-      'content-length': stats.size,
+      'content-length': bytes.length,
       // Artifact names are validated to a safe ASCII filename alphabet.
       'content-disposition': `attachment; filename="${artifact.name}"`,
       'cache-control': 'no-store',
@@ -325,9 +340,7 @@ export function createWebLayer({
       'x-content-type-options': 'nosniff',
       'referrer-policy': 'no-referrer',
     });
-    const stream = createReadStream(filePath);
-    stream.on('error', () => res.destroy());
-    stream.pipe(res);
+    res.end(bytes);
   }
 
   async function handleApi(req, res, url) {
@@ -412,7 +425,7 @@ export function createWebLayer({
       } catch {
         throw failure(400, 'invalid artifact name');
       }
-      streamArtifact(res, interaction.resolveArtifact({
+      sendArtifact(res, interaction.resolveArtifact({
         ...caller,
         invocationId: match[1],
         name,

@@ -141,17 +141,34 @@ async function loadConversation() {
   if (latest) await pollEvents(latest.invocationId, $('conversation-events'));
 }
 
+// One idempotency key per logical submission. The key is minted when the
+// user initiates a send and is reused verbatim on every retry of that same
+// submission (same session, same text), so a resend after a network failure
+// can never start duplicate work; only a genuinely new submission mints a
+// new key. Kept as a pure function so tests can exercise the policy.
+function nextSubmission(pending, sessionId, message, mintKey) {
+  if (pending && pending.sessionId === sessionId && pending.message === message) return pending;
+  return { sessionId, message, key: mintKey() };
+}
+
+let pendingSubmission = null; // survives failed sends until one succeeds
+
 async function sendMessage(event) {
   event.preventDefault();
   const input = $('message-input');
   const message = input.value.trim();
   if (!message || !state.session) return;
+  pendingSubmission = nextSubmission(
+    pendingSubmission,
+    state.session,
+    message,
+    () => crypto.randomUUID(),
+  );
   await api(`/ui/api/sessions/${encodeURIComponent(state.session)}/messages`, {
     method: 'POST',
-    // Client-generated idempotency key: a retry of this exact submission can
-    // never start duplicate work.
-    body: { message, idempotencyKey: crypto.randomUUID() },
+    body: { message, idempotencyKey: pendingSubmission.key },
   });
+  pendingSubmission = null; // consumed only by a successful submission
   input.value = '';
   await refresh();
 }

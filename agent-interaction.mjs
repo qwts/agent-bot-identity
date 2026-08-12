@@ -531,6 +531,10 @@ export function createInteractionService({
       return { souls };
     },
 
+    // Sessions are bound to one transport (#56); a listing is scoped to the
+    // caller's transport so one surface never renders — or tries to continue
+    // — another adapter's sessions (a web client must not list Telegram
+    // sessions, and could not continue them anyway).
     listSessions({ principal, transport, agentId = null }) {
       const wantedTransport = validated(() => validateTransport(transport));
       authorizeListing(principal, wantedTransport, 'observe');
@@ -538,7 +542,9 @@ export function createInteractionService({
       const sessions = listSessions(
         { principalId: principal.principalId, agentId: wantedAgent },
         storeOptions,
-      ).filter((session) => soulAllowed(principal, session.agentId));
+      )
+        .filter((session) => session.transport === wantedTransport)
+        .filter((session) => soulAllowed(principal, session.agentId));
       return { sessions: sessions.map(publicSession) };
     },
 

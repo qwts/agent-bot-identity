@@ -22,7 +22,7 @@ import {
   WEB_SESSION_TTL_MS,
   webRootDirectory,
 } from '../agent-web.mjs';
-import { addArtifact, operationDigest } from '../agent-jobs.mjs';
+import { addArtifact, createSession, operationDigest } from '../agent-jobs.mjs';
 import {
   authorizeSouls,
   bindTransport,
@@ -483,6 +483,57 @@ test('a browser session can converse, watch events across a refresh, and cancel'
   }, { executor });
 });
 
+test('the web session listing is scoped to the web transport', async () => {
+  const { env } = scratch();
+  seedSoul(env);
+  const principal = seedPrincipal(env);
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const cookie = await pairCookie(principal.principalId);
+    // Another adapter's session for the same principal and soul: it must
+    // never surface in the web client, which could not continue it anyway.
+    createSession(
+      { agentId: AGENT_ID, principalId: principal.principalId, transport: 'telegram' },
+      { env, home: '/nonexistent' },
+    );
+    const { session } = await (await ui('/ui/api/sessions', {
+      method: 'POST', body: { agentId: AGENT_ID }, cookie,
+    })).json();
+
+    const scoped = await (await ui(`/ui/api/sessions?agentId=${AGENT_ID}`, { cookie })).json();
+    assert.deepEqual(scoped.sessions.map((entry) => entry.sessionId), [session.sessionId]);
+    assert.ok(scoped.sessions.every((entry) => entry.transport === 'web'));
+
+    const all = await (await ui('/ui/api/sessions', { cookie })).json();
+    assert.ok(all.sessions.every((entry) => entry.transport === 'web'));
+    assert.equal(all.sessions.length, 1);
+  });
+});
+
+test('a retried submission reuses its idempotency key; only a new submission mints one', () => {
+  const app = readFileSync(path.join(WEB_ROOT, 'app.js'), 'utf8');
+  // The policy is a pure function in app.js; exercise the shipped source.
+  const match = app.match(/function nextSubmission\([\s\S]*?\n\}/);
+  assert.ok(match, 'nextSubmission policy function present in app.js');
+  const nextSubmission = new Function(`return ${match[0]}`)();
+  let minted = 0;
+  const mintKey = () => `key-${(minted += 1)}`;
+  const first = nextSubmission(null, 'session_a', 'hello', mintKey);
+  assert.equal(first.key, 'key-1');
+  // A retry of the same logical submission (the send failed and the user
+  // resends the same text in the same session) reuses the exact key, so the
+  // daemon's idempotency index collapses it into one invocation.
+  const retry = nextSubmission(first, 'session_a', 'hello', mintKey);
+  assert.equal(retry, first);
+  assert.equal(minted, 1);
+  // Only a genuinely new user-initiated submission mints a new key.
+  assert.equal(nextSubmission(first, 'session_a', 'different text', mintKey).key, 'key-2');
+  assert.equal(nextSubmission(first, 'session_b', 'hello', mintKey).key, 'key-3');
+  // And the pending record is dropped only by a successful send, so the key
+  // survives every failed attempt in between.
+  assert.match(app, /idempotencyKey: pendingSubmission\.key/);
+  assert.match(app, /pendingSubmission = null; \/\/ consumed only by a successful submission/);
+});
+
 test('another principal cannot observe a foreign invocation through the web API', async () => {
   const { env } = scratch();
   seedSoul(env);
@@ -704,6 +755,24 @@ test('artifact downloads are authorized, bounded, and traversal-proof', async ()
     const escape = await ui(`/ui/api/invocations/${invocationId}/artifacts/evil.txt`, { cookie });
     assert.equal(escape.status, 404);
     assert.deepEqual(await escape.json(), { error: 'artifact is not available' });
+
+    // A file whose bytes were substituted after recording (size intact,
+    // content changed) fails sha256 verification and is never served as
+    // authentic — the refusal carries none of the tampered content.
+    const tamperedPayload = 'artifact PAYLOAD bytes\n'; // same length, new content
+    assert.equal(Buffer.byteLength(tamperedPayload), Buffer.byteLength(payload));
+    writeFileSync(path.join(soul.spacePath, 'artifacts', 'tampered.txt'), tamperedPayload);
+    addArtifact(invocationId, {
+      name: 'tampered.txt',
+      bytes: Buffer.byteLength(tamperedPayload),
+      sha256: digest, // recorded digest of the ORIGINAL payload
+      spacePath: 'artifacts/tampered.txt',
+    }, { env, home: '/nonexistent' });
+    const tampered = await ui(`/ui/api/invocations/${invocationId}/artifacts/tampered.txt`, { cookie });
+    assert.equal(tampered.status, 409);
+    const tamperedBody = await tampered.text();
+    assert.ok(!tamperedBody.includes('PAYLOAD'));
+    assert.match(tamperedBody, /does not match its recorded metadata/);
 
     // Bytes that diverge from the recorded metadata are refused, and the
     // download cap is enforced from metadata before any read.

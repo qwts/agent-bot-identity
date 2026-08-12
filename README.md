@@ -261,7 +261,8 @@ closed rather than diverging from the daemon-owned stores.
 
 The daemon serves a small installable PWA at `http://127.0.0.1:<port>/ui/` —
 population browsing, conversations with message submission, active jobs with
-live events and cancellation, immutable approvals, and artifact downloads.
+live events and cancellation, immutable approvals, and bounded,
+sha256-verified artifact downloads.
 It is a projection of the same interaction APIs every adapter uses (`/v1`
 semantics, deny-by-default principals); the browser never reads population,
 session, job, or Agent Space files, and browser storage holds no tokens and
