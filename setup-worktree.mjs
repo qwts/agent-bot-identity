@@ -23,6 +23,8 @@
 //   - mints/binds a transcript-bound Agent ID (ENG-0081)
 //   - initializes that soul's durable Agent Space
 //   - registers the soul in the workstation population census
+//     (through the loopback daemon when settings.daemonPreference selects it;
+//      see bindSoul for the prefer/required fallback policy)
 //
 // Guard: it only touches LINKED worktrees (git-dir != common-dir). A session
 // in a primary checkout is left alone, so a human's own clone never silently
@@ -35,7 +37,8 @@ import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { resolveAgentSlug, pinnedSlug, territoryHarness, AGENT_ID_KEYS } from './resolve-agent.mjs';
-import { loadConfig, apiBase, githubHost, harnessForSlug } from './config.mjs';
+import { loadConfig, apiBase, daemonPreference, githubHost, harnessForSlug } from './config.mjs';
+import { daemonClient } from './agent-daemon.mjs';
 import { reconcileAppCredentials } from './credential-reconciler.mjs';
 import {
   discoverTranscript,
@@ -163,10 +166,33 @@ export async function botUid(slug, base, verifiedToken, {
   return uid;
 }
 
+// One policy for how a soul reaches the shared stores (#43): when the local
+// daemon is authoritative, setup registers and ensures space through it so
+// population and drives cannot diverge by invocation path. `prefer` falls back
+// in-process only when the daemon is UNREACHABLE — a reachable daemon that
+// refuses an operation is a real conflict (a space bound to another soul, a
+// corrupt census) that the in-process path would hit too, so it propagates.
+// `required` fails closed when the daemon is down.
+export async function bindSoul({ agentId, policy, client, ensureLocal }) {
+  if (policy !== 'off') {
+    const available = await client.available();
+    if (available) {
+      const space = await client.ensureSpace(agentId);
+      await client.registerSoul(agentId, space.path);
+      return { ...space, via: 'daemon' };
+    }
+    if (policy === 'required') {
+      throw new Error('daemon preference is "required" but the daemon is not reachable — start it with `agent-bot daemon start`');
+    }
+  }
+  return { ...ensureLocal(), via: 'in-process' };
+}
+
 export async function main({
   reconcileCredentials = reconcileAppCredentials,
   rewriteOrigins = rewriteOriginUrls,
   resolveBotUid = botUid,
+  daemon = null,
 } = {}) {
   const config = loadConfig();
   let gitDir; let commonDir;
@@ -234,8 +260,16 @@ export async function main({
   // Initialize and register before writing any worktree attribution. A missing,
   // corrupt, or mismatched space or census fails closed without leaving the
   // worktree partially bound.
-  const space = initAgentSpace(executionIdentity.id);
-  upsertIdentitySoul(executionIdentity.id, space.path);
+  const space = await bindSoul({
+    agentId: executionIdentity.id,
+    policy: daemonPreference({ config }),
+    client: daemon ?? daemonClient(),
+    ensureLocal: () => {
+      const local = initAgentSpace(executionIdentity.id);
+      upsertIdentitySoul(executionIdentity.id, local.path);
+      return local;
+    },
+  });
   git('config', '--worktree', 'agentBot.app', slug);
   git('config', '--worktree', 'agentBot.agentId', executionIdentity.id);
   git('config', '--worktree', 'user.name', `${slug}[bot]`);
@@ -260,7 +294,7 @@ export async function main({
   );
 
   const transcriptState = executionIdentity.transcript ? 'transcript bound' : 'transcript pending';
-  const spaceState = space.created ? 'space created' : 'space ready';
+  const spaceState = `${space.created ? 'space created' : 'space ready'}${space.via === 'daemon' ? ' via daemon' : ''}`;
   process.stdout.write(
     `worktree configured for ${slug}[bot] as ${executionIdentity.id} (${transcriptState}, ${spaceState})\n`,
   );

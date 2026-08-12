@@ -82,6 +82,7 @@ agent-bot doctor [--machine-only] [--app <slug>] [--json]
 agent-bot identity <ensure|spawn|bind|record|finalize|show|current>
 agent-bot space <init|ensure|path|show> [agent-id]
 agent-bot population <list|show> [agent-id] [--json]
+agent-bot daemon <run|start|status|stop> [--json]
 agent-bot install [--with-gh-shim]
 agent-bot install-gh-shim
 agent-bot ensure-private-key --app <slug> [--force]
@@ -240,6 +241,20 @@ is a separate aggregate index. Filter the population with `--status` or
 agent-bot population list --status active --app you-codex-agent --json
 agent-bot population show agent_00000000-0000-4000-8000-000000000000
 ```
+
+`daemon` runs a machine-local service over the same space and population
+stores, so other agents and hooks can register souls and ensure spaces without
+importing runtime modules. It binds only to `127.0.0.1` — a non-loopback bind
+address is refused before the listener opens — and every request must present
+the per-start bearer token recorded in the `0600` state file at
+`$XDG_STATE_HOME/agent-bot/daemon.json`, which keeps other local accounts on a
+shared machine out. `run` serves in the foreground for supervised launches;
+`start` detaches a background daemon and waits for it to become healthy;
+`status`/`stop` probe and terminate the recorded daemon. With
+`settings.daemonPreference` set to `prefer` or `required`, `setup-worktree`
+registers and ensures space through the daemon: `prefer` falls back to the
+in-process path only when the daemon is unreachable, and `required` fails
+closed rather than diverging from the daemon-owned stores.
 
 The repository also ships an official progressive-disclosure skill at
 `skills/agent-bot`. Its main `SKILL.md` routes setup, verified publishing, and

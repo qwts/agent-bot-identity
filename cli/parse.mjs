@@ -6,6 +6,7 @@ const PUBLIC_COMMANDS = new Set([
   'identity',
   'space',
   'population',
+  'daemon',
   'install',
   'update',
   'install-gh-shim',
