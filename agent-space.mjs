@@ -21,11 +21,24 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 import { currentAgentId, validateAgentId, withLock } from './agent-identity.mjs';
+import {
+  buildSpacePack,
+  downloadPackFromGist,
+  gistHandoffPointer,
+  packFileName,
+  parseGistReference,
+  parsePack,
+  serializePack,
+  uploadPackToGist,
+} from './agent-space-pack.mjs';
 import { loadConfig, spacesRootSetting } from './config.mjs';
 import { territoryHarness } from './resolve-agent.mjs';
 
 const SCHEMA_VERSION = 1;
 const MARKER_NAME = 'space.json';
+// Optional suitcase-handoff pointer recorded after a gist export. Pointer
+// only — never pack contents, never credentials.
+const HANDOFF_PATTERN = /^gist:[A-Za-z0-9]{1,64}$/;
 
 export function spacesHome({ env = process.env, home = homedir(), config } = {}) {
   if (env.AGENT_BOT_SPACES_HOME) return path.resolve(env.AGENT_BOT_SPACES_HOME);
@@ -53,6 +66,10 @@ function readMarker(root) {
   } catch {
     throw new Error('space marker could not be read');
   }
+  return parseMarkerText(raw);
+}
+
+function parseMarkerText(raw) {
   let record;
   try {
     record = JSON.parse(raw);
@@ -79,9 +96,21 @@ function readMarker(root) {
     throw new Error('space marker has an invalid createdAt');
   }
   if (createdAt !== record.createdAt) throw new Error('space marker has an invalid createdAt');
+  let handoff = null;
+  if (record.handoff !== undefined && record.handoff !== null) {
+    if (typeof record.handoff !== 'string' || !HANDOFF_PATTERN.test(record.handoff)) {
+      throw new Error('space marker has an invalid handoff pointer');
+    }
+    handoff = record.handoff;
+  }
   // Return only the public schema. A hand-edited marker must not smuggle
   // arbitrary or secret material into `space show` or doctor output.
-  return { schemaVersion: SCHEMA_VERSION, agentId, createdAt };
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    agentId,
+    createdAt,
+    ...(handoff ? { handoff } : {}),
+  };
 }
 
 function ensurePrivateDirectory(root) {
@@ -182,20 +211,183 @@ export function inspectAgentSpace(
   return { status: 'ok', id, path: root };
 }
 
+// Record the optional gist handoff pointer in the space marker. Pointer only:
+// the marker never carries pack contents or credentials.
+export function recordSpaceHandoff(
+  agentId,
+  handoff,
+  { env = process.env, home = homedir(), config } = {},
+) {
+  const id = validateAgentId(agentId);
+  if (typeof handoff !== 'string' || !HANDOFF_PATTERN.test(handoff)) {
+    throw new Error('handoff pointer must look like gist:<id>');
+  }
+  const spacesRoot = spacesHome({ env, home, config });
+  const root = path.join(spacesRoot, id);
+  return withLock(path.join(spacesRoot, `.${id}.lock`), `Agent Space ${id}`, () => {
+    if (!existsSync(markerPath(root))) throw new Error(`no agent space for ${id} at ${root}`);
+    const marker = readMarker(root);
+    if (marker.agentId !== id) {
+      throw new Error(`agent space at ${root} is bound to ${marker.agentId}, not ${id}`);
+    }
+    const next = { ...marker, handoff };
+    writeMarker(root, next);
+    return next;
+  });
+}
+
+// Restore a validated pack into the spaces root. The pack's own marker is
+// validated before anything touches disk, files are staged into a private
+// sibling directory, and the staged tree replaces the space atomically —
+// never a half-restored space, and never clobbering without --force.
+export function importAgentSpacePack(
+  pack,
+  {
+    force = false,
+    env = process.env,
+    home = homedir(),
+    config,
+    // Injection seam for tests only: proving the backup/restore path needs a
+    // rename that fails on demand, which the filesystem cannot simulate.
+    rename = renameSync,
+  } = {},
+) {
+  const id = validateAgentId(pack.agentId);
+  const markerEntry = pack.entries.find((entry) => entry.path === MARKER_NAME);
+  if (!markerEntry) throw new Error(`pack does not contain a ${MARKER_NAME} space marker`);
+  const marker = parseMarkerText(Buffer.from(markerEntry.data, 'base64').toString('utf8'));
+  if (marker.agentId !== id) {
+    throw new Error(`pack marker is bound to ${marker.agentId}, not ${id}`);
+  }
+  const spacesRoot = spacesHome({ env, home, config });
+  ensurePrivateDirectory(spacesRoot);
+  return withLock(path.join(spacesRoot, `.${id}.lock`), `Agent Space ${id}`, () => {
+    const root = path.join(spacesRoot, id);
+    if (existsSync(root) && !force) {
+      throw new Error(`agent space for ${id} already exists at ${root}; pass --force to replace it`);
+    }
+    const staging = `${root}.${process.pid}.${randomUUID()}.import`;
+    try {
+      ensurePrivateDirectory(staging);
+      for (const entry of pack.entries) {
+        const target = path.join(staging, entry.path);
+        mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+        writeFileSync(target, Buffer.from(entry.data, 'base64'), {
+          flag: 'wx',
+          mode: 0o600,
+        });
+      }
+      const staged = readMarker(staging);
+      if (staged.agentId !== id) {
+        throw new Error(`pack marker is bound to ${staged.agentId}, not ${id}`);
+      }
+      // Replacement must be recoverable: never delete the existing space
+      // before its successor is in place. Move it aside on the same
+      // filesystem, promote the staged tree, and only then discard the
+      // backup — a failure between the renames restores the original.
+      const backup = `${root}.${process.pid}.${randomUUID()}.replaced`;
+      let backedUp = false;
+      if (existsSync(root)) {
+        rename(root, backup);
+        backedUp = true;
+      }
+      try {
+        rename(staging, root);
+      } catch (error) {
+        if (backedUp) {
+          try {
+            rename(backup, root);
+          } catch {
+            throw new Error(
+              `import failed and the original space could not be restored automatically; ` +
+                `it is preserved at ${backup}: ${error.message}`,
+            );
+          }
+        }
+        throw error;
+      }
+      if (backedUp) rmSync(backup, { recursive: true, force: true });
+    } finally {
+      rmSync(staging, { recursive: true, force: true });
+    }
+    return { id, path: root, marker, entries: pack.entries.length };
+  });
+}
+
+// Remove a retired soul's space directory. Explicit destruction only: the
+// marker must exist and bind to the id, or nothing is deleted.
+export function deleteAgentSpace(
+  agentId,
+  { env = process.env, home = homedir(), config } = {},
+) {
+  const id = validateAgentId(agentId);
+  const spacesRoot = spacesHome({ env, home, config });
+  const root = path.join(spacesRoot, id);
+  return withLock(path.join(spacesRoot, `.${id}.lock`), `Agent Space ${id}`, () => {
+    if (!existsSync(markerPath(root))) {
+      throw new Error(`refusing to delete ${root}: it is not a marked agent space for ${id}`);
+    }
+    const marker = readMarker(root);
+    if (marker.agentId !== id) {
+      throw new Error(`agent space at ${root} is bound to ${marker.agentId}, not ${id}`);
+    }
+    rmSync(root, { recursive: true, force: true });
+    return { id, path: root };
+  });
+}
+
+const COMMAND_FLAGS = new Map([
+  ['init', ['json']],
+  ['ensure', ['json']],
+  ['path', ['json']],
+  ['show', ['json']],
+  ['export', ['json', 'gist', 'out']],
+  ['import', ['json', 'force']],
+  ['retire', ['json', 'delete-space']],
+]);
+
 function parseCli(argv) {
   const [command = 'path', ...tokens] = argv.slice(2);
+  const allowed = COMMAND_FLAGS.get(command) ?? ['json'];
   const positional = [];
-  let json = false;
-  for (const token of tokens) {
-    if (token === '--json') json = true;
-    else if (token.startsWith('-')) throw new Error(`unknown option: ${token}`);
-    else positional.push(token);
+  const options = { json: false, gist: false, force: false, deleteSpace: false, out: null };
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (!token.startsWith('-')) {
+      positional.push(token);
+      continue;
+    }
+    const name = token.startsWith('--') ? token.slice(2) : null;
+    if (!name || !allowed.includes(name)) throw new Error(`unknown option: ${token}`);
+    if (name === 'out') {
+      const value = tokens[++index];
+      if (!value || value.startsWith('-')) throw new Error('--out requires a path');
+      options.out = value;
+    } else if (name === 'json') {
+      options.json = true;
+    } else if (name === 'gist') {
+      options.gist = true;
+    } else if (name === 'force') {
+      options.force = true;
+    } else {
+      options.deleteSpace = true;
+    }
   }
   if (command === 'ensure' && positional.length > 0) {
     throw new Error('space ensure does not accept an Agent ID; it resolves the current context');
   }
+  if (command === 'import') {
+    if (positional.length !== 1) {
+      throw new Error('space import requires exactly one pack path or gist reference');
+    }
+    return { command, source: positional[0], agentId: null, ...options };
+  }
+  if (command === 'retire' && positional.length !== 1) {
+    throw new Error('space retire requires exactly one Agent ID');
+  }
   if (positional.length > 1) throw new Error(`${command} accepts at most one Agent ID`);
-  return { command, agentId: positional[0] ?? null, json };
+  if (options.gist && options.out) throw new Error('choose --gist or --out, not both');
+  return { command, agentId: positional[0] ?? null, source: null, ...options };
 }
 
 function resolveTargetId(args) {
@@ -272,10 +464,140 @@ async function main() {
       process.stdout.write(`${JSON.stringify(spaceJson(space), null, 2)}\n`);
       break;
     }
+    case 'export': {
+      const id = resolveTargetId(args);
+      const space = showAgentSpace(id);
+      const { pack, excluded } = buildSpacePack(space.path, id);
+      for (const relative of excluded) {
+        process.stderr.write(`agent-space: excluded regenerable cache file ${relative}\n`);
+      }
+      if (args.gist) {
+        const gist = await uploadPackToGist(pack);
+        const handoff = gistHandoffPointer(gist.id);
+        recordSpaceHandoff(id, handoff);
+        if (args.json) {
+          process.stdout.write(`${JSON.stringify({
+            agentId: id,
+            handoff,
+            url: gist.url,
+            contentHash: pack.contentHash,
+            entries: pack.entries.length,
+            excluded,
+          }, null, 2)}\n`);
+        } else {
+          process.stderr.write(`agent-space: uploaded secret-free pack for ${id}\n`);
+          process.stdout.write(`${handoff}\n`);
+        }
+        break;
+      }
+      const out = path.resolve(args.out ?? packFileName(id));
+      try {
+        writeFileSync(out, serializePack(pack), { flag: 'wx', mode: 0o600 });
+      } catch (error) {
+        if (error.code === 'EEXIST') {
+          throw new Error(`output pack already exists at ${out}; choose another --out path`);
+        }
+        throw error;
+      }
+      if (args.json) {
+        process.stdout.write(`${JSON.stringify({
+          agentId: id,
+          out,
+          contentHash: pack.contentHash,
+          entries: pack.entries.length,
+          excluded,
+        }, null, 2)}\n`);
+      } else {
+        process.stdout.write(`${out}\n`);
+      }
+      break;
+    }
+    case 'import': {
+      const gistId = args.source.startsWith('gist:') || /^https?:\/\//.test(args.source)
+        ? parseGistReference(args.source)
+        : null;
+      let pack;
+      if (gistId) {
+        pack = await downloadPackFromGist(gistId);
+      } else {
+        let raw;
+        try {
+          raw = readFileSync(args.source, 'utf8');
+        } catch (error) {
+          throw new Error(`could not read pack at ${args.source} (${error.code ?? 'unreadable'})`);
+        }
+        pack = parsePack(raw);
+      }
+      const restored = importAgentSpacePack(pack, { force: args.force });
+      if (args.json) {
+        process.stdout.write(`${JSON.stringify({
+          agentId: restored.id,
+          path: restored.path,
+          entries: restored.entries,
+          restored: true,
+        }, null, 2)}\n`);
+      } else {
+        process.stderr.write(`agent-space: restored ${restored.id}\n`);
+        process.stdout.write(`${restored.path}\n`);
+      }
+      break;
+    }
+    case 'retire': {
+      // Retirement is an explicit operator command (issue #46). Nothing in
+      // setup-worktree or identity finalize may reach this path: finalize
+      // seals provenance, it must never delete a soul's drive.
+      let id;
+      try {
+        id = validateAgentId(args.agentId);
+      } catch {
+        throw new Error('invalid Agent ID in this context');
+      }
+      // Loaded on demand like identity finalize: the census is only needed
+      // for lifecycle commands, and it fails closed on unknown ids.
+      const { retireIdentityWithPopulation, showSoul } = await import('./agent-population.mjs');
+      showSoul(id); // throws "no population record for <id>" — fail closed
+      const root = spacePath(id);
+      let deletable = false;
+      if (args.deleteSpace) {
+        const inspection = inspectAgentSpace(id);
+        if (inspection.status === 'ok') {
+          deletable = true;
+        } else if (!(inspection.status === 'missing' && !inspection.directoryPresent)) {
+          throw new Error(
+            `refusing to delete ${root}: it is not a valid agent space for ${id}; resolve it manually`,
+          );
+        }
+      }
+      // Retire both stores under the lifecycle lock: the identity record is
+      // the authority reuse paths consult, so marking it retired is what
+      // keeps a stale worktree pin from resurrecting the soul via setup.
+      const { soul: updated } = retireIdentityWithPopulation(id);
+      if (!updated) throw new Error(`no population record for ${id}`);
+      let spaceDeleted = false;
+      if (deletable) {
+        deleteAgentSpace(id);
+        spaceDeleted = true;
+      }
+      if (args.json) {
+        process.stdout.write(`${JSON.stringify({
+          agentId: id,
+          status: updated.status,
+          spacePath: root,
+          spaceDeleted,
+        }, null, 2)}\n`);
+      } else {
+        const disposition = spaceDeleted ? 'space deleted' : `space kept at ${root}`;
+        process.stdout.write(`retired ${id} (${disposition})\n`);
+      }
+      break;
+    }
     default:
       throw new Error(
         'usage: agent-bot space <init|path|show> [agent-id] [--json]\n' +
-          '       agent-bot space ensure [--json]',
+          '       agent-bot space ensure [--json]\n' +
+          '       agent-bot space export [agent-id] [--out <path>] [--gist] [--json]\n' +
+          '       agent-bot space import <pack|gist:id|gist-url> [--force] [--json]\n' +
+          '       agent-bot space retire <agent-id> [--delete-space] [--json]',
       );
   }
 }
