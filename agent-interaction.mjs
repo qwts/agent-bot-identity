@@ -13,26 +13,49 @@
 // never conflated.
 //
 // Execution is an injectable port: `executor({ invocation, message,
-// attachments, appendEvent, signal })` is the integration point for harness
-// adapters. v1 ships with a deliberate 'unconfigured' default that records a
-// stable event and fails the invocation, so the contract, store, and
-// authorization plane are testable before any real executor exists.
+// attachments, appendEvent, addArtifact, requestApproval, signal })` is the
+// integration point for harness adapters. v1 ships with a deliberate
+// 'unconfigured' default that records a stable event and fails the
+// invocation, so the contract, store, and authorization plane are testable
+// before any real executor exists.
+//
+// `requestApproval({ operation, summary, ttlMs })` implements immutable
+// command approval (#59 req 8): the proposed operation is frozen into a
+// proposal bound to the sha256 digest of its canonical JSON, the invocation
+// parks in 'waiting-approval', and only a decision that echoes the exact
+// digest — delivered by a principal holding the reserved 'approve' operation
+// — resumes it. A conversational "yes" has no pathway to authorize anything.
 
 import { homedir } from 'node:os';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
+import { timingSafeEqual } from 'node:crypto';
+import path from 'node:path';
+import { realpathSync } from 'node:fs';
+
 import {
+  DEFAULT_PROPOSAL_TTL_MS,
+  addArtifact,
   appendEvent,
+  createProposal,
   createSession,
+  decideProposal,
   getInvocation,
+  getProposal,
   getSession,
   listArtifacts,
+  listInvocations,
+  listProposals,
+  listSessions,
+  operationDigest,
   readEvents,
   submitInvocation,
   touchSession,
   transitionInvocation,
+  validateArtifactName,
   validateInvocationId,
+  validateProposalId,
   validateSessionId,
 } from './agent-jobs.mjs';
 import {
@@ -40,7 +63,7 @@ import {
   assertAuthorized,
   validateTransport,
 } from './agent-principals.mjs';
-import { populationFile, showSoul } from './agent-population.mjs';
+import { listSouls, populationFile, showSoul } from './agent-population.mjs';
 import { validateAgentId } from './agent-identity.mjs';
 
 // Bounded message size (#55 req 6). Kept below the daemon's 64 KiB request
@@ -136,6 +159,26 @@ function publicInvocation(invocation) {
   };
 }
 
+function publicProposal(proposal, invocation) {
+  const { proposalId, invocationId, operationDigest: digest, summary, createdAt, expiresAt, status } = proposal;
+  return {
+    proposalId,
+    invocationId,
+    agentId: invocation.agentId,
+    operationDigest: digest,
+    summary,
+    createdAt,
+    expiresAt,
+    status,
+  };
+}
+
+function digestsMatch(expected, presented) {
+  const left = Buffer.from(expected, 'utf8');
+  const right = Buffer.from(typeof presented === 'string' ? presented : '', 'utf8');
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
 export function createInteractionService({
   env = process.env,
   home = homedir(),
@@ -151,6 +194,8 @@ export function createInteractionService({
   const populationOptions = { file: populationFile({ env, home }) };
   // In-flight executions in this process: invocationId -> { controller, settled }.
   const executions = new Map();
+  // Executors waiting on an open proposal: proposalId -> settle(outcome).
+  const approvalWaiters = new Map();
 
   function audit(decision, { principal = null, transport = null, agentId = null, operation = null }) {
     appendAuditReceipt({
@@ -203,6 +248,62 @@ export function createInteractionService({
     appendEvent(invocationId, 'status', { status, ...data }, storeOptions);
   }
 
+  // Immutable command approval, exposed to executors as a capability. The
+  // invocation parks in 'waiting-approval' while an open proposal carries the
+  // digest of the exact operation; the wait settles on a decision, expiry, or
+  // cancellation, and execution resumes only through the legal transitions.
+  function makeRequestApproval(id, controller) {
+    return async ({ operation, summary, ttlMs = DEFAULT_PROPOSAL_TTL_MS } = {}) => {
+      const digest = operationDigest(operation);
+      transitionInvocation(id, 'waiting-approval', storeOptions);
+      recordStatus(id, 'waiting-approval');
+      const proposal = createProposal(
+        { invocationId: id, operationDigest: digest, summary },
+        { ...storeOptions, ttlMs },
+      );
+      appendEvent(id, 'approval-requested', {
+        proposalId: proposal.proposalId,
+        operationDigest: digest,
+        summary: proposal.summary,
+        expiresAt: proposal.expiresAt,
+      }, storeOptions);
+      const outcome = await new Promise((resolve) => {
+        let finished = false;
+        const settle = (value) => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(timer);
+          controller.signal.removeEventListener('abort', onAbort);
+          approvalWaiters.delete(proposal.proposalId);
+          resolve(value);
+        };
+        const onAbort = () => settle({ decision: 'deny', cancelled: true });
+        const timer = setTimeout(() => {
+          try {
+            decideProposal(proposal.proposalId, { decision: 'expired' }, storeOptions);
+            appendEvent(id, 'approval-decision', {
+              proposalId: proposal.proposalId,
+              decision: 'expired',
+            }, storeOptions);
+          } catch {
+            /* a concurrent decision beat the expiry timer */
+          }
+          settle({ decision: 'deny', expired: true });
+        }, Math.max(0, new Date(proposal.expiresAt).getTime() - now().getTime()));
+        timer.unref?.();
+        controller.signal.addEventListener('abort', onAbort, { once: true });
+        approvalWaiters.set(proposal.proposalId, settle);
+      });
+      // Cancellation owns its own state transitions; every other outcome puts
+      // the invocation back to work so the executor can act on the decision.
+      if (!outcome.cancelled && getInvocation(id, storeOptions).status === 'waiting-approval') {
+        transitionInvocation(id, 'running', storeOptions);
+        recordStatus(id, 'running');
+      }
+      return outcome;
+    };
+  }
+
   async function runInvocation(invocation, message, attachments, controller) {
     const id = invocation.invocationId;
     // Cancellation can land between submission and dispatch.
@@ -219,6 +320,8 @@ export function createInteractionService({
         message,
         attachments,
         appendEvent: (type, data) => appendEvent(id, type, data, storeOptions),
+        addArtifact: (artifact) => addArtifact(id, artifact, storeOptions),
+        requestApproval: makeRequestApproval(id, controller),
         signal: controller.signal,
       });
       // An executor that finished before honoring a cancel request still
@@ -241,6 +344,24 @@ export function createInteractionService({
         recordStatus(id, 'failed', { error: text });
       }
     }
+  }
+
+  function soulAllowed(principal, agentId) {
+    const souls = principal.authorizations.souls;
+    return souls.includes('*') || souls.includes(agentId);
+  }
+
+  // Listing endpoints have no single target soul; the gate is the operation
+  // itself, and each row is then filtered through the per-soul authorization.
+  function authorizeListing(principal, transport, operation) {
+    if (
+      !principal || typeof principal !== 'object' || principal.status !== 'active'
+      || !principal.authorizations.operations.includes(operation)
+    ) {
+      audit('denied', { principal, transport, operation });
+      throw failure(403, 'principal is not authorized for this operation');
+    }
+    audit('accepted', { principal, transport, operation });
   }
 
   function dispatch(invocation, message, attachments) {
@@ -395,6 +516,173 @@ export function createInteractionService({
         operation: 'observe',
       });
       return { artifacts: listArtifacts(invocation.invocationId, storeOptions) };
+    },
+
+    // Population projection for control surfaces (#59 req 5): only the souls
+    // this principal is authorized to observe, and only census metadata.
+    listAuthorizedSouls({ principal, transport }) {
+      const wantedTransport = validated(() => validateTransport(transport));
+      authorizeListing(principal, wantedTransport, 'observe');
+      const souls = listSouls(populationOptions)
+        .filter((soul) => soulAllowed(principal, soul.id))
+        .map(({ id, appSlug, parentId, status, spacePath, lastSeen }) => (
+          { id, appSlug, parentId, status, spacePath, lastSeen }
+        ));
+      return { souls };
+    },
+
+    listSessions({ principal, transport, agentId = null }) {
+      const wantedTransport = validated(() => validateTransport(transport));
+      authorizeListing(principal, wantedTransport, 'observe');
+      const wantedAgent = agentId === null || agentId === undefined ? null : agentIdOrFail(agentId);
+      const sessions = listSessions(
+        { principalId: principal.principalId, agentId: wantedAgent },
+        storeOptions,
+      ).filter((session) => soulAllowed(principal, session.agentId));
+      return { sessions: sessions.map(publicSession) };
+    },
+
+    listInvocations({ principal, transport, sessionId = null }) {
+      const wantedTransport = validated(() => validateTransport(transport));
+      authorizeListing(principal, wantedTransport, 'observe');
+      const wantedSession = sessionId === null || sessionId === undefined
+        ? null
+        : validated(() => validateSessionId(sessionId));
+      const invocations = listInvocations(
+        { principalId: principal.principalId, sessionId: wantedSession },
+        storeOptions,
+      ).filter((invocation) => soulAllowed(principal, invocation.agentId));
+      return { invocations: invocations.map(publicInvocation) };
+    },
+
+    // Open, unexpired proposals over souls this principal may observe. The
+    // digest travels with each row so an approving client signs off on the
+    // exact operation the daemon recorded, not on whatever text it rendered.
+    listProposals({ principal, transport }) {
+      const wantedTransport = validated(() => validateTransport(transport));
+      authorizeListing(principal, wantedTransport, 'observe');
+      const nowMs = now().getTime();
+      const proposals = [];
+      for (const proposal of listProposals({ status: 'open' }, storeOptions)) {
+        if (nowMs > new Date(proposal.expiresAt).getTime()) continue;
+        const invocation = getInvocation(proposal.invocationId, storeOptions);
+        if (!invocation || invocation.status !== 'waiting-approval') continue;
+        if (!soulAllowed(principal, invocation.agentId)) continue;
+        proposals.push(publicProposal(proposal, invocation));
+      }
+      return { proposals };
+    },
+
+    // Approve/deny an immutable proposal (#59 req 8). The caller must hold the
+    // reserved 'approve' operation for the soul, and must echo the exact
+    // operation digest; a mismatched or stale digest is refused. Consuming the
+    // proposal is atomic in the store, so a decision can never land twice.
+    decideProposal({ principal, transport, proposalId, decision, digest }) {
+      const wantedTransport = validated(() => validateTransport(transport));
+      const target = validated(() => validateProposalId(proposalId));
+      if (decision !== 'approve' && decision !== 'deny') {
+        throw failure(400, 'decision must be approve or deny');
+      }
+      const proposal = getProposal(target, storeOptions);
+      if (!proposal) throw failure(404, 'unknown proposal');
+      const invocation = getInvocation(proposal.invocationId, storeOptions);
+      if (!invocation) throw failure(404, 'unknown proposal');
+      authorize({
+        principal,
+        transport: wantedTransport,
+        agentId: invocation.agentId,
+        operation: 'approve',
+      });
+      if (proposal.status !== 'open' || invocation.status !== 'waiting-approval') {
+        throw failure(409, 'proposal is no longer open');
+      }
+      if (now().getTime() > new Date(proposal.expiresAt).getTime()) {
+        try {
+          decideProposal(proposal.proposalId, { decision: 'expired' }, storeOptions);
+          appendEvent(invocation.invocationId, 'approval-decision', {
+            proposalId: proposal.proposalId,
+            decision: 'expired',
+          }, storeOptions);
+        } catch {
+          /* already settled by the expiry timer */
+        }
+        const waiter = approvalWaiters.get(proposal.proposalId);
+        if (waiter) waiter({ decision: 'deny', expired: true });
+        throw failure(409, 'proposal is no longer open');
+      }
+      if (!digestsMatch(proposal.operationDigest, digest)) {
+        audit('denied', {
+          principal,
+          transport: wantedTransport,
+          agentId: invocation.agentId,
+          operation: 'approve',
+        });
+        throw failure(409, 'operation digest does not match the proposal');
+      }
+      let decided;
+      try {
+        decided = decideProposal(proposal.proposalId, {
+          decision: decision === 'approve' ? 'approved' : 'denied',
+          decidedBy: principal.principalId,
+        }, storeOptions);
+      } catch {
+        throw failure(409, 'proposal is no longer open');
+      }
+      appendEvent(invocation.invocationId, 'approval-decision', {
+        proposalId: decided.proposalId,
+        decision: decided.status,
+        operationDigest: decided.operationDigest,
+        decidedBy: decided.decidedBy,
+      }, storeOptions);
+      const settle = approvalWaiters.get(decided.proposalId);
+      if (settle) settle({ decision });
+      return { proposal: publicProposal(decided, invocation) };
+    },
+
+    // Bounded artifact resolution for download surfaces (#59 req 7). Bytes
+    // never flow through this service; it authorizes, matches recorded
+    // metadata, and proves the real path stays inside the soul's Agent Space
+    // (symlinks included) before the caller streams anything.
+    resolveArtifact({ principal, transport, invocationId, name }) {
+      const wantedTransport = validated(() => validateTransport(transport));
+      const invocation = ownedInvocation(principal, invocationId);
+      authorize({
+        principal,
+        transport: wantedTransport,
+        agentId: invocation.agentId,
+        operation: 'observe',
+      });
+      let wantedName;
+      try {
+        wantedName = validateArtifactName(name);
+      } catch {
+        throw failure(400, 'invalid artifact name');
+      }
+      const artifact = invocation.artifacts.find((entry) => entry.name === wantedName);
+      if (!artifact) throw failure(404, 'unknown artifact');
+      let soul;
+      try {
+        soul = showSoul(invocation.agentId, populationOptions);
+      } catch {
+        throw failure(404, 'unknown soul');
+      }
+      const root = path.resolve(soul.spacePath);
+      const candidate = path.resolve(root, artifact.spacePath);
+      if (candidate !== root && !candidate.startsWith(root + path.sep)) {
+        throw failure(404, 'artifact is not available');
+      }
+      let realRoot;
+      let realFile;
+      try {
+        realRoot = realpathSync(root);
+        realFile = realpathSync(candidate);
+      } catch {
+        throw failure(404, 'artifact is not available');
+      }
+      if (realFile !== realRoot && !realFile.startsWith(realRoot + path.sep)) {
+        throw failure(404, 'artifact is not available');
+      }
+      return { artifact, path: realFile };
     },
   };
 }

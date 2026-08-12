@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#11151a">
+<title>agent-bot</title>
+<link rel="stylesheet" href="/ui/style.css">
+<link rel="manifest" href="/ui/manifest.webmanifest">
+<link rel="icon" href="/ui/icon.svg" type="image/svg+xml">
+<script type="module" src="/ui/app.js"></script>
+</head>
+<body>
+<header>
+  <h1>agent-bot</h1>
+  <nav id="nav" hidden>
+    <button data-view="population" class="active" type="button">Population</button>
+    <button data-view="conversation" type="button">Conversation</button>
+    <button data-view="jobs" type="button">Jobs</button>
+    <button data-view="approvals" type="button">Approvals<span id="approvals-badge" hidden></span></button>
+  </nav>
+  <div id="whoami"></div>
+</header>
+
+<div id="banner" hidden>daemon unreachable — showing the offline shell; nothing here is authoritative</div>
+
+<main>
+  <section id="view-pairing" hidden>
+    <h2>Not paired</h2>
+    <p>This browser has no active daemon session. On the daemon machine run:</p>
+    <pre>agent-bot web open</pre>
+    <p>then open the printed one-time link here within two minutes. Pairing
+    codes are single use and the resulting session lives only in the daemon's
+    memory — nothing is stored in this browser.</p>
+  </section>
+
+  <section id="view-population" hidden>
+    <h2>Population</h2>
+    <p class="hint">Souls this principal may observe. Select one to converse.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Agent ID</th><th>App</th><th>Parent</th><th>Status</th><th>Last seen</th><th></th></tr></thead>
+      <tbody id="population-rows"></tbody>
+    </table></div>
+  </section>
+
+  <section id="view-conversation" hidden>
+    <h2>Conversation</h2>
+    <p id="conversation-soul" class="hint">Select a soul from Population first.</p>
+    <div id="conversation-invocations"></div>
+    <div id="conversation-events" class="events"></div>
+    <form id="message-form" hidden>
+      <textarea id="message-input" rows="3" maxlength="30000" placeholder="Message this soul…" required></textarea>
+      <button type="submit">Send</button>
+    </form>
+  </section>
+
+  <section id="view-jobs" hidden>
+    <h2>Active jobs</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Invocation</th><th>Soul</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+      <tbody id="jobs-rows"></tbody>
+    </table></div>
+    <div id="job-detail" hidden>
+      <h3 id="job-detail-title"></h3>
+      <div id="job-detail-events" class="events"></div>
+      <h4>Artifacts</h4>
+      <ul id="job-detail-artifacts"></ul>
+    </div>
+  </section>
+
+  <section id="view-approvals" hidden>
+    <h2>Approvals</h2>
+    <p class="hint">Immutable operation proposals. Approving sends back the exact
+    digest shown — a plain “yes” in a conversation can never authorize work.</p>
+    <div id="approvals-list"></div>
+  </section>
+</main>
+</body>
+</html>
