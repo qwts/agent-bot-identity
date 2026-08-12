@@ -81,6 +81,9 @@ agent-bot mint-token --app <slug> [--json]
 agent-bot doctor [--machine-only] [--app <slug>] [--json]
 agent-bot identity <ensure|spawn|bind|record|finalize|show|current>
 agent-bot space <init|ensure|path|show> [agent-id]
+agent-bot space export [agent-id] [--out <path>] [--gist]
+agent-bot space import <pack|gist:id|gist-url> [--force]
+agent-bot space retire <agent-id> [--delete-space]
 agent-bot population <list|show> [agent-id] [--json]
 agent-bot install [--with-gh-shim]
 agent-bot install-gh-shim
@@ -424,6 +427,45 @@ daemon and integration work in
 This config is policy, not a secret store: never put tokens, credentials, or
 private keys in it. Agent Space lifetime and path ownership remain defined by
 [ENG-0172](https://github.com/qwts/playbook-engineering/blob/main/docs/decisions/ENG-0172-agent-space-is-durable-per-soul-storage.md).
+
+#### Agent Space export packs, gist handoff, and retirement
+
+`agent-bot space export [agent-id]` writes the soul's space as a single
+secret-free pack: one deterministic JSON document whose manifest records the
+Agent ID, pack schema version, creation time, and a content hash over the
+entries (no external archiver, zero dependencies). Export fails closed when a
+known secret filename (private keys, `*.pem`, `*token*`, `.netrc`, `.env`,
+credential files, …) is present anywhere in the space; the only removals are
+the documented regenerable-cache exclusions (for example the
+`.agent-bot-token.json` worktree-token cache), which are reported on stderr
+rather than dropped silently. `agent-bot space import <pack> [--force]`
+validates the manifest hash and the embedded space marker before restoring
+atomically into the spaces root, and refuses to clobber an existing space
+without `--force`.
+
+`agent-bot space export <agent-id> --gist` is an opt-in suitcase transport: it
+uploads the same secret-free pack as a *secret* gist through the bound App's
+token-minting path (the slug is resolved territory-aware, exactly like
+`setup-worktree` and `worktree-token`), then records only the pointer
+`gist:<id>` in the space marker — never pack contents.
+`agent-bot space import gist:<id>` (or a gist URL) downloads and restores it.
+A mint failure or missing gist access fails closed with the App permission
+named. The App needs the account-level Gists permission, and organization
+policy may forbid unsanctioned gists entirely — nothing uses this transport
+unless you ask for it.
+
+`agent-bot space retire <agent-id>` is the explicit end of a soul's local
+lifecycle: it marks the soul `retired` in the authoritative identity record
+*and* the population census (under the shared lifecycle lock), and by
+default keeps the space directory on disk as a tombstone. `--delete-space`
+removes the directory, and only when its marker is present and bound to
+that id. Retirement is permanent for that identity: a worktree still pinned
+to a retired Agent ID fails setup closed with instructions to unpin or
+start fresh, a retired census record refuses to be overwritten, and a
+retired identity cannot be finalized — so re-running `setup-worktree` can
+never resurrect the soul or recreate a deleted space. Retirement never runs
+implicitly — identity finalize and worktree teardown do not call it — and
+`population list` shows retired souls in a separate `RETIRED` section.
 
 ### 4. Install the hooks (and optionally the gh shim)
 
