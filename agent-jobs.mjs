@@ -49,9 +49,11 @@ const MAX_ERROR_LENGTH = 512;
 // status. `cancel-requested` is a distinct state because cancellation is
 // cooperative: the record becomes `cancelled` only once execution actually
 // stopped, and an executor that finishes before noticing the request may
-// still land on `completed` or `failed`.
+// still land on `completed` or `failed`. `queued -> failed` exists for jobs
+// that can never dispatch: crash recovery after a daemon restart, or a
+// dispatch that dies before reaching `running`.
 export const INVOCATION_TRANSITIONS = Object.freeze({
-  queued: Object.freeze(['running', 'cancel-requested']),
+  queued: Object.freeze(['running', 'failed', 'cancel-requested']),
   running: Object.freeze(['completed', 'failed', 'waiting-approval', 'cancel-requested']),
   'waiting-approval': Object.freeze(['running', 'failed', 'cancel-requested']),
   'cancel-requested': Object.freeze(['cancelled', 'completed', 'failed']),
@@ -602,11 +604,15 @@ export function compactEvents(
 }
 
 // Crash recovery (#56 req 8), called on daemon startup before any dispatch.
-// Work that was executing when the previous daemon died cannot be resumed —
-// the executor and its in-memory context are gone — so `running` and
-// `waiting-approval` jobs are reconciled to `failed` with a stable error, and
-// `cancel-requested` jobs become `cancelled` (the death of the process
-// certainly stopped execution). `queued` jobs are left queued for re-dispatch.
+// Nothing a previous daemon owned can be resumed: executing work lost its
+// executor and in-memory context, and `queued` jobs lost the message that
+// only ever travels in memory — leaving them queued would strand them
+// forever. So `running` and `waiting-approval` jobs are reconciled to
+// `failed` with 'interrupted by daemon restart', `queued` jobs to `failed`
+// with 'interrupted before dispatch', and `cancel-requested` jobs become
+// `cancelled` (the death of the process certainly stopped execution). The
+// submitting adapter re-drives recovered work by retrying with a fresh
+// idempotency key.
 export function recoverInteractionStore(
   { env = process.env, home = homedir(), now = () => new Date() } = {},
 ) {
@@ -616,7 +622,6 @@ export function recoverInteractionStore(
     const { invocations, idempotency } = readJobs(options);
     const failed = [];
     const cancelled = [];
-    const queued = [];
     const next = Object.create(null);
     for (const invocation of Object.values(invocations)) {
       if (invocation.status === 'running' || invocation.status === 'waiting-approval') {
@@ -626,22 +631,29 @@ export function recoverInteractionStore(
           error: 'interrupted by daemon restart',
           updatedAt: at,
         };
-        failed.push(invocation.invocationId);
+        failed.push({ invocationId: invocation.invocationId, error: 'interrupted by daemon restart' });
+      } else if (invocation.status === 'queued') {
+        next[invocation.invocationId] = {
+          ...invocation,
+          status: 'failed',
+          error: 'interrupted before dispatch',
+          updatedAt: at,
+        };
+        failed.push({ invocationId: invocation.invocationId, error: 'interrupted before dispatch' });
       } else if (invocation.status === 'cancel-requested') {
         next[invocation.invocationId] = { ...invocation, status: 'cancelled', updatedAt: at };
         cancelled.push(invocation.invocationId);
       } else {
         next[invocation.invocationId] = invocation;
-        if (invocation.status === 'queued') queued.push(invocation.invocationId);
       }
     }
     if (failed.length > 0 || cancelled.length > 0) {
       writeJsonDocument(file, { schemaVersion: SCHEMA_VERSION, invocations: next, idempotency });
     }
-    return { failed, cancelled, queued };
+    return { failed, cancelled };
   });
-  for (const invocationId of recovered.failed) {
-    appendEvent(invocationId, 'recovery', { status: 'failed', error: 'interrupted by daemon restart' }, { env, home, now });
+  for (const { invocationId, error } of recovered.failed) {
+    appendEvent(invocationId, 'recovery', { status: 'failed', error }, { env, home, now });
   }
   for (const invocationId of recovered.cancelled) {
     appendEvent(invocationId, 'recovery', { status: 'cancelled' }, { env, home, now });

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
+  EXECUTION_FAILED_ERROR,
   MAX_MESSAGE_BYTES,
   UNCONFIGURED_EXECUTOR_ERROR,
   createInteractionService,
@@ -244,6 +245,44 @@ test('the unconfigured executor fails invocations with a stable documented error
     afterSeq: events.at(-2).seq,
   });
   assert.deepEqual(tail.events.map((event) => event.seq), [events.at(-1).seq]);
+});
+
+test('executor exception text never reaches records, events, or clients', async () => {
+  const { env } = scratch();
+  seedSoul(env);
+  const principal = seedPrincipal(env);
+  const logged = [];
+  const interaction = service(env, {
+    executor: async () => { throw new Error('secret-detail /private/keys/id_ed25519'); },
+    log: (line) => logged.push(line),
+  });
+  const { session } = interaction.createOrContinueSession({ principal, transport: 'web', agentId: AGENT_ID });
+  const { invocation } = interaction.submitMessage({
+    principal,
+    transport: 'web',
+    sessionId: session.sessionId,
+    message: 'trigger a crash',
+    idempotencyKey: 'leaky-1',
+  });
+  const failed = await waitFor(() => {
+    const current = getInvocation(invocation.invocationId, { env, home: '/nonexistent' });
+    return current.status === 'failed' ? current : null;
+  });
+  // The public failure reason is fixed; the real exception is server-side only.
+  assert.equal(failed.error, EXECUTION_FAILED_ERROR);
+  assert.equal(logged.some((line) => line.includes('secret-detail')), true);
+  const home = interactionHome({ env, home: '/nonexistent' });
+  const persisted = [
+    readFileSync(path.join(home, 'jobs.json'), 'utf8'),
+    readFileSync(path.join(home, 'events', `${invocation.invocationId}.jsonl`), 'utf8'),
+  ];
+  for (const raw of persisted) assert.equal(raw.includes('secret-detail'), false);
+  const { events } = interaction.readEvents({
+    principal,
+    transport: 'web',
+    invocationId: invocation.invocationId,
+  });
+  assert.deepEqual(events.at(-1).data, { status: 'failed', error: EXECUTION_FAILED_ERROR });
 });
 
 test('cooperative cancellation stops a running executor and reports stopped: true', async () => {

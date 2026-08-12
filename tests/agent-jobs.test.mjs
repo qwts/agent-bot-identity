@@ -245,15 +245,22 @@ test('crash recovery reconciles orphaned jobs into documented states', () => {
   const queued = submitInvocation({ ...base, idempotencyKey: 'queued' }, options).invocation;
 
   const recovered = recoverInteractionStore(options);
-  assert.deepEqual(new Set(recovered.failed), new Set([running.invocationId, waiting.invocationId]));
+  assert.deepEqual(new Map(recovered.failed.map((entry) => [entry.invocationId, entry.error])), new Map([
+    [running.invocationId, 'interrupted by daemon restart'],
+    [waiting.invocationId, 'interrupted by daemon restart'],
+    [queued.invocationId, 'interrupted before dispatch'],
+  ]));
   assert.deepEqual(recovered.cancelled, [cancelling.invocationId]);
-  assert.deepEqual(recovered.queued, [queued.invocationId]);
 
   const failed = getInvocation(running.invocationId, options);
   assert.equal(failed.status, 'failed');
   assert.equal(failed.error, 'interrupted by daemon restart');
   assert.equal(getInvocation(cancelling.invocationId, options).status, 'cancelled');
-  assert.equal(getInvocation(queued.invocationId, options).status, 'queued');
+  // A queued job cannot be re-driven by a new daemon (its message only ever
+  // travelled in memory), so recovery must not strand it in 'queued'.
+  const stranded = getInvocation(queued.invocationId, options);
+  assert.equal(stranded.status, 'failed');
+  assert.equal(stranded.error, 'interrupted before dispatch');
 
   const recoveryEvents = readEvents(running.invocationId, {}, options);
   assert.equal(recoveryEvents.at(-1).type, 'recovery');
@@ -261,8 +268,14 @@ test('crash recovery reconciles orphaned jobs into documented states', () => {
     status: 'failed',
     error: 'interrupted by daemon restart',
   });
+  const strandedEvents = readEvents(queued.invocationId, {}, options);
+  assert.equal(strandedEvents.at(-1).type, 'recovery');
+  assert.deepEqual(strandedEvents.at(-1).data, {
+    status: 'failed',
+    error: 'interrupted before dispatch',
+  });
   // Recovery is idempotent: a second pass finds nothing to reconcile.
-  assert.deepEqual(recoverInteractionStore(options).failed, []);
+  assert.deepEqual(recoverInteractionStore(options), { failed: [], cancelled: [] });
 });
 
 test('concurrent cross-process submissions neither corrupt nor duplicate', async () => {
