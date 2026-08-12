@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+export const MOCK_BOT_UID = '700001';
+
 export function startMockGitHubApp(root) {
   const portFile = join(root, `github-app-port-${process.pid}-${Date.now()}`);
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url), portFile], {
@@ -39,6 +41,16 @@ function serve(portFile) {
       response.end(JSON.stringify({
         token: 'fixture-token-never-logged',
         expires_at: '2099-01-01T00:00:00Z',
+      }));
+      return;
+    }
+    // Bot user lookup used by setup-worktree to derive the noreply author
+    // email. The fixture id is deliberately stable so tests can assert the
+    // exact attribution written into the worktree.
+    if (request.method === 'GET' && request.url.startsWith('/users/')) {
+      response.end(JSON.stringify({
+        id: 700001,
+        avatar_url: 'https://avatars.example/u/700001',
       }));
       return;
     }
