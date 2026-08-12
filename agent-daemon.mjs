@@ -15,6 +15,15 @@
 //
 // v0 scope per #41: register soul, space ensure, space path, population list.
 // No OAuth, no remote sync, no HTTPS — loopback is the boundary (#35).
+//
+// v1 adds the transport-neutral interaction contract (#55): sessions,
+// messages, invocation status, ordered events, cancellation, and artifact
+// references, served by agent-interaction.mjs over the durable job store
+// (agent-jobs.mjs) with deny-by-default principal authorization
+// (agent-principals.mjs). /v0 semantics are unchanged. Requests carry the
+// adapter-authenticated (transport, providerId) pair; the daemon resolves it
+// to a locally enrolled principal and refuses everything else — nothing on
+// this remote surface can enroll a principal or widen an authorization.
 
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -28,6 +37,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
 import { listSouls, upsertIdentitySoul } from './agent-population.mjs';
 import { stateDirectory, validateAgentId } from './agent-identity.mjs';
+import { createInteractionService } from './agent-interaction.mjs';
+import { recoverInteractionStore } from './agent-jobs.mjs';
+import { appendAuditReceipt, principalsFile, resolvePrincipal } from './agent-principals.mjs';
 
 const SCHEMA_VERSION = 1;
 const MAX_BODY_BYTES = 64 * 1024;
@@ -182,7 +194,11 @@ export function createDaemonServer({
   home = homedir(),
   config,
   token = randomBytes(32).toString('hex'),
+  executor,
 } = {}) {
+  // One interaction service per server so in-flight executions and their
+  // cancellation controllers live exactly as long as the daemon.
+  const interaction = createInteractionService({ env, home, config, executor });
   const server = createServer(async (req, res) => {
     try {
       if (!isLoopbackPeer(req.socket.remoteAddress)) {
@@ -196,6 +212,10 @@ export function createDaemonServer({
         return;
       }
       const url = new URL(req.url, 'http://127.0.0.1');
+      if (url.pathname.startsWith('/v1/')) {
+        await handleInteractionRequest({ req, res, url, interaction, env, home });
+        return;
+      }
       const route = `${req.method} ${url.pathname}`;
       switch (route) {
         case 'GET /v0/health': {
@@ -246,6 +266,75 @@ export function createDaemonServer({
   });
   server.token = token;
   return server;
+}
+
+// Versioned /v1 interaction routes (#55). The transport adapter authenticates
+// the provider identity and forwards only the normalized (transport,
+// providerId) pair — in the body for POSTs, in the query for GETs. The daemon
+// resolves that pair to a locally enrolled principal, deny-by-default; the
+// interaction service then authorizes each operation before any soul lookup
+// or job mutation. Errors are stable and never reflect request contents.
+async function handleInteractionRequest({ req, res, url, interaction, env, home }) {
+  const body = req.method === 'POST' ? parseJsonBody(await readBody(req)) : null;
+  const transport = body ? body.transport : url.searchParams.get('transport');
+  const providerId = body ? body.providerId : url.searchParams.get('providerId');
+  let principal;
+  try {
+    principal = resolvePrincipal({ transport, providerId }, { file: principalsFile({ env, home }) });
+  } catch {
+    throw Object.assign(new Error('invalid transport principal'), { statusCode: 400 });
+  }
+  if (!principal) {
+    // No principal, no route: the refusal is recorded but indistinguishable
+    // from any other authorization failure to the caller.
+    appendAuditReceipt({ event: 'denied-request', transport, decision: 'denied' }, { env, home });
+    sendJson(res, 403, { error: 'principal is not authorized for this operation' });
+    return;
+  }
+  let match;
+  if (req.method === 'POST' && url.pathname === '/v1/sessions') {
+    sendJson(res, 200, interaction.createOrContinueSession({
+      principal,
+      transport,
+      agentId: body.agentId,
+      sessionId: body.sessionId ?? null,
+    }));
+    return;
+  }
+  if (req.method === 'POST' && (match = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/messages$/))) {
+    sendJson(res, 200, interaction.submitMessage({
+      principal,
+      transport,
+      sessionId: match[1],
+      message: body.message,
+      idempotencyKey: body.idempotencyKey,
+      attachments: body.attachments,
+    }));
+    return;
+  }
+  if (req.method === 'GET' && (match = url.pathname.match(/^\/v1\/invocations\/([^/]+)$/))) {
+    sendJson(res, 200, interaction.getInvocation({ principal, transport, invocationId: match[1] }));
+    return;
+  }
+  if (req.method === 'GET' && (match = url.pathname.match(/^\/v1\/invocations\/([^/]+)\/events$/))) {
+    const after = url.searchParams.get('after');
+    sendJson(res, 200, interaction.readEvents({
+      principal,
+      transport,
+      invocationId: match[1],
+      afterSeq: after === null ? 0 : Number(after),
+    }));
+    return;
+  }
+  if (req.method === 'POST' && (match = url.pathname.match(/^\/v1\/invocations\/([^/]+)\/cancel$/))) {
+    sendJson(res, 200, await interaction.cancelInvocation({ principal, transport, invocationId: match[1] }));
+    return;
+  }
+  if (req.method === 'GET' && (match = url.pathname.match(/^\/v1\/invocations\/([^/]+)\/artifacts$/))) {
+    sendJson(res, 200, interaction.listArtifacts({ principal, transport, invocationId: match[1] }));
+    return;
+  }
+  sendJson(res, 404, { error: 'unknown route' });
 }
 
 // listSouls/upsertIdentitySoul default populationFile() reads process.env; the
@@ -348,6 +437,30 @@ export function daemonClient({
       const { souls } = await request('GET', `/v0/population${query ? `?${query}` : ''}`);
       return souls;
     },
+    // v1 interaction contract (#55). Adapters authenticate their provider
+    // identity and pass the normalized pair on every call; the daemon owns
+    // principal resolution and authorization.
+    async createSession({ transport, providerId, agentId, sessionId = null }) {
+      return request('POST', '/v1/sessions', { transport, providerId, agentId, sessionId });
+    },
+    async submitMessage(sessionId, { transport, providerId, message, idempotencyKey, attachments }) {
+      return request('POST', `/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
+        transport, providerId, message, idempotencyKey, attachments,
+      });
+    },
+    async invocation(invocationId, { transport, providerId }) {
+      return request('GET', `/v1/invocations/${encodeURIComponent(invocationId)}?${new URLSearchParams({ transport, providerId })}`);
+    },
+    async events(invocationId, { transport, providerId, afterSeq = 0 }) {
+      const params = new URLSearchParams({ transport, providerId, after: String(afterSeq) });
+      return request('GET', `/v1/invocations/${encodeURIComponent(invocationId)}/events?${params}`);
+    },
+    async cancel(invocationId, { transport, providerId }) {
+      return request('POST', `/v1/invocations/${encodeURIComponent(invocationId)}/cancel`, { transport, providerId });
+    },
+    async artifacts(invocationId, { transport, providerId }) {
+      return request('GET', `/v1/invocations/${encodeURIComponent(invocationId)}/artifacts?${new URLSearchParams({ transport, providerId })}`);
+    },
   };
 }
 
@@ -369,6 +482,11 @@ export async function runDaemon({
   if (existing.running) {
     throw new Error(`daemon already running (pid ${existing.pid}, port ${existing.port})`);
   }
+  // Reconcile jobs orphaned by a previous daemon before accepting new work
+  // (#56 req 8): executing work becomes failed, never-dispatched queued work
+  // becomes failed with its own stable reason, and pending cancellations
+  // become cancelled — nothing is silently stranded.
+  recoverInteractionStore({ env, home, now });
   const server = createDaemonServer({ env, home, config });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
