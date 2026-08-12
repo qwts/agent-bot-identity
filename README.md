@@ -21,6 +21,11 @@ Why you'd want this:
 - **Transcript-bound Agent IDs.** Each conversation gets a private
   `agent_<uuid>` recorded on commits as an `Agent-Identity:` trailer, so you
   can resolve a commit back to the provider transcript that produced it.
+  (Read it with `git log --format='%B' | grep '^Agent-Identity:'` — GitHub's
+  squash merge appends its own co-author block, which pushes the trailer out
+  of the final paragraph that git's `%(trailers:)` parser reads. The local
+  identity record and census are the authoritative attribution store; the
+  trailer is a breadcrumb.)
 
 This repository is the sole runtime owner of the agent-bot and
 transcript-bound execution identity system. Clone and install it directly;
