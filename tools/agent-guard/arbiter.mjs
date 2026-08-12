@@ -16,7 +16,7 @@ import process from 'node:process';
 
 import { clampCeiling, decideAdmission, deriveBudgetForMemory } from './lib/budget.mjs';
 import { readLeases } from './lib/leases.mjs';
-import { HEAVY_LANES, isAgentSession, isCi, listGrants, revokeGrant } from './lib/policy.mjs';
+import { HEAVY_LANES, harnessName, isAgentSession, isCi, listGrants, revokeGrant, writeGrant } from './lib/policy.mjs';
 import { machineToken, stateDir } from './lib/protocol.mjs';
 import { readMemoryStatus, topConsumers } from './lib/system-memory.mjs';
 
@@ -102,11 +102,23 @@ function grant(argv) {
     process.stderr.write(`unknown lane ${JSON.stringify(laneId ?? '')}; expected one of ${HEAVY_LANES.map((entry) => entry.id).join(', ')}\n`);
     return 1;
   }
-  process.stderr.write(
-    `agent grants are disabled for ${lane.id}: same-user files cannot authenticate human approval. ` +
-      'Run the lane directly from the owner\'s terminal or use GitHub CI.\n',
-  );
-  return 1;
+  // Defense in depth: the command hook already denies this invocation from
+  // agent sessions, but the arbiter refuses marked callers on its own too.
+  // The grant is honored by lane policy only in an UNMARKED session, so a
+  // grant minted here is owner evidence, not agent self-approval (#180).
+  if (harnessName(process.env) !== 'human') {
+    process.stderr.write(
+      `grants cannot be minted from an agent session (${harnessName(process.env)} markers present). ` +
+        "Run this from the owner's own terminal.\n",
+    );
+    return 1;
+  }
+  const requested = Number(argv[2]);
+  const minutes = Number.isFinite(requested) && requested > 0 ? Math.min(Math.round(requested), 240) : 30;
+  const written = writeGrant({ laneId: lane.id, minutes });
+  out(`granted ${lane.id} for ${minutes} minutes (expires ${written.expiresAt})`);
+  out('Run the lane through its guarded entrypoint; lease, ceiling, timeout, and admission enforcement still apply.');
+  return 0;
 }
 
 function revoke(argv) {

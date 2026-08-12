@@ -23,7 +23,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { CORE_LEASE_FIELDS, PROTOCOL_VERSION, ensureStateDirs, leasesDir, machineToken, stateDir } from './protocol.mjs';
+import { CORE_LEASE_FIELDS, PROTOCOL_VERSION, ensureStateDirs, lanePeaksDir, leasesDir, machineToken, stateDir } from './protocol.mjs';
 
 export function isProcessAlive(pid) {
   try {
@@ -233,6 +233,44 @@ export function leaseExists(id, env = process.env, { processGroupId = processGro
 
 const LOCK_STALE_MS = 30_000;
 const LOCK_POLL_MS = 50;
+
+/**
+ * Record a lane's measured peak after a COMPLETED run, keyed by repo and
+ * label. Stored in the protected state directory so shell commands cannot
+ * plant a low peak to shrink the next reservation; only run-guarded itself
+ * writes here, from RSS it measured. Kept as a small rolling window so one
+ * unusually light run does not undersize the next reservation.
+ */
+export function recordLanePeak({ env = process.env, repo, label, peakRssMb }) {
+  if (!Number.isFinite(peakRssMb) || peakRssMb <= 0) return;
+  const file = path.join(lanePeaksDir(env), `${encodeURIComponent(`${repo}::${label}`)}.json`);
+  let peaks = [];
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'));
+    if (Array.isArray(parsed)) peaks = parsed.filter((value) => Number.isFinite(value) && value > 0);
+  } catch {
+    // First record, or an unreadable file: start fresh.
+  }
+  peaks.push(Math.round(peakRssMb));
+  try {
+    mkdirSync(lanePeaksDir(env), { recursive: true });
+    writeFileSync(file, `${JSON.stringify(peaks.slice(-5))}\n`);
+  } catch {
+    // Peak history is an optimization; failing to record must not fail the run.
+  }
+}
+
+/** The largest recent recorded peak for a lane, or null without history. */
+export function readLanePeakMb({ env = process.env, repo, label }) {
+  const file = path.join(lanePeaksDir(env), `${encodeURIComponent(`${repo}::${label}`)}.json`);
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'));
+    const peaks = Array.isArray(parsed) ? parsed.filter((value) => Number.isFinite(value) && value > 0) : [];
+    return peaks.length > 0 ? Math.max(...peaks) : null;
+  } catch {
+    return null;
+  }
+}
 
 function lockPath(env) {
   return path.join(stateDir(env), 'admission.lock');

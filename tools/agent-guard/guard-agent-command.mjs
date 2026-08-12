@@ -30,8 +30,9 @@
 //
 // Protocols: --protocol=claude | cursor | codex
 
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { dirname, isAbsolute, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
@@ -42,7 +43,7 @@ const GUARD_GUIDE = 'https://github.com/qwts/playbook-engineering/blob/main/docs
 // Two different blocks need two different next steps, and a refusal whose
 // advice does not fit is one an agent argues with instead of following.
 const GUIDANCE =
-  'Push the branch and let GitHub CI verify — CI is the authoritative lane and is exempt from this guard. ' +
+  'Push the branch and let GitHub CI verify — its workflow invokes the underlying CI entrypoint directly. ' +
   `See ${GUARD_GUIDE}.`;
 
 // A direct binary is not necessarily a heavy run — in a tooling repo `node
@@ -108,8 +109,8 @@ const TAMPERING = [
   {
     pattern: /(?:^|[\s;&|])(?:CI|GITHUB_ACTIONS|CONTINUOUS_INTEGRATION|BUILDKITE|GITLAB_CI|JENKINS_URL)=/u,
     reason:
-      'Blocked a command-local CI marker: hosted CI is exempt from admission because its runner is isolated, but a ' +
-      `local command cannot grant itself that exemption. Remove the assignment and use the guarded entrypoint. ${GUIDANCE}`,
+      'Blocked a command-local CI marker: CI markers and bearer credentials never exempt this wrapper, and a ' +
+      `local command cannot change that policy. Remove the assignment and use the guarded entrypoint. ${GUIDANCE}`,
   },
   {
     pattern: /\bAGENT_GUARD_FORCE=/u,
@@ -154,14 +155,14 @@ const TAMPERING = [
   },
   {
     pattern:
-      /(?:\benv\b[^\n;&|]*(?:\s(?:-(?=\s|$)|-i|--ignore-environment)(?=\s|$)|(?:-u(?:=|\s*)|--unset(?:=|\s+))(?:CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|AI_AGENT|CODEX_\w+|CURSOR_\w+))|\b(?:unset\s+(?:(?:--|-v|-f)\s+)*|export\s+-n\s+)(?:CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|AI_AGENT|CODEX_\w+|CURSOR_\w+))/u,
+      /(?:\benv\b[^\n;&|]*(?:\s(?:-(?=\s|$)|-i|--ignore-environment)(?=\s|$)|(?:-u(?:=|\s*)|--unset(?:=|\s+))(?:CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|AI_AGENT|CODEX_\w+|CURSOR_\w+|\w*_AGENT))|\b(?:unset\s+(?:(?:--|-v|-f)\s+)*|export\s+-n\s+)(?:CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|AI_AGENT|CODEX_\w+|CURSOR_\w+|\w*_AGENT))/u,
     reason:
       'Blocked removal of agent identity before run-guarded.mjs: the wrapper must inherit its harness markers so it ' +
       `cannot misclassify an agent as the human owner. ${GUIDANCE}`,
   },
   {
     pattern:
-      /(?:^|[\s;&|])(?:CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|AI_AGENT|CODEX_\w+|CURSOR_\w+)=[^\s;&|]*/u,
+      /(?:^|[\s;&|])(?:CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|AI_AGENT|CODEX_\w+|CURSOR_\w+|\w*_AGENT)=[^\s;&|]*/u,
     reason:
       'Blocked reassignment of agent identity before run-guarded.mjs: clearing or replacing a harness marker can make ' +
       `the wrapper misclassify an agent as the human owner. ${GUIDANCE}`,
@@ -1007,26 +1008,115 @@ function hasRuntimeStdinProgram(command) {
   return false;
 }
 
-function hasRuntimeScriptFile(command) {
-  for (const segment of splitSegments(command)) {
-    const program = runtimeProgram(segment);
+function git(cwd, ...args) {
+  return execFileSync('git', ['-C', cwd, ...args], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim();
+}
+
+// The trust anchor for checked-in helpers: the remote default branch, which
+// agents cannot move locally (pushes are review-gated). No local fallback —
+// HEAD moves with any `git commit`, so a checkout without fetched origin
+// refs has no reviewed base and the allowance fails closed.
+function reviewedBaseRef(cwd) {
+  for (const ref of ['origin/HEAD', 'origin/main', 'origin/master']) {
+    try {
+      git(cwd, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`);
+      return ref;
+    } catch {
+      /* try the next anchor */
+    }
+  }
+  return null;
+}
+
+// A Node script is a reviewed checked-in helper when its on-disk content is
+// byte-identical to the blob at the reviewed base ref. Content provenance —
+// not a filename allowlist an agent could extend (#141's fake-wrapper
+// defect), and not mere trackedness an agent could satisfy with `git add`
+// or a local commit. Any git failure, path escape, or mismatch fails closed.
+function isReviewedCheckedInScript(token, cwd) {
+  let file = resolve(cwd, token);
+  if (!existsSync(file)) return false;
+  // git prints physical paths; resolve symlinked segments (macOS /var → /private/var)
+  // so the toplevel-relative computation compares like with like.
+  try {
+    file = realpathSync(file);
+  } catch {
+    return false;
+  }
+  try {
+    const toplevel = git(cwd, 'rev-parse', '--show-toplevel');
+    const relPath = relative(toplevel, file);
+    if (relPath.startsWith('..') || isAbsolute(relPath)) return false;
+    const base = reviewedBaseRef(cwd);
+    if (base === null) return false;
+    const reviewedBlob = git(cwd, 'rev-parse', '--verify', '--quiet', `${base}:${relPath.split(sep).join('/')}`);
+    const onDiskBlob = git(cwd, 'hash-object', '--', file);
+    return reviewedBlob === onDiskBlob;
+  } catch {
+    return false;
+  }
+}
+
+function hasRuntimeScriptFile(command, cwd = process.cwd()) {
+  const segments = splitSegments(command);
+  for (let index = 0; index < segments.length; index += 1) {
+    const program = runtimeProgram(segments[index]);
     if (program?.kind !== 'file') continue;
     const normalized = program.token.replaceAll('\u0004', ' ');
     if (program.family === 'node' && /(?:^|\/)tools\/agent-guard\/(?:run-guarded|arbiter)\.mjs$/u.test(normalized)) continue;
+    // Checked-in Node helpers whose content matches the reviewed base ref
+    // are the repository's own documented tooling (#191). Provenance only
+    // vouches for bytes nothing can touch between hashing and execution:
+    // another segment may cd away from the hook's cwd or rewrite the
+    // file, and a substitution runs before the runtime does. Segment
+    // order cannot prove safety — stripInertText promotes quoted
+    // substitutions to *trailing* segments even though they execute
+    // first — so only a single-segment, substitution-free command
+    // qualifies. Other runtimes, modified scripts, and dynamic paths
+    // stay denied.
+    if (
+      program.family === 'node' &&
+      segments.length === 1 &&
+      !/\$\(|`|[<>]\(/u.test(segments[index]) &&
+      isReviewedCheckedInScript(normalized, cwd)
+    )
+      continue;
     return true;
   }
   return false;
 }
 
 function hasDirectScriptDispatch(command, cwd = process.cwd()) {
-  for (const segment of splitSegments(command)) {
-    const tokens = commandAfterPrefixes(segment).split(/\s+/u).filter(Boolean);
+  const segments = splitSegments(command);
+  for (let index = 0; index < segments.length; index += 1) {
+    const tokens = commandAfterPrefixes(segments[index]).split(/\s+/u).filter(Boolean);
     if (tokens.length === 0) continue;
     const command = tokens[0];
     if (command === '.' || command === 'source') return tokens.length > 1;
+    // A fully-quoted command word containing whitespace blanks to a bare
+    // quote pair before this scan, so `'./la ne'` arrives as `''`. That is
+    // a dispatch this hook cannot resolve or inspect — in a compound line
+    // (where an earlier write can have created the file) it fails closed.
+    if ((command === "''" || command === '""') && (segments.length > 1 || /\$\(|`|[<>]\(/u.test(segments[index]))) return true;
     const candidate = command.replaceAll('\u0004', ' ');
     const file = resolve(cwd, candidate);
-    if (!existsSync(file)) continue;
+    if (!existsSync(file)) {
+      // A path-shaped dispatch target absent at hook time can still exist
+      // when the shell reaches it: another segment — or a substitution in
+      // this one — can create it and mark it executable in the same line
+      // (`printf … > lane && chmod +x lane && ./lane`, #189). Segment
+      // order cannot prove safety, because stripInertText promotes quoted
+      // substitutions to *trailing* segments even though they execute
+      // first. So any multi-segment line, and any remaining substitution
+      // marker, fails closed. A lone dispatch of a missing path stays
+      // allowed: nothing can have created it, and the shell fails on its
+      // own. Bare words are PATH lookups, not dispatches.
+      if (candidate.includes('/') && (segments.length > 1 || /\$\(|`|[<>]\(/u.test(segments[index]))) return true;
+      continue;
+    }
     try {
       const prefix = readFileSync(file).subarray(0, 4096);
       if (!prefix.includes(0)) return true;
@@ -1051,6 +1141,47 @@ function followsEnvCommand(scanned) {
   const envAt = tokens.findLastIndex((token) => /(?:^|\/)env$/u.test(token));
   if (envAt < 0) return false;
   return tokens.slice(envAt + 1).every((token) => token.startsWith('-') || /^\w+=\S*$/u.test(token));
+}
+
+const DESTRUCTIVE_TARGET_COMMANDS = new Set(['rm', 'rmdir', 'unlink', 'shred', 'srm', 'mv', 'cp', 'install', 'dd', 'truncate', 'tee', 'ln', 'chmod', 'chown', 'chflags']);
+
+// The executable a segment dispatches once wrapper commands (sudo, env,
+// timeout, …) and their option operands are skipped — the same walk that
+// hasProtectedEnvironmentAssignment does for assignments. `sudo rm` deletes
+// what `rm` deletes.
+function unwrappedCommandName(tokens) {
+  let wrapper = null;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const name = token.split('/').at(-1);
+    if (ASSIGNMENT_TOKEN.test(token)) continue;
+    if (ASSIGNMENT_PREFIX_COMMAND.test(name)) {
+      wrapper = name;
+      continue;
+    }
+    if (token.startsWith('-')) {
+      if (WRAPPER_OPTION_OPERANDS[wrapper]?.has(token)) index += 1;
+      continue;
+    }
+    if (wrapper === 'timeout' && /^\d+(?:\.\d+)?[smhd]?$/u.test(token)) continue;
+    return name;
+  }
+  return null;
+}
+
+// A quoted word naming the filesystem target of a destructive or redirecting
+// command is not inert prose: `rm -rf "$HOME/.cache/agent-guard"` deletes
+// exactly what its unquoted spelling deletes (#198). Preserve such words so
+// the guard-state scan sees them. quotedWord already rejects words with
+// whitespace or separators, so prose (`git commit -m "rm the cache"`) and
+// multi-word payloads can never be promoted through this path.
+function isDestructiveTargetQuotedWord(scanned, word) {
+  if (word === null) return false;
+  const segment = scanned.split(/\|\||&&|[;\n|&]/u).at(-1).trim();
+  const tokens = commandAfterPrefixes(segment).split(/\s+/u).filter(Boolean);
+  if (tokens.length === 0) return false;
+  if (/(?:^|\d)>>?$/u.test(tokens.at(-1))) return true;
+  return DESTRUCTIVE_TARGET_COMMANDS.has(unwrappedCommandName(tokens));
 }
 
 // Quoting an argv word does not make it inert: `npm run "ci"` and
@@ -1135,6 +1266,8 @@ export function stripInertText(command) {
         const word = quotedWord(quoted);
         scanned += word ?? (quoted.startsWith("'") ? "''" : '""');
       } else if (isExecutableQuotedWord(scanned, quotedWord(quoted))) {
+        scanned += quotedWord(quoted);
+      } else if (isDestructiveTargetQuotedWord(scanned, quotedWord(quoted))) {
         scanned += quotedWord(quoted);
       } else {
         scanned += quoted.startsWith("'") ? "''" : '""';
@@ -1483,7 +1616,7 @@ function hasDynamicIdentityRemoval(command) {
 }
 
 function isProtectedEnvironmentName(name) {
-  return /^(?:CI|GITHUB_ACTIONS|CONTINUOUS_INTEGRATION|BUILDKITE|GITLAB_CI|JENKINS_URL|NODE_OPTIONS|BASH_ENV|ENV|ZDOTDIR|PERL5OPT|RUBYOPT|PYTHONPATH|PYTHONHOME|PHPRC|PHP_INI_SCAN_DIR|LD_PRELOAD|DYLD_INSERT_LIBRARIES|GIT_SSH_COMMAND|GIT_CONFIG_COUNT|PATH|AGENT_GUARD_FORCE|AGENT_GUARD_ASSUME_HUMAN|AGENT_GUARD_STATE_DIR|AGENT_GUARDED|CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|AI_AGENT|CODEX_\w+|CURSOR_\w+)$/u.test(name);
+  return /^(?:CI|GITHUB_ACTIONS|CONTINUOUS_INTEGRATION|BUILDKITE|GITLAB_CI|JENKINS_URL|NODE_OPTIONS|BASH_ENV|ENV|ZDOTDIR|PERL5OPT|RUBYOPT|PYTHONPATH|PYTHONHOME|PHPRC|PHP_INI_SCAN_DIR|LD_PRELOAD|DYLD_INSERT_LIBRARIES|GIT_SSH_COMMAND|GIT_CONFIG_COUNT|PATH|AGENT_GUARD_FORCE|AGENT_GUARD_ASSUME_HUMAN|AGENT_GUARD_STATE_DIR|AGENT_GUARDED|CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|AI_AGENT|CODEX_\w+|CURSOR_\w+|\w*_AGENT)$/u.test(name);
 }
 
 function hasProtectedEnvironmentMutation(command) {
@@ -1574,20 +1707,43 @@ function referencesGuardState(command) {
   for (const rawWord of command.match(/[^\s<>;&|]+/gu) ?? []) {
     const word = rawWord.slice(rawWord.lastIndexOf('=') + 1).replace(/^['"]|['"]$/gu, '');
     const components = word.split('/');
-    const guardAt = components.findIndex((component) => shellPatternCanMatch(component, 'agent-guard'));
-    if (guardAt < 0) continue;
-    const tail = [];
-    for (const component of components.slice(guardAt + 1)) {
-      if (component === '' || component === '.') continue;
-      if (component === '..') tail.pop();
-      else tail.push(component);
+    // Every component that can match the store name is a candidate anchor: a
+    // variable component matches anything, so stopping at the first match
+    // lets `$XDG_CACHE_HOME/agent-guard` shift the real component into child
+    // position and walk past the checks below.
+    for (let guardAt = 0; guardAt < components.length; guardAt += 1) {
+      if (!shellPatternCanMatch(components[guardAt], 'agent-guard')) continue;
+      const tail = [];
+      for (const component of components.slice(guardAt + 1)) {
+        if (component === '' || component === '.') continue;
+        if (component === '..') tail.pop();
+        else tail.push(component);
+      }
+      const child = tail[0];
+      if (child !== undefined && child !== '') {
+        if (['leases', 'admission.lock', 'machine-token', 'lane-peaks'].some((target) => shellPatternCanMatch(child, target))) return true;
+        continue;
+      }
+      // No sensitive descendant named: this is the whole-store case
+      // (`rm -rf ~/.cache/agent-guard`). It is a state-store reference only
+      // when the leading chain can reach a machine cache root: a cache-named
+      // component anywhere before it (glob-aware, so `.c[a]che` still
+      // counts), or a variable expansion as the immediate parent. A bare
+      // word (`rg agent-guard docs`, `echo agent-guard`) or a repo source
+      // path (`ls tools/agent-guard`, absolute or home-anchored) is a
+      // mention, not the store (#190).
+      const prefixComponents = components.slice(0, guardAt);
+      // A pure variable expansion matches any target under
+      // shellPatternCanMatch, which would turn $PWD/tools/agent-guard into a
+      // cache path. Variables count only as the immediate parent (below);
+      // the cache-name scan needs literal or glob evidence.
+      const cacheNamed = prefixComponents.some(
+        (component) =>
+          !/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/u.test(component) &&
+          ['.cache', 'Caches', 'caches', 'cache'].some((target) => shellPatternCanMatch(component, target)),
+      );
+      if (cacheNamed || /[$]/u.test(prefixComponents.at(-1) ?? '')) return true;
     }
-    const child = tail[0];
-    if (
-      child === undefined ||
-      child === '' ||
-      ['leases', 'admission.lock', 'machine-token'].some((target) => shellPatternCanMatch(child, target))
-    ) return true;
   }
   return false;
 }
@@ -1833,10 +1989,84 @@ function commandAfterPrefixes(segment) {
   return tokens.slice(index).join(' ');
 }
 
+const PROTECTED_ENV_ASSIGNMENT = /^["']?(?:NODE_OPTIONS|BASH_ENV|ENV|ZDOTDIR|PERL5OPT|RUBYOPT|PYTHONPATH|PYTHONHOME|PHPRC|PHP_INI_SCAN_DIR|LD_PRELOAD|DYLD_INSERT_LIBRARIES|GIT_SSH_COMMAND|GIT_CONFIG_COUNT|PATH)=/u;
+const ASSIGNMENT_TOKEN = /^["']?[A-Za-z_][A-Za-z0-9_]*=/u;
+const ASSIGNMENT_PREFIX_COMMAND = /^(?:command|builtin|env|exec|time|nice|nohup|timeout|setsid|stdbuf|sudo|doas)$/u;
+// Options of the wrappers above whose operand is a separate following word.
+// An operand left in place would read as the command and end the assignment
+// scan early (`sudo -u root 'NODE_OPTIONS=…' npm run lint`).
+const WRAPPER_OPTION_OPERANDS = {
+  sudo: new Set(['-u', '--user', '-g', '--group', '-h', '--host', '-p', '--prompt', '-C', '--close-from', '-D', '--chdir', '-R', '--chroot', '-T', '--command-timeout', '-U', '--other-user']),
+  doas: new Set(['-u']),
+  env: new Set(['-C', '--chdir', '-u', '--unset', '-S', '--split-string']),
+  timeout: new Set(['-k', '--kill-after', '-s', '--signal']),
+  nice: new Set(['-n', '--adjustment']),
+  stdbuf: new Set(['-i', '-o', '-e']),
+};
+const EMPTY_OPERAND_OPTIONS = new Set();
+
+// splitSegments is quote-unaware, so a separator inside a quoted argument
+// would open a phantom segment whose first token looks like an assignment.
+// Blank separators inside quotes (the quoted word survives as one token).
+function maskQuotedSeparators(command) {
+  let scanned = '';
+  let rest = command;
+  for (;;) {
+    const match = QUOTED.exec(rest);
+    if (!match) break;
+    scanned += rest.slice(0, match.index) + match[0].replace(/[;\n|&]/gu, ' ');
+    rest = rest.slice(match.index + match[0].length);
+  }
+  return scanned + rest;
+}
+
+// A protected VAR=… is an override only where a shell or env-style wrapper
+// applies it to a command's environment: the assignment prefix of a segment,
+// or the argument list of env/sudo/timeout/…, where quoting does not defuse
+// it (`env 'NODE_OPTIONS=…' npm run lint` sets the variable all the same).
+export function hasProtectedEnvironmentAssignment(command) {
+  for (const segment of splitSegments(maskQuotedSeparators(command))) {
+    const tokens = segment.split(/\s+/u).filter(Boolean);
+    let index = 0;
+    while (index < tokens.length) {
+      const token = tokens[index];
+      if (ASSIGNMENT_TOKEN.test(token)) {
+        if (PROTECTED_ENV_ASSIGNMENT.test(token)) return true;
+        index += 1;
+        continue;
+      }
+      const name = token.replace(/^["']+|["']+$/gu, '').split('/').at(-1);
+      if (ASSIGNMENT_PREFIX_COMMAND.test(name)) {
+        index += 1;
+        // Skip option words together with their separate operands, so an
+        // operand never masquerades as the command and ends the scan while a
+        // quoted assignment still follows: sudo's run form is
+        // `sudo … [-u user] [VAR=value] … [command]`.
+        const operandOptions = WRAPPER_OPTION_OPERANDS[name] ?? EMPTY_OPERAND_OPTIONS;
+        while (tokens[index]?.startsWith('-')) {
+          const option = tokens[index];
+          index += 1;
+          if (operandOptions.has(option)) index += 1;
+        }
+        if ((name === 'timeout' || name === 'nice') && /^\d/u.test(tokens[index] ?? '')) index += 1;
+        continue;
+      }
+      break;
+    }
+  }
+  return false;
+}
+
 export function evaluateCommand(command, { cwd = process.cwd() } = {}) {
   if (typeof command !== 'string' || command.length === 0) return { allow: true };
   const dynamicCommand = maskNonShellHeredocs(command);
-  if (/\b(?:NODE_OPTIONS|BASH_ENV|ENV|ZDOTDIR|PERL5OPT|RUBYOPT|PYTHONPATH|PYTHONHOME|PHPRC|PHP_INI_SCAN_DIR|LD_PRELOAD|DYLD_INSERT_LIBRARIES|GIT_SSH_COMMAND|GIT_CONFIG_COUNT|PATH)=/u.test(dynamicCommand)) {
+  // Executable-loading environment overrides are denied only in positions
+  // that reach a command's environment: leading VAR=… prefixes and the
+  // argument list of env-style wrappers — where a quoted assignment is still
+  // an assignment. Elsewhere, quoted protected-variable text is a mention (a
+  // commit message, a grep pattern, a printf payload), not an override; the
+  // TAMPERING rule still scans the stripped text as the unquoted backstop.
+  if (hasProtectedEnvironmentAssignment(dynamicCommand)) {
     return {
       allow: false,
       reason:
@@ -1879,7 +2109,7 @@ export function evaluateCommand(command, { cwd = process.cwd() } = {}) {
     };
   }
 
-  if (hasRuntimeScriptFile(effective)) {
+  if (hasRuntimeScriptFile(effective, cwd)) {
     return {
       allow: false,
       reason: `Blocked direct runtime script-file dispatch: a script can launch a protected lane after static shell checks. Run it through the repository's guarded entrypoint. ${USE_ENTRYPOINT}`,
