@@ -1,0 +1,19 @@
+{
+  "name": "agent-bot control",
+  "short_name": "agent-bot",
+  "description": "Private local control surface for the agent-bot loopback daemon.",
+  "id": "/ui/",
+  "start_url": "/ui/",
+  "scope": "/ui/",
+  "display": "standalone",
+  "background_color": "#11151a",
+  "theme_color": "#11151a",
+  "icons": [
+    {
+      "src": "/ui/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

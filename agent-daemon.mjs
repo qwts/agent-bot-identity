@@ -24,6 +24,12 @@
 // adapter-authenticated (transport, providerId) pair; the daemon resolves it
 // to a locally enrolled principal and refuses everything else — nothing on
 // this remote surface can enroll a principal or widen an authorization.
+//
+// /ui/... serves the private web client (#59) from agent-web.mjs: static PWA
+// assets plus a cookie-authenticated JSON API over the same interaction
+// service. /ui routes never see the bearer token — browser auth is a local
+// pairing ceremony — and they change nothing about the loopback boundary:
+// the same peer check runs before any /ui routing.
 
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -40,6 +46,7 @@ import { stateDirectory, validateAgentId } from './agent-identity.mjs';
 import { createInteractionService } from './agent-interaction.mjs';
 import { recoverInteractionStore } from './agent-jobs.mjs';
 import { appendAuditReceipt, principalsFile, resolvePrincipal } from './agent-principals.mjs';
+import { createWebLayer } from './agent-web.mjs';
 
 const SCHEMA_VERSION = 1;
 const MAX_BODY_BYTES = 64 * 1024;
@@ -195,14 +202,24 @@ export function createDaemonServer({
   config,
   token = randomBytes(32).toString('hex'),
   executor,
+  now = () => new Date(),
 } = {}) {
   // One interaction service per server so in-flight executions and their
   // cancellation controllers live exactly as long as the daemon.
-  const interaction = createInteractionService({ env, home, config, executor });
+  const interaction = createInteractionService({ env, home, config, executor, now });
+  // The private web client (#59) rides the same server and the same loopback
+  // peer check; it authenticates browsers with its own pairing-code cookie
+  // sessions instead of the bearer token, which never reaches page script.
+  const web = createWebLayer({ env, home, config, interaction, daemonToken: token, now });
   const server = createServer(async (req, res) => {
     try {
       if (!isLoopbackPeer(req.socket.remoteAddress)) {
         sendJson(res, 403, { error: 'loopback peers only' });
+        return;
+      }
+      const url = new URL(req.url, 'http://127.0.0.1');
+      if (url.pathname === '/ui' || url.pathname.startsWith('/ui/')) {
+        await web.handle(req, res, url);
         return;
       }
       const authorization = req.headers.authorization ?? '';
@@ -211,7 +228,6 @@ export function createDaemonServer({
         sendJson(res, 401, { error: 'missing or invalid daemon token' });
         return;
       }
-      const url = new URL(req.url, 'http://127.0.0.1');
       if (url.pathname.startsWith('/v1/')) {
         await handleInteractionRequest({ req, res, url, interaction, env, home });
         return;
@@ -487,7 +503,7 @@ export async function runDaemon({
   // becomes failed with its own stable reason, and pending cancellations
   // become cancelled — nothing is silently stranded.
   recoverInteractionStore({ env, home, now });
-  const server = createDaemonServer({ env, home, config });
+  const server = createDaemonServer({ env, home, config, now });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(requestedPort, host, resolve);

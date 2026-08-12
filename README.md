@@ -86,6 +86,7 @@ agent-bot space import <pack|gist:id|gist-url> [--force]
 agent-bot space retire <agent-id> [--delete-space]
 agent-bot population <list|show> [agent-id] [--json]
 agent-bot daemon <run|start|status|stop> [--json]
+agent-bot web open [--principal <principal-id>] [--no-browser] [--json]
 agent-bot telegram <run|status> [--json]
 agent-bot install [--with-gh-shim]
 agent-bot install-gh-shim
@@ -259,6 +260,66 @@ shared machine out. `run` serves in the foreground for supervised launches;
 registers and ensures space through the daemon: `prefer` falls back to the
 in-process path only when the daemon is unreachable, and `required` fails
 closed rather than diverging from the daemon-owned stores.
+
+### Private web client
+
+The daemon serves a small installable PWA at `http://127.0.0.1:<port>/ui/` —
+population browsing, conversations with message submission, active jobs with
+live events and cancellation, immutable approvals, and bounded,
+sha256-verified artifact downloads.
+It is a projection of the same interaction APIs every adapter uses (`/v1`
+semantics, deny-by-default principals); the browser never reads population,
+session, job, or Agent Space files, and browser storage holds no tokens and
+no daemon state.
+
+Browser access is a local pairing ceremony, mirroring principal enrollment:
+
+```bash
+agent-bot principal enroll --label "operator phone"      # once
+agent-bot principal allow <principal-id> --soul <agent-id> \
+  --operation observe --operation message --operation cancel --operation approve
+agent-bot web open --principal <principal-id>
+```
+
+`web open` asks the running daemon (authenticated with the bearer token from
+the `0600` state file) to mint a one-time pairing code and prints/opens
+`http://127.0.0.1:<port>/ui/#<code>`. The page exchanges the code — single
+use, ~2 minute expiry — for a short-lived (~12 h) `HttpOnly` /
+`SameSite=Strict` cookie session held daemon-side in memory. The daemon's
+bearer token is never copied into JavaScript-accessible storage. State-
+changing UI requests additionally require the `X-Agent-Bot-UI` header and a
+same-origin `Origin` check, static assets ship a `'self'`-only
+Content-Security-Policy with no inline script, and the service worker caches
+only the offline shell — never API responses. Privileged work is approved
+only through immutable proposals: the UI posts back the exact sha256 digest
+of the proposed operation's canonical JSON, and a mismatched, expired, or
+already-consumed proposal is refused; a conversational "yes" has no pathway
+to authorize anything.
+
+#### Remote access (explicit operator choice)
+
+The daemon binds to loopback, full stop — `/ui` does not change that, and a
+non-loopback bind is refused before the listener opens. To reach the web
+client from another device, put a private-network ingress you already trust
+in front of the loopback port and treat it as the transport that
+authenticates the remote identity, for example with Tailscale on the daemon
+machine:
+
+```bash
+tailscale serve --https=443 http://127.0.0.1:<port>
+```
+
+The tailnet (or an equivalently reviewed reverse proxy with its own
+authentication) decides who reaches the port; the daemon still only ever
+sees a local peer, and the browser still has to pair: run `agent-bot web
+open --no-browser` on the daemon machine and open the printed link from the
+remote device, substituting the proxy host for `127.0.0.1`. Authorization
+stays with the local principal model — the proxy translates a remote
+identity into possession of an owner-minted pairing code for one enrolled
+principal, and there is no Tailscale API coupling in the runtime. Never
+expose the port with an unauthenticated LAN listener or a public reverse
+proxy; the pairing code is a capability, not a substitute for the private
+network's own authentication.
 
 The repository also ships an official progressive-disclosure skill at
 `skills/agent-bot`. Its main `SKILL.md` routes setup, verified publishing, and

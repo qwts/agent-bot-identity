@@ -275,7 +275,7 @@ test('crash recovery reconciles orphaned jobs into documented states', () => {
     error: 'interrupted before dispatch',
   });
   // Recovery is idempotent: a second pass finds nothing to reconcile.
-  assert.deepEqual(recoverInteractionStore(options), { failed: [], cancelled: [] });
+  assert.deepEqual(recoverInteractionStore(options), { failed: [], cancelled: [], expiredProposals: [] });
 });
 
 test('concurrent cross-process submissions neither corrupt nor duplicate', async () => {

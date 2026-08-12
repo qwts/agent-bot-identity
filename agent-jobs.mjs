@@ -11,7 +11,7 @@
 // secret-free by construction: no credentials, tokens, or message bodies are
 // persisted here (#31); artifact bytes live in the soul's Agent Space.
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   appendFileSync,
   chmodSync,
@@ -35,6 +35,7 @@ const UUID_BODY = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 const SESSION_ID_PATTERN = new RegExp(`^session_${UUID_BODY}$`);
 const INVOCATION_ID_PATTERN = new RegExp(`^invocation_${UUID_BODY}$`);
 const PRINCIPAL_ID_PATTERN = new RegExp(`^principal_${UUID_BODY}$`);
+const PROPOSAL_ID_PATTERN = new RegExp(`^proposal_${UUID_BODY}$`);
 const TRANSPORT_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 // Idempotency keys are adapter-chosen retry handles: visible ASCII, no spaces.
 const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{1,128}$/;
@@ -85,6 +86,18 @@ export function validateSessionId(value) {
 
 export function validateInvocationId(value) {
   return matchOrThrow(INVOCATION_ID_PATTERN, value, 'invalid invocation ID');
+}
+
+export function validateProposalId(value) {
+  return matchOrThrow(PROPOSAL_ID_PATTERN, value, 'invalid proposal ID');
+}
+
+export function validateArtifactName(value) {
+  return matchOrThrow(
+    ARTIFACT_NAME_PATTERN,
+    value,
+    'artifact name must be a plain filename without path separators',
+  );
 }
 
 function principalIdOrThrow(value) {
@@ -214,11 +227,7 @@ function normalizeArtifact(record) {
   // Non-secret metadata only. The name must not smuggle path traversal and
   // the reference is always relative to the soul's Agent Space root — the job
   // store never holds artifact bytes or absolute filesystem paths.
-  const name = matchOrThrow(
-    ARTIFACT_NAME_PATTERN,
-    record.name,
-    'artifact name must be a plain filename without path separators',
-  );
+  const name = validateArtifactName(record.name);
   if (!Number.isSafeInteger(record.bytes) || record.bytes < 0) {
     throw new Error('artifact bytes must be a non-negative integer');
   }
@@ -330,6 +339,42 @@ export function createSession(
 
 export function getSession(sessionId, { env = process.env, home = homedir() } = {}) {
   return readSessions({ env, home })[validateSessionId(sessionId)] ?? null;
+}
+
+// Projection listings for control surfaces (#59). Filters are validated so a
+// malformed selector fails loudly instead of silently matching nothing.
+export function listSessions(
+  { principalId = null, agentId = null } = {},
+  { env = process.env, home = homedir() } = {},
+) {
+  const wantedPrincipal = principalId === null ? null : matchOrThrow(PRINCIPAL_ID_PATTERN, principalId, 'invalid principal ID');
+  const wantedAgent = agentId === null ? null : agentIdOrThrow(agentId);
+  const records = Object.values(readSessions({ env, home }))
+    .filter((session) => wantedPrincipal === null || session.principalId === wantedPrincipal)
+    .filter((session) => wantedAgent === null || session.agentId === wantedAgent);
+  records.sort((left, right) => (
+    left.createdAt === right.createdAt
+      ? left.sessionId.localeCompare(right.sessionId)
+      : left.createdAt.localeCompare(right.createdAt)
+  ));
+  return records;
+}
+
+export function listInvocations(
+  { principalId = null, sessionId = null } = {},
+  { env = process.env, home = homedir() } = {},
+) {
+  const wantedPrincipal = principalId === null ? null : matchOrThrow(PRINCIPAL_ID_PATTERN, principalId, 'invalid principal ID');
+  const wantedSession = sessionId === null ? null : validateSessionId(sessionId);
+  const records = Object.values(readJobs({ env, home }).invocations)
+    .filter((invocation) => wantedPrincipal === null || invocation.principalId === wantedPrincipal)
+    .filter((invocation) => wantedSession === null || invocation.sessionId === wantedSession);
+  records.sort((left, right) => (
+    left.createdAt === right.createdAt
+      ? left.invocationId.localeCompare(right.invocationId)
+      : left.createdAt.localeCompare(right.createdAt)
+  ));
+  return records;
 }
 
 export function touchSession(
@@ -603,6 +648,191 @@ export function compactEvents(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Immutable operation proposals (#59 req 8). A privileged operation that needs
+// human sign-off is frozen into a proposal bound to the sha256 digest of the
+// operation's canonical JSON. Approval must echo that exact digest back — a
+// conversational "yes", a replay of an old proposal, or a UI rendering a
+// different operation than the one digested all fail closed. Proposals are
+// single-decision: once approved, denied, or expired they never reopen.
+
+const PROPOSAL_STATUSES = new Set(['open', 'approved', 'denied', 'expired']);
+const MAX_PROPOSAL_SUMMARY_LENGTH = 512;
+export const DEFAULT_PROPOSAL_TTL_MS = 15 * 60_000;
+
+function proposalsFile(options) {
+  return path.join(interactionHome(options), 'proposals.json');
+}
+
+// Canonical JSON: object keys sorted recursively, no whitespace, undefined
+// members dropped — the same operation object always digests identically.
+export function canonicalOperationJson(value) {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') {
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('operation must be JSON-serializable');
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => canonicalOperationJson(entry ?? null)).join(',')}]`;
+  }
+  if (typeof value === 'object') {
+    const members = Object.keys(value)
+      .filter((key) => value[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalOperationJson(value[key])}`);
+    return `{${members.join(',')}}`;
+  }
+  throw new Error('operation must be JSON-serializable');
+}
+
+export function operationDigest(operation) {
+  if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {
+    throw new Error('operation must be a plain object');
+  }
+  return createHash('sha256').update(canonicalOperationJson(operation), 'utf8').digest('hex');
+}
+
+function normalizeProposal(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    throw new Error('proposal record must be an object');
+  }
+  if (!PROPOSAL_STATUSES.has(record.status)) throw new Error('proposal status is not a known state');
+  return {
+    proposalId: matchOrThrow(PROPOSAL_ID_PATTERN, record.proposalId, 'invalid proposal ID'),
+    invocationId: validateInvocationId(record.invocationId),
+    operationDigest: matchOrThrow(SHA256_PATTERN, record.operationDigest, 'operation digest must be a sha256 hex digest'),
+    summary: printableText('summary', record.summary, { max: MAX_PROPOSAL_SUMMARY_LENGTH }),
+    createdAt: canonicalTimestamp('createdAt', record.createdAt),
+    expiresAt: canonicalTimestamp('expiresAt', record.expiresAt),
+    status: record.status,
+    decidedAt: record.decidedAt === undefined || record.decidedAt === null
+      ? null
+      : canonicalTimestamp('decidedAt', record.decidedAt),
+    decidedBy: record.decidedBy === undefined || record.decidedBy === null
+      ? null
+      : matchOrThrow(PRINCIPAL_ID_PATTERN, record.decidedBy, 'invalid principal ID'),
+  };
+}
+
+function readProposals(options) {
+  const document = readJsonDocument(proposalsFile(options), 'proposal store', 'proposals');
+  const proposals = Object.create(null);
+  for (const [key, value] of Object.entries(document?.proposals ?? {})) {
+    const proposal = normalizeProposal(value);
+    if (key !== proposal.proposalId) throw new Error('proposal store key does not match its proposal ID');
+    proposals[proposal.proposalId] = proposal;
+  }
+  return proposals;
+}
+
+function withProposalsLock(options, operation) {
+  const file = proposalsFile(options);
+  ensurePrivateDirectory(path.dirname(file));
+  return withLock(`${file}.lock`, 'proposal store', () => operation(file));
+}
+
+export function createProposal(
+  { invocationId, operationDigest: digest, summary },
+  {
+    env = process.env,
+    home = homedir(),
+    now = () => new Date(),
+    ttlMs = DEFAULT_PROPOSAL_TTL_MS,
+    idFactory = () => `proposal_${randomUUID()}`,
+  } = {},
+) {
+  const options = { env, home };
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) {
+    throw new Error('proposal ttlMs must be a positive integer');
+  }
+  const at = now();
+  const proposal = normalizeProposal({
+    proposalId: idFactory(),
+    invocationId,
+    operationDigest: digest,
+    summary,
+    createdAt: at.toISOString(),
+    expiresAt: new Date(at.getTime() + ttlMs).toISOString(),
+    status: 'open',
+    decidedAt: null,
+    decidedBy: null,
+  });
+  if (!getInvocation(proposal.invocationId, options)) throw new Error('unknown invocation');
+  return withProposalsLock(options, (file) => {
+    const proposals = readProposals(options);
+    if (proposals[proposal.proposalId]) throw new Error('proposal already exists');
+    writeJsonDocument(file, {
+      schemaVersion: SCHEMA_VERSION,
+      proposals: { ...proposals, [proposal.proposalId]: proposal },
+    });
+    return proposal;
+  });
+}
+
+export function getProposal(proposalId, { env = process.env, home = homedir() } = {}) {
+  return readProposals({ env, home })[validateProposalId(proposalId)] ?? null;
+}
+
+export function listProposals(
+  { status = null, invocationId = null } = {},
+  { env = process.env, home = homedir() } = {},
+) {
+  if (status !== null && !PROPOSAL_STATUSES.has(status)) {
+    throw new Error('proposal status is not a known state');
+  }
+  const wantedInvocation = invocationId === null ? null : validateInvocationId(invocationId);
+  const records = Object.values(readProposals({ env, home }))
+    .filter((proposal) => status === null || proposal.status === status)
+    .filter((proposal) => wantedInvocation === null || proposal.invocationId === wantedInvocation);
+  records.sort((left, right) => (
+    left.createdAt === right.createdAt
+      ? left.proposalId.localeCompare(right.proposalId)
+      : left.createdAt.localeCompare(right.createdAt)
+  ));
+  return records;
+}
+
+// The single, terminal decision. Approve/deny is refused once the proposal
+// left `open` or its expiry passed; the only transition allowed after expiry
+// is the bookkeeping move to `expired`.
+export function decideProposal(
+  proposalId,
+  { decision, decidedBy = null },
+  { env = process.env, home = homedir(), now = () => new Date() } = {},
+) {
+  const options = { env, home };
+  const target = validateProposalId(proposalId);
+  if (!['approved', 'denied', 'expired'].includes(decision)) {
+    throw new Error('proposal decision must be approved, denied, or expired');
+  }
+  const decider = decidedBy === null
+    ? null
+    : matchOrThrow(PRINCIPAL_ID_PATTERN, decidedBy, 'invalid principal ID');
+  return withProposalsLock(options, (file) => {
+    const proposals = readProposals(options);
+    const existing = proposals[target];
+    if (!existing) throw new Error('unknown proposal');
+    if (existing.status !== 'open') throw new Error('proposal is no longer open');
+    const at = now();
+    if (decision !== 'expired' && at.getTime() > new Date(existing.expiresAt).getTime()) {
+      throw new Error('proposal has expired');
+    }
+    const decided = {
+      ...existing,
+      status: decision,
+      decidedAt: at.toISOString(),
+      decidedBy: decider,
+    };
+    writeJsonDocument(file, {
+      schemaVersion: SCHEMA_VERSION,
+      proposals: { ...proposals, [target]: decided },
+    });
+    return decided;
+  });
+}
+
 // Crash recovery (#56 req 8), called on daemon startup before any dispatch.
 // Nothing a previous daemon owned can be resumed: executing work lost its
 // executor and in-memory context, and `queued` jobs lost the message that
@@ -658,7 +888,17 @@ export function recoverInteractionStore(
   for (const invocationId of recovered.cancelled) {
     appendEvent(invocationId, 'recovery', { status: 'cancelled' }, { env, home, now });
   }
-  return recovered;
+  // A proposal whose approval nobody can deliver anymore (the waiting
+  // execution died with the previous daemon) is expired, never resurrected.
+  const orphaned = [];
+  for (const proposal of listProposals({ status: 'open' }, options)) {
+    const invocation = getInvocation(proposal.invocationId, options);
+    if (!invocation || invocation.status !== 'waiting-approval') {
+      decideProposal(proposal.proposalId, { decision: 'expired' }, { env, home, now });
+      orphaned.push(proposal.proposalId);
+    }
+  }
+  return { ...recovered, expiredProposals: orphaned };
 }
 
 async function main() {
