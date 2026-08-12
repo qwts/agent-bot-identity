@@ -83,6 +83,7 @@ agent-bot identity <ensure|spawn|bind|record|finalize|show|current>
 agent-bot space <init|ensure|path|show> [agent-id]
 agent-bot population <list|show> [agent-id] [--json]
 agent-bot daemon <run|start|status|stop> [--json]
+agent-bot telegram <run|status> [--json]
 agent-bot install [--with-gh-shim]
 agent-bot install-gh-shim
 agent-bot ensure-private-key --app <slug> [--force]
@@ -652,6 +653,65 @@ agent-bot identity ensure --reuse-pending
 Transcript binding: Codex uses `CODEX_THREAD_ID`; Claude's WorktreeCreate hook
 passes the session id; other launchers set `AGENT_BOT_TRANSCRIPT_PROVIDER` and
 `AGENT_BOT_TRANSCRIPT_ID` (the `QWTS_AGENT_*` names still work).
+
+## Telegram adapter (remote messaging)
+
+`agent-bot telegram run` long-polls the Telegram Bot API and projects the
+daemon's `/v1` interaction contract into a chat: it is a thin transport, not
+an agent runtime. The local daemon must be running (`agent-bot daemon
+start`); there is no in-process fallback.
+
+Command grammar inside the chat: `/souls` lists the souls your principal may
+message, `/use <agent-id>` selects one for the chat, plain text submits a
+message to the selected (or default) soul, `/status` reports the active
+invocation, `/cancel` cancels it. Progress is projected by editing one
+bounded status message; the daemon's event log stays the record, so restarting
+the adapter — or Telegram losing every message — loses no canonical state.
+
+**Enrollment (owner-only, local CLI).** Telegram accounts are authenticated
+by their immutable numeric user ID only; usernames, display names, and
+forwarded metadata grant nothing. Send `/start` to your bot from the account,
+read the refused sender's numeric ID with
+[@userinfobot](https://t.me/userinfobot) or from the Bot API, then:
+
+```bash
+agent-bot principal enroll --label "me on telegram"
+agent-bot principal bind <principal-id> --transport telegram --provider-id <numeric-user-id>
+agent-bot principal allow <principal-id> --soul <agent-id> \
+  --operation message --operation observe --operation cancel \
+  --default-soul <agent-id>
+```
+
+**Token provisioning (reviewed paths only).** The bot token comes from
+`AGENT_BOT_TELEGRAM_TOKEN` or from the secure-store flow via user config:
+
+```json
+{ "settings": { "telegram": { "tokenSecret": {
+  "provider": "proton-pass", "collection": "Agents",
+  "item": "telegram-bot", "field": "token" } } } }
+```
+
+The token is never read from repository config and never written to state
+files, population or principal records, Agent Space, logs, events, or error
+messages (a redaction guard strips it from every error the adapter emits).
+
+**Policy defaults.** Direct messages only: group, supergroup, and channel
+updates are ignored unless the owner opts in with
+`AGENT_BOT_TELEGRAM_ALLOW_GROUPS=1` or `settings.telegram.allowGroups: true`
+(a reviewed policy decision). Attachments are refused in v1 with a static
+message — Telegram-supplied file names are never interpreted as paths; a
+staged, scanned ingress area is planned follow-up work. Messages are bounded
+to the daemon's message cap.
+
+**Trust and privacy limits.** Telegram (the provider) can read every bot
+message, so nothing canonical lives there: no secrets, no raw private
+repository archives, no authoritative memory. The adapter keeps only a small
+restart-safe projection file (`$XDG_STATE_HOME/agent-bot/telegram/state.json`,
+override `AGENT_BOT_TELEGRAM_STATE_PATH`) holding the update offset,
+per-chat soul selections, and session/invocation references — chat IDs map to
+daemon sessions, never the other way round. Duplicate or replayed updates are
+absorbed by deterministic idempotency keys (`telegram:<update_id>`), so one
+update can never create two invocations.
 
 ## Enterprise notes
 
