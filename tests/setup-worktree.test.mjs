@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -204,5 +204,32 @@ test('botUid still fails closed when nothing is cached and the lookup fails', as
   await assert.rejects(
     botUid('you-codex-agent', 'https://api.github.com', 'token', { home, fetchImpl }),
     /could not resolve you-codex-agent\[bot\]'s user id \(HTTP 503\)/,
+  );
+});
+
+test('botUid tolerates an unwritable config dir when the UID is already cached', async (t) => {
+  const { home, configDir } = uidFixture('you-codex-agent', { uid: '111' });
+  const fetchImpl = fakeProfileFetch({
+    id: 999,
+    avatar_url: 'https://avatars.githubusercontent.com/in/42?v=4',
+  });
+  chmodSync(configDir, 0o500);
+  t.after(() => chmodSync(configDir, 0o700));
+
+  const uid = await botUid('you-codex-agent', 'https://api.github.com', null, { home, fetchImpl });
+
+  assert.equal(uid, '111');
+  assert.equal(existsSync(join(configDir, 'bot-avatar-url')), false);
+});
+
+test('botUid still fails when nothing is cached and the cache cannot be written', async (t) => {
+  const { home, configDir } = uidFixture('you-codex-agent');
+  const fetchImpl = fakeProfileFetch({ id: 999 });
+  chmodSync(configDir, 0o500);
+  t.after(() => chmodSync(configDir, 0o700));
+
+  await assert.rejects(
+    botUid('you-codex-agent', 'https://api.github.com', null, { home, fetchImpl }),
+    /EACCES|EPERM/,
   );
 });

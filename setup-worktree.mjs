@@ -149,10 +149,16 @@ export async function botUid(slug, base, verifiedToken, {
     throw error;
   }
   const uid = cachedUid ?? String(profile.id);
-  mkdirSync(configDir, { recursive: true });
-  if (!cachedUid) writeFileSync(cachePath, `${uid}\n`);
-  if (typeof profile.avatar_url === 'string' && /^https:\/\//.test(profile.avatar_url)) {
-    writeFileSync(avatarPath, `${profile.avatar_url}\n`);
+  try {
+    mkdirSync(configDir, { recursive: true });
+    if (!cachedUid) writeFileSync(cachePath, `${uid}\n`);
+    if (typeof profile.avatar_url === 'string' && /^https:\/\//.test(profile.avatar_url)) {
+      writeFileSync(avatarPath, `${profile.avatar_url}\n`);
+    }
+  } catch (error) {
+    // A read-only config dir must not break a worktree that could bind before
+    // this backfill existed: cache writes are best-effort on the cached path.
+    if (!cachedUid) throw error;
   }
   return uid;
 }
