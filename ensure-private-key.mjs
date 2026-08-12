@@ -521,7 +521,10 @@ export function ensurePrivateKey({
 
 export function main(argv = process.argv.slice(2)) {
   const { force, explicit } = parseCliArgs(argv);
-  const slug = resolveAgentSlug({ explicit });
+  // Territory-aware unless --app states the App outright — the shared policy
+  // set by appConfig in mint-token.mjs (#20): inherited defaults (GH_AGENT_APP,
+  // the pin) are corrected inside bot territory, explicit requests are honored.
+  const slug = resolveAgentSlug({ explicit, worktree: !explicit });
   if (!slug) throw new Error('no App resolves; pass --app, set GH_AGENT_APP, or configure a pin');
   const result = ensurePrivateKey({ slug, force });
   process.stdout.write(`${result.downloaded ? 'fetched' : 'already present'} ${result.path}\n`);

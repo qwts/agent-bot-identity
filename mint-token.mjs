@@ -5,6 +5,7 @@
 // App selection (first match wins):
 //   --app <slug>             — read ~/.config/<slug>/{app-id,private-key.pem}
 //   GH_AGENT_APP=<slug>      — same lookup, set once per launcher environment
+//                              (corrected inside bot territory — see appConfig)
 //   git config agentBot.app  — the worktree's pin, so a token is minted for
 //                              the agent the commits are authored as
 //   harness + config.json    — auto-detect mapped through prefix/apps
@@ -61,31 +62,34 @@ export function appConfig({
       slug: null,
     };
   }
-  // Territory rules apply only when we are INFERRING which App to mint for.
-  // Without them this path took a worktree pin at face value, so a stale
-  // `agentBot.app` left in a Codex worktree minted a *Claude* token — commits
-  // attributed to one App, credentials issued for another. That is the split
-  // identity resolve-agent.mjs exists to prevent, and minting was the one
-  // caller not asking for the check.
+  // Territory rules apply whenever the App is not stated on the command line.
+  // A worktree pin and GH_AGENT_APP are the same kind of input: launcher- or
+  // session-level defaults set before anyone knew which worktree this process
+  // would run in. Taken at face value inside another harness's territory,
+  // either one mints a token for a foreign App while commits are attributed to
+  // the territory's App — the split identity resolve-agent.mjs exists to
+  // prevent. setup-worktree already corrects GH_AGENT_APP against territory
+  // when it *writes* the pin; minting applies the same correction, so a direct
+  // mint between launch and setup-worktree can no longer cross the boundary
+  // (#20). Outside bot territory GH_AGENT_APP is honored exactly as before —
+  // resolveAgentSlug only consults territory when the cwd is in one.
   //
-  // --app and GH_AGENT_APP are exempt because both are deliberate requests,
-  // not inferences. `doctor` mints every configured App in turn from whatever
-  // worktree it happens to run in, and a launcher that sets GH_AGENT_APP has
-  // stated its intent for the session. Binding those to territory would break
-  // diagnostics to catch a bug that only ever lived in the inferred path — the
-  // vector was a worktree pin left behind by an earlier session, which nobody
-  // states on purpose.
-  //
-  // setup-worktree still territory-checks GH_AGENT_APP when it *writes* the
-  // pin (it always passes worktree: true), so a mistaken launcher is corrected
-  // where the identity is decided rather than where a token is issued.
+  // --app is the one face-value override: a deliberate per-invocation request,
+  // not an inherited default. `doctor` depends on it to mint every configured
+  // App in turn from whatever worktree it happens to run in.
   const slug = resolveAgentSlug({
     explicit: explicitSlug,
     env,
     cwd,
     config: config ?? loadConfig({ env }),
-    worktree: !explicitSlug && !env.GH_AGENT_APP,
+    worktree: !explicitSlug,
   });
+  if (slug && !explicitSlug && env.GH_AGENT_APP && slug !== env.GH_AGENT_APP) {
+    // Note the correction on stderr only — stdout carries the token.
+    process.stderr.write(
+      `mint-token: GH_AGENT_APP=${env.GH_AGENT_APP} conflicts with this worktree's territory; minting for ${slug}\n`,
+    );
+  }
   if (slug) {
     const dir = join(home, '.config', slug);
     try {

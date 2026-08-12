@@ -664,7 +664,10 @@ async function main() {
 
   switch (args.command) {
     case 'ensure': {
-      const appSlug = resolveAgentSlug({ explicit: args.one('app') });
+      const explicitApp = args.one('app');
+      // Territory-aware unless --app is explicit — the shared policy set by
+      // appConfig in mint-token.mjs (#20).
+      const appSlug = resolveAgentSlug({ explicit: explicitApp, worktree: !explicitApp });
       if (!appSlug) throw new Error('no GitHub App identity resolves in this context');
       const identity = ensureAgentIdentity({
         currentId: currentAgentId(),
@@ -694,7 +697,9 @@ async function main() {
     case 'spawn': {
       const parentId = args.one('parent') ?? currentAgentId();
       const parent = parentId ? readAgentIdentity(parentId, { stateDir }) : null;
-      const appSlug = args.one('app') ?? parent?.github.appSlug ?? resolveAgentSlug();
+      // --app and the parent's App are explicit statements; only the inferred
+      // fallback is territory-aware (shared policy — appConfig, mint-token.mjs, #20).
+      const appSlug = args.one('app') ?? parent?.github.appSlug ?? resolveAgentSlug({ worktree: true });
       if (!appSlug) throw new Error('spawn requires an App identity or a resolvable parent');
       const identity = mintAgentIdentity({
         appSlug,
