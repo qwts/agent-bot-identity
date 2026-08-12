@@ -379,6 +379,44 @@ test('concurrent evidence writers do not lose one another', async () => {
   assert.equal(readAgentIdentity(record.id, { stateDir }).subjects.length, 12);
 });
 
+test('ensure corrects a cross-territory GH_AGENT_APP to the territory App (#20)', () => {
+  // Same policy as mint-token's appConfig: without --app the resolution is
+  // territory-aware, so a launcher-inherited GH_AGENT_APP cannot bind a
+  // foreign App's identity to a worktree another harness owns.
+  const root = state();
+  const stateDir = path.join(root, 'identities');
+  const repo = path.join(root, '.codex', 'worktrees', 'session', 'repo');
+  mkdirSync(repo, { recursive: true });
+  execFileSync('git', ['init', '--quiet', repo]);
+  const home = path.join(root, 'home');
+  mkdirSync(home, { recursive: true });
+  const configPath = path.join(root, 'config.json');
+  writeFileSync(configPath, JSON.stringify({ prefix: 'you' }));
+  const emptyGitConfig = path.join(root, 'gitconfig');
+  writeFileSync(emptyGitConfig, '');
+  const cleanEnv = { ...process.env };
+  for (const key of Object.keys(cleanEnv)) {
+    if (/^(CODEX|CLAUDE|AI_AGENT|QWTS_AGENT|AGENT_BOT)/.test(key)) delete cleanEnv[key];
+  }
+  const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'agent-identity.mjs');
+  const ensured = spawnSync(process.execPath, [cli, 'ensure', '--json'], {
+    cwd: repo,
+    encoding: 'utf8',
+    env: {
+      ...cleanEnv,
+      HOME: home,
+      AGENT_BOT_CONFIG: configPath,
+      AGENT_BOT_STATE_HOME: stateDir,
+      GH_AGENT_APP: 'you-claude-agent',
+      CODEX_THREAD_ID: 'thread-territory',
+      GIT_CONFIG_GLOBAL: emptyGitConfig,
+      GIT_CONFIG_SYSTEM: '/dev/null',
+    },
+  });
+  assert.equal(ensured.status, 0, ensured.stderr);
+  assert.equal(JSON.parse(ensured.stdout).github.appSlug, 'you-codex-agent');
+});
+
 test('concurrent setup in separate worktrees shares one conversation identity', async () => {
   const stateDir = state();
   const moduleUrl = pathToFileURL(path.resolve(
