@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  bindSoul,
   botUid,
   credentialHelperCommand,
   httpsRemoteUrl,
@@ -239,5 +240,94 @@ test('botUid still fails when nothing is cached and the cache cannot be written'
   await assert.rejects(
     botUid('you-codex-agent', 'https://api.github.com', null, { home, fetchImpl }),
     /EACCES|EPERM/,
+  );
+});
+
+function fakeDaemon({ availableResult = true, failEnsure = false } = {}) {
+  const calls = [];
+  return {
+    calls,
+    async available() {
+      calls.push('available');
+      return availableResult;
+    },
+    async ensureSpace(agentId) {
+      calls.push(`ensure:${agentId}`);
+      if (failEnsure) throw new Error('space is bound to another soul');
+      return { agentId, path: `/spaces/${agentId}`, created: true };
+    },
+    async registerSoul(agentId, spaceRoot) {
+      calls.push(`register:${agentId}:${spaceRoot}`);
+      return { id: agentId };
+    },
+  };
+}
+
+const BIND_ID = 'agent_44444444-4444-4444-8444-444444444444';
+
+test('bindSoul policy off never probes the daemon', async () => {
+  const daemon = fakeDaemon();
+  const result = await bindSoul({
+    agentId: BIND_ID,
+    policy: 'off',
+    client: daemon,
+    ensureLocal: () => ({ id: BIND_ID, path: '/local', created: true }),
+  });
+  assert.equal(result.via, 'in-process');
+  assert.deepEqual(daemon.calls, []);
+});
+
+test('bindSoul prefer uses a reachable daemon for ensure and register', async () => {
+  const daemon = fakeDaemon();
+  const result = await bindSoul({
+    agentId: BIND_ID,
+    policy: 'prefer',
+    client: daemon,
+    ensureLocal: () => { throw new Error('must not fall back'); },
+  });
+  assert.equal(result.via, 'daemon');
+  assert.equal(result.path, `/spaces/${BIND_ID}`);
+  assert.deepEqual(daemon.calls, [
+    'available',
+    `ensure:${BIND_ID}`,
+    `register:${BIND_ID}:/spaces/${BIND_ID}`,
+  ]);
+});
+
+test('bindSoul prefer falls back in-process only when the daemon is unreachable', async () => {
+  const daemon = fakeDaemon({ availableResult: false });
+  const result = await bindSoul({
+    agentId: BIND_ID,
+    policy: 'prefer',
+    client: daemon,
+    ensureLocal: () => ({ id: BIND_ID, path: '/local', created: false }),
+  });
+  assert.equal(result.via, 'in-process');
+  assert.equal(result.path, '/local');
+});
+
+test('bindSoul propagates a reachable daemon refusal instead of diverging', async () => {
+  const daemon = fakeDaemon({ failEnsure: true });
+  await assert.rejects(
+    bindSoul({
+      agentId: BIND_ID,
+      policy: 'prefer',
+      client: daemon,
+      ensureLocal: () => { throw new Error('must not fall back'); },
+    }),
+    /bound to another soul/,
+  );
+});
+
+test('bindSoul required fails closed when the daemon is down', async () => {
+  const daemon = fakeDaemon({ availableResult: false });
+  await assert.rejects(
+    bindSoul({
+      agentId: BIND_ID,
+      policy: 'required',
+      client: daemon,
+      ensureLocal: () => { throw new Error('must not fall back'); },
+    }),
+    /daemon preference is "required"/,
   );
 });
