@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   appendAuditReceipt,
+  applyAuthorizationChanges,
   assertAuthorized,
   auditFile,
   authorizeSouls,
@@ -235,6 +236,78 @@ test('duplicate enrollment of the same principal ID is refused', () => {
   enrollPrincipal({ label: 'one' }, { ...options, idFactory });
   assert.throws(() => enrollPrincipal({ label: 'two' }, { ...options, idFactory }), /already enrolled/);
   assert.equal(listPrincipals(options).length, 1);
+});
+
+test('authorization changes are all-or-nothing: a partially invalid request mutates nothing', () => {
+  const { options } = scratch();
+  const principal = enrolled(options);
+  authorizeSouls(principal.principalId, [SOUL_A], options);
+  setOperations(principal.principalId, ['message'], options);
+  const before = readFileSync(options.file, 'utf8');
+
+  // The souls facet is valid on its own; the later operations element is
+  // not. The whole request must be refused with the store byte-identical.
+  assert.throws(
+    () => applyAuthorizationChanges(principal.principalId, {
+      souls: [SOUL_A, SOUL_B],
+      operations: ['message', 'not-an-operation'],
+    }, options),
+    /subset of the interaction operations/,
+  );
+  assert.equal(readFileSync(options.file, 'utf8'), before);
+
+  // A default soul outside the soul list AS REQUESTED fails the same way.
+  assert.throws(
+    () => applyAuthorizationChanges(principal.principalId, {
+      souls: [SOUL_A],
+      defaultSoul: SOUL_B,
+    }, options),
+    /default soul must already be authorized/,
+  );
+  assert.equal(readFileSync(options.file, 'utf8'), before);
+
+  // An empty request is refused before any store access.
+  assert.throws(
+    () => applyAuthorizationChanges(principal.principalId, {}, options),
+    /at least one authorization change/,
+  );
+  assert.equal(readFileSync(options.file, 'utf8'), before);
+
+  // A fully valid request commits every facet in one mutation, including a
+  // default that only becomes legal through this same request.
+  const updated = applyAuthorizationChanges(principal.principalId, {
+    souls: [SOUL_A, SOUL_B],
+    operations: ['message', 'observe'],
+    defaultSoul: SOUL_B,
+  }, options);
+  assert.deepEqual(updated.authorizations.souls, [SOUL_A, SOUL_B]);
+  assert.deepEqual(updated.authorizations.operations, ['message', 'observe']);
+  assert.equal(updated.defaultSoul, SOUL_B);
+
+  // Narrowing souls in the same call clears a now-unreachable stored default.
+  const narrowed = applyAuthorizationChanges(principal.principalId, { souls: [SOUL_A] }, options);
+  assert.equal(narrowed.defaultSoul, null);
+});
+
+test('the principal allow CLI is atomic: a rejected request leaves the store unchanged', () => {
+  const { root, options } = scratch();
+  const env = {
+    ...process.env,
+    AGENT_BOT_PRINCIPALS_PATH: options.file,
+    AGENT_BOT_INTERACTION_HOME: path.join(root, 'interaction'),
+  };
+  const run = (...args) => spawnSync(process.execPath, [CLI, 'principal', ...args], { encoding: 'utf8', env });
+  const principal = JSON.parse(run('enroll', '--label', 'owner').stdout);
+  assert.equal(run('allow', principal.principalId, '--soul', SOUL_A, '--operation', 'message').status, 0);
+  const before = readFileSync(options.file, 'utf8');
+
+  const rejected = run(
+    'allow', principal.principalId,
+    '--soul', SOUL_B, '--operation', 'message', '--operation', 'bogus-operation',
+  );
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr, /subset of the interaction operations/);
+  assert.equal(readFileSync(options.file, 'utf8'), before);
 });
 
 test('the principal CLI enrolls, binds, allows, and lists without tokens', () => {
