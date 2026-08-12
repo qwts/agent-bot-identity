@@ -240,6 +240,36 @@ test('required shim, installed skill, managed target, and config failures are in
   assert.doesNotMatch(JSON.stringify(report), /secret config contents|\/foreign\/agent-bot/);
 });
 
+test('skill readiness probes every reference and fails when only storage-surfaces.md is missing', async () => {
+  const home = tempRoot();
+  const probed = [];
+  const ready = await collectReadiness({
+    command: 'doctor',
+    scope: 'machine',
+    ...machineDependencies(home),
+    access: (path) => {
+      if (path.includes('/skills/agent-bot/')) probed.push(path);
+    },
+  });
+  assert.equal(ready.machine.checks.find(({ id }) => id === 'skill.runtime').status, 'ready');
+  assert.ok(probed.some((path) => path.endsWith('/skills/agent-bot/references/storage-surfaces.md')));
+
+  const report = await collectReadiness({
+    command: 'doctor',
+    scope: 'machine',
+    ...machineDependencies(home),
+    access: (path) => {
+      if (path.endsWith('/skills/agent-bot/references/storage-surfaces.md')) {
+        throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      }
+    },
+  });
+  assert.equal(report.ready, false);
+  const check = report.machine.checks.find(({ id }) => id === 'skill.runtime');
+  assert.equal(check.status, 'failed');
+  assert.equal(check.code, 'runtime-skill-incomplete');
+});
+
 test('skipped bootstrap verification passes a null verifier and preserves the operation failure', async () => {
   const home = tempRoot();
   let verifier = 'unobserved';

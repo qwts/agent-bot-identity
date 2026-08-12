@@ -70,12 +70,16 @@ test('--app <slug> resolves app-id and key from ~/.config/<slug>/', () => {
   assert.equal(config.privateKeyPem, pem);
 });
 
-test('GH_AGENT_APP resolves the same lookup without a flag', () => {
+test('GH_AGENT_APP resolves the same lookup without a flag outside bot territory', () => {
   const home = fakeHome('you-codex-agent');
+  // Outside a worktree/scratchpad there is no territory to consult, so the
+  // launcher's stated identity is honored unchanged.
+  const cwd = mkdtempSync(join(tmpdir(), 'agent-bot-plain-'));
   const config = appConfig({
     argv: ['node', 'mint-token.mjs'],
     env: { GH_AGENT_APP: 'you-codex-agent' },
     home,
+    cwd,
     config: {},
   });
   assert.equal(config.appId, '98765');
@@ -92,7 +96,7 @@ function pinnedWorktree(tool, pin) {
   mkdirSync(repo, { recursive: true });
   const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' });
   git('init', '--quiet', '--initial-branch=main');
-  git('config', 'agentBot.app', pin);
+  if (pin) git('config', 'agentBot.app', pin);
   return repo;
 }
 
@@ -112,14 +116,45 @@ test('an inferred mint obeys territory, not a stale pin from another harness', (
   assert.equal(config.appId, '98765');
 });
 
+// GH_AGENT_APP is a launcher-level default, not a per-invocation request: it
+// was exported before anyone knew which worktree this process would land in.
+// Inside another harness's territory it is corrected the same way a stale pin
+// is (#20); outside territory it is honored unchanged (covered above).
+test('inside bot territory a cross-territory GH_AGENT_APP mints the territory App', () => {
+  const home = fakeHome('you-codex-agent');
+  const cwd = pinnedWorktree('codex', null);
+  const notes = [];
+  const write = process.stderr.write;
+  process.stderr.write = (chunk) => { notes.push(String(chunk)); return true; };
+  let config;
+  try {
+    config = appConfig({
+      argv: ['node', 'mint-token.mjs'],
+      env: { GH_AGENT_APP: 'you-claude-opus-agent' },
+      home,
+      cwd,
+      config: { prefix: 'you' },
+    });
+  } finally {
+    process.stderr.write = write;
+  }
+  // you-claude-opus-agent has no key material in this fake home, so resolving
+  // to it would throw. Reaching the codex App's key proves the correction.
+  assert.equal(config.slug, 'you-codex-agent');
+  assert.equal(config.appId, '98765');
+  // The correction is noted on stderr only — stdout carries the token.
+  assert.match(notes.join(''), /GH_AGENT_APP=you-claude-opus-agent.*you-codex-agent/);
+});
+
 test('a deliberate --app still mints from inside another harness territory', () => {
   // doctor mints every configured App in turn from whatever worktree it runs
-  // in; territory must not second-guess an explicit request.
+  // in; territory must not second-guess an explicit request — --app outranks
+  // the launcher environment and the pin alike.
   const home = fakeHome('you-copilot-agent');
   const cwd = pinnedWorktree('claude', 'you-claude-agent');
   const config = appConfig({
     argv: ['node', 'mint-token.mjs', '--app', 'you-copilot-agent'],
-    env: {},
+    env: { GH_AGENT_APP: 'you-codex-agent' },
     home,
     cwd,
     config: { prefix: 'you' },

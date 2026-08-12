@@ -140,7 +140,9 @@ export function validateIdentity(record) {
   if ('token' in (record.github ?? {}) || 'privateKey' in (record.github ?? {}) || 'secret' in (record.github ?? {})) {
     errors.push('identity records must not contain credentials');
   }
-  if (!['active', 'finalized'].includes(record.status)) errors.push('status must be active or finalized');
+  if (!['active', 'finalized', 'retired'].includes(record.status)) {
+    errors.push('status must be active, finalized, or retired');
+  }
   if (record.parentId !== null) {
     try {
       validateAgentId(record.parentId);
@@ -529,6 +531,7 @@ export function finalizeAgentIdentity(id, {
     throw new Error('onFinalized must be a function or null');
   }
   return mutateIdentity(id, stateDir, now, (record) => {
+    if (record.status === 'retired') throw new Error(`Agent ID ${id} is retired and cannot be finalized`);
     if (!record.transcript) throw new Error(`Agent ID ${id} has no transcript to finalize`);
     const digest = optionalText('transcriptSha256', transcriptSha256, { max: 64 });
     if (digest && !/^[0-9a-f]{64}$/i.test(digest)) throw new Error('transcriptSha256 must be 64 hexadecimal characters');
@@ -537,6 +540,32 @@ export function finalizeAgentIdentity(id, {
     record.finalizedAt = now().toISOString();
     return record;
   }, { afterWrite: onFinalized });
+}
+
+// Retirement is the explicit end of a soul's lifecycle (issue #46): it is
+// recorded in the authoritative identity record so reuse paths can refuse it,
+// not only in the census. Like finalize, an optional afterWrite hook lets the
+// caller synchronize a second store with rollback on failure.
+export function retireAgentIdentity(id, {
+  stateDir = stateDirectory(),
+  now = () => new Date(),
+  onRetired = null,
+} = {}) {
+  if (onRetired !== null && typeof onRetired !== 'function') {
+    throw new Error('onRetired must be a function or null');
+  }
+  return mutateIdentity(id, stateDir, now, (record) => {
+    record.status = 'retired';
+    record.retiredAt = now().toISOString();
+    return record;
+  }, { afterWrite: onRetired });
+}
+
+function retiredReuseError(id) {
+  return new Error(
+    `agent identity ${id} is retired; remove the worktree pin ` +
+      '(git config --unset agentBot.id) or start a new session to mint a fresh identity',
+  );
 }
 
 export function ensureAgentIdentity({
@@ -562,7 +591,11 @@ export function ensureAgentIdentity({
         console.warn(`agent-identity: ignoring invalid current identity ${currentId}: ${error.message}`);
       }
       // A corrupt pin is repairable metadata. The registry scan below can
-      // reuse a healthy transcript match or mint a replacement.
+      // reuse a healthy transcript match or mint a replacement. A retired pin
+      // is different: fail closed before any reuse path can touch the record.
+      if (current?.github.appSlug === appSlug && current.status === 'retired') {
+        throw retiredReuseError(current.id);
+      }
       if (current?.github.appSlug === appSlug) {
         if (transcript && sameTranscript(current.transcript, transcript)) identity = current;
         else if (transcript && !current.transcript) {
@@ -576,6 +609,14 @@ export function ensureAgentIdentity({
       }
     }
     identity ??= findTranscriptIdentity(appSlug, transcript, stateDir);
+    if (identity?.status === 'retired') {
+      // Deliberately fail closed instead of minting a replacement: a stale
+      // worktree pin or transcript match reaching a retired soul means an
+      // operator explicitly ended this lifecycle (issue #46). Silently
+      // minting would hide that and re-register a look-alike soul; the
+      // operator should remove the pin or start a fresh session on purpose.
+      throw retiredReuseError(identity.id);
+    }
     identity ??= mintAgentIdentity({
       appSlug,
       botUid,
@@ -664,7 +705,10 @@ async function main() {
 
   switch (args.command) {
     case 'ensure': {
-      const appSlug = resolveAgentSlug({ explicit: args.one('app') });
+      const explicitApp = args.one('app');
+      // Territory-aware unless --app is explicit — the shared policy set by
+      // appConfig in mint-token.mjs (#20).
+      const appSlug = resolveAgentSlug({ explicit: explicitApp, worktree: !explicitApp });
       if (!appSlug) throw new Error('no GitHub App identity resolves in this context');
       const identity = ensureAgentIdentity({
         currentId: currentAgentId(),
@@ -694,7 +738,9 @@ async function main() {
     case 'spawn': {
       const parentId = args.one('parent') ?? currentAgentId();
       const parent = parentId ? readAgentIdentity(parentId, { stateDir }) : null;
-      const appSlug = args.one('app') ?? parent?.github.appSlug ?? resolveAgentSlug();
+      // --app and the parent's App are explicit statements; only the inferred
+      // fallback is territory-aware (shared policy — appConfig, mint-token.mjs, #20).
+      const appSlug = args.one('app') ?? parent?.github.appSlug ?? resolveAgentSlug({ worktree: true });
       if (!appSlug) throw new Error('spawn requires an App identity or a resolvable parent');
       const identity = mintAgentIdentity({
         appSlug,
