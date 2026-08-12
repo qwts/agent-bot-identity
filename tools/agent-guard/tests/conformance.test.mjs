@@ -236,6 +236,40 @@ describe('agent-guard conformance (ENG-0138)', () => {
     }
   });
 
+  test('unenumerated wrappers cannot hide a heavy lane or test binary', () => {
+    // The prefix stripper knows an enumerated wrapper set; anything outside
+    // it (flock, sudo, doas, chrt, strace, …) must not become a bypass. The
+    // deny-side scans consider every runner-shaped token as a candidate
+    // command start, so the wrapper's argument tail is still inspected.
+    for (const command of [
+      'flock /tmp/agent.lock npm run ci',
+      'sudo npx vitest',
+      'doas npm run test:e2e',
+      'chrt -b 0 node --run ci',
+      'flock /tmp/agent.lock pnpm run test:stories:ci',
+      'strace -f npx playwright test',
+      'sudo -u me npx c8 npm test',
+      'flock /tmp/agent.lock npm run test:e2e:inner',
+      'flock /tmp/agent.lock npm run $lane',
+      // The -c string form runs its payload like `script -c`; a quoted
+      // payload is a command, not prose, and is promoted for the same scans.
+      "flock /tmp/agent.lock -c 'npm run ci'",
+      "flock -n /tmp/agent.lock --command 'npx vitest'",
+    ]) {
+      assert.equal(evaluateCommand(command, { env }).allow, false, `expected the guard to deny: ${command}`);
+    }
+    // The canonical wrapper still carries its own sanctioned tail, and a
+    // runner-shaped word in argument position is data, not an invocation.
+    for (const command of [
+      'node tools/agent-guard/run-guarded.mjs --label test:e2e -- npm run test:e2e:inner',
+      'brew info npm',
+      'git log --oneline -- vitest.config.ts',
+      "flock /tmp/agent.lock -c 'npm run lint'",
+    ]) {
+      assert.equal(evaluateCommand(command, { env }).allow, true, `expected the guard to allow: ${command}`);
+    }
+  });
+
   test('the guard denies tampering with its own controls', () => {
     for (const command of ['AGENT_GUARD_FORCE=1 npm run test:dom', 'AGENT_GUARD_ASSUME_HUMAN=1 npm run test:dom', 'node tools/agent-guard/arbiter.mjs grant e2e']) {
       assert.equal(evaluateCommand(command, { env }).allow, false, `expected the guard to deny: ${command}`);
@@ -249,7 +283,9 @@ describe('agent-guard conformance (ENG-0138)', () => {
     assert.deepEqual(parseGrantMinutes(['grant', 'e2e', '7']), { ok: true, minutes: 7 });
     assert.deepEqual(parseGrantMinutes(['grant', 'e2e']), { ok: true, minutes: 30 });
     assert.deepEqual(parseGrantMinutes(['grant', 'e2e', '--minutes', '9999']), { ok: true, minutes: 240 });
-    for (const argv of [['grant', 'e2e', '--minutes', 'soon'], ['grant', 'e2e', '--minutes'], ['grant', 'e2e', '--minutes', '-5'], ['grant', 'e2e', '--minutes', '0']]) {
+    // 0.1 is positive but rounds to zero minutes — a grant already expired at
+    // write time must be a refusal, not a reported success.
+    for (const argv of [['grant', 'e2e', '--minutes', 'soon'], ['grant', 'e2e', '--minutes'], ['grant', 'e2e', '--minutes', '-5'], ['grant', 'e2e', '--minutes', '0'], ['grant', 'e2e', '--minutes', '0.1'], ['grant', 'e2e', '0.4']]) {
       assert.equal(parseGrantMinutes(argv).ok, false, `expected a refusal for: ${argv.join(' ')}`);
     }
   });
