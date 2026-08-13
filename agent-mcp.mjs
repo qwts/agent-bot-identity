@@ -88,6 +88,16 @@ const TOOLS = [
     description: 'Path of the bound identity\'s Agent Space (requires bind).',
     inputSchema: { type: 'object', properties: {} },
   },
+  {
+    name: 'credential',
+    description:
+      'Mint a short-lived GitHub App installation token for the identity this '
+      + 'connection is bound to (requires bind). Tier 1 only: the token is the '
+      + 'bot\'s own — export it as GH_TOKEN for gh. Configured worktrees already '
+      + 'authenticate git through the credential helper, so git needs nothing. '
+      + 'Treat it as a secret; never write it to a file or commit.',
+    inputSchema: { type: 'object', properties: {} },
+  },
 ];
 
 export function createMcpState({
@@ -154,6 +164,10 @@ async function callTool(state, name, args = {}) {
       if (!state.secret) throw new Error('not bound — call the bind tool first');
       const binding = await state.client.binding(state.secret);
       return state.client.spacePath(binding.agentId);
+    }
+    case 'credential': {
+      if (!state.secret) throw new Error('not bound — call the bind tool first');
+      return state.client.credential(state.secret);
     }
     default:
       throw new Error(`unknown tool: ${name}`);

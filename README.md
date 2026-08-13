@@ -310,7 +310,18 @@ fresh proof of place, never a fresh identity).
 
 Binding is also the moment provenance lands in the census: the row picks up
 the transcript locator and parent lineage that pre-bind rows lack. Tools:
-`bind`, `whoami`, `population`, `space_path`.
+`bind`, `whoami`, `population`, `space_path`, `credential`.
+
+The `credential` tool is tier-1 brokering only: the daemon mints a
+short-lived App installation token for the identity the connection is bound
+to — the bot the caller already *is*, so nothing is borrowed. The request
+names no App and no Agent ID; both derive from the binding, authorization is
+"a bound agent on an enforced connection" rather than "can read the key
+file", and every grant or refusal appends an audit receipt (which records
+who and what, never the credential). Delegated human authority — operations
+only `qwts` can approve — is deliberately not this tool: that tier must
+never return a credential at all, and remains future work under #35's
+bounded approval broker.
 
 ### Private web client
 
