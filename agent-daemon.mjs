@@ -291,6 +291,15 @@ export function createDaemonServer({
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, binding });
           return;
         }
+        // The MCP server surrenders its binding when the connection closes,
+        // so the live-binding cap counts conversations rather than history.
+        case 'DELETE /v0/binding': {
+          if (!bindings.release(req.headers['x-agent-binding'] ?? '')) {
+            throw Object.assign(new Error('missing or invalid agent binding'), { statusCode: 401 });
+          }
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, released: true });
+          return;
+        }
         // Tier-1 credential brokering (#90): an App installation token for
         // the bot the caller already IS. Authorization is the live binding —
         // "a bound agent on an enforced connection" — never a request
@@ -390,8 +399,19 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now }) {
   const parentId = body.parentId === undefined || body.parentId === null
     ? null
     : requireAgentId(body.parentId);
-  const record = consumeBindToken({ gitDir: body.gitDir, token: body.token });
   const stateDir = stateDirectory({ env, home });
+  // A syntactically valid parentId can still be a typo or a stale ID from
+  // another machine; lineage must only ever point at an identity this
+  // workstation can produce. Checked before consuming so a rejected bind
+  // leaves the single-use token in place.
+  if (parentId !== null) {
+    try {
+      readAgentIdentity(parentId, { stateDir });
+    } catch {
+      throw Object.assign(new Error('parent Agent ID is unknown'), { statusCode: 409 });
+    }
+  }
+  const record = consumeBindToken({ gitDir: body.gitDir, token: body.token });
   let pinned;
   try {
     pinned = readAgentIdentity(record.agentId, { stateDir });
@@ -644,6 +664,9 @@ export function daemonClient({
         'x-agent-binding': secret,
       });
       return binding;
+    },
+    async releaseBinding(secret) {
+      return request('DELETE', '/v0/binding', undefined, { 'x-agent-binding': secret });
     },
     // Tier-1 (#90): the bound identity's own App installation token. The
     // caller is that identity — nothing is being borrowed.

@@ -27,6 +27,10 @@ const TOKEN_PATTERN = /^[0-9a-f]{64}$/;
 // A workstation runs a handful of concurrent conversations, not thousands; a
 // hard cap keeps a misbehaving client from growing daemon memory unbounded.
 const MAX_LIVE_BINDINGS = 256;
+// Bindings whose connection never said goodbye (a killed harness can't call
+// release) age out instead of counting against the cap forever. Generous on
+// purpose: a workstation conversation can legitimately run all day.
+const MAX_BINDING_AGE_MS = 24 * 60 * 60 * 1000;
 
 function fail(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -120,8 +124,17 @@ export function consumeBindToken({ gitDir, token }) {
 // fresh mint from the same worktree. Nothing reusable is ever written down.
 export function createBindingRegistry({ now = () => new Date() } = {}) {
   const bindings = new Map();
+  function evictExpired() {
+    const cutoff = now().getTime() - MAX_BINDING_AGE_MS;
+    for (const [secret, binding] of bindings) {
+      if (Date.parse(binding.boundAt) <= cutoff) bindings.delete(secret);
+    }
+  }
   return {
     bind({ agentId, worktree, transcript = null, harness = null }) {
+      // The cap must count live conversations, not lifetime binds: sweep
+      // abandoned bindings before deciding the registry is full.
+      evictExpired();
       if (bindings.size >= MAX_LIVE_BINDINGS) {
         throw fail('too many live bindings', 429);
       }
@@ -138,6 +151,7 @@ export function createBindingRegistry({ now = () => new Date() } = {}) {
     // Constant-shape lookup: compare against every live secret with a
     // timing-safe primitive instead of keying a hash lookup on the secret.
     resolve(secret) {
+      evictExpired();
       let found = null;
       for (const [candidate, binding] of bindings) {
         if (tokensMatch(candidate, secret)) found = binding;

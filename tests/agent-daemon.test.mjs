@@ -529,6 +529,61 @@ test('bind refuses to rewrite recorded lineage', async () => {
   });
 });
 
+test('bind refuses an unknown parent and leaves the token in place', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  await withServer(env, async ({ call }) => {
+    // Syntactically valid, but no identity record exists for it here: lineage
+    // must only ever point at an identity this workstation can produce.
+    const res = await call('/v0/bind', {
+      method: 'POST',
+      body: {
+        gitDir,
+        token: record.token,
+        transcript: { provider: 'codex', id: 'thread-daemon' },
+        parentId: 'agent_99999999-9999-4999-8999-999999999999',
+      },
+    });
+    assert.equal(res.status, 409);
+    assert.match((await res.json()).error, /parent Agent ID is unknown/);
+    // The rejected bind is retryable: the single-use token survives.
+    assert.equal(existsSync(path.join(gitDir, 'agent-bind-token.json')), true);
+  });
+});
+
+test('releasing a binding hands the slot back and invalidates the secret', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  await withServer(env, async ({ call }) => {
+    const bound = await (await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
+    })).json();
+
+    const forged = await call('/v0/binding', {
+      method: 'DELETE',
+      headers: { 'x-agent-binding': 'f'.repeat(64) },
+    });
+    assert.equal(forged.status, 401);
+
+    const released = await call('/v0/binding', {
+      method: 'DELETE',
+      headers: { 'x-agent-binding': bound.secret },
+    });
+    assert.equal(released.status, 200);
+    assert.equal((await released.json()).released, true);
+
+    // The secret is dead: reads and repeat releases both refuse it.
+    const after = await call('/v0/binding', { headers: { 'x-agent-binding': bound.secret } });
+    assert.equal(after.status, 401);
+    const again = await call('/v0/binding', {
+      method: 'DELETE',
+      headers: { 'x-agent-binding': bound.secret },
+    });
+    assert.equal(again.status, 401);
+  });
+});
+
 test('a new conversation reusing the worktree binds a fresh identity and asks for a repin', async () => {
   const { root, env } = scratchEnv();
   const { gitDir, worktree, record } = mintWorktreeToken(env, root);

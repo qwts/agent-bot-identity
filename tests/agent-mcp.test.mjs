@@ -4,8 +4,9 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 
-import { createMcpState, handleMcpMessage } from '../agent-mcp.mjs';
+import { createMcpState, handleMcpMessage, runMcpServer } from '../agent-mcp.mjs';
 import { mintBindToken, readBindToken } from '../agent-binding.mjs';
 
 const AGENT_ID = 'agent_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -91,6 +92,40 @@ test('notifications get no response; unknown methods get -32601', async () => {
   assert.equal(unknown.error.code, -32601);
   const invalid = await handleMcpMessage(state, { hello: 'there' });
   assert.equal(invalid.error.code, -32600);
+});
+
+test('a notification for a KNOWN method is also silent — no id:null reply', async () => {
+  const state = createMcpState({ client: fakeClient() });
+  // JSON-RPC: any request without an id is a notification, even when the
+  // method is one the server answers; an id:null response would read to the
+  // client as an unmatched reply.
+  assert.equal(await handleMcpMessage(state, { jsonrpc: '2.0', method: 'ping' }), null);
+  assert.equal(await handleMcpMessage(state, { jsonrpc: '2.0', method: 'tools/list' }), null);
+  assert.equal(await handleMcpMessage(state, { jsonrpc: '2.0', method: 'initialize', params: {} }), null);
+});
+
+test('the connection close surrenders the binding back to the daemon', async () => {
+  const { root, gitDir } = scratchRepo();
+  mintBindToken({ gitDir, worktree: root, agentId: AGENT_ID });
+  const released = [];
+  const client = fakeClient();
+  client.releaseBinding = async (secret) => { released.push(secret); return { released: true }; };
+  const state = createMcpState({ client, cwd: root, env: {} });
+
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const server = runMcpServer({ state, input, output });
+  const firstResponse = new Promise((resolve) => output.once('data', resolve));
+  input.write(`${JSON.stringify(request(1, 'tools/call', { name: 'bind', arguments: { transcript_id: 'session-5' } }))}\n`);
+  // Only close the connection once the bind round-trip has finished — the
+  // line handler runs async and end() would race it.
+  await firstResponse;
+  input.end();
+  await server;
+
+  assert.deepEqual(released, ['a'.repeat(64)]);
+  assert.equal(state.secret, null);
+  assert.equal(state.agentId, null);
 });
 
 test('bind reads the worktree token itself and never returns the secret', async () => {

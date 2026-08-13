@@ -154,3 +154,21 @@ test('registry refuses to grow without bound', () => {
     /too many live bindings/,
   );
 });
+
+test('abandoned bindings age out — the cap counts conversations, not history', () => {
+  let clock = new Date('2026-08-12T08:00:00.000Z');
+  const registry = createBindingRegistry({ now: () => clock });
+  const secrets = [];
+  for (let i = 0; i < 256; i++) {
+    secrets.push(registry.bind({ agentId: AGENT_ID, worktree: '/w' }));
+  }
+  assert.throws(() => registry.bind({ agentId: AGENT_ID, worktree: '/w' }), /too many live bindings/);
+
+  // A day later the abandoned bindings no longer hold the slots hostage…
+  clock = new Date('2026-08-13T08:00:00.001Z');
+  const fresh = registry.bind({ agentId: AGENT_ID, worktree: '/w' });
+  assert.equal(registry.size(), 1);
+  assert.equal(registry.resolve(fresh).agentId, AGENT_ID);
+  // …and an expired secret no longer resolves.
+  assert.equal(registry.resolve(secrets[0]), null);
+});
