@@ -54,8 +54,8 @@ would fire each hook twice. `npm test` runs `node sync-hooks.mjs --check`, so a
 hand-edited adapter cannot drift from the shared table.
 
 Generated entries are marker-scoped. Regeneration replaces entries containing
-`agent-bot agent-hook` and preserves foreign entries such as repository memory
-guards and Claude's `WorktreeCreate` hook.
+`agent-bot agent-hook` and preserves foreign entries such as Claude's
+`WorktreeCreate` hook.
 
 ## The contract
 
