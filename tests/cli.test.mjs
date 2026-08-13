@@ -74,6 +74,50 @@ test('portable launcher finds an nvm Node with a desktop-app PATH', () => {
   assert.equal(readFileSync(childPath, 'utf8').trim(), node);
 });
 
+test('portable launcher treats an empty NVM_DIR as unset', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-launcher-nvm-dir-'));
+  const node = join(home, '.nvm', 'versions', 'node', 'v-test', 'bin', 'node');
+  mkdirSync(dirname(node), { recursive: true });
+  symlinkSync(process.execPath, node);
+
+  const run = spawnSync(LAUNCHER, ['--version'], {
+    encoding: 'utf8',
+    env: { HOME: home, NVM_DIR: '', PATH: '/usr/bin:/bin' },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /^0\.2\.0\n$/);
+});
+
+test('portable launcher ignores an NVM_DIR that is not an nvm root', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-launcher-nvm-stale-'));
+  const node = join(home, '.nvm', 'versions', 'node', 'v-test', 'bin', 'node');
+  const stale = join(home, 'not-nvm');
+  mkdirSync(dirname(node), { recursive: true });
+  mkdirSync(stale, { recursive: true });
+  symlinkSync(process.execPath, node);
+
+  const run = spawnSync(LAUNCHER, ['--version'], {
+    encoding: 'utf8',
+    env: { HOME: home, NVM_DIR: stale, PATH: '/usr/bin:/bin' },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /^0\.2\.0\n$/);
+});
+
+test('portable launcher finds Node in ~/.local/bin', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-launcher-local-bin-'));
+  const node = join(home, '.local', 'bin', 'node');
+  mkdirSync(dirname(node), { recursive: true });
+  symlinkSync(process.execPath, node);
+
+  const run = spawnSync(LAUNCHER, ['--version'], {
+    encoding: 'utf8',
+    env: { HOME: home, PATH: '/usr/bin:/bin' },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /^0\.2\.0\n$/);
+});
+
 test('portable launcher skips an old PATH Node for a supported nvm Node', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-launcher-version-'));
   const oldBin = join(home, 'old-bin');

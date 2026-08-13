@@ -26,7 +26,12 @@ resolve_self() {
 }
 
 nvm_node() {
-  nvm_dir=${NVM_DIR:-"$HOME/.nvm"}
+  # Desktop apps sometimes export NVM_DIR empty or pointing at a directory
+  # that is not an nvm root. Prefer a usable NVM_DIR; otherwise $HOME/.nvm.
+  nvm_dir=$HOME/.nvm
+  if [ -n "${NVM_DIR:-}" ] && [ -d "$NVM_DIR/versions/node" ]; then
+    nvm_dir=$NVM_DIR
+  fi
   versions=$nvm_dir/versions/node
   [ -d "$versions" ] || return 1
 
@@ -83,6 +88,7 @@ find_node() {
   fi
 
   for candidate in \
+    "$HOME/.local/bin/node" \
     "$HOME/.volta/bin/node" \
     "$HOME/.local/share/fnm/aliases/default/bin/node" \
     "$HOME/.local/share/mise/shims/node" \
