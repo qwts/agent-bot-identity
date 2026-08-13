@@ -28,9 +28,11 @@ const TOKEN_PATTERN = /^[0-9a-f]{64}$/;
 // hard cap keeps a misbehaving client from growing daemon memory unbounded.
 const MAX_LIVE_BINDINGS = 256;
 // Bindings whose connection never said goodbye (a killed harness can't call
-// release) age out instead of counting against the cap forever. Generous on
-// purpose: a workstation conversation can legitimately run all day.
-const MAX_BINDING_AGE_MS = 24 * 60 * 60 * 1000;
+// release) idle out instead of counting against the cap forever. Idleness,
+// not age: every successful resolve refreshes the clock, so a conversation
+// that keeps calling bound tools stays bound however long it runs — only a
+// binding nothing has touched for a day is treated as abandoned.
+const MAX_BINDING_IDLE_MS = 24 * 60 * 60 * 1000;
 
 function fail(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -123,40 +125,49 @@ export function consumeBindToken({ gitDir, token }) {
 // bearer token: a daemon restart drops every binding, and re-binding takes a
 // fresh mint from the same worktree. Nothing reusable is ever written down.
 export function createBindingRegistry({ now = () => new Date() } = {}) {
+  // Each entry wraps the binding with its idle clock; lastSeenAt never leaves
+  // this map, so callers see the binding record exactly as bound.
   const bindings = new Map();
-  function evictExpired() {
-    const cutoff = now().getTime() - MAX_BINDING_AGE_MS;
-    for (const [secret, binding] of bindings) {
-      if (Date.parse(binding.boundAt) <= cutoff) bindings.delete(secret);
+  function evictIdle() {
+    const cutoff = now().getTime() - MAX_BINDING_IDLE_MS;
+    for (const [secret, entry] of bindings) {
+      if (entry.lastSeenAt <= cutoff) bindings.delete(secret);
     }
   }
   return {
     bind({ agentId, worktree, transcript = null, harness = null }) {
       // The cap must count live conversations, not lifetime binds: sweep
       // abandoned bindings before deciding the registry is full.
-      evictExpired();
+      evictIdle();
       if (bindings.size >= MAX_LIVE_BINDINGS) {
         throw fail('too many live bindings', 429);
       }
       const secret = randomBytes(32).toString('hex');
       bindings.set(secret, {
-        agentId: validateAgentId(agentId),
-        worktree,
-        transcript,
-        harness,
-        boundAt: now().toISOString(),
+        lastSeenAt: now().getTime(),
+        binding: {
+          agentId: validateAgentId(agentId),
+          worktree,
+          transcript,
+          harness,
+          boundAt: now().toISOString(),
+        },
       });
       return secret;
     },
     // Constant-shape lookup: compare against every live secret with a
     // timing-safe primitive instead of keying a hash lookup on the secret.
     resolve(secret) {
-      evictExpired();
+      evictIdle();
       let found = null;
-      for (const [candidate, binding] of bindings) {
-        if (tokensMatch(candidate, secret)) found = binding;
+      for (const [candidate, entry] of bindings) {
+        if (tokensMatch(candidate, secret)) found = entry;
       }
-      return found;
+      if (!found) return null;
+      // A resolved binding is a live conversation: refresh its idle clock so
+      // only untouched bindings ever expire.
+      found.lastSeenAt = now().getTime();
+      return found.binding;
     },
     release(secret) {
       for (const candidate of bindings.keys()) {

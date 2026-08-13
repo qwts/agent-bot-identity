@@ -237,20 +237,32 @@ export async function handleMcpMessage(state, message) {
 
 export function runMcpServer({ state = createMcpState(), input = process.stdin, output = process.stdout } = {}) {
   const lines = createInterface({ input, crlfDelay: Infinity });
-  lines.on('line', async (line) => {
+  // readline fires 'line' without awaiting the async handler, so 'close' can
+  // arrive while the final message — possibly the bind itself — is still in
+  // flight. Track every handler and drain the set before releasing, or a bind
+  // that completes after EOF would install a secret nobody ever surrenders.
+  const inFlight = new Set();
+  lines.on('line', (line) => {
     if (line.trim() === '') return;
-    let message;
-    try {
-      message = JSON.parse(line);
-    } catch {
-      output.write(`${JSON.stringify(rpcError(null, -32700, 'parse error'))}\n`);
-      return;
-    }
-    const response = await handleMcpMessage(state, message);
-    if (response) output.write(`${JSON.stringify(response)}\n`);
+    const task = (async () => {
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        output.write(`${JSON.stringify(rpcError(null, -32700, 'parse error'))}\n`);
+        return;
+      }
+      const response = await handleMcpMessage(state, message);
+      if (response) output.write(`${JSON.stringify(response)}\n`);
+    })();
+    inFlight.add(task);
+    task.finally(() => inFlight.delete(task));
   });
   return new Promise((resolve) => {
     lines.on('close', async () => {
+      while (inFlight.size > 0) {
+        await Promise.allSettled([...inFlight]);
+      }
       // The connection IS the identity, so the end of the connection is the
       // end of the binding: hand the slot back so the daemon's live-binding
       // cap counts conversations, not history. Best-effort — a dead daemon

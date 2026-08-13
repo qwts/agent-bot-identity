@@ -117,8 +117,6 @@ test('the connection close surrenders the binding back to the daemon', async () 
   const server = runMcpServer({ state, input, output });
   const firstResponse = new Promise((resolve) => output.once('data', resolve));
   input.write(`${JSON.stringify(request(1, 'tools/call', { name: 'bind', arguments: { transcript_id: 'session-5' } }))}\n`);
-  // Only close the connection once the bind round-trip has finished — the
-  // line handler runs async and end() would race it.
   await firstResponse;
   input.end();
   await server;
@@ -126,6 +124,34 @@ test('the connection close surrenders the binding back to the daemon', async () 
   assert.deepEqual(released, ['a'.repeat(64)]);
   assert.equal(state.secret, null);
   assert.equal(state.agentId, null);
+});
+
+test('close waits for an in-flight bind and still surrenders its binding', async () => {
+  const { root, gitDir } = scratchRepo();
+  mintBindToken({ gitDir, worktree: root, agentId: AGENT_ID });
+  const released = [];
+  const client = fakeClient();
+  const daemonBind = client.bind.bind(client);
+  // A slow daemon: EOF arrives while the bind round-trip is still in flight.
+  client.bind = async (args) => {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    return daemonBind(args);
+  };
+  client.releaseBinding = async (secret) => { released.push(secret); return { released: true }; };
+  const state = createMcpState({ client, cwd: root, env: {} });
+
+  const input = new PassThrough();
+  const output = new PassThrough();
+  output.resume();
+  const server = runMcpServer({ state, input, output });
+  input.write(`${JSON.stringify(request(1, 'tools/call', { name: 'bind', arguments: { transcript_id: 'session-6' } }))}\n`);
+  // No waiting: the close must drain the handler before deciding whether a
+  // binding exists, or the late bind would leak its registry slot.
+  input.end();
+  await server;
+
+  assert.deepEqual(released, ['a'.repeat(64)]);
+  assert.equal(state.secret, null);
 });
 
 test('bind reads the worktree token itself and never returns the secret', async () => {
