@@ -189,10 +189,14 @@ export async function handleMcpMessage(state, message) {
   }
   const { id = null, method, params = {} } = message;
   const isNotification = !('id' in message);
+  // JSON-RPC: a notification executes but never gets a response — including
+  // for known methods, so a ping without an id must not produce an id:null
+  // reply the client would treat as an unmatched response.
+  const reply = (payload) => (isNotification ? null : payload);
   try {
     switch (method) {
       case 'initialize':
-        return rpcResult(id, {
+        return reply(rpcResult(id, {
           protocolVersion: typeof params.protocolVersion === 'string' ? params.protocolVersion : PROTOCOL_VERSION,
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: 'agent-bot', version: serverVersion() },
@@ -201,24 +205,24 @@ export async function handleMcpMessage(state, message) {
             + 'thread identifier as transcript_id (and parent_agent_id when you were '
             + 'spawned by another agent). Binding joins this worktree\'s minted token '
             + 'with your conversation into one enforced identity; other tools require it.',
-        });
+        }));
       case 'ping':
-        return rpcResult(id, {});
+        return reply(rpcResult(id, {}));
       case 'tools/list':
-        return rpcResult(id, { tools: TOOLS });
+        return reply(rpcResult(id, { tools: TOOLS }));
       case 'tools/call': {
         try {
           const result = await callTool(state, params.name, params.arguments ?? {});
-          return rpcResult(id, {
+          return reply(rpcResult(id, {
             content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-          });
+          }));
         } catch (error) {
           // Tool failures are results, not protocol errors (MCP contract):
           // the agent should read the message and adapt.
-          return rpcResult(id, {
+          return reply(rpcResult(id, {
             content: [{ type: 'text', text: error.message }],
             isError: true,
-          });
+          }));
         }
       }
       default:
@@ -233,20 +237,47 @@ export async function handleMcpMessage(state, message) {
 
 export function runMcpServer({ state = createMcpState(), input = process.stdin, output = process.stdout } = {}) {
   const lines = createInterface({ input, crlfDelay: Infinity });
-  lines.on('line', async (line) => {
+  // readline fires 'line' without awaiting the async handler, so 'close' can
+  // arrive while the final message — possibly the bind itself — is still in
+  // flight. Track every handler and drain the set before releasing, or a bind
+  // that completes after EOF would install a secret nobody ever surrenders.
+  const inFlight = new Set();
+  lines.on('line', (line) => {
     if (line.trim() === '') return;
-    let message;
-    try {
-      message = JSON.parse(line);
-    } catch {
-      output.write(`${JSON.stringify(rpcError(null, -32700, 'parse error'))}\n`);
-      return;
-    }
-    const response = await handleMcpMessage(state, message);
-    if (response) output.write(`${JSON.stringify(response)}\n`);
+    const task = (async () => {
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        output.write(`${JSON.stringify(rpcError(null, -32700, 'parse error'))}\n`);
+        return;
+      }
+      const response = await handleMcpMessage(state, message);
+      if (response) output.write(`${JSON.stringify(response)}\n`);
+    })();
+    inFlight.add(task);
+    task.finally(() => inFlight.delete(task));
   });
   return new Promise((resolve) => {
-    lines.on('close', resolve);
+    lines.on('close', async () => {
+      while (inFlight.size > 0) {
+        await Promise.allSettled([...inFlight]);
+      }
+      // The connection IS the identity, so the end of the connection is the
+      // end of the binding: hand the slot back so the daemon's live-binding
+      // cap counts conversations, not history. Best-effort — a dead daemon
+      // has already forgotten every binding.
+      if (state.secret) {
+        try {
+          await state.client.releaseBinding(state.secret);
+        } catch {
+          // Nothing to do: the daemon is gone or the binding already expired.
+        }
+        state.secret = null;
+        state.agentId = null;
+      }
+      resolve();
+    });
   });
 }
 

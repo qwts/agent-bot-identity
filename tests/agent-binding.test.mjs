@@ -154,3 +154,27 @@ test('registry refuses to grow without bound', () => {
     /too many live bindings/,
   );
 });
+
+test('abandoned bindings idle out — the cap counts conversations, not history', () => {
+  let clock = new Date('2026-08-12T08:00:00.000Z');
+  const registry = createBindingRegistry({ now: () => clock });
+  const secrets = [];
+  for (let i = 0; i < 256; i++) {
+    secrets.push(registry.bind({ agentId: AGENT_ID, worktree: '/w' }));
+  }
+  assert.throws(() => registry.bind({ agentId: AGENT_ID, worktree: '/w' }), /too many live bindings/);
+
+  // 23 hours in, one conversation is still calling bound tools: the resolve
+  // refreshes its idle clock.
+  clock = new Date('2026-08-13T07:00:00.000Z');
+  assert.equal(registry.resolve(secrets[0]).agentId, AGENT_ID);
+
+  // 23 hours after that touch, the sweep runs: every binding nothing touched
+  // is gone, the active conversation is not, and the slots are free again.
+  clock = new Date('2026-08-14T06:00:00.000Z');
+  const fresh = registry.bind({ agentId: AGENT_ID, worktree: '/w' });
+  assert.equal(registry.size(), 2);
+  assert.equal(registry.resolve(fresh).agentId, AGENT_ID);
+  assert.equal(registry.resolve(secrets[0]).agentId, AGENT_ID);
+  assert.equal(registry.resolve(secrets[1]), null);
+});

@@ -47,9 +47,18 @@ Consumers must therefore:
 
 1. Treat the local identity record and population census as the authoritative
    attribution store (`agent-bot identity show`, `agent-bot population show`).
-2. When reading from git at all, grep the raw body (`git log --format='%B'`)
-   for `^Agent-Identity: ` instead of using `%(trailers:)`.
-3. Treat a missing trailer as "ask the census", never as "unattributed".
+2. When reading from git at all, scope the read to the commit in question —
+   `git show -s --format='%B' <sha>` — and grep it for `^Agent-Identity: `
+   instead of using `%(trailers:)`. An unscoped `git log --format='%B'` walk
+   matches every agent commit in the history, not the one being resolved.
+3. Treat a missing trailer as "ask the census", never as "unattributed". To
+   resolve a commit with no trailer, take its author bot (`git show -s
+   --format='%ae' <sha>` names the App slug) and list that App's identities
+   in the census (`agent-bot population list --app <slug>`); the identity
+   records' timestamps and transcript locators narrow it to a conversation.
+   A commit that predates identity records, or whose records were made on
+   another machine, may be genuinely unresolvable — say so rather than
+   guessing from branch names.
 
 Do not expose private identity records, transcript URLs, session tokens, or
 provider metadata in public issue or PR comments. Report only the Agent ID
