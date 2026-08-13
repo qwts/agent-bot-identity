@@ -89,7 +89,7 @@ agent-bot space <init|ensure|path|show> [agent-id]
 agent-bot space export [agent-id] [--out <path>] [--gist]
 agent-bot space import <pack|gist:id|gist-url> [--force]
 agent-bot space retire <agent-id> [--delete-space]
-agent-bot population <list|show> [agent-id|name] [--json]
+agent-bot population <list|show|backfill> [agent-id|name] [--dry-run] [--json]
 agent-bot daemon <run|start|status|stop> [--json]
 agent-bot mcp
 agent-bot web open [--principal <principal-id>] [--no-browser] [--json]
@@ -261,6 +261,22 @@ authoritative: consumers read the recorded name rather than re-deriving
 meaning from the display string, the row stays keyed by Agent ID (names are
 handles and may collide; IDs cannot), and `population show` accepts a name
 whenever it is unambiguous.
+
+Rows that predate binding carry `transcriptLocator: null` and show `?` in the
+PARENT column; `population list` counts them on every listing so the gap can
+never persist silently. `population backfill` repairs what the workstation's
+own transcript stores still prove: it scans `~/.claude/projects` and
+`~/.codex/sessions` for session files that mention each unbound Agent ID and
+records the locator when exactly one transcript names it. An ID found in
+several transcripts or none is reported and left untouched — ambiguity never
+turns into invented provenance. `--dry-run` prints the exact repairs without
+writing; results carry only `{provider, id}` locators, never transcript
+content or paths.
+
+```bash
+agent-bot population backfill --dry-run
+agent-bot population backfill
+```
 
 `daemon` runs a machine-local service over the same space and population
 stores, so other agents and hooks can register souls and ensure spaces without
