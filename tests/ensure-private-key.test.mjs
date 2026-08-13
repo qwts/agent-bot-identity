@@ -7,9 +7,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  PROVIDER_SESSION_REQUIRED,
   appIdPath, ensurePrivateKey, parseCliArgs, parsePassItemView, privateKeyPath,
   selectAppIdAttachment, selectIssuer, selectPrivateKeyAttachment, validateIssuer,
 } from '../ensure-private-key.mjs';
+
+function passRun(handler) {
+  return (args) => {
+    if (args[0] === 'info') return '{}';
+    return handler(args);
+  };
+}
 
 const VIEW = JSON.stringify({
   item: { id: 'item-1', share_id: 'share-1' },
@@ -97,11 +105,11 @@ test('ensurePrivateKey fails closed when the provider item has no issuer', () =>
   const path = privateKeyPath('bot-app', home);
   assert.throws(() => ensurePrivateKey({
     slug: 'bot-app', home,
-    run: (args) => {
+    run: passRun((args) => {
       if (args[1] === 'view') return VIEW;
       writeDownload(args, 'fixture material\n');
       return '';
-    },
+    }),
     validateKey: () => true,
   }), /no App ID\/client ID/);
   assert.equal(existsSync(path), false);
@@ -150,14 +158,14 @@ test('ensurePrivateKey writes the app-id beside the key from one item view', () 
   const calls = [];
   const result = ensurePrivateKey({
     slug: 'bot-app', home,
-    run: (args) => {
+    run: passRun((args) => {
       calls.push(args);
       if (args[1] === 'view') {
         return viewWith({ sections: [{ fields: [{ field_name: 'App ID', value: '4376641' }] }] });
       }
       writeDownload(args, 'fixture material\n');
       return '';
-    },
+    }),
     validateKey: () => true,
   });
   assert.equal(result.appIdWritten, true);
@@ -181,7 +189,7 @@ test('an app-id attachment is downloaded and validated when no field carries it'
   const downloads = [];
   const result = ensurePrivateKey({
     slug: 'bot-app', home,
-    run: (args) => {
+    run: passRun((args) => {
       if (args[1] === 'view') return view;
       const id = args[args.indexOf('--attachment-id') + 1];
       const out = args[args.indexOf('--output') + 1];
@@ -189,7 +197,7 @@ test('an app-id attachment is downloaded and validated when no field carries it'
       // Proton Pass stores the file verbatim, trailing newline and all.
       writeFileSync(out, id === 'attachment-2' ? '4376641\n' : 'fixture material\n');
       return '';
-    },
+    }),
     validateKey: () => true,
   });
   assert.equal(result.appIdWritten, true);
@@ -208,13 +216,13 @@ test('an app-id attachment holding junk fails without installing either credenti
   });
   assert.throws(() => ensurePrivateKey({
     slug: 'bot-app', home,
-    run: (args) => {
+    run: passRun((args) => {
       if (args[1] === 'view') return view;
       const id = args[args.indexOf('--attachment-id') + 1];
       const out = args[args.indexOf('--output') + 1];
       writeFileSync(out, id === 'attachment-2' ? '-----BEGIN RSA PRIVATE KEY-----\n' : 'key\n');
       return '';
-    },
+    }),
     validateKey: () => true,
   }), /restored App ID\/client ID is malformed/);
   assert.equal(existsSync(appIdPath('bot-app', home)), false);
@@ -237,12 +245,12 @@ test('a field beats an attachment, so no second download happens', () => {
   const downloads = [];
   ensurePrivateKey({
     slug: 'bot-app', home,
-    run: (args) => {
+    run: passRun((args) => {
       if (args[1] === 'view') return view;
       downloads.push(args[args.indexOf('--attachment-id') + 1]);
       writeFileSync(args[args.indexOf('--output') + 1], 'fixture material\n');
       return '';
-    },
+    }),
     validateKey: () => true,
   });
   assert.equal(readFileSync(appIdPath('bot-app', home), 'utf8'), '4394024\n');
@@ -256,15 +264,36 @@ test('a present key with a missing app-id still triggers the issuer restore', ()
   const calls = [];
   const result = ensurePrivateKey({
     slug: 'bot-app', home,
-    run: (args) => {
+    run: passRun((args) => {
       calls.push(args);
       return viewWith({ note: 'app-id: 4469551' });
-    },
+    }),
     validateKey: () => true,
   });
   assert.equal(result.downloaded, false);
   assert.equal(result.appIdWritten, true);
   assert.equal(readFileSync(appIdPath('bot-app', home), 'utf8'), '4469551\n');
-  // Only the view — the existing key is never re-downloaded.
+  // Session probe, then only the view — the existing key is never re-downloaded.
   assert.deepEqual(calls.map((args) => args[1]), ['view']);
+});
+
+test('a locked secret store fails closed before any item is read', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-key-locked-'));
+  const calls = [];
+  assert.throws(() => ensurePrivateKey({
+    slug: 'bot-app',
+    home,
+    run: (args) => {
+      calls.push(args);
+      throw Object.assign(new Error('pass-cli'), {
+        stderr: 'Error: This operation requires an authenticated client\nthere is no session\n',
+      });
+    },
+    validateKey: () => true,
+  }), (error) => {
+    assert.equal(error.code, PROVIDER_SESSION_REQUIRED);
+    assert.match(error.message, /secret store is unavailable/);
+    return true;
+  });
+  assert.deepEqual(calls, [['info', '--output', 'json']]);
 });

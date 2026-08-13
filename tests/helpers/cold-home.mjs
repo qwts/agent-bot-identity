@@ -64,6 +64,9 @@ for arg in "$@"; do
   prev=$arg
 done
 case "\${1:-} \${2:-} \${3:-}" in
+  "info "*|"info  ")
+    echo '{}'
+    ;;
   "item view "*)
     if [ -n "$title" ] && [ -f "$store/items/$title.json" ]; then
       cat "$store/items/$title.json"

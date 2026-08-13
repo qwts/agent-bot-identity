@@ -186,6 +186,68 @@ export function selectPrivateKeyAttachment(attachments) {
   throw new Error('pass-cli item has no unambiguous private-key.pem attachment');
 }
 
+export const PROVIDER_SESSION_REQUIRED = 'provider-session-required';
+export const PROVIDER_LOCKED = 'provider-locked';
+export const PROVIDER_UNAVAILABLE = 'provider-unavailable';
+export const STORE_UNAVAILABLE_CODES = Object.freeze([
+  PROVIDER_SESSION_REQUIRED,
+  PROVIDER_LOCKED,
+  PROVIDER_UNAVAILABLE,
+]);
+
+const PASS_CLI_FAILURE_CODES = new Set([
+  ...STORE_UNAVAILABLE_CODES,
+  'missing-item',
+  'ambiguous-item',
+  'provider-failure',
+]);
+
+function passCliText(error) {
+  return `${error?.stderr ?? ''}\n${error?.stdout ?? ''}\n${error?.message ?? ''}`;
+}
+
+// Classify a pass-cli failure without splicing provider output into the
+// operator action. Locked / missing sessions are a store gate, not an item
+// defect — they must not be reported as missing-issuer or a generic restore.
+export function classifyPassCliFailure(error) {
+  if (error?.code && PASS_CLI_FAILURE_CODES.has(error.code)) {
+    return { code: error.code };
+  }
+  if (error?.code === 'ENOENT') {
+    return { code: PROVIDER_UNAVAILABLE };
+  }
+  const text = passCliText(error);
+  if (/no session|authenticated client|not logged in|unauthenticated/i.test(text)) {
+    return { code: PROVIDER_SESSION_REQUIRED };
+  }
+  if (/session is locked|session locked|unlock the (?:current )?session|requires.*unlock/i.test(text)) {
+    return { code: PROVIDER_LOCKED };
+  }
+  if (/not found|no item/i.test(text)) {
+    return { code: 'missing-item' };
+  }
+  if (/ambiguous|multiple/i.test(text)) {
+    return { code: 'ambiguous-item' };
+  }
+  return { code: 'provider-failure' };
+}
+
+function passCliFailure(error) {
+  const { code } = classifyPassCliFailure(error);
+  const detail = {
+    [PROVIDER_UNAVAILABLE]: 'was not found',
+    [PROVIDER_SESSION_REQUIRED]: 'has no session',
+    [PROVIDER_LOCKED]: 'session is locked',
+    'missing-item': 'item not found',
+    'ambiguous-item': 'item selection is ambiguous',
+    'provider-failure': 'provider command failed',
+  }[code];
+  const wrapped = new Error(`pass-cli ${detail}`);
+  wrapped.code = code;
+  wrapped.cause = error;
+  return wrapped;
+}
+
 function runPass(args) {
   try {
     return execFileSync('pass-cli', args, {
@@ -193,12 +255,16 @@ function runPass(args) {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    const reason = /not found|no item/i.test(String(error.stderr ?? ''))
-      ? 'item not found'
-      : /ambiguous|multiple/i.test(String(error.stderr ?? ''))
-        ? 'item selection is ambiguous'
-        : 'provider command failed';
-    throw new Error(`pass-cli ${reason}`);
+    throw passCliFailure(error);
+  }
+}
+
+export function inspectProtonPassSession({ run = runPass } = {}) {
+  try {
+    run(['info', '--output', 'json']);
+    return { status: 'ready' };
+  } catch (error) {
+    return { status: 'failed', code: classifyPassCliFailure(error).code };
   }
 }
 
@@ -214,10 +280,22 @@ function preparationError(code, slug, message, cause) {
   return error;
 }
 
+function throwProviderReadError(error, slug) {
+  const { code } = classifyPassCliFailure(error);
+  const message = STORE_UNAVAILABLE_CODES.includes(code)
+    ? `secret store is unavailable (${code})`
+    : `credential provider could not read the App item (${code})`;
+  throw preparationError(code, slug, message, error);
+}
+
 export function createProtonPassCredentialProvider({ run = runPass, write = writeFileSync } = {}) {
   return {
     id: 'proton-pass',
     restore({ slug, issuerDestination, privateKeyDestination }) {
+      const session = inspectProtonPassSession({ run });
+      if (session.status === 'failed') {
+        throwProviderReadError({ code: session.code }, slug);
+      }
       let parsed;
       try {
         parsed = parsePassItemView(run([
@@ -231,12 +309,7 @@ export function createProtonPassCredentialProvider({ run = runPass, write = writ
           'json',
         ]));
       } catch (error) {
-        const code = /not found/i.test(error.message)
-          ? 'missing-item'
-          : /ambiguous/i.test(error.message)
-            ? 'ambiguous-item'
-            : 'provider-failure';
-        throw preparationError(code, slug, `credential provider could not read the App item (${code})`, error);
+        throwProviderReadError(error, slug);
       }
 
       const { shareId, itemId, attachments, fields, note } = parsed;
