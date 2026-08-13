@@ -436,7 +436,13 @@ function appCheck(id, source) {
           : 'local credential is valid'
         : 'live App mint succeeded')
       : status === 'failed'
-        ? (id === 'credential.local' ? 'local credential is incomplete or malformed' : 'live App mint failed')
+        ? (id === 'credential.local'
+          ? (source.code === 'provider-session-required' || source.code === 'provider-locked'
+            ? 'secret store is locked or has no session'
+            : source.code === 'provider-unavailable'
+              ? 'secret store CLI is not installed'
+              : 'local credential is incomplete or malformed')
+          : 'live App mint failed')
         : source.code === 'verification-not-run'
           ? 'live App mint was not run after an earlier bootstrap failure'
           : 'live App mint skipped because the local roster is incomplete',

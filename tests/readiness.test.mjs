@@ -337,6 +337,28 @@ test('bootstrap evidence must cover the exact roster and restored credentials ar
     incomplete.machine.checks.find(({ id }) => id === 'credential.roster').code,
     'credential-roster-incomplete',
   );
+
+  const gate = (slug) => ({
+    slug,
+    local: {
+      status: 'failed',
+      code: 'provider-session-required',
+      action: 'unlock the secret store with: pass-cli login',
+    },
+    live: { status: 'skipped' },
+  });
+  const locked = await collectReadiness({
+    command: 'bootstrap',
+    scope: 'machine',
+    ...machineDependencies(home, {
+      inspectCredentials: async () => assert.fail('a complete locked-store roster was re-probed'),
+    }),
+    appResults: [gate('org-codex-agent'), gate('org-claude-agent')],
+  });
+  assert.equal(locked.ready, false);
+  assert.equal(locked.machine.checks.find(({ id }) => id === 'credential.roster'), undefined);
+  assert.equal(locked.first_actionable_failure.code, 'provider-session-required');
+  assert.match(locked.first_actionable_failure.action, /pass-cli login/);
 });
 
 // A private linked-worktree repository with a complete, correct bot identity

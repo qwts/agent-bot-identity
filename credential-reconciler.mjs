@@ -4,7 +4,9 @@ import { dirname, join } from 'node:path';
 import {
   appIdPath,
   ensurePrivateKey,
+  inspectProtonPassSession,
   privateKeyPath,
+  STORE_UNAVAILABLE_CODES,
   validateIssuer,
   validatePrivateKey,
 } from './ensure-private-key.mjs';
@@ -40,6 +42,9 @@ function localFailure(error) {
     'unreadable-issuer': 'repair permissions on the local app-id file and retry',
     'unreadable-private-key': 'repair permissions on the local private-key.pem file and retry',
     'provider-failure': 'restore provider access and retry credential reconciliation',
+    'provider-unavailable': 'install pass-cli and retry credential reconciliation',
+    'provider-session-required': 'unlock the secret store with: pass-cli login',
+    'provider-locked': 'unlock the secret store with: pass-cli session unlock',
     'credential-transaction-invalid': 'inspect the App credential directory and repair its transaction marker',
     'credential-transaction-pending': 'run explicit credential reconciliation to recover the interrupted publication',
     'credential-transaction-recovery-failed': 'repair App credential file permissions and retry recovery',
@@ -50,6 +55,43 @@ function localFailure(error) {
     code,
     action: actions[code] ?? 'repair the App credential in the configured provider and retry',
   };
+}
+
+// Local files that are already present cannot be repaired by unlocking the
+// store. Only deficiencies whose next step is a provider read are store-gated.
+const LOCAL_CODES_REPAIRED_BY_STORE = new Set([
+  'missing-item',
+  'missing-issuer',
+  'missing-private-key',
+]);
+
+function applyStoreGateToLocalFailures(results, session) {
+  if (session?.status !== 'failed' || !STORE_UNAVAILABLE_CODES.includes(session.code)) {
+    return;
+  }
+  const gate = localFailure({ code: session.code });
+  for (const result of results) {
+    if (result.local.status !== 'failed') continue;
+    if (!LOCAL_CODES_REPAIRED_BY_STORE.has(result.local.code)) continue;
+    result.local = {
+      ...result.local,
+      ...gate,
+      evidence: result.local.evidence ?? { components: [] },
+    };
+  }
+}
+
+function fillUnprocessedRoster(results, roster, error) {
+  const seen = new Set(results.map((result) => result.slug));
+  const gate = localFailure(error);
+  for (const slug of roster) {
+    if (seen.has(slug)) continue;
+    results.push({
+      slug,
+      local: { ...gate },
+      live: { status: 'skipped' },
+    });
+  }
 }
 
 function validateRoster(slugs = []) {
@@ -129,6 +171,7 @@ export async function inspectAppCredentials({
   slugs,
   home = homedir(),
   inspect = inspectLocalAppCredential,
+  inspectSession = inspectProtonPassSession,
   verify = async (slug) => mint({ slug }),
 } = {}) {
   const roster = validateRoster(slugs ?? []);
@@ -137,7 +180,10 @@ export async function inspectAppCredentials({
     local: inspect({ slug, home }),
     live: { status: 'skipped', code: 'local-roster-incomplete' },
   }));
-  if (results.some((result) => result.local.status === 'failed')) return results;
+  if (results.some((result) => result.local.status === 'failed')) {
+    applyStoreGateToLocalFailures(results, inspectSession());
+    return results;
+  }
   if (verify === null) {
     for (const result of results) {
       result.live = { status: 'skipped', code: 'verification-not-run' };
@@ -220,6 +266,10 @@ export async function reconcileAppCredentials({
         local: localFailure(error),
         live: { status: 'skipped' },
       });
+      if (STORE_UNAVAILABLE_CODES.includes(error?.code)) {
+        fillUnprocessedRoster(results, roster, error);
+        throw new CredentialReconciliationError('local preparation', results);
+      }
     }
   }
   if (results.some((result) => result.local.status === 'failed')) {

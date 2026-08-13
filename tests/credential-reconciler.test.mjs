@@ -11,8 +11,11 @@ import {
 } from '../credential-reconciler.mjs';
 import {
   CredentialPreparationError,
+  PROVIDER_SESSION_REQUIRED,
   appIdPath,
+  classifyPassCliFailure,
   ensurePrivateKey,
+  inspectProtonPassSession,
   privateKeyPath,
   recoverCredentialTransaction,
 } from '../ensure-private-key.mjs';
@@ -77,6 +80,7 @@ test('diagnostic roster inspection gates live verification and never repairs', a
     inspect: ({ slug }) => slug === 'ready-agent'
       ? { status: 'ready', evidence: { components: [] } }
       : { status: 'failed', code: 'missing-private-key', action: 'repair key', evidence: { components: [] } },
+    inspectSession: () => ({ status: 'ready' }),
     verify: async (slug) => {
       verified.push(slug);
       return { token: 'secret-token', installation_id: 1, expires_at: 'later' };
@@ -257,4 +261,97 @@ test('live mismatch is App-specific and secret-safe after every App is checked',
     },
   );
   assert.deepEqual(verified, ['bad-agent', 'good-agent']);
+});
+
+test('a locked secret store is classified as a store gate, not an item defect', () => {
+  assert.equal(classifyPassCliFailure({
+    stderr: 'Error: This operation requires an authenticated client\nthere is no session\n',
+  }).code, PROVIDER_SESSION_REQUIRED);
+  assert.equal(classifyPassCliFailure({
+    stderr: 'Error: the session is locked; unlock the current session\n',
+  }).code, 'provider-locked');
+  assert.equal(classifyPassCliFailure({ code: 'ENOENT' }).code, 'provider-unavailable');
+  assert.equal(inspectProtonPassSession({
+    run: () => {
+      throw Object.assign(new Error('pass-cli'), {
+        stderr: 'Error: This operation requires an authenticated client',
+      });
+    },
+  }).code, PROVIDER_SESSION_REQUIRED);
+});
+
+test('roster inspection names unlock when local files are missing and the store is locked', async () => {
+  const results = await inspectAppCredentials({
+    slugs: ['ready-agent', 'cursor-agent'],
+    inspect: ({ slug }) => slug === 'ready-agent'
+      ? { status: 'ready', evidence: { components: [] } }
+      : {
+        status: 'failed',
+        code: 'missing-issuer',
+        action: 'add the App ID/client ID to the provider item and retry',
+        evidence: { components: [{ component: 'app-id', status: 'missing' }] },
+      },
+    inspectSession: () => ({ status: 'failed', code: PROVIDER_SESSION_REQUIRED }),
+    verify: async () => assert.fail('live mint must not run'),
+  });
+  const cursor = results.find((result) => result.slug === 'cursor-agent');
+  assert.equal(cursor.local.code, PROVIDER_SESSION_REQUIRED);
+  assert.match(cursor.local.action, /pass-cli login/);
+  assert.deepEqual(cursor.local.evidence.components, [{ component: 'app-id', status: 'missing' }]);
+  assert.equal(results.find((result) => result.slug === 'ready-agent').local.status, 'ready');
+});
+
+test('a locked store stops roster reconciliation before later Apps are prepared', async () => {
+  const prepared = [];
+  await assert.rejects(
+    reconcileAppCredentials({
+      slugs: ['alpha-agent', 'beta-agent'],
+      prepare: ({ slug }) => {
+        prepared.push(slug);
+        throw new CredentialPreparationError(
+          PROVIDER_SESSION_REQUIRED,
+          slug,
+          'secret store is unavailable (provider-session-required)',
+        );
+      },
+      verify: async () => assert.fail('live mint must not run'),
+    }),
+    (error) => {
+      assert.ok(error instanceof CredentialReconciliationError);
+      assert.match(error.message, /alpha-agent.*provider-session-required/);
+      assert.match(error.message, /beta-agent.*provider-session-required/);
+      assert.match(error.message, /pass-cli login/);
+      assert.deepEqual(error.results.map((result) => result.slug), ['alpha-agent', 'beta-agent']);
+      assert.equal(error.results[1].local.code, PROVIDER_SESSION_REQUIRED);
+      return true;
+    },
+  );
+  assert.deepEqual(prepared, ['alpha-agent']);
+});
+
+test('roster inspection keeps unreadable-file diagnostics when the store is locked', async () => {
+  const results = await inspectAppCredentials({
+    slugs: ['broken-agent', 'missing-agent'],
+    inspect: ({ slug }) => slug === 'broken-agent'
+      ? {
+        status: 'failed',
+        code: 'unreadable-issuer',
+        action: 'repair permissions on the local app-id file and retry',
+        evidence: { components: [{ component: 'app-id', status: 'unreadable' }] },
+      }
+      : {
+        status: 'failed',
+        code: 'missing-issuer',
+        action: 'add the App ID/client ID to the provider item and retry',
+        evidence: { components: [{ component: 'app-id', status: 'missing' }] },
+      },
+    inspectSession: () => ({ status: 'failed', code: PROVIDER_SESSION_REQUIRED }),
+    verify: async () => assert.fail('live mint must not run'),
+  });
+  const broken = results.find((result) => result.slug === 'broken-agent');
+  assert.equal(broken.local.code, 'unreadable-issuer');
+  assert.match(broken.local.action, /permissions/);
+  const missing = results.find((result) => result.slug === 'missing-agent');
+  assert.equal(missing.local.code, PROVIDER_SESSION_REQUIRED);
+  assert.match(missing.local.action, /pass-cli login/);
 });
