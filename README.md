@@ -21,6 +21,11 @@ Why you'd want this:
 - **Transcript-bound Agent IDs.** Each conversation gets a private
   `agent_<uuid>` recorded on commits as an `Agent-Identity:` trailer, so you
   can resolve a commit back to the provider transcript that produced it.
+  (Read it with `git log --format='%B' | grep '^Agent-Identity:'` — GitHub's
+  squash merge appends its own co-author block, which pushes the trailer out
+  of the final paragraph that git's `%(trailers:)` parser reads. The local
+  identity record and census are the authoritative attribution store; the
+  trailer is a breadcrumb.)
 
 This repository is the sole runtime owner of the agent-bot and
 transcript-bound execution identity system. Clone and install it directly;
@@ -84,7 +89,7 @@ agent-bot space <init|ensure|path|show> [agent-id]
 agent-bot space export [agent-id] [--out <path>] [--gist]
 agent-bot space import <pack|gist:id|gist-url> [--force]
 agent-bot space retire <agent-id> [--delete-space]
-agent-bot population <list|show> [agent-id] [--json]
+agent-bot population <list|show> [agent-id|name] [--json]
 agent-bot daemon <run|start|status|stop> [--json]
 agent-bot mcp
 agent-bot web open [--principal <principal-id>] [--no-browser] [--json]
@@ -246,7 +251,16 @@ is a separate aggregate index. Filter the population with `--status` or
 ```bash
 agent-bot population list --status active --app you-codex-agent --json
 agent-bot population show agent_00000000-0000-4000-8000-000000000000
+agent-bot population show quiet-heron-42
 ```
+
+Every census row carries a human-readable display name (`quiet-heron-42`),
+derived deterministically from the Agent ID, so rows written before names
+existed gain one on the next read with no migration. The census is
+authoritative: consumers read the recorded name rather than re-deriving
+meaning from the display string, the row stays keyed by Agent ID (names are
+handles and may collide; IDs cannot), and `population show` accepts a name
+whenever it is unambiguous.
 
 `daemon` runs a machine-local service over the same space and population
 stores, so other agents and hooks can register souls and ensure spaces without

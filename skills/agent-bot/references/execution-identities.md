@@ -32,6 +32,25 @@ a distinct execution identity intentionally.
 5. Resolve provenance through the local identity record, not by guessing from
    bot username or branch name.
 
+## Read attribution from the census, not the trailer parser
+
+The `Agent-Identity:` trailer is a human-readable breadcrumb, not the
+machine-readable record. GitHub's squash merge appends its own
+`Co-authored-by:` block after a `---------` separator, which displaces the
+trailer out of the message's final paragraph — and git's trailer parser only
+reads the final paragraph, so `git log --format='%(trailers:key=Agent-Identity)'`
+returns nothing on every squash-merged commit even though the line is present
+in the body. No authoring-side change can prevent this: GitHub appends at
+merge time, after any trailer we write.
+
+Consumers must therefore:
+
+1. Treat the local identity record and population census as the authoritative
+   attribution store (`agent-bot identity show`, `agent-bot population show`).
+2. When reading from git at all, grep the raw body (`git log --format='%B'`)
+   for `^Agent-Identity: ` instead of using `%(trailers:)`.
+3. Treat a missing trailer as "ask the census", never as "unattributed".
+
 Do not expose private identity records, transcript URLs, session tokens, or
 provider metadata in public issue or PR comments. Report only the Agent ID
 when the user explicitly requests it and the destination is appropriate.

@@ -30,7 +30,7 @@ import {
   validateIdentity,
   withLock,
 } from '../agent-identity.mjs';
-import { showSoul, upsertSoul } from '../agent-population.mjs';
+import { displayName, showSoul, upsertSoul } from '../agent-population.mjs';
 import { startMockGitHubApp } from './helpers/mock-github-app.mjs';
 
 const roots = [];
@@ -575,6 +575,7 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
   const firstPopulation = JSON.parse(readFileSync(populationPath, 'utf8'));
   assert.deepEqual(firstPopulation.souls[firstId], {
     id: firstId,
+    name: displayName(firstId),
     appSlug: app,
     parentId: id(42),
     status: 'active',
