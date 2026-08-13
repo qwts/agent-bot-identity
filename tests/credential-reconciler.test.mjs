@@ -319,10 +319,39 @@ test('a locked store stops roster reconciliation before later Apps are prepared'
     (error) => {
       assert.ok(error instanceof CredentialReconciliationError);
       assert.match(error.message, /alpha-agent.*provider-session-required/);
+      assert.match(error.message, /beta-agent.*provider-session-required/);
       assert.match(error.message, /pass-cli login/);
-      assert.doesNotMatch(error.message, /beta-agent/);
+      assert.deepEqual(error.results.map((result) => result.slug), ['alpha-agent', 'beta-agent']);
+      assert.equal(error.results[1].local.code, PROVIDER_SESSION_REQUIRED);
       return true;
     },
   );
   assert.deepEqual(prepared, ['alpha-agent']);
+});
+
+test('roster inspection keeps unreadable-file diagnostics when the store is locked', async () => {
+  const results = await inspectAppCredentials({
+    slugs: ['broken-agent', 'missing-agent'],
+    inspect: ({ slug }) => slug === 'broken-agent'
+      ? {
+        status: 'failed',
+        code: 'unreadable-issuer',
+        action: 'repair permissions on the local app-id file and retry',
+        evidence: { components: [{ component: 'app-id', status: 'unreadable' }] },
+      }
+      : {
+        status: 'failed',
+        code: 'missing-issuer',
+        action: 'add the App ID/client ID to the provider item and retry',
+        evidence: { components: [{ component: 'app-id', status: 'missing' }] },
+      },
+    inspectSession: () => ({ status: 'failed', code: PROVIDER_SESSION_REQUIRED }),
+    verify: async () => assert.fail('live mint must not run'),
+  });
+  const broken = results.find((result) => result.slug === 'broken-agent');
+  assert.equal(broken.local.code, 'unreadable-issuer');
+  assert.match(broken.local.action, /permissions/);
+  const missing = results.find((result) => result.slug === 'missing-agent');
+  assert.equal(missing.local.code, PROVIDER_SESSION_REQUIRED);
+  assert.match(missing.local.action, /pass-cli login/);
 });

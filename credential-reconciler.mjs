@@ -57,6 +57,43 @@ function localFailure(error) {
   };
 }
 
+// Local files that are already present cannot be repaired by unlocking the
+// store. Only deficiencies whose next step is a provider read are store-gated.
+const LOCAL_CODES_REPAIRED_BY_STORE = new Set([
+  'missing-item',
+  'missing-issuer',
+  'missing-private-key',
+]);
+
+function applyStoreGateToLocalFailures(results, session) {
+  if (session?.status !== 'failed' || !STORE_UNAVAILABLE_CODES.includes(session.code)) {
+    return;
+  }
+  const gate = localFailure({ code: session.code });
+  for (const result of results) {
+    if (result.local.status !== 'failed') continue;
+    if (!LOCAL_CODES_REPAIRED_BY_STORE.has(result.local.code)) continue;
+    result.local = {
+      ...result.local,
+      ...gate,
+      evidence: result.local.evidence ?? { components: [] },
+    };
+  }
+}
+
+function fillUnprocessedRoster(results, roster, error) {
+  const seen = new Set(results.map((result) => result.slug));
+  const gate = localFailure(error);
+  for (const slug of roster) {
+    if (seen.has(slug)) continue;
+    results.push({
+      slug,
+      local: { ...gate },
+      live: { status: 'skipped' },
+    });
+  }
+}
+
 function validateRoster(slugs = []) {
   if (slugs.some((slug) =>
     typeof slug !== 'string'
@@ -144,17 +181,7 @@ export async function inspectAppCredentials({
     live: { status: 'skipped', code: 'local-roster-incomplete' },
   }));
   if (results.some((result) => result.local.status === 'failed')) {
-    const session = inspectSession();
-    if (session?.status === 'failed' && STORE_UNAVAILABLE_CODES.includes(session.code)) {
-      for (const result of results) {
-        if (result.local.status !== 'failed') continue;
-        result.local = {
-          ...result.local,
-          ...localFailure({ code: session.code }),
-          evidence: result.local.evidence ?? { components: [] },
-        };
-      }
-    }
+    applyStoreGateToLocalFailures(results, inspectSession());
     return results;
   }
   if (verify === null) {
@@ -240,6 +267,7 @@ export async function reconcileAppCredentials({
         live: { status: 'skipped' },
       });
       if (STORE_UNAVAILABLE_CODES.includes(error?.code)) {
+        fillUnprocessedRoster(results, roster, error);
         throw new CredentialReconciliationError('local preparation', results);
       }
     }
