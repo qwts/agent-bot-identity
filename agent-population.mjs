@@ -442,6 +442,16 @@ function parseCli(argv) {
   return { command, positional, flags };
 }
 
+// "No parent" and "parent unknown" are different answers (#91). A bound row
+// (transcript recorded) with a null parentId was in a position to name its
+// spawner and had none: genuinely parentless, shown as '-'. An unbound row
+// never reached the moment where lineage is observable, so its null means
+// "we could not look", shown as '?'.
+function formatParent(record) {
+  if (record.parentId) return record.parentId;
+  return record.transcriptLocator ? '-' : '?';
+}
+
 function formatRow(record) {
   const transcript = record.transcriptLocator
     ? `${record.transcriptLocator.provider}:${record.transcriptLocator.id}`
@@ -451,7 +461,7 @@ function formatRow(record) {
     record.id,
     record.appSlug,
     record.status,
-    record.parentId ?? '-',
+    formatParent(record),
     record.lastSeen,
     record.spacePath,
     transcript,

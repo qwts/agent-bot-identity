@@ -219,6 +219,23 @@ test('name lookup answers a unique handle and refuses ambiguity (#92)', () => {
   );
 });
 
+test('the PARENT column tells no-parent apart from parent-unknown (#91)', () => {
+  const file = path.join(scratch(), 'population.json');
+  // Bound with no parent: lineage was observable and there was none.
+  upsertSoul(fixture(), { file });
+  // Never bound: the parent is unknown, not absent.
+  upsertSoul(fixture({
+    id: SECOND_ID,
+    spacePath: `/spaces/${SECOND_ID}`,
+    transcriptLocator: null,
+  }), { file });
+  const table = runCli(['population', 'list'], file);
+  assert.equal(table.status, 0, table.stderr);
+  const rowFor = (id) => table.stdout.split('\n').find((line) => line.includes(id)).split('\t');
+  assert.equal(rowFor(FIRST_ID)[4], '-', 'bound + null parent reads as genuinely parentless');
+  assert.equal(rowFor(SECOND_ID)[4], '?', 'unbound + null parent reads as unknown');
+});
+
 test('names must stay well-formed handles', () => {
   const file = path.join(scratch(), 'population.json');
   assert.throws(
