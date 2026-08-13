@@ -89,7 +89,7 @@ agent-bot space <init|ensure|path|show> [agent-id]
 agent-bot space export [agent-id] [--out <path>] [--gist]
 agent-bot space import <pack|gist:id|gist-url> [--force]
 agent-bot space retire <agent-id> [--delete-space]
-agent-bot population <list|show> [agent-id] [--json]
+agent-bot population <list|show> [agent-id|name] [--json]
 agent-bot daemon <run|start|status|stop> [--json]
 agent-bot mcp
 agent-bot web open [--principal <principal-id>] [--no-browser] [--json]
@@ -251,7 +251,16 @@ is a separate aggregate index. Filter the population with `--status` or
 ```bash
 agent-bot population list --status active --app you-codex-agent --json
 agent-bot population show agent_00000000-0000-4000-8000-000000000000
+agent-bot population show quiet-heron-42
 ```
+
+Every census row carries a human-readable display name (`quiet-heron-42`),
+derived deterministically from the Agent ID, so rows written before names
+existed gain one on the next read with no migration. The census is
+authoritative: consumers read the recorded name rather than re-deriving
+meaning from the display string, the row stays keyed by Agent ID (names are
+handles and may collide; IDs cannot), and `population show` accepts a name
+whenever it is unambiguous.
 
 `daemon` runs a machine-local service over the same space and population
 stores, so other agents and hooks can register souls and ensure spaces without
