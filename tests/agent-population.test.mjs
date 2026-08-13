@@ -20,8 +20,10 @@ import {
   showSoul,
   showSoulByName,
   updateSoulStatus,
+  upsertIdentitySoul,
   upsertSoul,
 } from '../agent-population.mjs';
+import { mintAgentIdentity } from '../agent-identity.mjs';
 
 const CLI = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
 const FIRST_ID = 'agent_11111111-1111-4111-8111-111111111111';
@@ -176,7 +178,11 @@ test('display names are deterministic, human-readable, and derived from the ID a
   assert.equal(displayName(FIRST_ID), displayName(FIRST_ID));
   assert.match(displayName(FIRST_ID), /^[a-z]+-[a-z]+-[0-9a-f]{2}$/);
   assert.notEqual(displayName(FIRST_ID), displayName(SECOND_ID));
-  assert.throws(() => displayName('agent_nope'), /invalid Agent ID/);
+  // Stable, non-reflecting error: untrusted input must never be echoed back.
+  assert.throws(() => displayName('agent_nope secret-looking-text'), (error) => {
+    assert.equal(error.message, 'id must be a valid Agent ID');
+    return true;
+  });
 });
 
 test('rows written before names existed gain one on read, with no migration (#92)', () => {
@@ -217,8 +223,23 @@ test('names must stay well-formed handles', () => {
   const file = path.join(scratch(), 'population.json');
   assert.throws(
     () => upsertSoul(fixture({ name: 'Not A Handle' }), { file }),
-    /lowercase words joined by hyphens/,
+    /hyphen-separated segments of lowercase letters and digits/,
   );
+});
+
+test('lifecycle upserts carry a recorded name forward instead of regenerating it (#92)', () => {
+  const root = scratch();
+  const file = path.join(root, 'population.json');
+  const stateDir = path.join(root, 'identities');
+  const identity = mintAgentIdentity({
+    appSlug: 'qwts-codex-agent',
+    transcript: { provider: 'codex', id: 'thread-1' },
+    stateDir,
+    idFactory: () => FIRST_ID,
+  });
+  upsertSoul(fixture({ name: 'chosen-handle-01' }), { file });
+  const after = upsertIdentitySoul(identity.id, `/spaces/${FIRST_ID}`, { file, stateDir });
+  assert.equal(after.name, 'chosen-handle-01');
 });
 
 test('population CLI shows a record by name (#92)', () => {

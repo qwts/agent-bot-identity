@@ -60,7 +60,10 @@ const NAME_NOUNS = [
 ];
 
 export function displayName(id) {
-  const hex = validateAgentId(id).slice('agent_'.length).replaceAll('-', '');
+  // agentId(), not validateAgentId(): the identity module's message reflects
+  // its input, and a name derivation fed untrusted text must answer with a
+  // stable error instead of echoing it.
+  const hex = agentId(id).slice('agent_'.length).replaceAll('-', '');
   const adjective = NAME_ADJECTIVES[Number.parseInt(hex.slice(0, 2), 16) % NAME_ADJECTIVES.length];
   const noun = NAME_NOUNS[Number.parseInt(hex.slice(2, 4), 16) % NAME_NOUNS.length];
   return `${adjective}-${noun}-${hex.slice(-2)}`;
@@ -124,7 +127,9 @@ function normalizeSoul(record, { defaultLastSeen = null } = {}) {
   // Rows written before names existed gain one on the next read, derived from
   // the ID, so no migration touches the store; the next write persists it.
   const name = printableText('name', record.name, { max: 80, required: false }) ?? displayName(id);
-  if (!NAME_PATTERN.test(name)) throw new Error('name must be lowercase words joined by hyphens');
+  if (!NAME_PATTERN.test(name)) {
+    throw new Error('name must be hyphen-separated segments of lowercase letters and digits');
+  }
   return {
     id,
     name,
@@ -302,6 +307,10 @@ export function upsertIdentitySoul(
     }
     return upsertSoul({
       id: identity.id,
+      // The census is authoritative for names: a lifecycle upsert must carry
+      // the recorded handle forward, not regenerate the derived default over
+      // an operator-chosen one. A missing row derives fresh in normalizeSoul.
+      name: existing?.name ?? null,
       appSlug: identity.github.appSlug,
       parentId: identity.parentId,
       status: identity.status,
