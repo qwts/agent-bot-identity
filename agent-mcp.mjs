@@ -93,8 +93,9 @@ const TOOLS = [
     description:
       'Mint a short-lived GitHub App installation token for the identity this '
       + 'connection is bound to (requires bind). Tier 1 only: the token is the '
-      + 'bot\'s own — export it as GH_TOKEN for gh/git. Treat it as a secret; '
-      + 'never write it to a file or commit.',
+      + 'bot\'s own — export it as GH_TOKEN for gh. Configured worktrees already '
+      + 'authenticate git through the credential helper, so git needs nothing. '
+      + 'Treat it as a secret; never write it to a file or commit.',
     inputSchema: { type: 'object', properties: {} },
   },
 ];

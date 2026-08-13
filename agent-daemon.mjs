@@ -61,6 +61,10 @@ const MAX_BODY_BYTES = 64 * 1024;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1']);
 const LOOPBACK_PEERS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 const HEALTH_TIMEOUT_MS = 1_500;
+// Credential minting reaches GitHub (installation lookup + token creation),
+// so it needs a network-scale budget — the health-probe timeout would abort
+// legitimate mints on any slow round trip.
+const CREDENTIAL_TIMEOUT_MS = 30_000;
 
 export function daemonStateFile({ env = process.env, home = homedir() } = {}) {
   if (env.AGENT_BOT_DAEMON_STATE_PATH) return path.resolve(env.AGENT_BOT_DAEMON_STATE_PATH);
@@ -295,6 +299,9 @@ export function createDaemonServer({
         // Delegated human authority (tier 2) is deliberately NOT this route —
         // it must never return a credential at all.
         case 'POST /v0/credential': {
+          // Drain the (unused) request body so keep-alive connections are left
+          // clean; readBody enforces MAX_BODY_BYTES like every other route.
+          await readBody(req);
           let binding;
           try {
             binding = requireBinding(req, bindings);
@@ -305,10 +312,25 @@ export function createDaemonServer({
             );
             throw error;
           }
-          const identity = readAgentIdentity(binding.agentId, {
-            stateDir: stateDirectory({ env, home }),
-          });
-          const grant = await mintImpl({ slug: identity.github.appSlug, env });
+          let grant;
+          let identity;
+          try {
+            identity = readAgentIdentity(binding.agentId, {
+              stateDir: stateDirectory({ env, home }),
+            });
+            grant = await mintImpl({ slug: identity.github.appSlug, env });
+          } catch (error) {
+            // A verified binding whose mint fails must still leave a receipt —
+            // the audit stream has to account for every attempt, not only the
+            // ones that reached a decision.
+            appendAuditReceipt({
+              event: 'credential-mint',
+              agentId: binding.agentId,
+              operation: 'tier1-app-token',
+              decision: 'failed',
+            }, { env, home, now });
+            throw error;
+          }
           appendAuditReceipt({
             event: 'credential-mint',
             agentId: binding.agentId,
@@ -564,7 +586,7 @@ export function daemonClient({
   fetchImpl = fetch,
   timeoutMs = HEALTH_TIMEOUT_MS,
 } = {}) {
-  async function request(method, pathname, body, headers = {}) {
+  async function request(method, pathname, body, headers = {}, requestTimeoutMs = timeoutMs) {
     // Re-read the state file on every request: a long-running adapter must
     // follow a daemon restart to its new port and per-start token instead of
     // failing forever against a cached endpoint.
@@ -578,7 +600,7 @@ export function daemonClient({
         ...headers,
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(requestTimeoutMs),
     });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(`daemon ${method} ${pathname} failed: ${payload.error ?? `HTTP ${res.status}`}`);
@@ -626,7 +648,7 @@ export function daemonClient({
     // Tier-1 (#90): the bound identity's own App installation token. The
     // caller is that identity — nothing is being borrowed.
     async credential(secret) {
-      return request('POST', '/v0/credential', {}, { 'x-agent-binding': secret });
+      return request('POST', '/v0/credential', {}, { 'x-agent-binding': secret }, CREDENTIAL_TIMEOUT_MS);
     },
     // v1 interaction contract (#55). Adapters authenticate their provider
     // identity and pass the normalized pair on every call; the daemon owns
