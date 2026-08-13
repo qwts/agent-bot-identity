@@ -434,6 +434,10 @@ function parseCli(argv) {
       flags.set('json', true);
       continue;
     }
+    if (token === '--dry-run') {
+      flags.set('dry-run', true);
+      continue;
+    }
     if (!['--status', '--app'].includes(token)) throw new Error(`unknown option: ${token}`);
     const value = tokens[++index];
     if (!value) throw new Error(`${token} requires a value`);
@@ -480,6 +484,17 @@ function formatPopulation(records) {
     lines.push('', 'RETIRED');
     for (const record of retired) lines.push(formatRow(record));
   }
+  // "transcript pending" may not persist silently (#91): every listing counts
+  // the souls that never bound and names the repair, so the gap stays loud
+  // until an operator either backfills it or accepts it knowingly.
+  const pending = active.filter((record) => record.transcriptLocator === null);
+  if (pending.length > 0) {
+    lines.push(
+      '',
+      `${pending.length} of ${active.length} souls have never bound a transcript (PARENT '?'); `
+      + `'agent-bot population backfill' repairs what local transcripts still prove.`,
+    );
+  }
   return `${lines.join('\n')}\n`;
 }
 
@@ -505,10 +520,21 @@ async function main() {
       process.stdout.write(`${JSON.stringify(soul, null, 2)}\n`);
       break;
     }
+    case 'backfill': {
+      if (args.positional.length > 0 || args.flags.has('status') || args.flags.has('app')) {
+        throw new Error('population backfill accepts only --dry-run and --json');
+      }
+      const { backfillTranscriptLocators, formatBackfillReport } = await import('./agent-backfill.mjs');
+      const report = backfillTranscriptLocators({ apply: !args.flags.has('dry-run') });
+      if (args.flags.has('json')) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+      else process.stdout.write(formatBackfillReport(report));
+      break;
+    }
     default:
       throw new Error(
         'usage: agent-bot population list [--status <status>] [--app <slug>] [--json]\n' +
-          '       agent-bot population show <agent-id|name> [--json]',
+          '       agent-bot population show <agent-id|name> [--json]\n' +
+          '       agent-bot population backfill [--dry-run] [--json]',
       );
   }
 }

@@ -296,6 +296,30 @@ test('population CLI lists, filters, and shows records', () => {
   assert.equal(JSON.parse(shown.stdout).id, SECOND_ID);
 });
 
+test('population list counts souls that never bound a transcript (#91)', () => {
+  const file = path.join(scratch(), 'population.json');
+  upsertSoul(fixture(), { file });
+  upsertSoul(fixture({
+    id: SECOND_ID,
+    spacePath: `/spaces/${SECOND_ID}`,
+    transcriptLocator: null,
+  }), { file });
+
+  // Pending may not persist silently: the listing counts it and names the
+  // repair.
+  const table = runCli(['population', 'list'], file);
+  assert.equal(table.status, 0, table.stderr);
+  assert.match(table.stdout, /1 of 2 souls have never bound a transcript \(PARENT '\?'\)/);
+  assert.match(table.stdout, /population backfill/);
+
+  // A fully bound census carries no warning.
+  const bound = path.join(scratch(), 'population.json');
+  upsertSoul(fixture(), { file: bound });
+  const clean = runCli(['population', 'list'], bound);
+  assert.equal(clean.status, 0, clean.stderr);
+  assert.doesNotMatch(clean.stdout, /never bound/);
+});
+
 test('population list shows retired souls in a separate section', () => {
   const file = path.join(scratch(), 'population.json');
   upsertSoul(fixture(), { file });
