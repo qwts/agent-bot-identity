@@ -92,3 +92,9 @@ Do not put credentials, private key material, transcript contents, or arbitrary
 identity fields into population records. The public row contains only the
 Agent ID, App slug, parent ID, status, Agent Space path, optional transcript
 locator, and last-seen timestamp.
+
+In the table view the PARENT column distinguishes two different absences: `-`
+means the soul was bound (its transcript is recorded, so lineage was
+observable) and genuinely has no parent, while `?` means the soul never bound
+and its parent is unknown rather than absent. In JSON both appear as
+`parentId: null`; apply the same rule by checking `transcriptLocator`.
