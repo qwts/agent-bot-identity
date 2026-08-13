@@ -55,6 +55,10 @@ function fakeClient(overrides = {}) {
       calls.push(['spacePath', agentId]);
       return { agentId, path: '/spaces/x' };
     },
+    async credential(secret) {
+      calls.push(['credential', secret]);
+      return { agentId: AGENT_ID, appSlug: 'you-codex-agent', token: 'ghs_grant', expires_at: 't' };
+    },
   };
 }
 
@@ -76,7 +80,7 @@ test('initialize advertises tools and instructs the agent to bind first', async 
   const list = await handleMcpMessage(state, request(2, 'tools/list'));
   assert.deepEqual(
     list.result.tools.map((tool) => tool.name),
-    ['bind', 'whoami', 'population', 'space_path'],
+    ['bind', 'whoami', 'population', 'space_path', 'credential'],
   );
 });
 
@@ -148,6 +152,24 @@ test('whoami and space_path require a live binding and derive identity from it',
   // it never passed a caller-chosen Agent ID.
   const spaceCall = client.calls.find(([name]) => name === 'spacePath');
   assert.equal(spaceCall[1], AGENT_ID);
+});
+
+test('credential requires a live binding and presents only the connection secret (#90)', async () => {
+  const { root, gitDir } = scratchRepo();
+  const client = fakeClient();
+  const state = createMcpState({ client, cwd: root, env: {} });
+  const unbound = await callTool(state, 'credential', {});
+  assert.equal(unbound.isError, true);
+  assert.match(unbound.text, /not bound/);
+
+  mintBindToken({ gitDir, worktree: root, agentId: AGENT_ID });
+  await callTool(state, 'bind', { transcript_id: 'session-5' });
+  const grant = await callTool(state, 'credential', {});
+  assert.equal(grant.isError, false);
+  assert.match(grant.text, /ghs_grant/);
+  // The request carried no Agent ID and no App — only the held secret.
+  const credentialCall = client.calls.find(([name]) => name === 'credential');
+  assert.equal(credentialCall[1], 'a'.repeat(64));
 });
 
 test('population forwards filters and works unbound', async () => {

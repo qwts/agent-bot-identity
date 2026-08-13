@@ -51,6 +51,7 @@ import {
   validateAgentId,
 } from './agent-identity.mjs';
 import { createInteractionService } from './agent-interaction.mjs';
+import { mint } from './mint-token.mjs';
 import { recoverInteractionStore } from './agent-jobs.mjs';
 import { appendAuditReceipt, principalsFile, resolvePrincipal } from './agent-principals.mjs';
 import { createWebLayer } from './agent-web.mjs';
@@ -209,6 +210,7 @@ export function createDaemonServer({
   config,
   token = randomBytes(32).toString('hex'),
   executor,
+  mintImpl = mint,
   now = () => new Date(),
 } = {}) {
   // One interaction service per server so in-flight executions and their
@@ -283,6 +285,43 @@ export function createDaemonServer({
         case 'GET /v0/binding': {
           const binding = requireBinding(req, bindings);
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, binding });
+          return;
+        }
+        // Tier-1 credential brokering (#90): an App installation token for
+        // the bot the caller already IS. Authorization is the live binding —
+        // "a bound agent on an enforced connection" — never a request
+        // parameter, and never a key-file read in the caller's process. The
+        // request names no App and no Agent ID: both derive from the binding.
+        // Delegated human authority (tier 2) is deliberately NOT this route —
+        // it must never return a credential at all.
+        case 'POST /v0/credential': {
+          let binding;
+          try {
+            binding = requireBinding(req, bindings);
+          } catch (error) {
+            appendAuditReceipt(
+              { event: 'credential-mint', operation: 'tier1-app-token', decision: 'denied' },
+              { env, home, now },
+            );
+            throw error;
+          }
+          const identity = readAgentIdentity(binding.agentId, {
+            stateDir: stateDirectory({ env, home }),
+          });
+          const grant = await mintImpl({ slug: identity.github.appSlug, env });
+          appendAuditReceipt({
+            event: 'credential-mint',
+            agentId: binding.agentId,
+            operation: 'tier1-app-token',
+            decision: 'granted',
+          }, { env, home, now });
+          sendJson(res, 200, {
+            schemaVersion: SCHEMA_VERSION,
+            agentId: binding.agentId,
+            appSlug: identity.github.appSlug,
+            token: grant.token,
+            expires_at: grant.expires_at,
+          });
           return;
         }
         case 'GET /v0/population': {
@@ -583,6 +622,11 @@ export function daemonClient({
         'x-agent-binding': secret,
       });
       return binding;
+    },
+    // Tier-1 (#90): the bound identity's own App installation token. The
+    // caller is that identity — nothing is being borrowed.
+    async credential(secret) {
+      return request('POST', '/v0/credential', {}, { 'x-agent-binding': secret });
     },
     // v1 interaction contract (#55). Adapters authenticate their provider
     // identity and pass the normalized pair on every call; the daemon owns

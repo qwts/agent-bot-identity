@@ -1,6 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -548,6 +548,66 @@ test('a new conversation reusing the worktree binds a fresh identity and asks fo
     assert.equal(body.repinRequired, true);
     assert.equal(body.soul.transcriptLocator.id, 'thread-later');
   });
+});
+
+test('tier-1 credential minting answers only a live binding and receipts both outcomes (#90)', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  const minted = [];
+  const server = createDaemonServer({
+    env,
+    home: '/nonexistent',
+    config: {},
+    mintImpl: async ({ slug }) => {
+      minted.push(slug);
+      return { token: 'ghs_test-grant', expires_at: '2026-08-12T09:00:00.000Z' };
+    },
+  });
+  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+  const port = server.address().port;
+  const call = (pathname, options = {}) =>
+    fetch(`http://127.0.0.1:${port}${pathname}`, {
+      method: options.method ?? 'GET',
+      headers: {
+        authorization: `Bearer ${server.token}`,
+        ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...(options.headers ?? {}),
+      },
+      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+    });
+  try {
+    // No binding, no credential — and the refusal is receipted.
+    const denied = await call('/v0/credential', { method: 'POST', body: {} });
+    assert.equal(denied.status, 401);
+    assert.equal(minted.length, 0);
+
+    const bound = await (await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
+    })).json();
+    const granted = await call('/v0/credential', {
+      method: 'POST',
+      body: {},
+      headers: { 'x-agent-binding': bound.secret },
+    });
+    assert.equal(granted.status, 200);
+    const grant = await granted.json();
+    // The App and identity derive from the binding; the request named neither.
+    assert.equal(grant.agentId, AGENT_ID);
+    assert.equal(grant.appSlug, 'you-codex-agent');
+    assert.equal(grant.token, 'ghs_test-grant');
+    assert.deepEqual(minted, ['you-codex-agent']);
+
+    const receipts = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8')
+      .trim().split('\n').map((line) => JSON.parse(line))
+      .filter((receipt) => receipt.event === 'credential-mint');
+    assert.deepEqual(receipts.map((receipt) => receipt.decision), ['denied', 'granted']);
+    assert.equal(receipts[1].agentId, AGENT_ID);
+    // The receipt records who and what — never the credential itself.
+    assert.doesNotMatch(JSON.stringify(receipts), /ghs_test-grant/);
+  } finally {
+    await new Promise((resolve) => { server.close(resolve); });
+  }
 });
 
 test('a daemon restart drops every binding — re-binding takes a fresh mint', async () => {
