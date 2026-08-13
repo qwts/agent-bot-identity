@@ -30,6 +30,41 @@ import {
 
 const SCHEMA_VERSION = 1;
 const APP_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
+const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+// Display names (#92). Two words and a two-hex-digit tail, derived
+// deterministically from the Agent ID so every existing census row gains a
+// stable name with no migration. The census is authoritative: consumers read
+// the recorded name and never re-derive meaning from the display string —
+// the derivation below is only the default generator, and the row remains
+// keyed by Agent ID (names may collide; IDs cannot).
+const NAME_ADJECTIVES = [
+  'amber', 'ashen', 'bold', 'brisk', 'calm', 'candid', 'civic', 'clever',
+  'coral', 'crisp', 'deft', 'dusky', 'eager', 'early', 'even', 'fabled',
+  'fair', 'fleet', 'frank', 'gentle', 'gilded', 'glad', 'grand', 'hardy',
+  'hazel', 'humble', 'indigo', 'iron', 'jade', 'keen', 'kind', 'lively',
+  'loyal', 'lucid', 'mellow', 'mild', 'noble', 'north', 'olive', 'onyx',
+  'opal', 'pale', 'patient', 'plain', 'proud', 'quiet', 'rapid', 'rustic',
+  'sable', 'sage', 'sharp', 'silent', 'sleek', 'sober', 'solid', 'spry',
+  'stark', 'steady', 'still', 'sunny', 'swift', 'tidy', 'vivid', 'wry',
+];
+const NAME_NOUNS = [
+  'anvil', 'arch', 'aspen', 'atlas', 'badger', 'beacon', 'birch', 'bison',
+  'brook', 'cairn', 'cedar', 'comet', 'crane', 'delta', 'dune', 'ember',
+  'falcon', 'fern', 'fjord', 'flint', 'gable', 'glade', 'grove', 'harbor',
+  'heron', 'hollow', 'inlet', 'ivy', 'juniper', 'kestrel', 'knoll', 'lantern',
+  'larch', 'ledge', 'linden', 'lynx', 'maple', 'marten', 'mesa', 'moss',
+  'otter', 'owl', 'oxbow', 'pine', 'plume', 'quarry', 'quill', 'raven',
+  'reed', 'ridge', 'rowan', 'sparrow', 'spruce', 'summit', 'tarn', 'thicket',
+  'trellis', 'vale', 'walnut', 'warren', 'weir', 'willow', 'wren', 'yarrow',
+];
+
+export function displayName(id) {
+  const hex = validateAgentId(id).slice('agent_'.length).replaceAll('-', '');
+  const adjective = NAME_ADJECTIVES[Number.parseInt(hex.slice(0, 2), 16) % NAME_ADJECTIVES.length];
+  const noun = NAME_NOUNS[Number.parseInt(hex.slice(2, 4), 16) % NAME_NOUNS.length];
+  return `${adjective}-${noun}-${hex.slice(-2)}`;
+}
 
 function printableText(name, value, { max = 512, required = true } = {}) {
   if (value === undefined || value === null || value === '') {
@@ -85,8 +120,14 @@ function normalizeSoul(record, { defaultLastSeen = null } = {}) {
   }
   const root = printableText('spacePath', record.spacePath, { max: 4096 });
   if (!path.isAbsolute(root)) throw new Error('spacePath must be absolute');
+  const id = agentId(record.id);
+  // Rows written before names existed gain one on the next read, derived from
+  // the ID, so no migration touches the store; the next write persists it.
+  const name = printableText('name', record.name, { max: 80, required: false }) ?? displayName(id);
+  if (!NAME_PATTERN.test(name)) throw new Error('name must be lowercase words joined by hyphens');
   return {
-    id: agentId(record.id),
+    id,
+    name,
     appSlug: appSlug(record.appSlug),
     parentId: record.parentId === undefined || record.parentId === null
       ? null
@@ -356,6 +397,20 @@ export function showSoul(id, { file = populationFile() } = {}) {
   return soul;
 }
 
+// Agents refer to each other by name, so `show` accepts one — but the census
+// stays keyed by Agent ID, and a name is only a handle: zero or several
+// matches fail with a stable message instead of guessing.
+export function showSoulByName(name, { file = populationFile() } = {}) {
+  const wanted = printableText('name', name, { max: 80 });
+  const matches = Object.values(readDocument(file).souls)
+    .filter((record) => record.name === wanted);
+  if (matches.length === 1) return matches[0];
+  if (matches.length === 0) throw new Error('no population record with that name');
+  throw new Error(
+    `that name is shared by ${matches.length} souls; use an Agent ID (${matches.map((record) => record.id).join(', ')})`,
+  );
+}
+
 function parseCli(argv) {
   const [command = 'list', ...tokens] = argv.slice(2);
   const positional = [];
@@ -383,6 +438,7 @@ function formatRow(record) {
     ? `${record.transcriptLocator.provider}:${record.transcriptLocator.id}`
     : '-';
   return [
+    record.name,
     record.id,
     record.appSlug,
     record.status,
@@ -399,7 +455,7 @@ function formatPopulation(records) {
   // retired soul for an active one (issue #46).
   const active = records.filter((record) => record.status !== 'retired');
   const retired = records.filter((record) => record.status === 'retired');
-  const lines = ['ID\tAPP\tSTATUS\tPARENT\tLAST SEEN\tSPACE\tTRANSCRIPT'];
+  const lines = ['NAME\tID\tAPP\tSTATUS\tPARENT\tLAST SEEN\tSPACE\tTRANSCRIPT'];
   for (const record of active) lines.push(formatRow(record));
   if (retired.length > 0) {
     lines.push('', 'RETIRED');
@@ -422,21 +478,18 @@ async function main() {
       if (args.flags.has('status') || args.flags.has('app')) {
         throw new Error('population show does not accept filters');
       }
-      if (args.positional.length !== 1) throw new Error('population show requires one Agent ID');
-      let soul;
-      try {
-        soul = showSoul(args.positional[0]);
-      } catch (error) {
-        if (error.message.startsWith('id must be')) throw new Error('invalid Agent ID in this context');
-        throw error;
-      }
+      if (args.positional.length !== 1) throw new Error('population show requires one Agent ID or name');
+      const target = args.positional[0];
+      const soul = target.startsWith('agent_')
+        ? showSoul(target)
+        : showSoulByName(target);
       process.stdout.write(`${JSON.stringify(soul, null, 2)}\n`);
       break;
     }
     default:
       throw new Error(
         'usage: agent-bot population list [--status <status>] [--app <slug>] [--json]\n' +
-          '       agent-bot population show <agent-id> [--json]',
+          '       agent-bot population show <agent-id|name> [--json]',
       );
   }
 }
