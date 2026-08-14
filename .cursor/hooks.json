@@ -1,6 +1,15 @@
 {
   "version": 1,
   "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "node tools/agent-guard/guard-agent-command.mjs --protocol=cursor"
+      },
+      {
+        "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect cursor --event pre-command # agent-bot agent-hook",
+        "failClosed": true
+      }
+    ],
     "sessionStart": [
       {
         "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect cursor --event session-start # agent-bot agent-hook"
@@ -24,12 +33,6 @@
       },
       {
         "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect cursor --event pre-file-write # agent-bot agent-hook",
-        "failClosed": true
-      }
-    ],
-    "beforeShellExecution": [
-      {
-        "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect cursor --event pre-command # agent-bot agent-hook",
         "failClosed": true
       }
     ],
