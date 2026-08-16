@@ -5,9 +5,11 @@
 # Self-tap: brew tap qwts/agent-bot-identity https://github.com/qwts/agent-bot-identity.git
 # Then: brew install agent-bot
 #
-# The formula installs the runtime tree into libexec and symlinks the portable
-# launcher. It does not write ~/.local/bin, Git core.hooksPath, or shell
-# startup files — run `agent-bot bootstrap --machine-only` after install.
+# The formula installs the runtime tree into libexec and a prefix wrapper that
+# points at the stable opt launcher and Homebrew's `node` opt_bin. It does not
+# write ~/.local/bin, Git core.hooksPath, or shell startup files — run
+# `agent-bot bootstrap --machine-only` after install. That bootstrap records
+# the opt wrapper, not a versioned Cellar path, so `brew upgrade` keeps hooks.
 #
 # To release a new version:
 #   1. Bump package.json, merge to main, and push tag vX.Y.Z.
@@ -27,7 +29,13 @@ class AgentBot < Formula
     %w[tests tools governance Formula].each { |path| rm_r(path) if File.exist?(path) }
 
     libexec.install Dir["*"]
-    bin.install_symlink libexec/"agent-bot"
+    chmod 0755, libexec/"agent-bot"
+    (bin/"agent-bot").write <<~SH
+      #!/bin/sh
+      export AGENT_BOT_SYSTEM_NODE_DIRS="#{Formula["node"].opt_bin}${AGENT_BOT_SYSTEM_NODE_DIRS:+ $AGENT_BOT_SYSTEM_NODE_DIRS}"
+      exec "#{opt_libexec}/agent-bot" "$@"
+    SH
+    chmod 0755, bin/"agent-bot"
   end
 
   def caveats

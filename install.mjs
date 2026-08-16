@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import {
   appendFileSync,
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -42,15 +43,45 @@ function optionalLstat(path, lstat = lstatSync) {
   }
 }
 
+const HOMEBREW_AGENT_BOT = /(?:^|\/)(?:Cellar\/agent-bot\/[^/]+|opt\/agent-bot)\/(?:bin|libexec)\/agent-bot(?:\.mjs)?$/;
+
+export function isHomebrewAgentBotPath(path) {
+  return HOMEBREW_AGENT_BOT.test(String(path).replaceAll('\\', '/'));
+}
+
+// Brew kegs are versioned. The managed ~/.local/bin symlink must point at
+// <prefix>/opt/agent-bot/bin/agent-bot so `brew upgrade` + cleanup cannot
+// leave hooks pinned to a deleted Cellar path.
+export function homebrewStableEntrypoint(entrypoint, exists = existsSync) {
+  const normalized = resolve(entrypoint).replaceAll('\\', '/');
+  const match = normalized.match(/^(.*)\/Cellar\/agent-bot\/[^/]+\/libexec\/agent-bot$/);
+  if (!match) return null;
+  const stable = join(match[1], 'opt', 'agent-bot', 'bin', 'agent-bot');
+  return exists(stable) ? stable : null;
+}
+
+export function managedEntrypoint(entrypoint, exists = existsSync) {
+  return homebrewStableEntrypoint(entrypoint, exists) ?? resolve(entrypoint);
+}
+
 export function isManagedExecutable(path, stat, entrypoint, readlink = readlinkSync) {
   if (!stat?.isSymbolicLink()) return false;
-  const target = resolve(dirname(path), readlink(path));
+  const linked = readlink(path);
+  const target = resolve(dirname(path), linked);
   const current = resolve(entrypoint);
   // `agent-bot.mjs` is the pre-launcher install target. Continue recognizing
   // it so `agent-bot update` can migrate an existing installation in place.
-  // Both accepted targets must belong to this checkout: a foreign executable
-  // with the same basename is not ours to replace.
-  return target === current || target === join(dirname(current), 'agent-bot.mjs');
+  if (target === current || target === join(dirname(current), 'agent-bot.mjs')) return true;
+  // A previous Homebrew keg or the stable opt wrapper is ours to replace
+  // when this install is also a Homebrew tree. A checkout must still refuse
+  // a foreign same-basename symlink.
+  if (
+    isHomebrewAgentBotPath(linked)
+    || isHomebrewAgentBotPath(target)
+  ) {
+    return isHomebrewAgentBotPath(current);
+  }
+  return false;
 }
 
 export function installExecutable({
@@ -62,8 +93,10 @@ export function installExecutable({
   remove = rmSync,
   symlink = symlinkSync,
   chmod = chmodSync,
+  exists = existsSync,
 } = {}) {
   const paths = installationPaths(home);
+  const desired = managedEntrypoint(entrypoint, exists);
   mkdir(paths.binDir, { recursive: true });
   chmod(entrypoint, 0o755);
   const stat = optionalLstat(paths.executable, lstat);
@@ -71,11 +104,12 @@ export function installExecutable({
     if (!isManagedExecutable(paths.executable, stat, entrypoint, readlink)) {
       throw new Error(`${paths.executable} exists and is not an agent-bot symlink`);
     }
-    const current = resolve(dirname(paths.executable), readlink(paths.executable));
-    if (current === resolve(entrypoint)) return paths.executable;
+    const linked = readlink(paths.executable);
+    const current = resolve(dirname(paths.executable), linked);
+    if (linked === desired || current === resolve(desired)) return paths.executable;
     remove(paths.executable, { force: true });
   }
-  symlink(entrypoint, paths.executable);
+  symlink(desired, paths.executable);
   return paths.executable;
 }
 

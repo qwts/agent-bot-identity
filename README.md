@@ -59,6 +59,8 @@ agent-bot bootstrap --profile /path/to/organization-profile.json --with-gh-shim 
 If `~/.local/bin/agent-bot` already points at a git checkout, move that
 symlink aside first (`rm ~/.local/bin/agent-bot`). The installer refuses to
 replace a symlink that does not already point at this packaged tree.
+Bootstrap records Homebrew's stable `opt` wrapper, not a versioned Cellar
+path, so a later `brew upgrade` does not leave hooks dangling.
 
 Development and first-time source installs still clone this repository and
 use `./agent-bot bootstrap` as documented below.
