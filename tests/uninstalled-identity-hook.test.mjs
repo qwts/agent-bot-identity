@@ -64,6 +64,8 @@ const DENY = [
   'sh -c "git push origin HEAD"',
   'bash -lc "gh pr create --title x --body y"',
   'echo hi & git push',
+  'echo "$(git commit -m hidden)"',
+  'echo `git push origin HEAD`',
 ];
 
 const ALLOW = [
@@ -82,6 +84,7 @@ const ALLOW = [
   'gh workflow list',
   'node --test tests/uninstalled-identity-hook.test.mjs',
   'printf "hello" > /tmp/notes.md',
+  "echo '$(git commit -m hidden)'",
 ];
 
 function coldEnv(home, extra = {}) {
@@ -183,6 +186,31 @@ test('uninstalled allowlist permits matching ai9d and refuses everyone else', ()
     command: 'git commit -m x',
     env: empty,
   }).decision, 'deny');
+  assert.equal(uninstalledDecision({
+    event: 'pre-command',
+    command: 'git commit --author="qwts <human@example.com>" -m x',
+    env: allowed,
+  }).decision, 'deny');
+  assert.equal(uninstalledDecision({
+    event: 'pre-command',
+    command: 'GIT_AUTHOR_NAME=qwts GIT_AUTHOR_EMAIL=human@example.com git commit -m x',
+    env: allowed,
+  }).decision, 'deny');
+  assert.equal(uninstalledDecision({
+    event: 'pre-command',
+    command: 'echo "$(git commit -m hidden)"',
+    env: human,
+  }).decision, 'deny');
+  assert.equal(uninstalledDecision({
+    event: 'pre-command',
+    command: 'echo "$(git commit -m hidden)"',
+    env: allowed,
+  }).decision, 'allow');
+  assert.equal(uninstalledDecision({
+    event: 'pre-command',
+    command: "echo '$(git commit -m hidden)'",
+    env: human,
+  }).decision, 'allow');
 });
 
 test('uninstalled decisions deny only commit, push, and pre-command publishes', () => {

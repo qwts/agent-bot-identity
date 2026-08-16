@@ -119,6 +119,150 @@ function skipEnvAndWrappers(argv) {
   return i;
 }
 
+function commandEnvAssignments(argv) {
+  const assigned = {};
+  let i = 0;
+  while (i < argv.length) {
+    const arg = argv[i];
+    if (arg === "command" || arg === "exec" || arg === "env") {
+      i += 1;
+      continue;
+    }
+    if (!arg.startsWith("-") && arg.includes("=") && !arg.includes("/")) {
+      const eq = arg.indexOf("=");
+      assigned[arg.slice(0, eq)] = arg.slice(eq + 1);
+      i += 1;
+      continue;
+    }
+    break;
+  }
+  return assigned;
+}
+
+function parseAuthorIdent(raw) {
+  const text = String(raw || "").trim();
+  const lt = text.lastIndexOf(" <");
+  if (lt > 0 && text.endsWith(">")) {
+    return { name: text.slice(0, lt).trim(), email: text.slice(lt + 2, -1).trim() };
+  }
+  if (text.includes("@") && !text.includes(" ")) return { name: "", email: text };
+  return { name: text, email: "" };
+}
+
+function gitCommitAuthorOverride(argv) {
+  let i = skipEnvAndWrappers(argv);
+  const bin = argv[i] ?? "";
+  if (bin !== "git" && !bin.endsWith("/git")) return "";
+  i += 1;
+  const takesValue = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"]);
+  let seenCommit = false;
+  let author = "";
+  while (i < argv.length) {
+    const arg = argv[i];
+    if (!seenCommit) {
+      if (arg === "commit") {
+        seenCommit = true;
+        i += 1;
+        continue;
+      }
+      if (arg === "push") return "";
+      if (takesValue.has(arg)) {
+        i += 2;
+        continue;
+      }
+      if (
+        arg.startsWith("--git-dir=")
+        || arg.startsWith("--work-tree=")
+        || arg.startsWith("--namespace=")
+        || arg.startsWith("--config-env=")
+      ) {
+        i += 1;
+        continue;
+      }
+      if (arg.startsWith("-")) {
+        i += 1;
+        continue;
+      }
+      return "";
+    }
+    if (arg === "--author" && argv[i + 1] !== undefined) {
+      author = argv[i + 1];
+      i += 2;
+      continue;
+    }
+    if (arg.startsWith("--author=")) {
+      author = arg.slice("--author=".length);
+      i += 1;
+      continue;
+    }
+    i += 1;
+  }
+  return seenCommit ? author : "";
+}
+
+function extractDollarParen(text, start) {
+  let depth = 1;
+  let quote = null;
+  const single = "\u0027";
+  const double = "\u0022";
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === single || ch === double) {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(") depth += 1;
+    if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) return { value: text.slice(start, i), end: i };
+    }
+  }
+  return null;
+}
+
+function commandSubstitutions(command) {
+  const text = String(command || "");
+  const found = [];
+  let quote = null;
+  const single = "\u0027";
+  const double = "\u0022";
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote === single) {
+      if (ch === single) quote = null;
+      continue;
+    }
+    if (ch === double && quote === double) {
+      quote = null;
+      continue;
+    }
+    if (!quote && (ch === single || ch === double)) {
+      quote = ch;
+      continue;
+    }
+    if (ch === "$" && text[i + 1] === "(") {
+      const inner = extractDollarParen(text, i + 2);
+      if (inner) {
+        found.push(inner.value);
+        i = inner.end;
+      }
+      continue;
+    }
+    if (ch === "`") {
+      const end = text.indexOf("`", i + 1);
+      if (end !== -1) {
+        found.push(text.slice(i + 1, end));
+        i = end;
+      }
+    }
+  }
+  return found;
+}
+
 function gitPublishSubcommand(argv) {
   let i = skipEnvAndWrappers(argv);
   const bin = argv[i] ?? "";
@@ -204,8 +348,11 @@ function resolveGhLogin(env = {}) {
   return "";
 }
 
-function isUnmanagedGitAuthor(env, authors) {
-  const ident = resolveGitAuthor(env);
+function isUnmanagedGitAuthor(env, authors, command) {
+  const argv = tokenizeCommand(command);
+  const merged = Object.assign({}, env, commandEnvAssignments(argv));
+  const override = gitCommitAuthorOverride(argv);
+  const ident = override ? parseAuthorIdent(override) : resolveGitAuthor(merged);
   return identMatches(ident.name, authors) || identMatches(ident.email, authors);
 }
 
@@ -220,11 +367,17 @@ function unmanagedPublishAllowed(command, env, authors, depth) {
   for (const segment of commandSegments(command)) {
     const argv = tokenizeCommand(segment);
     const gitSub = gitPublishSubcommand(argv);
-    if (gitSub === "commit" && !isUnmanagedGitAuthor(env, authors)) return false;
+    if (gitSub === "commit" && !isUnmanagedGitAuthor(env, authors, segment)) return false;
     if (gitSub === "push" && !isUnmanagedGhActor(env, authors)) return false;
     if (isGhWriteArgv(argv) && !isUnmanagedGhActor(env, authors)) return false;
     const nested = shellPayload(argv);
     if (nested && isHumanAttributedPublish(nested, depth + 1)
+      && !unmanagedPublishAllowed(nested, env, authors, depth + 1)) {
+      return false;
+    }
+  }
+  for (const nested of commandSubstitutions(command)) {
+    if (isHumanAttributedPublish(nested, depth + 1)
       && !unmanagedPublishAllowed(nested, env, authors, depth + 1)) {
       return false;
     }
@@ -340,13 +493,16 @@ export function isHumanAttributedPublish(command, depth) {
     const nested = shellPayload(argv);
     if (nested && isHumanAttributedPublish(nested, depth + 1)) return true;
   }
+  for (const nested of commandSubstitutions(command)) {
+    if (isHumanAttributedPublish(nested, depth + 1)) return true;
+  }
   return false;
 }
 
 export function uninstalledDecision({ event, command = "", env = {} }) {
   const authors = parseUnmanagedAuthors(env);
   if (event === "pre-commit") {
-    if (authors.length && isUnmanagedGitAuthor(env, authors)) {
+    if (authors.length && isUnmanagedGitAuthor(env, authors, command)) {
       return { decision: "allow", reason: "" };
     }
     return { decision: "deny", reason: UNINSTALLED_REASON };
@@ -383,6 +539,11 @@ const DETECT_SOURCE = [
   tokenizeCommand,
   commandSegments,
   skipEnvAndWrappers,
+  commandEnvAssignments,
+  parseAuthorIdent,
+  gitCommitAuthorOverride,
+  extractDollarParen,
+  commandSubstitutions,
   gitPublishSubcommand,
   isGitPublishArgv,
   parseUnmanagedAuthors,
