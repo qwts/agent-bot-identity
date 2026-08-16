@@ -706,7 +706,7 @@ Shells other than zsh get no registration. The identity scripts fall back to
 `~/.local/bin/agent-bot` directly for that case, and `agent-bot doctor` probes a
 non-login shell so a missing registration is reported rather than assumed.
 
-#### Experimental Codex desktop Pull Requests UI
+#### Codex desktop Pull Requests UI
 
 The normal gh-shim install covers agent shells but does not necessarily cover
 GitHub commands launched directly by the Codex desktop app. Codex currently
@@ -725,12 +725,15 @@ agent-bot install-gh-shim --restore-codex-desktop-gh /opt/homebrew/bin/gh
 
 The explicit install moves the selected `gh` to an adjacent
 `gh.agent-bot-real` backup and replaces only that path with a symlink to the
-managed shim. It refuses existing backups, foreign replacements, missing
-originals, relative paths, and unrecoverable restores. The ordinary
+managed shim. A valid legacy `gh.bak` is migrated to that canonical name;
+shim-to-shim backups, missing originals, relative paths, and unrecoverable
+restores fail closed. Re-running the explicit install repairs a Homebrew
+upgrade or relink by preserving the new stock executable and restoring the
+interposer. The ordinary
 `agent-bot install-gh-shim` command never modifies a system or Homebrew path.
-Because a package-manager upgrade may replace either link, verify the selected
-`gh` path after upgrading GitHub CLI and restore or reinstall the interposer if
-needed.
+The explicitly selected path is recorded without credentials so
+`agent-bot doctor` can report shell-shim readiness separately from missing,
+replaced, recursive, legacy, or unrecoverable Codex-desktop coverage.
 
 When a direct Codex desktop call is detected, the shim mints the configured
 Codex App token and adapts only the observed native request shapes:

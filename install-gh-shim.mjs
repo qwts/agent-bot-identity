@@ -3,10 +3,14 @@
 import process from 'node:process';
 import {
   appendFileSync,
+  closeSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   readlinkSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -18,7 +22,7 @@ import {
   basename, dirname, isAbsolute, join, resolve,
 } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { buildGhShim } from './gh-shim.mjs';
+import { buildGhShim, GH_SHIM_MARKER } from './gh-shim.mjs';
 import { ensurePathLine, zshStartupDir } from './shell-path.mjs';
 
 function optionalStat(path, lstat) {
@@ -46,17 +50,15 @@ function installManagedShimLink({ path, shimPath, binDir, lstat, readlink, remov
   return path;
 }
 
-const GH_INTERPOSER_BACKUP_SUFFIX = '.agent-bot-real';
+export const GH_INTERPOSER_BACKUP_SUFFIX = '.agent-bot-real';
+export const GH_INTERPOSER_LEGACY_BACKUP_SUFFIX = '.bak';
+const CODEX_DESKTOP_GH_STATE_FILE = 'codex-desktop-gh.json';
 
 function validateGhPath(path) {
   if (typeof path !== 'string' || !isAbsolute(path) || basename(path) !== 'gh') {
     throw new Error('Codex desktop gh path must be an absolute path ending in /gh');
   }
   return path;
-}
-
-function symlinkTarget(path, readlink) {
-  return resolve(dirname(path), readlink(path));
 }
 
 function isExecutableFile(path, stat) {
@@ -69,38 +71,217 @@ function isExecutableFile(path, stat) {
   }
 }
 
+export function codexDesktopGhStatePath(home = homedir()) {
+  return join(home, '.config', 'agent-bot', CODEX_DESKTOP_GH_STATE_FILE);
+}
+
+export function isAgentBotGhShim(path, {
+  open = openSync,
+  read = readSync,
+  close = closeSync,
+} = {}) {
+  let descriptor;
+  try {
+    descriptor = open(path, 'r');
+    const buffer = Buffer.alloc(Buffer.byteLength(GH_SHIM_MARKER) + 96);
+    const length = read(descriptor, buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, length).toString('utf8').includes(GH_SHIM_MARKER);
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  } finally {
+    if (descriptor !== undefined) close(descriptor);
+  }
+}
+
+function resolvesTo(path, expected, realpath) {
+  try {
+    return realpath(path) === realpath(expected);
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+function savedGhStatus(path, { lstat, stat, isShim }) {
+  const entry = optionalStat(path, lstat);
+  if (!entry) return { status: 'missing', path };
+  if (entry.isDirectory()) return { status: 'invalid', path, reason: 'directory' };
+  try {
+    if (isShim(path)) return { status: 'recursive', path };
+  } catch {
+    return { status: 'invalid', path, reason: 'unreadable' };
+  }
+  if (isExecutableFile(path, stat)) return { status: 'ready', path };
+  if (entry.isSymbolicLink()) return { status: 'dangling', path };
+  return { status: 'invalid', path, reason: 'not-executable' };
+}
+
+export function inspectGhInterposer({
+  path,
+  shimPath,
+  lstat = lstatSync,
+  stat = statSync,
+  realpath = realpathSync,
+  isShim = isAgentBotGhShim,
+} = {}) {
+  const ghPath = validateGhPath(path);
+  const backupPath = `${ghPath}${GH_INTERPOSER_BACKUP_SUFFIX}`;
+  const legacyBackupPath = `${ghPath}${GH_INTERPOSER_LEGACY_BACKUP_SUFFIX}`;
+  const target = optionalStat(ghPath, lstat);
+  const backup = savedGhStatus(backupPath, { lstat, stat, isShim });
+  const legacy = savedGhStatus(legacyBackupPath, { lstat, stat, isShim });
+  const evidence = { path: ghPath, backup_path: backupPath };
+
+  if (!target) {
+    return { status: 'missing', code: 'codex-gh-interposer-missing', evidence };
+  }
+  if (target.isDirectory() || !isExecutableFile(ghPath, stat)) {
+    return { status: 'unrecoverable', code: 'codex-gh-interposer-unrecoverable', evidence };
+  }
+  let targetIsShim;
+  try {
+    targetIsShim = resolvesTo(ghPath, shimPath, realpath) || isShim(ghPath);
+  } catch {
+    return { status: 'unrecoverable', code: 'codex-gh-interposer-unrecoverable', evidence };
+  }
+  if (backup.status === 'recursive' || legacy.status === 'recursive') {
+    return { status: 'recursive', code: 'codex-gh-interposer-recursive', evidence };
+  }
+
+  if (targetIsShim) {
+    if (backup.status === 'ready') {
+      if (legacy.status === 'missing') return { status: 'ready', code: null, evidence };
+      return {
+        status: 'legacy-ambiguous',
+        code: 'codex-gh-interposer-legacy-ambiguous',
+        evidence: { ...evidence, legacy_backup_path: legacyBackupPath },
+      };
+    }
+    if (backup.status === 'missing' && legacy.status === 'ready') {
+      return {
+        status: 'legacy-backup',
+        code: 'codex-gh-interposer-legacy-backup',
+        evidence: { ...evidence, legacy_backup_path: legacyBackupPath },
+      };
+    }
+    return { status: 'unrecoverable', code: 'codex-gh-interposer-unrecoverable', evidence };
+  }
+
+  if (backup.status === 'invalid' || legacy.status === 'invalid') {
+    return { status: 'unrecoverable', code: 'codex-gh-interposer-unrecoverable', evidence };
+  }
+  if (legacy.status !== 'missing') {
+    return {
+      status: 'legacy-ambiguous',
+      code: 'codex-gh-interposer-legacy-ambiguous',
+      evidence: { ...evidence, legacy_backup_path: legacyBackupPath },
+    };
+  }
+  if (backup.status !== 'missing') {
+    return { status: 'replaced', code: 'codex-gh-interposer-replaced', evidence };
+  }
+  return { status: 'unconfigured', code: 'codex-gh-interposer-unconfigured', evidence };
+}
+
+export function inspectShellGhShim({ home = homedir() } = {}) {
+  const shimPath = join(home, '.config', 'agent-bot', 'bin', 'gh');
+  const localPath = join(home, '.local', 'bin', 'gh');
+  const evidence = { path: shimPath, local_path: localPath };
+  const shim = optionalStat(shimPath, lstatSync);
+  const local = optionalStat(localPath, lstatSync);
+  if (!shim || !local) return { status: 'missing', code: 'gh-shim-missing', evidence };
+  let shimIsManaged;
+  try {
+    shimIsManaged = isExecutableFile(shimPath, statSync) && isAgentBotGhShim(shimPath);
+  } catch {
+    return { status: 'unrecoverable', code: 'gh-shell-shim-unrecoverable', evidence };
+  }
+  if (!shimIsManaged) {
+    return { status: 'replaced', code: 'gh-shell-shim-replaced', evidence };
+  }
+  if (!resolvesTo(localPath, shimPath, realpathSync)) {
+    let localIsShim;
+    try {
+      localIsShim = isAgentBotGhShim(localPath);
+    } catch {
+      return { status: 'unrecoverable', code: 'gh-shell-shim-unrecoverable', evidence };
+    }
+    return {
+      status: localIsShim ? 'recursive' : 'replaced',
+      code: localIsShim ? 'gh-shell-shim-recursive' : 'gh-shell-shim-replaced',
+      evidence,
+    };
+  }
+  return { status: 'ready', code: null, evidence };
+}
+
+export function inspectConfiguredCodexDesktopGh({ home = homedir() } = {}) {
+  const statePath = codexDesktopGhStatePath(home);
+  let state;
+  try {
+    state = JSON.parse(readFileSync(statePath, 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return { status: 'unconfigured', code: 'codex-gh-interposer-unconfigured', evidence: {} };
+    }
+    return {
+      status: 'unrecoverable',
+      code: 'codex-gh-interposer-state-invalid',
+      evidence: { state_path: statePath },
+    };
+  }
+  if (state?.schema_version !== 1 || typeof state.path !== 'string') {
+    return {
+      status: 'unrecoverable',
+      code: 'codex-gh-interposer-state-invalid',
+      evidence: { state_path: statePath },
+    };
+  }
+  const shimPath = join(home, '.config', 'agent-bot', 'bin', 'gh');
+  try {
+    return inspectGhInterposer({ path: state.path, shimPath });
+  } catch {
+    return {
+      status: 'unrecoverable',
+      code: 'codex-gh-interposer-state-invalid',
+      evidence: { state_path: statePath },
+    };
+  }
+}
+
 export function installGhInterposer({
   path,
   shimPath,
   lstat = lstatSync,
   stat = statSync,
-  readlink = readlinkSync,
+  realpath = realpathSync,
   rename = renameSync,
+  remove = rmSync,
   symlink = symlinkSync,
+  isShim = isAgentBotGhShim,
 } = {}) {
   const ghPath = validateGhPath(path);
   const backupPath = `${ghPath}${GH_INTERPOSER_BACKUP_SUFFIX}`;
+  const legacyBackupPath = `${ghPath}${GH_INTERPOSER_LEGACY_BACKUP_SUFFIX}`;
   if (resolve(ghPath) === resolve(shimPath)) {
     throw new Error('Codex desktop gh path must be the external gh, not the managed shim');
   }
-  const target = optionalStat(ghPath, lstat);
-  const backup = optionalStat(backupPath, lstat);
-  if (!target) throw new Error(`${ghPath} does not exist`);
-
-  if (target.isSymbolicLink() && symlinkTarget(ghPath, readlink) === shimPath) {
-    if (!backup) throw new Error(`${ghPath} is interposed but its original executable is missing`);
-    if (backup.isDirectory()) throw new Error(`${backupPath} is not a saved gh executable`);
-    if (!isExecutableFile(backupPath, stat)) {
-      throw new Error(`${backupPath} no longer resolves to an executable gh`);
-    }
+  if (!isExecutableFile(shimPath, stat) || !isShim(shimPath)) {
+    throw new Error('Codex desktop interposition requires the managed agent-bot gh shim');
+  }
+  const inspection = inspectGhInterposer({
+    path: ghPath, shimPath, lstat, stat, realpath, isShim,
+  });
+  if (inspection.status === 'ready') {
     return { path: ghPath, backupPath, updated: false };
   }
-  if (target.isDirectory()) throw new Error(`${ghPath} is a directory, not a gh executable`);
-  if (!isExecutableFile(ghPath, stat)) {
-    throw new Error(`${ghPath} does not resolve to an executable file`);
+  if (inspection.status === 'legacy-backup') {
+    rename(legacyBackupPath, backupPath);
+    return { path: ghPath, backupPath, updated: true, migratedLegacyBackup: true };
   }
-  if (backup) {
-    throw new Error(`${backupPath} already exists; refusing to replace ${ghPath}`);
+  if (!['unconfigured', 'replaced'].includes(inspection.status)) {
+    throw new Error(`${ghPath} cannot be interposed: ${inspection.code}`);
   }
 
   rename(ghPath, backupPath);
@@ -110,6 +291,7 @@ export function installGhInterposer({
     rename(backupPath, ghPath);
     throw error;
   }
+  if (optionalStat(legacyBackupPath, lstat)) remove(legacyBackupPath, { force: true });
   return { path: ghPath, backupPath, updated: true };
 }
 
@@ -118,27 +300,24 @@ export function restoreGhInterposer({
   shimPath,
   lstat = lstatSync,
   stat = statSync,
-  readlink = readlinkSync,
+  realpath = realpathSync,
   rename = renameSync,
+  isShim = isAgentBotGhShim,
 } = {}) {
   const ghPath = validateGhPath(path);
   const backupPath = `${ghPath}${GH_INTERPOSER_BACKUP_SUFFIX}`;
-  const target = optionalStat(ghPath, lstat);
-  if (!target?.isSymbolicLink() || symlinkTarget(ghPath, readlink) !== shimPath) {
-    throw new Error(`${ghPath} is not an agent-bot managed interposer`);
+  const legacyBackupPath = `${ghPath}${GH_INTERPOSER_LEGACY_BACKUP_SUFFIX}`;
+  const inspection = inspectGhInterposer({
+    path: ghPath, shimPath, lstat, stat, realpath, isShim,
+  });
+  if (!['ready', 'legacy-backup', 'legacy-ambiguous'].includes(inspection.status)) {
+    throw new Error(`${ghPath} cannot be restored: ${inspection.code}`);
   }
-  const backup = optionalStat(backupPath, lstat);
-  if (!backup) {
-    throw new Error(`${backupPath} is missing; refusing an unrecoverable restore`);
-  }
-  if (backup.isDirectory()) throw new Error(`${backupPath} is not a saved gh executable`);
-  if (!isExecutableFile(backupPath, stat)) {
-    throw new Error(`${backupPath} no longer resolves to an executable gh`);
-  }
+  const savedPath = inspection.status === 'legacy-backup' ? legacyBackupPath : backupPath;
   // POSIX rename replaces the managed symlink atomically with the saved
   // executable or symlink, leaving no interval where gh is absent.
-  rename(backupPath, ghPath);
-  return { path: ghPath, backupPath, restored: true };
+  rename(savedPath, ghPath);
+  return { path: ghPath, backupPath: savedPath, restored: true };
 }
 
 export function installGhShim({
@@ -187,10 +366,16 @@ export function installGhShim({
     path: codexGhPath,
     shimPath,
     lstat,
-    readlink,
     rename,
+    remove,
     symlink,
   });
+  const codexStatePath = codexInterposer ? codexDesktopGhStatePath(home) : null;
+  if (codexStatePath) {
+    write(codexStatePath, `${JSON.stringify({ schema_version: 1, path: codexGhPath })}\n`, {
+      mode: 0o600,
+    });
+  }
   const dir = zshStartupDir(home, env);
   const zshenv = ensurePathLine({
     dir,
@@ -209,7 +394,7 @@ export function installGhShim({
     append,
   });
   return {
-    shimPath, localShim, codexShim, codexInterposer, zshenv, zprofile,
+    shimPath, localShim, codexShim, codexInterposer, codexStatePath, zshenv, zprofile,
   };
 }
 
@@ -232,6 +417,7 @@ export function main(argv = process.argv.slice(2), { home = homedir() } = {}) {
   if (options.action === 'restore') {
     const shimPath = join(home, '.config', 'agent-bot', 'bin', 'gh');
     const restored = restoreGhInterposer({ path: options.codexGhPath, shimPath });
+    rmSync(codexDesktopGhStatePath(home), { force: true });
     process.stdout.write(`Codex desktop gh restored -> ${restored.path}\n`);
     return restored;
   }

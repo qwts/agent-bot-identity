@@ -54,6 +54,9 @@ function machineDependencies(home, { shim = false, inspectCredentials } = {}) {
     readlink: () => sourceEntrypoint,
     spawn: () => ({ status: 0, stdout: `${paths.executable}\n` }),
     exists: (path) => shim && path.endsWith('/bin/gh'),
+    inspectShellGh: () => shim
+      ? { status: 'ready', code: null, evidence: {} }
+      : { status: 'missing', code: 'gh-shim-missing', evidence: {} },
     access: () => {},
     git: (args) => {
       if (args[0] === '--version') return 'git version 2.50.1';
@@ -130,6 +133,31 @@ test('schema v1 is deterministic, secret-free, and warnings do not fail readines
     renderReadinessJson(report),
     /token|private-key\.pem|BEGIN PRIVATE KEY|secret-user|secret-password|private-path/,
   );
+});
+
+test('doctor distinguishes shell shim readiness from Codex desktop interposition failures', async () => {
+  const home = tempRoot();
+  for (const [status, code, expectedStatus] of [
+    ['unconfigured', 'codex-gh-interposer-unconfigured', 'warning'],
+    ['missing', 'codex-gh-interposer-missing', 'failed'],
+    ['replaced', 'codex-gh-interposer-replaced', 'failed'],
+    ['recursive', 'codex-gh-interposer-recursive', 'failed'],
+    ['legacy-ambiguous', 'codex-gh-interposer-legacy-ambiguous', 'failed'],
+    ['unrecoverable', 'codex-gh-interposer-unrecoverable', 'failed'],
+    ['ready', null, 'ready'],
+  ]) {
+    const report = await collectReadiness({
+      command: 'doctor',
+      scope: 'machine',
+      ...machineDependencies(home, { shim: true }),
+      inspectCodexDesktopGh: () => ({ status, code, evidence: { path: '/opt/homebrew/bin/gh' } }),
+    });
+    const shell = report.machine.checks.find(({ id }) => id === 'shim.gh');
+    const desktop = report.machine.checks.find(({ id }) => id === 'shim.gh_codex_desktop');
+    assert.equal(shell.status, 'ready');
+    assert.equal(desktop.status, expectedStatus);
+    assert.equal(desktop.code, code);
+  }
 });
 
 test('machine readiness reports profile compatibility and the complete active roster', async () => {

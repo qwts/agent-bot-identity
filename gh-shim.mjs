@@ -1,3 +1,5 @@
+export const GH_SHIM_MARKER = '# gh shim — agent bot identity. Managed by install-gh-shim.mjs';
+
 export function buildGhShim(tokenTool = null) {
   const tokenSetup = tokenTool
     ? `TOKEN_TOOL="${tokenTool}"
@@ -13,8 +15,7 @@ token_mint_app() { "$TOKEN_TOOL" mint-token --app "$1"; }
 token_expand_inbox_query() { "$TOKEN_TOOL" gh-inbox-query "$1" "$2"; }
 token_enrich_pr_view() { "$TOKEN_TOOL" gh-pr-view-json; }`;
   return `#!/bin/sh
-# gh shim — agent bot identity. Managed by install-gh-shim.mjs; do not edit
-# in place.
+${GH_SHIM_MARKER}; do not edit in place.
 ${tokenSetup}
 SELF="$0"
 case "$SELF" in
@@ -24,41 +25,58 @@ esac
 INVOKED_DIR=$(dirname -- "$SELF")
 SELF_REAL=$(readlink -f -- "$SELF" 2>/dev/null) || SELF_REAL=$SELF
 SELF_DIR=$(dirname -- "$SELF_REAL")
+candidate_is_shim() {
+  CANDIDATE_REAL=$(readlink -f -- "$1" 2>/dev/null) || CANDIDATE_REAL="$1"
+  [ "$CANDIDATE_REAL" = "$SELF_REAL" ] && return 0
+  /usr/bin/head -c 512 "$1" 2>/dev/null \
+    | /usr/bin/grep -Fq ${JSON.stringify(GH_SHIM_MARKER)}
+}
 REAL="$AGENT_BOT_REAL_GH"
 if [ -n "$REAL" ]; then
-  [ -x "$REAL" ] || {
+  [ -f "$REAL" ] && [ -x "$REAL" ] || {
     echo "agent-bot gh shim: AGENT_BOT_REAL_GH is not executable: $REAL" >&2
     exit 127
   }
-  REAL_RESOLVED=$(readlink -f -- "$REAL" 2>/dev/null) || REAL_RESOLVED="$REAL"
-  [ "$REAL_RESOLVED" != "$SELF_REAL" ] || {
-    echo "agent-bot gh shim: AGENT_BOT_REAL_GH resolves to the shim" >&2
+  ! candidate_is_shim "$REAL" || {
+    echo "agent-bot gh shim: AGENT_BOT_REAL_GH resolves to an agent-bot shim — refusing recursive dispatch" >&2
     exit 127
   }
 fi
 [ -n "$REAL" ] || for CAND in \
   "$INVOKED_DIR/gh.agent-bot-real" "$SELF_DIR/gh.agent-bot-real" \
   "$INVOKED_DIR/gh.bak" "$SELF_DIR/gh.bak"; do
-  [ -x "$CAND" ] || continue
+  [ -f "$CAND" ] && [ -x "$CAND" ] || continue
   CAND_REAL=$(readlink -f -- "$CAND" 2>/dev/null) || CAND_REAL="$CAND"
   [ "$CAND_REAL" = "$SELF_REAL" ] && continue
+  ! candidate_is_shim "$CAND" || {
+    echo "agent-bot gh shim: $CAND resolves to an agent-bot shim — refusing recursive dispatch" >&2
+    exit 127
+  }
   REAL="$CAND"; break
 done
 OLDIFS=$IFS; IFS=:
 for d in $PATH; do
   [ -n "$REAL" ] && break
   [ "$d" = "$SELF_DIR" ] && continue
-  [ -x "$d/gh" ] || continue
+  [ -f "$d/gh" ] && [ -x "$d/gh" ] || continue
   CAND="$d/gh"
   CAND_REAL=$(readlink -f -- "$CAND" 2>/dev/null) || CAND_REAL="$CAND"
   [ "$CAND_REAL" = "$SELF_REAL" ] && continue
+  ! candidate_is_shim "$CAND" || {
+    echo "agent-bot gh shim: $CAND resolves to an agent-bot shim — refusing recursive dispatch" >&2
+    exit 127
+  }
   REAL="$CAND"; break
 done
 IFS=$OLDIFS
 [ -n "$REAL" ] || for CAND in /opt/homebrew/opt/gh/bin/gh /usr/local/opt/gh/bin/gh; do
-  [ -x "$CAND" ] || continue
+  [ -f "$CAND" ] && [ -x "$CAND" ] || continue
   CAND_REAL=$(readlink -f -- "$CAND" 2>/dev/null) || CAND_REAL="$CAND"
   [ "$CAND_REAL" = "$SELF_REAL" ] && continue
+  ! candidate_is_shim "$CAND" || {
+    echo "agent-bot gh shim: $CAND resolves to an agent-bot shim — refusing recursive dispatch" >&2
+    exit 127
+  }
   REAL="$CAND"; break
 done
 [ -z "$REAL" ] && { echo "agent-bot gh shim: real gh not found on PATH" >&2; exit 127; }
