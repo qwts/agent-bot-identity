@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect codex --event pre-tool-use # agent-bot agent-hook",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect codex --event pre-tool-use; exit 0 # agent-bot agent-hook",
             "timeout": 60
           }
         ]
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect codex --event pre-command # agent-bot agent-hook",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect codex --event pre-command; node --input-type=module -e 'import { readFileSync } from \"node:fs\";\nfunction extractCommand(payload, env = {}) {\n  if (typeof env.AGENT_HOOK_TOOL_COMMAND === \"string\" && env.AGENT_HOOK_TOOL_COMMAND) {\n    return env.AGENT_HOOK_TOOL_COMMAND;\n  }\n  if (!payload || typeof payload !== \"object\") return \"\";\n  return payload.command\n    || payload.tool_input?.command\n    || payload.toolArgs?.command\n    || payload.tool_info?.command_line\n    || payload.tool_input?.cmd\n    || \"\";\n}\nfunction tokenizeCommand(command) {\n  const tokens = [];\n  let current = \"\";\n  let quote = null;\n  const single = \"\\u0027\";\n  const double = \"\\u0022\";\n  for (const ch of String(command || \"\")) {\n    if (quote) {\n      if (ch === quote) quote = null;\n      else current += ch;\n      continue;\n    }\n    if (ch === single || ch === double) {\n      quote = ch;\n      continue;\n    }\n    if (/\\s/.test(ch)) {\n      if (current) tokens.push(current);\n      current = \"\";\n      continue;\n    }\n    current += ch;\n  }\n  if (current) tokens.push(current);\n  return tokens;\n}\nfunction commandSegments(command) {\n  const text = String(command || \"\");\n  const segments = [];\n  let current = \"\";\n  let quote = null;\n  const single = \"\\u0027\";\n  const double = \"\\u0022\";\n  for (let i = 0; i < text.length; i += 1) {\n    const ch = text[i];\n    if (quote) {\n      current += ch;\n      if (ch === quote) quote = null;\n      continue;\n    }\n    if (ch === single || ch === double) {\n      quote = ch;\n      current += ch;\n      continue;\n    }\n    if (ch === \"\\n\" || ch === \";\") {\n      if (current.trim()) segments.push(current);\n      current = \"\";\n      continue;\n    }\n    if (ch === \"&\" && text[i + 1] === \"&\") {\n      if (current.trim()) segments.push(current);\n      current = \"\";\n      i += 1;\n      continue;\n    }\n    if (ch === \"|\") {\n      if (text[i + 1] === \"|\") i += 1;\n      if (current.trim()) segments.push(current);\n      current = \"\";\n      continue;\n    }\n    current += ch;\n  }\n  if (current.trim()) segments.push(current);\n  return segments;\n}\nfunction skipEnvAndWrappers(argv) {\n  let i = 0;\n  while (i < argv.length) {\n    const arg = argv[i];\n    if (arg === \"command\" || arg === \"exec\" || arg === \"env\") {\n      i += 1;\n      continue;\n    }\n    if (!arg.startsWith(\"-\") && arg.includes(\"=\") && !arg.includes(\"/\")) {\n      i += 1;\n      continue;\n    }\n    break;\n  }\n  return i;\n}\nfunction isGitPublishArgv(argv) {\n  let i = skipEnvAndWrappers(argv);\n  const bin = argv[i] ?? \"\";\n  if (bin !== \"git\" && !bin.endsWith(\"/git\")) return false;\n  i += 1;\n  const takesValue = new Set([\"-C\", \"-c\", \"--git-dir\", \"--work-tree\", \"--namespace\", \"--config-env\"]);\n  while (i < argv.length) {\n    const arg = argv[i];\n    if (arg === \"commit\" || arg === \"push\") return true;\n    if (takesValue.has(arg)) {\n      i += 2;\n      continue;\n    }\n    if (\n      arg.startsWith(\"--git-dir=\")\n      || arg.startsWith(\"--work-tree=\")\n      || arg.startsWith(\"--namespace=\")\n      || arg.startsWith(\"--config-env=\")\n    ) {\n      i += 1;\n      continue;\n    }\n    if (arg.startsWith(\"-\")) {\n      i += 1;\n      continue;\n    }\n    return arg === \"commit\" || arg === \"push\";\n  }\n  return false;\n}\nfunction isGhWriteArgv(argv) {\n  let i = skipEnvAndWrappers(argv);\n  const bin = argv[i] ?? \"\";\n  if (bin !== \"gh\" && !bin.endsWith(\"/gh\")) return false;\n  i += 1;\n  const takesValue = new Set([\"-R\", \"--repo\", \"--hostname\"]);\n  while (i < argv.length && argv[i].startsWith(\"-\")) {\n    if (takesValue.has(argv[i])) i += 2;\n    else i += 1;\n  }\n  const cmd = argv[i];\n  const sub = argv[i + 1];\n  if (cmd === \"pr\") {\n    return new Set([\n      \"create\", \"edit\", \"merge\", \"ready\", \"review\", \"comment\", \"close\", \"reopen\", \"lock\", \"unlock\",\n    ]).has(sub);\n  }\n  if (cmd === \"issue\") {\n    return new Set([\n      \"create\", \"edit\", \"comment\", \"close\", \"delete\", \"pin\", \"unpin\", \"transfer\", \"develop\", \"reopen\",\n    ]).has(sub);\n  }\n  if (cmd === \"api\") {\n    const rest = argv.slice(i + 1);\n    if (rest.includes(\"graphql\")) return true;\n    for (let j = 0; j < rest.length; j += 1) {\n      if ((rest[j] === \"-X\" || rest[j] === \"--method\") && rest[j + 1]) {\n        const method = String(rest[j + 1]).toUpperCase();\n        return method !== \"GET\" && method !== \"HEAD\";\n      }\n    }\n    return false;\n  }\n  if (cmd === \"repo\") return new Set([\"create\", \"delete\", \"edit\", \"sync\", \"archive\", \"rename\"]).has(sub);\n  if (cmd === \"release\") return new Set([\"create\", \"delete\", \"edit\", \"upload\"]).has(sub);\n  if (cmd === \"gist\") return new Set([\"create\", \"edit\", \"delete\"]).has(sub);\n  return false;\n}\nfunction isHumanAttributedPublish(command) {\n  for (const segment of commandSegments(command)) {\n    const argv = tokenizeCommand(segment);\n    if (isGitPublishArgv(argv) || isGhWriteArgv(argv)) return true;\n  }\n  return false;\n}\nconst allow = {\"stdout\":\"\",\"stderr\":\"\",\"exitCode\":0};\nconst deny = {\"stdout\":\"{\\\"hookSpecificOutput\\\":{\\\"hookEventName\\\":\\\"PreToolUse\\\",\\\"permissionDecision\\\":\\\"deny\\\",\\\"permissionDecisionReason\\\":\\\"uninstalled identity: refuse human-attributed commit or GitHub write; finish durable bootstrap to publish as the bot\\\"}}\",\"stderr\":\"uninstalled identity: refuse human-attributed commit or GitHub write; finish durable bootstrap to publish as the bot\",\"exitCode\":0};\nlet raw = \"\";\ntry { if (!process.stdin.isTTY) raw = readFileSync(0, \"utf8\"); } catch {}\nlet payload = {};\ntry { payload = raw.trim() ? JSON.parse(raw) : {}; } catch {}\nif (!payload || typeof payload !== \"object\" || Array.isArray(payload)) payload = {};\nconst encoded = isHumanAttributedPublish(extractCommand(payload, process.env)) ? deny : allow;\nif (encoded.stdout) process.stdout.write(encoded.stdout);\nif (encoded.stderr) process.stderr.write(encoded.stderr + \"\\n\");\nprocess.exit(encoded.exitCode);\n' # agent-bot agent-hook",
             "timeout": 60
           }
         ]
@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect codex --event pre-file-write # agent-bot agent-hook",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect codex --event pre-file-write; exit 0 # agent-bot agent-hook",
             "timeout": 60
           }
         ]
@@ -48,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect codex --event session-start # agent-bot agent-hook",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect codex --event session-start; exit 0 # agent-bot agent-hook",
             "timeout": 60
           }
         ]
@@ -59,7 +59,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect codex --event session-end # agent-bot agent-hook",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect codex --event session-end; exit 0 # agent-bot agent-hook",
             "timeout": 3
           }
         ]
@@ -70,7 +70,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect codex --event prompt-submit # agent-bot agent-hook",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect codex --event prompt-submit; exit 0 # agent-bot agent-hook",
             "timeout": 60
           }
         ]
@@ -81,7 +81,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect codex --event post-tool-use # agent-bot agent-hook",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect codex --event post-tool-use; exit 0 # agent-bot agent-hook",
             "timeout": 60
           }
         ]
@@ -92,7 +92,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] || exit 0; exec \"$H\" --dialect codex --event agent-stop # agent-bot agent-hook",
+            "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect codex --event agent-stop; exit 0 # agent-bot agent-hook",
             "timeout": 60
           }
         ]
