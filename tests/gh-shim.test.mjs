@@ -98,17 +98,9 @@ exit ${realExit}
   );
   chmodSync(real, 0o755);
 
-  const agentKeys = new Set([
-    'AI_AGENT', 'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'COPILOT_AGENT',
-    'CURSOR_AGENT', 'DEVIN_AGENT', 'GH_AGENT_APP', 'WINDSURF_AGENT',
-  ]);
-  const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(
-    ([key]) => !key.startsWith('CODEX_') && !agentKeys.has(key),
-  ));
   return spawnSync('sh', [shim, ...args], {
     encoding: 'utf8',
     env: {
-      ...cleanEnv,
       ...(explicitReal ? {
         AGENT_BOT_REAL_GH: explicitReal === 'directory' ? realDir : real,
       } : {}),
