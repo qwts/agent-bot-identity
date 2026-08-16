@@ -117,7 +117,9 @@ to run without identity policy. Adapters enter an explicit **uninstalled**
 mode (ENG-0128): they refuse `git commit`, `git push`, and GitHub writes
 as the human. An unmanaged session may publish only when the actor is in
 `AGENT_BOT_UNMANAGED_AUTHORS` (default `ai9d` when unset): git author for
-commits, `gh` login for pushes and `gh` writes. Reads and uncommitted
+commits (`--author` or `GIT_AUTHOR_*`, never committer identity; amend and
+reuse require `--reset-author` or an explicit `--author`), and the
+authenticated `gh` login for pushes and `gh` writes. Reads and uncommitted
 working-tree edits proceed. Cursor blocking events still print `{}` on
 allow so `failClosed` does not treat silence as a denial.
 

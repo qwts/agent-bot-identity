@@ -200,6 +200,62 @@ function gitCommitAuthorOverride(argv) {
   return seenCommit ? author : "";
 }
 
+function gitCommitReusesAuthor(argv) {
+  let i = skipEnvAndWrappers(argv);
+  const bin = argv[i] ?? "";
+  if (bin !== "git" && !bin.endsWith("/git")) return false;
+  i += 1;
+  const takesValue = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"]);
+  let seenCommit = false;
+  let reuses = false;
+  let reset = false;
+  let hasAuthor = false;
+  while (i < argv.length) {
+    const arg = argv[i];
+    if (!seenCommit) {
+      if (arg === "commit") {
+        seenCommit = true;
+        i += 1;
+        continue;
+      }
+      if (arg === "push") return false;
+      if (takesValue.has(arg)) {
+        i += 2;
+        continue;
+      }
+      if (
+        arg.startsWith("--git-dir=")
+        || arg.startsWith("--work-tree=")
+        || arg.startsWith("--namespace=")
+        || arg.startsWith("--config-env=")
+      ) {
+        i += 1;
+        continue;
+      }
+      if (arg.startsWith("-")) {
+        i += 1;
+        continue;
+      }
+      return false;
+    }
+    if (arg === "--amend" || arg === "-C" || arg === "--reuse-message" || arg === "-c" || arg === "--reedit-message") {
+      reuses = true;
+    }
+    if (arg.startsWith("--reuse-message=") || arg.startsWith("--reedit-message=")) reuses = true;
+    if (arg === "--reset-author") reset = true;
+    if (arg === "--author" || arg.startsWith("--author=")) hasAuthor = true;
+    if (
+      (arg === "-C" || arg === "--reuse-message" || arg === "-c" || arg === "--reedit-message" || arg === "--author")
+      && argv[i + 1] !== undefined
+    ) {
+      i += 2;
+      continue;
+    }
+    i += 1;
+  }
+  return seenCommit && reuses && !reset && !hasAuthor;
+}
+
 function extractDollarParen(text, start) {
   let depth = 1;
   let quote = null;
@@ -314,17 +370,19 @@ function identMatches(value, authors) {
 }
 
 function resolveGitAuthor(env = {}) {
-  const name = env.GIT_AUTHOR_NAME || env.GIT_COMMITTER_NAME || "";
-  const email = env.GIT_AUTHOR_EMAIL || env.GIT_COMMITTER_EMAIL || "";
+  const name = env.GIT_AUTHOR_NAME || "";
+  const email = env.GIT_AUTHOR_EMAIL || "";
   if (name || email) return { name, email };
   try {
     const nameRun = spawnSync("git", ["config", "--get", "user.name"], {
       encoding: "utf8",
       timeout: 2000,
+      env,
     });
     const emailRun = spawnSync("git", ["config", "--get", "user.email"], {
       encoding: "utf8",
       timeout: 2000,
+      env,
     });
     return {
       name: (nameRun.stdout || "").trim(),
@@ -336,12 +394,11 @@ function resolveGitAuthor(env = {}) {
 }
 
 function resolveGhLogin(env = {}) {
-  const fromEnv = env.GH_USER || env.GITHUB_USER || env.GITHUB_ACTOR || "";
-  if (fromEnv) return String(fromEnv).trim().toLowerCase();
   try {
     const run = spawnSync("gh", ["api", "user", "--jq", ".login"], {
       encoding: "utf8",
       timeout: 4000,
+      env,
     });
     if (run.status === 0) return (run.stdout || "").trim().toLowerCase();
   } catch {}
@@ -350,6 +407,7 @@ function resolveGhLogin(env = {}) {
 
 function isUnmanagedGitAuthor(env, authors, command) {
   const argv = tokenizeCommand(command);
+  if (gitCommitReusesAuthor(argv)) return false;
   const merged = Object.assign({}, env, commandEnvAssignments(argv));
   const override = gitCommitAuthorOverride(argv);
   const ident = override ? parseAuthorIdent(override) : resolveGitAuthor(merged);
@@ -542,6 +600,7 @@ const DETECT_SOURCE = [
   commandEnvAssignments,
   parseAuthorIdent,
   gitCommitAuthorOverride,
+  gitCommitReusesAuthor,
   extractDollarParen,
   commandSubstitutions,
   gitPublishSubcommand,

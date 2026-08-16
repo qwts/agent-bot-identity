@@ -23,7 +23,7 @@ if [ -x "$AGENT_HOOK" ]; then
   "$AGENT_HOOK" --dialect git --event pre-push <"$INPUT" || exit $?
 elif [ -n "$AGENT" ]; then
   AUTHORS="${AGENT_BOT_UNMANAGED_AUTHORS-ai9d}"
-  LOGIN="${GH_USER:-${GITHUB_USER:-${GITHUB_ACTOR:-}}}"
+  LOGIN=$(gh api user --jq .login 2>/dev/null || true)
   LOGIN=$(printf '%s' "$LOGIN" | tr '[:upper:]' '[:lower:]')
   ALLOWED=""
   IFS=','; for part in $AUTHORS; do

@@ -345,7 +345,7 @@ function identityClassCheck({ home, env, access }) {
       id: 'identity.class',
       status: 'warning',
       code: 'identity-uninstalled',
-      message: 'uninstalled or ephemeral session: committed hooks refuse human-attributed commits and GitHub writes',
+      message: 'uninstalled or ephemeral session: committed hooks refuse human-attributed commits and GitHub writes unless the actor is an unmanaged allowlisted author',
       action: 'on a host you will keep, run the source checkout bootstrap',
       evidence: {
         class: 'uninstalled',
