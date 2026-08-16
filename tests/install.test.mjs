@@ -4,11 +4,12 @@ import {
   mkdirSync, mkdtempSync, readFileSync, readlinkSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
-  agentHookFastPath, ensureExecutablePath, installAgentBot, installAgentHook, installExecutable,
-  installHookWrappers, installationPaths,
+  agentHookFastPath, ensureExecutablePath, homebrewStableEntrypoint, installAgentBot,
+  installAgentHook, installExecutable, installHookWrappers, installationPaths,
+  isHomebrewAgentBotPath, isManagedExecutable,
 } from '../install.mjs';
 import { installGhShim } from '../install-gh-shim.mjs';
 import { GIT_HOOK_NAMES } from '../git-hooks.mjs';
@@ -161,6 +162,49 @@ test('installExecutable refuses a foreign same-basename symlink', () => {
 
   assert.throws(() => installExecutable({ home, entrypoint }), /not an agent-bot symlink/);
   assert.equal(readlinkSync(installed), foreign);
+});
+
+test('installExecutable pins a Homebrew keg to the stable opt wrapper', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-install-'));
+  const prefix = mkdtempSync(join(tmpdir(), 'agent-bot-prefix-'));
+  const cellar = join(prefix, 'Cellar', 'agent-bot', '0.2.0', 'libexec');
+  const optBin = join(prefix, 'opt', 'agent-bot', 'bin');
+  mkdirSync(cellar, { recursive: true });
+  mkdirSync(optBin, { recursive: true });
+  const entrypoint = join(cellar, 'agent-bot');
+  const stable = join(optBin, 'agent-bot');
+  writeFileSync(entrypoint, '#!/bin/sh\n');
+  writeFileSync(stable, '#!/bin/sh\n');
+
+  assert.equal(homebrewStableEntrypoint(entrypoint), stable);
+  const installed = installExecutable({ home, entrypoint });
+  assert.equal(readlinkSync(installed), stable);
+  assert.equal(installExecutable({ home, entrypoint }), installed);
+});
+
+test('installExecutable replaces a stale Homebrew Cellar keg symlink', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-install-'));
+  const prefix = mkdtempSync(join(tmpdir(), 'agent-bot-prefix-'));
+  const oldCellar = join(prefix, 'Cellar', 'agent-bot', '0.2.0', 'libexec', 'agent-bot');
+  const newCellar = join(prefix, 'Cellar', 'agent-bot', '0.2.1', 'libexec', 'agent-bot');
+  const stable = join(prefix, 'opt', 'agent-bot', 'bin', 'agent-bot');
+  mkdirSync(dirname(oldCellar), { recursive: true });
+  mkdirSync(dirname(newCellar), { recursive: true });
+  mkdirSync(dirname(stable), { recursive: true });
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  writeFileSync(oldCellar, '#!/bin/sh\n');
+  writeFileSync(newCellar, '#!/bin/sh\n');
+  writeFileSync(stable, '#!/bin/sh\n');
+  const installed = join(home, '.local', 'bin', 'agent-bot');
+  symlinkSync(oldCellar, installed);
+
+  assert.equal(isHomebrewAgentBotPath(oldCellar), true);
+  assert.equal(
+    isManagedExecutable(installed, { isSymbolicLink: () => true }, newCellar),
+    true,
+  );
+  assert.equal(installExecutable({ home, entrypoint: newCellar }), installed);
+  assert.equal(readlinkSync(installed), stable);
 });
 
 test('installExecutable refuses a foreign executable', () => {

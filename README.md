@@ -36,9 +36,41 @@ organization-owned inputs and their acquisition procedure are governed from
 [`playbook-engineering`](https://github.com/qwts/playbook-engineering/blob/main/docs/reference/agent-bot-operations.md);
 if that procedure does not yet publish compatible input, bootstrap must stop.
 
+## Machine install (Homebrew)
+
+This repository is a Homebrew self-tap. Operators install the runtime from
+the tap, then wire machine state with the installed CLI — do not require a
+durable git checkout:
+
+```bash
+brew tap qwts/agent-bot-identity https://github.com/qwts/agent-bot-identity.git
+brew install agent-bot
+```
+
+Newer Homebrew may require `brew trust qwts/agent-bot-identity` after the tap.
+
+Homebrew places `agent-bot` on PATH under the prefix. It does **not** write
+`~/.local/bin`, Git `core.hooksPath`, or shell startup files. Run machine
+wiring next:
+
+```bash
+agent-bot bootstrap --profile /path/to/organization-profile.json --with-gh-shim --machine-only
+```
+
+If `~/.local/bin/agent-bot` already points at a git checkout, move that
+symlink aside first (`rm ~/.local/bin/agent-bot`). The installer refuses to
+replace a symlink that does not already point at this packaged tree.
+Bootstrap records Homebrew's stable `opt` wrapper, not a versioned Cellar
+path, so a later `brew upgrade` does not leave hooks dangling.
+
+Development and first-time source installs still clone this repository and
+use `./agent-bot bootstrap` as documented below.
+
 ## Cold start: “install agent bot identities”
 
-From a fresh clone, begin with the source launcher. Do not require an installed
+When the stable CLI is already installed from Homebrew, skip the source
+launcher and use `agent-bot bootstrap` as in Machine install. From a fresh
+clone, begin with the source launcher. Do not require an installed
 CLI to install itself, and do not configure only the harness currently running.
 For a governed organization, first obtain its explicit secret-free versioned
 profile and shared-tooling procedure. Never search for or assume
