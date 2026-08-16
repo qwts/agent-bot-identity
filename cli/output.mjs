@@ -14,7 +14,7 @@ Commands:
   space              Manage durable per-soul Agent Spaces
   population         List the workstation-local census of souls
   principal          Enroll and authorize messaging principals (owner ceremony)
-  daemon             Run or control the loopback daemon over the same stores
+  daemon             Run, supervise, or disable the loopback identity daemon
   mcp                Serve the agent-bot MCP tools (bind, whoami, population)
   web                Pair a browser with the daemon's private web client
   telegram           Long-poll Telegram as a thin transport over the daemon

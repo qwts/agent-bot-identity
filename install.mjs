@@ -19,6 +19,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensurePathLine, zshStartupDir } from './shell-path.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
+import { ensureDaemonSupervisor } from './daemon-supervisor.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const ENTRYPOINT = join(ROOT, 'agent-bot');
@@ -245,13 +246,15 @@ export function isAgentBotHooksPath(path, home = homedir()) {
   );
 }
 
-export function installAgentBot({
+export async function installAgentBot({
   home = homedir(),
+  env = process.env,
   run = (args) => execFileSync('git', args, { encoding: 'utf8' }).trim(),
   installCli = installExecutable,
   installAgentHooks = installAgentHook,
   installHooks = installHookWrappers,
   installPath = ensureExecutablePath,
+  ensureSupervisor = ensureDaemonSupervisor,
 } = {}) {
   const executable = installCli({ home });
   const agentHook = installAgentHooks({ home });
@@ -277,13 +280,14 @@ export function installAgentBot({
     }
   }
   run(['config', '--global', 'core.hooksPath', hooksPath]);
-  return { executable, agentHook, hooksPath, previous, chainedHooksPath, pathRegistration };
+  const supervisor = await ensureSupervisor({ home, env, executable });
+  return { executable, agentHook, hooksPath, previous, chainedHooksPath, pathRegistration, supervisor };
 }
 
-export function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2)) {
   const unknown = argv.filter((arg) => arg !== '--with-gh-shim');
   if (unknown.length) throw new Error(`unknown option: ${unknown[0]}`);
-  const result = installAgentBot();
+  const result = await installAgentBot();
   process.stdout.write(`agent-bot -> ${result.executable}\n`);
   process.stdout.write(`core.hooksPath -> ${result.hooksPath}\n`);
   if (result.pathRegistration.updated) {
@@ -292,6 +296,11 @@ export function main(argv = process.argv.slice(2)) {
   if (result.chainedHooksPath) {
     process.stdout.write(`chained hooks -> ${result.chainedHooksPath}\n`);
   }
+  if (result.supervisor?.applied) {
+    process.stdout.write(`daemon supervisor -> ${result.supervisor.unitPath}\n`);
+  } else if (result.supervisor?.reason === 'unsupported-platform') {
+    process.stdout.write(`daemon supervisor skipped (${result.supervisor.platform})\n`);
+  }
   if (argv.includes('--with-gh-shim')) {
     execFileSync(result.executable, ['install-gh-shim'], { stdio: 'inherit' });
   }
@@ -299,10 +308,8 @@ export function main(argv = process.argv.slice(2)) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  try {
-    main();
-  } catch (error) {
+  main().catch((error) => {
     process.stderr.write(`install: ${error.message}\n`);
     process.exit(1);
-  }
+  });
 }

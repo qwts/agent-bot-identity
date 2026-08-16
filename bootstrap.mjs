@@ -365,7 +365,7 @@ export async function bootstrap(options, {
 
     if (!operationFailure) {
       try {
-        const installed = installRuntime({ home });
+        const installed = await installRuntime({ home, env });
         executable = installed.executable;
       } catch {
         fail(

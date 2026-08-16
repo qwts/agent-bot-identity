@@ -114,7 +114,7 @@ export function buildControlledPath(root, { node = true } = {}) {
   symlinkSync(realExecutable('git'), join(bin, 'git'));
   if (node) symlinkSync(process.execPath, join(bin, 'node'));
   writeFileSync(join(bin, 'pass-cli'), FAKE_PASS_CLI, { mode: 0o755 });
-  for (const name of ['security', 'gh', 'npm', 'pass']) {
+  for (const name of ['security', 'gh', 'npm', 'pass', 'launchctl', 'systemctl']) {
     writeFileSync(join(bin, name), guardedExecutable(name), { mode: 0o755 });
   }
   return {
@@ -161,6 +161,7 @@ export function createColdHome({ prefix = 'agent-bot-cold-', node = true } = {})
     HOME: home,
     GIT_CONFIG_GLOBAL: globalGitConfig,
     AGENT_BOT_STATE_HOME: stateDir,
+    AGENT_BOT_SUPERVISOR_SKIP_LOAD: '1',
   });
 
   return {

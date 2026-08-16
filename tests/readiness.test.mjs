@@ -60,6 +60,21 @@ function machineDependencies(home, { shim = false, inspectCredentials } = {}) {
       throw Object.assign(new Error('unexpected git call'), { status: 1 });
     },
     load: () => ({ apps: { codex: 'org-codex-agent', claude: 'org-claude-agent' } }),
+    inspectDaemonSupervisor: () => ({
+      supported: true,
+      applied: true,
+      loaded: true,
+      platform: 'darwin',
+      kind: 'launchd',
+      unitPath: join(home, 'Library', 'LaunchAgents', 'dev.qwts.agent-bot.daemon.plist'),
+      label: 'dev.qwts.agent-bot.daemon',
+    }),
+    probeDaemon: async () => ({
+      running: true,
+      pid: 4242,
+      port: 50003,
+      startedAt: '2026-08-16T00:00:00.000Z',
+    }),
     inspectCredentials: inspectCredentials ?? (async ({ slugs }) => slugs.map((slug, index) => ({
       slug,
       local: { status: 'ready', restored: [] },
@@ -593,6 +608,42 @@ test('schema requirements and human output expose only the first action', async 
   const human = renderReadinessReport(report);
   assert.equal((human.match(/fix:/g) ?? []).length, 1);
   assert.match(human, /fix: repair first credential/);
+});
+
+test('machine readiness fails when the supervisor is missing or the daemon is down', async () => {
+  const home = tempRoot();
+  const missing = await collectReadiness({
+    command: 'doctor',
+    scope: 'machine',
+    ...machineDependencies(home),
+    inspectDaemonSupervisor: () => ({
+      supported: true,
+      applied: false,
+      loaded: false,
+      platform: 'darwin',
+      kind: 'launchd',
+    }),
+    probeDaemon: async () => ({ running: false, reason: 'no daemon state file' }),
+  });
+  assert.equal(missing.ready, false);
+  assert.equal(missing.machine.checks.find(({ id }) => id === 'daemon.supervisor').code, 'supervisor-not-applied');
+  assert.equal(missing.machine.checks.find(({ id }) => id === 'daemon.health').code, 'daemon-not-running');
+  assert.doesNotMatch(JSON.stringify(missing), /token|Bearer /);
+
+  const unsupported = await collectReadiness({
+    command: 'doctor',
+    scope: 'machine',
+    ...machineDependencies(home),
+    inspectDaemonSupervisor: () => ({
+      supported: false,
+      applied: false,
+      loaded: false,
+      platform: 'win32',
+      kind: null,
+    }),
+  });
+  assert.equal(unsupported.machine.checks.find(({ id }) => id === 'daemon.supervisor').status, 'warning');
+  assert.equal(unsupported.ready, true);
 });
 
 test('doctor JSON mode emits only the versioned report', async () => {
