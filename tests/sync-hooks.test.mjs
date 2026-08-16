@@ -44,6 +44,51 @@ test('regeneration replaces only marked entries and preserves foreign configurat
   assert.equal(JSON.stringify(parsed).includes('old command'), false);
 });
 
+test('existing hook event key order is preserved when a foreign entry sits mid-file', () => {
+  const row = DIALECTS.find((candidate) => candidate.key === 'claude');
+  const worktree = {
+    hooks: [{ type: 'command', command: 'agent-bot claude-worktree-create', timeout: 180 }],
+  };
+  const guard = {
+    matcher: 'Bash',
+    hooks: [{ type: 'command', command: 'foreign-guard' }],
+  };
+  const managed = {
+    hooks: [{
+      type: 'command',
+      command: `stale # ${MANAGED_MARKER}`,
+    }],
+  };
+  const current = JSON.stringify({
+    $schema: 'https://json.schemastore.org/claude-code-settings.json',
+    hooks: {
+      WorktreeCreate: [worktree],
+      SessionStart: [managed],
+      SessionEnd: [managed],
+      UserPromptSubmit: [managed],
+      PreToolUse: [guard, managed],
+      PostToolUse: [managed],
+      Stop: [managed],
+    },
+  });
+  const rendered = renderConfig(row, current);
+  const parsed = JSON.parse(rendered);
+
+  assert.deepEqual(Object.keys(parsed), ['$schema', 'hooks']);
+  assert.deepEqual(Object.keys(parsed.hooks), [
+    'WorktreeCreate',
+    'SessionStart',
+    'SessionEnd',
+    'UserPromptSubmit',
+    'PreToolUse',
+    'PostToolUse',
+    'Stop',
+  ]);
+  assert.deepEqual(parsed.hooks.WorktreeCreate, [worktree]);
+  assert.deepEqual(parsed.hooks.PreToolUse[0], guard);
+  assert.equal(renderConfig(row, rendered), rendered, 'generation must stay byte-stable');
+});
+
 test('Cursor blocking events are generated fail-closed', () => {
   const row = DIALECTS.find((candidate) => candidate.key === 'cursor');
   const config = JSON.parse(renderConfig(row));

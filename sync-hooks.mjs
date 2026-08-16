@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 // Generate the thin vendor adapters for the vendor-neutral agent-hook runner.
-// A generated entry is identified only by MANAGED_MARKER; every foreign entry
-// and every unrelated top-level setting survives regeneration.
+// A generated entry is identified only by MANAGED_MARKER; every foreign entry,
+// every unrelated top-level setting, and the existing hook event key order
+// survive regeneration.
 
 import process from 'node:process';
 import {
@@ -103,15 +104,19 @@ export function renderConfig(row, current = '{}') {
   const hooks = { ...(config.hooks ?? {}) };
   for (const [event, entries] of Object.entries(hooks)) {
     if (!Array.isArray(entries)) throw new Error(`${row.file}: hooks.${event} must be an array`);
-    const foreign = entries.filter((entry) => !isManaged(entry));
-    if (foreign.length) hooks[event] = foreign;
-    else delete hooks[event];
+    // Keep the key even when every current entry is managed. Deleting it here
+    // would re-append the generated event at the end and reshuffle foreign
+    // keys (WorktreeCreate, agent-guard) relative to SessionStart / PreToolUse.
+    hooks[event] = entries.filter((entry) => !isManaged(entry));
   }
   for (const event of CANONICAL_EVENTS) {
     if (!vendorEvent(row.key, event)) continue;
     const generated = hookEntry(row, event);
     hooks[generated.vendorEvent] ??= [];
     hooks[generated.vendorEvent].push(generated.entry);
+  }
+  for (const [event, entries] of Object.entries(hooks)) {
+    if (!entries.length) delete hooks[event];
   }
   const result = { ...config, hooks };
   if (row.format === 'cursor' || row.format === 'copilot') result.version ??= 1;
