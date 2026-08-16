@@ -22,7 +22,7 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
 export const MANAGED_MARKER = 'agent-bot agent-hook';
 
 function command(dialectKey, event) {
-  return `H="\${AGENT_BOT_HOOK_BIN:-\$HOME/.local/share/agent-bot/agent-hook}"; [ -x "$H" ] && exec "$H" --dialect ${dialectKey} --event ${event}; ${adapterFallback(dialectKey, event)} # ${MANAGED_MARKER}`;
+  return `export AGENT_BOT_UNMANAGED_AUTHORS="\${AGENT_BOT_UNMANAGED_AUTHORS-ai9d}"; H="\${AGENT_BOT_HOOK_BIN:-\$HOME/.local/share/agent-bot/agent-hook}"; [ -x "$H" ] && exec "$H" --dialect ${dialectKey} --event ${event}; ${adapterFallback(dialectKey, event)} # ${MANAGED_MARKER}`;
 }
 
 function timeoutSeconds(dialectKey, event) {

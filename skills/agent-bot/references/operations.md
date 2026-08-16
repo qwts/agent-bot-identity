@@ -26,9 +26,11 @@ the identity for the agent currently running.
 
 An uninstalled or ephemeral session — cloud offload, a fresh host, or this
 checkout opened before bootstrap — is already under identity policy.
-Committed hooks refuse human-attributed commits and GitHub writes; reads and
-uncommitted edits are allowed. `doctor` reports `identity.class` and does
-not install. Publishing as the bot still requires the durable journey below.
+Committed hooks refuse human-attributed commits and GitHub writes unless the
+actor is in `AGENT_BOT_UNMANAGED_AUTHORS` (default `ai9d` when unset); reads
+and uncommitted edits are allowed. `doctor` reports `identity.class` and
+does not install. Publishing as the bot still requires the durable journey
+below.
 
 1. Determine who owns organization policy. For `qwts`, read the canonical
    [agent bot organization operations](https://github.com/qwts/playbook-engineering/blob/main/docs/reference/agent-bot-operations.md)

@@ -756,6 +756,8 @@ test('identity.class is durable when the installed hook is executable and a warn
   assert.equal(uninstalledClass.status, 'warning');
   assert.equal(uninstalledClass.code, 'identity-uninstalled');
   assert.equal(uninstalledClass.evidence.class, 'uninstalled');
+  assert.deepEqual(uninstalledClass.evidence.unmanaged_authors, ['ai9d']);
+  assert.match(uninstalledClass.message, /unmanaged allowlisted author/);
   assert.notEqual(uninstalled.first_actionable_failure?.check_id, 'identity.class');
   assert.doesNotMatch(JSON.stringify(uninstalledClass), /token|BEGIN |passphrase/);
 });

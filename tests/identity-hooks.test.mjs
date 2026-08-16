@@ -127,10 +127,11 @@ test('pre-commit recognizes explicit App and per-harness agent markers', () => {
     ['copilot-agent', { COPILOT_AGENT: '1' }],
     ['devin-agent', { DEVIN_AGENT: '1' }],
     ['windsurf-agent', { WINDSURF_AGENT: '1' }],
+    ['unmanaged-ai9d', { CURSOR_AGENT: '1' }],
   ]) {
     const { repo, git } = fixture(name);
-    git('config', 'user.name', 'Human Developer');
-    git('config', 'user.email', 'human@example.com');
+    git('config', 'user.name', name === 'unmanaged-ai9d' ? 'ai9d' : 'Human Developer');
+    git('config', 'user.email', name === 'unmanaged-ai9d' ? 'ai9d@users.noreply.github.com' : 'human@example.com');
     git('remote', 'add', 'origin', 'https://github.com/example/repo.git');
     // Every marker the guard knows must be stripped, not just the ones that
     // predate this test. Running the suite inside a Cursor or Copilot session

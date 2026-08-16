@@ -74,9 +74,11 @@ clone, begin with the source launcher. Do not require an installed
 CLI to install itself, and do not configure only the harness currently running.
 Opening this checkout before bootstrap, or a cloud / ephemeral session that
 cannot finish install, is the uninstalled class: committed hooks refuse
-human-attributed commits and GitHub writes; reads and uncommitted edits are
-allowed. `doctor` reports `identity.class` and does not install. Publishing
-as the bot still requires the durable-host journey below.
+human-attributed commits and GitHub writes unless the actor is in
+`AGENT_BOT_UNMANAGED_AUTHORS` (default `ai9d` when unset). Reads and
+uncommitted edits are allowed. `doctor` reports `identity.class` and does
+not install. Publishing as the bot still requires the durable-host journey
+below.
 For a governed organization, first obtain its explicit secret-free versioned
 profile and shared-tooling procedure. Never search for or assume
 a local governance checkout; follow its canonical HTTPS guidance instead.
