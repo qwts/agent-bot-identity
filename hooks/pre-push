@@ -22,8 +22,19 @@ AGENT_HOOK="${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}"
 if [ -x "$AGENT_HOOK" ]; then
   "$AGENT_HOOK" --dialect git --event pre-push <"$INPUT" || exit $?
 elif [ -n "$AGENT" ]; then
-  echo "uninstalled identity: refuse human-attributed commit or GitHub write; finish durable bootstrap to publish as the bot" >&2
-  exit 2
+  AUTHORS="${AGENT_BOT_UNMANAGED_AUTHORS-ai9d}"
+  LOGIN="${GH_USER:-${GITHUB_USER:-${GITHUB_ACTOR:-}}}"
+  LOGIN=$(printf '%s' "$LOGIN" | tr '[:upper:]' '[:lower:]')
+  ALLOWED=""
+  IFS=','; for part in $AUTHORS; do
+    part=$(printf '%s' "$part" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+    [ "$part" = "$LOGIN" ] && [ -n "$part" ] && ALLOWED=1
+  done
+  unset IFS
+  if [ -z "$ALLOWED" ]; then
+    echo "uninstalled identity: refuse human-attributed commit or GitHub write; finish durable bootstrap to publish as the bot" >&2
+    exit 2
+  fi
 fi
 
 "$HOOK_DIR/chain-hook" pre-push "$@" <"$INPUT"

@@ -12,8 +12,39 @@ import {
   UNINSTALLED_REASON,
   adapterFallback,
   isHumanAttributedPublish,
+  parseUnmanagedAuthors,
   uninstalledDecision,
 } from '../uninstalled-identity-hook.mjs';
+
+const HUMAN = {
+  GIT_AUTHOR_NAME: 'qwts',
+  GIT_AUTHOR_EMAIL: 'qwts@users.noreply.github.com',
+  GIT_COMMITTER_NAME: 'qwts',
+  GIT_COMMITTER_EMAIL: 'qwts@users.noreply.github.com',
+  GH_USER: 'qwts',
+  GITHUB_USER: 'qwts',
+  GITHUB_ACTOR: 'qwts',
+};
+
+const AI9D = {
+  GIT_AUTHOR_NAME: 'ai9d',
+  GIT_AUTHOR_EMAIL: 'ai9d@users.noreply.github.com',
+  GIT_COMMITTER_NAME: 'ai9d',
+  GIT_COMMITTER_EMAIL: 'ai9d@users.noreply.github.com',
+  GH_USER: 'ai9d',
+  GITHUB_USER: 'ai9d',
+  GITHUB_ACTOR: 'ai9d',
+};
+
+const UNKNOWN = {
+  GIT_AUTHOR_NAME: ' ',
+  GIT_AUTHOR_EMAIL: ' ',
+  GIT_COMMITTER_NAME: ' ',
+  GIT_COMMITTER_EMAIL: ' ',
+  GH_USER: ' ',
+  GITHUB_USER: ' ',
+  GITHUB_ACTOR: ' ',
+};
 
 const DENY = [
   'git commit -m "wip"',
@@ -86,6 +117,74 @@ test('publish commands are denied and reads or uncommitted edits are allowed', (
   }
 });
 
+test('uninstalled allowlist parses comma-separated authors and defaults to deny-all', () => {
+  assert.deepEqual(parseUnmanagedAuthors({}), []);
+  assert.deepEqual(parseUnmanagedAuthors({ AGENT_BOT_UNMANAGED_AUTHORS: '' }), []);
+  assert.deepEqual(parseUnmanagedAuthors({ AGENT_BOT_UNMANAGED_AUTHORS: 'ai9d' }), ['ai9d']);
+  assert.deepEqual(parseUnmanagedAuthors({ AGENT_BOT_UNMANAGED_AUTHORS: 'ai9d, Other' }), ['ai9d', 'other']);
+});
+
+test('uninstalled allowlist permits matching ai9d and refuses everyone else', () => {
+  const allowed = { AGENT_BOT_UNMANAGED_AUTHORS: 'ai9d', ...AI9D };
+  const human = { AGENT_BOT_UNMANAGED_AUTHORS: 'ai9d', ...HUMAN };
+  const missing = { AGENT_BOT_UNMANAGED_AUTHORS: 'ai9d', ...UNKNOWN };
+  const empty = { AGENT_BOT_UNMANAGED_AUTHORS: '', ...AI9D };
+  const emailOnly = {
+    AGENT_BOT_UNMANAGED_AUTHORS: 'ai9d',
+    ...UNKNOWN,
+    GIT_AUTHOR_EMAIL: 'ai9d@users.noreply.github.com',
+  };
+
+  assert.deepEqual(uninstalledDecision({ event: 'pre-commit', env: allowed }), {
+    decision: 'allow',
+    reason: '',
+  });
+  assert.deepEqual(uninstalledDecision({ event: 'pre-push', env: allowed }), {
+    decision: 'allow',
+    reason: '',
+  });
+  assert.deepEqual(uninstalledDecision({
+    event: 'pre-command',
+    command: 'git commit -m x',
+    env: allowed,
+  }), { decision: 'allow', reason: '' });
+  assert.deepEqual(uninstalledDecision({
+    event: 'pre-command',
+    command: 'gh pr create --title x --body y',
+    env: allowed,
+  }), { decision: 'allow', reason: '' });
+  assert.deepEqual(uninstalledDecision({
+    event: 'pre-command',
+    command: 'git commit -m x',
+    env: emailOnly,
+  }), { decision: 'allow', reason: '' });
+
+  assert.equal(uninstalledDecision({ event: 'pre-commit', env: human }).decision, 'deny');
+  assert.equal(uninstalledDecision({ event: 'pre-push', env: human }).decision, 'deny');
+  assert.equal(uninstalledDecision({
+    event: 'pre-command',
+    command: 'git commit -m x',
+    env: human,
+  }).decision, 'deny');
+  assert.equal(uninstalledDecision({
+    event: 'pre-command',
+    command: 'gh pr create --title x',
+    env: human,
+  }).decision, 'deny');
+  assert.equal(uninstalledDecision({
+    event: 'pre-command',
+    command: 'git commit -m x && git push',
+    env: { AGENT_BOT_UNMANAGED_AUTHORS: 'ai9d', ...AI9D, GH_USER: 'qwts', GITHUB_USER: 'qwts', GITHUB_ACTOR: 'qwts' },
+  }).decision, 'deny');
+  assert.equal(uninstalledDecision({ event: 'pre-commit', env: missing }).decision, 'deny');
+  assert.equal(uninstalledDecision({ event: 'pre-push', env: missing }).decision, 'deny');
+  assert.equal(uninstalledDecision({
+    event: 'pre-command',
+    command: 'git commit -m x',
+    env: empty,
+  }).decision, 'deny');
+});
+
 test('uninstalled decisions deny only commit, push, and pre-command publishes', () => {
   assert.deepEqual(uninstalledDecision({ event: 'pre-commit' }), {
     decision: 'deny',
@@ -120,6 +219,7 @@ test('generated adapters on a cold home deny publish and allow file edits, in ev
       const deny = runGenerated(row.key, 'pre-command', {
         home,
         payload: { command: 'git commit -m incident' },
+        env: HUMAN,
       });
       const expectedDeny = encodeDecision({
         dialectKey: row.key,
@@ -154,10 +254,52 @@ test('generated adapters on a cold home deny publish and allow file edits, in ev
 
     const gitCommit = spawnSync('sh', ['-c', adapterFallback('git', 'pre-commit')], {
       encoding: 'utf8',
-      env: coldEnv(home),
+      env: coldEnv(home, { AGENT_BOT_UNMANAGED_AUTHORS: '', ...HUMAN }),
     });
     assert.equal(gitCommit.status, 2);
     assert.match(gitCommit.stderr, /uninstalled identity/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('generated adapters allow unmanaged publish only as ai9d', () => {
+  const home = mkdtempSync(join(tmpdir(), 'uninstalled-ai9d-'));
+  try {
+    for (const row of DIALECTS.filter((candidate) => candidate.file)) {
+      const allow = runGenerated(row.key, 'pre-command', {
+        home,
+        payload: { command: 'git commit -m ship' },
+        env: AI9D,
+      });
+      const expectedAllow = encodeDecision({
+        dialectKey: row.key,
+        event: 'pre-command',
+        decision: 'allow',
+      });
+      assert.equal(allow.status, expectedAllow.exitCode, `${row.key} ai9d commit exit`);
+      assert.equal(allow.stdout, expectedAllow.stdout, `${row.key} ai9d commit stdout`);
+
+      const push = runGenerated(row.key, 'pre-command', {
+        home,
+        payload: { command: 'gh pr create --title x --body y' },
+        env: AI9D,
+      });
+      assert.equal(push.status, expectedAllow.exitCode, `${row.key} ai9d gh write exit`);
+
+      const human = runGenerated(row.key, 'pre-command', {
+        home,
+        payload: { command: 'git commit -m ship' },
+        env: HUMAN,
+      });
+      const expectedDeny = encodeDecision({
+        dialectKey: row.key,
+        event: 'pre-command',
+        decision: 'deny',
+        reason: UNINSTALLED_REASON,
+      });
+      assert.equal(human.status, expectedDeny.exitCode, `${row.key} human commit exit`);
+    }
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -205,6 +347,22 @@ test('source pre-push denies an agent when the installed hook is missing', () =>
     });
     assert.equal(agent.status, 2);
     assert.match(agent.stderr, /uninstalled identity/);
+
+    const unmanaged = spawnSync(hook, ['origin', 'https://github.com/example/repo.git'], {
+      cwd: repo,
+      input: '',
+      encoding: 'utf8',
+      env: { ...stripped, CURSOR_AGENT: '1', GH_USER: 'ai9d' },
+    });
+    assert.equal(unmanaged.status, 0, unmanaged.stderr);
+
+    const humanActor = spawnSync(hook, ['origin', 'https://github.com/example/repo.git'], {
+      cwd: repo,
+      input: '',
+      encoding: 'utf8',
+      env: { ...stripped, CURSOR_AGENT: '1', GH_USER: 'qwts' },
+    });
+    assert.equal(humanActor.status, 2);
 
     const human = spawnSync(hook, ['origin', 'https://github.com/example/repo.git'], {
       cwd: repo,

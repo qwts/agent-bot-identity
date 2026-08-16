@@ -35,6 +35,7 @@ import {
   territoryHarness,
 } from './resolve-agent.mjs';
 import { credentialHelperCommand } from './setup-worktree.mjs';
+import { parseUnmanagedAuthors } from './uninstalled-identity-hook.mjs';
 
 export const READINESS_SCHEMA_VERSION = 1;
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -346,7 +347,14 @@ function identityClassCheck({ home, env, access }) {
       code: 'identity-uninstalled',
       message: 'uninstalled or ephemeral session: committed hooks refuse human-attributed commits and GitHub writes',
       action: 'on a host you will keep, run the source checkout bootstrap',
-      evidence: { class: 'uninstalled' },
+      evidence: {
+        class: 'uninstalled',
+        unmanaged_authors: parseUnmanagedAuthors({
+          AGENT_BOT_UNMANAGED_AUTHORS: env.AGENT_BOT_UNMANAGED_AUTHORS === undefined
+            ? 'ai9d'
+            : env.AGENT_BOT_UNMANAGED_AUTHORS,
+        }),
+      },
     });
   }
 }
