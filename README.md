@@ -72,6 +72,11 @@ When the stable CLI is already installed from Homebrew, skip the source
 launcher and use `agent-bot bootstrap` as in Machine install. From a fresh
 clone, begin with the source launcher. Do not require an installed
 CLI to install itself, and do not configure only the harness currently running.
+Opening this checkout before bootstrap, or a cloud / ephemeral session that
+cannot finish install, is the uninstalled class: committed hooks refuse
+human-attributed commits and GitHub writes; reads and uncommitted edits are
+allowed. `doctor` reports `identity.class` and does not install. Publishing
+as the bot still requires the durable-host journey below.
 For a governed organization, first obtain its explicit secret-free versioned
 profile and shared-tooling procedure. Never search for or assume
 a local governance checkout; follow its canonical HTTPS guidance instead.

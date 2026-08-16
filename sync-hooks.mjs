@@ -16,12 +16,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { CANONICAL_EVENTS, DIALECTS, isBlocking, vendorEvent } from './hook-dialects.mjs';
+import { adapterFallback } from './uninstalled-identity-hook.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 export const MANAGED_MARKER = 'agent-bot agent-hook';
 
 function command(dialectKey, event) {
-  return `H="\${AGENT_BOT_HOOK_BIN:-\$HOME/.local/share/agent-bot/agent-hook}"; [ -x "$H" ] || exit 0; exec "$H" --dialect ${dialectKey} --event ${event} # ${MANAGED_MARKER}`;
+  return `H="\${AGENT_BOT_HOOK_BIN:-\$HOME/.local/share/agent-bot/agent-hook}"; [ -x "$H" ] && exec "$H" --dialect ${dialectKey} --event ${event}; ${adapterFallback(dialectKey, event)} # ${MANAGED_MARKER}`;
 }
 
 function timeoutSeconds(dialectKey, event) {

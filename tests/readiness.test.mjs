@@ -730,6 +730,36 @@ test('machine readiness fails when the supervisor is missing or the daemon is do
   assert.equal(unsupported.ready, true);
 });
 
+test('identity.class is durable when the installed hook is executable and a warning when it is not', async () => {
+  const home = tempRoot();
+  const durable = await collectReadiness({
+    command: 'doctor',
+    scope: 'machine',
+    ...machineDependencies(home),
+  });
+  const durableClass = durable.machine.checks.find(({ id }) => id === 'identity.class');
+  assert.equal(durableClass.status, 'ready');
+  assert.equal(durableClass.evidence.class, 'durable');
+  assert.equal(durable.ready, true);
+
+  const uninstalled = await collectReadiness({
+    command: 'doctor',
+    scope: 'machine',
+    ...machineDependencies(home),
+    access: (path) => {
+      if (String(path).includes('agent-hook')) {
+        throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      }
+    },
+  });
+  const uninstalledClass = uninstalled.machine.checks.find(({ id }) => id === 'identity.class');
+  assert.equal(uninstalledClass.status, 'warning');
+  assert.equal(uninstalledClass.code, 'identity-uninstalled');
+  assert.equal(uninstalledClass.evidence.class, 'uninstalled');
+  assert.notEqual(uninstalled.first_actionable_failure?.check_id, 'identity.class');
+  assert.doesNotMatch(JSON.stringify(uninstalledClass), /token|BEGIN |passphrase/);
+});
+
 test('doctor JSON mode emits only the versioned report', async () => {
   const report = {
     schema_version: 1,

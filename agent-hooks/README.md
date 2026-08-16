@@ -111,11 +111,19 @@ everywhere; hooks fire more often and the contract stays one contract.
 ## When agent-bot is not installed
 
 The generated configs are committed, so they run for anyone who clones the
-repo. If `agent-bot` is missing they exit 0 and the action proceeds — denying
-every shell command on a machine that never opted into this toolkit would be
-hostile, and the repo has to stay usable without it.
+repo — a cloud offload, a fresh host, or this checkout opened before
+bootstrap. A missing `~/.local/share/agent-bot/agent-hook` is not a license
+to run without identity policy. Adapters enter an explicit **uninstalled**
+mode (ENG-0128): they refuse `git commit`, `git push`, and human-attributed
+GitHub writes (`gh pr create`, and the other write subcommands). Reads and
+uncommitted working-tree edits proceed. Cursor blocking events still print
+`{}` on allow so `failClosed` does not treat silence as a denial.
 
-That is the honest division of labour: this layer is the **fast, informative**
-one, and the git layer (`pre-commit`, `pre-push`) is the one that actually
-holds, because it needs no harness config and cannot be skipped by a harness
-that ignores its hooks. Policy that must hold belongs in both.
+That mode does not require `pass-cli`, a supervisor, or a finished durable
+bootstrap. Publishing as the bot still does. Doctor reports the class as
+`identity.class` (`durable` or `uninstalled`) and does not install or
+migrate.
+
+On a host the owner will keep, finish the durable bootstrap so the installed
+runner takes over. Policy that must hold everywhere still belongs in a
+harness event *and* in `pre-commit` / `pre-push`.

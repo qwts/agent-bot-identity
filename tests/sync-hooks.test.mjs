@@ -89,6 +89,25 @@ test('existing hook event key order is preserved when a foreign entry sits mid-f
   assert.equal(renderConfig(row, rendered), rendered, 'generation must stay byte-stable');
 });
 
+test('generated adapters exec the installed hook or run explicit uninstalled mode', () => {
+  for (const row of DIALECTS.filter((candidate) => candidate.file)) {
+    const config = JSON.parse(renderConfig(row));
+    for (const event of CANONICAL_EVENTS) {
+      const mapped = vendorEvent(row.key, event);
+      if (!mapped) continue;
+      const entry = config.hooks[mapped.event].find((candidate) => (
+        JSON.stringify(candidate).includes(`${row.key} --event ${event}`)
+      ));
+      const command = entry.command ?? entry.bash ?? entry.hooks?.[0]?.command ?? '';
+      assert.equal(command.includes('[ -x "$H" ] || exit 0'), false, `${row.key}/${event} still fails open`);
+      assert.match(command, /\[ -x "\$H" \] && exec "\$H"/);
+      if (event === 'pre-command') {
+        assert.match(command, /isHumanAttributedPublish/);
+      }
+    }
+  }
+});
+
 test('Cursor blocking events are generated fail-closed', () => {
   const row = DIALECTS.find((candidate) => candidate.key === 'cursor');
   const config = JSON.parse(renderConfig(row));

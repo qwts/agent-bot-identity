@@ -329,6 +329,28 @@ function spacesHomeCheck({ home, env, config, inspectCutover = inspectSpacesCuto
   });
 }
 
+function identityClassCheck({ home, env, access }) {
+  const hook = env.AGENT_BOT_HOOK_BIN || installationPaths(home).agentHook;
+  try {
+    access(hook, constants.X_OK);
+    return readinessCheck({
+      id: 'identity.class',
+      status: 'ready',
+      message: 'durable host: installed identity hook is present',
+      evidence: { class: 'durable' },
+    });
+  } catch {
+    return readinessCheck({
+      id: 'identity.class',
+      status: 'warning',
+      code: 'identity-uninstalled',
+      message: 'uninstalled or ephemeral session: committed hooks refuse human-attributed commits and GitHub writes',
+      action: 'on a host you will keep, run the source checkout bootstrap',
+      evidence: { class: 'uninstalled' },
+    });
+  }
+}
+
 function installedCliCheck({ home, lstat, readlink }) {
   const paths = installationPaths(home);
   let stat;
@@ -1033,6 +1055,7 @@ export async function collectReadiness({
     machineChecks.push(nodeCheck(nodeVersion));
     machineChecks.push(gitCheck({ cwd, env, git }));
     machineChecks.push(installedCliCheck({ home, lstat, readlink }));
+    machineChecks.push(identityClassCheck({ home, env, access }));
     machineChecks.push(shellPathCheck({ home, env, spawn }));
     try {
       config = load({ home, env });

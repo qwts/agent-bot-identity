@@ -72,7 +72,7 @@ if [ -n "$AGENT" ]; then
   esac
 fi
 
-AGENT_HOOK="$HOME/.local/share/agent-bot/agent-hook"
+AGENT_HOOK="${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}"
 if [ -x "$AGENT_HOOK" ]; then
   "$AGENT_HOOK" --dialect git --event pre-commit || exit $?
 fi
