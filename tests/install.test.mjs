@@ -306,6 +306,7 @@ test('installer chains displaced hooks and replaces legacy agent-bot hooks', asy
     installCli: () => installationPaths(home).executable,
     installHooks: () => installationPaths(home).hooksDir,
     ensureSupervisor: async () => ({ applied: true, loaded: true, unitPath: 'test' }),
+    ensureCutover: () => ({ applied: false, reason: 'nothing-to-move' }),
   });
   assert.equal(result.chainedHooksPath, '/custom/husky-hooks');
   assert.equal(values.get('agentBot.chainedHooksPath'), '/custom/husky-hooks');
@@ -320,6 +321,7 @@ test('installer chains displaced hooks and replaces legacy agent-bot hooks', asy
     installCli: () => installationPaths(home).executable,
     installHooks: () => installationPaths(home).hooksDir,
     ensureSupervisor: async () => ({ applied: true, loaded: true, unitPath: 'test' }),
+    ensureCutover: () => ({ applied: false, reason: 'nothing-to-move' }),
   });
   assert.equal(migrated.chainedHooksPath, null);
 });
@@ -344,6 +346,7 @@ test('install writes the supervisor through the injected helper and does not dis
       calls.push(['ensure', options.executable]);
       return { applied: true, loaded: true, unitPath: 'unit', refreshed: true };
     },
+    ensureCutover: () => ({ applied: false, reason: 'nothing-to-move' }),
   });
   const second = await installAgentBot({
     home,
@@ -354,6 +357,7 @@ test('install writes the supervisor through the injected helper and does not dis
       calls.push(['ensure', options.executable]);
       return { applied: true, loaded: true, unitPath: 'unit', refreshed: false };
     },
+    ensureCutover: () => ({ applied: false, reason: 'nothing-to-move' }),
   });
   assert.equal(first.supervisor.loaded, true);
   assert.equal(second.supervisor.loaded, true);
@@ -361,4 +365,31 @@ test('install writes the supervisor through the injected helper and does not dis
     ['ensure', installationPaths(home).executable],
     ['ensure', installationPaths(home).executable],
   ]);
+});
+
+test('install runs the spaces cutover through the injected helper', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-cutover-install-'));
+  const calls = [];
+  const run = (args) => {
+    if (args.includes('--get')) {
+      const error = new Error('unset');
+      error.status = 1;
+      throw error;
+    }
+    return '';
+  };
+  const result = await installAgentBot({
+    home,
+    env: { HOME: home },
+    run,
+    installCli: () => installationPaths(home).executable,
+    installHooks: () => installationPaths(home).hooksDir,
+    ensureSupervisor: async () => ({ applied: true, loaded: true, unitPath: 'unit' }),
+    ensureCutover: (options) => {
+      calls.push({ home: options.home, envHome: options.env.HOME });
+      return { applied: true, from: '/legacy', to: '/dest', moved: 2 };
+    },
+  });
+  assert.deepEqual(result.cutover, { applied: true, from: '/legacy', to: '/dest', moved: 2 });
+  assert.deepEqual(calls, [{ home, envHome: home }]);
 });

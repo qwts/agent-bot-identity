@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import {
   initAgentSpace,
   inspectAgentSpace,
+  legacySpacesHome,
   showAgentSpace,
   spacePath,
   spacesHome,
@@ -69,7 +70,7 @@ after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
-test('space root follows environment, user setting, then XDG and home defaults', () => {
+test('space root follows environment, user setting, then ~/.agent-space', () => {
   assert.equal(
     spacesHome({
       env: { AGENT_BOT_SPACES_HOME: '/override', XDG_DATA_HOME: '/xdg' },
@@ -88,10 +89,18 @@ test('space root follows environment, user setting, then XDG and home defaults',
   );
   assert.equal(
     spacesHome({ env: { XDG_DATA_HOME: '/xdg' }, home: '/home/u', config: {} }),
-    path.join('/xdg', 'agent-bot', 'spaces'),
+    path.join('/home/u', '.agent-space'),
   );
   assert.equal(
     spacesHome({ env: {}, home: '/home/u', config: {} }),
+    path.join('/home/u', '.agent-space'),
+  );
+  assert.equal(
+    legacySpacesHome({ env: { XDG_DATA_HOME: '/xdg' }, home: '/home/u' }),
+    path.join('/xdg', 'agent-bot', 'spaces'),
+  );
+  assert.equal(
+    legacySpacesHome({ env: {}, home: '/home/u' }),
     path.join('/home/u', '.local', 'share', 'agent-bot', 'spaces'),
   );
   assert.equal(

@@ -10,7 +10,9 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { inspectAgentSpace } from './agent-space.mjs';
+import { inspectAgentSpace, resolveSpacesHome } from './agent-space.mjs';
+import { listSouls, populationFile } from './agent-population.mjs';
+import { inspectSpacesCutover } from './spaces-cutover.mjs';
 import { apiBase, loadConfig, slugForHarness } from './config.mjs';
 import { inspectAppCredentials } from './credential-reconciler.mjs';
 import { detectHarness, HARNESSES } from './detect-harness.mjs';
@@ -250,6 +252,69 @@ async function daemonHealthCheck({ home, env, probe, skipLoad }) {
     message: 'identity daemon is not running',
     action: 'run: agent-bot install',
     evidence: { running: false },
+  });
+}
+
+function pathIsInside(root, candidate) {
+  if (typeof candidate !== 'string' || candidate.length === 0) return false;
+  const from = resolve(root);
+  const target = resolve(candidate);
+  return target === from || target.startsWith(`${from}/`) || target.startsWith(`${from}\\`);
+}
+
+function spacesRootCheck({ home, env, config }) {
+  const resolution = resolveSpacesHome({ home, env, config });
+  return readinessCheck({
+    id: 'spaces.root',
+    status: 'ready',
+    message: `Agent Space root ${resolution.root}`,
+    evidence: { root: resolution.root, source: resolution.source },
+  });
+}
+
+function spacesHomeCheck({ home, env, config, inspectCutover = inspectSpacesCutover }) {
+  const inspection = inspectCutover({ home, env, config });
+  if (inspection.conflict) {
+    return readinessCheck({
+      id: 'spaces.home',
+      status: 'failed',
+      code: 'spaces-cutover-conflict',
+      message: 'legacy and default Agent Space roots both hold spaces',
+      action: 'set AGENT_BOT_SPACES_HOME or settings.spacesRoot to the root you want to keep',
+      evidence: { conflict: true },
+    });
+  }
+  const file = populationFile({ home, env });
+  let souls = [];
+  try {
+    souls = listSouls({ file }).filter((soul) => soul.status !== 'retired');
+  } catch {
+    return readinessCheck({
+      id: 'spaces.home',
+      status: 'failed',
+      code: 'spaces-census-unreadable',
+      message: 'the population census could not be read',
+      action: 'inspect population.json and repair it manually; doctor will not modify it',
+    });
+  }
+  const mismatches = souls.filter((soul) => !pathIsInside(inspection.resolvedRoot, soul.spacePath));
+  if (mismatches.length) {
+    return readinessCheck({
+      id: 'spaces.home',
+      status: 'failed',
+      code: 'spaces-census-mismatch',
+      message: 'population census space paths are not under the resolved Agent Space root',
+      action: inspection.override
+        ? 'choose a root explicitly; changing an override does not migrate spaces'
+        : 'run: agent-bot update',
+      evidence: { mismatched: mismatches.length },
+    });
+  }
+  return readinessCheck({
+    id: 'spaces.home',
+    status: 'ready',
+    message: 'Agent Space home agrees with the census',
+    evidence: { root: inspection.resolvedRoot, source: inspection.source },
   });
 }
 
@@ -944,6 +1009,7 @@ export async function collectReadiness({
   inspectCredentials = inspectAppCredentials,
   inspectSpace = inspectAgentSpace,
   inspectDaemonSupervisor = inspectSupervisor,
+  inspectCutover = inspectSpacesCutover,
   probeDaemon = daemonStatus,
 } = {}) {
   const machineChecks = [];
@@ -1004,6 +1070,8 @@ export async function collectReadiness({
       probe: probeDaemon,
       skipLoad: supervisorSkipLoad(env),
     }));
+    machineChecks.push(spacesRootCheck({ home, env, config }));
+    machineChecks.push(spacesHomeCheck({ home, env, config, inspectCutover }));
     machineChecks.push(coverageCheck(now));
     machineChecks.push(ghShimCheck({ home, exists, required: expectedGhShim }));
     machineChecks.push(runtimeSkillCheck({ home, lstat, readlink, access }));

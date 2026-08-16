@@ -159,12 +159,13 @@ test('doctor does not echo an invalid pinned Agent ID', () => {
   assert.doesNotMatch(run.stderr, new RegExp(SECRET));
 });
 
-test('doctor skips Agent Space checks in a primary checkout', () => {
+test('doctor skips worktree Agent Space checks in a primary checkout', () => {
   const fx = fixture();
   git(fx.repo, 'config', 'agentBot.agentId', ID);
   const run = doctor(fx.repo, fx);
   assert.match(run.stdout, /primary checkout/);
-  assert.doesNotMatch(run.stdout, /Agent Space|space\.json/);
+  assert.match(run.stdout, /Agent Space root/);
+  assert.doesNotMatch(run.stdout, /Agent Space marker|space\.json/);
   assert.doesNotMatch(run.stdout, /Agent ID/);
   assert.equal(existsSync(path.join(fx.spaces, ID)), false);
 });

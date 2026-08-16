@@ -150,6 +150,7 @@ Run `agent-bot doctor`, then compare:
 - HTTPS origin and credential helper;
 - installed hooks and chained hooks path;
 - identity daemon supervisor and health;
+- resolved Agent Space root and census agreement;
 - current execution identity.
 
 Repair the earliest divergent layer. Do not patch later commands with a

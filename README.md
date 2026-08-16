@@ -607,7 +607,10 @@ use the `apps` map with the exact slugs instead. `doctor` prints the resolved
 
 Settings precedence is environment override, then user setting, then default.
 `AGENT_BOT_SPACES_HOME` overrides `settings.spacesRoot`; without either, the
-root follows the XDG data default. `AGENT_BOT_DAEMON_PREFERENCE` overrides
+root is `~/.agent-space`. `XDG_DATA_HOME` is not a resolution input — it only
+names the legacy tree for the one-time cutover that `install`, `update`, and
+`bootstrap` run when that tree holds spaces and `~/.agent-space` does not.
+`AGENT_BOT_DAEMON_PREFERENCE` overrides
 `settings.daemonPreference`. The modes select client fallback: direct-only
 (`off`), daemon-with-local-fallback (`prefer`), and daemon-only (`required`).
 `setup-worktree` already enforces all three. The supervisor is installed

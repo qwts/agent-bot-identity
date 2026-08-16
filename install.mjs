@@ -21,6 +21,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensurePathLine, zshStartupDir } from './shell-path.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { ensureDaemonSupervisor } from './daemon-supervisor.mjs';
+import { ensureSpacesCutover } from './spaces-cutover.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const ENTRYPOINT = join(ROOT, 'agent-bot');
@@ -289,6 +290,7 @@ export async function installAgentBot({
   installHooks = installHookWrappers,
   installPath = ensureExecutablePath,
   ensureSupervisor = ensureDaemonSupervisor,
+  ensureCutover = ensureSpacesCutover,
 } = {}) {
   const executable = installCli({ home });
   const agentHook = installAgentHooks({ home });
@@ -315,7 +317,8 @@ export async function installAgentBot({
   }
   run(['config', '--global', 'core.hooksPath', hooksPath]);
   const supervisor = await ensureSupervisor({ home, env, executable });
-  return { executable, agentHook, hooksPath, previous, chainedHooksPath, pathRegistration, supervisor };
+  const cutover = ensureCutover({ home, env });
+  return { executable, agentHook, hooksPath, previous, chainedHooksPath, pathRegistration, supervisor, cutover };
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -334,6 +337,11 @@ export async function main(argv = process.argv.slice(2)) {
     process.stdout.write(`daemon supervisor -> ${result.supervisor.unitPath}\n`);
   } else if (result.supervisor?.reason === 'unsupported-platform') {
     process.stdout.write(`daemon supervisor skipped (${result.supervisor.platform})\n`);
+  }
+  if (result.cutover?.applied) {
+    process.stdout.write(
+      `spaces cutover -> ${result.cutover.from} -> ${result.cutover.to} (${result.cutover.moved} spaces)\n`,
+    );
   }
   if (argv.includes('--with-gh-shim')) {
     execFileSync(result.executable, ['install-gh-shim'], { stdio: 'inherit' });
