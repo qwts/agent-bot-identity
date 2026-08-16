@@ -273,7 +273,18 @@ function spacesRootCheck({ home, env, config }) {
 }
 
 function spacesHomeCheck({ home, env, config, inspectCutover = inspectSpacesCutover }) {
-  const inspection = inspectCutover({ home, env, config });
+  let inspection;
+  try {
+    inspection = inspectCutover({ home, env, config });
+  } catch {
+    return readinessCheck({
+      id: 'spaces.home',
+      status: 'failed',
+      code: 'spaces-cutover-unreadable',
+      message: 'the Agent Space cutover record could not be read',
+      action: 'inspect spaces-cutover.json and repair it manually; doctor will not modify it',
+    });
+  }
   if (inspection.conflict) {
     return readinessCheck({
       id: 'spaces.home',

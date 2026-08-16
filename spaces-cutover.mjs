@@ -124,7 +124,27 @@ function removeIfPresent(target) {
   rmSync(target, { force: true });
 }
 
-function discardPartialDestination(dest) {
+function readStagedIds(inProgressPath) {
+  let raw;
+  try {
+    raw = readFileSync(inProgressPath, 'utf8');
+  } catch {
+    return null;
+  }
+  let record;
+  try {
+    record = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!record || typeof record !== 'object' || Array.isArray(record) || !Array.isArray(record.ids)) {
+    return null;
+  }
+  const ids = record.ids.filter((id) => isAgentId(id));
+  return ids.length === record.ids.length ? ids : null;
+}
+
+function discardPartialDestination(dest, stagedIds) {
   let entries;
   try {
     entries = readdirSync(dest, { withFileTypes: true });
@@ -132,9 +152,10 @@ function discardPartialDestination(dest) {
     if (error.code === 'ENOENT') return;
     throw error;
   }
+  const staged = new Set(stagedIds);
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    if (isAgentId(entry.name) || entry.name.startsWith('.tmp-')) {
+    if (entry.name.startsWith('.tmp-') || staged.has(entry.name)) {
       rmSync(path.join(dest, entry.name), { recursive: true, force: true });
     }
   }
@@ -227,15 +248,18 @@ export function ensureSpacesCutover({
   }
 
   const inProgress = existsSync(paths.inProgressPath);
+  const ids = soulDirectories(legacy);
   if (inProgress) {
-    discardPartialDestination(dest);
+    const destIds = new Set(soulDirectories(dest));
+    const staged = readStagedIds(paths.inProgressPath)
+      ?? ids.filter((id) => destIds.has(id));
+    discardPartialDestination(dest, staged);
   } else if (rootHoldsSpaces(legacy) && rootHoldsSpaces(dest)) {
     throw new Error(
       'Agent Space cutover refused: both the legacy root and ~/.agent-space hold spaces; set AGENT_BOT_SPACES_HOME or settings.spacesRoot to the root you want to keep',
     );
   }
 
-  const ids = soulDirectories(legacy);
   if (ids.length === 0) {
     return report({ applied: false, reason: 'nothing-to-move', from: legacy, to: dest });
   }
@@ -243,6 +267,7 @@ export function ensureSpacesCutover({
   writeJsonFile(paths.inProgressPath, {
     from: legacy,
     to: dest,
+    ids,
     startedAt: now().toISOString(),
   });
 

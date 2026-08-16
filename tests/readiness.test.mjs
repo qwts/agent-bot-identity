@@ -648,6 +648,22 @@ test('machine readiness reports the resolved spaces root and census agreement', 
   assert.equal(conflict.machine.checks.find(({ id }) => id === 'spaces.root').status, 'ready');
 });
 
+test('machine readiness fails closed when the cutover record is unreadable', async () => {
+  const home = tempRoot();
+  const record = join(home, '.local', 'state', 'agent-bot', 'spaces-cutover.json');
+  mkdirSync(dirname(record), { recursive: true });
+  writeFileSync(record, 'not-json\n');
+  const report = await collectReadiness({
+    command: 'doctor',
+    scope: 'machine',
+    ...machineDependencies(home),
+  });
+  assert.equal(report.ready, false);
+  assert.equal(report.machine.checks.find(({ id }) => id === 'spaces.home').code, 'spaces-cutover-unreadable');
+  assert.equal(report.machine.checks.find(({ id }) => id === 'spaces.root').status, 'ready');
+  assert.doesNotMatch(JSON.stringify(report), /token|Bearer /);
+});
+
 test('machine readiness fails when the census is not under the resolved spaces root', async () => {
   const home = tempRoot();
   const census = join(home, '.local', 'state', 'agent-bot', 'population.json');

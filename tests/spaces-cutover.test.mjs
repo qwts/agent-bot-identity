@@ -137,6 +137,28 @@ test('both populated roots without a record fail closed', () => {
   assert.equal(inspectSpacesCutover(ctx).conflict, true);
 });
 
+test('an in-progress retry keeps destination-only spaces and only replaces staged ids', () => {
+  const ctx = hermetic();
+  const legacy = legacySpacesHome(ctx);
+  const dest = defaultSpacesHome(ctx);
+  seedSpace(ID, legacy, { note: 'authoritative' });
+  seedSpace(OTHER_ID, dest, { note: 'keep-dest-only' });
+  seedCensus(ID, legacy, ctx);
+  mkdirSync(path.join(dest, ID), { recursive: true });
+  writeFileSync(path.join(dest, ID, 'note.txt'), 'partial\n');
+  writeFileSync(cutoverStatePaths(ctx).inProgressPath, `${JSON.stringify({
+    from: legacy,
+    to: dest,
+    ids: [ID],
+  })}\n`);
+
+  const result = ensureSpacesCutover(ctx);
+  assert.equal(result.applied, true);
+  assert.equal(readFileSync(path.join(dest, ID, 'note.txt'), 'utf8'), 'authoritative\n');
+  assert.equal(readFileSync(path.join(dest, OTHER_ID, 'note.txt'), 'utf8'), 'keep-dest-only\n');
+  assert.equal(existsSync(path.join(legacy, ID)), false);
+});
+
 test('an in-progress retry discards the partial destination and finishes', () => {
   const ctx = hermetic();
   const legacy = legacySpacesHome(ctx);
