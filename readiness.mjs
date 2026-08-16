@@ -579,6 +579,7 @@ function codexDesktopGhCheck({ home, inspect }) {
     replaced: 'the configured Codex desktop gh interposer was replaced',
     recursive: 'the configured Codex desktop gh backup chain is recursive',
     'legacy-backup': 'the configured Codex desktop gh interposer still uses legacy gh.bak',
+    'legacy-ambiguous': 'the configured Codex desktop gh path has an unowned legacy gh.bak',
     unrecoverable: 'the configured Codex desktop gh interposer is unrecoverable',
   };
   return readinessCheck({

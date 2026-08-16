@@ -107,7 +107,11 @@ function savedGhStatus(path, { lstat, stat, isShim }) {
   const entry = optionalStat(path, lstat);
   if (!entry) return { status: 'missing', path };
   if (entry.isDirectory()) return { status: 'invalid', path, reason: 'directory' };
-  if (isShim(path)) return { status: 'recursive', path };
+  try {
+    if (isShim(path)) return { status: 'recursive', path };
+  } catch {
+    return { status: 'invalid', path, reason: 'unreadable' };
+  }
   if (isExecutableFile(path, stat)) return { status: 'ready', path };
   if (entry.isSymbolicLink()) return { status: 'dangling', path };
   return { status: 'invalid', path, reason: 'not-executable' };
@@ -135,13 +139,25 @@ export function inspectGhInterposer({
   if (target.isDirectory() || !isExecutableFile(ghPath, stat)) {
     return { status: 'unrecoverable', code: 'codex-gh-interposer-unrecoverable', evidence };
   }
-  const targetIsShim = resolvesTo(ghPath, shimPath, realpath) || isShim(ghPath);
+  let targetIsShim;
+  try {
+    targetIsShim = resolvesTo(ghPath, shimPath, realpath) || isShim(ghPath);
+  } catch {
+    return { status: 'unrecoverable', code: 'codex-gh-interposer-unrecoverable', evidence };
+  }
   if (backup.status === 'recursive' || legacy.status === 'recursive') {
     return { status: 'recursive', code: 'codex-gh-interposer-recursive', evidence };
   }
 
   if (targetIsShim) {
-    if (backup.status === 'ready') return { status: 'ready', code: null, evidence };
+    if (backup.status === 'ready') {
+      if (legacy.status === 'missing') return { status: 'ready', code: null, evidence };
+      return {
+        status: 'legacy-ambiguous',
+        code: 'codex-gh-interposer-legacy-ambiguous',
+        evidence: { ...evidence, legacy_backup_path: legacyBackupPath },
+      };
+    }
     if (backup.status === 'missing' && legacy.status === 'ready') {
       return {
         status: 'legacy-backup',
@@ -155,7 +171,14 @@ export function inspectGhInterposer({
   if (backup.status === 'invalid' || legacy.status === 'invalid') {
     return { status: 'unrecoverable', code: 'codex-gh-interposer-unrecoverable', evidence };
   }
-  if (backup.status !== 'missing' || legacy.status !== 'missing') {
+  if (legacy.status !== 'missing') {
+    return {
+      status: 'legacy-ambiguous',
+      code: 'codex-gh-interposer-legacy-ambiguous',
+      evidence: { ...evidence, legacy_backup_path: legacyBackupPath },
+    };
+  }
+  if (backup.status !== 'missing') {
     return { status: 'replaced', code: 'codex-gh-interposer-replaced', evidence };
   }
   return { status: 'unconfigured', code: 'codex-gh-interposer-unconfigured', evidence };
@@ -168,11 +191,22 @@ export function inspectShellGhShim({ home = homedir() } = {}) {
   const shim = optionalStat(shimPath, lstatSync);
   const local = optionalStat(localPath, lstatSync);
   if (!shim || !local) return { status: 'missing', code: 'gh-shim-missing', evidence };
-  if (!isExecutableFile(shimPath, statSync) || !isAgentBotGhShim(shimPath)) {
+  let shimIsManaged;
+  try {
+    shimIsManaged = isExecutableFile(shimPath, statSync) && isAgentBotGhShim(shimPath);
+  } catch {
+    return { status: 'unrecoverable', code: 'gh-shell-shim-unrecoverable', evidence };
+  }
+  if (!shimIsManaged) {
     return { status: 'replaced', code: 'gh-shell-shim-replaced', evidence };
   }
   if (!resolvesTo(localPath, shimPath, realpathSync)) {
-    const localIsShim = isAgentBotGhShim(localPath);
+    let localIsShim;
+    try {
+      localIsShim = isAgentBotGhShim(localPath);
+    } catch {
+      return { status: 'unrecoverable', code: 'gh-shell-shim-unrecoverable', evidence };
+    }
     return {
       status: localIsShim ? 'recursive' : 'replaced',
       code: localIsShim ? 'gh-shell-shim-recursive' : 'gh-shell-shim-replaced',
@@ -240,7 +274,6 @@ export function installGhInterposer({
     path: ghPath, shimPath, lstat, stat, realpath, isShim,
   });
   if (inspection.status === 'ready') {
-    if (optionalStat(legacyBackupPath, lstat)) remove(legacyBackupPath, { force: true });
     return { path: ghPath, backupPath, updated: false };
   }
   if (inspection.status === 'legacy-backup') {
@@ -277,10 +310,10 @@ export function restoreGhInterposer({
   const inspection = inspectGhInterposer({
     path: ghPath, shimPath, lstat, stat, realpath, isShim,
   });
-  if (!['ready', 'legacy-backup'].includes(inspection.status)) {
+  if (!['ready', 'legacy-backup', 'legacy-ambiguous'].includes(inspection.status)) {
     throw new Error(`${ghPath} cannot be restored: ${inspection.code}`);
   }
-  const savedPath = inspection.status === 'ready' ? backupPath : legacyBackupPath;
+  const savedPath = inspection.status === 'legacy-backup' ? legacyBackupPath : backupPath;
   // POSIX rename replaces the managed symlink atomically with the saved
   // executable or symlink, leaving no interval where gh is absent.
   rename(savedPath, ghPath);

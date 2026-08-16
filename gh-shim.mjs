@@ -28,11 +28,12 @@ SELF_DIR=$(dirname -- "$SELF_REAL")
 candidate_is_shim() {
   CANDIDATE_REAL=$(readlink -f -- "$1" 2>/dev/null) || CANDIDATE_REAL="$1"
   [ "$CANDIDATE_REAL" = "$SELF_REAL" ] && return 0
-  grep -Fq ${JSON.stringify(GH_SHIM_MARKER)} "$1" 2>/dev/null
+  /usr/bin/head -c 512 "$1" 2>/dev/null \
+    | /usr/bin/grep -Fq ${JSON.stringify(GH_SHIM_MARKER)}
 }
 REAL="$AGENT_BOT_REAL_GH"
 if [ -n "$REAL" ]; then
-  [ -x "$REAL" ] || {
+  [ -f "$REAL" ] && [ -x "$REAL" ] || {
     echo "agent-bot gh shim: AGENT_BOT_REAL_GH is not executable: $REAL" >&2
     exit 127
   }
@@ -44,7 +45,7 @@ fi
 [ -n "$REAL" ] || for CAND in \
   "$INVOKED_DIR/gh.agent-bot-real" "$SELF_DIR/gh.agent-bot-real" \
   "$INVOKED_DIR/gh.bak" "$SELF_DIR/gh.bak"; do
-  [ -x "$CAND" ] || continue
+  [ -f "$CAND" ] && [ -x "$CAND" ] || continue
   CAND_REAL=$(readlink -f -- "$CAND" 2>/dev/null) || CAND_REAL="$CAND"
   [ "$CAND_REAL" = "$SELF_REAL" ] && continue
   ! candidate_is_shim "$CAND" || {
@@ -57,7 +58,7 @@ OLDIFS=$IFS; IFS=:
 for d in $PATH; do
   [ -n "$REAL" ] && break
   [ "$d" = "$SELF_DIR" ] && continue
-  [ -x "$d/gh" ] || continue
+  [ -f "$d/gh" ] && [ -x "$d/gh" ] || continue
   CAND="$d/gh"
   CAND_REAL=$(readlink -f -- "$CAND" 2>/dev/null) || CAND_REAL="$CAND"
   [ "$CAND_REAL" = "$SELF_REAL" ] && continue
@@ -69,7 +70,7 @@ for d in $PATH; do
 done
 IFS=$OLDIFS
 [ -n "$REAL" ] || for CAND in /opt/homebrew/opt/gh/bin/gh /usr/local/opt/gh/bin/gh; do
-  [ -x "$CAND" ] || continue
+  [ -f "$CAND" ] && [ -x "$CAND" ] || continue
   CAND_REAL=$(readlink -f -- "$CAND" 2>/dev/null) || CAND_REAL="$CAND"
   [ "$CAND_REAL" = "$SELF_REAL" ] && continue
   ! candidate_is_shim "$CAND" || {

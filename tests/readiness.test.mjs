@@ -142,6 +142,7 @@ test('doctor distinguishes shell shim readiness from Codex desktop interposition
     ['missing', 'codex-gh-interposer-missing', 'failed'],
     ['replaced', 'codex-gh-interposer-replaced', 'failed'],
     ['recursive', 'codex-gh-interposer-recursive', 'failed'],
+    ['legacy-ambiguous', 'codex-gh-interposer-legacy-ambiguous', 'failed'],
     ['unrecoverable', 'codex-gh-interposer-unrecoverable', 'failed'],
     ['ready', null, 'ready'],
   ]) {

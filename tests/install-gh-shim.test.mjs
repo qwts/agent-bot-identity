@@ -157,6 +157,16 @@ test('Codex desktop interposition refuses ambiguous or unrecoverable states', ()
     () => installGhInterposer({ path: nonExecutable, shimPath }),
     /codex-gh-interposer-unrecoverable/,
   );
+
+  assert.equal(inspectGhInterposer({
+    path: ghPath,
+    shimPath,
+    isShim: () => {
+      const error = new Error('permission denied');
+      error.code = 'EACCES';
+      throw error;
+    },
+  }).status, 'unrecoverable');
 });
 
 test('Codex desktop restore preserves the shim when its backup is unusable', () => {
@@ -252,6 +262,50 @@ test('legacy gh.bak is migrated only when it is a real executable', () => {
     () => installGhInterposer({ path: ghPath, shimPath }),
     /codex-gh-interposer-recursive/,
   );
+});
+
+test('foreign legacy gh.bak files are preserved and block ambiguous installation', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const bin = join(home, 'bin');
+  const ghPath = join(bin, 'gh');
+  const shimPath = join(home, 'shim');
+  const legacyPath = `${ghPath}.bak`;
+  mkdirSync(bin);
+  writeFileSync(shimPath, `${GH_SHIM_MARKER}\n`, { mode: 0o755 });
+  writeFileSync(ghPath, '#!/bin/sh\nexit 11\n', { mode: 0o755 });
+  writeFileSync(legacyPath, '#!/bin/sh\nexit 12\n', { mode: 0o755 });
+
+  assert.equal(inspectGhInterposer({ path: ghPath, shimPath }).status, 'legacy-ambiguous');
+  assert.throws(
+    () => installGhInterposer({ path: ghPath, shimPath }),
+    /codex-gh-interposer-legacy-ambiguous/,
+  );
+  assert.equal(readFileSync(ghPath, 'utf8'), '#!/bin/sh\nexit 11\n');
+  assert.equal(readFileSync(legacyPath, 'utf8'), '#!/bin/sh\nexit 12\n');
+});
+
+test('restore uses the canonical backup and preserves a foreign legacy gh.bak', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const bin = join(home, 'bin');
+  const ghPath = join(bin, 'gh');
+  const shimPath = join(home, 'shim');
+  const backupPath = `${ghPath}.agent-bot-real`;
+  const legacyPath = `${ghPath}.bak`;
+  mkdirSync(bin);
+  writeFileSync(shimPath, `${GH_SHIM_MARKER}\n`, { mode: 0o755 });
+  symlinkSync(shimPath, ghPath);
+  writeFileSync(backupPath, '#!/bin/sh\nexit 21\n', { mode: 0o755 });
+  writeFileSync(legacyPath, '#!/bin/sh\nexit 22\n', { mode: 0o755 });
+
+  assert.equal(inspectGhInterposer({ path: ghPath, shimPath }).status, 'legacy-ambiguous');
+  assert.throws(
+    () => installGhInterposer({ path: ghPath, shimPath }),
+    /codex-gh-interposer-legacy-ambiguous/,
+  );
+  const restored = restoreGhInterposer({ path: ghPath, shimPath });
+  assert.equal(restored.backupPath, backupPath);
+  assert.equal(readFileSync(ghPath, 'utf8'), '#!/bin/sh\nexit 21\n');
+  assert.equal(readFileSync(legacyPath, 'utf8'), '#!/bin/sh\nexit 22\n');
 });
 
 test('configured desktop inspection distinguishes missing and invalid state', () => {

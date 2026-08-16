@@ -109,7 +109,9 @@ exit ${realExit}
     encoding: 'utf8',
     env: {
       ...cleanEnv,
-      ...(explicitReal ? { AGENT_BOT_REAL_GH: real } : {}),
+      ...(explicitReal ? {
+        AGENT_BOT_REAL_GH: explicitReal === 'directory' ? realDir : real,
+      } : {}),
       GH_TOKEN: token,
       HOME: testHome,
       PATH: [shimDir, realDir, process.env.PATH].filter(Boolean).join(delimiter),
@@ -134,6 +136,8 @@ test('generated shim contains valid shell parameter expansions', () => {
   assert.match(shim, /CODEX_DESKTOP_PARENT[\s\S]+\/Applications\/ChatGPT\.app/);
   assert.match(shim, /TOKEN_REQUIRES_NODE=1[\s\S]+token_tool_available/);
   assert.match(buildGhShim(), /TOKEN_REQUIRES_NODE=""[\s\S]+token_tool_available/);
+  assert.match(shim, /\/usr\/bin\/head -c 512/);
+  assert.match(shim, /\[ -f "\$REAL" \] && \[ -x "\$REAL" \]/);
 });
 
 test('a matching explicit bot token is accepted in bot territory', () => {
@@ -315,6 +319,12 @@ test('recursive sibling, PATH, and explicit real-gh chains fail closed', () => {
     assert.equal(result.status, 127);
     assert.match(result.stderr, /agent-bot shim.*recursive dispatch/);
   }
+});
+
+test('an explicit real-gh directory fails closed', () => {
+  const result = runShim({ explicitReal: 'directory', args: ['--version'] });
+  assert.equal(result.status, 127);
+  assert.match(result.stderr, /AGENT_BOT_REAL_GH is not executable/);
 });
 
 test('human passthrough preserves arguments, environment, output streams, and exit status', () => {
