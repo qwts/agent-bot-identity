@@ -12,8 +12,10 @@ import {
   disableDaemonSupervisor,
   ensureDaemonSupervisor,
   inspectSupervisor,
+  isInactiveSupervisorError,
   renderLaunchdPlist,
   renderSystemdUnit,
+  supervisorEnvironment,
   supervisorPaths,
 } from '../daemon-supervisor.mjs';
 
@@ -29,7 +31,7 @@ test('launchd unit is secret-free, loopback-agnostic, and keep-alive', () => {
   assert.match(plist, /<string>run<\/string>/);
   assert.match(plist, /<key>KeepAlive<\/key>\s*<true\/>/s);
   assert.match(plist, /<key>RunAtLoad<\/key>\s*<true\/>/s);
-  assert.doesNotMatch(plist, /token|BEGIN |127\.0\.0\.1|AGENT_BOT_DAEMON/);
+  assert.doesNotMatch(plist, /token|BEGIN |127\.0\.0\.1|AGENT_BOT_DAEMON_HOST|AGENT_BOT_DAEMON_PORT/);
 });
 
 test('launchd unit XML-escapes the executable path', () => {
@@ -41,8 +43,26 @@ test('systemd unit restarts always and execs daemon run', () => {
   const unit = renderSystemdUnit({ executable: '/home/user/.local/bin/agent-bot' });
   assert.match(unit, /ExecStart=\/home\/user\/\.local\/bin\/agent-bot daemon run/);
   assert.match(unit, /Restart=always/);
-  assert.doesNotMatch(unit, /token|127\.0\.0\.1|Environment=/);
+  assert.doesNotMatch(unit, /token|127\.0\.0\.1|AGENT_BOT_DAEMON_HOST/);
   assert.equal(SYSTEMD_UNIT, 'agent-bot-daemon.service');
+});
+
+test('supervised units carry the resolved daemon state path', () => {
+  const environment = supervisorEnvironment({
+    env: { AGENT_BOT_DAEMON_STATE_PATH: '/tmp/custom-daemon.json' },
+    home: '/u',
+  });
+  assert.equal(environment.AGENT_BOT_DAEMON_STATE_PATH, '/tmp/custom-daemon.json');
+  const plist = renderLaunchdPlist({
+    executable: '/u/.local/bin/agent-bot',
+    environment,
+  });
+  assert.match(plist, /<key>AGENT_BOT_DAEMON_STATE_PATH<\/key>\s*<string>\/tmp\/custom-daemon\.json<\/string>/s);
+  const unit = renderSystemdUnit({
+    executable: '/u/.local/bin/agent-bot',
+    environment,
+  });
+  assert.match(unit, /Environment=AGENT_BOT_DAEMON_STATE_PATH=\/tmp\/custom-daemon\.json/);
 });
 
 test('supervisor paths follow the user-level convention', () => {
@@ -125,10 +145,34 @@ test('a second ensure refreshes the unit to a new entrypoint and keeps it loaded
     },
   };
   await ensureDaemonSupervisor({ ...options, executable: '/opt/old/agent-bot' });
+  const afterFirst = execs.filter((row) => row[0] === 'systemctl' && row.includes('restart')).length;
   await ensureDaemonSupervisor({ ...options, executable: '/opt/new/agent-bot' });
   assert.match(readFileSync(supervisorPaths(home, 'linux').unitPath, 'utf8'), /\/opt\/new\/agent-bot/);
   assert.ok(execs.some((row) => row[0] === 'systemctl' && row.includes('enable')));
+  assert.ok(execs.filter((row) => row[0] === 'systemctl' && row.includes('restart')).length > afterFirst);
   assert.equal(execs.some((row) => row.includes('disable')), false);
+});
+
+test('a no-op update still restarts the already-loaded supervisor', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-supervisor-restart-'));
+  const execs = [];
+  const options = {
+    home,
+    platform: 'linux',
+    env: {},
+    executable: '/opt/agent-bot',
+    admit: () => grantedAdmission(),
+    probe: async () => ({ running: true, pid: 9, port: 1, startedAt: '2026-08-16T00:00:00.000Z' }),
+    stopDetached: async () => {},
+    exec: (command, args) => {
+      execs.push([command, ...args]);
+      if (command === 'systemctl' && args.includes('is-enabled')) return 'enabled\n';
+      return '';
+    },
+  };
+  await ensureDaemonSupervisor(options);
+  await ensureDaemonSupervisor(options);
+  assert.equal(execs.filter((row) => row[0] === 'systemctl' && row.includes('restart')).length, 2);
 });
 
 test('ensure stops a detached daemon before the supervisor takes over', async () => {
@@ -190,4 +234,36 @@ test('disable unloads the unit, removes it, and stops the daemon', async () => {
   assert.ok(commands.some((row) => row[0] === 'launchctl'));
   assert.ok(commands.some((row) => row[0] === 'rm'));
   assert.ok(commands.some((row) => row[0] === 'stop'));
+});
+
+test('inactive supervisor errors are the only unload failures that are ignored', () => {
+  assert.equal(isInactiveSupervisorError({ stderr: 'Unit file agent-bot-daemon.service does not exist.\n' }), true);
+  assert.equal(isInactiveSupervisorError({ message: 'Could not find service' }), true);
+  assert.equal(isInactiveSupervisorError({ stderr: 'Failed to connect to user bus\n' }), false);
+});
+
+test('disable surfaces an unexpected systemd unload failure', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-supervisor-disable-fail-'));
+  const unitPath = supervisorPaths(home, 'linux').unitPath;
+  await assert.rejects(
+    () => disableDaemonSupervisor({
+      home,
+      platform: 'linux',
+      env: {},
+      exists: (path) => path === unitPath,
+      remove: () => { throw new Error('must not remove the unit after a failed unload'); },
+      probe: async () => ({ running: false }),
+      stop: async () => { throw new Error('must not stop after a failed unload'); },
+      exec: (command, args) => {
+        if (command === 'systemctl' && args.includes('disable')) {
+          throw Object.assign(new Error('Failed to connect to user bus'), {
+            stderr: 'Failed to connect to user bus\n',
+            status: 1,
+          });
+        }
+        return '';
+      },
+    }),
+    /Failed to connect to user bus/,
+  );
 });
