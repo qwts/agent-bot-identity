@@ -4,9 +4,26 @@ INPUT=$(mktemp "${TMPDIR:-/tmp}/agent-bot-pre-push.XXXXXX") || exit 1
 trap 'rm -f "$INPUT"' EXIT HUP INT TERM
 cat >"$INPUT"
 
-AGENT_HOOK="$HOME/.local/share/agent-bot/agent-hook"
+# Same agent-only markers as hooks/pre-commit. A missing installed runner is
+# uninstalled mode (ENG-0128): an agent must not push as the human. Ordinary
+# human shells still reach the chained hook.
+AGENT=""
+[ "$CLAUDECODE" = "1" ] && AGENT=1
+[ "$CURSOR_AGENT" = "1" ] && AGENT=1
+[ "$COPILOT_AGENT" = "1" ] && AGENT=1
+[ "$DEVIN_AGENT" = "1" ] && AGENT=1
+[ "$WINDSURF_AGENT" = "1" ] && AGENT=1
+[ -n "$AI_AGENT" ] && AGENT=1
+[ -n "$GH_AGENT_APP" ] && AGENT=1
+[ -n "$CLAUDE_CODE_ENTRYPOINT" ] && AGENT=1
+if [ -z "$AGENT" ]; then env | grep -q '^CODEX_' && AGENT=1; fi
+
+AGENT_HOOK="${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}"
 if [ -x "$AGENT_HOOK" ]; then
   "$AGENT_HOOK" --dialect git --event pre-push <"$INPUT" || exit $?
+elif [ -n "$AGENT" ]; then
+  echo "uninstalled identity: refuse human-attributed commit or GitHub write; finish durable bootstrap to publish as the bot" >&2
+  exit 2
 fi
 
 "$HOOK_DIR/chain-hook" pre-push "$@" <"$INPUT"

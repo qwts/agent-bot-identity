@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFileSync, spawnSync } from 'node:child_process';
 
 import { CANONICAL_EVENTS, DIALECTS, encodeDecision, vendorEvent } from '../hook-dialects.mjs';
 import { renderConfig } from '../sync-hooks.mjs';
@@ -25,7 +26,13 @@ const DENY = [
   'gh issue create --title x',
   'gh api graphql -f query=mutation',
   'gh api repos/qwts/x/pulls -X POST',
+  'gh api repos/o/r/issues/1/comments -f body=x',
   'gh repo create example',
+  'gh workflow run ci.yml',
+  'gh run cancel 123',
+  'sh -c "git push origin HEAD"',
+  'bash -lc "gh pr create --title x --body y"',
+  'echo hi & git push',
 ];
 
 const ALLOW = [
@@ -39,6 +46,9 @@ const ALLOW = [
   'gh issue view 1',
   'gh api user',
   'gh api repos/qwts/x --method GET',
+  'gh api user -f foo=bar -X GET',
+  'gh run list',
+  'gh workflow list',
   'node --test tests/uninstalled-identity-hook.test.mjs',
   'printf "hello" > /tmp/notes.md',
 ];
@@ -166,6 +176,43 @@ test('installed agent-hook still wins over uninstalled mode', () => {
     });
     assert.equal(result.status, 0);
     assert.equal(result.stdout, 'installed-ran');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('source pre-push denies an agent when the installed hook is missing', () => {
+  const home = mkdtempSync(join(tmpdir(), 'uninstalled-pre-push-'));
+  const repo = join(home, 'repo');
+  mkdirSync(repo);
+  execFileSync('git', ['init', '--quiet', '--initial-branch=main'], { cwd: repo });
+  const hook = join(dirname(dirname(fileURLToPath(import.meta.url))), 'hooks', 'pre-push');
+  const AMBIENT = [
+    'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'AI_AGENT', 'GH_AGENT_APP',
+    'CURSOR_AGENT', 'COPILOT_AGENT', 'DEVIN_AGENT', 'WINDSURF_AGENT',
+  ];
+  const stripped = Object.fromEntries(
+    Object.entries(coldEnv(home)).filter(
+      ([key]) => !key.startsWith('CODEX_') && !AMBIENT.includes(key),
+    ),
+  );
+  try {
+    const agent = spawnSync(hook, ['origin', 'https://github.com/example/repo.git'], {
+      cwd: repo,
+      input: '',
+      encoding: 'utf8',
+      env: { ...stripped, CURSOR_AGENT: '1' },
+    });
+    assert.equal(agent.status, 2);
+    assert.match(agent.stderr, /uninstalled identity/);
+
+    const human = spawnSync(hook, ['origin', 'https://github.com/example/repo.git'], {
+      cwd: repo,
+      input: '',
+      encoding: 'utf8',
+      env: stripped,
+    });
+    assert.equal(human.status, 0, human.stderr);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

@@ -81,10 +81,10 @@ function commandSegments(command) {
       current = "";
       continue;
     }
-    if (ch === "&" && text[i + 1] === "&") {
+    if (ch === "&") {
+      if (text[i + 1] === "&") i += 1;
       if (current.trim()) segments.push(current);
       current = "";
-      i += 1;
       continue;
     }
     if (ch === "|") {
@@ -147,6 +147,40 @@ function isGitPublishArgv(argv) {
   return false;
 }
 
+function ghApiWrites(rest) {
+  if (rest.includes("graphql")) return true;
+  let method = "";
+  let hasParams = false;
+  for (let j = 0; j < rest.length; j += 1) {
+    const arg = rest[j];
+    if ((arg === "-X" || arg === "--method") && rest[j + 1]) {
+      method = String(rest[j + 1]).toUpperCase();
+      j += 1;
+      continue;
+    }
+    if (arg.startsWith("--method=")) {
+      method = arg.slice("--method=".length).toUpperCase();
+      continue;
+    }
+    if (arg === "-f" || arg === "--raw-field" || arg === "-F" || arg === "--field" || arg === "--input") {
+      hasParams = true;
+      continue;
+    }
+    if (
+      arg.startsWith("-f")
+      || arg.startsWith("-F")
+      || arg.startsWith("--raw-field=")
+      || arg.startsWith("--field=")
+      || arg.startsWith("--input=")
+    ) {
+      hasParams = true;
+    }
+  }
+  if (method === "GET" || method === "HEAD") return false;
+  if (method) return true;
+  return hasParams;
+}
+
 function isGhWriteArgv(argv) {
   let i = skipEnvAndWrappers(argv);
   const bin = argv[i] ?? "";
@@ -158,38 +192,68 @@ function isGhWriteArgv(argv) {
     else i += 1;
   }
   const cmd = argv[i];
-  const sub = argv[i + 1];
-  if (cmd === "pr") {
-    return new Set([
-      "create", "edit", "merge", "ready", "review", "comment", "close", "reopen", "lock", "unlock",
-    ]).has(sub);
-  }
-  if (cmd === "issue") {
-    return new Set([
-      "create", "edit", "comment", "close", "delete", "pin", "unpin", "transfer", "develop", "reopen",
-    ]).has(sub);
-  }
-  if (cmd === "api") {
-    const rest = argv.slice(i + 1);
-    if (rest.includes("graphql")) return true;
-    for (let j = 0; j < rest.length; j += 1) {
-      if ((rest[j] === "-X" || rest[j] === "--method") && rest[j + 1]) {
-        const method = String(rest[j + 1]).toUpperCase();
-        return method !== "GET" && method !== "HEAD";
-      }
-    }
-    return false;
-  }
-  if (cmd === "repo") return new Set(["create", "delete", "edit", "sync", "archive", "rename"]).has(sub);
-  if (cmd === "release") return new Set(["create", "delete", "edit", "upload"]).has(sub);
-  if (cmd === "gist") return new Set(["create", "edit", "delete"]).has(sub);
-  return false;
+  const sub = argv[i + 1] || "";
+  if (!cmd) return false;
+  if (cmd === "api") return ghApiWrites(argv.slice(i + 1));
+  const readSubs = {
+    pr: ["view", "list", "status", "diff", "checks", "checkout"],
+    issue: ["view", "list", "status"],
+    repo: ["view", "list"],
+    release: ["view", "list", "download"],
+    gist: ["view", "list"],
+    run: ["list", "view", "watch"],
+    workflow: ["list", "view"],
+    search: ["issues", "prs", "repos", "commits", "code"],
+    auth: ["status"],
+    config: ["get", "list"],
+    alias: ["list"],
+    cache: ["list"],
+    label: ["list"],
+    project: ["list", "view"],
+    org: ["list"],
+    ruleset: ["list", "view"],
+    secret: ["list"],
+    variable: ["list"],
+    attestation: ["download", "verify"],
+    browse: [""],
+    help: [""],
+    status: [""],
+  };
+  const allowed = readSubs[cmd];
+  if (!allowed) return true;
+  return !allowed.includes(sub);
 }
 
-export function isHumanAttributedPublish(command) {
+function shellPayload(argv) {
+  let i = skipEnvAndWrappers(argv);
+  const base = (argv[i] ?? "").split("/").pop();
+  if (base !== "sh" && base !== "bash" && base !== "zsh" && base !== "dash" && base !== "ksh") {
+    return null;
+  }
+  i += 1;
+  while (i < argv.length) {
+    const arg = argv[i];
+    if (arg === "-c" && argv[i + 1] !== undefined) return argv[i + 1];
+    if (arg.startsWith("-") && !arg.startsWith("--") && arg.includes("c") && argv[i + 1] !== undefined) {
+      return argv[i + 1];
+    }
+    if (arg.startsWith("-")) {
+      i += 1;
+      continue;
+    }
+    break;
+  }
+  return null;
+}
+
+export function isHumanAttributedPublish(command, depth) {
+  if (depth == null) depth = 0;
+  if (depth > 8) return true;
   for (const segment of commandSegments(command)) {
     const argv = tokenizeCommand(segment);
     if (isGitPublishArgv(argv) || isGhWriteArgv(argv)) return true;
+    const nested = shellPayload(argv);
+    if (nested && isHumanAttributedPublish(nested, depth + 1)) return true;
   }
   return false;
 }
@@ -222,7 +286,9 @@ const DETECT_SOURCE = [
   commandSegments,
   skipEnvAndWrappers,
   isGitPublishArgv,
+  ghApiWrites,
   isGhWriteArgv,
+  shellPayload,
   isHumanAttributedPublish,
 ].map((fn) => fn.toString()).join('\n');
 
