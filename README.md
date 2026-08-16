@@ -3,9 +3,10 @@
 Give every coding agent on your machine its **own GitHub identity** — so a
 worktree created by Codex commits and opens PRs as `you-codex-agent[bot]`, one
 created by Claude Code as `you-claude-agent[bot]`, and so on, while your own
-shell stays *you*. Zero dependencies, no daemon, no per-tool plugins: the
-trigger is git's native hooks, and the identity is detected from the
-environment each IDE already sets on its own.
+shell stays *you*. Zero npm dependencies, no per-tool plugins: the trigger is
+git's native hooks, and the identity is detected from the environment each IDE
+already sets on its own. A loopback identity daemon is installed as a user-level
+supervisor so production verbs do not depend on someone remembering to start it.
 
 Why you'd want this:
 
@@ -122,7 +123,7 @@ agent-bot space export [agent-id] [--out <path>] [--gist]
 agent-bot space import <pack|gist:id|gist-url> [--force]
 agent-bot space retire <agent-id> [--delete-space]
 agent-bot population <list|show|backfill> [agent-id|name] [--dry-run] [--json]
-agent-bot daemon <run|start|status|stop> [--json]
+agent-bot daemon <run|start|status|stop|disable> [--json]
 agent-bot mcp
 agent-bot web open [--principal <principal-id>] [--no-browser] [--json]
 agent-bot telegram <run|status> [--json]
@@ -316,13 +317,17 @@ importing runtime modules. It binds only to `127.0.0.1` — a non-loopback bind
 address is refused before the listener opens — and every request must present
 the per-start bearer token recorded in the `0600` state file at
 `$XDG_STATE_HOME/agent-bot/daemon.json`, which keeps other local accounts on a
-shared machine out. `run` serves in the foreground for supervised launches;
-`start` detaches a background daemon and waits for it to become healthy;
-`status`/`stop` probe and terminate the recorded daemon. With
-`settings.daemonPreference` set to `prefer` or `required`, `setup-worktree`
-registers and ensures space through the daemon: `prefer` falls back to the
-in-process path only when the daemon is unreachable, and `required` fails
-closed rather than diverging from the daemon-owned stores.
+shared machine out. `install`, `update`, and `bootstrap` write and load a
+user-level supervisor (`launchd` on macOS, a systemd user unit on Linux) that
+execs `daemon run` at login and restarts it on failure. `start` is recovery
+when the supervisor is not in use; `status`/`stop` probe and terminate the
+recorded daemon; `disable` unloads the supervisor. MCP remains per-conversation
+stdio and is never supervised. With `settings.daemonPreference` set to
+`prefer` or `required`, `setup-worktree` registers and ensures space through
+the daemon: `prefer` falls back to the in-process path only when the daemon is
+unreachable, and `required` fails closed rather than diverging from the
+daemon-owned stores. After the supervisor path has been applied, `doctor`
+treats a missing supervisor or a down daemon as not-ready.
 
 ### MCP server: bind a conversation to its identity
 
@@ -603,13 +608,10 @@ use the `apps` map with the exact slugs instead. `doctor` prints the resolved
 Settings precedence is environment override, then user setting, then default.
 `AGENT_BOT_SPACES_HOME` overrides `settings.spacesRoot`; without either, the
 root follows the XDG data default. `AGENT_BOT_DAEMON_PREFERENCE` overrides
-`settings.daemonPreference`. The modes reserve direct-only (`off`),
-daemon-with-local-fallback (`prefer`), and daemon-only (`required`) policy.
-They are stored and validated now, but no mode changes execution until the
-daemon and integration work in
-[#41](https://github.com/qwts/agent-bot-identity/issues/41) and
-[#43](https://github.com/qwts/agent-bot-identity/issues/43) ships; in particular,
-`required` is not enforced yet.
+`settings.daemonPreference`. The modes select client fallback: direct-only
+(`off`), daemon-with-local-fallback (`prefer`), and daemon-only (`required`).
+`setup-worktree` already enforces all three. The supervisor is installed
+regardless of preference; preference does not start or stop the daemon.
 
 This config is policy, not a secret store: never put tokens, credentials, or
 private keys in it. Agent Space lifetime and path ownership remain defined by

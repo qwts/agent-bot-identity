@@ -859,8 +859,20 @@ async function main() {
       process.stdout.write(result.stopped ? `daemon stopped (pid ${result.pid})\n` : `${result.reason}\n`);
       break;
     }
+    case 'disable': {
+      const { disableDaemonSupervisor } = await import('./daemon-supervisor.mjs');
+      const result = await disableDaemonSupervisor();
+      if (json) {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      } else if (result.unloaded) {
+        process.stdout.write('daemon supervisor unloaded\n');
+      } else {
+        process.stdout.write(`${result.reason}\n`);
+      }
+      break;
+    }
     default:
-      throw new Error('usage: agent-bot daemon <run|start|status|stop> [--json]');
+      throw new Error('usage: agent-bot daemon <run|start|status|stop|disable> [--json]');
   }
 }
 

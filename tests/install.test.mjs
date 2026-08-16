@@ -284,7 +284,7 @@ test('the installed fast path is the managed POSIX implementation', () => {
   assert.equal(readFileSync(path, 'utf8'), agentHookFastPath());
 });
 
-test('installer chains displaced hooks and replaces legacy agent-bot hooks', () => {
+test('installer chains displaced hooks and replaces legacy agent-bot hooks', async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-install-'));
   const values = new Map([['core.hooksPath', '/custom/husky-hooks']]);
   const run = (args) => {
@@ -300,11 +300,12 @@ test('installer chains displaced hooks and replaces legacy agent-bot hooks', () 
     values.set(args.at(-2), args.at(-1));
     return '';
   };
-  const result = installAgentBot({
+  const result = await installAgentBot({
     home,
     run,
     installCli: () => installationPaths(home).executable,
     installHooks: () => installationPaths(home).hooksDir,
+    ensureSupervisor: async () => ({ applied: true, loaded: true, unitPath: 'test' }),
   });
   assert.equal(result.chainedHooksPath, '/custom/husky-hooks');
   assert.equal(values.get('agentBot.chainedHooksPath'), '/custom/husky-hooks');
@@ -313,11 +314,51 @@ test('installer chains displaced hooks and replaces legacy agent-bot hooks', () 
   values.set('core.hooksPath', '/repo/playbook-engineering/tools/agent-bot/hooks');
   values.delete('agentBot.chainedHooksPath');
   values.delete('qwts.chainedHooksPath');
-  const migrated = installAgentBot({
+  const migrated = await installAgentBot({
     home,
     run,
     installCli: () => installationPaths(home).executable,
     installHooks: () => installationPaths(home).hooksDir,
+    ensureSupervisor: async () => ({ applied: true, loaded: true, unitPath: 'test' }),
   });
   assert.equal(migrated.chainedHooksPath, null);
+});
+
+test('install writes the supervisor through the injected helper and does not disable it', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-supervisor-install-'));
+  const calls = [];
+  const run = (args) => {
+    if (args.includes('--get')) {
+      const error = new Error('unset');
+      error.status = 1;
+      throw error;
+    }
+    return '';
+  };
+  const first = await installAgentBot({
+    home,
+    run,
+    installCli: () => installationPaths(home).executable,
+    installHooks: () => installationPaths(home).hooksDir,
+    ensureSupervisor: async (options) => {
+      calls.push(['ensure', options.executable]);
+      return { applied: true, loaded: true, unitPath: 'unit', refreshed: true };
+    },
+  });
+  const second = await installAgentBot({
+    home,
+    run,
+    installCli: () => installationPaths(home).executable,
+    installHooks: () => installationPaths(home).hooksDir,
+    ensureSupervisor: async (options) => {
+      calls.push(['ensure', options.executable]);
+      return { applied: true, loaded: true, unitPath: 'unit', refreshed: false };
+    },
+  });
+  assert.equal(first.supervisor.loaded, true);
+  assert.equal(second.supervisor.loaded, true);
+  assert.deepEqual(calls, [
+    ['ensure', installationPaths(home).executable],
+    ['ensure', installationPaths(home).executable],
+  ]);
 });

@@ -12,7 +12,8 @@ Use this reference for setup, minting, diagnostics, and identity repair.
 | Mint a short-lived App installation token | `agent-bot mint-token [--app <slug>] [--json]` |
 | Diagnose the installation and mapped identities | `agent-bot doctor [--json]` |
 | Repair and verify an installed setup | `agent-bot bootstrap [--machine-only\|--worktree-only] [--json]` |
-| Install the CLI and hooks | `agent-bot install [--with-gh-shim]` |
+| Install the CLI, hooks, and identity-daemon supervisor | `agent-bot install [--with-gh-shim]` |
+| Unload the identity-daemon supervisor | `agent-bot daemon disable` |
 | Install only the fail-closed `gh` shim | `agent-bot install-gh-shim` |
 | Restore an App key and issuer from pass-cli | `agent-bot ensure-private-key --app <slug> [--force]` |
 | Read an authorized password/API key | `agent-bot secret get --provider <id> --collection <name> --item <title> --field <name> --reason <text>` |
@@ -30,7 +31,9 @@ the identity for the agent currently running.
 2. Obtain an explicit, secret-free versioned profile from that owner. If
    it is missing, incompatible, or incomplete, stop before mutation; do not
    infer a roster from the current harness or copy secret material into it.
-3. From a primary source checkout, prepare only machine state:
+3.    From a primary source checkout, prepare only machine state. Bootstrap
+   installs the CLI and loads the identity-daemon supervisor (`daemon start`
+   is recovery; `daemon disable` unloads it):
 
    ```bash
    ./agent-bot bootstrap --profile <path> --with-gh-shim --machine-only
@@ -146,6 +149,7 @@ Run `agent-bot doctor`, then compare:
 - Git author and committer;
 - HTTPS origin and credential helper;
 - installed hooks and chained hooks path;
+- identity daemon supervisor and health;
 - current execution identity.
 
 Repair the earliest divergent layer. Do not patch later commands with a

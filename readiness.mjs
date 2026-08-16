@@ -16,6 +16,8 @@ import { inspectAppCredentials } from './credential-reconciler.mjs';
 import { detectHarness, HARNESSES } from './detect-harness.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
+import { daemonStatus } from './agent-daemon.mjs';
+import { inspectSupervisor, supervisorSkipLoad } from './daemon-supervisor.mjs';
 import { installationPaths, isManagedExecutable } from './install.mjs';
 import {
   OrganizationProfileError,
@@ -174,6 +176,81 @@ function gitCheck({ cwd, env, git }) {
       action: 'install Git or repair PATH for the environment that runs agent-bot',
     });
   }
+}
+
+function supervisorCheck({ home, env, inspect }) {
+  const info = inspect({ home, env });
+  if (!info.supported) {
+    return readinessCheck({
+      id: 'daemon.supervisor',
+      status: 'warning',
+      code: 'supervisor-unsupported',
+      message: `no user-level supervisor on ${info.platform}; start the daemon with: agent-bot daemon start`,
+      evidence: { platform: info.platform, supported: false },
+    });
+  }
+  if (!info.applied || !info.loaded) {
+    return readinessCheck({
+      id: 'daemon.supervisor',
+      status: 'failed',
+      code: info.applied ? 'supervisor-not-loaded' : 'supervisor-not-applied',
+      message: info.applied
+        ? 'the identity daemon supervisor unit is present but not loaded'
+        : 'the identity daemon supervisor is not installed',
+      action: 'run: agent-bot install',
+      evidence: {
+        platform: info.platform,
+        kind: info.kind,
+        applied: info.applied,
+        loaded: info.loaded,
+      },
+    });
+  }
+  return readinessCheck({
+    id: 'daemon.supervisor',
+    status: 'ready',
+    message: `identity daemon supervisor loaded (${info.kind})`,
+    evidence: {
+      platform: info.platform,
+      kind: info.kind,
+      applied: true,
+      loaded: true,
+    },
+  });
+}
+
+async function daemonHealthCheck({ home, env, probe, skipLoad }) {
+  const status = await probe({ home, env });
+  if (status.running) {
+    return readinessCheck({
+      id: 'daemon.health',
+      status: 'ready',
+      message: `identity daemon running (pid ${status.pid}, port ${status.port})`,
+      evidence: {
+        running: true,
+        pid: status.pid,
+        port: status.port,
+        started_at: status.startedAt,
+      },
+    });
+  }
+  if (skipLoad) {
+    return readinessCheck({
+      id: 'daemon.health',
+      status: 'warning',
+      code: 'daemon-load-skipped',
+      message: 'supervisor unit written; OS load skipped in this environment',
+      evidence: { running: false },
+    });
+  }
+  return readinessCheck({
+    id: 'daemon.health',
+    status: 'failed',
+    code: 'daemon-not-running',
+    message: 'identity daemon is not running',
+    action: 'run: agent-bot install',
+    evidence: { running: false },
+  });
 }
 
 function installedCliCheck({ home, lstat, readlink }) {
@@ -866,6 +943,8 @@ export async function collectReadiness({
   load = loadConfig,
   inspectCredentials = inspectAppCredentials,
   inspectSpace = inspectAgentSpace,
+  inspectDaemonSupervisor = inspectSupervisor,
+  probeDaemon = daemonStatus,
 } = {}) {
   const machineChecks = [];
   let config = {};
@@ -918,6 +997,13 @@ export async function collectReadiness({
         : failedConfigCheck());
     }
     machineChecks.push(hooksCheck({ home, cwd, env, git, access }));
+    machineChecks.push(supervisorCheck({ home, env, inspect: inspectDaemonSupervisor }));
+    machineChecks.push(await daemonHealthCheck({
+      home,
+      env,
+      probe: probeDaemon,
+      skipLoad: supervisorSkipLoad(env),
+    }));
     machineChecks.push(coverageCheck(now));
     machineChecks.push(ghShimCheck({ home, exists, required: expectedGhShim }));
     machineChecks.push(runtimeSkillCheck({ home, lstat, readlink, access }));
