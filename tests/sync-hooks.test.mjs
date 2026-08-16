@@ -101,8 +101,9 @@ test('generated adapters exec the installed hook or run explicit uninstalled mod
       const command = entry.command ?? entry.bash ?? entry.hooks?.[0]?.command ?? '';
       assert.equal(command.includes('[ -x "$H" ] || exit 0'), false, `${row.key}/${event} still fails open`);
       assert.match(command, /\[ -x "\$H" \] && exec "\$H"/);
-      if (event === 'pre-command') {
-        assert.match(command, /isHumanAttributedPublish/);
+      assert.match(command, /export AGENT_BOT_UNMANAGED_AUTHORS="\$\{AGENT_BOT_UNMANAGED_AUTHORS-ai9d\}"/);
+      if (event === 'pre-command' || event === 'pre-commit' || event === 'pre-push') {
+        assert.match(command, /uninstalledDecision/);
       }
     }
   }

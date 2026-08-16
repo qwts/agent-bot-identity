@@ -73,8 +73,10 @@ current harness:
 6. An uninstalled or ephemeral session (cloud offload, fresh host, this
    checkout opened before bootstrap) is a supported class, not a reason to
    work from outside the tree. Committed hooks refuse human-attributed
-   commits and GitHub writes. Do not treat a missing installed `agent-hook`
-   as no policy. Publishing as the bot still requires the durable journey.
+   commits and GitHub writes unless the actor is in
+   `AGENT_BOT_UNMANAGED_AUTHORS` (default `ai9d` when unset). Do not treat a
+   missing installed `agent-hook` as no policy. Publishing as the bot still
+   requires the durable journey.
 
 ### Layout
 

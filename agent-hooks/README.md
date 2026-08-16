@@ -114,10 +114,14 @@ The generated configs are committed, so they run for anyone who clones the
 repo — a cloud offload, a fresh host, or this checkout opened before
 bootstrap. A missing `~/.local/share/agent-bot/agent-hook` is not a license
 to run without identity policy. Adapters enter an explicit **uninstalled**
-mode (ENG-0128): they refuse `git commit`, `git push`, and human-attributed
-GitHub writes (`gh pr create`, and the other write subcommands). Reads and
-uncommitted working-tree edits proceed. Cursor blocking events still print
-`{}` on allow so `failClosed` does not treat silence as a denial.
+mode (ENG-0128): they refuse `git commit`, `git push`, and GitHub writes
+as the human. An unmanaged session may publish only when the actor is in
+`AGENT_BOT_UNMANAGED_AUTHORS` (default `ai9d` when unset): git author for
+commits (`--author` or `GIT_AUTHOR_*`, never committer identity; amend and
+reuse require `--reset-author` or an explicit `--author`), and the
+authenticated `gh` login for pushes and `gh` writes. Reads and uncommitted
+working-tree edits proceed. Cursor blocking events still print `{}` on
+allow so `failClosed` does not treat silence as a denial.
 
 That mode does not require `pass-cli`, a supervisor, or a finished durable
 bootstrap. Publishing as the bot still does. Doctor reports the class as
