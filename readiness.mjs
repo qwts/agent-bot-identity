@@ -21,6 +21,7 @@ import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
 import { daemonStatus } from './agent-daemon.mjs';
 import { inspectSupervisor, supervisorSkipLoad } from './daemon-supervisor.mjs';
 import { installationPaths, isManagedExecutable } from './install.mjs';
+import { inspectConfiguredCodexDesktopGh, inspectShellGhShim } from './install-gh-shim.mjs';
 import {
   OrganizationProfileError,
   profileAppSlugs,
@@ -532,23 +533,63 @@ function coverageCheck(now) {
   });
 }
 
-function ghShimCheck({ home, exists, required }) {
-  const present = exists(join(home, '.config', 'agent-bot', 'bin', 'gh'));
-  if (present) {
+function ghShimCheck({ home, required, inspect }) {
+  const result = inspect({ home });
+  if (result.status === 'ready') {
     return readinessCheck({
       id: 'shim.gh',
       status: 'ready',
       message: 'managed fail-closed gh shim is installed',
-      evidence: { installed: true, required },
+      evidence: { ...result.evidence, installed: true, required },
     });
   }
   return readinessCheck({
     id: 'shim.gh',
-    status: required ? 'failed' : 'warning',
-    code: 'gh-shim-missing',
-    message: `gh shim is not installed${required ? '' : ' (optional)'}`,
-    action: required ? 'run: agent-bot install-gh-shim' : null,
-    evidence: { installed: false, required },
+    status: required || result.status !== 'missing' ? 'failed' : 'warning',
+    code: result.code,
+    message: result.status === 'missing'
+      ? `gh shim is not installed${required ? '' : ' (optional)'}`
+      : `managed gh shell shim is ${result.status}`,
+    action: required || result.status !== 'missing' ? 'run: agent-bot install-gh-shim' : null,
+    evidence: { ...result.evidence, installed: false, required },
+  });
+}
+
+function codexDesktopGhCheck({ home, inspect }) {
+  const result = inspect({ home });
+  if (result.status === 'ready') {
+    return readinessCheck({
+      id: 'shim.gh_codex_desktop',
+      status: 'ready',
+      message: 'Codex desktop gh interposition is ready',
+      evidence: result.evidence,
+    });
+  }
+  if (result.status === 'unconfigured') {
+    return readinessCheck({
+      id: 'shim.gh_codex_desktop',
+      status: 'warning',
+      code: result.code,
+      message: 'Codex desktop gh interposition is not configured (optional)',
+      evidence: result.evidence,
+    });
+  }
+  const messages = {
+    missing: 'the configured Codex desktop gh path is missing',
+    replaced: 'the configured Codex desktop gh interposer was replaced',
+    recursive: 'the configured Codex desktop gh backup chain is recursive',
+    'legacy-backup': 'the configured Codex desktop gh interposer still uses legacy gh.bak',
+    unrecoverable: 'the configured Codex desktop gh interposer is unrecoverable',
+  };
+  return readinessCheck({
+    id: 'shim.gh_codex_desktop',
+    status: 'failed',
+    code: result.code,
+    message: messages[result.status] ?? 'Codex desktop gh interposition is invalid',
+    action: result.status === 'unrecoverable'
+      ? 'restore the stock gh path manually, then explicitly reinstall the desktop interposer'
+      : 'run: agent-bot install-gh-shim --codex-desktop-gh <configured-gh-path>',
+    evidence: result.evidence,
   });
 }
 
@@ -1043,6 +1084,8 @@ export async function collectReadiness({
   inspectSpace = inspectAgentSpace,
   inspectDaemonSupervisor = inspectSupervisor,
   inspectCutover = inspectSpacesCutover,
+  inspectShellGh = inspectShellGhShim,
+  inspectCodexDesktopGh = inspectConfiguredCodexDesktopGh,
   probeDaemon = daemonStatus,
 } = {}) {
   const machineChecks = [];
@@ -1107,7 +1150,8 @@ export async function collectReadiness({
     machineChecks.push(spacesRootCheck({ home, env, config }));
     machineChecks.push(spacesHomeCheck({ home, env, config, inspectCutover }));
     machineChecks.push(coverageCheck(now));
-    machineChecks.push(ghShimCheck({ home, exists, required: expectedGhShim }));
+    machineChecks.push(ghShimCheck({ home, required: expectedGhShim, inspect: inspectShellGh }));
+    machineChecks.push(codexDesktopGhCheck({ home, inspect: inspectCodexDesktopGh }));
     machineChecks.push(runtimeSkillCheck({ home, lstat, readlink, access }));
   } else {
     try {

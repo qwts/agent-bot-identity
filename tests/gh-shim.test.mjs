@@ -31,6 +31,8 @@ function runShim({
   prViewOutput = '{"author":{"login":"app/app-agent"}}',
   prViewStatus = 0,
   enrichedPrOutput = '',
+  explicitReal = false,
+  realIsShim = false,
 } = {}) {
   const shimDir = join(root, `shim-${Math.random()}`);
   const realDir = join(root, `real-${Math.random()}`);
@@ -62,7 +64,7 @@ if (process.argv.includes('--enrich-gh-pr-view')) {
   const real = siblingName ? join(shimDir, siblingName) : join(realDir, 'gh');
   writeFileSync(
     real,
-    `#!/bin/sh
+    realIsShim ? buildGhShim(tokenTool) : `#!/bin/sh
 if [ "$1 $2" = "api graphql" ] && [ "$#" -ne 10 ]; then echo ${JSON.stringify(tokenLogin)}; exit 0; fi
 if [ "$1 $2 $3 $4" = "api user --jq .login" ]; then echo human-owner; exit 0; fi
 if [ "$1 $2 $3 $4" = "api user --hostname github.com" ]; then
@@ -86,21 +88,28 @@ if [ "$1 $2" = "pr list" ]; then
   for arg in "$@"; do printf '<%s>\\n' "$arg"; done
   exit 0
 fi
+if [ "$1" = "passthrough" ]; then
+  shift
+  for arg in "$@"; do printf 'arg=<%s>\\n' "$arg"; done
+  printf 'env=<%s>\\n' "$PASSTHROUGH_SENTINEL" >&2
+fi
 exit ${realExit}
 `,
   );
   chmodSync(real, 0o755);
 
-  const cleanEnv = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.startsWith('CODEX_')),
-  );
+  const agentKeys = new Set([
+    'AI_AGENT', 'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'COPILOT_AGENT',
+    'CURSOR_AGENT', 'DEVIN_AGENT', 'GH_AGENT_APP', 'WINDSURF_AGENT',
+  ]);
+  const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(
+    ([key]) => !key.startsWith('CODEX_') && !agentKeys.has(key),
+  ));
   return spawnSync('sh', [shim, ...args], {
     encoding: 'utf8',
     env: {
       ...cleanEnv,
-      AI_AGENT: '',
-      CLAUDECODE: '',
-      CLAUDE_CODE_ENTRYPOINT: '',
+      ...(explicitReal ? { AGENT_BOT_REAL_GH: real } : {}),
       GH_TOKEN: token,
       HOME: testHome,
       PATH: [shimDir, realDir, process.env.PATH].filter(Boolean).join(delimiter),
@@ -164,6 +173,28 @@ test('an agent outside bot territory cannot query or write through stock gh', ()
     });
     assert.equal(result.status, 1);
     assert.match(result.stderr, /outside bot territory.*refusing stock human gh/);
+  }
+});
+
+test('configured harnesses retain their own App identity in bot territory and fail outside it', () => {
+  const harnesses = [
+    ['claude-agent', { CLAUDECODE: '1' }],
+    ['cursor-agent', { CURSOR_AGENT: '1' }],
+    ['copilot-agent', { COPILOT_AGENT: '1' }],
+    ['devin-agent', { DEVIN_AGENT: '1' }],
+    ['windsurf-agent', { WINDSURF_AGENT: '1' }],
+    ['codex-agent', { CODEX_SANDBOX: 'seatbelt' }],
+  ];
+  for (const [slug, agentEnv] of harnesses) {
+    assert.equal(runWhoami({
+      slug,
+      agentEnv,
+      token: 'explicit-token',
+      tokenLogin: `${slug}[bot]`,
+    }), `${slug}[bot] — explicit GH_TOKEN`);
+    const outside = runShim({ agentEnv, args: ['issue', 'create', '--title', 'forbidden'] });
+    assert.equal(outside.status, 1);
+    assert.match(outside.stderr, /outside bot territory.*refusing stock human gh/);
   }
 });
 
@@ -272,6 +303,29 @@ test('a managed desktop interposer delegates to its preserved sibling gh', () =>
     args: ['--version'], siblingBackup: 'gh.agent-bot-real', realExit: 74,
   });
   assert.equal(result.status, 74, result.stderr);
+});
+
+test('recursive sibling, PATH, and explicit real-gh chains fail closed', () => {
+  for (const options of [
+    { siblingBackup: 'gh.agent-bot-real', realIsShim: true },
+    { realIsShim: true },
+    { explicitReal: true, realIsShim: true },
+  ]) {
+    const result = runShim({ ...options, args: ['--version'] });
+    assert.equal(result.status, 127);
+    assert.match(result.stderr, /agent-bot shim.*recursive dispatch/);
+  }
+});
+
+test('human passthrough preserves arguments, environment, output streams, and exit status', () => {
+  const result = runShim({
+    args: ['passthrough', 'space value', '', '--flag=value'],
+    agentEnv: { PASSTHROUGH_SENTINEL: 'preserved' },
+    realExit: 79,
+  });
+  assert.equal(result.status, 79);
+  assert.equal(result.stdout, 'arg=<space value>\narg=<>\narg=<--flag=value>\n');
+  assert.equal(result.stderr, 'env=<preserved>\n');
 });
 
 test('Codex desktop removes only the author filter from its exact branch PR query', () => {
