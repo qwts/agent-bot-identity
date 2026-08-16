@@ -1,13 +1,14 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installationPaths } from '../install.mjs';
 import { main as doctorMain } from '../doctor.mjs';
 import { organizationProfileToConfig } from '../organization-profile.mjs';
+import { displayName } from '../agent-population.mjs';
 import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
 import {
   READINESS_SCHEMA_VERSION,
@@ -608,6 +609,89 @@ test('schema requirements and human output expose only the first action', async 
   const human = renderReadinessReport(report);
   assert.equal((human.match(/fix:/g) ?? []).length, 1);
   assert.match(human, /fix: repair first credential/);
+});
+
+test('machine readiness reports the resolved spaces root and census agreement', async () => {
+  const home = tempRoot();
+  const ready = await collectReadiness({
+    command: 'doctor',
+    scope: 'machine',
+    ...machineDependencies(home),
+  });
+  const root = ready.machine.checks.find(({ id }) => id === 'spaces.root');
+  const agreement = ready.machine.checks.find(({ id }) => id === 'spaces.home');
+  assert.equal(root.status, 'ready');
+  assert.equal(root.evidence.source, 'default');
+  assert.equal(root.evidence.root, join(home, '.agent-space'));
+  assert.equal(agreement.status, 'ready');
+  assert.equal(ready.ready, true);
+
+  const conflict = await collectReadiness({
+    command: 'doctor',
+    scope: 'machine',
+    ...machineDependencies(home),
+    inspectCutover: () => ({
+      override: false,
+      source: 'default',
+      resolvedRoot: join(home, '.agent-space'),
+      destRoot: join(home, '.agent-space'),
+      legacyRoot: join(home, '.local', 'share', 'agent-bot', 'spaces'),
+      completed: false,
+      inProgress: false,
+      legacyPopulated: true,
+      destPopulated: true,
+      conflict: true,
+    }),
+  });
+  assert.equal(conflict.ready, false);
+  assert.equal(conflict.machine.checks.find(({ id }) => id === 'spaces.home').code, 'spaces-cutover-conflict');
+  assert.equal(conflict.machine.checks.find(({ id }) => id === 'spaces.root').status, 'ready');
+});
+
+test('machine readiness fails closed when the cutover record is unreadable', async () => {
+  const home = tempRoot();
+  const record = join(home, '.local', 'state', 'agent-bot', 'spaces-cutover.json');
+  mkdirSync(dirname(record), { recursive: true });
+  writeFileSync(record, 'not-json\n');
+  const report = await collectReadiness({
+    command: 'doctor',
+    scope: 'machine',
+    ...machineDependencies(home),
+  });
+  assert.equal(report.ready, false);
+  assert.equal(report.machine.checks.find(({ id }) => id === 'spaces.home').code, 'spaces-cutover-unreadable');
+  assert.equal(report.machine.checks.find(({ id }) => id === 'spaces.root').status, 'ready');
+  assert.doesNotMatch(JSON.stringify(report), /token|Bearer /);
+});
+
+test('machine readiness fails when the census is not under the resolved spaces root', async () => {
+  const home = tempRoot();
+  const census = join(home, '.local', 'state', 'agent-bot', 'population.json');
+  mkdirSync(dirname(census), { recursive: true });
+  writeFileSync(census, `${JSON.stringify({
+    schemaVersion: 1,
+    souls: {
+      'agent_11111111-1111-4111-8111-111111111111': {
+        id: 'agent_11111111-1111-4111-8111-111111111111',
+        name: displayName('agent_11111111-1111-4111-8111-111111111111'),
+        appSlug: 'qwts-codex-agent',
+        parentId: null,
+        status: 'active',
+        spacePath: join(home, '.local', 'share', 'agent-bot', 'spaces', 'agent_11111111-1111-4111-8111-111111111111'),
+        transcriptLocator: null,
+        lastSeen: '2026-08-16T00:00:00.000Z',
+      },
+    },
+  }, null, 2)}\n`);
+  const report = await collectReadiness({
+    command: 'doctor',
+    scope: 'machine',
+    ...machineDependencies(home),
+  });
+  assert.equal(report.ready, false);
+  const homeCheck = report.machine.checks.find(({ id }) => id === 'spaces.home');
+  assert.equal(homeCheck.code, 'spaces-census-mismatch');
+  assert.match(homeCheck.action, /agent-bot update/);
 });
 
 test('machine readiness fails when the supervisor is missing or the daemon is down', async () => {

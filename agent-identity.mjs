@@ -47,8 +47,12 @@ function requiredText(name, value, options) {
   return text;
 }
 
+export function isAgentId(id) {
+  return typeof id === 'string' && ID_PATTERN.test(id);
+}
+
 export function validateAgentId(id) {
-  if (typeof id !== 'string' || !ID_PATTERN.test(id)) {
+  if (!isAgentId(id)) {
     throw new Error(`invalid Agent ID: ${JSON.stringify(id)}`);
   }
   return id;

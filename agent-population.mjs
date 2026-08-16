@@ -237,6 +237,44 @@ export function upsertSoul(
   });
 }
 
+function pathIsInside(root, candidate) {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+// One locked rewrite so a cutover cannot leave the census split across roots.
+export function relocateSoulSpaces(
+  fromRoot,
+  toRoot,
+  { file = populationFile() } = {},
+) {
+  if (typeof fromRoot !== 'string' || !path.isAbsolute(fromRoot)) {
+    throw new Error('fromRoot must be an absolute path');
+  }
+  if (typeof toRoot !== 'string' || !path.isAbsolute(toRoot)) {
+    throw new Error('toRoot must be an absolute path');
+  }
+  if (!existsSync(file)) return { moved: 0 };
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) {
+      throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
+    }
+    const souls = { ...current.souls };
+    let moved = 0;
+    for (const [id, record] of Object.entries(souls)) {
+      if (!pathIsInside(fromRoot, record.spacePath)) continue;
+      souls[id] = normalizeSoul({
+        ...record,
+        spacePath: path.join(toRoot, id),
+      });
+      moved += 1;
+    }
+    if (moved > 0) writeDocument(file, souls);
+    return { moved };
+  });
+}
+
 export function updateSoulStatus(
   id,
   status,

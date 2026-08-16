@@ -71,8 +71,8 @@ function settingsSection(config) {
 }
 
 // Return the durable user setting only. agent-space.mjs owns the environment
-// override and XDG fallback so it can preserve the 0.x path compatibility
-// behavior governed by ENG-0172.
+// override and the ~/.agent-space default. XDG_DATA_HOME names the legacy
+// tree for the one-time cutover; it is not a resolution input.
 export function spacesRootSetting(config = loadConfig()) {
   const value = settingsSection(config).spacesRoot;
   if (value === undefined) return null;

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 // Durable per-soul storage keyed by a transcript-bound Agent ID. Agent Spaces
-// live under XDG data, outside bot territory, and survive worktree teardown,
-// context compaction, and identity finalization.
+// live under ~/.agent-space, outside bot territory, and survive worktree
+// teardown, context compaction, and identity finalization.
 
 import { randomUUID } from 'node:crypto';
 import {
@@ -40,11 +40,23 @@ const MARKER_NAME = 'space.json';
 // only — never pack contents, never credentials.
 const HANDOFF_PATTERN = /^gist:[A-Za-z0-9]{1,64}$/;
 
-export function spacesHome({ env = process.env, home = homedir(), config } = {}) {
-  if (env.AGENT_BOT_SPACES_HOME) return path.resolve(env.AGENT_BOT_SPACES_HOME);
+export function resolveSpacesHome({ env = process.env, home = homedir(), config } = {}) {
+  if (env.AGENT_BOT_SPACES_HOME) {
+    return { root: path.resolve(env.AGENT_BOT_SPACES_HOME), source: 'environment' };
+  }
   const loaded = config === undefined ? loadConfig({ home, env }) : config;
   const configured = spacesRootSetting(loaded);
-  if (configured) return path.resolve(configured);
+  if (configured) return { root: path.resolve(configured), source: 'setting' };
+  return { root: path.join(home, '.agent-space'), source: 'default' };
+}
+
+export function spacesHome(options = {}) {
+  return resolveSpacesHome(options).root;
+}
+
+// Names the pre-amendment ENG-0172 tree for the one-time cutover only.
+// XDG_DATA_HOME is not a resolution input.
+export function legacySpacesHome({ env = process.env, home = homedir() } = {}) {
   const dataHome = env.XDG_DATA_HOME
     ? path.resolve(env.XDG_DATA_HOME)
     : path.join(home, '.local', 'share');
