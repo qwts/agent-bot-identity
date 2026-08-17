@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 
 import { buildGhShim } from '../gh-shim.mjs';
 
@@ -98,7 +98,7 @@ exit ${realExit}
   );
   chmodSync(real, 0o755);
 
-  return spawnSync('sh', [shim, ...args], {
+  return spawnSync('/bin/sh', [shim, ...args], {
     encoding: 'utf8',
     env: {
       ...(explicitReal ? {
@@ -106,7 +106,7 @@ exit ${realExit}
       } : {}),
       GH_TOKEN: token,
       HOME: testHome,
-      PATH: [shimDir, realDir, process.env.PATH].filter(Boolean).join(delimiter),
+      PATH: [shimDir, realDir, dirname(process.execPath), '/usr/bin', '/bin'].join(delimiter),
       ...agentEnv,
     },
   });
