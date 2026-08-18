@@ -31,6 +31,8 @@ function runShim({
   prViewOutput = '{"author":{"login":"app/app-agent"}}',
   prViewStatus = 0,
   enrichedPrOutput = '',
+  psOutput = null,
+  lsofOutput = null,
   explicitReal = false,
   realIsShim = false,
 } = {}) {
@@ -56,8 +58,22 @@ if (process.argv.includes('--enrich-gh-pr-view')) {
     );
   }
 
+  const shimOptions = {};
+  if (psOutput !== null) {
+    const psStub = join(shimDir, 'ps-stub');
+    writeFileSync(psStub, `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(psOutput)}\n`);
+    chmodSync(psStub, 0o755);
+    shimOptions.psPath = psStub;
+  }
+  if (lsofOutput !== null) {
+    const lsofStub = join(shimDir, 'lsof-stub');
+    writeFileSync(lsofStub, `#!/bin/sh\nprintf 'n%s\\n' ${JSON.stringify(lsofOutput)}\n`);
+    chmodSync(lsofStub, 0o755);
+    shimOptions.lsofPath = lsofStub;
+  }
+
   const shim = join(shimDir, 'gh');
-  writeFileSync(shim, buildGhShim(tokenTool));
+  writeFileSync(shim, buildGhShim(tokenTool, shimOptions));
   chmodSync(shim, 0o755);
 
   const siblingName = siblingBackup === true ? 'gh.bak' : siblingBackup;
@@ -438,41 +454,68 @@ test('Codex desktop preserves a failed native PR detail status', () => {
   assert.equal(result.stdout.trim(), '{"message":"not found"}');
 });
 
-test("Claude Desktop's liveness probe reaches stock gh, and nothing else does", () => {
-  // The app exports the agent markers into its own children, so environment
-  // alone cannot tell its housekeeping probe from an agent shell.
-  const claudeDesktop = {
-    AGENT_BOT_CLAUDE_DESKTOP: '1',
-    CLAUDECODE: '1',
-    CLAUDE_CODE_ENTRYPOINT: 'claude-desktop',
-    AI_AGENT: 'claude-code_2-1-229_agent',
-  };
-  const probe = ['auth', 'token', '--hostname', 'github.com'];
+const CLAUDE_BUNDLE = '/Applications/Claude.app/Contents/MacOS/Claude';
+// The app exports the agent markers into its own children, so its housekeeping
+// probe looks exactly like an agent shell by environment alone.
+const DESKTOP_ENV = {
+  CLAUDECODE: '1',
+  CLAUDE_CODE_ENTRYPOINT: 'claude-desktop',
+  AI_AGENT: 'claude-code_2-1-229_agent',
+};
+const PROBE = ['auth', 'token', '--hostname', 'github.com'];
 
-  // The one probe shape delegates unchanged, with no territory at all.
-  const allowed = runShim({ agentEnv: claudeDesktop, args: probe });
-  assert.equal(allowed.status, 0, allowed.stderr);
-  assert.equal(allowed.stdout.trim(), 'human-oauth-token');
-  assert.doesNotMatch(allowed.stderr, /outside bot territory/);
-
-  // Narrowness: every other command from the app stays enforced.
-  const other = runShim({
-    agentEnv: claudeDesktop,
-    args: ['issue', 'create', '--title', 'forbidden'],
+test('the liveness probe reaches stock gh when the kernel confirms the parent', () => {
+  const result = runShim({
+    agentEnv: DESKTOP_ENV,
+    args: PROBE,
+    psOutput: CLAUDE_BUNDLE,
+    lsofOutput: CLAUDE_BUNDLE,
   });
-  assert.equal(other.status, 1);
-  assert.match(other.stderr, /outside bot territory.*refusing stock human gh/);
-
-  // The parent gate carries the rule: the identical argv from an ordinary
-  // agent shell must never reach the human's stored credential.
-  const noDesktop = runShim({ agentEnv: { CLAUDECODE: '1' }, args: probe });
-  assert.equal(noDesktop.status, 1);
-  assert.match(noDesktop.stderr, /outside bot territory.*refusing stock human gh/);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), 'human-oauth-token');
+  assert.doesNotMatch(result.stderr, /outside bot territory/);
 });
 
-test('the shim recognizes Claude Desktop by its parent bundle', () => {
-  assert.match(
-    buildGhShim('/tmp/token-tool.mjs'),
-    /CLAUDE_DESKTOP_PARENT[\s\S]+\/Applications\/Claude\.app/,
-  );
+test('a forged parent argv cannot unlock the probe', () => {
+  // ps reads the process arguments, which any caller can set when it execs.
+  // The kernel-mapped text file tells the truth, and it must win.
+  const result = runShim({
+    agentEnv: DESKTOP_ENV,
+    args: PROBE,
+    psOutput: CLAUDE_BUNDLE,
+    lsofOutput: '/bin/bash',
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /outside bot territory.*refusing stock human gh/);
+});
+
+test('no environment variable can unlock the probe', () => {
+  // Regression: an env override here would let any agent print the human's
+  // OAuth token from outside territory.
+  const result = runShim({
+    agentEnv: { ...DESKTOP_ENV, AGENT_BOT_CLAUDE_DESKTOP: '1' },
+    args: PROBE,
+    psOutput: '/bin/sh',
+    lsofOutput: '/bin/sh',
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /outside bot territory.*refusing stock human gh/);
+});
+
+test('only the probe argv passes, even from a confirmed Claude Desktop parent', () => {
+  const result = runShim({
+    agentEnv: DESKTOP_ENV,
+    args: ['issue', 'create', '--title', 'forbidden'],
+    psOutput: CLAUDE_BUNDLE,
+    lsofOutput: CLAUDE_BUNDLE,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /outside bot territory.*refusing stock human gh/);
+});
+
+test('the shim confirms Claude Desktop against the kernel, with no env override', () => {
+  const shim = buildGhShim('/tmp/token-tool.mjs');
+  assert.match(shim, /CLAUDE_DESKTOP_PARENT[\s\S]+\/Applications\/Claude\.app/);
+  assert.match(shim, /CLAUDE_DESKTOP_TEXT[\s\S]+\/Applications\/Claude\.app/);
+  assert.doesNotMatch(shim, /AGENT_BOT_CLAUDE_DESKTOP/);
 });

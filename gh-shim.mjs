@@ -1,6 +1,6 @@
 export const GH_SHIM_MARKER = '# gh shim — agent bot identity. Managed by install-gh-shim.mjs';
 
-export function buildGhShim(tokenTool = null) {
+export function buildGhShim(tokenTool = null, { psPath = '/bin/ps', lsofPath = '/usr/sbin/lsof' } = {}) {
   const tokenSetup = tokenTool
     ? `TOKEN_TOOL="${tokenTool}"
 TOKEN_REQUIRES_NODE=1
@@ -107,25 +107,39 @@ fi
 # shell by environment alone, and enforcement refuses it. The app then reports
 # that nonzero exit to the user as "the GitHub CLI is not logged in".
 #
-# Parent identity is the discriminator, as for the Codex desktop UI above: an
-# agent's command always has a shell or sandbox process in between, so an agent
-# can never make its gh a direct child of the bundle. cwd is deliberately not
-# part of the rule; the argv scope below is what keeps this narrow.
+# This is the human's own application asking for the human's own token, so the
+# probe delegates to stock gh rather than minting a bot identity. That makes
+# this gate a credential boundary, so it takes no input the caller controls:
+# there is deliberately no environment override here, unlike the Codex desktop
+# path above, because reaching stock gh outside territory prints the human's
+# token rather than minting a bot's.
 #
-# This is the human's own application asking for the human's own token, so
-# delegate to stock gh unchanged rather than minting a bot identity. Only the
-# single probe shape passes; every other command from the app still falls
-# through to normal territory enforcement.
+# ps alone cannot carry the gate. Its command and comm fields are both read
+# from the process arguments, which any caller can set when it execs, so ps is
+# only a cheap pre-filter. The kernel-mapped text file cannot be set that way,
+# so lsof confirms what the parent actually is before the token is released.
+#
+# This raises the cost of misuse; it is not a sandbox. The shim is found
+# through PATH, so a caller that names the real gh by absolute path bypasses
+# every rule here. The guarantee is against default and inadvertent use of the
+# human credential, not against a hostile process.
 CLAUDE_DESKTOP_CONTEXT=""
-[ "$AGENT_BOT_CLAUDE_DESKTOP" = "1" ] && CLAUDE_DESKTOP_CONTEXT=1
-if [ -z "$CLAUDE_DESKTOP_CONTEXT" ] && [ -x /bin/ps ]; then
-  CLAUDE_DESKTOP_PARENT=$(/bin/ps -p "$PPID" -o command= 2>/dev/null || true)
+if [ -x ${psPath} ] && [ -x ${lsofPath} ]; then
+  CLAUDE_DESKTOP_PARENT=$(${psPath} -p "$PPID" -o comm= 2>/dev/null || true)
   case "$CLAUDE_DESKTOP_PARENT" in
     /Applications/Claude.app/Contents/*)
-      CLAUDE_DESKTOP_CONTEXT=1
+      CLAUDE_DESKTOP_TEXT=$(${lsofPath} -p "$PPID" -a -d txt -Fn 2>/dev/null \
+        | sed -n 's/^n//p' | head -1)
+      case "$CLAUDE_DESKTOP_TEXT" in
+        /Applications/Claude.app/Contents/*)
+          CLAUDE_DESKTOP_CONTEXT=1
+          ;;
+      esac
       ;;
   esac
 fi
+# Only the single probe shape passes; every other command from the app still
+# falls through to normal territory enforcement.
 if [ -n "$CLAUDE_DESKTOP_CONTEXT" ] && [ "$#" -eq 4 ] && \
    [ "$1" = "auth" ] && [ "$2" = "token" ] && \
    [ "$3" = "--hostname" ] && [ "$4" = "github.com" ]; then
