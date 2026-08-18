@@ -88,6 +88,10 @@ if [ "$1 $2" = "pr list" ]; then
   for arg in "$@"; do printf '<%s>\\n' "$arg"; done
   exit 0
 fi
+if [ "$1 $2 $3 $4" = "auth token --hostname github.com" ]; then
+  echo human-oauth-token
+  exit 0
+fi
 if [ "$1" = "passthrough" ]; then
   shift
   for arg in "$@"; do printf 'arg=<%s>\\n' "$arg"; done
@@ -432,4 +436,43 @@ test('Codex desktop preserves a failed native PR detail status', () => {
   });
   assert.equal(result.status, 1);
   assert.equal(result.stdout.trim(), '{"message":"not found"}');
+});
+
+test("Claude Desktop's liveness probe reaches stock gh, and nothing else does", () => {
+  // The app exports the agent markers into its own children, so environment
+  // alone cannot tell its housekeeping probe from an agent shell.
+  const claudeDesktop = {
+    AGENT_BOT_CLAUDE_DESKTOP: '1',
+    CLAUDECODE: '1',
+    CLAUDE_CODE_ENTRYPOINT: 'claude-desktop',
+    AI_AGENT: 'claude-code_2-1-229_agent',
+  };
+  const probe = ['auth', 'token', '--hostname', 'github.com'];
+
+  // The one probe shape delegates unchanged, with no territory at all.
+  const allowed = runShim({ agentEnv: claudeDesktop, args: probe });
+  assert.equal(allowed.status, 0, allowed.stderr);
+  assert.equal(allowed.stdout.trim(), 'human-oauth-token');
+  assert.doesNotMatch(allowed.stderr, /outside bot territory/);
+
+  // Narrowness: every other command from the app stays enforced.
+  const other = runShim({
+    agentEnv: claudeDesktop,
+    args: ['issue', 'create', '--title', 'forbidden'],
+  });
+  assert.equal(other.status, 1);
+  assert.match(other.stderr, /outside bot territory.*refusing stock human gh/);
+
+  // The parent gate carries the rule: the identical argv from an ordinary
+  // agent shell must never reach the human's stored credential.
+  const noDesktop = runShim({ agentEnv: { CLAUDECODE: '1' }, args: probe });
+  assert.equal(noDesktop.status, 1);
+  assert.match(noDesktop.stderr, /outside bot territory.*refusing stock human gh/);
+});
+
+test('the shim recognizes Claude Desktop by its parent bundle', () => {
+  assert.match(
+    buildGhShim('/tmp/token-tool.mjs'),
+    /CLAUDE_DESKTOP_PARENT[\s\S]+\/Applications\/Claude\.app/,
+  );
 });

@@ -101,6 +101,37 @@ if [ -n "$CODEX_DESKTOP_CONTEXT" ]; then
   export CODEX_DESKTOP_GH
 fi
 
+# Claude Desktop polls GitHub liveness with one exact command, and it exports
+# the agent markers (CLAUDECODE, CLAUDE_CODE_ENTRYPOINT, AI_AGENT) into its own
+# children — so the app's housekeeping probe is indistinguishable from an agent
+# shell by environment alone, and enforcement refuses it. The app then reports
+# that nonzero exit to the user as "the GitHub CLI is not logged in".
+#
+# Parent identity is the discriminator, as for the Codex desktop UI above: an
+# agent's command always has a shell or sandbox process in between, so an agent
+# can never make its gh a direct child of the bundle. cwd is deliberately not
+# part of the rule; the argv scope below is what keeps this narrow.
+#
+# This is the human's own application asking for the human's own token, so
+# delegate to stock gh unchanged rather than minting a bot identity. Only the
+# single probe shape passes; every other command from the app still falls
+# through to normal territory enforcement.
+CLAUDE_DESKTOP_CONTEXT=""
+[ "$AGENT_BOT_CLAUDE_DESKTOP" = "1" ] && CLAUDE_DESKTOP_CONTEXT=1
+if [ -z "$CLAUDE_DESKTOP_CONTEXT" ] && [ -x /bin/ps ]; then
+  CLAUDE_DESKTOP_PARENT=$(/bin/ps -p "$PPID" -o command= 2>/dev/null || true)
+  case "$CLAUDE_DESKTOP_PARENT" in
+    /Applications/Claude.app/Contents/*)
+      CLAUDE_DESKTOP_CONTEXT=1
+      ;;
+  esac
+fi
+if [ -n "$CLAUDE_DESKTOP_CONTEXT" ] && [ "$#" -eq 4 ] && \
+   [ "$1" = "auth" ] && [ "$2" = "token" ] && \
+   [ "$3" = "--hostname" ] && [ "$4" = "github.com" ]; then
+  exec "$REAL" "$@"
+fi
+
 token_tool_available() {
   [ -e "$TOKEN_TOOL" ] || return 1
   [ -z "$TOKEN_REQUIRES_NODE" ] || command -v node >/dev/null 2>&1
