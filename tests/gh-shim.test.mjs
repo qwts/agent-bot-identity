@@ -31,6 +31,8 @@ function runShim({
   prViewOutput = '{"author":{"login":"app/app-agent"}}',
   prViewStatus = 0,
   enrichedPrOutput = '',
+  psOutput = null,
+  lsofOutput = null,
   explicitReal = false,
   realIsShim = false,
 } = {}) {
@@ -56,8 +58,22 @@ if (process.argv.includes('--enrich-gh-pr-view')) {
     );
   }
 
+  const shimOptions = {};
+  if (psOutput !== null) {
+    const psStub = join(shimDir, 'ps-stub');
+    writeFileSync(psStub, `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(psOutput)}\n`);
+    chmodSync(psStub, 0o755);
+    shimOptions.psPath = psStub;
+  }
+  if (lsofOutput !== null) {
+    const lsofStub = join(shimDir, 'lsof-stub');
+    writeFileSync(lsofStub, `#!/bin/sh\nprintf 'n%s\\n' ${JSON.stringify(lsofOutput)}\n`);
+    chmodSync(lsofStub, 0o755);
+    shimOptions.lsofPath = lsofStub;
+  }
+
   const shim = join(shimDir, 'gh');
-  writeFileSync(shim, buildGhShim(tokenTool));
+  writeFileSync(shim, buildGhShim(tokenTool, shimOptions));
   chmodSync(shim, 0o755);
 
   const siblingName = siblingBackup === true ? 'gh.bak' : siblingBackup;
@@ -86,6 +102,10 @@ if [ "$#" -eq 10 ]; then
 fi
 if [ "$1 $2" = "pr list" ]; then
   for arg in "$@"; do printf '<%s>\\n' "$arg"; done
+  exit 0
+fi
+if [ "$1 $2 $3 $4" = "auth token --hostname github.com" ]; then
+  echo human-oauth-token
   exit 0
 fi
 if [ "$1" = "passthrough" ]; then
@@ -432,4 +452,70 @@ test('Codex desktop preserves a failed native PR detail status', () => {
   });
   assert.equal(result.status, 1);
   assert.equal(result.stdout.trim(), '{"message":"not found"}');
+});
+
+const CLAUDE_BUNDLE = '/Applications/Claude.app/Contents/MacOS/Claude';
+// The app exports the agent markers into its own children, so its housekeeping
+// probe looks exactly like an agent shell by environment alone.
+const DESKTOP_ENV = {
+  CLAUDECODE: '1',
+  CLAUDE_CODE_ENTRYPOINT: 'claude-desktop',
+  AI_AGENT: 'claude-code_2-1-229_agent',
+};
+const PROBE = ['auth', 'token', '--hostname', 'github.com'];
+
+test('the liveness probe reaches stock gh when the kernel confirms the parent', () => {
+  const result = runShim({
+    agentEnv: DESKTOP_ENV,
+    args: PROBE,
+    psOutput: CLAUDE_BUNDLE,
+    lsofOutput: CLAUDE_BUNDLE,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), 'human-oauth-token');
+  assert.doesNotMatch(result.stderr, /outside bot territory/);
+});
+
+test('a forged parent argv cannot unlock the probe', () => {
+  // ps reads the process arguments, which any caller can set when it execs.
+  // The kernel-mapped text file tells the truth, and it must win.
+  const result = runShim({
+    agentEnv: DESKTOP_ENV,
+    args: PROBE,
+    psOutput: CLAUDE_BUNDLE,
+    lsofOutput: '/bin/bash',
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /outside bot territory.*refusing stock human gh/);
+});
+
+test('no environment variable can unlock the probe', () => {
+  // Regression: an env override here would let any agent print the human's
+  // OAuth token from outside territory.
+  const result = runShim({
+    agentEnv: { ...DESKTOP_ENV, AGENT_BOT_CLAUDE_DESKTOP: '1' },
+    args: PROBE,
+    psOutput: '/bin/sh',
+    lsofOutput: '/bin/sh',
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /outside bot territory.*refusing stock human gh/);
+});
+
+test('only the probe argv passes, even from a confirmed Claude Desktop parent', () => {
+  const result = runShim({
+    agentEnv: DESKTOP_ENV,
+    args: ['issue', 'create', '--title', 'forbidden'],
+    psOutput: CLAUDE_BUNDLE,
+    lsofOutput: CLAUDE_BUNDLE,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /outside bot territory.*refusing stock human gh/);
+});
+
+test('the shim confirms Claude Desktop against the kernel, with no env override', () => {
+  const shim = buildGhShim('/tmp/token-tool.mjs');
+  assert.match(shim, /CLAUDE_DESKTOP_PARENT[\s\S]+\/Applications\/Claude\.app/);
+  assert.match(shim, /CLAUDE_DESKTOP_TEXT[\s\S]+\/Applications\/Claude\.app/);
+  assert.doesNotMatch(shim, /AGENT_BOT_CLAUDE_DESKTOP/);
 });

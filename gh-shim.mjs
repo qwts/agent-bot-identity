@@ -1,6 +1,6 @@
 export const GH_SHIM_MARKER = '# gh shim — agent bot identity. Managed by install-gh-shim.mjs';
 
-export function buildGhShim(tokenTool = null) {
+export function buildGhShim(tokenTool = null, { psPath = '/bin/ps', lsofPath = '/usr/sbin/lsof' } = {}) {
   const tokenSetup = tokenTool
     ? `TOKEN_TOOL="${tokenTool}"
 TOKEN_REQUIRES_NODE=1
@@ -99,6 +99,51 @@ fi
 if [ -n "$CODEX_DESKTOP_CONTEXT" ]; then
   CODEX_DESKTOP_GH=1
   export CODEX_DESKTOP_GH
+fi
+
+# Claude Desktop polls GitHub liveness with one exact command, and it exports
+# the agent markers (CLAUDECODE, CLAUDE_CODE_ENTRYPOINT, AI_AGENT) into its own
+# children — so the app's housekeeping probe is indistinguishable from an agent
+# shell by environment alone, and enforcement refuses it. The app then reports
+# that nonzero exit to the user as "the GitHub CLI is not logged in".
+#
+# This is the human's own application asking for the human's own token, so the
+# probe delegates to stock gh rather than minting a bot identity. That makes
+# this gate a credential boundary, so it takes no input the caller controls:
+# there is deliberately no environment override here, unlike the Codex desktop
+# path above, because reaching stock gh outside territory prints the human's
+# token rather than minting a bot's.
+#
+# ps alone cannot carry the gate. Its command and comm fields are both read
+# from the process arguments, which any caller can set when it execs, so ps is
+# only a cheap pre-filter. The kernel-mapped text file cannot be set that way,
+# so lsof confirms what the parent actually is before the token is released.
+#
+# This raises the cost of misuse; it is not a sandbox. The shim is found
+# through PATH, so a caller that names the real gh by absolute path bypasses
+# every rule here. The guarantee is against default and inadvertent use of the
+# human credential, not against a hostile process.
+CLAUDE_DESKTOP_CONTEXT=""
+if [ -x ${psPath} ] && [ -x ${lsofPath} ]; then
+  CLAUDE_DESKTOP_PARENT=$(${psPath} -p "$PPID" -o comm= 2>/dev/null || true)
+  case "$CLAUDE_DESKTOP_PARENT" in
+    /Applications/Claude.app/Contents/*)
+      CLAUDE_DESKTOP_TEXT=$(${lsofPath} -p "$PPID" -a -d txt -Fn 2>/dev/null \
+        | sed -n 's/^n//p' | head -1)
+      case "$CLAUDE_DESKTOP_TEXT" in
+        /Applications/Claude.app/Contents/*)
+          CLAUDE_DESKTOP_CONTEXT=1
+          ;;
+      esac
+      ;;
+  esac
+fi
+# Only the single probe shape passes; every other command from the app still
+# falls through to normal territory enforcement.
+if [ -n "$CLAUDE_DESKTOP_CONTEXT" ] && [ "$#" -eq 4 ] && \
+   [ "$1" = "auth" ] && [ "$2" = "token" ] && \
+   [ "$3" = "--hostname" ] && [ "$4" = "github.com" ]; then
+  exec "$REAL" "$@"
 fi
 
 token_tool_available() {
