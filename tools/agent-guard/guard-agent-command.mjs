@@ -28,7 +28,7 @@
 // Fail-open by design: a malformed payload allows the command rather than
 // bricking every shell call.
 //
-// Protocols: --protocol=claude | cursor | codex
+// Protocols: --protocol=claude | cursor | codex | copilot | windsurf
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
@@ -3100,6 +3100,26 @@ function respond(protocol, verdict) {
     process.stdout.write(`${JSON.stringify(body)}\n`);
     return;
   }
+  if (protocol === 'copilot') {
+    // Copilot's preToolUse contract puts the decision at the top level, not
+    // under hookSpecificOutput; silence means allow.
+    if (!verdict.allow) {
+      process.stdout.write(`${JSON.stringify({
+        permissionDecision: 'deny',
+        permissionDecisionReason: verdict.reason,
+      })}\n`);
+    }
+    return;
+  }
+  if (protocol === 'windsurf') {
+    // Cascade pre-hooks block on exit code 2; stdout reaches the user when the
+    // adapter sets show_output.
+    if (!verdict.allow) {
+      process.stdout.write(`${verdict.reason}\nBlocked by the machine memory guard (see ${GUARD_GUIDE}).\n`);
+      process.exitCode = 2;
+    }
+    return;
+  }
   if (!verdict.allow) {
     process.stdout.write(
       `${JSON.stringify({
@@ -3113,17 +3133,41 @@ function respond(protocol, verdict) {
   }
 }
 
+// Each harness hands the hook a different envelope; pull the shell command and
+// cwd out of the dialect. A non-shell tool call carries no command and stays
+// out of scope (undefined command → allow).
+export function extractHookPayload(protocol, input) {
+  if (protocol === 'cursor') return { command: input.command, cwd: input.cwd };
+  if (protocol === 'copilot') {
+    // Copilot CLI names the tool `shell`; the coding agent names it `bash` and
+    // may deliver toolArgs as a JSON-encoded string rather than an object.
+    const args = typeof input.toolArgs === 'string' ? JSON.parse(input.toolArgs) : input.toolArgs;
+    return {
+      command: input.toolName === 'shell' || input.toolName === 'bash' ? normalizeCommand(args?.command) : undefined,
+      cwd: input.cwd,
+    };
+  }
+  if (protocol === 'windsurf') {
+    return {
+      command: normalizeCommand(input.tool_info?.command_line),
+      cwd: input.tool_info?.cwd ?? input.cwd,
+    };
+  }
+  return { command: normalizeCommand(input.tool_input?.command), cwd: input.cwd };
+}
+
 async function main() {
-  const protocol = process.argv.includes('--protocol=cursor') ? 'cursor' : process.argv.includes('--protocol=codex') ? 'codex' : 'claude';
+  const protocolFlag = process.argv.find((arg) => arg.startsWith('--protocol='));
+  const protocol = protocolFlag ? protocolFlag.slice('--protocol='.length) : 'claude';
   // This script lives in the checkout it protects, so its own location is the
   // authoritative project dir (CLAUDE_PROJECT_DIR matches for Claude Code;
-  // Cursor and Codex set no equivalent).
+  // the other harnesses set no equivalent).
   const projectDir = process.env.CLAUDE_PROJECT_DIR ?? dirname(dirname(dirname(fileURLToPath(import.meta.url))));
   let verdict = { allow: true };
   try {
     const input = JSON.parse(await readStdin());
-    const command = protocol === 'cursor' ? input.command : normalizeCommand(input.tool_input?.command);
-    verdict = evaluateHookInput({ command, cwd: input.cwd }, projectDir);
+    const { command, cwd } = extractHookPayload(protocol, input);
+    if (typeof command === 'string') verdict = evaluateHookInput({ command, cwd }, projectDir);
   } catch {
     // Fail open (see header).
   }
