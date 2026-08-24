@@ -10,6 +10,7 @@ export const PROFILE_HARNESSES = Object.freeze([
   'copilot',
   'cursor',
   'devin',
+  'meta',
   'vscode',
 ]);
 

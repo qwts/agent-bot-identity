@@ -40,8 +40,25 @@ test('worktree territory repairs conflicting launcher and pin identities', () =>
   }
 });
 
+// Meta Muse's territory segment is the harness key (`.meta/worktrees/`), and
+// its real App slug carries the product name, mapped through config.apps.
+test('Meta Muse territory binds its product-named App through the apps map', () => {
+  const config = { apps: { meta: 'qwts-muse-agent' } };
+  const worktree = repo('.meta/worktrees/agent-bot-identity/session', 'qwts-muse-agent');
+  assert.equal(territoryHarness(worktree), 'meta');
+  assert.equal(
+    resolveAgentSlug({ env: { MUSE_AGENT: '1' }, cwd: worktree, config, worktree: true }),
+    'qwts-muse-agent',
+  );
+  // Territory repairs a foreign launcher identity, same as every harness.
+  assert.equal(
+    resolveAgentSlug({ env: { CLAUDECODE: '1' }, cwd: worktree, config, worktree: true }),
+    'qwts-muse-agent',
+  );
+});
+
 test('every supported worktree territory owns conflicting pins', () => {
-  for (const harness of ['claude', 'codex', 'cursor', 'vscode']) {
+  for (const harness of ['claude', 'codex', 'cursor', 'meta', 'vscode']) {
     const worktree = repo(`.${harness}/worktrees/owner/repo`, 'you-claude-agent');
     assert.equal(resolveAgentSlug({ env: { GH_AGENT_APP: 'you-claude-agent' }, cwd: worktree, config: cfg, worktree: true }), `you-${harness}-agent`);
   }

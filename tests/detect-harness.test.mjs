@@ -99,6 +99,26 @@ test('every harness is an agent via its own <NAME>_AGENT marker alone', () => {
   assert.equal(detectAgentHarness({ CURSOR_AGENT: '1' }, cfg), 'you-cursor-agent');
   assert.equal(detectAgentHarness({ COPILOT_AGENT: '1' }, cfg), 'you-copilot-agent');
   assert.equal(detectAgentHarness({ DEVIN_AGENT: '1' }, cfg), 'you-devin-agent');
+  assert.equal(detectAgentHarness({ MUSE_AGENT: '1' }, cfg), 'you-meta-agent');
+});
+
+// Meta Muse is keyed `meta` (its territory is .meta/worktrees/) while its env
+// markers carry the product name. MUSE_RELEASE_INFO is set for any terminal
+// the app opens — it marks the editor, not an agent. Broad detection may key
+// on it; agent attribution may only key on MUSE_AGENT.
+test('a Muse agent session is an agent keyed meta; a Muse editor terminal is not', () => {
+  assert.equal(detectHarness({ MUSE_RELEASE_INFO: '0.9.1' }), 'meta');
+  assert.equal(detectHarness({ AI_AGENT: 'meta_muse' }), 'meta');
+  assert.equal(detectHarness({ MUSE_AGENT: '1' }), 'meta');
+  assert.equal(detectAgentHarness({ MUSE_RELEASE_INFO: '0.9.1' }, cfg), null);
+  assert.equal(detectAgentHarness({ MUSE_AGENT: '1' }, cfg), 'you-meta-agent');
+});
+
+// The App keeps the product name (…-muse-agent) while the harness key names
+// the territory, so the mapping rides config.apps, not the prefix pattern.
+test('Muse maps through a config.apps override to its product-named App slug', () => {
+  const config = { apps: { meta: 'qwts-muse-agent' } };
+  assert.equal(detectAgentHarness({ MUSE_AGENT: '1' }, config), 'qwts-muse-agent');
 });
 
 test('Devin is detected from its Codeium-era markers but keyed devin', () => {
