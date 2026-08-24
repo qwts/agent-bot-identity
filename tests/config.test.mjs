@@ -218,6 +218,7 @@ test('harnessForSlug covers every harness key, including the new Apps', () => {
     'you-cursor-agent': 'cursor',
     'you-copilot-agent': 'copilot',
     'you-devin-agent': 'devin',
+    'you-meta-agent': 'meta',
     'you-vscode-agent': 'vscode',
   };
   for (const [slug, harness] of Object.entries(expected)) {
@@ -226,9 +227,14 @@ test('harnessForSlug covers every harness key, including the new Apps', () => {
   // Model-pinned variants resolve to the same harness.
   assert.equal(harnessForSlug('you-cursor-kimi-agent', config), 'cursor');
   assert.equal(harnessForSlug('you-copilot-x-agent', config), 'copilot');
+  assert.equal(harnessForSlug('you-meta-spark-agent', config), 'meta');
   // And the unconfigured best-effort path knows them too.
   assert.equal(harnessForSlug('other-copilot-agent', {}), 'copilot');
   assert.equal(harnessForSlug('other-devin-agent', {}), 'devin');
+  // Meta Muse's real App slug carries the product name, not the harness key,
+  // so it resolves through the apps map and NOT through slug parsing.
+  assert.equal(harnessForSlug('qwts-muse-agent', { apps: { meta: 'qwts-muse-agent' } }), 'meta');
+  assert.equal(harnessForSlug('qwts-muse-agent', {}), null);
 });
 
 test('every detect-harness key is recognized by harnessForSlug', async () => {

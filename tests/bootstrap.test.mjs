@@ -259,6 +259,7 @@ test('configured App slugs are unique and deterministic', () => {
       'org-copilot-agent',
       'org-cursor-agent',
       'org-devin-agent',
+      'org-meta-agent',
       'org-vscode-agent',
       'z-agent',
     ],
