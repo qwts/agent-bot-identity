@@ -2,10 +2,11 @@
 # pre-commit guard: agents may only commit inside bot territory. Installed
 # machine-wide via core.hooksPath, it blocks a commit when ALL three hold:
 #   - the process carries agent-only environment markers — CLAUDECODE,
-#     CURSOR_AGENT, COPILOT_AGENT, DEVIN_AGENT, WINDSURF_AGENT,
+#     CURSOR_AGENT, COPILOT_AGENT, DEVIN_AGENT, WINDSURF_AGENT, MUSE_AGENT,
 #     CLAUDE_CODE_ENTRYPOINT, AI_AGENT, GH_AGENT_APP, CODEX_* — never editor
-#     markers like VSCODE_*/CURSOR_TRACE_ID/WINDSURF_IDE_TYPE, so a human in an
-#     editor terminal is never evaluated at all. This list must stay in step
+#     markers like VSCODE_*/CURSOR_TRACE_ID/WINDSURF_IDE_TYPE/MUSE_RELEASE_INFO,
+#     so a human in an editor terminal is never evaluated at all. This list
+#     must stay in step
 #     with detectAgentHarness in detect-harness.mjs: a marker recognized there
 #     but missing here means the resolver calls the session an agent while this
 #     guard waves it through as a human;
@@ -22,6 +23,7 @@ AGENT=""
 [ "$COPILOT_AGENT" = "1" ] && AGENT=1
 [ "$DEVIN_AGENT" = "1" ] && AGENT=1
 [ "$WINDSURF_AGENT" = "1" ] && AGENT=1
+[ "$MUSE_AGENT" = "1" ] && AGENT=1
 [ -n "$AI_AGENT" ] && AGENT=1
 [ -n "$GH_AGENT_APP" ] && AGENT=1
 [ -n "$CLAUDE_CODE_ENTRYPOINT" ] && AGENT=1

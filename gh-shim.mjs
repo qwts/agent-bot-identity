@@ -157,6 +157,7 @@ AGENT_CONTEXT=""
 [ "$COPILOT_AGENT" = "1" ] && AGENT_CONTEXT=1
 [ "$DEVIN_AGENT" = "1" ] && AGENT_CONTEXT=1
 [ "$WINDSURF_AGENT" = "1" ] && AGENT_CONTEXT=1
+[ "$MUSE_AGENT" = "1" ] && AGENT_CONTEXT=1
 [ -n "$CLAUDE_CODE_ENTRYPOINT" ] && AGENT_CONTEXT=1
 [ -n "$AI_AGENT" ] && AGENT_CONTEXT=1
 [ -n "$GH_AGENT_APP" ] && AGENT_CONTEXT=1
@@ -171,7 +172,8 @@ TERRITORY_HINT=""
 case "$PWD" in
   */.claude/worktrees/*|*/.codex/worktrees/*|\
   */.cursor/worktrees/*|*/.copilot/worktrees/*|\
-  */.devin/worktrees/*|*/.vscode/worktrees/*)
+  */.devin/worktrees/*|*/.meta/worktrees/*|\
+  */.vscode/worktrees/*)
     TERRITORY_HINT=1
     ;;
 esac

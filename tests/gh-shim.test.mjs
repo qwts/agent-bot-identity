@@ -199,6 +199,7 @@ test('configured harnesses retain their own App identity in bot territory and fa
     ['copilot-agent', { COPILOT_AGENT: '1' }],
     ['devin-agent', { DEVIN_AGENT: '1' }],
     ['windsurf-agent', { WINDSURF_AGENT: '1' }],
+    ['meta-agent', { MUSE_AGENT: '1' }],
     ['codex-agent', { CODEX_SANDBOX: 'seatbelt' }],
   ];
   for (const [slug, agentEnv] of harnesses) {
