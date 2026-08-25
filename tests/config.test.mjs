@@ -11,7 +11,6 @@ import {
   harnessForSlug,
   loadConfig,
   slugForHarness,
-  slugForModel,
   spacesRootSetting,
 } from '../config.mjs';
 import { organizationProfileToConfig } from '../organization-profile.mjs';
@@ -180,8 +179,6 @@ test('installed organization profile exposes active model mappings and rejects i
       },
     ],
   });
-  assert.equal(slugForModel('codex', 'gpt-5.6-sol', config), 'example-codex-sol-agent');
-  assert.equal(slugForModel('codex', 'legacy', config), null);
   assert.equal(harnessForSlug('example-codex-sol-agent', config), 'codex');
   assert.equal(harnessForSlug('example-retired-agent', config), null);
 

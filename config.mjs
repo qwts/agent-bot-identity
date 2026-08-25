@@ -25,7 +25,6 @@ import { isAbsolute, join } from 'node:path';
 import {
   profileStatusForSlug,
   runtimeProfileInfo,
-  slugForProfileModel,
 } from './organization-profile.mjs';
 
 const DAEMON_PREFERENCES = new Set(['off', 'prefer', 'required']);
@@ -123,10 +122,6 @@ export function slugForHarness(harness, config = loadConfig()) {
   if (config.apps?.[harness]) return config.apps[harness];
   if (config.prefix) return `${config.prefix}-${harness}-agent`;
   return null;
-}
-
-export function slugForModel(harness, model, config = loadConfig()) {
-  return slugForProfileModel(harness, model, config);
 }
 
 export function appLifecycleStatus(appSlug, config = loadConfig()) {

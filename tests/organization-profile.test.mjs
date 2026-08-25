@@ -9,7 +9,6 @@ import {
   parseOrganizationProfile,
   profileAppSlugs,
   runtimeProfileInfo,
-  slugForProfileModel,
   validateOrganizationProfile,
 } from '../organization-profile.mjs';
 import { HARNESSES } from '../detect-harness.mjs';
@@ -87,8 +86,6 @@ test('profile v1 normalizes complete defaults, model mappings, and lifecycle sta
     'example-codex-agent',
     'example-codex-sol-agent',
   ]);
-  assert.equal(slugForProfileModel('codex', 'gpt-5.6-sol', config), 'example-codex-sol-agent');
-  assert.equal(slugForProfileModel('codex', 'legacy-model', config), null);
   const info = runtimeProfileInfo(config);
   assert.equal(info.active.length, 3);
   assert.equal(info.retired.length, 1);
@@ -133,7 +130,7 @@ test('partial profiles fail when active harness defaults are absent or retired',
   assert.throws(() => validateOrganizationProfile(incompleteIdentity), /identity is incomplete/);
 });
 
-test('invalid slugs, duplicate identities, and ambiguous active models fail closed', () => {
+test('invalid slugs and duplicate identities fail closed', () => {
   const invalidSlug = completeProfile();
   invalidSlug.identities[0].slug = '../private-key';
   assert.throws(() => validateOrganizationProfile(invalidSlug), /App slug is invalid/);
@@ -141,7 +138,9 @@ test('invalid slugs, duplicate identities, and ambiguous active models fail clos
   const duplicate = completeProfile();
   duplicate.identities.push({ ...duplicate.identities[0] });
   assert.throws(() => validateOrganizationProfile(duplicate), /duplicate App identities/);
+});
 
+test('ambiguous active model mappings are ignored (models are parse-valid but not used for selection)', () => {
   const ambiguous = completeProfile();
   ambiguous.identities.push({
     slug: 'example-codex-terra-agent',
@@ -149,7 +148,7 @@ test('invalid slugs, duplicate identities, and ambiguous active models fail clos
     status: 'active',
     models: ['gpt-5.6-sol'],
   });
-  assert.throws(() => validateOrganizationProfile(ambiguous), /ambiguous active model mappings/);
+  assert.doesNotThrow(() => validateOrganizationProfile(ambiguous));
 });
 
 test('profile errors never reflect secret-shaped input or unsupported field names', () => {
