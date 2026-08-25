@@ -172,7 +172,7 @@ TERRITORY_HINT=""
 case "$PWD" in
   */.claude/worktrees/*|*/.codex/worktrees/*|\
   */.cursor/worktrees/*|*/.copilot/worktrees/*|\
-  */.devin/worktrees/*|*/.meta/worktrees/*|\
+  */.devin/worktrees/*|*/.muse/worktrees/*|\
   */.vscode/worktrees/*)
     TERRITORY_HINT=1
     ;;
