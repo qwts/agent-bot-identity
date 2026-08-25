@@ -50,15 +50,15 @@ const HARNESSES = [
       (e.AI_AGENT ?? '').toLowerCase().includes('devin'),
   },
   {
-    // Meta Muse is keyed `meta`, not `muse`, for the same reason Devin is not
-    // `windsurf`: the key names territory, and the app creates its worktrees
-    // under `.meta/worktrees/`. Only the env markers carry the product name.
+    // Meta Muse is keyed `muse`: the key names territory, and the app's
+    // worktrees live under `.muse/worktrees/`, matching its `~/.muse` config
+    // home and the qwts-muse-agent App slug.
     // MUSE_RELEASE_INFO is ambient — the app sets it for any terminal it
     // opens — but a terminal outside Muse never carries a MUSE_* key, so the
     // prefix test is safe here, same as the CODEX_/CURSOR_ rows. Ambient
     // markers stop at this broad detector; agent attribution needs the
     // MUSE_AGENT marker in detectAgentHarness below.
-    key: 'meta',
+    key: 'muse',
     match: (e) =>
       Object.keys(e).some((k) => k.startsWith('MUSE_')) ||
       (e.AI_AGENT ?? '').toLowerCase().includes('muse'),
@@ -129,11 +129,11 @@ export function detectAgentHarness(env = process.env, config = loadConfig({ env 
     aiAgent.includes('windsurf')
   ) {
     key = 'devin';
-    // MUSE_AGENT follows the <NAME>_AGENT rule (Meta Muse, keyed `meta` — see
+    // MUSE_AGENT follows the <NAME>_AGENT rule (Meta Muse, keyed `muse` — see
     // the HARNESSES row). MUSE_RELEASE_INFO is ambient (present whenever the
     // app is open, agent or human) and deliberately does NOT appear here.
   } else if (env.MUSE_AGENT === '1' || aiAgent.includes('muse')) {
-    key = 'meta';
+    key = 'muse';
   } else if (aiAgent.includes('vscode')) {
     key = 'vscode';
   }

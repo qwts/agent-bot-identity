@@ -132,7 +132,7 @@ export function appLifecycleStatus(appSlug, config = loadConfig()) {
 // detect-harness.mjs, which imports this module — the two lists are tied
 // together by a test instead of by a cycle. `vscode` is retained for the
 // pre-copilot Apps that still carry it.
-const SLUG_HARNESSES = ['claude', 'codex', 'cursor', 'copilot', 'devin', 'meta', 'vscode'];
+const SLUG_HARNESSES = ['claude', 'codex', 'cursor', 'copilot', 'devin', 'muse', 'vscode'];
 
 // Map an App slug back to its harness key. Used by execution-identity records
 // when there is no local agents roster (standalone clone).
