@@ -121,16 +121,52 @@ an agent process; what varies is who does the spawning.**
    would need a different mechanism entirely (e.g. shared session stores,
    which Devin exposes via `devin resume`/sessions.db, out of scope here).
 
-## Throwaway proof scripts
+## Addendum (2026-08-25): can Converse join a LIVE human-driven session?
 
-All probes were inline `node -e` one-shots against spawned processes; nothing
-was committed beyond this notes file. Reproduction sketch:
+The actual product problem: a human starts a session in Claude Code (desktop),
+works in it, then hits Converse in the Agent Space roster — and gets a NEW
+session instead of talking into the existing one. Probed whether the daemon
+can attach to the live session:
 
-```js
-// ACP (devin): spawn("devin", ["acp"]) → initialize → session/new → session/prompt
-// Codex dialect: spawn("codex", ["app-server"]) → initialize{clientInfo}
-//                → thread/start → turn/start{threadId, input} → item/completed
-```
+1. **How the desktop app hosts sessions**: Claude.app spawns
+   `claude-code/<ver>/claude --input-format stream-json --output-format
+   stream-json --resume=<uuid> ...` per session (own protocol, not ACP).
+   Verified live via `ps`.
+
+2. **No external attach path exists.**
+   - No ACP endpoint, no listening TCP port, no usable unix socket.
+   - `claude --print --resume <live-session-id>` from a second process FAILS
+     while the desktop session is live ("No conversation found with session
+     ID" — cwd-scoped lookup) and, from the matching project cwd, fails with
+     "Not logged in · Please run /login": the CLI's keychain entry
+     (`Claude Code-credentials`) holds only plugin `mcpOAuth` tokens, no
+     `claudeAiOauth`; the desktop app keeps its OAuth token in its own
+     encrypted storage ("Claude Safe Storage") that the CLI cannot read.
+
+3. **What IS possible (fork-style, not attach):**
+   - Live transcripts are written continuously to
+     `~/.claude/projects/<munged-cwd>/<session-uuid>.jsonl` — confirmed
+     growing while the desktop session was active.
+   - Once the desktop session is idle/closed AND the CLI is authenticated,
+     `claude --print --resume <uuid>` would continue that conversation —
+     but as a FORK: the human's app view and the daemon's resumed copy
+     diverge from that point.
+   - Devin exposes the same shape differently: `sessions.db` +
+     `devin resume` / ACP `loadSession: true`.
+
+### Conclusion for the daemon
+
+- **True two-way conversation with a live human-driven desktop session is not
+  achievable today on any installed harness.** There is no attach mechanism;
+  auth is deliberately siloed per surface.
+- **The fix for "Converse starts a new session" is ownership, not attach:**
+  the daemon executor must spawn and KEEP the harness process alive across
+  invocations, keyed by the daemon session id (Claude Code: one long-lived
+  `--input-format stream-json` child per daemon session; Codex: one
+  `app-server` child with `thread/resume`). Converse then always lands in the
+  same conversation because the daemon owns it end to end.
+- For human-started sessions the honest offer is fork-on-idle: resume the
+  transcript under the daemon's identity and tell the user it branched.
 
 ## Out of scope / not done
 
