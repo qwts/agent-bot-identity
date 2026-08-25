@@ -127,6 +127,7 @@ test('pre-commit recognizes explicit App and per-harness agent markers', () => {
     ['copilot-agent', { COPILOT_AGENT: '1' }],
     ['devin-agent', { DEVIN_AGENT: '1' }],
     ['windsurf-agent', { WINDSURF_AGENT: '1' }],
+    ['muse-agent', { MUSE_AGENT: '1' }],
     ['unmanaged-ai9d', { CURSOR_AGENT: '1' }],
   ]) {
     const { repo, git } = fixture(name);
@@ -140,6 +141,7 @@ test('pre-commit recognizes explicit App and per-harness agent markers', () => {
     const AMBIENT = [
       'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'AI_AGENT', 'GH_AGENT_APP',
       'CURSOR_AGENT', 'COPILOT_AGENT', 'DEVIN_AGENT', 'WINDSURF_AGENT',
+      'MUSE_AGENT',
     ];
     const env = Object.fromEntries(
       Object.entries(process.env).filter(

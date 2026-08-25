@@ -400,6 +400,7 @@ test('source pre-push denies an agent when the installed hook is missing', () =>
   const AMBIENT = [
     'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'AI_AGENT', 'GH_AGENT_APP',
     'CURSOR_AGENT', 'COPILOT_AGENT', 'DEVIN_AGENT', 'WINDSURF_AGENT',
+    'MUSE_AGENT',
   ];
   const stripped = Object.fromEntries(
     Object.entries(coldEnv(home)).filter(
