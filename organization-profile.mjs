@@ -238,7 +238,6 @@ export function validateOrganizationProfile(value) {
     .sort((left, right) => left.slug.localeCompare(right.slug));
   const bySlug = new Map();
   const activeHarnesses = new Set();
-  const activeModels = new Set();
   for (const identity of identities) {
     if (bySlug.has(identity.slug)) {
       fail('profile-invalid', 'organization profile contains duplicate App identities');
@@ -246,13 +245,6 @@ export function validateOrganizationProfile(value) {
     bySlug.set(identity.slug, identity);
     if (identity.status !== 'active') continue;
     activeHarnesses.add(identity.harness);
-    for (const model of identity.models) {
-      const mapping = `${identity.harness}\0${model}`;
-      if (activeModels.has(mapping)) {
-        fail('profile-invalid', 'organization profile contains ambiguous active model mappings');
-      }
-      activeModels.add(mapping);
-    }
   }
 
   for (const harness of activeHarnesses) {
@@ -392,14 +384,6 @@ export function runtimeProfileInfo(config) {
 
 export function profileAppSlugs(config) {
   return runtimeProfileInfo(config)?.active.map(({ slug }) => slug).sort() ?? [];
-}
-
-export function slugForProfileModel(harness, model, config) {
-  if (!harness || !model) return null;
-  const info = runtimeProfileInfo(config);
-  if (!info) return null;
-  return info.active.find((identity) =>
-    identity.harness === harness && identity.models.includes(model))?.slug ?? null;
 }
 
 export function profileStatusForSlug(slug, config) {
