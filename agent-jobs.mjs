@@ -597,6 +597,70 @@ export function appendEvent(
 
 // Resumable cursor reads (#56 req 3): pass the last seen `seq` back as
 // `afterSeq` to receive only newer events, in order.
+// --- invocation payload (#146) ---------------------------------------------
+// The inbound message and attachment references, persisted at submit time so
+// the reach-back plane (fetch_context) can hand a session its own context.
+// The payload is written once per invocation and never mutated.
+
+export const MAX_PAYLOAD_MESSAGE_BYTES = 32 * 1024;
+
+function payloadFile(invocationId, options) {
+  return path.join(interactionHome(options), 'payloads', `${validateInvocationId(invocationId)}.json`);
+}
+
+export function writeInvocationPayload(
+  invocationId,
+  { message, attachments = [] },
+  { env = process.env, home = homedir(), now = () => new Date() } = {},
+) {
+  const options = { env, home };
+  const target = validateInvocationId(invocationId);
+  if (!getInvocation(target, options)) throw new Error('unknown invocation');
+  if (
+    typeof message !== 'string'
+    || message.length === 0
+    || Buffer.byteLength(message, 'utf8') > MAX_PAYLOAD_MESSAGE_BYTES
+  ) {
+    throw new Error('payload message must be a bounded non-empty string');
+  }
+  if (
+    !Array.isArray(attachments)
+    || attachments.length > 16
+    || attachments.some((ref) => typeof ref !== 'string' || ref.length === 0 || ref.length > 256)
+  ) {
+    throw new Error('payload attachments must be a bounded array of references');
+  }
+  const document = {
+    schemaVersion: 1,
+    invocationId: target,
+    message,
+    attachments: [...attachments],
+    recordedAt: now().toISOString(),
+  };
+  writeJsonDocument(payloadFile(target, options), document);
+  return document;
+}
+
+export function readInvocationPayload(
+  invocationId,
+  { env = process.env, home = homedir() } = {},
+) {
+  const options = { env, home };
+  const target = validateInvocationId(invocationId);
+  let raw;
+  try {
+    raw = readFileSync(payloadFile(target, options), 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+  const parsed = JSON.parse(raw);
+  if (parsed?.schemaVersion !== 1 || parsed.invocationId !== target) {
+    throw new Error('invocation payload record is malformed');
+  }
+  return parsed;
+}
+
 export function readEvents(
   invocationId,
   { afterSeq = 0 } = {},

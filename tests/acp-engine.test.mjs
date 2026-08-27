@@ -256,6 +256,36 @@ test('the engine strips nesting guards, keeps the rest, and injects mcpServers',
   assert.equal(probe.loaded, false);
 });
 
+test('a per-invocation mcpServers factory sees the invocation and identity', async () => {
+  const calls = [];
+  const { finished, events } = await turn({
+    message: 'env-probe',
+    executorOptions: {
+      cwd: tmpdir(),
+      mcpServers: ({ invocation, identity, harness }) => {
+        calls.push({ invocationId: invocation.invocationId, agentId: identity.agentId, harness });
+        return [{ name: 'reach', command: 'agent-bot', args: ['reach-mcp'] }];
+      },
+    },
+  });
+  const probe = JSON.parse(chunkTexts(events)[0]);
+  assert.deepEqual(probe.mcpServers, [{ name: 'reach', command: 'agent-bot', args: ['reach-mcp'] }]);
+  assert.deepEqual(calls, [{
+    invocationId: finished.invocationId,
+    agentId: AGENT_ID,
+    harness: 'claude',
+  }]);
+});
+
+test('a factory that returns a non-array fails the turn closed', async () => {
+  const { finished } = await turn({
+    message: 'env-probe',
+    executorOptions: { cwd: tmpdir(), mcpServers: () => 'nope' },
+    expectStatus: 'failed',
+  });
+  assert.equal(finished.error, EXECUTION_FAILED_ERROR);
+});
+
 test('a prior harness session resumes via session/load without re-recording history', async () => {
   const seen = [];
   const { events } = await turn({

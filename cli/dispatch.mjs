@@ -16,6 +16,7 @@ const MODULES = new Map([
   ['principal', 'agent-principals.mjs'],
   ['daemon', 'agent-daemon.mjs'],
   ['mcp', 'agent-mcp.mjs'],
+  ['reach-mcp', 'daemon-mcp.mjs'],
   ['web', 'agent-web.mjs'],
   ['telegram', 'telegram-adapter.mjs'],
   ['install', 'install.mjs'],

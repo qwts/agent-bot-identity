@@ -234,7 +234,9 @@ export function createAcpExecutor({
   log = () => {},
 } = {}) {
   const row = resolveSpawn(registry, harness);
-  if (!Array.isArray(mcpServers)) failEngine('mcpServers must be an array');
+  if (!Array.isArray(mcpServers) && typeof mcpServers !== 'function') {
+    failEngine('mcpServers must be an array or a per-invocation factory function');
+  }
   if (getHarnessSession !== null && typeof getHarnessSession !== 'function') {
     failEngine('getHarnessSession must be a function when provided');
   }
@@ -253,6 +255,15 @@ export function createAcpExecutor({
   }) => {
     if (Array.isArray(attachments) && attachments.length > 0) {
       failEngine('attachments are not driven over ACP yet; retry without attachments');
+    }
+
+    // A factory gets the invocation so the reach-back server can be stamped
+    // with per-invocation env (invocation id, identity) before injection.
+    const turnMcpServers = typeof mcpServers === 'function'
+      ? mcpServers({ invocation, identity, harness })
+      : mcpServers;
+    if (!Array.isArray(turnMcpServers)) {
+      failEngine('mcpServers factory must return an array');
     }
 
     const env = { ...baseEnv };
@@ -348,13 +359,13 @@ export function createAcpExecutor({
         sessionId = prior.harnessSessionId;
         replaying = true;
         try {
-          await rpc.request('session/load', { sessionId, cwd, mcpServers: [...mcpServers] });
+          await rpc.request('session/load', { sessionId, cwd, mcpServers: [...turnMcpServers] });
         } finally {
           replaying = false;
         }
         bindHarnessSession({ mode: 'resume', harnessSessionId: sessionId });
       } else {
-        const created = await rpc.request('session/new', { cwd, mcpServers: [...mcpServers] });
+        const created = await rpc.request('session/new', { cwd, mcpServers: [...turnMcpServers] });
         if (typeof created?.sessionId !== 'string' || created.sessionId.length === 0) {
           failEngine('agent returned no sessionId for session/new');
         }

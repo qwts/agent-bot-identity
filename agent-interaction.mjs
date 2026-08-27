@@ -57,6 +57,7 @@ import {
   validateInvocationId,
   validateProposalId,
   validateSessionId,
+  writeInvocationPayload,
 } from './agent-jobs.mjs';
 import {
   appendAuditReceipt,
@@ -431,6 +432,13 @@ export function createInteractionService({
         idempotencyKey,
       }, storeOptions));
       if (!created) return { invocation: publicInvocation(invocation), duplicate: true };
+      // The invocation record never stores message text; the payload file is
+      // what a reach-back fetch_context reads after the daemon hands off.
+      writeInvocationPayload(
+        invocation.invocationId,
+        { message: text, attachments: references },
+        storeOptions,
+      );
       recordStatus(invocation.invocationId, 'queued');
       touchSession(session.sessionId, storeOptions);
       dispatch(invocation, text, references);
