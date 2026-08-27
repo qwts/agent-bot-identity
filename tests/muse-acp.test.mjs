@@ -84,7 +84,10 @@ function adapterEnv(store) {
 
 // --- adapter-level: drive muse-acp the way the engine does ------------------
 
-function startAdapter(store) {
+const ALLOW_RESPONSE = { outcome: { outcome: 'selected', optionId: 'allow' } };
+const REJECT_RESPONSE = { outcome: { outcome: 'selected', optionId: 'reject' } };
+
+function startAdapter(store, { permissionResponder = () => ALLOW_RESPONSE } = {}) {
   const child = spawn(process.execPath, [MUSE_ACP], {
     env: adapterEnv(store),
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -92,6 +95,7 @@ function startAdapter(store) {
   let nextId = 1;
   const pending = new Map();
   const notifications = [];
+  const permissionRequests = [];
   const waiters = [];
   const lines = createInterface({ input: child.stdout });
   lines.on('line', (line) => {
@@ -109,6 +113,15 @@ function startAdapter(store) {
       else entry.resolve(payload.result);
       return;
     }
+    if (payload.method === 'session/request_permission' && payload.id !== undefined) {
+      permissionRequests.push(payload.params);
+      child.stdin.write(`${JSON.stringify({
+        jsonrpc: '2.0',
+        id: payload.id,
+        result: permissionResponder(payload.params),
+      })}\n`);
+      return;
+    }
     if (payload.method === 'session/update') {
       notifications.push(payload.params);
       for (const waiter of waiters.splice(0)) waiter();
@@ -117,6 +130,7 @@ function startAdapter(store) {
   return {
     child,
     notifications,
+    permissionRequests,
     request(method, params) {
       return new Promise((resolve, reject) => {
         const id = nextId;
@@ -163,6 +177,49 @@ test('muse-acp initializes, mints uuid sessions, and forwards the exec argv cont
     assert.equal(probe.workspace, cwd);
     assert.equal(probe.provider, 'echo');
     assert.equal(realpathSync(probe.cwd), realpathSync(cwd));
+    // The prompt travels via --prompt-file, never as an argv token.
+    assert.equal(probe.promptViaFile, true);
+    assert.ok(!probe.argv.includes('argv-probe'));
+    // The turn was gated through the permission channel before spawning.
+    assert.equal(adapter.permissionRequests.length, 1);
+    assert.equal(adapter.permissionRequests[0].toolCall._meta.toolName, 'muse.exec');
+    assert.equal(adapter.permissionRequests[0].toolCall.kind, 'execute');
+  } finally {
+    adapter.stop();
+  }
+});
+
+test('a denied policy refuses the turn before any muse process spawns', async () => {
+  const adapter = startAdapter(seedMuseStore(), { permissionResponder: () => REJECT_RESPONSE });
+  try {
+    await adapter.request('initialize', { protocolVersion: 1 });
+    const { sessionId } = await adapter.request('session/new', { cwd: scratchDir('muse-cwd-') });
+    const result = await adapter.request('session/prompt', {
+      sessionId,
+      prompt: [{ type: 'text', text: 'argv-probe' }],
+    });
+    assert.deepEqual(result, { stopReason: 'refusal' });
+    // No muse output: the exec never ran.
+    assert.equal(adapter.notifications.length, 0);
+    assert.equal(adapter.permissionRequests.length, 1);
+  } finally {
+    adapter.stop();
+  }
+});
+
+test('hyphen-prefixed message text stays data, never an exec option', async () => {
+  const adapter = startAdapter(seedMuseStore());
+  try {
+    await adapter.request('initialize', { protocolVersion: 1 });
+    const { sessionId } = await adapter.request('session/new', { cwd: scratchDir('muse-cwd-') });
+    const hostile = '--workspace /etc --disable-sandbox --prompt-file /etc/passwd';
+    const result = await adapter.request('session/prompt', {
+      sessionId,
+      prompt: [{ type: 'text', text: hostile }],
+    });
+    assert.deepEqual(result, { stopReason: 'end_turn' });
+    // The hostile text arrives verbatim as the prompt, not as parsed argv.
+    assert.equal(adapter.notifications[0].update.content.text, `muse says: ${hostile}`);
   } finally {
     adapter.stop();
   }
@@ -288,12 +345,12 @@ async function waitFor(probe, { timeoutMs = 10_000, intervalMs = 20 } = {}) {
   }
 }
 
-async function engineTurn({ store, message, getHarnessSession = null }) {
+async function engineTurn({ store, message, getHarnessSession = null, policy = ALLOW_ALL }) {
   const { env, principal } = interactionFixture();
   const executor = createAcpExecutor({
     harness: 'muse',
     identity: MUSE_IDENTITY,
-    policy: ALLOW_ALL,
+    policy,
     // The production muse row, untouched except for pointing the adapter's
     // muse binary at the scripted fake via env.
     registry: { muse: ACP_SPAWN_REGISTRY.muse },
@@ -345,6 +402,20 @@ test('the drive engine completes a full Muse turn through the production registr
   assert.deepEqual(kinds, ['agent_message_chunk', 'tool_call', 'tool_call_update']);
   const stop = events.find((event) => event.type === STOP_EVENT);
   assert.deepEqual(stop.data, { stopReason: 'end_turn' });
+});
+
+test('a deny-fallback daemon policy refuses the Muse turn end to end', async () => {
+  const { finished, events } = await engineTurn({
+    store: seedMuseStore(),
+    message: 'ping',
+    policy: { version: 1, rules: [], fallback: 'deny' },
+  });
+  assert.equal(finished.status, 'completed');
+  // The engine's policy answered the adapter's muse.exec permission request
+  // with deny, so no muse process ran and the turn stopped as a refusal.
+  assert.equal(events.filter((event) => event.type === UPDATE_EVENT).length, 0);
+  const stop = events.find((event) => event.type === STOP_EVENT);
+  assert.deepEqual(stop.data, { stopReason: 'refusal' });
 });
 
 test('the drive engine resumes a persisted Muse session without re-recording history', async () => {

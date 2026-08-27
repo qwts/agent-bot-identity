@@ -4,6 +4,8 @@
 // and emits the JSONL envelope shapes probed from Muse Code 0.2.1 in #145.
 // The prompt selects the scenario so tests read as a list of turns.
 
+import { readFileSync } from 'node:fs';
+
 const args = process.argv.slice(2);
 const flag = (name) => {
   const index = args.indexOf(name);
@@ -12,7 +14,10 @@ const flag = (name) => {
 const sessionId = flag('--session-id');
 const workspace = flag('--workspace');
 const provider = flag('--provider');
-const prompt = args[args.length - 1];
+const promptFile = flag('--prompt-file');
+// Like the real CLI, --prompt-file wins; the positional fallback exists only
+// so an accidental regression to argv prompts is visible in the probe.
+const prompt = promptFile === null ? args[args.length - 1] : readFileSync(promptFile, 'utf8');
 
 let sequence = 0;
 function emit(payloadType, payload, recordType = 'event') {
@@ -41,7 +46,14 @@ const task = (event, taskId, extra = {}) => emit(`task.lifecycle.${event}`, {
 });
 
 if (prompt === 'argv-probe') {
-  delta(JSON.stringify({ sessionId, workspace, provider, cwd: process.cwd() }));
+  delta(JSON.stringify({
+    sessionId,
+    workspace,
+    provider,
+    cwd: process.cwd(),
+    promptViaFile: promptFile !== null,
+    argv: args.filter((arg) => arg !== promptFile),
+  }));
   terminal('completed');
 } else if (prompt === 'fail-run') {
   delta('about to fail');

@@ -31,11 +31,21 @@
 //   run.terminal anything else      → JSON-RPC error (the engine fails the
 //                                     turn; a failed run is not a clean stop)
 //
-// Permissions: Muse has no interactive permission callback — policy is
-// pre-declared on the exec invocation (workspace rooting, policy-gated
-// tools). This adapter therefore NEVER issues session/request_permission and
-// declares its capabilities honestly. The engine's policy still gates the
-// daemon side; what Muse may touch is bounded by --workspace.
+// Permissions: Muse has no per-tool interactive callback — tool policy is
+// pre-declared on the exec invocation and bounded by --workspace. What this
+// adapter CAN gate is the turn itself: before any muse process spawns it
+// issues exactly one session/request_permission for the tool name
+// `muse.exec`, so the daemon's executor policy genuinely decides — a deny
+// refuses the turn without spawning (stopReason 'refusal'), and an
+// approval-outcome policy parks the invocation behind the daemon's
+// digest-bound proposal flow before Muse ever runs. Granularity is
+// per-turn, not per-tool; that limit is Muse's, and it is documented here
+// rather than papered over.
+//
+// The prompt never travels as an argv token: it is written to a private
+// temp file and passed via --prompt-file, so hyphen-prefixed message text
+// (`--workspace`, `--prompt-file`, ...) can never be parsed as an exec
+// option (CWE-88).
 //
 // Environment knobs (all optional):
 //   MUSE_ACP_MUSE_BIN  — the muse executable (default 'muse'; tests point it
@@ -46,9 +56,9 @@
 
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { createReadStream, existsSync } from 'node:fs';
+import { createReadStream, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 
@@ -57,9 +67,47 @@ const CANCEL_KILL_GRACE_MS = 2_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const sessions = new Map();
+let nextRequestId = 1;
+let nextTurnId = 1;
+const pendingClientRequests = new Map();
 
 function write(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
+}
+
+// Agent-initiated JSON-RPC request to the client (the drive engine).
+function requestClient(method, params) {
+  return new Promise((resolve) => {
+    const id = `muse-acp-${nextRequestId}`;
+    nextRequestId += 1;
+    pendingClientRequests.set(id, resolve);
+    write({ jsonrpc: '2.0', id, method, params });
+  });
+}
+
+// The turn-level permission gate: one session/request_permission per prompt,
+// answered by the daemon's executor policy on the client side. Nothing
+// spawns unless the answer is the allow option.
+async function requestTurnPermission(sessionId, session) {
+  const turnId = nextTurnId;
+  nextTurnId += 1;
+  const result = await requestClient('session/request_permission', {
+    sessionId,
+    toolCall: {
+      toolCallId: `muse-exec-${turnId}`,
+      title: `muse exec turn in ${session.cwd}`,
+      kind: 'execute',
+      _meta: { toolName: 'muse.exec' },
+    },
+    options: [
+      { optionId: 'allow', name: 'Run this muse exec turn', kind: 'allow_once' },
+      { optionId: 'reject', name: 'Refuse this muse exec turn', kind: 'reject_once' },
+    ],
+  });
+  const outcome = result?.outcome ?? {};
+  if (outcome.outcome === 'selected' && outcome.optionId === 'allow') return 'allowed';
+  if (outcome.outcome === 'cancelled') return 'cancelled';
+  return 'denied';
 }
 
 function notifyUpdate(sessionId, update) {
@@ -163,7 +211,11 @@ function runExec(session, sessionId, text) {
     const args = ['exec', '--json', '--session-id', sessionId, '--workspace', session.cwd];
     if (process.env.MUSE_ACP_PROVIDER) args.push('--provider', process.env.MUSE_ACP_PROVIDER);
     if (process.env.MUSE_ACP_MODEL) args.push('--model', process.env.MUSE_ACP_MODEL);
-    args.push(text);
+    // The prompt goes through a file, never argv: message text that looks
+    // like an exec option must stay data (CWE-88).
+    const promptDir = mkdtempSync(path.join(tmpdir(), 'muse-acp-'));
+    writeFileSync(path.join(promptDir, 'prompt.txt'), text);
+    args.push('--prompt-file', path.join(promptDir, 'prompt.txt'));
 
     const child = spawn(bin, args, { cwd: session.cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     session.child = child;
@@ -194,12 +246,15 @@ function runExec(session, sessionId, text) {
       terminal = translateExecEvent(sessionId, record, taskKinds) ?? terminal;
     });
 
+    const cleanupPrompt = () => rmSync(promptDir, { recursive: true, force: true });
     child.on('error', (error) => {
       session.child = null;
+      cleanupPrompt();
       reject(new Error(`failed to run muse: ${error.message}`));
     });
     child.on('close', () => {
       session.child = null;
+      cleanupPrompt();
       if (session.cancelled) {
         resolve({ stopReason: 'cancelled' });
         return;
@@ -249,8 +304,8 @@ async function handle(method, params) {
       protocolVersion: PROTOCOL_VERSION,
       agentCapabilities: {
         loadSession: true,
-        // Honest: text only, and no interactive permission callback exists —
-        // Muse policy is pre-declared on the exec invocation.
+        // Honest: text only. Permission granularity is one request per turn
+        // (muse.exec) — Muse's own tool policy is pre-declared per invocation.
         promptCapabilities: { image: false, audio: false, embeddedContext: false },
       },
     };
@@ -288,6 +343,10 @@ async function handle(method, params) {
     if (session.child !== null) throw new Error('a prompt is already running for this session');
     const text = promptText(params.prompt);
     if (text.length === 0) throw new Error('session/prompt requires text content');
+    // The daemon's policy decides before anything spawns.
+    const permission = await requestTurnPermission(params.sessionId, session);
+    if (permission === 'cancelled') return { stopReason: 'cancelled' };
+    if (permission !== 'allowed') return { stopReason: 'refusal' };
     return runExec(session, params.sessionId, text);
   }
   throw new Error(`method not supported: ${method}`);
@@ -319,6 +378,15 @@ input.on('line', (line) => {
   try {
     payload = JSON.parse(line);
   } catch {
+    return;
+  }
+  if (payload?.id !== undefined && payload.method === undefined) {
+    // Response to an agent-initiated request (the permission gate).
+    const resolve = pendingClientRequests.get(payload.id);
+    if (resolve) {
+      pendingClientRequests.delete(payload.id);
+      resolve(payload.result ?? null);
+    }
     return;
   }
   if (typeof payload?.method !== 'string') return;
