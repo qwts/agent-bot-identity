@@ -50,6 +50,7 @@ import {
   listSessions,
   operationDigest,
   readEvents,
+  readInvocationPayload,
   submitInvocation,
   touchSession,
   transitionInvocation,
@@ -57,6 +58,7 @@ import {
   validateInvocationId,
   validateProposalId,
   validateSessionId,
+  writeInvocationPayload,
 } from './agent-jobs.mjs';
 import {
   appendAuditReceipt,
@@ -430,7 +432,34 @@ export function createInteractionService({
         transport: wantedTransport,
         idempotencyKey,
       }, storeOptions));
-      if (!created) return { invocation: publicInvocation(invocation), duplicate: true };
+      if (!created) {
+        // Crash repair: a prior submit can die between committing the
+        // invocation (idempotency index included) and persisting its payload,
+        // leaving a queued job that was never dispatched. The retry carries
+        // the same key and therefore the same message, so finishing the
+        // half-delivered submit here loses nothing and unsticks the job.
+        if (
+          getInvocation(invocation.invocationId, storeOptions).status === 'queued'
+          && readInvocationPayload(invocation.invocationId, storeOptions) === null
+        ) {
+          writeInvocationPayload(
+            invocation.invocationId,
+            { message: text, attachments: references },
+            storeOptions,
+          );
+          recordStatus(invocation.invocationId, 'queued');
+          touchSession(session.sessionId, storeOptions);
+          dispatch(invocation, text, references);
+        }
+        return { invocation: publicInvocation(invocation), duplicate: true };
+      }
+      // The invocation record never stores message text; the payload file is
+      // what a reach-back fetch_context reads after the daemon hands off.
+      writeInvocationPayload(
+        invocation.invocationId,
+        { message: text, attachments: references },
+        storeOptions,
+      );
       recordStatus(invocation.invocationId, 'queued');
       touchSession(session.sessionId, storeOptions);
       dispatch(invocation, text, references);

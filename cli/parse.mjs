@@ -9,6 +9,7 @@ const PUBLIC_COMMANDS = new Set([
   'principal',
   'daemon',
   'mcp',
+  'reach-mcp',
   'web',
   'telegram',
   'install',

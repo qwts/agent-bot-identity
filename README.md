@@ -383,6 +383,80 @@ only `qwts` can approve — is deliberately not this tool: that tier must
 never return a credential at all, and remains future work under #35's
 bounded approval broker.
 
+### Reach-back MCP server: the session's channel to its thread
+
+`agent-bot reach-mcp` serves the daemon reach-back tools over stdio: the one
+channel a daemon-driven harness session has back to the adapter thread that
+started it. Tools: `fetch_context` (the inbound message, attachment
+references — `space://` refs resolved into the soul's Agent Space when
+possible — and a bounded thread history), `report_status` (interim progress),
+`post_reply` (the final answer, landed as a durable `reply` event the adapter
+relays to its surface), and `clock_in` (an identity heartbeat carrying
+`agentBot.agentId`).
+
+It is **one server with two placements**:
+
+- **Injected** — the ACP drive engine passes a per-invocation entry in
+  `session/new` `mcpServers[]` (built by `reachMcpServerEntry`), with the
+  invocation id and identity stamped into the entry's environment
+  (`AGENT_BOT_REACH_INVOCATION`, `AGENT_BOT_REACH_AGENT_ID`). Claude,
+  OpenCode, and Codex sessions get this placement for free; no tool argument
+  ever names the invocation, and the server refuses an explicit
+  `invocation_id` that addresses any other thread. Muse is the exception:
+  muse-acp warns and drops injected entries because `muse exec` has no
+  per-run MCP mount, so Muse's reach-back lane is registered-only for now.
+- **Registered** — a live desktop harness config mounts
+  `agent-bot reach-mcp` from a configured worktree. Identity comes from the
+  worktree's `agentBot.agentId` git config, invocations are addressed
+  explicitly via `invocation_id`, and sessions remain **session-initiated
+  only**: the harness reaches into threads; nothing wakes it.
+
+Writes fail closed on identity: an invocation belonging to a different soul
+than the server speaks for is refused before any event is appended.
+
+Registered-placement snippets per harness:
+
+```json
+// Claude Code — .mcp.json
+{ "mcpServers": { "agent-reach": { "command": "agent-bot", "args": ["reach-mcp"] } } }
+```
+
+```json
+// OpenCode — opencode.json
+{ "mcp": { "agent-reach": { "type": "local", "command": ["agent-bot", "reach-mcp"] } } }
+```
+
+```toml
+# Codex — ~/.codex/config.toml
+[mcp_servers.agent-reach]
+command = "agent-bot"
+args = ["reach-mcp"]
+```
+
+```json
+// Muse — workspace plugin manifest, .muse-plugin/plugin.json
+{ "schemaVersion": 1, "name": "agent-reach", "version": "0.1.0",
+  "capabilities": { "mcpServers": [
+    { "id": "agent-reach", "transport": "stdio", "command": ["agent-bot", "reach-mcp"] }
+  ] } }
+```
+
+```json
+// Cursor — ~/.cursor/mcp.json
+{ "mcpServers": { "agent-reach": { "command": "agent-bot", "args": ["reach-mcp"] } } }
+```
+
+```json
+// VS Code / Copilot — .vscode/mcp.json
+{ "servers": { "agent-reach": { "type": "stdio", "command": "agent-bot", "args": ["reach-mcp"] } } }
+```
+
+**Cursor and VS Code/Copilot are registered-only.** Neither has an entry on
+the ACP drive plane (isolated-store CLIs, per #144), so the registered
+placement is their ONLY reach-back lane: a person working in those harnesses
+can read context and land replies into agent threads, but no daemon ever
+drives a Cursor or Copilot session.
+
 ### Private web client
 
 The daemon serves a small installable PWA at `http://127.0.0.1:<port>/ui/` —

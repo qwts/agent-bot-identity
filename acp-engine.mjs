@@ -35,8 +35,10 @@
 //     kills the child; the run rejects so the service records 'cancelled'.
 //   - An unknown stop reason fails the turn (the contract's stop vocabulary
 //     is ACP's own; a mismatch is a protocol violation, not noise).
-//   - Attachments are not driven over ACP yet: the engine refuses an
-//     invocation that carries attachments instead of silently dropping them.
+//   - Attachment refs are not driven over the ACP prompt: they reach the
+//     session through the injected reach-back server's fetch_context, so an
+//     attached turn requires a non-empty mcpServers result and fails closed
+//     when no reach channel is configured (never a silent drop).
 
 import { spawn as spawnChild } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -234,7 +236,9 @@ export function createAcpExecutor({
   log = () => {},
 } = {}) {
   const row = resolveSpawn(registry, harness);
-  if (!Array.isArray(mcpServers)) failEngine('mcpServers must be an array');
+  if (!Array.isArray(mcpServers) && typeof mcpServers !== 'function') {
+    failEngine('mcpServers must be an array or a per-invocation factory function');
+  }
   if (getHarnessSession !== null && typeof getHarnessSession !== 'function') {
     failEngine('getHarnessSession must be a function when provided');
   }
@@ -251,8 +255,20 @@ export function createAcpExecutor({
     invocation, message, attachments, signal,
     bindHarnessSession, emitUpdate, emitStop, requestPermission,
   }) => {
-    if (Array.isArray(attachments) && attachments.length > 0) {
-      failEngine('attachments are not driven over ACP yet; retry without attachments');
+    // A factory gets the invocation so the reach-back server can be stamped
+    // with per-invocation env (invocation id, identity) before injection.
+    const turnMcpServers = typeof mcpServers === 'function'
+      ? mcpServers({ invocation, identity, harness })
+      : mcpServers;
+    if (!Array.isArray(turnMcpServers)) {
+      failEngine('mcpServers factory must return an array');
+    }
+
+    // Attachment refs are not driven over the ACP prompt; they travel through
+    // the injected reach server's fetch_context. Without that channel an
+    // attached turn would silently lose its references, so it fails instead.
+    if (Array.isArray(attachments) && attachments.length > 0 && turnMcpServers.length === 0) {
+      failEngine('attachments need an injected reach-back MCP server; none is configured');
     }
 
     const env = { ...baseEnv };
@@ -348,13 +364,13 @@ export function createAcpExecutor({
         sessionId = prior.harnessSessionId;
         replaying = true;
         try {
-          await rpc.request('session/load', { sessionId, cwd, mcpServers: [...mcpServers] });
+          await rpc.request('session/load', { sessionId, cwd, mcpServers: [...turnMcpServers] });
         } finally {
           replaying = false;
         }
         bindHarnessSession({ mode: 'resume', harnessSessionId: sessionId });
       } else {
-        const created = await rpc.request('session/new', { cwd, mcpServers: [...mcpServers] });
+        const created = await rpc.request('session/new', { cwd, mcpServers: [...turnMcpServers] });
         if (typeof created?.sessionId !== 'string' || created.sessionId.length === 0) {
           failEngine('agent returned no sessionId for session/new');
         }

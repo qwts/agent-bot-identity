@@ -16,6 +16,7 @@ Commands:
   principal          Enroll and authorize messaging principals (owner ceremony)
   daemon             Run, supervise, or disable the loopback identity daemon
   mcp                Serve the agent-bot MCP tools (bind, whoami, population)
+  reach-mcp          Serve the daemon reach-back MCP tools (fetch_context, post_reply)
   web                Pair a browser with the daemon's private web client
   telegram           Long-poll Telegram as a thin transport over the daemon
   install            Install the CLI and Git hooks

@@ -432,6 +432,15 @@ export function createTelegramAdapter({
         if (event.type === 'artifact' && typeof event.data?.name === 'string') {
           artifacts.push(event.data.name);
         }
+        // Reach-back answers (#146): a session's post_reply lands as a
+        // 'reply' event, and the projection is the delivery leg — relay it
+        // as its own message rather than folding it into the status edit.
+        // The cursor guarantees each reply is sent once; events in the same
+        // poll batch as the terminal status still relay because the batch
+        // drains before the terminal check.
+        if (event.type === 'reply' && typeof event.data?.text === 'string') {
+          await replySafe(chatId, event.data.text);
+        }
       }
       await show();
       if (TERMINAL_STATUSES.has(status)) return;

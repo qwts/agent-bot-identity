@@ -160,6 +160,10 @@ async function withDaemon(env, executor, run) {
 }
 
 const quickExecutor = async ({ appendEvent }) => { appendEvent('progress', { step: 1 }); };
+// A reach-back session's answer: post_reply lands a 'reply' event mid-run.
+const replyExecutor = async ({ appendEvent }) => {
+  appendEvent('reply', { agentId: AGENT_ID, text: 'the answer is 42' });
+};
 const slowExecutor = ({ signal }) => new Promise((resolve, reject) => {
   const timer = setTimeout(resolve, 30_000);
   signal.addEventListener('abort', () => {
@@ -307,6 +311,30 @@ test('authorized end-to-end: text update becomes a daemon invocation and a proje
       const state = JSON.parse(readFileSync(env.AGENT_BOT_TELEGRAM_STATE_PATH, 'utf8'));
       assert.equal(state.offset, 503);
       assert.equal(Object.keys(state.sessions).length, 1);
+    });
+  } finally {
+    await mock.close();
+  }
+});
+
+test('a reach-back reply event is relayed to the chat as its own message (#146)', async () => {
+  const { env } = scratch();
+  seedSoul(env);
+  seedPrincipal(env, { defaultSoul: AGENT_ID });
+  const mock = await startMockBotApi();
+  try {
+    await withDaemon(env, replyExecutor, async () => {
+      const { adapter } = makeAdapter(env, mock);
+      mock.batches.push([textUpdate(550, 'what is the answer?')]);
+      await adapter.pollOnce();
+      await adapter.drain();
+
+      const [job] = invocations(env);
+      assert.equal(job.status, 'completed');
+      // The answer arrives verbatim, separate from the edited status message.
+      assert.ok(sentTexts(mock).includes('the answer is 42'));
+      const finalEdit = mock.calls.editMessageText.at(-1);
+      assert.match(finalEdit.text, /completed/);
     });
   } finally {
     await mock.close();
