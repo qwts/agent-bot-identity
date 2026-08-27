@@ -187,6 +187,9 @@ test('executor construction fails closed before any process is spawned', () => {
   assert.throws(() => createAcpExecutor({ ...good, mcpServers: 'daemon' }), /mcpServers/);
   assert.throws(() => createAcpExecutor({ ...good, getHarnessSession: 'yes' }), /getHarnessSession/);
   assert.throws(() => createAcpExecutor({ ...good, turnTimeoutMs: 0 }), /turnTimeoutMs/);
+  assert.throws(() => createAcpExecutor({ ...good, env: 'PATH=x' }), /env must be an object/);
+  assert.throws(() => createAcpExecutor({ ...good, spawn: 'sh' }), /spawn must be a function/);
+  assert.throws(() => createAcpExecutor({ ...good, log: 'stdout' }), /log must be a function/);
   assert.throws(() => createAcpExecutor({ ...good, identity: { app: IDENTITY.app } }), /agentBot\.agentId/);
 });
 
@@ -386,4 +389,38 @@ test('a turn that outlives its timeout fails instead of hanging the daemon', asy
   });
   assert.equal(finished.error, EXECUTION_FAILED_ERROR);
   assert.ok(logs.some((line) => /turn exceeded 300ms/.test(line)));
+});
+
+test('the whole process tree dies with the turn, not just the spawn runner', async () => {
+  const RUNNER = fileURLToPath(new URL('./fixtures/spawn-runner.mjs', import.meta.url));
+  const logs = [];
+  const { finished, events } = await turn({
+    message: 'hang',
+    expectStatus: 'failed',
+    logs,
+    executorOptions: {
+      turnTimeoutMs: 500,
+      registry: {
+        claude: {
+          ...FAKE_REGISTRY.claude,
+          // npx-shaped row: the agent runs as a grandchild on inherited pipes.
+          args: [RUNNER, FIXTURE],
+        },
+      },
+    },
+  });
+  // The deadline fires even though the grandchild holds the stdio pipes open.
+  assert.equal(finished.error, EXECUTION_FAILED_ERROR);
+  assert.ok(logs.some((line) => /turn exceeded 500ms/.test(line)));
+  const pidText = chunkTexts(events).find((text) => text.startsWith('pid:'));
+  const agentPid = Number(pidText.slice('pid:'.length));
+  assert.ok(Number.isSafeInteger(agentPid) && agentPid > 0);
+  await waitFor(() => {
+    try {
+      process.kill(agentPid, 0);
+      return null;
+    } catch {
+      return true;
+    }
+  });
 });

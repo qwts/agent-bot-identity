@@ -74,7 +74,7 @@ async function waitFor(probe, { timeoutMs = 180_000, intervalMs = 250 } = {}) {
   }
 }
 
-async function liveTurn({ env, principal, executor, interaction, message, key }) {
+async function liveTurn({ principal, interaction, message, key }) {
   const { session } = interaction.createOrContinueSession({
     principal,
     transport: 'web',
@@ -127,7 +127,6 @@ for (const harness of ['opencode', 'claude']) {
       env, home: '/nonexistent', config: {}, log: () => {}, executor: first,
     });
     const turn1 = await liveTurn({
-      env,
       principal,
       interaction: interaction1,
       message: `Remember the token ${TOKEN}. Reply with exactly OK.`,
@@ -150,7 +149,6 @@ for (const harness of ['opencode', 'claude']) {
       env, home: '/nonexistent', config: {}, log: () => {}, executor: second,
     });
     const turn2 = await liveTurn({
-      env,
       principal,
       interaction: interaction2,
       message: 'What token did I ask you to remember? Reply with just the token.',

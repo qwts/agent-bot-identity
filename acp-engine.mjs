@@ -145,6 +145,13 @@ function createRpcChannel(child, { onNotification, onRequest, log }) {
         // A notification to a dead child is moot; the close path reports.
       }
     },
+    // Force-fail every pending request. The turn deadline and cancel paths
+    // use this so a descendant that survives a kill attempt while holding the
+    // inherited stdio pipes open can never hold the run open with it.
+    abort(error) {
+      closed = true;
+      rejectAll(error);
+    },
   };
 }
 
@@ -234,6 +241,11 @@ export function createAcpExecutor({
   if (!Number.isSafeInteger(turnTimeoutMs) || turnTimeoutMs <= 0) {
     failEngine('turnTimeoutMs must be a positive integer');
   }
+  if (baseEnv === null || typeof baseEnv !== 'object' || Array.isArray(baseEnv)) {
+    failEngine('env must be an object of environment variables');
+  }
+  if (typeof spawn !== 'function') failEngine('spawn must be a function');
+  if (typeof log !== 'function') failEngine('log must be a function');
 
   const run = async ({
     invocation, message, attachments, signal,
@@ -246,7 +258,24 @@ export function createAcpExecutor({
     const env = { ...baseEnv };
     for (const name of row.stripEnv) delete env[name];
 
-    const child = spawn(row.command, [...row.args], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    // detached puts the agent in its own process group, so killTree can take
+    // down the whole tree — spawn-runner rows like npx launch the actual
+    // adapter as a descendant, and signaling only the direct child would leak
+    // it (still holding the inherited stdio pipes) past the turn.
+    const child = spawn(row.command, [...row.args], {
+      cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: true,
+    });
+    const killTree = () => {
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // Already gone.
+        }
+      }
+    };
     let stderrTail = '';
     child.stderr.on('data', (data) => {
       stderrTail = (stderrTail + data.toString()).slice(-STDERR_TAIL_BYTES);
@@ -294,13 +323,18 @@ export function createAcpExecutor({
     let cancelTimer = null;
     const onAbort = () => {
       if (sessionId !== null) rpc.notify('session/cancel', { sessionId });
-      cancelTimer = setTimeout(() => child.kill('SIGKILL'), CANCEL_GRACE_MS);
+      cancelTimer = setTimeout(() => {
+        rpc.abort(new Error('acp engine: turn aborted'));
+        killTree();
+      }, CANCEL_GRACE_MS);
     };
     signal.addEventListener('abort', onAbort, { once: true });
 
     const turnTimer = setTimeout(() => {
-      streamError = streamError ?? new Error(`acp engine: turn exceeded ${turnTimeoutMs}ms`);
-      child.kill('SIGKILL');
+      const deadline = new Error(`acp engine: turn exceeded ${turnTimeoutMs}ms`);
+      streamError = streamError ?? deadline;
+      rpc.abort(deadline);
+      killTree();
     }, turnTimeoutMs);
 
     try {
@@ -348,7 +382,7 @@ export function createAcpExecutor({
       clearTimeout(turnTimer);
       if (cancelTimer !== null) clearTimeout(cancelTimer);
       signal.removeEventListener('abort', onAbort);
-      child.kill('SIGKILL');
+      killTree();
     }
   };
 

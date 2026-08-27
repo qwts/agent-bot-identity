@@ -83,6 +83,8 @@ async function handlePrompt({ sessionId, prompt }) {
   }
 
   if (text === 'hang') {
+    // The pid lets tree-termination tests verify this process actually died.
+    chunk(sessionId, `pid:${process.pid}`);
     return new Promise((resolve) => { session.onCancel = () => resolve({ stopReason: 'cancelled' }); });
   }
 
