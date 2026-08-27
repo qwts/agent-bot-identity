@@ -6,7 +6,8 @@
   "license": "MIT",
   "private": true,
   "bin": {
-    "agent-bot": "./agent-bot"
+    "agent-bot": "./agent-bot",
+    "muse-acp": "./muse-acp.mjs"
   },
   "engines": {
     "node": ">=20"

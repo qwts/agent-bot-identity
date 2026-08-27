@@ -21,12 +21,21 @@
 //                app-server socket remains the gated attach plane (#148). The
 //                row ships disabled until the adapter spawn is verified on
 //                this machine profile — the exact package pin is checked then.
-//   - muse     — no row yet; it lands with muse-acp (#145).
+//   - muse     — muse-acp (#145): the co-shipped adapter (muse-acp.mjs)
+//                wraps `muse exec --json --session-id --workspace` per turn;
+//                spawned via this repo's own node so the row works wherever
+//                the daemon checkout lives. The row strips MUSE_AGENT for the
+//                same reason claude strips CLAUDECODE: the daemon is the
+//                parent, not a Muse session.
 //   - cursor / copilot — deliberately no row. Their CLIs keep isolated session
 //                stores, so driving them here would never surface in the
 //                desktop apps this plane exists to reach (#141 census).
 //                Revisit only if that changes.
+import { fileURLToPath } from 'node:url';
+
 export const HARNESS_KEY_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
+
+const MUSE_ACP_PATH = fileURLToPath(new URL('./muse-acp.mjs', import.meta.url));
 
 export const ACP_SPAWN_REGISTRY = Object.freeze({
   claude: Object.freeze({
@@ -48,6 +57,16 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
     store: '~/.local/share/opencode',
     auth: '`opencode auth login`',
     notes: 'native ACP endpoint; proven end-to-end in the #141 spike (new turn + session/load resume)',
+  }),
+  muse: Object.freeze({
+    harness: 'muse',
+    enabled: true,
+    command: process.execPath,
+    args: Object.freeze([MUSE_ACP_PATH]),
+    stripEnv: Object.freeze(['MUSE_AGENT']),
+    store: '~/.local/share/muse',
+    auth: 'existing `muse login` (meta provider credentials)',
+    notes: 'co-shipped muse-acp adapter over `muse exec --json --session-id --workspace` (#145); spawn-per-turn, resume is workspace-bound',
   }),
   codex: Object.freeze({
     harness: 'codex',
