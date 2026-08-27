@@ -177,7 +177,11 @@ for (const harness of ['opencode', 'claude', 'muse']) {
 
 const REACH_TOKEN = 'REACH_LOOP_TOKEN_4172';
 
-for (const harness of ['opencode', 'claude', 'muse']) {
+// No muse row here: muse-acp deliberately drops session/new mcpServers
+// (`muse exec` has no per-run MCP mount), so Muse's reach-back lane is
+// registered-only until the CLI grows one — an injected live test for it
+// could never pass and would misstate the enablement.
+for (const harness of ['opencode', 'claude']) {
   test(`live ${harness}: injected reach server closes the loop with a reply event`, {
     skip: REACH_LIVE.includes(harness) ? false : `set AGENT_BOT_REACH_LIVE=${harness} to run`,
     timeout: 360_000,

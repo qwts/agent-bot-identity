@@ -259,6 +259,113 @@ test('invocation-scoped tools fail closed on missing or mismatched identity', as
   assert.equal(readEvents(invocation.invocationId, {}, store(env)).length, 0);
 });
 
+test('an injected server is pinned: explicit invocation_id may not address a sibling thread', async () => {
+  const { env } = scratch();
+  const { session, invocation } = seedInvocation(env);
+  // A sibling invocation of the SAME soul in the same session — exactly what
+  // fetch_context's thread history exposes to the session.
+  const { invocation: sibling } = submitInvocation({
+    sessionId: session.sessionId,
+    agentId: AGENT_ID,
+    principalId: PRINCIPAL_ID,
+    transport: 'web',
+    idempotencyKey: 'sibling-turn',
+  }, store(env));
+  writeInvocationPayload(sibling.invocationId, { message: 'sibling question' }, store(env));
+
+  const state = injectedState(env, invocation.invocationId);
+  await assert.rejects(
+    call(state, 'post_reply', { text: 'crossed wires', invocation_id: sibling.invocationId }),
+    /pinned to its own invocation/,
+  );
+  await assert.rejects(
+    call(state, 'fetch_context', { invocation_id: sibling.invocationId }),
+    /pinned to its own invocation/,
+  );
+  assert.equal(readEvents(sibling.invocationId, {}, store(env)).length, 0);
+
+  // Restating the stamped invocation explicitly is fine — it names no other
+  // thread, so a session echoing its own id keeps working.
+  const posted = await call(state, 'post_reply', {
+    text: 'right thread',
+    invocation_id: invocation.invocationId,
+  });
+  assert.equal(posted.delivered, true);
+});
+
+test('a retry repairs a submit that crashed before persisting its payload', async () => {
+  const { env } = scratch();
+  upsertSoul({
+    id: AGENT_ID,
+    appSlug: IDENTITY.app,
+    parentId: null,
+    status: 'active',
+    spacePath: `/spaces/${AGENT_ID}`,
+    transcriptLocator: null,
+    lastSeen: '2026-08-27T08:00:00.000Z',
+  }, { file: env.AGENT_BOT_POPULATION_PATH });
+  const principalOptions = { file: env.AGENT_BOT_PRINCIPALS_PATH, env, home: '/nonexistent' };
+  const enrolled = enrollPrincipal({ label: 'owner' }, principalOptions);
+  bindTransport(enrolled.principalId, { transport: 'web', providerId: 'owner-subject' }, principalOptions);
+  authorizeSouls(enrolled.principalId, [AGENT_ID], principalOptions);
+  const principal = setOperations(
+    enrolled.principalId,
+    ['message', 'observe', 'cancel', 'approve'],
+    principalOptions,
+  );
+  const delivered = [];
+  const interaction = createInteractionService({
+    env,
+    home: '/nonexistent',
+    config: {},
+    log: () => {},
+    executor: async ({ message }) => { delivered.push(message); },
+  });
+  const { session } = interaction.createOrContinueSession({
+    principal, transport: 'web', agentId: AGENT_ID,
+  });
+  // Simulate the crash window: the invocation and idempotency index are
+  // committed, but the payload write and dispatch never happened.
+  const { invocation: stuck } = submitInvocation({
+    sessionId: session.sessionId,
+    agentId: AGENT_ID,
+    principalId: principal.principalId,
+    transport: 'web',
+    idempotencyKey: 'crashed-submit',
+  }, store(env));
+  assert.equal(readInvocationPayload(stuck.invocationId, store(env)), null);
+
+  const retried = interaction.submitMessage({
+    principal,
+    transport: 'web',
+    sessionId: session.sessionId,
+    message: 'the original message',
+    idempotencyKey: 'crashed-submit',
+  });
+  assert.equal(retried.duplicate, true);
+  assert.equal(retried.invocation.invocationId, stuck.invocationId);
+  assert.equal(
+    readInvocationPayload(stuck.invocationId, store(env)).message,
+    'the original message',
+  );
+  const deadline = Date.now() + 5_000;
+  while (delivered.length === 0 && Date.now() < deadline) {
+    await new Promise((resolve) => { setTimeout(resolve, 10); });
+  }
+  assert.deepEqual(delivered, ['the original message']);
+
+  // A second retry is a plain duplicate: payload present, no re-dispatch.
+  const again = interaction.submitMessage({
+    principal,
+    transport: 'web',
+    sessionId: session.sessionId,
+    message: 'the original message',
+    idempotencyKey: 'crashed-submit',
+  });
+  assert.equal(again.duplicate, true);
+  assert.equal(delivered.length, 1);
+});
+
 // --- registered placement ---------------------------------------------------
 
 test('a registered server takes its identity from the worktree git config', async () => {

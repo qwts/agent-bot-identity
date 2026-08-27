@@ -178,11 +178,23 @@ export function resolveReachIdentity(state) {
 // Every invocation-scoped tool runs the same gate: the invocation must exist
 // and must belong to the identity this server speaks for. A mismatch fails
 // closed — a registered server in the wrong worktree must not be able to
-// write into another soul's thread.
+// write into another soul's thread. An injected server is pinned harder
+// still: its env stamp IS the addressed thread, and an explicit
+// invocation_id naming any other invocation is refused even for the same
+// soul — fetch_context exposes sibling invocation ids, and a confused
+// session must not be able to post into a sibling thread through them.
 function requireInvocation(state, args, { identity }) {
-  const raw = typeof args.invocation_id === 'string' && args.invocation_id !== ''
+  const stamped = state.env[REACH_INVOCATION_ENV];
+  const explicit = typeof args.invocation_id === 'string' && args.invocation_id !== ''
     ? args.invocation_id
-    : state.env[REACH_INVOCATION_ENV];
+    : null;
+  if (typeof stamped === 'string' && stamped !== '' && explicit !== null && explicit !== stamped) {
+    throw new Error(
+      'this injected reach server is pinned to its own invocation; '
+      + 'invocation_id may not address another thread',
+    );
+  }
+  const raw = explicit ?? stamped;
   if (typeof raw !== 'string' || raw === '') {
     throw new Error(
       'no invocation in scope — pass invocation_id (registered placement) or '

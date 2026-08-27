@@ -399,9 +399,12 @@ It is **one server with two placements**:
 - **Injected** — the ACP drive engine passes a per-invocation entry in
   `session/new` `mcpServers[]` (built by `reachMcpServerEntry`), with the
   invocation id and identity stamped into the entry's environment
-  (`AGENT_BOT_REACH_INVOCATION`, `AGENT_BOT_REACH_AGENT_ID`). Every
-  daemon-driven session — Claude, OpenCode, Codex, Muse — gets this placement
-  for free; no tool argument ever names the invocation.
+  (`AGENT_BOT_REACH_INVOCATION`, `AGENT_BOT_REACH_AGENT_ID`). Claude,
+  OpenCode, and Codex sessions get this placement for free; no tool argument
+  ever names the invocation, and the server refuses an explicit
+  `invocation_id` that addresses any other thread. Muse is the exception:
+  muse-acp warns and drops injected entries because `muse exec` has no
+  per-run MCP mount, so Muse's reach-back lane is registered-only for now.
 - **Registered** — a live desktop harness config mounts
   `agent-bot reach-mcp` from a configured worktree. Identity comes from the
   worktree's `agentBot.agentId` git config, invocations are addressed

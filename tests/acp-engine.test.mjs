@@ -109,7 +109,7 @@ function begin(interaction, principal) {
 
 // Drives one engine turn through the real daemon service and returns the
 // terminal invocation plus its recorded events.
-async function turn({ executorOptions = {}, message, expectStatus = 'completed', logs = [] }) {
+async function turn({ executorOptions = {}, message, attachments, expectStatus = 'completed', logs = [] }) {
   const { env } = scratch();
   seedSoul(env);
   const principal = seedPrincipal(env);
@@ -127,6 +127,7 @@ async function turn({ executorOptions = {}, message, expectStatus = 'completed',
     transport: 'web',
     sessionId: session.sessionId,
     message,
+    attachments,
     idempotencyKey: `turn-${message}`,
   });
   const finished = await waitFor(() => {
@@ -343,7 +344,7 @@ test('a stop reason outside the ACP vocabulary fails the turn', async () => {
   assert.ok(logs.some((line) => /stopReason/.test(line)));
 });
 
-test('attachments are refused rather than silently dropped', async () => {
+test('attachments without a reach channel are refused rather than silently dropped', async () => {
   const logs = [];
   const { env } = scratch();
   seedSoul(env);
@@ -373,7 +374,20 @@ test('attachments are refused rather than silently dropped', async () => {
     return current.status === 'failed' ? current : null;
   });
   assert.equal(failed.error, EXECUTION_FAILED_ERROR);
-  assert.ok(logs.some((line) => /attachments are not driven over ACP yet/.test(line)));
+  assert.ok(logs.some((line) => /attachments need an injected reach-back MCP server/.test(line)));
+});
+
+test('an attached turn proceeds when a reach channel is injected', async () => {
+  const { events } = await turn({
+    message: 'env-probe',
+    executorOptions: {
+      cwd: tmpdir(),
+      mcpServers: [{ name: 'reach', command: 'agent-bot', args: ['reach-mcp'] }],
+    },
+    attachments: ['space://reports/latest.md'],
+  });
+  const probe = JSON.parse(chunkTexts(events)[0]);
+  assert.equal(probe.mcpServers.length, 1);
 });
 
 test('cancellation sends session/cancel and lands the invocation on cancelled', async () => {
