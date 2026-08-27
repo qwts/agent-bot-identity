@@ -115,7 +115,7 @@ function fullText(events) {
     .join('');
 }
 
-for (const harness of ['opencode', 'claude']) {
+for (const harness of ['opencode', 'claude', 'muse']) {
   test(`live ${harness}: new turn, then resume recalls the prior session`, {
     skip: LIVE.includes(harness) ? false : `set AGENT_BOT_ACP_LIVE=${harness} to run`,
     timeout: 360_000,
