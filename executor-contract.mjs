@@ -149,8 +149,13 @@ export function validateUpdate(update) {
     && (!update.content || typeof update.content !== 'object')) {
     fail(`${kind} requires a content object`);
   }
-  if (kind === 'tool_call' && !printableBounded(update.toolCallId, 128)) {
-    fail('tool_call requires a bounded toolCallId');
+  if (kind === 'tool_call') {
+    if (!printableBounded(update.toolCallId, 128)) {
+      fail('tool_call requires a bounded toolCallId');
+    }
+    if (!printableBounded(update.title, MAX_SUMMARY_LENGTH)) {
+      fail('tool_call requires a bounded title');
+    }
   }
   if (kind === 'tool_call_update') {
     if (!printableBounded(update.toolCallId, 128)) {
@@ -300,16 +305,38 @@ export function createContractExecutor({ harness, identity, policy, run } = {}) 
       || !signal || typeof signal.aborted !== 'boolean') {
       fail('executor port is missing required capabilities');
     }
+    // A multi-soul daemon must never let one soul's work run under another
+    // soul's execution identity: the invocation's agent must be the agent
+    // this executor was bound to at construction.
+    if (invocation.agentId !== boundIdentity.agentId) {
+      fail('invocation is bound to a different agent identity');
+    }
+
+    // Event-ordering state: binding precedes updates, and a surviving turn
+    // ends with exactly one stop. Violations fail the invocation instead of
+    // letting a malformed event log read as a completed turn.
+    let bound = false;
+    let stopped = false;
 
     const bindHarnessSession = ({ mode, harnessSessionId } = {}) => {
       const binding = validateHarnessBinding({ harness, mode, harnessSessionId });
       appendEvent(HARNESS_SESSION_EVENT, binding);
+      bound = true;
       return binding;
     };
 
-    const emitUpdate = (update) => appendEvent(UPDATE_EVENT, validateUpdate(update));
+    const emitUpdate = (update) => {
+      if (!bound) fail('update emitted before the harness session binding');
+      if (stopped) fail('update emitted after the terminal stop event');
+      return appendEvent(UPDATE_EVENT, validateUpdate(update));
+    };
 
-    const emitStop = ({ stopReason } = {}) => appendEvent(STOP_EVENT, validateStop({ stopReason }));
+    const emitStop = ({ stopReason } = {}) => {
+      if (stopped) fail('turn already emitted its terminal stop event');
+      const stop = appendEvent(STOP_EVENT, validateStop({ stopReason }));
+      stopped = true;
+      return stop;
+    };
 
     // Policy answers first; only an 'approval' outcome reaches the immutable
     // proposal flow, and its decision maps back to allow/deny. `decidedBy`
@@ -333,7 +360,7 @@ export function createContractExecutor({ harness, identity, policy, run } = {}) 
       };
     };
 
-    return run({
+    const result = await run({
       invocation,
       message,
       attachments,
@@ -347,5 +374,11 @@ export function createContractExecutor({ harness, identity, policy, run } = {}) 
       emitStop,
       requestPermission,
     });
+    // A run that returns normally has promised its terminal stop event; an
+    // aborted turn is excused because the service records the cancellation.
+    if (!stopped && !signal.aborted) {
+      fail('run resolved without emitting a terminal stop event');
+    }
+    return result;
   };
 }

@@ -22,6 +22,7 @@ import {
   validateUpdate,
 } from '../executor-contract.mjs';
 import {
+  EXECUTION_FAILED_ERROR,
   UNCONFIGURED_EXECUTOR_ERROR,
   createInteractionService,
 } from '../agent-interaction.mjs';
@@ -130,6 +131,7 @@ test('updates accept the ACP vocabulary and reject everything else', () => {
   assert.throws(() => validateUpdate({ sessionUpdate: 'user_message_chunk', content: {} }));
   assert.throws(() => validateUpdate({ sessionUpdate: 'agent_message_chunk' }));
   assert.throws(() => validateUpdate({ sessionUpdate: 'tool_call' }));
+  assert.throws(() => validateUpdate({ sessionUpdate: 'tool_call', toolCallId: 'call_1' }));
   assert.throws(() => validateUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 'call_1' }));
   assert.throws(() => validateUpdate({ sessionUpdate: 'plan' }));
   assert.throws(() => validateUpdate(null));
@@ -352,6 +354,93 @@ test('cancellation aborts a running contract executor cooperatively', async () =
   });
   assert.equal(outcome.status, 'cancelled');
   assert.equal(outcome.stopped, true);
+});
+
+test('an invocation for a different soul never reaches run', async () => {
+  const { env } = scratch();
+  seedSoul(env);
+  const principal = seedPrincipal(env);
+  let ran = false;
+  const executor = createContractExecutor({
+    harness: 'claude',
+    identity: { app: IDENTITY.app, agentId: 'agent_22222222-2222-4222-8222-222222222222' },
+    policy: ALLOW_ALL,
+    run: async () => { ran = true; },
+  });
+  const logs = [];
+  const interaction = service(env, { executor, log: (line) => logs.push(line) });
+  const session = begin(interaction, principal);
+  const { invocation } = interaction.submitMessage({
+    principal,
+    transport: 'web',
+    sessionId: session.sessionId,
+    message: 'wrong soul',
+    idempotencyKey: 'turn-foreign-identity',
+  });
+  const failed = await waitFor(() => {
+    const { invocation: current } = interaction.getInvocation({
+      principal,
+      transport: 'web',
+      invocationId: invocation.invocationId,
+    });
+    return current.status === 'failed' ? current : null;
+  });
+  // The public record carries only the fixed failure constant; the specific
+  // refusal reason is an internal detail surfaced through the service log.
+  assert.equal(failed.error, EXECUTION_FAILED_ERROR);
+  assert.ok(logs.some((line) => /different agent identity/.test(line)));
+  assert.equal(ran, false);
+});
+
+test('the event-ordering contract fails runs that break it', async () => {
+  const { env } = scratch();
+  seedSoul(env);
+  const principal = seedPrincipal(env);
+  const executor = createContractExecutor({
+    harness: 'claude',
+    identity: IDENTITY,
+    policy: ALLOW_ALL,
+    run: async ({ message, bindHarnessSession, emitUpdate, emitStop }) => {
+      if (message === 'early-update') {
+        emitUpdate({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'too soon' } });
+        return;
+      }
+      bindHarnessSession({ mode: 'new', harnessSessionId: `hs-${message}` });
+      if (message === 'double-stop') {
+        emitStop({ stopReason: 'end_turn' });
+        emitStop({ stopReason: 'end_turn' });
+        return;
+      }
+      // 'missing-stop': a normal return with no terminal stop event.
+    },
+  });
+  const logs = [];
+  const interaction = service(env, { executor, log: (line) => logs.push(line) });
+  const session = begin(interaction, principal);
+  const expectations = [
+    ['early-update', /before the harness session binding/],
+    ['double-stop', /already emitted its terminal stop event/],
+    ['missing-stop', /without emitting a terminal stop event/],
+  ];
+  for (const [message, pattern] of expectations) {
+    const { invocation } = interaction.submitMessage({
+      principal,
+      transport: 'web',
+      sessionId: session.sessionId,
+      message,
+      idempotencyKey: `turn-${message}`,
+    });
+    const failed = await waitFor(() => {
+      const { invocation: current } = interaction.getInvocation({
+        principal,
+        transport: 'web',
+        invocationId: invocation.invocationId,
+      });
+      return current.status === 'failed' ? current : null;
+    });
+    assert.equal(failed.error, EXECUTION_FAILED_ERROR);
+    assert.ok(logs.some((line) => pattern.test(line)), `expected a logged reason matching ${pattern}`);
+  }
 });
 
 test('the daemon default stays fail-closed: no executor, stable refusal', async () => {
