@@ -163,10 +163,14 @@ test('the shipped registry rows validate and match the enablement checklist', ()
   assert.equal(ACP_SPAWN_REGISTRY.opencode.enabled, true);
   // Codex: adapter lane decided, spawn not yet verified — registered, disabled.
   assert.equal(ACP_SPAWN_REGISTRY.codex.enabled, false);
-  // The claude row strips the nesting guard a Claude Code parent would leak.
+  // Muse: the co-shipped muse-acp adapter row (#145).
+  assert.equal(ACP_SPAWN_REGISTRY.muse.enabled, true);
+  // The claude row strips the nesting guard a Claude Code parent would leak;
+  // the muse row strips the equivalent Muse session marker.
   assert.ok(ACP_SPAWN_REGISTRY.claude.stripEnv.includes('CLAUDECODE'));
-  // No entry on this plane: isolated-store CLIs and the not-yet-landed muse row.
-  for (const absent of ['cursor', 'copilot', 'muse']) {
+  assert.ok(ACP_SPAWN_REGISTRY.muse.stripEnv.includes('MUSE_AGENT'));
+  // No entry on this plane: isolated-store CLIs.
+  for (const absent of ['cursor', 'copilot']) {
     assert.equal(ACP_SPAWN_REGISTRY[absent], undefined);
   }
 });
