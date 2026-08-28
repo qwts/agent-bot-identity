@@ -4,7 +4,7 @@
 // process because spawnSync blocks the test runner's event loop.
 
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import process from 'node:process';
@@ -16,14 +16,16 @@ export function startMockGistGitHub(root, mode = 'ok') {
     stdio: 'ignore',
   });
   const deadline = Date.now() + 5_000;
-  while (!existsSync(portFile) && Date.now() < deadline) {
+  let port;
+  do {
+    port = existsSync(portFile) ? readFileSync(portFile, 'utf8').trim() : '';
+    if (/^\d+$/.test(port)) break;
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-  }
-  if (!existsSync(portFile)) {
+  } while (Date.now() < deadline);
+  if (!/^\d+$/.test(port)) {
     child.kill();
     throw new Error('mock gist GitHub server did not start');
   }
-  const port = readFileSync(portFile, 'utf8').trim();
   const apiBase = `http://127.0.0.1:${port}`;
   return {
     apiBase,
@@ -95,7 +97,10 @@ function serve(portFile, mode) {
     });
   });
   server.listen(0, '127.0.0.1', () => {
-    writeFileSync(portFile, String(server.address().port), { flag: 'wx' });
+    // Write-then-rename: the parent polls for this file, and open+write is not
+    // atomic — it must never observe an empty or partially written port.
+    writeFileSync(`${portFile}.tmp`, String(server.address().port), { flag: 'wx' });
+    renameSync(`${portFile}.tmp`, portFile);
   });
 }
 
