@@ -5,10 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  DAEMON_RESERVE_MB,
   LAUNCHD_LABEL,
   SYSTEMD_UNIT,
-  admitDaemonStart,
   disableDaemonSupervisor,
   ensureDaemonSupervisor,
   inspectSupervisor,
@@ -18,10 +16,6 @@ import {
   supervisorEnvironment,
   supervisorPaths,
 } from '../daemon-supervisor.mjs';
-
-function grantedAdmission() {
-  return { granted: true, reason: 'granted', message: null };
-}
 
 test('launchd unit is secret-free, loopback-agnostic, and keep-alive', () => {
   const plist = renderLaunchdPlist({ executable: '/home/user/.local/bin/agent-bot' });
@@ -77,32 +71,6 @@ test('supervisor paths follow the user-level convention', () => {
   assert.equal(supervisorPaths('/u', 'win32').kind, null);
 });
 
-test('admission refuses a reserve above the derived ceiling', () => {
-  assert.throws(
-    () => admitDaemonStart({
-      requestMb: 4096,
-      readMemory: () => ({ totalMb: 8192, availableMb: 4000, swapTotalMb: 0, swapUsedMb: 0, pressureLevel: 1 }),
-      listLeases: () => [],
-      budgetFor: () => ({ maxRunMb: 2048, machineBudgetMb: 4096, availabilityFloorMb: 768, lightRunMb: 256 }),
-      decide: () => grantedAdmission(),
-    }),
-    /exceeds the ENG-0138 machine cap/,
-  );
-});
-
-test('admission refuses when the budget decision is denied', () => {
-  assert.throws(
-    () => admitDaemonStart({
-      requestMb: DAEMON_RESERVE_MB,
-      readMemory: () => ({ totalMb: 8192, availableMb: 100, swapTotalMb: 0, swapUsedMb: 0, pressureLevel: 1 }),
-      listLeases: () => [],
-      budgetFor: () => ({ maxRunMb: 2048, machineBudgetMb: 4096, availabilityFloorMb: 768, lightRunMb: 256 }),
-      decide: () => ({ granted: false, reason: 'insufficient-headroom', message: 'only 100 MB is available' }),
-    }),
-    /was not admitted: only 100 MB is available/,
-  );
-});
-
 test('ensure writes and loads a launchd unit without calling disable', async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-supervisor-'));
   const commands = [];
@@ -111,7 +79,6 @@ test('ensure writes and loads a launchd unit without calling disable', async () 
     platform: 'darwin',
     executable: join(home, '.local', 'bin', 'agent-bot'),
     env: {},
-    admit: () => grantedAdmission(),
     probe: async () => ({ running: true, pid: 9, port: 1, startedAt: '2026-08-16T00:00:00.000Z' }),
     stopDetached: async () => { commands.push(['stop']); },
     exec: (command, args) => {
@@ -135,7 +102,6 @@ test('a second ensure refreshes the unit to a new entrypoint and keeps it loaded
     home,
     platform: 'linux',
     env: {},
-    admit: () => grantedAdmission(),
     probe: async () => ({ running: true, pid: 9, port: 1, startedAt: '2026-08-16T00:00:00.000Z' }),
     stopDetached: async () => {},
     exec: (command, args) => {
@@ -161,7 +127,6 @@ test('a no-op update still restarts the already-loaded supervisor', async () => 
     platform: 'linux',
     env: {},
     executable: '/opt/agent-bot',
-    admit: () => grantedAdmission(),
     probe: async () => ({ running: true, pid: 9, port: 1, startedAt: '2026-08-16T00:00:00.000Z' }),
     stopDetached: async () => {},
     exec: (command, args) => {
@@ -183,7 +148,6 @@ test('ensure stops a detached daemon before the supervisor takes over', async ()
     platform: 'darwin',
     executable: join(home, '.local', 'bin', 'agent-bot'),
     env: {},
-    admit: () => grantedAdmission(),
     probe: async () => ({ running: true, pid: 11, port: 2, startedAt: '2026-08-16T00:00:00.000Z' }),
     stopDetached: async () => { stops.push('stopped'); },
     exists: () => false,
@@ -196,7 +160,6 @@ test('unsupported platforms skip the supervisor', async () => {
   const result = await ensureDaemonSupervisor({
     home: '/u',
     platform: 'win32',
-    admit: () => { throw new Error('should not admit'); },
   });
   assert.deepEqual(result, { applied: false, reason: 'unsupported-platform', platform: 'win32' });
 });
