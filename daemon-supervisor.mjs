@@ -9,7 +9,6 @@
 //   ensureDaemonSupervisor  — write/refresh the unit and keep it loaded
 //   disableDaemonSupervisor — unload the unit and stop the daemon
 //   inspectSupervisor       — secret-free status for doctor
-//   admitDaemonStart        — ENG-0138 admission before spawn
 
 import { execFileSync } from 'node:child_process';
 import {
@@ -24,15 +23,9 @@ import { dirname, join } from 'node:path';
 import process from 'node:process';
 
 import { daemonStateFile, daemonStatus, stopDaemon } from './agent-daemon.mjs';
-import { decideAdmission, deriveBudget } from './tools/agent-guard/lib/budget.mjs';
-import { readLeases } from './tools/agent-guard/lib/leases.mjs';
-import { readMemoryStatus } from './tools/agent-guard/lib/system-memory.mjs';
 
 export const LAUNCHD_LABEL = 'dev.qwts.agent-bot.daemon';
 export const SYSTEMD_UNIT = 'agent-bot-daemon.service';
-// One Node HTTP listener. Kept at the light-run floor so pressure/swap gates
-// that exist for Electron-sized lanes do not refuse the identity service.
-export const DAEMON_RESERVE_MB = 256;
 
 export function supervisorSkipLoad(env = process.env) {
   return env.AGENT_BOT_SUPERVISOR_SKIP_LOAD === '1';
@@ -138,33 +131,6 @@ export function renderSupervisorUnit({ kind, executable, environment = {} }) {
   if (kind === 'launchd') return renderLaunchdPlist({ executable, environment });
   if (kind === 'systemd') return renderSystemdUnit({ executable, environment });
   throw new Error(`unsupported supervisor kind: ${kind}`);
-}
-
-export function admitDaemonStart({
-  requestMb = DAEMON_RESERVE_MB,
-  env = process.env,
-  readMemory = readMemoryStatus,
-  listLeases = readLeases,
-  budgetFor = deriveBudget,
-  decide = decideAdmission,
-} = {}) {
-  const memory = readMemory();
-  const budget = budgetFor(memory.totalMb);
-  if (requestMb > budget.maxRunMb) {
-    throw new Error(
-      `identity daemon reserve ${requestMb} MB exceeds the ENG-0138 machine cap of ${budget.maxRunMb} MB`,
-    );
-  }
-  const decision = decide({
-    budget,
-    memory,
-    leases: listLeases(env),
-    requestMb,
-  });
-  if (!decision.granted) {
-    throw new Error(`identity daemon was not admitted: ${decision.message}`);
-  }
-  return decision;
 }
 
 function runCommand(command, args, { env = process.env } = {}) {
@@ -312,7 +278,6 @@ export async function ensureDaemonSupervisor({
   env = process.env,
   platform = process.platform,
   executable = join(home, '.local', 'bin', 'agent-bot'),
-  admit = admitDaemonStart,
   probe = daemonStatus,
   stopDetached = stopDaemon,
   exists = existsSync,
@@ -326,7 +291,6 @@ export async function ensureDaemonSupervisor({
     return { applied: false, reason: 'unsupported-platform', platform };
   }
   const skipLoad = supervisorSkipLoad(env);
-  if (!skipLoad) admit({ env });
   const environment = supervisorEnvironment({ env, home });
   const supervisorEnv = { ...env, ...environment };
   const body = renderSupervisorUnit({ kind: paths.kind, executable, environment });
