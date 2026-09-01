@@ -214,6 +214,15 @@ one. The scope is part of the projected config, so reapplying the same
 profile with the same scope is a no-op and applying it without the scope is
 a conflict, never a silent widening.
 
+Such an account usually has no login session, and launchd refuses to load a
+LaunchAgent into a session-less user domain (`Bootstrap failed: 5:
+Input/output error` from `launchctl bootstrap user/<uid>`). Run the
+account's bootstrap and doctor with `AGENT_BOT_SUPERVISOR_SKIP_LOAD=1`: the
+supervisor unit is still written under `~/Library/LaunchAgents` and loads
+on the account's first login (`RunAtLoad`), bootstrap does not wait for a
+daemon that cannot start yet, and doctor reports `daemon-load-skipped` as a
+warning instead of failing the account.
+
 Optional `api_base` must be a credential-free HTTPS URL. Optional `settings`
 may contain `spaces_root` and `daemon_preference` (`off`, `prefer`, or
 `required`). Unknown fields are rejected under schema v1 instead of being
