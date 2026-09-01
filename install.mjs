@@ -56,7 +56,12 @@ export function ensureExecutableMode(path, { stat = statSync, chmod = chmodSync 
     chmod(path, 0o755);
   } catch (error) {
     if (error?.code === 'EPERM') {
-      throw new Error(`${path} is not executable and is owned by another user; fix its mode as that user`);
+      const refused = new Error(
+        `${path} is not executable and is owned by another user; fix its mode as that user`,
+        { cause: error },
+      );
+      refused.code = error.code;
+      throw refused;
     }
     throw error;
   }

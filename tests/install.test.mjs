@@ -252,7 +252,7 @@ test('ensureExecutableMode names the owner problem when a needed chmod is refuse
   chmodSync(entrypoint, 0o644);
   assert.throws(
     () => ensureExecutableMode(entrypoint, { chmod: epermChmod }),
-    /owned by another user/,
+    (error) => error.code === 'EPERM' && /owned by another user/.test(error.message),
   );
 });
 
