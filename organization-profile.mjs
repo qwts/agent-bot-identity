@@ -4,14 +4,32 @@ import { isAbsolute } from 'node:path';
 export const ORGANIZATION_PROFILE_SCHEMA_VERSION = 1;
 export const RUNTIME_PROFILE_INTERFACE_VERSION = 1;
 
+// One harness key per independently attributable harness (ENG-0339: the
+// active roster is harness-level). Environment detection knows only a subset
+// of these — the rest resolve through the account-name input in
+// detect-harness.mjs, so adding a harness here needs no per-tool env research.
 export const PROFILE_HARNESSES = Object.freeze([
+  'aider',
+  'amp',
+  'antigravity',
   'claude',
+  'cline',
   'codex',
   'copilot',
   'cursor',
+  'deepseek',
   'devin',
+  'droid',
+  'goose',
+  'hermes',
+  'kiro',
   'muse',
+  'opencode',
+  'pi',
+  'qwen',
   'vscode',
+  'warp',
+  'zcode',
 ]);
 
 const HARNESSES = new Set(PROFILE_HARNESSES);

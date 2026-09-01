@@ -56,8 +56,18 @@ function completeProfile(overrides = {}) {
   };
 }
 
-test('profile harness vocabulary matches runtime harness detection', () => {
-  assert.deepEqual(PROFILE_HARNESSES, HARNESSES.map(({ key }) => key).sort());
+// ENG-0339 split the vocabulary: environment detection knows the harnesses
+// with measured markers, while the rest resolve through the account-name
+// input. The surviving invariant is containment — an env-detectable harness
+// the profile rejects would fail closed against its own machine's profile.
+test('profile harness vocabulary is sorted, unique, and contains every env-detected harness', () => {
+  assert.deepEqual([...PROFILE_HARNESSES], [...new Set(PROFILE_HARNESSES)].sort());
+  for (const { key } of HARNESSES) {
+    assert.ok(
+      PROFILE_HARNESSES.includes(key),
+      `detect-harness knows "${key}" but the profile vocabulary rejects it`,
+    );
+  }
 });
 
 test('profile v1 normalizes complete defaults, model mappings, and lifecycle state', () => {

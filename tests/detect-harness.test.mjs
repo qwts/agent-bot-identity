@@ -131,3 +131,35 @@ test('a plain VS Code terminal still resolves to vscode, not to a forked harness
     'vscode',
   );
 });
+
+// ENG-0339: the macOS account short name is a detection input. An agent
+// account is named by its harness's App slug, so the name alone resolves the
+// persona — including harnesses that have no env matcher at all.
+test('an agent account resolves its harness by name alone', async () => {
+  const { accountHarness } = await import('../detect-harness.mjs');
+  assert.equal(accountHarness(cfg, 'you-goose-agent'), 'goose');
+  assert.equal(accountHarness(cfg, 'you-claude-agent'), 'claude');
+  assert.equal(accountHarness({ apps: { warp: 'custom-warp-bot' } }, 'custom-warp-bot'), 'warp');
+});
+
+test('the owner account, unknown names, and no config yield no account harness', async () => {
+  const { accountHarness } = await import('../detect-harness.mjs');
+  assert.equal(accountHarness(cfg, 'user'), null); // delegate mode — human persona
+  assert.equal(accountHarness(cfg, 'you-goose'), null); // not slug-shaped
+  assert.equal(accountHarness(cfg, 'you-mystery-agent'), null); // not a rostered harness
+  assert.equal(accountHarness({}, 'you-goose-agent'), null); // inert without config
+  assert.equal(accountHarness(cfg, null), null);
+});
+
+test('agent-process detection treats an agent account as that persona', () => {
+  // In an agent account even a bare human terminal is the persona — the
+  // account, not the directory, is bot territory — and so is any other
+  // harness launched there.
+  assert.equal(detectAgentHarness({ PATH: '/usr/bin' }, cfg, 'you-goose-agent'), 'you-goose-agent');
+  assert.equal(detectAgentHarness({ CLAUDECODE: '1' }, cfg, 'you-goose-agent'), 'you-goose-agent');
+  // GH_AGENT_APP stays above the account input.
+  assert.equal(detectAgentHarness({ GH_AGENT_APP: 'custom-bot' }, cfg, 'you-goose-agent'), 'custom-bot');
+  // The owner's account leaves the marker chain unchanged.
+  assert.equal(detectAgentHarness({ CLAUDECODE: '1' }, cfg, 'user'), 'you-claude-agent');
+  assert.equal(detectAgentHarness({ PATH: '/usr/bin' }, cfg, 'user'), null);
+});

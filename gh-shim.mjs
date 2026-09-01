@@ -1,4 +1,10 @@
+import { PROFILE_HARNESSES } from './organization-profile.mjs';
+
 export const GH_SHIM_MARKER = '# gh shim — agent bot identity. Managed by install-gh-shim.mjs';
+
+// One `*/.<harness>/worktrees/*` glob per profile harness, so the shim's
+// territory hint speaks the same vocabulary as territoryHarness.
+const TERRITORY_GLOBS = PROFILE_HARNESSES.map((h) => `*/.${h}/worktrees/*`).join('|\\\n  ');
 
 export function buildGhShim(tokenTool = null, { psPath = '/bin/ps', lsofPath = '/usr/sbin/lsof' } = {}) {
   const tokenSetup = tokenTool
@@ -164,16 +170,19 @@ AGENT_CONTEXT=""
 if [ -z "$AGENT_CONTEXT" ]; then
   env | grep -q '^CODEX_' && AGENT_CONTEXT=1
 fi
+# ENG-0339: an agent account is agent context even in a bare terminal — its
+# short name is the harness's App slug (<owner>-<harness>-agent). The env
+# override exists for tests and can only ADD the signal, never mask the
+# real account.
+case "$(id -un 2>/dev/null)" in *-*-agent) AGENT_CONTEXT=1 ;; esac
+case "$AGENT_BOT_ACCOUNT" in *-*-agent) AGENT_CONTEXT=1 ;; esac
 
 TERRITORY_HINT=""
 # The .<tool>/worktrees segment is the signal, not the root above it: a boot
 # volume too small for agent worktrees pushes them onto /Volumes/<drive>, which
 # says nothing about who owns the work.
 case "$PWD" in
-  */.claude/worktrees/*|*/.codex/worktrees/*|\
-  */.cursor/worktrees/*|*/.copilot/worktrees/*|\
-  */.devin/worktrees/*|*/.muse/worktrees/*|\
-  */.vscode/worktrees/*)
+  ${TERRITORY_GLOBS})
     TERRITORY_HINT=1
     ;;
 esac

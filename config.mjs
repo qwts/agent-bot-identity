@@ -23,6 +23,7 @@ import { lstatSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import {
+  PROFILE_HARNESSES,
   profileStatusForSlug,
   runtimeProfileInfo,
 } from './organization-profile.mjs';
@@ -128,11 +129,11 @@ export function appLifecycleStatus(appSlug, config = loadConfig()) {
   return profileStatusForSlug(appSlug, config);
 }
 
-// Harness keys recognised in an App slug. Kept local rather than imported from
-// detect-harness.mjs, which imports this module — the two lists are tied
-// together by a test instead of by a cycle. `vscode` is retained for the
-// pre-copilot Apps that still carry it.
-const SLUG_HARNESSES = ['claude', 'codex', 'cursor', 'copilot', 'devin', 'muse', 'vscode'];
+// Harness keys recognised in an App slug: the profile vocabulary is the one
+// list (organization-profile.mjs has no import cycle with this module, unlike
+// detect-harness.mjs). `vscode` is retained for the pre-copilot Apps that
+// still carry it.
+const SLUG_HARNESSES = PROFILE_HARNESSES;
 
 // Map an App slug back to its harness key. Used by execution-identity records
 // when there is no local agents roster (standalone clone).

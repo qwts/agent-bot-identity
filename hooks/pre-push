@@ -18,6 +18,12 @@ AGENT=""
 [ -n "$GH_AGENT_APP" ] && AGENT=1
 [ -n "$CLAUDE_CODE_ENTRYPOINT" ] && AGENT=1
 if [ -z "$AGENT" ]; then env | grep -q '^CODEX_' && AGENT=1; fi
+# ENG-0339: an agent account (short name <owner>-<harness>-agent) is agent
+# context even in a bare terminal — the account, not the env, is the persona.
+# AGENT_BOT_ACCOUNT exists for tests and can only ADD the signal, never mask
+# the real account.
+case "$(id -un 2>/dev/null)" in *-*-agent) AGENT=1 ;; esac
+case "$AGENT_BOT_ACCOUNT" in *-*-agent) AGENT=1 ;; esac
 
 AGENT_HOOK="${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}"
 if [ -x "$AGENT_HOOK" ]; then

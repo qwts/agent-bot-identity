@@ -520,3 +520,24 @@ test('the shim confirms Claude Desktop against the kernel, with no env override'
   assert.match(shim, /CLAUDE_DESKTOP_TEXT[\s\S]+\/Applications\/Claude\.app/);
   assert.doesNotMatch(shim, /AGENT_BOT_CLAUDE_DESKTOP/);
 });
+
+// ENG-0339: territory hints and agent context must cover the whole fleet, not
+// just the env-detectable harnesses.
+test('the shim territory hint speaks the full profile vocabulary', async () => {
+  const { buildGhShim } = await import('../gh-shim.mjs');
+  const { PROFILE_HARNESSES } = await import('../organization-profile.mjs');
+  const shim = buildGhShim();
+  for (const harness of PROFILE_HARNESSES) {
+    assert.ok(shim.includes(`*/.${harness}/worktrees/*`), `territory hint misses ${harness}`);
+  }
+});
+
+test('an agent account is agent context with no env markers at all', () => {
+  const result = runShim({
+    agentEnv: { AGENT_BOT_ACCOUNT: 'you-goose-agent' },
+    args: ['issue', 'create', '--title', 'forbidden'],
+    tokenToolAvailable: false,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /token helper or Node is unavailable.*refusing stock human gh/);
+});
