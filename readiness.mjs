@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { inspectAgentSpace, resolveSpacesHome } from './agent-space.mjs';
 import { listSouls, populationFile } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
-import { apiBase, loadConfig, slugForHarness } from './config.mjs';
+import { apiBase, loadConfig, rosterScope, slugForHarness } from './config.mjs';
 import { inspectAppCredentials } from './credential-reconciler.mjs';
 import { detectHarness, HARNESSES } from './detect-harness.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
@@ -67,6 +67,26 @@ export function configuredAppSlugs(config, explicit = []) {
       'profile-app-retired',
       'an explicitly selected App is retired by the installed organization profile',
     );
+  }
+  // A scoped account's roster is exactly its scope: harness mappings and
+  // the rest of the profile roster belong to other accounts' homes. An
+  // explicit App outside the scope, or a scoped App the profile has since
+  // retired, fails closed rather than widening the roster.
+  const scope = rosterScope(config);
+  if (scope) {
+    if (explicit.some((slug) => !scope.includes(slug))) {
+      throw new OrganizationProfileError(
+        'app-out-of-scope',
+        'an explicitly selected App is outside this account\'s roster scope',
+      );
+    }
+    if (scope.some((slug) => profileStatusForSlug(slug, config) === 'retired')) {
+      throw new OrganizationProfileError(
+        'profile-app-retired',
+        'a scoped App is retired by the installed organization profile',
+      );
+    }
+    return scope;
   }
   const slugs = new Set([...profileAppSlugs(config), ...explicit]);
   for (const { key } of HARNESSES) {
@@ -455,15 +475,18 @@ function configCheck({ config, detectedHarness, mappings }) {
       evidence: { source: 'runtime-config', harness: detectedHarness, mappings },
     });
   }
+  const scope = rosterScope(config);
   return readinessCheck({
     id: 'config.runtime',
     status: 'ready',
-    message: `config loaded (${mappings.length} harness mapping${mappings.length === 1 ? '' : 's'})`,
+    message: `config loaded (${mappings.length} harness mapping${mappings.length === 1 ? '' : 's'}`
+      + (scope ? `, roster scoped to ${scope.length} App${scope.length === 1 ? '' : 's'})` : ')'),
     evidence: {
       source: 'runtime-config',
       harness: detectedHarness,
       mappings,
       api_base: safeApiBase(config),
+      ...(scope ? { scope } : {}),
     },
   });
 }

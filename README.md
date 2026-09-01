@@ -119,7 +119,7 @@ partial current-harness setup.
 Installation provides one executable at `~/.local/bin/agent-bot`:
 
 ```bash
-agent-bot bootstrap [--profile <path|->] [--config <path>] [--app <slug>] [--with-gh-shim] [--json]
+agent-bot bootstrap [--profile <path|->] [--config <path>] [--app <slug>] [--scope-app <slug>] [--with-gh-shim] [--json]
 agent-bot --version
 agent-bot setup-worktree [app-slug]
 agent-bot mint-token --app <slug> [--json]
@@ -193,6 +193,35 @@ partial profiles, unknown schema versions, and incompatible runtime
 requirements fail before the config, runtime, credentials, shim, or worktree
 is changed. Reapplying the same profile is a no-op; a different installed
 config is a conflict that requires explicit reconciliation.
+
+#### Roster scope for a dedicated account
+
+A machine account that exists to run one identity (a per-harness agent
+account whose home holds exactly one App key) is not an incomplete copy of
+the operator's roster. `--scope-app <slug>` (repeatable, only with
+`--profile`) projects the same profile with a `scope` of those Apps:
+
+```bash
+agent-bot bootstrap --profile organization-profile.json --scope-app you-claude-agent --with-gh-shim --machine-only
+```
+
+The scoped account's credential roster is exactly its scope: only those Apps
+are reconciled and live-minted, and harness defaults for other Apps do not
+widen it. Every scoped App must be active in the profile, an explicit `--app`
+outside the scope fails closed (`app-out-of-scope`), and a scoped App the
+profile later retires makes the account not ready rather than a roster of
+one. The scope is part of the projected config, so reapplying the same
+profile with the same scope is a no-op and applying it without the scope is
+a conflict, never a silent widening.
+
+Such an account usually has no login session, and launchd refuses to load a
+LaunchAgent into a session-less user domain (`Bootstrap failed: 5:
+Input/output error` from `launchctl bootstrap user/<uid>`). Run the
+account's bootstrap and doctor with `AGENT_BOT_SUPERVISOR_SKIP_LOAD=1`: the
+supervisor unit is still written under `~/Library/LaunchAgents` and loads
+on the account's first login (`RunAtLoad`), bootstrap does not wait for a
+daemon that cannot start yet, and doctor reports `daemon-load-skipped` as a
+warning instead of failing the account.
 
 Optional `api_base` must be a credential-free HTTPS URL. Optional `settings`
 may contain `spaces_root` and `daemon_preference` (`off`, `prefer`, or

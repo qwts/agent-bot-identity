@@ -20,6 +20,7 @@ import {
   parseBootstrapArgs,
 } from '../bootstrap.mjs';
 import { parseDoctorArgs } from '../doctor.mjs';
+import { loadConfig, rosterScope, scopeConfigToApps } from '../config.mjs';
 import {
   OrganizationProfileError,
   organizationProfileToConfig,
@@ -80,6 +81,7 @@ test('bootstrap CLI parses explicit phases and rejects ignored machine options',
       json: false,
       phase: 'all',
       requireSchemaVersion: null,
+      scopeApps: [],
       withGhShim: true,
     },
   );
@@ -606,4 +608,111 @@ test('bootstrap JSON mode emits exactly one report object', async () => {
   } finally {
     process.exitCode = previous;
   }
+});
+
+test('--scope-app is repeatable, needs --profile, and scopes the projected config', () => {
+  assert.deepEqual(
+    parseBootstrapArgs([
+      '--profile', '/profile.json',
+      '--scope-app', 'example-codex-sol-agent',
+      '--scope-app', 'example-codex-agent',
+      '--machine-only',
+    ]).scopeApps,
+    ['example-codex-sol-agent', 'example-codex-agent'],
+  );
+  assert.throws(
+    () => parseBootstrapArgs(['--config', '/config.json', '--scope-app', 'example-codex-agent']),
+    /--scope-app requires --profile/,
+  );
+  assert.throws(() => parseBootstrapArgs(['--profile', '/p.json', '--scope-app']), /requires a value/);
+});
+
+test('a scoped account\'s roster is exactly its scope, and it fails closed on drift', () => {
+  const config = scopeConfigToApps(
+    organizationProfileToConfig(organizationProfile()),
+    ['example-codex-sol-agent', 'example-codex-sol-agent'],
+  );
+  assert.deepEqual(config.scope, { apps: ['example-codex-sol-agent'] });
+  assert.deepEqual(configuredAppSlugs(config), ['example-codex-sol-agent']);
+  assert.deepEqual(configuredAppSlugs(config, ['example-codex-sol-agent']), ['example-codex-sol-agent']);
+  // The harness mapping (codex -> example-codex-agent) does not widen it.
+  assert.throws(
+    () => configuredAppSlugs(config, ['example-codex-agent']),
+    (error) => error.code === 'app-out-of-scope',
+  );
+  // A scoped App the profile has since retired is not a roster of one.
+  const retiredLater = {
+    ...config,
+    profile: {
+      ...config.profile,
+      identities: config.profile.identities.map((identity) => (
+        identity.slug === 'example-codex-sol-agent' ? { ...identity, status: 'retired' } : identity
+      )),
+    },
+  };
+  assert.throws(
+    () => configuredAppSlugs(retiredLater),
+    (error) => error.code === 'profile-app-retired',
+  );
+});
+
+test('a roster scope must name active profile Apps, without reflecting the slug', () => {
+  const config = organizationProfileToConfig(organizationProfile());
+  assert.throws(
+    () => scopeConfigToApps(config, ['example-old-agent']),
+    (error) => {
+      assert.equal(error.code, 'profile-app-retired');
+      assert.doesNotMatch(error.message, /example-old-agent/);
+      return true;
+    },
+  );
+  assert.throws(
+    () => scopeConfigToApps(config, ['nobody-agent']),
+    (error) => {
+      assert.equal(error.code, 'profile-app-unknown');
+      assert.doesNotMatch(error.message, /nobody-agent/);
+      return true;
+    },
+  );
+  assert.throws(
+    () => scopeConfigToApps(config, ['Bad Slug']),
+    (error) => error.code === 'profile-app-unknown',
+  );
+  assert.equal(scopeConfigToApps(config, []), config);
+});
+
+test('bootstrap --profile --scope-app installs a scoped config that reruns without conflict', () => {
+  const home = tempHome();
+  const install = () => installBootstrapProfile({
+    sourcePath: '-',
+    scopeApps: ['example-codex-sol-agent'],
+    home,
+    env: {},
+    read: () => JSON.stringify(organizationProfile()),
+  });
+  const first = install();
+  assert.equal(first.updated, true);
+  const written = JSON.parse(readFileSync(bootstrapConfigPath(home), 'utf8'));
+  assert.deepEqual(written.scope, { apps: ['example-codex-sol-agent'] });
+  assert.deepEqual(rosterScope(loadConfig({ home, env: {} })), ['example-codex-sol-agent']);
+  const second = install();
+  assert.equal(second.updated, false);
+  // The same profile without the scope is a different config: a conflict,
+  // never a silent widening of the roster.
+  assert.throws(
+    () => installBootstrapProfile({
+      sourcePath: '-',
+      home,
+      env: {},
+      read: () => JSON.stringify(organizationProfile()),
+    }),
+    (error) => error.code === 'profile-config-conflict',
+  );
+});
+
+test('a malformed scope in the installed config fails loudly', () => {
+  for (const scope of [null, [], { apps: [] }, { apps: 'x-agent' }, { apps: ['Bad Slug'] }]) {
+    assert.throws(() => rosterScope({ scope }), /scope/);
+  }
+  assert.equal(rosterScope({}), null);
 });

@@ -15,20 +15,28 @@
 //     "settings": {                        // durable, secret-free user policy
 //       "spacesRoot": "/absolute/path",
 //       "daemonPreference": "off"          // off | prefer | required
-//     }
+//     },
+//     "scope": { "apps": ["you-claude-agent"] } // this account serves only these Apps
 //   }
+//
+// `scope` is for a machine account dedicated to one identity (a per-harness
+// agent account): the credential roster is exactly those Apps instead of
+// every active App in the profile, so a home that holds one key is complete,
+// not incomplete. It is written by `bootstrap --profile ... --scope-app`.
 
 import process from 'node:process';
 import { lstatSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import {
+  OrganizationProfileError,
   PROFILE_HARNESSES,
   profileStatusForSlug,
   runtimeProfileInfo,
 } from './organization-profile.mjs';
 
 const DAEMON_PREFERENCES = new Set(['off', 'prefer', 'required']);
+const SCOPE_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 
 export function loadConfig({ home = homedir(), env = process.env } = {}) {
   const path = env.AGENT_BOT_CONFIG ?? join(home, '.config', 'agent-bot', 'config.json');
@@ -104,10 +112,62 @@ function validateDaemonPreference(value) {
   return value;
 }
 
+// The App roster this account is scoped to, sorted and unique, or null when
+// the config carries no scope (the roster is then every active profile App).
+export function rosterScope(config = loadConfig()) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error('agent-bot config must be an object');
+  }
+  if (config.scope === undefined) return null;
+  const scope = config.scope;
+  if (!scope || typeof scope !== 'object' || Array.isArray(scope)) {
+    throw new Error('agent-bot config scope must be an object');
+  }
+  const apps = scope.apps;
+  if (
+    !Array.isArray(apps)
+    || apps.length === 0
+    || apps.some((slug) => typeof slug !== 'string' || !SCOPE_SLUG_RE.test(slug))
+  ) {
+    throw new Error('invalid scope.apps: expected a non-empty list of App slugs');
+  }
+  return [...new Set(apps)].sort();
+}
+
+// Project a config onto a roster scope. Every scoped App must be active in
+// the installed organization profile: a retired identity must not regain a
+// foothold by being the only App an account serves, and a slug the profile
+// never listed has no App behind it at all. Deterministic for a given
+// (profile, scope) pair, so a rerun projects an identical config.
+export function scopeConfigToApps(config, apps = []) {
+  const wanted = [...new Set(apps)].sort();
+  if (wanted.length === 0) return config;
+  for (const slug of wanted) {
+    if (typeof slug !== 'string' || !SCOPE_SLUG_RE.test(slug)) {
+      throw new OrganizationProfileError('profile-app-unknown', 'a roster scope names an invalid App slug');
+    }
+    const status = profileStatusForSlug(slug, config);
+    if (status === 'retired') {
+      throw new OrganizationProfileError(
+        'profile-app-retired',
+        'a roster scope names an App retired by the organization profile',
+      );
+    }
+    if (status !== 'active') {
+      throw new OrganizationProfileError(
+        'profile-app-unknown',
+        'a roster scope names an App the organization profile does not list',
+      );
+    }
+  }
+  return { ...config, scope: { apps: wanted } };
+}
+
 function validateSettings(config) {
   const settings = settingsSection(config);
   if (settings.spacesRoot !== undefined) spacesRootSetting(config);
   if (settings.daemonPreference !== undefined) validateDaemonPreference(settings.daemonPreference);
+  rosterScope(config);
 }
 
 export function apiBase(config = loadConfig()) {
