@@ -104,14 +104,17 @@ export function parsePassItemView(text) {
 }
 
 // Proton Pass exposes custom fields in two places depending on item type:
-// `content.content.Custom.sections[].fields[]` for custom items, and a flat
-// `content.extra_fields[]` elsewhere. Read both rather than betting on one.
-function collectFields(content) {
+// `content.content.Custom.sections[].section_fields[]` (spelled `fields` by
+// some CLI builds) for custom items, and a flat `content.extra_fields[]`
+// elsewhere. Read every spelling rather than betting on one; a CLI upgrade
+// that renames the array must not silently hide credentials.
+export function collectFields(content) {
   const entries = [];
   const sections = content?.content?.Custom?.sections;
   if (Array.isArray(sections)) {
     for (const section of sections) {
       if (Array.isArray(section?.fields)) entries.push(...section.fields);
+      if (Array.isArray(section?.section_fields)) entries.push(...section.section_fields);
     }
   }
   if (Array.isArray(content?.extra_fields)) entries.push(...content.extra_fields);
@@ -119,12 +122,16 @@ function collectFields(content) {
   for (const entry of entries) {
     const name = pickString(entry?.field_name, entry?.fieldName, entry?.name, entry?.label);
     if (!name) continue;
+    // Values arrive either bare or wrapped in a typed union: the live CLI
+    // prints `content: { Text: ... }` / `content: { Hidden: ... }`.
     const value = pickString(
       typeof entry?.value === 'string' ? entry.value : null,
       entry?.value?.text,
       entry?.value?.content,
       entry?.field_value,
       entry?.data?.value,
+      entry?.content?.Text,
+      entry?.content?.Hidden,
     );
     if (value === null) continue;
     const key = name.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -183,7 +190,22 @@ export function selectPrivateKeyAttachment(attachments) {
   if (exact.length > 1) throw new Error('pass-cli item has ambiguous private-key.pem attachments');
   const pem = (attachments ?? []).filter((entry) => entry.name.toLowerCase().endsWith('.pem'));
   if (pem.length === 1) return pem[0];
+  // Zero and many are different failures: many is a conflict that must fail
+  // closed even when a field could answer, zero may fall through to the field.
+  if (pem.length > 1) throw new Error('pass-cli item has ambiguous private-key.pem attachments');
   throw new Error('pass-cli item has no unambiguous private-key.pem attachment');
+}
+
+// A hidden "Private Key" field is the CLI-writable home for the PEM —
+// `pass-cli item update --field` can set it, while attachments can only be
+// added through the desktop app. The attachment stays preferred so items
+// carrying both restore exactly as before; the field is the fallback.
+// collectFields trims values, so the trailing newline PEM tooling expects is
+// restored here.
+export function selectPrivateKeyField(fields) {
+  const value = (fields ?? new Map()).get('privatekey');
+  if (!value) return null;
+  return value.endsWith('\n') ? value : `${value}\n`;
 }
 
 export const PROVIDER_SESSION_REQUIRED = 'provider-session-required';
@@ -354,27 +376,42 @@ export function createProtonPassCredentialProvider({ run = runPass, write = writ
       }
 
       if (privateKeyDestination) {
-        let attachment;
+        let attachment = null;
         try {
           attachment = selectPrivateKeyAttachment(attachments);
         } catch (error) {
-          const code = /ambiguous/i.test(error.message) ? 'ambiguous-private-key' : 'missing-private-key';
-          throw preparationError(
-            code,
-            slug,
-            code === 'ambiguous-private-key'
-              ? 'the provider item has multiple private-key.pem candidates; keep exactly one'
-              : 'the provider item has no private-key.pem attachment',
-            error,
-          );
+          // Multiple candidates are a real conflict; zero just means the item
+          // may hold the key in its "Private Key" field instead. ("has
+          // ambiguous", not bare /ambiguous/ — the zero case says
+          // "no unambiguous", which that broader match would swallow.)
+          if (/has ambiguous/i.test(error.message)) {
+            throw preparationError(
+              'ambiguous-private-key',
+              slug,
+              'the provider item has multiple private-key.pem candidates; keep exactly one',
+              error,
+            );
+          }
         }
-        run([
-          'item', 'attachment', 'download',
-          '--share-id', shareId,
-          '--item-id', itemId,
-          '--attachment-id', attachment.id,
-          '--output', privateKeyDestination,
-        ]);
+        if (attachment) {
+          run([
+            'item', 'attachment', 'download',
+            '--share-id', shareId,
+            '--item-id', itemId,
+            '--attachment-id', attachment.id,
+            '--output', privateKeyDestination,
+          ]);
+        } else {
+          const fieldPem = selectPrivateKeyField(fields);
+          if (!fieldPem) {
+            throw preparationError(
+              'missing-private-key',
+              slug,
+              'the provider item has no private-key.pem attachment or "Private Key" field',
+            );
+          }
+          write(privateKeyDestination, fieldPem, { mode: 0o600 });
+        }
       }
       return { provider: 'proton-pass' };
     },
@@ -545,7 +582,7 @@ export function ensurePrivateKey({
         throw preparationError(
           'malformed-private-key',
           slug,
-          'the restored private key is malformed; replace the provider attachment',
+          'the restored private key is malformed; replace the provider attachment or "Private Key" field',
         );
       }
       chmod(keyTemporary, 0o600);
