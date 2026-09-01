@@ -47,11 +47,12 @@ function optionalLstat(path, lstat = lstatSync) {
 }
 
 // Runtime files may belong to another user: a Homebrew keg under an
-// admin-owned prefix ships them already 0755, and a non-owner chmod fails with
-// EPERM while changing nothing. Only chmod when bits are actually missing.
+// admin-owned prefix ships them already executable (0755, or 0555 for the
+// read-only wrapper), and a non-owner chmod fails with EPERM while changing
+// nothing. Only chmod when an executable bit is actually missing.
 export function ensureExecutableMode(path, { stat = statSync, chmod = chmodSync } = {}) {
   const mode = stat(path).mode & 0o777;
-  if ((mode & 0o755) === 0o755) return false;
+  if ((mode & 0o111) === 0o111) return false;
   try {
     chmod(path, 0o755);
   } catch (error) {

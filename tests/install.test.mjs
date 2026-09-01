@@ -234,6 +234,16 @@ test('installExecutable does not chmod an already-executable entrypoint it does 
   assert.equal(readlinkSync(installed), entrypoint);
 });
 
+test('installExecutable leaves a read-only 0555 entrypoint alone', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-install-'));
+  const root = mkdtempSync(join(tmpdir(), 'agent-bot-root-'));
+  const entrypoint = join(root, 'agent-bot');
+  writeFileSync(entrypoint, '#!/bin/sh\n', { mode: 0o555 });
+  chmodSync(entrypoint, 0o555);
+  const installed = installExecutable({ home, entrypoint, chmod: epermChmod });
+  assert.equal(readlinkSync(installed), entrypoint);
+});
+
 test('installExecutable still repairs a non-executable entrypoint it owns', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-install-'));
   const root = mkdtempSync(join(tmpdir(), 'agent-bot-root-'));
