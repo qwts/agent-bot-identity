@@ -210,9 +210,10 @@ are reconciled and live-minted, and harness defaults for other Apps do not
 widen it. Every scoped App must be active in the profile, an explicit `--app`
 outside the scope fails closed (`app-out-of-scope`), and a scoped App the
 profile later retires makes the account not ready rather than a roster of
-one. The scope is part of the projected config, so reapplying the same
-profile with the same scope is a no-op and applying it without the scope is
-a conflict, never a silent widening.
+one. The scope is part of the projected config: reapplying the same profile
+with the same scope is a no-op, adding a scope to an unscoped config from
+the same profile narrows it in place, and removing or changing a scope is a
+conflict, never a silent widening.
 
 Such an account usually has no login session, and launchd refuses to load a
 LaunchAgent into a session-less user domain (`Bootstrap failed: 5:

@@ -140,6 +140,12 @@ export function bootstrapConfigPath(home = homedir()) {
   return join(home, '.config', 'agent-bot', 'config.json');
 }
 
+function narrowsRosterScope(current, next) {
+  if (!next || next.scope === undefined || current.scope !== undefined) return false;
+  const { scope, ...unscoped } = next;
+  return isDeepStrictEqual(current, unscoped);
+}
+
 function publishBootstrapConfig({
   config,
   sourceDescription,
@@ -165,7 +171,14 @@ function publishBootstrapConfig({
       throw new Error(`${destination} exists and is not a regular agent-bot config file`);
     }
     const current = loadConfig({ home, env: { ...env, AGENT_BOT_CONFIG: destination } });
-    if (!isDeepStrictEqual(current, config)) {
+    if (isDeepStrictEqual(current, config)) {
+      return { config: current, path: destination, updated: false };
+    }
+    // Adding a roster scope to an unscoped config projected from the same
+    // profile only narrows what this account serves; it is rewritten in
+    // place. Removing or changing a scope, or any other difference, stays a
+    // conflict that needs explicit reconciliation.
+    if (!narrowsRosterScope(current, config)) {
       if (conflictCode) {
         throw new OrganizationProfileError(
           conflictCode,
@@ -176,7 +189,6 @@ function publishBootstrapConfig({
         `${destination} conflicts with ${sourceDescription}; move it aside or reconcile it explicitly`,
       );
     }
-    return { config: current, path: destination, updated: false };
   }
 
   mkdir(dirname(destination), { recursive: true });

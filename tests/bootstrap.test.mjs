@@ -697,6 +697,36 @@ test('bootstrap --profile --scope-app installs a scoped config that reruns witho
   assert.deepEqual(rosterScope(loadConfig({ home, env: {} })), ['example-codex-sol-agent']);
   const second = install();
   assert.equal(second.updated, false);
+  // A scope added to an unscoped config from the same profile narrows the
+  // roster: rewritten in place, not a conflict. Removing it stays one.
+  const unscopedHome = tempHome();
+  installBootstrapProfile({
+    sourcePath: '-', home: unscopedHome, env: {}, read: () => JSON.stringify(organizationProfile()),
+  });
+  const narrowed = installBootstrapProfile({
+    sourcePath: '-',
+    scopeApps: ['example-codex-sol-agent'],
+    home: unscopedHome,
+    env: {},
+    read: () => JSON.stringify(organizationProfile()),
+  });
+  assert.equal(narrowed.updated, true);
+  assert.deepEqual(
+    JSON.parse(readFileSync(bootstrapConfigPath(unscopedHome), 'utf8')).scope,
+    { apps: ['example-codex-sol-agent'] },
+  );
+  assert.equal(statSync(bootstrapConfigPath(unscopedHome)).mode & 0o777, 0o600);
+  // Changing an existing scope is a conflict too.
+  assert.throws(
+    () => installBootstrapProfile({
+      sourcePath: '-',
+      scopeApps: ['example-codex-agent'],
+      home,
+      env: {},
+      read: () => JSON.stringify(organizationProfile()),
+    }),
+    (error) => error.code === 'profile-config-conflict',
+  );
   // The same profile without the scope is a different config: a conflict,
   // never a silent widening of the roster.
   assert.throws(
