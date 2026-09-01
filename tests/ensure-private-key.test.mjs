@@ -177,6 +177,30 @@ test('a private-key.pem attachment stays preferred over the field', () => {
   assert.equal(readFileSync(privateKeyPath('bot-app', home), 'utf8'), 'attachment material\n');
 });
 
+// Two conflicting .pem attachments must fail closed even when a "Private Key"
+// field could answer — restoring the field would silently pick a third
+// candidate the operator never chose.
+test('ambiguous pem attachments never fall through to the field', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-key-'));
+  assert.throws(() => ensurePrivateKey({
+    slug: 'bot-app', home,
+    run: passRun(() => viewWith({
+      sections: [{
+        section_fields: [
+          { name: 'App ID', content: { Text: '4376641' } },
+          { name: 'Private Key', content: { Hidden: 'field material' } },
+        ],
+      }],
+      attachments: [
+        { id: 'attachment-1', content: { name: 'old-key.pem' } },
+        { id: 'attachment-2', content: { name: 'new-key.pem' } },
+      ],
+    })),
+    validateKey: () => true,
+  }), /multiple private-key\.pem candidates/);
+  assert.equal(existsSync(privateKeyPath('bot-app', home)), false);
+});
+
 test('missing both the attachment and the field names both restore sources', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-key-'));
   assert.throws(() => ensurePrivateKey({

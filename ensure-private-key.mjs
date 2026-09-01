@@ -190,6 +190,9 @@ export function selectPrivateKeyAttachment(attachments) {
   if (exact.length > 1) throw new Error('pass-cli item has ambiguous private-key.pem attachments');
   const pem = (attachments ?? []).filter((entry) => entry.name.toLowerCase().endsWith('.pem'));
   if (pem.length === 1) return pem[0];
+  // Zero and many are different failures: many is a conflict that must fail
+  // closed even when a field could answer, zero may fall through to the field.
+  if (pem.length > 1) throw new Error('pass-cli item has ambiguous private-key.pem attachments');
   throw new Error('pass-cli item has no unambiguous private-key.pem attachment');
 }
 
