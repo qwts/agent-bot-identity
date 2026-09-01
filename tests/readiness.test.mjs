@@ -314,6 +314,25 @@ test('skill readiness probes every reference and fails when only storage-surface
   assert.equal(check.code, 'runtime-skill-incomplete');
 });
 
+test('skill readiness probes the Homebrew libexec bundle behind the stable bin wrapper', async () => {
+  const home = tempRoot();
+  const probed = [];
+  const report = await collectReadiness({
+    command: 'doctor',
+    scope: 'machine',
+    ...machineDependencies(home),
+    readlink: () => '/opt/homebrew/opt/agent-bot/bin/agent-bot',
+    access: (path) => {
+      if (path.includes('/skills/agent-bot/')) probed.push(path);
+    },
+  });
+  assert.equal(report.machine.checks.find(({ id }) => id === 'skill.runtime').status, 'ready');
+  assert.equal(probed.length, 5);
+  for (const path of probed) {
+    assert.ok(path.startsWith('/opt/homebrew/opt/agent-bot/libexec/skills/agent-bot/'), path);
+  }
+});
+
 test('skipped bootstrap verification passes a null verifier and preserves the operation failure', async () => {
   const home = tempRoot();
   let verifier = 'unobserved';

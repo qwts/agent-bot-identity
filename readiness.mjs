@@ -20,7 +20,7 @@ import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
 import { daemonStatus } from './agent-daemon.mjs';
 import { inspectSupervisor, supervisorSkipLoad } from './daemon-supervisor.mjs';
-import { installationPaths, isManagedExecutable } from './install.mjs';
+import { homebrewRuntimeRoot, installationPaths, isManagedExecutable } from './install.mjs';
 import { inspectConfiguredCodexDesktopGh, inspectShellGhShim } from './install-gh-shim.mjs';
 import {
   OrganizationProfileError,
@@ -608,7 +608,8 @@ function runtimeSkillCheck({ home, lstat, readlink, access }) {
   try {
     const stat = optionalLstat(executable, lstat);
     if (stat?.isSymbolicLink()) {
-      runtimeRoot = dirname(resolve(dirname(executable), readlink(executable)));
+      const target = resolve(dirname(executable), readlink(executable));
+      runtimeRoot = homebrewRuntimeRoot(target) ?? dirname(target);
     }
   } catch {
     /* reported as an incomplete installed bundle below */

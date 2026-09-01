@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
-  agentHookFastPath, ensureExecutableMode, ensureExecutablePath, homebrewStableEntrypoint,
+  agentHookFastPath, ensureExecutableMode, ensureExecutablePath, homebrewRuntimeRoot, homebrewStableEntrypoint,
   installAgentBot, installAgentHook, installExecutable, installHookWrappers, installationPaths,
   isHomebrewAgentBotPath, isManagedExecutable,
 } from '../install.mjs';
@@ -205,6 +205,19 @@ test('installExecutable replaces a stale Homebrew Cellar keg symlink', () => {
   );
   assert.equal(installExecutable({ home, entrypoint: newCellar }), installed);
   assert.equal(readlinkSync(installed), stable);
+});
+
+test('homebrewRuntimeRoot maps the bin wrapper and libexec entrypoints to the keg libexec', () => {
+  assert.equal(
+    homebrewRuntimeRoot('/opt/homebrew/opt/agent-bot/bin/agent-bot'),
+    '/opt/homebrew/opt/agent-bot/libexec',
+  );
+  assert.equal(
+    homebrewRuntimeRoot('/usr/local/Cellar/agent-bot/0.3.1/libexec/agent-bot'),
+    '/usr/local/Cellar/agent-bot/0.3.1/libexec',
+  );
+  assert.equal(homebrewRuntimeRoot('/home/user/checkout/agent-bot'), null);
+  assert.equal(homebrewRuntimeRoot('/opt/homebrew/opt/agent-bot/libexec/skills/agent-bot'), null);
 });
 
 test('installExecutable refuses a foreign executable', () => {
