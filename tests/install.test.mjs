@@ -1,14 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  mkdirSync, mkdtempSync, readFileSync, readlinkSync, symlinkSync, writeFileSync,
+  chmodSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
-  agentHookFastPath, ensureExecutablePath, homebrewStableEntrypoint, installAgentBot,
-  installAgentHook, installExecutable, installHookWrappers, installationPaths,
+  agentHookFastPath, ensureExecutableMode, ensureExecutablePath, homebrewStableEntrypoint,
+  installAgentBot, installAgentHook, installExecutable, installHookWrappers, installationPaths,
   isHomebrewAgentBotPath, isManagedExecutable,
 } from '../install.mjs';
 import { installGhShim } from '../install-gh-shim.mjs';
@@ -212,6 +212,69 @@ test('installExecutable refuses a foreign executable', () => {
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
   writeFileSync(join(home, '.local', 'bin', 'agent-bot'), 'foreign\n');
   assert.throws(() => installExecutable({ home, chmod: () => {} }), /not an agent-bot symlink/);
+});
+
+// A Homebrew keg under an admin-owned prefix ships the entrypoint and hooks
+// already 0755 but owned by another user. The installer used to chmod them
+// unconditionally, and that no-op chmod failed with EPERM for the invoking
+// user, so bootstrap reported runtime-install-failed on every managed Mac.
+function epermChmod() {
+  const error = new Error('EPERM: operation not permitted, chmod');
+  error.code = 'EPERM';
+  throw error;
+}
+
+test('installExecutable does not chmod an already-executable entrypoint it does not own', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-install-'));
+  const root = mkdtempSync(join(tmpdir(), 'agent-bot-root-'));
+  const entrypoint = join(root, 'agent-bot');
+  writeFileSync(entrypoint, '#!/bin/sh\n', { mode: 0o755 });
+  chmodSync(entrypoint, 0o755);
+  const installed = installExecutable({ home, entrypoint, chmod: epermChmod });
+  assert.equal(readlinkSync(installed), entrypoint);
+});
+
+test('installExecutable leaves a read-only 0555 entrypoint alone', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-install-'));
+  const root = mkdtempSync(join(tmpdir(), 'agent-bot-root-'));
+  const entrypoint = join(root, 'agent-bot');
+  writeFileSync(entrypoint, '#!/bin/sh\n', { mode: 0o555 });
+  chmodSync(entrypoint, 0o555);
+  const installed = installExecutable({ home, entrypoint, chmod: epermChmod });
+  assert.equal(readlinkSync(installed), entrypoint);
+});
+
+test('installExecutable still repairs a non-executable entrypoint it owns', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-install-'));
+  const root = mkdtempSync(join(tmpdir(), 'agent-bot-root-'));
+  const entrypoint = join(root, 'agent-bot');
+  writeFileSync(entrypoint, '#!/bin/sh\n', { mode: 0o644 });
+  chmodSync(entrypoint, 0o644);
+  const calls = [];
+  installExecutable({ home, entrypoint, chmod: (path, mode) => calls.push([path, mode]) });
+  assert.deepEqual(calls, [[entrypoint, 0o755]]);
+});
+
+test('ensureExecutableMode names the owner problem when a needed chmod is refused', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agent-bot-root-'));
+  const entrypoint = join(root, 'agent-bot');
+  writeFileSync(entrypoint, '#!/bin/sh\n', { mode: 0o644 });
+  chmodSync(entrypoint, 0o644);
+  assert.throws(
+    () => ensureExecutableMode(entrypoint, { chmod: epermChmod }),
+    (error) => error.code === 'EPERM' && /owned by another user/.test(error.message),
+  );
+});
+
+test('hook wrappers install from already-executable source hooks another user owns', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-hooks-'));
+  const source = mkdtempSync(join(tmpdir(), 'agent-bot-source-'));
+  for (const name of [...GIT_HOOK_NAMES, 'chain-hook']) {
+    writeFileSync(join(source, name), '#!/bin/sh\n', { mode: 0o755 });
+    chmodSync(join(source, name), 0o755);
+  }
+  const hooks = installHookWrappers({ home, sourceHooks: source, chmod: epermChmod });
+  assert.match(readFileSync(join(hooks, 'pre-commit'), 'utf8'), /agent-bot.*hook pre-commit/);
 });
 
 test('hook wrappers dispatch through the stable executable', () => {

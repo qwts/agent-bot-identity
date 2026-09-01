@@ -422,6 +422,37 @@ test('invalid profile failure stops every downstream bootstrap mutation with a s
   assert.doesNotMatch(JSON.stringify(report), new RegExp(sentinel));
 });
 
+test('runtime install failure carries the installer error as evidence', async () => {
+  const config = organizationProfileToConfig(organizationProfile());
+  const report = await bootstrap(parseBootstrapArgs(['--machine-only']), {
+    installConfig: () => ({ config, path: '/config', updated: false }),
+    installRuntime: () => {
+      const error = new Error("EPERM: operation not permitted, chmod '/prefix/opt/agent-bot/libexec/agent-bot'");
+      error.code = 'EPERM';
+      throw error;
+    },
+    reconcileCredentials: () => assert.fail('credentials reconciled after runtime install failure'),
+    collect: (options) => ({
+      ...readyReport('machine'),
+      ready: false,
+      machine: { status: 'not_ready', checks: [options.operationFailure.check], apps: [] },
+      first_actionable_failure: {
+        scope: 'machine',
+        check_id: options.operationFailure.check.id,
+        app_slug: null,
+        code: options.operationFailure.check.code,
+        message: options.operationFailure.check.message,
+        action: options.operationFailure.check.action,
+      },
+    }),
+  });
+  assert.equal(report.ready, false);
+  const check = report.machine.checks.find(({ id }) => id === 'bootstrap.runtime');
+  assert.equal(check.code, 'runtime-install-failed');
+  assert.equal(check.evidence.error_code, 'EPERM');
+  assert.match(check.evidence.error, /chmod '\/prefix\/opt\/agent-bot\/libexec\/agent-bot'/);
+});
+
 test('retired explicit App stops bootstrap before runtime or credential mutation', async () => {
   const config = organizationProfileToConfig(organizationProfile());
   const report = await bootstrap(

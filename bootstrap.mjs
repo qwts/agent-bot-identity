@@ -311,10 +311,10 @@ export async function bootstrap(options, {
   let operationFailure = null;
   let reachedCredentialPhase = false;
 
-  const fail = (failureScope, id, code, message, action) => {
+  const fail = (failureScope, id, code, message, action, evidence = {}) => {
     operationFailure = {
       scope: failureScope,
-      check: readinessCheck({ id, status: 'failed', code, message, action }),
+      check: readinessCheck({ id, status: 'failed', code, message, action, evidence }),
     };
   };
 
@@ -367,13 +367,19 @@ export async function bootstrap(options, {
       try {
         const installed = await installRuntime({ home, env });
         executable = installed.executable;
-      } catch {
+      } catch (error) {
+        // The installer's own message names the file and the failed
+        // operation; without it the report cannot be acted on.
         fail(
           'machine',
           'bootstrap.runtime',
           'runtime-install-failed',
           'bootstrap could not install the managed CLI and hooks',
           'move conflicting installed files aside or repair permissions, then retry bootstrap',
+          {
+            error: error?.message ?? String(error),
+            error_code: error?.code ?? null,
+          },
         );
       }
     }

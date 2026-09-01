@@ -12,6 +12,7 @@ import {
   readlinkSync,
   readdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -43,6 +44,29 @@ function optionalLstat(path, lstat = lstatSync) {
     if (error.code === 'ENOENT') return null;
     throw error;
   }
+}
+
+// Runtime files may belong to another user: a Homebrew keg under an
+// admin-owned prefix ships them already executable (0755, or 0555 for the
+// read-only wrapper), and a non-owner chmod fails with EPERM while changing
+// nothing. Only chmod when an executable bit is actually missing.
+export function ensureExecutableMode(path, { stat = statSync, chmod = chmodSync } = {}) {
+  const mode = stat(path).mode & 0o777;
+  if ((mode & 0o111) === 0o111) return false;
+  try {
+    chmod(path, 0o755);
+  } catch (error) {
+    if (error?.code === 'EPERM') {
+      const refused = new Error(
+        `${path} is not executable and is owned by another user; fix its mode as that user`,
+        { cause: error },
+      );
+      refused.code = error.code;
+      throw refused;
+    }
+    throw error;
+  }
+  return true;
 }
 
 const HOMEBREW_AGENT_BOT = /(?:^|\/)(?:Cellar\/agent-bot\/[^/]+|opt\/agent-bot)\/(?:bin|libexec)\/agent-bot(?:\.mjs)?$/;
@@ -95,12 +119,13 @@ export function installExecutable({
   remove = rmSync,
   symlink = symlinkSync,
   chmod = chmodSync,
+  statFile = statSync,
   exists = existsSync,
 } = {}) {
   const paths = installationPaths(home);
   const desired = managedEntrypoint(entrypoint, exists);
   mkdir(paths.binDir, { recursive: true });
-  chmod(entrypoint, 0o755);
+  ensureExecutableMode(entrypoint, { stat: statFile, chmod });
   const stat = optionalLstat(paths.executable, lstat);
   if (stat) {
     if (!isManagedExecutable(paths.executable, stat, entrypoint, readlink)) {
@@ -237,6 +262,7 @@ export function installHookWrappers({
   write = writeFileSync,
   remove = rmSync,
   chmod = chmodSync,
+  statFile = statSync,
 } = {}) {
   const hooksDir = installationPaths(home).hooksDir;
   mkdir(hooksDir, { recursive: true });
@@ -256,7 +282,7 @@ export function installHookWrappers({
     if (body.includes('# Managed by agent-bot install.')) remove(stale, { force: true });
   }
   for (const name of hooks) {
-    chmod(join(sourceHooks, name), 0o755);
+    ensureExecutableMode(join(sourceHooks, name), { stat: statFile, chmod });
     write(join(hooksDir, name), hookWrapper(name), { mode: 0o755 });
   }
   return hooksDir;
