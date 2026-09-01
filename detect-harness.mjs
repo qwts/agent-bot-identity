@@ -16,7 +16,9 @@
 // the bot slug. Only the env markers are still Codeium-era, so the matcher and
 // the key deliberately differ.
 
+import { userInfo } from 'node:os';
 import { loadConfig, slugForHarness } from './config.mjs';
+import { PROFILE_HARNESSES } from './organization-profile.mjs';
 
 const HARNESSES = [
   {
@@ -72,6 +74,33 @@ const HARNESSES = [
   },
 ];
 
+// The OS account short name, or null when the platform cannot say. Never
+// throws: the resolver must degrade to the other inputs, not crash.
+export function accountName() {
+  try {
+    return userInfo().username || null;
+  } catch {
+    return null;
+  }
+}
+
+// ENG-0339: the account short name is itself a detection input. Agent
+// accounts are named by their harness-level App slug (account
+// `qwts-goose-agent` is the goose persona), so an account whose name IS the
+// slug a harness resolves to identifies that harness with no per-tool env
+// research — this is the rule that covers harnesses with no matcher above.
+// The comparison runs through slugForHarness so config `apps` overrides and
+// the `prefix` convention both count, and so no-config stays inert: without a
+// mapping nothing can match, and an account matching no configured slug
+// (the owner's account included — delegate mode, human persona) yields null.
+export function accountHarness(config = loadConfig(), account = accountName()) {
+  if (!account) return null;
+  for (const harness of PROFILE_HARNESSES) {
+    if (slugForHarness(harness, config) === account) return harness;
+  }
+  return null;
+}
+
 // Returns the harness key for the detected tool, or null if none matched.
 export function detectHarness(env = process.env) {
   for (const h of HARNESSES) {
@@ -95,9 +124,20 @@ export function detectHarness(env = process.env) {
 // Security
 // guards use this resolver when allowing stock human credentials would cross
 // the agent/human identity boundary. Returns a bot slug (via config) or null.
-export function detectAgentHarness(env = process.env, config = loadConfig({ env })) {
+export function detectAgentHarness(
+  env = process.env,
+  config = loadConfig({ env }),
+  account = accountName(),
+) {
   const explicit = typeof env.GH_AGENT_APP === 'string' ? env.GH_AGENT_APP.trim() : '';
   if (explicit) return explicit;
+
+  // ENG-0339 moved bot territory up to the account: in an agent account every
+  // process is that persona, human terminals included, so the account input
+  // sits above the env markers. In any other account it yields null and the
+  // marker chain below is unchanged.
+  const accountKey = accountHarness(config, account);
+  if (accountKey) return slugForHarness(accountKey, config);
 
   const aiAgent = typeof env.AI_AGENT === 'string' ? env.AI_AGENT.toLowerCase() : '';
   let key = null;

@@ -5,6 +5,7 @@
 //   explicit --app / argument   — the caller knows exactly what it wants
 //   GH_AGENT_APP                — a launcher told this whole process
 //   git config agentBot.app     — the pin (also reads qwts.agentApp)
+//   accountHarness(config)      — the macOS account IS an agent persona (ENG-0339)
 //   detectHarness(env) + config — the tool that is running, mapped to a slug
 //
 // Each step is optional: no pin and no harness markers just means no identity,
@@ -15,7 +16,7 @@
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { detectHarness, HARNESSES } from './detect-harness.mjs';
+import { accountHarness, accountName, detectHarness, HARNESSES } from './detect-harness.mjs';
 import {
   appLifecycleStatus,
   harnessForSlug,
@@ -125,6 +126,7 @@ export function resolveAgentSlug({
   config,
   worktree = false,
   git,
+  account = accountName(),
 } = {}) {
   const cfg = config ?? loadConfig({ env });
   const territory = worktree ? territoryHarness(cwd) : null;
@@ -150,5 +152,9 @@ export function resolveAgentSlug({
   if (env.GH_AGENT_APP) return requireActiveProfileApp(env.GH_AGENT_APP, cfg);
   const pinned = pinnedSlug(cwd, { git });
   if (pinned) return requireActiveProfileApp(pinned, cfg);
-  return slugForHarness(detectHarness(env), cfg);
+  // ENG-0339: the account is the persona, so its input outranks environment
+  // detection — a harness account resolves to its own App whatever tool runs
+  // there. In the owner's account it yields nothing and detection carries the
+  // un-migrated single-account workflow unchanged.
+  return slugForHarness(accountHarness(cfg, account) ?? detectHarness(env), cfg);
 }

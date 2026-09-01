@@ -243,6 +243,19 @@ test('every detect-harness key is recognized by harnessForSlug', async () => {
   }
 });
 
+// The account-name input (ENG-0339) covers harnesses that have no env
+// matcher, so the whole profile vocabulary — not just the detectable subset —
+// must round-trip through slug parsing.
+test('every profile-vocabulary harness is recognized by harnessForSlug', async () => {
+  const { PROFILE_HARNESSES } = await import('../organization-profile.mjs');
+  const config = { prefix: 'you' };
+  for (const key of PROFILE_HARNESSES) {
+    const expected = key === 'claude' ? 'claude-code' : key;
+    assert.equal(harnessForSlug(`you-${key}-agent`, config), expected, `profile vocabulary knows "${key}" but config.mjs does not`);
+    assert.equal(harnessForSlug(`other-${key}-agent`, {}), expected, `best-effort parsing misses "${key}"`);
+  }
+});
+
 test('apiBase and githubHost honor config and defaults', () => {
   assert.equal(apiBase({}), 'https://api.github.com');
   assert.equal(githubHost({}), 'github.com');

@@ -255,3 +255,31 @@ test('a Claude scratchpad is claude territory that repairs foreign launcher iden
     'you-claude-fable-agent',
   );
 });
+
+// ENG-0339: the account is the persona, so its input sits below the pin and
+// above environment detection in the fallback layer.
+test('an agent account outranks harness detection but not the pin', () => {
+  const plain = repo('account-plain');
+  assert.equal(
+    resolveAgentSlug({ env: CLAUDE, cwd: plain, config: cfg, account: 'you-goose-agent' }),
+    'you-goose-agent',
+  );
+  assert.equal(
+    resolveAgentSlug({ env: {}, cwd: plain, config: cfg, account: 'you-goose-agent' }),
+    'you-goose-agent',
+  );
+  const pinned = repo('account-pinned', 'you-claude-fable-agent');
+  assert.equal(
+    resolveAgentSlug({ env: {}, cwd: pinned, config: cfg, account: 'you-goose-agent' }),
+    'you-claude-fable-agent',
+  );
+});
+
+test('the owner account resolves through detection exactly as before', () => {
+  const plain = repo('account-owner');
+  assert.equal(
+    resolveAgentSlug({ env: CLAUDE, cwd: plain, config: cfg, account: 'user' }),
+    'you-claude-agent',
+  );
+  assert.equal(resolveAgentSlug({ env: {}, cwd: plain, config: cfg, account: 'user' }), null);
+});
