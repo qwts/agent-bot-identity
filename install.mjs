@@ -69,10 +69,17 @@ export function ensureExecutableMode(path, { stat = statSync, chmod = chmodSync 
   return true;
 }
 
-const HOMEBREW_AGENT_BOT = /(?:^|\/)(?:Cellar\/agent-bot\/[^/]+|opt\/agent-bot)\/(?:bin|libexec)\/agent-bot(?:\.mjs)?$/;
+const HOMEBREW_AGENT_BOT = /^((?:.*\/)?(?:Cellar\/agent-bot\/[^/]+|opt\/agent-bot))\/(?:bin|libexec)\/agent-bot(?:\.mjs)?$/;
 
 export function isHomebrewAgentBotPath(path) {
   return HOMEBREW_AGENT_BOT.test(String(path).replaceAll('\\', '/'));
+}
+
+// The keg's bin/agent-bot is a shell wrapper that execs libexec/agent-bot;
+// the runtime files (skills included) live beside the latter, not the wrapper.
+export function homebrewRuntimeRoot(path) {
+  const match = String(path).replaceAll('\\', '/').match(HOMEBREW_AGENT_BOT);
+  return match ? join(match[1], 'libexec') : null;
 }
 
 // Brew kegs are versioned. The managed ~/.local/bin symlink must point at
