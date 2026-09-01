@@ -10,11 +10,15 @@ import { formatMintGrant } from '../cli/mint-output.mjs';
 
 const CLI = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
 const LAUNCHER = fileURLToPath(new URL('../agent-bot', import.meta.url));
+// The version the CLI prints is package.json's; a release bump must not
+// break the launcher tests.
+const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+const VERSION_LINE = new RegExp(`^${VERSION.replaceAll('.', '\\.')}\\n$`);
 
 test('stable CLI exposes version and documented commands', () => {
   const version = spawnSync(process.execPath, [CLI, '--version'], { encoding: 'utf8' });
   assert.equal(version.status, 0, version.stderr);
-  assert.match(version.stdout, /^0\.2\.0\n$/);
+  assert.match(version.stdout, VERSION_LINE);
   const help = spawnSync(process.execPath, [CLI, '--help'], { encoding: 'utf8' });
   for (const command of [
     'bootstrap', 'setup-worktree', 'mint-token', 'doctor', 'identity', 'space', 'population', 'principal',
@@ -49,14 +53,14 @@ test('portable launcher finds an nvm Node with a desktop-app PATH', () => {
     env: { HOME: home, PATH: '/usr/bin:/bin' },
   });
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /^0\.2\.0\n$/);
+  assert.match(run.stdout, VERSION_LINE);
 
   const noPath = spawnSync(LAUNCHER, ['--version'], {
     encoding: 'utf8',
     env: { AGENT_BOT_NODE: process.execPath, HOME: home },
   });
   assert.equal(noPath.status, 0, noPath.stderr);
-  assert.match(noPath.stdout, /^0\.2\.0\n$/);
+  assert.match(noPath.stdout, VERSION_LINE);
 
   // Finding Node only for the CLI is insufficient: post-checkout and other
   // dispatched shell hooks invoke `node` again from the inherited PATH.
@@ -85,7 +89,7 @@ test('portable launcher treats an empty NVM_DIR as unset', () => {
     env: { HOME: home, NVM_DIR: '', PATH: '/usr/bin:/bin' },
   });
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /^0\.2\.0\n$/);
+  assert.match(run.stdout, VERSION_LINE);
 });
 
 test('portable launcher ignores an NVM_DIR that is not an nvm root', () => {
@@ -101,7 +105,7 @@ test('portable launcher ignores an NVM_DIR that is not an nvm root', () => {
     env: { HOME: home, NVM_DIR: stale, PATH: '/usr/bin:/bin' },
   });
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /^0\.2\.0\n$/);
+  assert.match(run.stdout, VERSION_LINE);
 });
 
 test('portable launcher finds Node in ~/.local/bin', () => {
@@ -115,7 +119,7 @@ test('portable launcher finds Node in ~/.local/bin', () => {
     env: { HOME: home, PATH: '/usr/bin:/bin' },
   });
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /^0\.2\.0\n$/);
+  assert.match(run.stdout, VERSION_LINE);
 });
 
 test('portable launcher skips an old PATH Node for a supported nvm Node', () => {
@@ -137,7 +141,7 @@ test('portable launcher skips an old PATH Node for a supported nvm Node', () => 
     env: { HOME: home, PATH: `${oldBin}:/usr/bin:/bin` },
   });
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /^0\.2\.0\n$/);
+  assert.match(run.stdout, VERSION_LINE);
 });
 
 test('portable launcher fails closed on an explicit unsupported Node', () => {
