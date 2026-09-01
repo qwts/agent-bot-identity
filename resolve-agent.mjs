@@ -16,7 +16,8 @@
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { accountHarness, accountName, detectHarness, HARNESSES } from './detect-harness.mjs';
+import { accountHarness, accountName, detectHarness } from './detect-harness.mjs';
+import { PROFILE_HARNESSES } from './organization-profile.mjs';
 import {
   appLifecycleStatus,
   harnessForSlug,
@@ -30,7 +31,10 @@ export const PIN_KEYS = ['agentBot.app', 'qwts.agentApp'];
 export const AGENT_ID_KEYS = ['agentBot.agentId', 'qwts.agentId'];
 export const CHAINED_HOOKS_KEYS = ['agentBot.chainedHooksPath', 'qwts.chainedHooksPath'];
 
-const KNOWN_HARNESSES = new Set(HARNESSES.map(({ key }) => key));
+// Territory recognition speaks the full profile vocabulary, not just the
+// env-detectable subset — `.goose/worktrees/` is goose territory even though
+// no env matcher for goose exists (ENG-0339's account-named harnesses).
+const KNOWN_HARNESSES = new Set(PROFILE_HARNESSES);
 
 // A worktree directory is an ownership boundary, not merely a convenience for
 // discovering credentials. A launcher can inherit another tool's environment,

@@ -400,7 +400,7 @@ test('source pre-push denies an agent when the installed hook is missing', () =>
   const AMBIENT = [
     'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'AI_AGENT', 'GH_AGENT_APP',
     'CURSOR_AGENT', 'COPILOT_AGENT', 'DEVIN_AGENT', 'WINDSURF_AGENT',
-    'MUSE_AGENT',
+    'MUSE_AGENT', 'AGENT_BOT_ACCOUNT',
   ];
   const stripped = Object.fromEntries(
     Object.entries(coldEnv(home)).filter(
@@ -416,6 +416,16 @@ test('source pre-push denies an agent when the installed hook is missing', () =>
     });
     assert.equal(agent.status, 2);
     assert.match(agent.stderr, /uninstalled identity/);
+
+    // ENG-0339: an agent account is agent context with no env marker at all.
+    const accountOnly = spawnSync(hook, ['origin', 'https://github.com/example/repo.git'], {
+      cwd: repo,
+      input: '',
+      encoding: 'utf8',
+      env: { ...stripped, AGENT_BOT_ACCOUNT: 'you-goose-agent', ...actorEnv('') },
+    });
+    assert.equal(accountOnly.status, 2);
+    assert.match(accountOnly.stderr, /uninstalled identity/);
 
     const unmanaged = spawnSync(hook, ['origin', 'https://github.com/example/repo.git'], {
       cwd: repo,

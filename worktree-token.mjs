@@ -25,11 +25,14 @@ import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { desktopConfigPath, worktreeRoot } from './claude-worktree-create.mjs';
 import { mint } from './mint-token.mjs';
-import { detectAgentHarness, HARNESSES } from './detect-harness.mjs';
+import { detectAgentHarness } from './detect-harness.mjs';
 import { loadConfig, slugForHarness } from './config.mjs';
+import { PROFILE_HARNESSES } from './organization-profile.mjs';
 import { resolveAgentSlug, scratchpadRoot } from './resolve-agent.mjs';
 
-const KNOWN_TOOLS = new Set(HARNESSES.map((h) => h.key));
+// The full profile vocabulary, matching territoryHarness — a harness with no
+// env matcher still owns its `.<harness>/worktrees/` directories.
+const KNOWN_TOOLS = new Set(PROFILE_HARNESSES);
 
 function git(...args) {
   // stdio pipes throughout: execFileSync otherwise passes git's stderr

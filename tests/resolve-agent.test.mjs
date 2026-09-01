@@ -283,3 +283,17 @@ test('the owner account resolves through detection exactly as before', () => {
   );
   assert.equal(resolveAgentSlug({ env: {}, cwd: plain, config: cfg, account: 'user' }), null);
 });
+
+// Territory speaks the full profile vocabulary (ENG-0339): `.goose/worktrees/`
+// is goose territory although goose has no env matcher, and an inherited
+// foreign marker cannot cross it.
+test('new-harness worktree directories are recognized territory', () => {
+  const worktree = repo('.goose/worktrees/session/repo');
+  assert.equal(territoryHarness(worktree), 'goose');
+  for (const env of [{}, CLAUDE, { GH_AGENT_APP: 'you-claude-agent' }]) {
+    assert.equal(
+      resolveAgentSlug({ env, cwd: worktree, config: cfg, worktree: true, account: 'user' }),
+      'you-goose-agent',
+    );
+  }
+});
