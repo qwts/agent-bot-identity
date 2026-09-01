@@ -14,7 +14,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
-import { loadConfig } from './config.mjs';
+import { loadConfig, scopeConfigToApps } from './config.mjs';
 import { reconcileAppCredentials } from './credential-reconciler.mjs';
 import { installAgentBot, installationPaths, isManagedExecutable } from './install.mjs';
 import { installGhShim } from './install-gh-shim.mjs';
@@ -44,6 +44,8 @@ Options:
                     Apply a versioned organization profile from a file or stdin
   --config <path>   Install an explicit secret-free config file; never discovers organization policy
   --app <slug>      Restore one App credential (repeatable)
+  --scope-app <slug>
+                    Scope this account's roster to the App (repeatable; with --profile)
   --with-gh-shim    Install the managed fail-closed gh shim
   --machine-only    Install and verify machine state; do not bind this worktree
   --worktree-only   Bind and verify this linked worktree; do not mutate machine setup
@@ -64,6 +66,7 @@ export function parseBootstrapArgs(argv = process.argv.slice(2)) {
     json: false,
     phase: 'all',
     requireSchemaVersion: null,
+    scopeApps: [],
     withGhShim: false,
   };
   let selectedPhase = null;
@@ -73,6 +76,7 @@ export function parseBootstrapArgs(argv = process.argv.slice(2)) {
       arg === '--profile'
       || arg === '--config'
       || arg === '--app'
+      || arg === '--scope-app'
       || arg === '--require-schema-version'
     ) {
       const value = argv[index + 1];
@@ -85,6 +89,8 @@ export function parseBootstrapArgs(argv = process.argv.slice(2)) {
         options.configPath = value;
       } else if (arg === '--app') {
         options.apps.push(value);
+      } else if (arg === '--scope-app') {
+        options.scopeApps.push(value);
       } else {
         if (options.requireSchemaVersion !== null) {
           throw new Error('--require-schema-version may be passed only once');
@@ -108,6 +114,9 @@ export function parseBootstrapArgs(argv = process.argv.slice(2)) {
   }
   if (options.profilePath && options.configPath) {
     throw new Error('--profile conflicts with --config');
+  }
+  if (options.scopeApps.length > 0 && !options.profilePath) {
+    throw new Error('--scope-app requires --profile');
   }
   if (
     options.phase === 'worktree'
@@ -205,6 +214,7 @@ export function installBootstrapConfig({
 
 export function installBootstrapProfile({
   sourcePath,
+  scopeApps = [],
   home = homedir(),
   env = process.env,
   read,
@@ -212,7 +222,7 @@ export function installBootstrapProfile({
   ...dependencies
 } = {}) {
   const profile = readOrganizationProfile({ sourcePath, read, stdin });
-  const config = organizationProfileToConfig(profile);
+  const config = scopeConfigToApps(organizationProfileToConfig(profile), scopeApps);
   const result = publishBootstrapConfig({
     config,
     sourceDescription: 'organization profile',
@@ -257,6 +267,8 @@ function safeProfileFailure(error) {
     'profile-schema-unsupported': 'bootstrap does not support the organization profile schema version',
     'profile-runtime-incompatible': 'the organization profile requires a newer runtime interface',
     'profile-config-conflict': 'the organization profile conflicts with the installed runtime config',
+    'profile-app-retired': 'bootstrap rejected a roster scope naming an App the organization profile retires',
+    'profile-app-unknown': 'bootstrap rejected a roster scope naming an App the organization profile does not list',
   };
   return {
     code: Object.hasOwn(messages, code) ? code : 'profile-apply-failed',
@@ -321,7 +333,7 @@ export async function bootstrap(options, {
   if (options.phase !== 'worktree') {
     try {
       const configResult = options.profilePath
-        ? installProfile({ sourcePath: options.profilePath, home, env })
+        ? installProfile({ sourcePath: options.profilePath, scopeApps: options.scopeApps, home, env })
         : installConfig({ sourcePath: options.configPath, home, env });
       config = configResult.config;
     } catch (error) {
