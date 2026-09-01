@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 import {
   PROVIDER_SESSION_REQUIRED,
   appIdPath, ensurePrivateKey, parseCliArgs, parsePassItemView, privateKeyPath,
-  selectAppIdAttachment, selectIssuer, selectPrivateKeyAttachment, validateIssuer,
+  selectAppIdAttachment, selectIssuer, selectPrivateKeyAttachment, selectPrivateKeyField,
+  validateIssuer,
 } from '../ensure-private-key.mjs';
 
 function passRun(handler) {
@@ -24,7 +25,7 @@ const VIEW = JSON.stringify({
   attachments: [{ id: 'attachment-1', content: { name: 'private-key.pem' } }],
 });
 
-function viewWith({ sections, extraFields, note } = {}) {
+function viewWith({ sections, extraFields, note, attachments } = {}) {
   return JSON.stringify({
     item: {
       id: 'item-1',
@@ -35,7 +36,7 @@ function viewWith({ sections, extraFields, note } = {}) {
         extra_fields: extraFields ?? [],
       },
     },
-    attachments: [{ id: 'attachment-1', content: { name: 'private-key.pem' } }],
+    attachments: attachments ?? [{ id: 'attachment-1', content: { name: 'private-key.pem' } }],
   });
 }
 
@@ -98,6 +99,95 @@ test('pass-cli JSON selects only an unambiguous pem attachment', () => {
   assert.equal(parsed.shareId, 'share-1');
   assert.equal(selectPrivateKeyAttachment(parsed.attachments).id, 'attachment-1');
   assert.throws(() => selectPrivateKeyAttachment([]), /no unambiguous/);
+});
+
+// The live pass-cli prints sections as `section_fields` with typed value
+// wrappers (`content.Text` / `content.Hidden`); older builds and fixtures use
+// `fields` with bare values. Both spellings must resolve — items whose PEM
+// lives in a hidden "Private Key" field are invisible under the old parser.
+test('custom fields are read from the live section_fields and content.Text/Hidden shapes', () => {
+  const parsed = parsePassItemView(viewWith({
+    sections: [{
+      section_fields: [
+        { name: 'App ID', content: { Text: '4376641' } },
+        { name: 'Private Key', content: { Hidden: '-----BEGIN KEY-----\nabc\n-----END KEY-----' } },
+      ],
+    }],
+    attachments: [],
+  }));
+  assert.equal(selectIssuer(parsed), '4376641');
+  // collectFields trims; the selector must hand back a newline-terminated PEM.
+  assert.equal(
+    selectPrivateKeyField(parsed.fields),
+    '-----BEGIN KEY-----\nabc\n-----END KEY-----\n',
+  );
+
+  const fromExtra = parsePassItemView(viewWith({
+    extraFields: [{ name: 'Private Key', content: { Text: 'pem material' } }],
+  }));
+  assert.equal(selectPrivateKeyField(fromExtra.fields), 'pem material\n');
+  assert.equal(selectPrivateKeyField(parsePassItemView(viewWith({})).fields), null);
+});
+
+test('the key restores from the "Private Key" field when the item has no attachment', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-key-'));
+  const calls = [];
+  const result = ensurePrivateKey({
+    slug: 'bot-app', home,
+    run: passRun((args) => {
+      calls.push(args);
+      return viewWith({
+        sections: [{
+          section_fields: [
+            { name: 'App ID', content: { Text: '4376641' } },
+            { name: 'Private Key', content: { Hidden: 'field material' } },
+          ],
+        }],
+        attachments: [],
+      });
+    }),
+    validateKey: () => true,
+  });
+  assert.equal(result.appIdWritten, true);
+  assert.equal(readFileSync(privateKeyPath('bot-app', home), 'utf8'), 'field material\n');
+  assert.equal(statSync(privateKeyPath('bot-app', home)).mode & 0o777, 0o600);
+  assert.ok(!calls.some((args) => args.includes('download')));
+});
+
+test('a private-key.pem attachment stays preferred over the field', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-key-'));
+  ensurePrivateKey({
+    slug: 'bot-app', home,
+    run: passRun((args) => {
+      if (args[1] === 'view') {
+        return viewWith({
+          sections: [{
+            section_fields: [
+              { name: 'App ID', content: { Text: '4376641' } },
+              { name: 'Private Key', content: { Hidden: 'field material' } },
+            ],
+          }],
+        });
+      }
+      writeDownload(args, 'attachment material\n');
+      return '';
+    }),
+    validateKey: () => true,
+  });
+  assert.equal(readFileSync(privateKeyPath('bot-app', home), 'utf8'), 'attachment material\n');
+});
+
+test('missing both the attachment and the field names both restore sources', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-key-'));
+  assert.throws(() => ensurePrivateKey({
+    slug: 'bot-app', home,
+    run: passRun(() => viewWith({
+      sections: [{ section_fields: [{ name: 'App ID', content: { Text: '4376641' } }] }],
+      attachments: [],
+    })),
+    validateKey: () => true,
+  }), /no private-key\.pem attachment or "Private Key" field/);
+  assert.equal(existsSync(privateKeyPath('bot-app', home)), false);
 });
 
 test('ensurePrivateKey fails closed when the provider item has no issuer', () => {
