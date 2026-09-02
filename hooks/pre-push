@@ -4,44 +4,50 @@ INPUT=$(mktemp "${TMPDIR:-/tmp}/agent-bot-pre-push.XXXXXX") || exit 1
 trap 'rm -f "$INPUT"' EXIT HUP INT TERM
 cat >"$INPUT"
 
-# Same agent-only markers as hooks/pre-commit. A missing installed runner is
-# uninstalled mode (ENG-0128): an agent must not push as the human. Ordinary
-# human shells still reach the chained hook.
-AGENT=""
-[ "$CLAUDECODE" = "1" ] && AGENT=1
-[ "$CURSOR_AGENT" = "1" ] && AGENT=1
-[ "$COPILOT_AGENT" = "1" ] && AGENT=1
-[ "$DEVIN_AGENT" = "1" ] && AGENT=1
-[ "$WINDSURF_AGENT" = "1" ] && AGENT=1
-[ "$MUSE_AGENT" = "1" ] && AGENT=1
-[ -n "$AI_AGENT" ] && AGENT=1
-[ -n "$GH_AGENT_APP" ] && AGENT=1
-[ -n "$CLAUDE_CODE_ENTRYPOINT" ] && AGENT=1
-if [ -z "$AGENT" ]; then env | grep -q '^CODEX_' && AGENT=1; fi
-# ENG-0339: an agent account (short name <owner>-<harness>-agent) is agent
-# context even in a bare terminal — the account, not the env, is the persona.
-# AGENT_BOT_ACCOUNT exists for tests and can only ADD the signal, never mask
-# the real account.
-case "$(id -un 2>/dev/null)" in *-*-agent) AGENT=1 ;; esac
-case "$AGENT_BOT_ACCOUNT" in *-*-agent) AGENT=1 ;; esac
+# shellcheck source=hooks/territory-guard
+. "$HOOK_DIR/territory-guard"
 
+AGENT=""
+ALLOWED=""
+if agent_bot_agent_context; then AGENT=1; fi
+
+# A missing installed runner is uninstalled mode (ENG-0128): an agent must
+# not push as the human. Ordinary human shells still reach the chained hook.
 AGENT_HOOK="${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}"
 if [ -x "$AGENT_HOOK" ]; then
   "$AGENT_HOOK" --dialect git --event pre-push <"$INPUT" || exit $?
 elif [ -n "$AGENT" ]; then
-  AUTHORS="${AGENT_BOT_UNMANAGED_AUTHORS-ai9d}"
   LOGIN=$(gh api user --jq .login 2>/dev/null || true)
-  LOGIN=$(printf '%s' "$LOGIN" | tr '[:upper:]' '[:lower:]')
-  ALLOWED=""
-  IFS=','; for part in $AUTHORS; do
-    part=$(printf '%s' "$part" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
-    [ "$part" = "$LOGIN" ] && [ -n "$part" ] && ALLOWED=1
-  done
-  unset IFS
-  if [ -z "$ALLOWED" ]; then
+  if agent_bot_unmanaged_author "$LOGIN"; then
+    ALLOWED=1
+  else
     echo "uninstalled identity: refuse human-attributed commit or GitHub write; finish durable bootstrap to publish as the bot" >&2
     exit 2
   fi
+fi
+
+# Same territory rule as hooks/pre-commit, at the last moment before anything
+# leaves the machine: an agent process pushing to GitHub as the human is
+# refused whatever the commits look like — pre-commit can be bypassed with
+# --no-verify, and a local clone of a checkout takes commits the guard never
+# saw. Runs after the installed runner so a runner verdict (and uninstalled
+# mode's own refusal) keeps its exit status. $2 is the URL git resolved for
+# the remote; a bare `git push` with no remote falls back to every remote of
+# the repository.
+if [ -n "$AGENT" ] && [ -z "$ALLOWED" ]; then
+  NAME=$(git config user.name 2>/dev/null || true)
+  case "$NAME" in
+    *"[bot]"*) ;;
+    *)
+      if agent_bot_unmanaged_author "$NAME" || agent_bot_unmanaged_author "$(git config user.email 2>/dev/null || true)"; then
+        :
+      elif [ -n "$2" ]; then
+        agent_bot_url_reaches_github "$2" && agent_bot_refuse_outside_territory push "$NAME"
+      elif agent_bot_repo_reaches_github; then
+        agent_bot_refuse_outside_territory push "$NAME"
+      fi
+      ;;
+  esac
 fi
 
 "$HOOK_DIR/chain-hook" pre-push "$@" <"$INPUT"
