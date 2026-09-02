@@ -986,6 +986,15 @@ contain secrets.
 - `prepare-commit-msg` appends `Agent-Identity: <id>`
 - `post-commit` records `commit:<sha>` against the identity
 - `pre-commit` refuses bot-attributed commits with no resolvable Agent ID
+- `pre-commit` and `pre-push` refuse a human-attributed commit or push from
+  agent context (the harness markers the `gh` shim reads, or an agent account)
+  whenever a remote reaches GitHub — directly, or through a local-path remote
+  whose own checkout does, so `git clone /path/to/checkout` is not a way
+  around the rule. Remoteless scratch repositories stay usable for tests. The
+  push guard holds even when the commit guard was skipped with `--no-verify`.
+  There is no environment escape hatch: an agent could set one as easily as a
+  human, and a person driving git inside a harness terminal commits from a bot
+  worktree like everyone else.
 
 ```bash
 agent-bot identity current

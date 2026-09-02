@@ -1,44 +1,22 @@
 #!/bin/sh
 # pre-commit guard: agents may only commit inside bot territory. Installed
 # machine-wide via core.hooksPath, it blocks a commit when ALL three hold:
-#   - the process carries agent-only environment markers — CLAUDECODE,
-#     CURSOR_AGENT, COPILOT_AGENT, DEVIN_AGENT, WINDSURF_AGENT, MUSE_AGENT,
-#     CLAUDE_CODE_ENTRYPOINT, AI_AGENT, GH_AGENT_APP, CODEX_* — never editor
-#     markers like VSCODE_*/CURSOR_TRACE_ID/WINDSURF_IDE_TYPE/MUSE_RELEASE_INFO,
-#     so a human in an editor terminal is never evaluated at all. This list
-#     must stay in step
-#     with detectAgentHarness in detect-harness.mjs: a marker recognized there
-#     but missing here means the resolver calls the session an agent while this
-#     guard waves it through as a human;
+#   - the process is agent context (see hooks/territory-guard for the marker
+#     list and the agent-account rule);
 #   - the commit would be attributed to the human (identity did not resolve
 #     to a *[bot]* — i.e. no bot worktree config applies here);
-#   - any remote points at GitHub (a remoteless scratch repo cannot
-#     impersonate anyone, and agents legitimately use those for tests).
+#   - any remote reaches GitHub, directly or through a local-path remote whose
+#     own checkout does (a remoteless scratch repo cannot impersonate anyone,
+#     and agents legitimately use those for tests).
 # Bot-attributed commits must also resolve an Agent ID. The guard fails closed
 # for agent processes but does not evaluate ordinary human shells.
 
-AGENT=""
-[ "$CLAUDECODE" = "1" ] && AGENT=1
-[ "$CURSOR_AGENT" = "1" ] && AGENT=1
-[ "$COPILOT_AGENT" = "1" ] && AGENT=1
-[ "$DEVIN_AGENT" = "1" ] && AGENT=1
-[ "$WINDSURF_AGENT" = "1" ] && AGENT=1
-[ "$MUSE_AGENT" = "1" ] && AGENT=1
-[ -n "$AI_AGENT" ] && AGENT=1
-[ -n "$GH_AGENT_APP" ] && AGENT=1
-[ -n "$CLAUDE_CODE_ENTRYPOINT" ] && AGENT=1
-if [ -z "$AGENT" ]; then env | grep -q '^CODEX_' && AGENT=1; fi
-# ENG-0339: an agent account (short name <owner>-<harness>-agent) is agent
-# context even in a bare terminal — the account, not the env, is the persona.
-# AGENT_BOT_ACCOUNT exists for tests and can only ADD the signal, never mask
-# the real account.
-case "$(id -un 2>/dev/null)" in *-*-agent) AGENT=1 ;; esac
-case "$AGENT_BOT_ACCOUNT" in *-*-agent) AGENT=1 ;; esac
-
 HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SETUP="$HOOK_DIR/../setup-worktree.mjs"
+# shellcheck source=hooks/territory-guard
+. "$HOOK_DIR/territory-guard"
 
-if [ -n "$AGENT" ]; then
+if agent_bot_agent_context; then
   NAME=$(git config user.name 2>/dev/null || true)
   case "$NAME" in
     *"[bot]"*)
@@ -56,26 +34,9 @@ if [ -n "$AGENT" ]; then
       fi
       ;;
     *)
-      REMOTES=$(git remote -v 2>/dev/null || true)
-      case "$REMOTES" in
-        *github.com*|*github.*)
-          # Inside bot territory but resolving to the human: the worktree
-          # config never landed (sandboxed harnesses cannot always write the
-          # shared git dir at setup). Name the actual remedy.
-          # The .<tool>/worktrees segment is the signal at any root.
-          case "$PWD" in
-            */.*/worktrees/*)
-              echo "agent-bot guard: this IS a bot worktree, but its identity config never landed." >&2
-              echo "Run: node $SETUP (from an unsandboxed shell), then retry." >&2
-              ;;
-            *)
-              echo "agent-bot guard: agents may only commit changes within .<tool>/worktrees/<repo>." >&2
-              echo "This commit would be attributed to the human ('${NAME:-unset}'). Create or use your tool's worktree." >&2
-              ;;
-          esac
-          exit 1
-          ;;
-      esac
+      if agent_bot_repo_reaches_github; then
+        agent_bot_refuse_outside_territory commit "$NAME"
+      fi
       ;;
   esac
 fi
