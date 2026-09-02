@@ -20,6 +20,7 @@ import { installAgentBot, installationPaths, isManagedExecutable } from './insta
 import { installGhShim } from './install-gh-shim.mjs';
 import {
   OrganizationProfileError,
+  isProjectedRuntimeConfig,
   organizationProfileToConfig,
   readOrganizationProfile,
 } from './organization-profile.mjs';
@@ -146,6 +147,18 @@ function narrowsRosterScope(current, next) {
   return isDeepStrictEqual(current, unscoped);
 }
 
+// A config that is purely the projection of an older published profile
+// carries no local edits, so a newer profile replaces it: the roster
+// evolves (identities added, retired, defaults moved) without every
+// bootstrapped machine and account turning into a conflict. The scope is
+// kept as it is (or narrowed from none); removing or changing one is still
+// a conflict, and hand-written or edited configs are never overwritten.
+function advancesProjectedProfile(current, next) {
+  if (!next || !Object.hasOwn(next, 'profile') || !isProjectedRuntimeConfig(current)) return false;
+  if (current.scope === undefined) return true;
+  return isDeepStrictEqual(current.scope, next.scope);
+}
+
 function publishBootstrapConfig({
   config,
   sourceDescription,
@@ -175,10 +188,12 @@ function publishBootstrapConfig({
       return { config: current, path: destination, updated: false };
     }
     // Adding a roster scope to an unscoped config projected from the same
-    // profile only narrows what this account serves; it is rewritten in
-    // place. Removing or changing a scope, or any other difference, stays a
-    // conflict that needs explicit reconciliation.
-    if (!narrowsRosterScope(current, config)) {
+    // profile only narrows what this account serves, and a config that is
+    // purely the projection of an older profile advances to the published
+    // one; both are rewritten in place. Removing or changing a scope, or any
+    // difference in a config that carries local edits, stays a conflict
+    // that needs explicit reconciliation.
+    if (!narrowsRosterScope(current, config) && !advancesProjectedProfile(current, config)) {
       if (conflictCode) {
         throw new OrganizationProfileError(
           conflictCode,

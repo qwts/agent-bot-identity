@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 export const ORGANIZATION_PROFILE_SCHEMA_VERSION = 1;
 export const RUNTIME_PROFILE_INTERFACE_VERSION = 1;
@@ -381,6 +382,23 @@ function profileFromRuntimeConfig(config) {
     ...(config.apiBase === undefined ? {} : { api_base: config.apiBase }),
     ...(Object.keys(settings).length === 0 ? {} : { settings }),
   });
+}
+
+// True when the runtime config is exactly what projecting its own embedded
+// profile snapshot yields (a roster scope aside): it is profile-owned, so a
+// newer published profile may replace it. Hand-written configs (no
+// snapshot), configs whose snapshot no longer validates, and configs that
+// drifted from their snapshot (a harness mapping outside the embedded
+// roster, an inconsistent owner) are not projections and are never
+// overwritten.
+export function isProjectedRuntimeConfig(config) {
+  if (!config || typeof config !== 'object' || !Object.hasOwn(config, 'profile')) return false;
+  const { scope, ...unscoped } = config;
+  try {
+    return isDeepStrictEqual(organizationProfileToConfig(profileFromRuntimeConfig(unscoped)), unscoped);
+  } catch {
+    return false;
+  }
 }
 
 export function runtimeProfileInfo(config) {

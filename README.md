@@ -215,6 +215,17 @@ with the same scope is a no-op, adding a scope to an unscoped config from
 the same profile narrows it in place, and removing or changing a scope is a
 conflict, never a silent widening.
 
+The published profile evolves: identities are added and retired, and harness
+defaults move. A config that is purely the projection of an older profile
+(it carries the profile snapshot and still matches it) is profile-owned and
+advances to the newly published one on the next bootstrap, keeping its
+scope, so a roster change never turns every bootstrapped machine and
+account into a conflict. A hand-written config without a snapshot, a config
+that drifted from its snapshot, or a scope the profile has since retired
+still fail closed
+(`profile-config-conflict`, `profile-app-retired`): reconcile or move the
+installed config aside, then retry.
+
 Such an account usually has no login session, and launchd refuses to load a
 LaunchAgent into a session-less user domain (`Bootstrap failed: 5:
 Input/output error` from `launchctl bootstrap user/<uid>`). Run the
