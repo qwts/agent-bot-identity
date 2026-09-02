@@ -22,6 +22,7 @@ export const PROFILE_HARNESSES = Object.freeze([
   'devin',
   'droid',
   'goose',
+  'grok',
   'hermes',
   'kiro',
   'muse',

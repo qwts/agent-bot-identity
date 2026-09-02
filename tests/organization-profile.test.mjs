@@ -70,6 +70,29 @@ test('profile harness vocabulary is sorted, unique, and contains every env-detec
   }
 });
 
+// A roster may add a harness the runtime has never measured an env marker
+// for (Grok Build landed this way). The published profile must validate on
+// every fleet Mac the moment the row exists, or bootstrap fails fleet-wide.
+test('a grok identity validates and an unknown harness fails the profile closed', () => {
+  const withGrok = completeProfile({
+    defaults: { ...completeProfile().defaults, grok: 'example-grok-agent' },
+    identities: [
+      ...completeProfile().identities,
+      { slug: 'example-grok-agent', harness: 'grok', status: 'active' },
+    ],
+  });
+  const config = organizationProfileToConfig(validateOrganizationProfile(withGrok));
+  assert.equal(config.apps.grok, 'example-grok-agent');
+
+  const unknown = completeProfile({
+    identities: [
+      ...completeProfile().identities,
+      { slug: 'example-nope-agent', harness: 'nope', status: 'active' },
+    ],
+  });
+  assert.throws(() => validateOrganizationProfile(unknown), /unsupported harness/);
+});
+
 test('profile v1 normalizes complete defaults, model mappings, and lifecycle state', () => {
   const profile = validateOrganizationProfile(completeProfile());
   assert.deepEqual(Object.keys(profile.defaults), ['claude', 'codex']);
