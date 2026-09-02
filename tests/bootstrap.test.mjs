@@ -23,6 +23,7 @@ import { parseDoctorArgs } from '../doctor.mjs';
 import { loadConfig, rosterScope, scopeConfigToApps } from '../config.mjs';
 import {
   OrganizationProfileError,
+  isProjectedRuntimeConfig,
   organizationProfileToConfig,
 } from '../organization-profile.mjs';
 
@@ -738,6 +739,102 @@ test('bootstrap --profile --scope-app installs a scoped config that reruns witho
     }),
     (error) => error.code === 'profile-config-conflict',
   );
+});
+
+test('a config projected from an older profile advances to the published one', () => {
+  const older = organizationProfile({
+    defaults: { codex: 'example-codex-agent', cursor: 'example-cursor-agent' },
+    identities: [
+      { slug: 'example-codex-agent', harness: 'codex', status: 'active' },
+      { slug: 'example-cursor-agent', harness: 'cursor', status: 'active' },
+      { slug: 'example-codex-sol-agent', harness: 'codex', status: 'active' },
+    ],
+  });
+  const install = (home, profile, scopeApps = []) => installBootstrapProfile({
+    sourcePath: '-', scopeApps, home, env: {}, read: () => JSON.stringify(profile),
+  });
+
+  // Unscoped: the roster grows, retires, and moves its defaults in place.
+  const home = tempHome();
+  assert.equal(install(home, older).updated, true);
+  assert.equal(isProjectedRuntimeConfig(loadConfig({ home, env: {} })), true);
+  const advanced = install(home, organizationProfile());
+  assert.equal(advanced.updated, true);
+  const written = loadConfig({ home, env: {} });
+  assert.deepEqual(written.apps, { codex: 'example-codex-agent' });
+  assert.deepEqual(
+    written.profile.identities.map((identity) => [identity.slug, identity.status]),
+    [
+      ['example-codex-agent', 'active'],
+      ['example-codex-sol-agent', 'active'],
+      ['example-old-agent', 'retired'],
+    ],
+  );
+  assert.equal(written.scope, undefined);
+  assert.equal(statSync(bootstrapConfigPath(home)).mode & 0o777, 0o600);
+  assert.equal(install(home, organizationProfile()).updated, false);
+
+  // Scoped: the scope survives the advance unchanged.
+  const scopedHome = tempHome();
+  install(scopedHome, older, ['example-codex-sol-agent']);
+  const scopedAdvance = install(scopedHome, organizationProfile(), ['example-codex-sol-agent']);
+  assert.equal(scopedAdvance.updated, true);
+  assert.deepEqual(rosterScope(loadConfig({ home: scopedHome, env: {} })), ['example-codex-sol-agent']);
+  assert.equal(loadConfig({ home: scopedHome, env: {} }).profile.identities.length, 3);
+
+  // Unscoped older config plus a scope: narrowing and advancing at once.
+  const bothHome = tempHome();
+  install(bothHome, older);
+  assert.equal(install(bothHome, organizationProfile(), ['example-codex-sol-agent']).updated, true);
+  assert.deepEqual(rosterScope(loadConfig({ home: bothHome, env: {} })), ['example-codex-sol-agent']);
+
+  // The scoped App retired in the new profile: not ready, not advanced.
+  const retiredHome = tempHome();
+  install(retiredHome, older, ['example-cursor-agent']);
+  const before = readFileSync(bootstrapConfigPath(retiredHome), 'utf8');
+  const retiringCursor = organizationProfile({
+    identities: [
+      ...organizationProfile().identities,
+      { slug: 'example-cursor-agent', harness: 'cursor', status: 'retired' },
+    ],
+  });
+  assert.throws(
+    () => install(retiredHome, retiringCursor, ['example-cursor-agent']),
+    (error) => error.code === 'profile-app-retired',
+  );
+  // And one the new profile no longer lists at all.
+  assert.throws(
+    () => install(retiredHome, organizationProfile(), ['example-cursor-agent']),
+    (error) => error.code === 'profile-app-unknown',
+  );
+  assert.equal(readFileSync(bootstrapConfigPath(retiredHome), 'utf8'), before);
+
+  // A scope change or removal is still a conflict even across profiles.
+  assert.throws(
+    () => install(scopedHome, organizationProfile({ organization: 'renamed' }), ['example-codex-agent']),
+    (error) => error.code === 'profile-config-conflict',
+  );
+  assert.throws(
+    () => install(scopedHome, organizationProfile({ organization: 'renamed' })),
+    (error) => error.code === 'profile-config-conflict',
+  );
+
+  // A config that no longer matches its own snapshot is not a projection:
+  // a harness mapping pointing outside the embedded roster conflicts.
+  const editedHome = tempHome();
+  install(editedHome, older);
+  const edited = JSON.parse(readFileSync(bootstrapConfigPath(editedHome), 'utf8'));
+  edited.apps.claude = 'example-unlisted-agent';
+  writeFileSync(bootstrapConfigPath(editedHome), `${JSON.stringify(edited, null, 2)}\n`);
+  assert.equal(isProjectedRuntimeConfig(edited), false);
+  const editedBefore = readFileSync(bootstrapConfigPath(editedHome), 'utf8');
+  assert.throws(
+    () => install(editedHome, organizationProfile()),
+    (error) => error instanceof OrganizationProfileError,
+  );
+  assert.equal(readFileSync(bootstrapConfigPath(editedHome), 'utf8'), editedBefore);
+  assert.equal(isProjectedRuntimeConfig({ apps: { codex: 'hand-written-agent' } }), false);
+  assert.equal(isProjectedRuntimeConfig(null), false);
 });
 
 test('a malformed scope in the installed config fails loudly', () => {
