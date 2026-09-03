@@ -47,7 +47,10 @@ test('regeneration replaces only marked entries and preserves foreign configurat
 test('existing hook event key order is preserved when a foreign entry sits mid-file', () => {
   const row = DIALECTS.find((candidate) => candidate.key === 'claude');
   const worktree = {
-    hooks: [{ type: 'command', command: 'agent-bot claude-worktree-create', timeout: 180 }],
+    // The governed WorktreeCreate hook as .claude/settings.json carries it
+    // (ENG-0339): gated on the rostered agent account through the runtime,
+    // not on a name glob, and never managed by sync-hooks.
+    hooks: [{ type: 'command', command: "B=\"${AGENT_BOT_BIN:-agent-bot}\"; if ! command -v \"$B\" >/dev/null 2>&1; then case \"$(id -un)\" in *-agent) echo \"agent-bot is not installed \u2014 install agent-bot-identity\" >&2; exit 127;; *) exit 0;; esac; fi; [ -n \"$(\"$B\" worktree-token --account-slug 2>/dev/null)\" ] || exit 0; exec \"$B\" claude-worktree-create", timeout: 180 }],
   };
   const guard = {
     matcher: 'Bash',

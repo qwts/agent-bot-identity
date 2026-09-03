@@ -1,29 +1,30 @@
 // One resolution order for every consumer that needs to know which agent it is.
-// The harness detects, the pin refines — but only if every path to a token asks
-// the same question the same way (ENG-0079).
+// The account is the persona, the pin refines — but only if every path to a
+// token asks the same question the same way (ENG-0079, ENG-0339).
 //
 //   explicit --app / argument   — the caller knows exactly what it wants
 //   GH_AGENT_APP                — a launcher told this whole process
 //   git config agentBot.app     — the pin (also reads qwts.agentApp)
 //   accountHarness(config)      — the macOS account IS an agent persona (ENG-0339)
-//   detectHarness(env) + config — the tool that is running, mapped to a slug
+//   detectHarness(env) + config — the tool that is running, mapped to a slug;
+//                                 opt-out with `detect: false` (see below)
 //
-// Each step is optional: no pin and no harness markers just means no identity,
-// which is what a plain human checkout should resolve to. What is *not*
-// optional is the difference between a pin that is absent and a pin that could
-// not be read — see pinnedSlug.
+// Each step is optional: no pin, no agent account, and no harness markers just
+// means no identity, which is what the owner's own checkout should resolve to.
+// What is *not* optional is the difference between a pin that is absent and a
+// pin that could not be read — see pinnedSlug.
+//
+// The directory a checkout lives in is never an input (ENG-0339 supersedes
+// ENG-0045): `.<tool>/worktrees/` is each harness's working layout inside its
+// own account, and it neither grants nor vetoes an identity. An explicit App
+// therefore never conflicts with anything — it is simply the answer.
 
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { accountHarness, accountName, detectHarness } from './detect-harness.mjs';
 import { PROFILE_HARNESSES } from './organization-profile.mjs';
-import {
-  appLifecycleStatus,
-  harnessForSlug,
-  loadConfig,
-  slugForHarness,
-} from './config.mjs';
+import { appLifecycleStatus, loadConfig, slugForHarness } from './config.mjs';
 
 // Pin keys written by setup-worktree. Prefer the standalone name; accept the
 // playbook-engineering name so a migrated machine keeps working.
@@ -31,37 +32,18 @@ export const PIN_KEYS = ['agentBot.app', 'qwts.agentApp'];
 export const AGENT_ID_KEYS = ['agentBot.agentId', 'qwts.agentId'];
 export const CHAINED_HOOKS_KEYS = ['agentBot.chainedHooksPath', 'qwts.chainedHooksPath'];
 
-// Territory recognition speaks the full profile vocabulary, not just the
-// env-detectable subset — `.goose/worktrees/` is goose territory even though
-// no env matcher for goose exists (ENG-0339's account-named harnesses).
+// Layout recognition speaks the full profile vocabulary, not just the
+// env-detectable subset — `.goose/worktrees/` is goose's layout even though no
+// env matcher for goose exists.
 const KNOWN_HARNESSES = new Set(PROFILE_HARNESSES);
 
-// A worktree directory is an ownership boundary, not merely a convenience for
-// discovering credentials. A launcher can inherit another tool's environment,
-// but it cannot make a Claude worktree out of .codex/worktrees.
-//
-// The Claude Code session scratchpad chain —
-// `<tmp>/claude-<uid>/<munged-project>/<session-uuid>/scratchpad` — is the
-// same kind of boundary: harness-created, session-scoped, Claude's by
-// construction. It lives here rather than in worktree-token so token minting
-// and every other consumer answer ownership identically (ENG-0079) — an
-// inherited CODEX_*/GH_AGENT_APP marker must no more mint a Codex token from
-// a Claude scratchpad than from a Claude worktree. Root-agnostic like the
-// worktrees rule: macOS says /private/tmp where Linux says /tmp.
-const SCRATCHPAD_RE =
-  /(?:^|\/)claude-\d+\/[^/]+\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/scratchpad(?=\/|$)/;
-
-export function scratchpadRoot(cwd) {
-  if (!cwd) return null;
-  const m = cwd.match(SCRATCHPAD_RE);
-  if (!m) return null;
-  return cwd.slice(0, m.index + m[0].length);
-}
-
+// Which harness's worktree LAYOUT a path sits in, or null. Advisory only: the
+// `.<tool>/worktrees` segment at any root says which tool placed the worktree
+// there (doctor reports it as evidence, setup-worktree names it in a repair
+// message). It is not an identity input and no consumer may treat it as one.
 export function territoryHarness(cwd = process.cwd()) {
-  const match = cwd.match(/(?:^|\/)\.([a-z]+)\/worktrees\//);
+  const match = (cwd ?? '').match(/(?:^|\/)\.([a-z]+)\/worktrees\//);
   if (match && KNOWN_HARNESSES.has(match[1])) return match[1];
-  if (scratchpadRoot(cwd)) return 'claude';
   return null;
 }
 
@@ -101,19 +83,14 @@ export function readGitConfig(cwd, keys, { git = defaultGitRunner } = {}) {
 }
 
 // Unset and unverifiable are different answers, and only one of them may fall
-// through to detection. A malformed config, an ambiguous pin (two values), or
+// through to the account. A malformed config, an ambiguous pin (two values), or
 // a config we lack permission to read all mean *the pin could not be checked*
 // — and falling back there produces exactly the split identity this module
 // exists to prevent: commits authored as the pinned agent, tokens minted for
-// the harness. Those fail closed. Only `git config` exit 1, the key genuinely
+// the account. Those fail closed. Only `git config` exit 1, the key genuinely
 // not being set, returns null.
 export function pinnedSlug(cwd = process.cwd(), options = {}) {
   return readGitConfig(cwd, PIN_KEYS, options);
-}
-
-function harnessOwnsTerritory(appSlug, territory, config) {
-  const harness = harnessForSlug(appSlug, config);
-  return (harness === 'claude-code' ? 'claude' : harness) === territory;
 }
 
 function requireActiveProfileApp(appSlug, config) {
@@ -123,42 +100,33 @@ function requireActiveProfileApp(appSlug, config) {
   return appSlug;
 }
 
+// `detect` — whether environment markers (CLAUDECODE, CODEX_*, …) may answer
+// when nothing above them does. They are a convenience for a deliberate CLI
+// request (`agent-bot mint-token` typed inside a harness). Anything that acts
+// without being asked — the gh shim, the credential path, hook-driven worktree
+// setup — passes `detect: false`, because ENG-0339 makes bot identity in the
+// owner's account a stated choice (--app, GH_AGENT_APP, a pin) and never an
+// inference: unpinned work there is the human's, done by a delegate. In an
+// agent account the account rung answers first either way.
 export function resolveAgentSlug({
   explicit = null,
   env = process.env,
   cwd = process.cwd(),
   config,
-  worktree = false,
   git,
-  account = accountName(),
+  account = accountName(env),
+  detect = true,
 } = {}) {
   const cfg = config ?? loadConfig({ env });
-  const territory = worktree ? territoryHarness(cwd) : null;
-  if (territory) {
-    const territorySlug = slugForHarness(territory, cfg);
-    if (!territorySlug) return null;
-    if (explicit) {
-      requireActiveProfileApp(explicit, cfg);
-      if (!harnessOwnsTerritory(explicit, territory, cfg)) {
-        throw new Error(`explicit App ${explicit} conflicts with ${territory} worktree territory`);
-      }
-      return explicit;
-    }
-    const launched = env.GH_AGENT_APP;
-    if (launched) requireActiveProfileApp(launched, cfg);
-    if (launched && harnessOwnsTerritory(launched, territory, cfg)) return launched;
-    const pinned = pinnedSlug(cwd, { git });
-    if (pinned) requireActiveProfileApp(pinned, cfg);
-    if (pinned && harnessOwnsTerritory(pinned, territory, cfg)) return pinned;
-    return territorySlug;
-  }
   if (explicit) return requireActiveProfileApp(explicit, cfg);
   if (env.GH_AGENT_APP) return requireActiveProfileApp(env.GH_AGENT_APP, cfg);
   const pinned = pinnedSlug(cwd, { git });
   if (pinned) return requireActiveProfileApp(pinned, cfg);
   // ENG-0339: the account is the persona, so its input outranks environment
   // detection — a harness account resolves to its own App whatever tool runs
-  // there. In the owner's account it yields nothing and detection carries the
-  // un-migrated single-account workflow unchanged.
-  return slugForHarness(accountHarness(cfg, account) ?? detectHarness(env), cfg);
+  // there. In the owner's account it yields nothing.
+  const accountKey = accountHarness(cfg, account);
+  if (accountKey) return slugForHarness(accountKey, cfg);
+  if (!detect) return null;
+  return slugForHarness(detectHarness(env), cfg);
 }

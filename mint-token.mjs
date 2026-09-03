@@ -5,9 +5,9 @@
 // App selection (first match wins):
 //   --app <slug>             — read ~/.config/<slug>/{app-id,private-key.pem}
 //   GH_AGENT_APP=<slug>      — same lookup, set once per launcher environment
-//                              (corrected inside bot territory — see appConfig)
-//   git config agentBot.app  — the worktree's pin, so a token is minted for
+//   git config agentBot.app  — the checkout's pin, so a token is minted for
 //                              the agent the commits are authored as
+//   account + config.json    — an agent account IS its harness's App (ENG-0339)
 //   harness + config.json    — auto-detect mapped through prefix/apps
 //   GH_APP_ID + GH_APP_PRIVATE_KEY or GH_APP_PRIVATE_KEY_PATH — CI/overrides
 // Env:  GH_APP_INSTALLATION_ID — only needed when the App has >1 installation
@@ -62,34 +62,18 @@ export function appConfig({
       slug: null,
     };
   }
-  // Territory rules apply whenever the App is not stated on the command line.
-  // A worktree pin and GH_AGENT_APP are the same kind of input: launcher- or
-  // session-level defaults set before anyone knew which worktree this process
-  // would run in. Taken at face value inside another harness's territory,
-  // either one mints a token for a foreign App while commits are attributed to
-  // the territory's App — the split identity resolve-agent.mjs exists to
-  // prevent. setup-worktree already corrects GH_AGENT_APP against territory
-  // when it *writes* the pin; minting applies the same correction, so a direct
-  // mint between launch and setup-worktree can no longer cross the boundary
-  // (#20). Outside bot territory GH_AGENT_APP is honored exactly as before —
-  // resolveAgentSlug only consults territory when the cwd is in one.
-  //
-  // --app is the one face-value override: a deliberate per-invocation request,
-  // not an inherited default. `doctor` depends on it to mint every configured
-  // App in turn from whatever worktree it happens to run in.
+  // One resolver for every consumer (ENG-0079): --app, then GH_AGENT_APP, then
+  // the checkout's pin, then the account, then harness detection. Explicit
+  // inputs are taken at face value wherever the process runs — the directory
+  // a checkout sits in is not an identity input and never vetoes one
+  // (ENG-0339 supersedes ENG-0045). `doctor` depends on --app to mint every
+  // configured App in turn from whatever checkout it happens to run in.
   const slug = resolveAgentSlug({
     explicit: explicitSlug,
     env,
     cwd,
     config: config ?? loadConfig({ env }),
-    worktree: !explicitSlug,
   });
-  if (slug && !explicitSlug && env.GH_AGENT_APP && slug !== env.GH_AGENT_APP) {
-    // Note the correction on stderr only — stdout carries the token.
-    process.stderr.write(
-      `mint-token: GH_AGENT_APP=${env.GH_AGENT_APP} conflicts with this worktree's territory; minting for ${slug}\n`,
-    );
-  }
   if (slug) {
     const dir = join(home, '.config', slug);
     try {

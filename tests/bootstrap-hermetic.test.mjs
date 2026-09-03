@@ -96,7 +96,7 @@ function assertColdSandboxIntact(fixture) {
   assert.equal(guardedInvocations(fixture), '', 'a guarded host executable was invoked');
 }
 
-test('cold machine bootstrap: primary refusal, complete install, idempotent rerun, worktree-only binding', async (t) => {
+test('cold machine bootstrap: delegate refusal, complete install, idempotent rerun, worktree-only binding', async (t) => {
   const fixture = createColdHome();
   const github = startMockGitHubApp(fixture.root);
   servers.push(github);
@@ -108,22 +108,31 @@ test('cold machine bootstrap: primary refusal, complete install, idempotent reru
   const shimPath = join(fixture.home, '.config', 'agent-bot', 'bin', 'gh');
   const host = new URL(github.apiBase).host;
 
-  await t.test('full bootstrap in a primary checkout readies the machine but refuses to bind', () => {
+  // ENG-0339: the account, not the directory, is bot territory. The fixture's
+  // account is the owner's (AGENT_BOT_ACCOUNT unset — the real short name,
+  // which is not on the roster), so with no pin and no GH_AGENT_APP the
+  // checkout is the human's own and bootstrap has no identity to bind.
+  await t.test('full bootstrap in the owner account readies the machine but leaves the human checkout human', () => {
     const run = runLauncher(fixture, ['bootstrap', '--json', '--with-gh-shim', '--config', configSource], { cwd: repo });
     const report = reportFrom(run);
     assert.equal(run.status, 1, run.stdout);
     assert.equal(report.ready, false);
     assert.equal(report.machine.status, 'ready');
     assert.equal(report.worktree.status, 'not_ready');
-    assert.equal(report.first_actionable_failure.code, 'linked-worktree-required');
+    assert.equal(report.first_actionable_failure.code, 'bot-identity-unresolved');
     // Machine state exists now; the human's primary checkout stays human.
     assert.equal(readlinkSync(paths.executable), LAUNCHER);
     assert.equal(optionalGit(fixture, repo, 'config', '--get', 'agentBot.app'), null);
     assert.equal(git(fixture, repo, 'config', '--get', 'user.name'), 'Fixture Human');
   });
 
+  // From here the scenario runs as the agent account (AGENT_BOT_ACCOUNT names
+  // it, the same seam the shell hooks and the gh shim honor): the account is
+  // the identity a checkout resolves through when nothing pins it.
+  const AGENT_ACCOUNT = { AGENT_BOT_ACCOUNT: SLUG };
+
   await t.test('complete bootstrap restores credentials cold and binds the linked worktree', () => {
-    const run = runLauncher(fixture, ['bootstrap', '--json', '--with-gh-shim', '--config', configSource], { cwd: worktree });
+    const run = runLauncher(fixture, ['bootstrap', '--json', '--with-gh-shim', '--config', configSource], { cwd: worktree, env: AGENT_ACCOUNT });
     const report = reportFrom(run);
     assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
     assert.equal(report.ready, true);
@@ -194,7 +203,7 @@ test('cold machine bootstrap: primary refusal, complete install, idempotent reru
     const zshenvBefore = readFileSync(join(fixture.home, '.zshenv'), 'utf8');
     const configBefore = readFileSync(configPath, 'utf8');
 
-    const run = runLauncher(fixture, ['bootstrap', '--json', '--with-gh-shim', '--config', configSource], { cwd: worktree });
+    const run = runLauncher(fixture, ['bootstrap', '--json', '--with-gh-shim', '--config', configSource], { cwd: worktree, env: AGENT_ACCOUNT });
     const report = reportFrom(run);
     assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
     assert.equal(report.ready, true);
@@ -212,7 +221,7 @@ test('cold machine bootstrap: primary refusal, complete install, idempotent reru
     const second = addLinkedWorktree(fixture, repo, { session: 'second', branch: 'second-topic' });
     const globalBefore = readFileSync(fixture.globalGitConfig, 'utf8');
 
-    const run = runLauncher(fixture, ['bootstrap', '--worktree-only', '--json'], { cwd: second });
+    const run = runLauncher(fixture, ['bootstrap', '--worktree-only', '--json'], { cwd: second, env: AGENT_ACCOUNT });
     const report = reportFrom(run);
     assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
     assert.equal(report.ready, true);
@@ -224,6 +233,20 @@ test('cold machine bootstrap: primary refusal, complete install, idempotent reru
     assert.equal(git(fixture, second, 'config', '--worktree', '--get', 'user.name'), `${SLUG}[bot]`);
     assert.equal(readFileSync(fixture.globalGitConfig, 'utf8'), globalBefore);
     assert.equal(optionalGit(fixture, repo, 'config', '--get', 'agentBot.app'), null);
+    assertColdSandboxIntact(fixture);
+  });
+
+  // ENG-0339 acceptance (c): in an agent account every checkout is bot work,
+  // the primary one included — no linked-worktree requirement remains.
+  await t.test('worktree-only bootstrap binds the primary checkout in an agent account', () => {
+    const run = runLauncher(fixture, ['bootstrap', '--worktree-only', '--json'], { cwd: repo, env: AGENT_ACCOUNT });
+    const report = reportFrom(run);
+    assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+    assert.equal(report.ready, true);
+    assert.equal(report.worktree.status, 'ready');
+    assert.equal(report.worktree.checks[0].message, 'primary checkout');
+    assert.equal(git(fixture, repo, 'config', '--worktree', '--get', 'agentBot.app'), SLUG);
+    assert.equal(git(fixture, repo, 'config', '--worktree', '--get', 'user.name'), `${SLUG}[bot]`);
     assertColdSandboxIntact(fixture);
   });
 });
@@ -279,7 +302,7 @@ test('bootstrap reports missing provider credentials and leaves shim and worktre
   const source = writeConfigSource(fixture, 'https://api.github.invalid');
   const { worktree } = createRepoWithLinkedWorktree(fixture);
 
-  const run = runLauncher(fixture, ['bootstrap', '--json', '--with-gh-shim', '--config', source], { cwd: worktree });
+  const run = runLauncher(fixture, ['bootstrap', '--json', '--with-gh-shim', '--config', source], { cwd: worktree, env: { AGENT_BOT_ACCOUNT: SLUG } });
   const report = reportFrom(run);
   assert.equal(run.status, 1, run.stdout);
   assert.equal(report.ready, false);

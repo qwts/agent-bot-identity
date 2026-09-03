@@ -1,6 +1,6 @@
 ---
 name: agent-bot
-description: Bootstrap, configure, and operate per-harness GitHub App identities and authorized secure-store reads for coding agents. Use for fresh-clone requests such as "install agent bot identities," source or installed agent-bot setup and diagnosis, bot credential minting, password or API-key retrieval, identity attribution, GitHub-verified bot commits, transcript-bound Agent IDs, Agent Spaces, and the workstation-local soul population. Do not use to turn a primary human checkout into bot territory, broaden password-manager access, or fall back to human credentials.
+description: Bootstrap, configure, and operate per-harness GitHub App identities and authorized secure-store reads for coding agents. Use for fresh-clone requests such as "install agent bot identities," source or installed agent-bot setup and diagnosis, bot credential minting, password or API-key retrieval, identity attribution, GitHub-verified bot commits, transcript-bound Agent IDs, Agent Spaces, and the workstation-local soul population. Do not use to bind a human's own checkout to a bot on harness detection alone, broaden password-manager access, or fall back to human credentials.
 ---
 
 # Agent Bot
@@ -43,8 +43,10 @@ path. Details and the governing contract link live in
 
 ## Preserve the invariants
 
-1. Treat only `.<tool>/worktrees/**` paths and recognized Claude scratchpads
-   as bot territory. Leave primary checkouts human.
+1. The account, not the directory, is bot territory (ENG-0339): a rostered
+   agent account owns every checkout in it; in the owner's account act as the
+   human's delegate unless `--app`, `GH_AGENT_APP`, or a pin states a bot.
+   Never treat a `.<tool>/worktrees/**` path as an identity signal.
 2. Resolve one App through the shared runtime; do not reproduce resolution in
    shell snippets or skill-local scripts.
 3. Stop on mint, credential, identity-pin, lease, verification, or tree-match

@@ -1,10 +1,4 @@
-import { PROFILE_HARNESSES } from './organization-profile.mjs';
-
 export const GH_SHIM_MARKER = '# gh shim — agent bot identity. Managed by install-gh-shim.mjs';
-
-// One `*/.<harness>/worktrees/*` glob per profile harness, so the shim's
-// territory hint speaks the same vocabulary as territoryHarness.
-const TERRITORY_GLOBS = PROFILE_HARNESSES.map((h) => `*/.${h}/worktrees/*`).join('|\\\n  ');
 
 export function buildGhShim(tokenTool = null, { psPath = '/bin/ps', lsofPath = '/usr/sbin/lsof' } = {}) {
   const tokenSetup = tokenTool
@@ -117,8 +111,8 @@ fi
 # probe delegates to stock gh rather than minting a bot identity. That makes
 # this gate a credential boundary, so it takes no input the caller controls:
 # there is deliberately no environment override here, unlike the Codex desktop
-# path above, because reaching stock gh outside territory prints the human's
-# token rather than minting a bot's.
+# path above, because reaching stock gh with a bot identity resolved prints
+# the human's token rather than minting a bot's.
 #
 # ps alone cannot carry the gate. Its command and comm fields are both read
 # from the process arguments, which any caller can set when it execs, so ps is
@@ -145,7 +139,7 @@ if [ -x ${psPath} ] && [ -x ${lsofPath} ]; then
   esac
 fi
 # Only the single probe shape passes; every other command from the app still
-# falls through to normal territory enforcement.
+# falls through to normal identity resolution.
 if [ -n "$CLAUDE_DESKTOP_CONTEXT" ] && [ "$#" -eq 4 ] && \
    [ "$1" = "auth" ] && [ "$2" = "token" ] && \
    [ "$3" = "--hostname" ] && [ "$4" = "github.com" ]; then
@@ -157,6 +151,15 @@ token_tool_available() {
   [ -z "$TOKEN_REQUIRES_NODE" ] || command -v node >/dev/null 2>&1
 }
 
+# Agent context: the process carries an agent-only marker, or names an agent
+# account through AGENT_BOT_ACCOUNT. It decides one thing only — whether a
+# MISSING token tool fails closed, because a bot that cannot mint must not
+# fall through to a stored human login. Who gets a token is the token tool's
+# answer: it classifies the real account by an exact roster match through the
+# shared runtime (ENG-0339), never by a shell glob on the account name, so
+# shell and JS cannot disagree about what an agent account is. In the owner's
+# account an agent marker alone confers nothing: a harness that was not told
+# to be the bot is the human's delegate and gets stock gh.
 AGENT_CONTEXT=""
 [ "$CLAUDECODE" = "1" ] && AGENT_CONTEXT=1
 [ "$CURSOR_AGENT" = "1" ] && AGENT_CONTEXT=1
@@ -167,87 +170,64 @@ AGENT_CONTEXT=""
 [ -n "$CLAUDE_CODE_ENTRYPOINT" ] && AGENT_CONTEXT=1
 [ -n "$AI_AGENT" ] && AGENT_CONTEXT=1
 [ -n "$GH_AGENT_APP" ] && AGENT_CONTEXT=1
+[ -n "$AGENT_BOT_ACCOUNT" ] && AGENT_CONTEXT=1
 if [ -z "$AGENT_CONTEXT" ]; then
   env | grep -q '^CODEX_' && AGENT_CONTEXT=1
 fi
-# ENG-0339: an agent account is agent context even in a bare terminal — its
-# short name is the harness's App slug (<owner>-<harness>-agent). The env
-# override exists for tests and can only ADD the signal, never mask the
-# real account.
-case "$(id -un 2>/dev/null)" in *-*-agent) AGENT_CONTEXT=1 ;; esac
-case "$AGENT_BOT_ACCOUNT" in *-*-agent) AGENT_CONTEXT=1 ;; esac
 
-TERRITORY_HINT=""
-# The .<tool>/worktrees segment is the signal, not the root above it: a boot
-# volume too small for agent worktrees pushes them onto /Volumes/<drive>, which
-# says nothing about who owns the work.
-case "$PWD" in
-  ${TERRITORY_GLOBS})
-    TERRITORY_HINT=1
-    ;;
-esac
-# Claude Code session scratchpads are bot territory too — a loose glob is fine
-# here: the hint only decides whether a MISSING token tool fails closed, never
-# who gets a token (worktree-token owns the strict rule).
-case "$PWD" in
-  */claude-[0-9]*/*/scratchpad|*/claude-[0-9]*/*/scratchpad/*)
-    TERRITORY_HINT=1
-    ;;
-esac
-if [ -z "$TERRITORY_HINT" ] && command -v git >/dev/null 2>&1; then
+# A checkout configured as a bot — a pin or the bot credential helper in its
+# git config — is a stated identity. With the token tool missing it fails
+# closed too, rather than degrading to the human. The directory the checkout
+# sits in is not a signal (ENG-0339 supersedes ENG-0045).
+IDENTITY_HINT=""
+if command -v git >/dev/null 2>&1; then
+  PIN=$(git config --get agentBot.app 2>/dev/null || git config --get qwts.agentApp 2>/dev/null || true)
+  [ -n "$PIN" ] && IDENTITY_HINT=1
   HELPERS=$(git config --get-all credential.helper 2>/dev/null || true)
   case "$HELPERS" in
-    *git-credential-bot.mjs*|*agent-bot*credential*) TERRITORY_HINT=1 ;;
+    *git-credential-bot.mjs*|*agent-bot*credential*) IDENTITY_HINT=1 ;;
   esac
 fi
 
-TERRITORY_SLUG=""
+# SLUG: the bot this invocation acts as — explicit GH_AGENT_APP, the pin, the
+# account — or empty for the human persona. AGENT_SLUG: the agent process the
+# environment describes, used only by the Codex desktop path below.
+SLUG=""
 AGENT_SLUG=""
-WORKTREE_SLUG=""
 if ! token_tool_available; then
-  if [ -n "$AGENT_CONTEXT$TERRITORY_HINT" ]; then
+  if [ -n "$AGENT_CONTEXT$IDENTITY_HINT" ]; then
     echo "agent-bot: token helper or Node is unavailable — refusing stock human gh" >&2
     exit 1
   fi
 else
-  TERRITORY_SLUG=$(token_tool --slug 2>/dev/null) || {
-    echo "agent-bot: territory detection failed — refusing stock human gh" >&2
+  SLUG=$(token_tool --slug 2>/dev/null) || {
+    echo "agent-bot: identity resolution failed — refusing stock human gh" >&2
     exit 1
   }
   AGENT_SLUG=$(token_tool --agent-slug 2>/dev/null) || {
     echo "agent-bot: agent detection failed — refusing stock human gh" >&2
     exit 1
   }
-  [ -n "$AGENT_SLUG" ] && AGENT_CONTEXT=1
 fi
-WORKTREE_SLUG="$TERRITORY_SLUG"
+CHECKOUT_SLUG="$SLUG"
 
-# The native desktop UI is bot territory by caller identity rather than cwd.
-# Its App slug still comes from the user's normal Codex mapping.
+# The native desktop UI acts as the configured Codex App by caller identity
+# rather than by cwd or account.
 if [ -n "$CODEX_DESKTOP_CONTEXT" ]; then
   # Installing the toolkit must remain inert until Codex has an App mapping.
   # Delegate unchanged so the native desktop UI keeps its existing identity.
   [ -n "$AGENT_SLUG" ] || exec "$REAL" "$@"
-  TERRITORY_SLUG="$AGENT_SLUG"
-fi
-
-# Agent processes may use gh only from configured bot territory. Outside it,
-# fail before stock gh can exercise the human's stored credentials. A real
-# human shell has no agent-only marker and keeps the stock passthrough.
-if [ -n "$AGENT_CONTEXT" ] && [ -z "$TERRITORY_SLUG" ]; then
-  echo "agent-bot: \${AGENT_SLUG:-detected agent} is outside bot territory — refusing stock human gh" >&2
-  echo "Create or use a linked bot worktree, then retry." >&2
-  exit 1
+  SLUG="$AGENT_SLUG"
 fi
 
 TOKEN_MINTED_BY_SHIM=""
 if [ -n "$CODEX_DESKTOP_CONTEXT" ] && [ -z "$GH_TOKEN" ]; then
-  # PR operations normally have a worktree cwd, so reuse the same private
-  # per-worktree token cache as agent shells only when that territory belongs
+  # PR operations normally have a checkout cwd, so reuse the same private
+  # per-checkout token cache as agent shells only when that checkout resolves
   # to the configured Codex App. A Codex window may inspect another harness's
-  # worktree; its cached token must never cross that identity boundary.
+  # pinned worktree; its cached token must never cross that identity boundary.
   TOKEN=""
-  if [ -n "$WORKTREE_SLUG" ] && [ "$WORKTREE_SLUG" = "$TERRITORY_SLUG" ]; then
+  if [ -n "$CHECKOUT_SLUG" ] && [ "$CHECKOUT_SLUG" = "$SLUG" ]; then
     TOKEN=$(token_tool) || {
       echo "agent-bot: Codex desktop token lookup failed — refusing stock human gh" >&2
       exit 1
@@ -256,7 +236,7 @@ if [ -n "$CODEX_DESKTOP_CONTEXT" ] && [ -z "$GH_TOKEN" ]; then
   # Root-level identity probes and foreign-harness worktrees have no compatible
   # cache, so mint the selected Codex App explicitly.
   if [ -z "$TOKEN" ]; then
-    TOKEN=$(token_mint_app "$TERRITORY_SLUG") || {
+    TOKEN=$(token_mint_app "$SLUG") || {
       echo "agent-bot: Codex desktop token mint failed — refusing stock human gh" >&2
       exit 1
     }
@@ -270,14 +250,16 @@ if [ -n "$CODEX_DESKTOP_CONTEXT" ] && [ -z "$GH_TOKEN" ]; then
   TOKEN_MINTED_BY_SHIM=1
 fi
 
+# An explicit GH_TOKEN must belong to the bot this invocation acts as: a
+# human token inside a bot identity, or another bot's token, is crossover.
 TOKEN_LOGIN=""
-if [ -n "$GH_TOKEN" ] && [ -n "$TERRITORY_SLUG" ] && [ -z "$TOKEN_MINTED_BY_SHIM" ]; then
+if [ -n "$GH_TOKEN" ] && [ -n "$SLUG" ] && [ -z "$TOKEN_MINTED_BY_SHIM" ]; then
   TOKEN_LOGIN=$("$REAL" api graphql -f "query={viewer{login}}" --jq .data.viewer.login 2>/dev/null) || {
     echo "agent-bot: could not resolve explicit GH_TOKEN identity" >&2
     exit 1
   }
-  if [ "$TOKEN_LOGIN" != "\${TERRITORY_SLUG}[bot]" ]; then
-    echo "agent-bot: explicit GH_TOKEN is $TOKEN_LOGIN, expected \${TERRITORY_SLUG}[bot] — refusing identity crossover" >&2
+  if [ "$TOKEN_LOGIN" != "\${SLUG}[bot]" ]; then
+    echo "agent-bot: explicit GH_TOKEN is $TOKEN_LOGIN, expected \${SLUG}[bot] — refusing identity crossover" >&2
     exit 1
   fi
 fi
@@ -296,12 +278,13 @@ if [ -n "$CODEX_DESKTOP_CONTEXT" ] && [ "$#" -eq 4 ] && \
     printf '%s\n' "$DESKTOP_USER"
     exit 0
   fi
-  exec "$REAL" api "users/\${TERRITORY_SLUG}[bot]" --hostname github.com
+  exec "$REAL" api "users/\${SLUG}[bot]" --hostname github.com
 fi
 
-# gh whoami: who will gh act as HERE, stated plainly. In bot territory an
-# explicit GH_TOKEN must resolve to that same bot; otherwise bot territory is
-# local/no-network and true human territory asks GitHub through stock gh.
+# gh whoami: who will gh act as HERE, stated plainly. With a bot identity an
+# explicit GH_TOKEN must resolve to that same bot; otherwise a bot identity is
+# answered locally with no network, and the human persona asks GitHub through
+# stock gh.
 if [ "$1" = "whoami" ]; then
   if [ -n "$GH_TOKEN" ]; then
     LOGIN="$TOKEN_LOGIN"
@@ -318,19 +301,26 @@ if [ "$1" = "whoami" ]; then
     echo "$LOGIN — explicit GH_TOKEN"
     exit 0
   fi
-  if [ -n "$TERRITORY_SLUG" ]; then
-    echo "\${TERRITORY_SLUG}[bot] — bot territory"
+  if [ -n "$SLUG" ]; then
+    echo "\${SLUG}[bot] — bot identity"
     exit 0
   fi
-  echo "$("$REAL" api user --jq .login 2>/dev/null || echo 'unknown') — human territory, gh is stock"
+  echo "$("$REAL" api user --jq .login 2>/dev/null || echo 'unknown') — human persona, gh is stock"
   exit 0
 fi
-if [ -z "$GH_TOKEN" ] && token_tool_available; then
+# A bot identity mints; a failed mint aborts rather than running gh as the
+# human. No identity is the delegate: stock gh, untouched.
+if [ -z "$GH_TOKEN" ] && [ -n "$SLUG" ]; then
   TOKEN=$(token_tool) || {
-    echo "agent-bot: token mint failed in a bot worktree — refusing to run gh as the human" >&2
+    echo "agent-bot: token mint failed for \${SLUG}[bot] — refusing to run gh as the human" >&2
     exit 1
   }
-  if [ -n "$TOKEN" ]; then GH_TOKEN="$TOKEN"; export GH_TOKEN; fi
+  [ -n "$TOKEN" ] || {
+    echo "agent-bot: token mint returned empty for \${SLUG}[bot] — refusing to run gh as the human" >&2
+    exit 1
+  }
+  GH_TOKEN="$TOKEN"
+  export GH_TOKEN
 fi
 
 # Codex's native Pull Requests UI uses one exact ten-argument GraphQL search
@@ -344,7 +334,7 @@ if [ -n "$CODEX_DESKTOP_CONTEXT" ] && [ "$#" -eq 10 ] && \
    [ "$9" = "--hostname" ] && [ "\${10}" = "github.com" ]; then
   case "$6" in
     searchQuery=is:pr*)
-      EXPANDED_SEARCH_QUERY=$(token_expand_inbox_query "$6" "$TERRITORY_SLUG") || {
+      EXPANDED_SEARCH_QUERY=$(token_expand_inbox_query "$6" "$SLUG") || {
         echo "agent-bot: could not expand Codex Pull Requests inbox query" >&2
         exit 1
       }

@@ -7,7 +7,7 @@ Usage:
 
 Commands:
   bootstrap          Bootstrap from source or repair installed machine setup
-  setup-worktree     Configure the current linked worktree
+  setup-worktree     Configure this checkout's bot identity
   mint-token         Mint a GitHub App installation token
   doctor             Diagnose installation and identity state
   identity           Manage transcript-bound execution identities

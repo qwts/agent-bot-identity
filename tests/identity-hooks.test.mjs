@@ -96,6 +96,15 @@ test('post-commit records the commit artifact in the private registry', () => {
   assert.ok(readAgentIdentity(identity.id, { stateDir }).artifacts.includes(`commit:${sha}`));
 });
 
+// An installed agent-hook that allows everything, so the guard under test is
+// the only thing that can refuse, and no test reaches `gh api user`.
+function allowingAgentHook() {
+  const bin = path.join(root, `allow-hook-${Math.random().toString(16).slice(2)}`);
+  writeFileSync(bin, '#!/bin/sh\nexit 0\n');
+  chmodSync(bin, 0o755);
+  return bin;
+}
+
 test('pre-commit blocks a bot-attributed agent commit until its Agent ID resolves', () => {
   const { repo, stateDir, identity, git, env } = fixture('guard');
   git('remote', 'add', 'origin', 'https://github.com/example/repo.git');
@@ -115,11 +124,12 @@ test('pre-commit blocks a bot-attributed agent commit until its Agent ID resolve
     }));
 });
 
-// CURSOR_AGENT and COPILOT_AGENT are the measured agent-session markers. Before
-// they were listed here, a Cursor agent set none of the markers this guard knew
-// about and committed as the human — the exact attribution the guard exists to
-// prevent.
-test('pre-commit recognizes explicit App and per-harness agent markers', () => {
+// CURSOR_AGENT and COPILOT_AGENT are the measured agent-session markers. Every
+// marker must still be recognized as agent context, because that is what
+// makes a bot-attributed commit answer for its Agent ID. Under ENG-0339 the
+// same context no longer refuses a human-attributed commit: in the owner's
+// account that is the human's delegate at work, wherever the checkout sits.
+test('pre-commit recognizes agent markers for bot attribution and lets the delegate commit as the human', () => {
   for (const [name, marker] of [
     ['app-marker', { GH_AGENT_APP: 'you-codex-agent' }],
     ['claude-entrypoint', { CLAUDE_CODE_ENTRYPOINT: 'cli' }],
@@ -150,15 +160,19 @@ test('pre-commit recognizes explicit App and per-harness agent markers', () => {
         ([key]) => !key.startsWith('CODEX_') && !AMBIENT.includes(key),
       ),
     );
-    assert.throws(
-      () => execFileSync(preCommit, {
-        cwd: repo,
-        env: { ...env, ...marker },
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      }),
-      /Command failed/,
-    );
+    const run = () => execFileSync(preCommit, {
+      cwd: repo,
+      env: { ...env, ...marker, AGENT_BOT_HOOK_BIN: allowingAgentHook() },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    // Human-attributed: delegate work, never refused, no directory rule.
+    assert.doesNotThrow(run, `${name}: a human-attributed commit is the delegate's own`);
+    // Bot-attributed with no Agent ID: the marker must still be seen as agent
+    // context, or this would slip through as an unidentified bot commit.
+    git('config', 'user.name', 'you-codex-agent[bot]');
+    git('config', '--unset', 'agentBot.agentId');
+    assert.throws(run, (error) => /no resolvable Agent-Identity/.test(error.stderr), `${name}: agent context recognized`);
   }
 });
 
@@ -179,23 +193,13 @@ function humanEnv(extra = {}) {
   return { ...env, ...extra };
 }
 
-// An installed agent-hook that allows everything, so the guard under test is
-// the only thing that can refuse, and no test reaches `gh api user`.
-function allowingAgentHook() {
-  const bin = path.join(root, `allow-hook-${Math.random().toString(16).slice(2)}`);
-  writeFileSync(bin, '#!/bin/sh\nexit 0\n');
-  chmodSync(bin, 0o755);
-  return bin;
-}
-
 const prePush = path.join(hooks, 'pre-push');
 const pushLine = 'refs/heads/main 0000000000000000000000000000000000000001 refs/heads/main 0000000000000000000000000000000000000000\n';
 
-// #175: pre-commit alone is not territory enforcement. It can be skipped with
-// --no-verify, and commits made where the guard saw no GitHub remote are one
-// `git push` from GitHub. The push is where the human's credential would be
-// spent, so it is refused on the same rule.
-test('pre-push refuses a human-attributed push from agent context to GitHub', () => {
+// ENG-0339 supersedes the #175 push rule: a human-attributed push from a
+// harness in the owner's account is delegate work, and no guard confines it
+// to `.<tool>/worktrees/<repo>`. The installed runner still sees every push.
+test('pre-push lets a human-attributed push from agent context reach GitHub', () => {
   const { repo, git } = fixture('push-guard');
   git('config', 'user.name', 'Human Developer');
   git('config', 'user.email', 'human@example.com');
@@ -211,20 +215,13 @@ test('pre-push refuses a human-attributed push from agent context to GitHub', ()
     });
 
   for (const marker of [{ CLAUDECODE: '1' }, { CURSOR_AGENT: '1' }, { AGENT_BOT_ACCOUNT: 'you-goose-agent' }]) {
-    assert.throws(
-      () => run(humanEnv(marker)),
-      (error) => /agents may only push changes within \.<tool>\/worktrees\/<repo>/.test(error.stderr)
-        && /attributed to the human \('Human Developer'\)/.test(error.stderr),
-    );
+    assert.doesNotThrow(() => run(humanEnv(marker)));
   }
-  // A bare `git push` hands the hook no URL; the repository's remotes decide.
-  assert.throws(
-    () => run(humanEnv({ CLAUDECODE: '1' }), []),
-    (error) => /agents may only push/.test(error.stderr),
-  );
+  // A bare `git push` hands the hook no URL; nothing about it is refused either.
+  assert.doesNotThrow(() => run(humanEnv({ CLAUDECODE: '1' }), []));
   // A human shell is never evaluated.
   assert.doesNotThrow(() => run(humanEnv()));
-  // Bot attribution passes the territory rule (the Agent ID is pre-commit's job).
+  // Bot attribution passes too (the Agent ID is pre-commit's job).
   git('config', 'user.name', 'you-codex-agent[bot]');
   assert.doesNotThrow(() => run(humanEnv({ CLAUDECODE: '1' })));
 });
@@ -243,10 +240,11 @@ test('pre-push lets an agent push to a remote that does not reach GitHub', () =>
   }));
 });
 
-// `git clone /path/to/checkout` gives the clone a local-path remote. The
-// guard used to read that as remoteless and let an agent commit as the human
-// there; the commits then land in the human's own checkout on push.
-test('pre-commit treats a local clone of a GitHub-backed checkout as GitHub-bound', () => {
+// A local clone of a GitHub-backed checkout, a remoteless scratch repo, and a
+// clone of one: none of them is a place the delegate may not commit. The
+// remote graph used to decide GitHub-boundness for the retired territory
+// rule; it decides nothing for a human-attributed commit now.
+test('pre-commit never confines a human-attributed commit by remote or directory', () => {
   const upstream = fixture('local-upstream');
   upstream.git('remote', 'add', 'origin', 'git@github.com:example/repo.git');
   const { repo, git } = fixture('local-clone');
@@ -254,16 +252,12 @@ test('pre-commit treats a local clone of a GitHub-backed checkout as GitHub-boun
   git('config', 'user.email', 'human@example.com');
   git('remote', 'add', 'origin', upstream.repo);
   const hookBin = allowingAgentHook();
-  assert.throws(
-    () => execFileSync(preCommit, {
-      cwd: repo,
-      env: { ...humanEnv({ CLAUDECODE: '1' }), AGENT_BOT_HOOK_BIN: hookBin },
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }),
-    (error) => /agents may only commit changes within \.<tool>\/worktrees\/<repo>/.test(error.stderr),
-  );
-  // A remoteless scratch repo, and a clone of one, stay usable for tests.
+  assert.doesNotThrow(() => execFileSync(preCommit, {
+    cwd: repo,
+    env: { ...humanEnv({ CLAUDECODE: '1' }), AGENT_BOT_HOOK_BIN: hookBin },
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }));
   git('remote', 'remove', 'origin');
   assert.doesNotThrow(() => execFileSync(preCommit, {
     cwd: repo,

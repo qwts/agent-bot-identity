@@ -75,7 +75,7 @@ function fixture() {
   execFileSync('git', ['commit', '--quiet', '-m', 'initial'], { cwd: repo, env });
   mkdirSync(dirname(worktree), { recursive: true });
   execFileSync('git', ['worktree', 'add', '--quiet', '-b', 'topic', worktree], { cwd: repo, env });
-  return { app, claudeApp, env, stateDir, worktree };
+  return { app, claudeApp, env, repo, stateDir, worktree };
 }
 
 test('Codex startup repairs identity through the installed stable CLI', () => {
@@ -111,7 +111,10 @@ test('Codex startup repairs identity through the installed stable CLI', () => {
   });
 });
 
-test('Codex startup evicts a Claude pin from Codex territory', () => {
+// ENG-0339: the directory is not a signal, so nothing about `.codex/worktrees`
+// evicts the pin. What outranks a stale pin is a stated identity — here the
+// launcher's GH_AGENT_APP — and the pin is repaired to it.
+test('Codex startup repins a stale Claude pin to the launcher-stated Codex App', () => {
   const { app, claudeApp, env, stateDir, worktree } = fixture();
   const previous = ensureAgentIdentity({
     appSlug: claudeApp,
@@ -127,14 +130,14 @@ test('Codex startup evicts a Claude pin from Codex territory', () => {
 
   const tokenSlug = execFileSync('node', [WORKTREE_TOKEN, '--slug'], {
     cwd: worktree,
-    env: { ...env, CLAUDECODE: '1', GH_AGENT_APP: claudeApp },
+    env: { ...env, CLAUDECODE: '1', GH_AGENT_APP: app },
     encoding: 'utf8',
   }).trim();
-  assert.equal(tokenSlug, app, 'token selection must not mint for the stale Claude pin');
+  assert.equal(tokenSlug, app, 'GH_AGENT_APP outranks the stale pin for token selection too');
 
   const result = execFileSync('bash', [STARTUP], {
     cwd: worktree,
-    env: { ...env, CLAUDECODE: '1', GH_AGENT_APP: claudeApp, CODEX_THREAD_ID: 'thread-repaired' },
+    env: { ...env, CLAUDECODE: '1', GH_AGENT_APP: app, CODEX_THREAD_ID: 'thread-repaired' },
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -149,4 +152,46 @@ test('Codex startup evicts a Claude pin from Codex territory', () => {
   assert.equal(readAgentIdentity(repairedId, { stateDir }).harness, 'codex');
   assert.equal(readAgentIdentity(previous.id, { stateDir }).github.appSlug, claudeApp);
   assert.match(result, /agent identity: test-codex-agent\[bot\]/);
+});
+
+// ENG-0339 acceptance (a): in the owner's account, an unpinned checkout with
+// no GH_AGENT_APP is the human's delegate. Startup reports that and exits
+// cleanly instead of refusing a primary checkout.
+test('Codex startup leaves an unpinned checkout in the owner account to the human persona', () => {
+  const { env, repo } = fixture();
+  const result = execFileSync('bash', [STARTUP], {
+    cwd: repo,
+    env: { ...env, AGENT_BOT_ACCOUNT: 'user', CODEX_THREAD_ID: 'thread-delegate' },
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  assert.match(result, /agent identity: none — human persona/);
+  const read = (key) => execFileSync('git', ['config', '--get', key], {
+    cwd: repo, env, encoding: 'utf8',
+  }).trim();
+  assert.equal(read('user.name'), 'Test');
+  assert.throws(() => read('agentBot.app'));
+});
+
+// ENG-0339 acceptance (c): in the agent account the primary checkout, with no
+// pin, resolves to that account's App and is configured like any worktree.
+test('Codex startup binds a primary checkout in the Codex agent account', () => {
+  const { app, env, repo, stateDir } = fixture();
+  const result = execFileSync('bash', [STARTUP], {
+    cwd: repo,
+    env: { ...env, AGENT_BOT_ACCOUNT: app, CODEX_THREAD_ID: 'thread-account' },
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const read = (key) => execFileSync('git', ['config', '--worktree', '--get', key], {
+    cwd: repo, env, encoding: 'utf8',
+  }).trim();
+  assert.equal(read('agentBot.app'), app);
+  assert.equal(read('user.name'), `${app}[bot]`);
+  assert.equal(readAgentIdentity(read('agentBot.agentId'), { stateDir }).github.appSlug, app);
+  assert.match(result, /agent identity: test-codex-agent\[bot\]/);
+  assert.equal(
+    execFileSync('node', [WORKTREE_TOKEN, '--slug'], { cwd: repo, env: { ...env, AGENT_BOT_ACCOUNT: app }, encoding: 'utf8' }).trim(),
+    app,
+  );
 });

@@ -1,19 +1,26 @@
 #!/bin/sh
-# Shared territory guard, sourced by hooks/pre-commit and hooks/pre-push.
+# Shared agent-context helpers, sourced by hooks/pre-commit and hooks/pre-push.
 # Never installed on its own: the installed wrappers exec `agent-bot hook
 # <name>`, which runs the sibling hook from this directory.
 #
 # agent_bot_agent_context: true when the process carries agent-only markers —
 # CLAUDECODE, CURSOR_AGENT, COPILOT_AGENT, DEVIN_AGENT, WINDSURF_AGENT,
 # MUSE_AGENT, CLAUDE_CODE_ENTRYPOINT, AI_AGENT, GH_AGENT_APP, CODEX_* — or runs
-# in an agent account (ENG-0339: short name <owner>-<harness>-agent is agent
-# context even in a bare terminal; AGENT_BOT_ACCOUNT exists for tests and can
-# only ADD the signal, never mask the real account). Never editor markers like
+# in an agent account (ENG-0339). The account is classified by an exact roster
+# match through the runtime (worktree-token.mjs --account-slug, the same
+# slugForHarness the JS resolver uses), never by a glob on the short name, so
+# shell and JS agree on what an agent account is. AGENT_BOT_ACCOUNT names the
+# account explicitly (tests, launchers); it can only ADD the signal, never
+# mask the real account. Never editor markers like
 # VSCODE_*/CURSOR_TRACE_ID/WINDSURF_IDE_TYPE/MUSE_RELEASE_INFO, so a human in
 # an editor terminal is never evaluated at all. This list must stay in step
-# with detectAgentHarness in detect-harness.mjs: a marker recognized there but
-# missing here means the resolver calls the session an agent while the guards
-# wave it through as a human.
+# with detectAgentHarness in detect-harness.mjs.
+#
+# Agent context no longer confines where an agent may commit: under ENG-0339
+# the account, not the directory, is bot territory, and a harness in the
+# owner's account that resolves to the human is the human's delegate. What
+# remains is attribution hygiene — a bot-attributed commit must carry a
+# resolvable Agent ID — and the uninstalled-mode rule (ENG-0128).
 agent_bot_agent_context() {
   [ "$CLAUDECODE" = "1" ] && return 0
   [ "$CURSOR_AGENT" = "1" ] && return 0
@@ -24,10 +31,20 @@ agent_bot_agent_context() {
   [ -n "$AI_AGENT" ] && return 0
   [ -n "$GH_AGENT_APP" ] && return 0
   [ -n "$CLAUDE_CODE_ENTRYPOINT" ] && return 0
+  [ -n "$AGENT_BOT_ACCOUNT" ] && return 0
   if env | grep -q '^CODEX_'; then return 0; fi
-  case "$(id -un 2>/dev/null)" in *-*-agent) return 0 ;; esac
-  case "$AGENT_BOT_ACCOUNT" in *-*-agent) return 0 ;; esac
+  [ -n "$(agent_bot_account_slug)" ] && return 0
   return 1
+}
+
+# The App slug the current account resolves to by roster, or nothing. Needs
+# the runtime; without Node the account cannot be classified and contributes
+# no signal (the env markers above still do).
+agent_bot_account_slug() {
+  _token_tool=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/../worktree-token.mjs
+  [ -f "$_token_tool" ] || return 0
+  command -v node >/dev/null 2>&1 || return 0
+  node "$_token_tool" --account-slug 2>/dev/null || true
 }
 
 agent_bot_github_url() {
@@ -38,11 +55,8 @@ agent_bot_github_url() {
 }
 
 # True when a remote URL reaches GitHub. A local-path remote counts when the
-# repository it names has a GitHub remote itself (one hop): `git clone
-# /path/to/checkout` used to look remoteless to the guard, so an agent could
-# commit as the human there and push into the human's checkout, one `git
-# push` away from GitHub. A remoteless scratch repo cannot impersonate anyone
-# and agents legitimately use those for tests.
+# repository it names has a GitHub remote itself (one hop). Retained for the
+# uninstalled-mode push rule.
 agent_bot_url_reaches_github() {
   _url=$1
   agent_bot_github_url "$_url" && return 0
@@ -66,33 +80,10 @@ agent_bot_repo_reaches_github() {
   }
 }
 
-# Refuse a human-attributed commit or push from agent context. $1 is the verb
-# for the message (commit|push); $2 the human name git would use.
-agent_bot_refuse_outside_territory() {
-  _verb=$1
-  _name=$2
-  _setup=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/../setup-worktree.mjs
-  # Inside bot territory but resolving to the human: the worktree config
-  # never landed (sandboxed harnesses cannot always write the shared git dir
-  # at setup). Name the actual remedy. The .<tool>/worktrees segment is the
-  # signal at any root.
-  case "$PWD" in
-    */.*/worktrees/*)
-      echo "agent-bot guard: this IS a bot worktree, but its identity config never landed." >&2
-      echo "Run: node $_setup (from an unsandboxed shell), then retry." >&2
-      ;;
-    *)
-      echo "agent-bot guard: agents may only $_verb changes within .<tool>/worktrees/<repo>." >&2
-      echo "This $_verb would be attributed to the human ('${_name:-unset}'). Create or use your tool's worktree." >&2
-      ;;
-  esac
-  exit 1
-}
-
 # True when $1 (a GitHub login, git name, or email) names an unmanaged author
 # the operator allowlisted in AGENT_BOT_UNMANAGED_AUTHORS (ENG-0128): such a
-# person may publish as themselves from an agent session, so the territory
-# rule does not apply to them.
+# person may publish as themselves from an agent session even in uninstalled
+# mode.
 agent_bot_unmanaged_author() {
   _value=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
   [ -n "$_value" ] || return 1

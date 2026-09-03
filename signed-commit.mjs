@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { apiBase, githubHost, loadConfig } from './config.mjs';
 import { mint } from './mint-token.mjs';
-import { resolveAgentSlug, territoryHarness } from './resolve-agent.mjs';
+import { resolveAgentSlug } from './resolve-agent.mjs';
 
 const MAX_BUFFER = 256 * 1024 * 1024;
 
@@ -150,11 +150,15 @@ export async function runSignedCommit(options, {
   let defaultBranch = localDefaultBranch(cwd);
   let api = null;
   if (!options.dryRun) {
-    if (!territoryHarness(cwd)) {
-      throw new Error('refusing signed publishing outside bot territory');
+    // Publishing needs a stated bot identity: --app, GH_AGENT_APP, the pin,
+    // or the harness account (ENG-0339). Where the checkout sits is not a
+    // signal, and a delegate in the owner's account has nothing to sign as.
+    const slug = resolveAgentSlug({ env, cwd, config, detect: false });
+    if (!slug) {
+      throw new Error(
+        'no bot identity resolves here — pass --app, set GH_AGENT_APP, pin the checkout, or run from the harness account',
+      );
     }
-    const slug = resolveAgentSlug({ env, cwd, config, worktree: true });
-    if (!slug) throw new Error('no agent App identity resolved for this worktree');
     const { token } = await mintImpl({ slug, env });
     api = makeApi({ base: apiBase(config), token, fetchImpl });
     const metadata = await api(`repos/${repo}`);

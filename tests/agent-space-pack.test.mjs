@@ -350,17 +350,21 @@ function gistFixture(apiBase) {
   writeFileSync(configPath, `${JSON.stringify({ prefix: 'you', owner: 'you', apiBase })}\n`);
   const globalConfig = path.join(root, 'global.gitconfig');
   writeFileSync(globalConfig, '');
-  const territory = path.join(root, '.claude', 'worktrees', 'session', 'repo');
-  mkdirSync(territory, { recursive: true });
+  // ENG-0339: the checkout's directory is not an identity input. The gist
+  // handoff mints through the shared resolver, and here the identity is the
+  // agent account (the fallback a linked or primary checkout resolves through).
+  const checkout = path.join(root, 'checkout');
+  mkdirSync(checkout, { recursive: true });
   const spaces = path.join(root, 'spaces');
   const env = {
     HOME: home,
     AGENT_BOT_CONFIG: configPath,
+    AGENT_BOT_ACCOUNT: 'you-claude-agent',
     AGENT_BOT_SPACES_HOME: spaces,
     GIT_CONFIG_GLOBAL: globalConfig,
     GIT_CONFIG_NOSYSTEM: '1',
   };
-  return { root, spaces, territory, env };
+  return { root, spaces, checkout, env };
 }
 
 test('space export --gist uploads the pack, records the pointer, and import restores it', async () => {
@@ -369,7 +373,7 @@ test('space export --gist uploads the pack, records the pointer, and import rest
     const fixture = gistFixture(github.apiBase);
     seededSpace(fixture.spaces);
 
-    const exported = runCli(['space', 'export', ID, '--gist'], fixture.env, fixture.territory);
+    const exported = runCli(['space', 'export', ID, '--gist'], fixture.env, fixture.checkout);
     assert.equal(exported.status, 0, exported.stderr);
     assert.equal(exported.stdout, 'gist:abc123DEF456\n');
     assert.doesNotMatch(exported.stdout + exported.stderr, /installation-token-sentinel/);
@@ -383,7 +387,7 @@ test('space export --gist uploads the pack, records the pointer, and import rest
     assert.equal(uploaded.contentHash, packContentHash(uploaded.entries));
 
     // Pointer only, recorded in the marker and visible in show.
-    const show = runCli(['space', 'show', ID], fixture.env, fixture.territory);
+    const show = runCli(['space', 'show', ID], fixture.env, fixture.checkout);
     assert.equal(show.status, 0, show.stderr);
     assert.equal(JSON.parse(show.stdout).handoff, 'gist:abc123DEF456');
     const marker = readFileSync(path.join(fixture.spaces, ID, 'space.json'), 'utf8');
@@ -395,7 +399,7 @@ test('space export --gist uploads the pack, records the pointer, and import rest
       ['url', 'https://gist.github.com/you/abc123DEF456'],
     ]) {
       const target = gistFixture(github.apiBase);
-      const imported = runCli(['space', 'import', reference], target.env, target.territory);
+      const imported = runCli(['space', 'import', reference], target.env, target.checkout);
       assert.equal(imported.status, 0, `${suffix}: ${imported.stderr}`);
       assert.equal(
         readFileSync(path.join(target.spaces, ID, 'notes.md'), 'utf8'),
@@ -413,7 +417,7 @@ test('a mint failure fails the gist export closed before any upload', async () =
     const fixture = gistFixture(github.apiBase);
     seededSpace(fixture.spaces);
 
-    const exported = runCli(['space', 'export', ID, '--gist'], fixture.env, fixture.territory);
+    const exported = runCli(['space', 'export', ID, '--gist'], fixture.env, fixture.checkout);
     assert.notEqual(exported.status, 0);
     assert.equal(exported.stdout, '');
     assert.match(exported.stderr, /could not mint a token for you-claude-agent/);
@@ -433,7 +437,7 @@ test('missing gist access fails closed and names the App permission', async () =
     const fixture = gistFixture(github.apiBase);
     seededSpace(fixture.spaces);
 
-    const exported = runCli(['space', 'export', ID, '--gist'], fixture.env, fixture.territory);
+    const exported = runCli(['space', 'export', ID, '--gist'], fixture.env, fixture.checkout);
     assert.notEqual(exported.status, 0);
     assert.equal(exported.stdout, '');
     assert.match(exported.stderr, /gist creation was refused \(HTTP 404\)/);

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { HARNESSES, detectAgentHarness, detectHarness } from '../detect-harness.mjs';
+import { HARNESSES, accountName, detectAgentHarness, detectHarness } from '../detect-harness.mjs';
 
 const cfg = { prefix: 'you' };
 
@@ -162,4 +162,15 @@ test('agent-process detection treats an agent account as that persona', () => {
   // The owner's account leaves the marker chain unchanged.
   assert.equal(detectAgentHarness({ CLAUDECODE: '1' }, cfg, 'user'), 'you-claude-agent');
   assert.equal(detectAgentHarness({ PATH: '/usr/bin' }, cfg, 'user'), null);
+});
+
+// ENG-0339: AGENT_BOT_ACCOUNT names the account for JS exactly as it does for
+// the shell hooks and the gh shim, so a launcher or a test can state the
+// account without changing who is logged in.
+test('AGENT_BOT_ACCOUNT overrides the OS account name for JS consumers', () => {
+  assert.equal(accountName({ AGENT_BOT_ACCOUNT: 'you-goose-agent' }), 'you-goose-agent');
+  assert.equal(accountName({ AGENT_BOT_ACCOUNT: '  you-goose-agent \n' }), 'you-goose-agent');
+  assert.equal(typeof accountName({}), 'string');
+  assert.equal(accountName({ AGENT_BOT_ACCOUNT: '' }), accountName({}));
+  assert.equal(detectAgentHarness({ AGENT_BOT_ACCOUNT: 'you-goose-agent' }, cfg), 'you-goose-agent');
 });

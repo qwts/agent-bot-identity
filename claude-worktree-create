@@ -1,5 +1,5 @@
 #!/bin/sh
-# Wrapper for the Claude Code WorktreeCreate hook (ENG-0016, ENG-0045).
+# Wrapper for the Claude Code WorktreeCreate hook (ENG-0016, ENG-0339).
 #
 # The hook is spawned by the Claude Code desktop app, not by a login shell, so
 # a node installed through nvm may be absent from its PATH. Rather than source

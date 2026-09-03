@@ -631,11 +631,10 @@ export function ensurePrivateKey({
 
 export function main(argv = process.argv.slice(2)) {
   const { force, explicit } = parseCliArgs(argv);
-  // Territory-aware unless --app states the App outright — the shared policy
-  // set by appConfig in mint-token.mjs (#20): inherited defaults (GH_AGENT_APP,
-  // the pin) are corrected inside bot territory, explicit requests are honored.
-  const slug = resolveAgentSlug({ explicit, worktree: !explicit });
-  if (!slug) throw new Error('no App resolves; pass --app, set GH_AGENT_APP, or configure a pin');
+  // The shared resolver: --app, GH_AGENT_APP, the pin, the account, then
+  // harness detection. Explicit inputs win wherever the process runs.
+  const slug = resolveAgentSlug({ explicit });
+  if (!slug) throw new Error('no App resolves; pass --app, set GH_AGENT_APP, pin the checkout, or run from the harness account');
   const result = ensurePrivateKey({ slug, force });
   process.stdout.write(`${result.downloaded ? 'fetched' : 'already present'} ${result.path}\n`);
   if (result.appIdWritten) process.stdout.write(`fetched ${result.idPath}\n`);

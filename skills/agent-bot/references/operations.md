@@ -8,7 +8,7 @@ Use this reference for setup, minting, diagnostics, and identity repair.
 |---|---|
 | Bootstrap from a fresh source checkout | `./agent-bot bootstrap --profile <path\|-> [--machine-only] [--with-gh-shim] [--json]` |
 | Inspect available commands | `agent-bot --help` |
-| Configure the current linked worktree | `agent-bot setup-worktree [app-slug]` |
+| Configure this checkout's bot identity | `agent-bot setup-worktree [app-slug]` |
 | Mint a short-lived App installation token | `agent-bot mint-token [--app <slug>] [--json]` |
 | Diagnose the installation and mapped identities | `agent-bot doctor [--json]` |
 | Repair and verify an installed setup | `agent-bot bootstrap [--machine-only\|--worktree-only] [--json]` |
@@ -39,7 +39,7 @@ below.
 2. Obtain an explicit, secret-free versioned profile from that owner. If
    it is missing, incompatible, or incomplete, stop before mutation; do not
    infer a roster from the current harness or copy secret material into it.
-3.    From a primary source checkout, prepare only machine state. Bootstrap
+3. From the owner's account, prepare only machine state. Bootstrap
    installs the CLI and loads the identity-daemon supervisor (`daemon start`
    is recovery; `daemon disable` unloads it):
 
@@ -47,11 +47,12 @@ below.
    ./agent-bot bootstrap --profile <path> --with-gh-shim --machine-only
    ```
 
-   From a linked agent worktree, the same source launcher may perform the full
-   machine and worktree flow by omitting `--machine-only`. Never bind a primary
-   checkout as bot territory.
+   From a checkout that resolves a bot identity — any checkout in the agent's
+   own account, or one with `GH_AGENT_APP` or a pin — the same source launcher
+   may perform the full machine and checkout flow by omitting `--machine-only`.
+   Never bind the human's own checkout on harness detection alone.
 4. After installation, use the stable CLI. If machine preparation happened in
-   the primary checkout, enter a linked worktree and finish its binding:
+   the owner's account, finish the binding from the agent account:
 
    ```bash
    agent-bot bootstrap --worktree-only
@@ -61,7 +62,8 @@ below.
    its governance procedure. The runtime installs its own CLI, hooks, optional
    `gh` shim, credentials, and worktree identity; it does not invent or vendor
    an organization's shared tool catalog.
-6. Verify machine readiness and, from a linked worktree, worktree readiness:
+6. Verify machine readiness and, from a checkout with a bot identity, worktree
+   readiness:
 
    ```bash
    agent-bot doctor --machine-only --json --require-schema-version 1
@@ -79,22 +81,27 @@ complete when only the current harness is usable.
 
 ## Configure safely
 
-1. Confirm the current path is a linked agent worktree. Do not run setup to
-   claim a primary checkout for a bot.
+1. Confirm a bot identity is stated: the agent's own account, `GH_AGENT_APP`,
+   or a pin. Setup binds nothing on harness detection alone, so in the owner's
+   account an unpinned checkout stays the human's (delegate). Where the
+   checkout sits — primary or linked, any directory — is not a signal.
 2. Inspect `~/.config/agent-bot/config.json` only when configuration is part of
    the request. Map each harness to its App with `prefix` and optional `apps`
    overrides.
 3. Run `agent-bot setup-worktree` and keep the resolved App slug shown by the
-   command. An explicit slug must belong to the worktree's harness territory.
+   command. An explicit slug is honored as stated; it never fails on a
+   directory mismatch.
 4. Run `agent-bot doctor` after installation or identity repair.
 
-Resolution order is: explicit App, `GH_AGENT_APP`, worktree
-`agentBot.app` pin, then harness mapping. Treat a present but unreadable or
-conflicting pin as an error, not as permission to fall through.
+Resolution order is: explicit App, `GH_AGENT_APP`, the checkout's
+`agentBot.app` pin, the account (exact roster slug), then harness mapping for
+deliberate CLI calls only. Treat a present but unreadable or conflicting pin as
+an error, not as permission to fall through.
 
 ## Authenticate GitHub operations
 
-Prefer the installed `gh` shim inside bot territory. Without the shim, mint and
+Prefer the installed `gh` shim under a bot identity (it is stock `gh` for the
+human persona). Without the shim, mint and
 export in two fail-closed steps:
 
 ```bash
@@ -152,7 +159,7 @@ This command reads password/API-key fields only. It does not replace or call
 
 Run `agent-bot doctor`, then compare:
 
-- detected harness and territory;
+- detected harness, account, and worktree layout;
 - resolved and pinned App slug;
 - Git author and committer;
 - HTTPS origin and credential helper;
@@ -168,5 +175,6 @@ different App slug, because that creates split attribution.
 explicit, idempotent repair boundary. Automation should use
 `doctor --json --require-schema-version 1` or the equivalent bootstrap flags;
 the report separates machine from worktree readiness and contains no mint
-token or key material. A primary checkout is intentionally not applicable for
-worktree identity and must never be claimed by a repair command.
+token or key material. A checkout with no bot identity is intentionally not
+applicable for worktree identity and must never be claimed by a repair
+command; a primary checkout in an agent account is verified like any worktree.

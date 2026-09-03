@@ -207,9 +207,10 @@ function git(fixture, args, cwd) {
   }).trim();
 }
 
-// A primary checkout with an SSH origin plus one linked worktree laid out in
-// harness territory (<root>/.<harness>/worktrees/...), matching how desktop
-// harnesses create agent worktrees.
+// A primary checkout with an SSH origin plus one linked worktree laid out the
+// way desktop harnesses create agent worktrees (<root>/.<harness>/worktrees/
+// ...). Layout only: under ENG-0339 the account names the identity, which a
+// scenario states with AGENT_BOT_ACCOUNT.
 export function createRepoWithLinkedWorktree(fixture, {
   harness = 'codex',
   session = 'session',

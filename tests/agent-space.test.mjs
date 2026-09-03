@@ -408,7 +408,9 @@ test('space ensure fails closed without a current Agent ID', () => {
   assert.equal(existsSync(spaces), false);
 });
 
-test('space ensure rejects primary checkouts and positional Agent IDs before creating', () => {
+// ENG-0339: a primary checkout is not a reason to refuse — the Agent ID, not
+// the directory, is what makes a space creatable.
+test('space ensure works from a primary checkout and rejects positional Agent IDs before creating', () => {
   const root = scratch();
   const spaces = path.join(root, 'spaces');
   const primary = path.join(root, 'primary');
@@ -416,14 +418,7 @@ test('space ensure rejects primary checkouts and positional Agent IDs before cre
   execFileSync('git', ['init', '--quiet'], { cwd: primary });
   const env = { AGENT_BOT_ID: ID, AGENT_BOT_SPACES_HOME: spaces };
 
-  const human = runCli(['space', 'ensure'], env, primary);
-  assert.notEqual(human.status, 0);
-  assert.equal(human.stdout, '');
-  assert.match(human.stderr, /requires bot territory/);
-  assert.equal(existsSync(spaces), false);
-
-  const botCwd = path.join(root, '.codex', 'worktrees', 'positional', 'repo');
-  mkdirSync(botCwd, { recursive: true });
+  const botCwd = primary;
   const positional = runCli(['space', 'ensure', OTHER_ID], env, botCwd);
   assert.notEqual(positional.status, 0);
   assert.equal(positional.stdout, '');
@@ -439,6 +434,11 @@ test('space ensure rejects primary checkouts and positional Agent IDs before cre
   assert.doesNotMatch(multiple.stderr, new RegExp(OTHER_ID));
   assert.doesNotMatch(multiple.stderr, new RegExp(ID));
   assert.equal(existsSync(spaces), false);
+
+  const ensured = runCli(['space', 'ensure'], env, primary);
+  assert.equal(ensured.status, 0, ensured.stderr);
+  assert.equal(ensured.stdout, `${path.join(spaces, ID)}\n`);
+  assert.equal(existsSync(path.join(spaces, ID)), true);
 });
 
 test('space CLI fails closed without an explicit or current Agent ID', () => {

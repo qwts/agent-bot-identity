@@ -636,6 +636,32 @@ test('primary checkout is explicitly not applicable for diagnostic worktree read
   assert.equal(report.worktree.checks[0].code, 'primary-checkout');
 });
 
+// ENG-0339: a primary checkout in an agent account is bot work and is verified
+// like a linked worktree; only a checkout with no bot identity is skipped.
+test('a primary checkout with a stated bot identity is verified, not skipped', async () => {
+  const root = tempRoot();
+  const repo = join(root, 'repo');
+  mkdirSync(repo);
+  execFileSync('git', ['init', '--quiet', '--initial-branch=main'], { cwd: repo });
+  for (const env of [
+    { HOME: root, AGENT_BOT_ACCOUNT: 'you-codex-agent' },
+    { HOME: root, AGENT_BOT_ACCOUNT: 'user', GH_AGENT_APP: 'you-codex-agent' },
+  ]) {
+    const report = await collectReadiness({
+      command: 'doctor',
+      scope: 'worktree',
+      cwd: repo,
+      home: root,
+      env,
+      load: () => ({ prefix: 'you' }),
+    });
+    assert.equal(report.worktree.status, 'not_ready');
+    assert.equal(report.worktree.checks[0].message, 'primary checkout');
+    assert.equal(report.worktree.checks[0].status, 'ready');
+    assert.ok(report.worktree.checks.some((check) => check.id === 'worktree.app' && check.status === 'failed'));
+  }
+});
+
 test('schema requirements and human output expose only the first action', async () => {
   assert.doesNotThrow(() => requireReadinessSchema(1));
   assert.throws(() => requireReadinessSchema(2), /does not satisfy/);

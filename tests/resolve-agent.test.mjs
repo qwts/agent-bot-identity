@@ -1,7 +1,7 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -21,79 +21,94 @@ function repo(name, pin) {
 }
 
 const CLAUDE = { CLAUDECODE: '1' };
+// The owner's own account: no roster slug, so the account contributes nothing.
+const OWNER = 'user';
 
 test('the pin refines what detection resolved', () => {
   const pinned = repo('pinned', 'you-claude-fable-agent');
   assert.equal(pinnedSlug(pinned), 'you-claude-fable-agent');
-  assert.equal(resolveAgentSlug({ env: CLAUDE, cwd: pinned, config: cfg }), 'you-claude-fable-agent');
+  assert.equal(resolveAgentSlug({ env: CLAUDE, cwd: pinned, config: cfg, account: OWNER }), 'you-claude-fable-agent');
 });
 
-test('worktree territory repairs conflicting launcher and pin identities', () => {
+// ENG-0339 supersedes ENG-0045: the directory a checkout sits in is layout,
+// not an identity input. A `.codex/worktrees` path neither repairs nor vetoes
+// a pin, a launcher identity, or an explicit App.
+test('the worktree directory is layout only: pin and launcher identity stand in any layout', () => {
   const worktree = repo('.codex/worktrees/session/repo', 'you-claude-agent');
-  assert.equal(territoryHarness(worktree), 'codex');
-  for (const env of [
-    { CLAUDECODE: '1' },
-    { GH_AGENT_APP: 'you-claude-agent' },
-    { CLAUDECODE: '1', GH_AGENT_APP: 'you-claude-agent' },
-  ]) {
-    assert.equal(resolveAgentSlug({ env, cwd: worktree, config: cfg, worktree: true }), 'you-codex-agent');
+  assert.equal(territoryHarness(worktree), 'codex', 'the layout is still readable as advice');
+  assert.equal(resolveAgentSlug({ env: CLAUDE, cwd: worktree, config: cfg, account: OWNER }), 'you-claude-agent');
+  assert.equal(
+    resolveAgentSlug({ env: { GH_AGENT_APP: 'you-claude-agent' }, cwd: worktree, config: cfg, account: OWNER }),
+    'you-claude-agent',
+  );
+  assert.equal(
+    resolveAgentSlug({ env: { GH_AGENT_APP: 'you-cursor-agent' }, cwd: worktree, config: cfg, account: OWNER }),
+    'you-cursor-agent',
+    'GH_AGENT_APP outranks the pin, and the directory has no say',
+  );
+});
+
+test('an explicit App never throws on a directory mismatch', () => {
+  const worktree = repo('.codex/worktrees/model/repo', 'you-codex-sol-agent');
+  assert.equal(resolveAgentSlug({ env: {}, cwd: worktree, config: cfg, account: OWNER }), 'you-codex-sol-agent');
+  assert.equal(resolveAgentSlug({ explicit: 'you-claude-agent', cwd: worktree, config: cfg }), 'you-claude-agent');
+  assert.equal(resolveAgentSlug({ explicit: 'custom-agent', cwd: worktree, config: cfg }), 'custom-agent');
+  for (const harness of ['claude', 'codex', 'cursor', 'muse', 'vscode', 'goose']) {
+    const layout = repo(`.${harness}/worktrees/owner/repo`, 'you-claude-agent');
+    assert.equal(
+      resolveAgentSlug({ explicit: 'you-cursor-agent', env: { GH_AGENT_APP: 'you-codex-agent' }, cwd: layout, config: cfg }),
+      'you-cursor-agent',
+      `--app is taken at face value under .${harness}/worktrees`,
+    );
   }
 });
 
-// Meta Muse's territory segment is the harness key (`.muse/worktrees/`), and
-// its App slug follows the {account}-{harness}-agent pattern like every other
-// harness, so no apps-map override is involved.
-test('Meta Muse territory binds its App by the slug pattern', () => {
+// Meta Muse's App slug follows the {account}-{harness}-agent pattern like
+// every other harness, so no apps-map override is involved.
+test('a Muse pin and a Muse account both bind the Muse App by the slug pattern', () => {
   const config = { prefix: 'qwts' };
   const worktree = repo('.muse/worktrees/agent-bot-identity/session', 'qwts-muse-agent');
   assert.equal(territoryHarness(worktree), 'muse');
   assert.equal(
-    resolveAgentSlug({ env: { MUSE_AGENT: '1' }, cwd: worktree, config, worktree: true }),
+    resolveAgentSlug({ env: { MUSE_AGENT: '1' }, cwd: worktree, config, account: OWNER }),
     'qwts-muse-agent',
   );
-  // Territory repairs a foreign launcher identity, same as every harness.
+  const plain = repo('muse-account');
   assert.equal(
-    resolveAgentSlug({ env: { CLAUDECODE: '1' }, cwd: worktree, config, worktree: true }),
+    resolveAgentSlug({ env: { CLAUDECODE: '1' }, cwd: plain, config, account: 'qwts-muse-agent' }),
     'qwts-muse-agent',
+    'the account outranks a foreign harness marker',
   );
 });
 
-test('every supported worktree territory owns conflicting pins', () => {
-  for (const harness of ['claude', 'codex', 'cursor', 'muse', 'vscode']) {
-    const worktree = repo(`.${harness}/worktrees/owner/repo`, 'you-claude-agent');
-    assert.equal(resolveAgentSlug({ env: { GH_AGENT_APP: 'you-claude-agent' }, cwd: worktree, config: cfg, worktree: true }), `you-${harness}-agent`);
-  }
-});
-
-test('worktree territory preserves a same-harness model pin and rejects cross-harness explicit Apps', () => {
-  const worktree = repo('.codex/worktrees/model/repo', 'you-codex-sol-agent');
-  assert.equal(resolveAgentSlug({ env: {}, cwd: worktree, config: cfg, worktree: true }), 'you-codex-sol-agent');
-  assert.throws(
-    () => resolveAgentSlug({ explicit: 'you-claude-agent', cwd: worktree, config: cfg, worktree: true }),
-    /conflicts with codex worktree territory/,
-  );
-  assert.throws(
-    () => resolveAgentSlug({ explicit: 'custom-agent', cwd: worktree, config: cfg, worktree: true }),
-    /conflicts with codex worktree territory/,
-  );
-});
-
-test('Claude territory accepts Claude Apps and favors a compatible launcher over a pin', () => {
+test('Claude launcher identities and explicit model Apps are honored as stated', () => {
   const worktree = repo('.claude/worktrees/model/repo', 'you-claude-fable-agent');
   assert.equal(
-    resolveAgentSlug({ env: { GH_AGENT_APP: 'you-claude-opus-agent' }, cwd: worktree, config: cfg, worktree: true }),
+    resolveAgentSlug({ env: { GH_AGENT_APP: 'you-claude-opus-agent' }, cwd: worktree, config: cfg, account: OWNER }),
     'you-claude-opus-agent',
   );
   assert.equal(
-    resolveAgentSlug({ explicit: 'you-claude-sonnet-agent', cwd: worktree, config: cfg, worktree: true }),
+    resolveAgentSlug({ explicit: 'you-claude-sonnet-agent', cwd: worktree, config: cfg }),
     'you-claude-sonnet-agent',
   );
 });
 
-test('worktree territory respects a custom configured App mapping', () => {
-  const worktree = repo('.codex/worktrees/custom/repo', 'you-claude-agent');
+test('a custom configured App mapping names the account and the harness alike', () => {
+  const config = { apps: { codex: 'special-bot' } };
+  const pinned = repo('.codex/worktrees/custom/repo', 'you-claude-agent');
   assert.equal(
-    resolveAgentSlug({ env: { CLAUDECODE: '1' }, cwd: worktree, config: { apps: { codex: 'special-bot' } }, worktree: true }),
+    resolveAgentSlug({ env: { CLAUDECODE: '1' }, cwd: pinned, config, account: OWNER }),
+    'you-claude-agent',
+    'the pin still outranks detection',
+  );
+  const plain = repo('custom-account');
+  assert.equal(
+    resolveAgentSlug({ env: {}, cwd: plain, config, account: 'special-bot' }),
+    'special-bot',
+    'an account named by the apps map is that App, exactly as the roster says',
+  );
+  assert.equal(
+    resolveAgentSlug({ env: { CODEX_SANDBOX: 'seatbelt' }, cwd: plain, config, account: OWNER }),
     'special-bot',
   );
 });
@@ -101,7 +116,7 @@ test('worktree territory respects a custom configured App mapping', () => {
 test('detection stands when nothing is pinned', () => {
   const plain = repo('plain');
   assert.equal(pinnedSlug(plain), null);
-  assert.equal(resolveAgentSlug({ env: CLAUDE, cwd: plain, config: cfg }), 'you-claude-agent');
+  assert.equal(resolveAgentSlug({ env: CLAUDE, cwd: plain, config: cfg, account: OWNER }), 'you-claude-agent');
 });
 
 test('an explicit slug outranks the environment, which outranks the pin', () => {
@@ -144,7 +159,7 @@ test('retired profile identities fail closed for explicit, launcher, and pinned 
     { env: {}, cwd: pinned },
   ]) {
     assert.throws(
-      () => resolveAgentSlug({ cwd: root, config, ...options }),
+      () => resolveAgentSlug({ cwd: root, config, account: OWNER, ...options }),
       /selected App is retired/,
     );
   }
@@ -154,9 +169,9 @@ test('retired profile identities fail closed for explicit, launcher, and pinned 
 test('a directory that is not a repository resolves quietly rather than throwing', () => {
   assert.equal(pinnedSlug(root), null);
   assert.equal(
-    resolveAgentSlug({ env: {}, cwd: root, config: cfg }),
+    resolveAgentSlug({ env: {}, cwd: root, config: cfg, account: OWNER }),
     null,
-    'no harness, no pin, no identity — not an error',
+    'no harness, no pin, no account — not an error',
   );
 });
 
@@ -168,7 +183,7 @@ test('an unreadable pin fails closed instead of falling through to the harness',
   appendFileSync(join(broken, '.git', 'config'), '\n[agentBot\napp = you-claude-fable-agent\n');
   assert.throws(() => pinnedSlug(broken), /agentBot\.app/);
   assert.throws(
-    () => resolveAgentSlug({ env: CLAUDE, cwd: broken, config: cfg }),
+    () => resolveAgentSlug({ env: CLAUDE, cwd: broken, config: cfg, account: OWNER }),
     /unverifiable pin is not an absent one/,
   );
 });
@@ -212,7 +227,7 @@ test('every consumer that mints or commits shares this resolver', async () => {
   // identity their own way. Import-level check, so a future consumer that
   // rolls its own chain shows up here rather than in production attribution.
   const sources = await Promise.all(
-    ['../setup-worktree.mjs', '../mint-token.mjs', '../ensure-private-key.mjs', '../agent-identity.mjs'].map(async (path) => ({
+    ['../setup-worktree.mjs', '../mint-token.mjs', '../ensure-private-key.mjs', '../agent-identity.mjs', '../worktree-token.mjs', '../signed-commit.mjs', '../agent-space-pack.mjs'].map(async (path) => ({
       path,
       text: await import('node:fs').then((fs) =>
         fs.readFileSync(new URL(path, import.meta.url), 'utf8'),
@@ -222,36 +237,28 @@ test('every consumer that mints or commits shares this resolver', async () => {
   for (const { path, text } of sources) {
     assert.match(text, /resolve-agent\.mjs/, `${path} resolves identity through the shared order`);
     assert.doesNotMatch(text, /detectHarness\(/, `${path} does not call detection directly`);
-    // The shared policy from #20: every inferred resolution asks the territory
-    // question. A call site is either explicit-exempt (worktree: !explicit) or
-    // always inferred (worktree: true) — never a bare resolveAgentSlug().
+    // ENG-0339: there is no directory question left to ask. A call site that
+    // still passed the retired `worktree:` flag would be asking it.
     for (const call of text.match(/resolveAgentSlug\((?:[^()]|\([^()]*\))*\)/g) ?? []) {
-      assert.match(call, /worktree:/, `${path} passes worktree at every resolveAgentSlug call site`);
+      assert.doesNotMatch(call, /worktree:/, `${path} no longer consults the directory`);
     }
   }
 });
 
-import { mkdirSync } from 'node:fs';
-
-test('a Claude scratchpad is claude territory that repairs foreign launcher identity (#26)', () => {
-  // Codex review on #27: without this, an inherited CODEX_*/GH_AGENT_APP
-  // marker selected the foreign bot and outranked the scratchpad's own slug.
+test('a session scratchpad is an ordinary directory: launcher and marker identities stand (#26 retired)', () => {
   const pad = join(root, 'claude-502/p/f3fe0864-f97d-4393-a9ef-8dac1cf89a27/scratchpad');
   mkdirSync(pad, { recursive: true });
-  assert.equal(territoryHarness(pad), 'claude');
-  // A foreign launcher identity cannot mint from Claude's scratchpad...
+  assert.equal(territoryHarness(pad), null);
   assert.equal(
-    resolveAgentSlug({ env: { GH_AGENT_APP: 'you-codex-agent' }, cwd: pad, config: cfg, worktree: true }),
-    'you-claude-agent',
+    resolveAgentSlug({ env: { GH_AGENT_APP: 'you-codex-agent' }, cwd: pad, config: cfg, account: OWNER }),
+    'you-codex-agent',
   );
-  // ...an ambient foreign harness marker cannot either...
   assert.equal(
-    resolveAgentSlug({ env: { CODEX_SANDBOX: '1' }, cwd: pad, config: cfg, worktree: true }),
-    'you-claude-agent',
+    resolveAgentSlug({ env: { CODEX_SANDBOX: '1' }, cwd: pad, config: cfg, account: OWNER }),
+    'you-codex-agent',
   );
-  // ...while a claude-owned launcher identity (model-variant App) is honored.
   assert.equal(
-    resolveAgentSlug({ env: { GH_AGENT_APP: 'you-claude-fable-agent' }, cwd: pad, config: cfg, worktree: true }),
+    resolveAgentSlug({ env: { GH_AGENT_APP: 'you-claude-fable-agent' }, cwd: pad, config: cfg, account: OWNER }),
     'you-claude-fable-agent',
   );
 });
@@ -278,21 +285,62 @@ test('an agent account outranks harness detection but not the pin', () => {
 test('the owner account resolves through detection exactly as before', () => {
   const plain = repo('account-owner');
   assert.equal(
-    resolveAgentSlug({ env: CLAUDE, cwd: plain, config: cfg, account: 'user' }),
+    resolveAgentSlug({ env: CLAUDE, cwd: plain, config: cfg, account: OWNER }),
     'you-claude-agent',
   );
-  assert.equal(resolveAgentSlug({ env: {}, cwd: plain, config: cfg, account: 'user' }), null);
+  assert.equal(resolveAgentSlug({ env: {}, cwd: plain, config: cfg, account: OWNER }), null);
 });
 
-// Territory speaks the full profile vocabulary (ENG-0339): `.goose/worktrees/`
-// is goose territory although goose has no env matcher, and an inherited
-// foreign marker cannot cross it.
-test('new-harness worktree directories are recognized territory', () => {
+test('AGENT_BOT_ACCOUNT names the account for the JS resolver, the same seam the shell hooks use', () => {
+  const plain = repo('account-env');
+  assert.equal(
+    resolveAgentSlug({ env: { AGENT_BOT_ACCOUNT: 'you-goose-agent' }, cwd: plain, config: cfg }),
+    'you-goose-agent',
+  );
+  assert.equal(
+    resolveAgentSlug({ env: { AGENT_BOT_ACCOUNT: 'you-goose-agent', CLAUDECODE: '1' }, cwd: plain, config: cfg }),
+    'you-goose-agent',
+  );
+  assert.equal(
+    resolveAgentSlug({ env: { AGENT_BOT_ACCOUNT: 'you-mystery-agent' }, cwd: plain, config: cfg }),
+    null,
+    'a name that merely looks like a slug is not on the roster — no glob, exact match only',
+  );
+});
+
+// Implicit actors — the gh shim, token minting, hook-driven setup — act only
+// on a STATED identity: explicit, launcher, pin, or account. Harness detection
+// alone does not make a checkout in the owner's account a bot's (delegate).
+test('detect: false stops at the account, so a delegate in the owner account resolves to nothing', () => {
+  const plain = repo('delegate');
+  assert.equal(resolveAgentSlug({ env: CLAUDE, cwd: plain, config: cfg, account: OWNER, detect: false }), null);
+  assert.equal(
+    resolveAgentSlug({ env: CLAUDE, cwd: plain, config: cfg, account: 'you-goose-agent', detect: false }),
+    'you-goose-agent',
+  );
+  assert.equal(
+    resolveAgentSlug({ env: { ...CLAUDE, GH_AGENT_APP: 'you-codex-agent' }, cwd: plain, config: cfg, account: OWNER, detect: false }),
+    'you-codex-agent',
+  );
+  const pinned = repo('delegate-pinned', 'you-claude-fable-agent');
+  assert.equal(resolveAgentSlug({ env: {}, cwd: pinned, config: cfg, account: OWNER, detect: false }), 'you-claude-fable-agent');
+});
+
+// A `.goose/worktrees` path is goose's layout, nothing more: in the owner's
+// account it resolves like any other directory, and in the goose account the
+// account — not the path — names the App.
+test('new-harness worktree directories are layout, not identity', () => {
   const worktree = repo('.goose/worktrees/session/repo');
   assert.equal(territoryHarness(worktree), 'goose');
-  for (const env of [{}, CLAUDE, { GH_AGENT_APP: 'you-claude-agent' }]) {
+  assert.equal(resolveAgentSlug({ env: {}, cwd: worktree, config: cfg, account: OWNER }), null);
+  assert.equal(resolveAgentSlug({ env: CLAUDE, cwd: worktree, config: cfg, account: OWNER }), 'you-claude-agent');
+  assert.equal(
+    resolveAgentSlug({ env: { GH_AGENT_APP: 'you-claude-agent' }, cwd: worktree, config: cfg, account: OWNER }),
+    'you-claude-agent',
+  );
+  for (const env of [{}, CLAUDE, { GH_AGENT_APP: '' }]) {
     assert.equal(
-      resolveAgentSlug({ env, cwd: worktree, config: cfg, worktree: true, account: 'user' }),
+      resolveAgentSlug({ env, cwd: worktree, config: cfg, account: 'you-goose-agent' }),
       'you-goose-agent',
     );
   }

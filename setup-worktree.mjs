@@ -26,9 +26,13 @@
 //     (through the loopback daemon when settings.daemonPreference selects it;
 //      see bindSoul for the prefer/required fallback policy)
 //
-// Guard: it only touches LINKED worktrees (git-dir != common-dir). A session
-// in a primary checkout is left alone, so a human's own clone never silently
-// becomes bot-authored.
+// Guard: it acts only when a bot identity is STATED — an explicit App,
+// GH_AGENT_APP, an existing pin — or the account is an agent account
+// (ENG-0339), never on harness detection alone. A primary checkout is
+// configured like any other when that holds (every checkout in an agent
+// account is bot work); in the owner's account an unpinned clone resolves to
+// nothing and is left alone, so a human's own checkout never silently becomes
+// bot-authored. The `.<tool>/worktrees` directory is layout, not a signal.
 
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
@@ -196,21 +200,21 @@ export async function main({
   daemon = null,
 } = {}) {
   const config = loadConfig();
-  let gitDir; let commonDir;
+  let gitDir;
   try {
     gitDir = git('rev-parse', '--absolute-git-dir');
-    commonDir = git('rev-parse', '--path-format=absolute', '--git-common-dir');
   } catch {
     return; // not inside a git repository — nothing to do
   }
-  if (gitDir === commonDir) return; // primary checkout, not an agent worktree
   const previousSlug = pinnedSlug();
-  const resolvedSlug = resolveAgentSlug({ explicit: process.argv[2], config, worktree: true });
-  if (!resolvedSlug) return; // no identity resolved for this checkout — nothing to do
+  const resolvedSlug = resolveAgentSlug({ explicit: process.argv[2], config, detect: false });
+  if (!resolvedSlug) return; // no bot identity stated for this checkout — human persona, nothing to do
   const slug = validateAppSlug(resolvedSlug);
-  const territory = territoryHarness();
-  if (previousSlug && previousSlug !== slug && territory) {
-    process.stderr.write(`setup-worktree: repaired ${previousSlug} to ${slug} for ${territory} territory\n`);
+  if (previousSlug && previousSlug !== slug) {
+    const layout = territoryHarness();
+    process.stderr.write(
+      `setup-worktree: repinning ${previousSlug} to ${slug}${layout ? ` (${layout} worktree layout)` : ''}\n`,
+    );
   }
   let verifiedToken = null;
   const [credential] = await reconcileCredentials({
@@ -223,8 +227,8 @@ export async function main({
     process.stdout.write(`credential restored for ${slug}\n`);
   }
   // Eliminate every SSH push path only after the App credential is locally
-  // ready and live-verified. A credential failure leaves the worktree wholly
-  // untouched and still guarded as human territory.
+  // ready and live-verified. A credential failure leaves the checkout wholly
+  // untouched.
   rewriteOrigins();
   const base = apiBase(config);
   const uid = await resolveBotUid(slug, base, verifiedToken);

@@ -1,27 +1,25 @@
 #!/bin/sh
-# pre-commit guard: agents may only commit inside bot territory. Installed
-# machine-wide via core.hooksPath, it blocks a commit when ALL three hold:
-#   - the process is agent context (see hooks/territory-guard for the marker
-#     list and the agent-account rule);
-#   - the commit would be attributed to the human (identity did not resolve
-#     to a *[bot]* — i.e. no bot worktree config applies here);
-#   - any remote reaches GitHub, directly or through a local-path remote whose
-#     own checkout does (a remoteless scratch repo cannot impersonate anyone,
-#     and agents legitimately use those for tests).
-# Bot-attributed commits must also resolve an Agent ID. The guard fails closed
-# for agent processes but does not evaluate ordinary human shells.
+# pre-commit guard: attribution hygiene for agent processes. Installed
+# machine-wide via core.hooksPath. When the process is agent context (see
+# hooks/agent-context for the marker list and the agent-account rule) and the
+# commit is bot-attributed, the bot must carry a resolvable Agent ID — bot
+# attribution alone identifies only the GitHub App; the transcript-bound
+# execution identity is minted by setup-worktree.
+#
+# A human-attributed commit from an agent process is not refused (ENG-0339
+# supersedes ENG-0045's worktree enforcement): in the owner's account a
+# harness that resolves to the human is the human's delegate, and no guard
+# confines where it commits. Ordinary human shells are never evaluated.
 
 HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SETUP="$HOOK_DIR/../setup-worktree.mjs"
-# shellcheck source=hooks/territory-guard
-. "$HOOK_DIR/territory-guard"
+# shellcheck source=hooks/agent-context
+. "$HOOK_DIR/agent-context"
 
 if agent_bot_agent_context; then
   NAME=$(git config user.name 2>/dev/null || true)
   case "$NAME" in
     *"[bot]"*)
-      # Bot attribution alone identifies only the GitHub App. A transcript-bound
-      # execution identity is minted by setup-worktree.
       IDENTITY_TOOL="$HOOK_DIR/../agent-identity.mjs"
       ID=""
       if [ -f "$IDENTITY_TOOL" ] && command -v node >/dev/null 2>&1; then
@@ -34,9 +32,7 @@ if agent_bot_agent_context; then
       fi
       ;;
     *)
-      if agent_bot_repo_reaches_github; then
-        agent_bot_refuse_outside_territory commit "$NAME"
-      fi
+      : # human persona — delegate work is the human's own (ENG-0339)
       ;;
   esac
 fi
