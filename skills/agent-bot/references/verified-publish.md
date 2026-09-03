@@ -7,7 +7,8 @@ branch under a force-with-lease equivalent.
 
 ## Preconditions
 
-1. Work only in bot territory with a resolvable App identity.
+1. Work under a stated bot identity: the agent account, `--app`,
+   `GH_AGENT_APP`, or a pin. The command refuses to mint when none resolves.
 2. Commit all intended changes and run the repository's required validation.
 3. Keep the range linear. Rebase away merge commits.
 4. Fetch the branch before beginning if another writer may have updated it.

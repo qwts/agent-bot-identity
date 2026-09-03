@@ -579,7 +579,7 @@ test('unsupported schema fails before every bootstrap mutation', async () => {
   assert.equal(report.first_actionable_failure.code, 'readiness-schema-unsupported');
 });
 
-test('full bootstrap requires a linked worktree while leaving machine readiness visible', async () => {
+test('full bootstrap requires a resolvable bot identity while leaving machine readiness visible', async () => {
   const report = await bootstrap(parseBootstrapArgs([]), {
     home: '/home/test',
     installConfig: () => ({ config: {}, path: '/config', updated: false }),
@@ -592,7 +592,7 @@ test('full bootstrap requires a linked worktree while leaving machine readiness 
   });
   assert.equal(report.machine.status, 'ready');
   assert.equal(report.worktree.status, 'not_ready');
-  assert.equal(report.first_actionable_failure.code, 'linked-worktree-required');
+  assert.equal(report.first_actionable_failure.code, 'bot-identity-unresolved');
 });
 
 test('bootstrap JSON mode emits exactly one report object', async () => {

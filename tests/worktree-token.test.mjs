@@ -1,13 +1,34 @@
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { worktreeSlug, pathSlug, resolveSlug, configuredRootSlug, scratchpadSlug, scratchpadRoot } from '../worktree-token.mjs';
+import { accountSlug, helperSlug, resolveSlug, worktreeSlug } from '../worktree-token.mjs';
 
+const TOOL = fileURLToPath(new URL('../worktree-token.mjs', import.meta.url));
 const cfg = { prefix: 'you' };
+
+const root = mkdtempSync(join(tmpdir(), 'worktree-token-'));
+after(() => rmSync(root, { recursive: true, force: true }));
 
 test('extracts the slug baked into the credential-helper line', () => {
   const helpers = '\n!node /Users/x/Code/agent-bot-identity/git-credential-bot.mjs qwts-codex-agent';
-  assert.equal(worktreeSlug(helpers, null), 'qwts-codex-agent');
+  assert.equal(helperSlug(helpers), 'qwts-codex-agent');
+  assert.equal(helperSlug("!'/Users/x/.local/bin/agent-bot' credential qwts-codex-agent"), 'qwts-codex-agent');
+});
+
+test('the last bot helper line wins when several exist', () => {
+  const helpers = '!node /x/git-credential-bot.mjs you-claude-agent\n!node /x/git-credential-bot.mjs you-codex-agent';
+  assert.equal(helperSlug(helpers), 'you-codex-agent');
+});
+
+test('no helper means no helper signal', () => {
+  assert.equal(helperSlug(''), null);
+  assert.equal(helperSlug('osxkeychain\n!gh auth git-credential'), null);
+  assert.equal(worktreeSlug('', null), null);
 });
 
 test('a pinned identity outranks the helper line', () => {
@@ -15,147 +36,97 @@ test('a pinned identity outranks the helper line', () => {
   assert.equal(worktreeSlug(helpers, 'you-claude-agent'), 'you-claude-agent');
 });
 
-test('no helper means human context', () => {
-  assert.equal(worktreeSlug('', null), null);
-  assert.equal(worktreeSlug('osxkeychain\n!gh auth git-credential', null), null);
+// ENG-0339: the pin is an explicit override, so it counts on its own — with
+// or without the helper line, wherever the checkout sits.
+test('a pin alone is a stated bot identity', () => {
+  assert.equal(worktreeSlug('', 'you-claude-agent'), 'you-claude-agent');
+  assert.equal(worktreeSlug('osxkeychain', 'you-claude-agent'), 'you-claude-agent');
 });
 
-test('a pin without the helper marker never makes bot territory', () => {
-  // A stray agentBot.app in a human clone must not cause a mint.
-  assert.equal(worktreeSlug('', 'you-claude-agent'), null);
-  assert.equal(worktreeSlug('osxkeychain', 'you-claude-agent'), null);
+test('resolution order: the shared resolver, then the pin, then the helper line', () => {
+  const helpers = '!node /x/git-credential-bot.mjs you-codex-agent';
+  assert.equal(resolveSlug({ selected: 'you-cursor-agent', pinned: 'you-claude-agent', helperLines: helpers }), 'you-cursor-agent');
+  assert.equal(resolveSlug({ pinned: 'you-claude-agent', helperLines: helpers }), 'you-claude-agent');
+  assert.equal(resolveSlug({ helperLines: helpers }), 'you-codex-agent');
+  assert.equal(resolveSlug({}), null);
 });
 
-test('the directory dictates the App even with no config at all (ENG-0045 d1)', () => {
-  // Sandboxed harnesses may never manage to write the worktree config —
-  // the path alone must resolve the bot.
-  const HOME = '/Users/u';
-  assert.equal(pathSlug(`${HOME}/.codex/worktrees/5243/test-repo`, cfg), 'you-codex-agent');
-  assert.equal(pathSlug(`${HOME}/.claude/worktrees/agent-bot-identity/x`, cfg), 'you-claude-agent');
-  assert.equal(pathSlug(`${HOME}/.cursor/worktrees/a/b`, cfg), 'you-cursor-agent');
-  assert.equal(pathSlug(`${HOME}/.vscode/worktrees/a/b`, cfg), 'you-vscode-agent');
+// Shell and JS must agree on what an agent account is: the exact roster slug,
+// not a `*-*-agent` glob.
+test('accountSlug classifies the account by exact roster match', () => {
+  assert.equal(accountSlug({ AGENT_BOT_ACCOUNT: 'you-goose-agent' }, cfg), 'you-goose-agent');
+  assert.equal(accountSlug({ AGENT_BOT_ACCOUNT: 'user' }, cfg), null);
+  assert.equal(accountSlug({ AGENT_BOT_ACCOUNT: 'you-mystery-agent' }, cfg), null);
+  assert.equal(accountSlug({ AGENT_BOT_ACCOUNT: 'special-bot' }, { apps: { warp: 'special-bot' } }), 'special-bot');
+  assert.equal(accountSlug({ AGENT_BOT_ACCOUNT: 'you-goose-agent' }, {}), null, 'inert without config');
 });
 
-test('territory is the .<tool>/worktrees segment, at any root (ENG-0045 d1)', () => {
-  // A boot volume too small for agent worktrees relocates them to an external
-  // drive. That is a fact about the hardware; the work is still the bot's.
-  // Anchoring the rule to $HOME demoted every worktree on such a machine to
-  // human territory, where the shim refused to run and the agent fell back to
-  // the human's credentials — the exact outcome ENG-0045 exists to prevent.
-  assert.equal(pathSlug('/Volumes/added_storage/Code/.claude/worktrees/overlook/x', cfg), 'you-claude-agent');
-  assert.equal(pathSlug('/Volumes/big/.codex/worktrees/1/r', cfg), 'you-codex-agent');
-  assert.equal(pathSlug('/srv/agents/.vscode/worktrees/a/b', cfg), 'you-vscode-agent');
+function checkout(name, { pin = null, layout = '' } = {}) {
+  const dir = join(root, layout, name);
+  mkdirSync(dir, { recursive: true });
+  execFileSync('git', ['init', '--quiet', dir]);
+  if (pin) execFileSync('git', ['config', 'agentBot.app', pin], { cwd: dir });
+  return dir;
+}
+
+function run(mode, cwd, extra = {}) {
+  const globalConfig = join(root, 'empty.gitconfig');
+  writeFileSync(globalConfig, '');
+  const configPath = join(root, 'config.json');
+  writeFileSync(configPath, JSON.stringify(cfg));
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (/^(CODEX|CLAUDE|AI_AGENT|CURSOR|COPILOT|DEVIN|WINDSURF|MUSE|GH_AGENT_APP|AGENT_BOT_)/.test(key)) delete env[key];
+  }
+  return execFileSync(process.execPath, [TOOL, mode], {
+    cwd,
+    encoding: 'utf8',
+    env: {
+      ...env,
+      HOME: root,
+      AGENT_BOT_CONFIG: configPath,
+      GIT_CONFIG_GLOBAL: globalConfig,
+      GIT_CONFIG_SYSTEM: '/dev/null',
+      ...extra,
+    },
+  }).trim();
+}
+
+// Acceptance (ENG-0339): the account is the fallback input, and it reaches
+// the token tool — so a PRIMARY checkout in an agent account resolves.
+test('--slug resolves a primary checkout in an agent account with no pin', () => {
+  const primary = checkout('account-primary');
+  assert.equal(run('--slug', primary, { AGENT_BOT_ACCOUNT: 'you-codex-agent' }), 'you-codex-agent');
+  assert.equal(run('--account-slug', primary, { AGENT_BOT_ACCOUNT: 'you-codex-agent' }), 'you-codex-agent');
 });
 
-test('paths outside .<tool>/worktrees are never territory', () => {
-  const HOME = '/Users/u';
-  assert.equal(pathSlug(`${HOME}/Code/test-repo`, cfg), null); // primary checkout
-  assert.equal(pathSlug(`${HOME}/.config/agent-bot`, cfg), null); // dotdir, not worktrees
-  assert.equal(pathSlug(`${HOME}/.unknowntool/worktrees/x/r`, cfg), null); // no matching App
-  assert.equal(pathSlug('/tmp/worktrees/x', cfg), null); // no dot-tool segment
-  assert.equal(pathSlug('/Volumes/d/claude/worktrees/x/r', cfg), null); // undotted, not a tool dir
-  assert.equal(pathSlug('/Volumes/d/.claude/worktrees', cfg), null); // the container, not a worktree
-  assert.equal(pathSlug(null, cfg), null);
+test('--slug is empty for an unpinned checkout in the owner account, even under a harness', () => {
+  const primary = checkout('owner-primary');
+  assert.equal(run('--slug', primary, { AGENT_BOT_ACCOUNT: 'user', CLAUDECODE: '1' }), '');
+  assert.equal(run('--account-slug', primary, { AGENT_BOT_ACCOUNT: 'user' }), '');
+  const linked = checkout('owner-layout', { layout: '.codex/worktrees/session' });
+  assert.equal(run('--slug', linked, { AGENT_BOT_ACCOUNT: 'user' }), '', 'the directory is not a signal');
 });
 
-test('a configured relocation root is territory even without the segment', () => {
-  // AGENT_WORKTREE_ROOT and the desktop preference accept any directory, and
-  // both creators then build <root>/<repo>/<name>. Those worktrees are Claude's
-  // by configuration though the path never says so — and the path rule exists
-  // precisely for when setup-worktree could not persist the helper line.
-  const HOME = '/Users/u';
-  assert.equal(configuredRootSlug('/override/test-repo/name', '/override', HOME, cfg), 'you-claude-agent');
-  assert.equal(configuredRootSlug('/wt', '/wt', HOME, cfg), 'you-claude-agent'); // the root itself
-  assert.equal(configuredRootSlug('/overridefoo/r/n', '/override', HOME, cfg), null); // prefix, not a path boundary
-  assert.equal(configuredRootSlug(`${HOME}/Code/r`, '/override', HOME, cfg), null);
-  // A root that broad is a misconfiguration, never a claim on human clones.
-  assert.equal(configuredRootSlug(`${HOME}/Code/r`, HOME, HOME, cfg), null);
-  assert.equal(configuredRootSlug('/anything/at/all', '/', HOME, cfg), null);
-  assert.equal(configuredRootSlug('/override/r/n', null, HOME, cfg), null);
-});
-
-test('resolution order: pin picks WHICH bot, only inside territory', () => {
-  const HOME = '/Users/u';
-  const inTerritory = { toplevel: `${HOME}/.codex/worktrees/1/r`, helperLines: '', config: cfg };
-  assert.equal(resolveSlug({ ...inTerritory, pinned: null }), 'you-codex-agent');
-  assert.equal(resolveSlug({ ...inTerritory, pinned: 'you-claude-agent' }), 'you-claude-agent');
-  // pin + no territory signal = human, still
+test('GH_AGENT_APP and the pin are stated identities in any checkout', () => {
+  const primary = checkout('launcher-primary');
+  assert.equal(run('--slug', primary, { AGENT_BOT_ACCOUNT: 'user', GH_AGENT_APP: 'you-claude-agent' }), 'you-claude-agent');
+  const pinned = checkout('pinned-primary', { pin: 'you-claude-fable-agent' });
+  assert.equal(run('--slug', pinned, { AGENT_BOT_ACCOUNT: 'user' }), 'you-claude-fable-agent');
   assert.equal(
-    resolveSlug({
-      pinned: 'you-claude-agent',
-      toplevel: `${HOME}/Code/r`,
-      helperLines: '',
-      config: cfg,
-    }),
-    null,
+    run('--slug', pinned, { AGENT_BOT_ACCOUNT: 'you-codex-agent' }),
+    'you-claude-fable-agent',
+    'the pin outranks the account',
   );
-  // helper line still marks configured worktrees outside the path pattern
   assert.equal(
-    resolveSlug({
-      pinned: null,
-      toplevel: `${HOME}/somewhere/r`,
-      helperLines: '!node /x/git-credential-bot.mjs qwts-vscode-agent',
-      config: cfg,
-    }),
-    'qwts-vscode-agent',
-  );
-});
-
-test('the shared resolver selection outranks a stale worktree pin inside territory', () => {
-  assert.equal(
-    resolveSlug({
-      selected: 'you-codex-agent',
-      pinned: 'you-claude-agent',
-      toplevel: '/Users/u/.codex/worktrees/1/r',
-      helperLines: '',
-      config: cfg,
-    }),
-    'you-codex-agent',
+    run('--slug', pinned, { AGENT_BOT_ACCOUNT: 'you-codex-agent', GH_AGENT_APP: 'you-cursor-agent' }),
+    'you-cursor-agent',
+    'GH_AGENT_APP outranks the pin and the account',
   );
 });
 
-test('the last bot helper line wins when several exist', () => {
-  const helpers = '!node /a/git-credential-bot.mjs old-slug\n!node /b/git-credential-bot.mjs new-slug';
-  assert.equal(worktreeSlug(helpers, null), 'new-slug');
-});
-
-test('a Claude Code session scratchpad is territory, at any root (#26)', () => {
-  // The harness creates <tmp>/claude-<uid>/<munged-project>/<session-uuid>/
-  // scratchpad and tells the agent to work there. Bot land by construction —
-  // and like the worktrees rule, the chain is the signal, not the root
-  // (macOS says /private/tmp where Linux says /tmp).
-  const pad =
-    '/private/tmp/claude-502/-Users-u-Code-repo--claude-worktrees-x/f3fe0864-f97d-4393-a9ef-8dac1cf89a27/scratchpad';
-  assert.equal(scratchpadSlug(pad, cfg), 'you-claude-agent');
-  assert.equal(scratchpadSlug(`${pad}/issues/drafts`, cfg), 'you-claude-agent');
-  assert.equal(
-    scratchpadSlug('/tmp/claude-0/p/00000000-0000-0000-0000-000000000000/scratchpad', cfg),
-    'you-claude-agent',
-  );
-  assert.equal(scratchpadRoot(`${pad}/issues/drafts`), pad);
-});
-
-test('a broken scratchpad chain never invents territory (#26)', () => {
-  const uuid = 'f3fe0864-f97d-4393-a9ef-8dac1cf89a27';
-  assert.equal(scratchpadSlug(`/tmp/claude-abc/p/${uuid}/scratchpad`, cfg), null); // uid not digits
-  assert.equal(scratchpadSlug(`/tmp/claude/p/${uuid}/scratchpad`, cfg), null); // no uid at all
-  assert.equal(scratchpadSlug('/tmp/claude-502/p/not-a-uuid/scratchpad', cfg), null);
-  assert.equal(scratchpadSlug(`/tmp/claude-502/p/${uuid}/other`, cfg), null); // wrong tail
-  assert.equal(scratchpadSlug(`/tmp/claude-502/p/${uuid}/scratchpad2/x`, cfg), null); // not a segment
-  assert.equal(scratchpadSlug(`/tmp/codex-502/p/${uuid}/scratchpad`, cfg), null); // unknown tool
-  assert.equal(scratchpadSlug('/Users/u/Code/repo', cfg), null); // primary checkout
-  assert.equal(scratchpadSlug(null, cfg), null);
-});
-
-test('scratchpad territory resolves with no repository signals at all (#26)', () => {
-  const pad = '/tmp/claude-502/p/f3fe0864-f97d-4393-a9ef-8dac1cf89a27/scratchpad';
-  assert.equal(
-    resolveSlug({ toplevel: null, helperLines: '', cwd: pad, config: cfg }),
-    'you-claude-agent',
-  );
-  // A pin still needs territory — a non-scratchpad cwd grants nothing.
-  assert.equal(
-    resolveSlug({ pinned: 'you-claude-agent', toplevel: null, helperLines: '', cwd: '/tmp/somewhere', config: cfg }),
-    null,
-  );
+test('--agent-slug reports the agent process, which is not the same question', () => {
+  const primary = checkout('agent-process');
+  assert.equal(run('--agent-slug', primary, { AGENT_BOT_ACCOUNT: 'user', CLAUDECODE: '1' }), 'you-claude-agent');
+  assert.equal(run('--agent-slug', primary, { AGENT_BOT_ACCOUNT: 'user' }), '');
 });

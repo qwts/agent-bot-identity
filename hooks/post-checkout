@@ -12,8 +12,11 @@
 # points back here, so the resolution holds.
 #
 # It never blocks a checkout: any failure is swallowed. setup-worktree.mjs
-# self-guards (only linked worktrees, only when an identity resolves), so
-# running it on every checkout is safe.
+# self-guards — it acts only when a bot identity is stated (an explicit App,
+# GH_AGENT_APP, an existing pin) or the account is an agent account
+# (ENG-0339), never on harness detection alone — so running it on every
+# checkout, primary or linked, is safe: in the owner's account a human's own
+# clone never silently becomes bot-authored.
 
 HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SETUP="$HOOK_DIR/../setup-worktree.mjs"

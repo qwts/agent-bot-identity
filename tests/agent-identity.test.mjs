@@ -379,10 +379,10 @@ test('concurrent evidence writers do not lose one another', async () => {
   assert.equal(readAgentIdentity(record.id, { stateDir }).subjects.length, 12);
 });
 
-test('ensure corrects a cross-territory GH_AGENT_APP to the territory App (#20)', () => {
-  // Same policy as mint-token's appConfig: without --app the resolution is
-  // territory-aware, so a launcher-inherited GH_AGENT_APP cannot bind a
-  // foreign App's identity to a worktree another harness owns.
+test('ensure binds the GH_AGENT_APP identity in any checkout (ENG-0339)', () => {
+  // Same policy as mint-token's appConfig: GH_AGENT_APP is a stated identity
+  // and the `.codex/worktrees` layout is not a signal, so the launcher's App
+  // is what the Agent ID is bound to.
   const root = state();
   const stateDir = path.join(root, 'identities');
   const repo = path.join(root, '.codex', 'worktrees', 'session', 'repo');
@@ -408,13 +408,14 @@ test('ensure corrects a cross-territory GH_AGENT_APP to the territory App (#20)'
       AGENT_BOT_CONFIG: configPath,
       AGENT_BOT_STATE_HOME: stateDir,
       GH_AGENT_APP: 'you-claude-agent',
-      CODEX_THREAD_ID: 'thread-territory',
+      AGENT_BOT_ACCOUNT: 'user',
+      CODEX_THREAD_ID: 'thread-layout',
       GIT_CONFIG_GLOBAL: emptyGitConfig,
       GIT_CONFIG_SYSTEM: '/dev/null',
     },
   });
   assert.equal(ensured.status, 0, ensured.stderr);
-  assert.equal(JSON.parse(ensured.stdout).github.appSlug, 'you-codex-agent');
+  assert.equal(JSON.parse(ensured.stdout).github.appSlug, 'you-claude-agent');
 });
 
 test('concurrent setup in separate worktrees shares one conversation identity', async () => {

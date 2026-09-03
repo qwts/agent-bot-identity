@@ -52,18 +52,19 @@ test('private key CLI accepts positional/flag slugs and force', () => {
   assert.throws(() => parseCliArgs(['--app']), /requires a slug/);
 });
 
-test('the CLI corrects a cross-territory GH_AGENT_APP to the territory App (#20)', () => {
-  // Same policy as mint-token's appConfig: GH_AGENT_APP is a launcher-level
-  // default, corrected inside bot territory; only --app is taken at face
-  // value. The claude App has no key material in this fake home, so resolving
-  // to it would reach for the provider and fail — a clean "already present"
-  // for the codex App's key proves the territory slug won.
-  const root = mkdtempSync(join(tmpdir(), 'agent-key-territory-'));
+test('the CLI honors GH_AGENT_APP in any checkout (ENG-0339)', () => {
+  // Same policy as mint-token's appConfig: GH_AGENT_APP is a stated identity,
+  // taken at face value wherever the process runs — a `.codex/worktrees`
+  // layout is not a signal. The codex App has no key material in this fake
+  // home, so resolving to the layout's harness would reach for the provider
+  // and fail — a clean "already present" for the claude App proves
+  // GH_AGENT_APP won.
+  const root = mkdtempSync(join(tmpdir(), 'agent-key-layout-'));
   const repo = join(root, '.codex', 'worktrees', 'session', 'repo');
   mkdirSync(repo, { recursive: true });
   execFileSync('git', ['init', '--quiet', repo]);
   const home = join(root, 'home');
-  const dir = join(home, '.config', 'you-codex-agent');
+  const dir = join(home, '.config', 'you-claude-agent');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'app-id'), '12345\n');
   writeFileSync(
@@ -86,12 +87,13 @@ test('the CLI corrects a cross-territory GH_AGENT_APP to the territory App (#20)
         HOME: home,
         AGENT_BOT_CONFIG: configPath,
         GH_AGENT_APP: 'you-claude-agent',
+        AGENT_BOT_ACCOUNT: 'user',
         GIT_CONFIG_GLOBAL: emptyGitConfig,
         GIT_CONFIG_SYSTEM: '/dev/null',
       },
     },
   );
-  assert.match(output, /already present .*you-codex-agent/);
+  assert.match(output, /already present .*you-claude-agent/);
 });
 
 test('pass-cli JSON selects only an unambiguous pem attachment', () => {

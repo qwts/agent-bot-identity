@@ -9,8 +9,8 @@
 //
 // The optional gist transport (opt-in, issue #45) uploads a pack as a secret
 // gist through the bound App's token-minting path. The slug is resolved
-// territory-aware — the same question setup-worktree and worktree-token ask —
-// never by trusting an inherited GH_AGENT_APP across territory (issue #20).
+// through the shared resolver — the same question setup-worktree and
+// worktree-token ask — never by a second copy of the resolution rules.
 // Organization policy may forbid unsanctioned gists; nothing here runs unless
 // the operator passes --gist or imports a gist reference.
 
@@ -279,15 +279,14 @@ export function parseGistReference(text) {
   return id;
 }
 
-// Mint through the bound App with a territory-aware slug (issue #20): the
-// same resolution setup-worktree and worktree-token use, so an inherited
-// GH_AGENT_APP cannot mint across territory, and mint() is always called
-// with an explicitly resolved slug.
+// Mint through the bound App with the shared resolver's slug — the same
+// resolution setup-worktree and worktree-token use — so mint() is always
+// called with an explicitly resolved slug.
 async function mintGistToken({ env, cwd, config, mintToken }) {
-  const slug = resolveAgentSlug({ env, cwd, config, worktree: true });
+  const slug = resolveAgentSlug({ env, cwd, config });
   if (!slug) {
     throw new Error(
-      'gist handoff requires a resolvable bot identity: run from bot territory or configure the harness App mapping',
+      'gist handoff requires a resolvable bot identity: pass --app, set GH_AGENT_APP, pin the checkout, or run from the harness account',
     );
   }
   try {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Claude Code `WorktreeCreate` hook — create the worktree, then land the bot
-// identity in it before the session starts (ENG-0016, ENG-0045).
+// identity in it before the session starts (ENG-0016, ENG-0339).
 //
 // Why a harness hook at all, when git's own post-checkout hook already runs
 // setup-worktree.mjs on `git worktree add`: Claude Code creates its worktrees
@@ -84,8 +84,8 @@ export function desktopConfigPath(home = homedir(), platform = process.platform,
   return join(env.XDG_CONFIG_HOME ?? join(home, '.config'), 'Claude', 'claude_desktop_config.json');
 }
 
-// Default is ENG-0045 bot territory — `~/.claude/worktrees` — which is also
-// what the gh shim and the pre-commit guard recognize.
+// Default is Claude's worktree layout — `~/.claude/worktrees`. Layout only:
+// under ENG-0339 the account, not the directory, decides identity.
 //
 // Always absolute: Claude Code rejects a relative path outright, and neither
 // source of an override is guaranteed to give one. A `~` or a relative value
@@ -97,7 +97,7 @@ export function worktreeRoot({ home = homedir(), desktopConfig = null, env = pro
     const custom = JSON.parse(desktopConfig).preferences?.chillingSlothLocation?.customPath;
     if (typeof custom === 'string' && custom !== '') return absolute(custom);
   } catch {
-    /* no readable desktop config — the territory default stands */
+    /* no readable desktop config — the layout default stands */
   }
   return join(home, '.claude', 'worktrees');
 }
@@ -178,9 +178,12 @@ async function main() {
   mkdirSync(dirname(path), { recursive: true });
   git(['worktree', 'add', '--no-track', '-b', branch, path, resolveBaseRef(mainRepo)], mainRepo);
 
-  // The identity step. Failing it does not fail the worktree: the pre-commit
-  // guard already blocks human-attributed commits in bot territory, so a loud
-  // warning here plus that guard beats leaving the agent with no workspace.
+  // The identity step. Failing it does not fail the worktree. The governed
+  // hook runs this only inside an agent account (ENG-0339), where the gh shim
+  // and token minting resolve the account's App with or without a pin, and
+  // pre-commit still refuses a bot-attributed commit that has no Agent ID —
+  // so a loud warning plus a usable workspace beats leaving the agent with
+  // none. Nothing here relies on a directory guard; there is none.
   try {
     execFileSync(process.execPath, [SETUP], {
       cwd: path,

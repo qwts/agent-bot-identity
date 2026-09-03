@@ -28,7 +28,8 @@ inherit by default, vary by explicit delta).
 ## What is specific to this repository
 
 This repository is the sole runtime owner of the agent-bot toolkit (ENG-0016 /
-ENG-0045 / ENG-0079 / ENG-0081), transcript-bound execution identities, and
+ENG-0339 / ENG-0079 / ENG-0081; ENG-0339 supersedes ENG-0045), transcript-bound
+execution identities, and
 Agent Space mechanics. The canonical Agent Space contract lives in
 [ENG-0172](https://github.com/qwts/playbook-engineering/blob/main/docs/decisions/ENG-0172-agent-space-is-durable-per-soul-storage.md).
 Governance repositories may consume the CLI but must not carry runtime copies.
@@ -59,9 +60,10 @@ current harness:
    [agent bot organization operations](https://github.com/qwts/playbook-engineering/blob/main/docs/reference/agent-bot-operations.md).
    Never assume or search for a local Playbook checkout, and never synthesize a
    roster from the currently running harness.
-3. A primary checkout may run only machine preparation with `--machine-only`.
-   Bind identity later from a linked agent worktree; never claim the primary
-   checkout as bot territory.
+3. In the owner's account run only machine preparation with `--machine-only`.
+   Bind identity from the agent's own account, or from a checkout with a
+   stated bot identity (`GH_AGENT_APP` or a pin); never bind the human's own
+   checkout on harness detection alone.
 4. Reconcile and live-verify the complete configured App roster, install the
    requested fail-closed runtime tooling, then complete the organization-owned
    harness skills/tooling from the governance procedure. Missing compatible
@@ -96,10 +98,12 @@ current harness:
 - Fail closed on mint / credential / pin failures — never fall back to the
   human GitHub login.
 - Identity resolution for commits and tokens must share `resolve-agent.mjs`.
-- Bot territory is the `.<tool>/worktrees` path segment at any root, plus the
-  Claude Code session scratchpad chain
-  (`claude-<uid>/<project>/<session-uuid>/scratchpad`); primary checkouts
-  stay human.
+- Bot territory is the macOS account, not the directory (ENG-0339): a
+  rostered agent account (`<prefix>-<harness>-agent`, classified by exact
+  roster slug in shell and JS alike — never a name glob) owns every checkout in
+  it, primary or linked; in the owner's account unpinned work is the human's
+  delegate. `.<tool>/worktrees` is layout only, and no guard confines where an
+  agent commits.
 - Worktree git config keys: `agentBot.app`, `agentBot.agentId`,
   `agentBot.chainedHooksPath` (still read the legacy `qwts.*` names).
 - User config at `~/.config/agent-bot/config.json` maps harness → App slug and

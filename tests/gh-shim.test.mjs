@@ -140,8 +140,7 @@ function runWhoami(options = {}) {
 
 test('generated shim contains valid shell parameter expansions', () => {
   const shim = buildGhShim('/tmp/agent-bot');
-  assert.match(shim, /\$\{AGENT_SLUG:-detected agent\}/);
-  assert.match(shim, /\$\{TERRITORY_SLUG\}\[bot\]/);
+  assert.match(shim, /\$\{SLUG\}\[bot\]/);
   assert.doesNotMatch(shim, /\$\\\{/);
   assert.doesNotMatch(shim, /\x7f/);
   assert.doesNotMatch(shim, /agent-bot-gh-trace|\/usr\/bin\/logger/);
@@ -152,7 +151,7 @@ test('generated shim contains valid shell parameter expansions', () => {
   assert.match(shim, /\[ -f "\$REAL" \] && \[ -x "\$REAL" \]/);
 });
 
-test('a matching explicit bot token is accepted in bot territory', () => {
+test('a matching explicit bot token is accepted under a bot identity', () => {
   assert.equal(
     runWhoami({
       slug: 'you-codex-agent',
@@ -163,7 +162,7 @@ test('a matching explicit bot token is accepted in bot territory', () => {
   );
 });
 
-test('an explicit human token is rejected in bot territory', () => {
+test('an explicit human token is rejected under a bot identity', () => {
   const result = runShim({
     slug: 'you-codex-agent',
     token: 'explicit-token',
@@ -173,26 +172,63 @@ test('an explicit human token is rejected in bot territory', () => {
   assert.match(result.stderr, /expected you-codex-agent\[bot\].*identity crossover/);
 });
 
-test('bot territory reports its local slug without an explicit token', () => {
-  assert.equal(runWhoami({ slug: 'you-codex-agent' }), 'you-codex-agent[bot] — bot territory');
+test('a bot identity reports its local slug without an explicit token', () => {
+  assert.equal(runWhoami({ slug: 'you-codex-agent' }), 'you-codex-agent[bot] — bot identity');
 });
 
-test('human territory asks stock gh for its login', () => {
-  assert.equal(runWhoami(), 'human-owner — human territory, gh is stock');
+test('the human persona asks stock gh for its login', () => {
+  assert.equal(runWhoami(), 'human-owner — human persona, gh is stock');
 });
 
-test('an agent outside bot territory cannot query or write through stock gh', () => {
-  for (const args of [['whoami'], ['issue', 'create', '--title', 'forbidden']]) {
-    const result = runShim({
-      agentSlug: 'you-codex-agent',
-      args,
-    });
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /outside bot territory.*refusing stock human gh/);
-  }
+// ENG-0339 acceptance (a): in the owner's account, unpinned work is the
+// human's delegate. gh is stock for the agent — no refusal, no mint — and the
+// directory is never consulted (the retired "outside bot territory" rule).
+test('an agent with no stated identity is the human persona: gh is stock, nothing is refused', () => {
+  assert.equal(runWhoami({ agentSlug: 'you-codex-agent' }), 'human-owner — human persona, gh is stock');
+  const write = runShim({
+    agentSlug: 'you-codex-agent',
+    args: ['passthrough', 'issue', 'create'],
+  });
+  assert.equal(write.status, 64, 'stock gh ran and decided the outcome');
+  assert.match(write.stdout, /arg=<issue>/);
+  assert.equal(write.stderr.includes('territory'), false);
 });
 
-test('configured harnesses retain their own App identity in bot territory and fail outside it', () => {
+// ENG-0339 acceptance (b): GH_AGENT_APP in a primary checkout acts as that
+// bot — the token tool resolves it and the shim mints for it.
+test('a stated GH_AGENT_APP acts as its bot in any checkout', () => {
+  assert.equal(
+    runWhoami({ slug: 'custom-model-bot', agentEnv: { GH_AGENT_APP: 'custom-model-bot' } }),
+    'custom-model-bot[bot] — bot identity',
+  );
+  const result = runShim({
+    slug: 'custom-model-bot',
+    agentEnv: { GH_AGENT_APP: 'custom-model-bot' },
+    cachedToken: 'minted-bot-token',
+    args: ['passthrough', 'issue', 'create'],
+  });
+  assert.equal(result.status, 64);
+  assert.match(result.stdout, /arg=<issue>/);
+});
+
+// ENG-0339 acceptance (c): an agent account resolves its App with no pin and
+// no marker at all; the shim mints rather than falling back to the human.
+test('an agent account is a bot identity with no pin and no env marker', () => {
+  assert.equal(
+    runWhoami({ slug: 'you-goose-agent', agentEnv: { AGENT_BOT_ACCOUNT: 'you-goose-agent' } }),
+    'you-goose-agent[bot] — bot identity',
+  );
+  const failed = runShim({
+    slug: 'you-goose-agent',
+    agentEnv: { AGENT_BOT_ACCOUNT: 'you-goose-agent' },
+    mintedToken: '',
+    args: ['issue', 'create', '--title', 'x'],
+  });
+  assert.equal(failed.status, 1);
+  assert.match(failed.stderr, /for you-goose-agent\[bot\] — refusing to run gh as the human/);
+});
+
+test('configured harnesses retain their own App identity, and are the human persona without one', () => {
   const harnesses = [
     ['claude-agent', { CLAUDECODE: '1' }],
     ['cursor-agent', { CURSOR_AGENT: '1' }],
@@ -209,19 +245,10 @@ test('configured harnesses retain their own App identity in bot territory and fa
       token: 'explicit-token',
       tokenLogin: `${slug}[bot]`,
     }), `${slug}[bot] — explicit GH_TOKEN`);
-    const outside = runShim({ agentEnv, args: ['issue', 'create', '--title', 'forbidden'] });
-    assert.equal(outside.status, 1);
-    assert.match(outside.stderr, /outside bot territory.*refusing stock human gh/);
+    const delegate = runShim({ agentEnv, args: ['passthrough', 'issue'] });
+    assert.equal(delegate.status, 64, `${slug}: stock gh serves the human persona`);
+    assert.match(delegate.stdout, /arg=<issue>/);
   }
-});
-
-test('any non-empty GH_AGENT_APP is agent context and cannot use human gh outside bot territory', () => {
-  const result = runShim({
-    agentEnv: { GH_AGENT_APP: 'custom-model-bot' },
-    args: ['issue', 'create', '--title', 'forbidden'],
-  });
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /outside bot territory.*refusing stock human gh/);
 });
 
 test('an agent fails closed when the installed token-helper path is stale', () => {
@@ -474,44 +501,67 @@ test('the liveness probe reaches stock gh when the kernel confirms the parent', 
   });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), 'human-oauth-token');
-  assert.doesNotMatch(result.stderr, /outside bot territory/);
+  assert.doesNotMatch(result.stderr, /territory/);
 });
 
-test('a forged parent argv cannot unlock the probe', () => {
+// The probe bypass exists for a bot identity: a confirmed Claude Desktop
+// parent reaches stock gh before the shim mints for the resolved App. A forged
+// parent or an env override does not unlock that path — the bot identity
+// answers instead.
+test('a forged parent argv cannot unlock the probe under a bot identity', () => {
   // ps reads the process arguments, which any caller can set when it execs.
   // The kernel-mapped text file tells the truth, and it must win.
   const result = runShim({
+    slug: 'you-claude-agent',
     agentEnv: DESKTOP_ENV,
     args: PROBE,
     psOutput: CLAUDE_BUNDLE,
     lsofOutput: '/bin/bash',
+    mintedToken: '',
   });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /outside bot territory.*refusing stock human gh/);
+  assert.match(result.stderr, /for you-claude-agent\[bot\] — refusing to run gh as the human/);
+  assert.doesNotMatch(result.stdout, /human-oauth-token/);
 });
 
-test('no environment variable can unlock the probe', () => {
-  // Regression: an env override here would let any agent print the human's
-  // OAuth token from outside territory.
+test('no environment variable can unlock the probe under a bot identity', () => {
   const result = runShim({
+    slug: 'you-claude-agent',
     agentEnv: { ...DESKTOP_ENV, AGENT_BOT_CLAUDE_DESKTOP: '1' },
     args: PROBE,
     psOutput: '/bin/sh',
     lsofOutput: '/bin/sh',
+    mintedToken: '',
   });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /outside bot territory.*refusing stock human gh/);
+  assert.doesNotMatch(result.stdout, /human-oauth-token/);
 });
 
-test('only the probe argv passes, even from a confirmed Claude Desktop parent', () => {
+test('only the probe argv bypasses the bot identity, even from a confirmed Claude Desktop parent', () => {
   const result = runShim({
+    slug: 'you-claude-agent',
     agentEnv: DESKTOP_ENV,
     args: ['issue', 'create', '--title', 'forbidden'],
     psOutput: CLAUDE_BUNDLE,
     lsofOutput: CLAUDE_BUNDLE,
+    mintedToken: '',
   });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /outside bot territory.*refusing stock human gh/);
+  assert.match(result.stderr, /for you-claude-agent\[bot\] — refusing to run gh as the human/);
+});
+
+// ENG-0339 acceptance (a), the desktop shape: the same probe from an agent
+// with no stated identity is delegate work and reaches stock gh regardless of
+// what the parent process is.
+test('the human persona reaches stock gh with no parent check at all', () => {
+  const result = runShim({
+    agentEnv: DESKTOP_ENV,
+    args: PROBE,
+    psOutput: '/bin/sh',
+    lsofOutput: '/bin/sh',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), 'human-oauth-token');
 });
 
 test('the shim confirms Claude Desktop against the kernel, with no env override', () => {
@@ -521,15 +571,16 @@ test('the shim confirms Claude Desktop against the kernel, with no env override'
   assert.doesNotMatch(shim, /AGENT_BOT_CLAUDE_DESKTOP/);
 });
 
-// ENG-0339: territory hints and agent context must cover the whole fleet, not
-// just the env-detectable harnesses.
-test('the shim territory hint speaks the full profile vocabulary', async () => {
-  const { buildGhShim } = await import('../gh-shim.mjs');
-  const { PROFILE_HARNESSES } = await import('../organization-profile.mjs');
+// ENG-0339: the account, not the directory, is bot territory. The shim carries
+// no directory globs and no account-name glob — the roster answers through
+// the token tool, so shell and JS agree on what an agent account is.
+test('the shim asks the roster, not the directory or an account-name glob', () => {
   const shim = buildGhShim();
-  for (const harness of PROFILE_HARNESSES) {
-    assert.ok(shim.includes(`*/.${harness}/worktrees/*`), `territory hint misses ${harness}`);
-  }
+  assert.doesNotMatch(shim, /\/worktrees\//);
+  assert.doesNotMatch(shim, /outside bot territory/);
+  assert.doesNotMatch(shim, /id -un/);
+  assert.doesNotMatch(shim, /\*-\*-agent/);
+  assert.match(shim, /token_tool --slug/);
 });
 
 test('an agent account is agent context with no env markers at all', () => {

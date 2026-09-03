@@ -507,9 +507,9 @@ export async function bootstrap(options, {
       const check = readinessCheck({
         id: 'bootstrap.worktree',
         status: 'failed',
-        code: 'linked-worktree-required',
-        message: 'bootstrap cannot bind bot identity in a primary checkout or outside a repository',
-        action: 'create or enter a linked agent worktree, then retry bootstrap',
+        code: 'bot-identity-unresolved',
+        message: 'bootstrap cannot bind bot identity here: no App resolves for this checkout, or it is outside a repository',
+        action: 'pass --app, set GH_AGENT_APP, pin the checkout, or run from the harness account, then retry bootstrap',
       });
       return buildReadinessReport({
         command: 'bootstrap',

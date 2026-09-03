@@ -49,8 +49,9 @@ the population census.
   and never commit its contents into a repository.
 - No secrets on any surface. Credentials come from an authorized
   `agent-bot secret get` read at time of use and are never persisted.
-- Scratchpad and worktree territory rules are unchanged by Agent Space;
-  primary checkouts stay human.
+- Identity rules are unchanged by Agent Space: the account, not the
+  directory, is bot territory (ENG-0339), and a scratchpad or worktree path is
+  never an identity signal.
 
 <!-- conformance: edits to this skill must keep the worktree / scratchpad /
      Agent Space distinction, the stable `agent-bot space` commands, and the

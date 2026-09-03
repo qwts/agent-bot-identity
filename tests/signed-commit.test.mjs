@@ -41,7 +41,10 @@ test('encodes legal ref characters without losing path structure', () => {
   assert.equal(encodeRefPath('heads/team/topic name'), 'heads/team/topic%20name');
 });
 
-test('non-dry publishing refuses a primary checkout before minting', async () => {
+test('non-dry publishing refuses to mint when no bot identity is stated', async () => {
+  // ENG-0339: a delegate in the owner's account has nothing to sign as. The
+  // directory is not consulted; only the absence of --app, GH_AGENT_APP, a
+  // pin, or an agent account refuses.
   const cwd = mkdtempSync(join(tmpdir(), 'agent-bot-primary-'));
   const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
   git('init', '-b', 'feature');
@@ -56,9 +59,10 @@ test('non-dry publishing refuses a primary checkout before minting', async () =>
   await assert.rejects(
     runSignedCommit(parseSignedCommitArgs(['--repo', 'acme/widgets']), {
       cwd,
+      env: { ...process.env, GH_AGENT_APP: '', AGENT_BOT_ACCOUNT: 'user' },
       mintImpl: async () => { minted = true; return { token: 'secret' }; },
     }),
-    /outside bot territory/,
+    /no bot identity resolves here/,
   );
   assert.equal(minted, false);
 });

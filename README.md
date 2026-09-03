@@ -17,8 +17,10 @@ Why you'd want this:
   (`author:you-codex-agent[bot]`), immutable, audit-friendly.
 - **Per-tool blast radius.** Each App has its own key and repo list; revoke or
   narrow one agent without touching the others.
-- **Fail-closed `gh`.** With the shim installed, agents outside bot territory
-  cannot fall through to your human credentials.
+- **Fail-closed `gh`.** With the shim installed, a bot identity that cannot
+  mint never falls through to your human credentials. Where no bot identity is
+  stated — an unpinned checkout in your own account — the agent is your
+  delegate and `gh` is stock (ENG-0339).
 - **Transcript-bound Agent IDs.** Each conversation gets a private
   `agent_<uuid>` recorded on commits as an `Agent-Identity:` trailer, so you
   can resolve a commit back to the provider transcript that produced it.
@@ -83,21 +85,23 @@ For a governed organization, first obtain its explicit secret-free versioned
 profile and shared-tooling procedure. Never search for or assume
 a local governance checkout; follow its canonical HTTPS guidance instead.
 
-From a primary checkout, prepare machine state without claiming that checkout
-as bot territory:
+From your own account, prepare machine state without binding your checkout to
+a bot:
 
 ```bash
 ./agent-bot bootstrap --profile /path/to/organization-profile.json --with-gh-shim --machine-only
 ```
 
-Then enter a linked agent worktree and bind it through the installed runtime:
+Then, from the agent's own macOS account (or any checkout with a stated bot
+identity — `GH_AGENT_APP` or a pin), bind it through the installed runtime:
 
 ```bash
 agent-bot bootstrap --worktree-only
 ```
 
-When already working from a linked agent worktree, omit `--machine-only` from
-the source command to perform both phases. Bootstrap reconciles and
+When already working from a checkout that resolves a bot identity, omit
+`--machine-only` from the source command to perform both phases. Bootstrap
+reconciles and
 live-verifies every App resolved by the configuration, not merely the current
 harness. Afterward, complete the organization-owned shared skills and harness
 tooling from its governance procedure.
@@ -106,7 +110,7 @@ Finish with the secret-free readiness contract:
 
 ```bash
 agent-bot doctor --machine-only --json --require-schema-version 1
-agent-bot doctor --json --require-schema-version 1  # linked worktree
+agent-bot doctor --json --require-schema-version 1  # a checkout with a bot identity
 ```
 
 Do not report the organization install complete until every expected App row
@@ -581,18 +585,27 @@ git worktree add …            (run by ANY tool: Codex, Cursor, VS Code, Claude
          └─ gh …              (with the shim) mints the same way automatically
 ```
 
-**Territory.** Paths under `.<tool>/worktrees/**` at *any* filesystem root are
-bot territory (not only under `$HOME`). Primary checkouts and bare human shells
-are never touched. No config file → the whole thing is inert.
+**Territory.** The macOS account, not the directory, is bot territory
+(ENG-0339, superseding ENG-0045). In an agent account named by its roster slug
+(`<prefix>-<harness>-agent`, or the `apps` override) every checkout — primary
+or linked — is that harness's App. In your own account an unpinned checkout is
+your delegate: commits, pushes, and `gh` run as you, and nothing is refused.
+A `.<tool>/worktrees/**` path is layout, never a signal. Bare human shells are
+never touched. No config file → the whole thing is inert.
 
 **Identity resolution** (same order for commits and tokens):
 
 1. `--app <slug>` / explicit argument
 2. `GH_AGENT_APP`
 3. `git config agentBot.app` (pin; also reads `qwts.agentApp` for compatibility)
-4. harness auto-detection mapped through `config.json`
+4. the account — an exact roster match on the short name (`AGENT_BOT_ACCOUNT`
+   overrides it for launchers and tests)
+5. harness auto-detection mapped through `config.json` — deliberate CLI calls
+   only; the `gh` shim, token minting, and hook-driven setup stop at step 4
 
-An unverifiable pin fails closed — it never falls through to harness detection.
+An unverifiable pin fails closed — it never falls through to the account or
+harness detection. Explicit inputs are taken at face value wherever the
+process runs: nothing throws on a directory mismatch.
 
 ## Setup
 
@@ -610,23 +623,25 @@ command:
 The bootstrap installs the stable CLI and hooks, refuses a conflicting existing
 config, reconciles every active App resolved by the profile through `pass-cli`, and
 live-verifies every App before it installs the optional managed `gh` shim or
-configures a linked worktree. A local failure is reported for every affected
+configures the current checkout. A local failure is reported for every affected
 App before any live mint is attempted; a revoked or mismatched App ID/private
 key fails during the live phase. It finishes by collecting the same readiness
 report as `doctor` and never interposes a system or Homebrew `gh`; that remains
 a separate explicit operation.
 
-Use `--machine-only` from a primary checkout when preparing the machine without
-binding a worktree. Use `--worktree-only` later from a linked worktree to run
-only identity setup and verification. The latter requires the machine install
-to point at the same source checkout and rejects machine-setup options rather
-than silently ignoring them.
+Use `--machine-only` when preparing the machine without binding the current
+checkout. Use `--worktree-only` later, from any checkout that resolves a bot
+identity, to run only identity setup and verification. The latter requires the
+machine install to point at the same source checkout and rejects machine-setup
+options rather than silently ignoring them.
 
 `doctor` is always read-only and continues to reject `--repair`. Bootstrap is
 the explicit repair boundary: it performs only the documented idempotent setup
 operations, stops after the first failed mutation phase, and reports later live
-verification as skipped. A full bootstrap requires a linked worktree; use
-`--machine-only` deliberately from a primary checkout.
+verification as skipped. A full bootstrap requires a checkout that resolves a
+bot identity (an agent account, `GH_AGENT_APP`, or a pin); in your own account
+use `--machine-only` deliberately, or the bind phase reports
+`bot-identity-unresolved`.
 
 The numbered sections below document standalone operator provisioning and the
 runtime's underlying components. They are not a substitute for an
@@ -759,7 +774,7 @@ without `--force`.
 
 `agent-bot space export <agent-id> --gist` is an opt-in suitcase transport: it
 uploads the same secret-free pack as a *secret* gist through the bound App's
-token-minting path (the slug is resolved territory-aware, exactly like
+token-minting path (the slug comes from the shared resolver, exactly like
 `setup-worktree` and `worktree-token`), then records only the pointer
 `gist:<id>` in the space marker — never pack contents.
 `agent-bot space import gist:<id>` (or a gist URL) downloads and restores it.
@@ -887,16 +902,19 @@ Or smoke-test a worktree from an agent session:
 git worktree add ../t -b test-identity && git -C ../t config --worktree user.name
 ```
 
-From inside an agent session that prints `you-<harness>-agent[bot]`; from a
-bare shell it prints nothing (human worktree). Clean up with
+From an agent account, or a session with `GH_AGENT_APP` set, that prints
+`you-<harness>-agent[bot]`; from your own account with neither it prints
+nothing (delegate — your worktree). Clean up with
 `git worktree remove ../t && git branch -D test-identity`.
 
 ## Day-to-day: gh and PRs
 
 With the **gh shim** installed (`agent-bot install-gh-shim`), there is no
-per-task step: inside bot territory `gh` mints and exports `GH_TOKEN` on its
-own. Outside territory, agent processes are refused (fail closed); human shells
-passthrough to stock `gh`.
+per-task step: under a bot identity (an agent account, `GH_AGENT_APP`, or a
+pin) `gh` mints and exports `GH_TOKEN` on its own, and a failed mint aborts
+rather than continuing as you. With no bot identity — your own account, no
+pin — `gh` is stock for agents and humans alike (delegate); the shim never
+refuses by directory.
 
 Without the shim, mint before `gh pr create`:
 
@@ -915,21 +933,25 @@ never continue as the human.
 Detection can be overridden, first match wins: `--app <slug>` on any tool,
 `GH_AGENT_APP` in the environment, or `git config agentBot.app <slug>` to pin
 a checkout to one compatible identity (e.g. a model-level App for that
-harness). Setup persists the resolved App as the worktree pin so later token
-minters cannot disagree with commit authorship.
+harness). Setup persists the resolved App as the checkout's pin so later token
+minters cannot disagree with commit authorship. Below all three sits the
+account: in an agent account, an unpinned checkout is that account's App.
 
-**Worktree territory is authoritative.** A checkout under
-`.<tool>/worktrees/**` belongs to that tool: `.codex/worktrees/**` always uses
-a Codex App, and likewise for Claude, Cursor, and VS Code. A pin for another
-harness is corrupt metadata. Startup repairs it, its author/helper settings,
-and its execution identity; an explicit cross-harness `setup-worktree` request
-is rejected.
+**Explicit overrides outrank the account and the directory.** `--app`,
+`GH_AGENT_APP`, and the pin are honored as stated wherever the checkout sits;
+nothing throws on a directory mismatch. When a stated identity differs from a
+stale pin, startup repins the checkout, its author/helper settings, and its
+execution identity to the stated App.
 
 ## Claude Code worktrees
 
 Claude Code often creates worktrees from a sandbox that cannot write the shared
 git dir — so git's `post-checkout` may not land the identity. Wire Claude's
-`WorktreeCreate` hook to the installed CLI (user or project settings):
+`WorktreeCreate` hook to the installed CLI (user or project settings), gated on
+the agent account so a human's own worktrees keep Claude's built-in creation.
+The gate asks the runtime for the account's exact roster slug rather than
+matching the account name against a glob, so shell and JS agree on what an
+agent account is:
 
 ```json
 {
@@ -939,7 +961,8 @@ git dir — so git's `post-checkout` may not land the identity. Wire Claude's
         "hooks": [
           {
             "type": "command",
-            "command": "agent-bot claude-worktree-create"
+            "command": "B=\"${AGENT_BOT_BIN:-agent-bot}\"; if ! command -v \"$B\" >/dev/null 2>&1; then case \"$(id -un)\" in *-agent) echo \"agent-bot is not installed — install agent-bot-identity\" >&2; exit 127;; *) exit 0;; esac; fi; [ -n \"$(\"$B\" worktree-token --account-slug 2>/dev/null)\" ] || exit 0; exec \"$B\" claude-worktree-create",
+            "timeout": 180
           }
         ]
       }
@@ -948,7 +971,8 @@ git dir — so git's `post-checkout` may not land the identity. Wire Claude's
 }
 ```
 
-The wrapper finds Node even when nvm is not on the desktop app's PATH.
+This repository's own `.claude/settings.json` carries that entry. The wrapper
+finds Node even when nvm is not on the desktop app's PATH.
 
 ## Codex / harness startup
 
@@ -960,7 +984,8 @@ agent-bot setup-worktree
 ```
 
 The checked-in `scripts/ensure-identity.sh` adds verification of the pin,
-author, credential helper, and execution-identity hooks. `AGENT_BOT_HOME` is
+author, credential helper, and execution-identity hooks; where no bot identity
+resolves it reports the human persona and exits cleanly. `AGENT_BOT_HOME` is
 only a fallback for harnesses whose startup environment cannot find the
 installed executable.
 
@@ -986,15 +1011,14 @@ contain secrets.
 - `prepare-commit-msg` appends `Agent-Identity: <id>`
 - `post-commit` records `commit:<sha>` against the identity
 - `pre-commit` refuses bot-attributed commits with no resolvable Agent ID
-- `pre-commit` and `pre-push` refuse a human-attributed commit or push from
-  agent context (the harness markers the `gh` shim reads, or an agent account)
-  whenever a remote reaches GitHub — directly, or through a local-path remote
-  whose own checkout does, so `git clone /path/to/checkout` is not a way
-  around the rule. Remoteless scratch repositories stay usable for tests. The
-  push guard holds even when the commit guard was skipped with `--no-verify`.
-  There is no environment escape hatch: an agent could set one as easily as a
-  human, and a person driving git inside a harness terminal commits from a bot
-  worktree like everyone else.
+- neither `pre-commit` nor `pre-push` confines where an agent may commit or
+  push: a human-attributed commit from a harness in your own account is your
+  delegate's work (ENG-0339). Agent context — the harness markers the `gh`
+  shim reads, or an agent account classified by exact roster slug — still
+  decides that a bot-attributed commit must carry its Agent ID, and in
+  uninstalled mode (no installed runner, ENG-0128) an agent's push as an
+  unmanaged human is refused unless the actor is in
+  `AGENT_BOT_UNMANAGED_AUTHORS`.
 
 ```bash
 agent-bot identity current
@@ -1087,8 +1111,10 @@ agent-bot doctor --json --require-schema-version 1
 The diagnostic reports Node and Git, the managed CLI and harness PATH, config,
 every configured App credential and live mint, hooks, optional gh shim, the
 runtime-owned skill, and current worktree identity. Machine and worktree status
-are separate; a primary checkout is `not_applicable`, not silently converted to
-bot territory. Human output prints one action for the earliest failure, while
+are separate; a checkout with no bot identity (your own account, no pin) is
+`not_applicable`, never silently converted, while a primary checkout in an
+agent account is verified like any worktree. Human output prints one action for
+the earliest failure, while
 JSON retains secret-free status for every check and App.
 
 ## Failure modes

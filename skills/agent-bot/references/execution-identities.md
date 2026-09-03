@@ -83,9 +83,9 @@ environment override before the governed default.
 On success, stdout contains only the absolute space path. Use `--json` when
 the caller needs marker metadata or whether the space was created. `ensure`
 accepts no positional Agent ID: it resolves the environment identity first,
-then the worktree pin, and fails non-zero if neither is present. It also
-refuses to create from a human primary checkout even when an Agent ID is
-injected.
+then the worktree pin, and fails non-zero if neither is present. The checkout's
+directory is not a gate (ENG-0339): a primary checkout with a current Agent ID
+creates like any other.
 
 ## Inspect the local population
 

@@ -70,10 +70,8 @@ test('--app <slug> resolves app-id and key from ~/.config/<slug>/', () => {
   assert.equal(config.privateKeyPem, pem);
 });
 
-test('GH_AGENT_APP resolves the same lookup without a flag outside bot territory', () => {
+test('GH_AGENT_APP resolves the same lookup without a flag', () => {
   const home = fakeHome('you-codex-agent');
-  // Outside a worktree/scratchpad there is no territory to consult, so the
-  // launcher's stated identity is honored unchanged.
   const cwd = mkdtempSync(join(tmpdir(), 'agent-bot-plain-'));
   const config = appConfig({
     argv: ['node', 'mint-token.mjs'],
@@ -85,13 +83,12 @@ test('GH_AGENT_APP resolves the same lookup without a flag outside bot territory
   assert.equal(config.appId, '98765');
 });
 
-// A worktree in one harness's territory carrying another harness's pin. Nobody
-// sets that on purpose — it is what an earlier session leaves behind — and
-// before territory rules reached this path it minted a token for the pinned
-// App while commits were attributed to the territory's App. Credentials for one
-// identity, authorship for another.
+// A checkout laid out under one harness's `.<tool>/worktrees` directory and
+// pinned to another harness's App. Under ENG-0339 the layout is not an
+// identity input: the pin names the App the commits are authored as, so the
+// pin is what mints — credentials and authorship stay one identity.
 function pinnedWorktree(tool, pin) {
-  const root = mkdtempSync(join(tmpdir(), 'agent-bot-territory-'));
+  const root = mkdtempSync(join(tmpdir(), 'agent-bot-layout-'));
   const repo = join(root, `.${tool}`, 'worktrees', 'session', 'repo');
   mkdirSync(repo, { recursive: true });
   const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' });
@@ -100,28 +97,26 @@ function pinnedWorktree(tool, pin) {
   return repo;
 }
 
-test('an inferred mint obeys territory, not a stale pin from another harness', () => {
-  const home = fakeHome('you-codex-agent');
+test('an inferred mint follows the pin, whatever directory the checkout sits in', () => {
+  const home = fakeHome('you-claude-opus-agent');
   const cwd = pinnedWorktree('codex', 'you-claude-opus-agent');
   const config = appConfig({
     argv: ['node', 'mint-token.mjs'],
-    env: {},
+    env: { AGENT_BOT_ACCOUNT: 'user' },
     home,
     cwd,
     config: { prefix: 'you' },
   });
-  // you-claude-opus-agent has no key material in this fake home, so resolving
-  // to it would throw. Reaching the codex App's key proves the eviction.
-  assert.equal(config.slug, 'you-codex-agent');
+  // you-codex-agent has no key material in this fake home, so resolving to the
+  // layout's harness would throw. Reaching the pinned App's key proves the pin won.
+  assert.equal(config.slug, 'you-claude-opus-agent');
   assert.equal(config.appId, '98765');
 });
 
-// GH_AGENT_APP is a launcher-level default, not a per-invocation request: it
-// was exported before anyone knew which worktree this process would land in.
-// Inside another harness's territory it is corrected the same way a stale pin
-// is (#20); outside territory it is honored unchanged (covered above).
-test('inside bot territory a cross-territory GH_AGENT_APP mints the territory App', () => {
-  const home = fakeHome('you-codex-agent');
+// GH_AGENT_APP is a stated identity and outranks the account and the
+// directory alike (ENG-0339 acceptance b). No correction, no stderr note.
+test('GH_AGENT_APP mints its own App in any checkout, with no correction note', () => {
+  const home = fakeHome('you-claude-opus-agent');
   const cwd = pinnedWorktree('codex', null);
   const notes = [];
   const write = process.stderr.write;
@@ -130,7 +125,7 @@ test('inside bot territory a cross-territory GH_AGENT_APP mints the territory Ap
   try {
     config = appConfig({
       argv: ['node', 'mint-token.mjs'],
-      env: { GH_AGENT_APP: 'you-claude-opus-agent' },
+      env: { GH_AGENT_APP: 'you-claude-opus-agent', AGENT_BOT_ACCOUNT: 'you-codex-agent' },
       home,
       cwd,
       config: { prefix: 'you' },
@@ -138,18 +133,31 @@ test('inside bot territory a cross-territory GH_AGENT_APP mints the territory Ap
   } finally {
     process.stderr.write = write;
   }
-  // you-claude-opus-agent has no key material in this fake home, so resolving
-  // to it would throw. Reaching the codex App's key proves the correction.
-  assert.equal(config.slug, 'you-codex-agent');
+  assert.equal(config.slug, 'you-claude-opus-agent');
   assert.equal(config.appId, '98765');
-  // The correction is noted on stderr only — stdout carries the token.
-  assert.match(notes.join(''), /GH_AGENT_APP=you-claude-opus-agent.*you-codex-agent/);
+  assert.equal(notes.join(''), '');
 });
 
-test('a deliberate --app still mints from inside another harness territory', () => {
-  // doctor mints every configured App in turn from whatever worktree it runs
-  // in; territory must not second-guess an explicit request — --app outranks
-  // the launcher environment and the pin alike.
+// ENG-0339 acceptance (c): the account is the fallback input, so an unpinned
+// primary checkout in an agent account mints that account's App.
+test('an agent account mints its App from an unpinned primary checkout', () => {
+  const home = fakeHome('you-codex-agent');
+  const cwd = pinnedWorktree('claude', null);
+  const config = appConfig({
+    argv: ['node', 'mint-token.mjs'],
+    env: { AGENT_BOT_ACCOUNT: 'you-codex-agent' },
+    home,
+    cwd,
+    config: { prefix: 'you' },
+  });
+  assert.equal(config.slug, 'you-codex-agent');
+  assert.equal(config.appId, '98765');
+});
+
+test('a deliberate --app mints from any checkout, whatever the pin or layout', () => {
+  // doctor mints every configured App in turn from whatever checkout it runs
+  // in; --app outranks the launcher environment and the pin alike, and the
+  // directory never throws on a mismatch.
   const home = fakeHome('you-copilot-agent');
   const cwd = pinnedWorktree('claude', 'you-claude-agent');
   const config = appConfig({

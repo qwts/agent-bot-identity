@@ -1,53 +1,32 @@
 #!/bin/sh
+# pre-push: run the installed runner, or in uninstalled mode (ENG-0128) refuse
+# an agent's push as an unmanaged human. Where an agent may push is not a
+# question the hook asks any more: under ENG-0339 the account, not the
+# directory, is bot territory, and a human-attributed push from a harness in
+# the owner's account is delegate work (the human's own).
 HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 INPUT=$(mktemp "${TMPDIR:-/tmp}/agent-bot-pre-push.XXXXXX") || exit 1
 trap 'rm -f "$INPUT"' EXIT HUP INT TERM
 cat >"$INPUT"
 
-# shellcheck source=hooks/territory-guard
-. "$HOOK_DIR/territory-guard"
+# shellcheck source=hooks/agent-context
+. "$HOOK_DIR/agent-context"
 
 AGENT=""
-ALLOWED=""
 if agent_bot_agent_context; then AGENT=1; fi
 
 # A missing installed runner is uninstalled mode (ENG-0128): an agent must
-# not push as the human. Ordinary human shells still reach the chained hook.
+# not push as the human unless the actor is an allowlisted unmanaged author.
+# Ordinary human shells still reach the chained hook.
 AGENT_HOOK="${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}"
 if [ -x "$AGENT_HOOK" ]; then
   "$AGENT_HOOK" --dialect git --event pre-push <"$INPUT" || exit $?
 elif [ -n "$AGENT" ]; then
   LOGIN=$(gh api user --jq .login 2>/dev/null || true)
-  if agent_bot_unmanaged_author "$LOGIN"; then
-    ALLOWED=1
-  else
+  if ! agent_bot_unmanaged_author "$LOGIN"; then
     echo "uninstalled identity: refuse human-attributed commit or GitHub write; finish durable bootstrap to publish as the bot" >&2
     exit 2
   fi
-fi
-
-# Same territory rule as hooks/pre-commit, at the last moment before anything
-# leaves the machine: an agent process pushing to GitHub as the human is
-# refused whatever the commits look like — pre-commit can be bypassed with
-# --no-verify, and a local clone of a checkout takes commits the guard never
-# saw. Runs after the installed runner so a runner verdict (and uninstalled
-# mode's own refusal) keeps its exit status. $2 is the URL git resolved for
-# the remote; a bare `git push` with no remote falls back to every remote of
-# the repository.
-if [ -n "$AGENT" ] && [ -z "$ALLOWED" ]; then
-  NAME=$(git config user.name 2>/dev/null || true)
-  case "$NAME" in
-    *"[bot]"*) ;;
-    *)
-      if agent_bot_unmanaged_author "$NAME" || agent_bot_unmanaged_author "$(git config user.email 2>/dev/null || true)"; then
-        :
-      elif [ -n "$2" ]; then
-        agent_bot_url_reaches_github "$2" && agent_bot_refuse_outside_territory push "$NAME"
-      elif agent_bot_repo_reaches_github; then
-        agent_bot_refuse_outside_territory push "$NAME"
-      fi
-      ;;
-  esac
 fi
 
 "$HOOK_DIR/chain-hook" pre-push "$@" <"$INPUT"

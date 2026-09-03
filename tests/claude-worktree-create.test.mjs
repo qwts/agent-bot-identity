@@ -62,7 +62,7 @@ test('Claude startup emits only canonical transcript environment names', () => {
   assert.equal('QWTS_AGENT_TRANSCRIPT_ID' in env, false);
 });
 
-test('places worktrees in bot territory, honoring a relocated worktree directory', () => {
+test('places worktrees in Claude\'s worktree layout, honoring a relocated worktree directory', () => {
   assert.equal(worktreeRoot({ home: '/home/dev', env: {} }), join('/home/dev', '.claude', 'worktrees'));
   assert.equal(
     worktreeRoot({
@@ -144,7 +144,7 @@ function fixture(name) {
   return { home, repo, git };
 }
 
-test('creates the worktree in bot territory and prints its path', () => {
+test('creates the worktree in Claude\'s worktree layout and prints its path', () => {
   const { home, repo, git } = fixture('e2e');
 
   const printed = runHook({ cwd: repo, name: 'topic-1a2b', session_id: 'session-1' }, { home });

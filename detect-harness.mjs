@@ -12,7 +12,7 @@
 // first row whose `match` returns true wins.
 //
 // Devin is keyed `devin`, not `windsurf`: Cognition acquired Windsurf, the app
-// ships as Devin, and the key also names territory (`.devin/worktrees/`) and
+// ships as Devin, and the key also names the worktree layout (`.devin/worktrees/`) and
 // the bot slug. Only the env markers are still Codeium-era, so the matcher and
 // the key deliberately differ.
 
@@ -52,7 +52,7 @@ const HARNESSES = [
       (e.AI_AGENT ?? '').toLowerCase().includes('devin'),
   },
   {
-    // Meta Muse is keyed `muse`: the key names territory, and the app's
+    // Meta Muse is keyed `muse`: the key names the worktree layout, and the app's
     // worktrees live under `.muse/worktrees/`, matching its `~/.muse` config
     // home and the qwts-muse-agent App slug.
     // MUSE_RELEASE_INFO is ambient — the app sets it for any terminal it
@@ -76,7 +76,16 @@ const HARNESSES = [
 
 // The OS account short name, or null when the platform cannot say. Never
 // throws: the resolver must degrade to the other inputs, not crash.
-export function accountName() {
+//
+// AGENT_BOT_ACCOUNT names the account explicitly. It exists for tests and for
+// launchers that run a persona from a shell the kernel does not attribute to
+// it; it is the same kind of stated input as GH_AGENT_APP (and confers no more
+// — minting still needs that App's key in this home). The shell hooks and the
+// gh shim read the same variable, so shell and JS never disagree about which
+// account a process is in. Empty means unset.
+export function accountName(env = process.env) {
+  const override = typeof env?.AGENT_BOT_ACCOUNT === 'string' ? env.AGENT_BOT_ACCOUNT.trim() : '';
+  if (override) return override;
   try {
     return userInfo().username || null;
   } catch {
@@ -127,7 +136,7 @@ export function detectHarness(env = process.env) {
 export function detectAgentHarness(
   env = process.env,
   config = loadConfig({ env }),
-  account = accountName(),
+  account = accountName(env),
 ) {
   const explicit = typeof env.GH_AGENT_APP === 'string' ? env.GH_AGENT_APP.trim() : '';
   if (explicit) return explicit;
@@ -135,7 +144,10 @@ export function detectAgentHarness(
   // ENG-0339 moved bot territory up to the account: in an agent account every
   // process is that persona, human terminals included, so the account input
   // sits above the env markers. In any other account it yields null and the
-  // marker chain below is unchanged.
+  // marker chain below is unchanged — that chain still says "an agent process
+  // is running", which is what this function answers; whether that process
+  // may act as a bot is resolveAgentSlug's question, and in the owner's
+  // account the answer is no unless the identity is stated.
   const accountKey = accountHarness(config, account);
   if (accountKey) return slugForHarness(accountKey, config);
 

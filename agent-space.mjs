@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Durable per-soul storage keyed by a transcript-bound Agent ID. Agent Spaces
-// live under ~/.agent-space, outside bot territory, and survive worktree
+// live under ~/.agent-space, outside any checkout, and survive worktree
 // teardown, context compaction, and identity finalization.
 
 import { randomUUID } from 'node:crypto';
@@ -32,7 +32,6 @@ import {
   uploadPackToGist,
 } from './agent-space-pack.mjs';
 import { loadConfig, spacesRootSetting } from './config.mjs';
-import { territoryHarness } from './resolve-agent.mjs';
 
 const SCHEMA_VERSION = 1;
 const MARKER_NAME = 'space.json';
@@ -420,10 +419,10 @@ function resolveTargetId(args) {
   return current;
 }
 
+// `ensure` creates for the current Agent ID only. Where the process runs is
+// not a gate (ENG-0339): an Agent ID is minted by setup-worktree for a stated
+// bot identity, so having one is what makes a space creatable here.
 function resolveEnsureId() {
-  if (!territoryHarness(process.cwd())) {
-    throw new Error('space ensure requires bot territory; refusing to create from a human primary checkout');
-  }
   let current;
   try {
     current = currentAgentId();

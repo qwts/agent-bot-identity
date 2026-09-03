@@ -787,23 +787,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
       })],
     };
   }
-  if (resolve(gitDir) === resolve(commonDir)) {
-    return {
-      status: 'not_applicable',
-      checks: [readinessCheck({
-        id: 'worktree.kind',
-        status: 'warning',
-        code: 'primary-checkout',
-        message: 'primary checkout — bot identity is not applied (by design)',
-      })],
-    };
-  }
-
-  const checks = [readinessCheck({
-    id: 'worktree.kind',
-    status: 'ready',
-    message: 'linked worktree',
-  })];
+  const primary = resolve(gitDir) === resolve(commonDir);
   // Every subprocess in this probe — including the pin reads inside
   // resolve-agent.mjs — must run through the injected runner with the caller's
   // env. Mixing in ambient process.env lets a host's injected GIT_CONFIG_*
@@ -813,7 +797,36 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
   let slug = null;
   let slugFailed = false;
   try {
-    slug = resolveAgentSlug({ env, cwd, config, worktree: true, git: run });
+    // Stated identity only (ENG-0339): GH_AGENT_APP, the pin, the account.
+    // Harness detection does not make a checkout a bot's, so it is not what
+    // doctor verifies.
+    slug = resolveAgentSlug({ env, cwd, config, git: run, detect: false });
+  } catch (error) {
+    slugFailed = true;
+  }
+  // A primary checkout with no stated bot identity is the human's own (the
+  // owner's account, delegate mode): nothing to verify, by design. With one
+  // — an agent account, GH_AGENT_APP, or a pin — it is verified exactly like
+  // a linked worktree: every checkout in an agent account is bot work.
+  if (primary && !slug && !slugFailed) {
+    return {
+      status: 'not_applicable',
+      checks: [readinessCheck({
+        id: 'worktree.kind',
+        status: 'warning',
+        code: 'primary-checkout',
+        message: 'primary checkout with no bot identity — human persona (by design)',
+      })],
+    };
+  }
+
+  const checks = [readinessCheck({
+    id: 'worktree.kind',
+    status: 'ready',
+    message: primary ? 'primary checkout' : 'linked worktree',
+  })];
+  try {
+    if (slugFailed) resolveAgentSlug({ env, cwd, config, git: run, detect: false });
   } catch (error) {
     slugFailed = true;
     checks.push(readinessCheck({
@@ -831,7 +844,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
         id: 'worktree.app',
         status: 'failed',
         code: 'worktree-app-missing',
-        message: 'linked worktree has no resolved App identity',
+        message: 'no App identity resolves for this checkout',
         action: 'run: agent-bot setup-worktree <app-slug>',
       }));
     }
@@ -843,7 +856,9 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
     } catch (error) {
       pinError = safeGitErrorCode(error);
     }
-    const territory = territoryHarness(cwd);
+    // Layout only (ENG-0339): which harness's `.<tool>/worktrees` directory
+    // the checkout sits in, reported as evidence, never used to decide.
+    const worktree_layout = territoryHarness(cwd);
     if (pinError) {
       checks.push(readinessCheck({
         id: 'worktree.app',
@@ -851,7 +866,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
         code: 'worktree-pin-unreadable',
         message: 'the worktree App pin could not be read',
         action: 'rerun doctor; if this persists, repair the worktree App pin',
-        evidence: { app_slug: slug, territory, git_error: pinError },
+        evidence: { app_slug: slug, worktree_layout, git_error: pinError },
       }));
     } else if (pin !== slug) {
       checks.push(readinessCheck({
@@ -860,14 +875,14 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
         code: pin ? 'worktree-app-mismatch' : 'worktree-app-unpinned',
         message: 'worktree App identity is not pinned to the resolved App',
         action: 'run: agent-bot setup-worktree',
-        evidence: { app_slug: slug, territory },
+        evidence: { app_slug: slug, worktree_layout },
       }));
     } else {
       checks.push(readinessCheck({
         id: 'worktree.app',
         status: 'ready',
         message: `App identity ${slug}`,
-        evidence: { app_slug: slug, territory },
+        evidence: { app_slug: slug, worktree_layout },
       }));
     }
   }
