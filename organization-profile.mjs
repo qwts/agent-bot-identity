@@ -338,6 +338,10 @@ export function organizationProfileToConfig(value) {
       minimumRuntimeInterfaceVersion: profile.minimum_runtime_interface_version,
       identities: profile.identities,
     },
+    // The governance owner is the default installation account: today's
+    // profile carries no per-identity installation account, and a user-owned
+    // roster hosts its own Apps. An operator may set `owner` to another
+    // account; mint-token consults it only for an App installed on several.
     owner: profile.account_owner,
     apps: profile.defaults,
   };
@@ -365,9 +369,13 @@ function profileFromRuntimeConfig(config) {
       'identities',
     ],
   }, 'runtime organization profile metadata');
-  if (config.owner !== metadata.accountOwner) {
-    fail('profile-invalid', 'runtime organization profile owner is inconsistent');
-  }
+  // `owner` is deliberately not compared with `accountOwner`. They answer
+  // different questions: `owner` selects the account an App is installed on,
+  // `accountOwner` is the roster's governance owner. They coincide for a
+  // user-owned roster and legitimately differ when a private App is owned by
+  // — and so installed on — an organization the governance owner controls
+  // (#194). The check that means something is `owner` against the App's
+  // actual installations, and mint-token performs it at mint time.
   const settings = {};
   if (config.settings?.spacesRoot !== undefined) settings.spaces_root = config.settings.spacesRoot;
   if (config.settings?.daemonPreference !== undefined) {
@@ -390,8 +398,8 @@ function profileFromRuntimeConfig(config) {
 // newer published profile may replace it. Hand-written configs (no
 // snapshot), configs whose snapshot no longer validates, and configs that
 // drifted from their snapshot (a harness mapping outside the embedded
-// roster, an inconsistent owner) are not projections and are never
-// overwritten.
+// roster, an `owner` other than the account owner the profile projects) are
+// not projections and are never overwritten.
 export function isProjectedRuntimeConfig(config) {
   if (!config || typeof config !== 'object' || !Object.hasOwn(config, 'profile')) return false;
   const { scope, ...unscoped } = config;

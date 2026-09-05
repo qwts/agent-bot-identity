@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+`owner` is the account an App is installed on, not the roster's governance
+owner (#194).
+
+- The runtime profile no longer requires `owner` to equal
+  `profile.accountOwner`. A private App can only be installed on the account
+  that owns it, so an organization the governance owner controls gets its own
+  App, installed on the organization while the person keeps governing the
+  roster; that configuration now loads without `profile-invalid` and without
+  falsifying either field. A config whose `owner` differs from the projected
+  account owner is not a projection and is never overwritten by a profile
+  republish.
+- `mint-token` mints against an App's only installation whatever `owner`
+  says; `owner` is consulted only when an App is installed on several
+  accounts. The multi-installation errors name the candidate accounts and
+  distinguish "`owner` matched none of the installations" from "pick one".
+- `owner`, when present, must be a non-empty account name.
+
 ## 0.4.0
 
 The macOS account, not the directory, is bot territory (ENG-0339 supersedes

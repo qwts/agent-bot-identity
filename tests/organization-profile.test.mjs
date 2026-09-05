@@ -5,6 +5,7 @@ import {
   OrganizationProfileError,
   PROFILE_HARNESSES,
   RUNTIME_PROFILE_INTERFACE_VERSION,
+  isProjectedRuntimeConfig,
   organizationProfileToConfig,
   parseOrganizationProfile,
   profileAppSlugs,
@@ -211,7 +212,19 @@ test('runtime profile metadata is revalidated instead of trusted after installat
   config.profile.identities[0].status = 'unknown';
   assert.throws(() => runtimeProfileInfo(config), /identity status is invalid/);
 
-  const ownerMismatch = organizationProfileToConfig(completeProfile());
-  ownerMismatch.owner = 'different-owner';
-  assert.throws(() => runtimeProfileInfo(ownerMismatch), /owner is inconsistent/);
+});
+
+// `owner` selects the account an App is installed on; `account_owner` is the
+// roster's governance owner. A private App owned by an organization is
+// installed there while the person keeps governing the roster, so the two
+// legitimately differ and the runtime must load such a config (#194). It is
+// still not a projection: a profile republish must not clobber the operator's
+// installation account.
+test('the installation account may differ from the governance owner', () => {
+  const config = organizationProfileToConfig(completeProfile());
+  config.owner = 'org-that-hosts-the-app';
+  const info = runtimeProfileInfo(config);
+  assert.equal(info.accountOwner, 'example');
+  assert.equal(config.owner, 'org-that-hosts-the-app');
+  assert.equal(isProjectedRuntimeConfig(config), false);
 });
