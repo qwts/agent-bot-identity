@@ -178,12 +178,12 @@ export async function botUid(slug, base, verifiedToken, {
 // refuses an operation is a real conflict (a space bound to another soul, a
 // corrupt census) that the in-process path would hit too, so it propagates.
 // `required` fails closed when the daemon is down.
-export async function bindSoul({ agentId, policy, client, ensureLocal }) {
+export async function bindSoul({ agentId, policy, client, ensureLocal, worktree = null }) {
   if (policy !== 'off') {
     const available = await client.available();
     if (available) {
       const space = await client.ensureSpace(agentId);
-      await client.registerSoul(agentId, space.path);
+      await client.registerSoul(agentId, space.path, { worktree });
       return { ...space, via: 'daemon' };
     }
     if (policy === 'required') {
@@ -262,6 +262,14 @@ export async function main({
     fields: identityFieldsFromEnv(),
     stateDir: stateDirectory(),
   });
+  // The census row records the checkout it is pinned to, so doctor can name
+  // an active soul no checkout references (#192). Null in a bare repository.
+  let worktree = null;
+  try {
+    worktree = git('rev-parse', '--show-toplevel') || null;
+  } catch {
+    /* no working tree to record */
+  }
   // Initialize and register before writing any worktree attribution. A missing,
   // corrupt, or mismatched space or census fails closed without leaving the
   // worktree partially bound.
@@ -269,12 +277,21 @@ export async function main({
     agentId: executionIdentity.id,
     policy: daemonPreference({ config }),
     client: daemon ?? daemonClient(),
+    worktree,
     ensureLocal: () => {
       const local = initAgentSpace(executionIdentity.id);
-      upsertIdentitySoul(executionIdentity.id, local.path);
+      upsertIdentitySoul(executionIdentity.id, local.path, { worktree });
       return local;
     },
   });
+  if (currentAgentId && currentAgentId !== executionIdentity.id) {
+    // A rotation is deliberate (a new conversation, an App change, a repin),
+    // but it leaves the previous soul active with no checkout: say so here,
+    // and doctor keeps saying so until it is retired.
+    process.stderr.write(
+      `setup-worktree: ${currentAgentId} is no longer pinned here; doctor lists it as unreferenced until it is retired\n`,
+    );
+  }
   git('config', '--worktree', 'agentBot.app', slug);
   git('config', '--worktree', 'agentBot.agentId', executionIdentity.id);
   git('config', '--worktree', 'user.name', `${slug}[bot]`);
@@ -305,7 +322,7 @@ export async function main({
   // configured worktree — it simply cannot bind until a mint succeeds.
   let bindState = 'bind token minted';
   try {
-    mintBindToken({ gitDir, worktree: git('rev-parse', '--show-toplevel'), agentId: executionIdentity.id });
+    mintBindToken({ gitDir, worktree: worktree ?? git('rev-parse', '--show-toplevel'), agentId: executionIdentity.id });
   } catch {
     bindState = 'bind token unavailable';
   }

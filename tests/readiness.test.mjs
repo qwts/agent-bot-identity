@@ -873,3 +873,70 @@ test('doctor emits a structured schema failure without running probes', async ()
     process.exitCode = previous;
   }
 });
+
+// doctor names active souls that no checkout references (#192): the census
+// row records the checkout that pinned each soul, and a soul whose checkout
+// is gone, pinned to another soul, or never recorded is unreferenced.
+test('doctor names active souls that no checkout references', async () => {
+  const home = tempRoot();
+  const census = join(home, '.local', 'state', 'agent-bot', 'population.json');
+  const ids = {
+    held: 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    repinned: 'agent_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    unrecorded: 'agent_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    gone: 'agent_dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    retired: 'agent_eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+  };
+  const row = (id, worktree, status = 'active') => ({
+    id,
+    name: displayName(id),
+    appSlug: 'qwts-codex-agent',
+    parentId: null,
+    status,
+    spacePath: join(home, '.agent-space', id),
+    worktree,
+    transcriptLocator: null,
+    lastSeen: '2026-08-16T00:00:00.000Z',
+  });
+  const write = (souls) => {
+    mkdirSync(dirname(census), { recursive: true });
+    writeFileSync(census, `${JSON.stringify({ schemaVersion: 1, souls }, null, 2)}\n`);
+  };
+  const pins = { [join(home, 'held')]: ids.held, [join(home, 'moved')]: 'agent_ffffffff-ffff-4fff-8fff-ffffffffffff' };
+  const dependencies = machineDependencies(home);
+  const git = (args, options = {}) => {
+    if (args[0] === 'config' && args[1] === '--get' && /agentId$/.test(args[2])) {
+      if (!Object.hasOwn(pins, options.cwd)) throw Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' });
+      if (args[2] !== 'agentBot.agentId') throw Object.assign(new Error('unset'), { status: 1 });
+      return pins[options.cwd];
+    }
+    return dependencies.git(args, options);
+  };
+
+  write({
+    [ids.held]: row(ids.held, join(home, 'held')),
+    [ids.repinned]: row(ids.repinned, join(home, 'moved')),
+    [ids.unrecorded]: row(ids.unrecorded, null),
+    [ids.gone]: row(ids.gone, join(home, 'gone')),
+    [ids.retired]: row(ids.retired, null, 'retired'),
+  });
+  const report = await collectReadiness({ command: 'doctor', scope: 'machine', ...dependencies, git });
+  const check = report.machine.checks.find(({ id }) => id === 'souls.referenced');
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'souls-unreferenced');
+  assert.deepEqual(check.evidence, {
+    active: 4,
+    unreferenced: [ids.repinned, ids.unrecorded, ids.gone],
+    unverified: [],
+  });
+  assert.match(check.message, new RegExp(ids.repinned));
+  assert.match(check.action, /agent-bot space retire <agent-id> --delete-space/);
+  assert.equal(report.ready, true, 'unreferenced souls warn; they do not fail readiness');
+  assert.doesNotMatch(JSON.stringify(report), /token|Bearer /);
+
+  write({ [ids.held]: row(ids.held, join(home, 'held')) });
+  const quiet = await collectReadiness({ command: 'doctor', scope: 'machine', ...dependencies, git });
+  const held = quiet.machine.checks.find(({ id }) => id === 'souls.referenced');
+  assert.equal(held.status, 'ready');
+  assert.deepEqual(held.evidence, { active: 1 });
+});
