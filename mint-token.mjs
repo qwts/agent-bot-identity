@@ -10,7 +10,10 @@
 //   account + config.json    — an agent account IS its harness's App (ENG-0339)
 //   harness + config.json    — auto-detect mapped through prefix/apps
 //   GH_APP_ID + GH_APP_PRIVATE_KEY or GH_APP_PRIVATE_KEY_PATH — CI/overrides
-// Env:  GH_APP_INSTALLATION_ID — only needed when the App has >1 installation
+// Installation: an App installed on one account mints there. When an App is
+//   installed on several accounts, config "owner" (the account an App is
+//   installed on — not the roster's governance owner) or
+//   GH_APP_INSTALLATION_ID picks one.
 // Flag: --json — print the documented secret-bearing stdout object:
 //   { schema_version: 1, token, expires_at, installation_id }
 
@@ -108,6 +111,37 @@ async function gh(base, method, path, jwt) {
   return body;
 }
 
+// Pick the installation to mint against. An App installed on exactly one
+// account has exactly one place it can mint, so `owner` is not consulted.
+// `owner` is the account an App is installed on, not the roster's governance
+// owner (profile.account_owner): a private App can only be installed on the
+// account that owns it, so an App owned by an organization the governance
+// owner controls is installed on that organization while the person keeps
+// governing the roster (#194). `owner` earns its keep only when an App is
+// installed on several accounts, and then it must name one of them.
+export function pickInstallation(installations, owner) {
+  if (installations.length === 0) {
+    throw new Error(
+      'the App is not installed on any account — the key is valid, but creation is not installation: open the App page -> Install App and install it on the account whose repos agents work in (in a managed org this may require admin approval)',
+    );
+  }
+  if (installations.length === 1) return installations[0];
+  const accounts = installations.map((i) => i.account?.login).filter(Boolean).join(', ');
+  if (!owner) {
+    throw new Error(
+      `the App is installed on ${installations.length} accounts (${accounts}) — set "owner" in the config (or GH_APP_INSTALLATION_ID) to pick one`,
+    );
+  }
+  const wanted = String(owner).toLowerCase();
+  const pick = installations.find((i) => i.account?.login?.toLowerCase() === wanted);
+  if (!pick) {
+    throw new Error(
+      `owner "${owner}" matched none of the App's installations — the App is installed on: ${accounts}; set "owner" to one of them (or GH_APP_INSTALLATION_ID)`,
+    );
+  }
+  return pick;
+}
+
 // Programmatic entry point (used by git-credential-bot.mjs): mint a token
 // for a slug, or for whatever appConfig() resolves when slug is omitted.
 export async function mint({ slug, env = process.env } = {}) {
@@ -120,19 +154,7 @@ export async function mint({ slug, env = process.env } = {}) {
   let installationId = env.GH_APP_INSTALLATION_ID;
   if (!installationId) {
     const installations = await gh(base, 'GET', '/app/installations', jwt);
-    const pick = config.owner
-      ? installations.find((i) => i.account?.login?.toLowerCase() === config.owner.toLowerCase())
-      : installations.length === 1
-        ? installations[0]
-        : null;
-    if (!pick) {
-      throw new Error(
-        installations.length === 0
-          ? 'the App is not installed on any account — the key is valid, but creation is not installation: open the App page -> Install App and install it on the account whose repos agents work in (in a managed org this may require admin approval)'
-          : `the App is installed on ${installations.length} accounts — set "owner" in the config (or GH_APP_INSTALLATION_ID) to pick one`,
-      );
-    }
-    installationId = pick.id;
+    installationId = pickInstallation(installations, config.owner).id;
   }
 
   const grant = await gh(base, 'POST', `/app/installations/${installationId}/access_tokens`, jwt);

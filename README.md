@@ -736,7 +736,12 @@ use the `apps` map with the exact slugs instead. `doctor` prints the resolved
 ```
 
 - `apps` — per-harness overrides of the prefix pattern.
-- `owner` — required when an App is installed on more than one account.
+- `owner` — the GitHub account an App is installed on. Consulted only when
+  an App is installed on more than one account; an App with one installation
+  mints there whatever `owner` says. This is not the profile's
+  `account_owner` (the roster's governance owner): a private App owned by an
+  organization is installed on that organization while the person keeps
+  governing the roster, so the two may differ.
 - `apiBase` — GitHub Enterprise Server / data-residency hosts.
 - `settings.spacesRoot` — an absolute, durable Agent Space root.
 - `settings.daemonPreference` — `off`, `prefer`, or `required`; the default is
@@ -1092,7 +1097,10 @@ update can never create two invocations.
 ## Enterprise notes
 
 - **Org-owned Apps work identically** — create them under the org's developer
-  settings; set `owner` in the config.
+  settings. A private App can only be installed on the account that owns it,
+  so an organization gets its own App; the profile's `account_owner` stays the
+  governance owner, and `owner` is only needed when that App is installed on
+  more than one account.
 - **App installation tokens are exempt from SAML/SSO enforcement** — unlike
   PATs, no per-org authorization dance.
 - **EMU / managed accounts live on github.com** — do *not* set `apiBase` for
@@ -1121,8 +1129,10 @@ JSON retains secret-free status for every check and App.
 
 - `no app config for "<slug>"` — step 2 missing for that App.
 - Mint `401` mentioning the JWT — app-id and key mismatch, or key revoked.
-- `could not pick an installation` / multi-account — set `owner` or
-  `GH_APP_INSTALLATION_ID`.
+- `the App is installed on N accounts (a, b)` — set `owner` to one of the
+  listed accounts, or `GH_APP_INSTALLATION_ID`.
+- `owner "X" matched none of the App's installations` — `owner` names an
+  account the App is not installed on; the message lists the candidates.
 - Push rejected with the token set — the repo isn't in that App's
   installation list.
 - A `gh` call acts as you — shim not on PATH, or `GH_TOKEN` unset/expired

@@ -10,7 +10,8 @@
 //   {
 //     "prefix": "yourname",              // slug = <prefix>-<harness>-agent
 //     "apps": { "claude": "custom" },    // per-harness overrides of that pattern
-//     "owner": "your-org",               // pick the App installation by account
+//     "owner": "your-org",               // account an App is installed on; consulted
+//                                        // only when an App has several installations
 //     "apiBase": "https://api.github.com", // GitHub Enterprise Server / ghe.com
 //     "settings": {                        // durable, secret-free user policy
 //       "spacesRoot": "/absolute/path",
@@ -163,8 +164,19 @@ export function scopeConfigToApps(config, apps = []) {
   return { ...config, scope: { apps: wanted } };
 }
 
+// `owner` names the GitHub account an App is installed on. It is a selector
+// for mint-token, not the roster's governance owner, and the two may differ.
+function validateOwner(config) {
+  const owner = config.owner;
+  if (owner === undefined) return;
+  if (typeof owner !== 'string' || owner.length === 0 || owner.includes('\0')) {
+    throw new Error('invalid owner: expected a non-empty GitHub account name');
+  }
+}
+
 function validateSettings(config) {
   const settings = settingsSection(config);
+  validateOwner(config);
   if (settings.spacesRoot !== undefined) spacesRootSetting(config);
   if (settings.daemonPreference !== undefined) validateDaemonPreference(settings.daemonPreference);
   rosterScope(config);

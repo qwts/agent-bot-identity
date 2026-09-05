@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { generateKeyPairSync, createVerify } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { buildAppJwt, appConfig } from '../mint-token.mjs';
+import { buildAppJwt, appConfig, mint, pickInstallation } from '../mint-token.mjs';
 
 const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const pem = privateKey.export({ type: 'pkcs8', format: 'pem' });
@@ -237,4 +238,107 @@ test('no selection at all names every option in the error', () => {
     }),
     /--app <slug>.*GH_AGENT_APP.*GH_APP_ID/,
   );
+});
+
+// Installation selection (#194). `owner` is the account an App is installed
+// on, not the roster's governance owner; an App with one installation has one
+// place it can mint, so `owner` is only consulted when there are several.
+const ORG = { id: 42, account: { login: 'org-that-hosts-the-app' } };
+const PERSON = { id: 43, account: { login: 'governance-owner' } };
+
+test('one installation mints there even when "owner" names another account', () => {
+  assert.equal(pickInstallation([ORG], 'governance-owner'), ORG);
+  assert.equal(pickInstallation([ORG], undefined), ORG);
+});
+
+test('"owner" picks its installation among several, case-insensitively', () => {
+  assert.equal(pickInstallation([ORG, PERSON], 'Governance-Owner'), PERSON);
+  assert.equal(pickInstallation([ORG, PERSON], 'org-that-hosts-the-app'), ORG);
+});
+
+test('several installations and no "owner" names every candidate account', () => {
+  assert.throws(
+    () => pickInstallation([ORG, PERSON], undefined),
+    /installed on 2 accounts \(org-that-hosts-the-app, governance-owner\) — set "owner"/,
+  );
+});
+
+test('an "owner" matching no installation names the owner and the candidates', () => {
+  assert.throws(
+    () => pickInstallation([ORG, PERSON], 'someone-else'),
+    /owner "someone-else" matched none of the App's installations — the App is installed on: org-that-hosts-the-app, governance-owner/,
+  );
+});
+
+test('no installation at all still points at Install App', () => {
+  assert.throws(() => pickInstallation([], 'governance-owner'), /not installed on any account/);
+});
+
+// End to end against a local GitHub stand-in: the owner-mismatch failure the
+// issue reproduces, minted through the real request path. The config carries
+// a governance owner the App is not installed on, and the App has exactly one
+// installation — this used to fail with 'installed on 1 accounts'.
+function installationServer(installations) {
+  const server = createServer((request, response) => {
+    response.setHeader('content-type', 'application/json');
+    if (!/^Bearer \S+$/.test(request.headers.authorization ?? '')) {
+      response.statusCode = 401;
+      response.end(JSON.stringify({ message: 'Bad credentials' }));
+      return;
+    }
+    if (request.method === 'GET' && request.url === '/app/installations') {
+      response.end(JSON.stringify(installations));
+      return;
+    }
+    const grant = request.url.match(/^\/app\/installations\/(\d+)\/access_tokens$/);
+    if (request.method === 'POST' && grant && installations.some((i) => String(i.id) === grant[1])) {
+      response.end(JSON.stringify({
+        token: `fixture-token-never-logged-${grant[1]}`,
+        expires_at: '2099-01-01T00:00:00Z',
+      }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ message: 'not found' }));
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      resolve({
+        apiBase: `http://127.0.0.1:${server.address().port}`,
+        close: () => new Promise((done) => server.close(done)),
+      });
+    });
+  });
+}
+
+function mintEnv(apiBase, owner) {
+  const configPath = join(mkdtempSync(join(tmpdir(), 'agent-bot-mint-')), 'config.json');
+  writeFileSync(configPath, `${JSON.stringify({ owner, apiBase })}\n`);
+  return { AGENT_BOT_CONFIG: configPath, GH_APP_ID: '98765', GH_APP_PRIVATE_KEY: pem };
+}
+
+test('mint succeeds for an App with one installation whatever "owner" says', async () => {
+  const github = await installationServer([ORG]);
+  try {
+    const grant = await mint({ env: mintEnv(github.apiBase, 'governance-owner') });
+    assert.equal(grant.installation_id, 42);
+    assert.equal(grant.token, 'fixture-token-never-logged-42');
+    assert.equal(grant.expires_at, '2099-01-01T00:00:00Z');
+  } finally {
+    await github.close();
+  }
+});
+
+test('mint follows "owner" when the App is installed on several accounts', async () => {
+  const github = await installationServer([ORG, PERSON]);
+  try {
+    const grant = await mint({ env: mintEnv(github.apiBase, 'governance-owner') });
+    assert.equal(grant.installation_id, 43);
+    await assert.rejects(
+      mint({ env: mintEnv(github.apiBase, undefined) }),
+      /installed on 2 accounts \(org-that-hosts-the-app, governance-owner\)/,
+    );
+  } finally {
+    await github.close();
+  }
 });

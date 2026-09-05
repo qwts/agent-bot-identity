@@ -229,7 +229,7 @@ function liveFailure(error) {
     return {
       status: 'failed',
       code: 'ambiguous-installation',
-      action: 'set the account owner or installation ID explicitly and retry',
+      action: 'set "owner" to one of the accounts the App is installed on (or GH_APP_INSTALLATION_ID) and retry',
     };
   }
   return {

@@ -13,7 +13,7 @@ import {
   slugForHarness,
   spacesRootSetting,
 } from '../config.mjs';
-import { organizationProfileToConfig } from '../organization-profile.mjs';
+import { organizationProfileToConfig, runtimeProfileInfo } from '../organization-profile.mjs';
 
 function tempHome(name = 'agent-bot-config-') {
   return mkdtempSync(join(tmpdir(), name));
@@ -156,7 +156,7 @@ test('apps overrides beat the prefix pattern', () => {
   assert.equal(slugForHarness('codex', config), 'you-codex-agent');
 });
 
-test('installed organization profile exposes active model mappings and rejects inconsistent metadata', () => {
+test('installed organization profile exposes active model mappings and lets the installation account differ from the governance owner', () => {
   const config = organizationProfileToConfig({
     schema_version: 1,
     organization: 'example-engineering',
@@ -185,9 +185,22 @@ test('installed organization profile exposes active model mappings and rejects i
   const home = tempHome();
   writeConfig(home, config);
   assert.deepEqual(loadConfig({ home, env: {} }), config);
-  config.profile.accountOwner = 'different-owner';
+  // The installation account (`owner`) and the governance owner
+  // (`profile.accountOwner`) are distinct facts; an App owned by an
+  // organization is installed there while the person governs the roster (#194).
+  config.owner = 'org-that-hosts-the-app';
   writeConfig(home, config);
-  assert.throws(() => loadConfig({ home, env: {} }), /owner is inconsistent/);
+  const loaded = loadConfig({ home, env: {} });
+  assert.deepEqual(loaded, config);
+  assert.equal(runtimeProfileInfo(loaded).accountOwner, 'example');
+});
+
+test('owner must be a non-empty account name when present', () => {
+  for (const owner of ['', 7, null, ['org']]) {
+    const home = tempHome();
+    writeConfig(home, { prefix: 'you', owner });
+    assert.throws(() => loadConfig({ home, env: {} }), /invalid owner/);
+  }
 });
 
 test('harnessForSlug reverse-looks up apps and prefix shapes', () => {
