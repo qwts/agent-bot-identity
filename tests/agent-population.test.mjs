@@ -42,6 +42,7 @@ function fixture(overrides = {}) {
     parentId: null,
     status: 'active',
     spacePath: `/spaces/${FIRST_ID}`,
+    worktree: null,
     transcriptLocator: { provider: 'codex', id: 'thread-1' },
     lastSeen: LAST_SEEN,
     ...overrides,
@@ -366,4 +367,28 @@ test('population errors never reflect invalid record or store contents', () => {
   const corrupt = runCli(['population', 'list'], file);
   assert.notEqual(corrupt.status, 0);
   assert.doesNotMatch(corrupt.stderr, /secret-store-sentinel/);
+});
+
+// A row remembers the checkout that pinned the soul, so an active soul no
+// checkout references is discoverable (#192). Lifecycle upserts know nothing
+// about place and carry the recorded checkout forward.
+test('rows record the checkout that pinned the soul and carry it forward', () => {
+  const root = scratch();
+  const file = path.join(root, 'population.json');
+  const stateDir = path.join(root, 'identities');
+  assert.equal(upsertSoul(fixture({ worktree: '/checkouts/demo' }), { file }).worktree, '/checkouts/demo');
+  assert.throws(() => upsertSoul(fixture({ worktree: 'checkouts/demo' }), { file }), /worktree must be absolute/);
+  assert.equal(listSouls({ file })[0].worktree, '/checkouts/demo');
+
+  const identity = mintAgentIdentity({ appSlug: 'qwts-codex-agent', stateDir });
+  const bound = upsertIdentitySoul(identity.id, `/spaces/${identity.id}`, {
+    file,
+    stateDir,
+    worktree: '/checkouts/bound',
+  });
+  assert.equal(bound.worktree, '/checkouts/bound');
+  const lifecycle = upsertIdentitySoul(identity.id, `/spaces/${identity.id}`, { file, stateDir });
+  assert.equal(lifecycle.worktree, '/checkouts/bound', 'an upsert that names no checkout keeps the recorded one');
+  const cleared = upsertIdentitySoul(identity.id, `/spaces/${identity.id}`, { file, stateDir, worktree: null });
+  assert.equal(cleared.worktree, null);
 });

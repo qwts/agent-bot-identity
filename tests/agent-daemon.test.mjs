@@ -247,8 +247,9 @@ test('start, status, client operations, and stop round-trip through the real CLI
     assert.equal(await client.available(), true);
     const space = await client.ensureSpace(AGENT_ID);
     assert.equal(space.created, true);
-    const soul = await client.registerSoul(AGENT_ID, space.path);
+    const soul = await client.registerSoul(AGENT_ID, space.path, { worktree: '/checkouts/demo' });
     assert.equal(soul.id, AGENT_ID);
+    assert.equal(soul.worktree, '/checkouts/demo', 'the daemon records the checkout that pinned the soul (#192)');
     const souls = await client.population();
     assert.equal(souls.length, 1);
 

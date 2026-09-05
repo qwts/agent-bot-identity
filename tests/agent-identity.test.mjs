@@ -194,19 +194,15 @@ test('reuses one identity within a transcript, binds a pending record, and rotat
     transcript: null,
     idFactory,
   }));
+  // With no transcript in view the pending pin stands (#192): setup runs on
+  // every session and every checkout, and rotating here orphaned a soul each
+  // time.
   const nextPending = ensureAgentIdentity(mintOptions(stateDir, {
     currentId: pending.id,
     transcript: null,
     idFactory,
   }));
-  assert.notEqual(nextPending.id, pending.id);
-  const explicitlyReused = ensureAgentIdentity(mintOptions(stateDir, {
-    currentId: nextPending.id,
-    transcript: null,
-    reusePending: true,
-    idFactory,
-  }));
-  assert.equal(explicitlyReused.id, nextPending.id);
+  assert.equal(nextPending.id, pending.id);
 
   const bound = ensureAgentIdentity(mintOptions(stateDir, {
     currentId: pending.id,
@@ -224,6 +220,48 @@ test('reuses one identity within a transcript, binds a pending record, and rotat
   assert.notEqual(nextConversation.id, first.id);
   assert.equal(readAgentIdentity(first.id, { stateDir }).transcript.id, 'thread-1');
   assert.equal(nextConversation.transcript.id, 'thread-2');
+});
+
+// setup-worktree is the harness-startup command and git's post-checkout hook:
+// it runs on a pinned checkout constantly, usually with no transcript in the
+// environment. The pin stands unless something states a new identity (#192).
+test('a pinned soul stands without a transcript and rotates only on evidence', () => {
+  const stateDir = state();
+  let next = 1;
+  const idFactory = () => id(next++);
+  const bound = mintAgentIdentity(mintOptions(stateDir, { idFactory })); // thread-1
+  const pending = mintAgentIdentity(mintOptions(stateDir, { transcript: null, idFactory }));
+
+  for (const pin of [bound, pending]) {
+    for (let run = 0; run < 2; run++) {
+      const again = ensureAgentIdentity(mintOptions(stateDir, {
+        currentId: pin.id,
+        transcript: null,
+        idFactory,
+      }));
+      assert.equal(again.id, pin.id, 'a repeated setup with no transcript keeps the pin');
+    }
+  }
+  assert.equal(readAgentIdentity(bound.id, { stateDir }).transcript.id, 'thread-1');
+  assert.equal(readAgentIdentity(pending.id, { stateDir }).transcript, null);
+
+  const otherConversation = ensureAgentIdentity(mintOptions(stateDir, {
+    currentId: bound.id,
+    transcript: { provider: 'codex', id: 'thread-2' },
+    idFactory,
+  }));
+  assert.notEqual(otherConversation.id, bound.id, 'a different transcript is evidence of a new conversation');
+
+  const otherApp = ensureAgentIdentity(mintOptions(stateDir, {
+    currentId: pending.id,
+    appSlug: 'you-claude-fable-agent',
+    transcript: null,
+    idFactory,
+  }));
+  assert.notEqual(otherApp.id, pending.id, 'an App change is a stated identity change');
+
+  // Exactly the four deliberate records exist: no repeated setup minted one.
+  assert.equal(readdirSync(stateDir).filter((name) => name.endsWith('.json')).length, 4);
 });
 
 test('a transcript binding is immutable and an App change gets a new execution identity', () => {
@@ -526,9 +564,14 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
       AGENT_BOT_SPACES_HOME: spacesDir,
       AGENT_BOT_POPULATION_PATH: populationPath,
       AGENT_BOT_PARENT_ID: id(42),
-      CODEX_THREAD_ID: thread,
+      ...(thread ? { CODEX_THREAD_ID: thread } : {}),
     },
   });
+  const worktreeTop = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+    cwd: worktree,
+    env: cleanEnv,
+    encoding: 'utf8',
+  }).trim();
 
   const firstSetup = runSetup('thread-1');
   assert.match(firstSetup, /space created/);
@@ -581,6 +624,7 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
     parentId: id(42),
     status: 'active',
     spacePath: path.join(spacesDir, firstId),
+    worktree: worktreeTop,
     transcriptLocator: { provider: 'codex', id: 'thread-1' },
     lastSeen: firstPopulation.souls[firstId].lastSeen,
   });
@@ -614,6 +658,25 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
   const repeatedPopulation = JSON.parse(readFileSync(populationPath, 'utf8'));
   assert.deepEqual(Object.keys(repeatedPopulation.souls), [firstId]);
   assert.notEqual(repeatedPopulation.souls[firstId].lastSeen, '2000-01-01T00:00:00.000Z');
+
+  // The harness startup hook and git's post-checkout hook run setup with no
+  // transcript in the environment. An already-pinned checkout keeps its soul
+  // and mints no second Agent Space (#192).
+  for (let run = 0; run < 2; run++) {
+    const silentSetup = runSetup(null);
+    assert.match(silentSetup, new RegExp(`as ${firstId} \\(transcript bound, space ready`));
+    assert.equal(
+      execFileSync('git', ['config', '--get', 'agentBot.agentId'], {
+        cwd: worktree,
+        env: cleanEnv,
+        encoding: 'utf8',
+      }).trim(),
+      firstId,
+      'setup with no transcript in view keeps the pinned Agent ID',
+    );
+  }
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(populationPath, 'utf8')).souls), [firstId]);
+  assert.deepEqual(readdirSync(spacesDir), [firstId]);
 
   finalizeAgentIdentity(firstId, { stateDir });
   repeatedPopulation.souls[firstId].status = 'active';

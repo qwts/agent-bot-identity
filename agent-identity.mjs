@@ -598,7 +598,6 @@ export function ensureAgentIdentity({
   transcript = discoverTranscript(),
   fields = identityFieldsFromEnv(),
   subjects = [],
-  reusePending = false,
   stateDir = stateDirectory(),
   now = () => new Date(),
   idFactory,
@@ -623,7 +622,14 @@ export function ensureAgentIdentity({
         else if (transcript && !current.transcript) {
           identity = findTranscriptIdentity(appSlug, transcript, stateDir)
             ?? bindAgentTranscript(current.id, transcript, { stateDir, now });
-        } else if (!transcript && reusePending && !current.transcript) {
+        } else if (!transcript) {
+          // Nothing in view says a different conversation has taken over
+          // this checkout, so the pin stands — bound or still pending. The
+          // harness startup hook runs setup every session and git runs it on
+          // every checkout; minting here each time orphaned the previous
+          // soul with its record still active and nothing to reap it (#192).
+          // Rotation needs evidence: a transcript that differs from the
+          // bound one, an App change, or an operator's repin.
           identity = current;
         }
         // A different provider conversation reused the worktree: preserve the
@@ -691,6 +697,8 @@ function parseCli(argv) {
       positional.push(token);
       continue;
     }
+    // --reuse-pending is accepted for older launchers; reusing a pinned soul
+    // when no transcript is in view is the default since #192.
     if (token === '--json' || token === '--reuse-pending') {
       flags.set(token.slice(2), ['true']);
       continue;
@@ -749,7 +757,6 @@ async function main() {
           parentId: args.one('parent') ?? identityFieldsFromEnv().parentId,
         },
         subjects: args.flags.get('subject') ?? [],
-        reusePending: args.flags.has('reuse-pending'),
         stateDir,
       });
       gitConfig(['config', 'extensions.worktreeConfig', 'true']);

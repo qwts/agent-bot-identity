@@ -351,6 +351,70 @@ function spacesHomeCheck({ home, env, config, inspectCutover = inspectSpacesCuto
   });
 }
 
+// Active souls that no checkout references (#192). A census row records the
+// checkout setup-worktree pinned the soul to; a soul whose checkout is gone,
+// is pinned to another soul, or was never recorded is orphaned unless a
+// setup records a checkout for it. A warning, not a failure: the machine
+// still works, but the operator can now see what to retire instead of
+// diffing the census against every pin by hand.
+function checkoutHolds(soul, { git, env }) {
+  if (!soul.worktree) return 'unrecorded';
+  for (const key of AGENT_ID_KEYS) {
+    try {
+      const value = (git(['config', '--get', key], { cwd: soul.worktree, env }) ?? '').trim();
+      if (value === soul.id) return 'held';
+      if (value) return 'repinned';
+    } catch (error) {
+      if (error?.status === 1) continue; // unset for this key
+      // No such directory, or a directory that is no longer a repository.
+      if (error?.code === 'ENOENT' || error?.status === 128) return 'gone';
+      return 'unverified';
+    }
+  }
+  return 'unpinned';
+}
+
+function unreferencedSoulsCheck({ home, env, git }) {
+  let souls;
+  try {
+    souls = listSouls({ file: populationFile({ home, env }) })
+      .filter((soul) => soul.status === 'active');
+  } catch {
+    return null; // spaces.home already reports an unreadable census
+  }
+  const unreferenced = [];
+  const unverified = [];
+  for (const soul of souls) {
+    const verdict = checkoutHolds(soul, { git, env });
+    if (verdict === 'held') continue;
+    (verdict === 'unverified' ? unverified : unreferenced).push(soul.id);
+  }
+  if (unreferenced.length === 0 && unverified.length === 0) {
+    return readinessCheck({
+      id: 'souls.referenced',
+      status: 'ready',
+      message: souls.length === 0
+        ? 'no active souls in the census'
+        : `every active soul is pinned to a checkout (${souls.length})`,
+      evidence: { active: souls.length },
+    });
+  }
+  const shown = unreferenced.slice(0, 5).join(', ')
+    + (unreferenced.length > 5 ? `, and ${unreferenced.length - 5} more` : '');
+  return readinessCheck({
+    id: 'souls.referenced',
+    status: 'warning',
+    code: unreferenced.length > 0 ? 'souls-unreferenced' : 'souls-unverified',
+    message: unreferenced.length > 0
+      ? `${unreferenced.length} active soul(s) are referenced by no checkout: ${shown}`
+      : `${unverified.length} active soul(s) could not be checked against their checkout`,
+    action: unreferenced.length > 0
+      ? 'run agent-bot setup-worktree in a checkout that should keep one; retire the rest with: agent-bot space retire <agent-id> --delete-space'
+      : 'rerun doctor; if this persists, inspect Git and system load',
+    evidence: { active: souls.length, unreferenced, unverified },
+  });
+}
+
 function identityClassCheck({ home, env, access }) {
   const hook = env.AGENT_BOT_HOOK_BIN || installationPaths(home).agentHook;
   try {
@@ -1197,6 +1261,8 @@ export async function collectReadiness({
     }));
     machineChecks.push(spacesRootCheck({ home, env, config }));
     machineChecks.push(spacesHomeCheck({ home, env, config, inspectCutover }));
+    const unreferencedSouls = unreferencedSoulsCheck({ home, env, git });
+    if (unreferencedSouls) machineChecks.push(unreferencedSouls);
     machineChecks.push(coverageCheck(now));
     machineChecks.push(ghShimCheck({ home, required: expectedGhShim, inspect: inspectShellGh }));
     machineChecks.push(codexDesktopGhCheck({ home, inspect: inspectCodexDesktopGh }));

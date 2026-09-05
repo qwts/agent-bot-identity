@@ -19,6 +19,22 @@ owner (#194).
   distinguish "`owner` matched none of the installations" from "pick one".
 - `owner`, when present, must be a non-empty account name.
 
+`setup-worktree` on an already-pinned checkout keeps its soul (#192).
+
+- With no transcript in view — how the harness startup hook and git's
+  `post-checkout` hook run it — `setup-worktree` and `identity ensure` reuse
+  the pinned Agent ID instead of minting a new one and silently orphaning
+  the previous soul. Rotation still happens on a transcript that differs
+  from the bound one, an App change, or a repin; a retired pin still fails
+  closed. `identity ensure --reuse-pending` is accepted and is now the
+  default.
+- Census rows record the checkout that pinned the soul (`worktree`), written
+  by `setup-worktree` in-process and through the daemon's `/v0/register` and
+  bind paths. `doctor` gains `souls.referenced`: a warning naming every
+  active soul whose checkout is gone, pinned to another soul, or never
+  recorded, with the retire command to run. `setup-worktree` says on stderr
+  when a rotation leaves the previous soul unreferenced.
+
 ## 0.4.0
 
 The macOS account, not the directory, is bot territory (ENG-0339 supersedes
