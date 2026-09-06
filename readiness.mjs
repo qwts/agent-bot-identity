@@ -15,7 +15,7 @@ import { listSouls, populationFile } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
 import { apiBase, loadConfig, rosterScope, slugForHarness } from './config.mjs';
 import { inspectAppCredentials } from './credential-reconciler.mjs';
-import { detectHarness, HARNESSES } from './detect-harness.mjs';
+import { accountHarness, accountName, detectHarness, HARNESSES } from './detect-harness.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
 import { daemonStatus } from './agent-daemon.mjs';
@@ -1250,6 +1250,33 @@ export async function collectReadiness({
           action: 'remove the retired --app selection, then retry',
         })
         : failedConfigCheck());
+    }
+    const account = accountName(env);
+    if (!configValid || Object.keys(config).length === 0) {
+      machineChecks.push(readinessCheck({
+        id: 'account.app',
+        status: 'failed',
+        code: 'account-config-unavailable',
+        message: 'account identity cannot be classified without a valid runtime config',
+        action: 'restore the organization runtime config/profile, then rerun doctor',
+        evidence: { account },
+      }));
+    } else {
+      const profile = runtimeProfileInfo(config);
+      const scopedApps = rosterScope(config);
+      const identity = profile?.identities.find(({ slug, status }) => slug === account && status === 'active');
+      const harness = scopedApps && !scopedApps.includes(account)
+        ? null
+        : profile ? identity?.harness ?? null : accountHarness(config, account);
+      const slug = harness ? account : null;
+      machineChecks.push(readinessCheck({
+        id: 'account.app',
+        status: slug ? 'ready' : 'not_applicable',
+        message: slug
+          ? `account ${account} resolves to App ${slug}`
+          : 'no configured App matches the OS account — no account-level bot identity',
+        evidence: { account, harness, app_slug: slug },
+      }));
     }
     machineChecks.push(hooksCheck({ home, cwd, env, git, access }));
     machineChecks.push(supervisorCheck({ home, env, inspect: inspectDaemonSupervisor }));

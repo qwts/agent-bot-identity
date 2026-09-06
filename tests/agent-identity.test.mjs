@@ -625,6 +625,7 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
     status: 'active',
     spacePath: path.join(spacesDir, firstId),
     worktree: worktreeTop,
+    worktrees: [worktreeTop],
     transcriptLocator: { provider: 'codex', id: 'thread-1' },
     lastSeen: firstPopulation.souls[firstId].lastSeen,
   });
