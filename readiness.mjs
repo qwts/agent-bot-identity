@@ -1198,8 +1198,13 @@ export async function collectReadiness({
         evidence: { account },
       }));
     } else {
-      const harness = accountHarness(config, account);
-      const slug = slugForHarness(harness, config);
+      const profile = runtimeProfileInfo(config);
+      const scopedApps = rosterScope(config);
+      const identity = profile?.identities.find(({ slug, status }) => slug === account && status === 'active');
+      const harness = scopedApps && !scopedApps.includes(account)
+        ? null
+        : profile ? identity?.harness ?? null : accountHarness(config, account);
+      const slug = harness ? account : null;
       machineChecks.push(readinessCheck({
         id: 'account.app',
         status: slug ? 'ready' : 'not_applicable',
