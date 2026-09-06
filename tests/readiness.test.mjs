@@ -135,6 +135,57 @@ test('schema v1 is deterministic, secret-free, and warnings do not fail readines
   );
 });
 
+test('doctor reports account identity outside a repository, including machine-only mode', async () => {
+  const home = tempRoot();
+  for (const scope of ['all', 'machine']) {
+    const report = await collectReadiness({
+      ...machineDependencies(home),
+      scope,
+      env: { HOME: home, AGENT_BOT_ACCOUNT: 'org-qwen-agent', CLAUDECODE: '1' },
+      load: () => ({ apps: { qwen: 'org-qwen-agent', claude: 'org-claude-agent' } }),
+    });
+    const check = report.machine.checks.find(({ id }) => id === 'account.app');
+    assert.equal(check?.status, 'ready');
+    assert.deepEqual(check.evidence, {
+      account: 'org-qwen-agent', harness: 'qwen', app_slug: 'org-qwen-agent',
+    });
+    assert.match(renderReadinessReport(report), /account org-qwen-agent resolves to App org-qwen-agent/);
+    assert.equal(JSON.parse(renderReadinessJson(report)).machine.checks.find(({ id }) => id === 'account.app').status, 'ready');
+    assert.equal(report.worktree.status, scope === 'all' ? 'not_applicable' : 'not_requested');
+    assert.equal(report.ready, true);
+  }
+});
+
+test('doctor does not infer account identity from a name pattern or harness environment', async () => {
+  const home = tempRoot();
+  for (const account of ['owner', 'org-unknown-agent']) {
+    const report = await collectReadiness({
+      ...machineDependencies(home),
+      env: { HOME: home, AGENT_BOT_ACCOUNT: account, CLAUDECODE: '1', GH_AGENT_APP: 'org-claude-agent' },
+    });
+    const check = report.machine.checks.find(({ id }) => id === 'account.app');
+    assert.equal(check?.status, 'not_applicable');
+    assert.deepEqual(check.evidence, { account, harness: null, app_slug: null });
+    assert.equal(report.ready, true);
+  }
+});
+
+test('doctor cannot classify an account with missing or invalid runtime config', async () => {
+  const home = tempRoot();
+  for (const load of [() => ({}), () => { throw new Error('invalid config'); }]) {
+    const report = await collectReadiness({
+      ...machineDependencies(home),
+      env: { HOME: home, AGENT_BOT_ACCOUNT: 'org-codex-agent' },
+      load,
+    });
+    const check = report.machine.checks.find(({ id }) => id === 'account.app');
+    assert.equal(check?.status, 'failed');
+    assert.equal(check.code, 'account-config-unavailable');
+    assert.equal(check.evidence.app_slug, undefined);
+    assert.equal(report.ready, false);
+  }
+});
+
 test('doctor distinguishes shell shim readiness from Codex desktop interposition failures', async () => {
   const home = tempRoot();
   for (const [status, code, expectedStatus] of [
