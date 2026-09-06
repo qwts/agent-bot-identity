@@ -289,7 +289,7 @@ export async function main({
     // but it leaves the previous soul active with no checkout: say so here,
     // and doctor keeps saying so until it is retired.
     process.stderr.write(
-      `setup-worktree: ${currentAgentId} is no longer pinned here; doctor lists it as unreferenced until it is retired\n`,
+      `setup-worktree: ${currentAgentId} is no longer pinned here; run doctor to check its other recorded checkouts\n`,
     );
   }
   git('config', '--worktree', 'agentBot.app', slug);

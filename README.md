@@ -328,8 +328,8 @@ tree, then resets the local branch to the published signed history. Start with
 `population` reads the workstation-local census at
 `$XDG_STATE_HOME/agent-bot/population.json` (or
 `$AGENT_BOT_POPULATION_PATH`). Records contain only the Agent ID, App slug,
-parent ID, status, Agent Space path, the checkout that last pinned the soul,
-optional transcript locator, and last-seen timestamp. Identity JSON remains the provenance source of truth; this census
+parent ID, status, Agent Space path, all known checkout references and the
+latest checkout, optional transcript locator, and last-seen timestamp. Identity JSON remains the provenance source of truth; this census
 is a separate aggregate index. Filter the population with `--status` or
 `--app`, and use `--json` for machine-readable output:
 
@@ -1037,11 +1037,12 @@ With no transcript in view — the harness startup hook and git's
 stands, bound or still pending. A new Agent ID is minted only on evidence of
 a new identity: a transcript that differs from the bound one, an App change
 (`--app`, `GH_AGENT_APP`, a repin), or a pin that is absent, unreadable, or
-retired (retired fails closed). Each census row records the checkout that
-pinned its soul, and `doctor` warns (`souls-unreferenced`) naming every
-active soul whose checkout is gone, pinned to another soul, or never
-recorded; retire those with `agent-bot space retire <agent-id>
---delete-space`.
+retired (retired fails closed). Each census row retains all known checkouts
+that pinned its soul (`worktrees`), plus the latest checkout (`worktree`) for
+compatibility. `doctor` checks worktree-scoped pins across those references
+and warns (`souls-unreferenced`) when none still holds the active soul.
+Unrecorded checkouts and active sessions may still use it: verify those
+before considering retirement. The warning never recommends deleting its space.
 
 Transcript binding: Codex uses `CODEX_THREAD_ID`; Claude's WorktreeCreate hook
 passes the session id; other launchers set `AGENT_BOT_TRANSCRIPT_PROVIDER` and

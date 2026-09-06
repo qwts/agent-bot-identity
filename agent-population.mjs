@@ -133,6 +133,17 @@ function normalizeSoul(record, { defaultLastSeen = null } = {}) {
     worktree = printableText('worktree', record.worktree, { max: 4096 });
     if (!path.isAbsolute(worktree)) throw new Error('worktree must be absolute');
   }
+  if (record.worktrees !== undefined && !Array.isArray(record.worktrees)) {
+    throw new Error('worktrees must be an array');
+  }
+  const worktrees = [...new Set([
+    ...Array.from(record.worktrees ?? [], (value) => {
+      const checkout = printableText('worktrees entry', value, { max: 4096 });
+      if (!path.isAbsolute(checkout)) throw new Error('worktrees entries must be absolute');
+      return path.normalize(checkout);
+    }),
+    ...(worktree === null ? [] : [path.normalize(worktree)]),
+  ])];
   // Rows written before names existed gain one on the next read, derived from
   // the ID, so no migration touches the store; the next write persists it.
   const name = printableText('name', record.name, { max: 80, required: false }) ?? displayName(id);
@@ -149,6 +160,7 @@ function normalizeSoul(record, { defaultLastSeen = null } = {}) {
     status: printableText('status', record.status, { max: 80 }),
     spacePath: root,
     worktree,
+    worktrees,
     transcriptLocator: transcriptLocator(record.transcriptLocator),
     lastSeen: canonicalTimestamp('lastSeen', record.lastSeen ?? defaultLastSeen),
   };
@@ -240,6 +252,10 @@ export function upsertSoul(
       throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
     }
     const existing = current.souls[candidate.id];
+    if (existing) {
+      candidate.worktrees = [...new Set([...existing.worktrees, ...candidate.worktrees])];
+      if (record.worktree === undefined) candidate.worktree = existing.worktree;
+    }
     if (existing && JSON.stringify(existing) === JSON.stringify(candidate)) return existing;
     const souls = { ...current.souls, [candidate.id]: candidate };
     writeDocument(file, souls);

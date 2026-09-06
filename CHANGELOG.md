@@ -28,12 +28,15 @@ owner (#194).
   from the bound one, an App change, or a repin; a retired pin still fails
   closed. `identity ensure --reuse-pending` is accepted and is now the
   default.
-- Census rows record the checkout that pinned the soul (`worktree`), written
-  by `setup-worktree` in-process and through the daemon's `/v0/register` and
-  bind paths. `doctor` gains `souls.referenced`: a warning naming every
-  active soul whose checkout is gone, pinned to another soul, or never
-  recorded, with the retire command to run. `setup-worktree` says on stderr
-  when a rotation leaves the previous soul unreferenced.
+- Census rows retain all known checkouts that pinned the soul (`worktrees`)
+  alongside the latest checkout (`worktree`), written by `setup-worktree`
+  in-process and through the daemon's `/v0/register` and bind paths. Old rows
+  gain their recorded checkout as their first reference. `doctor` gains
+  `souls.referenced`: a warning when no recorded checkout's worktree-scoped
+  pin still holds the active soul. The warning asks operators to verify
+  unrecorded checkouts and active sessions before considering retirement;
+  it does not recommend deleting a space. `setup-worktree` says on stderr
+  when a rotation unpins the previous soul from the current checkout.
 
 ## 0.4.0
 

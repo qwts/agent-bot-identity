@@ -905,9 +905,9 @@ test('doctor names active souls that no checkout references', async () => {
   const pins = { [join(home, 'held')]: ids.held, [join(home, 'moved')]: 'agent_ffffffff-ffff-4fff-8fff-ffffffffffff' };
   const dependencies = machineDependencies(home);
   const git = (args, options = {}) => {
-    if (args[0] === 'config' && args[1] === '--get' && /agentId$/.test(args[2])) {
+    if (args[0] === 'config' && args.includes('--get') && /agentId$/.test(args.at(-1))) {
       if (!Object.hasOwn(pins, options.cwd)) throw Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' });
-      if (args[2] !== 'agentBot.agentId') throw Object.assign(new Error('unset'), { status: 1 });
+      if (args.at(-1) !== 'agentBot.agentId') throw Object.assign(new Error('unset'), { status: 1 });
       return pins[options.cwd];
     }
     return dependencies.git(args, options);
@@ -930,7 +930,8 @@ test('doctor names active souls that no checkout references', async () => {
     unverified: [],
   });
   assert.match(check.message, new RegExp(ids.repinned));
-  assert.match(check.action, /agent-bot space retire <agent-id> --delete-space/);
+  assert.match(check.action, /verify.*before.*retir/);
+  assert.doesNotMatch(check.action, /--delete-space/);
   assert.equal(report.ready, true, 'unreferenced souls warn; they do not fail readiness');
   assert.doesNotMatch(JSON.stringify(report), /token|Bearer /);
 
@@ -939,4 +940,67 @@ test('doctor names active souls that no checkout references', async () => {
   const held = quiet.machine.checks.find(({ id }) => id === 'souls.referenced');
   assert.equal(held.status, 'ready');
   assert.deepEqual(held.evidence, { active: 1 });
+
+  for (const latest of ['gone', 'moved']) {
+    write({
+      [ids.held]: {
+        ...row(ids.held, join(home, latest)),
+        worktrees: [join(home, latest), join(home, 'held')],
+      },
+    });
+    const shared = await collectReadiness({ command: 'doctor', scope: 'machine', ...dependencies, git });
+    assert.equal(shared.machine.checks.find(({ id }) => id === 'souls.referenced').status, 'ready');
+  }
+
+  write({
+    [ids.held]: {
+      ...row(ids.held, join(home, 'gone')),
+      worktrees: [join(home, 'gone'), join(home, 'unreadable')],
+    },
+  });
+  const uncertain = await collectReadiness({
+    command: 'doctor', scope: 'machine', ...dependencies,
+    git: (args, options) => {
+      if (options?.cwd === join(home, 'unreadable')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return git(args, options);
+    },
+  });
+  const unverified = uncertain.machine.checks.find(({ id }) => id === 'souls.referenced');
+  assert.equal(unverified.code, 'souls-unverified');
+  assert.deepEqual(unverified.evidence.unreferenced, []);
+  assert.deepEqual(unverified.evidence.unverified, [ids.held]);
+});
+
+test('soul reference checks ignore global pins and honor legacy worktree pins', async () => {
+  const { home, worktree, id, env, worktreeGit } = linkedWorktreeFixture();
+  const census = join(home, '.local', 'state', 'agent-bot', 'population.json');
+  mkdirSync(dirname(census), { recursive: true });
+  writeFileSync(census, JSON.stringify({
+    schemaVersion: 1,
+    souls: {
+      [id]: {
+        id, appSlug: 'org-codex-agent', status: 'active',
+        spacePath: join(home, '.agent-space', id), worktree,
+        lastSeen: '2026-08-16T00:00:00.000Z',
+      },
+    },
+  }));
+  const dependencies = machineDependencies(home);
+  const probe = async () => {
+    const report = await collectReadiness({
+      ...dependencies, scope: 'machine', env,
+      git: (args, options) => {
+        if (options?.cwd !== worktree) return dependencies.git(args, options);
+        return execFileSync('git', args, { ...options, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      },
+    });
+    return report.machine.checks.find(({ id: checkId }) => checkId === 'souls.referenced');
+  };
+  worktreeGit('config', '--worktree', '--unset', 'agentBot.agentId');
+  writeFileSync(join(home, '.gitconfig'), `[agentBot]\n  agentId = ${id}\n`);
+  assert.deepEqual((await probe()).evidence.unreferenced, [id]);
+
+  writeFileSync(join(home, '.gitconfig'), '[agentBot]\n  agentId = agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\n');
+  worktreeGit('config', '--worktree', 'qwts.agentId', id);
+  assert.equal((await probe()).status, 'ready');
 });

@@ -43,6 +43,7 @@ function fixture(overrides = {}) {
     status: 'active',
     spacePath: `/spaces/${FIRST_ID}`,
     worktree: null,
+    worktrees: [],
     transcriptLocator: { provider: 'codex', id: 'thread-1' },
     lastSeen: LAST_SEEN,
     ...overrides,
@@ -391,4 +392,82 @@ test('rows record the checkout that pinned the soul and carry it forward', () =>
   assert.equal(lifecycle.worktree, '/checkouts/bound', 'an upsert that names no checkout keeps the recorded one');
   const cleared = upsertIdentitySoul(identity.id, `/spaces/${identity.id}`, { file, stateDir, worktree: null });
   assert.equal(cleared.worktree, null);
+  assert.deepEqual(cleared.worktrees, ['/checkouts/bound']);
+});
+
+test('legacy census rows gain worktree history on read and persist it on update', () => {
+  const file = path.join(scratch(), 'population.json');
+  const first = fixture({ worktree: '/checkouts/a' });
+  const second = fixture({ id: SECOND_ID });
+  delete first.worktrees;
+  delete second.worktrees;
+  delete second.worktree;
+  const raw = JSON.stringify({ schemaVersion: 1, souls: { [FIRST_ID]: first, [SECOND_ID]: second } });
+  writeFileSync(file, raw);
+
+  assert.deepEqual(showSoul(FIRST_ID, { file }).worktrees, ['/checkouts/a']);
+  assert.deepEqual(showSoul(SECOND_ID, { file }).worktrees, []);
+  assert.equal(showSoul(SECOND_ID, { file }).worktree, null);
+  assert.equal(readFileSync(file, 'utf8'), raw);
+  updateSoulStatus(FIRST_ID, 'finalized', { file });
+  const stored = JSON.parse(readFileSync(file, 'utf8'));
+  assert.deepEqual(stored.souls[FIRST_ID].worktrees, ['/checkouts/a']);
+  assert.deepEqual(stored.souls[SECOND_ID].worktrees, []);
+});
+
+test('repeated transcript soul registrations retain every checkout across lifecycle updates', () => {
+  const root = scratch();
+  const file = path.join(root, 'population.json');
+  const stateDir = path.join(root, 'identities');
+  const identity = mintAgentIdentity({
+    appSlug: 'qwts-codex-agent',
+    transcript: { provider: 'codex', id: 'shared-thread' },
+    stateDir,
+  });
+  const spacePath = `/spaces/${identity.id}`;
+  for (const worktree of ['/checkouts/a', '/checkouts/b', '/checkouts/a', '/checkouts/b']) {
+    const soul = upsertIdentitySoul(identity.id, spacePath, { file, stateDir, worktree });
+    assert.equal(soul.worktree, worktree);
+  }
+  assert.deepEqual(showSoul(identity.id, { file }).worktrees, ['/checkouts/a', '/checkouts/b']);
+  for (const options of [{}, { worktree: undefined }, { worktree: null }, {}]) {
+    const soul = upsertIdentitySoul(identity.id, spacePath, { file, stateDir, ...options });
+    assert.deepEqual(soul.worktrees, ['/checkouts/a', '/checkouts/b']);
+  }
+  for (const status of ['finalized', 'retired']) {
+    const soul = updateSoulStatus(identity.id, status, { file });
+    assert.deepEqual(soul.worktrees, ['/checkouts/a', '/checkouts/b']);
+  }
+});
+
+test('generic upserts union normalized history even when callers omit or clear place', () => {
+  const file = path.join(scratch(), 'population.json');
+  upsertSoul(fixture({ worktree: '/checkouts/a', worktrees: ['/checkouts/old', '/checkouts/old'] }), { file });
+  const updated = upsertSoul(fixture({ worktree: '/checkouts/b', worktrees: ['/checkouts/x/../a'] }), { file });
+  const expected = ['/checkouts/old', '/checkouts/a', '/checkouts/b'];
+  assert.deepEqual(updated.worktrees, expected);
+  assert.equal(updated.worktree, '/checkouts/b');
+  const omitted = upsertSoul(fixture({ worktree: undefined, worktrees: undefined }), { file });
+  assert.deepEqual(omitted.worktrees, expected);
+  assert.equal(omitted.worktree, '/checkouts/b');
+  const cleared = upsertSoul(fixture({ worktree: null, worktrees: [] }), { file });
+  assert.deepEqual(cleared.worktrees, expected);
+  assert.equal(cleared.worktree, null);
+  assert.deepEqual(showSoul(FIRST_ID, { file }).worktrees, expected);
+});
+
+test('worktree history rejects invalid arrays and paths without reflecting their contents', () => {
+  const file = path.join(scratch(), 'population.json');
+  for (const worktrees of [null, {}, 'secret-sentinel', [null], [undefined], [42], [''],
+    ['relative-secret-sentinel'], ['/secret-sentinel\n'], [`/${'a'.repeat(4096)}`]]) {
+    const record = fixture({ worktrees });
+    const invalid = (error) => {
+      assert.match(error.message, /worktrees/);
+      assert.doesNotMatch(error.message, /secret-sentinel/);
+      return true;
+    };
+    assert.throws(() => upsertSoul(record, { file }), invalid);
+    writeFileSync(file, JSON.stringify({ schemaVersion: 1, souls: { [FIRST_ID]: record } }));
+    assert.throws(() => listSouls({ file }), invalid);
+  }
 });

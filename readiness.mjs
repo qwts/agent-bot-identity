@@ -357,11 +357,11 @@ function spacesHomeCheck({ home, env, config, inspectCutover = inspectSpacesCuto
 // setup records a checkout for it. A warning, not a failure: the machine
 // still works, but the operator can now see what to retire instead of
 // diffing the census against every pin by hand.
-function checkoutHolds(soul, { git, env }) {
-  if (!soul.worktree) return 'unrecorded';
+function checkoutHolds(soul, { git, env, worktree }) {
+  if (!worktree) return 'unrecorded';
   for (const key of AGENT_ID_KEYS) {
     try {
-      const value = (git(['config', '--get', key], { cwd: soul.worktree, env }) ?? '').trim();
+      const value = (git(['config', '--worktree', '--get', key], { cwd: worktree, env }) ?? '').trim();
       if (value === soul.id) return 'held';
       if (value) return 'repinned';
     } catch (error) {
@@ -385,9 +385,9 @@ function unreferencedSoulsCheck({ home, env, git }) {
   const unreferenced = [];
   const unverified = [];
   for (const soul of souls) {
-    const verdict = checkoutHolds(soul, { git, env });
-    if (verdict === 'held') continue;
-    (verdict === 'unverified' ? unverified : unreferenced).push(soul.id);
+    const verdicts = soul.worktrees.map((worktree) => checkoutHolds(soul, { git, env, worktree }));
+    if (verdicts.includes('held')) continue;
+    (verdicts.includes('unverified') ? unverified : unreferenced).push(soul.id);
   }
   if (unreferenced.length === 0 && unverified.length === 0) {
     return readinessCheck({
@@ -406,10 +406,10 @@ function unreferencedSoulsCheck({ home, env, git }) {
     status: 'warning',
     code: unreferenced.length > 0 ? 'souls-unreferenced' : 'souls-unverified',
     message: unreferenced.length > 0
-      ? `${unreferenced.length} active soul(s) are referenced by no checkout: ${shown}`
-      : `${unverified.length} active soul(s) could not be checked against their checkout`,
+      ? `${unreferenced.length} active soul(s) have no verified pin in their recorded checkouts: ${shown}`
+      : `${unverified.length} active soul(s) could not be checked against their recorded checkouts`,
     action: unreferenced.length > 0
-      ? 'run agent-bot setup-worktree in a checkout that should keep one; retire the rest with: agent-bot space retire <agent-id> --delete-space'
+      ? 'run agent-bot setup-worktree in a checkout that should keep one; verify other checkouts and active sessions before considering retirement'
       : 'rerun doctor; if this persists, inspect Git and system load',
     evidence: { active: souls.length, unreferenced, unverified },
   });
