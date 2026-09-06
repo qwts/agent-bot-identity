@@ -274,9 +274,17 @@ export function createDaemonServer({
           if (typeof body.spacePath !== 'string' || !path.isAbsolute(body.spacePath)) {
             throw Object.assign(new Error('spacePath must be an absolute path'), { statusCode: 400 });
           }
+          let worktree;
+          if (body.worktree !== undefined && body.worktree !== null) {
+            if (typeof body.worktree !== 'string' || !path.isAbsolute(body.worktree)) {
+              throw Object.assign(new Error('worktree must be an absolute path'), { statusCode: 400 });
+            }
+            worktree = body.worktree;
+          }
           const soul = upsertIdentitySoul(id, body.spacePath, {
             file: populationOverride(env, home),
             stateDir: stateDirectory({ env, home }),
+            worktree,
           });
           sendJson(res, 200, { soul });
           return;
@@ -454,6 +462,7 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now }) {
   const soul = upsertIdentitySoul(bound.id, space.path, {
     file: populationOverride(env, home),
     stateDir,
+    worktree: record.worktree,
   });
   const secret = bindings.bind({
     agentId: bound.id,
@@ -638,8 +647,12 @@ export function daemonClient({
     async ensureSpace(agentId) {
       return request('POST', '/v0/space/ensure', { agentId });
     },
-    async registerSoul(agentId, spaceRoot) {
-      const { soul } = await request('POST', '/v0/register', { agentId, spacePath: spaceRoot });
+    async registerSoul(agentId, spaceRoot, { worktree = null } = {}) {
+      const { soul } = await request('POST', '/v0/register', {
+        agentId,
+        spacePath: spaceRoot,
+        ...(worktree ? { worktree } : {}),
+      });
       return soul;
     },
     async spacePath(agentId) {
