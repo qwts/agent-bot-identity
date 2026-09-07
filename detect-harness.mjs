@@ -17,8 +17,8 @@
 // the key deliberately differ.
 
 import { userInfo } from 'node:os';
-import { loadConfig, slugForHarness } from './config.mjs';
-import { PROFILE_HARNESSES } from './organization-profile.mjs';
+import { loadConfig, rosterScope, slugForHarness } from './config.mjs';
+import { PROFILE_HARNESSES, runtimeProfileInfo } from './organization-profile.mjs';
 
 const HARNESSES = [
   {
@@ -102,6 +102,15 @@ export function accountName(env = process.env) {
 // the `prefix` convention both count, and so no-config stays inert: without a
 // mapping nothing can match, and an account matching no configured slug
 // (the owner's account included — delegate mode, human persona) yields null.
+export function configuredAccountIdentity(config = loadConfig(), account = accountName()) {
+  const scope = rosterScope(config);
+  if (!account || (scope && !scope.includes(account))) return null;
+  const profile = runtimeProfileInfo(config);
+  const identity = profile?.identities.find(({ slug, status }) => slug === account && status === 'active');
+  const harness = profile ? identity?.harness : accountHarness(config, account);
+  return harness ? { slug: account, harness } : null;
+}
+
 export function accountHarness(config = loadConfig(), account = accountName()) {
   if (!account) return null;
   for (const harness of PROFILE_HARNESSES) {

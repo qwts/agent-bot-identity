@@ -25,10 +25,14 @@
 
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { readAgentIdentity, stateDirectory, withLock } from './agent-identity.mjs';
+import { loadConfig } from './config.mjs';
+import { configuredAccountIdentity } from './detect-harness.mjs';
 
 const SETUP = join(dirname(fileURLToPath(import.meta.url)), 'setup-worktree.mjs');
 
@@ -150,12 +154,45 @@ function resolveBaseRef(repo) {
   return pickBaseRef({ originHead, exists: (ref) => refExists(repo, ref) });
 }
 
+function canReuseWorktree(path, { commonDir, branch, sessionId, app }) {
+  try {
+    if (realpathSync(git(['rev-parse', '--show-toplevel'], path)) !== realpathSync(path)) return false;
+    if (realpathSync(git(['rev-parse', '--path-format=absolute', '--git-common-dir'], path)) !== commonDir) return false;
+    if (git(['symbolic-ref', 'HEAD'], path) !== `refs/heads/${branch}`) return false;
+    const id = git(['config', '--worktree', '--get', 'agentBot.agentId'], path);
+    const identity = readAgentIdentity(id, { stateDir: stateDirectory() });
+    return identity.id === id && identity.status !== 'retired'
+      && identity.transcript?.provider === 'claude' && identity.transcript.id === sessionId
+      && (!app || (identity.github.appSlug === app
+        && git(['config', '--worktree', '--get', 'agentBot.app'], path) === app));
+  } catch {
+    return false;
+  }
+}
+
+function withCreationLock(commonDir, name, operation) {
+  const label = `Claude worktree ${name}`;
+  for (let attempt = 0; ; attempt++) {
+    let started = false;
+    try {
+      return withLock(join(commonDir, `agent-bot-claude-${name}.lock`), label, () => {
+        started = true;
+        return operation();
+      }, { keepLiveOwners: true });
+    } catch (error) {
+      if (started || attempt >= 59 || error.message !== `timed out waiting for ${label}`) throw error;
+    }
+  }
+}
+
 async function main() {
   const { baseRepo, name, sessionId } = parseHookInput(readStdin());
 
   // A linked worktree's common dir points at the primary checkout: worktrees
   // are always placed by the repository, never by whichever copy asked.
-  const mainRepo = dirname(git(['rev-parse', '--path-format=absolute', '--git-common-dir'], baseRepo));
+  const commonDir = realpathSync(git(['rev-parse', '--path-format=absolute', '--git-common-dir'], baseRepo));
+  const mainRepo = dirname(commonDir);
+  const app = process.env.GH_AGENT_APP?.trim() || configuredAccountIdentity(loadConfig())?.slug;
 
   let desktopConfig = null;
   try {
@@ -166,34 +203,39 @@ async function main() {
   const path = worktreePath(worktreeRoot({ desktopConfig }), mainRepo, name);
   const branch = branchName(name);
 
-  if (existsSync(path)) throw new Error(`refusing to reuse an existing path: ${path}`);
-  if (refExists(mainRepo, `refs/heads/${branch}`)) throw new Error(`branch ${branch} already exists`);
+  withCreationLock(commonDir, name, () => {
+    if (existsSync(path)) {
+      if (canReuseWorktree(path, { commonDir, branch, sessionId, app })) return;
+      throw new Error(`refusing to reuse an existing path: ${path}`);
+    }
+    if (refExists(mainRepo, `refs/heads/${branch}`)) throw new Error(`branch ${branch} already exists`);
 
-  try {
-    git(['fetch', '--quiet', 'origin'], mainRepo);
-  } catch {
-    /* offline, or no origin — branch from what is already local */
-  }
+    try {
+      git(['fetch', '--quiet', 'origin'], mainRepo);
+    } catch {
+      /* offline, or no origin — branch from what is already local */
+    }
 
-  mkdirSync(dirname(path), { recursive: true });
-  git(['worktree', 'add', '--no-track', '-b', branch, path, resolveBaseRef(mainRepo)], mainRepo);
+    mkdirSync(dirname(path), { recursive: true });
+    git(['worktree', 'add', '--no-track', '-b', branch, path, resolveBaseRef(mainRepo)], mainRepo);
 
-  // The identity step. Failing it does not fail the worktree. The governed
-  // hook runs this only inside an agent account (ENG-0339), where the gh shim
-  // and token minting resolve the account's App with or without a pin, and
-  // pre-commit still refuses a bot-attributed commit that has no Agent ID —
-  // so a loud warning plus a usable workspace beats leaving the agent with
-  // none. Nothing here relies on a directory guard; there is none.
-  try {
-    execFileSync(process.execPath, [SETUP], {
-      cwd: path,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: claudeTranscriptEnvironment(sessionId),
-    });
-  } catch (err) {
-    process.stderr.write(`bot identity not applied to ${path}: ${err.message}\n`);
-  }
+    // The identity step. Failing it does not fail the worktree. The governed
+    // hook runs this only inside an agent account (ENG-0339), where the gh shim
+    // and token minting resolve the account's App with or without a pin, and
+    // pre-commit still refuses a bot-attributed commit that has no Agent ID —
+    // so a loud warning plus a usable workspace beats leaving the agent with
+    // none. Nothing here relies on a directory guard; there is none.
+    try {
+      execFileSync(process.execPath, [SETUP], {
+        cwd: path,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: claudeTranscriptEnvironment(sessionId, { ...process.env, ...(app ? { GH_AGENT_APP: app } : {}) }),
+      });
+    } catch (err) {
+      process.stderr.write(`bot identity not applied to ${path}: ${err.message}\n`);
+    }
+  });
 
   process.stdout.write(`${path}\n`);
 }

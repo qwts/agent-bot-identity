@@ -951,33 +951,35 @@ execution identity to the stated App.
 ## Claude Code worktrees
 
 Claude Code often creates worktrees from a sandbox that cannot write the shared
-git dir — so git's `post-checkout` may not land the identity. Wire Claude's
-`WorktreeCreate` hook to the installed CLI (user or project settings), gated on
-the agent account so a human's own worktrees keep Claude's built-in creation.
-The gate asks the runtime for the account's exact roster slug rather than
-matching the account name against a glob, so shell and JS agree on what an
-agent account is:
+git dir, so Git's `post-checkout` may not land the identity. `agent-bot install`
+and `agent-bot bootstrap --machine-only` now install the `WorktreeCreate`
+transcript adapter into the account's `~/.claude/settings.json` (or
+`$CLAUDE_CONFIG_DIR/settings.json`) when the account is an exact active Claude
+identity in the configured roster and scope. Model-specific identities are
+included. Human and other harness accounts are untouched, regardless of IDE
+markers or `GH_AGENT_APP`.
 
-```json
-{
-  "hooks": {
-    "WorktreeCreate": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "B=\"${AGENT_BOT_BIN:-agent-bot}\"; if ! command -v \"$B\" >/dev/null 2>&1; then case \"$(id -un)\" in *-agent) echo \"agent-bot is not installed — install agent-bot-identity\" >&2; exit 127;; *) exit 0;; esac; fi; [ -n \"$(\"$B\" worktree-token --account-slug 2>/dev/null)\" ] || exit 0; exec \"$B\" claude-worktree-create",
-            "timeout": 180
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+The adapter calls `~/.local/bin/agent-bot`, checks the account's exact roster
+slug again at execution, and passes Claude's `session_id` into identity setup.
+New hook-created worktrees therefore record a Claude transcript locator in both
+the identity record and the population census. Existing unbound souls are not
+retroactively repaired. The launcher finds Node even when nvm is not on the
+desktop app's PATH.
 
-This repository's own `.claude/settings.json` carries that entry. The wrapper
-finds Node even when nvm is not on the desktop app's PATH.
+Provisioning preserves unrelated settings and hooks and is idempotent. Invalid
+JSON, symlinked settings, disabled hooks, or a different `WorktreeCreate` hook
+require explicit reconciliation; the installer never replaces those settings
+or overrides a hooks policy. This repository still carries its separately
+governed project adapter. Concurrent calls through that adapter and the new
+user adapter serialize creation and reuse only a worktree with the same
+repository, branch, App, and bound Claude session; other collisions still fail.
+Unrelated custom creators require explicit reconciliation.
+
+`agent-bot doctor --machine-only` reports `hooks.claude_worktree`, naming missing
+or conflicting installation state and the repair action. Missing adapters are
+fixed by `agent-bot bootstrap --machine-only`. The separate `hooks.coverage`
+warning names stale/unverified dialects; installing an adapter does not falsely
+mark upstream dialect evidence as freshly verified.
 
 ## Codex / harness startup
 

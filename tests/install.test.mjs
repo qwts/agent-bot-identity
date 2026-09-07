@@ -443,6 +443,27 @@ test('install writes the supervisor through the injected helper and does not dis
   ]);
 });
 
+test('install provisions the account transcript adapter from the installed runtime config', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-adapter-install-'));
+  const configPath = join(home, '.config', 'agent-bot', 'config.json');
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, JSON.stringify({ apps: { claude: 'example-claude-agent' } }));
+  const result = await installAgentBot({
+    home, env: { HOME: home, AGENT_BOT_ACCOUNT: 'example-claude-agent' },
+    run: (args) => {
+      if (args.includes('--get')) throw Object.assign(new Error('unset'), { status: 1 });
+      return '';
+    },
+    installCli: () => installationPaths(home).executable,
+    installHooks: () => installationPaths(home).hooksDir,
+    ensureSupervisor: async () => ({ applied: false }),
+    ensureCutover: () => ({ applied: false }),
+  });
+  assert.equal(result.transcriptAdapter.updated, true);
+  const settings = JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8'));
+  assert.equal(settings.hooks.WorktreeCreate.length, 1);
+});
+
 test('install runs the spaces cutover through the injected helper', async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-cutover-install-'));
   const calls = [];

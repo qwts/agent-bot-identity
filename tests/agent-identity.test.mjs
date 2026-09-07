@@ -784,6 +784,20 @@ test('reclaiming refuses to carry off a lock that is not the one judged stale', 
   assert.equal(readFileSync(path.join(lock, 'owner'), 'utf8'), 'live-holder');
 });
 
+test('long-running creation locks retain live owners beyond the staleness window', () => {
+  const lock = path.join(state(), 'creation.lock');
+  withLock(lock, 'creation', () => {
+    const owner = readFileSync(path.join(lock, 'owner'), 'utf8');
+    utimesSync(lock, new Date(0), new Date(0));
+    reclaimStaleLock(lock, statSync(lock), { keepLiveOwners: true });
+    assert.equal(readFileSync(path.join(lock, 'owner'), 'utf8'), owner);
+    assert.throws(() => withLock(lock, 'contender', () => assert.fail('live lock was stolen'), {
+      keepLiveOwners: true,
+    }), /timed out waiting for contender/);
+  }, { keepLiveOwners: true });
+  assert.throws(() => statSync(lock), /ENOENT/);
+});
+
 test('a genuinely stale lock is still reclaimed', () => {
   const root = state();
   const lock = path.join(root, 'stale.lock');

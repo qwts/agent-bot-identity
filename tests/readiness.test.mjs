@@ -10,6 +10,7 @@ import { main as doctorMain } from '../doctor.mjs';
 import { organizationProfileToConfig } from '../organization-profile.mjs';
 import { displayName } from '../agent-population.mjs';
 import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
+import { ensureClaudeWorktreeAdapter } from '../sync-hooks.mjs';
 import {
   READINESS_SCHEMA_VERSION,
   collectReadiness,
@@ -205,8 +206,28 @@ test('doctor classifies accounts against the scoped active profile roster', asyn
       account, harness: expectedHarness, app_slug: expectedHarness ? account : null,
     });
     if (expectedHarness) assert.ok(report.machine.apps.some(({ slug }) => slug === account));
-    assert.equal(report.ready, true);
+    assert.equal(report.ready, expectedHarness !== 'claude');
   }
+});
+
+test('doctor names a missing Claude transcript adapter and verifies explicit provisioning', async () => {
+  const home = tempRoot();
+  const env = { HOME: home, AGENT_BOT_ACCOUNT: 'org-claude-agent' };
+  const config = { apps: { claude: 'org-claude-agent' } };
+  const options = { ...machineDependencies(home), scope: 'machine', env, load: () => config };
+  const missing = await collectReadiness(options);
+  const check = missing.machine.checks.find(({ id }) => id === 'hooks.claude_worktree');
+  assert.equal(check.code, 'claude-worktree-adapter-missing');
+  assert.match(check.action, /bootstrap --machine-only/);
+  assert.equal(missing.ready, false);
+  ensureClaudeWorktreeAdapter({ home, env, config });
+  const ready = await collectReadiness(options);
+  assert.equal(ready.machine.checks.find(({ id }) => id === 'hooks.claude_worktree').status, 'ready');
+  assert.equal(ready.ready, true);
+  const stale = await collectReadiness({ ...options, now: new Date('2027-01-01T00:00:00Z') });
+  const coverage = stale.machine.checks.find(({ id }) => id === 'hooks.coverage');
+  assert.match(coverage.message, /claude \(verified, stale\)/);
+  assert.match(coverage.action, /maintainer verification/);
 });
 
 test('doctor cannot classify an account with missing or invalid runtime config', async () => {

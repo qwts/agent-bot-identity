@@ -29,8 +29,8 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { mint } from './mint-token.mjs';
-import { accountHarness, accountName, detectAgentHarness } from './detect-harness.mjs';
-import { loadConfig, slugForHarness } from './config.mjs';
+import { configuredAccountIdentity, accountName, detectAgentHarness } from './detect-harness.mjs';
+import { loadConfig } from './config.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { stateDirectory } from './agent-identity.mjs';
 
@@ -55,7 +55,7 @@ export function helperSlug(helperLines) {
 // gh shim consult instead of a name glob, so shell and JS agree on what an
 // agent account is (ENG-0339). Null in the owner's account.
 export function accountSlug(env = process.env, config = loadConfig({ env })) {
-  return slugForHarness(accountHarness(config, accountName(env)), config);
+  return configuredAccountIdentity(config, accountName(env))?.slug ?? null;
 }
 
 // Resolution order: the shared resolver's selection (explicit, launcher, pin,
