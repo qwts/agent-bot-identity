@@ -2,9 +2,22 @@
 
 ## Unreleased
 
+## 0.5.0
+
+- Doctor reports the account-level App outside a Git checkout, including
+  scoped model identities, without inferring identity from harness markers
+  (#190, #197). The broader account repair command remains a follow-up.
+- Installation recovers dangling CLI symlinks after preserving them in unique
+  backups, while live foreign links, regular files, permission errors, and
+  symlink loops remain explicit conflicts. Doctor names missing targets
+  and provides recovery guidance (#179, #199).
+- Release preparation keeps the last valid Homebrew formula until the new
+  tag and verified archive checksum exist; placeholder checksums are rejected.
+
 - Install/bootstrap now provision Claude's user-level WorktreeCreate transcript
   adapter for exact active Claude roster accounts, including scoped model
-  identities (#193). Human accounts and unrelated settings stay untouched;
+  identities (#193). Explicit `GH_AGENT_APP` selections are preserved.
+  Human accounts and unrelated settings stay untouched;
   conflicting, disabled, or unreadable settings require explicit reconciliation.
   Doctor reports adapter installation separately from named stale/unverified
   dialect evidence and supplies repair guidance. Duplicate user/project creator
