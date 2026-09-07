@@ -95,6 +95,42 @@ after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
+test('doctor distinguishes dangling CLI targets and reports their evidence', async () => {
+  const home = tempRoot();
+  const target = '../../deleted-checkout/agent-bot';
+  const report = await collectReadiness({
+    ...machineDependencies(home), scope: 'machine', readlink: () => target,
+  });
+  const check = report.machine.checks.find(({ id }) => id === 'runtime.installed_cli');
+  assert.equal(check.code, 'installed-cli-dangling');
+  assert.equal(check.evidence.target, target);
+  assert.equal(check.evidence.resolved_target, join(home, 'deleted-checkout', 'agent-bot'));
+  assert.match(check.action, /source checkout bootstrap.*--machine-only/);
+});
+
+for (const code of ['EACCES', 'EPERM', 'ELOOP', 'ENOTDIR']) {
+  test(`doctor reports ${code} as unreadable rather than dangling`, async () => {
+    const home = tempRoot();
+    const report = await collectReadiness({
+      ...machineDependencies(home), scope: 'machine',
+      statFile: () => { throw Object.assign(new Error(code), { code }); },
+    });
+    const check = report.machine.checks.find(({ id }) => id === 'runtime.installed_cli');
+    assert.equal(check.code, 'installed-cli-unreadable');
+    assert.equal(check.evidence.error_code, code);
+    assert.equal(check.evidence.target, sourceEntrypoint);
+  });
+}
+
+test('doctor detects a missing managed target rather than reporting it ready', async () => {
+  const home = tempRoot();
+  const report = await collectReadiness({
+    ...machineDependencies(home), scope: 'machine',
+    statFile: () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); },
+  });
+  assert.equal(report.machine.checks.find(({ id }) => id === 'runtime.installed_cli').code, 'installed-cli-dangling');
+});
+
 test('schema v1 is deterministic, secret-free, and warnings do not fail readiness', async () => {
   const home = tempRoot();
   const report = await collectReadiness({
@@ -357,6 +393,7 @@ test('required shim, installed skill, managed target, and config failures are in
     ...base,
     expectedGhShim: true,
     readlink: () => '/foreign/agent-bot',
+    statFile: () => ({}),
     access: (path) => {
       if (path.includes('/skills/agent-bot/')) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
     },
@@ -371,7 +408,8 @@ test('required shim, installed skill, managed target, and config failures are in
   assert.equal(report.machine.checks.find(({ id }) => id === 'config.runtime').code, 'config-invalid');
   assert.equal(report.machine.checks.find(({ id }) => id === 'shim.gh').status, 'failed');
   assert.equal(report.machine.checks.find(({ id }) => id === 'skill.runtime').status, 'failed');
-  assert.doesNotMatch(JSON.stringify(report), /secret config contents|\/foreign\/agent-bot/);
+  assert.doesNotMatch(JSON.stringify(report), /secret config contents/);
+  assert.equal(report.machine.checks.find(({ id }) => id === 'runtime.installed_cli').evidence.target, '/foreign/agent-bot');
 });
 
 test('skill readiness probes every reference and fails when only storage-surfaces.md is missing', async () => {
