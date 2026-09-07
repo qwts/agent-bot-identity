@@ -307,7 +307,7 @@ test('concurrent installed and governed Claude adapters share only the same boun
   assert.equal(conflict.code, 1);
   assert.equal(conflict.stdout, '');
   assert.match(conflict.stderr, /refusing to reuse an existing path/);
-  const wrongApp = await invoke(`"$AGENT_BOT_BIN" claude-worktree-create`, payload, { GH_AGENT_APP: 'other-app' });
+  const wrongApp = await invoke(commands[0].command, payload, { GH_AGENT_APP: 'other-app' });
   assert.equal(wrongApp.code, 1);
   assert.match(wrongApp.stderr, /refusing to reuse an existing path/);
   assert.equal(readFileSync(populationPath, 'utf8'), JSON.stringify(population, null, 2) + '\n');

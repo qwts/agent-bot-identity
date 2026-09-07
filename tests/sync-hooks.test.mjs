@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -33,6 +34,23 @@ test('account provisioning installs an idempotent Claude transcript adapter with
   assert.equal(inspectClaudeWorktreeAdapter(options).status, 'ready');
   assert.equal(ensureClaudeWorktreeAdapter(options).updated, false);
   assert.equal(readFileSync(path, 'utf8'), text);
+});
+
+test('installed Claude adapter preserves explicit App selection behind the account gate', () => {
+  const options = adapterFixture();
+  ensureClaudeWorktreeAdapter(options);
+  const settings = JSON.parse(readFileSync(join(options.home, '.claude', 'settings.json'), 'utf8'));
+  const command = settings.hooks.WorktreeCreate[0].hooks[0].command;
+  const bin = join(options.home, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, 'agent-bot'), '#!/bin/sh\nif [ "$1" = worktree-token ]; then printf "%s" "$AGENT_BOT_ACCOUNT"; else printf "%s" "$GH_AGENT_APP"; fi\n', { mode: 0o755 });
+  const run = (env) => execFileSync('sh', ['-c', command], {
+    env: { PATH: process.env.PATH, ...options.env, ...env }, encoding: 'utf8',
+  });
+  assert.equal(run({ GH_AGENT_APP: 'example-claude-model-agent' }), 'example-claude-model-agent');
+  assert.equal(run({}), 'example-claude-agent');
+  assert.equal(run({ GH_AGENT_APP: '' }), 'example-claude-agent');
+  assert.equal(run({ AGENT_BOT_ACCOUNT: '', GH_AGENT_APP: 'example-claude-model-agent' }), '');
 });
 
 test('human and other harness accounts do not receive Claude settings, regardless of environment markers', () => {
