@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Install/bootstrap now provision Claude's user-level WorktreeCreate transcript
+  adapter for exact active Claude roster accounts, including scoped model
+  identities (#193). Human accounts and unrelated settings stay untouched;
+  conflicting, disabled, or unreadable settings require explicit reconciliation.
+  Doctor reports adapter installation separately from named stale/unverified
+  dialect evidence and supplies repair guidance. Duplicate user/project creator
+  calls serialize and reuse only the same bound session, repository, branch,
+  and App; live creation locks cannot be reclaimed solely because of age.
+
 `owner` is the account an App is installed on, not the roster's governance
 owner (#194).
 

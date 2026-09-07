@@ -278,7 +278,7 @@ function withTakeover(lock, mutate) {
   return false;
 }
 
-export function reclaimStaleLock(lock, observed) {
+export function reclaimStaleLock(lock, observed, { keepLiveOwners = false } = {}) {
   return withTakeover(lock, () => {
     // Re-read under the mutex. Nothing can remove or replace `lock` from here
     // until the mutex is dropped, so this reading stays true for the rename.
@@ -291,6 +291,17 @@ export function reclaimStaleLock(lock, observed) {
     }
     if (current.ino !== observed.ino) return;
     if (Date.now() - current.mtimeMs <= STALE_LOCK_MS) return;
+    if (keepLiveOwners) {
+      const pid = Number(/^(\d+)\./.exec(ownerToken(lock) ?? '')?.[1]);
+      if (Number.isSafeInteger(pid) && pid > 0) {
+        try {
+          process.kill(pid, 0);
+          return;
+        } catch (error) {
+          if (error.code !== 'ESRCH') return;
+        }
+      }
+    }
 
     const stale = `${lock}.stale.${process.pid}.${randomUUID()}`;
     renameSync(lock, stale);
@@ -315,7 +326,7 @@ export function reclaimStaleLock(lock, observed) {
   });
 }
 
-export function withLock(lock, label, operation) {
+export function withLock(lock, label, operation, { keepLiveOwners = false } = {}) {
   const token = `${process.pid}.${randomUUID()}`;
   let acquired = false;
   for (let attempt = 0; attempt < 200; attempt++) {
@@ -326,8 +337,8 @@ export function withLock(lock, label, operation) {
       try {
         const observed = statSync(lock);
         if (Date.now() - observed.mtimeMs > STALE_LOCK_MS) {
-          reclaimStaleLock(lock, observed);
-          continue;
+          reclaimStaleLock(lock, observed, { keepLiveOwners });
+          if (!keepLiveOwners) continue;
         }
       } catch (lockError) {
         if (lockError.code !== 'ENOENT') throw lockError;

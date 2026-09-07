@@ -15,7 +15,8 @@ import { listSouls, populationFile } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
 import { apiBase, loadConfig, rosterScope, slugForHarness } from './config.mjs';
 import { inspectAppCredentials } from './credential-reconciler.mjs';
-import { accountHarness, accountName, detectHarness, HARNESSES } from './detect-harness.mjs';
+import { configuredAccountIdentity, accountName, detectHarness, HARNESSES } from './detect-harness.mjs';
+import { inspectClaudeWorktreeAdapter } from './sync-hooks.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
 import { daemonStatus } from './agent-daemon.mjs';
@@ -616,14 +617,16 @@ function hooksCheck({ home, cwd, env, git, access }) {
 
 function coverageCheck(now) {
   const rows = hookCoverage(now);
-  const warning = rows.some((row) => row.status !== 'verified' || row.stale);
+  const affected = rows.filter((row) => row.status !== 'verified' || row.stale);
+  const warning = affected.length > 0;
   return readinessCheck({
     id: 'hooks.coverage',
     status: warning ? 'warning' : 'ready',
     code: warning ? 'hook-coverage-unverified' : null,
     message: warning
-      ? 'one or more harness hook dialects are unverified or stale'
+      ? `harness hook dialect review needed: ${affected.map((row) => `${row.key} (${row.status}${row.stale ? ', stale' : ''})`).join(', ')}`
       : 'harness hook coverage is current',
+    action: warning ? 'update agent-bot, then run: agent-bot bootstrap --machine-only; remaining stale or unverified dialects need runtime maintainer verification' : null,
     evidence: { dialects: rows },
   });
 }
@@ -1262,13 +1265,9 @@ export async function collectReadiness({
         evidence: { account },
       }));
     } else {
-      const profile = runtimeProfileInfo(config);
-      const scopedApps = rosterScope(config);
-      const identity = profile?.identities.find(({ slug, status }) => slug === account && status === 'active');
-      const harness = scopedApps && !scopedApps.includes(account)
-        ? null
-        : profile ? identity?.harness ?? null : accountHarness(config, account);
-      const slug = harness ? account : null;
+      const identity = configuredAccountIdentity(config, account);
+      const harness = identity?.harness ?? null;
+      const slug = identity?.slug ?? null;
       machineChecks.push(readinessCheck({
         id: 'account.app',
         status: slug ? 'ready' : 'not_applicable',
@@ -1291,6 +1290,12 @@ export async function collectReadiness({
     const unreferencedSouls = unreferencedSoulsCheck({ home, env, git });
     if (unreferencedSouls) machineChecks.push(unreferencedSouls);
     machineChecks.push(coverageCheck(now));
+    if (configValid) {
+      machineChecks.push(readinessCheck({
+        id: 'hooks.claude_worktree',
+        ...inspectClaudeWorktreeAdapter({ home, env, config }),
+      }));
+    }
     machineChecks.push(ghShimCheck({ home, required: expectedGhShim, inspect: inspectShellGh }));
     machineChecks.push(codexDesktopGhCheck({ home, inspect: inspectCodexDesktopGh }));
     machineChecks.push(runtimeSkillCheck({ home, lstat, readlink, access }));

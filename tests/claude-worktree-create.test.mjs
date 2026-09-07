@@ -1,7 +1,7 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +16,13 @@ import {
   worktreePath,
   worktreeRoot,
 } from '../claude-worktree-create.mjs';
+import { readAgentIdentity } from '../agent-identity.mjs';
+import { CLAUDE_WORKTREE_CREATE_COMMAND } from '../hook-dialects.mjs';
+import { installExecutable } from '../install.mjs';
+import { organizationProfileToConfig } from '../organization-profile.mjs';
+import { ensureClaudeWorktreeAdapter } from '../sync-hooks.mjs';
+import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
+import { startMockGitHubApp } from './helpers/mock-github-app.mjs';
 
 const AGENT_BOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const HOOK = join(AGENT_BOT, 'claude-worktree-create.mjs');
@@ -190,6 +197,121 @@ test('the wrapper finds an nvm node with none on PATH and nothing sourced', { sk
   rmSync(join(nvmDir, 'alias', 'default'));
   assert.equal(run({}), join(nvmDir, 'versions', 'node', 'v24.18.0', 'bin', 'node'), 'else the newest installed');
   assert.throws(() => run({ NVM_DIR: join(root, 'absent') }), /no node on PATH/);
+});
+
+test('concurrent installed and governed Claude adapters share only the same bound session (#193)', async (t) => {
+  const home = join(root, 'installed adapter home');
+  const repo = join(home, 'Code', 'sample');
+  const bin = join(home, 'bin');
+  const app = 'fixture-model-persona';
+  const stateDir = join(home, 'state');
+  const populationPath = join(home, 'population.json');
+  mkdirSync(repo, { recursive: true });
+  mkdirSync(bin);
+  const github = startMockGitHubApp(home);
+  t.after(() => github.stop());
+  const config = {
+    ...organizationProfileToConfig({
+      schema_version: 1,
+      organization: 'test-owner',
+      account_owner: 'fixture',
+      minimum_runtime_interface_version: 1,
+      defaults: { claude: 'fixture-claude-agent' },
+      identities: [
+        { slug: 'fixture-claude-agent', harness: 'claude', status: 'active' },
+        { slug: app, harness: 'claude', status: 'active', models: ['model'] },
+      ],
+    }),
+    scope: { apps: [app] },
+    owner: 'test-owner',
+    settings: { daemonPreference: 'off' },
+  };
+  mkdirSync(join(home, '.config', 'agent-bot'), { recursive: true });
+  writeFileSync(join(home, '.config', 'agent-bot', 'config.json'), JSON.stringify(config));
+  mkdirSync(join(home, '.config', app));
+  writeFileSync(join(home, '.config', app, 'app-id'), '12345\n');
+  writeFileSync(join(home, '.config', app, 'private-key.pem'), github.privateKeyPem, { mode: 0o600 });
+  writeFileSync(join(home, '.config', app, 'bot-uid'), '700001\n');
+  writeFileSync(join(home, '.config', app, 'bot-avatar-url'), 'https://avatars.example/u/700001\n');
+  writeFileSync(join(bin, 'pass-cli'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  const env = hermeticGitEnv({}, {
+    HOME: home,
+    PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`,
+    GIT_CONFIG_GLOBAL: join(home, '.gitconfig'),
+    GIT_TERMINAL_PROMPT: '0',
+    GITHUB_API_URL: github.apiBase,
+    AGENT_BOT_BIN: join(home, '.local', 'bin', 'agent-bot'),
+    AGENT_BOT_ACCOUNT: app,
+    AGENT_BOT_STATE_HOME: stateDir,
+    AGENT_BOT_SPACES_HOME: join(home, 'spaces'),
+    AGENT_BOT_POPULATION_PATH: populationPath,
+  });
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, env, encoding: 'utf8' }).trim();
+  git(repo, 'init', '--quiet', '-b', 'main');
+  git(repo, 'config', 'user.name', 'Test');
+  git(repo, 'config', 'user.email', 'test@example.com');
+  git(repo, 'config', 'commit.gpgsign', 'false');
+  writeFileSync(join(repo, 'README.md'), '# sample\n');
+  git(repo, 'add', 'README.md');
+  git(repo, 'commit', '--quiet', '-m', 'init');
+
+  installExecutable({ home });
+  await ensureClaudeWorktreeAdapter({ home, env, config });
+  const settings = JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8'));
+  const commands = settings.hooks.WorktreeCreate.flatMap((entry) => entry.hooks)
+    .filter((hook) => hook.type === 'command');
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].command, CLAUDE_WORKTREE_CREATE_COMMAND);
+  const sessionId = 'installed-claude-session-193';
+  const governed = JSON.parse(readFileSync(join(AGENT_BOT, '.claude', 'settings.json'), 'utf8'))
+    .hooks.WorktreeCreate[0].hooks[0].command;
+  const invoke = (command, payload, overrides = {}) => new Promise((resolve, reject) => {
+    const child = spawn('sh', ['-c', command], { cwd: repo, env: { ...env, ...overrides }, timeout: 30_000 });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (data) => { stdout += data; });
+    child.stderr.on('data', (data) => { stderr += data; });
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+    child.stdin.end(JSON.stringify(payload));
+  });
+  const payload = { cwd: repo, name: 'topic-193', session_id: sessionId };
+  const results = await Promise.all([invoke(governed, payload), invoke(commands[0].command, payload)]);
+  const printed = results[0].stdout.trim();
+  for (const result of results) {
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    assert.equal(result.stdout, `${printed}\n`);
+  }
+
+  assert.equal(printed, join(home, '.claude', 'worktrees', 'sample', 'topic-193'));
+  assert.equal(git(printed, 'rev-parse', '--abbrev-ref', 'HEAD'), 'claude/topic-193');
+  assert.equal(git(printed, 'config', '--worktree', '--get', 'agentBot.app'), app);
+  const agentId = git(printed, 'config', '--worktree', '--get', 'agentBot.agentId');
+  assert.match(agentId, /^agent_/);
+  const transcript = { provider: 'claude', id: sessionId, sha256: null };
+  assert.deepEqual(readAgentIdentity(agentId, { stateDir }).transcript, transcript);
+  const population = JSON.parse(readFileSync(populationPath, 'utf8'));
+  assert.equal(population.souls[agentId].appSlug, app);
+  assert.deepEqual(population.souls[agentId].transcriptLocator, { provider: 'claude', id: sessionId });
+  assert.equal(population.souls[agentId].worktree, realpathSync(printed));
+  assert.deepEqual(Object.keys(population.souls), [agentId]);
+  assert.deepEqual(readdirSync(stateDir).filter((name) => /^agent_.*\.json$/.test(name)), [`${agentId}.json`]);
+  const rejected = await invoke(governed, { ...payload, session_id: 'different-session' });
+  assert.equal(rejected.code, 1);
+  assert.equal(rejected.stdout, '');
+  assert.match(rejected.stderr, /refusing to reuse an existing path/);
+  const unrelated = join(dirname(printed), 'unrelated');
+  mkdirSync(unrelated);
+  const conflict = await invoke(commands[0].command, { ...payload, name: 'unrelated' });
+  assert.equal(conflict.code, 1);
+  assert.equal(conflict.stdout, '');
+  assert.match(conflict.stderr, /refusing to reuse an existing path/);
+  const wrongApp = await invoke(`"$AGENT_BOT_BIN" claude-worktree-create`, payload, { GH_AGENT_APP: 'other-app' });
+  assert.equal(wrongApp.code, 1);
+  assert.match(wrongApp.stderr, /refusing to reuse an existing path/);
+  assert.equal(readFileSync(populationPath, 'utf8'), JSON.stringify(population, null, 2) + '\n');
+  assert.equal(git(printed, 'config', '--worktree', '--get', 'agentBot.agentId'), agentId);
 });
 
 test('fails loudly rather than reusing a path or a branch', () => {

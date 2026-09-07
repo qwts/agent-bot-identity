@@ -107,6 +107,8 @@ function firstPath(payload, paths) {
 // and `timeoutFailMode` are SEPARATE on purpose: Copilot's preToolUse fails
 // closed when a hook errors but OPEN when it times out, and collapsing those
 // into one field is exactly how a guard silently stops guarding under load.
+export const CLAUDE_WORKTREE_CREATE_COMMAND = 'B="$HOME/.local/bin/agent-bot"; A=$("$B" worktree-token --account-slug) || exit $?; [ -n "$A" ] || exit 0; GH_AGENT_APP="$A" exec "$B" claude-worktree-create';
+
 export const DIALECTS = [
   {
     key: 'claude',

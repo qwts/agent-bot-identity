@@ -23,6 +23,7 @@ import { ensurePathLine, zshStartupDir } from './shell-path.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { ensureDaemonSupervisor } from './daemon-supervisor.mjs';
 import { ensureSpacesCutover } from './spaces-cutover.mjs';
+import { ensureClaudeWorktreeAdapter } from './sync-hooks.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const ENTRYPOINT = join(ROOT, 'agent-bot');
@@ -324,6 +325,7 @@ export async function installAgentBot({
   installPath = ensureExecutablePath,
   ensureSupervisor = ensureDaemonSupervisor,
   ensureCutover = ensureSpacesCutover,
+  installTranscriptAdapter = ensureClaudeWorktreeAdapter,
 } = {}) {
   const executable = installCli({ home });
   const agentHook = installAgentHooks({ home });
@@ -351,7 +353,8 @@ export async function installAgentBot({
   run(['config', '--global', 'core.hooksPath', hooksPath]);
   const supervisor = await ensureSupervisor({ home, env, executable });
   const cutover = ensureCutover({ home, env });
-  return { executable, agentHook, hooksPath, previous, chainedHooksPath, pathRegistration, supervisor, cutover };
+  const transcriptAdapter = installTranscriptAdapter({ home, env });
+  return { executable, agentHook, hooksPath, previous, chainedHooksPath, pathRegistration, supervisor, cutover, transcriptAdapter };
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -365,6 +368,9 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (result.chainedHooksPath) {
     process.stdout.write(`chained hooks -> ${result.chainedHooksPath}\n`);
+  }
+  if (result.transcriptAdapter?.updated) {
+    process.stdout.write(`Claude WorktreeCreate adapter -> ${result.transcriptAdapter.evidence.path}\n`);
   }
   if (result.supervisor?.applied) {
     process.stdout.write(`daemon supervisor -> ${result.supervisor.unitPath}\n`);
