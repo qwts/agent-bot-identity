@@ -6,6 +6,7 @@ import {
   existsSync,
   lstatSync,
   readlinkSync,
+  statSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -21,7 +22,7 @@ import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
 import { daemonStatus } from './agent-daemon.mjs';
 import { inspectSupervisor, supervisorSkipLoad } from './daemon-supervisor.mjs';
-import { homebrewRuntimeRoot, installationPaths, isManagedExecutable } from './install.mjs';
+import { homebrewRuntimeRoot, inspectExecutableLink, installationPaths, isManagedExecutable } from './install.mjs';
 import { inspectConfiguredCodexDesktopGh, inspectShellGhShim } from './install-gh-shim.mjs';
 import {
   OrganizationProfileError,
@@ -445,18 +446,26 @@ function identityClassCheck({ home, env, access }) {
   }
 }
 
-function installedCliCheck({ home, lstat, readlink }) {
+function installedCliCheck({ home, lstat, readlink, statFile }) {
   const paths = installationPaths(home);
   let stat;
+  let link;
+  const evidence = { path: paths.executable };
   try {
     stat = optionalLstat(paths.executable, lstat);
-  } catch {
+    if (stat?.isSymbolicLink()) {
+      evidence.target = readlink(paths.executable);
+      evidence.resolved_target = resolve(dirname(paths.executable), evidence.target);
+      link = inspectExecutableLink(paths.executable, stat, { readlink: () => evidence.target, statFile });
+    }
+  } catch (error) {
     return readinessCheck({
       id: 'runtime.installed_cli',
       status: 'failed',
       code: 'installed-cli-unreadable',
       message: 'the installed agent-bot entrypoint could not be inspected',
-      action: 'run: agent-bot bootstrap --machine-only',
+      action: 'repair the entrypoint target or permissions, then run the source checkout bootstrap with --machine-only',
+      evidence: { ...evidence, error_code: error.code ?? null },
     });
   }
   if (!stat) {
@@ -468,13 +477,24 @@ function installedCliCheck({ home, lstat, readlink }) {
       action: 'run the source checkout bootstrap with --machine-only',
     });
   }
-  if (!isManagedExecutable(paths.executable, stat, SOURCE_ENTRYPOINT, readlink)) {
+  if (link?.dangling) {
+    return readinessCheck({
+      id: 'runtime.installed_cli',
+      status: 'failed',
+      code: 'installed-cli-dangling',
+      message: `the installed agent-bot symlink target is missing: ${link.target}`,
+      action: 'run the source checkout bootstrap with --machine-only to preserve the dangling link in a unique backup and install this checkout',
+      evidence,
+    });
+  }
+  if (!isManagedExecutable(paths.executable, stat, SOURCE_ENTRYPOINT, () => link.target)) {
     return readinessCheck({
       id: 'runtime.installed_cli',
       status: 'failed',
       code: 'installed-cli-unmanaged',
-      message: 'the installed agent-bot entrypoint is not managed by this checkout',
+      message: `the installed agent-bot entrypoint is not managed by this checkout${link ? ` (target: ${link.target})` : ''}`,
       action: 'move the foreign entrypoint aside, then run the source checkout bootstrap',
+      evidence,
     });
   }
   return readinessCheck({
@@ -1191,6 +1211,7 @@ export async function collectReadiness({
   git = runGit,
   spawn = spawnSync,
   lstat = lstatSync,
+  statFile = statSync,
   readlink = readlinkSync,
   exists = existsSync,
   access = accessSync,
@@ -1212,7 +1233,7 @@ export async function collectReadiness({
   if (scope !== 'worktree') {
     machineChecks.push(nodeCheck(nodeVersion));
     machineChecks.push(gitCheck({ cwd, env, git }));
-    machineChecks.push(installedCliCheck({ home, lstat, readlink }));
+    machineChecks.push(installedCliCheck({ home, lstat, readlink, statFile }));
     machineChecks.push(identityClassCheck({ home, env, access }));
     machineChecks.push(shellPathCheck({ home, env, spawn }));
     try {

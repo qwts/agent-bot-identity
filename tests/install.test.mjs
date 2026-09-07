@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  chmodSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, symlinkSync, writeFileSync,
+  chmodSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -134,6 +134,99 @@ test('installExecutable creates an idempotent ~/.local/bin/agent-bot symlink', (
   assert.equal(installExecutable({ home, entrypoint }), installed);
 });
 
+for (const kind of ['relative', 'absolute']) {
+  test(`installExecutable preserves and recovers a dangling ${kind} link`, () => {
+    const home = mkdtempSync(join(tmpdir(), 'agent-bot-recovery-'));
+    const target = kind === 'relative' ? '../../deleted-checkout/agent-bot' : join(home, 'deleted-checkout', 'agent-bot');
+    const entrypoint = join(home, 'agent-bot');
+    writeFileSync(entrypoint, '#!/bin/sh\n', { mode: 0o755 });
+    const { binDir, executable } = installationPaths(home);
+    mkdirSync(binDir, { recursive: true });
+    symlinkSync(target, executable);
+    assert.equal(installExecutable({ home, entrypoint }), executable);
+    assert.equal(readlinkSync(executable), entrypoint);
+    const backups = readdirSync(binDir).filter((name) => name.startsWith('agent-bot.dangling-backup-'));
+    assert.equal(backups.length, 1);
+    assert.equal(readlinkSync(join(binDir, backups[0], 'agent-bot')), target);
+    installExecutable({ home, entrypoint });
+    assert.deepEqual(readdirSync(binDir).filter((name) => name.startsWith('agent-bot.dangling-backup-')), backups);
+  });
+}
+
+for (const code of ['EACCES', 'EPERM', 'ELOOP', 'ENOTDIR']) {
+  test(`installExecutable preserves links whose target inspection fails with ${code}`, () => {
+    const home = mkdtempSync(join(tmpdir(), 'agent-bot-recovery-'));
+    const entrypoint = join(home, 'agent-bot');
+    const foreign = join(home, 'foreign');
+    writeFileSync(entrypoint, '#!/bin/sh\n', { mode: 0o755 });
+    const { binDir, executable } = installationPaths(home);
+    mkdirSync(binDir, { recursive: true });
+    symlinkSync(foreign, executable);
+    assert.throws(() => installExecutable({
+      home, entrypoint,
+      statFile: (path) => {
+        if (path === foreign) throw Object.assign(new Error(code), { code });
+        return statSync(path);
+      },
+    }), { code });
+    assert.equal(readlinkSync(executable), foreign);
+    assert.deepEqual(readdirSync(binDir), ['agent-bot']);
+  });
+}
+
+test('installExecutable preserves a live relative foreign link and a real symlink loop', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-recovery-'));
+  const entrypoint = join(home, 'agent-bot');
+  const foreign = join(home, 'foreign');
+  writeFileSync(entrypoint, '#!/bin/sh\n', { mode: 0o755 });
+  writeFileSync(foreign, 'foreign executable', { mode: 0o755 });
+  const { binDir, executable } = installationPaths(home);
+  mkdirSync(binDir, { recursive: true });
+  symlinkSync('../../foreign', executable);
+  assert.throws(() => installExecutable({ home, entrypoint }), (error) => error.message.includes('../../foreign'));
+  assert.equal(readlinkSync(executable), '../../foreign');
+  assert.equal(readFileSync(foreign, 'utf8'), 'foreign executable');
+  const loopHome = mkdtempSync(join(tmpdir(), 'agent-bot-loop-'));
+  const loopPaths = installationPaths(loopHome);
+  mkdirSync(loopPaths.binDir, { recursive: true });
+  symlinkSync('agent-bot', loopPaths.executable);
+  assert.throws(() => installExecutable({ home: loopHome, entrypoint }), { code: 'ELOOP' });
+  assert.equal(readlinkSync(loopPaths.executable), 'agent-bot');
+});
+
+test('installExecutable leaves the dangling link untouched when backup rename fails', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-recovery-'));
+  const entrypoint = join(home, 'agent-bot');
+  writeFileSync(entrypoint, '#!/bin/sh\n', { mode: 0o755 });
+  const { binDir, executable } = installationPaths(home);
+  mkdirSync(binDir, { recursive: true });
+  symlinkSync('../../deleted-checkout/agent-bot', executable);
+  assert.throws(() => installExecutable({
+    home, entrypoint,
+    rename: () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); },
+  }), { code: 'EACCES' });
+  assert.equal(readlinkSync(executable), '../../deleted-checkout/agent-bot');
+});
+
+test('installExecutable retains its backup when replacement creation fails', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-recovery-'));
+  const entrypoint = join(home, 'agent-bot');
+  writeFileSync(entrypoint, '#!/bin/sh\n', { mode: 0o755 });
+  const { binDir, executable } = installationPaths(home);
+  mkdirSync(binDir, { recursive: true });
+  const target = '../../deleted-checkout/agent-bot';
+  symlinkSync(target, executable);
+  assert.throws(() => installExecutable({
+    home, entrypoint,
+    symlink: () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); },
+  }), { code: 'EACCES' });
+  const backups = readdirSync(binDir);
+  assert.equal(backups.length, 1);
+  assert.match(backups[0], /^agent-bot\.dangling-backup-/);
+  assert.equal(readlinkSync(join(binDir, backups[0], 'agent-bot')), target);
+  assert.equal(installExecutable({ home, entrypoint }), executable);
+});
+
 test('installExecutable migrates the legacy .mjs symlink to the launcher', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-install-'));
   const root = mkdtempSync(join(tmpdir(), 'agent-bot-root-'));
@@ -160,7 +253,11 @@ test('installExecutable refuses a foreign same-basename symlink', () => {
   writeFileSync(foreign, '#!/bin/sh\n');
   symlinkSync(foreign, installed);
 
-  assert.throws(() => installExecutable({ home, entrypoint }), /not an agent-bot symlink/);
+  assert.throws(() => installExecutable({ home, entrypoint }), (error) => {
+    assert.match(error.message, /not an agent-bot symlink/);
+    assert.ok(error.message.includes(foreign));
+    return true;
+  });
   assert.equal(readlinkSync(installed), foreign);
 });
 

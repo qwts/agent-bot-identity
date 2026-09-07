@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -20,6 +21,7 @@ import {
   parseBootstrapArgs,
 } from '../bootstrap.mjs';
 import { parseDoctorArgs } from '../doctor.mjs';
+import { installExecutable, installationPaths } from '../install.mjs';
 import { loadConfig, rosterScope, scopeConfigToApps } from '../config.mjs';
 import {
   OrganizationProfileError,
@@ -423,6 +425,35 @@ test('invalid profile failure stops every downstream bootstrap mutation with a s
   assert.equal(report.ready, false);
   assert.equal(report.first_actionable_failure.code, 'profile-invalid');
   assert.doesNotMatch(JSON.stringify(report), new RegExp(sentinel));
+});
+
+test('machine-only bootstrap recovers a deleted checkout link without binding a worktree', async () => {
+  const home = tempHome();
+  const entrypoint = join(home, 'agent-bot');
+  const { binDir, executable } = installationPaths(home);
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(entrypoint, '#!/bin/sh\n', { mode: 0o755 });
+  symlinkSync('../../deleted-checkout/agent-bot', executable);
+  let reconciled = false;
+  const dependencies = {
+    home, env: { HOME: home },
+    installConfig: () => ({ config: { apps: { codex: 'example-codex-agent' } } }),
+    installRuntime: () => ({ executable: installExecutable({ home, entrypoint }) }),
+    reconcileCredentials: async ({ slugs }) => {
+      reconciled = true;
+      assert.deepEqual(slugs, ['example-codex-agent']);
+      return slugs.map((slug) => ({ slug, local: { status: 'ready' }, live: { status: 'ready' } }));
+    },
+    run: () => assert.fail('machine bootstrap must not bind a worktree'),
+    collect: ({ operationFailure, scope }) => {
+      assert.equal(operationFailure, null);
+      assert.equal(reconciled, true);
+      assert.equal(readlinkSync(executable), entrypoint);
+      return readyReport(scope);
+    },
+  };
+  assert.equal((await bootstrap(parseBootstrapArgs(['--machine-only']), dependencies)).ready, true);
+  assert.equal((await bootstrap(parseBootstrapArgs(['--machine-only']), dependencies)).ready, true);
 });
 
 test('runtime install failure carries the installer error as evidence', async () => {

@@ -8,6 +8,8 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
+  renameSync,
   readFileSync,
   readlinkSync,
   readdirSync,
@@ -118,6 +120,19 @@ export function isManagedExecutable(path, stat, entrypoint, readlink = readlinkS
   return false;
 }
 
+export function inspectExecutableLink(path, stat, { readlink = readlinkSync, statFile = statSync } = {}) {
+  if (!stat?.isSymbolicLink()) return null;
+  const target = readlink(path);
+  const resolvedTarget = resolve(dirname(path), target);
+  try {
+    statFile(resolvedTarget);
+    return { target, resolvedTarget, dangling: false };
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    return { target, resolvedTarget, dangling: true };
+  }
+}
+
 export function installExecutable({
   home = homedir(),
   entrypoint = ENTRYPOINT,
@@ -129,6 +144,8 @@ export function installExecutable({
   chmod = chmodSync,
   statFile = statSync,
   exists = existsSync,
+  mkdtemp = mkdtempSync,
+  rename = renameSync,
 } = {}) {
   const paths = installationPaths(home);
   const desired = managedEntrypoint(entrypoint, exists);
@@ -136,13 +153,18 @@ export function installExecutable({
   ensureExecutableMode(entrypoint, { stat: statFile, chmod });
   const stat = optionalLstat(paths.executable, lstat);
   if (stat) {
-    if (!isManagedExecutable(paths.executable, stat, entrypoint, readlink)) {
-      throw new Error(`${paths.executable} exists and is not an agent-bot symlink`);
+    const link = inspectExecutableLink(paths.executable, stat, { readlink, statFile });
+    if (link?.dangling) {
+      const backupDir = mkdtemp(`${paths.executable}.dangling-backup-`);
+      rename(paths.executable, join(backupDir, 'agent-bot'));
+    } else {
+      if (!isManagedExecutable(paths.executable, stat, entrypoint, readlink)) {
+        const target = link ? ` (target: ${link.target}; resolved target: ${link.resolvedTarget})` : '';
+        throw new Error(`${paths.executable} exists and is not an agent-bot symlink${target}`);
+      }
+      if (link.target === desired || link.resolvedTarget === resolve(desired)) return paths.executable;
+      remove(paths.executable, { force: true });
     }
-    const linked = readlink(paths.executable);
-    const current = resolve(dirname(paths.executable), linked);
-    if (linked === desired || current === resolve(desired)) return paths.executable;
-    remove(paths.executable, { force: true });
   }
   symlink(desired, paths.executable);
   return paths.executable;

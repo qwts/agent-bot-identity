@@ -59,9 +59,16 @@ wiring next:
 agent-bot bootstrap --profile /path/to/organization-profile.json --with-gh-shim --machine-only
 ```
 
-If `~/.local/bin/agent-bot` already points at a git checkout, move that
-symlink aside first (`rm ~/.local/bin/agent-bot`). The installer refuses to
-replace a symlink that does not already point at this packaged tree.
+If `~/.local/bin/agent-bot` points at a live foreign git checkout, preserve
+that symlink by moving it to an unused backup path before switching installs.
+The installer refuses regular-file conflicts and live foreign symlinks, naming
+the latter's target. A dangling symlink is recovered automatically: it is renamed
+to `~/.local/bin/agent-bot.dangling-backup-<unique>/agent-bot` before the new
+entrypoint is installed. The backup retains the original link text; relative
+targets are relative to the original entrypoint directory when restored there.
+Permission errors and symlink loops are not treated as missing targets.
+Doctor reports `installed-cli-dangling` with the original and resolved target;
+run `./agent-bot bootstrap --machine-only` from a live source checkout to repair it.
 Bootstrap records Homebrew's stable `opt` wrapper, not a versioned Cellar
 path, so a later `brew upgrade` does not leave hooks dangling.
 
