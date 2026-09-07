@@ -28,6 +28,20 @@ brew install --build-from-source agent-bot
 brew test agent-bot
 ```
 
-A version bump updates `package.json`, lands on `main`, tags `vX.Y.Z`, then
-updates the formula `url` / `sha256` in a follow-up. The tap
-reads the formula from `main`; Cellar contents come from the tag tarball.
+Release in two reviewed PRs so the tap stays installable throughout:
+
+1. Update `package.json` and `CHANGELOG.md`, validate, and merge the release PR
+   to `main`. Leave the formula's last published `url` and `sha256` unchanged.
+2. Create and push an annotated `vX.Y.Z` tag on that merged release commit.
+   Never move an existing release tag.
+3. Download the tag's GitHub archive and compute its SHA-256. Verify the
+   archive's `package.json` and CLI version match the tag, then update the
+   formula `url` and `sha256` together in a follow-up PR. Validate and merge it.
+4. Only after the formula PR merges is the new version available to Homebrew
+   and managed-machine consumers. Test a pilot installation before rollout.
+
+The tap reads the formula from `main`; Cellar contents come from the tag
+archive. The formula may temporarily lag `package.json`, but must never point
+at a newer runtime or carry a placeholder checksum. Tests enforce this
+ordering and reject all-zero checksums; archive availability and the actual
+checksum must be verified during the formula update, not guessed.
