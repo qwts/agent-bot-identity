@@ -18,8 +18,8 @@
 class AgentBot < Formula
   desc "Per-harness GitHub App identities for coding agents"
   homepage "https://github.com/qwts/agent-bot-identity"
-  url "https://github.com/qwts/agent-bot-identity/archive/refs/tags/v0.4.0.tar.gz"
-  sha256 "912d8260d53a1d8bc36c283c1dd71af447940d60ab5a7600a012221e97bccc76"
+  url "https://github.com/qwts/agent-bot-identity/archive/refs/tags/v0.5.0.tar.gz"
+  sha256 "97b825c4aec39cacc1f047f16fdb62c9cdcd56b52d5a1a29c0843cb31cdf7d49"
   license "MIT"
   head "https://github.com/qwts/agent-bot-identity.git", branch: "main"
 
@@ -46,10 +46,9 @@ class AgentBot < Formula
 
         agent-bot bootstrap --profile /path/to/organization-profile.json --with-gh-shim --machine-only
 
-      If ~/.local/bin/agent-bot already points at a git checkout, move that
-      symlink aside first:
-
-        rm ~/.local/bin/agent-bot
+      Bootstrap preserves dangling ~/.local/bin/agent-bot symlinks in unique
+      backups before replacing them. Live foreign checkout links remain
+      conflicts: preserve those at an unused backup path before switching.
 
       Newer Homebrew may require:
 
