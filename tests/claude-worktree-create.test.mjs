@@ -234,6 +234,11 @@ test('concurrent installed and governed Claude adapters share only the same boun
   writeFileSync(join(home, '.config', app, 'bot-uid'), '700001\n');
   writeFileSync(join(home, '.config', app, 'bot-avatar-url'), 'https://avatars.example/u/700001\n');
   writeFileSync(join(bin, 'pass-cli'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  // The governed hook now gates on the real OS account name matching
+  // qwts-*-agent (#193 was authored against the older AGENT_BOT_BIN-first
+  // check); shim `id` so the fixture reads as that account regardless of
+  // who actually runs the test.
+  writeFileSync(join(bin, 'id'), '#!/bin/sh\necho qwts-fixture-agent\n', { mode: 0o755 });
   const env = hermeticGitEnv({}, {
     HOME: home,
     PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`,
