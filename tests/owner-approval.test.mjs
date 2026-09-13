@@ -113,6 +113,30 @@ test('caller-supplied App key material is its own credential path — no dialog'
   );
 });
 
+test('an explicit --app still requires the dialog even with GH_APP_ID and key material set — appConfig ignores them once --app is given', () => {
+  assert.equal(
+    ownerApprovalRequired({
+      argv: ['node', 'mint-token.mjs', '--app', 'you-devin-agent'],
+      env: { ...OWNER, GH_APP_ID: '11111', GH_APP_PRIVATE_KEY: 'pem' },
+      cwd: plainCwd(),
+      config: CONFIG,
+    }),
+    true,
+  );
+});
+
+test('GH_AGENT_APP is still a stated identity when GH_APP_ID and key material are also set — no dialog either way', () => {
+  assert.equal(
+    ownerApprovalRequired({
+      argv: ['node', 'mint-token.mjs'],
+      env: { ...OWNER, GH_AGENT_APP: 'you-devin-agent', GH_APP_ID: '11111', GH_APP_PRIVATE_KEY: 'pem' },
+      cwd: plainCwd(),
+      config: CONFIG,
+    }),
+    false,
+  );
+});
+
 test('no --app and no ambient identity mints nothing — the gate is not the error path', () => {
   assert.equal(
     ownerApprovalRequired({

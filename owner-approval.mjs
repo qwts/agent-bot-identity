@@ -36,9 +36,9 @@ export function explicitAppArg(argv = []) {
 }
 
 // True when a mint must be confirmed by the owner through the OS dialog:
-// the account is not an agent account, the caller did not supply its own App
-// key material, no ambient identity resolves, and an explicit --app names a
-// managed App config to mint.
+// the account is not an agent account, no explicit --app/GH_AGENT_APP would
+// route to caller-supplied key material anyway, no ambient identity
+// resolves, and an explicit --app names a managed App config to mint.
 export function ownerApprovalRequired({
   argv = process.argv,
   env = process.env,
@@ -49,10 +49,16 @@ export function ownerApprovalRequired({
 } = {}) {
   const cfg = config ?? loadConfig({ env });
   const acct = account ?? accountName(env);
+  const explicitApp = explicitAppArg(argv);
   if (accountHarness(cfg, acct)) return false;
-  if (env.GH_APP_ID && (env.GH_APP_PRIVATE_KEY || env.GH_APP_PRIVATE_KEY_PATH)) return false;
+  // GH_APP_ID + key material is only the caller's own credential path when
+  // appConfig() will actually use it — no --app and no GH_AGENT_APP, both of
+  // which take precedence there and load the managed key file instead, so
+  // dummy env values alongside an explicit --app must not skip the dialog.
+  if (!explicitApp && !env.GH_AGENT_APP
+    && env.GH_APP_ID && (env.GH_APP_PRIVATE_KEY || env.GH_APP_PRIVATE_KEY_PATH)) return false;
   if (ambientSlug({ env, cwd, config: cfg, account: acct, git })) return false;
-  return Boolean(explicitAppArg(argv));
+  return Boolean(explicitApp);
 }
 
 // Raise the macOS authorization dialog naming the operation; any dismissal,
