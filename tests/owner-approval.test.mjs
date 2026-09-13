@@ -133,13 +133,14 @@ test('ambientSlug resolves a pin; explicitAppArg reads the flag', () => {
 });
 
 test('a granted dialog lets the mint proceed', () => {
-  assert.doesNotThrow(() => requireOwnerApproval({ prompt: 'approve it', run: () => '' }));
+  assert.doesNotThrow(() => requireOwnerApproval({ prompt: 'approve it', platform: 'darwin', run: () => '' }));
 });
 
 test('a cancelled dialog fails closed with no token minted', () => {
   assert.throws(
     () => requireOwnerApproval({
       prompt: 'approve it',
+      platform: 'darwin',
       run: () => { const e = new Error('execution error: User canceled. (-128)'); e.stderr = 'User canceled. (-128)'; throw e; },
     }),
     /owner approval was cancelled — no token minted/,
@@ -150,6 +151,7 @@ test('an unavailable dialog fails closed rather than minting', () => {
   assert.throws(
     () => requireOwnerApproval({
       prompt: 'approve it',
+      platform: 'darwin',
       run: () => { throw new Error('osascript: no such file'); },
     }),
     /owner approval could not be completed .*— no token minted/,
