@@ -26,6 +26,7 @@ import process from 'node:process';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { loadConfig, apiBase } from './config.mjs';
 import { formatMintGrant } from './cli/mint-output.mjs';
+import { ownerApprovalRequired, requireOwnerApproval, explicitAppArg } from './owner-approval.mjs';
 
 function b64url(input) {
   return Buffer.from(input).toString('base64url');
@@ -162,6 +163,16 @@ export async function mint({ slug, env = process.env } = {}) {
 }
 
 async function main() {
+  // An unmarked explicit mint in the owner's account is a credential release
+  // with no stated identity — it carries the owner-approval ceremony. Stated
+  // identities (pin, GH_AGENT_APP, harness markers, agent account) mint as
+  // before.
+  if (ownerApprovalRequired({ argv: process.argv })) {
+    const slug = explicitAppArg(process.argv);
+    requireOwnerApproval({
+      prompt: `Approve a GitHub App installation token for ${slug}[bot] — mint-token was run in the owner's account with no stated agent identity.`,
+    });
+  }
   const grant = await mint();
   process.stdout.write(formatMintGrant(grant, { json: process.argv.includes('--json') }));
 }

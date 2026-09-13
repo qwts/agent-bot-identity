@@ -97,6 +97,11 @@ current harness:
 
 - Fail closed on mint / credential / pin failures — never fall back to the
   human GitHub login.
+- `agent-bot mint-token --app` in the owner's account with no stated identity
+  (no pin, `GH_AGENT_APP`, agent account, or harness-resolving markers) must
+  be confirmed through the macOS authorization dialog — the owner-approval
+  gate in `owner-approval.mjs` (ENG-0353 direction). Stated identities mint
+  as before.
 - Identity resolution for commits and tokens must share `resolve-agent.mjs`.
 - Bot territory is the macOS account, not the directory (ENG-0339): a
   rostered agent account (`<prefix>-<harness>-agent`, classified by exact
