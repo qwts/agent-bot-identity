@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Canonical, vendor-neutral agent context for this repository, per
-[ENG-0006](https://github.com/qwts/playbook-engineering/blob/main/docs/decisions/ENG-0006-agentic-primitives-governance.md).
+[ENG-0006](https://github.com/qwts/agent-sop/blob/main/docs/decisions/ENG-0006-agentic-primitives-governance.md).
 Vendor-specific files (Copilot instructions, Cursor rules, and similar) are
 thin adapters onto this file — they never restate what is here.
 
@@ -11,17 +11,17 @@ thin adapters onto this file — they never restate what is here.
 
 PR-first workflow, validation-before-push, commit and PR hygiene, and the
 untrusted-input threat model are defined once, for every repo, in the
-[org-wide agent conventions](https://github.com/qwts/playbook-engineering/blob/main/docs/reference/agent-conventions.md).
+[org-wide agent conventions](https://github.com/qwts/agent-sop/blob/main/docs/reference/agent-conventions.md).
 Before creating or copying a repo-local skill, consult the reviewed
-[shared agent skills](https://github.com/qwts/playbook-engineering/blob/74e775ef23d8e7d8f8e693ccc2329f430978c096/skills/README.md)
+[shared agent skills](https://github.com/qwts/agent-sop/blob/74e775ef23d8e7d8f8e693ccc2329f430978c096/skills/README.md)
 index. Reuse only the pinned version supplied by the governed harness; a skill
 genuinely specific to this repository belongs in its local context.
 This repository is governed by
-[playbook-engineering](https://github.com/qwts/playbook-engineering) — its
-[shared SOPs](https://github.com/qwts/playbook-engineering/blob/main/docs/sop/README.md)
-and [engineering decisions](https://github.com/qwts/playbook-engineering/blob/main/docs/decisions/README.md)
+[agent-sop](https://github.com/qwts/agent-sop) — its
+[shared SOPs](https://github.com/qwts/agent-sop/blob/main/docs/sop/README.md)
+and [engineering decisions](https://github.com/qwts/agent-sop/blob/main/docs/decisions/README.md)
 apply here by default
-([ENG-0008](https://github.com/qwts/playbook-engineering/blob/main/docs/decisions/ENG-0008-shared-sop-inheritance.md):
+([ENG-0008](https://github.com/qwts/agent-sop/blob/main/docs/decisions/ENG-0008-shared-sop-inheritance.md):
 inherit by default, vary by explicit delta).
 <!-- governed:shared-agent-discovery:end -->
 
@@ -31,7 +31,7 @@ This repository is the sole runtime owner of the agent-bot toolkit (ENG-0016 /
 ENG-0339 / ENG-0079 / ENG-0081; ENG-0339 supersedes ENG-0045), transcript-bound
 execution identities, and
 Agent Space mechanics. The canonical Agent Space contract lives in
-[ENG-0172](https://github.com/qwts/playbook-engineering/blob/main/docs/decisions/ENG-0172-agent-space-is-durable-per-soul-storage.md).
+[ENG-0172](https://github.com/qwts/agent-sop/blob/main/docs/decisions/ENG-0172-agent-space-is-durable-per-soul-storage.md).
 Governance repositories may consume the CLI but must not carry runtime copies.
 Zero npm dependencies. Node ≥ 20.
 
@@ -57,7 +57,7 @@ current harness:
    is absent. After installation, use `agent-bot` as the stable entrypoint.
 2. Obtain the explicit secret-free versioned organization profile and the
    shared-tooling procedure from the governance owner's
-   [agent bot organization operations](https://github.com/qwts/playbook-engineering/blob/main/docs/reference/agent-bot-operations.md).
+   [agent bot organization operations](https://github.com/qwts/agent-sop/blob/main/docs/reference/agent-bot-operations.md).
    Never assume or search for a local Playbook checkout, and never synthesize a
    roster from the currently running harness.
 3. In the owner's account run only machine preparation with `--machine-only`.
