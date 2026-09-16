@@ -35,7 +35,7 @@ transcript-bound execution identity system. Clone and install it directly;
 organization governance may supply the roster, compatible configuration, and
 shared harness tooling, but it is not a runtime provider. For `qwts`, those
 organization-owned inputs and their acquisition procedure are governed from
-[`playbook-engineering`](https://github.com/qwts/playbook-engineering/blob/main/docs/reference/agent-bot-operations.md);
+[`agent-sop`](https://github.com/qwts/agent-sop/blob/main/docs/reference/agent-bot-operations.md);
 if that procedure does not yet publish compatible input, bootstrap must stop.
 
 ## Machine install (Homebrew)

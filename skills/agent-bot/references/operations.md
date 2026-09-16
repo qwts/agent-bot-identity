@@ -33,7 +33,7 @@ does not install. Publishing as the bot still requires the durable journey
 below.
 
 1. Determine who owns organization policy. For `qwts`, read the canonical
-   [agent bot organization operations](https://github.com/qwts/playbook-engineering/blob/main/docs/reference/agent-bot-operations.md)
+   [agent bot organization operations](https://github.com/qwts/agent-sop/blob/main/docs/reference/agent-bot-operations.md)
    over HTTPS. Do not assume, search for, or hard-code a local governance
    checkout.
 2. Obtain an explicit, secret-free versioned profile from that owner. If

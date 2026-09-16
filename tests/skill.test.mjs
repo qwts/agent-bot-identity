@@ -8,7 +8,7 @@ import { helpText } from '../cli/output.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SKILL = join(ROOT, 'skills', 'agent-bot');
-const PLAYBOOK_OPERATIONS = 'https://github.com/qwts/playbook-engineering/blob/main/docs/reference/agent-bot-operations.md';
+const PLAYBOOK_OPERATIONS = 'https://github.com/qwts/agent-sop/blob/main/docs/reference/agent-bot-operations.md';
 
 test('official skill is a progressive router over focused references', () => {
   const main = readFileSync(join(SKILL, 'SKILL.md'), 'utf8');
@@ -35,7 +35,7 @@ test('skill delegates executable behavior to the stable runtime', () => {
   assert.match(operations, /install agent bot identities/u);
   assert.match(operations, /\.\/agent-bot bootstrap --profile <path\\\|->/u);
   assert.match(operations, /agent-bot bootstrap --worktree-only/u);
-  assert.match(operations, /playbook-engineering\/blob\/main\/docs\/reference\/agent-bot-operations\.md/u);
+  assert.match(operations, /agent-sop\/blob\/main\/docs\/reference\/agent-bot-operations\.md/u);
   assert.match(operations, /agent-bot secret get/u);
   assert.match(operations, /--reason <text>/u);
   assert.match(operations, /does not replace or call\n`ensure-private-key`/u);
