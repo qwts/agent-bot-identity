@@ -45,7 +45,7 @@ jobs:
       run_post_merge: ${{ steps.policy.outputs.run_post_merge }}
     steps:
       - id: policy
-        uses: qwts/playbook-engineering/.github/actions/ci-policy@40d1c46756ba70ef40d1b56915d1cdd45b8efa85
+        uses: qwts/qwts-agent-ci/.github/actions/ci-policy@3a5617b287d922e37f262210a1d8750d8217b56d
 
   merge-evidence:
     name: Verify exact main evidence
@@ -142,8 +142,8 @@ jobs:
       - name: Checkout pinned runtime checker
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          repository: qwts/playbook-engineering
-          ref: 40d1c46756ba70ef40d1b56915d1cdd45b8efa85
+          repository: qwts/qwts-agent-ci
+          ref: 3a5617b287d922e37f262210a1d8750d8217b56d
           path: .ci-runtime-policy
           sparse-checkout: tools/ci-runtime
           persist-credentials: false
