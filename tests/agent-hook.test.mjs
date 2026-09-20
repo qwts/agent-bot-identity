@@ -319,7 +319,7 @@ test('runHooks is callable in-process for every canonical event', () => {
   }
 });
 
-test('the git pre-push backstop rejects rewrites and allows fast-forwards', () => {
+test('the git pre-push backstop allows branch cleanup but rejects rewrites and tag deletion', () => {
   const work = path.join(root, `git-push${(seq += 1)}`);
   mkdirSync(work, { recursive: true });
   execFileSync('git', ['init', '--quiet'], { cwd: work });
@@ -344,7 +344,21 @@ test('the git pre-push backstop rejects rewrites and allows fast-forwards', () =
     },
   );
 
+  const zero = '0'.repeat(40);
+  const deletion = `(delete) ${zero} refs/heads/completed-feature ${second}\n`;
+  assert.equal(run(line(second, zero)).status, 0, 'new branch push was rejected');
   assert.equal(run(line(second, first)).status, 0, 'fast-forward push was rejected');
+  assert.equal(run(deletion).status, 0, 'ordinary branch deletion was rejected');
+  assert.equal(run(`${deletion}${line(second, first)}`).status, 0,
+    'branch deletion combined with a fast-forward was rejected');
+  const deleteThenRewrite = run(`${deletion}${line(first, second)}`);
+  assert.equal(deleteThenRewrite.status, 2, 'branch deletion bypassed a later rewrite check');
+  assert.match(deleteThenRewrite.stderr, /may not rewrite/);
+  const tagDeletion = run(`(delete) ${zero} refs/tags/v1.0.0 ${second}\n`);
+  assert.equal(tagDeletion.status, 2, 'tag deletion was allowed');
+  assert.match(tagDeletion.stderr, /may not delete refs\/tags\/v1\.0\.0/);
+  assert.equal(run(`${deletion}(delete) ${zero} refs/tags/v1.0.0 ${second}\n`).status, 2,
+    'branch deletion bypassed a later tag deletion check');
   const rewrite = run(`${line(second, first)}${line(first, second)}`);
   assert.equal(rewrite.status, 2);
   assert.match(rewrite.stderr, /may not rewrite/);
