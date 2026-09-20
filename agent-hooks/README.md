@@ -108,6 +108,19 @@ Filtering happens **inside** your hook, using the variables above. Devin
 Desktop has no matcher field at all, so no declarative matcher could work
 everywhere; hooks fire more often and the contract stays one contract.
 
+## Remote branch cleanup
+
+The git `pre-push/50-no-force-push` guard allows new branches, fast-forward
+updates, and ordinary branch deletion (`git push origin --delete <branch>`).
+Branch cleanup does not rewrite a surviving branch's history. Remote
+permissions and rulesets remain authoritative for preventing deletion of
+protected branches; the local guard does not infer protection from branch names
+or decide whether a branch's work is complete.
+
+Non-fast-forward updates and deletion of non-branch refs, including tags,
+remain blocked. Every update in a multi-ref push is checked, even after an
+allowed branch deletion.
+
 ## When agent-bot is not installed
 
 The generated configs are committed, so they run for anyone who clones the

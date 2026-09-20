@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Allow ordinary remote branch cleanup through the git pre-push guard, leaving
+  branch deletion permissions to remote rulesets while retaining rejection of
+  history rewrites and non-branch ref deletion (#210).
+
 ## 0.5.0
 
 - Doctor reports the account-level App outside a Git checkout, including
