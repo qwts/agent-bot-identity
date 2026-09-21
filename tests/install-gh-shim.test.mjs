@@ -50,7 +50,8 @@ test('gh shim installation migrates the loose export lines into managed blocks',
   const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
   writeFileSync(
     join(home, '.zshenv'),
-    'export PATH="$HOME/.config/agent-bot/bin:$PATH"  # agent-bot gh shim\n',
+    'export PATH="$HOME/.config/agent-bot/bin:$PATH"  # agent-bot gh shim\n'
+    + 'export AGENT_TOOLCHAIN="$HOME/.config/agent-bot/bin/gh"\n',
   );
   writeFileSync(
     join(home, '.zprofile'),
@@ -66,6 +67,8 @@ test('gh shim installation migrates the loose export lines into managed blocks',
   assert.doesNotMatch(zshenv, /agent-bot gh shim\n/);
   assert.match(zshenv, /^# BEGIN agent-bot-gh-shim$/m);
   assert.match(zshenv, /^path=\("\$HOME\/\.config\/agent-bot\/bin" \$path\)$/m);
+  assert.match(zshenv, /^export AGENT_TOOLCHAIN="\$HOME\/\.config\/agent-bot\/bin\/gh"$/m,
+    'a line that merely references the shim dir is not absorbed');
 
   const zprofile = readFileSync(join(home, '.zprofile'), 'utf8');
   assert.match(zprofile, /^export PATH="\/opt\/homebrew\/bin:\$PATH"$/m, 'non-agent-bot lines are left alone');

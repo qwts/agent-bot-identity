@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync,
+  symlinkSync, writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ensureBlock } from '../shell-path.mjs';
@@ -201,4 +204,110 @@ test('ensureBlock preserves the file mode when rewriting', () => {
     execFile: () => { throw Object.assign(new Error('no'), { code: 'ENOENT' }); },
   });
   assert.equal(statSync(file).mode & 0o777, 0o640);
+});
+
+test('ensureBlock writes through a symlinked dotfile, keeping the link', () => {
+  const home = mkdtempSync(join(tmpdir(), 'shell-path-'));
+  const dots = join(home, 'dots');
+  const target = join(dots, 'zshenv');
+  mkdirSync(dots, { recursive: true });
+  writeFileSync(target, 'alias a=1\n');
+  symlinkSync(target, join(home, '.zshenv'));
+  const result = ensureBlock({
+    dir: home,
+    filename: '.zshenv',
+    name: 'agent-bot-cli',
+    body: BODY,
+    execFile: () => { throw Object.assign(new Error('no'), { code: 'ENOENT' }); },
+  });
+  assert.equal(result.updated, true);
+  assert.equal(lstatSync(join(home, '.zshenv')).isSymbolicLink(), true, 'the link survives');
+  assert.equal(realpathSync(join(home, '.zshenv')), realpathSync(target));
+  assert.match(readFileSync(target, 'utf8'), /^# BEGIN agent-bot-cli$/m);
+});
+
+test('ensureBlock does not absorb lines that merely reference the shim directory', () => {
+  const home = mkdtempSync(join(tmpdir(), 'shell-path-'));
+  const file = join(home, '.zshenv');
+  writeFileSync(file,
+    'export PATH="$HOME/.config/agent-bot/bin:$PATH"  # agent-bot gh shim\n'
+    + 'export AGENT_TOOLCHAIN="$HOME/.config/agent-bot/bin/gh"\n');
+  ensureBlock({
+    dir: home,
+    filename: '.zshenv',
+    name: 'agent-bot-gh-shim',
+    body: 'typeset -U path PATH\npath=("$HOME/.config/agent-bot/bin" $path)\n',
+    absorbMarkers: ['# agent-bot gh shim'],
+    execFile: () => { throw Object.assign(new Error('no'), { code: 'ENOENT' }); },
+  });
+  const text = readFileSync(file, 'utf8');
+  assert.equal(text.includes('# agent-bot gh shim\n'), false, 'the legacy PATH line is absorbed');
+  assert.match(text, /^export AGENT_TOOLCHAIN="\$HOME\/\.config\/agent-bot\/bin\/gh"$/m, 'unrelated reference survives');
+});
+
+test('ensureBlock recomputes from fresh content on a concurrent write (compare-and-retry)', () => {
+  const home = mkdtempSync(join(tmpdir(), 'shell-path-'));
+  const file = join(home, '.zshenv');
+  writeFileSync(file, 'alias a=1\n');
+  let reads = 0;
+  const racingRead = (path, enc) => {
+    reads += 1;
+    // The compare read simulates another installer having just committed its
+    // block while we were computing our rewrite.
+    if (reads >= 2) {
+      writeFileSync(file, 'alias a=1\n# BEGIN agent-bot-gh-shim\nsh\n# END agent-bot-gh-shim\n', enc);
+    }
+    return readFileSync(path, enc);
+  };
+  const result = ensureBlock({
+    dir: home,
+    filename: '.zshenv',
+    name: 'agent-bot-cli',
+    body: BODY,
+    read: racingRead,
+    execFile: () => { throw Object.assign(new Error('no'), { code: 'ENOENT' }); },
+  });
+  assert.equal(result.updated, true);
+  const text = readFileSync(file, 'utf8');
+  assert.match(text, /^# BEGIN agent-bot-cli$/m, 'target block present');
+  assert.match(text, /^# BEGIN agent-bot-gh-shim$/m, 'the concurrent block is not dropped');
+});
+
+test('ensureBlock fails loudly rather than loop forever on sustained contention', () => {
+  const home = mkdtempSync(join(tmpdir(), 'shell-path-'));
+  writeFileSync(join(home, '.zshenv'), 'alias a=1\n');
+  let n = 0;
+  const churningRead = (path, enc) => `change ${n++}\n`;
+  assert.throws(
+    () => ensureBlock({
+      dir: home,
+      filename: '.zshenv',
+      name: 'agent-bot-cli',
+      body: BODY,
+      read: churningRead,
+      execFile: () => { throw Object.assign(new Error('no'), { code: 'ENOENT' }); },
+    }),
+    /refusing concurrent modification/,
+  );
+});
+
+test('ensureBlock leaves no temp file behind after a failed write', () => {
+  const home = mkdtempSync(join(tmpdir(), 'shell-path-'));
+  writeFileSync(join(home, '.zshenv'), 'alias a=1\n');
+  assert.throws(
+    () => ensureBlock({
+      dir: home,
+      filename: '.zshenv',
+      name: 'agent-bot-cli',
+      body: BODY,
+      rename: () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); },
+      execFile: () => { throw Object.assign(new Error('no'), { code: 'ENOENT' }); },
+    }),
+    { code: 'EACCES' },
+  );
+  assert.deepEqual(
+    readdirSync(home).filter((entry) => entry.endsWith('.tmp')),
+    [],
+    'temp must be cleaned up',
+  );
 });

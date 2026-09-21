@@ -385,9 +385,10 @@ export function installGhShim({
     filename: '.zshenv',
     name: 'agent-bot-gh-shim',
     body: 'typeset -U path PATH\npath=("$HOME/.config/agent-bot/bin" $path)\n',
-    // The loose `.config/agent-bot/bin` substring doubles as the legacy marker,
-    // covering the pre-managed `export PATH=...  # agent-bot gh shim` line.
-    absorbMarkers: ['# agent-bot gh shim', '.config/agent-bot/bin'],
+    // Absorb only the precise legacy marker, never the bare `.config/agent-bot/bin`
+    // substring: a user-authored line that merely references that directory (an
+    // export, a tool alias) must not be deleted as if it were the old PATH line.
+    absorbMarkers: ['# agent-bot gh shim'],
     read,
     write,
     rename,
