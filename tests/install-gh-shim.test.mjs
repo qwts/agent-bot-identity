@@ -34,12 +34,44 @@ test('gh shim installation is stable and idempotent', () => {
   const body = readFileSync(first.shimPath, 'utf8');
   assert.match(body, /\.local\/bin\/agent-bot/);
   assert.doesNotMatch(body, /PLAYBOOK_HOME|playbook-home|tools\/agent-bot/);
-  assert.match(readFileSync(join(home, '.zshenv'), 'utf8'), /\.config\/agent-bot\/bin/);
-  assert.match(readFileSync(join(home, '.zprofile'), 'utf8'), /brew\/bin[\s\S]+gh shim login priority/);
+  // .zshenv registers the shim dir for every zsh including harness shells, as
+  // a managed block; .zprofile keeps the login-priority ordering after brew.
+  assert.match(readFileSync(join(home, '.zshenv'), 'utf8'), /^# BEGIN agent-bot-gh-shim$/m);
+  const zprofile = readFileSync(join(home, '.zprofile'), 'utf8');
+  assert.match(zprofile, /brew\/bin[\s\S]+# BEGIN agent-bot-gh-shim/);
+  assert.match(zprofile, /^path=\("\$HOME\/\.local\/bin" "\$\{\(@\)path:#\$HOME\/\.local\/bin\}"\)$/m);
 
   const second = installGhShim({ home });
   assert.equal(second.zshenv.updated, false);
   assert.equal(second.zprofile.updated, false);
+});
+
+test('gh shim installation migrates the loose export lines into managed blocks', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  writeFileSync(
+    join(home, '.zshenv'),
+    'export PATH="$HOME/.config/agent-bot/bin:$PATH"  # agent-bot gh shim\n',
+  );
+  writeFileSync(
+    join(home, '.zprofile'),
+    'export PATH="/opt/homebrew/bin:$PATH"\n'
+    + 'path=("$HOME/.local/bin" "${(@)path:#$HOME/.local/bin}")  # agent-bot gh shim login priority\n',
+  );
+
+  const installed = installGhShim({ home });
+  assert.equal(installed.zshenv.updated, true);
+  assert.equal(installed.zprofile.updated, true);
+
+  const zshenv = readFileSync(join(home, '.zshenv'), 'utf8');
+  assert.doesNotMatch(zshenv, /agent-bot gh shim\n/);
+  assert.match(zshenv, /^# BEGIN agent-bot-gh-shim$/m);
+  assert.match(zshenv, /^path=\("\$HOME\/\.config\/agent-bot\/bin" \$path\)$/m);
+
+  const zprofile = readFileSync(join(home, '.zprofile'), 'utf8');
+  assert.match(zprofile, /^export PATH="\/opt\/homebrew\/bin:\$PATH"$/m, 'non-agent-bot lines are left alone');
+  assert.doesNotMatch(zprofile, /agent-bot gh shim login priority/);
+  assert.match(zprofile, /^# BEGIN agent-bot-gh-shim$/m);
+  assert.equal(zprofile.match(/^# BEGIN agent-bot-gh-shim$/gm).length, 1);
 });
 
 test('shell shim inspection distinguishes missing, replaced, recursive, and ready states', () => {
@@ -324,12 +356,16 @@ test('configured desktop inspection distinguishes missing and invalid state', ()
 test('zsh resolves the shim in non-login and login shells', { skip: !HAS_ZSH }, () => {
   const { home, brewBin, installed } = installWithBrewPath();
   const env = { ...process.env, HOME: home, ZDOTDIR: home, PATH: `${brewBin}:/usr/bin:/bin` };
+  // An interactive login zsh may print session-restore noise to stdout before
+  // the command output, so take the last line (or split each PATH entry onto
+  // its own line with the `print -rl` form) rather than the whole stream.
   const nonLogin = execFileSync('zsh', ['-c', 'command -v gh'], { env, encoding: 'utf8' }).trim();
-  const login = execFileSync('zsh', ['-lic', 'command -v gh'], { env, encoding: 'utf8' }).trim();
-  const loginPath = execFileSync('zsh', ['-lic', 'print -r -- $PATH'], { env, encoding: 'utf8' }).trim();
+  const login = execFileSync('zsh', ['-lic', 'command -v gh'], { env, encoding: 'utf8' })
+    .trim().split('\n').at(-1).trim();
+  const loginPath = execFileSync('zsh', ['-lic', 'print -rl -- $path'], { env, encoding: 'utf8' }).trim();
   assert.equal(nonLogin, installed.shimPath);
   assert.equal(login, installed.localShim);
-  assert.equal(loginPath.split(':').filter((entry) => entry === join(home, '.local', 'bin')).length, 1);
+  assert.equal(loginPath.split('\n').filter((entry) => entry === join(home, '.local', 'bin')).length, 1);
 });
 
 test('gh shim installer preserves foreign files and symlinks', () => {

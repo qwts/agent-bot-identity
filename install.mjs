@@ -3,7 +3,6 @@
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import {
-  appendFileSync,
   chmodSync,
   existsSync,
   lstatSync,
@@ -21,7 +20,7 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { ensurePathLine, zshStartupDir } from './shell-path.mjs';
+import { ensureBlock, zshStartupDir } from './shell-path.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { ensureDaemonSupervisor } from './daemon-supervisor.mjs';
 import { ensureSpacesCutover } from './spaces-cutover.mjs';
@@ -185,27 +184,47 @@ export function ensureExecutablePath({
   home = homedir(),
   env = process.env,
   read = readFileSync,
-  append = appendFileSync,
+  write = writeFileSync,
+  rename = renameSync,
+  mkdir = mkdirSync,
+  chmod = chmodSync,
+  stat = statSync,
+  execFile = execFileSync,
 } = {}) {
   const dir = zshStartupDir(home, env);
-  // Distinct from install-gh-shim's `.config/agent-bot/bin` marker, which is a
-  // loose substring the .zprofile line below also contains.
-  const zshenv = ensurePathLine({
+  // .zshenv keeps the harness-resolution registration; .zprofile keeps the
+  // login ordering one. Both are now managed blocks — reordered to put this
+  // directory first without the nested-shell duplication `path` arrays avoid —
+  // and both absorb the loose export lines older installs appended. The
+  // .zprofile body drops the legacy `# agent-bot installed commands` suffix
+  // comment; the marker moved into the block delimiters.
+  const zshenv = ensureBlock({
     dir,
     filename: '.zshenv',
-    line: 'export PATH="$HOME/.local/bin:$PATH"  # agent-bot CLI',
-    marker: '# agent-bot CLI',
+    name: 'agent-bot-cli',
+    body: 'typeset -U path PATH\npath=("$HOME/.local/bin" $path)\n',
+    absorbMarkers: ['# agent-bot CLI'],
     read,
-    append,
+    write,
+    rename,
+    mkdir,
+    chmod,
+    stat,
+    execFile,
   });
-  const marker = '# agent-bot installed commands';
-  const zprofile = ensurePathLine({
+  const zprofile = ensureBlock({
     dir,
     filename: '.zprofile',
-    line: `export PATH="$HOME/.config/agent-bot/bin:$HOME/.local/bin:$PATH"  ${marker}`,
-    marker,
+    name: 'agent-bot-cli',
+    body: 'typeset -U path PATH\npath=("$HOME/.config/agent-bot/bin" "$HOME/.local/bin" $path)\n',
+    absorbMarkers: ['# agent-bot installed commands'],
     read,
-    append,
+    write,
+    rename,
+    mkdir,
+    chmod,
+    stat,
+    execFile,
   });
   // `updated` answers "did this run change anything", which is what the caller
   // prints. Reporting only .zprofile made an upgrade from the old .zprofile-only

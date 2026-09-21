@@ -211,7 +211,8 @@ test('cold machine bootstrap: delegate refusal, complete install, idempotent rer
     assert.equal(readFileSync(configPath, 'utf8'), configBefore);
     const zshenv = readFileSync(join(fixture.home, '.zshenv'), 'utf8');
     assert.equal(zshenv, zshenvBefore);
-    assert.equal(zshenv.split('# agent-bot CLI').length, 2, 'PATH line must not be duplicated');
+    assert.equal(zshenv.split('# BEGIN agent-bot-cli').length - 1, 1, 'PATH block must not be duplicated');
+    assert.equal(zshenv.split('# BEGIN agent-bot-gh-shim').length - 1, 1, 'gh shim block must not be duplicated');
     const helpers = git(fixture, worktree, 'config', '--get-all', 'credential.helper').split('\n');
     assert.equal(helpers.length, 2, 'rerun must not stack credential helpers');
     assertColdSandboxIntact(fixture);
