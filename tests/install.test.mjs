@@ -26,30 +26,41 @@ test('PATH is registered for harness shells as well as login shells', () => {
 
   assert.equal(first.updated, true);
   assert.equal(first.zshenv.updated, true);
-  // .zshenv is the file every zsh reads, so it is the one a harness depends on.
-  assert.match(readFileSync(join(home, '.zshenv'), 'utf8'), /^export PATH="\$HOME\/\.local\/bin:\$PATH"/m);
-  // .zprofile keeps its own line: appended after Homebrew's shellenv, it is what
-  // puts our directory first for a login shell.
-  assert.match(readFileSync(join(home, '.zprofile'), 'utf8'), /# agent-bot installed commands$/m);
+  // .zshenv is the file every zsh reads, so it is the one a harness depends on;
+  // the registration is a managed block with a dedup-guarded `path` array.
+  const zshenv = readFileSync(join(home, '.zshenv'), 'utf8');
+  assert.match(zshenv, /^# BEGIN agent-bot-cli$/m);
+  assert.match(zshenv, /^typeset -U path PATH$/m);
+  assert.match(zshenv, /^path=\("\$HOME\/\.local\/bin" \$path\)$/m);
+  assert.match(zshenv, /^# END agent-bot-cli$/m);
+  // .zprofile keeps its own block: appended after Homebrew's shellenv, it is
+  // what puts our directory first for a login shell, with the config dir ahead
+  // of the local bin.
+  const zprofile = readFileSync(join(home, '.zprofile'), 'utf8');
+  assert.match(zprofile, /^# BEGIN agent-bot-cli$/m);
+  assert.match(zprofile, /^path=\("\$HOME\/\.config\/agent-bot\/bin" "\$HOME\/\.local\/bin" \$path\)$/m);
+  assert.match(zprofile, /^# END agent-bot-cli$/m);
 
   const second = ensureExecutablePath({ home });
   assert.equal(second.updated, false);
   assert.equal(second.zshenv.updated, false);
-  assert.equal(readFileSync(join(home, '.zshenv'), 'utf8').match(/agent-bot CLI/g).length, 1);
+  assert.equal(zshenv.match(/^# BEGIN agent-bot-cli$/gm).length, 1);
 });
 
-// The two installers write to the same files. The gh shim's .zshenv marker is
-// the loose substring `.config/agent-bot/bin`, which the CLI's .zprofile line
-// also contains — a shared marker would make one installer believe the other had
-// already run.
+// The two installers write to the same files. The gh shim's old marker was the
+// loose substring `.config/agent-bot/bin`, which the CLI's .zprofile line also
+// contained — a shared marker would make one installer believe the other had
+// already run. With managed blocks each installer owns a distinct block name.
 test('the two installers do not mistake each other for themselves', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-markers-'));
   ensureExecutablePath({ home });
   installGhShim({ home });
 
   const zshenv = readFileSync(join(home, '.zshenv'), 'utf8');
-  assert.match(zshenv, /agent-bot CLI/);
-  assert.match(zshenv, /agent-bot gh shim/);
+  assert.match(zshenv, /^# BEGIN agent-bot-cli$/m);
+  assert.match(zshenv, /^# BEGIN agent-bot-gh-shim$/m);
+  assert.equal(zshenv.match(/^# BEGIN agent-bot-cli$/gm).length, 1);
+  assert.equal(zshenv.match(/^# BEGIN agent-bot-gh-shim$/gm).length, 1);
   assert.equal(zshenv.split('\n').filter((line) => line.includes('.local/bin')).length, 1);
 
   assert.equal(ensureExecutablePath({ home }).zshenv.updated, false);
@@ -66,20 +77,19 @@ test('registration follows ZDOTDIR when zsh reads its startup files elsewhere', 
   ensureExecutablePath({ home, env: { ZDOTDIR: zdotdir } });
 
   // Created even though it did not exist: it is still where zsh will look.
-  assert.match(readFileSync(join(zdotdir, '.zshenv'), 'utf8'), /agent-bot CLI/);
-  assert.match(readFileSync(join(zdotdir, '.zprofile'), 'utf8'), /# agent-bot installed commands$/m);
+  assert.match(readFileSync(join(zdotdir, '.zshenv'), 'utf8'), /^# BEGIN agent-bot-cli$/m);
+  assert.match(readFileSync(join(zdotdir, '.zprofile'), 'utf8'), /^# BEGIN agent-bot-cli$/m);
   assert.throws(() => readFileSync(join(home, '.zshenv'), 'utf8'), /ENOENT/);
 
   // The gh shim installer writes the same two files and must agree.
   installGhShim({ home, env: { ZDOTDIR: zdotdir } });
-  assert.match(readFileSync(join(zdotdir, '.zshenv'), 'utf8'), /agent-bot gh shim/);
+  assert.match(readFileSync(join(zdotdir, '.zshenv'), 'utf8'), /^# BEGIN agent-bot-gh-shim$/m);
   assert.throws(() => readFileSync(join(home, '.zshenv'), 'utf8'), /ENOENT/);
 });
 
-// Upgrading from the .zprofile-only install writes .zshenv while .zprofile is
-// already registered. Reporting only .zprofile made that look like a no-op, so
-// the installer printed nothing about a file it had just changed.
-test('an upgrade reports that something changed', () => {
+// Upgrading from the loose-export install rewrites the loose lines into managed
+// blocks on the next run — that is the self-repair path for existing machines.
+test('an upgrade migrates loose registrations into managed blocks', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-upgrade-'));
   writeFileSync(
     join(home, '.zprofile'),
@@ -87,7 +97,9 @@ test('an upgrade reports that something changed', () => {
   );
 
   const upgrade = ensureExecutablePath({ home, env: {} });
-  assert.equal(upgrade.zprofile.updated, false, 'the existing line is left alone');
+  assert.equal(upgrade.zprofile.updated, true, 'the loose line is absorbed into a block');
+  assert.equal(readFileSync(join(home, '.zprofile'), 'utf8').includes('agent-bot installed commands'), false);
+  assert.match(readFileSync(join(home, '.zprofile'), 'utf8'), /^# BEGIN agent-bot-cli$/m);
   assert.equal(upgrade.zshenv.updated, true, 'the missing one is added');
   assert.equal(upgrade.updated, true, 'and the caller is told the run changed something');
 });

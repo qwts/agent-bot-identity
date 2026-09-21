@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 import process from 'node:process';
+import { execFileSync } from 'node:child_process';
 import {
-  appendFileSync,
+  chmodSync,
   closeSync,
   lstatSync,
   mkdirSync,
@@ -23,7 +24,7 @@ import {
 } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildGhShim, GH_SHIM_MARKER } from './gh-shim.mjs';
-import { ensurePathLine, zshStartupDir } from './shell-path.mjs';
+import { ensureBlock, zshStartupDir } from './shell-path.mjs';
 
 function optionalStat(path, lstat) {
   try {
@@ -331,12 +332,14 @@ export function installGhShim({
   mkdir = mkdirSync,
   write = writeFileSync,
   read = readFileSync,
-  append = appendFileSync,
   symlink = symlinkSync,
   remove = rmSync,
   lstat = lstatSync,
   readlink = readlinkSync,
   rename = renameSync,
+  chmod = chmodSync,
+  stat = statSync,
+  execFile = execFileSync,
 } = {}) {
   const binDir = join(home, '.config', 'agent-bot', 'bin');
   mkdir(binDir, { recursive: true });
@@ -377,21 +380,36 @@ export function installGhShim({
     });
   }
   const dir = zshStartupDir(home, env);
-  const zshenv = ensurePathLine({
+  const zshenv = ensureBlock({
     dir,
     filename: '.zshenv',
-    line: 'export PATH="$HOME/.config/agent-bot/bin:$PATH"  # agent-bot gh shim',
-    marker: '.config/agent-bot/bin',
+    name: 'agent-bot-gh-shim',
+    body: 'typeset -U path PATH\npath=("$HOME/.config/agent-bot/bin" $path)\n',
+    // Absorb only the precise legacy marker, never the bare `.config/agent-bot/bin`
+    // substring: a user-authored line that merely references that directory (an
+    // export, a tool alias) must not be deleted as if it were the old PATH line.
+    absorbMarkers: ['# agent-bot gh shim'],
     read,
-    append,
+    write,
+    rename,
+    mkdir,
+    chmod,
+    stat,
+    execFile,
   });
-  const zprofile = ensurePathLine({
+  const zprofile = ensureBlock({
     dir,
     filename: '.zprofile',
-    line: 'path=("$HOME/.local/bin" "${(@)path:#$HOME/.local/bin}")  # agent-bot gh shim login priority',
-    marker: '# agent-bot gh shim login priority',
+    name: 'agent-bot-gh-shim',
+    body: 'path=("$HOME/.local/bin" "${(@)path:#$HOME/.local/bin}")\n',
+    absorbMarkers: ['# agent-bot gh shim login priority'],
     read,
-    append,
+    write,
+    rename,
+    mkdir,
+    chmod,
+    stat,
+    execFile,
   });
   return {
     shimPath, localShim, codexShim, codexInterposer, codexStatePath, zshenv, zprofile,
