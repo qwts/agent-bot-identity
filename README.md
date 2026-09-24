@@ -572,7 +572,8 @@ network's own authentication.
 The repository also ships an official progressive-disclosure skill at
 `skills/agent-bot`. Its main `SKILL.md` routes setup, verified publishing, and
 execution-provenance requests into focused references while all executable
-behavior remains in this zero-dependency runtime.
+behavior remains in this zero-dependency runtime. Orders that arrive on a
+GitHub thread are `skills/thread-orders`.
 
 ## How it works
 
