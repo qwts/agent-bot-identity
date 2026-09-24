@@ -95,6 +95,17 @@ test('a short repo name and a bad signature store nothing', async () => {
   assert.equal(await mailbox.size(), 1);
 });
 
+test('a mention in a different case is stored under the roster slug', async () => {
+  const mailbox = createMailbox();
+  const body = JSON.stringify(mention('qwts/example1', 'please look @QWTS-GROK-AGENT'));
+  const stored = await handleHookRequest(delivery(body, await sign(body)), mailbox, secrets);
+  assert.equal((await stored.json()).stored, true);
+  const taken = await take(mailbox, 'qwts/example1');
+  const event = await taken.json();
+  assert.equal(event.app, 'qwts-grok-agent');
+  assert.match(event.text, /@QWTS-GROK-AGENT/);
+});
+
 test('a comment authored by the App is not stored', async () => {
   const mailbox = createMailbox();
   const body = JSON.stringify(mention('qwts/example1', '@qwts-grok-agent', 'qwts-grok-agent[bot]'));

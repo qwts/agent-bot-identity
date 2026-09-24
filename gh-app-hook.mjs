@@ -49,11 +49,14 @@ export async function verifyGithubSignature(secret, body, header) {
 function mentions(body, app) {
   if (typeof body !== 'string' || typeof app !== 'string' || app === '') return false;
   const escaped = app.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(?:^|[^\\w-])@${escaped}(?:\\[bot\\])?(?![\\w-])`).test(body);
+  return new RegExp(`(?:^|[^\\w-])@${escaped}(?:\\[bot\\])?(?![\\w-])`, 'i').test(body);
 }
 
-function isSelf(login, app) {
-  return login === app || login === `${app}[bot]`;
+function sameAccount(login, app) {
+  if (typeof login !== 'string' || typeof app !== 'string') return false;
+  const left = login.toLowerCase();
+  const right = app.toLowerCase();
+  return left === right || left === `${right}[bot]`;
 }
 
 export function acceptDelivery(app, payload) {
@@ -61,7 +64,7 @@ export function acceptDelivery(app, payload) {
   if (typeof repo !== 'string' || !repo.includes('/')) return null;
   if (payload.action === 'review_requested') {
     const login = payload.requested_reviewer?.login;
-    if (!isSelf(login, app)) return null;
+    if (!sameAccount(login, app)) return null;
     return {
       app,
       repo,
@@ -72,7 +75,7 @@ export function acceptDelivery(app, payload) {
   }
   if (payload.action === 'created' && payload.comment) {
     const login = payload.comment.user?.login;
-    if (isSelf(login, app)) return null;
+    if (sameAccount(login, app)) return null;
     if (!mentions(payload.comment.body, app)) return null;
     return {
       app,
@@ -114,7 +117,8 @@ function fullName(value) {
 export async function handleHookRequest(request, mailbox, { inboxToken, webhookSecrets }) {
   const url = new URL(request.url);
   if (request.method === 'POST' && url.pathname.startsWith('/github/')) {
-    const app = decodeURIComponent(url.pathname.slice('/github/'.length));
+    const requested = decodeURIComponent(url.pathname.slice('/github/'.length));
+    const app = Object.keys(webhookSecrets ?? {}).find((name) => name.toLowerCase() === requested.toLowerCase()) ?? requested;
     const secret = webhookSecrets?.[app];
     const body = await request.text();
     const ok = await verifyGithubSignature(secret, body, request.headers.get('x-hub-signature-256'));
