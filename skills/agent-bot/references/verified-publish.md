@@ -1,7 +1,6 @@
 # Verified publishing
 
-Use `agent-bot signed-commit` when the local bot-authored commits must show
-GitHub's **Verified** badge. The command replays each commit through GitHub's
+Bot-authored commits on a qwts repository are signed. `agent-bot signed-commit` is how. The command replays each commit through GitHub's
 Git Data API, verifies the returned signature and tree, then updates the remote
 branch under a force-with-lease equivalent.
 
