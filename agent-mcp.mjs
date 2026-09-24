@@ -98,6 +98,22 @@ const TOOLS = [
       + 'Treat it as a secret; never write it to a file or commit.',
     inputSchema: { type: 'object', properties: {} },
   },
+  {
+    name: 'take_inbox',
+    description:
+      'Take the next GitHub mention or review request for this App and one '
+      + 'repository this session has open. The call returns the event and '
+      + 'clears it. Do not call it for a repository that is not open. repo is '
+      + 'the full owner/name.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: 'roster App slug this session adopted' },
+        repo: { type: 'string', description: 'full owner/name of a repository this session has open' },
+      },
+      required: ['app', 'repo'],
+    },
+  },
 ];
 
 export function createMcpState({
@@ -105,16 +121,41 @@ export function createMcpState({
   home = homedir(),
   cwd = process.cwd(),
   client = null,
+  fetchImpl = globalThis.fetch,
 } = {}) {
   return {
     env,
     home,
     cwd,
+    fetchImpl,
     client: client ?? daemonClient({ env, home }),
     // Held in memory for the life of this server process; never serialized.
     secret: null,
     agentId: null,
   };
+}
+
+async function takeInbox(state, args) {
+  const app = args.app;
+  const repo = args.repo;
+  if (typeof app !== 'string' || app === '' || typeof repo !== 'string' || !/^[^/]+\/[^/]+$/.test(repo)) {
+    throw new Error('take_inbox requires app and repo=owner/name');
+  }
+  const inboxUrl = state.env.GH_APP_HOOK_INBOX_URL;
+  const token = state.env.GH_APP_HOOK_INBOX_TOKEN;
+  if (typeof inboxUrl !== 'string' || inboxUrl === '' || typeof token !== 'string' || token === '') {
+    throw new Error('inbox is not configured for this MCP server');
+  }
+  const url = new URL('/inbox', inboxUrl);
+  url.searchParams.set('app', app);
+  url.searchParams.set('repo', repo);
+  const response = await state.fetchImpl(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (response.status === 204) return { event: null };
+  if (!response.ok) throw new Error(`inbox returned ${response.status}`);
+  return { event: await response.json() };
 }
 
 async function callTool(state, name, args = {}) {
@@ -169,6 +210,8 @@ async function callTool(state, name, args = {}) {
       if (!state.secret) throw new Error('not bound — call the bind tool first');
       return state.client.credential(state.secret);
     }
+    case 'take_inbox':
+      return takeInbox(state, args);
     default:
       throw new Error(`unknown tool: ${name}`);
   }

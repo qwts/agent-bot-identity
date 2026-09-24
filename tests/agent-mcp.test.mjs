@@ -81,7 +81,7 @@ test('initialize advertises tools and instructs the agent to bind first', async 
   const list = await handleMcpMessage(state, request(2, 'tools/list'));
   assert.deepEqual(
     list.result.tools.map((tool) => tool.name),
-    ['bind', 'whoami', 'population', 'space_path', 'credential'],
+    ['bind', 'whoami', 'population', 'space_path', 'credential', 'take_inbox'],
   );
 });
 
@@ -240,6 +240,39 @@ test('population forwards filters and works unbound', async () => {
   assert.equal(isError, false);
   const [, filters] = client.calls.find(([name]) => name === 'population');
   assert.deepEqual(filters, { status: 'active', app: 'qwts-claude-agent' });
+});
+
+test('take_inbox forwards app and repo and does not return the bearer token', async () => {
+  const seen = [];
+  const fetchImpl = async (url, options) => {
+    seen.push({ url: String(url), authorization: options.headers.authorization });
+    if (seen.length === 1) return new Response(null, { status: 204 });
+    return new Response(JSON.stringify({
+      app: 'qwts-grok-agent',
+      repo: 'qwts/example1',
+      kind: 'mention',
+      url: 'https://github.com/qwts/example1/issues/1#issuecomment-1',
+      text: '@qwts-grok-agent',
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const state = createMcpState({
+    client: fakeClient(),
+    env: { GH_APP_HOOK_INBOX_URL: 'https://gh-app-hook.qwts.org', GH_APP_HOOK_INBOX_TOKEN: 'inbox-secret' },
+    fetchImpl,
+  });
+  const empty = await callTool(state, 'take_inbox', { app: 'qwts-grok-agent', repo: 'qwts/example1' });
+  assert.equal(empty.isError, false);
+  assert.match(empty.text, /"event": null/);
+  const taken = await callTool(state, 'take_inbox', { app: 'qwts-grok-agent', repo: 'qwts/example1' });
+  assert.match(taken.text, /qwts\/example1/);
+  assert.doesNotMatch(taken.text, /inbox-secret/);
+  assert.equal(seen[0].authorization, 'Bearer inbox-secret');
+  assert.match(seen[0].url, /app=qwts-grok-agent/);
+  assert.match(seen[0].url, /repo=qwts%2Fexample1/);
+
+  const short = await callTool(state, 'take_inbox', { app: 'qwts-grok-agent', repo: 'example1' });
+  assert.equal(short.isError, true);
+  assert.match(short.text, /owner\/name/);
 });
 
 test('the surrendered token is consumed by the daemon, not the MCP server', async () => {
