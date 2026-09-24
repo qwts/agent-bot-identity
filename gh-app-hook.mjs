@@ -65,6 +65,7 @@ export function acceptDelivery(app, payload) {
   if (payload.action === 'review_requested') {
     const login = payload.requested_reviewer?.login;
     if (!sameAccount(login, app)) return null;
+    if (sameAccount(payload.pull_request?.user?.login, app)) return null;
     return {
       app,
       repo,
@@ -147,17 +148,53 @@ export async function handleHookRequest(request, mailbox, { inboxToken, webhookS
   return json(404, { error: 'not found' });
 }
 
-const memory = createMailbox();
+export class InboxDurable {
+  constructor(state) {
+    this.storage = state.storage;
+  }
+
+  async fetch(request) {
+    const records = (await this.storage.get('records')) ?? [];
+    const body = await request.json();
+    if (new URL(request.url).pathname === '/take') {
+      const index = records.findIndex((record) => record.app === body.app && record.repo === body.repo);
+      if (index < 0) return new Response(null, { status: 204 });
+      const [record] = records.splice(index, 1);
+      await this.storage.put('records', records);
+      return Response.json(record);
+    }
+    records.push(body);
+    await this.storage.put('records', records);
+    return new Response(null, { status: 204 });
+  }
+}
+
+function durableMailbox(namespace) {
+  const stub = namespace.get(namespace.idFromName('inbox'));
+  return {
+    async add(record) {
+      const response = await stub.fetch('https://inbox/add', { method: 'POST', body: JSON.stringify(record) });
+      if (!response.ok && response.status !== 204) throw new Error(`inbox add failed: ${response.status}`);
+    },
+    async take(key) {
+      const response = await stub.fetch('https://inbox/take', { method: 'POST', body: JSON.stringify(key) });
+      if (response.status === 204) return null;
+      if (!response.ok) throw new Error(`inbox take failed: ${response.status}`);
+      return response.json();
+    },
+  };
+}
 
 export default {
   async fetch(request, env = {}) {
+    if (!env.INBOX) return json(500, { error: 'inbox storage is not bound' });
     let webhookSecrets = {};
     try {
       webhookSecrets = JSON.parse(env.WEBHOOK_SECRETS ?? '{}');
     } catch {
       webhookSecrets = {};
     }
-    return handleHookRequest(request, env.MAILBOX ?? memory, {
+    return handleHookRequest(request, durableMailbox(env.INBOX), {
       inboxToken: env.INBOX_TOKEN,
       webhookSecrets,
     });

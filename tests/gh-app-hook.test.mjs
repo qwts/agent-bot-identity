@@ -114,6 +114,23 @@ test('a comment authored by the App is not stored', async () => {
   assert.equal(await mailbox.size(), 0);
 });
 
+test('a review request on a pull request the App opened is not stored', async () => {
+  const mailbox = createMailbox();
+  const own = {
+    action: 'review_requested',
+    repository: { full_name: 'qwts/example1' },
+    requested_reviewer: { login: 'qwts-grok-agent[bot]' },
+    pull_request: {
+      html_url: 'https://github.com/qwts/example1/pull/4',
+      user: { login: 'qwts-grok-agent[bot]' },
+    },
+  };
+  const raw = JSON.stringify(own);
+  const response = await handleHookRequest(delivery(raw, await sign(raw)), mailbox, secrets);
+  assert.equal((await response.json()).stored, false);
+  assert.equal(await mailbox.size(), 0);
+});
+
 test('a review request for the App is stored and one for someone else is not', async () => {
   const mailbox = createMailbox();
   const mine = {

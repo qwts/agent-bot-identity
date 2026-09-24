@@ -22,7 +22,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -101,18 +101,11 @@ const TOOLS = [
   {
     name: 'take_inbox',
     description:
-      'Take the next GitHub mention or review request for this App and one '
-      + 'repository this session has open. The call returns the event and '
-      + 'clears it. Do not call it for a repository that is not open. repo is '
-      + 'the full owner/name.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        app: { type: 'string', description: 'roster App slug this session adopted' },
-        repo: { type: 'string', description: 'full owner/name of a repository this session has open' },
-      },
-      required: ['app', 'repo'],
-    },
+      'Take the next GitHub mention or review request for the App and '
+      + 'repository this bound worktree is. The call returns the event and '
+      + 'clears it. The repository and App come from the binding, not from '
+      + 'the caller. Requires bind.',
+    inputSchema: { type: 'object', properties: {} },
   },
 ];
 
@@ -135,12 +128,20 @@ export function createMcpState({
   };
 }
 
-async function takeInbox(state, args) {
-  const app = args.app;
-  const repo = args.repo;
-  if (typeof app !== 'string' || app === '' || typeof repo !== 'string' || !/^[^/]+\/[^/]+$/.test(repo)) {
-    throw new Error('take_inbox requires app and repo=owner/name');
+function githubRepo(remote) {
+  const match = String(remote).match(/github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?$/);
+  if (!match) throw new Error('origin is not a GitHub repository');
+  return `${match[1]}/${match[2]}`;
+}
+
+async function takeInbox(state) {
+  if (!state.secret) throw new Error('not bound — call the bind tool first');
+  const binding = await state.client.binding(state.secret);
+  if (resolve(binding.worktree) !== resolve(state.cwd)) {
+    throw new Error('take_inbox only serves the bound worktree');
   }
+  const app = git(state.cwd, 'config', '--worktree', '--get', 'agentBot.app');
+  const repo = githubRepo(git(state.cwd, 'remote', 'get-url', 'origin'));
   const inboxUrl = state.env.GH_APP_HOOK_INBOX_URL;
   const token = state.env.GH_APP_HOOK_INBOX_TOKEN;
   if (typeof inboxUrl !== 'string' || inboxUrl === '' || typeof token !== 'string' || token === '') {
