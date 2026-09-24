@@ -17,8 +17,8 @@ minted; never continue with an ambient human GitHub login.
 - Read [operations.md](references/operations.md) for fresh-machine bootstrap,
   installation, worktree setup, token minting, password/API-key retrieval,
   diagnostics, or identity-repair requests.
-- Read [verified-publish.md](references/verified-publish.md) before publishing
-  commits that must show GitHub's **Verified** badge.
+- Read [verified-publish.md](references/verified-publish.md) before publishing.
+  Bot-authored commits on a qwts repository are signed. `agent-bot signed-commit` is how.
 - Read [execution-identities.md](references/execution-identities.md) for Agent
   ID creation, binding, recording, lookup, transcript provenance, or Agent
   Space resolution.
