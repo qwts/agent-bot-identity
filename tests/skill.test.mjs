@@ -42,6 +42,10 @@ test('skill delegates executable behavior to the stable runtime', () => {
   assert.match(publish, /agent-bot signed-commit --dry-run/u);
   assert.match(publish, /force-with-lease/u);
   assert.match(publish, /Verified/u);
+  for (const text of [main, publish]) {
+    assert.match(text, /Bot-authored commits on a qwts repository are signed/u);
+    assert.match(text, /`agent-bot signed-commit` is how/u);
+  }
 });
 
 test('Agent Space guidance links the canonical contract and keeps operations local', () => {
