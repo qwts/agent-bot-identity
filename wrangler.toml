@@ -1,0 +1,11 @@
+name = "gh-app-hook"
+main = "gh-app-hook.mjs"
+compatibility_date = "2024-12-01"
+
+[[durable_objects.bindings]]
+name = "INBOX"
+class_name = "InboxDurable"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["InboxDurable"]

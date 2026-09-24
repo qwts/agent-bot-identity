@@ -22,7 +22,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -98,6 +98,15 @@ const TOOLS = [
       + 'Treat it as a secret; never write it to a file or commit.',
     inputSchema: { type: 'object', properties: {} },
   },
+  {
+    name: 'take_inbox',
+    description:
+      'Take the next GitHub mention or review request for the App and '
+      + 'repository this bound worktree is. The call returns the event and '
+      + 'clears it. The repository and App come from the binding, not from '
+      + 'the caller. Requires bind.',
+    inputSchema: { type: 'object', properties: {} },
+  },
 ];
 
 export function createMcpState({
@@ -105,16 +114,49 @@ export function createMcpState({
   home = homedir(),
   cwd = process.cwd(),
   client = null,
+  fetchImpl = globalThis.fetch,
 } = {}) {
   return {
     env,
     home,
     cwd,
+    fetchImpl,
     client: client ?? daemonClient({ env, home }),
     // Held in memory for the life of this server process; never serialized.
     secret: null,
     agentId: null,
   };
+}
+
+function githubRepo(remote) {
+  const match = String(remote).match(/github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?$/);
+  if (!match) throw new Error('origin is not a GitHub repository');
+  return `${match[1]}/${match[2]}`;
+}
+
+async function takeInbox(state) {
+  if (!state.secret) throw new Error('not bound — call the bind tool first');
+  const binding = await state.client.binding(state.secret);
+  if (resolve(binding.worktree) !== resolve(state.cwd)) {
+    throw new Error('take_inbox only serves the bound worktree');
+  }
+  const app = git(state.cwd, 'config', '--worktree', '--get', 'agentBot.app');
+  const repo = githubRepo(git(state.cwd, 'remote', 'get-url', 'origin'));
+  const inboxUrl = state.env.GH_APP_HOOK_INBOX_URL;
+  const token = state.env.GH_APP_HOOK_INBOX_TOKEN;
+  if (typeof inboxUrl !== 'string' || inboxUrl === '' || typeof token !== 'string' || token === '') {
+    throw new Error('inbox is not configured for this MCP server');
+  }
+  const url = new URL('/inbox', inboxUrl);
+  url.searchParams.set('app', app);
+  url.searchParams.set('repo', repo);
+  const response = await state.fetchImpl(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (response.status === 204) return { event: null };
+  if (!response.ok) throw new Error(`inbox returned ${response.status}`);
+  return { event: await response.json() };
 }
 
 async function callTool(state, name, args = {}) {
@@ -169,6 +211,8 @@ async function callTool(state, name, args = {}) {
       if (!state.secret) throw new Error('not bound — call the bind tool first');
       return state.client.credential(state.secret);
     }
+    case 'take_inbox':
+      return takeInbox(state, args);
     default:
       throw new Error(`unknown tool: ${name}`);
   }
