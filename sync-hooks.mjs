@@ -21,12 +21,11 @@ import { isDeepStrictEqual } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { accountName, configuredAccountIdentity } from './detect-harness.mjs';
 import { loadConfig } from './config.mjs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 
 import { CANONICAL_EVENTS, CLAUDE_WORKTREE_CREATE_COMMAND, DIALECTS, isBlocking, vendorEvent } from './hook-dialects.mjs';
 import { adapterFallback } from './uninstalled-identity-hook.mjs';
 
-const ROOT = dirname(fileURLToPath(import.meta.url));
 export const MANAGED_MARKER = 'agent-bot agent-hook';
 
 function command(dialectKey, event) {
@@ -210,14 +209,23 @@ export function ensureClaudeWorktreeAdapter(options = {}) {
   return { ...inspectClaudeWorktreeAdapter(options), updated: true };
 }
 
-export function syncHooks({ root = ROOT, check = false } = {}) {
+// User-level path for a dialect. Claude follows CLAUDE_CONFIG_DIR, matching
+// the WorktreeCreate installer. Never join this onto a repository root:
+// a project file can outrank the user hook.
+export function hookHomePath(row, home = homedir(), env = process.env) {
+  if (!row.homeFile) throw new Error(`${row.key} has no user hook path`);
+  if (row.key === 'claude' && env.CLAUDE_CONFIG_DIR) return join(resolve(env.CLAUDE_CONFIG_DIR), 'settings.json');
+  return join(resolve(home), row.homeFile);
+}
+
+export function syncHooks({ home = homedir(), env = process.env, check = false } = {}) {
   const drift = [];
-  for (const row of DIALECTS.filter((candidate) => candidate.file)) {
-    const path = join(root, row.file);
+  for (const row of DIALECTS.filter((candidate) => candidate.homeFile)) {
+    const path = hookHomePath(row, home, env);
     const current = existsSync(path) ? readFileSync(path, 'utf8') : '{}';
     const desired = renderConfig(row, current);
     if (current === desired) continue;
-    drift.push(row.file);
+    drift.push(path);
     if (!check) {
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, desired);

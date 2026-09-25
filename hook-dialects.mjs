@@ -116,6 +116,7 @@ export const DIALECTS = [
     // and no .devin file is ever written — writing one double-fires every hook.
     alsoServes: ['devin-cli'],
     file: '.claude/settings.json',
+    homeFile: '.claude/settings.json',
     format: 'claude',
     events: {
       'session-start': 'SessionStart',
@@ -138,6 +139,7 @@ export const DIALECTS = [
   {
     key: 'codex',
     file: '.codex/hooks.json',
+    homeFile: '.codex/hooks.json',
     format: 'claude',
     events: {
       'session-start': 'SessionStart',
@@ -163,6 +165,7 @@ export const DIALECTS = [
   {
     key: 'cursor',
     file: '.cursor/hooks.json',
+    homeFile: '.cursor/hooks.json',
     format: 'cursor',
     events: {
       'session-start': 'sessionStart',
@@ -195,6 +198,7 @@ export const DIALECTS = [
   {
     key: 'copilot',
     file: '.github/hooks/agent-bot.json',
+    homeFile: '.copilot/hooks/agent-bot.json',
     format: 'copilot',
     events: {
       'session-start': 'sessionStart',
@@ -220,6 +224,7 @@ export const DIALECTS = [
   {
     key: 'devin-desktop',
     file: '.windsurf/hooks.json',
+    homeFile: '.windsurf/hooks.json',
     format: 'windsurf',
     // LEGACY. Cognition acquired Windsurf; the app ships as Devin and its CLI
     // already speaks the claude dialect. This snake_case, no-matcher,

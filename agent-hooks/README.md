@@ -47,11 +47,12 @@ covers Devin Desktop's weak channel and Devin cloud's absent one.
 
 ### Generated adapters
 
-`hook-dialects.mjs` declares the vendor spellings and `sync-hooks.mjs` generates
-the checked-in Claude, Codex, Cursor, Copilot, and Devin Desktop adapters. Devin
-CLI consumes the Claude adapter natively; generating a second Devin CLI file
-would fire each hook twice. `npm test` runs `node sync-hooks.mjs --check`, so a
-hand-edited adapter cannot drift from the shared table.
+`hook-dialects.mjs` declares the vendor spellings and `sync-hooks.mjs` writes
+the Claude, Codex, Cursor, Copilot, and Devin Desktop adapters into the harness
+user directory (`~/.claude`, `~/.codex`, `~/.cursor`, `~/.copilot/hooks`,
+`~/.windsurf`). Devin CLI consumes the Claude adapter natively; generating a
+second Devin CLI file would fire each hook twice. The adapters are not
+committed in a repository. A project copy can outrank the user hook.
 
 Generated entries are marker-scoped. Regeneration replaces entries containing
 `agent-bot agent-hook` and preserves foreign entries such as Claude's

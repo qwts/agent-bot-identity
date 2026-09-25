@@ -13,8 +13,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node sync-hooks.mjs --check && node --test tests/*.mjs",
-    "test:serial": "node sync-hooks.mjs --check && node --test --test-concurrency=1 tests/*.mjs",
+    "test": "node --test tests/*.mjs",
+    "test:serial": "node --test --test-concurrency=1 tests/*.mjs",
     "sync:hooks": "node sync-hooks.mjs",
     "doctor": "node doctor.mjs",
     "install-hooks": "node install.mjs",

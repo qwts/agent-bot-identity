@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { CANONICAL_EVENTS, DIALECTS, isBlocking, vendorEvent } from '../hook-dialects.mjs';
-import { MANAGED_MARKER, renderConfig, syncHooks, ensureClaudeWorktreeAdapter, inspectClaudeWorktreeAdapter } from '../sync-hooks.mjs';
+import { MANAGED_MARKER, hookHomePath, renderConfig, syncHooks, ensureClaudeWorktreeAdapter, inspectClaudeWorktreeAdapter } from '../sync-hooks.mjs';
 import { organizationProfileToConfig } from '../organization-profile.mjs';
 import { accountSlug } from '../worktree-token.mjs';
 
@@ -238,14 +238,35 @@ test('Cursor blocking events are generated fail-closed', () => {
 });
 
 test('--check reports drift without writing and apply repairs it', () => {
-  const root = mkdtempSync(join(tmpdir(), 'agent-hook-sync-'));
-  for (const row of DIALECTS.filter((candidate) => candidate.file)) {
-    const path = join(root, row.file);
+  const home = mkdtempSync(join(tmpdir(), 'agent-hook-sync-'));
+  const repo = mkdtempSync(join(tmpdir(), 'agent-hook-repo-'));
+  for (const row of DIALECTS.filter((candidate) => candidate.homeFile)) {
+    const path = hookHomePath(row, home);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, '{}\n');
   }
-  assert.equal(syncHooks({ root, check: true }).length, 5);
-  assert.equal(readFileSync(join(root, '.claude/settings.json'), 'utf8'), '{}\n');
-  assert.equal(syncHooks({ root }).length, 5);
-  assert.deepEqual(syncHooks({ root, check: true }), []);
+  assert.equal(syncHooks({ home, check: true }).length, 5);
+  assert.equal(readFileSync(hookHomePath(DIALECTS.find((row) => row.key === 'claude'), home), 'utf8'), '{}\n');
+  assert.equal(syncHooks({ home }).length, 5);
+  assert.deepEqual(syncHooks({ home, check: true }), []);
+  assert.equal(existsSync(join(repo, '.cursor', 'hooks.json')), false);
+  assert.equal(existsSync(join(home, '.github', 'hooks', 'agent-bot.json')), false);
+  assert.equal(existsSync(join(home, '.copilot', 'hooks', 'agent-bot.json')), true);
+});
+
+test('user-level sync keeps a foreign WorktreeCreate hook and does not write the repo', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-hook-home-'));
+  const repo = mkdtempSync(join(tmpdir(), 'agent-hook-repo-'));
+  const claude = DIALECTS.find((row) => row.key === 'claude');
+  const path = hookHomePath(claude, home);
+  mkdirSync(dirname(path), { recursive: true });
+  const worktree = { hooks: [{ type: 'command', command: 'foreign-create', timeout: 180 }] };
+  writeFileSync(path, JSON.stringify({ permissions: { allow: ['Read'] }, hooks: { WorktreeCreate: [worktree] } }));
+  syncHooks({ home });
+  const settings = JSON.parse(readFileSync(path, 'utf8'));
+  assert.deepEqual(settings.permissions, { allow: ['Read'] });
+  assert.deepEqual(settings.hooks.WorktreeCreate, [worktree]);
+  assert.ok(settings.hooks.SessionStart.length >= 1);
+  assert.equal(existsSync(join(repo, '.cursor', 'hooks.json')), false);
+  assert.equal(existsSync(join(repo, '.claude', 'settings.json')), false);
 });

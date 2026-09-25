@@ -977,9 +977,8 @@ desktop app's PATH.
 Provisioning preserves unrelated settings and hooks and is idempotent. Invalid
 JSON, symlinked settings, disabled hooks, or a different `WorktreeCreate` hook
 require explicit reconciliation; the installer never replaces those settings
-or overrides a hooks policy. This repository still carries its separately
-governed project adapter. Concurrent calls through that adapter and the new
-user adapter serialize creation and reuse only a worktree with the same
+or overrides a hooks policy. Concurrent calls through the user adapter
+serialize creation and reuse only a worktree with the same
 repository, branch, App, and bound Claude session; other collisions still fail.
 Unrelated custom creators require explicit reconciliation.
 
@@ -1004,15 +1003,18 @@ resolves it reports the human persona and exits cleanly. `AGENT_BOT_HOME` is
 only a fallback for harnesses whose startup environment cannot find the
 installed executable.
 
-All harness lifecycle adapters are generated from `hook-dialects.mjs`:
+All harness lifecycle adapters are generated from `hook-dialects.mjs` into the
+harness user directory, not into the repository:
 
 ```bash
-npm run sync:hooks       # refresh checked-in adapters
+npm run sync:hooks       # write ~/.claude, ~/.codex, ~/.cursor, ~/.copilot, ~/.windsurf
 node sync-hooks.mjs --check
 ```
 
 The adapters call one vendor-neutral runner. Claude's adapter also serves Devin
 CLI; Codex, Cursor, Copilot, and Devin Desktop receive their native JSON shape.
+A repository hook is not generated. Where a harness gives the project file
+precedence, a committed copy would replace the user hook.
 The Git `pre-commit` and `pre-push` hooks provide the common backstop for
 harnesses or cloud surfaces that do not expose every lifecycle event.
 
