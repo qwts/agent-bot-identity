@@ -199,7 +199,7 @@ test('the wrapper finds an nvm node with none on PATH and nothing sourced', { sk
   assert.throws(() => run({ NVM_DIR: join(root, 'absent') }), /no node on PATH/);
 });
 
-test('concurrent installed and governed Claude adapters share only the same bound session (#193)', async (t) => {
+test('concurrent user-level Claude adapters share only the same bound session (#193)', async (t) => {
   const home = join(root, 'installed adapter home');
   const repo = join(home, 'Code', 'sample');
   const bin = join(home, 'bin');
@@ -268,10 +268,9 @@ test('concurrent installed and governed Claude adapters share only the same boun
   assert.equal(commands.length, 1);
   assert.equal(commands[0].command, CLAUDE_WORKTREE_CREATE_COMMAND);
   const sessionId = 'installed-claude-session-193';
-  const governed = JSON.parse(readFileSync(join(AGENT_BOT, '.claude', 'settings.json'), 'utf8'))
-    .hooks.WorktreeCreate[0].hooks[0].command;
-  const invoke = (command, payload, overrides = {}) => new Promise((resolve, reject) => {
-    const child = spawn('sh', ['-c', command], { cwd: repo, env: { ...env, ...overrides }, timeout: 30_000 });
+  const command = commands[0].command;
+  const invoke = (hookCommand, payload, overrides = {}) => new Promise((resolve, reject) => {
+    const child = spawn('sh', ['-c', hookCommand], { cwd: repo, env: { ...env, ...overrides }, timeout: 30_000 });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (data) => { stdout += data; });
@@ -281,7 +280,7 @@ test('concurrent installed and governed Claude adapters share only the same boun
     child.stdin.end(JSON.stringify(payload));
   });
   const payload = { cwd: repo, name: 'topic-193', session_id: sessionId };
-  const results = await Promise.all([invoke(governed, payload), invoke(commands[0].command, payload)]);
+  const results = await Promise.all([invoke(command, payload), invoke(command, payload)]);
   const printed = results[0].stdout.trim();
   for (const result of results) {
     assert.equal(result.code, 0, result.stderr);
@@ -302,17 +301,17 @@ test('concurrent installed and governed Claude adapters share only the same boun
   assert.equal(population.souls[agentId].worktree, realpathSync(printed));
   assert.deepEqual(Object.keys(population.souls), [agentId]);
   assert.deepEqual(readdirSync(stateDir).filter((name) => /^agent_.*\.json$/.test(name)), [`${agentId}.json`]);
-  const rejected = await invoke(governed, { ...payload, session_id: 'different-session' });
+  const rejected = await invoke(command, { ...payload, session_id: 'different-session' });
   assert.equal(rejected.code, 1);
   assert.equal(rejected.stdout, '');
   assert.match(rejected.stderr, /refusing to reuse an existing path/);
   const unrelated = join(dirname(printed), 'unrelated');
   mkdirSync(unrelated);
-  const conflict = await invoke(commands[0].command, { ...payload, name: 'unrelated' });
+  const conflict = await invoke(command, { ...payload, name: 'unrelated' });
   assert.equal(conflict.code, 1);
   assert.equal(conflict.stdout, '');
   assert.match(conflict.stderr, /refusing to reuse an existing path/);
-  const wrongApp = await invoke(commands[0].command, payload, { GH_AGENT_APP: 'other-app' });
+  const wrongApp = await invoke(command, payload, { GH_AGENT_APP: 'other-app' });
   assert.equal(wrongApp.code, 1);
   assert.match(wrongApp.stderr, /refusing to reuse an existing path/);
   assert.equal(readFileSync(populationPath, 'utf8'), JSON.stringify(population, null, 2) + '\n');
