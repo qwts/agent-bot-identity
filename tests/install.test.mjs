@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  chmodSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -509,6 +509,40 @@ test('installer chains displaced hooks and replaces legacy agent-bot hooks', asy
     ensureCutover: () => ({ applied: false, reason: 'nothing-to-move' }),
   });
   assert.equal(migrated.chainedHooksPath, null);
+});
+
+test('machine install writes the known harness adapters into the user directory', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-user-hooks-'));
+  const values = new Map();
+  const run = (args) => {
+    const key = args.at(-1);
+    if (args.includes('--get')) {
+      if (!values.has(key)) {
+        const error = new Error('unset');
+        error.status = 1;
+        throw error;
+      }
+      return values.get(key);
+    }
+    if (args.includes('--unset-all')) return '';
+    values.set(args.at(-2), args.at(-1));
+    return '';
+  };
+  await installAgentBot({
+    home,
+    run,
+    installCli: () => installationPaths(home).executable,
+    installHooks: () => installationPaths(home).hooksDir,
+    ensureSupervisor: async () => ({ applied: true, loaded: true, unitPath: 'test' }),
+    ensureCutover: () => ({ applied: false, reason: 'nothing-to-move' }),
+    installTranscriptAdapter: () => ({ status: 'not_applicable' }),
+  });
+  assert.equal(existsSync(join(home, '.claude', 'settings.json')), true);
+  assert.equal(existsSync(join(home, '.codex', 'hooks.json')), true);
+  assert.equal(existsSync(join(home, '.cursor', 'hooks.json')), true);
+  assert.equal(existsSync(join(home, '.copilot', 'hooks', 'agent-bot.json')), true);
+  assert.equal(existsSync(join(home, '.windsurf', 'hooks.json')), true);
+  assert.equal(existsSync(join(home, '.github', 'hooks', 'agent-bot.json')), false);
 });
 
 test('install writes the supervisor through the injected helper and does not disable it', async () => {

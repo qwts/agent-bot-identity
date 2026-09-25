@@ -24,7 +24,7 @@ import { ensureBlock, zshStartupDir } from './shell-path.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { ensureDaemonSupervisor } from './daemon-supervisor.mjs';
 import { ensureSpacesCutover } from './spaces-cutover.mjs';
-import { ensureClaudeWorktreeAdapter } from './sync-hooks.mjs';
+import { ensureClaudeWorktreeAdapter, syncHooks } from './sync-hooks.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const ENTRYPOINT = join(ROOT, 'agent-bot');
@@ -367,6 +367,7 @@ export async function installAgentBot({
   ensureSupervisor = ensureDaemonSupervisor,
   ensureCutover = ensureSpacesCutover,
   installTranscriptAdapter = ensureClaudeWorktreeAdapter,
+  installUserHooks = syncHooks,
 } = {}) {
   const executable = installCli({ home });
   const agentHook = installAgentHooks({ home });
@@ -395,7 +396,8 @@ export async function installAgentBot({
   const supervisor = await ensureSupervisor({ home, env, executable });
   const cutover = ensureCutover({ home, env });
   const transcriptAdapter = installTranscriptAdapter({ home, env });
-  return { executable, agentHook, hooksPath, previous, chainedHooksPath, pathRegistration, supervisor, cutover, transcriptAdapter };
+  const userHooks = installUserHooks({ home, env });
+  return { executable, agentHook, hooksPath, previous, chainedHooksPath, pathRegistration, supervisor, cutover, transcriptAdapter, userHooks };
 }
 
 export async function main(argv = process.argv.slice(2)) {
