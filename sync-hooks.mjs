@@ -214,23 +214,76 @@ export function ensureClaudeWorktreeAdapter(options = {}) {
 // a project file can outrank the user hook.
 export function hookHomePath(row, home = homedir(), env = process.env) {
   if (!row.homeFile) throw new Error(`${row.key} has no user hook path`);
-  if (row.key === 'claude' && env.CLAUDE_CONFIG_DIR) return join(resolve(env.CLAUDE_CONFIG_DIR), 'settings.json');
-  return join(resolve(home), row.homeFile);
+  const base = resolve(home);
+  if (row.key === 'claude' && env.CLAUDE_CONFIG_DIR) return join(resolve(base, env.CLAUDE_CONFIG_DIR), 'settings.json');
+  return join(base, row.homeFile);
+}
+
+function assertRegularHookFile(path) {
+  const directory = dirname(path);
+  if (existsSync(directory)) {
+    const parent = lstatSync(directory);
+    if (parent.isSymbolicLink() || !parent.isDirectory()) {
+      throw new Error(`${directory} must be a regular directory`);
+    }
+  }
+  if (!existsSync(path)) return;
+  const file = lstatSync(path);
+  if (file.isSymbolicLink() || !file.isFile()) {
+    throw new Error(`${path} must be a regular file`);
+  }
+}
+
+function writeAtomic(path, contents) {
+  assertRegularHookFile(path);
+  mkdirSync(dirname(path), { recursive: true });
+  assertRegularHookFile(path);
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, contents, { flag: 'wx', mode: 0o600 });
+    renameSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
+const CODEX_USER_POLICY = `approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = true
+
+[features]
+hooks = true
+
+[apps.connector_76869538009648d5b282a4bb21c3d157]
+enabled = true
+destructive_enabled = false
+`;
+
+function ensureCodexUserPolicy(home, check) {
+  const path = join(resolve(home), '.codex', 'config.toml');
+  if (existsSync(path)) {
+    assertRegularHookFile(path);
+    return [];
+  }
+  if (check) return [path];
+  writeAtomic(path, CODEX_USER_POLICY);
+  return [path];
 }
 
 export function syncHooks({ home = homedir(), env = process.env, check = false } = {}) {
   const drift = [];
   for (const row of DIALECTS.filter((candidate) => candidate.homeFile)) {
     const path = hookHomePath(row, home, env);
+    assertRegularHookFile(path);
     const current = existsSync(path) ? readFileSync(path, 'utf8') : '{}';
     const desired = renderConfig(row, current);
     if (current === desired) continue;
     drift.push(path);
-    if (!check) {
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, desired);
-    }
+    if (!check) writeAtomic(path, desired);
   }
+  drift.push(...ensureCodexUserPolicy(home, check));
   return drift;
 }
 
