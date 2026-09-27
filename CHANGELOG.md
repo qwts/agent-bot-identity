@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 0.6.1
+
+- `doctor` reports four more pieces of machine state that previously surfaced
+  only as a failure: which App each recorded checkout is bound to, whether a
+  secure-store provider has a live session, whether the gh-app-hook inbox is
+  configured and wired into a harness, and the installed CLI version beside a
+  source checkout's. All four are advisory, so they report state without
+  changing `bootstrap` behaviour or a CI gate (#228, #231).
+- The secure-store session probe never reads a field, so a diagnostic cannot
+  become a secret reader, and an unreachable provider is reported distinctly
+  from one that answered "no session" (#231).
+- An App outside the configured roster now fails the worktree section instead of
+  being reported as a `failed` check inside a section that still claimed `ready`
+  (#228, #231).
+- An empty App roster is reported as unconfigured rather than treated as
+  allowing any App, and a manifest that is not this runtime is never used as the
+  checkout version for skew (#231).
+
 ## 0.6.0
 
 - Harness hook adapters for Claude, Codex, Cursor, Copilot, and Windsurf are
