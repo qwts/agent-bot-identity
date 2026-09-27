@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- The `gh-app-hook` Worker pushes each stored record to registered webhook
+  subscribers instead of only serving polling consumers. A `SUBSCRIBERS`
+  Worker secret maps an App slug (and optional `owner/name` repos) to
+  destinations with per-subscriber sender keys and an optional auth override;
+  each push is HMAC-SHA256 signed (`x-hub-signature-256`), at-least-once with
+  alarm-driven retry and a dead-letter list, and `/inbox` keeps working as the
+  catch-up path because `take` now marks a record pulled instead of deleting
+  it. Sender keys and subscriber URLs never appear in logs, errors, or
+  responses, and a bearer-protected `GET /deadletter?app=` surfaces what never
+  arrived (#234).
+
 ## 0.6.1
 
 - `doctor` reports four more pieces of machine state that previously surfaced
