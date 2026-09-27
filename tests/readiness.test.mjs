@@ -14,6 +14,7 @@ import { ensureClaudeWorktreeAdapter } from '../sync-hooks.mjs';
 import {
   READINESS_SCHEMA_VERSION,
   collectReadiness,
+  harnessMcpWiring,
   credentialHelperSequenceReady,
   renderReadinessJson,
   renderReadinessReport,
@@ -1600,4 +1601,84 @@ test('the binding summary counts checkouts, not souls', async () => {
   const check = report.machine.checks.find((entry) => entry.id === 'worktree.binding_summary');
   assert.equal(check.evidence.active, 1);
   assert.equal(check.evidence.checkouts, 3);
+});
+
+test('the binding check ignores GIT_CONFIG_* injection in the default env path', async () => {
+  // The existing suite test cannot catch this: it passes a hermetic env, so
+  // collectReadiness never defaults to process.env. This one leaves
+  // GIT_CONFIG_COUNT poisoning the real environment the way a container would.
+  const repo = join(tempRoot(), 'repo');
+  mkdirSync(repo);
+  execFileSync('git', ['init', '--quiet', '--initial-branch=main'], { cwd: repo });
+  const clean = hermeticGitEnv(process.env, { HOME: repo, GIT_CONFIG_GLOBAL: join(repo, '.gitconfig') });
+  const git = (args, options) => execFileSync('git', args, {
+    cwd: options?.cwd, env: options?.env ?? clean, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  }).replace(/[\r\n]+$/, '');
+  execFileSync('git', ['config', '--worktree', 'agentBot.app', 'org-claude-agent'], { cwd: repo, env: clean });
+
+  const saved = new Map();
+  const poison = {
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'agentBot.app',
+    GIT_CONFIG_VALUE_0: 'ambient-wrong-agent',
+  };
+  for (const [key, value] of Object.entries(poison)) {
+    saved.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+  try {
+    // cwd is a real repo whose own config pins org-claude-agent.
+    const report = await collectReadiness({
+      command: 'doctor', scope: 'worktree', cwd: repo, home: repo, env: process.env, git,
+      load: () => ({ apps: { claude: 'org-claude-agent' } }),
+    });
+    const check = report.worktree.checks.find((entry) => entry.id === 'worktree.binding');
+    assert.equal(check.status, 'ready');
+    assert.equal(check.evidence.app_slug, 'org-claude-agent');
+    // Scoped to this check on purpose. The pre-existing worktree.app check reads
+    // the same git config and does echo the injected App, so a whole-report
+    // assertion would fail on a gap this change did not introduce. That is
+    // tracked separately rather than absorbed here.
+    assert.doesNotMatch(JSON.stringify(check), /ambient-wrong-agent/);
+  } finally {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('the inbox section finds a project-scoped MCP registration', async () => {
+  // Scanning only `home` reports a false negative for the common case where the
+  // wiring is committed alongside the repository that needs it.
+  const home = tempRoot();
+  const project = tempRoot();
+  writeFileSync(join(project, '.mcp.json'), JSON.stringify({
+    mcpServers: { 'agent-bot': { command: ['agent-bot', 'mcp'] } },
+  }));
+  const harnessWires = harnessMcpWiring({ home, cwd: project });
+  assert.ok(
+    harnessWires.some((entry) => entry.harness === 'claude' && entry.scope === 'project'),
+    `expected a project-scoped claude registration, saw ${JSON.stringify(harnessWires)}`,
+  );
+});
+
+test('the inbox section still finds a user-scoped registration', async () => {
+  const home = tempRoot();
+  mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
+  writeFileSync(join(home, '.config', 'opencode', 'opencode.jsonc'), '{\n  "mcp": { "agent-bot": {} }\n}\n');
+  const harnessWires = harnessMcpWiring({ home, cwd: tempRoot() });
+  assert.ok(
+    harnessWires.some((entry) => entry.harness === 'opencode' && entry.scope === 'user'),
+    `expected a user-scoped opencode registration, saw ${JSON.stringify(harnessWires)}`,
+  );
+});
+
+test('an unrelated MCP server is never reported as agent-bot wiring', async () => {
+  const home = tempRoot();
+  const project = tempRoot();
+  writeFileSync(join(project, '.mcp.json'), JSON.stringify({
+    mcpServers: { playwright: { command: ['npx', 'playwright'] } },
+  }));
+  assert.deepEqual(harnessMcpWiring({ home, cwd: project }), []);
 });

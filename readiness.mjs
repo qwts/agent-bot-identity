@@ -465,16 +465,27 @@ function worktreeBindingSummaryCheck({ home, env, roster }) {
 // machine-wide observation, and a diagnostic that quietly tolerated it would
 // misreport what this session can actually act as.
 function currentWorktreeBindingCheck({ cwd, env, git, roster }) {
-  // Read the pin through the injected git with the caller's env, exactly as the
-  // other worktree probes do. `pinnedSlug` cannot be used here: it forwards no
-  // env to its subprocess, so it would read ambient GIT_CONFIG_* injection and
-  // report whatever a container happened to set.
+  // Read the pin through the injected git, exactly as the other worktree probes
+  // do. `pinnedSlug` cannot be used here: it forwards no env to its subprocess.
+  //
+  // The caller's env is NOT passed through unmodified. `collectReadiness` defaults
+  // it to process.env, so command-scope GIT_CONFIG_COUNT/GIT_CONFIG_KEY_*/
+  // GIT_CONFIG_VALUE_* injection in a container would satisfy the first
+  // `--worktree --get` and report whatever App the container injected. Strip
+  // those, plus the repository-override variables, so the answer comes from the
+  // checkout's own configuration.
+  const probeEnv = { ...env };
+  for (const key of Object.keys(probeEnv)) {
+    if (/^GIT_(CONFIG|DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|NAMESPACE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CEILING_DIRECTORIES)/.test(key)) {
+      delete probeEnv[key];
+    }
+  }
   let slug = null;
   let readable = true;
   for (const key of PIN_KEYS) {
     for (const args of [['config', '--worktree', '--get', key], ['config', '--get', key]]) {
       try {
-        const value = (git(args, { cwd, env }) ?? '').trim();
+        const value = (git(args, { cwd, env: probeEnv }) ?? '').trim();
         if (value) {
           slug = value;
           break;
@@ -758,25 +769,52 @@ const MCP_CONFIG_LOCATIONS = [
 // Reports which harnesses wire the agent-bot MCP server specifically. A file
 // that configures some other MCP server yields no entry: this check answers
 // "is agent-bot wired here", not "does this harness use MCP at all".
-function defaultListHarnessMcpServers({ home }) {
+// Harness MCP configuration is not only user-level: `.mcp.json` and
+// `opencode.json`/`opencode.jsonc` are commonly project-scoped, committed
+// alongside the repository that needs them. Scanning only `home` would report
+// a false negative for exactly the checkouts that are wired, so project
+// locations are scanned too. A path that does not exist is not reported, which
+// keeps the failure direction a false negative rather than a claim of wiring
+// that is absent.
+const PROJECT_MCP_CONFIG_LOCATIONS = [
+  { harness: 'claude', key: /"mcpServers"\s*:/, agent: /agent-bot/, paths: ['.mcp.json'] },
+  { harness: 'claude', key: /"mcp"\s*:/, agent: /agent-bot/, paths: ['.mcp.json'] },
+  { harness: 'opencode', key: /"mcp"\s*:/, agent: /agent-bot/, paths: ['opencode.jsonc', 'opencode.json', '.opencode/opencode.json'] },
+  { harness: 'codex', key: /^\s*\[mcp_servers\./m, agent: /agent-bot/, paths: ['.codex/config.toml'] },
+];
+
+function harnessWiresAgentBot({ home, cwd, locations }) {
   const found = [];
   const seen = new Set();
-  for (const { harness, key, agent, paths } of MCP_CONFIG_LOCATIONS) {
+  for (const { harness, key, agent, paths } of locations) {
     if (seen.has(harness)) continue;
-    for (const relative of paths) {
-      let contents;
-      try {
-        contents = readFileSync(join(home, relative), 'utf8');
-      } catch {
-        continue;
+    const roots = [{ base: home, paths }];
+    if (cwd) roots.push({ base: cwd, paths: PROJECT_MCP_CONFIG_LOCATIONS.find((e) => e.harness === harness)?.paths ?? paths });
+    for (const { base, paths: candidates } of roots) {
+      for (const relative of candidates) {
+        let contents;
+        try {
+          contents = readFileSync(join(base, relative), 'utf8');
+        } catch {
+          continue;
+        }
+        if (!key.test(contents) || !agent.test(contents)) continue;
+        found.push({ harness, mcp: 'agent-bot', scope: base === home ? 'user' : 'project' });
+        seen.add(harness);
+        break;
       }
-      if (!key.test(contents) || !agent.test(contents)) continue;
-      found.push({ harness, mcp: 'agent-bot' });
-      seen.add(harness);
-      break;
+      if (seen.has(harness)) break;
     }
   }
   return found;
+}
+
+export function harnessMcpWiring(options) {
+  return harnessWiresAgentBot({ locations: MCP_CONFIG_LOCATIONS, ...options });
+}
+
+function defaultListHarnessMcpServers({ home, cwd }) {
+  return harnessWiresAgentBot({ home, cwd, locations: MCP_CONFIG_LOCATIONS });
 }
 
 function unreferencedSoulsCheck({ home, env, git }) {
@@ -1722,7 +1760,7 @@ export async function collectReadiness({
     machineChecks.push(secureStoreCheck({ probe: probeSecretStore }));
     machineChecks.push(inboxConfigurationCheck({
       env,
-      harnesses: listHarnessMcpServers({ home }),
+      harnesses: listHarnessMcpServers({ home, cwd }),
     }));
     machineChecks.push(versionSkewCheck({
       home,
