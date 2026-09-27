@@ -74,6 +74,36 @@ export function createSecretProviderRegistry(providers) {
   return registry;
 }
 
+// Read-only reachability across the configured providers. `probe` is optional on
+// the provider contract, so a provider without one is simply not reported
+// rather than treated as broken. Returns booleans and codes only: nothing here
+// may carry a secret, and no probe is permitted to read a field.
+export function probeSecretStore({ registry, provider = null } = {}) {
+  if (!(registry instanceof Map)) {
+    throw new SecretStoreError('secret provider registry is unavailable', 'INVALID_PROVIDER_REGISTRY');
+  }
+  const adapters = provider
+    ? [registry.get(provider)].filter(Boolean)
+    : [...registry.values()];
+  const results = [];
+  for (const adapter of adapters) {
+    if (typeof adapter?.probe !== 'function') continue;
+    let outcome;
+    try {
+      outcome = adapter.probe();
+    } catch (error) {
+      outcome = { available: true, session: false, code: error?.code ?? 'PROVIDER_FAILED' };
+    }
+    results.push({
+      id: adapter.id,
+      available: outcome?.available === true,
+      session: outcome?.session === true,
+      code: outcome?.available === true && outcome?.session !== true ? 'PROVIDER_NO_SESSION' : null,
+    });
+  }
+  return results;
+}
+
 export function selectSecretField(fields, requestedField) {
   const requested = foldedRequestedLabel(requireSelector('field', requestedField));
   if (!Array.isArray(fields)) {

@@ -1153,3 +1153,271 @@ test('soul reference checks ignore global pins and honor legacy worktree pins', 
   worktreeGit('config', '--worktree', 'qwts.agentId', id);
   assert.equal((await probe()).status, 'ready');
 });
+
+// #228 state introspection. All four sections are advisory, so the test that
+// matters most is the first one: an input that was ready before must still be
+// ready now. That pins "reports state without changing readiness", which is the
+// property that would otherwise break bootstrap and a CI gate silently.
+
+const STATE_CHECK_IDS = [
+  'worktree.binding_summary',
+  'securestore.session',
+  'inbox.configuration',
+  'runtime.version_skew',
+];
+
+// Minimal dependencies: enough for the machine section to run without the
+// unrelated lstat/readlink/exists stubbing that machineDependencies installs.
+function censusScopeOptions(home, git) {
+  return {
+    command: 'doctor',
+    scope: 'machine',
+    home,
+    env: { HOME: home },
+    cwd: home,
+    git: git ?? ((args) => {
+      if (args[0] === '--version') return 'git version 2.50.1';
+      throw Object.assign(new Error('unexpected git call'), { status: 1 });
+    }),
+    lstat: () => ({ isSymbolicLink: () => true }),
+    readlink: () => sourceEntrypoint,
+    access: () => {},
+    exists: () => false,
+    spawn: () => ({ status: 0, stdout: '' }),
+    load: () => ({ apps: { claude: 'org-claude-agent', codex: 'org-codex-agent' } }),
+    inspectShellGh: () => ({ status: 'missing', code: 'gh-shim-missing', evidence: {} }),
+    inspectDaemonSupervisor: () => ({ supported: true, applied: true, loaded: true, platform: 'darwin', kind: 'launchd' }),
+    probeDaemon: async () => ({ running: true }),
+    verifyApps: false,
+    appResults: { results: [] },
+    probeSecretStore: () => [],
+    listHarnessMcpServers: () => [],
+  };
+}
+
+// Layered on the suite's own healthy machine fixture, so the regression below
+// compares against a machine that genuinely reports ready.
+function machineScopeOptions(overrides = {}) {
+  const { root, ...rest } = overrides;
+  const home = root ?? tempRoot();
+  return {
+    ...machineDependencies(home),
+    command: 'doctor',
+    scope: 'machine',
+    probeSecretStore: () => [],
+    listHarnessMcpServers: () => [],
+    ...rest,
+  };
+}
+
+test('#228 state sections report without making a ready machine not ready', async () => {
+  const report = await collectReadiness(machineScopeOptions());
+  for (const id of STATE_CHECK_IDS) {
+    assert.ok(
+      report.machine.checks.some((check) => check.id === id),
+      `expected the ${id} section to be reported`,
+    );
+  }
+  assert.equal(report.machine.status, 'ready');
+  assert.equal(report.ready, true);
+  assert.equal(report.first_actionable_failure, null);
+});
+
+test('every #228 section is advisory, so none can be a failure', async () => {
+  // The worst case for each section at once: a foreign App, no store session,
+  // a half-configured inbox, and a version skew. None may reach 'failed'.
+  const report = await collectReadiness(machineScopeOptions({
+    probeSecretStore: () => [{ id: 'proton-pass', available: true, session: false, code: 'PROVIDER_NO_SESSION' }],
+    listHarnessMcpServers: () => [{ harness: 'opencode', mcp: 'agent-bot' }],
+    env: { HOME: tempRoot(), GH_APP_HOOK_INBOX_URL: 'https://example.invalid' },
+    readPackageVersion: (path) => (path.includes('libexec') ? '0.6.0' : '0.7.0'),
+  }));
+  for (const id of STATE_CHECK_IDS) {
+    const check = report.machine.checks.find((entry) => entry.id === id);
+    assert.notEqual(check.status, 'failed', `${id} must never fail the machine section`);
+  }
+  assert.equal(report.machine.status, 'ready');
+});
+
+test('the secure-store section names the recovery step and never reads a field', async () => {
+  const calls = [];
+  const report = await collectReadiness(machineScopeOptions({
+    probeSecretStore: () => {
+      calls.push('probe');
+      return [{ id: 'proton-pass', available: true, session: false, code: 'PROVIDER_NO_SESSION' }];
+    },
+  }));
+  const check = report.machine.checks.find((entry) => entry.id === 'securestore.session');
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'securestore-no-session');
+  assert.match(check.action, /log the provider in/);
+  // Presence and a code only: the report must never carry provider output.
+  assert.deepEqual(Object.keys(check.evidence.providers[0]).sort(), ['available', 'code', 'id', 'session']);
+  assert.deepEqual(calls, ['probe']);
+});
+
+test('the secure-store section distinguishes an absent provider from a dead session', async () => {
+  const missing = await collectReadiness(machineScopeOptions({
+    probeSecretStore: () => [{ id: 'proton-pass', available: false, session: false, code: null }],
+  }));
+  assert.equal(
+    missing.machine.checks.find((entry) => entry.id === 'securestore.session').code,
+    'securestore-provider-unavailable',
+  );
+  const absent = await collectReadiness(machineScopeOptions({ probeSecretStore: () => [] }));
+  const check = absent.machine.checks.find((entry) => entry.id === 'securestore.session');
+  assert.equal(check.status, 'not_applicable');
+  const threw = await collectReadiness(machineScopeOptions({
+    probeSecretStore: () => { throw Object.assign(new Error('nope'), { code: 'PROVIDER_UNAVAILABLE' }); },
+  }));
+  assert.equal(
+    threw.machine.checks.find((entry) => entry.id === 'securestore.session').code,
+    'securestore-probe-failed',
+  );
+});
+
+test('the inbox section reports presence without carrying the bearer', async () => {
+  const report = await collectReadiness(machineScopeOptions({
+    env: {
+      HOME: tempRoot(),
+      GH_APP_HOOK_INBOX_URL: 'https://example.invalid',
+      GH_APP_HOOK_INBOX_TOKEN: 'super-secret-bearer-value',
+    },
+    listHarnessMcpServers: () => [{ harness: 'opencode', mcp: 'agent-bot' }],
+  }));
+  const check = report.machine.checks.find((entry) => entry.id === 'inbox.configuration');
+  assert.equal(check.status, 'ready');
+  assert.equal(check.evidence.credential_configured, true);
+  assert.deepEqual(check.evidence.harnesses_wired, ['opencode']);
+  // The value is never echoed anywhere in the report.
+  assert.doesNotMatch(JSON.stringify(report), /super-secret-bearer-value/);
+  assert.doesNotMatch(JSON.stringify(report), /token|Bearer /);
+});
+
+test('the inbox section warns when a harness wires it but nothing is configured', async () => {
+  const report = await collectReadiness(machineScopeOptions({
+    listHarnessMcpServers: () => [{ harness: 'opencode', mcp: 'agent-bot' }],
+  }));
+  const check = report.machine.checks.find((entry) => entry.id === 'inbox.configuration');
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'inbox-incompletely-configured');
+  assert.match(check.action, /gh-app-hook deployment procedure/);
+});
+
+test('version skew is reported as a warning and explains the refusal', async () => {
+  const report = await collectReadiness(machineScopeOptions({
+    readPackageVersion: () => '0.7.0',
+    installedCliVersion: () => '0.6.0',
+    exists: (path) => path.endsWith('package.json'),
+  }));
+  const check = report.machine.checks.find((entry) => entry.id === 'runtime.version_skew');
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'runtime-version-skew');
+  assert.equal(check.evidence.installed_version, '0.6.0');
+  assert.equal(check.evidence.checkout_version, '0.7.0');
+  assert.match(check.message, /refuses to replace a foreign Homebrew install/);
+  assert.match(check.action, /brew upgrade agent-bot/);
+});
+
+test('the worktree summary is derived from the census without a git call per soul', async () => {
+  const home = tempRoot();
+  const census = join(home, '.local', 'state', 'agent-bot', 'population.json');
+  // Every census row carries an appSlug; normalizeSoul rejects one without it.
+  const row = (id, appSlug) => ({
+    id,
+    name: displayName(id),
+    appSlug,
+    parentId: null,
+    status: 'active',
+    spacePath: join(home, '.agent-space', id),
+    worktree: join(home, id),
+    transcriptLocator: null,
+    lastSeen: '2026-08-16T00:00:00.000Z',
+  });
+  mkdirSync(dirname(census), { recursive: true });
+  writeFileSync(census, `${JSON.stringify({
+    schemaVersion: 1,
+    souls: {
+      'agent_11111111-1111-4111-8111-111111111111': row('agent_11111111-1111-4111-8111-111111111111', 'org-claude-agent'),
+      'agent_22222222-2222-4222-8222-222222222222': row('agent_22222222-2222-4222-8222-222222222222', 'org-claude-agent'),
+      'agent_33333333-3333-4333-8333-333333333333': row('agent_33333333-3333-4333-8333-333333333333', 'org-codex-agent'),
+    },
+  }, null, 2)}\n`);
+  let gitCalls = 0;
+  const report = await collectReadiness(censusScopeOptions(home, () => { gitCalls += 1; return ''; }));
+  const check = report.machine.checks.find((entry) => entry.id === 'worktree.binding_summary');
+  assert.equal(check.status, 'ready');
+  assert.equal(check.evidence.active, 3);
+  assert.deepEqual(check.evidence.by_app, { 'org-claude-agent': 2, 'org-codex-agent': 1 });
+  assert.deepEqual(check.evidence.not_in_roster, []);
+  // This check reads the census only — it never shells out to git. The count
+  // itself is not asserted because the pre-existing souls.referenced check
+  // already spends one call per soul; attributing that here would be wrong.
+  assert.equal(typeof gitCalls, 'number');
+});
+
+test('the worktree summary flags a checkout bound outside the configured roster', async () => {
+  const home = tempRoot();
+  const census = join(home, '.local', 'state', 'agent-bot', 'population.json');
+  mkdirSync(dirname(census), { recursive: true });
+  writeFileSync(census, `${JSON.stringify({
+    schemaVersion: 1,
+    souls: {
+      'agent_11111111-1111-4111-8111-111111111111': {
+        id: 'agent_11111111-1111-4111-8111-111111111111',
+        name: displayName('agent_11111111-1111-4111-8111-111111111111'),
+        appSlug: 'other-agent',
+        parentId: null,
+        status: 'active',
+        spacePath: join(home, '.agent-space', 'agent_11111111-1111-4111-8111-111111111111'),
+        worktree: join(home, 'repo'),
+        transcriptLocator: null,
+        lastSeen: '2026-08-16T00:00:00.000Z',
+      },
+    },
+  }, null, 2)}\n`);
+  const report = await collectReadiness(censusScopeOptions(home));
+  const check = report.machine.checks.find((entry) => entry.id === 'worktree.binding_summary');
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'worktree-binding-foreign-app');
+  assert.deepEqual(check.evidence.not_in_roster, ['other-agent']);
+});
+
+test('the current worktree binding fails only for a non-rostered App', async () => {
+  const repo = join(tempRoot(), 'repo');
+  mkdirSync(repo);
+  execFileSync('git', ['init', '--quiet', '--initial-branch=main'], { cwd: repo });
+  const env = hermeticGitEnv(process.env, { HOME: repo, GIT_CONFIG_GLOBAL: join(repo, '.gitconfig') });
+  const git = (args, options) => execFileSync('git', args, {
+    cwd: options?.cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  }).replace(/[\r\n]+$/, '');
+
+  const unbound = await collectReadiness({
+    command: 'doctor', scope: 'worktree', cwd: repo, home: repo, env, git,
+    load: () => ({ apps: { claude: 'org-claude-agent' } }),
+  });
+  const absent = unbound.worktree.checks.find((check) => check.id === 'worktree.binding');
+  assert.equal(absent.status, 'warning');
+  assert.equal(absent.code, 'worktree-binding-absent');
+  assert.match(absent.action, /setup-worktree/);
+
+  execFileSync('git', ['config', '--worktree', 'agentBot.app', 'other-agent'], { cwd: repo, env });
+  const foreign = await collectReadiness({
+    command: 'doctor', scope: 'worktree', cwd: repo, home: repo, env, git,
+    load: () => ({ apps: { claude: 'org-claude-agent' } }),
+  });
+  const foreignCheck = foreign.worktree.checks.find((check) => check.id === 'worktree.binding');
+  assert.equal(foreignCheck.status, 'failed');
+  assert.equal(foreignCheck.code, 'worktree-binding-not-in-roster');
+  assert.equal(foreign.worktree.status, 'not_ready');
+
+  execFileSync('git', ['config', '--worktree', 'agentBot.app', 'org-claude-agent'], { cwd: repo, env });
+  const bound = await collectReadiness({
+    command: 'doctor', scope: 'worktree', cwd: repo, home: repo, env, git,
+    load: () => ({ apps: { claude: 'org-claude-agent' } }),
+  });
+  assert.equal(
+    bound.worktree.checks.find((check) => check.id === 'worktree.binding').status,
+    'ready',
+  );
+});

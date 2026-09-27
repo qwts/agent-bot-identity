@@ -207,6 +207,24 @@ export function createProtonPassAdapter(options = {}) {
   const run = options.run ?? ((args, invocation = {}) => runPassCli(args, { ...options, ...invocation }));
   return Object.freeze({
     id: 'proton-pass',
+    // Session state only. This deliberately never views an item, so it creates
+    // no audit entry and produces no decrypted material: a diagnostic must not
+    // become a secret reader. Booleans only, because `pass-cli info` reports
+    // account identifiers that a readiness report has no business carrying.
+    probe() {
+      try {
+        safeInvoke(run, ['info']);
+        return { available: true, session: true };
+      } catch (error) {
+        if (error?.code === 'PROVIDER_UNAVAILABLE') {
+          return { available: false, session: false };
+        }
+        // A logged-out or locked store fails the same way as any other non-zero
+        // request, so report it as present-but-unsessioned and let the caller
+        // name the recovery step.
+        return { available: true, session: false };
+      }
+    },
     readFields({ collection, item, reason }) {
       const auditReason = requireAuditReason(reason);
       let shareId;
