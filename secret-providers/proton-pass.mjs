@@ -207,6 +207,33 @@ export function createProtonPassAdapter(options = {}) {
   const run = options.run ?? ((args, invocation = {}) => runPassCli(args, { ...options, ...invocation }));
   return Object.freeze({
     id: 'proton-pass',
+    // Session state only. This deliberately never views an item, so it creates
+    // no audit entry and produces no decrypted material: a diagnostic must not
+    // become a secret reader. Booleans and a failure class only, because
+    // `pass-cli info` reports account identifiers that a readiness report has no
+    // business carrying.
+    //
+    // The distinction that matters: a provider that could not be reached, could
+    // not start, or timed out is NOT a logged-out session. Collapsing those into
+    // "no session" tells an operator to log in when the real problem is a
+    // timeout or a missing executable, and sends them to the wrong fix.
+    probe() {
+      try {
+        safeInvoke(run, ['info']);
+        return { available: true, session: true, code: null };
+      } catch (error) {
+        if (error?.code === 'PROVIDER_UNAVAILABLE') {
+          return { available: false, session: false, code: 'PROVIDER_UNAVAILABLE' };
+        }
+        if (error?.code === 'PROVIDER_TIMEOUT' || error?.code === 'PROVIDER_START_FAILED'
+          || error?.code === 'PROVIDER_OUTPUT_LIMIT') {
+          return { available: false, session: false, code: error.code };
+        }
+        // A completed request that failed is the logged-out/locked case: the
+        // provider ran and declined.
+        return { available: true, session: false, code: 'PROVIDER_NO_SESSION' };
+      }
+    },
     readFields({ collection, item, reason }) {
       const auditReason = requireAuditReason(reason);
       let shareId;

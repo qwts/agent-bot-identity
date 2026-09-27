@@ -5,6 +5,7 @@ import {
   constants,
   existsSync,
   lstatSync,
+  readFileSync,
   readlinkSync,
   statSync,
 } from 'node:fs';
@@ -32,6 +33,7 @@ import {
 } from './organization-profile.mjs';
 import {
   AGENT_ID_KEYS,
+  PIN_KEYS,
   pinnedSlug,
   readGitConfig,
   resolveAgentSlug,
@@ -39,6 +41,8 @@ import {
 } from './resolve-agent.mjs';
 import { credentialHelperCommand } from './setup-worktree.mjs';
 import { parseUnmanagedAuthors } from './uninstalled-identity-hook.mjs';
+import { BUILTIN_SECRET_PROVIDERS } from './secret.mjs';
+import { createSecretProviderRegistry, probeSecretStore } from './secret-store.mjs';
 
 export const READINESS_SCHEMA_VERSION = 1;
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -51,6 +55,9 @@ const SKILL_FILES = [
   'skills/agent-bot/references/storage-surfaces.md',
 ];
 const APP_SLUG_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
+// Identifies this runtime's own manifest, so version skew never compares against
+// an unrelated project that happens to be the working directory.
+const AGENT_BOT_PACKAGE_NAME = 'agent-bot-identity';
 
 export function readinessCheck({
   id,
@@ -374,6 +381,440 @@ function checkoutHolds(soul, { git, env, worktree }) {
     }
   }
   return 'unpinned';
+}
+
+// #228 state introspection. Everything here is advisory: `sectionStatus` fails
+// a section only on 'failed', and doctor exits non-zero on `report.ready`, so a
+// 'warning' reports state without changing bootstrap behaviour or a CI gate.
+
+// Which App each recorded checkout is bound to, from the census alone. The
+// census already records appSlug per soul, so this costs no git call per
+// checkout — the existing souls.referenced check already spends those, and
+// doubling them would make doctor unusable on a large census.
+function worktreeBindingSummaryCheck({ home, env, roster }) {
+  let souls;
+  try {
+    souls = listSouls({ file: populationFile({ home, env }) })
+      .filter((soul) => soul.status === 'active');
+  } catch {
+    return null; // spaces.home already reports an unreadable census
+  }
+  if (souls.length === 0) {
+    return readinessCheck({
+      id: 'worktree.binding_summary',
+      status: 'not_applicable',
+      message: 'no active souls in the census, so no checkout bindings to summarize',
+      evidence: { active: 0, by_app: {}, not_in_roster: [] },
+    });
+  }
+  // Every census row carries an appSlug — normalizeSoul rejects one without it,
+  // so an unpinned soul is not a state this document can represent. Count
+  // checkouts, not souls: a soul may hold several linked worktrees, and counting
+  // one per soul would undercount the thing this check summarizes.
+  const byApp = new Map();
+  let checkoutCount = 0;
+  for (const soul of souls) {
+    const worktrees = Array.isArray(soul.worktrees) && soul.worktrees.length > 0
+      ? soul.worktrees
+      : [null];
+    for (const _worktree of worktrees) {
+      byApp.set(soul.appSlug, (byApp.get(soul.appSlug) ?? 0) + 1);
+      checkoutCount += 1;
+    }
+  }
+  // Same rule as the current-worktree check: an empty roster is an unconfigured
+  // machine, not a machine where every App is acceptable.
+  const known = roster ?? [];
+  const evidence = {
+    active: souls.length,
+    checkouts: checkoutCount,
+    by_app: Object.fromEntries([...byApp.entries()].sort(([a], [b]) => a.localeCompare(b))),
+    not_in_roster: known.length === 0 ? [] : [...byApp.keys()].filter((slug) => !known.includes(slug)).sort(),
+    roster_configured: known.length > 0,
+  };
+  if (known.length === 0) {
+    return readinessCheck({
+      id: 'worktree.binding_summary',
+      status: 'warning',
+      code: 'worktree-binding-no-roster',
+      message: `${checkoutCount} checkout(s) are bound, but no App roster is configured to verify them against`,
+      action: 'configure the App mapping, then bind each checkout with: agent-bot setup-worktree',
+      evidence,
+    });
+  }
+  if (evidence.not_in_roster.length === 0) {
+    return readinessCheck({
+      id: 'worktree.binding_summary',
+      status: 'ready',
+      message: `every checkout is bound to a rostered App (${checkoutCount})`,
+      evidence,
+    });
+  }
+  return readinessCheck({
+    id: 'worktree.binding_summary',
+    status: 'warning',
+    code: 'worktree-binding-foreign-app',
+    message: `checkouts are bound to Apps outside the configured roster: ${evidence.not_in_roster.join(', ')}`,
+    action: 'bind each checkout explicitly with: agent-bot setup-worktree',
+    evidence,
+  });
+}
+
+// The current worktree in full detail. This one may fail: an App outside the
+// roster is a real misconfiguration of the worktree being diagnosed, not a
+// machine-wide observation, and a diagnostic that quietly tolerated it would
+// misreport what this session can actually act as.
+function currentWorktreeBindingCheck({ cwd, env, git, roster }) {
+  // Read the pin through the injected git, exactly as the other worktree probes
+  // do. `pinnedSlug` cannot be used here: it forwards no env to its subprocess.
+  //
+  // The caller's env is NOT passed through unmodified. `collectReadiness` defaults
+  // it to process.env, so command-scope GIT_CONFIG_COUNT/GIT_CONFIG_KEY_*/
+  // GIT_CONFIG_VALUE_* injection in a container would satisfy the first
+  // `--worktree --get` and report whatever App the container injected. Strip
+  // those, plus the repository-override variables, so the answer comes from the
+  // checkout's own configuration.
+  const probeEnv = { ...env };
+  for (const key of Object.keys(probeEnv)) {
+    if (/^GIT_(CONFIG|DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|NAMESPACE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CEILING_DIRECTORIES)/.test(key)) {
+      delete probeEnv[key];
+    }
+  }
+  let slug = null;
+  let readable = true;
+  for (const key of PIN_KEYS) {
+    for (const args of [['config', '--worktree', '--get', key], ['config', '--get', key]]) {
+      try {
+        const value = (git(args, { cwd, env: probeEnv }) ?? '').trim();
+        if (value) {
+          slug = value;
+          break;
+        }
+      } catch (error) {
+        // status 1 is "unset"; anything else means this is not a usable worktree.
+        if (error?.status !== 1) {
+          readable = false;
+          break;
+        }
+      }
+    }
+    if (slug || !readable) break;
+  }
+  if (!readable) {
+    return readinessCheck({
+      id: 'worktree.binding',
+      status: 'not_applicable',
+      message: 'the current directory is not a readable Git worktree',
+    });
+  }
+  if (!slug) {
+    return readinessCheck({
+      id: 'worktree.binding',
+      status: 'warning',
+      code: 'worktree-binding-absent',
+      message: 'the current worktree is not bound to an App, so identity-bound capabilities will refuse it',
+      action: 'bind this worktree with: agent-bot setup-worktree',
+      evidence: { worktree: cwd, app_slug: null },
+    });
+  }
+  // An empty roster means no App is configured, not that every App is allowed.
+  // Treating absence as allow-all would make this failure unreachable on an
+  // account with no mappings — exactly when a pin has nothing to reconcile with.
+  const known = roster ?? [];
+  if (known.length === 0) {
+    return readinessCheck({
+      id: 'worktree.binding',
+      status: 'warning',
+      code: 'worktree-binding-no-roster',
+      message: `the current worktree is bound to ${slug}, but no App roster is configured to verify it against`,
+      action: 'configure the App mapping, then bind again with: agent-bot setup-worktree',
+      evidence: { worktree: cwd, app_slug: slug, roster: known },
+    });
+  }
+  const inRoster = known.includes(slug);
+  return readinessCheck({
+    id: 'worktree.binding',
+    status: inRoster ? 'ready' : 'failed',
+    code: inRoster ? null : 'worktree-binding-not-in-roster',
+    message: inRoster
+      ? `the current worktree is bound to ${slug}`
+      : `the current worktree is bound to ${slug}, which is not in the configured roster`,
+    action: inRoster ? null : 'reconcile the App mapping, then bind again with: agent-bot setup-worktree',
+    evidence: { worktree: cwd, app_slug: slug, roster: known },
+  });
+}
+
+// Secure-store reachability, from the provider's own session probe. Never reads
+// a field, so this creates no audit entry and puts no secret in the report.
+function secureStoreCheck({ probe }) {
+  let results;
+  try {
+    results = probe();
+  } catch (error) {
+    return readinessCheck({
+      id: 'securestore.session',
+      status: 'warning',
+      code: 'securestore-probe-failed',
+      message: 'the secure store could not be probed',
+      action: 'check the provider executable, then rerun doctor',
+      evidence: { providers: [], code: error?.code ?? 'PROVIDER_FAILED' },
+    });
+  }
+  if (!Array.isArray(results) || results.length === 0) {
+    return readinessCheck({
+      id: 'securestore.session',
+      status: 'not_applicable',
+      message: 'no configured secure store reports session state',
+    });
+  }
+  const evidence = { providers: results };
+  if (results.every((entry) => entry.available && entry.session)) {
+    return readinessCheck({
+      id: 'securestore.session',
+      status: 'ready',
+      message: `every configured secure store has a live session (${results.length})`,
+      evidence,
+    });
+  }
+  // A provider that never answered is a different problem from one that answered
+  // "no session", and the recovery differs. Grouping them would send an operator
+  // to log in again when the real fault is a timeout or a missing executable.
+  const unreachable = results.filter((entry) => !entry.available);
+  const unsessioned = results.filter((entry) => entry.available && !entry.session);
+  if (unreachable.length > 0) {
+    return readinessCheck({
+      id: 'securestore.session',
+      status: 'warning',
+      code: 'securestore-provider-unavailable',
+      message: `secure store provider(s) did not answer: ${unreachable.map((e) => `${e.id} (${e.code ?? 'unavailable'})`).join(', ')}`,
+      action: 'check the provider executable and connectivity, then rerun doctor; logging in will not help an unreachable provider',
+      evidence,
+    });
+  }
+  return readinessCheck({
+    id: 'securestore.session',
+    status: 'warning',
+    code: 'securestore-no-session',
+    message: `secure store has no live session: ${unsessioned.map((e) => e.id).join(', ')}`,
+    action: 'log the provider in, then rerun doctor; a bound action needing a secret will fail until then',
+    evidence,
+  });
+}
+
+// Inbox reachability, presence only. Reports what is configured and whether a
+// harness has the MCP server wired; it never reads the bearer, and it makes no
+// network call by default — a diagnostic that blocks on an unreachable third
+// party is worse than one that reports the configuration it can see.
+function inboxConfigurationCheck({ env, harnesses }) {
+  const url = typeof env.GH_APP_HOOK_INBOX_URL === 'string' ? env.GH_APP_HOOK_INBOX_URL : null;
+  // Only an agent-bot entry counts as wired. A harness with some unrelated MCP
+  // server configured has not wired the inbox.
+  const wired = Array.isArray(harnesses)
+    ? harnesses.filter((entry) => entry?.mcp === 'agent-bot')
+    : [];
+  const evidence = {
+    url_configured: Boolean(url),
+    // Named for what it is, and deliberately free of the words the leak guard
+    // screens for: this reports presence, never a value.
+    credential_configured: typeof env.GH_APP_HOOK_INBOX_TOKEN === 'string' && env.GH_APP_HOOK_INBOX_TOKEN.length > 0,
+    harnesses_wired: wired.map((entry) => entry.harness),
+  };
+  if (!url && wired.length === 0) {
+    return readinessCheck({
+      id: 'inbox.configuration',
+      status: 'not_applicable',
+      message: 'no gh-app-hook inbox is configured and no harness wires its MCP server',
+      evidence,
+    });
+  }
+  if (url && evidence.credential_configured && wired.length > 0) return readinessCheck({
+    id: 'inbox.configuration',
+    status: 'ready',
+    message: `the inbox is configured and wired into ${wired.length} harness(es)`,
+    evidence,
+  });
+  return readinessCheck({
+    id: 'inbox.configuration',
+    status: 'warning',
+    code: 'inbox-incompletely-configured',
+    message: !url
+      ? 'a harness wires the inbox MCP server but no inbox URL is configured'
+      : 'the inbox is configured but no harness wires its MCP server, or the bearer is absent',
+    action: 'see the gh-app-hook deployment procedure for provisioning and harness wiring',
+    evidence,
+  });
+}
+
+// Installed CLI version beside a source checkout's, when doctor runs from one.
+// Skew is normal mid-release, so this is never a failure. The two version
+// lookups are injected separately: resolving where the installed runtime lives
+// is a different question from comparing versions, and only the former knows
+// about Homebrew's layout.
+function versionSkewCheck({ home, cwd, exists, readVersion, installedVersion }) {
+  let installed = null;
+  try {
+    installed = installedVersion({ home });
+  } catch {
+    installed = null; // installedCliCheck owns install failures
+  }
+  // Only a manifest that is actually this runtime counts. Accepting any
+  // package.json found in the cwd would compare the installed agent-bot against
+  // whatever project doctor happened to be run from and report bogus skew.
+  let checkout = null;
+  let checkoutPath = null;
+  for (const candidate of [cwd, ROOT]) {
+    const manifest = join(candidate, 'package.json');
+    if (!exists(manifest)) continue;
+    let name;
+    try {
+      name = JSON.parse(readFileSync(manifest, 'utf8')).name;
+    } catch {
+      continue;
+    }
+    if (name !== AGENT_BOT_PACKAGE_NAME) continue;
+    const version = readVersion(manifest);
+    if (version) {
+      checkout = version;
+      checkoutPath = candidate;
+      break;
+    }
+  }
+  if (!checkout) {
+    return readinessCheck({
+      id: 'runtime.version_skew',
+      status: 'not_applicable',
+      message: 'no source checkout manifest was found to compare against the installed CLI',
+      evidence: { installed_version: installed, checkout_version: null },
+    });
+  }
+  const evidence = {
+    installed_version: installed,
+    checkout_version: checkout,
+    checkout_path: checkoutPath,
+  };
+  if (installed === null) {
+    return readinessCheck({
+      id: 'runtime.version_skew',
+      status: 'not_applicable',
+      message: 'the installed runtime version could not be read, so skew is unknown',
+      evidence,
+    });
+  }
+  if (installed === checkout) return readinessCheck({
+    id: 'runtime.version_skew',
+    status: 'ready',
+    message: `the installed CLI and the source checkout are both ${installed}`,
+    evidence,
+  });
+  return readinessCheck({
+    id: 'runtime.version_skew',
+    status: 'warning',
+    code: 'runtime-version-skew',
+    message: `the installed CLI is ${installed} but the source checkout is ${checkout}; a checkout deliberately refuses to replace a foreign Homebrew install`,
+    action: 'install the release with: brew upgrade agent-bot',
+    evidence,
+  });
+}
+
+// #228 default dependencies. Each is injectable so the checks stay testable
+// without a live provider, a real Homebrew prefix, or a harness config on disk.
+
+function defaultProbeSecretStore() {
+  return probeSecretStore({ registry: createSecretProviderRegistry(BUILTIN_SECRET_PROVIDERS) });
+}
+
+function readManifestVersion(path) {
+  try {
+    const manifest = JSON.parse(readFileSync(path, 'utf8'));
+    return typeof manifest.version === 'string' && manifest.version ? manifest.version : null;
+  } catch {
+    return null;
+  }
+}
+
+// Only a Homebrew install has a versioned runtime root to read, and the managed
+// entrypoint is a symlink at ~/.local/bin rather than the keg path itself — so
+// resolve the link before looking for the runtime root. A bootstrap install has
+// no versioned runtime at all, so skew is unknowable and reported as such rather
+// than guessed at from a checkout elsewhere on the machine.
+function installedCliVersion({ home, readlink = readlinkSync, readVersion = readManifestVersion }) {
+  const executable = installationPaths(home).executable;
+  let resolved = executable;
+  try {
+    const target = readlink(executable);
+    if (target) resolved = resolve(dirname(executable), target);
+  } catch {
+    resolved = executable;
+  }
+  const runtimeRoot = homebrewRuntimeRoot(resolved);
+  if (!runtimeRoot) return null;
+  return readVersion(join(runtimeRoot, 'package.json'));
+}
+
+// Harness config locations that may wire an MCP server, with the key each
+// harness actually uses. HARNESSES enumerates hook dialects and does not
+// include opencode, so it cannot be reused here. `agentBotPattern` matches the
+// server name; an unrelated MCP server in the same file must not read as
+// agent-bot wiring, or a configured inbox would report ready with agent-bot
+// absent.
+const MCP_CONFIG_LOCATIONS = [
+  { harness: 'opencode', key: /"mcp"\s*:/, agent: /agent-bot/, paths: ['.config/opencode/opencode.jsonc', '.config/opencode/opencode.json'] },
+  { harness: 'claude', key: /"mcpServers"\s*:/, agent: /agent-bot/, paths: ['.claude.json', '.claude/settings.json', '.mcp.json'] },
+  { harness: 'claude', key: /"mcp"\s*:/, agent: /agent-bot/, paths: ['.claude.json', '.claude/settings.json', '.mcp.json'] },
+  { harness: 'codex', key: /^\s*\[mcp_servers\./m, agent: /agent-bot/, paths: ['.codex/config.toml'] },
+  { harness: 'codex', key: /"mcpServers"\s*:/, agent: /agent-bot/, paths: ['.codex/mcp.json'] },
+  { harness: 'cursor', key: /"mcpServers"\s*:/, agent: /agent-bot/, paths: ['.cursor/mcp.json'] },
+];
+
+// Reports which harnesses wire the agent-bot MCP server specifically. A file
+// that configures some other MCP server yields no entry: this check answers
+// "is agent-bot wired here", not "does this harness use MCP at all".
+// Harness MCP configuration is not only user-level: `.mcp.json` and
+// `opencode.json`/`opencode.jsonc` are commonly project-scoped, committed
+// alongside the repository that needs them. Scanning only `home` would report
+// a false negative for exactly the checkouts that are wired, so project
+// locations are scanned too. A path that does not exist is not reported, which
+// keeps the failure direction a false negative rather than a claim of wiring
+// that is absent.
+const PROJECT_MCP_CONFIG_LOCATIONS = [
+  { harness: 'claude', key: /"mcpServers"\s*:/, agent: /agent-bot/, paths: ['.mcp.json'] },
+  { harness: 'claude', key: /"mcp"\s*:/, agent: /agent-bot/, paths: ['.mcp.json'] },
+  { harness: 'opencode', key: /"mcp"\s*:/, agent: /agent-bot/, paths: ['opencode.jsonc', 'opencode.json', '.opencode/opencode.json'] },
+  { harness: 'codex', key: /^\s*\[mcp_servers\./m, agent: /agent-bot/, paths: ['.codex/config.toml'] },
+];
+
+function harnessWiresAgentBot({ home, cwd, locations }) {
+  const found = [];
+  const seen = new Set();
+  for (const { harness, key, agent, paths } of locations) {
+    if (seen.has(harness)) continue;
+    const roots = [{ base: home, paths }];
+    if (cwd) roots.push({ base: cwd, paths: PROJECT_MCP_CONFIG_LOCATIONS.find((e) => e.harness === harness)?.paths ?? paths });
+    for (const { base, paths: candidates } of roots) {
+      for (const relative of candidates) {
+        let contents;
+        try {
+          contents = readFileSync(join(base, relative), 'utf8');
+        } catch {
+          continue;
+        }
+        if (!key.test(contents) || !agent.test(contents)) continue;
+        found.push({ harness, mcp: 'agent-bot', scope: base === home ? 'user' : 'project' });
+        seen.add(harness);
+        break;
+      }
+      if (seen.has(harness)) break;
+    }
+  }
+  return found;
+}
+
+export function harnessMcpWiring(options) {
+  return harnessWiresAgentBot({ locations: MCP_CONFIG_LOCATIONS, ...options });
+}
+
+function defaultListHarnessMcpServers({ home, cwd }) {
+  return harnessWiresAgentBot({ home, cwd, locations: MCP_CONFIG_LOCATIONS });
 }
 
 function unreferencedSoulsCheck({ home, env, git }) {
@@ -1223,6 +1664,10 @@ export async function collectReadiness({
   inspectShellGh = inspectShellGhShim,
   inspectCodexDesktopGh = inspectConfiguredCodexDesktopGh,
   probeDaemon = daemonStatus,
+  probeSecretStore = defaultProbeSecretStore,
+  readPackageVersion = readManifestVersion,
+  installedCliVersion: resolveInstalledVersion = installedCliVersion,
+  listHarnessMcpServers = defaultListHarnessMcpServers,
 } = {}) {
   const machineChecks = [];
   let config = {};
@@ -1310,6 +1755,20 @@ export async function collectReadiness({
     machineChecks.push(spacesHomeCheck({ home, env, config, inspectCutover }));
     const unreferencedSouls = unreferencedSoulsCheck({ home, env, git });
     if (unreferencedSouls) machineChecks.push(unreferencedSouls);
+    const bindingSummary = worktreeBindingSummaryCheck({ home, env, roster });
+    if (bindingSummary) machineChecks.push(bindingSummary);
+    machineChecks.push(secureStoreCheck({ probe: probeSecretStore }));
+    machineChecks.push(inboxConfigurationCheck({
+      env,
+      harnesses: listHarnessMcpServers({ home, cwd }),
+    }));
+    machineChecks.push(versionSkewCheck({
+      home,
+      cwd,
+      exists,
+      readVersion: readPackageVersion,
+      installedVersion: (options) => resolveInstalledVersion({ ...options, readVersion: readPackageVersion }),
+    }));
     machineChecks.push(coverageCheck(now));
     if (configValid) {
       machineChecks.push(readinessCheck({
@@ -1323,6 +1782,14 @@ export async function collectReadiness({
   } else {
     try {
       config = load({ home, env });
+      // The worktree section verifies the current checkout's App against the
+      // configured roster, so the roster has to be resolved here too. Skipping it
+      // leaves roster empty, which would silently accept any App as in-roster.
+      roster = configuredAppSlugs(config, explicitApps);
+      if (roster.some((slug) => typeof slug !== 'string' || !APP_SLUG_RE.test(slug))) {
+        configValid = false;
+        roster = [];
+      }
     } catch {
       configValid = false;
     }
@@ -1367,6 +1834,21 @@ export async function collectReadiness({
   let worktree = { status: 'not_requested', checks: [] };
   if (scope !== 'machine') {
     worktree = worktreeChecks({ cwd, env, home, config, git, inspectSpace });
+    // Appended, not prepended: the existing worktree checks own their ordering,
+    // and firstActionableFailure already scans every check in the section. The
+    // status is recomputed from the complete list because this check can fail,
+    // and a section that reports `ready` while holding a `failed` check would
+    // leave report.ready true and doctor exiting 0 on an identity failure.
+    const bindingCheck = currentWorktreeBindingCheck({
+      cwd, env, git, roster: configValid ? roster : [],
+    });
+    const bindingChecks = [...worktree.checks, bindingCheck];
+    worktree = {
+      status: worktree.status === 'not_applicable'
+        ? 'not_applicable'
+        : sectionStatus(bindingChecks),
+      checks: bindingChecks,
+    };
     if (operationFailure?.scope === 'worktree') {
       worktree = {
         status: 'not_ready',
