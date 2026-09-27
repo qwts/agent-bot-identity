@@ -92,13 +92,16 @@ export function probeSecretStore({ registry, provider = null } = {}) {
     try {
       outcome = adapter.probe();
     } catch (error) {
-      outcome = { available: true, session: false, code: error?.code ?? 'PROVIDER_FAILED' };
+      outcome = { available: false, session: false, code: error?.code ?? 'PROVIDER_FAILED' };
     }
+    // Preserve whatever class the provider reported. Overwriting a timeout or a
+    // startup failure with PROVIDER_NO_SESSION would misdirect the operator to
+    // log in again when the provider never answered in the first place.
     results.push({
       id: adapter.id,
       available: outcome?.available === true,
       session: outcome?.session === true,
-      code: outcome?.available === true && outcome?.session !== true ? 'PROVIDER_NO_SESSION' : null,
+      code: outcome?.code ?? (outcome?.available === true && outcome?.session !== true ? 'PROVIDER_NO_SESSION' : null),
     });
   }
   return results;

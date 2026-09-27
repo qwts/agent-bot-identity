@@ -1343,17 +1343,48 @@ test('the worktree summary is derived from the census without a git call per sou
       'agent_33333333-3333-4333-8333-333333333333': row('agent_33333333-3333-4333-8333-333333333333', 'org-codex-agent'),
     },
   }, null, 2)}\n`);
-  let gitCalls = 0;
-  const report = await collectReadiness(censusScopeOptions(home, () => { gitCalls += 1; return ''; }));
+  const report = await collectReadiness(censusScopeOptions(home, () => ''));
   const check = report.machine.checks.find((entry) => entry.id === 'worktree.binding_summary');
   assert.equal(check.status, 'ready');
   assert.equal(check.evidence.active, 3);
+  assert.equal(check.evidence.checkouts, 3);
   assert.deepEqual(check.evidence.by_app, { 'org-claude-agent': 2, 'org-codex-agent': 1 });
   assert.deepEqual(check.evidence.not_in_roster, []);
-  // This check reads the census only — it never shells out to git. The count
-  // itself is not asserted because the pre-existing souls.referenced check
-  // already spends one call per soul; attributing that here would be wrong.
-  assert.equal(typeof gitCalls, 'number');
+});
+
+test('the worktree summary is derived from the census, never from git', async () => {
+  // Isolation rather than a call count: the pre-existing souls.referenced check
+  // already spends a git call per soul, so counting total calls would attribute
+  // that spend here. If this check shelled out at all, a git stub that throws
+  // would take the summary down with it.
+  const home = tempRoot();
+  const census = join(home, '.local', 'state', 'agent-bot', 'population.json');
+  const row = (id, appSlug) => ({
+    id,
+    name: displayName(id),
+    appSlug,
+    parentId: null,
+    status: 'active',
+    spacePath: join(home, '.agent-space', id),
+    worktree: join(home, id),
+    transcriptLocator: null,
+    lastSeen: '2026-08-16T00:00:00.000Z',
+  });
+  mkdirSync(dirname(census), { recursive: true });
+  writeFileSync(census, `${JSON.stringify({
+    schemaVersion: 1,
+    souls: {
+      'agent_11111111-1111-4111-8111-111111111111': row('agent_11111111-1111-4111-8111-111111111111', 'org-claude-agent'),
+      'agent_22222222-2222-4222-8222-222222222222': row('agent_22222222-2222-4222-8222-222222222222', 'org-codex-agent'),
+    },
+  }, null, 2)}\n`);
+  const report = await collectReadiness(censusScopeOptions(home, () => {
+    throw Object.assign(new Error('git must not be consulted for the binding summary'), { status: 1 });
+  }));
+  const check = report.machine.checks.find((entry) => entry.id === 'worktree.binding_summary');
+  assert.ok(check, 'the binding summary must not depend on git');
+  assert.equal(check.status, 'ready');
+  assert.equal(check.evidence.checkouts, 2);
 });
 
 test('the worktree summary flags a checkout bound outside the configured roster', async () => {
@@ -1420,4 +1451,153 @@ test('the current worktree binding fails only for a non-rostered App', async () 
     bound.worktree.checks.find((check) => check.id === 'worktree.binding').status,
     'ready',
   );
+});
+
+test('a foreign App fails the worktree section, not just the check list', async () => {
+  // The regression both reviewers found: appending a `failed` check without
+  // recomputing the section left `ready: true` and a zero exit code.
+  const repo = join(tempRoot(), 'repo');
+  mkdirSync(repo);
+  execFileSync('git', ['init', '--quiet', '--initial-branch=main'], { cwd: repo });
+  const env = hermeticGitEnv(process.env, { HOME: repo, GIT_CONFIG_GLOBAL: join(repo, '.gitconfig') });
+  const git = (args, options) => execFileSync('git', args, {
+    cwd: options?.cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  }).replace(/[\r\n]+$/, '');
+  execFileSync('git', ['config', '--worktree', 'agentBot.app', 'other-agent'], { cwd: repo, env });
+  const report = await collectReadiness({
+    command: 'doctor', scope: 'worktree', cwd: repo, home: repo, env, git,
+    load: () => ({ apps: { claude: 'org-claude-agent' } }),
+  });
+  const binding = report.worktree.checks.find((check) => check.id === 'worktree.binding');
+  assert.equal(binding.status, 'failed');
+  // The section and the report must both reflect it.
+  assert.equal(report.worktree.status, 'not_ready');
+  assert.equal(report.ready, false);
+  // firstActionableFailure reports the first failure in the section, which is a
+  // pre-existing worktree check in a bare fixture. The binding failure is
+  // asserted directly above and reflected in the section status here.
+  assert.ok(report.first_actionable_failure);
+});
+
+test('an unconfigured roster does not make every App acceptable', async () => {
+  // Absence of a roster is an unconfigured machine, not a machine where any
+  // pinned App is fine. Treating it as allow-all made the foreign-App failure
+  // unreachable on exactly the accounts least able to detect it.
+  const repo = join(tempRoot(), 'repo');
+  mkdirSync(repo);
+  execFileSync('git', ['init', '--quiet', '--initial-branch=main'], { cwd: repo });
+  const env = hermeticGitEnv(process.env, { HOME: repo, GIT_CONFIG_GLOBAL: join(repo, '.gitconfig') });
+  const git = (args, options) => execFileSync('git', args, {
+    cwd: options?.cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  }).replace(/[\r\n]+$/, '');
+  execFileSync('git', ['config', '--worktree', 'agentBot.app', 'any-agent'], { cwd: repo, env });
+  const report = await collectReadiness({
+    command: 'doctor', scope: 'worktree', cwd: repo, home: repo, env, git,
+    load: () => ({}),
+  });
+  const binding = report.worktree.checks.find((check) => check.id === 'worktree.binding');
+  // Advisory, not failed: an unverifiable roster is an unconfigured machine, and
+  // the other worktree checks in a bare fixture carry their own failures, so the
+  // binding check's own status is what this asserts.
+  assert.equal(binding.status, 'warning');
+  assert.equal(binding.code, 'worktree-binding-no-roster');
+});
+
+test('the inbox section ignores an unrelated MCP server', async () => {
+  // `mcp: 'other'` used to satisfy the truthiness filter, so a harness with some
+  // unrelated server would read as inbox-wired and report ready.
+  const report = await collectReadiness(machineScopeOptions({
+    env: {
+      HOME: tempRoot(),
+      GH_APP_HOOK_INBOX_URL: 'https://example.invalid',
+      GH_APP_HOOK_INBOX_TOKEN: 'a-bearer-value',
+    },
+    listHarnessMcpServers: () => [{ harness: 'claude', mcp: 'other' }],
+  }));
+  const check = report.machine.checks.find((entry) => entry.id === 'inbox.configuration');
+  assert.equal(check.status, 'warning');
+  assert.deepEqual(check.evidence.harnesses_wired, []);
+});
+
+test('the inbox section recognises the documented per-harness config shapes', async () => {
+  for (const [label, harnesses, expected] of [
+    ['claude mcpServers', [{ harness: 'claude', mcp: 'agent-bot' }], ['claude']],
+    ['codex mcp_servers', [{ harness: 'codex', mcp: 'agent-bot' }], ['codex']],
+  ]) {
+    const report = await collectReadiness(machineScopeOptions({
+      env: {
+        HOME: tempRoot(),
+        GH_APP_HOOK_INBOX_URL: 'https://example.invalid',
+        GH_APP_HOOK_INBOX_TOKEN: 'a-bearer-value',
+      },
+      listHarnessMcpServers: () => harnesses,
+    }));
+    const check = report.machine.checks.find((entry) => entry.id === 'inbox.configuration');
+    assert.equal(check.status, 'ready', label);
+    assert.deepEqual(check.evidence.harnesses_wired, expected, label);
+  }
+});
+
+test('version skew ignores an unrelated project manifest', async () => {
+  // Accepting any package.json in the cwd compared the installed runtime against
+  // whatever project doctor was run from, producing bogus skew and a bogus
+  // `brew upgrade` recommendation.
+  const project = tempRoot();
+  writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'some-other-app', version: '9.9.9' }));
+  const report = await collectReadiness(machineScopeOptions({
+    cwd: project,
+    readPackageVersion: (path) => (path.includes('some-other-app') ? '9.9.9' : '0.6.0'),
+    exists: (path) => path.endsWith('package.json'),
+  }));
+  const check = report.machine.checks.find((entry) => entry.id === 'runtime.version_skew');
+  assert.notEqual(check.code, 'runtime-version-skew');
+  assert.notEqual(check.evidence.checkout_version, '9.9.9');
+});
+
+test('an unreachable store is not reported as a logged-out session', async () => {
+  // A timeout or a missing executable must not send the operator to log in
+  // again; the recovery is completely different.
+  for (const code of ['PROVIDER_TIMEOUT', 'PROVIDER_START_FAILED', 'PROVIDER_UNAVAILABLE']) {
+    const report = await collectReadiness(machineScopeOptions({
+      probeSecretStore: () => [{ id: 'proton-pass', available: false, session: false, code }],
+    }));
+    const check = report.machine.checks.find((entry) => entry.id === 'securestore.session');
+    assert.equal(check.code, 'securestore-provider-unavailable', code);
+    assert.match(check.action, /will not help an unreachable provider/);
+    assert.equal(check.evidence.providers[0].code, code);
+  }
+  const loggedOut = await collectReadiness(machineScopeOptions({
+    probeSecretStore: () => [{ id: 'proton-pass', available: true, session: false, code: 'PROVIDER_NO_SESSION' }],
+  }));
+  const check = loggedOut.machine.checks.find((entry) => entry.id === 'securestore.session');
+  assert.equal(check.code, 'securestore-no-session');
+  assert.match(check.action, /log the provider in/);
+});
+
+test('the binding summary counts checkouts, not souls', async () => {
+  // A soul may hold several linked worktrees; counting one per soul undercounts
+  // what the check claims to summarize.
+  const home = tempRoot();
+  const census = join(home, '.local', 'state', 'agent-bot', 'population.json');
+  mkdirSync(dirname(census), { recursive: true });
+  writeFileSync(census, `${JSON.stringify({
+    schemaVersion: 1,
+    souls: {
+      'agent_11111111-1111-4111-8111-111111111111': {
+        id: 'agent_11111111-1111-4111-8111-111111111111',
+        name: displayName('agent_11111111-1111-4111-8111-111111111111'),
+        appSlug: 'org-claude-agent',
+        parentId: null,
+        status: 'active',
+        spacePath: join(home, '.agent-space', 'a'),
+        worktrees: [join(home, 'a'), join(home, 'b'), join(home, 'c')],
+        transcriptLocator: null,
+        lastSeen: '2026-08-16T00:00:00.000Z',
+      },
+    },
+  }, null, 2)}\n`);
+  const report = await collectReadiness(censusScopeOptions(home, () => ''));
+  const check = report.machine.checks.find((entry) => entry.id === 'worktree.binding_summary');
+  assert.equal(check.evidence.active, 1);
+  assert.equal(check.evidence.checkouts, 3);
 });
