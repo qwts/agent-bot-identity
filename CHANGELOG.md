@@ -2,9 +2,36 @@
 
 ## Unreleased
 
+## 0.6.0
+
+- Harness hook adapters for Claude, Codex, Cursor, Copilot, and Windsurf are
+  written under the user directory by `sync-hooks` and are no longer committed
+  in the repository, because a project copy can outrank the user hook
+  (#222, #223).
+- The agent-bot skill states that bot commits on a qwts repository are signed
+  with `agent-bot signed-commit`, rather than signing only when an agent already
+  knows the Verified badge is required (#220, #221).
+- A shared `thread-orders` skill records that the first comment on a GitHub
+  thread names the App, so later comments on that thread need no second mention.
+  A live-session order is `qwts`; a remote request is authorized by an issue
+  `qwts` opens (#218, #219).
+- A mention or review request addressed to a roster App is delivered by a
+  Cloudflare Worker, and the `take_inbox` MCP tool returns the oldest event for
+  the App and full `owner/name` the session is bound to, then clears it. Another
+  repository, a short name, or an unauthenticated call is refused, and the
+  mailbox credential stays in the tool server rather than in the model
+  (#214, #215).
+- PATH registrations for the CLI and the gh shim, across `.zshenv` and
+  `.zprofile`, move from loose append-only export lines to managed
+  `# BEGIN`/`# END` blocks following the zsh-functions contract. Existing loose
+  lines are absorbed on the next install so machines self-repair, and nested
+  shells no longer duplicate the directories (#206, #212).
 - Allow ordinary remote branch cleanup through the git pre-push guard, leaving
   branch deletion permissions to remote rulesets while retaining rejection of
   history rewrites and non-branch ref deletion (#210).
+- The shared CI actions this repository consumes are pinned to their capability
+  repository home, `qwts/qwts-agent-ci`, as commit SHAs, instead of the retired
+  home (ENG-0355, ENG-0282; qwts/agent-sop#372) (#209).
 
 ## 0.5.0
 
