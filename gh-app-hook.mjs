@@ -1,8 +1,12 @@
 // GitHub App mailbox. GitHub posts a signed delivery. A session takes the
 // oldest record for one App and one full owner/name repository. The take
-// marks the record pulled rather than deleting it: a record stays in storage
-// until every push subscriber has acked (or been dead-lettered) and the pull
-// path has seen it, so a record a push is still delivering is never lost.
+// marks the record pulled rather than deleting it. A record stays in
+// storage until every push subscriber has acked (or been dead-lettered):
+// fully pushed records expire 24h after the last ack (pulled or not, so
+// push-only consumers don't accumulate forever), a record no subscriber
+// matched stays until pulled with a 7-day cap, and dead letters stay 7
+// days. So a record a push is still delivering is never lost, and /inbox
+// stays a working catch-up path.
 //
 // Push delivery, retry, and dead-lettering live in the Durable Object. Each
 // record is stored under its own key (`record:<id>`) so no single storage
@@ -44,6 +48,12 @@ export const MAX_DELIVERY_ATTEMPTS = 5;
 export const PUSH_TIMEOUT_MS = 5_000;
 export const DELIVERED_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 export const DEAD_LETTER_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+// Hard cap for records no subscriber matched (pull-only): they can't ack, so
+// they can't wait on `pulled` forever.
+export const PULL_ONLY_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+// Cap on the stored comment text so one record can't exceed the 128 KiB
+// storage value limit; the pull path sees a truncation marker, never a gap.
+export const TEXT_LIMIT = 16_384;
 // ~30s, 2m, 10m, 1h: long enough for a receiver to outlive a deploy blip,
 // short enough that MAX_DELIVERY_ATTEMPTS converges in hours, not days.
 export const BACKOFF_SCHEDULE_MS = [30_000, 2 * 60_000, 10 * 60_000, 60 * 60_000];
@@ -57,13 +67,17 @@ const RESERVED_AUTH_HEADERS = new Set(['x-hub-signature-256', 'content-type']);
 // path so no consumer ever sees a record without them.
 export function normalizeRecord(record, now = Date.now()) {
   const source = record && typeof record === 'object' && !Array.isArray(record) ? record : {};
-  return {
+  const normalized = {
     ...source,
     id: typeof source.id === 'string' && source.id !== '' ? source.id : crypto.randomUUID(),
     pulled: source.pulled === true,
     createdAt: Number.isFinite(source.createdAt) ? source.createdAt : now,
     deliveries: Array.isArray(source.deliveries) ? source.deliveries : [],
   };
+  if (typeof normalized.text === 'string' && normalized.text.length > TEXT_LIMIT) {
+    normalized.text = `${normalized.text.slice(0, TEXT_LIMIT)}\n[truncated]`;
+  }
+  return normalized;
 }
 
 export function createMailbox() {
@@ -208,7 +222,10 @@ export async function parseSubscribers(raw) {
         auth = { header, scheme };
       }
       const id = typeof entry.id === 'string' && entry.id !== '' ? entry.id : await hashText(entry.url);
-      if (seen.has(id)) continue; // identical destination, deduped
+      if (seen.has(id)) {
+        issues.push(`skipped a subscriber for ${app}: duplicate destination`);
+        continue; // identical URL/id, deduped
+      }
       seen.add(id);
       subscribers.push({ id, app, url: entry.url, key: entry.key, repos, auth });
     }
@@ -310,10 +327,13 @@ export async function collectAndPush(records, subscribers, { now = Date.now(), f
     const subscriber = subscriberById.get(subscriberId);
     const record = recordById.get(recordId);
     if (!subscriber || !record) {
+      // A transiently malformed SUBSCRIBERS secret (or a deploy between
+      // reads) must not dead-letter live deliveries: retry with the normal
+      // backoff and let the attempt cap decide.
       return {
         recordId,
         subscriberId,
-        delivery: { ...delivery, status: 'dead', lastError: 'subscriber removed', nextRetryAt: null },
+        delivery: applyDeliveryAttempt(delivery, { ok: false, retryable: true, error: 'subscriber removed' }, { maxAttempts, now }),
       };
     }
     const outcome = await deliverToSubscriber(subscriber, buildDeliveryEnvelope(record), { fetchImpl, timeoutMs });
@@ -355,11 +375,13 @@ export function takeRecord(records, { app, repo }) {
 // Prune records whose push deliveries are terminal and whose TTL has
 // elapsed, and compute when the object should next wake. Pending records
 // are never pruned (the earliest nextRetryAt wins the wake). Dead-lettered
-// records live 7 days from creation. Fully delivered records — including
-// records with no matching subscriber (pull-only apps) — live until the
-// pull path has seen them (pulled) and then 24h more, so a pull consumer
-// never loses an unpulled record to the TTL. Returns `{ kept, nextWake }`.
-export function pruneRecords(records, now = Date.now(), { deliveredTtlMs = DELIVERED_TTL_MS, deadLetterTtlMs = DEAD_LETTER_TTL_MS } = {}) {
+// records live 7 days from creation. Fully pushed records live 24h past
+// the LAST ack regardless of `pulled` — a push-only subscriber never
+// pulls, so waiting on `pulled` would accumulate forever. Records no
+// subscriber matched (pull-only) live until pulled (then 24h), with a
+// 7-day hard cap that also counts toward the wake. Returns
+// `{ kept, nextWake }`.
+export function pruneRecords(records, now = Date.now(), { deliveredTtlMs = DELIVERED_TTL_MS, deadLetterTtlMs = DEAD_LETTER_TTL_MS, pullOnlyTtlMs = PULL_ONLY_TTL_MS } = {}) {
   const kept = [];
   let nextWake = null;
   const consider = (time) => {
@@ -367,6 +389,7 @@ export function pruneRecords(records, now = Date.now(), { deliveredTtlMs = DELIV
   };
   for (const record of records) {
     const deliveries = Array.isArray(record.deliveries) ? record.deliveries : [];
+    const createdAt = Number.isFinite(record.createdAt) ? record.createdAt : now;
     if (deliveries.some((delivery) => delivery.status === 'pending')) {
       kept.push(record);
       for (const delivery of deliveries) {
@@ -374,7 +397,6 @@ export function pruneRecords(records, now = Date.now(), { deliveredTtlMs = DELIV
       }
       continue;
     }
-    const createdAt = Number.isFinite(record.createdAt) ? record.createdAt : now;
     if (deliveries.some((delivery) => delivery.status === 'dead')) {
       if (now - createdAt < deadLetterTtlMs) {
         kept.push(record);
@@ -382,13 +404,30 @@ export function pruneRecords(records, now = Date.now(), { deliveredTtlMs = DELIV
       }
       continue;
     }
-    if (record.pulled !== true) {
-      kept.push(record); // wait for the pull path before expiring
+    if (deliveries.length === 0) {
+      // Pull-only: nothing can ack it, so it can't wait on `pulled` forever.
+      if (record.pulled === true) {
+        if (now - createdAt < deliveredTtlMs) {
+          kept.push(record);
+          consider(createdAt + deliveredTtlMs);
+        }
+      } else if (now - createdAt < pullOnlyTtlMs) {
+        kept.push(record);
+        consider(createdAt + pullOnlyTtlMs);
+      }
       continue;
     }
-    if (now - createdAt < deliveredTtlMs) {
+    // Delivered to every matched subscriber: 24h past the last ack, pulled
+    // or not, so push-only consumers don't accumulate and replays stop.
+    // A delivery without a recorded ack time contributes nothing (the
+    // creation time is the floor), never the epoch.
+    const lastAck = deliveries.reduce(
+      (latest, delivery) => (Number.isFinite(delivery.deliveredAt) ? Math.max(latest, delivery.deliveredAt) : latest),
+      createdAt,
+    );
+    if (now - lastAck < deliveredTtlMs) {
       kept.push(record);
-      consider(createdAt + deliveredTtlMs);
+      consider(lastAck + deliveredTtlMs);
     }
   }
   return { kept, nextWake };
@@ -530,23 +569,28 @@ export class InboxDurable {
   }
 
   // Migrate the legacy single-`records`-array layout to per-record keys.
-  // Ids for legacy records are derived deterministically so two overlapping
-  // migrations can't duplicate a record. Idempotent: safe to call anywhere.
+  // Ids for legacy records are derived deterministically (content plus array
+  // index, so identical legacy events stay distinct records) so two
+  // overlapping migrations can't duplicate one. Idempotent: safe to call
+  // anywhere.
   async migrateLegacy(now) {
     const legacy = await this.storage.get(LEGACY_KEY);
     if (!Array.isArray(legacy)) return;
-    for (const raw of legacy) {
+    for (const [index, raw] of legacy.entries()) {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
       const id = typeof raw.id === 'string' && raw.id !== ''
         ? raw.id
-        : await hashText(JSON.stringify([raw.app, raw.repo, raw.kind, raw.url, raw.text ?? null, raw.number ?? null]));
+        : await hashText(JSON.stringify([index, raw.app, raw.repo, raw.kind, raw.url, raw.text ?? null, raw.number ?? null]));
       await this.storage.put(this.keyFor(id), normalizeRecord({ ...raw, id }, now));
     }
     await this.storage.delete(LEGACY_KEY);
   }
 
-  // storage.list() yields StoredValue wrappers on the Worker runtime; the
-  // fake storage used in tests yields records directly. Unwrap both.
+  // storage.list() yields raw values in KEY order, and keys are opaque ids
+  // (delivery GUIDs), so take would return a random record. Order by
+  // creation time (then id, for same-millisecond ties) to keep /inbox FIFO.
+  // A StoredValue `{value}` wrapper is unwrapped defensively in case the
+  // runtime ever hands one back.
   async listRecords() {
     const map = await this.storage.list({ prefix: RECORD_PREFIX });
     const records = [];
@@ -556,7 +600,7 @@ export class InboxDurable {
         : value;
       if (record && typeof record === 'object' && !Array.isArray(record)) records.push(record);
     }
-    return records;
+    return records.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0) || String(a.id).localeCompare(String(b.id)));
   }
 
   async subscribers() {
@@ -621,6 +665,20 @@ export class InboxDurable {
   }
 
   async alarm() {
+    try {
+      await this.runAlarm();
+    } catch (error) {
+      // Cloudflare retries a *failed* alarm only six times, so a transiently
+      // throwing alarm would silently drop the retry loop. Catch, log
+      // redacted, and re-arm; pushes are at-least-once, so a retry is safe.
+      const { subscribers } = await parseSubscribers(this.env?.SUBSCRIBERS ?? null);
+      const secrets = subscribers.flatMap((subscriber) => [subscriber.key, subscriber.url]);
+      console.warn(`gh-app-hook: alarm failed; re-armed: ${redactSecrets(error?.message ?? 'unknown error', secrets)}`);
+      await this.storage.setAlarm(Date.now() + 30_000);
+    }
+  }
+
+  async runAlarm() {
     const now = Date.now();
     await this.migrateLegacy(now);
     const subscribers = await this.subscribers();

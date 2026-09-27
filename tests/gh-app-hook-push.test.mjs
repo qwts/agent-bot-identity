@@ -22,6 +22,8 @@ import {
   DEAD_LETTER_TTL_MS,
   DELIVERED_TTL_MS,
   MAX_DELIVERY_ATTEMPTS,
+  PULL_ONLY_TTL_MS,
+  TEXT_LIMIT,
 } from '../gh-app-hook.mjs';
 
 const URL_A = 'https://grok-routine.invalid/hook';
@@ -65,10 +67,11 @@ function fakeHarness({ subscribers = null, fetchImpl = null, seed = {} } = {}) {
     async get(key) { return map.get(key); },
     async put(key, value) { map.set(key, value); },
     async delete(key) { map.delete(key); },
+    // the real runtime returns raw values in key order
     async list({ prefix } = {}) {
       const out = new Map();
       for (const [key, value] of map.entries()) {
-        if (!prefix || key.startsWith(prefix)) out.set(key, { value });
+        if (!prefix || key.startsWith(prefix)) out.set(key, value);
       }
       return out;
     },
@@ -116,6 +119,15 @@ test('normalizeRecord fills id, pulled, createdAt, and deliveries for legacy rec
   const complete = normalizeRecord(record(), now);
   assert.equal(complete.id, 'rec-1');
   assert.equal(complete.pulled, false);
+
+  // the stored text is capped so one record can't exceed the storage
+  // value limit; the pull path sees a marker, never a silent gap
+  const long = 'x'.repeat(TEXT_LIMIT + 100);
+  const truncated = normalizeRecord({ app: 'a', repo: 'o/n', kind: 'mention', text: long }, now);
+  assert.equal(truncated.text.length, TEXT_LIMIT + '\n[truncated]'.length);
+  assert.ok(truncated.text.endsWith('\n[truncated]'));
+  const short = normalizeRecord({ app: 'a', repo: 'o/n', kind: 'mention', text: 'x'.repeat(TEXT_LIMIT) }, now);
+  assert.equal(short.text, 'x'.repeat(TEXT_LIMIT)); // at the limit: untouched
 });
 
 test('parseSubscribers normalizes valid entries and fails closed on invalid ones', async () => {
@@ -164,11 +176,11 @@ test('parseSubscribers reports malformed input and dedupes identical destination
   const dupes = await parseSubscribers(JSON.stringify({
     'qwts-grok-agent': [
       { url: URL_A, key: KEY_A },
-      { url: URL_A, key: 'other-key' }, // identical URL, deduped
+      { url: URL_A, key: 'other-key' }, // identical URL, deduped with a warning
     ],
   }));
   assert.equal(dupes.subscribers.length, 1);
-  assert.deepEqual(dupes.issues, []);
+  assert.deepEqual(dupes.issues, ['skipped a subscriber for qwts-grok-agent: duplicate destination']);
 });
 
 test('selectSubscribers matches app and optional repo scope case-insensitively', () => {
@@ -313,12 +325,21 @@ test('collectAndPush pushes due deliveries across all records and redacts stored
   assert.equal(outcomes[0].delivery.nextRetryAt, now + backoffMs(1));
 });
 
-test('collectAndPush dead-letters deliveries for removed subscribers', async () => {
+test('collectAndPush retries a missing subscriber instead of dead-lettering it', async () => {
   const now = 1_000_000;
-  const records = [record({ deliveries: [{ subscriberId: 'sub-gone', status: 'pending', attempts: 0, lastError: null, nextRetryAt: now - 1, deliveredAt: null }] })];
+  const base = { subscriberId: 'sub-gone', status: 'pending', attempts: 0, lastError: null, nextRetryAt: now - 1, deliveredAt: null };
+  const records = [record({ deliveries: [base] })];
+  // no subscribers at all (e.g. a transiently malformed SUBSCRIBERS secret)
   const outcomes = await collectAndPush(records, [], { now, fetchImpl: async () => new Response(null, { status: 200 }) });
-  assert.equal(outcomes[0].delivery.status, 'dead');
+  assert.equal(outcomes[0].delivery.status, 'pending'); // not dead-lettered
   assert.equal(outcomes[0].delivery.lastError, 'subscriber removed');
+  assert.equal(outcomes[0].delivery.nextRetryAt, now + backoffMs(1));
+
+  // the attempt cap still converges to dead if the subscriber never returns
+  let delivery = { ...base, attempts: MAX_DELIVERY_ATTEMPTS - 1 };
+  const capped = await collectAndPush([record({ deliveries: [delivery] })], [], { now, fetchImpl: async () => new Response(null, { status: 200 }) });
+  assert.equal(capped[0].delivery.status, 'dead');
+  assert.equal(capped[0].delivery.lastError, 'subscriber removed');
 });
 
 test('takeRecord is non-destructive and returns each record once', () => {
@@ -332,22 +353,32 @@ test('takeRecord is non-destructive and returns each record once', () => {
   assert.equal(second.record, null);
 });
 
-test('pruneRecords keeps pending, respects pulled, expires dead letters at 7d', () => {
+test('pruneRecords keeps pending, expires pushed 24h after the last ack regardless of pulled', () => {
   const now = 1_000_000;
   const pending = record({ deliveries: [{ status: 'pending', nextRetryAt: now + 1 }] });
-  const deliveredPulled = record({ id: 'rec-d1', pulled: true, deliveries: [{ status: 'delivered' }] });
-  const deliveredUnpulled = record({ id: 'rec-d2', pulled: false, deliveries: [{ status: 'delivered' }] });
-  const noSubscribers = record({ id: 'rec-d3', pulled: false, deliveries: [] }); // pull-only app
+  const deliveredPulled = record({ id: 'rec-d1', pulled: true, deliveries: [{ status: 'delivered', deliveredAt: now }] });
+  // push-only: fully delivered, never pulled — must still expire
+  const deliveredUnpulled = record({ id: 'rec-d2', pulled: false, deliveries: [{ status: 'delivered', deliveredAt: now }] });
   const dead = record({ id: 'rec-dead', pulled: true, deliveries: [{ status: 'dead' }] });
 
-  const fresh = pruneRecords([pending, deliveredPulled, deliveredUnpulled, noSubscribers, dead], now);
-  assert.equal(fresh.kept.length, 5);
+  const fresh = pruneRecords([pending, deliveredPulled, deliveredUnpulled, dead], now);
+  assert.equal(fresh.kept.length, 4);
 
-  // delivered + pulled expires at 24h; unpulled records (delivered or
-  // subscriber-less) are kept so the pull path never loses them
-  const after24h = pruneRecords([deliveredPulled, deliveredUnpulled, noSubscribers], now + DELIVERED_TTL_MS);
-  assert.equal(after24h.kept.length, 2);
-  assert.deepEqual(after24h.kept.map((r) => r.id).sort(), ['rec-d2', 'rec-d3']);
+  // pushed records expire 24h after the last ack, pulled or not, so a
+  // push-only subscriber's records never accumulate forever
+  const after24h = pruneRecords([deliveredPulled, deliveredUnpulled], now + DELIVERED_TTL_MS);
+  assert.equal(after24h.kept.length, 0);
+
+  // the window is the LAST ack, not creation: an old record re-acked recently
+  // survives, and its expiry counts toward the wake
+  const oldAckedLate = record({
+    id: 'rec-late',
+    createdAt: now - DELIVERED_TTL_MS * 3,
+    deliveries: [{ status: 'delivered', deliveredAt: now - 1_000 }],
+  });
+  const late = pruneRecords([oldAckedLate], now);
+  assert.equal(late.kept.length, 1);
+  assert.equal(late.nextWake, now - 1_000 + DELIVERED_TTL_MS);
 
   // dead letters outlive the delivered TTL and expire at 7 days
   const beforeDeadTtl = pruneRecords([dead], now + DELIVERED_TTL_MS);
@@ -358,6 +389,23 @@ test('pruneRecords keeps pending, respects pulled, expires dead letters at 7d', 
   // pending is never pruned even far in the future
   const pendingLater = pruneRecords([pending], now + DEAD_LETTER_TTL_MS * 10);
   assert.equal(pendingLater.kept.length, 1);
+});
+
+test('pruneRecords caps subscriber-less records: 24h after pull, 7d unpulled', () => {
+  const now = 1_000_000;
+  const pulled = record({ id: 'rec-p1', pulled: true, deliveries: [] });
+  const unpulled = record({ id: 'rec-p2', pulled: false, deliveries: [] }); // pull-only app
+
+  // pulled: kept for the 24h catch-up window
+  const after24h = pruneRecords([pulled], now + DELIVERED_TTL_MS);
+  assert.equal(after24h.kept.length, 0);
+
+  // unpulled: kept for a pull consumer, but only up to the 7-day hard cap
+  const beforeCap = pruneRecords([unpulled], now + DELIVERED_TTL_MS);
+  assert.equal(beforeCap.kept.length, 1);
+  assert.equal(beforeCap.nextWake, now + PULL_ONLY_TTL_MS); // the cap counts toward the wake
+  const afterCap = pruneRecords([unpulled], now + PULL_ONLY_TTL_MS);
+  assert.equal(afterCap.kept.length, 0);
 });
 
 test('pruneRecords computes the next wake across ALL records, not just one', () => {
@@ -378,8 +426,8 @@ test('pruneRecords computes the next wake across ALL records, not just one', () 
   const mixed = pruneRecords([pendingA, pendingB, expiring], now);
   assert.equal(mixed.nextWake, now + 5_000);
 
-  const nothing = pruneRecords([record({ id: 'rec-x', pulled: false, deliveries: [] })], now);
-  assert.equal(nothing.nextWake, null); // unpulled, no subscribers: no wake
+  const pullOnly = pruneRecords([record({ id: 'rec-x', pulled: false, deliveries: [] })], now);
+  assert.equal(pullOnly.nextWake, now + PULL_ONLY_TTL_MS); // the hard cap wakes the prune
 });
 
 test('the deadletter route is bearer-protected and returns redacted dead records', async () => {
@@ -434,9 +482,9 @@ test('InboxDurable add persists first, schedules the alarm, and never pushes inl
   assert.equal(alarmLog.length, 1);
 });
 
-test('InboxDurable alarm delivers pending pushes and clears the alarm', async () => {
+test('InboxDurable alarm delivers pending pushes and schedules the delivered expiry', async () => {
   const seen = [];
-  const { durable, map } = fakeHarness({
+  const { durable, map, alarmLog } = fakeHarness({
     subscribers: JSON.stringify({ 'qwts-grok-agent': [{ url: URL_A, key: KEY_A }] }),
     fetchImpl: async (url, init) => {
       seen.push({ url, init });
@@ -451,6 +499,10 @@ test('InboxDurable alarm delivers pending pushes and clears the alarm', async ()
   const stored = [...map.values()][0];
   assert.equal(stored.deliveries[0].status, 'delivered');
   assert.ok(Number.isFinite(stored.deliveries[0].deliveredAt));
+  // a push-only record (never pulled) still expires: the alarm re-arms for
+  // 24h after the last ack rather than being cleared
+  const last = alarmLog[alarmLog.length - 1];
+  assert.equal(last, stored.deliveries[0].deliveredAt + DELIVERED_TTL_MS);
 });
 
 test('InboxDurable alarm retries with backoff and re-arms the alarm', async () => {
@@ -563,6 +615,59 @@ test('InboxDurable skips subscribers scoped to other repos', async () => {
   assert.equal(calls.length, 0); // no push
   const stored = [...map.values()][0];
   assert.deepEqual(stored.deliveries, []); // pull-only path
+});
+
+test('InboxDurable take returns the OLDEST record, not key order (FIFO)', async () => {
+  const { durable } = fakeHarness({
+    subscribers: JSON.stringify({ 'qwts-grok-agent': [{ url: URL_A, key: KEY_A }] }),
+    fetchImpl: async () => new Response(null, { status: 200 }),
+  });
+  const base = Date.now();
+  // added in reverse chronological order, with ids whose key order
+  // (record:c..., record:n..., record:z...) also differs from arrival order
+  await doFetch(durable, '/add', freshRecord({ id: 'z-guid', createdAt: base + 3_000, number: 3 }));
+  await doFetch(durable, '/add', freshRecord({ id: 'n-guid', createdAt: base + 2_000, number: 2 }));
+  await doFetch(durable, '/add', freshRecord({ id: 'c-guid', createdAt: base + 1_000, number: 1 }));
+  const first = await doFetch(durable, '/take', { app: 'qwts-grok-agent', repo: 'qwts/example1' });
+  assert.equal(first.status, 200);
+  assert.equal((await first.json()).id, 'c-guid'); // oldest by createdAt, not key order
+  const second = await doFetch(durable, '/take', { app: 'qwts-grok-agent', repo: 'qwts/example1' });
+  assert.equal((await second.json()).id, 'n-guid');
+});
+
+test('InboxDurable migration keeps identical legacy events as distinct records', async () => {
+  const same = { app: 'qwts-grok-agent', repo: 'qwts/example1', kind: 'mention', url: 'https://github.com/qwts/example1/issues/9', text: 'dup', number: 9 };
+  const { durable, map } = fakeHarness({
+    subscribers: null,
+    fetchImpl: async () => new Response(null, { status: 200 }),
+    seed: { records: [same, { ...same }] }, // two identical legacy events
+  });
+  await doFetch(durable, '/take', { app: 'qwts-grok-agent', repo: 'qwts/example1' });
+  assert.equal(map.has('records'), false);
+  // both survive migration as separate records (the array index keeps
+  // otherwise-identical content hashes distinct)
+  assert.equal([...map.keys()].filter((key) => key.startsWith('record:')).length, 2);
+});
+
+test('InboxDurable alarm catches a failure and re-arms instead of dying', async () => {
+  const { durable, map, alarmLog, state } = fakeHarness({
+    subscribers: JSON.stringify({ 'qwts-grok-agent': [{ url: URL_A, key: KEY_A }] }),
+    fetchImpl: async () => new Response(null, { status: 204 }),
+  });
+  await doFetch(durable, '/add', freshRecord());
+  // a transiently throwing storage call fails the alarm run...
+  const originalList = state.storage.list;
+  state.storage.list = async () => { throw new Error('transient storage failure'); };
+  await durable.alarm(); // ...but the alarm itself must not throw
+  state.storage.list = originalList;
+  // ...and it re-arms shortly so the retry loop survives (Cloudflare only
+  // retries a failed alarm six times)
+  const last = alarmLog[alarmLog.length - 1];
+  assert.ok(Number.isFinite(last) && last > Date.now() && last <= Date.now() + 30_000);
+  // the re-armed run completes the delivery
+  await durable.alarm();
+  const stored = [...map.values()][0];
+  assert.equal(stored.deliveries[0].status, 'delivered');
 });
 
 test('MAX_DELIVERY_ATTEMPTS is the agreed small cap', () => {
