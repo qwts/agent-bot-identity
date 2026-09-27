@@ -103,8 +103,12 @@ const TOOLS = [
     description:
       'Take the next GitHub mention or review request for the App and '
       + 'repository this bound worktree is. The call returns the event and '
-      + 'clears it. The repository and App come from the binding, not from '
-      + 'the caller. Requires bind.',
+      + 'marks it pulled (the record stays until its push deliveries settle '
+      + 'and the TTL expires). A returned event carries a `deliveries` array '
+      + 'with the per-subscriber push status (`pending`, `delivered`, or '
+      + '`dead`), so a consumer that also receives pushes can skip events '
+      + 'already delivered and watch for dead ones. The repository and App '
+      + 'come from the binding, not from the caller. Requires bind.',
     inputSchema: { type: 'object', properties: {} },
   },
 ];

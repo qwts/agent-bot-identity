@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- The `gh-app-hook` Worker pushes each stored record to registered webhook
+  subscribers instead of only serving polling consumers. A `SUBSCRIBERS`
+  Worker secret maps an App slug (and optional `owner/name` repos, matched
+  case-insensitively) to https destinations with per-subscriber sender keys
+  and an optional auth override (reserved header names are rejected, the
+  scheme defaults to `Bearer`); each push is HMAC-SHA256 signed
+  (`x-hub-signature-256`), at-least-once with alarm-driven retry (30s/2m/10m/1h
+  backoff, 5 attempts) and a dead-letter list, and `/inbox` keeps working as
+  the catch-up path because `take` now marks a record pulled instead of
+  deleting it. Retention: fully pushed records expire 24h after the last
+  ack regardless of `pulled` (so push-only subscribers don't accumulate),
+  subscriber-less records stay until pulled with a 7-day cap, dead letters
+  stay 7 days, and takes stay FIFO by creation time. Records are stored
+  one per storage key (legacy single-array records migrate on first read,
+  normalized so a pre-push record can never crash a request), the stored
+  comment text is capped so one record can't exceed the storage value
+  limit, `/add` persists first, schedules the alarm, and returns without
+  any outbound push, and `X-GitHub-Delivery` becomes the record id so a
+  GitHub redelivery dedupes instead of re-pushing. A transiently
+  malformed `SUBSCRIBERS` secret or a failing alarm run retries instead
+  of dead-lettering live deliveries. Sender keys and subscriber URLs
+  never appear in logs, errors, or responses, and a bearer-protected
+  `GET /deadletter?app=` surfaces what never arrived (#234).
+
 ## 0.6.1
 
 - `doctor` reports four more pieces of machine state that previously surfaced
