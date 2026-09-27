@@ -4,11 +4,39 @@
 // until every push subscriber has acked (or been dead-lettered) and the pull
 // path has seen it, so a record a push is still delivering is never lost.
 //
-// Push delivery, retry, and dead-lettering live in the Durable Object. The
-// core decision logic (subscriber selection, HMAC signing, retry
+// Push delivery, retry, and dead-lettering live in the Durable Object. Each
+// record is stored under its own key (`record:<id>`) so no single storage
+// value grows with the inbox. `/add` never pushes inline: it normalizes the
+// record, persists it, schedules an alarm, and returns immediately, so a
+// hung receiver can never delay GitHub's webhook. All outbound pushes run
+// from `alarm()` with bounded concurrency and never under the concurrency
+// lock. When GitHub provides `X-GitHub-Delivery`, that GUID becomes the
+// record id, so a GitHub redelivery dedupes instead of re-pushing.
+//
+// The core decision logic (subscriber selection, HMAC signing, retry
 // classification, delivery-state transitions, TTL pruning) is pure and
 // Cloudflare-free so the Node test runner can cover it without a Worker
 // runtime.
+//
+// SUBSCRIBERS is a Worker secret (JSON object) mapping an App slug to a
+// list of destinations:
+//
+//   {
+//     "qwts-grok-agent": [
+//       { "url": "https://receiver.example/hook", "key": "sender-key",
+//         "repos": ["qwts/example1"], "auth": { "header": "x-hub-auth", "scheme": "Token" } }
+//     ]
+//   }
+//
+// Per entry: `url` must be https, `key` is the per-subscriber sender key,
+// `repos` (optional) scopes the entry to full owner/name repositories
+// (matched case-insensitively), `auth` (optional) overrides the default
+// `Authorization: Bearer <key>` header (the header must not be a reserved
+// name like `x-hub-signature-256`; `scheme` defaults to `Bearer`). Every
+// request also carries `x-hub-signature-256`, an HMAC-SHA256 of the body
+// keyed by `key`. Malformed JSON or invalid entries fail closed (skipped,
+// with a redacted warning); duplicate destinations are deduped. Keys and
+// URLs are never echoed into logs, errors, or stored state.
 
 const text = new TextEncoder();
 
@@ -16,13 +44,33 @@ export const MAX_DELIVERY_ATTEMPTS = 5;
 export const PUSH_TIMEOUT_MS = 5_000;
 export const DELIVERED_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 export const DEAD_LETTER_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+// ~30s, 2m, 10m, 1h: long enough for a receiver to outlive a deploy blip,
+// short enough that MAX_DELIVERY_ATTEMPTS converges in hours, not days.
+export const BACKOFF_SCHEDULE_MS = [30_000, 2 * 60_000, 10 * 60_000, 60 * 60_000];
+
+const RECORD_PREFIX = 'record:';
+const LEGACY_KEY = 'records';
+const RESERVED_AUTH_HEADERS = new Set(['x-hub-signature-256', 'content-type']);
+
+// Records stored by earlier versions (or handed in by tests) may lack
+// `id`, `deliveries`, `createdAt`, or `pulled`. Normalize on every read
+// path so no consumer ever sees a record without them.
+export function normalizeRecord(record, now = Date.now()) {
+  const source = record && typeof record === 'object' && !Array.isArray(record) ? record : {};
+  return {
+    ...source,
+    id: typeof source.id === 'string' && source.id !== '' ? source.id : crypto.randomUUID(),
+    pulled: source.pulled === true,
+    createdAt: Number.isFinite(source.createdAt) ? source.createdAt : now,
+    deliveries: Array.isArray(source.deliveries) ? source.deliveries : [],
+  };
+}
 
 export function createMailbox() {
   let records = [];
-  let next = 1;
   return {
     async add(record) {
-      records.push({ ...record, id: next++, pulled: false, createdAt: Date.now(), deliveries: [] });
+      records.push(normalizeRecord(record, Date.now()));
     },
     async take({ app, repo }) {
       const result = takeRecord(records, { app, repo });
@@ -86,66 +134,93 @@ async function hashText(value) {
   return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-function isValidUrl(value) {
+function isHttpsUrl(value) {
   if (typeof value !== 'string') return false;
   try {
-    const url = new URL(value);
-    return url.protocol === 'https:' || url.protocol === 'http:';
+    return new URL(value).protocol === 'https:';
   } catch {
     return false;
   }
 }
 
-// SUBSCRIBERS is a Worker secret mapping an App slug to a list of
-// destinations. Each entry carries its own sender key and an optional repo
-// scope and auth override. Malformed JSON or invalid entries fail closed
-// (skipped); keys and URLs are never echoed.
+// Parse the SUBSCRIBERS secret. Returns `{ subscribers, issues }`: issues are
+// redacted, loggable reasons for skipping malformed input (never the key or
+// URL). Identical destinations (same derived id) are deduped.
 export async function parseSubscribers(raw) {
-  if (typeof raw !== 'string' || raw.trim() === '') return [];
+  const issues = [];
+  if (typeof raw !== 'string' || raw.trim() === '') return { subscribers: [], issues };
   let parsed;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return [];
+    issues.push('SUBSCRIBERS is not valid JSON');
+    return { subscribers: [], issues };
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    issues.push('SUBSCRIBERS must be a JSON object keyed by App slug');
+    return { subscribers: [], issues };
+  }
   const subscribers = [];
+  const seen = new Set();
   for (const [app, entries] of Object.entries(parsed)) {
-    if (typeof app !== 'string' || app === '' || !Array.isArray(entries)) continue;
+    if (typeof app !== 'string' || app === '' || !Array.isArray(entries)) {
+      issues.push(`skipped app ${JSON.stringify(app)}: expected an array of subscribers`);
+      continue;
+    }
     for (const entry of entries) {
-      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
-      const url = entry.url;
-      const key = entry.key;
-      if (!isValidUrl(url) || typeof key !== 'string' || key === '') continue;
+      const skip = (reason) => issues.push(`skipped a subscriber for ${app}: ${reason}`);
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        skip('entry is not an object');
+        continue;
+      }
+      if (!isHttpsUrl(entry.url)) {
+        skip('url is missing or not https');
+        continue;
+      }
+      if (typeof entry.key !== 'string' || entry.key === '') {
+        skip('key is missing');
+        continue;
+      }
       let repos = null;
       if (entry.repos !== undefined) {
-        if (!Array.isArray(entry.repos) || !entry.repos.every((repo) => typeof repo === 'string' && repo.includes('/'))) {
+        if (!Array.isArray(entry.repos) || entry.repos.length === 0
+          || !entry.repos.every((repo) => typeof repo === 'string' && repo.includes('/'))) {
+          skip('repos is malformed');
           continue;
         }
-        repos = entry.repos;
+        repos = entry.repos.map((repo) => repo.toLowerCase());
       }
       let auth = null;
       if (entry.auth !== undefined) {
-        if (
-          !entry.auth || typeof entry.auth !== 'object'
-          || typeof entry.auth.header !== 'string' || entry.auth.header === ''
-          || typeof entry.auth.scheme !== 'string' || entry.auth.scheme === ''
-        ) {
+        if (!entry.auth || typeof entry.auth !== 'object' || Array.isArray(entry.auth)
+          || typeof entry.auth.header !== 'string' || entry.auth.header === '') {
+          skip('auth is malformed');
           continue;
         }
-        auth = { header: entry.auth.header.toLowerCase(), scheme: entry.auth.scheme };
+        const header = entry.auth.header.toLowerCase();
+        if (RESERVED_AUTH_HEADERS.has(header)) {
+          skip(`auth header ${header} is reserved`);
+          continue;
+        }
+        const scheme = typeof entry.auth.scheme === 'string' && entry.auth.scheme !== ''
+          ? entry.auth.scheme
+          : 'Bearer';
+        auth = { header, scheme };
       }
-      const id = typeof entry.id === 'string' && entry.id !== '' ? entry.id : await hashText(url);
-      subscribers.push({ id, app, url, key, repos, auth });
+      const id = typeof entry.id === 'string' && entry.id !== '' ? entry.id : await hashText(entry.url);
+      if (seen.has(id)) continue; // identical destination, deduped
+      seen.add(id);
+      subscribers.push({ id, app, url: entry.url, key: entry.key, repos, auth });
     }
   }
-  return subscribers;
+  return { subscribers, issues };
 }
 
 export function selectSubscribers(subscribers, record) {
+  const repo = typeof record.repo === 'string' ? record.repo.toLowerCase() : record.repo;
   return subscribers.filter((subscriber) => (
     subscriber.app === record.app
-    && (subscriber.repos === null || subscriber.repos.includes(record.repo))
+    && (subscriber.repos === null || subscriber.repos.includes(repo))
   ));
 }
 
@@ -172,7 +247,8 @@ export function classifyRetryable(status) {
 }
 
 export function backoffMs(attempts) {
-  return Math.min(1000 * 2 ** Math.max(0, attempts - 1), 60_000);
+  const index = Math.max(0, Math.min(attempts - 1, BACKOFF_SCHEDULE_MS.length - 1));
+  return BACKOFF_SCHEDULE_MS[index];
 }
 
 // Attempt delivery to one subscriber. 2xx is final; 429/5xx retry; any other
@@ -214,26 +290,55 @@ export function applyDeliveryAttempt(delivery, outcome, { maxAttempts = MAX_DELI
   return { ...delivery, status: 'dead', attempts, lastError: outcome.error ?? null, nextRetryAt: null };
 }
 
-// Push one record to all matching subscribers and fold the outcomes into
-// per-subscriber delivery state. Returns the earliest alarm time (if any)
-// for a pending retry.
-export async function runDeliveries(record, subscribers, { fetchImpl = fetch, now = Date.now(), maxAttempts = MAX_DELIVERY_ATTEMPTS, timeoutMs = PUSH_TIMEOUT_MS } = {}) {
-  const envelope = buildDeliveryEnvelope(record);
-  const deliveries = await Promise.all(subscribers.map(async (subscriber) => {
-    const outcome = await deliverToSubscriber(subscriber, envelope, { fetchImpl, timeoutMs });
-    return applyDeliveryAttempt(
-      { subscriberId: subscriber.id, status: 'pending', attempts: 0, lastError: null, nextRetryAt: null, deliveredAt: null },
-      outcome,
-      { maxAttempts, now },
-    );
-  }));
-  let nextAlarm = null;
-  for (const delivery of deliveries) {
-    if (delivery.status === 'pending' && (nextAlarm === null || delivery.nextRetryAt < nextAlarm)) {
-      nextAlarm = delivery.nextRetryAt;
+// Collect every due delivery across ALL records (pending and nextRetryAt in
+// the past) and push them with bounded concurrency. Returns one outcome per
+// due delivery as `{ recordId, subscriberId, delivery }`. This runs outside
+// any concurrency lock: the caller applies the results afterward.
+export async function collectAndPush(records, subscribers, { now = Date.now(), fetchImpl = fetch, maxAttempts = MAX_DELIVERY_ATTEMPTS, timeoutMs = PUSH_TIMEOUT_MS, concurrency = 8 } = {}) {
+  const subscriberById = new Map(subscribers.map((subscriber) => [subscriber.id, subscriber]));
+  const recordById = new Map(records.map((record) => [record.id, record]));
+  const due = [];
+  for (const record of records) {
+    const deliveries = Array.isArray(record.deliveries) ? record.deliveries : [];
+    for (const delivery of deliveries) {
+      if (delivery.status === 'pending' && delivery.nextRetryAt !== null && delivery.nextRetryAt <= now) {
+        due.push({ recordId: record.id, subscriberId: delivery.subscriberId, delivery });
+      }
     }
   }
-  return { deliveries, nextAlarm };
+  return mapConcurrent(due, concurrency, async ({ recordId, subscriberId, delivery }) => {
+    const subscriber = subscriberById.get(subscriberId);
+    const record = recordById.get(recordId);
+    if (!subscriber || !record) {
+      return {
+        recordId,
+        subscriberId,
+        delivery: { ...delivery, status: 'dead', lastError: 'subscriber removed', nextRetryAt: null },
+      };
+    }
+    const outcome = await deliverToSubscriber(subscriber, buildDeliveryEnvelope(record), { fetchImpl, timeoutMs });
+    return { recordId, subscriberId, delivery: applyDeliveryAttempt(delivery, outcome, { maxAttempts, now }) };
+  });
+}
+
+// Run `fn` over `items` with at most `limit` in flight, preserving order.
+async function mapConcurrent(items, limit, fn) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const workers = [];
+  const count = Math.max(1, Math.min(limit, items.length));
+  for (let worker = 0; worker < count; worker += 1) {
+    workers.push((async () => {
+      for (;;) {
+        const index = cursor;
+        cursor += 1;
+        if (index >= items.length) break;
+        results[index] = await fn(items[index], index);
+      }
+    })());
+  }
+  await Promise.all(workers);
+  return results;
 }
 
 // Non-destructive take: return the oldest not-yet-pulled record for an
@@ -247,34 +352,46 @@ export function takeRecord(records, { app, repo }) {
   return { records: next, record: next[index] };
 }
 
-// Remove records whose push deliveries are terminal and whose TTL has
-// elapsed. Fully delivered records live 24h; records with a dead delivery
-// live 7 days so /deadletter stays readable. Pending records are never
-// pruned. Returns the earliest future expiry among kept settled records.
+// Prune records whose push deliveries are terminal and whose TTL has
+// elapsed, and compute when the object should next wake. Pending records
+// are never pruned (the earliest nextRetryAt wins the wake). Dead-lettered
+// records live 7 days from creation. Fully delivered records — including
+// records with no matching subscriber (pull-only apps) — live until the
+// pull path has seen them (pulled) and then 24h more, so a pull consumer
+// never loses an unpulled record to the TTL. Returns `{ kept, nextWake }`.
 export function pruneRecords(records, now = Date.now(), { deliveredTtlMs = DELIVERED_TTL_MS, deadLetterTtlMs = DEAD_LETTER_TTL_MS } = {}) {
   const kept = [];
-  let nextExpiry = null;
+  let nextWake = null;
+  const consider = (time) => {
+    if (Number.isFinite(time) && (nextWake === null || time < nextWake)) nextWake = time;
+  };
   for (const record of records) {
-    const pending = record.deliveries.some((delivery) => delivery.status === 'pending');
-    if (pending) {
+    const deliveries = Array.isArray(record.deliveries) ? record.deliveries : [];
+    if (deliveries.some((delivery) => delivery.status === 'pending')) {
       kept.push(record);
+      for (const delivery of deliveries) {
+        if (delivery.status === 'pending') consider(delivery.nextRetryAt);
+      }
       continue;
     }
-    const hasDead = record.deliveries.some((delivery) => delivery.status === 'dead');
-    const ttl = hasDead ? deadLetterTtlMs : deliveredTtlMs;
-    const age = now - record.createdAt;
-    if (age >= ttl) continue;
-    kept.push(record);
-    const expiry = record.createdAt + ttl;
-    if (nextExpiry === null || expiry < nextExpiry) nextExpiry = expiry;
+    const createdAt = Number.isFinite(record.createdAt) ? record.createdAt : now;
+    if (deliveries.some((delivery) => delivery.status === 'dead')) {
+      if (now - createdAt < deadLetterTtlMs) {
+        kept.push(record);
+        consider(createdAt + deadLetterTtlMs);
+      }
+      continue;
+    }
+    if (record.pulled !== true) {
+      kept.push(record); // wait for the pull path before expiring
+      continue;
+    }
+    if (now - createdAt < deliveredTtlMs) {
+      kept.push(record);
+      consider(createdAt + deliveredTtlMs);
+    }
   }
-  return { kept, nextExpiry };
-}
-
-function earliestWake(a, b) {
-  if (a === null || a === undefined) return b ?? null;
-  if (b === null || b === undefined) return a;
-  return a < b ? a : b;
+  return { kept, nextWake };
 }
 
 function mentions(body, app) {
@@ -368,7 +485,13 @@ export async function handleHookRequest(request, mailbox, { inboxToken, webhookS
       return json(400, { error: 'bad payload' });
     }
     const record = acceptDelivery(app, payload);
-    if (record) await mailbox.add(record);
+    if (record) {
+      // GitHub redeliveries reuse the same delivery GUID; carrying it as the
+      // record id lets the storage dedupe instead of re-pushing.
+      const deliveryId = request.headers.get('x-github-delivery');
+      if (typeof deliveryId === 'string' && deliveryId !== '') record.id = deliveryId;
+      await mailbox.add(record);
+    }
     return json(200, { stored: Boolean(record) });
   }
   if (request.method === 'POST' && url.pathname === '/inbox') {
@@ -398,18 +521,48 @@ export class InboxDurable {
     this.state = state;
     this.storage = state.storage;
     this.env = env;
+    // Production uses the Worker runtime fetch; tests inject a fake here.
+    this.fetchImpl = env?.fetchImpl ?? fetch;
   }
 
-  async read() {
-    return (await this.storage.get('records')) ?? [];
+  keyFor(id) {
+    return `${RECORD_PREFIX}${id}`;
   }
 
-  async write(records) {
-    await this.storage.put('records', records);
+  // Migrate the legacy single-`records`-array layout to per-record keys.
+  // Ids for legacy records are derived deterministically so two overlapping
+  // migrations can't duplicate a record. Idempotent: safe to call anywhere.
+  async migrateLegacy(now) {
+    const legacy = await this.storage.get(LEGACY_KEY);
+    if (!Array.isArray(legacy)) return;
+    for (const raw of legacy) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+      const id = typeof raw.id === 'string' && raw.id !== ''
+        ? raw.id
+        : await hashText(JSON.stringify([raw.app, raw.repo, raw.kind, raw.url, raw.text ?? null, raw.number ?? null]));
+      await this.storage.put(this.keyFor(id), normalizeRecord({ ...raw, id }, now));
+    }
+    await this.storage.delete(LEGACY_KEY);
+  }
+
+  // storage.list() yields StoredValue wrappers on the Worker runtime; the
+  // fake storage used in tests yields records directly. Unwrap both.
+  async listRecords() {
+    const map = await this.storage.list({ prefix: RECORD_PREFIX });
+    const records = [];
+    for (const value of map.values()) {
+      const record = value && typeof value === 'object' && !Array.isArray(value) && 'value' in value
+        ? value.value
+        : value;
+      if (record && typeof record === 'object' && !Array.isArray(record)) records.push(record);
+    }
+    return records;
   }
 
   async subscribers() {
-    return parseSubscribers(this.env?.SUBSCRIBERS ?? null);
+    const { subscribers, issues } = await parseSubscribers(this.env?.SUBSCRIBERS ?? null);
+    for (const issue of issues) console.warn(`gh-app-hook: ${issue}`);
+    return subscribers;
   }
 
   async fetch(request) {
@@ -421,82 +574,85 @@ export class InboxDurable {
     return new Response(null, { status: 404 });
   }
 
-  async handleAdd(record) {
+  // Persist first, push later: normalize, dedupe on id, persist the record
+  // with pending deliveries, schedule the alarm, return. No outbound fetch
+  // happens here, so GitHub's webhook is never held hostage to a receiver.
+  async handleAdd(body) {
     const now = Date.now();
-    const stored = { ...record, id: crypto.randomUUID(), pulled: false, createdAt: now, deliveries: [] };
-    const subscribers = await this.subscribers();
-    const matches = selectSubscribers(subscribers, stored);
-    await this.state.blockConcurrencyWhile(async () => {
-      const { deliveries, nextAlarm } = await runDeliveries(stored, matches, { now });
-      const records = await this.read();
-      records.push({ ...stored, deliveries });
-      const { kept, nextExpiry } = pruneRecords(records, now);
-      await this.write(kept);
-      const wake = earliestWake(nextAlarm, nextExpiry);
-      if (wake !== null) await this.storage.setAlarm(wake);
-      else await this.storage.deleteAlarm();
+    return this.state.blockConcurrencyWhile(async () => {
+      await this.migrateLegacy(now);
+      const record = normalizeRecord(body, now);
+      if (await this.storage.get(this.keyFor(record.id))) {
+        return new Response(null, { status: 204 }); // redelivery, already stored
+      }
+      const subscribers = await this.subscribers();
+      const matches = selectSubscribers(subscribers, record);
+      record.deliveries = matches.map((subscriber) => ({
+        subscriberId: subscriber.id,
+        status: 'pending',
+        attempts: 0,
+        lastError: null,
+        nextRetryAt: now,
+        deliveredAt: null,
+      }));
+      await this.storage.put(this.keyFor(record.id), record);
+      await this.storage.setAlarm(now);
+      return new Response(null, { status: 204 });
     });
-    return new Response(null, { status: 204 });
   }
 
   async handleTake({ app, repo }) {
-    const record = await this.state.blockConcurrencyWhile(async () => {
-      const records = await this.read();
-      const { records: next, record: taken } = takeRecord(records, { app, repo });
-      await this.write(next);
-      return taken;
+    return this.state.blockConcurrencyWhile(async () => {
+      await this.migrateLegacy(Date.now());
+      const records = await this.listRecords();
+      const { record } = takeRecord(records, { app, repo });
+      if (record) await this.storage.put(this.keyFor(record.id), record);
+      return record ? Response.json(record) : new Response(null, { status: 204 });
     });
-    if (!record) return new Response(null, { status: 204 });
-    return Response.json(record);
   }
 
   async handleDeadletter({ app }) {
-    const records = await this.read();
-    const dead = records.filter((record) => record.app === app && record.deliveries.some((delivery) => delivery.status === 'dead'));
+    await this.migrateLegacy(Date.now());
+    const records = await this.listRecords();
+    const dead = records.filter((record) => (
+      record.app === app && record.deliveries.some((delivery) => delivery.status === 'dead')
+    ));
     return Response.json(dead);
   }
 
   async alarm() {
     const now = Date.now();
+    await this.migrateLegacy(now);
+    const subscribers = await this.subscribers();
+    const snapshot = await this.listRecords();
+    // Outbound pushes run with bounded concurrency and no lock held, so a
+    // hung receiver can't stall the object or other events.
+    const outcomes = await collectAndPush(snapshot, subscribers, { now, fetchImpl: this.fetchImpl });
     await this.state.blockConcurrencyWhile(async () => {
-      const subscribers = await this.subscribers();
-      const byId = new Map(subscribers.map((subscriber) => [subscriber.id, subscriber]));
-      const records = await this.read();
-      let nextAlarm = null;
-      const updated = [];
-      for (const record of records) {
-        const due = record.deliveries.some((delivery) => (
-          delivery.status === 'pending' && delivery.nextRetryAt !== null && delivery.nextRetryAt <= now
-        ));
-        if (!due) {
-          updated.push(record);
-          continue;
-        }
-        const envelope = buildDeliveryEnvelope(record);
-        const deliveries = [];
-        for (const delivery of record.deliveries) {
-          if (!(delivery.status === 'pending' && delivery.nextRetryAt !== null && delivery.nextRetryAt <= now)) {
-            deliveries.push(delivery);
-            continue;
+      const current = await this.listRecords();
+      const outcomeByKey = new Map(outcomes.map((outcome) => [`${outcome.recordId}\u0000${outcome.subscriberId}`, outcome.delivery]));
+      const merged = current.map((record) => {
+        let changed = false;
+        const deliveries = record.deliveries.map((delivery) => {
+          const replacement = outcomeByKey.get(`${record.id}\u0000${delivery.subscriberId}`);
+          if (replacement) {
+            changed = true;
+            return replacement;
           }
-          const subscriber = byId.get(delivery.subscriberId);
-          if (!subscriber) {
-            deliveries.push({ ...delivery, status: 'dead', lastError: 'subscriber removed', nextRetryAt: null });
-            continue;
-          }
-          const outcome = await deliverToSubscriber(subscriber, envelope, { fetchImpl: fetch });
-          const applied = applyDeliveryAttempt(delivery, outcome, { maxAttempts: MAX_DELIVERY_ATTEMPTS, now });
-          deliveries.push(applied);
-          if (applied.status === 'pending' && (nextAlarm === null || applied.nextRetryAt < nextAlarm)) {
-            nextAlarm = applied.nextRetryAt;
-          }
-        }
-        updated.push({ ...record, deliveries });
+          return delivery;
+        });
+        return changed ? { ...record, deliveries } : record;
+      });
+      const changedIds = new Set(outcomes.map((outcome) => outcome.recordId));
+      const { kept, nextWake } = pruneRecords(merged, now);
+      const keptIds = new Set(kept.map((record) => record.id));
+      for (const record of kept) {
+        if (changedIds.has(record.id)) await this.storage.put(this.keyFor(record.id), record);
       }
-      const { kept, nextExpiry } = pruneRecords(updated, now);
-      await this.write(kept);
-      const wake = earliestWake(nextAlarm, nextExpiry);
-      if (wake !== null) await this.storage.setAlarm(wake);
+      for (const record of current) {
+        if (!keptIds.has(record.id)) await this.storage.delete(this.keyFor(record.id));
+      }
+      if (nextWake !== null) await this.storage.setAlarm(nextWake);
       else await this.storage.deleteAlarm();
     });
   }
