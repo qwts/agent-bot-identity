@@ -1,7 +1,7 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -415,7 +415,11 @@ test('required shim, installed skill, managed target, and config failures are in
     ...base,
     expectedGhShim: true,
     readlink: () => '/foreign/agent-bot',
-    statFile: () => ({}),
+    // The always-succeed statFile stub above makes the dedicated launcher
+    // session directory appear to exist; probe it hermetically instead of
+    // letting the default reach a real pass-cli from inside a unit test.
+    statFile: () => ({ isDirectory: () => true }),
+    probeSessionContext: () => [{ id: 'proton-pass', available: true, session: true, code: null }],
     access: (path) => {
       if (path.includes('/skills/agent-bot/')) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
     },
@@ -1163,6 +1167,7 @@ test('soul reference checks ignore global pins and honor legacy worktree pins', 
 const STATE_CHECK_IDS = [
   'worktree.binding_summary',
   'securestore.session',
+  'securestore.launcher_session',
   'inbox.configuration',
   'runtime.version_skew',
 ];
@@ -1275,6 +1280,158 @@ test('the secure-store section distinguishes an absent provider from a dead sess
     threw.machine.checks.find((entry) => entry.id === 'securestore.session').code,
     'securestore-probe-failed',
   );
+});
+
+// The launcher's dedicated pass-cli session is a different session from the
+// interactive one, and the ambient securestore.session probe says nothing
+// about it. These pin the blind spot the launcher section exists to close:
+// doctor must name the directory, name the recovery command, distinguish a
+// dead session from an unreachable provider, and never carry provider output.
+
+function launcherStatFile() {
+  const suffix = join('agent-bot', 'proton-pass');
+  return (path) => {
+    if (typeof path === 'string' && path.endsWith(suffix)) return { isDirectory: () => true };
+    return statSync(path);
+  };
+}
+
+test('the launcher secure-store section probes the dedicated session directory and names its recovery', async () => {
+  const probed = [];
+  const report = await collectReadiness(machineScopeOptions({
+    statFile: launcherStatFile(),
+    probeSessionContext: (context) => {
+      probed.push(context);
+      return [{ id: 'proton-pass', available: true, session: false, code: 'PROVIDER_NO_SESSION' }];
+    },
+  }));
+  const check = report.machine.checks.find((entry) => entry.id === 'securestore.launcher_session');
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'securestore-launcher-no-session');
+  assert.equal(probed.length, 1);
+  assert.ok(probed[0].session_dir.endsWith(join('agent-bot', 'proton-pass')));
+  assert.ok(check.action.includes(`PROTON_PASS_SESSION_DIR='${probed[0].session_dir}'`));
+  assert.match(check.action, /pass-cli login/);
+  // Presence, a directory, and codes only — never provider output.
+  assert.deepEqual(
+    Object.keys(check.evidence.contexts[0]).sort(),
+    ['available', 'code', 'id', 'session', 'session_dir'],
+  );
+});
+
+test('the launcher secure-store section distinguishes an absent provider from a dead session', async () => {
+  const missing = await collectReadiness(machineScopeOptions({
+    statFile: launcherStatFile(),
+    probeSessionContext: () => [{ id: 'proton-pass', available: false, session: false, code: null }],
+  }));
+  const check = missing.machine.checks.find((entry) => entry.id === 'securestore.launcher_session');
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'securestore-provider-unavailable');
+  assert.match(check.action, /logging in will not help/);
+  const threw = await collectReadiness(machineScopeOptions({
+    statFile: launcherStatFile(),
+    probeSessionContext: () => {
+      throw Object.assign(new Error('nope'), { code: 'PROVIDER_UNAVAILABLE' });
+    },
+  }));
+  assert.equal(
+    threw.machine.checks.find((entry) => entry.id === 'securestore.launcher_session').code,
+    'securestore-probe-failed',
+  );
+});
+
+test('the launcher secure-store section stays not_applicable without a dedicated session directory', async () => {
+  const probed = [];
+  const report = await collectReadiness(machineScopeOptions({
+    probeSessionContext: (context) => {
+      probed.push(context);
+      return [{ id: 'proton-pass', available: true, session: true, code: null }];
+    },
+  }));
+  const check = report.machine.checks.find((entry) => entry.id === 'securestore.launcher_session');
+  assert.equal(check.status, 'not_applicable');
+  assert.deepEqual(probed, []);
+});
+
+test('the launcher secure-store section honors XDG_STATE_HOME for the session directory', async () => {
+  const home = tempRoot();
+  const stateHome = join(home, 'state-root');
+  const probed = [];
+  const report = await collectReadiness(machineScopeOptions({
+    root: home,
+    env: { HOME: home, XDG_STATE_HOME: stateHome },
+    statFile: launcherStatFile(),
+    probeSessionContext: (context) => {
+      probed.push(context);
+      return [{ id: 'proton-pass', available: true, session: true, code: null }];
+    },
+  }));
+  const check = report.machine.checks.find((entry) => entry.id === 'securestore.launcher_session');
+  assert.equal(check.status, 'ready');
+  assert.deepEqual(probed, [{
+    id: 'proton-pass',
+    session_dir: join(stateHome, 'agent-bot', 'proton-pass'),
+  }]);
+});
+
+test('the launcher secure-store section distinguishes an unreadable directory from an absent one', async () => {
+  const probed = [];
+  const suffix = join('agent-bot', 'proton-pass');
+  const unreadable = await collectReadiness(machineScopeOptions({
+    statFile: (path) => {
+      if (typeof path === 'string' && path.endsWith(suffix)) {
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      }
+      return statSync(path);
+    },
+    probeSessionContext: (context) => {
+      probed.push(context);
+      return [{ id: 'proton-pass', available: true, session: true, code: null }];
+    },
+  }));
+  const check = unreadable.machine.checks.find((entry) => entry.id === 'securestore.launcher_session');
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'securestore-launcher-unreadable');
+  assert.equal(check.evidence.inspection.code, 'EACCES');
+  assert.ok(check.evidence.inspection.session_dir.endsWith(suffix));
+  // A directory doctor cannot inspect is never probed as a session context
+  // and never reported as absent: both would hide the launcher outage.
+  assert.deepEqual(probed, []);
+  const regularFile = await collectReadiness(machineScopeOptions({
+    statFile: (path) => {
+      if (typeof path === 'string' && path.endsWith(suffix)) return {};
+      return statSync(path);
+    },
+    probeSessionContext: () => assert.fail('a non-directory session path must not be probed'),
+  }));
+  const fileCheck = regularFile.machine.checks.find((entry) => entry.id === 'securestore.launcher_session');
+  assert.equal(fileCheck.status, 'warning');
+  assert.equal(fileCheck.code, 'securestore-launcher-unreadable');
+  assert.equal(fileCheck.evidence.inspection.code, 'launcher-session-not-a-directory');
+});
+
+test('the launcher secure-store section shell-quotes the session directory in its recovery command', async () => {
+  const home = tempRoot();
+  // A state home whose name carries a single quote, a command substitution,
+  // and backticks: interpolated into double quotes it would rewrite the
+  // copy-paste recovery command instead of naming a directory.
+  const stateHome = join(home, "we'ird-$(echo pwned)-`x`");
+  const sessionDir = join(stateHome, 'agent-bot', 'proton-pass');
+  const report = await collectReadiness(machineScopeOptions({
+    root: home,
+    env: { HOME: home, XDG_STATE_HOME: stateHome },
+    statFile: (path) => (path === sessionDir ? { isDirectory: () => true } : statSync(path)),
+    probeSessionContext: () => [{ id: 'proton-pass', available: true, session: false, code: 'PROVIDER_NO_SESSION' }],
+  }));
+  const check = report.machine.checks.find((entry) => entry.id === 'securestore.launcher_session');
+  assert.equal(check.code, 'securestore-launcher-no-session');
+  const quoted = `'${sessionDir.replaceAll("'", "'\\''")}'`;
+  assert.ok(check.action.includes(`PROTON_PASS_SESSION_DIR=${quoted}`));
+  // No unquoted or double-quoted interpolation of the directory survives.
+  assert.doesNotMatch(check.action, /PROTON_PASS_SESSION_DIR="[^"]*"/u);
+  assert.doesNotMatch(check.action, /PROTON_PASS_SESSION_DIR=[^' <]/u);
+  // The message still names the directory verbatim for a human reader.
+  assert.ok(check.message.includes(sessionDir));
 });
 
 test('the inbox section reports presence without carrying the bearer', async () => {

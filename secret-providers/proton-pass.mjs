@@ -217,9 +217,14 @@ export function createProtonPassAdapter(options = {}) {
     // not start, or timed out is NOT a logged-out session. Collapsing those into
     // "no session" tells an operator to log in when the real problem is a
     // timeout or a missing executable, and sends them to the wrong fix.
-    probe() {
+    //
+    // An invocation may carry an `env`, which threads a session context (such
+    // as the MCP launcher's dedicated PROTON_PASS_SESSION_DIR) through to
+    // pass-cli. `info` still reports session state only: probing a named
+    // session context must not turn into reading a field in it.
+    probe(invocation = {}) {
       try {
-        safeInvoke(run, ['info']);
+        safeInvoke(run, ['info'], invocation);
         return { available: true, session: true, code: null };
       } catch (error) {
         if (error?.code === 'PROVIDER_UNAVAILABLE') {

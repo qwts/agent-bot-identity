@@ -9,6 +9,7 @@ import {
   SecretStoreError,
   createSecretProviderRegistry,
   getSecret,
+  probeSecretStore,
   selectSecretField,
 } from '../secret-store.mjs';
 import {
@@ -94,6 +95,49 @@ test('built-in adapters satisfy the static registry contract', () => {
   );
   assert.throws(() => createSecretProviderRegistry([{ id: 'missing-method' }]), /readFields/u);
   assert.throws(() => createSecretProviderRegistry([{ id: 'Bad ID', readFields() {} }]), /invalid id/u);
+});
+
+// A named session context (the MCP launcher's dedicated PROTON_PASS_SESSION_DIR)
+// is probed through the same contract as the ambient one: the invocation env
+// must reach pass-cli verbatim, and the probe still reads session state only —
+// `info`, never a field.
+test('probing a named session context threads its env to pass-cli without reading a field', () => {
+  const seen = [];
+  const adapter = createProtonPassAdapter({
+    run: (args, invocation = {}) => {
+      seen.push({ args, invocation });
+      if (args[0] === 'info') return '';
+      throw new Error('unexpected fixture invocation');
+    },
+  });
+  const sessionEnv = { PROTON_PASS_SESSION_DIR: '/tmp/dedicated-proton-pass' };
+  assert.deepEqual(adapter.probe({ env: sessionEnv }), {
+    available: true,
+    session: true,
+    code: null,
+  });
+  assert.deepEqual(seen, [{ args: ['info'], invocation: { env: sessionEnv } }]);
+  assert.deepEqual(adapter.probe(), { available: true, session: true, code: null });
+  assert.deepEqual(seen[1], { args: ['info'], invocation: {} });
+
+  const probed = [];
+  const registry = createSecretProviderRegistry([{
+    id: 'test-store',
+    readFields: () => [],
+    probe: (invocation) => {
+      probed.push(invocation);
+      return { available: true, session: false, code: 'PROVIDER_NO_SESSION' };
+    },
+  }]);
+  probeSecretStore({ registry, env: sessionEnv });
+  probeSecretStore({ registry });
+  assert.deepEqual(probed, [{ env: sessionEnv }, undefined]);
+  assert.deepEqual(probeSecretStore({ registry, env: sessionEnv }), [{
+    id: 'test-store',
+    available: true,
+    session: false,
+    code: 'PROVIDER_NO_SESSION',
+  }]);
 });
 
 test('every built-in adapter passes the shared normalized-read contract', () => {

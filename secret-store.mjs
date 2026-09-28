@@ -76,21 +76,24 @@ export function createSecretProviderRegistry(providers) {
 
 // Read-only reachability across the configured providers. `probe` is optional on
 // the provider contract, so a provider without one is simply not reported
-// rather than treated as broken. Returns booleans and codes only: nothing here
-// may carry a secret, and no probe is permitted to read a field.
-export function probeSecretStore({ registry, provider = null } = {}) {
+// rather than treated as broken. An `env` probes a named session context (for
+// example the MCP launcher's dedicated PROTON_PASS_SESSION_DIR) instead of the
+// ambient one. Returns booleans and codes only: nothing here may carry a
+// secret, and no probe is permitted to read a field.
+export function probeSecretStore({ registry, provider = null, env = undefined } = {}) {
   if (!(registry instanceof Map)) {
     throw new SecretStoreError('secret provider registry is unavailable', 'INVALID_PROVIDER_REGISTRY');
   }
   const adapters = provider
     ? [registry.get(provider)].filter(Boolean)
     : [...registry.values()];
+  const invocation = env === undefined ? undefined : { env };
   const results = [];
   for (const adapter of adapters) {
     if (typeof adapter?.probe !== 'function') continue;
     let outcome;
     try {
-      outcome = adapter.probe();
+      outcome = adapter.probe(invocation);
     } catch (error) {
       outcome = { available: false, session: false, code: error?.code ?? 'PROVIDER_FAILED' };
     }
