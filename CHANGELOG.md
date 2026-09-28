@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.0
+
 - The `gh-app-hook` Worker pushes each stored record to registered webhook
   subscribers instead of only serving polling consumers. A `SUBSCRIBERS`
   Worker secret maps an App slug (and optional `owner/name` repos, matched
