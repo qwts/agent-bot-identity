@@ -723,6 +723,112 @@ function defaultProbeSecretStore() {
   return probeSecretStore({ registry: createSecretProviderRegistry(BUILTIN_SECRET_PROVIDERS) });
 }
 
+// The MCP launcher's dedicated proton-pass session, probed where it lives. The
+// launcher that harness MCP configs point at (~/.config/opencode/bin/
+// agent-bot-inbox-mcp) keeps a dedicated pass-cli session directory under the
+// agent-bot state root so an interactive logout cannot tear the server's
+// session down — which also means the interactive session says nothing about
+// the launcher's. Probing only the ambient session reports ready while the
+// harness's agent-bot MCP server dies at spawn with an opaque
+// "Connection closed". Presence on disk is the only claim made: a machine
+// without the directory reports no context, never a guess, and the probe
+// itself reads session state only — never a field.
+function launcherSessionContexts({ home, env, statFile = statSync } = {}) {
+  const base = env.XDG_STATE_HOME ? resolve(env.XDG_STATE_HOME) : join(home, '.local', 'state');
+  const dir = join(base, 'agent-bot', 'proton-pass');
+  try {
+    statFile(dir);
+  } catch {
+    return [];
+  }
+  return [{ id: 'proton-pass', session_dir: dir }];
+}
+
+function defaultProbeSessionContext(context) {
+  return probeSecretStore({
+    registry: createSecretProviderRegistry(BUILTIN_SECRET_PROVIDERS),
+    env: { ...process.env, PROTON_PASS_SESSION_DIR: context.session_dir },
+  });
+}
+
+// The launcher's session directory is invisible to the ambient probe, so it
+// gets its own advisory check rather than a second verdict inside
+// securestore.session: an operator reading "secure store has a live session"
+// must not have to wonder which session that verdict covers. Recovery differs
+// per failure class, exactly as in secureStoreCheck: an unreachable provider
+// must not be reported as a login problem.
+function secureStoreLauncherSessionCheck({ contexts, probeSessionContext }) {
+  if (!Array.isArray(contexts) || contexts.length === 0) {
+    return readinessCheck({
+      id: 'securestore.launcher_session',
+      status: 'not_applicable',
+      message: 'no dedicated MCP launcher session directory on this machine',
+    });
+  }
+  let results;
+  try {
+    results = contexts.map((context) => {
+      const entries = probeSessionContext(context);
+      const entry = Array.isArray(entries)
+        ? entries.find((candidate) => candidate.id === context.id)
+        : null;
+      return {
+        id: context.id,
+        session_dir: context.session_dir,
+        available: entry?.available === true,
+        session: entry?.session === true,
+        code: entry?.code ?? (entry?.available === true && entry?.session !== true
+          ? 'PROVIDER_NO_SESSION' : null),
+      };
+    });
+  } catch (error) {
+    return readinessCheck({
+      id: 'securestore.launcher_session',
+      status: 'warning',
+      code: 'securestore-probe-failed',
+      message: 'the launcher secure store session could not be probed',
+      action: 'check the provider executable, then rerun doctor',
+      evidence: { contexts: [], code: error?.code ?? 'PROVIDER_FAILED' },
+    });
+  }
+  // Presence, a directory, and codes only — never provider output, so the
+  // report stays secret-free exactly like securestore.session.
+  const evidence = { contexts: results };
+  if (results.every((entry) => entry.available && entry.session)) {
+    return readinessCheck({
+      id: 'securestore.launcher_session',
+      status: 'ready',
+      message: `every dedicated MCP launcher session is live (${results.length})`,
+      evidence,
+    });
+  }
+  const unreachable = results.filter((entry) => !entry.available);
+  if (unreachable.length > 0) {
+    return readinessCheck({
+      id: 'securestore.launcher_session',
+      status: 'warning',
+      code: 'securestore-provider-unavailable',
+      message: `launcher secure store session(s) did not answer: ${
+        unreachable.map((entry) => `${entry.id} (${entry.code ?? 'unavailable'})`).join(', ')}`,
+      action: 'check the provider executable and connectivity, then rerun doctor; logging in will not help an unreachable provider',
+      evidence,
+    });
+  }
+  const dirs = results
+    .filter((entry) => entry.available && !entry.session)
+    .map((entry) => entry.session_dir);
+  return readinessCheck({
+    id: 'securestore.launcher_session',
+    status: 'warning',
+    code: 'securestore-launcher-no-session',
+    message: `dedicated MCP launcher session(s) have no live login: ${dirs.join(', ')}`,
+    action: dirs.length === 1
+      ? `log the launcher session in, then rerun doctor: PROTON_PASS_SESSION_DIR="${dirs[0]}" PROTON_PASS_PERSONAL_ACCESS_TOKEN='<pat from the authorized store>' pass-cli login`
+      : 'log each launcher session directory above in, then rerun doctor: PROTON_PASS_SESSION_DIR="<dir>" PROTON_PASS_PERSONAL_ACCESS_TOKEN=\'<pat from the authorized store>\' pass-cli login',
+    evidence,
+  });
+}
+
 function readManifestVersion(path) {
   try {
     const manifest = JSON.parse(readFileSync(path, 'utf8'));
@@ -1668,6 +1774,7 @@ export async function collectReadiness({
   readPackageVersion = readManifestVersion,
   installedCliVersion: resolveInstalledVersion = installedCliVersion,
   listHarnessMcpServers = defaultListHarnessMcpServers,
+  probeSessionContext = defaultProbeSessionContext,
 } = {}) {
   const machineChecks = [];
   let config = {};
@@ -1758,6 +1865,10 @@ export async function collectReadiness({
     const bindingSummary = worktreeBindingSummaryCheck({ home, env, roster });
     if (bindingSummary) machineChecks.push(bindingSummary);
     machineChecks.push(secureStoreCheck({ probe: probeSecretStore }));
+    machineChecks.push(secureStoreLauncherSessionCheck({
+      contexts: launcherSessionContexts({ home, env, statFile }),
+      probeSessionContext,
+    }));
     machineChecks.push(inboxConfigurationCheck({
       env,
       harnesses: listHarnessMcpServers({ home, cwd }),
