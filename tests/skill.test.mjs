@@ -17,7 +17,10 @@ test('official skill is a progressive router over focused references', () => {
   assert.match(frontmatter, /^description: .+$/m);
   assert.match(frontmatter, /fresh-clone/u);
   assert.match(frontmatter, /install agent bot identities/u);
-  assert.equal(frontmatter.split('\n').filter((line) => /^[a-z_]+:/u.test(line)).length, 2);
+  // name, description, and the ENG-0055 contract under metadata.
+  assert.deepEqual(frontmatter.split('\n').filter((line) => /^[a-z_]+:/u.test(line)).map((line) => line.split(':')[0]), ['name', 'description', 'metadata']);
+  assert.match(frontmatter, /^ {2}qwts-contract: "1"$/m);
+  assert.match(frontmatter, /^ {2}qwts-cli: "agent-bot"$/m);
   for (const reference of ['operations.md', 'verified-publish.md', 'execution-identities.md', 'storage-surfaces.md']) {
     assert.match(main, new RegExp(`references/${reference.replace('.', '\\.')}`));
     assert.match(readFileSync(join(SKILL, 'references', reference), 'utf8'), /agent-bot/u);

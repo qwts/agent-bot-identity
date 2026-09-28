@@ -25,6 +25,7 @@ const MODULES = new Map([
   ['ensure-private-key', 'ensure-private-key.mjs'],
   ['signed-commit', 'signed-commit.mjs'],
   ['secret', 'secret.mjs'],
+  ['skill', 'skill.mjs'],
   ['credential', 'git-credential-bot.mjs'],
   ['worktree-token', 'worktree-token.mjs'],
   ['gh-inbox-query', 'gh-inbox-query.mjs'],

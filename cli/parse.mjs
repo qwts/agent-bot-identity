@@ -18,6 +18,7 @@ const PUBLIC_COMMANDS = new Set([
   'ensure-private-key',
   'signed-commit',
   'secret',
+  'skill',
 ]);
 
 const INTERNAL_COMMANDS = new Set([

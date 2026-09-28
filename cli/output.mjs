@@ -25,6 +25,7 @@ Commands:
   ensure-private-key Restore an App private key and app-id with pass-cli
   signed-commit      Replay local commits with GitHub-verified signatures
   secret             Read a password or API key from a secure-store provider
+  skill              Print this release's agent skill bundle and source commit
 
 Cold start:
   ./agent-bot bootstrap --profile <path|-> [options]  Run from a fresh source checkout
