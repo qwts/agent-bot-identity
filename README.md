@@ -150,6 +150,7 @@ agent-bot install-gh-shim
 agent-bot ensure-private-key --app <slug> [--force]
 agent-bot signed-commit [--base <ref>] [--branch <name>] [--repo <owner/name>] [--dry-run]
 agent-bot secret get --provider <id> --collection <name> --item <title> --field <name> --reason <text>
+agent-bot skill path [--json]
 ```
 
 ### Organization profile v1

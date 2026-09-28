@@ -41,6 +41,14 @@ test('stable CI gate covers manual, PR, and main fallback lanes', () => {
   assert.match(ci, /post-merge\)/);
   assert.match(ci, /test "\$CODEQL" = success/);
   assert.match(ci, /test "\$WORKFLOW_RUNTIME" = success/);
+  assert.match(ci, /test "\$SKILL_GATE" = success/);
+});
+
+test('the ENG-0055 skill gate checks the packaged tree in every lane', () => {
+  assert.match(ci, /cli-skill-gate@[0-9a-f]{40}/);
+  assert.match(ci, /git archive HEAD \| tar -x/);
+  assert.match(ci, /skill-workflows\.test\.mjs/);
+  assert.match(ci, /needs: \[policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime, skill-gate\]/);
 });
 
 test('advanced CodeQL is callable only through governed CI for both languages', () => {

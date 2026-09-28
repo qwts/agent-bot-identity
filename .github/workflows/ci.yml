@@ -150,9 +150,45 @@ jobs:
       - name: Enforce bounded workflow runtime
         run: node .ci-runtime-policy/tools/ci-runtime/runtime-policy.mjs --root "$GITHUB_WORKSPACE"
 
+  skill-gate:
+    name: CLI skill release gate
+    # ENG-0055: the release fails closed unless the agent skill, its bundle,
+    # and the packaged executable agree. Every lane runs it, so a version bump
+    # that outgrows qwts-versions fails before it can be tagged.
+    needs: policy
+    if: needs.policy.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 20
+      - name: Package the release tree as the formula installs it
+        # git archive applies export-subst, as GitHub's release archive does,
+        # so RELEASE_COMMIT is stamped; the formula then drops these paths and
+        # installs the remaining top-level entries into libexec.
+        run: |
+          set -euo pipefail
+          pkg="$RUNNER_TEMP/pkg"
+          mkdir -p "$pkg/src" "$pkg/libexec"
+          git archive HEAD | tar -x -C "$pkg/src"
+          rm -rf "$pkg/src/tests" "$pkg/src/tools" "$pkg/src/governance" "$pkg/src/Formula"
+          cp -R "$pkg/src/"* "$pkg/libexec/"
+      - uses: qwts/qwts-agent-ci/.github/actions/cli-skill-gate@518948bdfaa8f64a9fc5803f339fe32f8dc0c62e
+        with:
+          skill: skills/agent-bot
+          executable: ${{ runner.temp }}/pkg/libexec/agent-bot
+          bundle: ${{ runner.temp }}/pkg/libexec/skills/agent-bot
+          bundle-args-json: '["skill", "path"]'
+          test-json: '["node", "--test", "tests/skill-workflows.test.mjs"]'
+
   gate:
     name: CI
-    needs: [policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime]
+    needs: [policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime, skill-gate]
     if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -164,12 +200,14 @@ jobs:
           COMPLETE: ${{ needs.complete.result }}
           CODEQL: ${{ needs.codeql.result }}
           WORKFLOW_RUNTIME: ${{ needs.workflow-runtime.result }}
+          SKILL_GATE: ${{ needs.skill-gate.result }}
           PREFLIGHT: ${{ needs.preflight-evidence.result }}
           PREFLIGHT_VALIDATED: ${{ needs.preflight-evidence.outputs.validated }}
           MERGE_VALIDATED: ${{ needs.merge-evidence.outputs.validated }}
         run: |
           test "$POLICY" = success
           test "$WORKFLOW_RUNTIME" = success
+          test "$SKILL_GATE" = success
           case "$MODE" in
             full)
               if [ "$PREFLIGHT_VALIDATED" = true ]; then

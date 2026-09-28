@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- The agent-bot skill conforms to ENG-0055. Its frontmatter carries the
+  `qwts-` contract under `metadata` (range `>=0.7.0 <0.8.0`, validated
+  `0.7.0`), and it classifies every command it routes to by side effect,
+  with retry guidance. New read-only `agent-bot skill path [--json]` prints
+  the installed release's skill bundle and its source commit. A release
+  archive reports the commit from `RELEASE_COMMIT`, which GitHub's archive
+  export stamps. CI adds a `CLI skill release gate` job that packages the
+  tree as the formula does and runs `qwts-agent-ci`'s `cli-skill-gate`. A
+  0.8.0 bump fails until the skill is revalidated.
+
 ## 0.7.0
 
 - The `gh-app-hook` Worker pushes each stored record to registered webhook
