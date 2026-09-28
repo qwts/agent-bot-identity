@@ -415,10 +415,10 @@ test('required shim, installed skill, managed target, and config failures are in
     ...base,
     expectedGhShim: true,
     readlink: () => '/foreign/agent-bot',
-    statFile: () => ({}),
     // The always-succeed statFile stub above makes the dedicated launcher
     // session directory appear to exist; probe it hermetically instead of
     // letting the default reach a real pass-cli from inside a unit test.
+    statFile: () => ({ isDirectory: () => true }),
     probeSessionContext: () => [{ id: 'proton-pass', available: true, session: true, code: null }],
     access: (path) => {
       if (path.includes('/skills/agent-bot/')) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
@@ -1291,7 +1291,7 @@ test('the secure-store section distinguishes an absent provider from a dead sess
 function launcherStatFile() {
   const suffix = join('agent-bot', 'proton-pass');
   return (path) => {
-    if (typeof path === 'string' && path.endsWith(suffix)) return {};
+    if (typeof path === 'string' && path.endsWith(suffix)) return { isDirectory: () => true };
     return statSync(path);
   };
 }
@@ -1310,7 +1310,7 @@ test('the launcher secure-store section probes the dedicated session directory a
   assert.equal(check.code, 'securestore-launcher-no-session');
   assert.equal(probed.length, 1);
   assert.ok(probed[0].session_dir.endsWith(join('agent-bot', 'proton-pass')));
-  assert.ok(check.action.includes(`PROTON_PASS_SESSION_DIR="${probed[0].session_dir}"`));
+  assert.ok(check.action.includes(`PROTON_PASS_SESSION_DIR='${probed[0].session_dir}'`));
   assert.match(check.action, /pass-cli login/);
   // Presence, a directory, and codes only — never provider output.
   assert.deepEqual(
@@ -1372,6 +1372,66 @@ test('the launcher secure-store section honors XDG_STATE_HOME for the session di
     id: 'proton-pass',
     session_dir: join(stateHome, 'agent-bot', 'proton-pass'),
   }]);
+});
+
+test('the launcher secure-store section distinguishes an unreadable directory from an absent one', async () => {
+  const probed = [];
+  const suffix = join('agent-bot', 'proton-pass');
+  const unreadable = await collectReadiness(machineScopeOptions({
+    statFile: (path) => {
+      if (typeof path === 'string' && path.endsWith(suffix)) {
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      }
+      return statSync(path);
+    },
+    probeSessionContext: (context) => {
+      probed.push(context);
+      return [{ id: 'proton-pass', available: true, session: true, code: null }];
+    },
+  }));
+  const check = unreadable.machine.checks.find((entry) => entry.id === 'securestore.launcher_session');
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'securestore-launcher-unreadable');
+  assert.equal(check.evidence.inspection.code, 'EACCES');
+  assert.ok(check.evidence.inspection.session_dir.endsWith(suffix));
+  // A directory doctor cannot inspect is never probed as a session context
+  // and never reported as absent: both would hide the launcher outage.
+  assert.deepEqual(probed, []);
+  const regularFile = await collectReadiness(machineScopeOptions({
+    statFile: (path) => {
+      if (typeof path === 'string' && path.endsWith(suffix)) return {};
+      return statSync(path);
+    },
+    probeSessionContext: () => assert.fail('a non-directory session path must not be probed'),
+  }));
+  const fileCheck = regularFile.machine.checks.find((entry) => entry.id === 'securestore.launcher_session');
+  assert.equal(fileCheck.status, 'warning');
+  assert.equal(fileCheck.code, 'securestore-launcher-unreadable');
+  assert.equal(fileCheck.evidence.inspection.code, 'launcher-session-not-a-directory');
+});
+
+test('the launcher secure-store section shell-quotes the session directory in its recovery command', async () => {
+  const home = tempRoot();
+  // A state home whose name carries a single quote, a command substitution,
+  // and backticks: interpolated into double quotes it would rewrite the
+  // copy-paste recovery command instead of naming a directory.
+  const stateHome = join(home, "we'ird-$(echo pwned)-`x`");
+  const sessionDir = join(stateHome, 'agent-bot', 'proton-pass');
+  const report = await collectReadiness(machineScopeOptions({
+    root: home,
+    env: { HOME: home, XDG_STATE_HOME: stateHome },
+    statFile: (path) => (path === sessionDir ? { isDirectory: () => true } : statSync(path)),
+    probeSessionContext: () => [{ id: 'proton-pass', available: true, session: false, code: 'PROVIDER_NO_SESSION' }],
+  }));
+  const check = report.machine.checks.find((entry) => entry.id === 'securestore.launcher_session');
+  assert.equal(check.code, 'securestore-launcher-no-session');
+  const quoted = `'${sessionDir.replaceAll("'", "'\\''")}'`;
+  assert.ok(check.action.includes(`PROTON_PASS_SESSION_DIR=${quoted}`));
+  // No unquoted or double-quoted interpolation of the directory survives.
+  assert.doesNotMatch(check.action, /PROTON_PASS_SESSION_DIR="[^"]*"/u);
+  assert.doesNotMatch(check.action, /PROTON_PASS_SESSION_DIR=[^' <]/u);
+  // The message still names the directory verbatim for a human reader.
+  assert.ok(check.message.includes(sessionDir));
 });
 
 test('the inbox section reports presence without carrying the bearer', async () => {

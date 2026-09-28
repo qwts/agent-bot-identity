@@ -730,18 +730,28 @@ function defaultProbeSecretStore() {
 // session down — which also means the interactive session says nothing about
 // the launcher's. Probing only the ambient session reports ready while the
 // harness's agent-bot MCP server dies at spawn with an opaque
-// "Connection closed". Presence on disk is the only claim made: a machine
-// without the directory reports no context, never a guess, and the probe
-// itself reads session state only — never a field.
+// "Connection closed". A genuine absence (ENOENT) is the only input that means
+// "no dedicated launcher session directory on this machine" — anything else
+// the directory stat reports is a machine with a launcher session doctor
+// cannot see, which is exactly the outage this check exists to name, so it
+// surfaces as an inspection anomaly instead of a silent not_applicable. The
+// probe itself reads session state only — never a field.
 function launcherSessionContexts({ home, env, statFile = statSync } = {}) {
   const base = env.XDG_STATE_HOME ? resolve(env.XDG_STATE_HOME) : join(home, '.local', 'state');
   const dir = join(base, 'agent-bot', 'proton-pass');
+  let info;
   try {
-    statFile(dir);
-  } catch {
-    return [];
+    info = statFile(dir);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { contexts: [], inspection: null };
+    return { contexts: [], inspection: { session_dir: dir, code: error?.code ?? 'PROVIDER_FAILED' } };
   }
-  return [{ id: 'proton-pass', session_dir: dir }];
+  // A regular file at the session directory path is a broken launcher session
+  // directory, not an absent one: the launcher cannot use it either.
+  if (typeof info?.isDirectory !== 'function' || !info.isDirectory()) {
+    return { contexts: [], inspection: { session_dir: dir, code: 'launcher-session-not-a-directory' } };
+  }
+  return { contexts: [{ id: 'proton-pass', session_dir: dir }], inspection: null };
 }
 
 function defaultProbeSessionContext(context) {
@@ -751,13 +761,31 @@ function defaultProbeSessionContext(context) {
   });
 }
 
+// The recovery command is copy-paste shell, so the session directory must
+// appear as a POSIX single-quoted literal: a HOME or XDG_STATE_HOME carrying
+// $(), backticks, or quotes must not rewrite the command the operator runs.
+function shellQuoteLiteral(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
 // The launcher's session directory is invisible to the ambient probe, so it
 // gets its own advisory check rather than a second verdict inside
 // securestore.session: an operator reading "secure store has a live session"
 // must not have to wonder which session that verdict covers. Recovery differs
 // per failure class, exactly as in secureStoreCheck: an unreachable provider
 // must not be reported as a login problem.
-function secureStoreLauncherSessionCheck({ contexts, probeSessionContext }) {
+function secureStoreLauncherSessionCheck({ discovery, probeSessionContext }) {
+  if (discovery.inspection) {
+    return readinessCheck({
+      id: 'securestore.launcher_session',
+      status: 'warning',
+      code: 'securestore-launcher-unreadable',
+      message: `the dedicated MCP launcher session directory could not be inspected: ${discovery.inspection.session_dir} (${discovery.inspection.code})`,
+      action: 'check the session directory path and permissions, then rerun doctor',
+      evidence: { contexts: [], inspection: discovery.inspection },
+    });
+  }
+  const contexts = discovery.contexts;
   if (!Array.isArray(contexts) || contexts.length === 0) {
     return readinessCheck({
       id: 'securestore.launcher_session',
@@ -823,8 +851,8 @@ function secureStoreLauncherSessionCheck({ contexts, probeSessionContext }) {
     code: 'securestore-launcher-no-session',
     message: `dedicated MCP launcher session(s) have no live login: ${dirs.join(', ')}`,
     action: dirs.length === 1
-      ? `log the launcher session in, then rerun doctor: PROTON_PASS_SESSION_DIR="${dirs[0]}" PROTON_PASS_PERSONAL_ACCESS_TOKEN='<pat from the authorized store>' pass-cli login`
-      : 'log each launcher session directory above in, then rerun doctor: PROTON_PASS_SESSION_DIR="<dir>" PROTON_PASS_PERSONAL_ACCESS_TOKEN=\'<pat from the authorized store>\' pass-cli login',
+      ? `log the launcher session in, then rerun doctor: PROTON_PASS_SESSION_DIR=${shellQuoteLiteral(dirs[0])} PROTON_PASS_PERSONAL_ACCESS_TOKEN='<pat from the authorized store>' pass-cli login`
+      : 'log each launcher session directory above in, then rerun doctor: PROTON_PASS_SESSION_DIR=\'<dir above>\' PROTON_PASS_PERSONAL_ACCESS_TOKEN=\'<pat from the authorized store>\' pass-cli login',
     evidence,
   });
 }
@@ -1866,7 +1894,7 @@ export async function collectReadiness({
     if (bindingSummary) machineChecks.push(bindingSummary);
     machineChecks.push(secureStoreCheck({ probe: probeSecretStore }));
     machineChecks.push(secureStoreLauncherSessionCheck({
-      contexts: launcherSessionContexts({ home, env, statFile }),
+      discovery: launcherSessionContexts({ home, env, statFile }),
       probeSessionContext,
     }));
     machineChecks.push(inboxConfigurationCheck({
