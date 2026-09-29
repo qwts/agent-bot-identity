@@ -31,7 +31,10 @@ test('skill path reports the bundled skill and its source commit', () => {
   const r = run('skill', 'path');
   assert.equal(r.status, 0, r.stderr);
   const [bundle, commitLine] = r.stdout.trimEnd().split('\n');
-  assert.match(commitLine, /^commit ([0-9a-f]{40}|unknown)$/);
+  // A packaged release must name its source commit; only a direct run from a
+  // tree with no git metadata may report unknown.
+  const commitPattern = process.env.CLI_SKILL_GATE_EXECUTABLE ? /^commit [0-9a-f]{40}$/ : /^commit ([0-9a-f]{40}|unknown)$/;
+  assert.match(commitLine, commitPattern);
   assert.equal(readFileSync(join(bundle, 'SKILL.md'), 'utf8'), readFileSync(SOURCE_SKILL, 'utf8'));
 
   const json = run('skill', 'path', '--json');
