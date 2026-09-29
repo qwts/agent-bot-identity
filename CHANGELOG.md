@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.1
+
 - The agent-bot skill conforms to ENG-0055. Its frontmatter carries the
   `qwts-` contract under `metadata` (range `>=0.7.0 <0.8.0`, validated
   `0.7.0`), and it classifies every command it routes to by side effect,
@@ -10,7 +12,16 @@
   archive reports the commit from `RELEASE_COMMIT`, which GitHub's archive
   export stamps. CI adds a `CLI skill release gate` job that packages the
   tree as the formula does and runs `qwts-agent-ci`'s `cli-skill-gate`. A
-  0.8.0 bump fails until the skill is revalidated.
+  0.8.0 bump fails until the skill is revalidated. Under that gate,
+  `skill path` must name a 40-hex source commit; `unknown` passes only for
+  a direct run from a tree with no git metadata (#243, #244).
+- `doctor` adds an advisory `securestore.launcher_session` check. It probes
+  the dedicated pass-cli session the harness MCP launcher keeps under the
+  agent-bot state root, which the ambient `securestore.session` check never
+  saw, so an expired launcher session no longer reports ready while the MCP
+  server dies at spawn with "Connection closed". A machine without that
+  session reports `not_applicable`, and each failure class names its
+  pass-cli login recovery (#241).
 
 ## 0.7.0
 
