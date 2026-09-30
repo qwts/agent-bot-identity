@@ -1681,6 +1681,7 @@ test('the inbox section recognises the documented per-harness config shapes', as
   for (const [label, harnesses, expected] of [
     ['claude mcpServers', [{ harness: 'claude', mcp: 'agent-bot' }], ['claude']],
     ['codex mcp_servers', [{ harness: 'codex', mcp: 'agent-bot' }], ['codex']],
+    ['qwen mcpServers', [{ harness: 'qwen', mcp: 'agent-bot' }], ['qwen']],
   ]) {
     const report = await collectReadiness(machineScopeOptions({
       env: {
@@ -1838,4 +1839,44 @@ test('an unrelated MCP server is never reported as agent-bot wiring', async () =
     mcpServers: { playwright: { command: ['npx', 'playwright'] } },
   }));
   assert.deepEqual(harnessMcpWiring({ home, cwd: project }), []);
+});
+
+// Qwen Code reads `mcpServers` from settings.json at two scopes: user
+// ~/.qwen/settings.json and project .qwen/settings.json. Without a row in both
+// tables a correctly wired Qwen harness is a permanent false negative, and
+// inbox.configuration can never list `qwen` in harnesses_wired.
+test('the inbox section finds a user-scoped Qwen registration', async () => {
+  const home = tempRoot();
+  mkdirSync(join(home, '.qwen'), { recursive: true });
+  writeFileSync(join(home, '.qwen', 'settings.json'), JSON.stringify({
+    mcpServers: { 'agent-bot': { command: 'agent-bot', args: ['mcp'] } },
+  }));
+  const harnessWires = harnessMcpWiring({ home, cwd: tempRoot() });
+  assert.ok(
+    harnessWires.some((entry) => entry.harness === 'qwen' && entry.scope === 'user'),
+    `expected a user-scoped qwen registration, saw ${JSON.stringify(harnessWires)}`,
+  );
+});
+
+test('the inbox section finds a project-scoped Qwen registration', async () => {
+  const home = tempRoot();
+  const project = tempRoot();
+  mkdirSync(join(project, '.qwen'), { recursive: true });
+  writeFileSync(join(project, '.qwen', 'settings.json'), JSON.stringify({
+    mcpServers: { 'agent-bot': { command: 'agent-bot', args: ['mcp'] } },
+  }));
+  const harnessWires = harnessMcpWiring({ home, cwd: project });
+  assert.ok(
+    harnessWires.some((entry) => entry.harness === 'qwen' && entry.scope === 'project'),
+    `expected a project-scoped qwen registration, saw ${JSON.stringify(harnessWires)}`,
+  );
+});
+
+test('an unrelated MCP server in Qwen settings is not agent-bot wiring', async () => {
+  const home = tempRoot();
+  mkdirSync(join(home, '.qwen'), { recursive: true });
+  writeFileSync(join(home, '.qwen', 'settings.json'), JSON.stringify({
+    mcpServers: { playwright: { command: 'npx', args: ['playwright'] } },
+  }));
+  assert.deepEqual(harnessMcpWiring({ home, cwd: tempRoot() }), []);
 });

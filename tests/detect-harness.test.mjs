@@ -100,6 +100,7 @@ test('every harness is an agent via its own <NAME>_AGENT marker alone', () => {
   assert.equal(detectAgentHarness({ COPILOT_AGENT: '1' }, cfg), 'you-copilot-agent');
   assert.equal(detectAgentHarness({ DEVIN_AGENT: '1' }, cfg), 'you-devin-agent');
   assert.equal(detectAgentHarness({ MUSE_AGENT: '1' }, cfg), 'you-muse-agent');
+  assert.equal(detectAgentHarness({ QWEN_CODE: '1' }, cfg), 'you-qwen-agent');
 });
 
 // Meta Muse is keyed `muse` (its territory is .muse/worktrees/, matching its
@@ -112,6 +113,34 @@ test('a Muse agent session is an agent keyed muse; a Muse editor terminal is not
   assert.equal(detectHarness({ MUSE_AGENT: '1' }), 'muse');
   assert.equal(detectAgentHarness({ MUSE_RELEASE_INFO: '0.9.1' }, cfg), null);
   assert.equal(detectAgentHarness({ MUSE_AGENT: '1' }, cfg), 'you-muse-agent');
+});
+
+// Measured from a live Qwen Code 0.24.6 session: QWEN_CODE=1 plus a
+// QWEN_CODE_* family (CLI, SESSION_ID, PROJECT_DIR, MODEL), with AI_AGENT
+// unset. Qwen Code is a terminal CLI agent rather than an editor, so
+// QWEN_CODE=1 is the CLAUDECODE=1 analogue and both resolvers may key on it.
+// QWEN_CODE_AGENT_ID is exported but EMPTY at top level: an existence test
+// would attribute every session and a non-empty test would attribute none, so
+// neither is used and the rest of the family stays ambient.
+test('a Qwen Code session is an agent keyed qwen; its ambient family is not', () => {
+  assert.equal(detectHarness({ QWEN_CODE: '1' }), 'qwen');
+  assert.equal(detectHarness({ AI_AGENT: 'qwen-code' }), 'qwen');
+  assert.equal(detectAgentHarness({ QWEN_CODE: '1' }, cfg), 'you-qwen-agent');
+  assert.equal(detectAgentHarness({ QWEN_CODE_AGENT_ID: '' }, cfg), null);
+  assert.equal(
+    detectAgentHarness({ QWEN_CODE_SESSION_ID: 'x', QWEN_CODE_PROJECT_DIR: '/tmp' }, cfg),
+    null,
+  );
+});
+
+// The ordering invariant that matters for a CLI harness a contributor may run
+// inside an editor terminal: the qwen row sits above the vscode fallback, so
+// TERM_PROGRAM/VSCODE_* from the surrounding editor cannot claim the session.
+test('Qwen Code inside a VS Code terminal is qwen, not vscode', () => {
+  assert.equal(
+    detectHarness({ QWEN_CODE: '1', TERM_PROGRAM: 'vscode', VSCODE_CWD: '/tmp' }),
+    'qwen',
+  );
 });
 
 test('Devin is detected from its Codeium-era markers but keyed devin', () => {

@@ -66,6 +66,22 @@ const HARNESSES = [
       (e.AI_AGENT ?? '').toLowerCase().includes('muse'),
   },
   {
+    // Qwen Code is keyed `qwen`: the key names the worktree layout
+    // (~/.qwen/worktrees/), matching its ~/.qwen config home and the
+    // qwts-qwen-agent App slug.
+    // Measured from a live Qwen Code 0.24.6 session: QWEN_CODE=1 plus a
+    // QWEN_CODE_* family (CLI, SESSION_ID, PROJECT_DIR, MODEL, …), with
+    // AI_AGENT unset. It is a terminal CLI agent rather than an editor, so
+    // QWEN_CODE=1 is the CLAUDECODE=1 analogue and a human terminal never
+    // carries it — which is why broad detection and agent attribution below
+    // may both key on it, as they do for claude. QWEN_CODE_AGENT_ID is
+    // exported but EMPTY at top level, so it is deliberately not a marker:
+    // an existence test would attribute every session and a non-empty test
+    // would attribute none.
+    key: 'qwen',
+    match: (e) => e.QWEN_CODE === '1' || (e.AI_AGENT ?? '').toLowerCase().includes('qwen'),
+  },
+  {
     key: 'vscode',
     match: (e) =>
       e.TERM_PROGRAM === 'vscode' ||
@@ -195,6 +211,13 @@ export function detectAgentHarness(
     // app is open, agent or human) and deliberately does NOT appear here.
   } else if (env.MUSE_AGENT === '1' || aiAgent.includes('muse')) {
     key = 'muse';
+    // Qwen Code has no separate <NAME>_AGENT marker: QWEN_CODE=1 is it, the
+    // same shape as CLAUDECODE=1, because the CLI is the agent process rather
+    // than an editor a human may merely have open. QWEN_CODE_AGENT_ID stays
+    // out for the reason recorded on the HARNESSES row — it is exported empty
+    // at top level, so it cannot distinguish an agent from anything else.
+  } else if (env.QWEN_CODE === '1' || aiAgent.includes('qwen')) {
+    key = 'qwen';
   } else if (aiAgent.includes('vscode')) {
     key = 'vscode';
   }

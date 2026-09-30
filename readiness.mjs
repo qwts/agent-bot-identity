@@ -898,6 +898,9 @@ const MCP_CONFIG_LOCATIONS = [
   { harness: 'codex', key: /^\s*\[mcp_servers\./m, agent: /agent-bot/, paths: ['.codex/config.toml'] },
   { harness: 'codex', key: /"mcpServers"\s*:/, agent: /agent-bot/, paths: ['.codex/mcp.json'] },
   { harness: 'cursor', key: /"mcpServers"\s*:/, agent: /agent-bot/, paths: ['.cursor/mcp.json'] },
+  // Qwen Code loads MCP servers from `mcpServers` in settings.json, at user
+  // scope ~/.qwen/settings.json and project scope .qwen/settings.json.
+  { harness: 'qwen', key: /"mcpServers"\s*:/, agent: /agent-bot/, paths: ['.qwen/settings.json'] },
 ];
 
 // Reports which harnesses wire the agent-bot MCP server specifically. A file
@@ -915,6 +918,7 @@ const PROJECT_MCP_CONFIG_LOCATIONS = [
   { harness: 'claude', key: /"mcp"\s*:/, agent: /agent-bot/, paths: ['.mcp.json'] },
   { harness: 'opencode', key: /"mcp"\s*:/, agent: /agent-bot/, paths: ['opencode.jsonc', 'opencode.json', '.opencode/opencode.json'] },
   { harness: 'codex', key: /^\s*\[mcp_servers\./m, agent: /agent-bot/, paths: ['.codex/config.toml'] },
+  { harness: 'qwen', key: /"mcpServers"\s*:/, agent: /agent-bot/, paths: ['.qwen/settings.json'] },
 ];
 
 function harnessWiresAgentBot({ home, cwd, locations }) {
