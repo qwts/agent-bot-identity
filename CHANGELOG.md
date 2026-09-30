@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.7.2
+
+- `qwen` is a recognized harness. `detect-harness` gains a `HARNESSES` row
+  keyed on `QWEN_CODE=1`, measured from a live Qwen Code session, and placed
+  above the cursor, copilot, devin, and muse rows: those match ambient editor
+  markers that an integrated terminal exports to every child process, so a
+  Qwen session run inside one of them previously detected as the surrounding
+  editor while `detectAgentHarness` — which excludes ambient markers by design
+  — said `qwen`, splitting one session across two identities. Both resolvers
+  now agree. `claude` and `codex` keep their precedence, because their markers
+  name another agent CLI rather than an editor and both resolvers already
+  agreed on them; a test pins that choice. `QWEN_CODE_AGENT_ID` is exported
+  empty at top level and so is deliberately not a marker.
+  `detectAgentHarness` gains the matching branch, so a Qwen session resolves
+  its App on a deliberate CLI call, becomes visible to the gh shim's
+  `--agent-slug` agent-process guard, and stops recording its transcript
+  provider as `custom`. `readiness` learns the Qwen Code MCP config locations
+  (`~/.qwen/settings.json` and `.qwen/settings.json`, key `mcpServers`), so
+  `inbox.configuration` can report a wired Qwen harness instead of a permanent
+  false negative (#248, #249).
+
 ## 0.7.1
 
 - The agent-bot skill conforms to ENG-0055. Its frontmatter carries the
