@@ -31,6 +31,39 @@ const HARNESSES = [
       Object.keys(e).some((k) => k.startsWith('CODEX_')) || (e.AI_AGENT ?? '').includes('codex'),
   },
   {
+    // Qwen Code is keyed `qwen`: the key names the worktree layout
+    // (~/.qwen/worktrees/), matching its ~/.qwen config home and the
+    // qwts-qwen-agent App slug.
+    //
+    // Measured from a live Qwen Code 0.24.6 session: QWEN_CODE=1 plus a
+    // QWEN_CODE_* family (CLI, SESSION_ID, PROJECT_DIR, MODEL, …), with
+    // AI_AGENT unset. It is a terminal CLI agent rather than an editor, so
+    // QWEN_CODE=1 is the CLAUDECODE=1 analogue and a human terminal never
+    // carries it — which is why broad detection and agent attribution below
+    // may both key on it, as they do for claude. QWEN_CODE_AGENT_ID is
+    // exported but EMPTY at top level, so it is deliberately not a marker:
+    // an existence test would attribute every session and a non-empty test
+    // would attribute none.
+    //
+    // Placed above cursor/copilot/devin/muse, not merely above the vscode
+    // fallback. Qwen is a CLI a contributor runs in whatever integrated
+    // terminal they already have open, and those rows match on ambient editor
+    // markers (CURSOR_*, WINDSURF_*/ACP_BACKEND, MUSE_*) that the editor
+    // exports to every child process. Below them, one session resolved two
+    // ways: detectHarness answered `cursor` while detectAgentHarness — which
+    // deliberately excludes ambient markers — answered `qwen`, the split
+    // attribution this resolver exists to prevent. QWEN_CODE=1 names the
+    // process actually running, so it wins over a marker that only says which
+    // editor is open around it.
+    //
+    // claude and codex stay ahead. Their markers name another agent CLI
+    // rather than a surrounding editor, and on those both resolvers already
+    // agree, so there is no split to repair; which of two nested agents
+    // should win is a separate question this row does not answer.
+    key: 'qwen',
+    match: (e) => e.QWEN_CODE === '1' || (e.AI_AGENT ?? '').toLowerCase().includes('qwen'),
+  },
+  {
     key: 'cursor',
     match: (e) =>
       Object.keys(e).some((k) => k.startsWith('CURSOR_')) ||
@@ -195,6 +228,13 @@ export function detectAgentHarness(
     // app is open, agent or human) and deliberately does NOT appear here.
   } else if (env.MUSE_AGENT === '1' || aiAgent.includes('muse')) {
     key = 'muse';
+    // Qwen Code has no separate <NAME>_AGENT marker: QWEN_CODE=1 is it, the
+    // same shape as CLAUDECODE=1, because the CLI is the agent process rather
+    // than an editor a human may merely have open. QWEN_CODE_AGENT_ID stays
+    // out for the reason recorded on the HARNESSES row — it is exported empty
+    // at top level, so it cannot distinguish an agent from anything else.
+  } else if (env.QWEN_CODE === '1' || aiAgent.includes('qwen')) {
+    key = 'qwen';
   } else if (aiAgent.includes('vscode')) {
     key = 'vscode';
   }

@@ -257,6 +257,8 @@ test('configured App slugs are unique and deterministic', () => {
       { prefix: 'org', apps: { codex: 'custom-codex-agent' } },
       ['z-agent', 'custom-codex-agent', 'a-agent'],
     ),
+    // One slug per detect-harness HARNESSES key, so this list grows when a
+    // harness row is added there.
     [
       'a-agent',
       'custom-codex-agent',
@@ -265,6 +267,7 @@ test('configured App slugs are unique and deterministic', () => {
       'org-cursor-agent',
       'org-devin-agent',
       'org-muse-agent',
+      'org-qwen-agent',
       'org-vscode-agent',
       'z-agent',
     ],

@@ -100,6 +100,7 @@ test('every harness is an agent via its own <NAME>_AGENT marker alone', () => {
   assert.equal(detectAgentHarness({ COPILOT_AGENT: '1' }, cfg), 'you-copilot-agent');
   assert.equal(detectAgentHarness({ DEVIN_AGENT: '1' }, cfg), 'you-devin-agent');
   assert.equal(detectAgentHarness({ MUSE_AGENT: '1' }, cfg), 'you-muse-agent');
+  assert.equal(detectAgentHarness({ QWEN_CODE: '1' }, cfg), 'you-qwen-agent');
 });
 
 // Meta Muse is keyed `muse` (its territory is .muse/worktrees/, matching its
@@ -112,6 +113,65 @@ test('a Muse agent session is an agent keyed muse; a Muse editor terminal is not
   assert.equal(detectHarness({ MUSE_AGENT: '1' }), 'muse');
   assert.equal(detectAgentHarness({ MUSE_RELEASE_INFO: '0.9.1' }, cfg), null);
   assert.equal(detectAgentHarness({ MUSE_AGENT: '1' }, cfg), 'you-muse-agent');
+});
+
+// Measured from a live Qwen Code 0.24.6 session: QWEN_CODE=1 plus a
+// QWEN_CODE_* family (CLI, SESSION_ID, PROJECT_DIR, MODEL), with AI_AGENT
+// unset. Qwen Code is a terminal CLI agent rather than an editor, so
+// QWEN_CODE=1 is the CLAUDECODE=1 analogue and both resolvers may key on it.
+// QWEN_CODE_AGENT_ID is exported but EMPTY at top level: an existence test
+// would attribute every session and a non-empty test would attribute none, so
+// neither is used and the rest of the family stays ambient.
+test('a Qwen Code session is an agent keyed qwen; its ambient family is not', () => {
+  assert.equal(detectHarness({ QWEN_CODE: '1' }), 'qwen');
+  assert.equal(detectHarness({ AI_AGENT: 'qwen-code' }), 'qwen');
+  assert.equal(detectAgentHarness({ QWEN_CODE: '1' }, cfg), 'you-qwen-agent');
+  assert.equal(detectAgentHarness({ QWEN_CODE_AGENT_ID: '' }, cfg), null);
+  assert.equal(
+    detectAgentHarness({ QWEN_CODE_SESSION_ID: 'x', QWEN_CODE_PROJECT_DIR: '/tmp' }, cfg),
+    null,
+  );
+});
+
+// Qwen is a CLI a contributor runs inside whatever integrated terminal they
+// already have open, and those editors export ambient markers to every child
+// process. The qwen row therefore sits above cursor/copilot/devin/muse and not
+// merely above the vscode fallback: below them, detectHarness answered with the
+// surrounding editor while detectAgentHarness — which excludes ambient markers
+// by design — answered qwen, splitting one session across two identities.
+test('Qwen Code inside an editor terminal is qwen, not the surrounding editor', () => {
+  for (const ambient of [
+    { CURSOR_TRACE_ID: 'x', CURSOR_LAYOUT: 'y' },
+    { __CFBundleIdentifier: 'com.todesktop.x.cursor' },
+    { WINDSURF_IDE_TYPE: 'windsurf' },
+    { ACP_BACKEND: 'windsurf', VSCODE_PID: '1' },
+    { __CFBundleIdentifier: 'com.exafunction.windsurf' },
+    { MUSE_RELEASE_INFO: '0.9.1' },
+    { COPILOT_DEBUG_NONCE: 'nonce' },
+    { TERM_PROGRAM: 'vscode', VSCODE_CWD: '/tmp' },
+  ]) {
+    const env = { QWEN_CODE: '1', ...ambient };
+    const label = JSON.stringify(ambient);
+    assert.equal(detectHarness(env), 'qwen', label);
+    // Agreement between the two resolvers is the real invariant: a session
+    // that detects as one harness and attributes as another is exactly the
+    // split attribution this module exists to prevent.
+    assert.equal(detectAgentHarness(env, cfg), 'you-qwen-agent', label);
+  }
+});
+
+// Deliberate, and pinned so it is not "fixed" later: claude and codex stay
+// ahead of qwen. Their markers name another agent CLI rather than a surrounding
+// editor, and both resolvers already agree on them, so no session is split.
+// Which of two nested agents should win is a separate question.
+test('a Qwen session nested in another agent CLI still resolves that agent', () => {
+  assert.equal(detectHarness({ QWEN_CODE: '1', CLAUDECODE: '1' }), 'claude');
+  assert.equal(detectAgentHarness({ QWEN_CODE: '1', CLAUDECODE: '1' }, cfg), 'you-claude-agent');
+  assert.equal(detectHarness({ QWEN_CODE: '1', CODEX_SANDBOX: 'seatbelt' }), 'codex');
+  assert.equal(
+    detectAgentHarness({ QWEN_CODE: '1', CODEX_SANDBOX: 'seatbelt' }, cfg),
+    'you-codex-agent',
+  );
 });
 
 test('Devin is detected from its Codeium-era markers but keyed devin', () => {
