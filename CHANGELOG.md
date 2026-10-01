@@ -2,11 +2,14 @@
 
 ## Unreleased
 
-- Soul package format, version 1 (#283, ADR-0275 decisions 1 to 3).
-  `docs/soul-package.md` specifies `soul.json`, the package layout, how
-  unknown files are kept, and the canonical revision hash, with fixed test
-  vectors. `agent-bot soul pack validate PATH` checks a package and prints
-  its revision. Nothing runs packages yet.
+- `agent-bot daemon pair-comms` now pairs with this account's one-account
+  agent-comms broker when `--broker` is omitted (#286, ADR-0059 decision 3).
+  Private custody requires owned 0700 rendezvous/proof directories and a
+  0600 socket. The daemon persists the broker mode and applies it to every
+  account-watch connection and wake report. Named brokers and older saved
+  credentials retain group-mode custody. No agent-bot feature gate is used.
+  Protocol fixture tests cover CLI pairing, joining account-watch, receiving
+  and reporting a wake, and refusing loosened private permissions.
 
 ## 0.8.0
 

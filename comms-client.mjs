@@ -10,10 +10,10 @@
 // own credential file: the daemon authenticates as its own credential kind,
 // `auth: { daemon: <account>, secret }` (ADR-0008 decisions 4 and 7).
 //
-// Pairing (`agent-bot daemon pair-comms --broker <account>`) writes a
+// Pairing (`agent-bot daemon pair-comms [--broker <account>]`) writes a
 // kernel-stamped proof file holding `sha256(secret)` into the shared pairing
 // directory, sends `daemon-pair-request`, prints the owner-approval code, and
-// persists `{ account, secret, brokerUid, pairedAt }` at
+// persists `{ account, secret, brokerUid, mode, pairedAt }` at
 // `~/.local/state/agent-bot/comms-daemon.json` (0600). The background account
 // watch (`createCommsSupervisor`, started by `runDaemon` when a credential
 // exists) keeps `account-watch` open with capped exponential backoff (1 s to
@@ -68,8 +68,8 @@ export function commsPaths({ env = process.env } = {}) {
   return {
     shared,
     socket: path.join(shared, 'broker.sock'),
-    // Sticky and world-writable, like /tmp: anyone may drop a pairing proof,
-    // nobody may remove another account's, and the kernel stamps its owner.
+    // Group brokers use a sticky 1777 proof directory; private brokers use
+    // 0700. In both modes the kernel stamps the proof owner.
     proofs: path.join(shared, 'pairing'),
   };
 }
@@ -97,6 +97,7 @@ function checkCredentialShape(value) {
     || typeof value.account !== 'string' || value.account === ''
     || typeof value.secret !== 'string' || value.secret === ''
     || !Number.isInteger(value.brokerUid)
+    || (value.mode !== undefined && !['single-account', 'group'].includes(value.mode))
     || typeof value.pairedAt !== 'string'
   ) {
     fail('unpaired', 'the saved comms credential is unreadable; pair again');
@@ -128,6 +129,7 @@ export function saveCommsCredential(credential, { env = process.env, home = home
     account: credential.account,
     secret: credential.secret,
     brokerUid: credential.brokerUid,
+    mode: credential.mode ?? 'group',
     pairedAt: credential.pairedAt ?? new Date().toISOString(),
   };
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -213,19 +215,39 @@ export function assertCommsBrokerSocket(file, ownerUid) {
 }
 
 // Refuse a broker unless its directory, ancestors, and socket belong to the
-// pinned broker account. There is no trust on first use: `pair-comms
-// --broker ACCOUNT` names it, and later calls use the uid recorded then.
-export function checkBrokerCustody(paths, brokerUid) {
+// pinned broker account. Pairing pins this account for a private broker, or
+// the named --broker account for group mode. Later calls use the saved mode
+// and uid; credentials predating single-account mode remain group mode.
+export function checkBrokerCustody(paths, brokerUid, mode = 'group') {
+  if (!['single-account', 'group'].includes(mode)) {
+    fail('broker-untrusted', 'unknown broker mode');
+  }
   if (!Number.isInteger(brokerUid)) {
     fail('broker-untrusted', 'no broker account is pinned for this client');
   }
   statPath(paths.socket, 'broker-unreachable', `no broker socket at ${paths.socket}; is the broker running?`);
+  if (mode === 'single-account') {
+    if (brokerUid !== process.getuid()) fail('broker-untrusted', 'the private broker must belong to this account');
+    assertPrivateBrokerCustody(paths, brokerUid);
+    return;
+  }
   assertCommsAncestors(paths.shared, brokerUid);
   const dir = assertCommsOwnedDir(paths.shared, brokerUid);
   if ((dir.mode & 0o022) !== 0) {
     fail('broker-untrusted', `${paths.shared} is writable by accounts other than the broker's`);
   }
   assertCommsBrokerSocket(paths.socket, brokerUid);
+}
+
+// agent-comms ADR-0059: one account owns the entire private rendezvous.
+export function assertPrivateBrokerCustody(paths, ownerUid) {
+  assertCommsAncestors(paths.shared, ownerUid);
+  assertCommsOwnedDir(paths.shared, ownerUid, { mode: 0o700 });
+  assertCommsOwnedDir(paths.proofs, ownerUid, { mode: 0o700 });
+  assertCommsBrokerSocket(paths.socket, ownerUid);
+  if ((statPath(paths.socket, 'broker-unreachable').mode & 0o7777) !== 0o600) {
+    fail('broker-untrusted', `${paths.socket} is not a private 0600 socket`);
+  }
 }
 
 // --- wire framing (mirrors agent-comms lib/wire.mjs) ---
@@ -346,15 +368,16 @@ function newRequestId() {
 }
 
 export class CommsClient {
-  constructor({ socketPath, brokerUid, timeoutMs = COMMS_REQUEST_TIMEOUT_MS } = {}) {
+  constructor({ socketPath, brokerUid, mode = 'group', timeoutMs = COMMS_REQUEST_TIMEOUT_MS } = {}) {
     if (typeof socketPath !== 'string' || socketPath === '') fail('usage', 'a broker socket path is required');
     this.socketPath = socketPath;
     this.brokerUid = brokerUid;
+    this.mode = mode;
     this.timeoutMs = timeoutMs;
   }
 
   checkCustody(paths = commsPaths()) {
-    checkBrokerCustody(paths, this.brokerUid);
+    checkBrokerCustody(paths, this.brokerUid, this.mode);
   }
 
   // One request line, one reply line. Resolves with `result`; refuses with
@@ -416,11 +439,13 @@ export async function pairDaemonComms({
   uidOfImpl = uidOfAccount,
   now = () => new Date(),
 } = {}) {
-  if (!brokerAccount) fail('usage', 'name the broker account: agent-bot daemon pair-comms --broker ACCOUNT');
   if (typeof account !== 'string' || account === '') fail('usage', 'a daemon account name is required');
-  const brokerUid = uidOfImpl(brokerAccount);
-  checkBrokerCustody(paths, brokerUid);
-  assertCommsOwnedDir(paths.proofs, brokerUid, { mode: 0o1777 });
+  // Same selection rule as agent-comms: naming an account opts into group
+  // mode. Persist it for reconnects; never infer mode from agent-bot gates.
+  const mode = brokerAccount ? 'group' : 'single-account';
+  const brokerUid = brokerAccount ? uidOfImpl(brokerAccount) : process.getuid();
+  checkBrokerCustody(paths, brokerUid, mode);
+  assertCommsOwnedDir(paths.proofs, brokerUid, { mode: mode === 'group' ? 0o1777 : 0o700 });
   const resolvedPublicKey = publicKey ?? (keyPairProvider
     ? await keyPairProvider({ env, home })
     : ensureDaemonKeyPair({ env, home }).publicKeyPem);
@@ -436,12 +461,12 @@ export async function pairDaemonComms({
     // The create mode passes through the umask; the broker account must be
     // able to read the proof, so set 0644 explicitly.
     chmodSync(proofFile, 0o644);
-    const client = clientFactory({ socketPath: paths.socket, brokerUid });
+    const client = clientFactory({ socketPath: paths.socket, brokerUid, mode });
     const result = await client.request(
       { op: 'daemon-pair-request', account, secretHash, proof, publicKey: resolvedPublicKey },
       { paths },
     );
-    saveCommsCredential({ account, secret, brokerUid, pairedAt: now().toISOString() }, { env, home });
+    saveCommsCredential({ account, secret, brokerUid, mode, pairedAt: now().toISOString() }, { env, home });
     return { account, brokerUid, code: result?.code, state: result?.state };
   } finally {
     rmSync(proofFile, { force: true });
@@ -451,7 +476,7 @@ export async function pairDaemonComms({
 function resolvePairCredential(credential, { env, home }) {
   if (credential) return checkCredentialShape(credential);
   const loaded = loadCommsCredential({ env, home });
-  if (!loaded) fail('unpaired', 'this daemon is not paired; run `agent-bot daemon pair-comms --broker ACCOUNT`');
+  if (!loaded) fail('unpaired', 'this daemon is not paired; run `agent-bot daemon pair-comms [--broker ACCOUNT]`');
   return loaded;
 }
 
@@ -481,7 +506,7 @@ export async function reportCommsWake(
 ) {
   checkWakeReport({ agentId, messageIds, outcome, detail });
   const pair = resolvePairCredential(credential, { env, home });
-  const client = clientFactory({ socketPath: paths.socket, brokerUid: pair.brokerUid });
+  const client = clientFactory({ socketPath: paths.socket, brokerUid: pair.brokerUid, mode: pair.mode ?? 'group' });
   return client.request({
     op: 'wake-report',
     auth: { daemon: pair.account, secret: pair.secret },
@@ -541,7 +566,7 @@ export function createCommsSupervisor({
   }
 
   async function watchOnce(pair, signal) {
-    const client = clientFactory({ socketPath: paths.socket, brokerUid: pair.brokerUid });
+    const client = clientFactory({ socketPath: paths.socket, brokerUid: pair.brokerUid, mode: pair.mode ?? 'group' });
     await client.stream(
       { op: 'account-watch', auth: { daemon: pair.account, secret: pair.secret } },
       (event) => {
@@ -587,7 +612,7 @@ export function createCommsSupervisor({
       if (!pair) {
         state.lastError = state.lastError?.startsWith('unpaired:')
           ? state.lastError
-          : 'unpaired: this daemon is not paired; run `agent-bot daemon pair-comms --broker ACCOUNT`';
+          : 'unpaired: this daemon is not paired; run `agent-bot daemon pair-comms [--broker ACCOUNT]`';
         await sleepImpl(backoffMs, stopController.signal);
         backoffMs = nextCommsBackoffMs(backoffMs);
         continue;
@@ -611,7 +636,7 @@ export function createCommsSupervisor({
     },
     report(fields) {
       const pair = credential ?? loadCommsCredential({ env, home });
-      if (!pair) fail('unpaired', 'this daemon is not paired; run `agent-bot daemon pair-comms --broker ACCOUNT`');
+      if (!pair) fail('unpaired', 'this daemon is not paired; run `agent-bot daemon pair-comms [--broker ACCOUNT]`');
       return reportFor(pair)(fields);
     },
     start() {

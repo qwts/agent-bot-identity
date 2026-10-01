@@ -16,7 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createDaemonServer, daemonStatus, runDaemon } from '../agent-daemon.mjs';
-import { commsPaths, saveCommsCredential } from '../comms-client.mjs';
+import { commsPaths, createCommsSupervisor, loadCommsCredential, saveCommsCredential } from '../comms-client.mjs';
 
 const DAEMON_CLI = fileURLToPath(new URL('../agent-daemon.mjs', import.meta.url));
 const ME = userInfo().username;
@@ -132,11 +132,60 @@ test('pair-comms pairs against a fake broker and prints the owner code', async (
   }
 });
 
-test('pair-comms without --broker prints usage and pairs nothing', async () => {
+test('pair-comms without --broker pairs privately, joins account-watch, and reports a wake', async () => {
   const world = scratchWorld();
-  const run = await runCli(['pair-comms'], childEnv(world));
-  assert.equal(run.status, 1);
-  assert.match(run.stderr, /usage: agent-bot daemon pair-comms --broker <account>/);
+  chmodSync(world.shared, 0o700);
+  chmodSync(path.join(world.shared, 'pairing'), 0o700);
+  let report;
+  const wake = { event: 'wake', agentId: 'agent_private', messageIds: ['private-wake'], count: 1 };
+  const broker = await startFakeBroker(world.socket, (line, { send }) => {
+    if (line.op === 'daemon-pair-request') {
+      assert.equal(line.account, ME);
+      assert.equal(statSync(path.join(world.shared, 'pairing', line.proof)).uid, MY_UID);
+      send({ ok: true, code: 'PRIVATE', state: 'pending' });
+    } else {
+      const credential = loadCommsCredential({ env: world.env });
+      assert.deepEqual(line.auth, { daemon: ME, secret: credential.secret });
+      if (line.op === 'account-watch') {
+        send({ event: 'ready' });
+        send(wake);
+      } else if (line.op === 'wake-report') {
+        report = line;
+        send({ ok: true, recorded: true });
+      } else assert.fail(`unexpected operation: ${line.op}`);
+    }
+  });
+  chmodSync(world.socket, 0o600);
+  const supervisor = createCommsSupervisor({ env: world.env });
+  try {
+    const run = await runCli(['pair-comms'], childEnv(world));
+    assert.equal(run.status, 0, run.stderr);
+    assert.match(run.stdout, /owner approval code: PRIVATE/);
+    const credential = loadCommsCredential({ env: world.env });
+    assert.equal(credential.mode, 'single-account');
+    assert.equal(credential.brokerUid, MY_UID);
+    supervisor.start();
+    await waitFor(() => report);
+    assert.equal(supervisor.getState().connected, true);
+    assert.equal(supervisor.getState().lastWake.agentId, wake.agentId);
+    assert.deepEqual(report.messageIds, wake.messageIds);
+    assert.equal(report.outcome, 'waiting');
+    // Custody is rechecked on later requests using the persisted mode.
+    chmodSync(world.socket, 0o660);
+    await assert.rejects(supervisor.report({ agentId: wake.agentId, messageIds: wake.messageIds, outcome: 'warm' }), /private 0600 socket/);
+  } finally {
+    supervisor.stop();
+    await broker.close();
+  }
+});
+
+test('pair-comms rejects an incomplete explicit broker flag', async () => {
+  const world = scratchWorld();
+  for (const args of [['--broker'], ['--broker='], ['--broker', '--json']]) {
+    const run = await runCli(['pair-comms', ...args], childEnv(world));
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /--broker requires an account name/);
+  }
   assert.equal(existsSync(world.env.AGENT_BOT_COMMS_DAEMON_PATH), false);
 });
 

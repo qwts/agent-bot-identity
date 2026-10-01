@@ -13,7 +13,7 @@
 //   agent-bot daemon status [--json] — probe the recorded daemon
 //   agent-bot daemon stop            — terminate the recorded daemon
 //   agent-bot daemon vouch-key       — print the account Ed25519 public key (SPKI PEM)
-//   agent-bot daemon pair-comms --broker <account>
+//   agent-bot daemon pair-comms [--broker <account>]
 //                                    — pair this account's daemon with the
 //                                      agent-comms broker (prints the owner
 //                                      approval code); status shows the
@@ -1156,14 +1156,17 @@ export async function stopDaemon({ env = process.env, home = homedir(), fetchImp
 
 function brokerFlag(args) {
   for (let index = 0; index < args.length; index += 1) {
-    if (args[index] === '--broker' && index + 1 < args.length) return args[index + 1];
-    if (args[index].startsWith('--broker=')) return args[index].slice('--broker='.length);
+    if (args[index] === '--broker' || args[index].startsWith('--broker=')) {
+      const value = args[index] === '--broker' ? args[index + 1] : args[index].slice('--broker='.length);
+      if (!value || value.startsWith('--')) throw new Error('--broker requires an account name');
+      return value;
+    }
   }
   return null;
 }
 
 function formatCommsStatus(comms) {
-  if (!comms?.paired) return 'comms: not paired (run `agent-bot daemon pair-comms --broker <account>`)';
+  if (!comms?.paired) return 'comms: not paired (run `agent-bot daemon pair-comms [--broker <account>]`)';
   return `comms: paired as ${comms.account}, account-watch ${comms.connected ? 'connected' : 'disconnected'}`;
 }
 
@@ -1208,7 +1211,6 @@ async function main() {
     }
     case 'pair-comms': {
       const broker = brokerFlag(rest);
-      if (!broker) throw new Error('usage: agent-bot daemon pair-comms --broker <account> [--json]');
       const pairing = await pairDaemonComms({ brokerAccount: broker });
       if (json) {
         process.stdout.write(`${JSON.stringify(pairing, null, 2)}\n`);
