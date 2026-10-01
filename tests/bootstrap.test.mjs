@@ -882,3 +882,18 @@ test('a malformed scope in the installed config fails loudly', () => {
   }
   assert.equal(rosterScope({}), null);
 });
+
+test('an explicit --config source applies its own feature gates over a projected profile config', () => {
+  const home = tempHome();
+  installBootstrapProfile({
+    sourcePath: '-', home, env: {}, read: () => JSON.stringify(organizationProfile()),
+  });
+  const projected = loadConfig({ home, env: {} });
+  assert.equal(isProjectedRuntimeConfig(projected), true);
+  const sourcePath = join(tempHome(), 'config.json');
+  writeFileSync(sourcePath, JSON.stringify({ ...projected, features: { 'github-identity': true } }));
+  const result = installBootstrapConfig({ sourcePath, home, env: {} });
+  assert.equal(result.updated, true);
+  assert.deepEqual(loadConfig({ home, env: {} }).features, { 'github-identity': true });
+  assert.equal(installBootstrapConfig({ sourcePath, home, env: {} }).updated, false);
+});

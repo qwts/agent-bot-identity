@@ -46,6 +46,7 @@ export function isGateEnabled(name, { env = process.env, home = homedir(), confi
   void env;
   if (!FEATURE_GATES.includes(name)) throw new Error(`unknown feature gate: ${name}`);
   const loaded = config === undefined ? loadConfig({ home, env }) : config;
+  validateFeatures(loaded);
   return loaded.features?.[name] === true;
 }
 
@@ -197,6 +198,10 @@ function validateSettings(config) {
   if (settings.spacesRoot !== undefined) spacesRootSetting(config);
   if (settings.daemonPreference !== undefined) validateDaemonPreference(settings.daemonPreference);
   rosterScope(config);
+  validateFeatures(config);
+}
+
+function validateFeatures(config) {
   if (config.features !== undefined) {
     if (!config.features || typeof config.features !== 'object' || Array.isArray(config.features)) {
       throw new Error('agent-bot config features must be an object');

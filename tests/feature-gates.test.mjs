@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gateStatus, isGateEnabled, loadConfig } from '../config.mjs';
@@ -20,4 +20,17 @@ test('feature gates default off and only explicit config true enables them', () 
     'persona-accounts': { enabled: false, source: 'default' },
   });
   assert.throws(() => isGateEnabled('unknown'), /unknown feature gate/);
+});
+
+test('malformed feature gates fail closed from a config file and from an injected config', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-gates-'));
+  const dir = join(home, '.config', 'agent-bot');
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, 'config.json');
+  writeFileSync(path, JSON.stringify({ features: { 'unknown-addon': true } }));
+  assert.throws(() => loadConfig({ home, env: {} }), /unknown feature gate: unknown-addon/);
+  writeFileSync(path, JSON.stringify({ features: { 'github-identity': 'yes' } }));
+  assert.throws(() => loadConfig({ home, env: {} }), /invalid features\.github-identity/);
+  assert.throws(() => isGateEnabled('github-identity', { config: { features: { 'github-identity': 'yes' } } }), /invalid features\.github-identity/);
+  assert.throws(() => isGateEnabled('github-identity', { config: { features: [] } }), /features must be an object/);
 });
