@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import { isGateEnabled } from '../config.mjs';
 import {
+  ensureAgentIdentity,
   mintAgentIdentity,
   readAgentIdentity,
   stateDirectory,
@@ -405,7 +406,7 @@ test('with github-identity off, bind, spawn, comms join, vouch, and wake need no
     body: {},
   });
   assert.equal(credential.status, 409);
-  assert.match((await credential.json()).error, /no GitHub App/);
+  assert.match((await credential.json()).error, /github-identity add-on is off/);
 
   const frames = [];
   server.warmPool.add(agentId, {
@@ -437,4 +438,22 @@ test('with github-identity off, bind, spawn, comms join, vouch, and wake need no
     () => factory({ agentId, harness: 'codex', cwd: repo, env: {} }),
     /no github identity/,
   );
+});
+
+test('with the gate off, a bind never inherits a GitHub-backed soul by pin or transcript', (t) => {
+  const stateDir = path.join(scratch(t), 'identities');
+  const transcript = { provider: 'codex', id: 'shared-transcript' };
+  const backed = mintAgentIdentity({
+    useGithub: true, appSlug: 'you-codex-agent', botUid: '308462948', harness: 'codex',
+    transcript, stateDir, env: {}, idFactory: () => 'agent_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+  });
+  const opts = { appSlug: 'you-codex-agent', harness: 'codex', transcript, fields: {}, stateDir, useGithub: false };
+  const byTranscript = ensureAgentIdentity(opts);
+  assert.notEqual(byTranscript.id, backed.id);
+  assert.equal(Object.hasOwn(byTranscript, 'github'), false);
+  const byPin = ensureAgentIdentity({ ...opts, currentId: backed.id, transcript: null });
+  assert.notEqual(byPin.id, backed.id);
+  assert.equal(Object.hasOwn(byPin, 'github'), false);
+  // With the gate on, the GitHub-backed soul is still the match.
+  assert.equal(ensureAgentIdentity({ ...opts, useGithub: true }).id, backed.id);
 });

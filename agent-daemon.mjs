@@ -444,14 +444,17 @@ export function createDaemonServer({
             }, { env, home, now });
             throw error;
           }
-          if (!identity.github?.appSlug) {
+          // The add-on gate decides, not the record: a soul that carries a
+          // github field gets no App token while github-identity is off.
+          const githubOn = isGateEnabled('github-identity', { env, home, config });
+          if (!githubOn || !identity.github?.appSlug) {
             appendAuditReceipt({
               event: 'credential-mint',
               agentId: binding.agentId,
               operation: 'tier1-app-token',
               decision: 'denied',
             }, { env, home, now });
-            throw Object.assign(new Error('this soul has no GitHub App'), { statusCode: 409 });
+            throw Object.assign(new Error(githubOn ? 'this soul has no GitHub App' : 'the github-identity add-on is off'), { statusCode: 409 });
           }
           try {
             grant = await mintImpl({ slug: identity.github.appSlug, env });

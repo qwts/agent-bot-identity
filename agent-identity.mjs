@@ -499,7 +499,9 @@ function findTranscriptIdentity(appSlug, transcript, stateDir, { useGithub = tru
       console.warn(`agent-identity: ignoring invalid registry record ${id}: ${error.message}`);
       continue;
     }
-    const sameApp = useGithub ? record.github?.appSlug === appSlug : true;
+    // Without the add-on only github-less souls are in scope, so a bind can
+    // never inherit another conversation's App identity.
+    const sameApp = useGithub ? record.github?.appSlug === appSlug : record.github == null;
     if (sameApp && sameTranscript(record.transcript, transcript)) {
       return record;
     }
@@ -639,11 +641,11 @@ export function ensureAgentIdentity({
   env = process.env,
   home = homedir(),
 } = {}) {
-  // App equality is a match key only while this soul uses the add-on. With
-  // the gate off — or for a soul that has no github field — the pin stands
-  // on the transcript rules alone (#192) and a fresh mint omits `github`.
+  // With the add-on on, App equality is a match key. With it off, only
+  // github-less souls are in scope: a pin or transcript match that reaches a
+  // GitHub-backed soul is ignored and a fresh mint omits `github`.
   const githubOn = useGithub ?? isEnabled('github-identity', { env, home });
-  const inScope = (record) => Boolean(record) && (githubOn ? record.github?.appSlug === appSlug : true);
+  const inScope = (record) => Boolean(record) && (githubOn ? record.github?.appSlug === appSlug : record.github == null);
   return withRegistryLock(stateDir, () => {
     let identity = null;
     if (currentId) {
