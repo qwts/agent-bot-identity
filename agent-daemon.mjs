@@ -376,6 +376,7 @@ export function createDaemonServer({
           const identity = mintAgentIdentity({
             appSlug: parentApp, botUid: parent.github?.botUid ?? null, harness,
             transcript: body.transcript, parentId: source.agentId,
+            packagePath: body.packagePath ?? null,
             team: body.team ?? parent.team, squad: body.squad ?? parent.squad,
             type: body.type ?? 'agent', level: body.level, subjects: body.subjects ?? [], stateDir, now,
             useGithub,

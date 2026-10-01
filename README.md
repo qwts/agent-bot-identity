@@ -419,6 +419,9 @@ that binding and calls `POST /v0/spawn` with a binding proof in
 `{ agentId, parent, binding }` as JSON. The daemon mints the child under the
 parent's App and writes a separate 0600 file at
 `<git-dir>/agent-bindings/<childId>.json`, leaving the parent's binding intact.
+Use `identity spawn --package PATH` to derive the child ID from its starting
+[soul package genesis](docs/soul-genesis.md). This records the computed package
+revision and parent while keeping the spawn nonce private.
 With `identity spawn -- <command...>`, the command receives the child file as
 `AGENT_BOT_BINDING` and child ID as `QWTS_AGENT_ID` (and `AGENT_BOT_ID`); its
 exit status becomes the CLI's status. Parent revocation or expiry cascades to
