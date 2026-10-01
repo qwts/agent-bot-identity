@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- The daemon wakes souls through the wake plane (agent-comms ADR-0008
+  decisions 7 to 9). Each wake from the broker's `account-watch` goes to the
+  soul's warm sockets, or to a cold turn when the owner turned cold wake on,
+  or else is reported `waiting`. The dispatcher's outcome goes back to the
+  broker as a `wake-report`. The ACP executor is wired when the user config
+  says `"executor": { "enabled": true, "policy": { ... } }`. A cold turn runs
+  under that policy, and anything that would need an approval is denied.
+  Daemon pairing reuses the vouch key instead of a second key steward.
+
 - `agent-bot identity spawn` gives the child its own binding (#258,
   agent-comms ADR-0008 decision 2). With a parent binding it asks the daemon's
   `POST /v0/spawn`, which writes `<git-dir>/agent-bindings/<agentId>.json`, and
@@ -33,6 +42,63 @@
   `x-agent-binding`, or a bind token minted in that git dir), so a path and
   the daemon bearer never yield another worktree's secret.
   `readBinding` is the one reader, honoring `AGENT_BOT_BINDING`.
+
+- The daemon pairs with the agent-comms broker (#255, agent-comms ADR-0008
+  decisions 4 and 7). `agent-bot daemon pair-comms --broker <account>` sends
+  `daemon-pair-request` with the daemon's Ed25519 public key and a
+  kernel-stamped proof, prints the owner's approval code, and keeps the
+  credential at `~/.local/state/agent-bot/comms-daemon.json` (0600). Once
+  approved, `runDaemon` holds the broker's `account-watch` stream open with
+  capped backoff (1 s to 30 s) and answers each wake with `wake-report`
+  (`waiting` until dispatch lands). `daemon status` shows the pairing and the
+  stream. The client mirrors agent-comms wire v1 and its custody checks.
+
+- Wake dispatch gains its seam. A new `wake-dispatch.mjs` is the pure half of
+  ADR-0008 decision 7: `dispatchWake(event, { pool, coldWake, report, receipt })`
+  answers one coalesced account-watch wake with `warm`, `cold`, `waiting`, or
+  `failed`, and `createWakeDispatcher(ports)` returns the `(event) => Promise`
+  an account-watch client holds, serialising per soul so one slow cold turn
+  cannot reorder or stall another soul's wake. The frame a warm socket receives
+  is `{ event, agentId, count, cursor, messageIds }`, built field by field so an
+  unexpected field on a watch event is never forwarded to a listener. A send
+  error on every socket for a soul is `failed` with a detail and drops the
+  sockets, so the soul is honestly cold on its next wake — never a `waiting`
+  that hides a dead pool. Every dispatch also writes a receipt of
+  `{ event, agentId, count, outcome }` and nothing else, so the audit trail is
+  never a second copy of the mailbox. The warm pool (#147), the account-watch
+  client (#255), and cold wake (#259) are its ports; `runDaemon` wires them
+  once all three land (#256).
+
+- Wake plane endpoint (#147, agent-comms ADR-0008 decision 8). `GET /v0/wake`
+  upgrades to a WebSocket authenticated by the binding secret
+  (`x-agent-binding`, or the `agent-binding.<secret>` subprotocol for clients
+  that cannot set headers, echoed in the handshake), with no bearer and GET
+  only. The daemon implements the server half of RFC 6455 itself: masked text
+  frames, ping and pong, close, 125-byte control frames, and a 64 KiB frame
+  cap in both directions. A protocol violation closes the socket and stops
+  reading from it. Connected sockets are the warm pool, keyed by agent ID: a ready
+  frame on connect, a ping every 30 s, and two missed pongs drop the socket.
+  `/v0/health` and `agent-bot daemon status` report warm sockets per agent.
+
+- Cold wake is opt-in per soul (#259, agent-comms ADR-0008 decision 9).
+  `agent-bot soul cold-wake <agentId> [on|off|show]` is an owner-only setting
+  kept in `~/.local/state/agent-bot/cold-wake.json` (0600), with a secret-free
+  audit receipt. `createColdWaker` starts one executor turn in the soul's
+  worktree with the soul's binding, naming only the waiting message IDs, and
+  reports `cold` as soon as the turn starts; wakes that arrive during the turn
+  merge into it, and the turn's end lands in a `finished` or `failed` receipt.
+  With the setting off it reports `waiting`.
+
+- Sessions arm a wake listener (#257, agent-comms ADR-0008 decision 8).
+  `agent-bot wake listen` holds the session's WebSocket at the daemon's
+  `GET /v0/wake`, authenticated by the binding, and prints one NDJSON line
+  per frame (`connected`, each `wake`, `disconnected`, `stopped`). It runs
+  under a persistent watcher such as Claude Code's Monitor, reconnects with
+  capped backoff, re-reads the binding after a daemon restart, and only ever
+  presents the secret to a loopback daemon. The new SessionStart hook
+  `20-arm-wake` tells every bound session in bot territory to arm it. Hooks
+  can now return advisory `context`, which reaches the model on dialects that
+  have a context channel (Claude, Codex); readiness reports which do.
 
 ## 0.7.2
 

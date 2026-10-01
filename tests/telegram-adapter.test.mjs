@@ -341,6 +341,8 @@ test('a reach-back reply event is relayed to the chat as its own message (#146)'
   }
 });
 
+const STRANGER_ID = 6_102_847_395;
+
 test('unauthorized senders are refused before any job exists; only the immutable ID matters', async () => {
   const { env } = scratch();
   seedSoul(env);
@@ -350,7 +352,7 @@ test('unauthorized senders are refused before any job exists; only the immutable
     await withDaemon(env, quickExecutor, async () => {
       const { adapter } = makeAdapter(env, mock);
       // Same username as the owner, different immutable ID: refused.
-      mock.batches.push([textUpdate(600, 'let me in', { fromId: 777, username: 'owner' })]);
+      mock.batches.push([textUpdate(600, 'let me in', { fromId: STRANGER_ID, username: 'owner' })]);
       await adapter.pollOnce();
       await adapter.drain();
       assert.equal(sentTexts(mock).at(-1), REFUSAL_NOT_ENROLLED);
@@ -360,8 +362,10 @@ test('unauthorized senders are refused before any job exists; only the immutable
         'utf8',
       );
       assert.match(audit, /"event":"denied-request"/);
-      assert.equal(audit.includes('777'), false);
-      assert.equal(audit.includes('owner'), false);
+      // Whole-token matches: audit lines carry random IDs and timestamps,
+      // so a bare substring check on a short number fails by chance.
+      assert.doesNotMatch(audit, new RegExp(`\\b${STRANGER_ID}\\b`));
+      assert.doesNotMatch(audit, /\bowner\b/);
 
       // Changed username on the enrolled ID: still authorized.
       mock.batches.push([textUpdate(601, 'hello', { username: 'freshly-renamed' })]);
