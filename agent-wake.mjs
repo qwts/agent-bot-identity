@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 
 const MAX_FRAME = 64 * 1024;
+// RFC 6455 5.5: control frames carry at most 125 bytes.
+const MAX_CONTROL = 125;
 
 export class WarmPool {
   #agents = new Map();
@@ -22,9 +24,13 @@ export class WarmPool {
 
   send(agentId, frame) {
     let delivered = 0;
+    const text = Buffer.from(typeof frame === 'string' ? frame : JSON.stringify(frame));
+    // Refused before any socket sees it: an oversized frame is a sender bug,
+    // not a reason to desynchronize every listener.
+    if (text.length > MAX_FRAME) throw new Error(`wake frame of ${text.length} bytes exceeds ${MAX_FRAME}`);
     for (const socket of this.#agents.get(agentId) ?? []) {
       if (socket.destroyed || !socket.writable) continue;
-      try { writeFrame(socket, 0x1, typeof frame === 'string' ? frame : JSON.stringify(frame)); delivered++; }
+      try { writeFrame(socket, 0x1, text); delivered++; }
       catch { socket.destroy(); }
     }
     return delivered;
@@ -37,6 +43,7 @@ export class WarmPool {
 
 function writeFrame(socket, opcode, data = '') {
   const payload = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  if (payload.length > 0xffff) throw new Error('frame too large for this encoder');
   const head = payload.length < 126
     ? Buffer.from([0x80 | opcode, payload.length])
     : Buffer.from([0x80 | opcode, 126, payload.length >> 8, payload.length & 255]);
@@ -54,9 +61,9 @@ function closeSocket(socket, code = 1000) {
   setTimeout(() => socket.destroy(), 1000).unref?.();
 }
 
-function protocolSecret(value) {
+function bindingProtocol(value) {
   return String(value ?? '').split(',').map((part) => part.trim())
-    .find((part) => part.startsWith('agent-binding.'))?.slice('agent-binding.'.length) ?? '';
+    .find((part) => part.startsWith('agent-binding.')) ?? null;
 }
 
 export function attachWakeEndpoint(server, { lookupBinding, pingIntervalMs = 30_000, setIntervalImpl = setInterval, clearIntervalImpl = clearInterval } = {}) {
@@ -67,11 +74,15 @@ export function attachWakeEndpoint(server, { lookupBinding, pingIntervalMs = 30_
     socket.on('error', () => socket.destroy());
     const url = new URL(req.url, 'http://127.0.0.1');
     if (url.pathname !== '/v0/wake') { socket.destroy(); return; }
+    if (req.method !== 'GET') { socket.end('HTTP/1.1 405 Method Not Allowed\r\nAllow: GET\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); return; }
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) {
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return;
     }
     let binding;
-    try { binding = lookupBinding(req.headers['x-agent-binding'] || protocolSecret(req.headers['sec-websocket-protocol'])); }
+    // A browser cannot set headers, so the secret may ride as the subprotocol
+    // `agent-binding.<secret>`; a compliant client then needs it echoed.
+    const protocol = req.headers['x-agent-binding'] ? null : bindingProtocol(req.headers['sec-websocket-protocol']);
+    try { binding = lookupBinding(req.headers['x-agent-binding'] || protocol?.slice('agent-binding.'.length) || ''); }
     catch { binding = null; }
     if (!binding) { socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); return; }
     const key = req.headers['sec-websocket-key'];
@@ -79,10 +90,11 @@ export function attachWakeEndpoint(server, { lookupBinding, pingIntervalMs = 30_
       socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n'); return;
     }
     const accept = createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
-    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    const echoed = protocol ? `Sec-WebSocket-Protocol: ${protocol}\r\n` : '';
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n${echoed}\r\n`);
     const agentId = binding.agentId;
     warmPool.add(agentId, socket);
-    let buffered = head?.length ? Buffer.from(head) : Buffer.alloc(0);
+    let buffered = Buffer.alloc(0);
     let missedPongs = 0;
     let awaitingPong = false;
     // A frame this endpoint refuses ends the read side for good: nothing more
@@ -106,6 +118,7 @@ export function attachWakeEndpoint(server, { lookupBinding, pingIntervalMs = 30_
         // RFC 6455 5.1: a server must fail the connection on an unmasked frame.
         if (!masked) { refuse(1002); return; }
         if (buffered.length < offset + 4 + length) return;
+        if (opcode >= 0x8 && length > MAX_CONTROL) { refuse(1002); return; }
         if (!fin || opcode === 0x2 || ![0x1, 0x8, 0x9, 0xa].includes(opcode)) { refuse(1003); return; }
         const mask = buffered.subarray(offset, offset + 4); offset += 4;
         const payload = Buffer.from(buffered.subarray(offset, offset + length));
@@ -117,6 +130,8 @@ export function attachWakeEndpoint(server, { lookupBinding, pingIntervalMs = 30_
       }
     };
     socket.on('data', onData);
+    // A client may pipeline its first frame with the upgrade request.
+    if (head?.length) onData(Buffer.from(head));
     const timer = setIntervalImpl(() => {
       if (awaitingPong && ++missedPongs >= 2) { closeSocket(socket, 1001); return; }
       awaitingPong = true;

@@ -866,6 +866,10 @@ async function main() {
         process.stdout.write(`${JSON.stringify(status, (key, value) => (key === 'stale' ? undefined : value), 2)}\n`);
       } else if (status.running) {
         process.stdout.write(`running (pid ${status.pid}, port ${status.port}, since ${status.startedAt})\n`);
+        const warm = Object.entries(status.warmPool ?? {});
+        process.stdout.write(warm.length
+          ? `warm pool: ${warm.map(([id, count]) => `${id} (${count})`).join(', ')}\n`
+          : 'warm pool: empty\n');
       } else {
         process.stdout.write(`not running: ${status.reason}\n`);
       }

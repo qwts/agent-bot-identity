@@ -155,3 +155,72 @@ test('a socket error on a refused handshake does not crash the daemon', async ()
     server.close();
   }
 });
+
+function upgradeRequest({ method = 'GET', headers = 'x-agent-binding: valid\r\n' } = {}) {
+  return `${method} /v0/wake HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n${headers}\r\n`;
+}
+
+async function exchange(f, bytes, waitMs = 30) {
+  let data = Buffer.alloc(0);
+  f.socket.on('data', (chunk) => { data = Buffer.concat([data, chunk]); });
+  f.socket.write(bytes);
+  await new Promise((resolve) => setTimeout(resolve, waitMs));
+  return data;
+}
+
+test('only GET upgrades to the wake socket', async () => {
+  const f = await fixture();
+  try {
+    const data = await exchange(f, upgradeRequest({ method: 'POST' }));
+    assert.match(data.toString('latin1'), /^HTTP\/1\.1 405/);
+    assert.equal(f.pool.has(ID), false);
+  } finally {
+    f.close();
+  }
+});
+
+test('a binding presented as a subprotocol is echoed in the handshake', async () => {
+  const f = await fixture();
+  try {
+    const data = await exchange(f, upgradeRequest({ headers: 'Sec-WebSocket-Protocol: agent-binding.valid\r\n' }));
+    assert.match(data.toString('latin1'), /101 Switching Protocols/);
+    assert.match(data.toString('latin1'), /Sec-WebSocket-Protocol: agent-binding\.valid\r\n/);
+    assert.equal(f.pool.has(ID), true);
+  } finally {
+    f.close();
+  }
+});
+
+test('a frame pipelined with the upgrade is processed at once', async () => {
+  const f = await fixture();
+  try {
+    const ping = maskedFrame(0x9, 'hi');
+    const data = await exchange(f, Buffer.concat([Buffer.from(upgradeRequest(), 'latin1'), ping]));
+    // The pong for the pipelined ping arrives without any later chunk.
+    assert.ok(data.includes(Buffer.from([0x8a, 0x02, 0x68, 0x69])));
+  } finally {
+    f.close();
+  }
+});
+
+test('a control frame over 125 bytes is a protocol error', async () => {
+  const f = await fixture();
+  try {
+    await handshake(f.socket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const payload = Buffer.alloc(126), mask = Buffer.from([1, 2, 3, 4]);
+    const frame = Buffer.concat([Buffer.from([0x89, 0x80 | 126, 0, 126]), mask, payload]);
+    const data = await exchange(f, frame);
+    assert.ok(data.includes(Buffer.from([0x88, 0x02, 0x03, 0xea])));
+  } finally {
+    f.close();
+  }
+});
+
+test('an outbound wake frame over the cap is refused before any socket sees it', () => {
+  const pool = new WarmPool();
+  const socket = { writable: true, destroyed: false, frames: [], write(value) { this.frames.push(value); } };
+  pool.add(ID, socket);
+  assert.throws(() => pool.send(ID, 'x'.repeat(64 * 1024 + 1)), /exceeds/);
+  assert.equal(socket.frames.length, 0);
+});
