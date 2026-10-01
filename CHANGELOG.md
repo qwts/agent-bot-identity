@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Wake plane endpoint (#147, agent-comms ADR-0008 decision 8). `GET /v0/wake`
+  upgrades to a WebSocket authenticated by the binding secret
+  (`x-agent-binding`, or the `agent-binding.<secret>` subprotocol for clients
+  that cannot set headers), with no bearer. The daemon implements the server
+  half of RFC 6455 itself: masked text frames, ping and pong, close, a 64 KiB
+  frame cap. Connected sockets are the warm pool, keyed by agent ID: a ready
+  frame on connect, a ping every 30 s, and two missed pongs drop the socket.
+  `/v0/health` and `agent-bot daemon status` report warm sockets per agent.
+
 ## 0.7.2
 
 - `qwen` is a recognized harness. `detect-harness` gains a `HARNESSES` row

@@ -55,6 +55,7 @@ import { mint } from './mint-token.mjs';
 import { recoverInteractionStore } from './agent-jobs.mjs';
 import { appendAuditReceipt, principalsFile, resolvePrincipal } from './agent-principals.mjs';
 import { createWebLayer } from './agent-web.mjs';
+import { attachWakeEndpoint } from './agent-wake.mjs';
 
 const SCHEMA_VERSION = 1;
 const MAX_BODY_BYTES = 64 * 1024;
@@ -229,6 +230,7 @@ export function createDaemonServer({
   // peer check; it authenticates browsers with its own pairing-code cookie
   // sessions instead of the bearer token, which never reaches page script.
   const web = createWebLayer({ env, home, config, interaction, daemonToken: token, now });
+  let warmPool;
   const server = createServer(async (req, res) => {
     try {
       if (!isLoopbackPeer(req.socket.remoteAddress)) {
@@ -253,7 +255,7 @@ export function createDaemonServer({
       const route = `${req.method} ${url.pathname}`;
       switch (route) {
         case 'GET /v0/health': {
-          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid });
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid, warmPool: warmPool.list() });
           return;
         }
         case 'POST /v0/space/ensure': {
@@ -380,7 +382,9 @@ export function createDaemonServer({
       sendJson(res, failure.statusCode, { error: failure.message });
     }
   });
+  warmPool = attachWakeEndpoint(server, { lookupBinding: (secret) => bindings.resolve(secret) });
   server.token = token;
+  server.warmPool = warmPool;
   return server;
 }
 
@@ -580,7 +584,7 @@ async function probeHealth(state, { fetchImpl = fetch, timeoutMs = HEALTH_TIMEOU
     });
     if (!res.ok) return false;
     const body = await res.json();
-    return body?.status === 'ok' && body?.pid === state.pid;
+    return body?.status === 'ok' && body?.pid === state.pid ? body : false;
   } catch {
     return false;
   }
@@ -600,8 +604,9 @@ export async function daemonStatus({
     return { running: false, reason: error.message };
   }
   if (!state) return { running: false, reason: 'no daemon state file' };
-  if (await probeHealth(state, { fetchImpl, timeoutMs })) {
-    return { running: true, pid: state.pid, port: state.port, startedAt: state.startedAt };
+  const health = await probeHealth(state, { fetchImpl, timeoutMs });
+  if (health) {
+    return { running: true, pid: state.pid, port: state.port, startedAt: state.startedAt, warmPool: health.warmPool ?? {} };
   }
   return { running: false, reason: 'daemon state file is stale (health probe failed)', stale: state };
 }
