@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Cold wake is opt-in per soul (#259, agent-comms ADR-0008 decision 9).
+  `agent-bot soul cold-wake <agentId> [on|off|show]` is an owner-only setting
+  kept in `~/.local/state/agent-bot/cold-wake.json` (0600), with a secret-free
+  audit receipt. `createColdWaker` starts one executor turn in the soul's
+  worktree with the soul's binding, naming only the waiting message IDs, and
+  keeps one turn in flight per soul; with the setting off it reports
+  `waiting`.
+
 ## 0.7.2
 
 - `qwen` is a recognized harness. `detect-harness` gains a `HARNESSES` row

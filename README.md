@@ -141,6 +141,7 @@ agent-bot space export [agent-id] [--out <path>] [--gist]
 agent-bot space import <pack|gist:id|gist-url> [--force]
 agent-bot space retire <agent-id> [--delete-space]
 agent-bot population <list|show|backfill> [agent-id|name] [--dry-run] [--json]
+agent-bot soul cold-wake <agent-id> [on|off|show]
 agent-bot daemon <run|start|status|stop|disable> [--json]
 agent-bot mcp
 agent-bot web open [--principal <principal-id>] [--no-browser] [--json]

@@ -7,6 +7,7 @@ const PUBLIC_COMMANDS = new Set([
   'space',
   'population',
   'principal',
+  'soul',
   'daemon',
   'mcp',
   'reach-mcp',

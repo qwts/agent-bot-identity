@@ -1,0 +1,52 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import { createColdWaker } from '../cold-wake.mjs';
+
+const id = 'agent_12345678-1234-4123-8123-123456789abc';
+const binding = { worktree: '/work/tree', file: '/work/tree/.git/agent-bindings/child.json' };
+
+test('cold wake is opt-in and reports waiting while disabled', async () => {
+  let calls = 0;
+  const wake = createColdWaker({ executor: async () => { calls += 1; }, settings: {}, lookupBinding: async () => binding, identities: async () => ({ harness: 'codex' }), receipt() {} });
+  assert.deepEqual(await wake({ agentId: id, count: 1, cursor: 'c', messageIds: ['m1'] }), { outcome: 'waiting', detail: 'cold wake is disabled' });
+  assert.equal(calls, 0);
+});
+
+test('enabled cold wake supplies message IDs, worktree and binding, and records a secret-free receipt', async () => {
+  let input;
+  const receipts = [];
+  const wake = createColdWaker({ executor: async (value) => { input = value; }, settings: { [id]: true }, lookupBinding: async () => binding, identities: async () => ({ harness: 'codex' }), receipt: (value) => receipts.push(value) });
+  assert.equal((await wake({ agentId: id, count: 2, cursor: 'c', messageIds: ['m1', 'm2'] })).outcome, 'cold');
+  assert.equal(input.invocation.cwd, binding.worktree);
+  assert.equal(input.env.AGENT_BOT_BINDING, binding.file);
+  assert.match(input.message.text, /2 agent-comms messages waiting \(IDs: m1, m2\)/);
+  assert.match(input.message.text, /agent-comms inbox --full, act, and ack/);
+  assert.deepEqual(receipts, [{ event: 'cold-wake', agentId: id, decision: 'started' }]);
+});
+
+test('cold wake reports failures and single-flights concurrent wakes per soul', async () => {
+  let finish;
+  let calls = 0;
+  const wake = createColdWaker({ executor: async () => { calls += 1; await new Promise((resolve) => { finish = resolve; }); }, settings: { [id]: true }, lookupBinding: async () => binding, identities: async () => ({ harness: 'codex' }), receipt() {} });
+  const first = wake({ agentId: id, count: 1, messageIds: ['m1'] });
+  await new Promise((resolve) => setImmediate(resolve));
+  const second = await wake({ agentId: id, count: 1, messageIds: ['m2'] });
+  assert.equal(second.outcome, 'cold');
+  assert.equal(calls, 1);
+  finish();
+  assert.equal((await first).outcome, 'cold');
+
+  const failed = createColdWaker({ executor: async () => { throw new Error('launch failed'); }, settings: { [id]: true }, lookupBinding: async () => binding, identities: async () => ({ harness: 'codex' }), receipt() {} });
+  assert.deepEqual(await failed({ agentId: id, count: 1, messageIds: ['m3'] }), { outcome: 'failed', detail: 'launch failed' });
+});
+
+test('cold waker reads the current setting for each wake', async () => {
+  let enabled = true;
+  let calls = 0;
+  const wake = createColdWaker({ executor: async () => { calls += 1; }, settings: () => ({ [id]: enabled }), lookupBinding: async () => binding, identities: async () => ({ harness: 'codex' }), receipt() {} });
+  assert.equal((await wake({ agentId: id, count: 1, messageIds: ['m1'] })).outcome, 'cold');
+  enabled = false;
+  assert.deepEqual(await wake({ agentId: id, count: 1, messageIds: ['m2'] }), { outcome: 'waiting', detail: 'cold wake is disabled' });
+  assert.equal(calls, 1);
+});
