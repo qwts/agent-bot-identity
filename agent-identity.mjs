@@ -28,6 +28,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { resolveAgentSlug, AGENT_ID_KEYS } from './resolve-agent.mjs';
 import { harnessForSlug, loadConfig } from './config.mjs';
+import { deriveSoulId, spawnNonce, validateGenesis } from './soul-genesis.mjs';
+import { computePackageRevision } from './soul-package.mjs';
 
 const SCHEMA_VERSION = 1;
 const ID_PATTERN = /^agent_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -136,6 +138,12 @@ export function validateIdentity(record) {
     validateAgentId(record.id);
   } catch (error) {
     errors.push(error.message);
+  }
+  if (record.genesis !== undefined && record.genesis !== null) {
+    try {
+      validateGenesis(record.genesis);
+      if (record.id?.[20] !== '8') errors.push('genesis requires a UUIDv8 Agent ID');
+    } catch (error) { errors.push(error.message); }
   }
   if (!APP_PATTERN.test(record.github?.appSlug ?? '')) errors.push('github.appSlug must be a GitHub App slug');
   if (record.github?.credentialProvider !== 'worktree-token') {
@@ -392,7 +400,7 @@ export function readAgentIdentity(id, { stateDir = stateDirectory() } = {}) {
   }
   const errors = validateIdentity(record);
   if (errors.length > 0) throw new Error(`Agent ID ${id} is invalid: ${errors.join('; ')}`);
-  return record;
+  return { ...record, genesis: record.genesis ?? null };
 }
 
 export function mintAgentIdentity({
@@ -410,16 +418,22 @@ export function mintAgentIdentity({
   stateDir = stateDirectory(),
   now = () => new Date(),
   idFactory = () => `agent_${randomUUID()}`,
+  packagePath = null,
+  nonceFactory = spawnNonce,
 } = {}) {
   const slug = requiredText('appSlug', appSlug, { max: 100 });
   if (!APP_PATTERN.test(slug)) throw new Error(`invalid GitHub App slug: ${JSON.stringify(slug)}`);
   const normalizedParent = parentId ? validateAgentId(parentId) : null;
   const createdAt = now().toISOString();
+  const genesis = packagePath === null ? null : {
+    revision: computePackageRevision(packagePath), parentSoul: normalizedParent,
+  };
 
   for (let attempt = 0; attempt < 8; attempt++) {
     const record = {
       schemaVersion: SCHEMA_VERSION,
-      id: validateAgentId(idFactory()),
+      id: validateAgentId(genesis ? deriveSoulId({ ...genesis, nonce: nonceFactory() }) : idFactory()),
+      genesis,
       team: optionalText('team', team) ?? slug,
       squad: optionalText('squad', squad),
       type: requiredText('type', type, { max: 80 }),
@@ -450,6 +464,20 @@ export function mintAgentIdentity({
     }
   }
   throw new Error('could not allocate a unique Agent ID');
+}
+
+// Integration port for the revision-chain owner. It must durably append before
+// resolving; no default silently drops history. Also supports legacy adoption.
+export async function recordAgentPackageRevision(id, packagePath, {
+  appendRevision,
+  stateDir = stateDirectory(),
+} = {}) {
+  if (typeof appendRevision !== 'function') throw new Error('appendRevision chain writer is required');
+  const identity = readAgentIdentity(id, { stateDir });
+  if (identity.status === 'retired') throw retiredReuseError(id);
+  const revision = computePackageRevision(packagePath);
+  await appendRevision({ agentId: identity.id, revision, genesis: identity.genesis });
+  return identity;
 }
 
 function sameTranscript(left, right) {
@@ -809,6 +837,7 @@ async function main() {
       const result = await spawnIdentity({
         options: {
           name: args.one('name'), harness: args.one('harness'),
+          packagePath: args.one('package') ? path.resolve(args.one('package')) : null,
           parent: args.one('parent'), app: args.one('app'),
           transcript: args.one('transcript')
             ? { provider: args.one('provider') ?? 'custom', id: args.one('transcript') } : null,
@@ -836,6 +865,7 @@ async function main() {
           type: args.one('type') ?? 'agent',
           level: args.one('level'),
           parentId,
+          packagePath: args.one('package') ? path.resolve(args.one('package')) : null,
           subjects: args.flags.get('subject') ?? [],
           stateDir,
         });

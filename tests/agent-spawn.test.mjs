@@ -150,3 +150,31 @@ test('child bindings cannot escape through a symlinked directory', async (t) => 
   assert.equal(Object.keys(JSON.parse(readFileSync(f.file))).length, 1);
   assert.equal(readBinding({ env: {}, gitDir: f.gitDir }).secret, f.secret);
 });
+
+test('packaged CLI spawn derives a UUIDv8 with the bound parent and computed revision', async (t) => {
+  const { computePackageRevision } = await import('../soul-package.mjs');
+  const f = await fixture(t);
+  const packagePath = path.join(f.root, 'child.soul');
+  mkdirSync(packagePath);
+  writeFileSync(path.join(packagePath, 'soul.json'), JSON.stringify({ formatVersion: 1,
+    name: 'Child', description: 'Child soul', displaySeed: 'child', preferredHarnesses: [],
+    revision: `sha256:${'0'.repeat(64)}`, parentRevision: null }));
+  writeFileSync(path.join(packagePath, 'AGENTS.md'), 'Child instructions\n');
+  const out = await run(['--package', 'child.soul'], f);
+  assert.equal(out.status, 0, out.stderr);
+  const result = JSON.parse(out.stdout);
+  const row = readAgentIdentity(result.agentId, { stateDir: stateDirectory({ env: f.env }) });
+  assert.equal(row.id[20], '8');
+  assert.deepEqual(row.genesis, { revision: computePackageRevision(packagePath), parentSoul: f.parent.id });
+  assert.equal(readBinding({ env: { AGENT_BOT_BINDING: result.binding } }).agentId, row.id);
+  assert.notEqual((await run(['--package', 'missing.soul'], f)).status, 0);
+
+  // The same option works in the explicitly unbound, local claimed path.
+  const unbound = mkdtempSync(path.join(tmpdir(), 'genesis-unbound-'));
+  t.after(() => rmSync(unbound, { recursive: true, force: true }));
+  const local = await run(['--package', packagePath, '--app', 'test-app', '--json'], { ...f, root: unbound });
+  assert.equal(local.status, 0, local.stderr);
+  const claimed = JSON.parse(local.stdout);
+  assert.equal(claimed.id[20], '8');
+  assert.deepEqual(claimed.genesis, { revision: computePackageRevision(packagePath), parentSoul: null });
+});
