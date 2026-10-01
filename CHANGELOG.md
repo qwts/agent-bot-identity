@@ -4,8 +4,9 @@
 
 - Souls no longer require a GitHub App (#280, ADR-0274). With
   `github-identity` off, setup, bind, spawn, vouch, and wake work with an
-  identity that has no `github` field; GitHub metadata, credentials, and the
-  `gh` shim are opt-in. qwts machines must set
+  identity that has no `github` field. Warm sockets work without GitHub;
+  cold ACP wake is reported unsupported until ACP can launch without an App.
+  GitHub metadata, credentials, and the `gh` shim are opt-in. qwts machines must set
   `features.github-identity: true` and `features.persona-accounts: true`
   before upgrading to keep their existing behavior.
 

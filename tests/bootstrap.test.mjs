@@ -275,7 +275,7 @@ test('configured App slugs are unique and deterministic', () => {
 });
 
 test('configured roster includes every active profile App and excludes retired Apps', () => {
-  const config = organizationProfileToConfig(organizationProfile());
+  const config = { ...organizationProfileToConfig(organizationProfile()), features: { 'github-identity': true } };
   assert.deepEqual(
     configuredAppSlugs(config, ['explicit-agent', 'example-codex-agent']),
     [
@@ -308,7 +308,7 @@ test('full bootstrap follows config, install, credentials, shim, worktree, readi
       installConfig: (options) => {
         calls.push(['config', options.sourcePath]);
         return {
-          config: { apps: { codex: 'codex-agent', claude: 'claude-agent' } },
+          config: { apps: { codex: 'codex-agent', claude: 'claude-agent' }, features: { 'github-identity': true } },
           path: '/home/test/.config/agent-bot/config.json',
           updated: true,
         };
@@ -351,11 +351,26 @@ test('full bootstrap follows config, install, credentials, shim, worktree, readi
   );
 });
 
+test('bootstrap with github-identity off skips credential reconciliation and shim expectation', async () => {
+  const calls = [];
+  await bootstrap(parseBootstrapArgs(['--config', '/profile.json', '--with-gh-shim']), {
+    home: '/home/test', env: { HOME: '/home/test' },
+    installConfig: () => ({ config: { apps: { codex: 'codex-agent' }, features: { 'github-identity': false } }, updated: true }),
+    installRuntime: () => ({ executable: '/home/test/.local/bin/agent-bot' }),
+    reconcileCredentials: () => { calls.push('credentials'); throw new Error('must not run'); },
+    installShim: () => { calls.push('shim'); },
+    run: () => {},
+    collect: (options) => { calls.push(['collect', options.expectedGhShim, options.verifyApps]); return readyReport(options.scope); },
+  });
+  assert.deepEqual(calls, [['collect', false, false]]);
+});
+
 test('profile bootstrap validates and applies the complete active roster before runtime mutation', async () => {
   const calls = [];
   const config = {
     owner: 'example',
     apps: { codex: 'example-codex-agent' },
+    features: { 'github-identity': true },
     profile: {
       schemaVersion: 1,
       organization: 'example-engineering',
@@ -440,7 +455,7 @@ test('machine-only bootstrap recovers a deleted checkout link without binding a 
   let reconciled = false;
   const dependencies = {
     home, env: { HOME: home },
-    installConfig: () => ({ config: { apps: { codex: 'example-codex-agent' } } }),
+    installConfig: () => ({ config: { apps: { codex: 'example-codex-agent' }, features: { 'github-identity': true } } }),
     installRuntime: () => ({ executable: installExecutable({ home, entrypoint }) }),
     reconcileCredentials: async ({ slugs }) => {
       reconciled = true;
@@ -460,7 +475,7 @@ test('machine-only bootstrap recovers a deleted checkout link without binding a 
 });
 
 test('runtime install failure carries the installer error as evidence', async () => {
-  const config = organizationProfileToConfig(organizationProfile());
+  const config = { ...organizationProfileToConfig(organizationProfile()), features: { 'github-identity': true } };
   const report = await bootstrap(parseBootstrapArgs(['--machine-only']), {
     installConfig: () => ({ config, path: '/config', updated: false }),
     installRuntime: () => {
@@ -491,7 +506,7 @@ test('runtime install failure carries the installer error as evidence', async ()
 });
 
 test('retired explicit App stops bootstrap before runtime or credential mutation', async () => {
-  const config = organizationProfileToConfig(organizationProfile());
+  const config = { ...organizationProfileToConfig(organizationProfile()), features: { 'github-identity': true } };
   const report = await bootstrap(
     parseBootstrapArgs(['--app', 'example-old-agent', '--machine-only']),
     {
@@ -578,7 +593,7 @@ test('bootstrap refuses to continue after credential reconciliation fails', asyn
     parseBootstrapArgs(['--machine-only', '--app', 'missing-id-agent']),
     {
       home: '/home/test',
-      installConfig: () => ({ config: {}, path: '/config', updated: false }),
+      installConfig: () => ({ config: { features: { 'github-identity': true } }, path: '/config', updated: false }),
       installRuntime: () => ({ executable: '/installed/agent-bot' }),
       reconcileCredentials: async () => {
         const error = new Error('secret-shaped provider detail');

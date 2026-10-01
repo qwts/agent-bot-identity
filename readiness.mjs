@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { inspectAgentSpace, resolveSpacesHome } from './agent-space.mjs';
 import { listSouls, populationFile } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
-import { apiBase, gateStatus, loadConfig, rosterScope, slugForHarness } from './config.mjs';
+import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness } from './config.mjs';
 import { inspectAppCredentials } from './credential-reconciler.mjs';
 import { configuredAccountIdentity, accountName, detectHarness, HARNESSES } from './detect-harness.mjs';
 import { inspectClaudeWorktreeAdapter } from './sync-hooks.mjs';
@@ -1461,6 +1461,7 @@ function isHttpsRemote(value) {
 }
 
 function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
+  const githubIdentityEnabled = isGateEnabled('github-identity', { env, home, config });
   let gitDir;
   let commonDir;
   try {
@@ -1515,6 +1516,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
     status: 'ready',
     message: primary ? 'primary checkout' : 'linked worktree',
   })];
+  const noAppAddon = !githubIdentityEnabled && !slug && !slugFailed;
   try {
     if (slugFailed) resolveAgentSlug({ env, cwd, config, git: run, detect: false });
   } catch (error) {
@@ -1528,7 +1530,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
       evidence: { git_error: safeGitErrorCode(error) },
     }));
   }
-  if (!slug) {
+  if (!slug && !noAppAddon) {
     if (!slugFailed) {
       checks.push(readinessCheck({
         id: 'worktree.app',
@@ -1538,7 +1540,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
         action: 'run: agent-bot setup-worktree <app-slug>',
       }));
     }
-  } else {
+  } else if (slug) {
     let pin = null;
     let pinError = null;
     try {
@@ -1577,6 +1579,10 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
     }
   }
 
+  if (noAppAddon) {
+    // This checkout intentionally has no GitHub attribution, signing policy,
+    // hooks, remote rewrite, or App credential helper.
+  } else {
   const name = probe(['config', '--worktree', '--get', 'user.name']);
   const email = probe(['config', '--worktree', '--get', 'user.email']);
   const attributionError = name.error ?? email.error;
@@ -1595,6 +1601,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
       action: identityReady ? null : 'run: agent-bot setup-worktree',
       evidence: identityReady ? { app_slug: slug } : {},
     }));
+  }
 
   let agentId = null;
   let agentIdError = null;
@@ -1670,6 +1677,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
     }
   }
 
+  if (!noAppAddon) {
   // `git remote get-url` exits 2 for a remote that does not exist; that is the
   // deterministic "no origin" answer, not an abnormal failure.
   const fetchUrls = probe(['remote', 'get-url', '--all', 'origin'], { absentStatuses: [1, 2] });
@@ -1736,6 +1744,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
         : 'credential helper reset/App binding is missing, reordered, or contains fallback helpers',
       action: helperReady ? null : 'run: agent-bot setup-worktree',
     }));
+  }
 
   return {
     status: checks.some((check) => check.status === 'failed') ? 'not_ready' : 'ready',

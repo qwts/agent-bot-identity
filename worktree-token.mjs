@@ -80,6 +80,8 @@ function cachePath(gitDir, slug) {
 }
 
 async function main() {
+  if (process.argv.includes('--account-slug')
+      && !isGateEnabled('github-identity', { env: process.env, home: process.env.HOME })) return;
   if (!isGateEnabled('github-identity', { env: process.env, home: process.env.HOME })) {
     console.error('worktree-token: github-identity is off — refusing GitHub credentials');
     process.exit(1);

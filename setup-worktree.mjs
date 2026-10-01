@@ -282,6 +282,37 @@ async function configureSoulWithoutApp({ gitDir, config, daemon, gate: isEnabled
     useGithub: false,
     gate: isEnabled,
   });
+  // Remove only GitHub-specific worktree state installed by this command.
+  // Preserve unrelated credential helpers and restore an earlier hooks path.
+  const getConfig = (key) => {
+    try { return git('config', '--worktree', '--get', key); } catch { return ''; }
+  };
+  const hooks = getConfig('agentBot.chainedHooksPath');
+  if (hooks) git('config', '--worktree', 'core.hooksPath', hooks);
+  for (const key of ['agentBot.app', 'agentBot.chainedHooksPath']) {
+    try { git('config', '--worktree', '--unset-all', key); } catch { /* absent */ }
+  }
+  if (getConfig('user.name').endsWith('[bot]')) {
+    for (const key of ['user.name', 'user.email']) {
+      try { git('config', '--worktree', '--unset-all', key); } catch { /* absent */ }
+    }
+  }
+  try {
+    const helpers = git('config', '--worktree', '--get-all', 'credential.helper').split('\n');
+    const isBotHelper = (value) => value.includes('git-credential-bot.mjs')
+      || /(?:^|\/)agent-bot(?:'|\") credential /.test(value);
+    const retained = helpers.filter((value) => !isBotHelper(value));
+    git('config', '--worktree', '--unset-all', 'credential.helper');
+    for (const helper of retained) git('config', '--worktree', '--add', 'credential.helper', helper);
+  } catch { /* no worktree helpers */ }
+  if (getConfig('commit.gpgsign') === 'false') {
+    try { git('config', '--worktree', '--unset-all', 'commit.gpgsign'); } catch { /* absent */ }
+  }
+  // core.hooksPath is removed only when it points at our installed hooks.
+  const hooksPath = getConfig('core.hooksPath');
+  if (hooksPath.includes('/share/agent-bot/hooks')) {
+    try { git('config', '--worktree', '--unset-all', 'core.hooksPath'); } catch { /* absent */ }
+  }
   git('config', '--worktree', 'agentBot.agentId', executionIdentity.id);
   const bindState = bindTokenState({ gitDir, worktree, agentId: executionIdentity.id });
   const transcriptState = executionIdentity.transcript ? 'transcript bound' : 'transcript pending';
