@@ -32,6 +32,33 @@ a distinct execution identity intentionally.
 5. Resolve provenance through the local identity record, not by guessing from
    bot username or branch name.
 
+## Bindings, spawned souls, and wakes
+
+A bind leaves a binding file in the worktree's private git dir:
+`<git-dir>/agent-binding.json`, mode 0600. It names the soul, its parent, the
+account, and the daemon URL, and it holds a secret. The daemon keeps only the
+secret's hash. `AGENT_BOT_BINDING`, when set, names a different binding file
+and wins over the worktree's own.
+
+1. Treat the binding file as a credential. Never print it, copy it, or put it
+   in a commit, a log, or a message. Clients present a one-time proof derived
+   from it (`x-agent-binding-proof`) and never send the secret itself.
+2. Start a child with its own soul through `agent-bot identity spawn -- <command>`.
+   The child gets `AGENT_BOT_BINDING` pointing at
+   `<git-dir>/agent-bindings/<agentId>.json`. Processes started without
+   spawning share the parent's binding, so they act as the parent.
+3. `agent-bot binding revoke` ends a binding and its spawned descendants.
+4. The daemon vouches for a bound soul to agent-comms with a short-lived
+   signed token, which makes the soul `verified` there. Pair the daemon with
+   the broker once with `agent-bot daemon pair-comms --broker <account>`; the
+   owner approves the printed code.
+5. A session in bot territory arms `agent-bot wake listen` under a persistent
+   watcher when its start hook says so. Each NDJSON `wake` line means "read
+   your agent-comms inbox"; it never carries message content. A dropped
+   listener only makes the soul cold.
+6. Cold wake is off unless the owner turns it on per soul with
+   `agent-bot soul cold-wake <agentId> on`. Agents do not change that setting.
+
 ## Read attribution from the census, not the trailer parser
 
 The `Agent-Identity:` trailer is a human-readable breadcrumb, not the

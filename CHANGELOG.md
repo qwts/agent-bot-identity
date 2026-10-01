@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.0
+
 - Binding proofs (#270, agent-comms ADR-0008 decision 3 as amended). Clients
   no longer send the binding secret: each request carries a one-time
   `x-agent-binding-proof` (`v1.<keyId>.<ts>.<nonce>.<mac>`), an HMAC keyed by
