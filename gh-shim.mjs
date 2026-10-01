@@ -17,6 +17,7 @@ token_enrich_pr_view() { "$TOKEN_TOOL" gh-pr-view-json; }`;
   return `#!/bin/sh
 ${GH_SHIM_MARKER}; do not edit in place.
 ${tokenSetup}
+# github-identity access is decided when this shim is installed from config.
 SELF="$0"
 case "$SELF" in
   */*) ;;

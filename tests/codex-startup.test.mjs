@@ -46,6 +46,7 @@ function fixture() {
     apps: { codex: app, claude: claudeApp },
     apiBase: github.apiBase,
     owner: 'test-owner',
+    features: { 'github-identity': true },
   }));
   writeFileSync(join(home, '.local', 'bin', 'agent-bot'),
     `#!/bin/sh\nexec node ${JSON.stringify(join(ROOT, 'agent-bot.mjs'))} "$@"\n`, { mode: 0o755 });
@@ -117,6 +118,7 @@ test('Codex startup repairs identity through the installed stable CLI', () => {
 test('Codex startup repins a stale Claude pin to the launcher-stated Codex App', () => {
   const { app, claudeApp, env, stateDir, worktree } = fixture();
   const previous = ensureAgentIdentity({
+    useGithub: true,
     appSlug: claudeApp,
     botUid: '654321',
     harness: 'claude-code',

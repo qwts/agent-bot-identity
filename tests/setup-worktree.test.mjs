@@ -96,6 +96,7 @@ test('credential failure leaves the linked worktree and SSH remote untouched', (
   writeFileSync(join(home, '.config', slug, 'private-key.pem'), 'malformed\n');
   writeFileSync(join(home, '.config', 'agent-bot', 'config.json'), JSON.stringify({
     apps: { codex: slug },
+    features: { 'github-identity': true },
   }));
   writeFileSync(globalConfig, '');
   // The malformed local credentials force a provider restore, so the PATH

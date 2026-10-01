@@ -12,7 +12,7 @@ function plane({ pool = coldPool, settings = { [ID]: true }, executorFor = null,
     pool,
     settings,
     lookupSoul: () => soul,
-    identities: () => ({ harness: 'codex' }),
+    identities: () => ({ harness: 'codex', github: { appSlug: 'you-codex-agent' } }),
     executorFor,
     receipt: (record) => receipts.push(record),
   });

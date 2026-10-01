@@ -163,7 +163,7 @@ function canReuseWorktree(path, { commonDir, branch, sessionId, app }) {
     const identity = readAgentIdentity(id, { stateDir: stateDirectory() });
     return identity.id === id && identity.status !== 'retired'
       && identity.transcript?.provider === 'claude' && identity.transcript.id === sessionId
-      && (!app || (identity.github.appSlug === app
+      && (!app || (identity.github?.appSlug === app
         && git(['config', '--worktree', '--get', 'agentBot.app'], path) === app));
   } catch {
     return false;

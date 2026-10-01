@@ -31,6 +31,11 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
       if (!binding?.worktree || !binding?.file) throw new Error('soul binding is unavailable');
       identity = await identities(agentId);
       if (!identity?.harness) throw new Error('soul harness identity is unavailable');
+      if (!identity?.github?.appSlug) {
+        land();
+        receipt({ event: 'cold-wake', agentId, decision: 'unsupported' });
+        return { outcome: 'failed', detail: 'cold wake is unsupported without a GitHub App identity' };
+      }
     } catch (error) {
       land();
       receipt({ event: 'cold-wake', agentId, decision: 'failed' });

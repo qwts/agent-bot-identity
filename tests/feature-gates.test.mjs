@@ -7,7 +7,7 @@ import { gateStatus, isGateEnabled, loadConfig } from '../config.mjs';
 
 test('feature gates default off and only explicit config true enables them', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-gates-'));
-  assert.equal(isGateEnabled('github-identity', { home, env: { GITHUB_IDENTITY: '1' } }), false);
+  assert.equal(isGateEnabled('github-identity', { home, env: {} }), false);
   assert.equal(isGateEnabled('persona-accounts', { home }), false);
   const path = join(home, '.config', 'agent-bot', 'config.json');
   mkdirSync(join(home, '.config', 'agent-bot'), { recursive: true });

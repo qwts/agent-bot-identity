@@ -52,6 +52,7 @@ function scratchEnv() {
 
 function mintIdentity(env, { id = AGENT_ID } = {}) {
   return ensureAgentIdentity({
+    gate: () => true,
     appSlug: 'you-codex-agent',
     botUid: '308462948',
     harness: 'codex',
@@ -63,7 +64,9 @@ function mintIdentity(env, { id = AGENT_ID } = {}) {
 }
 
 async function withServer(env, run, options = {}) {
-  const server = createDaemonServer({ env, home: '/nonexistent', config: {}, ...options });
+  const server = createDaemonServer({
+    env, home: '/nonexistent', config: { features: { 'github-identity': true } }, ...options,
+  });
   await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
   const port = server.address().port;
   const call = (pathname, { method = 'GET', body, token = server.token, headers = {} } = {}) =>
@@ -320,7 +323,7 @@ test('stop refuses to signal a recorded PID that fails the authenticated probe',
 
 test('probes and clients dial the loopback host recorded in the state file', async () => {
   const { env } = scratchEnv();
-  const server = createDaemonServer({ env, home: '/nonexistent', config: {} });
+  const server = createDaemonServer({ env, home: '/nonexistent', config: { features: { 'github-identity': true } } });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '::1', resolve);
@@ -363,7 +366,7 @@ test('the client follows a daemon restart to its new port and token', async () =
   const client = daemonClient({ env, home: '/nonexistent' });
 
   async function serve() {
-    const server = createDaemonServer({ env, home: '/nonexistent', config: {} });
+    const server = createDaemonServer({ env, home: '/nonexistent', config: { features: { 'github-identity': true } } });
     await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
     writeFileSync(env.AGENT_BOT_DAEMON_STATE_PATH, JSON.stringify({
       schemaVersion: 1,
@@ -666,7 +669,7 @@ test('tier-1 credential minting answers only a live binding and receipts both ou
   const server = createDaemonServer({
     env,
     home: '/nonexistent',
-    config: {},
+    config: { features: { 'github-identity': true } },
     mintImpl: async ({ slug }) => {
       minted.push(slug);
       return { token: 'ghs_test-grant', expires_at: '2026-08-12T09:00:00.000Z' };
@@ -725,7 +728,7 @@ test('a mint failure after a verified binding still leaves a secret-free receipt
   const server = createDaemonServer({
     env,
     home: '/nonexistent',
-    config: {},
+    config: { features: { 'github-identity': true } },
     mintImpl: async () => { throw new Error('GitHub said no: key ghs_never-leaks rejected'); },
   });
   await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });

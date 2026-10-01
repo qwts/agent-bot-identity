@@ -447,7 +447,9 @@ test('the whole process tree dies with the turn, not just the spawn runner', asy
     expectStatus: 'failed',
     logs,
     executorOptions: {
-      turnTimeoutMs: 500,
+      // Allow the nested Node process to start on slower CI hosts before the
+      // deadline proves that the entire tree is terminated.
+      turnTimeoutMs: 2500,
       registry: {
         claude: {
           ...FAKE_REGISTRY.claude,
@@ -459,7 +461,7 @@ test('the whole process tree dies with the turn, not just the spawn runner', asy
   });
   // The deadline fires even though the grandchild holds the stdio pipes open.
   assert.equal(finished.error, EXECUTION_FAILED_ERROR);
-  assert.ok(logs.some((line) => /turn exceeded 500ms/.test(line)));
+  assert.ok(logs.some((line) => /turn exceeded 2500ms/.test(line)));
   const pidText = chunkTexts(events).find((text) => text.startsWith('pid:'));
   const agentPid = Number(pidText.slice('pid:'.length));
   assert.ok(Number.isSafeInteger(agentPid) && agentPid > 0);

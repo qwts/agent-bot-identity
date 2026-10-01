@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { accountSlug, helperSlug, resolveSlug, worktreeSlug } from '../worktree-token.mjs';
 
 const TOOL = fileURLToPath(new URL('../worktree-token.mjs', import.meta.url));
-const cfg = { prefix: 'you' };
+const cfg = { prefix: 'you', features: { 'github-identity': true } };
 
 const root = mkdtempSync(join(tmpdir(), 'worktree-token-'));
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -69,11 +69,11 @@ function checkout(name, { pin = null, layout = '' } = {}) {
   return dir;
 }
 
-function run(mode, cwd, extra = {}) {
+function run(mode, cwd, extra = {}, config = cfg) {
   const globalConfig = join(root, 'empty.gitconfig');
   writeFileSync(globalConfig, '');
   const configPath = join(root, 'config.json');
-  writeFileSync(configPath, JSON.stringify(cfg));
+  writeFileSync(configPath, JSON.stringify(config));
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
     if (/^(CODEX|CLAUDE|AI_AGENT|CURSOR|COPILOT|DEVIN|WINDSURF|MUSE|QWEN|GH_AGENT_APP|AGENT_BOT_)/.test(key)) delete env[key];
@@ -129,4 +129,9 @@ test('--agent-slug reports the agent process, which is not the same question', (
   const primary = checkout('agent-process');
   assert.equal(run('--agent-slug', primary, { AGENT_BOT_ACCOUNT: 'user', CLAUDECODE: '1' }), 'you-claude-agent');
   assert.equal(run('--agent-slug', primary, { AGENT_BOT_ACCOUNT: 'user' }), '');
+});
+
+test('--account-slug is an empty successful probe when the add-on is off', () => {
+  const primary = checkout('gate-off-probe');
+  assert.equal(run('--account-slug', primary, { AGENT_BOT_ACCOUNT: 'you-codex-agent' }, { prefix: 'you' }), '');
 });
