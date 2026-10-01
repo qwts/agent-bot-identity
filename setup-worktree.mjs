@@ -41,18 +41,25 @@ import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { resolveAgentSlug, pinnedSlug, territoryHarness, AGENT_ID_KEYS } from './resolve-agent.mjs';
-import { mintBindToken } from './agent-binding.mjs';
+import { mintBindToken, readBinding } from './agent-binding.mjs';
 import { loadConfig, apiBase, daemonPreference, githubHost, harnessForSlug } from './config.mjs';
 import { daemonClient } from './agent-daemon.mjs';
 import { reconcileAppCredentials } from './credential-reconciler.mjs';
 import {
   discoverTranscript,
   ensureAgentIdentity,
+  readAgentIdentity,
   identityFieldsFromEnv,
   stateDirectory,
 } from './agent-identity.mjs';
 import { initAgentSpace } from './agent-space.mjs';
 import { upsertIdentitySoul } from './agent-population.mjs';
+
+export function prepareWorktreeBinding(options) {
+  if (readBinding({ env: {}, gitDir: options.gitDir })) return 'binding reused';
+  mintBindToken(options);
+  return 'bind token minted';
+}
 
 function git(...args) {
   return execFileSync('git', args, {
@@ -253,7 +260,8 @@ export async function main({
       /* try next key */
     }
   }
-  const executionIdentity = ensureAgentIdentity({
+  const sharedBinding = readBinding({ env: {}, gitDir });
+  const executionIdentity = sharedBinding ? readAgentIdentity(sharedBinding.agentId, { stateDir: stateDirectory() }) : ensureAgentIdentity({
     currentId: currentAgentId,
     appSlug: slug,
     botUid: uid,
@@ -322,7 +330,7 @@ export async function main({
   // configured worktree — it simply cannot bind until a mint succeeds.
   let bindState = 'bind token minted';
   try {
-    mintBindToken({ gitDir, worktree: worktree ?? git('rev-parse', '--show-toplevel'), agentId: executionIdentity.id });
+    bindState = prepareWorktreeBinding({ gitDir, worktree: worktree ?? git('rev-parse', '--show-toplevel'), agentId: executionIdentity.id });
   } catch {
     bindState = 'bind token unavailable';
   }

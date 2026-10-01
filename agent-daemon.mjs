@@ -40,7 +40,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { consumeBindToken, createBindingRegistry } from './agent-binding.mjs';
+import { consumeBindToken, createBindingRegistry, readBinding, readBindToken, assertPrivateGitDir } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
 import { listSouls, upsertIdentitySoul } from './agent-population.mjs';
 import {
@@ -220,11 +220,7 @@ export function createDaemonServer({
   // One interaction service per server so in-flight executions and their
   // cancellation controllers live exactly as long as the daemon.
   const interaction = createInteractionService({ env, home, config, executor, now });
-  // Live connection bindings (#94) exist only in this process, like the
-  // per-start bearer token: a restart drops them all, and re-binding takes a
-  // fresh worktree mint. Identity is derived from the binding on every
-  // request — never from a request parameter.
-  const bindings = createBindingRegistry({ now });
+  const bindings = createBindingRegistry({ now, file: path.join(env.XDG_STATE_HOME ?? path.join(home, '.local', 'state'), 'agent-bot', 'bindings.json'), account: env.USER ?? process.env.USER ?? 'unknown' });
   // The private web client (#59) rides the same server and the same loopback
   // peer check; it authenticates browsers with its own pairing-code cookie
   // sessions instead of the bearer token, which never reaches page script.
@@ -242,7 +238,7 @@ export function createDaemonServer({
       }
       const authorization = req.headers.authorization ?? '';
       const presented = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
-      if (!tokensMatch(token, presented)) {
+      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/credential'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
         sendJson(res, 401, { error: 'missing or invalid daemon token' });
         return;
       }
@@ -299,8 +295,7 @@ export function createDaemonServer({
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, binding });
           return;
         }
-        // The MCP server surrenders its binding when the connection closes,
-        // so the live-binding cap counts conversations rather than history.
+        // Explicit revocation invalidates the secret and removes its file.
         case 'DELETE /v0/binding': {
           if (!bindings.release(req.headers['x-agent-binding'] ?? '')) {
             throw Object.assign(new Error('missing or invalid agent binding'), { statusCode: 401 });
@@ -380,6 +375,10 @@ export function createDaemonServer({
       sendJson(res, failure.statusCode, { error: failure.message });
     }
   });
+  server.on('listening', () => {
+    const address = server.address();
+    bindings.rewrite(`http://${address.address === '::1' ? '[::1]' : '127.0.0.1'}:${address.port}`);
+  });
   server.token = token;
   return server;
 }
@@ -395,6 +394,13 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now }) {
   // Validate the conversation half BEFORE consuming: a bind rejected for a
   // malformed request must leave the single-use token in place so the caller
   // can retry, while a wrong or replayed token still fails without consuming.
+  if (typeof body.gitDir !== 'string' || !path.isAbsolute(body.gitDir)) throw new Error('gitDir must be an absolute path');
+  const existing = readBinding({ env: {}, gitDir: body.gitDir });
+  if (existing) {
+    const binding = bindings.resolve(existing.secret);
+    if (binding && body.parentId && body.parentId !== binding.parent) throw Object.assign(new Error('identity already records a different parent'), { statusCode: 409 });
+    if (binding && binding.gitDir === body.gitDir) return { schemaVersion: SCHEMA_VERSION, ...binding, secret: existing.secret, repinRequired: false };
+  }
   const transcript = body.transcript;
   if (!transcript || typeof transcript !== 'object' || Array.isArray(transcript)
     || typeof transcript.id !== 'string' || transcript.id === '') {
@@ -419,6 +425,8 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now }) {
       throw Object.assign(new Error('parent Agent ID is unknown'), { statusCode: 409 });
     }
   }
+  const pending = readBindToken(body.gitDir);
+  if (pending) assertPrivateGitDir(body.gitDir, pending.worktree);
   const record = consumeBindToken({ gitDir: body.gitDir, token: body.token });
   let pinned;
   try {
@@ -466,6 +474,9 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now }) {
   });
   const secret = bindings.bind({
     agentId: bound.id,
+    gitDir: body.gitDir,
+    parent: bound.parentId ?? null,
+    app: bound.github.appSlug,
     worktree: record.worktree,
     transcript: locator,
     harness: bound.harness,
@@ -614,17 +625,19 @@ export function daemonClient({
   home = homedir(),
   fetchImpl = fetch,
   timeoutMs = HEALTH_TIMEOUT_MS,
+  cwd = process.cwd(),
 } = {}) {
   async function request(method, pathname, body, headers = {}, requestTimeoutMs = timeoutMs) {
     // Re-read the state file on every request: a long-running adapter must
     // follow a daemon restart to its new port and per-start token instead of
     // failing forever against a cached endpoint.
-    const state = readStateFile(daemonStateFile({ env, home }));
-    if (!state) throw new Error('daemon is not running (no state file)');
-    const res = await fetchImpl(`${baseUrl(state)}${pathname}`, {
+    const shared = headers['x-agent-binding'] ? readBinding({ env, cwd }) : null;
+    const state = shared ? null : readStateFile(daemonStateFile({ env, home }));
+    if (!state && !shared) throw new Error('daemon is not running (no state file)');
+    const res = await fetchImpl(`${shared?.daemon ?? baseUrl(state)}${pathname}`, {
       method,
       headers: {
-        authorization: `Bearer ${state.token}`,
+        ...(state ? { authorization: `Bearer ${state.token}` } : {}),
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
         ...headers,
       },
@@ -666,9 +679,8 @@ export function daemonClient({
       const { souls } = await request('GET', `/v0/population${query ? `?${query}` : ''}`);
       return souls;
     },
-    // Surrender-and-enforce binding (#94). The secret in the response exists
-    // only in daemon memory and the caller's process — it must never be
-    // written to disk, logged, or returned to the conversation.
+    // The daemon writes the shared secret in the private git dir. Callers
+    // must never log it or return it to the conversation.
     async bind({ gitDir, token, transcript, parentId = null, harness = null }) {
       return request('POST', '/v0/bind', { gitDir, token, transcript, parentId, harness });
     },

@@ -409,17 +409,19 @@ conversation knows — its session/thread identifier, and its parent agent when
 it was spawned by one. The server reads the minted token from the worktree it
 is running in and surrenders it to the daemon, which verifies the token
 against the file on disk, **consumes it**, joins place and conversation into
-one identity, and answers with a per-connection binding secret the MCP server
-holds in memory only. The secret is never written down, logged, or shown to
-the conversation.
+one identity, and writes `agent-binding.json` in the worktree's private git
+directory (0600, atomic replacement). It contains `{ v: 1, agentId, parent,
+account, daemon, secret }`; the secret is 32 random bytes encoded as base64url.
+The daemon stores only its SHA-256 hash and binding metadata in
+`~/.local/state/agent-bot/bindings.json` (0600).
 
-From then on identity is a property of the connection, not a parameter of any
-request: `whoami` and `space_path` carry no Agent ID, and the daemon derives
-who is asking from the binding alone. A consumed token cannot be replayed —
-after binding there is no token left to steal — and a daemon restart drops
-every binding, so re-binding takes a fresh mint from the same worktree
-(re-running `setup-worktree` or any later checkout re-mints; a re-mint is a
-fresh proof of place, never a fresh identity).
+Bindings survive daemon and MCP restarts. The daemon refreshes their loopback
+URL at startup, prunes missing git dirs, and expires bindings unused for 30
+days. MCP bind and setup-worktree reuse an existing binding; closing MCP stdin
+does not revoke it. Use `agent-bot binding revoke` (or `DELETE /v0/binding`) to
+revoke and remove the file. The shared reader prefers `AGENT_BOT_BINDING` over
+the private git dir and refuses files with an incorrect owner or mode.
+Secrets are never logged or returned to the conversation.
 
 Binding is also the moment provenance lands in the census: the row picks up
 the transcript locator and parent lineage that pre-bind rows lack. Tools:

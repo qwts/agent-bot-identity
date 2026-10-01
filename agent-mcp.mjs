@@ -12,8 +12,8 @@
 // calls the `bind` tool with what only the conversation knows (transcript
 // locator, parent agent); this server reads the token from the worktree it is
 // running in, exchanges it at the daemon, and holds the returned binding
-// secret in process memory only. The secret is never written down, logged, or
-// returned to the conversation — identity stays a property of the connection.
+// secret from the private git dir. The secret is never logged or returned
+// to the conversation; subsequent MCP processes reuse the shared binding.
 //
 // Git and gh remain the only sanctioned write paths to GitHub; nothing here
 // touches commits or the credential boundary.
@@ -26,7 +26,7 @@ import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { readBindToken } from './agent-binding.mjs';
+import { readBinding, readBindToken } from './agent-binding.mjs';
 import { daemonClient } from './agent-daemon.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
 
@@ -125,7 +125,7 @@ export function createMcpState({
     home,
     cwd,
     fetchImpl,
-    client: client ?? daemonClient({ env, home }),
+    client: client ?? daemonClient({ env, home, cwd }),
     // Held in memory for the life of this server process; never serialized.
     secret: null,
     agentId: null,
@@ -166,6 +166,13 @@ async function takeInbox(state) {
 async function callTool(state, name, args = {}) {
   switch (name) {
     case 'bind': {
+      const existing = readBinding({ env: state.env, cwd: state.cwd });
+      if (existing) {
+        const binding = await state.client.binding(existing.secret);
+        state.secret = existing.secret;
+        state.agentId = binding.agentId;
+        return binding;
+      }
       if (typeof args.transcript_id !== 'string' || args.transcript_id === '') {
         throw new Error('bind requires transcript_id');
       }
@@ -310,19 +317,6 @@ export function runMcpServer({ state = createMcpState(), input = process.stdin, 
     lines.on('close', async () => {
       while (inFlight.size > 0) {
         await Promise.allSettled([...inFlight]);
-      }
-      // The connection IS the identity, so the end of the connection is the
-      // end of the binding: hand the slot back so the daemon's live-binding
-      // cap counts conversations, not history. Best-effort — a dead daemon
-      // has already forgotten every binding.
-      if (state.secret) {
-        try {
-          await state.client.releaseBinding(state.secret);
-        } catch {
-          // Nothing to do: the daemon is gone or the binding already expired.
-        }
-        state.secret = null;
-        state.agentId = null;
       }
       resolve();
     });
