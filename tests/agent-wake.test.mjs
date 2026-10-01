@@ -224,3 +224,28 @@ test('an outbound wake frame over the cap is refused before any socket sees it',
   assert.throws(() => pool.send(ID, 'x'.repeat(64 * 1024 + 1)), /exceeds/);
   assert.equal(socket.frames.length, 0);
 });
+
+test('a binding proof upgrades, and a proof with no binding behind it is refused (#270)', async () => {
+  const server = createServer();
+  attachWakeEndpoint(server, {
+    lookupBinding: () => { throw new Error('a proof must never fall back to the bare secret'); },
+    lookupProof: (req) => req.headers['x-agent-binding-proof'] === 'v1.good' ? { agentId: ID } : null,
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const attempt = async (proof) => {
+    const socket = connect(server.address().port, '127.0.0.1');
+    await once(socket, 'connect');
+    let data = '';
+    socket.on('data', (chunk) => { data += chunk.toString('latin1'); });
+    socket.write(`GET /v0/wake HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nx-agent-binding-proof: ${proof}\r\n\r\n`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    socket.destroy();
+    return data;
+  };
+  try {
+    assert.match(await attempt('v1.good'), /101 Switching Protocols/);
+    assert.match(await attempt('v1.spent'), /401 Unauthorized/);
+  } finally {
+    server.close();
+  }
+});

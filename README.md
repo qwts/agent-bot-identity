@@ -414,7 +414,8 @@ one identity, and writes `agent-binding.json` in the worktree's private git
 directory (0600, atomic replacement). It contains `{ v: 1, agentId, parent,
 account, daemon, secret }`; the secret is 32 random bytes encoded as base64url.
 `agent-bot identity spawn [--name <name>] [--harness <harness>]` requires
-that binding and calls `POST /v0/spawn` using `x-agent-binding`. It returns
+that binding and calls `POST /v0/spawn` with a binding proof in
+`x-agent-binding-proof` (the secret itself never leaves the process). It returns
 `{ agentId, parent, binding }` as JSON. The daemon mints the child under the
 parent's App and writes a separate 0600 file at
 `<git-dir>/agent-bindings/<childId>.json`, leaving the parent's binding intact.

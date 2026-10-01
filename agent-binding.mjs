@@ -11,6 +11,7 @@ import path from 'node:path';
 import process from 'node:process';
 
 import { validateAgentId } from './agent-identity.mjs';
+import { PROOF_HEADER, PROOF_WINDOW_MS, bindingKeyId, checkBindingProof, parseBindingProof, signBindingProof } from './binding-proof.mjs';
 
 const SCHEMA_VERSION = 1;
 const TOKEN_FILE = 'agent-bind-token.json';
@@ -19,6 +20,8 @@ const TOKEN_PATTERN = /^[0-9a-f]{64}$/;
 // hard cap keeps a misbehaving client from growing daemon memory unbounded.
 const MAX_LIVE_BINDINGS = 256;
 const MAX_BINDING_IDLE_MS = 30 * 24 * 60 * 60 * 1000;
+// Nonces live for two proof windows; a full cache refuses rather than grows.
+const MAX_SEEN_NONCES = 10_000;
 
 function fail(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -232,6 +235,45 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
     }
     if (removed) save();
   }
+  function touch(key) {
+    expire();
+    const entry = bindings.get(key);
+    if (!entry) return null;
+    // Idle expiry is measured in days, so persisting the clock about once a
+    // minute is enough and spares a disk write on every request.
+    const previous = Date.parse(entry.lastUsedAt);
+    entry.lastUsedAt = now().toISOString();
+    if (now().getTime() - previous >= 60_000) save();
+    return { ...entry, bindingHash: key };
+  }
+  function releaseKey(key) {
+    const entry = bindings.get(key);
+    if (!entry) return false;
+    remove(key, entry);
+    save();
+    return true;
+  }
+  // A proof is accepted once: its nonce is remembered for two windows, which
+  // outlives the timestamp check on either side of the daemon's clock.
+  const seenNonces = new Map();
+  // Spent nonces do not survive a restart, so proofs made before this
+  // registry existed are refused outright (#270 review).
+  const startedAt = now().getTime();
+  function keyForProof(header, { method, path: pathname, authority }) {
+    const proof = parseBindingProof(header);
+    if (!proof || typeof authority !== 'string') return null;
+    const at = now().getTime();
+    for (const [nonce, until] of seenNonces) if (until <= at) seenNonces.delete(nonce);
+    if (seenNonces.has(proof.nonce) || seenNonces.size >= MAX_SEEN_NONCES) return null;
+    for (const key of bindings.keys()) {
+      const raw = Buffer.from(key, 'hex');
+      if (bindingKeyId(raw) !== proof.keyId) continue;
+      if (!checkBindingProof(proof, raw, { method, path: pathname, authority, now: at, notBefore: startedAt })) return null;
+      seenNonces.set(proof.nonce, at + 2 * PROOF_WINDOW_MS);
+      return key;
+    }
+    return null;
+  }
   return {
     rewrite(url) {
       daemon = url;
@@ -277,25 +319,22 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
       return secret;
     },
     resolve(secret) {
-      expire();
       if (typeof secret !== 'string') return null;
-      const entry = bindings.get(hash(secret));
-      if (!entry) return null;
-      // Idle expiry is measured in days, so persisting the clock about once a
-      // minute is enough and spares a disk write on every request.
-      const previous = Date.parse(entry.lastUsedAt);
-      entry.lastUsedAt = now().toISOString();
-      if (now().getTime() - previous >= 60_000) save();
-      return { ...entry, bindingHash: hash(secret) };
+      return touch(hash(secret));
+    },
+    // A binding proof (#270) names the binding without carrying its secret.
+    // `request` is { method, path, authority }: what the proof must cover.
+    resolveProof(header, request) {
+      const key = keyForProof(header, request);
+      return key ? touch(key) : null;
     },
     release(secret) {
       if (typeof secret !== 'string') return false;
-      const key = hash(secret);
-      const entry = bindings.get(key);
-      if (!entry) return false;
-      remove(key, entry);
-      save();
-      return true;
+      return releaseKey(hash(secret));
+    },
+    releaseProof(header, request) {
+      const key = keyForProof(header, request);
+      return key ? releaseKey(key) : false;
     },
     // The cold path (#259) starts a turn for a soul, not for a secret: the
     // most recently used binding names its worktree and the file the turn
@@ -331,8 +370,10 @@ function recordedParent(binding) {
 // abandoned in-memory bindings before answering.
 export function lookupBinding(registry, secret, { now = () => new Date() } = {}) {
   if (!registry || typeof registry.resolve !== 'function') return null;
-  const presented = typeof secret === 'string' ? secret : '';
-  const binding = registry.resolve(presented);
+  // `secret` is the bare secret from an older client, or { proof, request }.
+  const binding = secret && typeof secret === 'object'
+    ? (typeof registry.resolveProof === 'function' ? registry.resolveProof(secret.proof, secret.request) : null)
+    : registry.resolve(typeof secret === 'string' ? secret : '');
   if (!binding || typeof binding !== 'object') return null;
   const parentIsSet = Object.prototype.hasOwnProperty.call(binding, 'parent')
     || Object.prototype.hasOwnProperty.call(binding, 'parentId');
@@ -350,11 +391,13 @@ export function lookupBinding(registry, secret, { now = () => new Date() } = {})
   };
 }
 
-export async function revokeBinding({ env = process.env, cwd = process.cwd(), fetchImpl = fetch } = {}) {
+export async function revokeBinding({ env = process.env, cwd = process.cwd(), fetchImpl = fetch, now = () => new Date() } = {}) {
   const binding = readBinding({ env, cwd });
   if (!binding) throw new Error('no binding exists');
-  const response = await fetchImpl(`${binding.daemon}/v0/binding`, {
-    method: 'DELETE', headers: { 'x-agent-binding': binding.secret }, signal: AbortSignal.timeout(5000),
+  const target = new URL('/v0/binding', binding.daemon);
+  const proof = signBindingProof({ secret: binding.secret, method: 'DELETE', path: target.pathname, authority: target.host, now: now().getTime() });
+  const response = await fetchImpl(target.href, {
+    method: 'DELETE', headers: { [PROOF_HEADER]: proof }, signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error(`binding revoke failed: HTTP ${response.status}`);
 }

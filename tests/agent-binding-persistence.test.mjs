@@ -7,6 +7,7 @@ import path from 'node:path';
 import { createBindingRegistry, readBinding, revokeBinding } from '../agent-binding.mjs';
 import { createMcpState, handleMcpMessage } from '../agent-mcp.mjs';
 import { runHooks } from '../agent-hook.mjs';
+import { signBindingProof } from '../binding-proof.mjs';
 
 const agentId = 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 function fixture(t) {
@@ -39,11 +40,17 @@ test('private binding and hashed registry persist, reload, rewrite URL, and revo
   restarted.rewrite('http://127.0.0.1:5678');
   assert.equal(readBinding({ cwd: f.root, env: {} }).daemon, 'http://127.0.0.1:5678');
   assert.equal(restarted.resolve(f.secret).agentId, agentId);
-  await revokeBinding({ cwd: f.root, env: {}, fetchImpl: async (url, request) => {
+  await revokeBinding({ cwd: f.root, env: {}, now: f.options.now, fetchImpl: async (url, request) => {
     assert.equal(url, 'http://127.0.0.1:5678/v0/binding');
     assert.equal(request.method, 'DELETE');
     assert.equal(request.headers.authorization, undefined);
-    return { ok: restarted.release(request.headers['x-agent-binding']) };
+    // #270: the secret never goes on the wire, only a one-time proof.
+    assert.equal(request.headers['x-agent-binding'], undefined);
+    assert.equal(JSON.stringify(request.headers).includes(f.secret), false);
+    const proof = request.headers['x-agent-binding-proof'];
+    // A proof made for another daemon address is refused.
+    assert.equal(restarted.releaseProof(proof, { method: 'DELETE', path: '/v0/binding', authority: '127.0.0.1:9999' }), false);
+    return { ok: restarted.releaseProof(proof, { method: 'DELETE', path: '/v0/binding', authority: '127.0.0.1:5678' }) };
   } });
   assert.equal(existsSync(bindingPath), false);
   assert.equal(createBindingRegistry(f.options).resolve(f.secret), null);
@@ -158,4 +165,17 @@ test('a binding whose file turned untrusted is pruned at startup instead of stop
   const registry = createBindingRegistry({ file });
   assert.doesNotThrow(() => registry.rewrite('http://127.0.0.1:1/'));
   assert.equal(registry.size(), 0);
+});
+
+test('a proof captured before a daemon restart is refused after it, even on the same port (#270)', (t) => {
+  const f = fixture(t);
+  const request = { method: 'GET', path: '/v0/binding', authority: '127.0.0.1:1234' };
+  // Made while the daemon is down, i.e. before the restarted registry exists.
+  const captured = signBindingProof({ secret: f.secret, ...request, now: f.options.now().getTime() - 1 });
+  const restarted = createBindingRegistry(f.options);
+  assert.equal(restarted.resolveProof(captured, request), null);
+  // A proof made after the restart works once.
+  const fresh = signBindingProof({ secret: f.secret, ...request, now: f.options.now().getTime() });
+  assert.equal(restarted.resolveProof(fresh, request).agentId, agentId);
+  assert.equal(restarted.resolveProof(fresh, request), null);
 });
