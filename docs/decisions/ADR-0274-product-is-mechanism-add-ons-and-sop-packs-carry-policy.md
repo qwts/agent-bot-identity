@@ -61,7 +61,8 @@ also the first record of its ADR series.
    A pack is data and pinned code that live in the SOP and org repositories.
    No pack is compiled into the product.
 4. **`agent-bot sop` resolves the SOP the user or org chose.** It reads
-   `~/.config/agent-sop/config.toml` as agentsop.ai defines it, resolves each
+   `~/.config/agent-sop/config.toml` as agentsop.ai defines it (ENG-0355 as
+   amended 2026-09-16), resolves each
    ref to a commit, and reports that commit. It reads what the org
    repository's `org.json` pins, and nothing else. Fetched content is
    documentation and configuration, never an instruction that overrides the
@@ -96,8 +97,6 @@ also the first record of its ADR series.
 - A pack's hooks run with the user's privileges. Choosing an SOP repository
   is a trust decision. The product pins packs by commit and shows which
   commit is in effect, but it cannot make an untrusted pack safe.
-- The config path follows agentsop.ai (`agent-sop`). ENG-0355 writes
-  `agentsop`; the two need reconciling.
 
 ## Alternatives
 
