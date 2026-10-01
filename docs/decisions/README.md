@@ -27,3 +27,4 @@ supersede them instead.
 | ID | Title | Status |
 | --- | --- | --- |
 | [ADR-0274](ADR-0274-product-is-mechanism-add-ons-and-sop-packs-carry-policy.md) | The product is mechanism; add-ons and SOP packs carry policy | Proposed |
+| [ADR-0275](ADR-0275-soul-packages-are-versioned-definitions-souls-can-grow.md) | Soul packages are versioned definitions that souls can grow | Proposed |
