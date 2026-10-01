@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Wake dispatch gains its seam. A new `wake-dispatch.mjs` is the pure half of
+  ADR-0008 decision 7: `dispatchWake(event, { pool, coldWake, report, receipt })`
+  answers one coalesced account-watch wake with `warm`, `cold`, `waiting`, or
+  `failed`, and `createWakeDispatcher(ports)` returns the `(event) => Promise`
+  an account-watch client holds, serialising per soul so one slow cold turn
+  cannot reorder or stall another soul's wake. The frame a warm socket receives
+  is `{ event, agentId, count, cursor, messageIds }`, built field by field so an
+  unexpected field on a watch event is never forwarded to a listener. A send
+  error on every socket for a soul is `failed` with a detail and drops the
+  sockets, so the soul is honestly cold on its next wake — never a `waiting`
+  that hides a dead pool. Every dispatch also writes a receipt of
+  `{ event, agentId, count, outcome }` and nothing else, so the audit trail is
+  never a second copy of the mailbox. The warm pool (#147), the account-watch
+  client (#255), and cold wake (#259) are its ports; `runDaemon` wires them
+  once all three land (#256).
+
 ## 0.7.2
 
 - `qwen` is a recognized harness. `detect-harness` gains a `HARNESSES` row
