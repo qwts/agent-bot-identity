@@ -23,7 +23,7 @@ import {
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { resolveAgentSlug, AGENT_ID_KEYS } from './resolve-agent.mjs';
@@ -701,9 +701,11 @@ export function currentAgentId({ env = process.env, cwd = process.cwd() } = {}) 
 function parseCli(argv) {
   const [command = 'current', ...tokens] = argv.slice(2);
   const positional = [];
+  let childCommand = null;
   const flags = new Map();
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index];
+    if (token === '--') { childCommand = tokens.slice(index + 1); break; }
     if (!token.startsWith('--')) {
       positional.push(token);
       continue;
@@ -720,7 +722,7 @@ function parseCli(argv) {
     flags.set(key, [...(flags.get(key) ?? []), value]);
   }
   const one = (name) => flags.get(name)?.at(-1) ?? null;
-  return { command, positional, flags, one, json: flags.has('json') };
+  return { command, childCommand, positional, flags, one, json: flags.has('json') };
 }
 
 function botUidForSlug(slug, home = homedir()) {
@@ -737,6 +739,30 @@ function printRecord(record, json) {
     return;
   }
   process.stdout.write(`${record.id}\n`);
+}
+
+export function childIdentityEnv(result, env = process.env) {
+  return { ...env, AGENT_BOT_BINDING: result.binding, AGENT_BOT_ID: result.agentId,
+    QWTS_AGENT_ID: result.agentId, AGENT_BOT_PARENT_ID: result.parent, QWTS_AGENT_PARENT_ID: result.parent };
+}
+
+export async function spawnIdentity({ options = {}, env = process.env, cwd = process.cwd(), fetchImpl = fetch } = {}) {
+  const { readBinding } = await import('./agent-binding.mjs');
+  const parent = readBinding({ env, cwd });
+  if (!parent) {
+    if (env.AGENT_BOT_BINDING) throw new Error('spawn requires a parent binding: AGENT_BOT_BINDING is unreadable');
+    return null;
+  }
+  const response = await fetchImpl(`${parent.daemon}/v0/spawn`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-agent-binding': parent.secret },
+    body: JSON.stringify(options), signal: AbortSignal.timeout(30000),
+  });
+  if (!response.ok) throw new Error(`identity spawn failed: HTTP ${response.status}`);
+  const result = await response.json();
+  if (result.warning) process.stderr.write(`identity spawn: ${result.warning}\n`);
+  validateAgentId(result.agentId);
+  if (result.parent !== parent.agentId || !path.isAbsolute(result.binding ?? '')) throw new Error('invalid spawn response');
+  return { agentId: result.agentId, parent: result.parent, binding: result.binding };
 }
 
 async function main() {
@@ -776,28 +802,49 @@ async function main() {
       break;
     }
     case 'spawn': {
-      const parentId = args.one('parent') ?? currentAgentId();
-      const parent = parentId ? readAgentIdentity(parentId, { stateDir }) : null;
-      // --app and the parent's App are explicit statements; the fallback is
-      // the shared resolver.
-      const appSlug = args.one('app') ?? parent?.github.appSlug ?? resolveAgentSlug();
-      if (!appSlug) throw new Error('spawn requires an App identity or a resolvable parent');
-      const identity = mintAgentIdentity({
-        appSlug,
-        botUid: parent?.github.botUid ?? botUidForSlug(appSlug),
-        harness: parent?.harness ?? harnessForApp(appSlug),
-        transcript: args.one('transcript')
-          ? { provider: args.one('provider') ?? 'custom', id: args.one('transcript') }
-          : discoverTranscript(),
-        team: args.one('team') ?? parent?.team,
-        squad: args.one('squad') ?? parent?.squad,
-        type: args.one('type') ?? 'agent',
-        level: args.one('level'),
-        parentId,
-        subjects: args.flags.get('subject') ?? [],
-        stateDir,
+      if (args.childCommand && !args.childCommand.length) throw new Error('spawn -- requires a command');
+      const result = await spawnIdentity({
+        options: {
+          name: args.one('name'), harness: args.one('harness'),
+          parent: args.one('parent'), app: args.one('app'),
+          transcript: args.one('transcript')
+            ? { provider: args.one('provider') ?? 'custom', id: args.one('transcript') } : null,
+          team: args.one('team'), squad: args.one('squad'), type: args.one('type'),
+          level: args.one('level'), subjects: args.flags.get('subject') ?? [],
+        },
       });
-      printRecord(identity, args.json);
+      if (!result) {
+        // No binding means no daemon to vouch: mint a claimed identity locally,
+        // as before ADR-0008.
+        if (args.childCommand) throw new Error('spawn -- requires a parent binding');
+        const parentId = args.one('parent') ?? currentAgentId();
+        const parent = parentId ? readAgentIdentity(parentId, { stateDir }) : null;
+        const appSlug = args.one('app') ?? parent?.github.appSlug ?? resolveAgentSlug();
+        if (!appSlug) throw new Error('spawn requires an App identity or a resolvable parent');
+        const identity = mintAgentIdentity({
+          appSlug,
+          botUid: parent?.github.botUid ?? botUidForSlug(appSlug),
+          harness: parent?.harness ?? harnessForApp(appSlug),
+          transcript: args.one('transcript')
+            ? { provider: args.one('provider') ?? 'custom', id: args.one('transcript') }
+            : discoverTranscript(),
+          team: args.one('team') ?? parent?.team,
+          squad: args.one('squad') ?? parent?.squad,
+          type: args.one('type') ?? 'agent',
+          level: args.one('level'),
+          parentId,
+          subjects: args.flags.get('subject') ?? [],
+          stateDir,
+        });
+        printRecord(identity, args.json);
+      } else if (args.childCommand) {
+        const [command, ...argv] = args.childCommand;
+        const child = spawnSync(command, argv, {
+          stdio: 'inherit', env: childIdentityEnv(result),
+        });
+        if (child.error) throw new Error(`spawn command failed: ${child.error.message}`);
+        process.exitCode = child.status ?? 1;
+      } else process.stdout.write(`${JSON.stringify(result)}\n`);
       break;
     }
     case 'bind': {

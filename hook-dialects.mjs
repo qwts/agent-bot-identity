@@ -12,6 +12,7 @@
 
 // Events a hook can subscribe to, by creating agent-hooks/<event>/.
 export const CANONICAL_EVENTS = [
+  'spawn',
   'session-start',
   'session-end',
   'prompt-submit',

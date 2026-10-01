@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `agent-bot identity spawn` gives the child its own binding (#258,
+  agent-comms ADR-0008 decision 2). With a parent binding it asks the daemon's
+  `POST /v0/spawn`, which writes `<git-dir>/agent-bindings/<agentId>.json`, and
+  `identity spawn -- <command>` runs the command with `AGENT_BOT_BINDING` set to
+  it. Revoking a parent revokes its spawned descendants. With no binding the
+  command mints a claimed identity locally, as before.
 - The daemon vouches for bound souls (#254, agent-comms ADR-0008 decision 3).
   `POST /v0/vouch`, authenticated only by `x-agent-binding` (no bearer),
   returns a five-minute Ed25519 soul token

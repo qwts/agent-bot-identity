@@ -13,7 +13,7 @@
 // change rarely, not hooks, which change constantly.
 
 import process from 'node:process';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFile } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -260,6 +260,27 @@ export function runHooks({ dialectKey, event, payload, dir, env = process.env })
     results.push({ name, ...readVerdict(run) });
   }
   return combine(results, event);
+}
+
+// The comms CLI owns account pairing and refuses an unpaired join. Do not
+// inspect its private state or initiate pairing here. Keep this asynchronous:
+// join may call back into this daemon for the sibling vouch operation.
+export async function runSpawnHooks({ agentId, parent, binding, name, harness, cwd, env = process.env }) {
+  const childEnv = { ...env, AGENT_BOT_BINDING: binding, AGENT_BOT_ID: agentId,
+    QWTS_AGENT_ID: agentId, AGENT_BOT_PARENT_ID: parent, QWTS_AGENT_PARENT_ID: parent };
+  const warnings = [];
+  await new Promise((resolve) => {
+    execFile('agent-comms', ['join', '--name', name, '--harness', harness], {
+      cwd, env: childEnv, timeout: 10000, maxBuffer: 64 * 1024,
+    }, (error) => {
+      if (error && error.code !== 'ENOENT') warnings.push('agent-comms join failed (account must be paired)');
+      resolve();
+    });
+  });
+  const result = runHooks({ dialectKey: 'claude', event: 'spawn',
+    payload: { cwd, agentId, parent, name, harness }, dir: hooksDir(childEnv, cwd), env: childEnv });
+  if (result.decision !== 'allow') warnings.push(`spawn hook: ${result.reason}`);
+  return warnings.join('; ') || null;
 }
 
 export function main(argv = process.argv.slice(2), env = process.env) {

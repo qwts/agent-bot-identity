@@ -46,12 +46,13 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { assertPrivateGitDir, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
+import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
 import { listSouls, upsertIdentitySoul } from './agent-population.mjs';
 import {
   bindAgentLineage,
   ensureAgentIdentity,
+  mintAgentIdentity,
   readAgentIdentity,
   stateDirectory,
   validateAgentId,
@@ -60,6 +61,7 @@ import { createInteractionService } from './agent-interaction.mjs';
 import { mint } from './mint-token.mjs';
 import { recoverInteractionStore } from './agent-jobs.mjs';
 import { appendAuditReceipt, principalsFile, resolvePrincipal } from './agent-principals.mjs';
+import { runSpawnHooks } from './agent-hook.mjs';
 import { createWebLayer } from './agent-web.mjs';
 import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs';
 
@@ -224,6 +226,7 @@ export function createDaemonServer({
   token = randomBytes(32).toString('hex'),
   executor,
   mintImpl = mint,
+  spawnHook = runSpawnHooks,
   now = () => new Date(),
   // #253 replaces this with its persistent lookup. The default reads the
   // in-memory registry and does not change how bindings are stored.
@@ -279,7 +282,7 @@ export function createDaemonServer({
       }
       const authorization = req.headers.authorization ?? '';
       const presented = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
-      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/credential'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
+      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/credential', 'POST /v0/spawn'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
         sendJson(res, 401, { error: 'missing or invalid daemon token' });
         return;
       }
@@ -329,6 +332,39 @@ export function createDaemonServer({
         case 'POST /v0/bind': {
           const body = parseJsonBody(await readBody(req));
           sendJson(res, 200, bindWorktreeConversation({ body, bindings, env, home, config, now }));
+          return;
+        }
+        case 'POST /v0/spawn': {
+          const source = requireBinding(req, bindings);
+          const body = parseJsonBody(await readBody(req));
+          const stateDir = stateDirectory({ env, home });
+          const parent = readAgentIdentity(source.agentId, { stateDir });
+          if ((body.parent && body.parent !== source.agentId)
+            || (body.app && body.app !== parent.github.appSlug)) {
+            throw Object.assign(new Error('spawn cannot override parent authority'), { statusCode: 403 });
+          }
+          const harness = body.harness ?? source.harness ?? parent.harness ?? 'unknown';
+          const name = body.name ?? 'child';
+          for (const value of [name, harness]) {
+            if (typeof value !== 'string' || !value || value.length > 100 || /[\u0000-\u001f\u007f]/.test(value)) {
+              throw Object.assign(new Error('invalid spawn name or harness'), { statusCode: 400 });
+            }
+          }
+          const identity = mintAgentIdentity({
+            appSlug: parent.github.appSlug, botUid: parent.github.botUid, harness,
+            transcript: body.transcript, parentId: source.agentId,
+            team: body.team ?? parent.team, squad: body.squad ?? parent.squad,
+            type: body.type ?? 'agent', level: body.level, subjects: body.subjects ?? [], stateDir, now,
+          });
+          bindings.bind({ agentId: identity.id, parent: source.agentId, spawnedBy: source.bindingHash,
+            worktree: source.worktree, gitDir: source.gitDir, app: parent.github.appSlug,
+            harness, transcript: identity.transcript });
+          const result = { agentId: identity.id, parent: source.agentId,
+            binding: childBindingPath(source.gitDir, identity.id) };
+          let warning;
+          try { warning = await spawnHook({ ...result, name: body.name ?? identity.id, harness, cwd: source.worktree, env }); }
+          catch { warning = 'spawn hook failed'; }
+          sendJson(res, 200, { ...result, ...(warning ? { warning } : {}) });
           return;
         }
         case 'GET /v0/binding': {
