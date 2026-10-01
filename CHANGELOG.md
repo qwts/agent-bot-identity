@@ -10,6 +10,12 @@
   updates. Nothing consumes the gates yet: qwts machines should set both
   to `true` before the add-ons start honouring them (#280, #281).
 
+- Soul package format, version 1 (#283, ADR-0275 decisions 1 to 3).
+  `docs/soul-package.md` specifies `soul.json`, the package layout, how
+  unknown files are kept, and the canonical revision hash, with fixed test
+  vectors. `agent-bot soul pack validate PATH` checks a package and prints
+  its revision. Nothing runs packages yet.
+
 ## 0.8.0
 
 - `agent-bot daemon pair-comms` prints the broker's pairing state and the
