@@ -112,7 +112,9 @@ export function attachWakeEndpoint(server, { lookupBinding, pingIntervalMs = 30_
     const remove = () => { clearIntervalImpl(timer); warmPool.remove(agentId, socket); };
     // `on`, not `once`: a second error event with no listener would crash the daemon.
     socket.once('close', remove);
-    socket.once('end', remove);
+    // The HTTP server allows half-open sockets; a client that hangs up must
+    // not leave the daemon holding its side open.
+    socket.once('end', () => { remove(); socket.destroy(); });
     socket.on('error', () => { remove(); socket.destroy(); });
     warmPool.send(agentId, { event: 'ready', agentId });
   });

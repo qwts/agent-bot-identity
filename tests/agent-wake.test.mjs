@@ -98,3 +98,19 @@ test('wake listener responds to server ping and is removed after two missed pong
     assert.equal(f.pool.has(ID), false);
   } finally { await f.close(); }
 });
+
+test('a client that hangs up leaves no half-open socket on the daemon', async () => {
+  const f = await fixture();
+  try {
+    await handshake(f.socket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(f.pool.has(ID), true);
+    f.socket.end();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(f.pool.has(ID), false);
+    // server.close() only completes once the daemon's side is gone too.
+    await new Promise((resolve) => { f.server.close(resolve); });
+  } finally {
+    f.socket.destroy();
+  }
+});
