@@ -147,6 +147,12 @@ function narrowsRosterScope(current, next) {
   return isDeepStrictEqual(current, unscoped);
 }
 
+function sameProfileProjection(current, next) {
+  const { features: _currentFeatures, ...currentProjection } = current;
+  const { features: _nextFeatures, ...nextProjection } = next;
+  return isDeepStrictEqual(currentProjection, nextProjection);
+}
+
 // A config that is purely the projection of an older published profile
 // carries no local edits, so a newer profile replaces it: the roster
 // evolves (identities added, retired, defaults moved) without every
@@ -163,6 +169,7 @@ function publishBootstrapConfig({
   config,
   sourceDescription,
   conflictCode = null,
+  preserveLocalFeatures = false,
   home = homedir(),
   env = process.env,
   lstat = lstatSync,
@@ -184,7 +191,7 @@ function publishBootstrapConfig({
       throw new Error(`${destination} exists and is not a regular agent-bot config file`);
     }
     const current = loadConfig({ home, env: { ...env, AGENT_BOT_CONFIG: destination } });
-    if (isDeepStrictEqual(current, config)) {
+    if (isDeepStrictEqual(current, config) || (preserveLocalFeatures && isProjectedRuntimeConfig(current) && sameProfileProjection(current, config))) {
       return { config: current, path: destination, updated: false };
     }
     // Adding a roster scope to an unscoped config projected from the same
@@ -193,7 +200,8 @@ function publishBootstrapConfig({
     // one; both are rewritten in place. Removing or changing a scope, or any
     // difference in a config that carries local edits, stays a conflict
     // that needs explicit reconciliation.
-    if (!narrowsRosterScope(current, config) && !advancesProjectedProfile(current, config)) {
+    const advancingProfile = advancesProjectedProfile(current, config);
+    if (!narrowsRosterScope(current, config) && !advancingProfile) {
       if (conflictCode) {
         throw new OrganizationProfileError(
           conflictCode,
@@ -203,6 +211,12 @@ function publishBootstrapConfig({
       throw new Error(
         `${destination} conflicts with ${sourceDescription}; move it aside or reconcile it explicitly`,
       );
+    }
+    // Feature gates are local add-on choices, not organization-profile edits.
+    // Preserve them while advancing the profile projection; an explicit
+    // --config source carries its own gate choices.
+    if (preserveLocalFeatures && advancingProfile && current.features !== undefined) {
+      config = { ...config, features: current.features };
     }
   }
 
@@ -254,6 +268,7 @@ export function installBootstrapProfile({
     config,
     sourceDescription: 'organization profile',
     conflictCode: 'profile-config-conflict',
+    preserveLocalFeatures: true,
     home,
     env,
     ...dependencies,

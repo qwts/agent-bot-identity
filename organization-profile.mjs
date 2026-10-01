@@ -402,7 +402,7 @@ function profileFromRuntimeConfig(config) {
 // not projections and are never overwritten.
 export function isProjectedRuntimeConfig(config) {
   if (!config || typeof config !== 'object' || !Object.hasOwn(config, 'profile')) return false;
-  const { scope, ...unscoped } = config;
+  const { scope, features, ...unscoped } = config;
   try {
     return isDeepStrictEqual(organizationProfileToConfig(profileFromRuntimeConfig(unscoped)), unscoped);
   } catch {
