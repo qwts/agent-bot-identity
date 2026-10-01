@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.8.0
+
+- `agent-bot daemon pair-comms` prints the broker's pairing state and the
+  owner approval code. The comms client read results under a `result` key,
+  but the broker replies `{ ok: true, ...result }`, so every request's result
+  came back empty and pairing printed `undefined`. The test stubs now speak
+  the broker's real reply shape.
+
 - Binding proofs (#270, agent-comms ADR-0008 decision 3 as amended). Clients
   no longer send the binding secret: each request carries a one-time
   `x-agent-binding-proof` (`v1.<keyId>.<ts>.<nonce>.<mac>`), an HMAC keyed by
