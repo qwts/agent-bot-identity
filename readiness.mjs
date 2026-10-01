@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { inspectAgentSpace, resolveSpacesHome } from './agent-space.mjs';
 import { listSouls, populationFile } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
-import { apiBase, gateStatus, loadConfig, rosterScope, slugForHarness } from './config.mjs';
+import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness } from './config.mjs';
 import { inspectAppCredentials } from './credential-reconciler.mjs';
 import { configuredAccountIdentity, accountName, detectHarness, HARNESSES } from './detect-harness.mjs';
 import { inspectClaudeWorktreeAdapter } from './sync-hooks.mjs';
@@ -414,31 +414,45 @@ function worktreeBindingSummaryCheck({ home, env, roster }) {
       evidence: { active: 0, by_app: {}, not_in_roster: [] },
     });
   }
-  // Every census row carries an appSlug — normalizeSoul rejects one without it,
-  // so an unpinned soul is not a state this document can represent. Count
-  // checkouts, not souls: a soul may hold several linked worktrees, and counting
-  // one per soul would undercount the thing this check summarizes.
+  // Count checkouts, not souls: a soul may hold several linked worktrees.
+  // A null appSlug is a soul with no GitHub App (#280). Those checkouts are
+  // counted in without_app and are not compared with the roster.
   const byApp = new Map();
   let checkoutCount = 0;
+  let withoutApp = 0;
   for (const soul of souls) {
     const worktrees = Array.isArray(soul.worktrees) && soul.worktrees.length > 0
       ? soul.worktrees
       : [null];
     for (const _worktree of worktrees) {
-      byApp.set(soul.appSlug, (byApp.get(soul.appSlug) ?? 0) + 1);
       checkoutCount += 1;
+      if (!soul.appSlug) {
+        withoutApp += 1;
+        continue;
+      }
+      byApp.set(soul.appSlug, (byApp.get(soul.appSlug) ?? 0) + 1);
     }
   }
   // Same rule as the current-worktree check: an empty roster is an unconfigured
-  // machine, not a machine where every App is acceptable.
+  // machine, not a machine where every App is acceptable. Souls with no App
+  // are not an unconfigured roster.
   const known = roster ?? [];
   const evidence = {
     active: souls.length,
     checkouts: checkoutCount,
     by_app: Object.fromEntries([...byApp.entries()].sort(([a], [b]) => a.localeCompare(b))),
+    without_app: withoutApp,
     not_in_roster: known.length === 0 ? [] : [...byApp.keys()].filter((slug) => !known.includes(slug)).sort(),
     roster_configured: known.length > 0,
   };
+  if (byApp.size === 0) {
+    return readinessCheck({
+      id: 'worktree.binding_summary',
+      status: 'ready',
+      message: `${checkoutCount} checkout(s) have no GitHub App`,
+      evidence,
+    });
+  }
   if (known.length === 0) {
     return readinessCheck({
       id: 'worktree.binding_summary',
@@ -450,10 +464,13 @@ function worktreeBindingSummaryCheck({ home, env, roster }) {
     });
   }
   if (evidence.not_in_roster.length === 0) {
+    const message = withoutApp > 0
+      ? `${checkoutCount - withoutApp} checkout(s) are bound to a rostered App; ${withoutApp} have no GitHub App`
+      : `every checkout is bound to a rostered App (${checkoutCount})`;
     return readinessCheck({
       id: 'worktree.binding_summary',
       status: 'ready',
-      message: `every checkout is bound to a rostered App (${checkoutCount})`,
+      message,
       evidence,
     });
   }
@@ -1444,6 +1461,7 @@ function isHttpsRemote(value) {
 }
 
 function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
+  const githubIdentityEnabled = isGateEnabled('github-identity', { env, home, config });
   let gitDir;
   let commonDir;
   try {
@@ -1498,6 +1516,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
     status: 'ready',
     message: primary ? 'primary checkout' : 'linked worktree',
   })];
+  const noAppAddon = !githubIdentityEnabled && !slug && !slugFailed;
   try {
     if (slugFailed) resolveAgentSlug({ env, cwd, config, git: run, detect: false });
   } catch (error) {
@@ -1511,7 +1530,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
       evidence: { git_error: safeGitErrorCode(error) },
     }));
   }
-  if (!slug) {
+  if (!slug && !noAppAddon) {
     if (!slugFailed) {
       checks.push(readinessCheck({
         id: 'worktree.app',
@@ -1521,7 +1540,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
         action: 'run: agent-bot setup-worktree <app-slug>',
       }));
     }
-  } else {
+  } else if (slug) {
     let pin = null;
     let pinError = null;
     try {
@@ -1560,6 +1579,10 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
     }
   }
 
+  if (noAppAddon) {
+    // This checkout intentionally has no GitHub attribution, signing policy,
+    // hooks, remote rewrite, or App credential helper.
+  } else {
   const name = probe(['config', '--worktree', '--get', 'user.name']);
   const email = probe(['config', '--worktree', '--get', 'user.email']);
   const attributionError = name.error ?? email.error;
@@ -1578,6 +1601,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
       action: identityReady ? null : 'run: agent-bot setup-worktree',
       evidence: identityReady ? { app_slug: slug } : {},
     }));
+  }
 
   let agentId = null;
   let agentIdError = null;
@@ -1653,6 +1677,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
     }
   }
 
+  if (!noAppAddon) {
   // `git remote get-url` exits 2 for a remote that does not exist; that is the
   // deterministic "no origin" answer, not an abnormal failure.
   const fetchUrls = probe(['remote', 'get-url', '--all', 'origin'], { absentStatuses: [1, 2] });
@@ -1719,6 +1744,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
         : 'credential helper reset/App binding is missing, reordered, or contains fallback helpers',
       action: helperReady ? null : 'run: agent-bot setup-worktree',
     }));
+  }
 
   return {
     status: checks.some((check) => check.status === 'failed') ? 'not_ready' : 'ready',

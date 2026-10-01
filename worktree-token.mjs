@@ -7,8 +7,9 @@
 //   0 + token on stdout  -> a bot identity resolved, token ready
 //   0 + empty stdout     -> no bot identity here: the human persona (delegate
 //                           mode, ENG-0339), and the shim runs stock gh
-//   non-zero             -> a bot identity resolved but the mint FAILED; caller
-//                           must abort rather than fall back to the human
+//   non-zero             -> a bot identity resolved but the mint FAILED, or
+//                           github-identity is off; caller must abort rather
+//                           than fall back to the human
 //
 // Identity is the shared resolver's answer (resolve-agent.mjs): explicit
 // GH_AGENT_APP, then the checkout's pin, then the account — with the
@@ -30,7 +31,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { mint } from './mint-token.mjs';
 import { configuredAccountIdentity, accountName, detectAgentHarness } from './detect-harness.mjs';
-import { loadConfig } from './config.mjs';
+import { isGateEnabled, loadConfig } from './config.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { stateDirectory } from './agent-identity.mjs';
 
@@ -79,6 +80,12 @@ function cachePath(gitDir, slug) {
 }
 
 async function main() {
+  if (process.argv.includes('--account-slug')
+      && !isGateEnabled('github-identity', { env: process.env, home: process.env.HOME })) return;
+  if (!isGateEnabled('github-identity', { env: process.env, home: process.env.HOME })) {
+    console.error('worktree-token: github-identity is off — refusing GitHub credentials');
+    process.exit(1);
+  }
   // Agent-process detection is intentionally independent of the current
   // repository. The gh shim uses it for the Codex desktop compatibility path.
   if (process.argv.includes('--agent-slug')) {

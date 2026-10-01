@@ -88,6 +88,7 @@ function writeConfigSource(fixture, apiBase) {
     apps: { codex: SLUG },
     owner: 'test-owner',
     apiBase,
+    features: { 'github-identity': true, 'persona-accounts': true },
   }));
   return source;
 }

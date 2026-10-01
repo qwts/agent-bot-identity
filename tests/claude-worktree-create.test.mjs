@@ -224,6 +224,7 @@ test('concurrent user-level Claude adapters share only the same bound session (#
     }),
     scope: { apps: [app] },
     owner: 'test-owner',
+    features: { 'github-identity': true },
     settings: { daemonPreference: 'off' },
   };
   mkdirSync(join(home, '.config', 'agent-bot'), { recursive: true });

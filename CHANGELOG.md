@@ -12,6 +12,14 @@
   file from Agent Space is an explicit revision that records its source.
   `docs/soul-revisions.md` documents the format and commands.
 
+- Souls no longer require a GitHub App (#280, ADR-0274). With
+  `github-identity` off, setup, bind, spawn, vouch, and wake work with an
+  identity that has no `github` field. Warm sockets work without GitHub;
+  cold ACP wake is reported unsupported until ACP can launch without an App.
+  GitHub metadata, credentials, and the `gh` shim are opt-in. qwts machines must set
+  `features.github-identity: true` and `features.persona-accounts: true`
+  before upgrading to keep their existing behavior.
+
 - `agent-bot sop` reads `~/.config/agent-sop/config.toml` (ENG-0355 as
   amended 2026-09-16) and resolves each ref to a commit (#282, ADR-0274
   decision 4). It reports the org, sop, and comms repositories and what

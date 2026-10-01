@@ -14,7 +14,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
-import { loadConfig, scopeConfigToApps } from './config.mjs';
+import { isGateEnabled, loadConfig, scopeConfigToApps } from './config.mjs';
 import { reconcileAppCredentials } from './credential-reconciler.mjs';
 import { installAgentBot, installationPaths, isManagedExecutable } from './install.mjs';
 import { installGhShim } from './install-gh-shim.mjs';
@@ -326,6 +326,7 @@ export async function bootstrap(options, {
   installRuntime = installAgentBot,
   installShim = installGhShim,
   reconcileCredentials = reconcileAppCredentials,
+  gate = isGateEnabled,
   verifyInstalled = assertInstalledRuntime,
   run = runInstalled,
   collect = collectReadiness,
@@ -364,6 +365,7 @@ export async function bootstrap(options, {
   let credentialSlugs = null;
   let operationFailure = null;
   let reachedCredentialPhase = false;
+  let githubIdentityEnabled = false;
 
   const fail = (failureScope, id, code, message, action, evidence = {}) => {
     operationFailure = {
@@ -404,6 +406,10 @@ export async function bootstrap(options, {
     }
 
     if (!operationFailure) {
+      githubIdentityEnabled = gate('github-identity', { env, home, config });
+    }
+
+    if (!operationFailure && githubIdentityEnabled) {
       try {
         credentialSlugs = configuredAppSlugs(config, options.apps);
       } catch {
@@ -438,7 +444,7 @@ export async function bootstrap(options, {
       }
     }
 
-    if (!operationFailure) {
+    if (!operationFailure && githubIdentityEnabled) {
       reachedCredentialPhase = true;
       try {
         credentialResults = await reconcileCredentials({
@@ -461,7 +467,7 @@ export async function bootstrap(options, {
 
     const credentialsFailed = credentialResults?.some((result) =>
       result.local.status === 'failed' || result.live.status === 'failed');
-    if (!operationFailure && !credentialsFailed && options.withGhShim) {
+    if (!operationFailure && !credentialsFailed && githubIdentityEnabled && options.withGhShim) {
       try {
         installShim({ home, env });
       } catch {
@@ -511,7 +517,7 @@ export async function bootstrap(options, {
       explicitApps: options.apps,
       home,
       env,
-      expectedGhShim: options.withGhShim,
+      expectedGhShim: githubIdentityEnabled && options.withGhShim,
       appResults: credentialResults,
       operationFailure,
       verifyApps: options.phase === 'worktree'

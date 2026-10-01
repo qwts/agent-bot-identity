@@ -42,7 +42,7 @@ import { join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { resolveAgentSlug, pinnedSlug, territoryHarness, AGENT_ID_KEYS } from './resolve-agent.mjs';
 import { mintBindToken, readBinding } from './agent-binding.mjs';
-import { loadConfig, apiBase, daemonPreference, githubHost, harnessForSlug } from './config.mjs';
+import { loadConfig, isGateEnabled, apiBase, daemonPreference, githubHost, harnessForSlug } from './config.mjs';
 import { daemonClient } from './agent-daemon.mjs';
 import { reconcileAppCredentials } from './credential-reconciler.mjs';
 import {
@@ -200,11 +200,134 @@ export async function bindSoul({ agentId, policy, client, ensureLocal, worktree 
   return { ...ensureLocal(), via: 'in-process' };
 }
 
+// Identity, census, space, and the rotation warning. GitHub attribution
+// (author, credential helper, hooks, app pin) stays with the caller so the
+// add-on-off path can bind a soul without writing bot git config.
+async function bindExecutionIdentity({
+  gitDir,
+  slug = null,
+  botUidValue = null,
+  harness = null,
+  config,
+  daemon,
+  useGithub,
+  gate: isEnabled,
+}) {
+  git('config', 'extensions.worktreeConfig', 'true');
+  let currentAgentId = null;
+  for (const key of AGENT_ID_KEYS) {
+    try {
+      currentAgentId = git('config', '--worktree', '--get', key) || null;
+      if (currentAgentId) break;
+    } catch {
+      /* try next key */
+    }
+  }
+  const sharedBinding = readBinding({ env: {}, gitDir });
+  const executionIdentity = sharedBinding ? readAgentIdentity(sharedBinding.agentId, { stateDir: stateDirectory() }) : ensureAgentIdentity({
+    currentId: currentAgentId,
+    appSlug: slug,
+    botUid: botUidValue,
+    harness: harness ?? (slug ? harnessForSlug(slug, config) : null),
+    transcript: discoverTranscript(),
+    fields: identityFieldsFromEnv(),
+    stateDir: stateDirectory(),
+    useGithub,
+    gate: isEnabled,
+  });
+  // The census row records the checkout it is pinned to, so doctor can name
+  // an active soul no checkout references (#192). Null in a bare repository.
+  let worktree = null;
+  try {
+    worktree = git('rev-parse', '--show-toplevel') || null;
+  } catch {
+    /* no working tree to record */
+  }
+  const space = await bindSoul({
+    agentId: executionIdentity.id,
+    policy: daemonPreference({ config }),
+    client: daemon ?? daemonClient(),
+    worktree,
+    ensureLocal: () => {
+      const local = initAgentSpace(executionIdentity.id);
+      upsertIdentitySoul(executionIdentity.id, local.path, { worktree });
+      return local;
+    },
+  });
+  if (currentAgentId && currentAgentId !== executionIdentity.id) {
+    process.stderr.write(
+      `setup-worktree: ${currentAgentId} is no longer pinned here; run doctor to check its other recorded checkouts\n`,
+    );
+  }
+  return { executionIdentity, space, worktree };
+}
+
+function bindTokenState({ gitDir, worktree, agentId }) {
+  try {
+    return prepareWorktreeBinding({
+      gitDir,
+      worktree: worktree ?? git('rev-parse', '--show-toplevel'),
+      agentId,
+    });
+  } catch {
+    return 'bind token unavailable';
+  }
+}
+
+async function configureSoulWithoutApp({ gitDir, config, daemon, gate: isEnabled }) {
+  const { executionIdentity, space, worktree } = await bindExecutionIdentity({
+    gitDir,
+    config,
+    daemon,
+    useGithub: false,
+    gate: isEnabled,
+  });
+  // Remove only GitHub-specific worktree state installed by this command.
+  // Preserve unrelated credential helpers and restore an earlier hooks path.
+  const getConfig = (key) => {
+    try { return git('config', '--worktree', '--get', key); } catch { return ''; }
+  };
+  const hooks = getConfig('agentBot.chainedHooksPath');
+  if (hooks) git('config', '--worktree', 'core.hooksPath', hooks);
+  for (const key of ['agentBot.app', 'agentBot.chainedHooksPath']) {
+    try { git('config', '--worktree', '--unset-all', key); } catch { /* absent */ }
+  }
+  if (getConfig('user.name').endsWith('[bot]')) {
+    for (const key of ['user.name', 'user.email']) {
+      try { git('config', '--worktree', '--unset-all', key); } catch { /* absent */ }
+    }
+  }
+  try {
+    const helpers = git('config', '--worktree', '--get-all', 'credential.helper').split('\n');
+    const isBotHelper = (value) => value.includes('git-credential-bot.mjs')
+      || /(?:^|\/)agent-bot(?:'|\") credential /.test(value);
+    const retained = helpers.filter((value) => !isBotHelper(value));
+    git('config', '--worktree', '--unset-all', 'credential.helper');
+    for (const helper of retained) git('config', '--worktree', '--add', 'credential.helper', helper);
+  } catch { /* no worktree helpers */ }
+  if (getConfig('commit.gpgsign') === 'false') {
+    try { git('config', '--worktree', '--unset-all', 'commit.gpgsign'); } catch { /* absent */ }
+  }
+  // core.hooksPath is removed only when it points at our installed hooks.
+  const hooksPath = getConfig('core.hooksPath');
+  if (hooksPath.includes('/share/agent-bot/hooks')) {
+    try { git('config', '--worktree', '--unset-all', 'core.hooksPath'); } catch { /* absent */ }
+  }
+  git('config', '--worktree', 'agentBot.agentId', executionIdentity.id);
+  const bindState = bindTokenState({ gitDir, worktree, agentId: executionIdentity.id });
+  const transcriptState = executionIdentity.transcript ? 'transcript bound' : 'transcript pending';
+  const spaceState = `${space.created ? 'space created' : 'space ready'}${space.via === 'daemon' ? ' via daemon' : ''}`;
+  process.stdout.write(
+    `worktree configured as ${executionIdentity.id} (${transcriptState}, ${spaceState}, ${bindState})\n`,
+  );
+}
+
 export async function main({
   reconcileCredentials = reconcileAppCredentials,
   rewriteOrigins = rewriteOriginUrls,
   resolveBotUid = botUid,
   daemon = null,
+  gate: isEnabled = isGateEnabled,
 } = {}) {
   const config = loadConfig();
   let gitDir;
@@ -212,6 +335,10 @@ export async function main({
     gitDir = git('rev-parse', '--absolute-git-dir');
   } catch {
     return; // not inside a git repository — nothing to do
+  }
+  if (!isEnabled('github-identity', { env: process.env, home: homedir(), config })) {
+    await configureSoulWithoutApp({ gitDir, config, daemon, gate: isEnabled });
+    return;
   }
   const previousSlug = pinnedSlug();
   const resolvedSlug = resolveAgentSlug({ explicit: process.argv[2], config, detect: false });
@@ -250,56 +377,19 @@ export async function main({
     /* no hooks path was configured */
   }
 
-  git('config', 'extensions.worktreeConfig', 'true');
-  let currentAgentId = null;
-  for (const key of AGENT_ID_KEYS) {
-    try {
-      currentAgentId = git('config', '--worktree', '--get', key) || null;
-      if (currentAgentId) break;
-    } catch {
-      /* try next key */
-    }
-  }
-  const sharedBinding = readBinding({ env: {}, gitDir });
-  const executionIdentity = sharedBinding ? readAgentIdentity(sharedBinding.agentId, { stateDir: stateDirectory() }) : ensureAgentIdentity({
-    currentId: currentAgentId,
-    appSlug: slug,
-    botUid: uid,
-    harness: harnessForSlug(slug, config),
-    transcript: discoverTranscript(),
-    fields: identityFieldsFromEnv(),
-    stateDir: stateDirectory(),
-  });
-  // The census row records the checkout it is pinned to, so doctor can name
-  // an active soul no checkout references (#192). Null in a bare repository.
-  let worktree = null;
-  try {
-    worktree = git('rev-parse', '--show-toplevel') || null;
-  } catch {
-    /* no working tree to record */
-  }
   // Initialize and register before writing any worktree attribution. A missing,
   // corrupt, or mismatched space or census fails closed without leaving the
   // worktree partially bound.
-  const space = await bindSoul({
-    agentId: executionIdentity.id,
-    policy: daemonPreference({ config }),
-    client: daemon ?? daemonClient(),
-    worktree,
-    ensureLocal: () => {
-      const local = initAgentSpace(executionIdentity.id);
-      upsertIdentitySoul(executionIdentity.id, local.path, { worktree });
-      return local;
-    },
+  const { executionIdentity, space, worktree } = await bindExecutionIdentity({
+    gitDir,
+    slug,
+    botUidValue: uid,
+    harness: harnessForSlug(slug, config),
+    config,
+    daemon,
+    useGithub: true,
+    gate: isEnabled,
   });
-  if (currentAgentId && currentAgentId !== executionIdentity.id) {
-    // A rotation is deliberate (a new conversation, an App change, a repin),
-    // but it leaves the previous soul active with no checkout: say so here,
-    // and doctor keeps saying so until it is retired.
-    process.stderr.write(
-      `setup-worktree: ${currentAgentId} is no longer pinned here; run doctor to check its other recorded checkouts\n`,
-    );
-  }
   git('config', '--worktree', 'agentBot.app', slug);
   git('config', '--worktree', 'agentBot.agentId', executionIdentity.id);
   git('config', '--worktree', 'user.name', `${slug}[bot]`);
@@ -328,12 +418,7 @@ export async function main({
   // no-op for identity. Best-effort like the token cache above: a sandboxed
   // harness that cannot write the (shared) private git dir still gets a fully
   // configured worktree — it simply cannot bind until a mint succeeds.
-  let bindState = 'bind token minted';
-  try {
-    bindState = prepareWorktreeBinding({ gitDir, worktree: worktree ?? git('rev-parse', '--show-toplevel'), agentId: executionIdentity.id });
-  } catch {
-    bindState = 'bind token unavailable';
-  }
+  const bindState = bindTokenState({ gitDir, worktree, agentId: executionIdentity.id });
 
   const transcriptState = executionIdentity.transcript ? 'transcript bound' : 'transcript pending';
   const spaceState = `${space.created ? 'space created' : 'space ready'}${space.via === 'daemon' ? ' via daemon' : ''}`;

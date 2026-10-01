@@ -50,6 +50,8 @@ function id(number) {
 
 function mintOptions(stateDir, overrides = {}) {
   return {
+    useGithub: true,
+    gate: () => true,
     appSlug: 'you-codex-agent',
     botUid: '308462948',
     harness: 'codex',
@@ -429,7 +431,7 @@ test('ensure binds the GH_AGENT_APP identity in any checkout (ENG-0339)', () => 
   const home = path.join(root, 'home');
   mkdirSync(home, { recursive: true });
   const configPath = path.join(root, 'config.json');
-  writeFileSync(configPath, JSON.stringify({ prefix: 'you' }));
+  writeFileSync(configPath, JSON.stringify({ prefix: 'you', features: { 'github-identity': true } }));
   const emptyGitConfig = path.join(root, 'gitconfig');
   writeFileSync(emptyGitConfig, '');
   const cleanEnv = { ...process.env };
@@ -526,6 +528,7 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
   writeFileSync(path.join(home, '.config', 'agent-bot', 'config.json'), JSON.stringify({
     apiBase: github.apiBase,
     owner: 'test-owner',
+    features: { 'github-identity': true },
   }));
   mkdirSync(repo);
   execFileSync('git', ['init', '--quiet', '--initial-branch=main'], { cwd: repo });

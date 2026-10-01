@@ -89,6 +89,8 @@ function agentId(value, name = 'id') {
 }
 
 function appSlug(value) {
+  // Null is a soul with no GitHub App (#280). A present value is still a slug.
+  if (value === undefined || value === null) return null;
   const slug = printableText('appSlug', value, { max: 100 });
   if (!APP_PATTERN.test(slug)) throw new Error('appSlug must be a GitHub App slug');
   return slug;
@@ -378,7 +380,7 @@ export function upsertIdentitySoul(
       // the recorded handle forward, not regenerate the derived default over
       // an operator-chosen one. A missing row derives fresh in normalizeSoul.
       name: existing?.name ?? null,
-      appSlug: identity.github.appSlug,
+      appSlug: identity.github?.appSlug ?? null,
       parentId: identity.parentId,
       status: identity.status,
       spacePath,
@@ -531,7 +533,7 @@ function formatRow(record) {
   return [
     record.name,
     record.id,
-    record.appSlug,
+    record.appSlug ?? '-',
     record.status,
     formatParent(record),
     record.lastSeen,

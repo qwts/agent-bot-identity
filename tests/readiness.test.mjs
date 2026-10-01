@@ -1485,7 +1485,8 @@ test('version skew is reported as a warning and explains the refusal', async () 
 test('the worktree summary is derived from the census without a git call per soul', async () => {
   const home = tempRoot();
   const census = join(home, '.local', 'state', 'agent-bot', 'population.json');
-  // Every census row carries an appSlug; normalizeSoul rejects one without it.
+  // These rows name a rostered App. A row may also omit appSlug (#280);
+  // normalizeSoul stores that absence as null.
   const row = (id, appSlug) => ({
     id,
     name: displayName(id),

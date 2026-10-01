@@ -24,6 +24,7 @@ import {
 } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildGhShim, GH_SHIM_MARKER } from './gh-shim.mjs';
+import { isGateEnabled } from './config.mjs';
 import { ensureBlock, zshStartupDir } from './shell-path.mjs';
 
 function optionalStat(path, lstat) {
@@ -341,6 +342,9 @@ export function installGhShim({
   stat = statSync,
   execFile = execFileSync,
 } = {}) {
+  if (!isGateEnabled('github-identity', { env, home })) {
+    return { skipped: true, reason: 'github-identity is off' };
+  }
   const binDir = join(home, '.config', 'agent-bot', 'bin');
   mkdir(binDir, { recursive: true });
   const shimPath = join(binDir, 'gh');
@@ -441,6 +445,10 @@ export function main(argv = process.argv.slice(2), { home = homedir() } = {}) {
   }
 
   const result = installGhShim({ home, codexGhPath: options.codexGhPath });
+  if (result.skipped) {
+    process.stdout.write(`${result.reason}; gh shim installation skipped\n`);
+    return result;
+  }
   process.stdout.write(`gh shim -> ${result.shimPath}\n`);
   process.stdout.write(`PATH shim -> ${result.localShim}\n`);
   if (result.codexShim) {

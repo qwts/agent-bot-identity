@@ -17,7 +17,7 @@ import process from 'node:process';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { mint } from './mint-token.mjs';
-import { loadConfig, githubHost } from './config.mjs';
+import { isGateEnabled, loadConfig, githubHost } from './config.mjs';
 
 export function parseCredentialRequest(text) {
   const request = {};
@@ -32,6 +32,7 @@ async function main() {
   const [slug, operation] = process.argv.slice(2);
   if (!slug) throw new Error('usage: git-credential-bot.mjs <app-slug> <get|store|erase>');
   if (operation !== 'get') return;
+  if (!isGateEnabled('github-identity')) throw new Error('github-identity add-on is off');
 
   const request = parseCredentialRequest(readFileSync(0, 'utf8'));
   const host = githubHost(loadConfig());
