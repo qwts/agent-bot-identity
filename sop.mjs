@@ -295,21 +295,43 @@ function callGit(runGit, args) {
   };
 }
 
-export function defaultRunGit(args) {
-  const result = spawnSync('git', args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-    timeout: 60_000,
-    maxBuffer: ORG_JSON_LIMIT,
+// Git runs hermetically: no ambient GIT_* overrides (GIT_CONFIG_COUNT pairs,
+// GIT_DIR and friends), no system or global config (so no url.*.insteadOf
+// rewrite or helper), and only the transports this read needs (https; never
+// ext:: or other command transports).
+export function sopGitEnv(base = process.env, { allowProtocols = 'https' } = {}) {
+  const env = {};
+  for (const [key, value] of Object.entries(base)) {
+    if (!key.startsWith('GIT_')) env[key] = value;
+  }
+  return Object.assign(env, {
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_ALLOW_PROTOCOL: allowProtocols,
+    GIT_TERMINAL_PROMPT: '0',
   });
-  return {
-    status: result.status ?? 1,
-    stdout: result.stdout ?? '',
-    stderr: result.stderr || (result.error ? result.error.message : ''),
-    error: result.error ?? null,
+}
+
+export function createRunGit({ env = process.env, allowProtocols = 'https' } = {}) {
+  const gitEnv = sopGitEnv(env, { allowProtocols });
+  return function runGit(args) {
+    const result = spawnSync('git', args, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: gitEnv,
+      timeout: 60_000,
+      maxBuffer: ORG_JSON_LIMIT,
+    });
+    return {
+      status: result.status ?? 1,
+      stdout: result.stdout ?? '',
+      stderr: result.stderr || (result.error ? result.error.message : ''),
+      error: result.error ?? null,
+    };
   };
 }
+
+export const defaultRunGit = createRunGit();
 
 function brief(text) {
   const line = String(text ?? '').split('\n').map((item) => item.trim()).find(Boolean) ?? '';
@@ -588,8 +610,10 @@ export function resolveSop(options = {}) {
   };
 }
 
+// org.json values are untrusted: fold line breaks and drop C0/C1 controls
+// and DEL so a value cannot move the cursor or restyle the terminal.
 function oneLine(value) {
-  return String(value).replace(/[\r\n]+/g, ' ');
+  return String(value).replace(/[\r\n]+/g, ' ').replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
 }
 
 function appendRepo(lines, role, repo) {

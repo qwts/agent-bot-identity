@@ -11,7 +11,8 @@ import {
   USAGE,
   assertSopGitCommand,
   configPathFor,
-  defaultRunGit,
+  createRunGit,
+  sopGitEnv,
   formatSopReport,
   gitSubcommand,
   loadSopConfig,
@@ -21,6 +22,7 @@ import {
   resolveSop,
 } from '../sop.mjs';
 
+const localRunGit = createRunGit({ allowProtocols: 'file' });
 const CLI = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
 const ORG = '11'.repeat(20);
 const SOP = '22'.repeat(20);
@@ -478,7 +480,7 @@ test('a local repository resolves through git ls-remote and only org.json is rea
       },
       runGit(args) {
         calls.push(args);
-        return defaultRunGit(args);
+        return localRunGit(args);
       },
       makeTemp() {
         scratch = mkdtempSync(join(root, 'read-'));
@@ -546,4 +548,31 @@ test('the sop command is routed and a missing default file exits 0', () => {
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('git runs hermetically: no ambient overrides, no system or global config, https only', () => {
+  const env = sopGitEnv({
+    PATH: '/bin', HOME: '/home/u', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'url.ext::sh -c evil.insteadOf',
+    GIT_CONFIG_VALUE_0: 'https://github.com/', GIT_DIR: '/elsewhere', GIT_SSH_COMMAND: 'evil',
+  });
+  assert.deepEqual(env, {
+    PATH: '/bin', HOME: '/home/u', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_ALLOW_PROTOCOL: 'https', GIT_TERMINAL_PROMPT: '0',
+  });
+});
+
+test('the human report strips terminal control characters from org.json values', () => {
+  const body = orgJson({
+    organization: { id: 'acme\u001b[2J', account: 'acme\u009b31m', profile: 'p\u0007.json' },
+  });
+  const git = fakeGit({ 'refs/heads/main': ORG }, body.replace('The SOP.', 'The \\u001b]0;pwned\\u0007SOP.'));
+  const report = resolveSop({
+    configText: 'schema_version = 1\n[repos]\norg = "acme/org@main"\n',
+    configPath: '/cfg/config.toml',
+    runGit: git.runGit,
+    makeTemp: () => mkdtempSync(join(tmpdir(), 'sop-ctl-')),
+  });
+  const text = formatSopReport(report);
+  assert.match(text, /acme\[2J/);
+  assert.doesNotMatch(text, /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/);
 });
