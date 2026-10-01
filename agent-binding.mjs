@@ -175,6 +175,19 @@ export function readBinding({ env = process.env, cwd = process.cwd(), gitDir, ui
 
 const hash = (secret) => createHash('sha256').update(secret).digest('hex');
 
+export function childBindingPath(gitDir, agentId) {
+  return path.join(gitDir, 'agent-bindings', `${validateAgentId(agentId)}.json`);
+}
+
+function entryPath(entry) {
+  if (!entry.spawnedBy) return path.join(entry.gitDir, 'agent-binding.json');
+  const directory = path.join(entry.gitDir, 'agent-bindings');
+  if (realpathSync(directory) !== path.join(realpathSync(entry.gitDir), 'agent-bindings')) {
+    throw fail('child binding directory must not be a symlink');
+  }
+  return childBindingPath(entry.gitDir, entry.agentId);
+}
+
 export function createBindingRegistry({ now = () => new Date(), file, account = process.env.USER ?? 'unknown' } = {}) {
   const loaded = file ? readPrivate(file) ?? {} : {};
   if (typeof loaded !== 'object' || Array.isArray(loaded)) throw fail('invalid binding store');
@@ -182,6 +195,7 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
     if (!/^[a-f0-9]{64}$/.test(key) || !entry || typeof entry !== 'object'
       || typeof entry.gitDir !== 'string' || !path.isAbsolute(entry.gitDir)
       || typeof entry.worktree !== 'string' || !path.isAbsolute(entry.worktree)
+      || (entry.spawnedBy !== undefined && !/^[a-f0-9]{64}$/.test(entry.spawnedBy))
       || !Number.isFinite(Date.parse(entry.createdAt)) || !Number.isFinite(Date.parse(entry.lastUsedAt))) {
       throw fail('invalid binding store');
     }
@@ -199,12 +213,15 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
   // cleanup, so an unreadable file or a moved worktree never blocks it.
   function remove(key, entry) {
     bindings.delete(key);
+    for (const [childKey, child] of bindings) {
+      if (child.spawnedBy === key) remove(childKey, child);
+    }
     if (!entry.gitDir) return;
     try {
-      const existing = readBinding({ env: {}, gitDir: entry.gitDir });
+      const existing = readBinding({ env: { AGENT_BOT_BINDING: entryPath(entry) } });
       if (existing && hash(existing.secret) === key) {
         assertPrivateGitDir(entry.gitDir, entry.worktree);
-        rmSync(path.join(entry.gitDir, 'agent-binding.json'), { force: true });
+        rmSync(entryPath(entry), { force: true });
       }
     } catch { /* left for the owner; the secret no longer authenticates */ }
   }
@@ -223,27 +240,40 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
       // so a binding whose file is gone, foreign, or moved is pruned.
       for (const [key, entry] of bindings) {
         try {
-          const existing = readBinding({ env: {}, gitDir: entry.gitDir });
-          if (!existing || hash(existing.secret) !== key) { bindings.delete(key); continue; }
+          const existing = readBinding({ env: { AGENT_BOT_BINDING: entryPath(entry) } });
+          if (!existing || hash(existing.secret) !== key) { remove(key, entry); continue; }
           assertPrivateGitDir(entry.gitDir, entry.worktree);
-          atomicWrite(path.join(entry.gitDir, 'agent-binding.json'), { ...existing, daemon });
+          atomicWrite(entryPath(entry), { ...existing, daemon });
         } catch {
-          bindings.delete(key);
+          remove(key, entry);
         }
       }
       save();
     },
-    bind({ agentId, worktree, gitDir, parent = null, app = null, transcript = null, harness = null }) {
+    bind({ agentId, worktree, gitDir, parent = null, app = null, transcript = null, harness = null, spawnedBy }) {
       expire();
+      if (spawnedBy) {
+        const source = bindings.get(spawnedBy);
+        if (!source || source.agentId !== parent || source.gitDir !== gitDir || source.worktree !== worktree) throw fail('invalid spawn parent binding', 403);
+      }
       if (bindings.size >= MAX_LIVE_BINDINGS) throw fail('too many live bindings', 429);
       const secret = randomBytes(32).toString('base64url');
       const createdAt = now().toISOString();
-      const entry = { agentId: validateAgentId(agentId), parent, gitDir, app, worktree, transcript, harness, createdAt, lastUsedAt: createdAt, boundAt: createdAt };
+      const entry = { ...(spawnedBy ? { spawnedBy } : {}), agentId: validateAgentId(agentId), parent, gitDir, app, worktree, transcript, harness, createdAt, lastUsedAt: createdAt, boundAt: createdAt };
       if (file && (!gitDir || !path.isAbsolute(gitDir) || !daemon)) throw fail('binding requires a private git dir and daemon URL');
       if (file) assertPrivateGitDir(gitDir, worktree);
       bindings.set(hash(secret), entry);
       save();
-      if (gitDir) atomicWrite(path.join(gitDir, 'agent-binding.json'), { v: 1, agentId, parent, account, daemon, secret });
+      try {
+        if (gitDir) {
+          if (spawnedBy) mkdirSync(path.join(gitDir, 'agent-bindings'), { recursive: true, mode: 0o700 });
+          atomicWrite(entryPath(entry), { v: 1, agentId, parent, account, daemon, secret });
+        }
+      } catch (error) {
+        bindings.delete(hash(secret));
+        save();
+        throw error;
+      }
       return secret;
     },
     resolve(secret) {
@@ -256,7 +286,7 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
       const previous = Date.parse(entry.lastUsedAt);
       entry.lastUsedAt = now().toISOString();
       if (now().getTime() - previous >= 60_000) save();
-      return { ...entry };
+      return { ...entry, bindingHash: hash(secret) };
     },
     release(secret) {
       if (typeof secret !== 'string') return false;

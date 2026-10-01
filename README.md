@@ -412,6 +412,24 @@ against the file on disk, **consumes it**, joins place and conversation into
 one identity, and writes `agent-binding.json` in the worktree's private git
 directory (0600, atomic replacement). It contains `{ v: 1, agentId, parent,
 account, daemon, secret }`; the secret is 32 random bytes encoded as base64url.
+`agent-bot identity spawn [--name <name>] [--harness <harness>]` requires
+that binding and calls `POST /v0/spawn` using `x-agent-binding`. It returns
+`{ agentId, parent, binding }` as JSON. The daemon mints the child under the
+parent's App and writes a separate 0600 file at
+`<git-dir>/agent-bindings/<childId>.json`, leaving the parent's binding intact.
+With `identity spawn -- <command...>`, the command receives the child file as
+`AGENT_BOT_BINDING` and child ID as `QWTS_AGENT_ID` (and `AGENT_BOT_ID`); its
+exit status becomes the CLI's status. Parent revocation or expiry cascades to
+all descendants through their recorded parent binding hashes (`spawnedBy`).
+
+After writing the file, the daemon fires the nonblocking `spawn` hook. Its
+built-in handler invokes `agent-comms join --name <name> --harness <harness>`
+with the child's environment, then runs executables in `agent-hooks/spawn/`.
+Absent `agent-comms` is skipped; join failures are reported without undoing
+the spawn. Account pairing remains enforced by `agent-comms join`; this hook
+never reads its private pairing state or initiates pairing. The injectable
+`spawnHook` is the integration seam; spawn needs no vouch implementation.
+
 The daemon stores only its SHA-256 hash and binding metadata in
 `~/.local/state/agent-bot/bindings.json` (0600).
 
