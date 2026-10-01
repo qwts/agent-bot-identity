@@ -28,6 +28,10 @@
   foreign, or moved is pruned rather than stopping the daemon. MCP `bind` and
   `setup-worktree` reuse an existing binding, MCP shutdown no longer revokes
   it, and `agent-bot binding revoke` (or `DELETE /v0/binding`) does.
+  Rebinding an already-bound worktree through `POST /v0/bind` requires the
+  same proof of place as a first bind (its binding secret in
+  `x-agent-binding`, or a bind token minted in that git dir), so a path and
+  the daemon bearer never yield another worktree's secret.
   `readBinding` is the one reader, honoring `AGENT_BOT_BINDING`.
 
 ## 0.7.2

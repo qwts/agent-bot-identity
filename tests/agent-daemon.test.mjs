@@ -422,13 +422,23 @@ test('bind consumes the worktree token and exchanges it for a live binding', asy
     assert.equal(body.worktree, worktree);
     assert.equal(body.repinRequired, false);
     assert.match(body.secret, /^[A-Za-z0-9_-]{43}$/);
-    // Consumed once; subsequent bind calls reuse the shared binding.
+    // Consumed once. Reuse hands back the live secret, so a caller holding
+    // only the daemon bearer and a path is refused: it must present the
+    // binding it read, or a bind token minted in that git dir.
     assert.equal(existsSync(path.join(gitDir, 'agent-bind-token.json')), false);
     const replay = await call('/v0/bind', {
       method: 'POST',
       body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
     });
-    assert.equal(replay.status, 200);
+    assert.equal(replay.status, 403);
+    assert.equal(JSON.stringify(await replay.json()).includes(body.secret), false);
+    const holder = await call('/v0/bind', {
+      method: 'POST',
+      headers: { 'x-agent-binding': body.secret },
+      body: { gitDir, transcript: { provider: 'codex', id: 'thread-daemon' } },
+    });
+    assert.equal(holder.status, 200);
+    assert.equal((await holder.json()).secret, body.secret);
   });
 });
 

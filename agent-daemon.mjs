@@ -331,7 +331,8 @@ export function createDaemonServer({
         }
         case 'POST /v0/bind': {
           const body = parseJsonBody(await readBody(req));
-          sendJson(res, 200, bindWorktreeConversation({ body, bindings, env, home, config, now }));
+          const presentedBinding = typeof req.headers['x-agent-binding'] === 'string' ? req.headers['x-agent-binding'] : null;
+          sendJson(res, 200, bindWorktreeConversation({ body, bindings, env, home, config, now, presentedBinding }));
           return;
         }
         case 'POST /v0/spawn': {
@@ -467,7 +468,7 @@ export function createDaemonServer({
 // joins the two halves into one identity. The body carries NO Agent ID: who
 // is binding is derived entirely from the consumed token record, so no caller
 // can bind as a worktree it cannot read.
-function bindWorktreeConversation({ body, bindings, env, home, config, now }) {
+function bindWorktreeConversation({ body, bindings, env, home, config, now, presentedBinding = null }) {
   // Validate the conversation half BEFORE consuming: a bind rejected for a
   // malformed request must leave the single-use token in place so the caller
   // can retry, while a wrong or replayed token still fails without consuming.
@@ -475,8 +476,21 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now }) {
   const existing = readBinding({ env: {}, gitDir: body.gitDir });
   if (existing) {
     const binding = bindings.resolve(existing.secret);
-    if (binding && body.parentId && body.parentId !== binding.parent) throw Object.assign(new Error('identity already records a different parent'), { statusCode: 409 });
-    if (binding && binding.gitDir === body.gitDir) return { schemaVersion: SCHEMA_VERSION, ...binding, secret: existing.secret, repinRequired: false };
+    if (binding && binding.gitDir === body.gitDir) {
+      // Reuse hands back a live secret, so the caller must prove it can read
+      // this git dir, exactly as a first bind does: present the binding it
+      // read, or a bind token minted there. A path and the daemon bearer
+      // alone must never yield another worktree's secret.
+      const pending = readBindToken(body.gitDir);
+      const holdsBinding = presentedBinding !== null && tokensMatch(existing.secret, presentedBinding);
+      // A matching token proves place without being spent, so a redundant
+      // token survives reuse.
+      const holdsToken = pending !== null && typeof body.token === 'string' && tokensMatch(pending.token, body.token);
+      if (!holdsBinding && !holdsToken) throw Object.assign(new Error('this worktree is already bound; present its binding'), { statusCode: 403 });
+      if (!holdsBinding) assertPrivateGitDir(body.gitDir, pending.worktree);
+      if (body.parentId && body.parentId !== binding.parent) throw Object.assign(new Error('identity already records a different parent'), { statusCode: 409 });
+      return { schemaVersion: SCHEMA_VERSION, ...binding, secret: existing.secret, repinRequired: false };
+    }
   }
   const transcript = body.transcript;
   if (!transcript || typeof transcript !== 'object' || Array.isArray(transcript)
