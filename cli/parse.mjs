@@ -22,6 +22,7 @@ const PUBLIC_COMMANDS = new Set([
   'signed-commit',
   'secret',
   'skill',
+  'sop',
 ]);
 
 const INTERNAL_COMMANDS = new Set([

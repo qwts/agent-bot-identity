@@ -77,7 +77,7 @@ for. `agent-bot skill path` prints the installed release's copy of this skill.
 
 | Class | Commands | Retry |
 |---|---|---|
-| read-only | `--help`, `doctor`, `skill path`, `population list`, `space path`, `signed-commit --dry-run`, `secret get` | Safe to repeat. |
+| read-only | `--help`, `doctor`, `sop`, `skill path`, `population list`, `space path`, `signed-commit --dry-run`, `secret get` | Safe to repeat. |
 | local-write | `bootstrap`, `setup-worktree`, `install`, `install-gh-shim`, `daemon disable`, `ensure-private-key`, `space ensure` | Converge on rerun; confirm with `doctor`. |
 | remote-write | `mint-token` | Each run mints a new short-lived token; repeating is safe. |
 | remote-write | `signed-commit` | Never blindly rerun. Follow the printed recovery in [verified-publish.md](references/verified-publish.md), and inspect the remote branch head before any second attempt. |

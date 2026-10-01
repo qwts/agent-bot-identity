@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `agent-bot sop` reads `~/.config/agent-sop/config.toml` (ENG-0355 as
+  amended 2026-09-16) and resolves each ref to a commit (#282, ADR-0274
+  decision 4). It reports the org, sop, and comms repositories and what
+  the org repository's `org.json` pins. With no config file it reports
+  that no SOP is in effect and exits 0. Fetched content is reported only:
+  the command does not clone, check out, apply, or execute it.
+
 - `agent-bot daemon pair-comms` now pairs with this account's one-account
   agent-comms broker when `--broker` is omitted (#286, ADR-0059 decision 3).
   Private custody requires owned 0700 rendezvous/proof directories and a
