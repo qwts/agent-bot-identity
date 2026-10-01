@@ -8,6 +8,7 @@ import {
   bindTokenPath,
   consumeBindToken,
   createBindingRegistry,
+  lookupBinding,
   mintBindToken,
   readBindToken,
 } from '../agent-binding.mjs';
@@ -177,4 +178,44 @@ test('abandoned bindings idle out — the cap counts conversations, not history'
   assert.equal(registry.resolve(fresh).agentId, AGENT_ID);
   assert.equal(registry.resolve(secrets[0]).agentId, AGENT_ID);
   assert.equal(registry.resolve(secrets[1]), null);
+});
+
+test('lookupBinding returns the live soul and stamps lastUsedAt (#254)', () => {
+  let clock = new Date('2026-08-12T08:00:00.000Z');
+  const registry = createBindingRegistry({ now: () => clock });
+  const secret = registry.bind({ agentId: AGENT_ID, worktree: '/wt' });
+  clock = new Date('2026-08-12T09:00:00.000Z');
+  const found = lookupBinding(registry, secret, { now: () => clock });
+  assert.equal(found.agentId, AGENT_ID);
+  // The persisted registry always records the parent, so null is a known null.
+  assert.equal(found.parent, null);
+  assert.equal(found.parentIsSet, true);
+  assert.equal(found.lastUsedAt, '2026-08-12T09:00:00.000Z');
+  assert.equal(registry.resolve(secret).lastUsedAt, '2026-08-12T09:00:00.000Z');
+  assert.equal(lookupBinding(registry, 'f'.repeat(64), { now: () => clock }), null);
+  assert.equal(lookupBinding(registry, undefined, { now: () => clock }), null);
+});
+
+test('lookupBinding keeps an explicit parent and reports an idle binding as gone (#254)', () => {
+  let clock = new Date('2026-08-12T08:00:00.000Z');
+  const stored = {
+    agentId: AGENT_ID,
+    parent: null,
+    worktree: '/wt',
+    boundAt: '2026-08-12T08:00:00.000Z',
+  };
+  const registry = {
+    resolve(secret) {
+      return secret === 'known' ? stored : null;
+    },
+  };
+  const found = lookupBinding(registry, 'known', { now: () => clock });
+  assert.equal(found.parent, null);
+  assert.equal(found.parentIsSet, true);
+  assert.equal(stored.lastUsedAt, '2026-08-12T08:00:00.000Z');
+
+  const live = createBindingRegistry({ now: () => clock });
+  const secret = live.bind({ agentId: AGENT_ID, worktree: '/wt' });
+  clock = new Date(clock.getTime() + (30 * 24 * 60 * 60 * 1000) + 1);
+  assert.equal(lookupBinding(live, secret, { now: () => clock }), null);
 });
