@@ -1,8 +1,12 @@
+import { execFileSync } from 'node:child_process';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { createPublicKey, verify } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   assertLoopbackHost,
@@ -14,8 +18,9 @@ import {
   startDaemon,
   stopDaemon,
 } from '../agent-daemon.mjs';
+import { verifySoulToken, vouchKeyPath, vouchStateDir } from '../vouch.mjs';
 import { ensureAgentIdentity, stateDirectory } from '../agent-identity.mjs';
-import { mintBindToken } from '../agent-binding.mjs';
+import { mintBindToken, readBinding } from '../agent-binding.mjs';
 import {
   authorizeSouls,
   bindTransport,
@@ -56,8 +61,8 @@ function mintIdentity(env, { id = AGENT_ID } = {}) {
   });
 }
 
-async function withServer(env, run) {
-  const server = createDaemonServer({ env, home: '/nonexistent', config: {} });
+async function withServer(env, run, options = {}) {
+  const server = createDaemonServer({ env, home: '/nonexistent', config: {}, ...options });
   await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
   const port = server.address().port;
   const call = (pathname, { method = 'GET', body, token = server.token, headers = {} } = {}) =>
@@ -391,9 +396,10 @@ test('the client follows a daemon restart to its new port and token', async () =
 
 function mintWorktreeToken(env, root, { id = AGENT_ID } = {}) {
   const identity = mintIdentity(env, { id });
-  const gitDir = path.join(root, 'gitdir');
-  mkdirSync(gitDir, { recursive: true });
   const worktree = path.join(root, 'worktree');
+  mkdirSync(worktree, { recursive: true });
+  execFileSync('git', ['init', '-q', worktree]);
+  const gitDir = path.join(worktree, '.git');
   const record = mintBindToken({ gitDir, worktree, agentId: identity.id });
   return { identity, gitDir, worktree, record };
 }
@@ -415,14 +421,24 @@ test('bind consumes the worktree token and exchanges it for a live binding', asy
     assert.equal(body.agentId, AGENT_ID);
     assert.equal(body.worktree, worktree);
     assert.equal(body.repinRequired, false);
-    assert.match(body.secret, /^[0-9a-f]{64}$/);
-    // Consumed: the file is gone and a replay finds nothing to present.
+    assert.match(body.secret, /^[A-Za-z0-9_-]{43}$/);
+    // Consumed once. Reuse hands back the live secret, so a caller holding
+    // only the daemon bearer and a path is refused: it must present the
+    // binding it read, or a bind token minted in that git dir.
     assert.equal(existsSync(path.join(gitDir, 'agent-bind-token.json')), false);
     const replay = await call('/v0/bind', {
       method: 'POST',
       body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
     });
     assert.equal(replay.status, 403);
+    assert.equal(JSON.stringify(await replay.json()).includes(body.secret), false);
+    const holder = await call('/v0/bind', {
+      method: 'POST',
+      headers: { 'x-agent-binding': body.secret },
+      body: { gitDir, transcript: { provider: 'codex', id: 'thread-daemon' } },
+    });
+    assert.equal(holder.status, 200);
+    assert.equal((await holder.json()).secret, body.secret);
   });
 });
 
@@ -588,7 +604,7 @@ test('releasing a binding hands the slot back and invalidates the secret', async
   });
 });
 
-test('a new conversation reusing the worktree binds a fresh identity and asks for a repin', async () => {
+test('a conversation reuses the persisted identity without consuming a new token', async () => {
   const { root, env } = scratchEnv();
   const { gitDir, worktree, record } = mintWorktreeToken(env, root);
   await withServer(env, async ({ call }) => {
@@ -603,9 +619,9 @@ test('a new conversation reusing the worktree binds a fresh identity and asks fo
     });
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.notEqual(body.agentId, AGENT_ID);
-    assert.equal(body.repinRequired, true);
-    assert.equal(body.soul.transcriptLocator.id, 'thread-later');
+    assert.equal(body.agentId, AGENT_ID);
+    assert.equal(body.repinRequired, false);
+    assert.equal(existsSync(path.join(gitDir, 'agent-bind-token.json')), true);
   });
 });
 
@@ -715,7 +731,7 @@ test('a mint failure after a verified binding still leaves a secret-free receipt
   }
 });
 
-test('a daemon restart drops every binding — re-binding takes a fresh mint', async () => {
+test('a daemon restart preserves binding authentication without a bearer', async () => {
   const { root, env } = scratchEnv();
   const { gitDir, worktree, record } = mintWorktreeToken(env, root);
   let secret;
@@ -727,9 +743,13 @@ test('a daemon restart drops every binding — re-binding takes a fresh mint', a
     secret = bound.secret;
   });
   await withServer(env, async ({ call }) => {
-    const stale = await call('/v0/binding', { headers: { 'x-agent-binding': secret } });
-    assert.equal(stale.status, 401);
-    // Fresh mint from the same worktree re-establishes the binding.
+    const stale = await call('/v0/binding', { token: '', headers: { 'x-agent-binding': secret } });
+    assert.equal(stale.status, 200);
+    const shared = readBinding({ env: {}, gitDir });
+    assert.equal(shared.secret, secret);
+    const direct = await fetch(`${shared.daemon}/v0/binding`, { headers: { 'x-agent-binding': secret } });
+    assert.equal(direct.status, 200);
+    // A redundant token survives reuse of the persisted binding.
     const again = mintBindToken({ gitDir, worktree, agentId: AGENT_ID });
     const rebound = await call('/v0/bind', {
       method: 'POST',
@@ -737,5 +757,281 @@ test('a daemon restart drops every binding — re-binding takes a fresh mint', a
     });
     assert.equal(rebound.status, 200);
     assert.equal((await rebound.json()).agentId, AGENT_ID);
+  });
+});
+
+// --- soul vouch (#254, ADR-0008 decision 3) ---
+
+const PARENT_ID = 'agent_22222222-2222-4222-8222-222222222222';
+const DAEMON_MODULE = fileURLToPath(new URL('../agent-daemon.mjs', import.meta.url));
+
+function vouchReceipts(env) {
+  const file = path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl');
+  if (!existsSync(file)) return [];
+  return readFileSync(file, 'utf8')
+    .trim()
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line))
+    .filter((receipt) => receipt.event === 'vouch');
+}
+
+test('POST /v0/vouch signs a soul token for the bound soul and no bearer (#254)', async () => {
+  const { root, env } = scratchEnv();
+  // A different transcript from the child: mintIdentity always records
+  // thread-daemon, and ensureAgentIdentity would otherwise reuse that row.
+  ensureAgentIdentity({
+    appSlug: 'you-codex-agent',
+    botUid: '308462948',
+    harness: 'codex',
+    transcript: { provider: 'codex', id: 'thread-parent' },
+    stateDir: stateDirectory({ env, home: '/nonexistent' }),
+    idFactory: () => PARENT_ID,
+    now: () => new Date('2026-08-12T08:00:00.000Z'),
+  });
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  let current = new Date('2026-08-12T08:00:00.000Z');
+  await withServer(env, async ({ call }) => {
+    const bound = await (await call('/v0/bind', {
+      method: 'POST',
+      body: {
+        gitDir,
+        token: record.token,
+        transcript: { provider: 'codex', id: 'thread-daemon' },
+        parentId: PARENT_ID,
+      },
+    })).json();
+
+    current = new Date('2026-08-12T08:05:00.000Z');
+    const anonymous = await call('/v0/health', { token: null });
+    assert.equal(anonymous.status, 401);
+
+    const res = await call('/v0/vouch', {
+      method: 'POST',
+      token: null,
+      body: {
+        aud: 'agent-comms',
+        account: 'not-the-os-user',
+        agentId: PARENT_ID,
+        parent: AGENT_ID,
+      },
+      headers: { 'x-agent-binding': bound.secret },
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(Object.keys(body).sort(), ['agentId', 'exp', 'parent', 'token']);
+    assert.equal(body.agentId, AGENT_ID);
+    assert.equal(body.parent, PARENT_ID);
+    const iat = Math.floor(current.getTime() / 1000);
+    assert.equal(body.exp, iat + 300);
+
+    const [version, payloadSegment, signatureSegment] = body.token.split('.');
+    assert.equal(version, 'v1');
+    assert.equal(body.token.split('.').length, 3);
+    const payload = JSON.parse(Buffer.from(payloadSegment, 'base64url').toString('utf8'));
+    assert.deepEqual(Object.keys(payload), ['v', 'aud', 'account', 'agentId', 'parent', 'iat', 'exp', 'nonce']);
+    assert.equal(payload.v, 1);
+    assert.equal(payload.aud, 'agent-comms');
+    assert.equal(payload.account, userInfo().username);
+    assert.notEqual(payload.account, 'not-the-os-user');
+    assert.equal(payload.agentId, AGENT_ID);
+    assert.equal(payload.parent, PARENT_ID);
+    assert.equal(payload.iat, iat);
+    assert.equal(payload.exp, iat + 300);
+    assert.equal(Buffer.from(payload.nonce, 'base64url').length, 16);
+    assert.equal(Buffer.from(signatureSegment, 'base64url').length, 64);
+
+    const printed = spawnSync(process.execPath, [DAEMON_MODULE, 'vouch-key'], {
+      encoding: 'utf8',
+      env: { ...process.env, ...env, HOME: root },
+    });
+    assert.equal(printed.status, 0, printed.stderr);
+    assert.match(printed.stdout, /^-----BEGIN PUBLIC KEY-----/);
+    assert.doesNotMatch(printed.stdout, /PRIVATE KEY/);
+    const publicKey = createPublicKey(printed.stdout);
+    assert.equal(
+      verify(null, Buffer.from(payloadSegment), publicKey, Buffer.from(signatureSegment, 'base64url')),
+      true,
+    );
+    // The signature covers the payload segment's bytes, not the decoded JSON
+    // and not the v1 prefix.
+    assert.equal(
+      verify(null, Buffer.from(`v1.${payloadSegment}`), publicKey, Buffer.from(signatureSegment, 'base64url')),
+      false,
+    );
+    assert.equal(verifySoulToken(body.token, printed.stdout, () => current)?.agentId, AGENT_ID);
+
+    const keyFile = vouchKeyPath(vouchStateDir({ env, home: '/nonexistent' }));
+    assert.equal(statSync(keyFile).mode & 0o777, 0o600);
+    assert.match(readFileSync(keyFile, 'utf8'), /^-----BEGIN PRIVATE KEY-----/);
+
+    const who = await call('/v0/binding', { headers: { 'x-agent-binding': bound.secret } });
+    assert.equal((await who.json()).binding.lastUsedAt, '2026-08-12T08:05:00.000Z');
+
+    const wrongBearer = await call('/v0/vouch', {
+      method: 'POST',
+      token: 'not-the-daemon-token',
+      body: { aud: 'agent-comms' },
+      headers: { 'x-agent-binding': bound.secret },
+    });
+    assert.equal(wrongBearer.status, 200);
+
+    const receipts = vouchReceipts(env);
+    assert.deepEqual(receipts.map((receipt) => receipt.decision), ['granted', 'granted']);
+    assert.equal(receipts[0].agentId, AGENT_ID);
+    assert.equal(receipts[0].at, '2026-08-12T08:05:00.000Z');
+    const audit = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8');
+    assert.equal(audit.includes(bound.secret), false);
+    assert.equal(audit.includes(body.token), false);
+    assert.equal(audit.includes(payload.nonce), false);
+  }, { now: () => current });
+});
+
+test('vouch refuses an unknown or idle-expired binding with unbound (#254)', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  let current = new Date('2026-08-12T08:00:00.000Z');
+  await withServer(env, async ({ call }) => {
+    const bound = await (await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
+    })).json();
+
+    const missing = await call('/v0/vouch', {
+      method: 'POST',
+      token: null,
+      body: { aud: 'agent-comms' },
+    });
+    assert.equal(missing.status, 401);
+    assert.deepEqual(await missing.json(), { error: 'unbound' });
+
+    const forged = await call('/v0/vouch', {
+      method: 'POST',
+      token: null,
+      body: { aud: 'agent-comms' },
+      headers: { 'x-agent-binding': 'f'.repeat(64) },
+    });
+    assert.equal(forged.status, 401);
+    assert.deepEqual(await forged.json(), { error: 'unbound' });
+
+    // Persisted bindings idle out after 30 days unused (#253).
+    current = new Date(current.getTime() + (30 * 24 * 60 * 60 * 1000) + 1);
+    const expired = await call('/v0/vouch', {
+      method: 'POST',
+      token: null,
+      body: { aud: 'agent-comms' },
+      headers: { 'x-agent-binding': bound.secret },
+    });
+    assert.equal(expired.status, 401);
+    assert.deepEqual(await expired.json(), { error: 'unbound' });
+
+    const receipts = vouchReceipts(env);
+    assert.deepEqual(receipts.map((receipt) => receipt.decision), ['denied', 'denied', 'denied']);
+    assert.equal(receipts.every((receipt) => receipt.agentId === undefined), true);
+    const audit = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8');
+    assert.equal(audit.includes(bound.secret), false);
+    assert.equal(audit.includes('f'.repeat(64)), false);
+  }, { now: () => current });
+});
+
+test('vouch refuses a bad audience before it touches the binding (#254)', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  await withServer(env, async ({ call }) => {
+    const bound = await (await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
+    })).json();
+    const bad = await call('/v0/vouch', {
+      method: 'POST',
+      token: null,
+      body: { aud: 'somewhere-else' },
+      headers: { 'x-agent-binding': bound.secret },
+    });
+    assert.equal(bad.status, 400);
+    assert.deepEqual(await bad.json(), { error: 'aud must be agent-comms' });
+    const missingAud = await call('/v0/vouch', { method: 'POST', token: null, body: {} });
+    assert.equal(missingAud.status, 400);
+    const notJson = await call('/v0/vouch', { method: 'POST', token: null, body: '{nope' });
+    assert.equal(notJson.status, 400);
+    const get = await call('/v0/vouch', { token: null });
+    assert.equal(get.status, 401);
+    assert.deepEqual(await get.json(), { error: 'missing or invalid daemon token' });
+    assert.equal(vouchReceipts(env).length, 0);
+    assert.equal(existsSync(vouchKeyPath(vouchStateDir({ env, home: '/nonexistent' }))), false);
+  });
+});
+
+test('a binding may vouch 60 times a minute and the next is refused (#254)', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  let current = new Date('2026-08-12T08:00:00.000Z');
+  await withServer(env, async ({ call }) => {
+    const bound = await (await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-vouch-rate' } },
+    })).json();
+    const vouch = () => call('/v0/vouch', {
+      method: 'POST',
+      token: null,
+      body: { aud: 'agent-comms' },
+      headers: { 'x-agent-binding': bound.secret },
+    });
+    for (let i = 0; i < 60; i += 1) {
+      const res = await vouch();
+      assert.equal(res.status, 200, `vouch ${i} returned ${res.status}`);
+    }
+    const limited = await vouch();
+    assert.equal(limited.status, 429);
+    assert.deepEqual(await limited.json(), { error: 'rate limited' });
+    current = new Date(current.getTime() + 59_999);
+    assert.equal((await vouch()).status, 429);
+    current = new Date(current.getTime() + 1);
+    const again = await vouch();
+    assert.equal(again.status, 200);
+
+    const receipts = vouchReceipts(env);
+    assert.equal(receipts.filter((receipt) => receipt.decision === 'granted').length, 61);
+    assert.equal(receipts.filter((receipt) => receipt.decision === 'rate-limited').length, 2);
+    const audit = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8');
+    assert.equal(audit.includes(bound.secret), false);
+  }, { now: () => current });
+});
+
+test('vouch uses the injected binding lookup and its parent (#254)', async () => {
+  const { env } = scratchEnv();
+  const seen = [];
+  await withServer(env, async ({ call }) => {
+    const missing = await call('/v0/vouch', {
+      method: 'POST',
+      token: null,
+      body: { aud: 'agent-comms' },
+      headers: { 'x-agent-binding': 'absent' },
+    });
+    assert.equal(missing.status, 401);
+    assert.deepEqual(await missing.json(), { error: 'unbound' });
+
+    const res = await call('/v0/vouch', {
+      method: 'POST',
+      token: null,
+      body: { aud: 'agent-comms' },
+      headers: { 'x-agent-binding': 'present' },
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.agentId, AGENT_ID);
+    assert.equal(body.parent, PARENT_ID);
+    assert.deepEqual(seen, ['absent', 'present']);
+  }, {
+    lookupBinding(secret) {
+      seen.push(secret);
+      if (secret !== 'present') return null;
+      return {
+        agentId: AGENT_ID,
+        parent: PARENT_ID,
+        parentIsSet: true,
+        boundAt: '2026-08-12T08:00:00.000Z',
+      };
+    },
   });
 });

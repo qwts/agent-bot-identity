@@ -12,6 +12,7 @@
 //   agent-bot daemon start           — detach a background `run`, wait healthy
 //   agent-bot daemon status [--json] — probe the recorded daemon
 //   agent-bot daemon stop            — terminate the recorded daemon
+//   agent-bot daemon vouch-key       — print the account Ed25519 public key (SPKI PEM)
 //
 // v0 scope per #41: register soul, space ensure, space path, population list.
 // No OAuth, no remote sync, no HTTPS — loopback is the boundary (#35).
@@ -30,22 +31,28 @@
 // service. /ui routes never see the bearer token — browser auth is a local
 // pairing ceremony — and they change nothing about the loopback boundary:
 // the same peer check runs before any /ui routing.
+//
+// POST /v0/vouch (#254, ADR-0008 decision 3) sits behind that loopback gate
+// but not the bearer. The caller presents a binding secret in
+// x-agent-binding and receives a five-minute Ed25519 soul token. The signing
+// key is created once per account; `daemon vouch-key` prints its SPKI form.
 
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { consumeBindToken, createBindingRegistry } from './agent-binding.mjs';
+import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
 import { listSouls, upsertIdentitySoul } from './agent-population.mjs';
 import {
   bindAgentLineage,
   ensureAgentIdentity,
+  mintAgentIdentity,
   readAgentIdentity,
   stateDirectory,
   validateAgentId,
@@ -54,10 +61,14 @@ import { createInteractionService } from './agent-interaction.mjs';
 import { mint } from './mint-token.mjs';
 import { recoverInteractionStore } from './agent-jobs.mjs';
 import { appendAuditReceipt, principalsFile, resolvePrincipal } from './agent-principals.mjs';
+import { runSpawnHooks } from './agent-hook.mjs';
 import { createWebLayer } from './agent-web.mjs';
+import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs';
 
 const SCHEMA_VERSION = 1;
 const MAX_BODY_BYTES = 64 * 1024;
+const VOUCH_LIMIT = 60;
+const VOUCH_WINDOW_MS = 60_000;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1']);
 const LOOPBACK_PEERS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 const HEALTH_TIMEOUT_MS = 1_500;
@@ -215,16 +226,37 @@ export function createDaemonServer({
   token = randomBytes(32).toString('hex'),
   executor,
   mintImpl = mint,
+  spawnHook = runSpawnHooks,
   now = () => new Date(),
+  // #253 replaces this with its persistent lookup. The default reads the
+  // in-memory registry and does not change how bindings are stored.
+  lookupBinding: lookupBindingOverride = null,
 } = {}) {
   // One interaction service per server so in-flight executions and their
   // cancellation controllers live exactly as long as the daemon.
   const interaction = createInteractionService({ env, home, config, executor, now });
-  // Live connection bindings (#94) exist only in this process, like the
-  // per-start bearer token: a restart drops them all, and re-binding takes a
-  // fresh worktree mint. Identity is derived from the binding on every
-  // request — never from a request parameter.
-  const bindings = createBindingRegistry({ now });
+  const bindings = createBindingRegistry({ now, file: path.join(vouchStateDir({ env, home }), 'bindings.json'), account: env.USER ?? process.env.USER ?? 'unknown' });
+  const findBinding = lookupBindingOverride
+    ?? ((secret) => lookupRegistryBinding(bindings, secret, { now }));
+  // Per-binding vouch window. The map stores sha256(secret), never the secret.
+  const vouchHits = new Map();
+  let vouchKey = null;
+  function signingKey() {
+    if (!vouchKey) vouchKey = loadOrCreateVouchKey(vouchStateDir({ env, home }));
+    return vouchKey.privateKey;
+  }
+  function allowVouch(secret) {
+    const key = createHash('sha256').update(secret, 'utf8').digest('hex');
+    const atMs = now().getTime();
+    const recent = (vouchHits.get(key) ?? []).filter((stamp) => atMs - stamp < VOUCH_WINDOW_MS);
+    if (recent.length >= VOUCH_LIMIT) {
+      vouchHits.set(key, recent);
+      return false;
+    }
+    recent.push(atMs);
+    vouchHits.set(key, recent);
+    return true;
+  }
   // The private web client (#59) rides the same server and the same loopback
   // peer check; it authenticates browsers with its own pairing-code cookie
   // sessions instead of the bearer token, which never reaches page script.
@@ -240,9 +272,17 @@ export function createDaemonServer({
         await web.handle(req, res, url);
         return;
       }
+      // Binding-authenticated and bearer-free (#254). Every other route still
+      // requires the per-start bearer below.
+      if (req.method === 'POST' && url.pathname === '/v0/vouch') {
+        await handleVouchRequest({
+          req, res, findBinding, allowVouch, signingKey, env, home, now,
+        });
+        return;
+      }
       const authorization = req.headers.authorization ?? '';
       const presented = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
-      if (!tokensMatch(token, presented)) {
+      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/credential', 'POST /v0/spawn'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
         sendJson(res, 401, { error: 'missing or invalid daemon token' });
         return;
       }
@@ -291,7 +331,41 @@ export function createDaemonServer({
         }
         case 'POST /v0/bind': {
           const body = parseJsonBody(await readBody(req));
-          sendJson(res, 200, bindWorktreeConversation({ body, bindings, env, home, config, now }));
+          const presentedBinding = typeof req.headers['x-agent-binding'] === 'string' ? req.headers['x-agent-binding'] : null;
+          sendJson(res, 200, bindWorktreeConversation({ body, bindings, env, home, config, now, presentedBinding }));
+          return;
+        }
+        case 'POST /v0/spawn': {
+          const source = requireBinding(req, bindings);
+          const body = parseJsonBody(await readBody(req));
+          const stateDir = stateDirectory({ env, home });
+          const parent = readAgentIdentity(source.agentId, { stateDir });
+          if ((body.parent && body.parent !== source.agentId)
+            || (body.app && body.app !== parent.github.appSlug)) {
+            throw Object.assign(new Error('spawn cannot override parent authority'), { statusCode: 403 });
+          }
+          const harness = body.harness ?? source.harness ?? parent.harness ?? 'unknown';
+          const name = body.name ?? 'child';
+          for (const value of [name, harness]) {
+            if (typeof value !== 'string' || !value || value.length > 100 || /[\u0000-\u001f\u007f]/.test(value)) {
+              throw Object.assign(new Error('invalid spawn name or harness'), { statusCode: 400 });
+            }
+          }
+          const identity = mintAgentIdentity({
+            appSlug: parent.github.appSlug, botUid: parent.github.botUid, harness,
+            transcript: body.transcript, parentId: source.agentId,
+            team: body.team ?? parent.team, squad: body.squad ?? parent.squad,
+            type: body.type ?? 'agent', level: body.level, subjects: body.subjects ?? [], stateDir, now,
+          });
+          bindings.bind({ agentId: identity.id, parent: source.agentId, spawnedBy: source.bindingHash,
+            worktree: source.worktree, gitDir: source.gitDir, app: parent.github.appSlug,
+            harness, transcript: identity.transcript });
+          const result = { agentId: identity.id, parent: source.agentId,
+            binding: childBindingPath(source.gitDir, identity.id) };
+          let warning;
+          try { warning = await spawnHook({ ...result, name: body.name ?? identity.id, harness, cwd: source.worktree, env }); }
+          catch { warning = 'spawn hook failed'; }
+          sendJson(res, 200, { ...result, ...(warning ? { warning } : {}) });
           return;
         }
         case 'GET /v0/binding': {
@@ -299,8 +373,7 @@ export function createDaemonServer({
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, binding });
           return;
         }
-        // The MCP server surrenders its binding when the connection closes,
-        // so the live-binding cap counts conversations rather than history.
+        // Explicit revocation invalidates the secret and removes its file.
         case 'DELETE /v0/binding': {
           if (!bindings.release(req.headers['x-agent-binding'] ?? '')) {
             throw Object.assign(new Error('missing or invalid agent binding'), { statusCode: 401 });
@@ -380,6 +453,10 @@ export function createDaemonServer({
       sendJson(res, failure.statusCode, { error: failure.message });
     }
   });
+  server.on('listening', () => {
+    const address = server.address();
+    bindings.rewrite(`http://${address.address === '::1' ? '[::1]' : '127.0.0.1'}:${address.port}`);
+  });
   server.token = token;
   return server;
 }
@@ -391,10 +468,30 @@ export function createDaemonServer({
 // joins the two halves into one identity. The body carries NO Agent ID: who
 // is binding is derived entirely from the consumed token record, so no caller
 // can bind as a worktree it cannot read.
-function bindWorktreeConversation({ body, bindings, env, home, config, now }) {
+function bindWorktreeConversation({ body, bindings, env, home, config, now, presentedBinding = null }) {
   // Validate the conversation half BEFORE consuming: a bind rejected for a
   // malformed request must leave the single-use token in place so the caller
   // can retry, while a wrong or replayed token still fails without consuming.
+  if (typeof body.gitDir !== 'string' || !path.isAbsolute(body.gitDir)) throw new Error('gitDir must be an absolute path');
+  const existing = readBinding({ env: {}, gitDir: body.gitDir });
+  if (existing) {
+    const binding = bindings.resolve(existing.secret);
+    if (binding && binding.gitDir === body.gitDir) {
+      // Reuse hands back a live secret, so the caller must prove it can read
+      // this git dir, exactly as a first bind does: present the binding it
+      // read, or a bind token minted there. A path and the daemon bearer
+      // alone must never yield another worktree's secret.
+      const pending = readBindToken(body.gitDir);
+      const holdsBinding = presentedBinding !== null && tokensMatch(existing.secret, presentedBinding);
+      // A matching token proves place without being spent, so a redundant
+      // token survives reuse.
+      const holdsToken = pending !== null && typeof body.token === 'string' && tokensMatch(pending.token, body.token);
+      if (!holdsBinding && !holdsToken) throw Object.assign(new Error('this worktree is already bound; present its binding'), { statusCode: 403 });
+      if (!holdsBinding) assertPrivateGitDir(body.gitDir, pending.worktree);
+      if (body.parentId && body.parentId !== binding.parent) throw Object.assign(new Error('identity already records a different parent'), { statusCode: 409 });
+      return { schemaVersion: SCHEMA_VERSION, ...binding, secret: existing.secret, repinRequired: false };
+    }
+  }
   const transcript = body.transcript;
   if (!transcript || typeof transcript !== 'object' || Array.isArray(transcript)
     || typeof transcript.id !== 'string' || transcript.id === '') {
@@ -419,6 +516,8 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now }) {
       throw Object.assign(new Error('parent Agent ID is unknown'), { statusCode: 409 });
     }
   }
+  const pending = readBindToken(body.gitDir);
+  if (pending) assertPrivateGitDir(body.gitDir, pending.worktree);
   const record = consumeBindToken({ gitDir: body.gitDir, token: body.token });
   let pinned;
   try {
@@ -466,6 +565,9 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now }) {
   });
   const secret = bindings.bind({
     agentId: bound.id,
+    gitDir: body.gitDir,
+    parent: bound.parentId ?? null,
+    app: bound.github.appSlug,
     worktree: record.worktree,
     transcript: locator,
     harness: bound.harness,
@@ -490,6 +592,90 @@ function requireBinding(req, bindings) {
     throw Object.assign(new Error('missing or invalid agent binding'), { statusCode: 401 });
   }
   return binding;
+}
+
+// Until #253 stores parent on the binding, a lookup that does not know the
+// field is filled from the identity recorded at bind time. A lookup that
+// returns a parent (including an explicit null) wins, so the store can
+// disagree with the identity file without this route second-guessing it.
+function parentForVouch(binding, { env, home }) {
+  if (typeof binding.parent === 'string' && binding.parent.length > 0) return binding.parent;
+  if (binding.parentIsSet) return binding.parent ?? null;
+  try {
+    const record = readAgentIdentity(binding.agentId, { stateDir: stateDirectory({ env, home }) });
+    return record.parentId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function presentedBinding(req) {
+  const header = req.headers['x-agent-binding'];
+  return typeof header === 'string' ? header : '';
+}
+
+async function handleVouchRequest({
+  req,
+  res,
+  findBinding,
+  allowVouch,
+  signingKey,
+  env,
+  home,
+  now,
+}) {
+  const body = parseJsonBody(await readBody(req));
+  if (body.aud !== 'agent-comms') {
+    throw Object.assign(new Error('aud must be agent-comms'), { statusCode: 400 });
+  }
+  const secret = presentedBinding(req);
+  const binding = findBinding(secret);
+  if (!binding) {
+    appendAuditReceipt(
+      { event: 'vouch', operation: 'soul-token', decision: 'denied' },
+      { env, home, now },
+    );
+    throw Object.assign(new Error('unbound'), { statusCode: 401 });
+  }
+  if (!allowVouch(secret)) {
+    appendAuditReceipt({
+      event: 'vouch',
+      agentId: binding.agentId,
+      operation: 'soul-token',
+      decision: 'rate-limited',
+    }, { env, home, now });
+    throw Object.assign(new Error('rate limited'), { statusCode: 429 });
+  }
+  let account;
+  try {
+    account = userInfo().username;
+  } catch {
+    account = '';
+  }
+  if (typeof account !== 'string' || account.length === 0) {
+    throw Object.assign(new Error('could not determine the account name'), { statusCode: 500 });
+  }
+  const parent = parentForVouch(binding, { env, home });
+  let token;
+  let payload;
+  try {
+    token = signSoulToken({ account, agentId: binding.agentId, parent }, signingKey(), now);
+    payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
+  } catch {
+    throw Object.assign(new Error('could not sign soul token'), { statusCode: 500 });
+  }
+  appendAuditReceipt({
+    event: 'vouch',
+    agentId: binding.agentId,
+    operation: 'soul-token',
+    decision: 'granted',
+  }, { env, home, now });
+  sendJson(res, 200, {
+    token,
+    agentId: payload.agentId,
+    parent: payload.parent,
+    exp: payload.exp,
+  });
 }
 
 // Versioned /v1 interaction routes (#55). The transport adapter authenticates
@@ -614,17 +800,19 @@ export function daemonClient({
   home = homedir(),
   fetchImpl = fetch,
   timeoutMs = HEALTH_TIMEOUT_MS,
+  cwd = process.cwd(),
 } = {}) {
   async function request(method, pathname, body, headers = {}, requestTimeoutMs = timeoutMs) {
     // Re-read the state file on every request: a long-running adapter must
     // follow a daemon restart to its new port and per-start token instead of
     // failing forever against a cached endpoint.
-    const state = readStateFile(daemonStateFile({ env, home }));
-    if (!state) throw new Error('daemon is not running (no state file)');
-    const res = await fetchImpl(`${baseUrl(state)}${pathname}`, {
+    const shared = headers['x-agent-binding'] ? readBinding({ env, cwd }) : null;
+    const state = shared ? null : readStateFile(daemonStateFile({ env, home }));
+    if (!state && !shared) throw new Error('daemon is not running (no state file)');
+    const res = await fetchImpl(`${shared?.daemon ?? baseUrl(state)}${pathname}`, {
       method,
       headers: {
-        authorization: `Bearer ${state.token}`,
+        ...(state ? { authorization: `Bearer ${state.token}` } : {}),
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
         ...headers,
       },
@@ -666,9 +854,8 @@ export function daemonClient({
       const { souls } = await request('GET', `/v0/population${query ? `?${query}` : ''}`);
       return souls;
     },
-    // Surrender-and-enforce binding (#94). The secret in the response exists
-    // only in daemon memory and the caller's process — it must never be
-    // written to disk, logged, or returned to the conversation.
+    // The daemon writes the shared secret in the private git dir. Callers
+    // must never log it or return it to the conversation.
     async bind({ gitDir, token, transcript, parentId = null, harness = null }) {
       return request('POST', '/v0/bind', { gitDir, token, transcript, parentId, harness });
     },
@@ -884,8 +1071,15 @@ async function main() {
       }
       break;
     }
+    case 'vouch-key': {
+      const unexpected = rest.filter((arg) => arg !== '--json');
+      if (unexpected.length > 0) throw new Error('usage: agent-bot daemon vouch-key');
+      const { publicKeyPem } = loadOrCreateVouchKey(vouchStateDir());
+      process.stdout.write(publicKeyPem.endsWith('\n') ? publicKeyPem : `${publicKeyPem}\n`);
+      break;
+    }
     default:
-      throw new Error('usage: agent-bot daemon <run|start|status|stop|disable> [--json]');
+      throw new Error('usage: agent-bot daemon <run|start|status|stop|disable|vouch-key> [--json]');
   }
 }
 

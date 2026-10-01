@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+- `agent-bot identity spawn` gives the child its own binding (#258,
+  agent-comms ADR-0008 decision 2). With a parent binding it asks the daemon's
+  `POST /v0/spawn`, which writes `<git-dir>/agent-bindings/<agentId>.json`, and
+  `identity spawn -- <command>` runs the command with `AGENT_BOT_BINDING` set to
+  it. Revoking a parent revokes its spawned descendants. With no binding the
+  command mints a claimed identity locally, as before.
+- The daemon vouches for bound souls (#254, agent-comms ADR-0008 decision 3).
+  `POST /v0/vouch`, authenticated only by `x-agent-binding` (no bearer),
+  returns a five-minute Ed25519 soul token
+  `v1.<payload>.<signature over the payload segment>` for agent-comms, with
+  the account, soul, and parent taken from the binding, never from the body.
+  The per-account key is created once at
+  `~/.local/state/agent-bot/vouch-key.pem` (PKCS#8, 0600) and is never
+  rotated silently; `agent-bot daemon vouch-key` prints its SPKI public key.
+  Vouches are limited to 60 per binding per minute, and each attempt leaves a
+  secret-free receipt.
+
+- Soul bindings persist (#253, agent-comms ADR-0008 decision 1). A
+  successful bind writes `<git-dir>/agent-binding.json` (0600) holding the
+  agent ID, parent, account, daemon URL, and binding secret; the daemon keeps
+  only the secret's SHA-256 in `~/.local/state/agent-bot/bindings.json`
+  (0600). Bindings survive daemon restarts, idle out after 30 days unused, and
+  have their daemon URL rewritten at startup; a binding whose file is gone,
+  foreign, or moved is pruned rather than stopping the daemon. MCP `bind` and
+  `setup-worktree` reuse an existing binding, MCP shutdown no longer revokes
+  it, and `agent-bot binding revoke` (or `DELETE /v0/binding`) does.
+  Rebinding an already-bound worktree through `POST /v0/bind` requires the
+  same proof of place as a first bind (its binding secret in
+  `x-agent-binding`, or a bind token minted in that git dir), so a path and
+  the daemon bearer never yield another worktree's secret.
+  `readBinding` is the one reader, honoring `AGENT_BOT_BINDING`.
+
 ## 0.7.2
 
 - `qwen` is a recognized harness. `detect-harness` gains a `HARNESSES` row

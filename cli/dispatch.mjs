@@ -14,6 +14,7 @@ const MODULES = new Map([
   ['space', 'agent-space.mjs'],
   ['population', 'agent-population.mjs'],
   ['principal', 'agent-principals.mjs'],
+  ['binding', 'agent-binding.mjs'],
   ['daemon', 'agent-daemon.mjs'],
   ['mcp', 'agent-mcp.mjs'],
   ['reach-mcp', 'daemon-mcp.mjs'],

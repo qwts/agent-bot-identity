@@ -141,7 +141,7 @@ agent-bot space export [agent-id] [--out <path>] [--gist]
 agent-bot space import <pack|gist:id|gist-url> [--force]
 agent-bot space retire <agent-id> [--delete-space]
 agent-bot population <list|show|backfill> [agent-id|name] [--dry-run] [--json]
-agent-bot daemon <run|start|status|stop|disable> [--json]
+agent-bot daemon <run|start|status|stop|disable|vouch-key> [--json]
 agent-bot mcp
 agent-bot web open [--principal <principal-id>] [--no-browser] [--json]
 agent-bot telegram <run|status> [--json]
@@ -409,17 +409,37 @@ conversation knows — its session/thread identifier, and its parent agent when
 it was spawned by one. The server reads the minted token from the worktree it
 is running in and surrenders it to the daemon, which verifies the token
 against the file on disk, **consumes it**, joins place and conversation into
-one identity, and answers with a per-connection binding secret the MCP server
-holds in memory only. The secret is never written down, logged, or shown to
-the conversation.
+one identity, and writes `agent-binding.json` in the worktree's private git
+directory (0600, atomic replacement). It contains `{ v: 1, agentId, parent,
+account, daemon, secret }`; the secret is 32 random bytes encoded as base64url.
+`agent-bot identity spawn [--name <name>] [--harness <harness>]` requires
+that binding and calls `POST /v0/spawn` using `x-agent-binding`. It returns
+`{ agentId, parent, binding }` as JSON. The daemon mints the child under the
+parent's App and writes a separate 0600 file at
+`<git-dir>/agent-bindings/<childId>.json`, leaving the parent's binding intact.
+With `identity spawn -- <command...>`, the command receives the child file as
+`AGENT_BOT_BINDING` and child ID as `QWTS_AGENT_ID` (and `AGENT_BOT_ID`); its
+exit status becomes the CLI's status. Parent revocation or expiry cascades to
+all descendants through their recorded parent binding hashes (`spawnedBy`).
 
-From then on identity is a property of the connection, not a parameter of any
-request: `whoami` and `space_path` carry no Agent ID, and the daemon derives
-who is asking from the binding alone. A consumed token cannot be replayed —
-after binding there is no token left to steal — and a daemon restart drops
-every binding, so re-binding takes a fresh mint from the same worktree
-(re-running `setup-worktree` or any later checkout re-mints; a re-mint is a
-fresh proof of place, never a fresh identity).
+After writing the file, the daemon fires the nonblocking `spawn` hook. Its
+built-in handler invokes `agent-comms join --name <name> --harness <harness>`
+with the child's environment, then runs executables in `agent-hooks/spawn/`.
+Absent `agent-comms` is skipped; join failures are reported without undoing
+the spawn. Account pairing remains enforced by `agent-comms join`; this hook
+never reads its private pairing state or initiates pairing. The injectable
+`spawnHook` is the integration seam; spawn needs no vouch implementation.
+
+The daemon stores only its SHA-256 hash and binding metadata in
+`~/.local/state/agent-bot/bindings.json` (0600).
+
+Bindings survive daemon and MCP restarts. The daemon refreshes their loopback
+URL at startup, prunes missing git dirs, and expires bindings unused for 30
+days. MCP bind and setup-worktree reuse an existing binding; closing MCP stdin
+does not revoke it. Use `agent-bot binding revoke` (or `DELETE /v0/binding`) to
+revoke and remove the file. The shared reader prefers `AGENT_BOT_BINDING` over
+the private git dir and refuses files with an incorrect owner or mode.
+Secrets are never logged or returned to the conversation.
 
 Binding is also the moment provenance lands in the census: the row picks up
 the transcript locator and parent lineage that pre-bind rows lack. Tools:
