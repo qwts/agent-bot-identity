@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Genesis-derived soul IDs (#284, ADR-0275 decisions 5, 6 and 9).
+  `identity spawn --package PATH` (and the daemon's spawn) derives the
+  `agent_<uuid>` as a UUIDv8 from the package's starting revision, the
+  parent soul, and a private spawn nonce; the identity row records
+  `genesis: { revision, parentSoul }`. Later revisions never change the ID.
+  Existing souls keep their IDs and read as `genesis: null`.
+  `docs/soul-genesis.md` gives the exact encoding and test vectors.
+
 - `agent-bot daemon pair-comms` now pairs with this account's one-account
   agent-comms broker when `--broker` is omitted (#286, ADR-0059 decision 3).
   Private custody requires owned 0700 rendezvous/proof directories and a
