@@ -10,6 +10,7 @@ const PUBLIC_COMMANDS = new Set([
   'daemon',
   'mcp',
   'reach-mcp',
+  'wake',
   'web',
   'telegram',
   'install',

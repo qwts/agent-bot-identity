@@ -109,6 +109,16 @@ function firstPath(payload, paths) {
 // into one field is exactly how a guard silently stops guarding under load.
 export const CLAUDE_WORKTREE_CREATE_COMMAND = 'B="$HOME/.local/bin/agent-bot"; A=$("$B" worktree-token --account-slug) || exit $?; [ -n "$A" ] || exit 0; GH_AGENT_APP="${GH_AGENT_APP:-$A}" exec "$B" claude-worktree-create';
 
+// `contextChannel` records, per canonical event, whether this dialect can hand
+// a hook's text to the model as CONTEXT rather than as a verdict. It is a
+// separate axis from `decision`: a permission answer travels the other way
+// (hook -> harness -> enforced), while context is advisory text the model may
+// read. Most dialects have no such channel at all, and an empty map is a
+// declared gap the runner reports — never a silent drop of what a hook said.
+//
+// Only SessionStart is modelled, because that is the one event where a hook
+// legitimately needs to tell the model something standing ("arm the wake
+// listener") instead of allowing or denying an action.
 export const DIALECTS = [
   {
     key: 'claude',
@@ -129,6 +139,9 @@ export const DIALECTS = [
       'agent-stop': 'Stop',
     },
     decision: 'claude-json',
+    // Documented: a SessionStart hook may add context to the session through
+    // `hookSpecificOutput.additionalContext`.
+    contextChannel: { 'session-start': 'claude-json' },
     nativeFailMode: 'closed',
     timeoutFailMode: 'closed',
     timeoutCapMs: null,
@@ -152,6 +165,11 @@ export const DIALECTS = [
       'agent-stop': 'Stop',
     },
     decision: 'claude-json',
+    // This row already speaks the claude-json stdout channel for decisions, so
+    // context rides the same envelope. Codex documents no context field of its
+    // own; if it ignores `additionalContext` the injection is a no-op there and
+    // nothing else changes — the runner's own stderr note still says it sent it.
+    contextChannel: { 'session-start': 'claude-json' },
     nativeFailMode: 'closed',
     timeoutFailMode: 'closed',
     // Codex caps SessionEnd hard. The runner budgets under this; a hook that
@@ -178,6 +196,11 @@ export const DIALECTS = [
       'session-end': 'sessionEnd',
     },
     decision: 'cursor-json',
+    // No context field is documented for sessionStart. stdout there is the
+    // permission answer, so injecting text would mean inventing a field — which
+    // the harness would ignore, silently, and we would have reported otherwise.
+    contextChannel: {},
+    contextNote: 'no context field is documented for sessionStart — stdout is the permission answer',
     // Cursor fails OPEN unless the config sets failClosed. The generator emits
     // that flag on every blocking event rather than documenting the hazard.
     nativeFailMode: 'open',
@@ -211,6 +234,11 @@ export const DIALECTS = [
       'agent-stop': 'agentStop',
     },
     decision: 'copilot-json',
+    // No context field is documented for sessionStart either, and the row's
+    // decision envelope is a permission object — the wrong shape to smuggle
+    // advisory text through.
+    contextChannel: {},
+    contextNote: 'no context field is documented for sessionStart — nothing to carry context in',
     nativeFailMode: 'closed',
     // The one that matters: preToolUse fails CLOSED on a hook error but OPEN on
     // a hook timeout. The runner therefore answers on its own clock, strictly
@@ -243,6 +271,8 @@ export const DIALECTS = [
     // No stdout protocol at all: exit code is the entire channel, and there is
     // no matcher field, so every filter must live inside the hook.
     decision: 'exit-code',
+    contextChannel: {},
+    contextNote: 'exit code is the entire channel — there is no stdout to carry context',
     nativeFailMode: 'closed',
     timeoutFailMode: 'closed',
     timeoutCapMs: null,
@@ -259,6 +289,8 @@ export const DIALECTS = [
     format: 'git',
     events: { 'pre-commit': 'pre-commit', 'pre-push': 'pre-push' },
     decision: 'exit-code',
+    contextChannel: {},
+    contextNote: 'git has no session-start event to inject into',
     nativeFailMode: 'closed',
     timeoutFailMode: 'closed',
     timeoutCapMs: null,
@@ -281,6 +313,21 @@ export function vendorEvent(dialectKey, event) {
   const spec = dialect(dialectKey).events[event];
   if (!spec) return null;
   return typeof spec === 'string' ? { event: spec, matcher: null } : { matcher: null, ...spec };
+}
+
+// Can this dialect hand a hook's text to the model on this event? A false here
+// is a declared gap, and the caller must say so rather than drop the text
+// quietly — a hook that believes it armed a session and did not is worse than
+// no hook at all.
+export function supportsContext(dialectKey, event) {
+  return Boolean(dialect(dialectKey).contextChannel?.[event]);
+}
+
+// The row's own words for why it cannot inject context, or null when it can.
+// Surfaced by `doctor` so a harness that silently lacks the channel is visible
+// in a readiness report instead of only in this file.
+export function contextNote(dialectKey) {
+  return dialect(dialectKey).contextNote ?? null;
 }
 
 export function budgetMs(dialectKey, event, requested = 10000) {
@@ -394,5 +441,37 @@ export function encodeDecision({ dialectKey, event, decision, reason = '' }) {
       // Exit 2 is the Claude/Codex native "block", and the only thing Windsurf
       // and git can say at all.
       return { stdout: '', stderr: reason, exitCode: 2 };
+  }
+}
+
+// Advisory text -> what this dialect understands, in the same three-field shape
+// as encodeDecision. Context is never a verdict: it exits 0 and denies nothing,
+// so a hook that injects text can only ever add to a session.
+//
+// Returns null when the dialect has no channel for this event. That is
+// deliberately distinguishable from an empty encoding — a caller that wrote ''
+// and moved on would be reporting an injection that never happened.
+export function encodeContext({ dialectKey, event, contexts = [] }) {
+  if (!supportsContext(dialectKey, event)) return null;
+  const text = contexts
+    .filter((entry) => typeof entry === 'string' && entry.trim() !== '')
+    .map((entry) => entry.trim())
+    .join('\n\n');
+  if (!text) return { stdout: '', stderr: '', exitCode: 0 };
+  const vendor = vendorEvent(dialectKey, event);
+  switch (dialect(dialectKey).contextChannel[event]) {
+    case 'claude-json':
+      return {
+        stdout: JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: vendor?.event ?? event,
+            additionalContext: text,
+          },
+        }),
+        stderr: '',
+        exitCode: 0,
+      };
+    default:
+      return null;
   }
 }

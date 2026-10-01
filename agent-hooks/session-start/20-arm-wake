@@ -1,0 +1,18 @@
+#!/bin/sh
+# Arm the wake listener at session start (#257, ADR-0008 decision 8).
+#
+# A session is in the daemon's warm pool only while a listener holds a socket
+# open at the wake plane, and a session cannot be relied on to remember to
+# start one. So this hook injects the standing instruction to arm
+# `agent-bot wake listen` under the harness's persistent watcher.
+#
+# It never runs the listener itself. A hook that blocked on a socket would sit
+# inside the harness's own session-start timeout and take the start down with
+# it; the listener belongs to the session, which outlives this hook by hours.
+#
+# Silent — no output, exit 0 — outside bot territory and without a binding, so
+# a human's checkout and an unbound worktree are told nothing. Which of those
+# applies is decided in one place, in JS, so shell and JS cannot disagree.
+
+command -v agent-bot >/dev/null 2>&1 || exit 0
+agent-bot wake session-context

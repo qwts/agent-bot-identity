@@ -22,6 +22,8 @@ import {
   CANONICAL_EVENTS,
   DIALECTS,
   budgetMs,
+  contextNote,
+  encodeContext,
   encodeDecision,
   envelopeEnv,
   isBlocking,
@@ -146,41 +148,71 @@ export function parsePayload(text, { dialectKey, event } = {}) {
 // is an error. Optionally one stdout line `agent-hook: {json}` for a richer
 // verdict. Unparseable output is an ERROR, never an allow — garbage must not
 // be a pass.
+//
+// The same line may carry `context`: advisory text for the model rather than a
+// verdict about the action (SessionStart's "arm the wake listener" is the case
+// that needs it). A context-only line is an allow, exactly like an empty
+// stdout. Context is honoured on an allow at exit 0 and dropped on every other
+// outcome: a hook that denied, errored, or died mid-cleanup has not reliably
+// said anything, and its text must not reach the session on the strength of a
+// line it printed before failing.
 export function readVerdict({ status, stdout = '', stderr = '' }) {
   const line = stdout.split('\n').find((l) => l.startsWith('agent-hook:'));
   if (line) {
     try {
       const parsed = JSON.parse(line.slice('agent-hook:'.length).trim());
-      const decision = parsed?.decision;
+      const context =
+        typeof parsed?.context === 'string' && parsed.context.trim() !== '' ? parsed.context : null;
+      const decision = parsed?.decision === undefined && context ? 'allow' : parsed?.decision;
       if (['allow', 'deny', 'ask'].includes(decision)) {
         // The exit status outranks the line. A hook that prints allow and then
         // dies -- a failing cleanup step, a `set -e` trap after the verdict --
         // has not allowed anything; it has failed while claiming success. Only
         // an exit 0 may say allow, and a printed allow can never soften a
         // nonzero exit.
-        if (status === 0) return { decision, reason: parsed.reason ?? stderr.trim() };
+        if (status === 0) {
+          return {
+            decision,
+            reason: parsed.reason ?? stderr.trim(),
+            context: decision === 'allow' ? context : null,
+          };
+        }
         if (status === 2) {
-          return { decision: 'deny', reason: parsed.reason ?? (stderr.trim() || 'denied by hook') };
+          return {
+            decision: 'deny',
+            reason: parsed.reason ?? (stderr.trim() || 'denied by hook'),
+            context: null,
+          };
         }
         return {
           decision: 'error',
           reason: `hook printed "${decision}" then exited ${status}: ${stderr.trim()}`.trim(),
+          context: null,
         };
       }
-      return { decision: 'error', reason: `hook returned an unknown decision: ${decision}` };
+      return {
+        decision: 'error',
+        reason: `hook returned an unknown decision: ${parsed?.decision}`,
+        context: null,
+      };
     } catch {
-      return { decision: 'error', reason: 'hook emitted an unparseable agent-hook: line' };
+      return {
+        decision: 'error',
+        reason: 'hook emitted an unparseable agent-hook: line',
+        context: null,
+      };
     }
   }
-  if (status === 0) return { decision: 'allow', reason: '' };
-  if (status === 2) return { decision: 'deny', reason: stderr.trim() || 'denied by hook' };
-  return { decision: 'error', reason: stderr.trim() || `hook exited ${status}` };
+  if (status === 0) return { decision: 'allow', reason: '', context: null };
+  if (status === 2) return { decision: 'deny', reason: stderr.trim() || 'denied by hook', context: null };
+  return { decision: 'error', reason: stderr.trim() || `hook exited ${status}`, context: null };
 }
 
 // deny > ask > allow, first denial wins, and an error resolves through the
 // EVENT's fail mode — which is why a hook needs no manifest to be safe.
 export function combine(results, event) {
   const reasons = [];
+  const contexts = [];
   let decision = 'allow';
   for (const result of results) {
     let { decision: verdict } = result;
@@ -191,13 +223,16 @@ export function combine(results, event) {
       }
       verdict = 'deny';
     }
-    if (verdict === 'deny') return { decision: 'deny', reason: `${result.name}: ${result.reason}` };
+    if (verdict === 'deny') return { decision: 'deny', reason: `${result.name}: ${result.reason}`, contexts: [] };
     if (verdict === 'ask') {
       decision = 'ask';
       reasons.push(`${result.name}: ${result.reason}`);
     }
+    // An ask is already an answer about the action, so its context has nowhere
+    // to go; only hooks that allowed contribute text.
+    if (verdict === 'allow' && result.context) contexts.push(result.context);
   }
-  return { decision, reason: reasons.join('; ') };
+  return { decision, reason: reasons.join('; '), contexts };
 }
 
 export function runHooks({ dialectKey, event, payload, dir, env = process.env }) {
@@ -266,7 +301,7 @@ export function main(argv = process.argv.slice(2), env = process.env) {
     return 0;
   }
   const { dialect: dialectKey, event } = parsed;
-  const { decision, reason } = runHooks({
+  const { decision, reason, contexts } = runHooks({
     dialectKey,
     event,
     payload: parsePayload(readStdin(), { dialectKey, event }),
@@ -274,9 +309,27 @@ export function main(argv = process.argv.slice(2), env = process.env) {
     env,
   });
   const encoded = encodeDecision({ dialectKey, event, decision, reason });
-  if (encoded.stdout) process.stdout.write(encoded.stdout);
-  if (encoded.stderr) process.stderr.write(`${encoded.stderr}\n`);
-  return encoded.exitCode;
+  // Context replaces the neutral allow response rather than joining it: a
+  // dialect that can carry text answers with that text, and a dialect that
+  // cannot still answers with its own neutral shape — Cursor's `{}` — so
+  // failClosed never reads a dropped injection as a denial.
+  const injected =
+    decision === 'allow' && contexts.length > 0
+      ? encodeContext({ dialectKey, event, contexts })
+      : null;
+  if (decision === 'allow' && contexts.length > 0 && !injected) {
+    // A declared gap is reported, never silently dropped: the hook believes it
+    // told the session something, and on this harness it did not.
+    process.stderr.write(
+      `agent-hook: ${dialectKey} has no ${event} context channel — ${
+        contextNote(dialectKey) ?? 'none is documented'
+      }\n`,
+    );
+  }
+  const output = injected ?? encoded;
+  if (output.stdout) process.stdout.write(output.stdout);
+  if (output.stderr) process.stderr.write(`${output.stderr}\n`);
+  return output.exitCode;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

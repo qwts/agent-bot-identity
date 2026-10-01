@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Sessions arm a wake listener (#257, agent-comms ADR-0008 decision 8).
+  `agent-bot wake listen` holds the session's WebSocket at the daemon's
+  `GET /v0/wake`, authenticated by the binding, and prints one NDJSON line
+  per frame (`connected`, each `wake`, `disconnected`, `stopped`). It runs
+  under a persistent watcher such as Claude Code's Monitor, reconnects with
+  capped backoff, re-reads the binding after a daemon restart, and only ever
+  presents the secret to a loopback daemon. The new SessionStart hook
+  `20-arm-wake` tells every bound session in bot territory to arm it. Hooks
+  can now return advisory `context`, which reaches the model on dialects that
+  have a context channel (Claude, Codex); readiness reports which do.
+
 ## 0.7.2
 
 - `qwen` is a recognized harness. `detect-harness` gains a `HARNESSES` row
