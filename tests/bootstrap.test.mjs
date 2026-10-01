@@ -791,6 +791,10 @@ test('a config projected from an older profile advances to the published one', (
   // Unscoped: the roster grows, retires, and moves its defaults in place.
   const home = tempHome();
   assert.equal(install(home, older).updated, true);
+  const localConfigPath = bootstrapConfigPath(home);
+  const localConfig = loadConfig({ home, env: {} });
+  localConfig.features = { 'github-identity': true, 'persona-accounts': false };
+  writeFileSync(localConfigPath, `${JSON.stringify(localConfig, null, 2)}\n`);
   assert.equal(isProjectedRuntimeConfig(loadConfig({ home, env: {} })), true);
   const advanced = install(home, organizationProfile());
   assert.equal(advanced.updated, true);
@@ -805,6 +809,7 @@ test('a config projected from an older profile advances to the published one', (
     ],
   );
   assert.equal(written.scope, undefined);
+  assert.deepEqual(written.features, { 'github-identity': true, 'persona-accounts': false });
   assert.equal(statSync(bootstrapConfigPath(home)).mode & 0o777, 0o600);
   assert.equal(install(home, organizationProfile()).updated, false);
 

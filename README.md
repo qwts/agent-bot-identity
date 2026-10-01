@@ -762,6 +762,10 @@ use the `apps` map with the exact slugs instead. `doctor` prints the resolved
   "settings": {
     "spacesRoot": "/absolute/path/to/agent-bot/spaces",
     "daemonPreference": "off"
+  },
+  "features": {
+    "github-identity": false,
+    "persona-accounts": false
   }
 }
 ```
@@ -777,6 +781,9 @@ use the `apps` map with the exact slugs instead. `doctor` prints the resolved
 - `settings.spacesRoot` — an absolute, durable Agent Space root.
 - `settings.daemonPreference` — `off`, `prefer`, or `required`; the default is
   `off`.
+- `features.github-identity` and `features.persona-accounts` — optional add-on
+  gates, both off unless explicitly set to `true`. qwts machines keep their
+  current behavior by setting both to `true` in this same config.
 
 Settings precedence is environment override, then user setting, then default.
 `AGENT_BOT_SPACES_HOME` overrides `settings.spacesRoot`; without either, the

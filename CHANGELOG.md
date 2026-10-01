@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Feature gates for add-ons (#279, ADR-0274 decisions 1 and 2). The user
+  config's `features` object turns `github-identity` and `persona-accounts`
+  on; both are off by default and no environment variable sets them.
+  `agent-bot doctor` reports each gate and its source. Gate settings do not
+  mark an organization-projected config as edited, and survive profile
+  updates. Nothing consumes the gates yet: qwts machines should set both
+  to `true` before the add-ons start honouring them (#280, #281).
+
 ## 0.8.0
 
 - `agent-bot daemon pair-comms` prints the broker's pairing state and the

@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { inspectAgentSpace, resolveSpacesHome } from './agent-space.mjs';
 import { listSouls, populationFile } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
-import { apiBase, loadConfig, rosterScope, slugForHarness } from './config.mjs';
+import { apiBase, gateStatus, loadConfig, rosterScope, slugForHarness } from './config.mjs';
 import { inspectAppCredentials } from './credential-reconciler.mjs';
 import { configuredAccountIdentity, accountName, detectHarness, HARNESSES } from './detect-harness.mjs';
 import { inspectClaudeWorktreeAdapter } from './sync-hooks.mjs';
@@ -1854,6 +1854,12 @@ export async function collectReadiness({
       if (Object.keys(config).length > 0) {
         machineChecks.push(organizationProfileCheck(config));
       }
+      machineChecks.push(readinessCheck({
+        id: 'config.feature_gates',
+        status: 'ready',
+        message: 'feature gates resolved from user config or default off',
+        evidence: { gates: gateStatus(config) },
+      }));
     } catch (error) {
       configValid = false;
       machineChecks.push(error?.code === 'profile-app-retired'
