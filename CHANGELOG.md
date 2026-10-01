@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- The daemon vouches for bound souls (#254, agent-comms ADR-0008 decision 3).
+  `POST /v0/vouch`, authenticated only by `x-agent-binding` (no bearer),
+  returns a five-minute Ed25519 soul token
+  `v1.<payload>.<signature over the payload segment>` for agent-comms, with
+  the account, soul, and parent taken from the binding, never from the body.
+  The per-account key is created once at
+  `~/.local/state/agent-bot/vouch-key.pem` (PKCS#8, 0600) and is never
+  rotated silently; `agent-bot daemon vouch-key` prints its SPKI public key.
+  Vouches are limited to 60 per binding per minute, and each attempt leaves a
+  secret-free receipt.
+
 - Soul bindings persist (#253, agent-comms ADR-0008 decision 1). A
   successful bind writes `<git-dir>/agent-binding.json` (0600) holding the
   agent ID, parent, account, daemon URL, and binding secret; the daemon keeps
