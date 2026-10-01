@@ -1,0 +1,125 @@
+# Soul revisions, format 1
+
+The revision mechanism stores package snapshots and an append-only journal at
+`<identity state directory>/soul-revisions/<agentId>/`. It does not execute
+package code, grant tools, alter an identity, or add daemon routes. Hosts remain
+responsible for authenticating the actor and approving requested tool authority
+on their bound connections.
+
+## Commands
+
+All commands print JSON. Reasons are required positional strings; quote reasons
+containing spaces.
+
+```sh
+agent-bot soul revision adopt ID PACKAGE 'Starting package'
+agent-bot soul revision edit ID PACKAGE 'Customize instructions'
+agent-bot soul revision propose ID PACKAGE 'Learned a better procedure'
+agent-bot soul revision list ID
+agent-bot soul revision approve ID PROPOSAL_ID 'Reviewed the proposed changes'
+agent-bot soul revision reject ID PROPOSAL_ID 'Keep the current behavior'
+agent-bot soul revision history ID
+agent-bot soul revision promote ID notes/lesson.md knowledge/lesson.md 'Keep lesson'
+```
+
+Adopt records the starting package, preserving its parent. For a soul with a
+genesis, the package must match that genesis revision. A legacy soul can adopt a
+package without changing its ID. Adoption is explicit and happens once; the
+spawn/install integration can call `adoptSoulPackage` after minting. Edits and
+proposals require an adopted package so their base contents are available for
+review. Inputs must be quiescent directories, as with package validation.
+
+An edit copies the supplied complete package tree, sets its parent to the current
+head, computes its revision, and appends it. Inputs are never modified. Undo uses
+an earlier snapshot's contents as a new edit, with the current head as parent.
+Unknown files, unknown manifest fields, binary bytes, directories, and execute
+bits survive. Manifest JSON formatting is normalized in stored snapshots.
+
+Proposals snapshot the complete candidate immediately and include a computed
+path diff (`added`, `modified`, `removed`), reason, author, timestamp, and base
+revision. Approval uses those stored bytes, never the caller's later edits.
+Approving a stale proposal fails; resubmit it against the new head. Stale
+proposals can still be rejected. Rejected proposals cannot be approved later.
+
+The CLI's adopt, edit, approve, and reject commands use an owner-only guard:
+resolved Agent IDs or App identities cannot invoke them. Hosts that call module
+functions directly must authenticate user actions themselves. This is a local
+mechanism boundary, not isolation against an account that can rewrite runtime
+files. `revisionCommand` accepts an injectable `assertUser` for a host's own
+user-approval ceremony. The CLI also refuses cross-soul proposals and requires an Agent ID when an App
+identity is resolved. Hosts can supply `assertSoulTarget` for their authenticated
+soul boundary. There is no flag that changes a proposal into a user edit.
+
+## Policy schema
+
+The **current accepted package's** `policy.json` controls proposals:
+
+```json
+{"mode":"auto","paths":["AGENTS.md","notes","notes/**"]}
+```
+
+`mode` must be `ask`, `auto`, or `never`. A missing policy defaults to `ask`.
+`paths` is an optional array of case-sensitive, package-relative globs; omitted
+paths permit no changed paths. Invalid policies fail closed. Unknown policy
+fields are preserved but have no effect in format 1.
+
+`*` matches within one path component, `?` matches one character in a component,
+and `**` matches across components. `**/` also matches zero directory components.
+There are no negations, braces, character classes, or backslash escapes.
+Absolute paths, `.` and `..` components, and control characters are invalid.
+Directory creation/removal and execute-bit changes count as changed paths.
+Every changed path, including a newly added directory, must match for auto
+approval; otherwise the proposal stays pending. An unchanged tree can still
+produce a new revision because its parent changes.
+
+`never` records a rejected proposal without advancing the head. `ask` records a
+pending proposal. `auto` applies only an allowed diff. Changes to `policy.json`
+and `soul.json`, or paths with a tool/MCP component or filename token, always
+require user approval. Tool configurations have no shared capability schema yet,
+so even tool removals or other potentially narrowing changes require approval.
+The canonical `tools.json` and `mcp.json` files are covered. Hosts introducing
+other authority-bearing extension formats must require approval for those
+extensions; package contents never grant runtime authority on their own.
+
+## Storage and module integration
+
+`soul-revisions.mjs` exports adoption, editing, proposal, decision, history,
+package-path, diff, and promotion functions. Options accept `stateDir` and `now`
+for embedding/testing. `createRevisionAppender(packagePath, { reason, ...options })`
+implements the `recordAgentPackageRevision` append port; it verifies the complete
+prepared package's hash and current parent before appending. This low-level port
+is for authenticated user edits. Soul callers use `proposeSoulRevision`.
+
+Each `objects/<64-hex>.soul` holds a full validated package. Numbered journal JSON
+records carry `schemaVersion: 1`, `kind`, and `at`. Revision records contain
+`revision`, `parentRevision`, `author: user|soul`, and `reason`. Approved proposals
+also record `proposalId`, `approval: user|auto`, and, for user approval,
+`approvedBy` and `approvalReason`. The original author remains `soul`.
+
+Proposal records contain `proposalId`, both revisions, `author: soul`, `reason`,
+`diff`, `requiresUser`, and initial `status: pending|rejected`. Reject decisions
+are separate `kind: decision` records. `listSoulProposals` derives final status
+from later records; it never updates a proposal in place. `history` returns only
+accepted revisions. Snapshots referenced by proposals remain available after
+rejection. Unreferenced snapshots or staging files from interrupted operations
+are harmless; automatic garbage collection is not provided.
+
+A per-soul lock serializes journal publication. Complete JSON files are linked
+exclusively into their final names, and existing snapshots are validated rather
+than overwritten. Parent comparisons reject stale appends. Host callers can pass
+`expectedParent` to edit/propose for optimistic concurrency. Stored packages are
+read-only by contract; hash checks detect external modification.
+
+## Agent Space promotion
+
+Promotion copies one regular file from the configured Agent Space into the
+current package. Source and destination are relative paths without traversal;
+symlinks are refused. Memory is otherwise untouched. The CLI creates a soul
+proposal under the same policy as other proposals. Its reason names the source
+Agent ID and relative path, including after approval.
+
+Hosts may call `promoteSpaceContent` with authenticated `actor: user` for a direct
+user revision; the default is `soul`. `resolveSpace` is the injectable seam for
+space resolution and defaults to the existing `spacePath` runtime API. Promotion
+rejects a changed base rather than overwriting concurrent edits. Directory-wide
+promotion is deliberately not implicit: select files explicitly.

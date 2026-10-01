@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Soul revisions and self-proposals (#285, ADR-0275 decisions 4, 7 and 8).
+  `agent-bot soul revision` records append-only, content-addressed package
+  revisions. A user edit is a new revision, and undo is another one. A soul
+  proposes a revision; the package's `policy.json` decides `ask` (the
+  default, needing `approve` or `reject`), `auto` (only when every changed
+  path matches its globs), or `never`. Changes to `policy.json`,
+  `soul.json`, or tool/MCP configuration always need the user. Promoting a
+  file from Agent Space is an explicit revision that records its source.
+  `docs/soul-revisions.md` documents the format and commands.
+
 - `agent-bot sop` reads `~/.config/agent-sop/config.toml` (ENG-0355 as
   amended 2026-09-16) and resolves each ref to a commit (#282, ADR-0274
   decision 4). It reports the org, sop, and comms repositories and what
