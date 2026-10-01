@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- The daemon pairs with the agent-comms broker (#255, agent-comms ADR-0008
+  decisions 4 and 7). `agent-bot daemon pair-comms --broker <account>` sends
+  `daemon-pair-request` with the daemon's Ed25519 public key and a
+  kernel-stamped proof, prints the owner's approval code, and keeps the
+  credential at `~/.local/state/agent-bot/comms-daemon.json` (0600). Once
+  approved, `runDaemon` holds the broker's `account-watch` stream open with
+  capped backoff (1 s to 30 s) and answers each wake with `wake-report`
+  (`waiting` until dispatch lands). `daemon status` shows the pairing and the
+  stream. The client mirrors agent-comms wire v1 and its custody checks.
+
 ## 0.7.2
 
 - `qwen` is a recognized harness. `detect-harness` gains a `HARNESSES` row
