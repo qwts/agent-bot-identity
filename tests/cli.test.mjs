@@ -24,7 +24,7 @@ test('stable CLI exposes version and documented commands', () => {
     'bootstrap', 'setup-worktree', 'mint-token', 'doctor', 'identity', 'space', 'population', 'principal', 'binding',
     'daemon', 'telegram', 'install', 'update',
     'install-gh-shim', 'ensure-private-key',
-    'signed-commit', 'secret',
+    'signed-commit', 'secret', 'sop',
   ]) assert.match(help.stdout, new RegExp(command));
   assert.match(help.stdout, /^  soul +Turn cold wake on or off/m);
 });

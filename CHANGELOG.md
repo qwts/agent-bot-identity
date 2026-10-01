@@ -10,6 +10,13 @@
   `features.github-identity: true` and `features.persona-accounts: true`
   before upgrading to keep their existing behavior.
 
+- `agent-bot sop` reads `~/.config/agent-sop/config.toml` (ENG-0355 as
+  amended 2026-09-16) and resolves each ref to a commit (#282, ADR-0274
+  decision 4). It reports the org, sop, and comms repositories and what
+  the org repository's `org.json` pins. With no config file it reports
+  that no SOP is in effect and exits 0. Fetched content is reported only:
+  the command does not clone, check out, apply, or execute it.
+
 - Genesis-derived soul IDs (#284, ADR-0275 decisions 5, 6 and 9).
   `identity spawn --package PATH` (and the daemon's spawn) derives the
   `agent_<uuid>` as a UUIDv8 from the package's starting revision, the
