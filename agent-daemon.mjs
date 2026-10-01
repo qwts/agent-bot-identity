@@ -13,6 +13,11 @@
 //   agent-bot daemon status [--json] — probe the recorded daemon
 //   agent-bot daemon stop            — terminate the recorded daemon
 //   agent-bot daemon vouch-key       — print the account Ed25519 public key (SPKI PEM)
+//   agent-bot daemon pair-comms --broker <account>
+//                                    — pair this account's daemon with the
+//                                      agent-comms broker (prints the owner
+//                                      approval code); status shows the
+//                                      pairing and the account-watch link.
 //
 // v0 scope per #41: register soul, space ensure, space path, population list.
 // No OAuth, no remote sync, no HTTPS — loopback is the boundary (#35).
@@ -64,6 +69,11 @@ import { appendAuditReceipt, principalsFile, resolvePrincipal } from './agent-pr
 import { runSpawnHooks } from './agent-hook.mjs';
 import { createWebLayer } from './agent-web.mjs';
 import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs';
+import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms-client.mjs';
+import { attachWakeEndpoint } from './agent-wake.mjs';
+import { readColdWakeSettings } from './cold-wake-settings.mjs';
+import { loadConfig } from './config.mjs';
+import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
 
 const SCHEMA_VERSION = 1;
 const MAX_BODY_BYTES = 64 * 1024;
@@ -231,6 +241,9 @@ export function createDaemonServer({
   // #253 replaces this with its persistent lookup. The default reads the
   // in-memory registry and does not change how bindings are stored.
   lookupBinding: lookupBindingOverride = null,
+  // Live comms watch state for GET /v0/comms/status. The supervisor is owned
+  // by runDaemon; tests and embedding callers pass a stub with getState().
+  comms = null,
 } = {}) {
   // One interaction service per server so in-flight executions and their
   // cancellation controllers live exactly as long as the daemon.
@@ -261,6 +274,7 @@ export function createDaemonServer({
   // peer check; it authenticates browsers with its own pairing-code cookie
   // sessions instead of the bearer token, which never reaches page script.
   const web = createWebLayer({ env, home, config, interaction, daemonToken: token, now });
+  let warmPool;
   const server = createServer(async (req, res) => {
     try {
       if (!isLoopbackPeer(req.socket.remoteAddress)) {
@@ -293,7 +307,7 @@ export function createDaemonServer({
       const route = `${req.method} ${url.pathname}`;
       switch (route) {
         case 'GET /v0/health': {
-          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid });
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid, warmPool: warmPool.list() });
           return;
         }
         case 'POST /v0/space/ensure': {
@@ -436,6 +450,15 @@ export function createDaemonServer({
           });
           return;
         }
+        // Comms pairing state (#255): who this daemon is paired as, and whether
+        // its account-watch stream to the agent-comms broker is connected.
+        case 'GET /v0/comms/status': {
+          sendJson(res, 200, {
+            schemaVersion: SCHEMA_VERSION,
+            comms: readCommsStatus({ env, home, live: comms?.getState() ?? null }),
+          });
+          return;
+        }
         case 'GET /v0/population': {
           const souls = listSouls({
             status: url.searchParams.get('status'),
@@ -457,7 +480,10 @@ export function createDaemonServer({
     const address = server.address();
     bindings.rewrite(`http://${address.address === '::1' ? '[::1]' : '127.0.0.1'}:${address.port}`);
   });
+  warmPool = attachWakeEndpoint(server, { lookupBinding: (secret) => bindings.resolve(secret) });
   server.token = token;
+  server.warmPool = warmPool;
+  server.bindings = bindings;
   return server;
 }
 
@@ -766,7 +792,7 @@ async function probeHealth(state, { fetchImpl = fetch, timeoutMs = HEALTH_TIMEOU
     });
     if (!res.ok) return false;
     const body = await res.json();
-    return body?.status === 'ok' && body?.pid === state.pid;
+    return body?.status === 'ok' && body?.pid === state.pid ? body : false;
   } catch {
     return false;
   }
@@ -783,13 +809,41 @@ export async function daemonStatus({
   try {
     state = readStateFile(file);
   } catch (error) {
-    return { running: false, reason: error.message };
+    return { running: false, reason: error.message, comms: readCommsStatus({ env, home }) };
   }
-  if (!state) return { running: false, reason: 'no daemon state file' };
-  if (await probeHealth(state, { fetchImpl, timeoutMs })) {
-    return { running: true, pid: state.pid, port: state.port, startedAt: state.startedAt };
+  if (!state) return { running: false, reason: 'no daemon state file', comms: readCommsStatus({ env, home }) };
+  const health = await probeHealth(state, { fetchImpl, timeoutMs });
+  if (health) {
+    return {
+      running: true,
+      pid: state.pid,
+      port: state.port,
+      startedAt: state.startedAt,
+      warmPool: health.warmPool ?? {},
+      comms: await probeComms(state, { env, home, fetchImpl, timeoutMs }),
+    };
   }
-  return { running: false, reason: 'daemon state file is stale (health probe failed)', stale: state };
+  return {
+    running: false,
+    reason: 'daemon state file is stale (health probe failed)',
+    stale: state,
+    comms: readCommsStatus({ env, home }),
+  };
+}
+
+async function probeComms(state, { env, home, fetchImpl, timeoutMs }) {
+  try {
+    const res = await fetchImpl(`${baseUrl(state)}/v0/comms/status`, {
+      headers: { authorization: `Bearer ${state.token}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return readCommsStatus({ env, home });
+    const body = await res.json().catch(() => ({}));
+    if (!body || typeof body.comms !== 'object') return readCommsStatus({ env, home });
+    return body.comms;
+  } catch {
+    return readCommsStatus({ env, home });
+  }
 }
 
 // Thin client for callers that prefer the daemon over in-process stores (#43).
@@ -923,7 +977,37 @@ export async function runDaemon({
   // becomes failed with its own stable reason, and pending cancellations
   // become cancelled — nothing is silently stranded.
   recoverInteractionStore({ env, home, now });
-  const server = createDaemonServer({ env, home, config, now });
+  // The ACP executor is off unless the user config turns it on (#259):
+  // `"executor": { "enabled": true, "policy": { ... } }`. Without it /v1
+  // keeps its unconfigured error and cold wake reports `waiting`.
+  const setup = (config ?? loadConfig({ home, env })).executor;
+  const identities = (agentId) => readAgentIdentity(validateAgentId(agentId), { stateDir: stateDirectory({ env, home }) });
+  const executorFor = setup?.enabled === true
+    ? acpExecutorFor({ identities, policy: setup.policy ?? { version: 1, rules: [], fallback: 'deny' }, baseEnv: env })
+    : null;
+  const executor = executorFor
+    ? (input) => {
+      const identity = identities(input.invocation.agentId);
+      return executorFor({ agentId: identity.id, harness: identity.harness, cwd: input.invocation.cwd ?? setup.cwd ?? home, env: {} })(input);
+    }
+    : undefined;
+  // The comms supervisor idles until a pairing credential exists, then keeps
+  // the broker's account-watch stream open for this account's wakes (#255).
+  // Each wake goes through the wake plane: a warm socket, else the opt-in
+  // cold turn, else `waiting` (ADR-0008 decisions 7 to 9).
+  let server;
+  const onWake = (wake, ports) => server.wakePlane(wake, ports);
+  const comms = createCommsSupervisor({ env, home, now, onWake });
+  server = createDaemonServer({ env, home, config, now, comms, executor });
+  server.wakePlane = createWakePlane({
+    pool: server.warmPool,
+    settings: () => readColdWakeSettings({ env, home }),
+    lookupSoul: (agentId) => server.bindings.findAgent(agentId),
+    identities,
+    executorFor,
+    // Receipts carry a soul and a decision, never message IDs or content.
+    receipt: ({ event, agentId, decision, outcome }) => appendAuditReceipt({ event, agentId, decision: decision ?? outcome }, { env, home, now }),
+  });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(requestedPort, host, resolve);
@@ -938,7 +1022,13 @@ export async function runDaemon({
     startedAt: now().toISOString(),
   };
   writeStateFile(file, state);
+  comms.start();
   const shutdown = () => {
+    try {
+      comms.stop();
+    } catch {
+      /* the watch loop is already down */
+    }
     try {
       const recorded = readStateFile(file);
       // Another daemon may have replaced a stale record; only remove our own.
@@ -952,7 +1042,7 @@ export async function runDaemon({
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
   onListening?.(state, server);
-  return { server, state };
+  return { server, state, comms };
 }
 
 const START_TIMEOUT_MS = 8_000;
@@ -1021,6 +1111,19 @@ export async function stopDaemon({ env = process.env, home = homedir(), fetchImp
   throw new Error(`daemon pid ${state.pid} did not exit within the shutdown deadline`);
 }
 
+function brokerFlag(args) {
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === '--broker' && index + 1 < args.length) return args[index + 1];
+    if (args[index].startsWith('--broker=')) return args[index].slice('--broker='.length);
+  }
+  return null;
+}
+
+function formatCommsStatus(comms) {
+  if (!comms?.paired) return 'comms: not paired (run `agent-bot daemon pair-comms --broker <account>`)';
+  return `comms: paired as ${comms.account}, account-watch ${comms.connected ? 'connected' : 'disconnected'}`;
+}
+
 async function main() {
   const [command = 'status', ...rest] = process.argv.slice(2);
   const json = rest.includes('--json');
@@ -1048,10 +1151,29 @@ async function main() {
         process.stdout.write(`${JSON.stringify(status, (key, value) => (key === 'stale' ? undefined : value), 2)}\n`);
       } else if (status.running) {
         process.stdout.write(`running (pid ${status.pid}, port ${status.port}, since ${status.startedAt})\n`);
+        process.stdout.write(`${formatCommsStatus(status.comms)}\n`);
+        const warm = Object.entries(status.warmPool ?? {});
+        process.stdout.write(warm.length
+          ? `warm pool: ${warm.map(([id, count]) => `${id} (${count})`).join(', ')}\n`
+          : 'warm pool: empty\n');
       } else {
         process.stdout.write(`not running: ${status.reason}\n`);
+        process.stdout.write(`${formatCommsStatus(status.comms)}\n`);
       }
       if (!status.running) process.exitCode = 1;
+      break;
+    }
+    case 'pair-comms': {
+      const broker = brokerFlag(rest);
+      if (!broker) throw new Error('usage: agent-bot daemon pair-comms --broker <account> [--json]');
+      const pairing = await pairDaemonComms({ brokerAccount: broker });
+      if (json) {
+        process.stdout.write(`${JSON.stringify(pairing, null, 2)}\n`);
+      } else {
+        process.stdout.write(`daemon pairing requested for account '${pairing.account}' (state: ${pairing.state})\n`);
+        process.stdout.write(`owner approval code: ${pairing.code}\n`);
+        process.stdout.write('the owner approves this code on the broker admin socket, exactly like an account pairing\n');
+      }
       break;
     }
     case 'stop': {
@@ -1079,7 +1201,7 @@ async function main() {
       break;
     }
     default:
-      throw new Error('usage: agent-bot daemon <run|start|status|stop|disable|vouch-key> [--json]');
+      throw new Error('usage: agent-bot daemon <run|start|status|stop|disable|vouch-key|pair-comms> [--json]');
   }
 }
 

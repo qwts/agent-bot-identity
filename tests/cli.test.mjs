@@ -26,6 +26,7 @@ test('stable CLI exposes version and documented commands', () => {
     'install-gh-shim', 'ensure-private-key',
     'signed-commit', 'secret',
   ]) assert.match(help.stdout, new RegExp(command));
+  assert.match(help.stdout, /^  soul +Turn cold wake on or off/m);
 });
 
 test('stable CLI dispatches bootstrap from the source checkout', () => {

@@ -5,10 +5,13 @@ import {
   CANONICAL_EVENTS,
   DIALECTS,
   budgetMs,
+  contextNote,
+  encodeContext,
   encodeDecision,
   envelopeEnv,
   isBlocking,
   normalizeEnvelope,
+  supportsContext,
   vendorEvent,
 } from '../hook-dialects.mjs';
 import { hookCoverage } from '../doctor.mjs';
@@ -227,6 +230,75 @@ test('doctor exposes declared gaps, unverified rows, and stale evidence', () => 
   assert.equal(current.find((row) => row.key === 'cursor').status, 'unverified');
   assert.equal(current.some((row) => row.stale), false);
 
+  // Context is reported next to event coverage, because a dialect can wire every
+  // event and still have nowhere to put a SessionStart instruction.
+  assert.deepEqual(current.find((row) => row.key === 'claude').contextEvents, ['session-start']);
+  assert.equal(current.find((row) => row.key === 'claude').contextNote, null);
+  assert.deepEqual(current.find((row) => row.key === 'cursor').contextEvents, []);
+  assert.match(current.find((row) => row.key === 'cursor').contextNote, /no context field/);
+
   const stale = hookCoverage(new Date('2027-01-01T00:00:00Z'));
   assert.equal(stale.every((row) => row.stale), true);
+});
+
+// --- context injection -------------------------------------------------------------
+
+// Context is advisory text for the model and a separate axis from the permission
+// answer: a hook that injects can only ever add to a session, never deny it. A
+// dialect with no channel returns null — a declared gap the runner reports —
+// rather than an encoding that silently drops what the hook said.
+test("context rides the dialect's own envelope, and is never a verdict", () => {
+  const encoded = encodeContext({
+    dialectKey: 'claude', event: 'session-start', contexts: ['arm it'],
+  });
+  assert.deepEqual(JSON.parse(encoded.stdout), {
+    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'arm it' },
+  });
+  assert.equal(encoded.exitCode, 0);
+  assert.equal(encoded.stderr, '');
+  assert.equal(encoded.stdout.includes('permissionDecision'), false, 'context invents no verdict field');
+
+  // Every hook that spoke arrives, in order, in one injection.
+  assert.equal(
+    JSON.parse(encodeContext({
+      dialectKey: 'claude', event: 'session-start', contexts: ['first', 'second'],
+    }).stdout).hookSpecificOutput.additionalContext,
+    'first\n\nsecond',
+  );
+
+  assert.deepEqual(
+    encodeContext({ dialectKey: 'claude', event: 'session-start', contexts: ['', '   ', null, 7] }),
+    encodeDecision({ dialectKey: 'claude', event: 'session-start', decision: 'allow' }),
+    'nothing to say is the neutral allow, not an empty additionalContext',
+  );
+
+  // Codex already speaks the claude-json stdout channel for decisions, so the
+  // same envelope carries its context too.
+  assert.deepEqual(
+    JSON.parse(encodeContext({ dialectKey: 'codex', event: 'session-start', contexts: ['arm it'] }).stdout),
+    JSON.parse(encoded.stdout),
+  );
+});
+
+test('a dialect with no context channel declares the gap rather than dropping the text', () => {
+  assert.equal(supportsContext('claude', 'session-start'), true);
+  assert.equal(contextNote('claude'), null);
+  for (const { key } of DIALECTS) {
+    if (supportsContext(key, 'session-start')) continue;
+    assert.equal(
+      encodeContext({ dialectKey: key, event: 'session-start', contexts: ['x'] }),
+      null,
+      `${key} encodes context it has no channel for`,
+    );
+    assert.ok(contextNote(key), `${key} has no context channel and nothing says why`);
+  }
+  // Cursor wires session-start for decisions; the gap is on the context axis,
+  // not in event coverage — which is why the two are tracked separately.
+  assert.equal(vendorEvent('cursor', 'session-start').event, 'sessionStart');
+  assert.equal(supportsContext('cursor', 'session-start'), false);
+  assert.match(contextNote('cursor'), /no context field is documented/);
+  // SessionStart is the only modelled event: it is the one place a hook needs to
+  // say something standing instead of answering about an action.
+  assert.equal(supportsContext('claude', 'pre-command'), false);
+  assert.equal(encodeContext({ dialectKey: 'claude', event: 'pre-command', contexts: ['x'] }), null);
 });

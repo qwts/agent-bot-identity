@@ -297,6 +297,23 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
       save();
       return true;
     },
+    // The cold path (#259) starts a turn for a soul, not for a secret: the
+    // most recently used binding names its worktree and the file the turn
+    // presents as AGENT_BOT_BINDING.
+    findAgent(agentId) {
+      expire();
+      let found = null;
+      for (const entry of bindings.values()) {
+        if (entry.agentId !== agentId) continue;
+        if (!found || Date.parse(entry.lastUsedAt) > Date.parse(found.lastUsedAt)) found = entry;
+      }
+      if (!found) return null;
+      try {
+        return { agentId, worktree: found.worktree, gitDir: found.gitDir, file: entryPath(found) };
+      } catch {
+        return null;
+      }
+    },
     size() { return bindings.size; },
   };
 }

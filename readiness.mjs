@@ -149,6 +149,13 @@ export function hookCoverage(today = new Date()) {
       status: row.status,
       verifiedOn: row.verifiedOn,
       stale: ageDays > 90,
+      // Context injection is a separate capability from event coverage: a
+      // dialect can wire every event and still have no way to hand a hook's
+      // text to the model, which is what a SessionStart instruction needs.
+      // The note is the row's own words for the gap, so a report says why
+      // instead of only reporting an empty list.
+      contextEvents: Object.keys(row.contextChannel ?? {}),
+      contextNote: row.contextNote ?? null,
     };
   });
 }

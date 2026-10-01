@@ -15,9 +15,11 @@ const MODULES = new Map([
   ['population', 'agent-population.mjs'],
   ['principal', 'agent-principals.mjs'],
   ['binding', 'agent-binding.mjs'],
+  ['soul', 'cold-wake-settings.mjs'],
   ['daemon', 'agent-daemon.mjs'],
   ['mcp', 'agent-mcp.mjs'],
   ['reach-mcp', 'daemon-mcp.mjs'],
+  ['wake', 'wake-listen.mjs'],
   ['web', 'agent-web.mjs'],
   ['telegram', 'telegram-adapter.mjs'],
   ['install', 'install.mjs'],
@@ -54,5 +56,7 @@ export function dispatchAgentBot(parsed) {
   }
   const module = MODULES.get(parsed.command);
   if (!module) throw new Error(`unsupported command: ${parsed.command}`);
-  return run(process.execPath, [join(ROOT, module), ...parsed.args]);
+  const args = parsed.command === 'soul' && parsed.args[0] === 'cold-wake' ? parsed.args.slice(1) : parsed.args;
+  if (parsed.command === 'soul' && parsed.args[0] !== 'cold-wake') throw new Error('usage: agent-bot soul cold-wake <agentId> [on|off|show]');
+  return run(process.execPath, [join(ROOT, module), ...args]);
 }

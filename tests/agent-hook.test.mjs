@@ -268,7 +268,7 @@ test('an unknown dialect is refused at parse time, and never blocks', () => {
 });
 
 test('verdict reading maps the exit codes a hook author actually uses', () => {
-  assert.deepEqual(readVerdict({ status: 0 }), { decision: 'allow', reason: '' });
+  assert.deepEqual(readVerdict({ status: 0 }), { decision: 'allow', reason: '', context: null });
   assert.equal(readVerdict({ status: 2, stderr: 'why' }).decision, 'deny');
   assert.equal(readVerdict({ status: 2, stderr: 'why' }).reason, 'why');
   assert.equal(readVerdict({ status: 1 }).decision, 'error');
@@ -310,6 +310,146 @@ test('combine short-circuits on deny and keeps ask below it', () => {
     'deny',
   );
   assert.equal(combine([{ name: 'a', decision: 'ask', reason: 'x' }], 'pre-command').decision, 'ask');
+});
+
+// --- context: what a hook tells the model, as opposed to what it decides -------------
+
+// The line `agent-bot wake session-context` prints: an allow that carries text.
+function contextHook(text) {
+  return `#!/bin/sh\necho 'agent-hook: ${JSON.stringify({ context: text })}'\n`;
+}
+
+test('a context-only line is an allow that carries text', () => {
+  const line = 'agent-hook: {"context":"arm the wake listener"}';
+  assert.deepEqual(readVerdict({ status: 0, stdout: line }), {
+    decision: 'allow',
+    reason: '',
+    context: 'arm the wake listener',
+  });
+  // Context is honoured on an allow at exit 0 and dropped on every other
+  // outcome: a hook that denied, errored, or died mid-cleanup has not reliably
+  // said anything, and its text must not reach the session on the strength of a
+  // line it printed before failing.
+  assert.equal(readVerdict({ status: 2, stdout: line }).context, null);
+  assert.equal(readVerdict({ status: 7, stdout: line }).context, null);
+  assert.equal(
+    readVerdict({ status: 0, stdout: 'agent-hook: {"decision":"deny","context":"x"}' }).context,
+    null,
+  );
+  // Blank or non-text context is no injection at all, and a line that then says
+  // nothing decidable stays the error it always was — garbage must not pass.
+  assert.equal(readVerdict({ status: 0, stdout: 'agent-hook: {"context":"  "}' }).decision, 'error');
+  assert.equal(readVerdict({ status: 0, stdout: 'agent-hook: {"context":42}' }).decision, 'error');
+});
+
+test('only hooks that allowed contribute context, and a denial drops all of it', () => {
+  assert.deepEqual(
+    combine([
+      { name: '20-a', decision: 'allow', context: 'first' },
+      { name: '40-b', decision: 'allow', context: 'second' },
+    ], 'session-start'),
+    { decision: 'allow', reason: '', contexts: ['first', 'second'] },
+  );
+  // An ask is already an answer about the action, so its text has nowhere to go.
+  assert.deepEqual(
+    combine([{ name: '20-a', decision: 'ask', reason: 'x', context: 'ignored' }], 'session-start')
+      .contexts,
+    [],
+  );
+  assert.deepEqual(
+    combine([
+      { name: '20-a', decision: 'allow', context: 'first' },
+      { name: '40-b', decision: 'deny', reason: 'no' },
+    ], 'session-start'),
+    { decision: 'deny', reason: '40-b: no', contexts: [] },
+  );
+});
+
+test('a SessionStart hook reaches the Claude Code model as additionalContext', () => {
+  const dir = hooksDir({
+    'session-start/20-arm-wake': contextHook('arm `agent-bot wake listen` under Monitor'),
+  });
+  const result = invoke(dir, {
+    dialect: 'claude',
+    event: 'session-start',
+    payload: { session_id: 's1' },
+  });
+  assert.equal(result.status, 0);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    hookSpecificOutput: {
+      hookEventName: 'SessionStart',
+      additionalContext: 'arm `agent-bot wake listen` under Monitor',
+    },
+  });
+  assert.equal(result.stderr, '');
+  // Context travels without a verdict: the vendor event name comes from the
+  // dialect table, and no permission field is invented on the way.
+  assert.equal(result.stdout.includes('permissionDecision'), false);
+
+  // Two hooks that both speak arrive together, in hook order.
+  const both = hooksDir({
+    'session-start/20-arm-wake': contextHook('first'),
+    'session-start/40-also': contextHook('second'),
+  });
+  assert.equal(
+    JSON.parse(invoke(both, { dialect: 'claude', event: 'session-start' }).stdout)
+      .hookSpecificOutput.additionalContext,
+    'first\n\nsecond',
+  );
+});
+
+test('codex carries context on the stdout envelope it already speaks', () => {
+  const dir = hooksDir({ 'session-start/20-arm-wake': contextHook('arm the listener') });
+  const result = invoke(dir, { dialect: 'codex', event: 'session-start' });
+  assert.equal(result.status, 0);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'arm the listener' },
+  });
+});
+
+test('a dialect with no context channel reports the gap instead of dropping the text', () => {
+  const dir = hooksDir({ 'session-start/20-arm-wake': contextHook('arm the listener') });
+
+  const cursor = invoke(dir, { dialect: 'cursor', event: 'session-start' });
+  assert.equal(cursor.status, 0);
+  assert.equal(
+    cursor.stdout,
+    '{}',
+    'still the neutral allow — a dropped injection must never read as a denial',
+  );
+  assert.match(cursor.stderr, /cursor has no session-start context channel/);
+  assert.match(cursor.stderr, /no context field is documented for sessionStart/);
+
+  const copilot = invoke(dir, { dialect: 'copilot', event: 'session-start' });
+  assert.equal(copilot.status, 0);
+  assert.equal(copilot.stdout, '');
+  assert.match(copilot.stderr, /nothing to carry context in/);
+
+  const windsurf = invoke(dir, { dialect: 'devin-desktop', event: 'session-start' });
+  assert.equal(windsurf.status, 0);
+  assert.equal(windsurf.stdout, '');
+  assert.match(windsurf.stderr, /exit code is the entire channel/);
+});
+
+test('a hook that dies after printing context does not get to speak', () => {
+  const dir = hooksDir({
+    'session-start/20-arm-wake': `#!/bin/sh\necho 'agent-hook: {"decision":"allow","context":"arm it"}'\nexit 7\n`,
+  });
+  const result = invoke(dir, { dialect: 'claude', event: 'session-start' });
+  assert.equal(result.status, 0, 'session-start is advisory, so the run still allows');
+  assert.equal(result.stdout.includes('additionalContext'), false);
+  assert.match(result.stderr, /exited 7/);
+});
+
+test('a denying hook is not also allowed to address the model', () => {
+  const dir = hooksDir({
+    'session-start/20-deny': `#!/bin/sh\necho 'agent-hook: {"decision":"deny","reason":"no","context":"trust me"}'\nexit 0\n`,
+  });
+  const result = invoke(dir, { dialect: 'claude', event: 'session-start' });
+  const out = JSON.parse(result.stdout).hookSpecificOutput;
+  assert.equal(out.permissionDecision, 'deny');
+  assert.match(out.permissionDecisionReason, /20-deny: no/);
+  assert.equal(out.additionalContext, undefined);
 });
 
 test('runHooks is callable in-process for every canonical event', () => {
