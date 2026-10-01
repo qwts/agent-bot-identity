@@ -362,8 +362,11 @@ export class CommsClient {
   // ...args }`; `v` and `id` are stamped here.
   async request(fields, { paths = commsPaths(), timeoutMs = this.timeoutMs } = {}) {
     this.checkCustody(paths);
-    const reply = await openCommsConnection(this.socketPath, { id: newRequestId(), ...fields }, { timeoutMs });
-    return reply.result;
+    // The broker answers `{ ok: true, ...result }`: the result's fields sit
+    // beside `ok`, not under a `result` key.
+    const { ok: _ok, v: _v, id: _id, ...result } = await openCommsConnection(
+      this.socketPath, { id: newRequestId(), ...fields }, { timeoutMs });
+    return result;
   }
 
   // One request line, then one `onEvent` call per `{ event, ... }` line until

@@ -116,7 +116,7 @@ test('pair-comms pairs against a fake broker and prints the owner code', async (
   const world = scratchWorld();
   const broker = await startFakeBroker(world.socket, (line, { send }) => {
     assert.equal(line.op, 'daemon-pair-request');
-    send({ v: 1, id: line.id, ok: true, result: { account: line.account, code: 'OWNER1', state: 'pending' } });
+    send({ v: 1, id: line.id, ok: true, account: line.account, code: 'OWNER1', state: 'pending' });
   });
   try {
     const run = await runCli(['pair-comms', '--broker', ME], childEnv(world));
@@ -230,7 +230,7 @@ test('runDaemon opens account-watch when a credential exists and status shows it
     }
     if (line.op === 'wake-report') {
       reportSeen = line;
-      send({ v: 1, id: line.id, ok: true, result: { recorded: true } });
+      send({ v: 1, id: line.id, ok: true, recorded: true });
     }
   });
   const { server, comms } = await runDaemon({ env: childEnv(world), home: '/nonexistent', port: 0 });
@@ -278,7 +278,7 @@ test('runDaemon delivers a broker wake to the soul\'s warm socket and reports wa
     }
     if (line.op === 'wake-report') {
       reports.push(line);
-      send({ v: 1, id: line.id, ok: true, result: { recorded: true } });
+      send({ v: 1, id: line.id, ok: true, recorded: true });
     }
   });
   const { server, comms } = await runDaemon({ env: childEnv(world), home: '/nonexistent', port: 0, config: {} });

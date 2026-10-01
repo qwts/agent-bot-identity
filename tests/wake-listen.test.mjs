@@ -157,7 +157,8 @@ async function startStub({ secret = SECRET, onConnection = null } = {}) {
   server.on('upgrade', (req, socket, head) => {
     // The client presents a proof (#270), never the secret itself.
     const proof = parseBindingProof(req.headers[PROOF_HEADER]);
-    const authority = `127.0.0.1:${server.address().port}`;
+    // The port captured at listen: a late reconnect can land after close().
+    const authority = `127.0.0.1:${port}`;
     const valid = proof !== null
       && checkBindingProof(proof, bindingKey(secret), { method: req.method, path: req.url, authority });
     attempts.push({ path: req.url, proved: valid, bare: req.headers[BINDING_HEADER] ?? null });

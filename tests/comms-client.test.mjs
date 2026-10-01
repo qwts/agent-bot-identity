@@ -127,7 +127,7 @@ test('a broker request is one v1 line and resolves with result', async () => {
     assert.match(line.id, /^[0-9a-f]+$/);
     assert.equal(line.op, 'ping');
     assert.deepEqual(line.auth, { daemon: 'worker', secret: 's3cret' });
-    send({ v: 1, id: line.id, ok: true, result: { pong: true } });
+    send({ v: 1, id: line.id, ok: true, pong: true });
   });
   try {
     const { client, paths } = testClient(world);
@@ -196,7 +196,7 @@ test('daemon pairing writes a proof file and persists the credential', async () 
     seenProofBody = readFileSync(proofFile, 'utf8');
     seenProofMode = statSync(proofFile).mode & 0o777;
     assert.equal(seenProofBody, line.secretHash);
-    send({ v: 1, id: line.id, ok: true, result: { account: line.account, code: 'K7Q2XD', state: 'pending' } });
+    send({ v: 1, id: line.id, ok: true, account: line.account, code: 'K7Q2XD', state: 'pending' });
   });
   try {
     const pairing = await pairDaemonComms({
@@ -238,7 +238,7 @@ test('the pairing proof is 0644 even under a restrictive umask', async () => {
   let seenProofMode = null;
   const broker = await startFakeBroker(world.socket, (line, { send }) => {
     seenProofMode = statSync(path.join(world.proofs, line.proof)).mode & 0o777;
-    send({ v: 1, id: line.id, ok: true, result: { account: line.account, code: 'K7Q2XD', state: 'pending' } });
+    send({ v: 1, id: line.id, ok: true, account: line.account, code: 'K7Q2XD', state: 'pending' });
   });
   const previous = process.umask(0o077);
   try {
@@ -325,7 +325,7 @@ test('account-watch delivers wakes and the default handler answers waiting', asy
     }
     if (line.op === 'wake-report') {
       reportLine = line;
-      send({ v: 1, id: line.id, ok: true, result: { recorded: true } });
+      send({ v: 1, id: line.id, ok: true, recorded: true });
       socket.destroy();
     }
   });
@@ -443,7 +443,7 @@ test('wake reports are validated and framed with daemon auth', async () => {
     assert.equal(line.agentId, 'agent_22222222-2222-4222-8222-222222222222');
     assert.deepEqual(line.messageIds, ['m9']);
     assert.equal(line.outcome, 'cold');
-    send({ v: 1, id: line.id, ok: true, result: { recorded: true } });
+    send({ v: 1, id: line.id, ok: true, recorded: true });
   });
   try {
     const result = await reportCommsWake(
