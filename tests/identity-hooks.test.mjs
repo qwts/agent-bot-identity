@@ -84,6 +84,18 @@ test('custom message hooks are chained and identity adds exactly one opaque trai
   assert.doesNotMatch(body, /thread|token|credential/i);
 });
 
+test('both add-on gates off leaves the commit trailer hook inert', () => {
+  const { repo, git, env } = fixture('prepare-gates-off');
+  const home = path.join(root, 'prepare-gates-off-home');
+  mkdirSync(path.join(home, '.config', 'agent-bot'), { recursive: true });
+  writeFileSync(path.join(home, '.config', 'agent-bot', 'config.json'), JSON.stringify({ features: { 'github-identity': false, 'persona-accounts': false } }));
+  const message = path.join(repo, 'message.txt');
+  writeFileSync(message, 'plain commit\n');
+  execFileSync(prepare, [message, 'message'], { cwd: repo, env: { ...env, HOME: home } });
+  assert.doesNotMatch(readFileSync(message, 'utf8'), /^Agent-Identity:/m);
+  assert.equal(git('config', '--get', 'commit.gpgsign'), 'false');
+});
+
 test('post-commit records the commit artifact in the private registry', () => {
   const { repo, stateDir, identity, git, env } = fixture('post');
   writeFileSync(path.join(repo, 'next.txt'), 'next\n');

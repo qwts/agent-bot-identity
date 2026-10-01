@@ -331,21 +331,44 @@ test('an empty census summary does not invent a without_app count', async (t) =>
   assert.equal(Object.hasOwn(check.evidence, 'without_app'), false);
 });
 
-test('the gh shim has no environment gate and installer skips when config gate is off', async (t) => {
-  assert.doesNotMatch(buildGhShim(), /AGENT_BOT_FEATURE_GATE/);
+test('both gates off disable the GitHub shim, token path, and signed commits', async (t) => {
   const root = scratch(t);
+  const env = isolatedEnv(root);
+  const config = path.join(root, 'home', '.config', 'agent-bot');
+  mkdirSync(config, { recursive: true });
+  writeFileSync(path.join(config, 'config.json'), JSON.stringify({ features: { 'github-identity': false, 'persona-accounts': false } }));
+  const realBin = path.join(root, 'real-bin');
+  mkdirSync(realBin);
+  const realGh = path.join(realBin, 'gh');
+  const log = path.join(root, 'real-gh-args');
+  writeFileSync(realGh, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)));\n`, { mode: 0o755 });
   const shim = path.join(root, 'gh');
-  writeFileSync(shim, buildGhShim());
+  writeFileSync(shim, buildGhShim(null, { configModule: path.join(ROOT, 'config.mjs') }));
   chmodSync(shim, 0o755);
   const { installGhShim } = await import('../install-gh-shim.mjs');
-  assert.deepEqual(installGhShim({ home: root, env: isolatedEnv(root) }), { skipped: true, reason: 'github-identity is off' });
+  assert.deepEqual(installGhShim({ home: env.HOME, env }), { skipped: true, reason: 'github-identity is off' });
+
+  const shimRun = spawnSync(shim, ['auth', 'status'], {
+    encoding: 'utf8',
+    env: { ...env, PATH: `${realBin}:${process.env.PATH}` },
+  });
+  assert.equal(shimRun.status, 0, shimRun.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(log, 'utf8')), ['auth', 'status']);
 
   const token = spawnSync(process.execPath, [TOKEN_CLI, '--slug'], {
     encoding: 'utf8',
-    env: isolatedEnv(root),
+    env,
   });
   assert.equal(token.status, 1);
   assert.match(token.stderr, /github-identity is off — refusing GitHub credentials/);
+
+  const { runSignedCommit, parseSignedCommitArgs } = await import('../signed-commit.mjs');
+  await assert.rejects(runSignedCommit(parseSignedCommitArgs(['--dry-run']), {
+    cwd: root,
+    env,
+    stdout: { write() {} },
+    stderr: { write() {} },
+  }), /github-identity add-on is off/);
 });
 
 test('ensure-identity accepts a pinned soul that has no App', (t) => {

@@ -9,6 +9,9 @@ HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 IDENTITY_TOOL="$HOOK_DIR/../agent-identity.mjs"
 [ -f "$IDENTITY_TOOL" ] && command -v node >/dev/null 2>&1 || exit 0
 
+# Agent-Identity trailers belong to the GitHub identity add-on.
+node --input-type=module -e 'import(process.argv[1]).then(({isGateEnabled}) => process.exit(isGateEnabled("github-identity") ? 0 : 1)).catch(() => process.exit(1))' "$HOOK_DIR/../config.mjs" || exit 0
+
 ID=$(node "$IDENTITY_TOOL" current) || {
   echo "agent identity lookup failed; refusing an unresolvable provenance trailer" >&2
   exit 1

@@ -22,7 +22,7 @@ import { homedir } from 'node:os';
 import {
   basename, dirname, isAbsolute, join, resolve,
 } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildGhShim, GH_SHIM_MARKER } from './gh-shim.mjs';
 import { isGateEnabled } from './config.mjs';
 import { ensureBlock, zshStartupDir } from './shell-path.mjs';
@@ -348,7 +348,7 @@ export function installGhShim({
   const binDir = join(home, '.config', 'agent-bot', 'bin');
   mkdir(binDir, { recursive: true });
   const shimPath = join(binDir, 'gh');
-  write(shimPath, buildGhShim(), { mode: 0o755 });
+  write(shimPath, buildGhShim(null, { configModule: fileURLToPath(new URL('./config.mjs', import.meta.url)) }), { mode: 0o755 });
 
   const localBin = join(home, '.local', 'bin');
   mkdir(localBin, { recursive: true });

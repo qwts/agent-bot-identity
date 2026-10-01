@@ -1,6 +1,6 @@
 export const GH_SHIM_MARKER = '# gh shim — agent bot identity. Managed by install-gh-shim.mjs';
 
-export function buildGhShim(tokenTool = null, { psPath = '/bin/ps', lsofPath = '/usr/sbin/lsof' } = {}) {
+export function buildGhShim(tokenTool = null, { psPath = '/bin/ps', lsofPath = '/usr/sbin/lsof', configModule = null } = {}) {
   const tokenSetup = tokenTool
     ? `TOKEN_TOOL="${tokenTool}"
 TOKEN_REQUIRES_NODE=1
@@ -17,7 +17,8 @@ token_enrich_pr_view() { "$TOKEN_TOOL" gh-pr-view-json; }`;
   return `#!/bin/sh
 ${GH_SHIM_MARKER}; do not edit in place.
 ${tokenSetup}
-# github-identity access is decided when this shim is installed from config.
+# Recheck the config gate at invocation: an already-installed shim must stop
+# intercepting GitHub operations as soon as the add-on is turned off.
 SELF="$0"
 case "$SELF" in
   */*) ;;
@@ -81,6 +82,10 @@ IFS=$OLDIFS
   REAL="$CAND"; break
 done
 [ -z "$REAL" ] && { echo "agent-bot gh shim: real gh not found on PATH" >&2; exit 127; }
+CONFIG_MODULE=${JSON.stringify(configModule ?? '')}
+if [ -n "$CONFIG_MODULE" ] && ! node --input-type=module -e 'import(process.argv[1]).then(({isGateEnabled}) => process.exit(isGateEnabled("github-identity") ? 0 : 1)).catch(() => process.exit(1))' "$CONFIG_MODULE"; then
+  exec "$REAL" "$@"
+fi
 
 # Experimental Codex desktop compatibility. Native GitHub operations are
 # direct children of the desktop bundle, whereas agent shell commands have a

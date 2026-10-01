@@ -7,7 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import process from 'node:process';
-import { apiBase, githubHost, loadConfig } from './config.mjs';
+import { apiBase, githubHost, isGateEnabled, loadConfig } from './config.mjs';
 import { mint } from './mint-token.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 
@@ -138,6 +138,7 @@ export async function runSignedCommit(options, {
   stdout = process.stdout, stderr = process.stderr,
 } = {}) {
   if (options.help) { stdout.write(signedCommitHelp()); return { dryRun: true, help: true }; }
+  if (!isGateEnabled('github-identity', { env, home: env.HOME })) throw new Error('github-identity add-on is off');
   if (gitTrim(['status', '--porcelain'], cwd)) {
     throw new Error('working tree is dirty — commit or stash first, so the signed commit matches what you tested');
   }
