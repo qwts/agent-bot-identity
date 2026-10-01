@@ -11,6 +11,20 @@
   Protocol fixture tests cover CLI pairing, joining account-watch, receiving
   and reporting a wake, and refusing loosened private permissions.
 
+- Feature gates for add-ons (#279, ADR-0274 decisions 1 and 2). The user
+  config's `features` object turns `github-identity` and `persona-accounts`
+  on; both are off by default and no environment variable sets them.
+  `agent-bot doctor` reports each gate and its source. Gate settings do not
+  mark an organization-projected config as edited, and survive profile
+  updates. Nothing consumes the gates yet: qwts machines should set both
+  to `true` before the add-ons start honouring them (#280, #281).
+
+- Soul package format, version 1 (#283, ADR-0275 decisions 1 to 3).
+  `docs/soul-package.md` specifies `soul.json`, the package layout, how
+  unknown files are kept, and the canonical revision hash, with fixed test
+  vectors. `agent-bot soul pack validate PATH` checks a package and prints
+  its revision. Nothing runs packages yet.
+
 ## 0.8.0
 
 - `agent-bot daemon pair-comms` prints the broker's pairing state and the

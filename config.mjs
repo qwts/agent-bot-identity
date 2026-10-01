@@ -38,6 +38,24 @@ import {
 
 const DAEMON_PREFERENCES = new Set(['off', 'prefer', 'required']);
 const SCOPE_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
+export const FEATURE_GATES = Object.freeze(['github-identity', 'persona-accounts']);
+
+// Add-ons use this single gate seam. Gates are config-only and default off;
+// environment variables never implicitly enable them.
+export function isGateEnabled(name, { env = process.env, home = homedir(), config } = {}) {
+  void env;
+  if (!FEATURE_GATES.includes(name)) throw new Error(`unknown feature gate: ${name}`);
+  const loaded = config === undefined ? loadConfig({ home, env }) : config;
+  validateFeatures(loaded);
+  return loaded.features?.[name] === true;
+}
+
+export function gateStatus(config = {}) {
+  return Object.fromEntries(FEATURE_GATES.map((name) => [name, {
+    enabled: config.features?.[name] === true,
+    source: config.features && Object.hasOwn(config.features, name) ? 'user-config' : 'default',
+  }]));
+}
 
 export function loadConfig({ home = homedir(), env = process.env } = {}) {
   const path = env.AGENT_BOT_CONFIG ?? join(home, '.config', 'agent-bot', 'config.json');
@@ -180,6 +198,19 @@ function validateSettings(config) {
   if (settings.spacesRoot !== undefined) spacesRootSetting(config);
   if (settings.daemonPreference !== undefined) validateDaemonPreference(settings.daemonPreference);
   rosterScope(config);
+  validateFeatures(config);
+}
+
+function validateFeatures(config) {
+  if (config.features !== undefined) {
+    if (!config.features || typeof config.features !== 'object' || Array.isArray(config.features)) {
+      throw new Error('agent-bot config features must be an object');
+    }
+    for (const [name, enabled] of Object.entries(config.features)) {
+      if (!FEATURE_GATES.includes(name)) throw new Error(`unknown feature gate: ${name}`);
+      if (typeof enabled !== 'boolean') throw new Error(`invalid features.${name}: expected true or false`);
+    }
+  }
 }
 
 export function apiBase(config = loadConfig()) {

@@ -108,6 +108,11 @@ test('doctor distinguishes dangling CLI targets and reports their evidence', asy
   assert.equal(check.evidence.target, target);
   assert.equal(check.evidence.resolved_target, join(home, 'deleted-checkout', 'agent-bot'));
   assert.match(check.action, /source checkout bootstrap.*--machine-only/);
+  const gates = report.machine.checks.find(({ id }) => id === 'config.feature_gates');
+  assert.deepEqual(gates.evidence.gates, {
+    'github-identity': { enabled: false, source: 'default' },
+    'persona-accounts': { enabled: false, source: 'default' },
+  });
 });
 
 for (const code of ['EACCES', 'EPERM', 'ELOOP', 'ENOTDIR']) {

@@ -791,6 +791,10 @@ test('a config projected from an older profile advances to the published one', (
   // Unscoped: the roster grows, retires, and moves its defaults in place.
   const home = tempHome();
   assert.equal(install(home, older).updated, true);
+  const localConfigPath = bootstrapConfigPath(home);
+  const localConfig = loadConfig({ home, env: {} });
+  localConfig.features = { 'github-identity': true, 'persona-accounts': false };
+  writeFileSync(localConfigPath, `${JSON.stringify(localConfig, null, 2)}\n`);
   assert.equal(isProjectedRuntimeConfig(loadConfig({ home, env: {} })), true);
   const advanced = install(home, organizationProfile());
   assert.equal(advanced.updated, true);
@@ -805,6 +809,7 @@ test('a config projected from an older profile advances to the published one', (
     ],
   );
   assert.equal(written.scope, undefined);
+  assert.deepEqual(written.features, { 'github-identity': true, 'persona-accounts': false });
   assert.equal(statSync(bootstrapConfigPath(home)).mode & 0o777, 0o600);
   assert.equal(install(home, organizationProfile()).updated, false);
 
@@ -876,4 +881,19 @@ test('a malformed scope in the installed config fails loudly', () => {
     assert.throws(() => rosterScope({ scope }), /scope/);
   }
   assert.equal(rosterScope({}), null);
+});
+
+test('an explicit --config source applies its own feature gates over a projected profile config', () => {
+  const home = tempHome();
+  installBootstrapProfile({
+    sourcePath: '-', home, env: {}, read: () => JSON.stringify(organizationProfile()),
+  });
+  const projected = loadConfig({ home, env: {} });
+  assert.equal(isProjectedRuntimeConfig(projected), true);
+  const sourcePath = join(tempHome(), 'config.json');
+  writeFileSync(sourcePath, JSON.stringify({ ...projected, features: { 'github-identity': true } }));
+  const result = installBootstrapConfig({ sourcePath, home, env: {} });
+  assert.equal(result.updated, true);
+  assert.deepEqual(loadConfig({ home, env: {} }).features, { 'github-identity': true });
+  assert.equal(installBootstrapConfig({ sourcePath, home, env: {} }).updated, false);
 });
