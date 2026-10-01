@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
@@ -15,7 +16,7 @@ import {
   stopDaemon,
 } from '../agent-daemon.mjs';
 import { ensureAgentIdentity, stateDirectory } from '../agent-identity.mjs';
-import { mintBindToken } from '../agent-binding.mjs';
+import { mintBindToken, readBinding } from '../agent-binding.mjs';
 import {
   authorizeSouls,
   bindTransport,
@@ -391,9 +392,10 @@ test('the client follows a daemon restart to its new port and token', async () =
 
 function mintWorktreeToken(env, root, { id = AGENT_ID } = {}) {
   const identity = mintIdentity(env, { id });
-  const gitDir = path.join(root, 'gitdir');
-  mkdirSync(gitDir, { recursive: true });
   const worktree = path.join(root, 'worktree');
+  mkdirSync(worktree, { recursive: true });
+  execFileSync('git', ['init', '-q', worktree]);
+  const gitDir = path.join(worktree, '.git');
   const record = mintBindToken({ gitDir, worktree, agentId: identity.id });
   return { identity, gitDir, worktree, record };
 }
@@ -415,14 +417,14 @@ test('bind consumes the worktree token and exchanges it for a live binding', asy
     assert.equal(body.agentId, AGENT_ID);
     assert.equal(body.worktree, worktree);
     assert.equal(body.repinRequired, false);
-    assert.match(body.secret, /^[0-9a-f]{64}$/);
-    // Consumed: the file is gone and a replay finds nothing to present.
+    assert.match(body.secret, /^[A-Za-z0-9_-]{43}$/);
+    // Consumed once; subsequent bind calls reuse the shared binding.
     assert.equal(existsSync(path.join(gitDir, 'agent-bind-token.json')), false);
     const replay = await call('/v0/bind', {
       method: 'POST',
       body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
     });
-    assert.equal(replay.status, 403);
+    assert.equal(replay.status, 200);
   });
 });
 
@@ -588,7 +590,7 @@ test('releasing a binding hands the slot back and invalidates the secret', async
   });
 });
 
-test('a new conversation reusing the worktree binds a fresh identity and asks for a repin', async () => {
+test('a conversation reuses the persisted identity without consuming a new token', async () => {
   const { root, env } = scratchEnv();
   const { gitDir, worktree, record } = mintWorktreeToken(env, root);
   await withServer(env, async ({ call }) => {
@@ -603,9 +605,9 @@ test('a new conversation reusing the worktree binds a fresh identity and asks fo
     });
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.notEqual(body.agentId, AGENT_ID);
-    assert.equal(body.repinRequired, true);
-    assert.equal(body.soul.transcriptLocator.id, 'thread-later');
+    assert.equal(body.agentId, AGENT_ID);
+    assert.equal(body.repinRequired, false);
+    assert.equal(existsSync(path.join(gitDir, 'agent-bind-token.json')), true);
   });
 });
 
@@ -715,7 +717,7 @@ test('a mint failure after a verified binding still leaves a secret-free receipt
   }
 });
 
-test('a daemon restart drops every binding — re-binding takes a fresh mint', async () => {
+test('a daemon restart preserves binding authentication without a bearer', async () => {
   const { root, env } = scratchEnv();
   const { gitDir, worktree, record } = mintWorktreeToken(env, root);
   let secret;
@@ -727,9 +729,13 @@ test('a daemon restart drops every binding — re-binding takes a fresh mint', a
     secret = bound.secret;
   });
   await withServer(env, async ({ call }) => {
-    const stale = await call('/v0/binding', { headers: { 'x-agent-binding': secret } });
-    assert.equal(stale.status, 401);
-    // Fresh mint from the same worktree re-establishes the binding.
+    const stale = await call('/v0/binding', { token: '', headers: { 'x-agent-binding': secret } });
+    assert.equal(stale.status, 200);
+    const shared = readBinding({ env: {}, gitDir });
+    assert.equal(shared.secret, secret);
+    const direct = await fetch(`${shared.daemon}/v0/binding`, { headers: { 'x-agent-binding': secret } });
+    assert.equal(direct.status, 200);
+    // A redundant token survives reuse of the persisted binding.
     const again = mintBindToken({ gitDir, worktree, agentId: AGENT_ID });
     const rebound = await call('/v0/bind', {
       method: 'POST',

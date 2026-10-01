@@ -104,7 +104,7 @@ test('a notification for a KNOWN method is also silent — no id:null reply', as
   assert.equal(await handleMcpMessage(state, { jsonrpc: '2.0', method: 'initialize', params: {} }), null);
 });
 
-test('the connection close surrenders the binding back to the daemon', async () => {
+test('connection close preserves the binding', async () => {
   const { root, gitDir } = scratchRepo();
   mintBindToken({ gitDir, worktree: root, agentId: AGENT_ID });
   const released = [];
@@ -121,12 +121,12 @@ test('the connection close surrenders the binding back to the daemon', async () 
   input.end();
   await server;
 
-  assert.deepEqual(released, ['a'.repeat(64)]);
-  assert.equal(state.secret, null);
-  assert.equal(state.agentId, null);
+  assert.deepEqual(released, []);
+  assert.equal(state.secret, 'a'.repeat(64));
+  assert.equal(state.agentId, AGENT_ID);
 });
 
-test('close waits for an in-flight bind and still surrenders its binding', async () => {
+test('close waits for an in-flight bind and preserves its binding', async () => {
   const { root, gitDir } = scratchRepo();
   mintBindToken({ gitDir, worktree: root, agentId: AGENT_ID });
   const released = [];
@@ -150,8 +150,8 @@ test('close waits for an in-flight bind and still surrenders its binding', async
   input.end();
   await server;
 
-  assert.deepEqual(released, ['a'.repeat(64)]);
-  assert.equal(state.secret, null);
+  assert.deepEqual(released, []);
+  assert.equal(state.secret, 'a'.repeat(64));
 });
 
 test('bind reads the worktree token itself and never returns the secret', async () => {

@@ -28,6 +28,8 @@ import {
   normalizeEnvelope,
 } from './hook-dialects.mjs';
 
+import { readBinding } from './agent-binding.mjs';
+
 const ROOT = dirname(fileURLToPath(import.meta.url));
 
 // Injectable so the deadline is testable without sleeping through it.
@@ -202,6 +204,10 @@ export function combine(results, event) {
 
 export function runHooks({ dialectKey, event, payload, dir, env = process.env }) {
   const envelope = normalizeEnvelope({ dialectKey, event, payload });
+  let binding;
+  try { binding = readBinding({ env, cwd: envelope.cwd ?? process.cwd() }); }
+  catch { return { decision: 'deny', reason: 'untrusted agent binding' }; }
+  if (binding) env = { ...env, QWTS_AGENT_ID: binding.agentId };
   const stdin = JSON.stringify(envelope);
   // AGENT_HOOK_TIMEOUT_MS only ever tightens: budgetMs caps it against the
   // vendor's window, so an operator can be stricter but never leak past a

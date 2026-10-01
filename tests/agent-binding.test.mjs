@@ -132,7 +132,7 @@ test('registry binds, resolves, and releases without ever exposing the map', () 
     transcript: { provider: 'claude', id: 'session-1' },
     harness: 'claude',
   });
-  assert.match(secret, /^[0-9a-f]{64}$/);
+  assert.match(secret, /^[A-Za-z0-9_-]{43}$/);
   const binding = registry.resolve(secret);
   assert.equal(binding.agentId, AGENT_ID);
   assert.equal(binding.transcript.id, 'session-1');
@@ -164,14 +164,14 @@ test('abandoned bindings idle out — the cap counts conversations, not history'
   }
   assert.throws(() => registry.bind({ agentId: AGENT_ID, worktree: '/w' }), /too many live bindings/);
 
-  // 23 hours in, one conversation is still calling bound tools: the resolve
+  // 29 days in, one conversation is still calling bound tools: the resolve
   // refreshes its idle clock.
-  clock = new Date('2026-08-13T07:00:00.000Z');
+  clock = new Date('2026-09-10T07:00:00.000Z');
   assert.equal(registry.resolve(secrets[0]).agentId, AGENT_ID);
 
-  // 23 hours after that touch, the sweep runs: every binding nothing touched
+  // 29 days after that touch, the sweep runs: every binding nothing touched
   // is gone, the active conversation is not, and the slots are free again.
-  clock = new Date('2026-08-14T06:00:00.000Z');
+  clock = new Date('2026-10-09T06:00:00.000Z');
   const fresh = registry.bind({ agentId: AGENT_ID, worktree: '/w' });
   assert.equal(registry.size(), 2);
   assert.equal(registry.resolve(fresh).agentId, AGENT_ID);

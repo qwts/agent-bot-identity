@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Soul bindings persist (#253, agent-comms ADR-0008 decision 1). A
+  successful bind writes `<git-dir>/agent-binding.json` (0600) holding the
+  agent ID, parent, account, daemon URL, and binding secret; the daemon keeps
+  only the secret's SHA-256 in `~/.local/state/agent-bot/bindings.json`
+  (0600). Bindings survive daemon restarts, idle out after 30 days unused, and
+  have their daemon URL rewritten at startup; a binding whose file is gone,
+  foreign, or moved is pruned rather than stopping the daemon. MCP `bind` and
+  `setup-worktree` reuse an existing binding, MCP shutdown no longer revokes
+  it, and `agent-bot binding revoke` (or `DELETE /v0/binding`) does.
+  `readBinding` is the one reader, honoring `AGENT_BOT_BINDING`.
+
 ## 0.7.2
 
 - `qwen` is a recognized harness. `detect-harness` gains a `HARNESSES` row
