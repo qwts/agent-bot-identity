@@ -66,7 +66,7 @@ function bindingProtocol(value) {
     .find((part) => part.startsWith('agent-binding.')) ?? null;
 }
 
-export function attachWakeEndpoint(server, { lookupBinding, pingIntervalMs = 30_000, setIntervalImpl = setInterval, clearIntervalImpl = clearInterval } = {}) {
+export function attachWakeEndpoint(server, { lookupBinding, lookupProof = () => null, pingIntervalMs = 30_000, setIntervalImpl = setInterval, clearIntervalImpl = clearInterval } = {}) {
   const warmPool = new WarmPool();
   server.on('upgrade', (req, socket, head) => {
     // Node hands the upgrade socket over with no error listener. A peer that
@@ -81,9 +81,14 @@ export function attachWakeEndpoint(server, { lookupBinding, pingIntervalMs = 30_
     let binding;
     // A browser cannot set headers, so the secret may ride as the subprotocol
     // `agent-binding.<secret>`; a compliant client then needs it echoed.
-    const protocol = req.headers['x-agent-binding'] ? null : bindingProtocol(req.headers['sec-websocket-protocol']);
-    try { binding = lookupBinding(req.headers['x-agent-binding'] || protocol?.slice('agent-binding.'.length) || ''); }
-    catch { binding = null; }
+    // A binding proof (#270) never carries the secret and wins over both.
+    const proved = typeof req.headers['x-agent-binding-proof'] === 'string';
+    const protocol = proved || req.headers['x-agent-binding'] ? null : bindingProtocol(req.headers['sec-websocket-protocol']);
+    try {
+      binding = proved
+        ? lookupProof(req)
+        : lookupBinding(req.headers['x-agent-binding'] || protocol?.slice('agent-binding.'.length) || '');
+    } catch { binding = null; }
     if (!binding) { socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); return; }
     const key = req.headers['sec-websocket-key'];
     if (req.headers.upgrade?.toLowerCase() !== 'websocket' || req.headers['sec-websocket-version'] !== '13' || !key) {

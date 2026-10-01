@@ -39,11 +39,17 @@ test('private binding and hashed registry persist, reload, rewrite URL, and revo
   restarted.rewrite('http://127.0.0.1:5678');
   assert.equal(readBinding({ cwd: f.root, env: {} }).daemon, 'http://127.0.0.1:5678');
   assert.equal(restarted.resolve(f.secret).agentId, agentId);
-  await revokeBinding({ cwd: f.root, env: {}, fetchImpl: async (url, request) => {
+  await revokeBinding({ cwd: f.root, env: {}, now: f.options.now, fetchImpl: async (url, request) => {
     assert.equal(url, 'http://127.0.0.1:5678/v0/binding');
     assert.equal(request.method, 'DELETE');
     assert.equal(request.headers.authorization, undefined);
-    return { ok: restarted.release(request.headers['x-agent-binding']) };
+    // #270: the secret never goes on the wire, only a one-time proof.
+    assert.equal(request.headers['x-agent-binding'], undefined);
+    assert.equal(JSON.stringify(request.headers).includes(f.secret), false);
+    const proof = request.headers['x-agent-binding-proof'];
+    // A proof made for another daemon address is refused.
+    assert.equal(restarted.releaseProof(proof, { method: 'DELETE', path: '/v0/binding', authority: '127.0.0.1:9999' }), false);
+    return { ok: restarted.releaseProof(proof, { method: 'DELETE', path: '/v0/binding', authority: '127.0.0.1:5678' }) };
   } });
   assert.equal(existsSync(bindingPath), false);
   assert.equal(createBindingRegistry(f.options).resolve(f.secret), null);

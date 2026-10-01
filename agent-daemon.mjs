@@ -69,6 +69,7 @@ import { appendAuditReceipt, principalsFile, resolvePrincipal } from './agent-pr
 import { runSpawnHooks } from './agent-hook.mjs';
 import { createWebLayer } from './agent-web.mjs';
 import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs';
+import { PROOF_HEADER, parseBindingProof, signBindingProof } from './binding-proof.mjs';
 import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms-client.mjs';
 import { attachWakeEndpoint } from './agent-wake.mjs';
 import { readColdWakeSettings } from './cold-wake-settings.mjs';
@@ -258,8 +259,12 @@ export function createDaemonServer({
     if (!vouchKey) vouchKey = loadOrCreateVouchKey(vouchStateDir({ env, home }));
     return vouchKey.privateKey;
   }
-  function allowVouch(secret) {
-    const key = createHash('sha256').update(secret, 'utf8').digest('hex');
+  // Keyed per binding: the proof's key ID, or sha256 of an older client's
+  // bare secret. Neither is the secret.
+  function allowVouch(presented) {
+    const key = typeof presented === 'string'
+      ? createHash('sha256').update(presented, 'utf8').digest('hex')
+      : parseBindingProof(presented.proof).keyId;
     const atMs = now().getTime();
     const recent = (vouchHits.get(key) ?? []).filter((stamp) => atMs - stamp < VOUCH_WINDOW_MS);
     if (recent.length >= VOUCH_LIMIT) {
@@ -345,8 +350,7 @@ export function createDaemonServer({
         }
         case 'POST /v0/bind': {
           const body = parseJsonBody(await readBody(req));
-          const presentedBinding = typeof req.headers['x-agent-binding'] === 'string' ? req.headers['x-agent-binding'] : null;
-          sendJson(res, 200, bindWorktreeConversation({ body, bindings, env, home, config, now, presentedBinding }));
+          sendJson(res, 200, bindWorktreeConversation({ body, bindings, env, home, config, now, presented: presentedCredential(req) }));
           return;
         }
         case 'POST /v0/spawn': {
@@ -389,7 +393,11 @@ export function createDaemonServer({
         }
         // Explicit revocation invalidates the secret and removes its file.
         case 'DELETE /v0/binding': {
-          if (!bindings.release(req.headers['x-agent-binding'] ?? '')) {
+          const presented = presentedCredential(req);
+          const released = typeof presented === 'string'
+            ? bindings.release(presented)
+            : bindings.releaseProof(presented.proof, presented.request);
+          if (!released) {
             throw Object.assign(new Error('missing or invalid agent binding'), { statusCode: 401 });
           }
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, released: true });
@@ -480,7 +488,13 @@ export function createDaemonServer({
     const address = server.address();
     bindings.rewrite(`http://${address.address === '::1' ? '[::1]' : '127.0.0.1'}:${address.port}`);
   });
-  warmPool = attachWakeEndpoint(server, { lookupBinding: (secret) => bindings.resolve(secret) });
+  warmPool = attachWakeEndpoint(server, {
+    lookupBinding: (secret) => bindings.resolve(secret),
+    lookupProof: (req) => {
+      const presented = presentedCredential(req);
+      return typeof presented === 'string' ? null : bindings.resolveProof(presented.proof, presented.request);
+    },
+  });
   server.token = token;
   server.warmPool = warmPool;
   server.bindings = bindings;
@@ -494,7 +508,7 @@ export function createDaemonServer({
 // joins the two halves into one identity. The body carries NO Agent ID: who
 // is binding is derived entirely from the consumed token record, so no caller
 // can bind as a worktree it cannot read.
-function bindWorktreeConversation({ body, bindings, env, home, config, now, presentedBinding = null }) {
+function bindWorktreeConversation({ body, bindings, env, home, config, now, presented = '' }) {
   // Validate the conversation half BEFORE consuming: a bind rejected for a
   // malformed request must leave the single-use token in place so the caller
   // can retry, while a wrong or replayed token still fails without consuming.
@@ -508,7 +522,10 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now, pres
       // read, or a bind token minted there. A path and the daemon bearer
       // alone must never yield another worktree's secret.
       const pending = readBindToken(body.gitDir);
-      const holdsBinding = presentedBinding !== null && tokensMatch(existing.secret, presentedBinding);
+      const holdsBinding = typeof presented === 'string'
+        ? presented !== '' && tokensMatch(existing.secret, presented)
+        : bindings.resolveProof(presented.proof, presented.request)?.bindingHash
+          === createHash('sha256').update(existing.secret).digest('hex');
       // A matching token proves place without being spent, so a redundant
       // token survives reuse.
       const holdsToken = pending !== null && typeof body.token === 'string' && tokensMatch(pending.token, body.token);
@@ -612,8 +629,30 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now, pres
   };
 }
 
+// The daemon address a binding proof must name, spelled the way the binding
+// file's daemon URL spells its host.
+function daemonAuthority(req) {
+  const address = String(req.socket.localAddress ?? '').replace(/^::ffff:/, '');
+  return `${address.includes(':') ? `[${address}]` : address}:${req.socket.localPort}`;
+}
+
+// What the caller presented for its binding (#270): a proof, which never
+// carries the secret, as { proof, request }; otherwise an older client's bare
+// secret from `x-agent-binding` (empty when absent).
+function presentedCredential(req) {
+  const proof = req.headers[PROOF_HEADER];
+  if (typeof proof === 'string') {
+    const request = { method: req.method, path: new URL(req.url, 'http://127.0.0.1').pathname, authority: daemonAuthority(req) };
+    return { proof, request };
+  }
+  return typeof req.headers['x-agent-binding'] === 'string' ? req.headers['x-agent-binding'] : '';
+}
+
 function requireBinding(req, bindings) {
-  const binding = bindings.resolve(req.headers['x-agent-binding'] ?? '');
+  const presented = presentedCredential(req);
+  const binding = typeof presented === 'string'
+    ? bindings.resolve(presented)
+    : bindings.resolveProof(presented.proof, presented.request);
   if (!binding) {
     throw Object.assign(new Error('missing or invalid agent binding'), { statusCode: 401 });
   }
@@ -635,10 +674,6 @@ function parentForVouch(binding, { env, home }) {
   }
 }
 
-function presentedBinding(req) {
-  const header = req.headers['x-agent-binding'];
-  return typeof header === 'string' ? header : '';
-}
 
 async function handleVouchRequest({
   req,
@@ -654,8 +689,8 @@ async function handleVouchRequest({
   if (body.aud !== 'agent-comms') {
     throw Object.assign(new Error('aud must be agent-comms'), { statusCode: 400 });
   }
-  const secret = presentedBinding(req);
-  const binding = findBinding(secret);
+  const presented = presentedCredential(req);
+  const binding = findBinding(presented);
   if (!binding) {
     appendAuditReceipt(
       { event: 'vouch', operation: 'soul-token', decision: 'denied' },
@@ -663,7 +698,7 @@ async function handleVouchRequest({
     );
     throw Object.assign(new Error('unbound'), { statusCode: 401 });
   }
-  if (!allowVouch(secret)) {
+  if (!allowVouch(presented)) {
     appendAuditReceipt({
       event: 'vouch',
       agentId: binding.agentId,
@@ -860,15 +895,23 @@ export function daemonClient({
     // Re-read the state file on every request: a long-running adapter must
     // follow a daemon restart to its new port and per-start token instead of
     // failing forever against a cached endpoint.
-    const shared = headers['x-agent-binding'] ? readBinding({ env, cwd }) : null;
+    const { 'x-agent-binding': secret, ...rest } = headers;
+    const shared = secret ? readBinding({ env, cwd }) : null;
     const state = shared ? null : readStateFile(daemonStateFile({ env, home }));
     if (!state && !shared) throw new Error('daemon is not running (no state file)');
-    const res = await fetchImpl(`${shared?.daemon ?? baseUrl(state)}${pathname}`, {
+    const target = new URL(pathname, shared?.daemon ?? baseUrl(state));
+    // A binding is presented as a proof for this one request (#270); the
+    // secret itself never leaves this process.
+    const proof = shared
+      ? { [PROOF_HEADER]: signBindingProof({ secret, method, path: target.pathname, authority: target.host }) }
+      : {};
+    const res = await fetchImpl(`${target.origin}${pathname}`, {
       method,
       headers: {
         ...(state ? { authorization: `Bearer ${state.token}` } : {}),
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
-        ...headers,
+        ...rest,
+        ...proof,
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(requestTimeoutMs),

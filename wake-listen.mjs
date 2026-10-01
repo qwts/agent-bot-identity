@@ -11,8 +11,8 @@
 // `agent-hooks/session-start/20-arm-wake` injects the standing instruction that
 // tells the session to arm this command and what to do with each line.
 //
-// Node's global WebSocket cannot set request headers, and the binding secret
-// travels in `x-agent-binding`, so the client half of RFC 6455 is written out
+// Node's global WebSocket cannot set request headers, and the binding travels
+// as a proof in `x-agent-binding-proof` (#270), so the client half of RFC 6455 is written out
 // here over node:http: handshake through the `upgrade` event, masked outgoing
 // frames, pong answers to pings, and text-frame parsing. Zero npm
 // dependencies, like the rest of this runtime.
@@ -25,6 +25,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
+import { PROOF_HEADER, signBindingProof } from './binding-proof.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 
 export const WAKE_PATH = '/v0/wake';
@@ -192,6 +193,12 @@ export function isLoopbackHost(hostname) {
 // header. A binding file that names a remote host is therefore either corrupt
 // or an attempt to walk the secret out of the account, and neither deserves a
 // connection.
+// One proof per attempt, bound to the wake URL it is sent to (#270).
+export function wakeProof(secret, url) {
+  const target = new URL(url);
+  return signBindingProof({ secret, method: 'GET', path: target.pathname, authority: target.host });
+}
+
 export function wakeUrl(daemon) {
   const url = new URL(WAKE_PATH, daemon);
   if (url.protocol !== 'http:') {
@@ -534,7 +541,9 @@ async function oneAttempt({ binding, url, connect, stdout, signal }) {
   try {
     connection = await connect({
       url,
-      headers: { [BINDING_HEADER]: binding.secret },
+      // A fresh proof per attempt (#270): whoever answers on this port never
+      // learns the secret, and a captured proof is spent or names this port.
+      headers: { [PROOF_HEADER]: wakeProof(binding.secret, url) },
       signal,
       onOpen,
       onText: (text) => writeLine(stdout, frameLine(text)),

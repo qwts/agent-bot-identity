@@ -21,6 +21,7 @@ import {
 import { verifySoulToken, vouchKeyPath, vouchStateDir } from '../vouch.mjs';
 import { ensureAgentIdentity, stateDirectory } from '../agent-identity.mjs';
 import { mintBindToken, readBinding } from '../agent-binding.mjs';
+import { PROOF_HEADER, signBindingProof } from '../binding-proof.mjs';
 import {
   authorizeSouls,
   bindTransport,
@@ -463,6 +464,39 @@ test('binding whoami answers only to the connection secret', async () => {
     assert.equal(binding.agentId, AGENT_ID);
     assert.equal(binding.worktree, worktree);
     assert.equal(binding.transcript.id, 'thread-daemon');
+  });
+});
+
+test('a binding proof authenticates once, for this daemon and this route only (#270)', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  await withServer(env, async ({ call, port }) => {
+    const bound = await (await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-proof' } },
+    })).json();
+    const prove = (fields = {}) => signBindingProof({
+      secret: bound.secret, method: 'GET', path: '/v0/binding', authority: `127.0.0.1:${port}`, ...fields,
+    });
+
+    const proof = prove();
+    const who = await call('/v0/binding', { token: null, headers: { [PROOF_HEADER]: proof } });
+    assert.equal(who.status, 200);
+    assert.equal((await who.json()).binding.agentId, bound.agentId);
+
+    // Spent: a captured proof is good for one request.
+    const replay = await call('/v0/binding', { token: null, headers: { [PROOF_HEADER]: proof } });
+    assert.equal(replay.status, 401);
+
+    // Made for the port a squatter held, then relayed here: refused.
+    const relayed = await call('/v0/binding', { token: null, headers: { [PROOF_HEADER]: prove({ authority: '127.0.0.1:1' }) } });
+    assert.equal(relayed.status, 401);
+    // Made for another route: refused.
+    const elsewhere = await call('/v0/binding', { token: null, headers: { [PROOF_HEADER]: prove({ path: '/v0/credential' }) } });
+    assert.equal(elsewhere.status, 401);
+    // Outside the freshness window: refused.
+    const stale = await call('/v0/binding', { token: null, headers: { [PROOF_HEADER]: prove({ now: Date.now() - 5 * 60_000 }) } });
+    assert.equal(stale.status, 401);
   });
 });
 

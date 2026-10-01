@@ -753,8 +753,11 @@ export async function spawnIdentity({ options = {}, env = process.env, cwd = pro
     if (env.AGENT_BOT_BINDING) throw new Error('spawn requires a parent binding: AGENT_BOT_BINDING is unreadable');
     return null;
   }
-  const response = await fetchImpl(`${parent.daemon}/v0/spawn`, {
-    method: 'POST', headers: { 'content-type': 'application/json', 'x-agent-binding': parent.secret },
+  const { PROOF_HEADER, signBindingProof } = await import('./binding-proof.mjs');
+  const target = new URL('/v0/spawn', parent.daemon);
+  const proof = signBindingProof({ secret: parent.secret, method: 'POST', path: target.pathname, authority: target.host });
+  const response = await fetchImpl(target.href, {
+    method: 'POST', headers: { 'content-type': 'application/json', [PROOF_HEADER]: proof },
     body: JSON.stringify(options), signal: AbortSignal.timeout(30000),
   });
   if (!response.ok) throw new Error(`identity spawn failed: HTTP ${response.status}`);

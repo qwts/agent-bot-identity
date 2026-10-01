@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
+import { PROOF_HEADER, bindingKey, checkBindingProof, parseBindingProof } from '../binding-proof.mjs';
 import {
   BACKOFF,
   BINDING_ENV,
@@ -31,6 +32,7 @@ import {
   wakeInstruction,
   wakeUrl,
   websocketAccept,
+  wakeProof,
 } from '../wake-listen.mjs';
 
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -153,11 +155,15 @@ async function startStub({ secret = SECRET, onConnection = null } = {}) {
     res.end('no such route');
   });
   server.on('upgrade', (req, socket, head) => {
-    const presented = req.headers[BINDING_HEADER];
-    attempts.push({ path: req.url, presented });
+    // The client presents a proof (#270), never the secret itself.
+    const proof = parseBindingProof(req.headers[PROOF_HEADER]);
+    const authority = `127.0.0.1:${server.address().port}`;
+    const valid = proof !== null
+      && checkBindingProof(proof, bindingKey(secret), { method: req.method, path: req.url, authority });
+    attempts.push({ path: req.url, proved: valid, bare: req.headers[BINDING_HEADER] ?? null });
     // Set before a refusal too: the client may reset while the 403 is in flight.
     socket.on('error', () => {});
-    if (req.url !== WAKE_PATH || presented !== secret) {
+    if (req.url !== WAKE_PATH || !valid) {
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       return;
     }
@@ -292,7 +298,7 @@ test('a listener holds the socket and prints one NDJSON line per frame', async (
     { event: 'wake', messages: 2 },
   ]);
   assert.deepEqual(stdout.lines.at(-1), { event: 'stopped' });
-  assert.deepEqual(stub.attempts, [{ path: WAKE_PATH, presented: SECRET }]);
+  assert.deepEqual(stub.attempts, [{ path: WAKE_PATH, proved: true, bare: null }]);
   await stub.stop();
 });
 
@@ -412,9 +418,10 @@ test('the handshake budget does not kill an established wake socket', async () =
   const stub = await startStub();
   const controller = new AbortController();
   const texts = [];
+  const url = wakeUrl(stub.daemon);
   const connection = await connectWake({
-    url: wakeUrl(stub.daemon),
-    headers: { [BINDING_HEADER]: SECRET },
+    url,
+    headers: { [PROOF_HEADER]: wakeProof(SECRET, url) },
     timeoutMs: 100,
     signal: controller.signal,
     onText: (text) => texts.push(text),
@@ -838,7 +845,7 @@ test('a binding revoked while the listener holds it stops the listener', async (
     stderr,
     readBinding: () => reads.shift() ?? null,
     connect: async ({ headers }) => {
-      attempts.push(headers[BINDING_HEADER]);
+      attempts.push(headers);
       throw new Error('the daemon answered HTTP 403 instead of upgrading');
     },
     signal: new AbortController().signal,
@@ -846,7 +853,8 @@ test('a binding revoked while the listener holds it stops the listener', async (
     backoff: FAST,
   });
   assert.equal(code, 1);
-  assert.deepEqual(attempts, [SECRET], 'the revoked secret is never presented again');
+  assert.equal(attempts.length, 1, 'the revoked binding is never presented again');
+  assert.equal(JSON.stringify(attempts).includes(SECRET), false, 'the secret itself is never presented');
   assert.deepEqual(stdout.lines.at(-1), { event: 'unbound' });
   assert.match(stderr.text, /^wake: unbound — the binding was revoked or removed/);
 });

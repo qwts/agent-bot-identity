@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Binding proofs (#270, agent-comms ADR-0008 decision 3 as amended). Clients
+  no longer send the binding secret: each request carries a one-time
+  `x-agent-binding-proof` (`v1.<keyId>.<ts>.<nonce>.<mac>`), an HMAC keyed by
+  the secret's SHA-256 over the method, path, and daemon address, fresh
+  within 60 s, and refused once its nonce is seen. A process holding the
+  daemon's loopback port while the daemon is down learns nothing reusable,
+  and a captured proof does not work at the daemon's real port. `wake listen`,
+  spawn, binding revoke, and the MCP daemon client present proofs; the daemon
+  still accepts the bare `x-agent-binding` from older clients.
+
 - The daemon wakes souls through the wake plane (agent-comms ADR-0008
   decisions 7 to 9). Each wake from the broker's `account-watch` goes to the
   soul's warm sockets, or to a cold turn when the owner turned cold wake on,
