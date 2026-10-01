@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `agent-bot daemon pair-comms` now pairs with this account's one-account
+  agent-comms broker when `--broker` is omitted (#286, ADR-0059 decision 3).
+  Private custody requires owned 0700 rendezvous/proof directories and a
+  0600 socket. The daemon persists the broker mode and applies it to every
+  account-watch connection and wake report. Named brokers and older saved
+  credentials retain group-mode custody. No agent-bot feature gate is used.
+  Protocol fixture tests cover CLI pairing, joining account-watch, receiving
+  and reporting a wake, and refusing loosened private permissions.
+
 - Feature gates for add-ons (#279, ADR-0274 decisions 1 and 2). The user
   config's `features` object turns `github-identity` and `persona-accounts`
   on; both are off by default and no environment variable sets them.

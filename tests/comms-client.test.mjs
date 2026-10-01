@@ -283,9 +283,8 @@ test('the vouch key is reused, never replaced, and must be an owner-only Ed25519
   assert.equal(readFileSync(file, 'utf8'), rsa);
 });
 
-test('pairing fails closed without a broker account or with an unknown one', async () => {
+test('pairing fails closed with an unknown broker account', async () => {
   const world = scratchWorld();
-  await assert.rejects(pairDaemonComms({ env: world.env, home: '/nonexistent', brokerAccount: '' }), /name the broker account/);
   await assert.rejects(
     pairDaemonComms({ env: world.env, home: '/nonexistent', brokerAccount: 'no-such-account-xyz' }),
     /no account named/,
@@ -466,5 +465,51 @@ test('an over-limit broker line fails the request instead of buffering forever',
     await assert.rejects(client.request({ op: 'ping' }, { paths }), /protocol limit/);
   } finally {
     await broker.close();
+  }
+});
+
+
+test('private custody rejects loose directories, socket, wrong owner, and unknown mode', async () => {
+  const world = scratchWorld();
+  chmodSync(world.shared, 0o700);
+  chmodSync(world.proofs, 0o700);
+  const broker = await startFakeBroker(world.socket, () => {});
+  chmodSync(world.socket, 0o600);
+  try {
+    checkBrokerCustody(world.paths, MY_UID, 'single-account');
+    for (const [file, good, bad] of [
+      [world.shared, 0o700, 0o750],
+      [world.proofs, 0o700, 0o1777],
+      [world.socket, 0o600, 0o660],
+    ]) {
+      chmodSync(file, bad);
+      await assert.rejects(pairDaemonComms({ env: world.env }), { code: 'broker-untrusted' });
+      chmodSync(file, good);
+    }
+    assert.throws(() => checkBrokerCustody(world.paths, MY_UID + 1, 'single-account'), /this account/);
+    assert.throws(() => checkBrokerCustody(world.paths, MY_UID, 'unknown'), /unknown broker mode/);
+    // Naming even our own account retains group mode's 1777 proof check.
+    await assert.rejects(pairDaemonComms({ env: world.env, brokerAccount: ME }), /expected 1777/);
+    assert.equal(broker.requests.length, 0);
+    assert.equal(existsSync(world.env.AGENT_BOT_COMMS_DAEMON_PATH), false);
+  } finally {
+    await broker.close();
+  }
+});
+
+test('credential mode round-trips, old credentials remain group, invalid modes fail closed', () => {
+  const world = scratchWorld();
+  const legacy = { account: ME, secret: 'test', brokerUid: MY_UID, pairedAt: '2026-10-01' };
+  for (const mode of ['single-account', 'group']) {
+    saveCommsCredential({ ...legacy, mode }, { env: world.env });
+    assert.equal(loadCommsCredential({ env: world.env }).mode, mode);
+  }
+  assert.equal(saveCommsCredential(legacy, { env: world.env }).mode, 'group');
+  writeFileSync(world.env.AGENT_BOT_COMMS_DAEMON_PATH, JSON.stringify(legacy));
+  assert.equal(loadCommsCredential({ env: world.env }).mode, undefined);
+  for (const mode of ['invalid', null, false]) {
+    assert.throws(() => saveCommsCredential({ ...legacy, mode }, { env: world.env }), /pair again/);
+    writeFileSync(world.env.AGENT_BOT_COMMS_DAEMON_PATH, JSON.stringify({ ...legacy, mode }));
+    assert.throws(() => loadCommsCredential({ env: world.env }), /pair again/);
   }
 });
