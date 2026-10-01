@@ -256,6 +256,9 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
   // A proof is accepted once: its nonce is remembered for two windows, which
   // outlives the timestamp check on either side of the daemon's clock.
   const seenNonces = new Map();
+  // Spent nonces do not survive a restart, so proofs made before this
+  // registry existed are refused outright (#270 review).
+  const startedAt = now().getTime();
   function keyForProof(header, { method, path: pathname, authority }) {
     const proof = parseBindingProof(header);
     if (!proof || typeof authority !== 'string') return null;
@@ -265,7 +268,7 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
     for (const key of bindings.keys()) {
       const raw = Buffer.from(key, 'hex');
       if (bindingKeyId(raw) !== proof.keyId) continue;
-      if (!checkBindingProof(proof, raw, { method, path: pathname, authority, now: at })) return null;
+      if (!checkBindingProof(proof, raw, { method, path: pathname, authority, now: at, notBefore: startedAt })) return null;
       seenNonces.set(proof.nonce, at + 2 * PROOF_WINDOW_MS);
       return key;
     }

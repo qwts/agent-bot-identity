@@ -629,11 +629,11 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now, pres
   };
 }
 
-// The daemon address a binding proof must name, spelled the way the binding
-// file's daemon URL spells its host.
+// The daemon address a binding proof must name, normalized exactly as a
+// client's `new URL(daemon).host` is (port 80 is omitted, IPv6 bracketed).
 function daemonAuthority(req) {
   const address = String(req.socket.localAddress ?? '').replace(/^::ffff:/, '');
-  return `${address.includes(':') ? `[${address}]` : address}:${req.socket.localPort}`;
+  return new URL(`http://${address.includes(':') ? `[${address}]` : address}:${req.socket.localPort}`).host;
 }
 
 // What the caller presented for its binding (#270): a proof, which never

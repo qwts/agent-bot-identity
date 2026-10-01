@@ -7,6 +7,7 @@ import path from 'node:path';
 import { createBindingRegistry, readBinding, revokeBinding } from '../agent-binding.mjs';
 import { createMcpState, handleMcpMessage } from '../agent-mcp.mjs';
 import { runHooks } from '../agent-hook.mjs';
+import { signBindingProof } from '../binding-proof.mjs';
 
 const agentId = 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 function fixture(t) {
@@ -164,4 +165,17 @@ test('a binding whose file turned untrusted is pruned at startup instead of stop
   const registry = createBindingRegistry({ file });
   assert.doesNotThrow(() => registry.rewrite('http://127.0.0.1:1/'));
   assert.equal(registry.size(), 0);
+});
+
+test('a proof captured before a daemon restart is refused after it, even on the same port (#270)', (t) => {
+  const f = fixture(t);
+  const request = { method: 'GET', path: '/v0/binding', authority: '127.0.0.1:1234' };
+  // Made while the daemon is down, i.e. before the restarted registry exists.
+  const captured = signBindingProof({ secret: f.secret, ...request, now: f.options.now().getTime() - 1 });
+  const restarted = createBindingRegistry(f.options);
+  assert.equal(restarted.resolveProof(captured, request), null);
+  // A proof made after the restart works once.
+  const fresh = signBindingProof({ secret: f.secret, ...request, now: f.options.now().getTime() });
+  assert.equal(restarted.resolveProof(fresh, request).agentId, agentId);
+  assert.equal(restarted.resolveProof(fresh, request), null);
 });

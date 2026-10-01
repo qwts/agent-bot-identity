@@ -6,7 +6,8 @@
   no longer send the binding secret: each request carries a one-time
   `x-agent-binding-proof` (`v1.<keyId>.<ts>.<nonce>.<mac>`), an HMAC keyed by
   the secret's SHA-256 over the method, path, and daemon address, fresh
-  within 60 s, and refused once its nonce is seen. A process holding the
+  within 60 s, refused once its nonce is seen, and refused when made before
+  the daemon started (so a restart on the same port cannot replay one). A process holding the
   daemon's loopback port while the daemon is down learns nothing reusable,
   and a captured proof does not work at the daemon's real port. `wake listen`,
   spawn, binding revoke, and the MCP daemon client present proofs; the daemon
