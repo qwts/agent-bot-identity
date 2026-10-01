@@ -12,6 +12,7 @@
 //   agent-bot daemon start           — detach a background `run`, wait healthy
 //   agent-bot daemon status [--json] — probe the recorded daemon
 //   agent-bot daemon stop            — terminate the recorded daemon
+//   agent-bot daemon vouch-key       — print the account Ed25519 public key (SPKI PEM)
 //
 // v0 scope per #41: register soul, space ensure, space path, population list.
 // No OAuth, no remote sync, no HTTPS — loopback is the boundary (#35).
@@ -30,17 +31,22 @@
 // service. /ui routes never see the bearer token — browser auth is a local
 // pairing ceremony — and they change nothing about the loopback boundary:
 // the same peer check runs before any /ui routing.
+//
+// POST /v0/vouch (#254, ADR-0008 decision 3) sits behind that loopback gate
+// but not the bearer. The caller presents a binding secret in
+// x-agent-binding and receives a five-minute Ed25519 soul token. The signing
+// key is created once per account; `daemon vouch-key` prints its SPKI form.
 
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { consumeBindToken, createBindingRegistry, readBinding, readBindToken, assertPrivateGitDir } from './agent-binding.mjs';
+import { assertPrivateGitDir, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
 import { listSouls, upsertIdentitySoul } from './agent-population.mjs';
 import {
@@ -55,9 +61,12 @@ import { mint } from './mint-token.mjs';
 import { recoverInteractionStore } from './agent-jobs.mjs';
 import { appendAuditReceipt, principalsFile, resolvePrincipal } from './agent-principals.mjs';
 import { createWebLayer } from './agent-web.mjs';
+import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs';
 
 const SCHEMA_VERSION = 1;
 const MAX_BODY_BYTES = 64 * 1024;
+const VOUCH_LIMIT = 60;
+const VOUCH_WINDOW_MS = 60_000;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1']);
 const LOOPBACK_PEERS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 const HEALTH_TIMEOUT_MS = 1_500;
@@ -216,11 +225,35 @@ export function createDaemonServer({
   executor,
   mintImpl = mint,
   now = () => new Date(),
+  // #253 replaces this with its persistent lookup. The default reads the
+  // in-memory registry and does not change how bindings are stored.
+  lookupBinding: lookupBindingOverride = null,
 } = {}) {
   // One interaction service per server so in-flight executions and their
   // cancellation controllers live exactly as long as the daemon.
   const interaction = createInteractionService({ env, home, config, executor, now });
   const bindings = createBindingRegistry({ now, file: path.join(env.XDG_STATE_HOME ?? path.join(home, '.local', 'state'), 'agent-bot', 'bindings.json'), account: env.USER ?? process.env.USER ?? 'unknown' });
+  const findBinding = lookupBindingOverride
+    ?? ((secret) => lookupRegistryBinding(bindings, secret, { now }));
+  // Per-binding vouch window. The map stores sha256(secret), never the secret.
+  const vouchHits = new Map();
+  let vouchKey = null;
+  function signingKey() {
+    if (!vouchKey) vouchKey = loadOrCreateVouchKey(vouchStateDir({ env, home }));
+    return vouchKey.privateKey;
+  }
+  function allowVouch(secret) {
+    const key = createHash('sha256').update(secret, 'utf8').digest('hex');
+    const atMs = now().getTime();
+    const recent = (vouchHits.get(key) ?? []).filter((stamp) => atMs - stamp < VOUCH_WINDOW_MS);
+    if (recent.length >= VOUCH_LIMIT) {
+      vouchHits.set(key, recent);
+      return false;
+    }
+    recent.push(atMs);
+    vouchHits.set(key, recent);
+    return true;
+  }
   // The private web client (#59) rides the same server and the same loopback
   // peer check; it authenticates browsers with its own pairing-code cookie
   // sessions instead of the bearer token, which never reaches page script.
@@ -234,6 +267,14 @@ export function createDaemonServer({
       const url = new URL(req.url, 'http://127.0.0.1');
       if (url.pathname === '/ui' || url.pathname.startsWith('/ui/')) {
         await web.handle(req, res, url);
+        return;
+      }
+      // Binding-authenticated and bearer-free (#254). Every other route still
+      // requires the per-start bearer below.
+      if (req.method === 'POST' && url.pathname === '/v0/vouch') {
+        await handleVouchRequest({
+          req, res, findBinding, allowVouch, signingKey, env, home, now,
+        });
         return;
       }
       const authorization = req.headers.authorization ?? '';
@@ -501,6 +542,90 @@ function requireBinding(req, bindings) {
     throw Object.assign(new Error('missing or invalid agent binding'), { statusCode: 401 });
   }
   return binding;
+}
+
+// Until #253 stores parent on the binding, a lookup that does not know the
+// field is filled from the identity recorded at bind time. A lookup that
+// returns a parent (including an explicit null) wins, so the store can
+// disagree with the identity file without this route second-guessing it.
+function parentForVouch(binding, { env, home }) {
+  if (typeof binding.parent === 'string' && binding.parent.length > 0) return binding.parent;
+  if (binding.parentIsSet) return binding.parent ?? null;
+  try {
+    const record = readAgentIdentity(binding.agentId, { stateDir: stateDirectory({ env, home }) });
+    return record.parentId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function presentedBinding(req) {
+  const header = req.headers['x-agent-binding'];
+  return typeof header === 'string' ? header : '';
+}
+
+async function handleVouchRequest({
+  req,
+  res,
+  findBinding,
+  allowVouch,
+  signingKey,
+  env,
+  home,
+  now,
+}) {
+  const body = parseJsonBody(await readBody(req));
+  if (body.aud !== 'agent-comms') {
+    throw Object.assign(new Error('aud must be agent-comms'), { statusCode: 400 });
+  }
+  const secret = presentedBinding(req);
+  const binding = findBinding(secret);
+  if (!binding) {
+    appendAuditReceipt(
+      { event: 'vouch', operation: 'soul-token', decision: 'denied' },
+      { env, home, now },
+    );
+    throw Object.assign(new Error('unbound'), { statusCode: 401 });
+  }
+  if (!allowVouch(secret)) {
+    appendAuditReceipt({
+      event: 'vouch',
+      agentId: binding.agentId,
+      operation: 'soul-token',
+      decision: 'rate-limited',
+    }, { env, home, now });
+    throw Object.assign(new Error('rate limited'), { statusCode: 429 });
+  }
+  let account;
+  try {
+    account = userInfo().username;
+  } catch {
+    account = '';
+  }
+  if (typeof account !== 'string' || account.length === 0) {
+    throw Object.assign(new Error('could not determine the account name'), { statusCode: 500 });
+  }
+  const parent = parentForVouch(binding, { env, home });
+  let token;
+  let payload;
+  try {
+    token = signSoulToken({ account, agentId: binding.agentId, parent }, signingKey(), now);
+    payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
+  } catch {
+    throw Object.assign(new Error('could not sign soul token'), { statusCode: 500 });
+  }
+  appendAuditReceipt({
+    event: 'vouch',
+    agentId: binding.agentId,
+    operation: 'soul-token',
+    decision: 'granted',
+  }, { env, home, now });
+  sendJson(res, 200, {
+    token,
+    agentId: payload.agentId,
+    parent: payload.parent,
+    exp: payload.exp,
+  });
 }
 
 // Versioned /v1 interaction routes (#55). The transport adapter authenticates
@@ -896,8 +1021,15 @@ async function main() {
       }
       break;
     }
+    case 'vouch-key': {
+      const unexpected = rest.filter((arg) => arg !== '--json');
+      if (unexpected.length > 0) throw new Error('usage: agent-bot daemon vouch-key');
+      const { publicKeyPem } = loadOrCreateVouchKey(vouchStateDir());
+      process.stdout.write(publicKeyPem.endsWith('\n') ? publicKeyPem : `${publicKeyPem}\n`);
+      break;
+    }
     default:
-      throw new Error('usage: agent-bot daemon <run|start|status|stop|disable> [--json]');
+      throw new Error('usage: agent-bot daemon <run|start|status|stop|disable|vouch-key> [--json]');
   }
 }
 

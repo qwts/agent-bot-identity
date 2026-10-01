@@ -271,6 +271,38 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
   };
 }
 
+function recordedParent(binding) {
+  // An explicit null is "this store knows there is no parent". A missing
+  // field means this registry does not record parent at all (#253 does).
+  if (Object.prototype.hasOwnProperty.call(binding, 'parent')) return binding.parent ?? null;
+  if (Object.prototype.hasOwnProperty.call(binding, 'parentId')) return binding.parentId ?? null;
+  return null;
+}
+
+// Seam for soul vouching (#254). A hit stamps lastUsedAt on the live object resolve() returned.
+// Unknown and idle-expired secrets return null — resolve() already evicts
+// abandoned in-memory bindings before answering.
+export function lookupBinding(registry, secret, { now = () => new Date() } = {}) {
+  if (!registry || typeof registry.resolve !== 'function') return null;
+  const presented = typeof secret === 'string' ? secret : '';
+  const binding = registry.resolve(presented);
+  if (!binding || typeof binding !== 'object') return null;
+  const parentIsSet = Object.prototype.hasOwnProperty.call(binding, 'parent')
+    || Object.prototype.hasOwnProperty.call(binding, 'parentId');
+  const lastUsedAt = now().toISOString();
+  binding.lastUsedAt = lastUsedAt;
+  return {
+    agentId: binding.agentId,
+    parent: recordedParent(binding),
+    parentIsSet,
+    worktree: binding.worktree ?? null,
+    transcript: binding.transcript ?? null,
+    harness: binding.harness ?? null,
+    boundAt: binding.boundAt ?? null,
+    lastUsedAt,
+  };
+}
+
 export async function revokeBinding({ env = process.env, cwd = process.cwd(), fetchImpl = fetch } = {}) {
   const binding = readBinding({ env, cwd });
   if (!binding) throw new Error('no binding exists');
@@ -286,4 +318,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     await revokeBinding();
     process.stdout.write('binding revoked\n');
   } catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 1; }
+
 }
