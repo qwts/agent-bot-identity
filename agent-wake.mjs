@@ -62,6 +62,9 @@ function protocolSecret(value) {
 export function attachWakeEndpoint(server, { lookupBinding, pingIntervalMs = 30_000, setIntervalImpl = setInterval, clearIntervalImpl = clearInterval } = {}) {
   const warmPool = new WarmPool();
   server.on('upgrade', (req, socket, head) => {
+    // Node hands the upgrade socket over with no error listener. A peer that
+    // resets while a refusal is being written must not crash the daemon.
+    socket.on('error', () => socket.destroy());
     const url = new URL(req.url, 'http://127.0.0.1');
     if (url.pathname !== '/v0/wake') { socket.destroy(); return; }
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) {
@@ -82,17 +85,28 @@ export function attachWakeEndpoint(server, { lookupBinding, pingIntervalMs = 30_
     let buffered = head?.length ? Buffer.from(head) : Buffer.alloc(0);
     let missedPongs = 0;
     let awaitingPong = false;
+    // A frame this endpoint refuses ends the read side for good: nothing more
+    // is buffered from a peer that broke the protocol.
+    const refuse = (code) => {
+      socket.off('data', onData);
+      buffered = Buffer.alloc(0);
+      closeSocket(socket, code);
+    };
     const onData = (chunk) => {
       buffered = Buffer.concat([buffered, chunk]);
+      // One frame plus its largest header is the most worth holding.
+      if (buffered.length > MAX_FRAME + 14) { refuse(1009); return; }
       while (buffered.length >= 2) {
         const first = buffered[0], second = buffered[1];
         const fin = !!(first & 0x80), opcode = first & 0x0f, masked = !!(second & 0x80);
         let length = second & 0x7f, offset = 2;
         if (length === 126) { if (buffered.length < 4) return; length = buffered.readUInt16BE(2); offset = 4; }
-        else if (length === 127) { closeSocket(socket, 1009); return; }
-        if (length > MAX_FRAME) { closeSocket(socket, 1009); return; }
-        if (!masked || buffered.length < offset + 4 + length) return;
-        if (!fin || opcode === 0x2 || ![0x1, 0x8, 0x9, 0xa].includes(opcode)) { closeSocket(socket, 1003); return; }
+        else if (length === 127) { refuse(1009); return; }
+        if (length > MAX_FRAME) { refuse(1009); return; }
+        // RFC 6455 5.1: a server must fail the connection on an unmasked frame.
+        if (!masked) { refuse(1002); return; }
+        if (buffered.length < offset + 4 + length) return;
+        if (!fin || opcode === 0x2 || ![0x1, 0x8, 0x9, 0xa].includes(opcode)) { refuse(1003); return; }
         const mask = buffered.subarray(offset, offset + 4); offset += 4;
         const payload = Buffer.from(buffered.subarray(offset, offset + length));
         for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i & 3];

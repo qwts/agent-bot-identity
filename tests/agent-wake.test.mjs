@@ -114,3 +114,44 @@ test('a client that hangs up leaves no half-open socket on the daemon', async ()
     f.socket.destroy();
   }
 });
+
+test('an unmasked frame is refused and nothing more is buffered from that peer', async () => {
+  const f = await fixture();
+  try {
+    let data = Buffer.alloc(0);
+    f.socket.on('data', (chunk) => { data = Buffer.concat([data, chunk]); });
+    await handshake(f.socket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // An unmasked text frame header that promises a payload it never sends.
+    f.socket.write(Buffer.from([0x81, 0x7e, 0xff, 0x00]));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Close frame with 1002 (protocol error) from the daemon.
+    assert.ok(data.includes(Buffer.from([0x88, 0x02, 0x03, 0xea])));
+    // Bytes after the refusal are not read into the daemon's heap.
+    f.socket.write(Buffer.alloc(128 * 1024));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(f.pool.has(ID), false);
+  } finally {
+    f.close();
+  }
+});
+
+test('a socket error on a refused handshake does not crash the daemon', async () => {
+  const server = createServer();
+  attachWakeEndpoint(server, { lookupBinding: () => null });
+  let upgraded;
+  server.prependListener('upgrade', (req, socket) => { upgraded = socket; });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const socket = connect(server.address().port, '127.0.0.1');
+  try {
+    await once(socket, 'connect');
+    await handshake(socket, 'wrong');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // With no listener this would be an uncaught 'error' and a process exit.
+    upgraded.emit('error', Object.assign(new Error('write ECONNRESET'), { code: 'ECONNRESET' }));
+    assert.equal(upgraded.destroyed, true);
+  } finally {
+    socket.destroy();
+    server.close();
+  }
+});
