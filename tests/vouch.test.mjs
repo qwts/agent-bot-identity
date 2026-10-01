@@ -1,8 +1,8 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { createPrivateKey, createPublicKey, sign, verify } from 'node:crypto';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -190,4 +190,18 @@ test('daemon vouch-key prints the SPKI public key and creates it once (#254)', (
   const rejected = spawnSync(process.execPath, [DAEMON, 'vouch-key', 'extra'], { encoding: 'utf8', env });
   assert.equal(rejected.status, 1);
   assert.match(rejected.stderr, /usage: agent-bot daemon vouch-key/);
+});
+
+test('a symlinked vouch key is refused, not read or chmodded through', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'vouch-link-'));
+  try {
+    const real = path.join(dir, 'elsewhere.pem');
+    const { privateKey } = generateKeyPairSync('ed25519');
+    writeFileSync(real, privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o644 });
+    symlinkSync(real, vouchKeyPath(dir));
+    assert.throws(() => loadOrCreateVouchKey(dir), /not a regular file owned by this account/);
+    assert.equal(statSync(real).mode & 0o777, 0o644);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

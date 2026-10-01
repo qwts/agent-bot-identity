@@ -21,7 +21,7 @@ import {
   sign,
   verify,
 } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
@@ -56,12 +56,20 @@ function tightenKeyMode(file) {
 // A key that is not Ed25519 PKCS#8 is refused and left in place. Replacing it
 // would silently rotate the public key the broker has already approved.
 function readVouchKey(file) {
+  // O_NOFOLLOW and an owner check, like the binding reader: a symlink or a
+  // foreign file is refused rather than read and chmodded through.
   let pem;
+  let fd;
   try {
-    pem = readFileSync(file, 'utf8');
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.uid !== process.getuid()) throw new Error('untrusted');
+    pem = readFileSync(fd, 'utf8');
   } catch (error) {
     if (error.code === 'ENOENT') return null;
-    throw new Error('vouch key could not be read');
+    throw new Error('vouch key file is not a regular file owned by this account');
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
   try {
     const privateKey = createPrivateKey(pem);

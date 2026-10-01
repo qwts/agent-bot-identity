@@ -235,7 +235,7 @@ export function createDaemonServer({
   // One interaction service per server so in-flight executions and their
   // cancellation controllers live exactly as long as the daemon.
   const interaction = createInteractionService({ env, home, config, executor, now });
-  const bindings = createBindingRegistry({ now, file: path.join(env.XDG_STATE_HOME ?? path.join(home, '.local', 'state'), 'agent-bot', 'bindings.json'), account: env.USER ?? process.env.USER ?? 'unknown' });
+  const bindings = createBindingRegistry({ now, file: path.join(vouchStateDir({ env, home }), 'bindings.json'), account: env.USER ?? process.env.USER ?? 'unknown' });
   const findBinding = lookupBindingOverride
     ?? ((secret) => lookupRegistryBinding(bindings, secret, { now }));
   // Per-binding vouch window. The map stores sha256(secret), never the secret.
