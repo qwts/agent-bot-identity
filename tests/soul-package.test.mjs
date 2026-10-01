@@ -5,7 +5,7 @@ import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { canonicalJson, canonicalPackageBytes, computePackageRevision, validateSoulPackage } from '../soul-package.mjs';
+import { canonicalJson, canonicalPackageBytes, computePackageRevision, skillField, validateSoulPackage } from '../soul-package.mjs';
 
 const vectors = JSON.parse(readFileSync(new URL('./fixtures/soul-package/vectors.json', import.meta.url)));
 const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
@@ -141,7 +141,7 @@ test('symlinks, special files and nonportable paths fail closed', (t) => {
 
 test('Agent Skills layout accepts required YAML strings and preserves supporting files', (t) => {
   const root = fixture(t); const skill = join(root, 'skills', 'example'); mkdirSync(skill, { recursive: true });
-  for (const description of ['Useful skill', '"Useful skill"', "'Useful skill'", '|\n  Useful skill', '>\n  Useful\n  skill']) {
+  for (const description of ['Useful skill', '"Useful skill"', "'Useful skill'", '|\n  Useful skill', '>\n  Useful\n  skill', '"Useful skill" # note', "'Useful skill' # note", '|- # note\n  Useful\n\n  skill', '>2\n  Useful', `>\n${'    word\n'.repeat(204)}`]) {
     writeFileSync(join(skill, 'SKILL.md'), `---\nname: example\ndescription: ${description}\nmetadata:\n  future: yes\n---\nInstructions\n`);
     seal(root); validateSoulPackage(root);
   }
@@ -151,10 +151,18 @@ test('Agent Skills layout accepts required YAML strings and preserves supporting
   seal(root); const before = snapshot(root); validateSoulPackage(root); assert.deepEqual(snapshot(root), before);
 });
 
+test('block scalars decode before the length check: literal keeps lines, folded joins them', () => {
+  const decode = (header, lines) => skillField(`description: ${header}\n${lines.map((line) => `    ${line}`).join('\n')}\n`, 'description');
+  assert.equal(decode('|', ['one', 'two']), 'one\ntwo\n');
+  assert.equal(decode('|-', ['one', 'two']), 'one\ntwo');
+  assert.equal(decode('>', ['one', 'two', '', 'three']), 'one two\nthree\n');
+  assert.equal(decode('>-', ['one', '  indented', 'two']), 'one\n  indented\ntwo');
+});
+
 test('malformed skill metadata and missing SKILL.md fail', (t) => {
   const root = fixture(t); const skill = join(root, 'skills', 'example'); mkdirSync(skill, { recursive: true });
   assert.throws(() => validateSoulPackage(root), /SKILL.md/);
-  for (const front of ['', 'name: other\ndescription: text', 'name: example', 'name: example\ndescription: []', 'name: example\ndescription: ""', 'name: example\nname: example\ndescription: text', `name: example\ndescription: ${'x'.repeat(1025)}`]) {
+  for (const front of ['', 'name: other\ndescription: text', 'name: example', 'name: example\ndescription: []', 'name: example\ndescription: ""', 'name: example\nname: example\ndescription: text', `name: example\ndescription: ${'x'.repeat(1025)}`, 'name: example\ndescription: "Useful" skill', "name: example\ndescription: 'Useful' skill", 'name: example\ndescription: |\n', `name: example\ndescription: |\n${'  word\n'.repeat(206)}`]) {
     writeFileSync(join(skill, 'SKILL.md'), `---\n${front}\n---\n`);
     assert.throws(() => validateSoulPackage(root));
   }

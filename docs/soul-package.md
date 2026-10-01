@@ -42,7 +42,9 @@ Required fields are `name` (1–64 lowercase ASCII letters/digits, with single
 interior hyphens, matching its directory) and `description` (nonempty, at most
 1024 characters). The format-1 validator supports required string fields as
 plain single-line scalars, single/double-quoted single-line scalars, or literal
-and folded block scalars (`|`, `>`, optionally `+`/`-`). Unknown front-matter
+and folded block scalars (`|`, `>`, optionally `+`/`-` and an indentation
+digit), each optionally followed by a ` #` comment. Block scalars are dedented,
+folded, and chomped as YAML defines before the length check. Unknown front-matter
 fields are opaque. It does not implement general YAML tags, aliases, or flow
 collections for these two fields. Supporting files and unknown files directly
 under `skills/` are retained. Every immediate directory under `skills/` is a

@@ -38,19 +38,43 @@ function utf8(bytes, label) {
   catch { throw new Error(`${label} must be UTF-8`); }
 }
 
+// A YAML block scalar: the indented lines after a `|` (literal) or `>`
+// (folded) header, dedented by the first line's indent, with clip, strip
+// (`-`), or keep (`+`) chomping.
+function blockScalar(tail, style, chomp) {
+  const lines = (tail.match(/^(?:\r?\n(?:[ \t]+[^\r\n]*|[ \t]*(?=\r?\n|$)))*/)?.[0] ?? '').split(/\r?\n/).slice(1);
+  const indent = lines.find((line) => line.trim())?.match(/^[ \t]*/)[0].length ?? 0;
+  const body = lines.map((line) => line.slice(indent));
+  let text = style === '|'
+    ? body.join('\n')
+    : body.reduce((out, line, i) => {
+      if (i === 0) return line;
+      if (line === '') return `${out}\n`;
+      if (body[i - 1] === '') return `${out}${line}`;
+      if (/^[ \t]/.test(line) || /^[ \t]/.test(body[i - 1])) return `${out}\n${line}`;
+      return `${out} ${line}`;
+    }, '');
+  const content = text.replace(/\n*$/, '');
+  if (chomp === '-') return content;
+  if (chomp === '+') return `${text}\n`;
+  return content ? `${content}\n` : '';
+}
+
 // Required Agent Skills fields are YAML strings. Other front matter is opaque.
-function skillField(front, key) {
+export function skillField(front, key) {
   const matches = [...front.matchAll(new RegExp(`^${key}:[ \\t]*(.*)$`, 'gm'))];
   if (matches.length !== 1) throw new Error(`SKILL.md needs one ${key} field`);
   let value = matches[0][1].trim();
-  if (/^[>|][-+]?$/.test(value)) {
-    const tail = front.slice(matches[0].index + matches[0][0].length);
-    value = (tail.match(/^(?:\r?\n(?:[ \t]+[^\n]*|(?=\r?\n)))*/)?.[0] ?? '').trim();
-  } else if (value.startsWith('"')) {
-    try { value = JSON.parse(value); } catch { throw new Error(`invalid quoted skill ${key}`); }
-  } else if (value.startsWith("'")) {
-    if (!/^'(?:[^']|'')*'$/.test(value)) throw new Error(`invalid quoted skill ${key}`);
-    value = value.slice(1, -1).replaceAll("''", "'");
+  const block = value.match(/^([>|])([-+]?)[1-9]?([-+]?)(?:[ \t]+#.*)?$/);
+  let quoted;
+  if (block) {
+    value = blockScalar(front.slice(matches[0].index + matches[0][0].length), block[1], block[2] || block[3]);
+  } else if ((quoted = value.match(/^("(?:[^"\\]|\\.)*")(?:[ \t]+#.*)?$/))) {
+    try { value = JSON.parse(quoted[1]); } catch { throw new Error(`invalid quoted skill ${key}`); }
+  } else if ((quoted = value.match(/^'((?:[^']|'')*)'(?:[ \t]+#.*)?$/))) {
+    value = quoted[1].replaceAll("''", "'");
+  } else if (/^["']/.test(value)) {
+    throw new Error(`invalid quoted skill ${key}`);
   } else {
     value = value.replace(/\s+#.*$/, '').trim();
     if (/^(?:null|true|false|~|[\d.+-]+)$/i.test(value) || /^[\[\]{}&*!]/.test(value)) throw new Error(`skill ${key} must be a string`);
