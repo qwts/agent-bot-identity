@@ -59,6 +59,12 @@ if [[ -z "$agent_app" && -z "$agent_id" ]]; then
   echo "==> agent identity: none — human persona (delegate); set GH_AGENT_APP or pin the checkout to act as a bot"
   exit 0
 fi
+# github-identity off (#280): the checkout has a soul and no App. Bot author,
+# credential helper, and commit hooks belong to the add-on and are not required.
+if [[ -z "$agent_app" ]]; then
+  echo "==> agent identity: $agent_id (no GitHub App)"
+  exit 0
+fi
 author="$(git config --worktree --get user.name 2>/dev/null || true)"
 helper="$(git config --worktree --get-all credential.helper 2>/dev/null | tail -n 1 || true)"
 hooks="$(git config --worktree --path --get core.hooksPath 2>/dev/null || true)"

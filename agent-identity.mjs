@@ -2,11 +2,11 @@
 
 // Transcript-bound execution identities (ENG-0081).
 //
-// The GitHub App remains the external actor. This module mints one private,
-// structured identity per agent conversation so a commit can be resolved back
-// to the provider transcript that produced it. Records contain no credential:
-// they name the existing worktree-token provider, which continues to mint
-// short-lived installation tokens privately and on demand.
+// This module mints one private, structured identity per agent conversation
+// so a commit can be resolved back to the provider transcript that produced
+// it. GitHub App metadata is optional (#280, ADR-0274): with github-identity
+// enabled, a record names the worktree-token provider and contains no
+// credential. Without the add-on, the record has no `github` field.
 
 import { randomUUID } from 'node:crypto';
 import {
@@ -27,7 +27,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { resolveAgentSlug, AGENT_ID_KEYS } from './resolve-agent.mjs';
-import { harnessForSlug, loadConfig } from './config.mjs';
+import { harnessForSlug, isGateEnabled, loadConfig } from './config.mjs';
 
 const SCHEMA_VERSION = 1;
 const ID_PATTERN = /^agent_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -137,12 +137,21 @@ export function validateIdentity(record) {
   } catch (error) {
     errors.push(error.message);
   }
-  if (!APP_PATTERN.test(record.github?.appSlug ?? '')) errors.push('github.appSlug must be a GitHub App slug');
-  if (record.github?.credentialProvider !== 'worktree-token') {
-    errors.push('github.credentialProvider must be worktree-token');
-  }
-  if ('token' in (record.github ?? {}) || 'privateKey' in (record.github ?? {}) || 'secret' in (record.github ?? {})) {
-    errors.push('identity records must not contain credentials');
+  // `github` is optional metadata set by the github-identity add-on. Absence
+  // is a soul with no App. A present value is still the credential-free
+  // worktree-token descriptor, never a token.
+  if (!Object.hasOwn(record, 'github') || record.github === undefined) {
+    /* no GitHub metadata */
+  } else if (!record.github || typeof record.github !== 'object' || Array.isArray(record.github)) {
+    errors.push('github must be an object when present');
+  } else {
+    if (!APP_PATTERN.test(record.github.appSlug ?? '')) errors.push('github.appSlug must be a GitHub App slug');
+    if (record.github.credentialProvider !== 'worktree-token') {
+      errors.push('github.credentialProvider must be worktree-token');
+    }
+    if ('token' in record.github || 'privateKey' in record.github || 'secret' in record.github) {
+      errors.push('identity records must not contain credentials');
+    }
   }
   if (!['active', 'finalized', 'retired'].includes(record.status)) {
     errors.push('status must be active, finalized, or retired');
@@ -410,9 +419,26 @@ export function mintAgentIdentity({
   stateDir = stateDirectory(),
   now = () => new Date(),
   idFactory = () => `agent_${randomUUID()}`,
+  // false omits `github` even when the gate is on: a soul that does not use
+  // the add-on stays without it (ADR-0274). Undefined follows `gate`.
+  useGithub = undefined,
+  gate: isEnabled = isGateEnabled,
+  home = homedir(),
+  env = process.env,
 } = {}) {
-  const slug = requiredText('appSlug', appSlug, { max: 100 });
-  if (!APP_PATTERN.test(slug)) throw new Error(`invalid GitHub App slug: ${JSON.stringify(slug)}`);
+  const githubOn = useGithub ?? isEnabled('github-identity', { env, home });
+  let slug = null;
+  let github = null;
+  if (githubOn) {
+    slug = requiredText('appSlug', appSlug, { max: 100 });
+    if (!APP_PATTERN.test(slug)) throw new Error(`invalid GitHub App slug: ${JSON.stringify(slug)}`);
+    github = {
+      appSlug: slug,
+      botUid: optionalText('botUid', botUid, { max: 40 }),
+      actor: `${slug}[bot]`,
+      credentialProvider: 'worktree-token',
+    };
+  }
   const normalizedParent = parentId ? validateAgentId(parentId) : null;
   const createdAt = now().toISOString();
 
@@ -426,12 +452,7 @@ export function mintAgentIdentity({
       level: optionalText('level', level, { max: 80 }),
       parentId: normalizedParent,
       harness: optionalText('harness', harness, { max: 80 }),
-      github: {
-        appSlug: slug,
-        botUid: optionalText('botUid', botUid, { max: 40 }),
-        actor: `${slug}[bot]`,
-        credentialProvider: 'worktree-token',
-      },
+      ...(github ? { github } : {}),
       transcript: normalizeTranscript(transcript),
       status: 'active',
       subjects: normalizeValues('subject', subjects),
@@ -456,7 +477,7 @@ function sameTranscript(left, right) {
   return left?.provider === right?.provider && left?.id === right?.id;
 }
 
-function findTranscriptIdentity(appSlug, transcript, stateDir) {
+function findTranscriptIdentity(appSlug, transcript, stateDir, { useGithub = true } = {}) {
   if (!transcript) return null;
   let names;
   try {
@@ -478,7 +499,8 @@ function findTranscriptIdentity(appSlug, transcript, stateDir) {
       console.warn(`agent-identity: ignoring invalid registry record ${id}: ${error.message}`);
       continue;
     }
-    if (record.github.appSlug === appSlug && sameTranscript(record.transcript, transcript)) {
+    const sameApp = useGithub ? record.github?.appSlug === appSlug : true;
+    if (sameApp && sameTranscript(record.transcript, transcript)) {
       return record;
     }
   }
@@ -612,7 +634,16 @@ export function ensureAgentIdentity({
   stateDir = stateDirectory(),
   now = () => new Date(),
   idFactory,
+  useGithub = undefined,
+  gate: isEnabled = isGateEnabled,
+  env = process.env,
+  home = homedir(),
 } = {}) {
+  // App equality is a match key only while this soul uses the add-on. With
+  // the gate off — or for a soul that has no github field — the pin stands
+  // on the transcript rules alone (#192) and a fresh mint omits `github`.
+  const githubOn = useGithub ?? isEnabled('github-identity', { env, home });
+  const inScope = (record) => Boolean(record) && (githubOn ? record.github?.appSlug === appSlug : true);
   return withRegistryLock(stateDir, () => {
     let identity = null;
     if (currentId) {
@@ -625,13 +656,13 @@ export function ensureAgentIdentity({
       // A corrupt pin is repairable metadata. The registry scan below can
       // reuse a healthy transcript match or mint a replacement. A retired pin
       // is different: fail closed before any reuse path can touch the record.
-      if (current?.github.appSlug === appSlug && current.status === 'retired') {
+      if (inScope(current) && current.status === 'retired') {
         throw retiredReuseError(current.id);
       }
-      if (current?.github.appSlug === appSlug) {
+      if (inScope(current)) {
         if (transcript && sameTranscript(current.transcript, transcript)) identity = current;
         else if (transcript && !current.transcript) {
-          identity = findTranscriptIdentity(appSlug, transcript, stateDir)
+          identity = findTranscriptIdentity(appSlug, transcript, stateDir, { useGithub: githubOn })
             ?? bindAgentTranscript(current.id, transcript, { stateDir, now });
         } else if (!transcript) {
           // Nothing in view says a different conversation has taken over
@@ -647,7 +678,7 @@ export function ensureAgentIdentity({
         // old immutable record and resolve or mint its execution identity.
       }
     }
-    identity ??= findTranscriptIdentity(appSlug, transcript, stateDir);
+    identity ??= findTranscriptIdentity(appSlug, transcript, stateDir, { useGithub: githubOn });
     if (identity?.status === 'retired') {
       // Deliberately fail closed instead of minting a replacement: a stale
       // worktree pin or transcript match reaching a retired soul means an
@@ -657,8 +688,8 @@ export function ensureAgentIdentity({
       throw retiredReuseError(identity.id);
     }
     identity ??= mintAgentIdentity({
-      appSlug,
-      botUid,
+      appSlug: githubOn ? appSlug : null,
+      botUid: githubOn ? botUid : null,
       harness,
       transcript,
       ...fields,
@@ -666,6 +697,9 @@ export function ensureAgentIdentity({
       stateDir,
       now,
       idFactory,
+      useGithub: githubOn,
+      gate: isEnabled,
+      env,
     });
     const combinedSubjects = new Set([...identity.subjects, ...subjects]);
     if (combinedSubjects.size !== identity.subjects.length) {
@@ -777,14 +811,16 @@ async function main() {
     case 'ensure': {
       // The shared resolver (ENG-0079): --app, GH_AGENT_APP, the pin, the
       // account, then harness detection. Explicit inputs win wherever the
-      // process runs.
-      const appSlug = resolveAgentSlug({ explicit: args.one('app') });
-      if (!appSlug) throw new Error('no GitHub App identity resolves in this context');
+      // process runs. With github-identity off, no App is required (#280).
+      const githubOn = isGateEnabled('github-identity', { env: process.env, home: homedir() });
+      const appSlug = githubOn ? resolveAgentSlug({ explicit: args.one('app') }) : null;
+      if (githubOn && !appSlug) throw new Error('no GitHub App identity resolves in this context');
       const identity = ensureAgentIdentity({
         currentId: currentAgentId(),
         appSlug,
-        botUid: botUidForSlug(appSlug),
-        harness: harnessForApp(appSlug),
+        botUid: appSlug ? botUidForSlug(appSlug) : null,
+        harness: appSlug ? harnessForApp(appSlug) : args.one('harness'),
+        useGithub: githubOn,
         transcript: args.one('transcript')
           ? { provider: args.one('provider') ?? 'custom', id: args.one('transcript') }
           : discoverTranscript(),
@@ -822,12 +858,19 @@ async function main() {
         if (args.childCommand) throw new Error('spawn -- requires a parent binding');
         const parentId = args.one('parent') ?? currentAgentId();
         const parent = parentId ? readAgentIdentity(parentId, { stateDir }) : null;
-        const appSlug = args.one('app') ?? parent?.github.appSlug ?? resolveAgentSlug();
-        if (!appSlug) throw new Error('spawn requires an App identity or a resolvable parent');
+        const requestedApp = args.one('app');
+        const parentApp = parent?.github?.appSlug ?? null;
+        // A parent with no github field does not gain one by the gate being
+        // on. An explicit --app opts that child into the add-on.
+        const githubOn = isGateEnabled('github-identity', { env: process.env, home: homedir() })
+          && (!parent || parent.github != null || Boolean(requestedApp));
+        const appSlug = githubOn ? (requestedApp ?? parentApp ?? resolveAgentSlug()) : null;
+        if (githubOn && !appSlug) throw new Error('spawn requires an App identity or a resolvable parent');
         const identity = mintAgentIdentity({
           appSlug,
-          botUid: parent?.github.botUid ?? botUidForSlug(appSlug),
-          harness: parent?.harness ?? harnessForApp(appSlug),
+          botUid: githubOn ? (parent?.github?.botUid ?? botUidForSlug(appSlug)) : null,
+          harness: parent?.harness ?? args.one('harness') ?? (githubOn ? harnessForApp(appSlug) : null),
+          useGithub: githubOn,
           transcript: args.one('transcript')
             ? { provider: args.one('provider') ?? 'custom', id: args.one('transcript') }
             : discoverTranscript(),

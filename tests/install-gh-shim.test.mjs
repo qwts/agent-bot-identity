@@ -18,8 +18,17 @@ import { GH_SHIM_MARKER } from '../gh-shim.mjs';
 const HAS_ZSH = spawnSync('zsh', ['-c', ':'], { stdio: 'ignore' }).status === 0;
 const INSTALLER = fileURLToPath(new URL('../install-gh-shim.mjs', import.meta.url));
 
-function installWithBrewPath() {
+function homeFixture() {
   const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  mkdirSync(join(home, '.config', 'agent-bot'), { recursive: true });
+  writeFileSync(join(home, '.config', 'agent-bot', 'config.json'), JSON.stringify({
+    features: { 'github-identity': true },
+  }));
+  return home;
+}
+
+function installWithBrewPath() {
+  const home = homeFixture();
   const brewBin = join(home, 'brew', 'bin');
   mkdirSync(brewBin, { recursive: true });
   writeFileSync(join(brewBin, 'gh'), '#!/bin/sh\n', { mode: 0o755 });
@@ -47,7 +56,7 @@ test('gh shim installation is stable and idempotent', () => {
 });
 
 test('gh shim installation migrates the loose export lines into managed blocks', () => {
-  const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const home = homeFixture();
   writeFileSync(
     join(home, '.zshenv'),
     'export PATH="$HOME/.config/agent-bot/bin:$PATH"  # agent-bot gh shim\n'
@@ -78,7 +87,7 @@ test('gh shim installation migrates the loose export lines into managed blocks',
 });
 
 test('shell shim inspection distinguishes missing, replaced, recursive, and ready states', () => {
-  const missingHome = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const missingHome = homeFixture();
   assert.equal(inspectShellGhShim({ home: missingHome }).status, 'missing');
 
   const { home, installed } = installWithBrewPath();
@@ -93,7 +102,7 @@ test('shell shim inspection distinguishes missing, replaced, recursive, and read
 });
 
 test('Codex runtime override resolves the managed gh shim before Homebrew', () => {
-  const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const home = homeFixture();
   const codexOverrideDir = join(home, 'codex-runtime', 'bin', 'override');
   mkdirSync(codexOverrideDir, { recursive: true });
 
@@ -106,7 +115,7 @@ test('Codex runtime override resolves the managed gh shim before Homebrew', () =
 });
 
 test('Codex desktop interposition is explicit, reversible, and idempotent', () => {
-  const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const home = homeFixture();
   const bin = join(home, 'homebrew', 'bin');
   const cellar = join(home, 'homebrew', 'Cellar', 'gh', 'bin');
   mkdirSync(bin, { recursive: true });
@@ -135,7 +144,7 @@ test('Codex desktop interposition is explicit, reversible, and idempotent', () =
 });
 
 test('install-gh-shim CLI installs and restores an explicit desktop interposer', () => {
-  const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const home = homeFixture();
   const ghPath = join(home, 'homebrew', 'bin', 'gh');
   mkdirSync(join(home, 'homebrew', 'bin'), { recursive: true });
   writeFileSync(ghPath, '#!/bin/sh\n', { mode: 0o755 });
@@ -162,7 +171,7 @@ test('install-gh-shim CLI installs and restores an explicit desktop interposer',
 });
 
 test('Codex desktop interposition refuses ambiguous or unrecoverable states', () => {
-  const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const home = homeFixture();
   const shimPath = join(home, 'shim');
   const ghPath = join(home, 'gh');
   writeFileSync(shimPath, `${GH_SHIM_MARKER}\n`, { mode: 0o755 });
@@ -205,7 +214,7 @@ test('Codex desktop interposition refuses ambiguous or unrecoverable states', ()
 });
 
 test('Codex desktop restore preserves the shim when its backup is unusable', () => {
-  const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const home = homeFixture();
   const shimPath = join(home, 'shim');
   writeFileSync(shimPath, `${GH_SHIM_MARKER}\n`, { mode: 0o755 });
 
@@ -229,7 +238,7 @@ test('Codex desktop restore preserves the shim when its backup is unusable', () 
 });
 
 test('a missing desktop backup fails closed and leaves the shim in place', () => {
-  const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const home = homeFixture();
   const bin = join(home, 'missing-backup');
   const ghPath = join(bin, 'gh');
   const shimPath = join(home, 'shim');
@@ -246,7 +255,7 @@ test('a missing desktop backup fails closed and leaves the shim in place', () =>
 });
 
 test('Codex desktop interposition repairs a Homebrew relink and remains restorable', () => {
-  const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const home = homeFixture();
   const bin = join(home, 'homebrew', 'bin');
   const ghPath = join(bin, 'gh');
   const shimPath = join(home, 'shim');
@@ -274,7 +283,7 @@ test('Codex desktop interposition repairs a Homebrew relink and remains restorab
 });
 
 test('legacy gh.bak is migrated only when it is a real executable', () => {
-  const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const home = homeFixture();
   const ghPath = join(home, 'bin', 'gh');
   const shimPath = join(home, 'shim');
   const realGh = join(home, 'real-gh');
@@ -300,7 +309,7 @@ test('legacy gh.bak is migrated only when it is a real executable', () => {
 });
 
 test('foreign legacy gh.bak files are preserved and block ambiguous installation', () => {
-  const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const home = homeFixture();
   const bin = join(home, 'bin');
   const ghPath = join(bin, 'gh');
   const shimPath = join(home, 'shim');
@@ -320,7 +329,7 @@ test('foreign legacy gh.bak files are preserved and block ambiguous installation
 });
 
 test('restore uses the canonical backup and preserves a foreign legacy gh.bak', () => {
-  const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const home = homeFixture();
   const bin = join(home, 'bin');
   const ghPath = join(bin, 'gh');
   const shimPath = join(home, 'shim');
@@ -344,7 +353,7 @@ test('restore uses the canonical backup and preserves a foreign legacy gh.bak', 
 });
 
 test('configured desktop inspection distinguishes missing and invalid state', () => {
-  const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const home = homeFixture();
   assert.equal(inspectConfiguredCodexDesktopGh({ home }).status, 'unconfigured');
   mkdirSync(join(home, '.config', 'agent-bot'), { recursive: true });
   writeFileSync(codexDesktopGhStatePath(home), '{broken\n');
@@ -372,11 +381,11 @@ test('zsh resolves the shim in non-login and login shells', { skip: !HAS_ZSH }, 
 });
 
 test('gh shim installer preserves foreign files and symlinks', () => {
-  const home = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const home = homeFixture();
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
   writeFileSync(join(home, '.local', 'bin', 'gh'), 'foreign\n');
   assert.throws(() => installGhShim({ home }), /real file/);
-  const otherHome = mkdtempSync(join(tmpdir(), 'agent-gh-'));
+  const otherHome = homeFixture();
   mkdirSync(join(otherHome, '.local', 'bin'), { recursive: true });
   writeFileSync(join(otherHome, 'foreign-gh'), 'foreign\n');
   symlinkSync(join(otherHome, 'foreign-gh'), join(otherHome, '.local', 'bin', 'gh'));

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { accountSlug, helperSlug, resolveSlug, worktreeSlug } from '../worktree-token.mjs';
 
 const TOOL = fileURLToPath(new URL('../worktree-token.mjs', import.meta.url));
-const cfg = { prefix: 'you' };
+const cfg = { prefix: 'you', features: { 'github-identity': true } };
 
 const root = mkdtempSync(join(tmpdir(), 'worktree-token-'));
 after(() => rmSync(root, { recursive: true, force: true }));

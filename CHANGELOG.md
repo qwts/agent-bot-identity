@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Souls no longer require a GitHub App (#280, ADR-0274). With
+  `github-identity` off, setup, bind, spawn, vouch, and wake work with an
+  identity that has no `github` field; GitHub metadata, credentials, and the
+  `gh` shim are opt-in. qwts machines must set
+  `features.github-identity: true` and `features.persona-accounts: true`
+  before upgrading to keep their existing behavior.
+
 - `agent-bot daemon pair-comms` now pairs with this account's one-account
   agent-comms broker when `--broker` is omitted (#286, ADR-0059 decision 3).
   Private custody requires owned 0700 rendezvous/proof directories and a

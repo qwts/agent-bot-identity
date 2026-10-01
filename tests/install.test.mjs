@@ -16,6 +16,13 @@ import { GIT_HOOK_NAMES } from '../git-hooks.mjs';
 
 const HAS_ZSH = spawnSync('zsh', ['-c', ':'], { stdio: 'ignore' }).status === 0;
 
+function enableGitHubIdentity(home) {
+  mkdirSync(join(home, '.config', 'agent-bot'), { recursive: true });
+  writeFileSync(join(home, '.config', 'agent-bot', 'config.json'), JSON.stringify({
+    features: { 'github-identity': true },
+  }));
+}
+
 // PATH registration had no coverage at all, which is how it shipped writing only
 // .zprofile: zsh reads that for login shells alone, so every harness — which
 // spawns non-login, non-interactive shells reading .zshenv — found no agent-bot
@@ -53,6 +60,7 @@ test('PATH is registered for harness shells as well as login shells', () => {
 // already run. With managed blocks each installer owns a distinct block name.
 test('the two installers do not mistake each other for themselves', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-markers-'));
+  enableGitHubIdentity(home);
   ensureExecutablePath({ home });
   installGhShim({ home });
 
@@ -73,6 +81,7 @@ test('the two installers do not mistake each other for themselves', () => {
 // nothing.
 test('registration follows ZDOTDIR when zsh reads its startup files elsewhere', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-zdotdir-'));
+  enableGitHubIdentity(home);
   const zdotdir = join(home, '.config', 'zsh');
   ensureExecutablePath({ home, env: { ZDOTDIR: zdotdir } });
 
@@ -590,7 +599,7 @@ test('install provisions the account transcript adapter from the installed runti
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-adapter-install-'));
   const configPath = join(home, '.config', 'agent-bot', 'config.json');
   mkdirSync(dirname(configPath), { recursive: true });
-  writeFileSync(configPath, JSON.stringify({ apps: { claude: 'example-claude-agent' } }));
+  writeFileSync(configPath, JSON.stringify({ apps: { claude: 'example-claude-agent' }, features: { 'github-identity': true } }));
   const result = await installAgentBot({
     home, env: { HOME: home, AGENT_BOT_ACCOUNT: 'example-claude-agent' },
     run: (args) => {

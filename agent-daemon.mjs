@@ -73,7 +73,7 @@ import { PROOF_HEADER, parseBindingProof, signBindingProof } from './binding-pro
 import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms-client.mjs';
 import { attachWakeEndpoint } from './agent-wake.mjs';
 import { readColdWakeSettings } from './cold-wake-settings.mjs';
-import { loadConfig } from './config.mjs';
+import { isGateEnabled, loadConfig } from './config.mjs';
 import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
 
 const SCHEMA_VERSION = 1;
@@ -358,8 +358,9 @@ export function createDaemonServer({
           const body = parseJsonBody(await readBody(req));
           const stateDir = stateDirectory({ env, home });
           const parent = readAgentIdentity(source.agentId, { stateDir });
+          const parentApp = parent.github?.appSlug ?? null;
           if ((body.parent && body.parent !== source.agentId)
-            || (body.app && body.app !== parent.github.appSlug)) {
+            || (body.app && body.app !== parentApp)) {
             throw Object.assign(new Error('spawn cannot override parent authority'), { statusCode: 403 });
           }
           const harness = body.harness ?? source.harness ?? parent.harness ?? 'unknown';
@@ -369,14 +370,18 @@ export function createDaemonServer({
               throw Object.assign(new Error('invalid spawn name or harness'), { statusCode: 400 });
             }
           }
+          // A parent with no github field stays without one even when the
+          // gate is on. The gate off omits github on the child either way.
+          const useGithub = isGateEnabled('github-identity', { env, home, config }) && parent.github != null;
           const identity = mintAgentIdentity({
-            appSlug: parent.github.appSlug, botUid: parent.github.botUid, harness,
+            appSlug: parentApp, botUid: parent.github?.botUid ?? null, harness,
             transcript: body.transcript, parentId: source.agentId,
             team: body.team ?? parent.team, squad: body.squad ?? parent.squad,
             type: body.type ?? 'agent', level: body.level, subjects: body.subjects ?? [], stateDir, now,
+            useGithub,
           });
           bindings.bind({ agentId: identity.id, parent: source.agentId, spawnedBy: source.bindingHash,
-            worktree: source.worktree, gitDir: source.gitDir, app: parent.github.appSlug,
+            worktree: source.worktree, gitDir: source.gitDir, app: identity.github?.appSlug ?? null,
             harness, transcript: identity.transcript });
           const result = { agentId: identity.id, parent: source.agentId,
             binding: childBindingPath(source.gitDir, identity.id) };
@@ -430,6 +435,25 @@ export function createDaemonServer({
             identity = readAgentIdentity(binding.agentId, {
               stateDir: stateDirectory({ env, home }),
             });
+          } catch (error) {
+            appendAuditReceipt({
+              event: 'credential-mint',
+              agentId: binding.agentId,
+              operation: 'tier1-app-token',
+              decision: 'failed',
+            }, { env, home, now });
+            throw error;
+          }
+          if (!identity.github?.appSlug) {
+            appendAuditReceipt({
+              event: 'credential-mint',
+              agentId: binding.agentId,
+              operation: 'tier1-app-token',
+              decision: 'denied',
+            }, { env, home, now });
+            throw Object.assign(new Error('this soul has no GitHub App'), { statusCode: 409 });
+          }
+          try {
             grant = await mintImpl({ slug: identity.github.appSlug, env });
           } catch (error) {
             // A verified binding whose mint fails must still leave a receipt —
@@ -573,11 +597,16 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now, pres
   // transcript, an earlier identity already owns it, or a fresh one is minted
   // (a later conversation reusing the worktree). parentId only applies on a
   // mint; a reused identity's missing lineage is repaired below.
+  // Reuse the pinned soul. GitHub metadata is copied only when the add-on
+  // is on AND this soul already has it; a soul without `github` stays that
+  // way when the gate is later turned on.
+  const useGithub = isGateEnabled('github-identity', { env, home, config }) && pinned.github != null;
   const identity = ensureAgentIdentity({
     currentId: record.agentId,
-    appSlug: pinned.github.appSlug,
-    botUid: pinned.github.botUid,
+    appSlug: useGithub ? pinned.github.appSlug : null,
+    botUid: useGithub ? pinned.github.botUid : null,
     harness,
+    useGithub,
     transcript: locator,
     fields: {
       team: pinned.team,
@@ -610,7 +639,7 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now, pres
     agentId: bound.id,
     gitDir: body.gitDir,
     parent: bound.parentId ?? null,
-    app: bound.github.appSlug,
+    app: bound.github?.appSlug ?? null,
     worktree: record.worktree,
     transcript: locator,
     harness: bound.harness,

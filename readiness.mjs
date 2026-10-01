@@ -414,31 +414,45 @@ function worktreeBindingSummaryCheck({ home, env, roster }) {
       evidence: { active: 0, by_app: {}, not_in_roster: [] },
     });
   }
-  // Every census row carries an appSlug — normalizeSoul rejects one without it,
-  // so an unpinned soul is not a state this document can represent. Count
-  // checkouts, not souls: a soul may hold several linked worktrees, and counting
-  // one per soul would undercount the thing this check summarizes.
+  // Count checkouts, not souls: a soul may hold several linked worktrees.
+  // A null appSlug is a soul with no GitHub App (#280). Those checkouts are
+  // counted in without_app and are not compared with the roster.
   const byApp = new Map();
   let checkoutCount = 0;
+  let withoutApp = 0;
   for (const soul of souls) {
     const worktrees = Array.isArray(soul.worktrees) && soul.worktrees.length > 0
       ? soul.worktrees
       : [null];
     for (const _worktree of worktrees) {
-      byApp.set(soul.appSlug, (byApp.get(soul.appSlug) ?? 0) + 1);
       checkoutCount += 1;
+      if (!soul.appSlug) {
+        withoutApp += 1;
+        continue;
+      }
+      byApp.set(soul.appSlug, (byApp.get(soul.appSlug) ?? 0) + 1);
     }
   }
   // Same rule as the current-worktree check: an empty roster is an unconfigured
-  // machine, not a machine where every App is acceptable.
+  // machine, not a machine where every App is acceptable. Souls with no App
+  // are not an unconfigured roster.
   const known = roster ?? [];
   const evidence = {
     active: souls.length,
     checkouts: checkoutCount,
     by_app: Object.fromEntries([...byApp.entries()].sort(([a], [b]) => a.localeCompare(b))),
+    without_app: withoutApp,
     not_in_roster: known.length === 0 ? [] : [...byApp.keys()].filter((slug) => !known.includes(slug)).sort(),
     roster_configured: known.length > 0,
   };
+  if (byApp.size === 0) {
+    return readinessCheck({
+      id: 'worktree.binding_summary',
+      status: 'ready',
+      message: `${checkoutCount} checkout(s) have no GitHub App`,
+      evidence,
+    });
+  }
   if (known.length === 0) {
     return readinessCheck({
       id: 'worktree.binding_summary',
@@ -450,10 +464,13 @@ function worktreeBindingSummaryCheck({ home, env, roster }) {
     });
   }
   if (evidence.not_in_roster.length === 0) {
+    const message = withoutApp > 0
+      ? `${checkoutCount - withoutApp} checkout(s) are bound to a rostered App; ${withoutApp} have no GitHub App`
+      : `every checkout is bound to a rostered App (${checkoutCount})`;
     return readinessCheck({
       id: 'worktree.binding_summary',
       status: 'ready',
-      message: `every checkout is bound to a rostered App (${checkoutCount})`,
+      message,
       evidence,
     });
   }
