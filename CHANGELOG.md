@@ -7,8 +7,9 @@
   kept in `~/.local/state/agent-bot/cold-wake.json` (0600), with a secret-free
   audit receipt. `createColdWaker` starts one executor turn in the soul's
   worktree with the soul's binding, naming only the waiting message IDs, and
-  keeps one turn in flight per soul; with the setting off it reports
-  `waiting`.
+  reports `cold` as soon as the turn starts; wakes that arrive during the turn
+  merge into it, and the turn's end lands in a `finished` or `failed` receipt.
+  With the setting off it reports `waiting`.
 
 ## 0.7.2
 

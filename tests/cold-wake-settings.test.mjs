@@ -12,12 +12,14 @@ const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
 
 async function withState(run) {
   const root = mkdtempSync(path.join(tmpdir(), 'cold-wake-'));
-  try { return await run({ root, env: { ...process.env, XDG_STATE_HOME: path.join(root, 'state'), HOME: root, GIT_CONFIG_COUNT: '0' } }); }
+  try { return await run({ root, env: { ...process.env, XDG_STATE_HOME: path.join(root, 'state'), HOME: root, GIT_CONFIG_COUNT: '0', GH_AGENT_APP: '' } }); }
   finally { rmSync(root, { recursive: true, force: true }); }
 }
 
 function invoke(env, ...args) {
-  return spawnSync(process.execPath, [cli, 'soul', 'cold-wake', id, ...args], { encoding: 'utf8', env });
+  // Run outside any worktree: a bound checkout's agentBot.app pin would make
+  // the caller an agent and the owner-only setting refuse.
+  return spawnSync(process.execPath, [cli, 'soul', 'cold-wake', id, ...args], { encoding: 'utf8', env, cwd: env.HOME });
 }
 
 test('soul cold-wake supports on, off, and show, and refuses agent accounts', () => withState(({ env }) => {
