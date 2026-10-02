@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Souls carry their harnesses (#307, ADR-0276). When a soul home is made
+  from a package with `package.json` and `package-lock.json`, the daemon
+  runs `npm ci --ignore-scripts --omit=dev` in it, using the host's npm
+  (`AGENT_BOT_NPM`, an `npm-cli.js` run with this Node) or else `npm` from
+  PATH. A failed install fails the launch and removes the half-made home.
+  Registry rows name their npm binary (`soulBin`), so a home that installed
+  it runs the harness with this Node, without npx. `daemon install` carries
+  `AGENT_BOT_NPM` into the unit.
+
 - Principal launches start souls without a GitHub App (#297). A launched
   soul with no live binding gets a home, a private git worktree at
   `<state>/homes/<agentId>`, which the daemon binds before starting the

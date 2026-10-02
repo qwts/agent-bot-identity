@@ -23,7 +23,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import process from 'node:process';
 
 import { daemonStateFile, daemonStatus, stopDaemon } from './agent-daemon.mjs';
@@ -93,6 +93,8 @@ export function supervisorEnvironment({ env = process.env, home = homedir() } = 
     AGENT_BOT_DAEMON_STATE_PATH: daemonStateFile({ env, home }),
     // The supervised daemon resolves the same label as the host that installed it.
     ...(label ? { [SERVICE_LABEL_VARIABLE]: label } : {}),
+    // A host's own npm, which installs soul harnesses (ADR-0276).
+    ...(env.AGENT_BOT_NPM && isAbsolute(env.AGENT_BOT_NPM) ? { AGENT_BOT_NPM: env.AGENT_BOT_NPM } : {}),
   };
 }
 
