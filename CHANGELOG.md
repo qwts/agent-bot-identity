@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The daemon handles principal `launch` frames from agent-comms (#295). It
+  starts the named harness for an existing soul and reports `launch-result`
+  by requestId, using a private journal so that no request is replayed after a
+  restart. Souls without a GitHub App identity, and package spawns, report
+  `failed` until #297.
+
 - Souls no longer require a GitHub App (#280, ADR-0274). With
   `github-identity` off, setup, bind, spawn, vouch, and wake work with an
   identity that has no `github` field. Warm sockets work without GitHub;

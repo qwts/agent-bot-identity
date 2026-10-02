@@ -513,3 +513,56 @@ test('credential mode round-trips, old credentials remain group, invalid modes f
     assert.throws(() => loadCommsCredential({ env: world.env }), /pair again/);
   }
 });
+
+test('account-watch routes launches and recovery with fresh daemon-authenticated result connections', async () => {
+  const world = scratchWorld();
+  const credential = { account: 'worker', secret: 's3cret', brokerUid: MY_UID, pairedAt: '2026-10-01T00:00:00.000Z' };
+  const reports = [];
+  let recovered = false;
+  const onLaunch = async (event, { account, report }) => {
+    assert.equal(account, 'worker');
+    assert.equal(event.soul, 'soul');
+    await report({ requestId: event.requestId, status: 'launched', agentId: 'soul' });
+  };
+  onLaunch.recover = async ({ report }) => {
+    recovered = true;
+    await report({ requestId: 'old', status: 'failed', agentId: null, detail: 'restarted' });
+  };
+  let watchSocket;
+  const broker = await startFakeBroker(world.socket, (line, { send, socket }) => {
+    if (line.op === 'account-watch') {
+      watchSocket = socket;
+      send({ event: 'ready' });
+      send({ event: 'launch', requestId: 'new', principal: 'p', account: 'worker', soul: 'soul', harness: 'claude' });
+    } else {
+      assert.notEqual(socket, watchSocket);
+      reports.push(line);
+      send({ v: 1, id: line.id, ok: true });
+    }
+  });
+  const supervisor = createCommsSupervisor({ env: world.env, credential, paths: world.paths, onLaunch });
+  try {
+    supervisor.start();
+    await waitFor(() => reports.length === 2);
+    assert.equal(recovered, true);
+    for (const result of reports) {
+      assert.equal(result.op, 'launch-result');
+      assert.deepEqual(result.auth, { daemon: 'worker', secret: 's3cret' });
+    }
+    assert.equal(reports.find((r) => r.requestId === 'new').status, 'launched');
+    assert.equal(reports.find((r) => r.requestId === 'old').agentId, null);
+  } finally { supervisor.stop(); await broker.close(); }
+});
+
+test('launch-result rejects invalid correlation, status, and identity fields before connecting', async () => {
+  const { reportCommsLaunch } = await import('../comms-client.mjs');
+  for (const fields of [
+    { requestId: '', status: 'failed' },
+    { requestId: 'r', status: 'pending' },
+    { requestId: 'r', status: 'launched' },
+    { requestId: 'r', status: 'failed', agentId: 'a' },
+    { requestId: 'r', status: 'failed', detail: 42 },
+  ]) await assert.rejects(reportCommsLaunch(fields, {
+    clientFactory: () => { throw new Error('must not connect'); },
+  }), /invalid launch result/);
+});
