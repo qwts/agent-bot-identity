@@ -16,6 +16,7 @@ import {
   isInactiveSupervisorError,
   renderLaunchdPlist,
   renderSystemdUnit,
+  stableHomebrewPath,
   supervisorEnvironment,
   supervisorPaths,
 } from '../daemon-supervisor.mjs';
@@ -357,8 +358,11 @@ test('daemon install registers this runtime under the host label and is idempote
     loaded: true,
   });
   const body = readFileSync(unitPath, 'utf8');
-  assert.ok(body.includes(process.execPath));
-  assert.ok(body.includes(cli));
+  // #321: on a Homebrew install the unit records the stable opt paths, not the
+  // versioned Cellar realpath the runtime was launched from.
+  assert.ok(body.includes(stableHomebrewPath(process.execPath)));
+  assert.ok(body.includes(stableHomebrewPath(cli)));
+  assert.doesNotMatch(body, /Cellar/);
   assert.equal(JSON.parse(run().stdout).changed, false);
   const bad = spawnSync(process.execPath, [cli, 'daemon', 'install'], {
     env: { ...env, AGENT_BOT_SERVICE_LABEL: '../x' }, encoding: 'utf8',
