@@ -63,12 +63,12 @@ test('opencode: no permission is left at ask, and text after the last tool call 
     assert.deepEqual(plan.args.slice(-2), ['--', '--looks-like-a-flag']);
     assert.ok(plan.args.includes('ses_1'));
   }
-  // Read-only is the plan agent, not denied tools: the free tier refuses a
-  // request whose tools were switched off.
-  const readOnly = opencode.plan({ prompt: 'x', policy: 'read-only' });
-  assert.deepEqual(readOnly.args.slice(3, 5), ['--agent', 'plan']);
-  assert.ok(!('edit' in JSON.parse(readOnly.env.OPENCODE_PERMISSION)));
-  assert.ok(!opencode.plan({ prompt: 'x', policy: 'workspace' }).args.includes('plan'));
+  // Read-only denies edits, shell and subagents outright; it never trades
+  // a denial for an agent that can still run commands.
+  const readOnly = JSON.parse(opencode.plan({ prompt: 'x', policy: 'read-only' }).env.OPENCODE_PERMISSION);
+  assert.deepEqual([readOnly.edit, readOnly.bash, readOnly.task], ['deny', 'deny', 'deny']);
+  assert.ok(!('*' in readOnly));
+  assert.ok(!opencode.plan({ prompt: 'x', policy: 'read-only' }).args.includes('--agent'));
   assert.deepEqual(opencode.parse(OPENCODE_OUTPUT), { reply: 'pong', sessionId: 'ses_f017', failure: null });
 });
 
@@ -81,12 +81,14 @@ test('devin: the workspace policy runs sandboxed, and the session id comes from 
   assert.equal(plan.stdin, 'hi');
   assert.ok(!devin.plan({ prompt: 'hi', policy: 'read-only' }).args.includes('--sandbox'));
   const listed = JSON.stringify([
-    { id: 'elsewhere', working_directory: '/other', last_activity_at: 9 },
-    { id: 'older', working_directory: '/work', last_activity_at: 1 },
-    { id: 'newest', working_directory: '/work', last_activity_at: 5 },
+    { id: 'elsewhere', working_directory: '/other' },
+    { id: 'nowhere' },
+    { id: 'blank', working_directory: '' },
+    { id: 'older', working_directory: '/work' },
+    { id: 'newest', working_directory: '/work' },
   ]);
-  assert.equal(devin.latestSession(listed, '/work'), 'newest');
-  assert.equal(devin.latestSession('not json', '/work'), null);
+  assert.deepEqual(devin.sessionsIn(listed, '/work'), ['older', 'newest']);
+  assert.equal(devin.sessionsIn('not json', '/work'), null);
 });
 
 test('the PATH keeps the host tool path first and adds the harness install dirs', () => {
@@ -131,13 +133,25 @@ test('a failed turn throws with the harness detail and keeps the recorded sessio
   await assert.rejects(execute({ invocation: { agentId: ID, harness: 'codex', cwd: root }, message: 'm', policy: 'anything' }), /read-only or workspace policy/);
 }));
 
-test('devin records the newest session in its worktree after a fresh turn', () => withState(async ({ env, root }) => {
+test('devin records only the one session its fresh turn created in the worktree', () => withState(async ({ env, root }) => {
   const sessions = createWakeSessions({ file: wakeSessionsFile({ env }) });
-  const run = async (_command, args) => (args[0] === 'list'
-    ? { code: 0, stdout: JSON.stringify([{ id: 'visual-continent', working_directory: root, last_activity_at: 2 }]), stderr: '' }
-    : { code: 0, stdout: 'pong\n', stderr: '' });
-  const execute = createResumeExecutor({ sessions, baseEnv: {}, home: root, run });
-  assert.equal((await execute({ invocation: { agentId: ID, harness: 'devin', cwd: root }, message: 'm', policy: 'read-only' })).reply, 'pong');
+  const listing = (ids) => ({ code: 0, stdout: JSON.stringify([
+    // Rows from another directory or with none never count, even if newer.
+    { id: 'other-project', working_directory: '/other', last_activity_at: 99 },
+    { id: 'no-dir', last_activity_at: 98 },
+    ...ids.map((id) => ({ id, working_directory: root })),
+  ]), stderr: '' });
+  const make = (after) => {
+    let lists = 0;
+    return async (_command, args) => (args[0] === 'list'
+      ? listing(lists++ === 0 ? ['human-session'] : after)
+      : { code: 0, stdout: 'pong\n', stderr: '' });
+  };
+  const turn = (run) => createResumeExecutor({ sessions, baseEnv: {}, home: root, run })({ invocation: { agentId: ID, harness: 'devin', cwd: root }, message: 'm', policy: 'read-only' });
+  // Two new sessions appeared (a human started one meanwhile): adopt neither.
+  assert.equal((await turn(make(['human-session', 'mine', 'theirs']))).reply, 'pong');
+  assert.equal(sessions.get(ID, 'devin'), null);
+  await turn(make(['human-session', 'visual-continent']));
   assert.equal(sessions.get(ID, 'devin'), 'visual-continent');
 }));
 

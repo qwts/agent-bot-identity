@@ -64,13 +64,16 @@ export const RESUME_HARNESSES = Object.freeze({
     plan({ sessionId, prompt, policy }) {
       // OPENCODE_PERMISSION is merged over the user's config, so no rule is
       // left at `ask`: an ask with nobody to answer can hang a headless run.
-      // Read-only uses the built-in `plan` agent (no edits) rather than
-      // denying tools: OpenCode's free tier refuses a request whose tools
-      // were switched off. `plan` can still run shell commands.
+      // Read-only denies edits, shell and subagents outright. OpenCode's free
+      // tier refuses a request whose tools were switched off, so there a
+      // read-only turn fails closed rather than running with less denied.
+      // OpenCode has no OS sandbox: `workspace` trusts the soul with shell
+      // in its worktree, confined only by `external_directory`.
       const noAsk = { external_directory: 'deny', doom_loop: 'deny', read: { '*': 'allow', '*.env': 'deny', '*.env.*': 'deny' } };
-      const permission = policy === 'workspace' ? { '*': 'allow', ...noAsk } : noAsk;
-      const args = ['run', '--format', 'json', ...(policy === 'workspace' ? [] : ['--agent', 'plan']),
-        ...(sessionId ? ['--session', sessionId] : []), '--', prompt];
+      const permission = policy === 'workspace'
+        ? { '*': 'allow', ...noAsk }
+        : { ...noAsk, edit: 'deny', bash: 'deny', task: 'deny' };
+      const args = ['run', '--format', 'json', ...(sessionId ? ['--session', sessionId] : []), '--', prompt];
       return { args, stdin: null, env: { OPENCODE_PERMISSION: JSON.stringify(permission) } };
     },
     parse(stdout) {
@@ -104,14 +107,18 @@ export const RESUME_HARNESSES = Object.freeze({
       return { reply: String(stdout).trim(), sessionId: null, failure: null };
     },
     listArgs: Object.freeze(['list', '--format', 'json']),
-    latestSession(stdout, cwd) {
+    // Ids of the sessions `devin list` shows for exactly this worktree. A row
+    // without a working directory belongs to no worktree, so it never
+    // matches.
+    sessionsIn(stdout, cwd) {
       let sessions;
       try { sessions = JSON.parse(String(stdout)); } catch { return null; }
       if (!Array.isArray(sessions)) return null;
       const real = (dir) => { try { return realpathSync(dir); } catch { return path.resolve(dir); } };
-      const here = sessions.filter((s) => typeof s?.id === 'string' && (!s.working_directory || real(s.working_directory) === real(cwd)));
-      here.sort((a, b) => (Number(b.last_activity_at) || 0) - (Number(a.last_activity_at) || 0));
-      return here[0]?.id ?? null;
+      const here = real(cwd);
+      return sessions
+        .filter((s) => typeof s?.id === 'string' && typeof s.working_directory === 'string' && s.working_directory && real(s.working_directory) === here)
+        .map((s) => s.id);
     },
   }),
 });
@@ -206,6 +213,14 @@ export function createResumeExecutor({ sessions, baseEnv = process.env, home = h
       QWTS_AGENT_ID: agentId,
       AGENT_BOT_ID: agentId,
     };
+    // A harness that prints no session id is asked which sessions exist in
+    // the worktree before and after a fresh turn; only a single new one is
+    // recorded, so a wake never adopts another soul's or project's session.
+    const listIds = async () => {
+      const listed = await run(row.command, row.listArgs, { cwd, env: runEnv, stdin: null, timeoutMs: 30_000 }).catch(() => null);
+      return listed?.code === 0 ? row.sessionsIn(listed.stdout, cwd) : null;
+    };
+    const before = !sessionId && row.listArgs ? await listIds() : null;
     const result = await run(row.command, plan.args, { cwd, env: runEnv, stdin: plan.stdin, timeoutMs: turnTimeoutMs });
     const parsed = row.parse(result.stdout);
     if (result.code !== 0 || parsed.failure) {
@@ -213,9 +228,9 @@ export function createResumeExecutor({ sessions, baseEnv = process.env, home = h
       throw new Error(`${harness} turn failed: ${detail}`);
     }
     let nextSession = parsed.sessionId;
-    if (!nextSession && row.listArgs) {
-      const listed = await run(row.command, row.listArgs, { cwd, env: runEnv, stdin: null, timeoutMs: 30_000 }).catch(() => null);
-      if (listed?.code === 0) nextSession = row.latestSession(listed.stdout, cwd);
+    if (!nextSession && before) {
+      const created = (await listIds())?.filter((id) => !before.includes(id)) ?? [];
+      if (created.length === 1) nextSession = created[0];
     }
     if (nextSession && nextSession !== sessionId) sessions.set(agentId, harness, nextSession);
     return { reply: parsed.reply };
