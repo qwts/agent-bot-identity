@@ -307,6 +307,9 @@ export function createContractExecutor({ harness, identity, policy, run } = {}) 
       || !signal || typeof signal.aborted !== 'boolean') {
       fail('executor port is missing required capabilities');
     }
+    // The message is the turn's prompt text. An object here reached the
+    // harness as an invalid prompt block and failed every daemon wake (R4).
+    if (typeof message !== 'string') fail('executor message must be the prompt text');
     // A multi-soul daemon must never let one soul's work run under another
     // soul's execution identity: the invocation's agent must be the agent
     // this executor was bound to at construction.

@@ -22,7 +22,7 @@ function fixture(t, overrides = {}) {
     executorFor: (args) => { calls.push(args); return async (input) => {
       assert.equal(JSON.parse(readFileSync(file))[0].status, 'pending');
       assert.deepEqual(await input.requestApproval(), { decision: 'deny' });
-      assert.match(input.message.text, /Join agent-comms/);
+      assert.match(input.message, /Join agent-comms/);
       input.appendEvent(HARNESS_SESSION_EVENT, {});
     }; }, ...overrides };
   const ports = { account: 'worker', report: async (result) => { reports.push(result); } };

@@ -3,8 +3,18 @@
 // flight per soul. Binding lookup is injected because bindings are owned by
 // the daemon's private-git-dir registry: it resolves a soul to its worktree
 // and the binding file the turn presents as AGENT_BOT_BINDING.
+//
+// With a `relay` (comms-relay.mjs) the waker reads the soul's inbox itself,
+// runs one turn per message, and sends each turn's answer back as the reply,
+// because a cold turn cannot get a tool call approved.
 
-export function createColdWaker({ executor, settings, lookupBinding, identities, receipt }) {
+import { FINAL_REPLY_ERRORS, senderAddress } from './comms-relay.mjs';
+
+export function relayPrompt(message) {
+  return `You have an agent-comms message from ${senderAddress(message.from)}. Your final answer is sent back to them as your reply, so write it as the reply itself; you do not need to run agent-comms.\n\n${message.body}`;
+}
+
+export function createColdWaker({ executor, settings, lookupBinding, identities, receipt, relay = null }) {
   if (typeof executor !== 'function') throw new Error('cold waker requires an executor');
   if (typeof lookupBinding !== 'function') throw new Error('cold waker requires lookupBinding');
   if (typeof identities !== 'function') throw new Error('cold waker requires identities');
@@ -36,17 +46,31 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
       receipt({ event: 'cold-wake', agentId, decision: 'failed' });
       return { outcome: 'failed', detail: error?.message || 'cold wake failed' };
     }
-    const prompt = `There are ${Number.isSafeInteger(count) ? count : flight.ids.length} agent-comms messages waiting (IDs: ${flight.ids.join(', ')}). Read them with agent-comms inbox --full, act, and ack.`;
+    const invocation = { agentId, harness: identity.harness, cwd: binding.worktree, cursor };
+    const env = { AGENT_BOT_BINDING: binding.file };
+    const soul = { agentId, binding };
+    // Each read returns everything still unacked, so messages that merge
+    // into this flight are answered before it lands.
+    const relayed = async () => {
+      for (let messages = await relay.read(soul); messages.length; messages = await relay.read(soul)) {
+        for (const message of messages) {
+          const result = await executor({ invocation, message: relayPrompt(message), attachments: [], env });
+          const body = typeof result?.reply === 'string' ? result.reply.trim() : '';
+          if (body) {
+            await relay.reply(soul, { to: senderAddress(message.from), replyTo: message.id, body }).catch((error) => {
+              if (!FINAL_REPLY_ERRORS.has(error?.code)) throw error;
+            });
+          }
+          await relay.ack(soul, [message.id]);
+        }
+      }
+    };
+    const prompt = `There are ${Number.isSafeInteger(count) ? count : flight.ids.length} agent-comms messages waiting (IDs: ${flight.ids.join(', ')}). Read them with agent-comms inbox read, act, and ack them with agent-comms inbox ack.`;
     // The wake is reported `cold` once the turn starts (#259 req 3); the
     // turn itself runs on, and wakes that arrive meanwhile merge into it.
     let turn;
     try {
-      turn = Promise.resolve(executor({
-        invocation: { agentId, harness: identity.harness, cwd: binding.worktree, cursor },
-        message: { text: prompt },
-        attachments: [],
-        env: { AGENT_BOT_BINDING: binding.file },
-      }));
+      turn = relay ? relayed() : Promise.resolve(executor({ invocation, message: prompt, attachments: [], env }));
     } catch {
       // A launch that throws started no turn, so the wake is not `cold`.
       land();

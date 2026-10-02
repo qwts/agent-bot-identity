@@ -9,6 +9,7 @@
 
 import { createAcpExecutor } from './acp-engine.mjs';
 import { createColdWaker } from './cold-wake.mjs';
+import { UPDATE_EVENT } from './executor-contract.mjs';
 import { createWakeDispatcher } from './wake-dispatch.mjs';
 
 // The broker port the dispatcher wants, over the supervisor's report.
@@ -17,20 +18,29 @@ export function wakeReporter(report) {
 }
 
 // A cold turn has no principal watching it, so nothing may escalate to an
-// approval: whatever the policy does not allow outright is denied.
+// approval: whatever the policy does not allow outright is denied. The turn
+// resolves with its `reply`: the agent's message text after its last tool
+// call, which the cold waker's relay sends back.
 export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onEvent = () => {} }) {
   return async ({ invocation, message, attachments, env }) => {
     const executor = executorFor({ agentId: invocation.agentId, harness: invocation.harness, cwd: invocation.cwd, env });
     const signal = AbortSignal.timeout(turnTimeoutMs);
-    return executor({
+    let reply = '';
+    const collect = (type, update) => {
+      if (type !== UPDATE_EVENT) return;
+      if (update?.sessionUpdate === 'agent_message_chunk' && typeof update.content?.text === 'string') reply += update.content.text;
+      else if (update?.sessionUpdate === 'tool_call') reply = '';
+    };
+    const result = await executor({
       invocation,
       message,
       attachments,
       signal,
-      appendEvent: (type) => { onEvent(type); return { type }; },
+      appendEvent: (type, data) => { collect(type, data); onEvent(type); return { type }; },
       addArtifact: () => { throw new Error('a cold turn has no artifact store'); },
       requestApproval: async () => ({ decision: 'deny' }),
     });
+    return { ...result, reply };
   };
 }
 
@@ -53,13 +63,14 @@ export function acpExecutorFor({ identities, policy, baseEnv }) {
 
 // onWake for createCommsSupervisor. `coldWake` is null when the daemon has no
 // executor, which leaves every soul without a warm socket `waiting`.
-export function createWakePlane({ pool, settings, lookupSoul, identities, executorFor = null, receipt, turnTimeoutMs }) {
+export function createWakePlane({ pool, settings, lookupSoul, identities, executorFor = null, relay = null, receipt, turnTimeoutMs }) {
   const coldWake = executorFor
     ? createColdWaker({
       executor: coldTurnExecutor({ executorFor, turnTimeoutMs }),
       settings,
       lookupBinding: async (agentId) => lookupSoul(agentId),
       identities: async (agentId) => identities(agentId),
+      relay,
       receipt,
     })
     : null;

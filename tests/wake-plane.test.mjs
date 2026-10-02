@@ -60,7 +60,7 @@ test('with cold wake on, one turn starts in the worktree with the soul\'s bindin
   await onWake(wake(['m3']), { report });
   assert.deepEqual(reports.map((r) => r.outcome), ['cold', 'cold']);
   assert.deepEqual(built, { agentId: ID, harness: 'codex', cwd: soul.worktree, env: { AGENT_BOT_BINDING: soul.file } });
-  assert.match(input.message.text, /IDs: m1, m2/);
+  assert.match(input.message, /IDs: m1, m2/);
   // A cold turn has nobody to approve anything.
   assert.deepEqual(await input.requestApproval({ operation: {}, summary: 'x' }), { decision: 'deny' });
   finish();
@@ -76,4 +76,19 @@ test('the cold turn executor supplies the contract ports and a turn deadline', a
   assert.equal(typeof seen.appendEvent, 'function');
   assert.equal(typeof seen.addArtifact, 'function');
   assert.equal(seen.signal.aborted, false);
+});
+
+test('the cold turn resolves with the agent text after its last tool call', async () => {
+  const run = coldTurnExecutor({
+    executorFor: () => async ({ appendEvent }) => {
+      appendEvent('update', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Let me look.' } });
+      appendEvent('update', { sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Read' });
+      appendEvent('update', { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'hmm' } });
+      appendEvent('update', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hi, ' } });
+      appendEvent('update', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'all good.' } });
+      return { stopReason: 'end_turn' };
+    },
+  });
+  const result = await run({ invocation: { agentId: ID, harness: 'codex', cwd: '/w' }, message: 'hi', attachments: [], env: {} });
+  assert.deepEqual(result, { stopReason: 'end_turn', reply: 'Hi, all good.' });
 });
