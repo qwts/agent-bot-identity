@@ -41,3 +41,11 @@ test('a failed agent-comms call rejects with its error message', async () => {
   const refused = (command, args, options, done) => done(new Error('exit 1'), JSON.stringify({ ok: false, error: { code: 'reply-depth-exceeded', message: 'this conversation reached the reply-depth limit' } }), '');
   await assert.rejects(createCommsRelay({ env: {}, run: refused }).reply(soul, { to: 'owner', replyTo: 'm1', body: 'hi' }), { code: 'reply-depth-exceeded' });
 });
+
+test('an unmanaged soul with no binding file runs without the daemon\'s inherited binding (#323)', async () => {
+  const calls = [];
+  const run = (command, args, options, done) => { calls.push(options); done(null, JSON.stringify({ ok: true, messages: [] }), ''); };
+  const relay = createCommsRelay({ env: { PATH: '/tools', AGENT_BOT_BINDING: '/daemon/own/binding.json' }, run });
+  await relay.read({ agentId: 'agent_1', binding: { worktree: '/home/soul', file: null } });
+  assert.deepEqual(calls[0].env, { PATH: '/tools', AGENT_BOT_ID: 'agent_1', QWTS_AGENT_ID: 'agent_1' });
+});

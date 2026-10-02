@@ -61,12 +61,27 @@ export function acpExecutorFor({ identities, policy, baseEnv }) {
   };
 }
 
-// onWake for createCommsSupervisor. `coldWake` is null when the daemon has no
-// executor, which leaves every soul without a warm socket `waiting`.
-export function createWakePlane({ pool, settings, lookupSoul, identities, executorFor = null, relay = null, receipt, turnTimeoutMs }) {
-  const coldWake = executorFor
+// The cold waker's executor: each turn goes down the lane its soul's setting
+// picked. A lane the daemon has no executor for fails the turn, which leaves
+// the message unacked for a later wake.
+export function laneExecutor({ acpTurn = null, resumeTurn = null }) {
+  return (input) => {
+    if (input.wake?.lane === 'resume') {
+      if (!resumeTurn) throw new Error('resume wake is not available in this daemon');
+      return resumeTurn({ ...input, policy: input.wake.policy });
+    }
+    if (!acpTurn) throw new Error('no executor is configured for this daemon');
+    return acpTurn(input);
+  };
+}
+
+// onWake for createCommsSupervisor. `coldWake` is null when the daemon has
+// neither the ACP executor nor the resume executor, which leaves every soul
+// without a warm socket `waiting`.
+export function createWakePlane({ pool, settings, lookupSoul, identities, executorFor = null, resumeExecutor = null, relay = null, receipt, turnTimeoutMs }) {
+  const coldWake = executorFor || resumeExecutor
     ? createColdWaker({
-      executor: coldTurnExecutor({ executorFor, turnTimeoutMs }),
+      executor: laneExecutor({ acpTurn: executorFor ? coldTurnExecutor({ executorFor, turnTimeoutMs }) : null, resumeTurn: resumeExecutor }),
       settings,
       lookupBinding: async (agentId) => lookupSoul(agentId),
       identities: async (agentId) => identities(agentId),

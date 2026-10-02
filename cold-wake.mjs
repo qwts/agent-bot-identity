@@ -8,6 +8,7 @@
 // runs one turn per message, and sends each turn's answer back as the reply,
 // because a cold turn cannot get a tool call approved.
 
+import { wakeSetting } from './cold-wake-settings.mjs';
 import { FINAL_REPLY_ERRORS, senderAddress } from './comms-relay.mjs';
 
 export function relayPrompt(message) {
@@ -23,7 +24,10 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
   async function coldWake(event) {
     const { agentId, count, cursor, messageIds } = event ?? {};
     const currentSettings = typeof settings === 'function' ? await settings() : settings;
-    if (currentSettings?.[agentId] !== true) return { outcome: 'waiting', detail: 'cold wake is disabled' };
+    // The setting picks the lane (#323): an ACP turn or a resumed harness
+    // session. The executor receives it as `wake`.
+    const wake = wakeSetting(currentSettings?.[agentId]);
+    if (wake === null) return { outcome: 'waiting', detail: 'cold wake is disabled' };
     if (active.has(agentId)) {
       active.get(agentId).ids.push(...(Array.isArray(messageIds) ? messageIds : []));
       return { outcome: 'cold', detail: 'merged into the active turn' };
@@ -38,7 +42,9 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
     let identity;
     try {
       binding = await lookupBinding(agentId);
-      if (!binding?.worktree || !binding?.file) throw new Error('soul binding is unavailable');
+      // A resume turn can run on a worktree alone: a soul bound by its own
+      // session pins its identity in the worktree's git config (#323).
+      if (!binding?.worktree || (!binding.file && wake.lane !== 'resume')) throw new Error('soul binding is unavailable');
       identity = await identities(agentId);
       if (!identity?.harness) throw new Error('soul harness identity is unavailable');
     } catch (error) {
@@ -47,14 +53,14 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
       return { outcome: 'failed', detail: error?.message || 'cold wake failed' };
     }
     const invocation = { agentId, harness: identity.harness, cwd: binding.worktree, cursor };
-    const env = { AGENT_BOT_BINDING: binding.file };
+    const env = binding.file ? { AGENT_BOT_BINDING: binding.file } : {};
     const soul = { agentId, binding };
     // Each read returns everything still unacked, so messages that merge
     // into this flight are answered before it lands.
     const relayed = async () => {
       for (let messages = await relay.read(soul); messages.length; messages = await relay.read(soul)) {
         for (const message of messages) {
-          const result = await executor({ invocation, message: relayPrompt(message), attachments: [], env });
+          const result = await executor({ invocation, message: relayPrompt(message), attachments: [], env, wake });
           const body = typeof result?.reply === 'string' ? result.reply.trim() : '';
           if (body) {
             await relay.reply(soul, { to: senderAddress(message.from), replyTo: message.id, body }).catch((error) => {
@@ -70,7 +76,7 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
     // turn itself runs on, and wakes that arrive meanwhile merge into it.
     let turn;
     try {
-      turn = relay ? relayed() : Promise.resolve(executor({ invocation, message: prompt, attachments: [], env }));
+      turn = relay ? relayed() : Promise.resolve(executor({ invocation, message: prompt, attachments: [], env, wake }));
     } catch {
       // A launch that throws started no turn, so the wake is not `cold`.
       land();
