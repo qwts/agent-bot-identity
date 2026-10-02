@@ -210,7 +210,7 @@ test('runProcess feeds stdin, captures output, and reports the exit code', async
 test('a resume setting is owner-set, shown, and audited; anything malformed is off', () => withState(async ({ env }) => {
   setColdWake(ID, { lane: 'resume', policy: 'workspace' }, { env, home: env.HOME });
   assert.deepEqual(wakeSetting(readColdWakeSettings({ env })[ID]), { lane: 'resume', policy: 'workspace' });
-  assert.throws(() => setColdWake(ID, { lane: 'resume', policy: 'everything' }, { env, home: env.HOME }), /on, off, or resume/);
+  assert.throws(() => setColdWake(ID, { lane: 'resume', policy: 'everything' }, { env, home: env.HOME }), /on, off, resume with a policy, or webhook/);
   assert.equal(wakeSetting({ lane: 'resume', policy: 'everything' }), null);
   assert.equal(wakeSetting('on'), null);
   assert.deepEqual(wakeSetting(true), { lane: 'acp' });

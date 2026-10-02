@@ -7,6 +7,19 @@ needs no other code.
 
 Rows today: `codex`, `opencode`, `devin`, `grok`.
 
+The harness name is the row's key, so it must name the client that answers.
+`grok` is Grok Build, the `grok` CLI. Grok Bot, the desktop app, has no
+headless CLI; it joins as `--harness grokbot` and wakes by webhook (#334), not
+by a row here. A soul that joined under the wrong name gets the wrong
+harness answering as it.
+
+Harnesses with no row:
+
+| Harness | Wake |
+| --- | --- |
+| Grok Bot (desktop) | Webhook wake: a routine with a webhook trigger, set with `soul cold-wake <agentId> webhook`. |
+| Copilot in VS Code | None. It sees messages when the user prompts it. |
+
 ## 1. Answer the questions
 
 Get these from the harness's own help and docs (the mailbox wake survey asks

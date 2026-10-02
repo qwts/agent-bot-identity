@@ -7,6 +7,9 @@
 // With a `relay` (comms-relay.mjs) the waker reads the soul's inbox itself,
 // runs one turn per message, and sends each turn's answer back as the reply,
 // because a cold turn cannot get a tool call approved.
+//
+// A webhook soul (#334) runs no turn here: its harness's routine reads and
+// acks its own inbox, so the waker only calls the webhook.
 
 import { wakeSetting } from './cold-wake-settings.mjs';
 import { FINAL_REPLY_ERRORS, senderAddress } from './comms-relay.mjs';
@@ -15,7 +18,7 @@ export function relayPrompt(message) {
   return `You have an agent-comms message from ${senderAddress(message.from)}. Your final answer is sent back to them as your reply, so write it as the reply itself; you do not need to run agent-comms.\n\n${message.body}`;
 }
 
-export function createColdWaker({ executor, settings, lookupBinding, identities, receipt, relay = null }) {
+export function createColdWaker({ executor, settings, lookupBinding, identities, receipt, relay = null, webhook = null }) {
   if (typeof executor !== 'function') throw new Error('cold waker requires an executor');
   if (typeof lookupBinding !== 'function') throw new Error('cold waker requires lookupBinding');
   if (typeof identities !== 'function') throw new Error('cold waker requires identities');
@@ -44,13 +47,29 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
       binding = await lookupBinding(agentId);
       // A resume turn can run on a worktree alone: a soul bound by its own
       // session pins its identity in the worktree's git config (#323).
-      if (!binding?.worktree || (!binding.file && wake.lane !== 'resume')) throw new Error('soul binding is unavailable');
-      identity = await identities(agentId);
-      if (!identity?.harness) throw new Error('soul harness identity is unavailable');
+      // A webhook needs only the worktree its routine reads the inbox in.
+      if (!binding?.worktree || (!binding.file && wake.lane === 'acp')) throw new Error('soul binding is unavailable');
+      if (wake.lane === 'webhook' && !webhook) throw new Error('webhook wake is not available in this daemon');
+      identity = wake.lane === 'webhook' ? null : await identities(agentId);
+      if (wake.lane !== 'webhook' && !identity?.harness) throw new Error('soul harness identity is unavailable');
     } catch (error) {
       land();
       receipt({ event: 'cold-wake', agentId, decision: 'failed' });
       return { outcome: 'failed', detail: error?.message || 'cold wake failed' };
+    }
+    if (wake.lane === 'webhook') {
+      // The call is the whole flight: the routine runs on the harness's side,
+      // and the messages stay unacked until the soul acks them.
+      try {
+        await webhook({ agentId, worktree: binding.worktree });
+        receipt({ event: 'cold-wake', agentId, decision: 'webhook' });
+        return { outcome: 'cold', detail: 'webhook accepted' };
+      } catch (error) {
+        receipt({ event: 'cold-wake', agentId, decision: 'failed' });
+        return { outcome: 'failed', detail: error?.message || 'webhook wake failed' };
+      } finally {
+        land();
+      }
     }
     const invocation = { agentId, harness: identity.harness, cwd: binding.worktree, cursor };
     const env = binding.file ? { AGENT_BOT_BINDING: binding.file } : {};
