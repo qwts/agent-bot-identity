@@ -101,6 +101,27 @@ export function supervisorEnvironment({ env = process.env, home = homedir() } = 
   };
 }
 
+// #321: Homebrew keg paths are versioned (`.../Cellar/<formula>/<version>/...`)
+// and vanish on `brew upgrade` + `brew cleanup`, leaving launchd looping on a
+// missing binary. The stable `.../opt/<formula>/...` symlink survives upgrades,
+// so supervised units must record the opt form, never the Cellar form. Paths
+// without a Cellar segment — the ~/.local/bin launcher, /usr/local/bin, and
+// app bundles such as /Applications/GeniusBar.app/... — are already stable
+// and pass through untouched.
+const HOMEBREW_CELLAR_SEGMENT = /^(.*)\/Cellar\/([^/]+)\/[^/]+(\/.*)$/;
+
+export function stableHomebrewPath(path) {
+  if (typeof path !== 'string') return path;
+  const match = path.match(HOMEBREW_CELLAR_SEGMENT);
+  if (!match) return path;
+  return `${match[1]}/opt/${match[2]}${match[3]}`;
+}
+
+export function stableDaemonProgramArguments(programArguments) {
+  if (!Array.isArray(programArguments)) return programArguments;
+  return programArguments.map((arg) => stableHomebrewPath(arg));
+}
+
 function checkProgram({ executable, programArguments }) {
   const program = programArguments ?? [executable, 'daemon', 'run'];
   if (!Array.isArray(program) || program.length === 0
@@ -341,8 +362,16 @@ export async function ensureDaemonSupervisor({
   const skipLoad = supervisorSkipLoad(env);
   const environment = supervisorEnvironment({ env, home });
   const supervisorEnv = { ...env, ...environment };
+  // Resolve through the stable opt paths, not the versioned Cellar realpath:
+  // a unit that pins a Cellar path breaks on the next `brew upgrade` +
+  // `brew cleanup`, while the opt form (or an already-stable launcher or app
+  // bundle path) survives. A previous unit that pins Cellar paths therefore
+  // always differs from the freshly rendered body, so `install` reports
+  // `changed: true` and repairs it on the next run.
+  const stableExecutable = stableHomebrewPath(executable);
+  const stableArguments = stableDaemonProgramArguments(programArguments);
   const body = renderSupervisorUnit({
-    kind: paths.kind, executable, programArguments, environment, label: paths.label,
+    kind: paths.kind, executable: stableExecutable, programArguments: stableArguments, environment, label: paths.label,
   });
   mkdir(dirname(paths.unitPath), { recursive: true });
   let previous = null;
