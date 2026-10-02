@@ -4,8 +4,8 @@ description: Bootstrap, configure, and operate per-harness GitHub App identities
 metadata:
   qwts-contract: "1"
   qwts-cli: "agent-bot"
-  qwts-versions: ">=0.8.0 <0.9.0"
-  qwts-validated: "0.8.0"
+  qwts-versions: ">=0.9.0 <0.10.0"
+  qwts-validated: "0.9.0"
   qwts-side-effects: "remote-write"
 ---
 
@@ -67,6 +67,9 @@ path. Details and the governing contract link live in
    runtime bootstrap. Prefer the versioned `--profile` contract, require the
    complete active identity roster and organization-owned harness tooling, and
    never reduce it to the current harness or reactivate a retired identity.
+8. GitHub identity is an add-on: `signed-commit`, `Agent-Identity` trailers
+   and the `gh` shim run only with `features.github-identity: true` in the
+   user config (`doctor` shows each gate). Off is not an error to work around.
 
 ## Know the side effects before retrying
 
