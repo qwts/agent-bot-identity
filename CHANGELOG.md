@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Embedded hosts supervise their own daemon (#302). `AGENT_BOT_SERVICE_LABEL`
+  names the launchd label or systemd unit (one safe token, else a usage
+  error) and is carried into the unit; `daemon disable` and `doctor` honour
+  it. `agent-bot daemon install [--json]` registers the running node and
+  `agent-bot.mjs` entry as `daemon run`, rewriting and reloading only when
+  the unit changed, so an updated or moved host re-registers by running it
+  again. It reports `{ label, unitPath, changed, loaded }`. Without the
+  variable, install and bootstrap behave as before.
+
 ## 0.9.0
 
 - qwts conventions run only with `github-identity` on (#281, ADR-0274

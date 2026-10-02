@@ -9,6 +9,10 @@
 //   ensureDaemonSupervisor  — write/refresh the unit and keep it loaded
 //   disableDaemonSupervisor — unload the unit and stop the daemon
 //   inspectSupervisor       — secret-free status for doctor
+//
+// An embedded host (GeniusBar) sets AGENT_BOT_SERVICE_LABEL so its unit
+// cannot collide with an installed agent-bot's, and registers its bundled
+// runtime with `agent-bot daemon install` (#302).
 
 import { execFileSync } from 'node:child_process';
 import {
@@ -26,26 +30,45 @@ import { daemonStateFile, daemonStatus, stopDaemon } from './agent-daemon.mjs';
 
 export const LAUNCHD_LABEL = 'dev.qwts.agent-bot.daemon';
 export const SYSTEMD_UNIT = 'agent-bot-daemon.service';
+export const SERVICE_LABEL_VARIABLE = 'AGENT_BOT_SERVICE_LABEL';
+
+/**
+ * The host-supplied service label, or null for the defaults. It names a
+ * launchctl target and a unit file, so it must be one safe token.
+ */
+export function hostServiceLabel(env = process.env) {
+  const label = env[SERVICE_LABEL_VARIABLE];
+  if (label === undefined || label === '') return null;
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(label)) {
+    throw Object.assign(new Error(
+      `usage: ${SERVICE_LABEL_VARIABLE} must use letters, digits, dots, underscores or hyphens and start with a letter, digit or underscore`,
+    ), { code: 'usage' });
+  }
+  return label;
+}
 
 export function supervisorSkipLoad(env = process.env) {
   return env.AGENT_BOT_SUPERVISOR_SKIP_LOAD === '1';
 }
 
-export function supervisorPaths(home = homedir(), platform = process.platform) {
+export function supervisorPaths(home = homedir(), platform = process.platform, env = process.env) {
+  const hostLabel = hostServiceLabel(env);
   if (platform === 'darwin') {
+    const label = hostLabel ?? LAUNCHD_LABEL;
     return {
       platform,
       kind: 'launchd',
-      label: LAUNCHD_LABEL,
-      unitPath: join(home, 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`),
+      label,
+      unitPath: join(home, 'Library', 'LaunchAgents', `${label}.plist`),
     };
   }
   if (platform === 'linux') {
+    const label = hostLabel ? `${hostLabel}.service` : SYSTEMD_UNIT;
     return {
       platform,
       kind: 'systemd',
-      label: SYSTEMD_UNIT,
-      unitPath: join(home, '.config', 'systemd', 'user', SYSTEMD_UNIT),
+      label,
+      unitPath: join(home, '.config', 'systemd', 'user', label),
     };
   }
   return {
@@ -65,19 +88,36 @@ function xmlEscape(value) {
 }
 
 export function supervisorEnvironment({ env = process.env, home = homedir() } = {}) {
+  const label = hostServiceLabel(env);
   return {
     AGENT_BOT_DAEMON_STATE_PATH: daemonStateFile({ env, home }),
+    // The supervised daemon resolves the same label as the host that installed it.
+    ...(label ? { [SERVICE_LABEL_VARIABLE]: label } : {}),
   };
+}
+
+function checkProgram({ executable, programArguments }) {
+  const program = programArguments ?? [executable, 'daemon', 'run'];
+  if (!Array.isArray(program) || program.length === 0
+    || program.some((arg) => typeof arg !== 'string' || arg.length === 0 || arg.includes('\0'))) {
+    throw new Error('supervisor executable must be a non-empty path');
+  }
+  return program;
+}
+
+// systemd splits ExecStart on whitespace, honours quotes and C escapes, and
+// expands $ and % specifiers: quote every word and escape all of them.
+function systemdWord(arg) {
+  return `"${arg.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '$$$$').replaceAll('%', '%%')
+    .replaceAll('\n', '\\n')}"`;
 }
 
 function environmentEntries(environment = {}) {
   return Object.entries(environment).filter(([, value]) => typeof value === 'string' && value.length > 0);
 }
 
-export function renderLaunchdPlist({ executable, environment = {} }) {
-  if (typeof executable !== 'string' || executable.length === 0 || executable.includes('\0')) {
-    throw new Error('supervisor executable must be a non-empty path');
-  }
+export function renderLaunchdPlist({ executable, programArguments, environment = {}, label = LAUNCHD_LABEL }) {
+  const program = checkProgram({ executable, programArguments });
   const envXml = environmentEntries(environment).map(([key, value]) => (
     `    <key>${xmlEscape(key)}</key>\n    <string>${xmlEscape(value)}</string>`
   )).join('\n');
@@ -89,12 +129,10 @@ export function renderLaunchdPlist({ executable, environment = {} }) {
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>${xmlEscape(LAUNCHD_LABEL)}</string>
+  <string>${xmlEscape(label)}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${xmlEscape(executable)}</string>
-    <string>daemon</string>
-    <string>run</string>
+${program.map((arg) => `    <string>${xmlEscape(arg)}</string>`).join('\n')}
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -105,11 +143,12 @@ export function renderLaunchdPlist({ executable, environment = {} }) {
 `;
 }
 
-export function renderSystemdUnit({ executable, environment = {} }) {
-  if (typeof executable !== 'string' || executable.length === 0 || executable.includes('\0')) {
-    throw new Error('supervisor executable must be a non-empty path');
-  }
-  const execStart = executable.includes(' ') ? `"${executable.replaceAll('"', '\\"')}"` : executable;
+export function renderSystemdUnit({ executable, programArguments, environment = {} }) {
+  checkProgram({ executable, programArguments });
+  // The default form is unchanged; a host's argument list is fully quoted.
+  const execStart = programArguments
+    ? programArguments.map(systemdWord).join(' ')
+    : `${executable.includes(' ') ? `"${executable.replaceAll('"', '\\"')}"` : executable} daemon run`;
   const envLines = environmentEntries(environment)
     .map(([key, value]) => `Environment=${key}=${value.replaceAll('\n', '')}`)
     .join('\n');
@@ -118,7 +157,7 @@ Description=agent-bot identity daemon
 After=default.target
 
 [Service]
-ExecStart=${execStart} daemon run
+ExecStart=${execStart}
 ${envLines ? `${envLines}\n` : ''}Restart=always
 RestartSec=2
 
@@ -127,9 +166,9 @@ WantedBy=default.target
 `;
 }
 
-export function renderSupervisorUnit({ kind, executable, environment = {} }) {
-  if (kind === 'launchd') return renderLaunchdPlist({ executable, environment });
-  if (kind === 'systemd') return renderSystemdUnit({ executable, environment });
+export function renderSupervisorUnit({ kind, executable, programArguments, environment = {}, label }) {
+  if (kind === 'launchd') return renderLaunchdPlist({ executable, programArguments, environment, label });
+  if (kind === 'systemd') return renderSystemdUnit({ executable, programArguments, environment });
   throw new Error(`unsupported supervisor kind: ${kind}`);
 }
 
@@ -152,7 +191,7 @@ export function inspectSupervisor({
   exists = existsSync,
   exec = runCommand,
 } = {}) {
-  const paths = supervisorPaths(home, platform);
+  const paths = supervisorPaths(home, platform, env);
   if (!paths.kind) {
     return {
       supported: false,
@@ -278,6 +317,10 @@ export async function ensureDaemonSupervisor({
   env = process.env,
   platform = process.platform,
   executable = join(home, '.local', 'bin', 'agent-bot'),
+  // A host's own runtime and entry, replacing `executable daemon run`.
+  programArguments,
+  // install/update always restart; `daemon install` reloads only on change.
+  reloadUnchanged = true,
   probe = daemonStatus,
   stopDetached = stopDaemon,
   exists = existsSync,
@@ -286,20 +329,38 @@ export async function ensureDaemonSupervisor({
   mkdir = mkdirSync,
   exec = runCommand,
 } = {}) {
-  const paths = supervisorPaths(home, platform);
+  const paths = supervisorPaths(home, platform, env);
   if (!paths.kind) {
     return { applied: false, reason: 'unsupported-platform', platform };
   }
   const skipLoad = supervisorSkipLoad(env);
   const environment = supervisorEnvironment({ env, home });
   const supervisorEnv = { ...env, ...environment };
-  const body = renderSupervisorUnit({ kind: paths.kind, executable, environment });
+  const body = renderSupervisorUnit({
+    kind: paths.kind, executable, programArguments, environment, label: paths.label,
+  });
   mkdir(dirname(paths.unitPath), { recursive: true });
   let previous = null;
   try {
     previous = read(paths.unitPath, 'utf8');
   } catch {
     previous = null;
+  }
+  if (!reloadUnchanged && previous === body) {
+    const unchanged = inspectSupervisor({ home, env, platform, exists, exec });
+    if (unchanged.loaded) {
+      return {
+        applied: true,
+        loaded: true,
+        skippedLoad: skipLoad,
+        refreshed: false,
+        platform,
+        kind: paths.kind,
+        label: paths.label,
+        unitPath: paths.unitPath,
+        statePath: environment.AGENT_BOT_DAEMON_STATE_PATH,
+      };
+    }
   }
   write(paths.unitPath, body, { mode: 0o644 });
   const inspection = inspectSupervisor({ home, env, platform, exists, exec });
@@ -318,6 +379,7 @@ export async function ensureDaemonSupervisor({
       refreshed: previous !== body,
       platform,
       kind: paths.kind,
+      label: paths.label,
       unitPath: paths.unitPath,
       statePath: environment.AGENT_BOT_DAEMON_STATE_PATH,
     };
@@ -333,6 +395,7 @@ export async function ensureDaemonSupervisor({
     port: healthy.port,
     platform,
     kind: paths.kind,
+    label: paths.label,
     unitPath: paths.unitPath,
     statePath: environment.AGENT_BOT_DAEMON_STATE_PATH,
   };
@@ -348,7 +411,7 @@ export async function disableDaemonSupervisor({
   remove = rmSync,
   exec = runCommand,
 } = {}) {
-  const paths = supervisorPaths(home, platform);
+  const paths = supervisorPaths(home, platform, env);
   if (!paths.kind) {
     return { unloaded: false, reason: 'unsupported-platform', platform };
   }
@@ -365,6 +428,7 @@ export async function disableDaemonSupervisor({
     stopped: Boolean(status.running),
     platform,
     kind: paths.kind,
+    label: paths.label,
     unitPath: paths.unitPath,
   };
 }
