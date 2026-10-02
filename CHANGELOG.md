@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.10.1
+
+- A launched soul joins agent-comms before its first turn (#313), so the
+  broker reports it `launched` and it appears in the principal's roster.
+- A cold-woken soul reads and answers its messages (#314). A cold turn
+  denies every tool call, so the daemon now relays: it reads the soul's
+  inbox as the soul, runs one turn per message with the sender and body in
+  the prompt, sends the turn's final text back with `--reply-to`, and acks
+  the message. A reply refused for good (the reply-depth limit, or the
+  sender gone) is acked unanswered. Wake and launch prompts now reach the
+  harness as text; the executor contract rejects anything else.
+
 ## 0.10.0
 
 - Souls carry their harnesses (#307, ADR-0276). When a soul home is made
