@@ -18,6 +18,10 @@
 //                                      agent-comms broker (prints the owner
 //                                      approval code); status shows the
 //                                      pairing and the account-watch link.
+//   agent-bot daemon install [--json] — supervise this runtime's daemon (node
+//                                      and entry as running now) under
+//                                      AGENT_BOT_SERVICE_LABEL; rewritten and
+//                                      reloaded only when that changed (#302)
 //
 // v0 scope per #41: register soul, space ensure, space path, population list.
 // No OAuth, no remote sync, no HTTPS — loopback is the boundary (#35).
@@ -1269,6 +1273,23 @@ async function main() {
       process.stdout.write(result.stopped ? `daemon stopped (pid ${result.pid})\n` : `${result.reason}\n`);
       break;
     }
+    case 'install': {
+      const unexpected = rest.filter((arg) => arg !== '--json');
+      if (unexpected.length > 0) throw new Error('usage: agent-bot daemon install [--json]');
+      const { ensureDaemonSupervisor } = await import('./daemon-supervisor.mjs');
+      // This runtime exactly: the node running now and its agent-bot entry.
+      const entry = fileURLToPath(new URL('./agent-bot.mjs', import.meta.url));
+      const result = await ensureDaemonSupervisor({
+        programArguments: [process.execPath, entry, 'daemon', 'run'],
+        reloadUnchanged: false,
+      });
+      if (!result.applied) throw new Error(`no user-level supervisor on ${result.platform}`);
+      const summary = { label: result.label, unitPath: result.unitPath, changed: result.refreshed, loaded: result.loaded };
+      process.stdout.write(json
+        ? `${JSON.stringify(summary, null, 2)}\n`
+        : `daemon supervisor ${summary.changed ? 'installed' : 'unchanged'}: ${summary.label} (${summary.unitPath})\n`);
+      break;
+    }
     case 'disable': {
       const { disableDaemonSupervisor } = await import('./daemon-supervisor.mjs');
       const result = await disableDaemonSupervisor();
@@ -1289,7 +1310,7 @@ async function main() {
       break;
     }
     default:
-      throw new Error('usage: agent-bot daemon <run|start|status|stop|disable|vouch-key|pair-comms> [--json]');
+      throw new Error('usage: agent-bot daemon <run|start|status|stop|install|disable|vouch-key|pair-comms> [--json]');
   }
 }
 

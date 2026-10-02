@@ -14,6 +14,7 @@ Use this reference for setup, minting, diagnostics, and identity repair.
 | Repair and verify an installed setup | `agent-bot bootstrap [--machine-only\|--worktree-only] [--json]` |
 | Install the CLI, hooks, and identity-daemon supervisor | `agent-bot install [--with-gh-shim]` |
 | Unload the identity-daemon supervisor | `agent-bot daemon disable` |
+| Supervise an embedded host's own runtime (re-run after update or move) | `AGENT_BOT_SERVICE_LABEL=<label> agent-bot daemon install [--json]` |
 | Install only the fail-closed `gh` shim | `agent-bot install-gh-shim` |
 | Restore an App key and issuer from pass-cli | `agent-bot ensure-private-key --app <slug> [--force]` |
 | Read an authorized password/API key | `agent-bot secret get --provider <id> --collection <name> --item <title> --field <name> --reason <text>` |
