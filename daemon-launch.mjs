@@ -11,7 +11,7 @@ export const LAUNCH_NAME_MAX = 128;
 // `provisionHome` binds a soul that has no live binding (#297); `discard`
 // retires a soul this request spawned when its first start fails, so a
 // failed package launch leaves no active identity behind.
-export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {},
+export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
   executorFor, turnTimeoutMs = 30 * 60_000 }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
@@ -50,28 +50,33 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
     let spawned = null;
     try {
       if (event.account !== account) throw new Error('launch account does not match paired daemon');
-      if (typeof event.harness !== 'string' || !HARNESS_KEY_PATTERN.test(event.harness)) throw new Error('invalid launch harness');
       const targets = [event.soul, event.package].filter((value) => value !== undefined);
       if (targets.length !== 1 || typeof targets[0] !== 'string' || !targets[0]) {
         throw new Error('launch requires exactly one soul or package');
+      }
+      // ADR-0276 order: the launch's own harness, else the soul's default,
+      // else a registry harness found on PATH.
+      const harness = event.harness ?? await defaultHarness(event.soul ? { soul: event.soul } : { package: event.package });
+      if (typeof harness !== 'string' || !HARNESS_KEY_PATTERN.test(harness)) {
+        throw new Error(event.harness === undefined ? 'no harness for this launch: name one, or install a harness' : 'invalid launch harness');
       }
       // Same bound as agent-comms' broker launch contract (lib/broker/launch.mjs).
       if (event.name !== undefined && (typeof event.name !== 'string' || !event.name.trim() || event.name.length > LAUNCH_NAME_MAX || /[\u0000-\u001f\u007f]/.test(event.name))) throw new Error('invalid launch name');
       // Every check that can fail without starting runs before a package spawn mints.
       if (!executorFor) throw new Error('daemon ACP executor is disabled');
-      const identity = event.soul ? await identities(event.soul) : await spawnPackage(event);
+      const identity = event.soul ? await identities(event.soul) : await spawnPackage({ ...event, harness });
       if (!event.soul) spawned = identity?.id ?? null;
       const binding = await lookupBinding(identity.id)
-        ?? await provisionHome({ agentId: identity.id, harness: event.harness, packagePath: event.package ?? null });
+        ?? await provisionHome({ agentId: identity.id, harness, packagePath: event.package ?? null });
       if (!binding?.worktree || !binding?.file) throw new Error('soul binding is unavailable');
-      const executor = executorFor({ agentId: identity.id, harness: event.harness, cwd: binding.worktree,
+      const executor = executorFor({ agentId: identity.id, harness, cwd: binding.worktree,
         env: { AGENT_BOT_BINDING: binding.file, AGENT_BOT_ID: identity.id, QWTS_AGENT_ID: identity.id } });
       // An ACP session binding is the readiness boundary. A returned promise
       // alone is not evidence that the harness spawned successfully.
       await new Promise((resolve, reject) => {
         let started = false;
         Promise.resolve().then(() => executor({
-          invocation: { agentId: identity.id, harness: event.harness, cwd: binding.worktree },
+          invocation: { agentId: identity.id, harness, cwd: binding.worktree },
           message: { text: 'You were launched by a principal. Join agent-comms as usual, read your inbox, and handle incoming work.' },
           attachments: [], signal: AbortSignal.timeout(turnTimeoutMs),
           appendEvent: (type, data) => {

@@ -52,20 +52,29 @@ export async function installHarnesses(worktree, { env = process.env, node = pro
  * `bindings.findAgent`.
  */
 export function createSoulHomes({ stateDir, bindings, install = installHarnesses }) {
+  // One creation per home at a time: a second launch of the same new soul
+  // waits for the first instead of racing it through copy and install.
+  const creating = new Map();
+  async function create(worktree, packagePath) {
+    mkdirSync(worktree, { recursive: true, mode: 0o700 });
+    try {
+      if (packagePath) cpSync(packagePath, worktree, { recursive: true, verbatimSymlinks: true, force: false });
+      await install(worktree);
+      execFileSync('git', ['init', '-q'], { cwd: worktree, env: { PATH: process.env.PATH }, stdio: 'ignore' });
+      appendFileSync(path.join(worktree, '.git', 'info', 'exclude'), 'node_modules/\n');
+    } catch (error) {
+      // A half-made home is removed, so the next launch starts it afresh.
+      rmSync(worktree, { recursive: true, force: true });
+      throw error;
+    }
+  }
   return async function provision({ agentId, harness = null, packagePath = null }) {
     const worktree = soulHomePath(stateDir, agentId);
+    while (creating.has(worktree)) await creating.get(worktree).catch(() => {});
     if (!existsSync(path.join(worktree, '.git'))) {
-      mkdirSync(worktree, { recursive: true, mode: 0o700 });
-      try {
-        if (packagePath) cpSync(packagePath, worktree, { recursive: true, verbatimSymlinks: true, force: false });
-        await install(worktree);
-        execFileSync('git', ['init', '-q'], { cwd: worktree, env: { PATH: process.env.PATH }, stdio: 'ignore' });
-        appendFileSync(path.join(worktree, '.git', 'info', 'exclude'), 'node_modules/\n');
-      } catch (error) {
-        // A half-made home is removed, so the next launch starts it afresh.
-        rmSync(worktree, { recursive: true, force: true });
-        throw error;
-      }
+      const made = create(worktree, packagePath);
+      creating.set(worktree, made);
+      try { await made; } finally { creating.delete(worktree); }
     }
     const gitDir = realpathSync(path.join(worktree, '.git'));
     bindings.bind({ agentId, worktree, gitDir, harness });

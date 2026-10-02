@@ -80,7 +80,8 @@ import { attachWakeEndpoint } from './agent-wake.mjs';
 import { readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler } from './daemon-launch.mjs';
-import { createSoulHomes } from './soul-home.mjs';
+import { createSoulHomes, installHarnesses } from './soul-home.mjs';
+import { defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { validateSoulPackage } from './soul-package.mjs';
 import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
 
@@ -1092,6 +1093,14 @@ export async function runDaemon({
   // cold turn, else `waiting` (ADR-0008 decisions 7 to 9).
   let server;
   const onWake = (wake, ports) => server.wakePlane(wake, ports);
+  // One provisioner for the daemon's life, so concurrent launches of a new
+  // soul share its creation; it installs with this daemon's environment.
+  let homes;
+  const provisionHome = (soul) => {
+    homes ??= createSoulHomes({ stateDir: stateDirectory({ env, home }), bindings: server.bindings,
+      install: (dir) => installHarnesses(dir, { env }) });
+    return homes(soul);
+  };
   const onLaunch = createLaunchHandler({
     file: path.join(path.dirname(daemonStateFile({ env, home })), 'launch-requests.json'),
     identities,
@@ -1103,7 +1112,15 @@ export async function runDaemon({
         stateDir: stateDirectory({ env, home }), now });
     },
     lookupBinding: (agentId) => server.bindings.findAgent(agentId),
-    provisionHome: (soul) => createSoulHomes({ stateDir: stateDirectory({ env, home }), bindings: server.bindings })(soul),
+    provisionHome: (soul) => provisionHome(soul),
+    // ADR-0276: an existing soul's own harness, else a package's preference,
+    // else a registry harness on PATH.
+    defaultHarness: async ({ soul, package: packagePath }) => {
+      if (soul) return identities(soul).harness ?? defaultHarnessFor([], { available: (cmd) => onPath(cmd, env) });
+      let preferred = [];
+      try { preferred = JSON.parse(readFileSync(path.join(packagePath, 'soul.json'), 'utf8')).preferredHarnesses ?? []; } catch {}
+      return defaultHarnessFor(Array.isArray(preferred) ? preferred : [], { available: (cmd) => onPath(cmd, env) });
+    },
     // A principal launched this soul to talk to it, so later messages wake it.
     onLaunched: (agentId) => setColdWake(agentId, true, { env, home, now }),
     discard: (agentId) => retireAgentIdentity(agentId, { stateDir: stateDirectory({ env, home }), now }),

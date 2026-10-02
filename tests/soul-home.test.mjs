@@ -62,3 +62,20 @@ test('installs pinned harnesses with npm ci, scripts off, using the host npm', a
   assert.deepEqual(calls, [{ command: '/app/node', args: ['/app/npm/bin/npm-cli.js', 'ci', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund'], cwd: root }]);
   assert.deepEqual(npmCommand({}), { command: 'npm', args: [] });
 });
+
+test('two launches of the same new soul share one creation', async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'soul-home-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  let installs = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const bindings = fakeBindings();
+  const provision = createSoulHomes({ stateDir: root, bindings, install: async () => { installs += 1; await gate; } });
+  const first = provision({ agentId });
+  const second = provision({ agentId });
+  release();
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(installs, 1);
+  assert.equal(a.worktree, b.worktree);
+  assert.equal(existsSync(path.join(a.worktree, '.git')), true);
+});

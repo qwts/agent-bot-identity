@@ -31,8 +31,8 @@
 //                stores, so driving them here would never surface in the
 //                desktop apps this plane exists to reach (#141 census).
 //                Revisit only if that changes.
-import { existsSync, realpathSync } from 'node:fs';
-import { join } from 'node:path';
+import { accessSync, constants, existsSync, realpathSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const HARNESS_KEY_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
@@ -125,6 +125,26 @@ export function spawnCommand(row, cwd, { node = process.execPath } = {}) {
     if (existsSync(bin)) return { command: node, args: [realpathSync(bin)] };
   }
   return { command: row.command, args: [...row.args] };
+}
+
+/** Whether a bare command name is an executable on PATH. */
+export function onPath(command, env = process.env) {
+  if (!command || command.includes('/')) return false;
+  return (env.PATH ?? '').split(delimiter).filter(Boolean).some((dir) => {
+    try { accessSync(join(dir, command), constants.X_OK); return true; } catch { return false; }
+  });
+}
+
+/**
+ * A soul's harness when a launch names none (ADR-0276): its first
+ * preferred harness the registry enables, else the first enabled registry
+ * harness whose command is on PATH, else null.
+ */
+export function defaultHarnessFor(preferred = [], { registry = ACP_SPAWN_REGISTRY, available = (cmd) => onPath(cmd) } = {}) {
+  const enabled = (key) => registry[key]?.enabled === true;
+  return preferred.find(enabled)
+    ?? Object.values(registry).find((row) => row.enabled && available(row.command))?.harness
+    ?? null;
 }
 
 // Fail closed on both unknown and disabled harnesses: the caller learns why a
