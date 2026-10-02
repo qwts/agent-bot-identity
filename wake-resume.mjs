@@ -1,0 +1,223 @@
+// Resume wake (#323): wake a soul by resuming its own harness session for
+// one headless turn. Nothing runs between messages, and each turn continues
+// the conversation the last one left, so a soul keeps its context without
+// polling and without an ACP adapter.
+//
+// A headless turn has nobody to approve a tool call, so the owner picks a
+// permission policy per soul ahead of time and each harness enforces it with
+// its own flags: `read-only` answers but changes nothing; `workspace` edits
+// files and runs commands in the soul's worktree, with network, so it can
+// push its work. Whatever the policy does not allow is denied, never asked.
+//
+// The daemon owns these sessions: the first wake starts one and records its
+// id, and every later wake resumes it. A session a human has open in a
+// window is not shared, because Devin and Codex refuse a second writer.
+
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { chmodSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
+import { validateAgentId, withLock } from './agent-identity.mjs';
+
+export const RESUME_POLICIES = Object.freeze(['read-only', 'workspace']);
+
+const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+
+function jsonLines(stdout) {
+  const events = [];
+  for (const line of String(stdout).split('\n')) {
+    if (!line.trim()) continue;
+    try { events.push(JSON.parse(line)); } catch { /* a harness may print a stray non-JSON line */ }
+  }
+  return events;
+}
+
+// Each row turns (sessionId, prompt, policy) into one headless run, and the
+// run's output into { reply, sessionId }. `stdin` carries the prompt where
+// the harness reads it there, so a long message never meets argv limits.
+export const RESUME_HARNESSES = Object.freeze({
+  codex: Object.freeze({
+    command: 'codex',
+    plan({ sessionId, prompt, policy }) {
+      const sandbox = policy === 'workspace'
+        ? ['-c', 'sandbox_mode="workspace-write"', '-c', 'sandbox_workspace_write.network_access=true']
+        : ['-c', 'sandbox_mode="read-only"'];
+      const args = ['exec', ...(sessionId ? ['resume', sessionId] : []), '--json', '--skip-git-repo-check',
+        '-c', 'approval_policy="never"', ...sandbox, '-'];
+      return { args, stdin: prompt, env: {} };
+    },
+    parse(stdout) {
+      let reply = '';
+      let sessionId = null;
+      let failure = null;
+      for (const event of jsonLines(stdout)) {
+        if (event.type === 'thread.started' && typeof event.thread_id === 'string') sessionId = event.thread_id;
+        else if (event.type === 'item.completed' && event.item?.type === 'agent_message' && typeof event.item.text === 'string') reply = event.item.text;
+        else if (event.type === 'turn.failed' || event.type === 'error') failure = event.error?.message ?? event.message ?? 'codex turn failed';
+      }
+      return { reply, sessionId, failure };
+    },
+  }),
+  opencode: Object.freeze({
+    command: 'opencode',
+    plan({ sessionId, prompt, policy }) {
+      // OPENCODE_PERMISSION is merged over the user's config, so no rule is
+      // left at `ask`: an ask with nobody to answer can hang a headless run.
+      // Read-only uses the built-in `plan` agent (no edits) rather than
+      // denying tools: OpenCode's free tier refuses a request whose tools
+      // were switched off. `plan` can still run shell commands.
+      const noAsk = { external_directory: 'deny', doom_loop: 'deny', read: { '*': 'allow', '*.env': 'deny', '*.env.*': 'deny' } };
+      const permission = policy === 'workspace' ? { '*': 'allow', ...noAsk } : noAsk;
+      const args = ['run', '--format', 'json', ...(policy === 'workspace' ? [] : ['--agent', 'plan']),
+        ...(sessionId ? ['--session', sessionId] : []), '--', prompt];
+      return { args, stdin: null, env: { OPENCODE_PERMISSION: JSON.stringify(permission) } };
+    },
+    parse(stdout) {
+      // The reply is the text after the turn's last tool call, as on the ACP
+      // path: earlier text is narration between steps.
+      let reply = '';
+      let sessionId = null;
+      let failure = null;
+      for (const event of jsonLines(stdout)) {
+        if (typeof event.sessionID === 'string') sessionId = event.sessionID;
+        if (event.type === 'text' && typeof event.part?.text === 'string') reply += event.part.text;
+        else if (event.type === 'tool_use') reply = '';
+        else if (event.type === 'error') failure = event.error?.data?.message ?? event.error?.message ?? 'opencode turn failed';
+      }
+      return { reply, sessionId, failure };
+    },
+  }),
+  devin: Object.freeze({
+    command: 'devin',
+    plan({ sessionId, prompt, policy }) {
+      // `--sandbox` confines commands' writes to the workspace, so the
+      // workspace policy can approve every tool inside it.
+      const mode = policy === 'workspace' ? ['--sandbox', '--permission-mode', 'dangerous'] : ['--permission-mode', 'auto'];
+      const args = [...(sessionId ? ['--resume', sessionId] : []), '--print', '--prompt-file', '/dev/stdin',
+        '--respect-workspace-trust', 'false', ...mode];
+      return { args, stdin: prompt, env: {} };
+    },
+    // Print mode writes the answer as plain text and no session id; the id
+    // comes from `devin list` in the worktree afterwards.
+    parse(stdout) {
+      return { reply: String(stdout).trim(), sessionId: null, failure: null };
+    },
+    listArgs: Object.freeze(['list', '--format', 'json']),
+    latestSession(stdout, cwd) {
+      let sessions;
+      try { sessions = JSON.parse(String(stdout)); } catch { return null; }
+      if (!Array.isArray(sessions)) return null;
+      const real = (dir) => { try { return realpathSync(dir); } catch { return path.resolve(dir); } };
+      const here = sessions.filter((s) => typeof s?.id === 'string' && (!s.working_directory || real(s.working_directory) === real(cwd)));
+      here.sort((a, b) => (Number(b.last_activity_at) || 0) - (Number(a.last_activity_at) || 0));
+      return here[0]?.id ?? null;
+    },
+  }),
+});
+
+export function resumeHarnessSupported(harness) {
+  return Object.hasOwn(RESUME_HARNESSES, harness);
+}
+
+// --- the daemon's record of each soul's session ---------------------------
+
+export function wakeSessionsFile({ env = process.env, home = homedir() } = {}) {
+  const base = env.XDG_STATE_HOME ? path.resolve(env.XDG_STATE_HOME) : path.join(home, '.local', 'state');
+  return path.join(base, 'agent-bot', 'wake-sessions.json');
+}
+
+export function createWakeSessions({ file }) {
+  const read = () => {
+    try { return JSON.parse(readFileSync(file, 'utf8'))?.sessions ?? {}; }
+    catch (error) { if (error.code === 'ENOENT') return {}; throw new Error('wake sessions could not be read'); }
+  };
+  return {
+    // A session belongs to one harness: a soul moved to another harness
+    // starts fresh rather than handing a foreign id to the new one.
+    get(agentId, harness) {
+      const entry = read()[validateAgentId(agentId)];
+      return entry?.harness === harness && typeof entry.sessionId === 'string' ? entry.sessionId : null;
+    },
+    set(agentId, harness, sessionId) {
+      const id = validateAgentId(agentId);
+      mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      withLock(`${file}.lock`, 'wake sessions', () => {
+        const sessions = read();
+        sessions[id] = { harness, sessionId };
+        const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+        try { writeFileSync(temp, `${JSON.stringify({ schemaVersion: 1, sessions }, null, 2)}\n`, { flag: 'wx', mode: 0o600 }); renameSync(temp, file); chmodSync(file, 0o600); }
+        finally { rmSync(temp, { force: true }); }
+      });
+    },
+  };
+}
+
+// --- running a turn --------------------------------------------------------
+
+// Resolves { code, stdout, stderr }; rejects only when the process cannot
+// start. Output past the cap is dropped rather than buffered without bound.
+export function runProcess(command, args, { cwd, env, stdin = null, timeoutMs }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    const take = (current, chunk) => (current.length < MAX_OUTPUT_BYTES ? current + chunk : current);
+    child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout = take(stdout, chunk); });
+    child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr = take(stderr, chunk); });
+    const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
+    child.once('error', (error) => { clearTimeout(timer); reject(error); });
+    child.once('close', (code, signal) => { clearTimeout(timer); resolve({ code: signal ? null : code, signal, stdout, stderr }); });
+    child.stdin.on('error', () => { /* a harness that exits early closes its stdin */ });
+    child.stdin.end(stdin ?? '');
+  });
+}
+
+// A launchd daemon gets a bare PATH, and harness CLIs and agent-comms live in
+// ~/.local/bin or Homebrew. Those are appended, so a host's own tool path
+// (GeniusBar's bundled tools) still comes first.
+export function resumePath(env, home) {
+  const dirs = [...(env.PATH || '').split(path.delimiter), path.join(home, '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
+  return [...new Set(dirs.filter(Boolean))].join(path.delimiter);
+}
+
+function lastLine(text) {
+  return String(text).trim().split('\n').pop()?.slice(0, 300) || '';
+}
+
+/**
+ * The resume lane's executor: ({ invocation, message, env, policy }) →
+ * { reply }. `invocation` carries the soul's agentId, harness, and worktree
+ * (cwd); `env` carries its binding. Fails with a plain Error the cold waker
+ * records, leaving the message unacked for the next wake.
+ */
+export function createResumeExecutor({ sessions, baseEnv = process.env, home = homedir(), run = runProcess, turnTimeoutMs = 30 * 60_000 }) {
+  return async ({ invocation, message, env = {}, policy }) => {
+    const { agentId, harness, cwd } = invocation;
+    const row = RESUME_HARNESSES[harness];
+    if (!row) throw new Error(`resume wake does not support the ${harness} harness`);
+    if (!RESUME_POLICIES.includes(policy)) throw new Error('resume wake needs a read-only or workspace policy');
+    const sessionId = sessions.get(agentId, harness);
+    const plan = row.plan({ sessionId, prompt: message, policy });
+    const runEnv = {
+      ...baseEnv, ...env, ...plan.env,
+      HOME: baseEnv.HOME || home,
+      PATH: resumePath(baseEnv, home),
+      QWTS_AGENT_ID: agentId,
+      AGENT_BOT_ID: agentId,
+    };
+    const result = await run(row.command, plan.args, { cwd, env: runEnv, stdin: plan.stdin, timeoutMs: turnTimeoutMs });
+    const parsed = row.parse(result.stdout);
+    if (result.code !== 0 || parsed.failure) {
+      const detail = parsed.failure || lastLine(result.stderr) || lastLine(result.stdout) || (result.signal ? `stopped by ${result.signal}` : `exit ${result.code}`);
+      throw new Error(`${harness} turn failed: ${detail}`);
+    }
+    let nextSession = parsed.sessionId;
+    if (!nextSession && row.listArgs) {
+      const listed = await run(row.command, row.listArgs, { cwd, env: runEnv, stdin: null, timeoutMs: 30_000 }).catch(() => null);
+      if (listed?.code === 0) nextSession = row.latestSession(listed.stdout, cwd);
+    }
+    if (nextSession && nextSession !== sessionId) sessions.set(agentId, harness, nextSession);
+    return { reply: parsed.reply };
+  };
+}

@@ -57,7 +57,11 @@ and wins over the worktree's own.
    your agent-comms inbox"; it never carries message content. A dropped
    listener only makes the soul cold.
 6. Cold wake is off unless the owner turns it on per soul with
-   `agent-bot soul cold-wake <agentId> on`. Agents do not change that setting.
+   `agent-bot soul cold-wake <agentId> on`, or with
+   `agent-bot soul cold-wake <agentId> resume <read-only|workspace>`.
+   Resume wakes a Codex, OpenCode or Devin soul by resuming a daemon-owned
+   session of its own harness for one headless turn per message, under that
+   policy (#323). Agents do not change that setting.
 
 ## Read attribution from the census, not the trailer parser
 

@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { validateAgentId, withLock } from './agent-identity.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
+import { RESUME_POLICIES } from './wake-resume.mjs';
 
 export function coldWakeFile({ env = process.env, home = homedir() } = {}) {
   const base = env.XDG_STATE_HOME ? path.resolve(env.XDG_STATE_HOME) : path.join(home, '.local', 'state');
@@ -17,9 +18,22 @@ export function readColdWakeSettings(options = {}) {
   try { const parsed = JSON.parse(readFileSync(coldWakeFile(options), 'utf8')); return parsed?.settings ?? {}; }
   catch (error) { if (error.code === 'ENOENT') return {}; throw new Error('cold wake settings could not be read'); }
 }
+// A soul's setting is `true` (an ACP turn, #259), `{ lane: 'resume', policy }`
+// (its own harness session resumed for one turn, #323), or off. Anything
+// else, such as a resume setting with an unknown policy, is off.
+export function wakeSetting(value) {
+  if (value === true) return { lane: 'acp' };
+  if (value?.lane === 'resume' && RESUME_POLICIES.includes(value.policy)) return { lane: 'resume', policy: value.policy };
+  return null;
+}
+function describeSetting(value) {
+  const setting = wakeSetting(value);
+  return setting === null ? 'off' : setting.lane === 'acp' ? 'on' : `resume ${setting.policy}`;
+}
 export function setColdWake(agentId, enabled, { env = process.env, home = homedir(), now = () => new Date() } = {}) {
   const id = validateAgentId(agentId);
-  if (typeof enabled !== 'boolean') throw new Error('cold wake setting must be on or off');
+  if (typeof enabled !== 'boolean' && wakeSetting(enabled)?.lane !== 'resume') throw new Error('cold wake setting must be on, off, or resume with a policy');
+  if (typeof enabled === 'object') enabled = { lane: 'resume', policy: enabled.policy };
   const file = coldWakeFile({ env, home });
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   // Read, change, and replace under one lock, so two owner commands for
@@ -31,14 +45,17 @@ export function setColdWake(agentId, enabled, { env = process.env, home = homedi
     try { writeFileSync(temp, `${JSON.stringify({ schemaVersion: 1, settings }, null, 2)}\n`, { flag: 'wx', mode: 0o600 }); renameSync(temp, file); chmodSync(file, 0o600); }
     finally { rmSync(temp, { force: true }); }
   });
-  appendAuditReceipt({ event: 'cold-wake-setting', agentId: id, decision: enabled ? 'on' : 'off' }, { env, home, now });
+  appendAuditReceipt({ event: 'cold-wake-setting', agentId: id, decision: describeSetting(enabled).replace(' ', ':') }, { env, home, now });
   return enabled;
 }
 async function main() {
-  const [id, value, ...rest] = process.argv.slice(2);
-  if (!id || rest.length || (value !== undefined && !['on', 'off', 'show'].includes(value))) throw new Error('usage: agent-bot soul cold-wake <agentId> [on|off|show]');
+  const [id, value, policy, ...rest] = process.argv.slice(2);
+  const usage = `usage: agent-bot soul cold-wake <agentId> [on|off|show|resume ${RESUME_POLICIES.join('|')}]`;
+  if (!id || rest.length || (value !== undefined && !['on', 'off', 'show', 'resume'].includes(value))) throw new Error(usage);
+  if ((value === 'resume') !== (policy !== undefined) || (policy !== undefined && !RESUME_POLICIES.includes(policy))) throw new Error(usage);
   if (resolveAgentSlug({ detect: false }) !== null) throw new Error('cold wake settings are owner only');
-  if (value === undefined || value === 'show') process.stdout.write(`${readColdWakeSettings()[validateAgentId(id)] === true ? 'on' : 'off'}\n`);
+  if (value === undefined || value === 'show') process.stdout.write(`${describeSetting(readColdWakeSettings()[validateAgentId(id)])}\n`);
+  else if (value === 'resume') { setColdWake(id, { lane: 'resume', policy }); process.stdout.write(`${id} cold wake resume ${policy}\n`); }
   else { setColdWake(id, value === 'on'); process.stdout.write(`${id} cold wake ${value}\n`); }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch((error) => { process.stderr.write(`agent-bot soul cold-wake: ${error.message}\n`); process.exit(1); });

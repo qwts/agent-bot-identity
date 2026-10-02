@@ -21,7 +21,7 @@ export const FINAL_REPLY_ERRORS = new Set(['reply-depth-exceeded', 'unknown-reci
  */
 export function createCommsRelay({ env = process.env, run = execFile } = {}) {
   const asSoul = ({ agentId, binding }, args) => new Promise((resolve, reject) => {
-    const soulEnv = { ...env, AGENT_BOT_BINDING: binding.file, AGENT_BOT_ID: agentId, QWTS_AGENT_ID: agentId };
+    const soulEnv = { ...env, ...(binding.file ? { AGENT_BOT_BINDING: binding.file } : {}), AGENT_BOT_ID: agentId, QWTS_AGENT_ID: agentId };
     run('agent-comms', args, { cwd: binding.worktree, env: soulEnv, timeout: 30_000 }, (error, stdout = '', stderr = '') => {
       let result = null;
       try { result = JSON.parse(String(stdout)); } catch {}

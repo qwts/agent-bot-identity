@@ -48,7 +48,7 @@
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir, userInfo } from 'node:os';
 import path from 'node:path';
@@ -57,7 +57,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
-import { listSouls, upsertIdentitySoul } from './agent-population.mjs';
+import { listSouls, populationFile, upsertIdentitySoul } from './agent-population.mjs';
 import {
   bindAgentLineage,
   ensureAgentIdentity,
@@ -85,6 +85,7 @@ import { defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { validateSoulPackage } from './soul-package.mjs';
 import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
 import { createCommsRelay } from './comms-relay.mjs';
+import { createResumeExecutor, createWakeSessions, resumePath, wakeSessionsFile } from './wake-resume.mjs';
 
 /**
  * What a soul's harness inherits: the daemon's environment with the host's
@@ -114,6 +115,23 @@ export function joinLaunchedSoul({ agentId, harness, name, binding }, { env = pr
       reject(new Error(`joining agent-comms failed: ${detail}`));
     });
   });
+}
+
+/**
+ * A soul an interactive session set up with `setup-worktree` has no daemon
+ * binding: its worktree's git config pins the identity instead. The
+ * population still records that worktree, so a resume wake (#323) can run
+ * there. Resolves { agentId, worktree, file: null }, or null when the soul
+ * is not active or its worktree is gone.
+ */
+export function recordedWorktree(agentId, { env = process.env, home = homedir() } = {}) {
+  let soul;
+  try { soul = listSouls({ status: 'active', file: populationFile({ env, home }) }).find((record) => record.id === agentId); }
+  catch { return null; }
+  const worktree = typeof soul?.worktree === 'string' && path.isAbsolute(soul.worktree) ? soul.worktree : null;
+  if (!worktree) return null;
+  try { if (!statSync(worktree).isDirectory()) return null; } catch { return null; }
+  return { agentId, worktree, file: null };
 }
 
 const SCHEMA_VERSION = 1;
@@ -1153,10 +1171,18 @@ export async function runDaemon({
   server.wakePlane = createWakePlane({
     pool: server.warmPool,
     settings: () => readColdWakeSettings({ env, home }),
-    lookupSoul: (agentId) => server.bindings.findAgent(agentId),
+    lookupSoul: (agentId) => server.bindings.findAgent(agentId) ?? recordedWorktree(agentId, { env, home }),
     identities,
     executorFor,
-    relay: createCommsRelay({ env: soulEnvironment(env) }),
+    // Resume wake (#323) needs no executor config: it runs only for a soul
+    // the owner set to `resume <policy>`.
+    resumeExecutor: createResumeExecutor({
+      sessions: createWakeSessions({ file: wakeSessionsFile({ env, home }) }),
+      baseEnv: soulEnvironment(env),
+      home,
+    }),
+    // The relay runs agent-comms, which a launchd PATH does not reach.
+    relay: createCommsRelay({ env: { ...soulEnvironment(env), PATH: resumePath(soulEnvironment(env), home) } }),
     // Receipts carry a soul and a decision, never message IDs or content.
     receipt: ({ event, agentId, decision, outcome }) => appendAuditReceipt({ event, agentId, decision: decision ?? outcome }, { env, home, now }),
   });

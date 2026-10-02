@@ -73,5 +73,5 @@ test('concurrent changes to different souls are all kept', () => withState(async
 test('an unknown soul subcommand names the whole grammar', () => withState(({ env }) => {
   const result = spawnSync(process.execPath, [cli, 'soul', 'warm-wake', id], { encoding: 'utf8', env, cwd: env.HOME });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /\[on\|off\|show\]/);
+  assert.match(result.stderr, /\[on\|off\|show\|resume read-only\|workspace\]/);
 }));
