@@ -366,3 +366,18 @@ test('daemon install registers this runtime under the host label and is idempote
   assert.notEqual(bad.status, 0);
   assert.match(bad.stderr, /usage: AGENT_BOT_SERVICE_LABEL/);
 });
+
+test('the supervised daemon keeps the host npm only when it is an absolute path (ADR-0276)', () => {
+  assert.equal(supervisorEnvironment({ env: { AGENT_BOT_NPM: '/App/npm/bin/npm-cli.js' }, home: '/u' }).AGENT_BOT_NPM, '/App/npm/bin/npm-cli.js');
+  assert.equal('AGENT_BOT_NPM' in supervisorEnvironment({ env: { AGENT_BOT_NPM: 'npm-cli.js' }, home: '/u' }), false);
+  assert.equal(supervisorEnvironment({ env: { AGENT_BOT_EXECUTOR: '1' }, home: '/u' }).AGENT_BOT_EXECUTOR, '1');
+  assert.equal('AGENT_BOT_EXECUTOR' in supervisorEnvironment({ env: { AGENT_BOT_EXECUTOR: 'yes' }, home: '/u' }), false);
+});
+
+test('souls get the host tools first on PATH, and the unit keeps the tool path (ADR-0276)', async () => {
+  const { soulEnvironment } = await import('../agent-daemon.mjs');
+  assert.equal(soulEnvironment({ AGENT_BOT_TOOL_PATH: '/App/bin', PATH: '/usr/bin:/bin' }).PATH, '/App/bin:/usr/bin:/bin');
+  assert.equal(soulEnvironment({ AGENT_BOT_TOOL_PATH: 'bin', PATH: '/usr/bin' }).PATH, '/usr/bin');
+  assert.equal(soulEnvironment({ PATH: '/usr/bin' }).PATH, '/usr/bin');
+  assert.equal(supervisorEnvironment({ env: { AGENT_BOT_TOOL_PATH: '/App/bin' }, home: '/u' }).AGENT_BOT_TOOL_PATH, '/App/bin');
+});

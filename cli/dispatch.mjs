@@ -16,6 +16,7 @@ const MODULES = new Map([
   ['principal', 'agent-principals.mjs'],
   ['binding', 'agent-binding.mjs'],
   ['soul', 'cold-wake-settings.mjs'],
+  ['harness', 'harness-auth.mjs'],
   ['daemon', 'agent-daemon.mjs'],
   ['mcp', 'agent-mcp.mjs'],
   ['reach-mcp', 'daemon-mcp.mjs'],

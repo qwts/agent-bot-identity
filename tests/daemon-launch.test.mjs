@@ -82,6 +82,28 @@ test('a package launch spawns a soul, homes it with the package, and starts it',
   assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId: spawnedId });
 });
 
+test('a launch with no harness uses the default it resolves, and fails clearly without one', async (t) => {
+  const asked = [];
+  const f = fixture(t, { defaultHarness: (target) => { asked.push(target); return 'claude'; } });
+  await f.handler({ ...event, harness: undefined }, f.ports);
+  assert.deepEqual(asked, [{ soul: agentId }]);
+  assert.equal(f.calls[0].harness, 'claude');
+  assert.equal(f.reports[0].status, 'launched');
+  const g = fixture(t);
+  await g.handler({ ...event, harness: undefined }, g.ports);
+  assert.match(g.reports[0].detail, /no harness for this launch/);
+});
+
+test('a launched soul is made reachable; a failed one is not', async (t) => {
+  const reachable = [];
+  const f = fixture(t, { onLaunched: (id) => { reachable.push(id); } });
+  await f.handler(event, f.ports);
+  assert.deepEqual(reachable, [agentId]);
+  const g = fixture(t, { onLaunched: (id) => { reachable.push(id); }, executorFor: () => async () => {} });
+  await g.handler(event, g.ports);
+  assert.deepEqual(reachable, [agentId]);
+});
+
 test('a package launch that cannot start retires the soul it spawned', async (t) => {
   const retired = [];
   const f = fixture(t, { spawnPackage: () => ({ id: spawnedId }), lookupBinding: () => null,

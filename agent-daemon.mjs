@@ -77,12 +77,23 @@ import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs'
 import { PROOF_HEADER, parseBindingProof, signBindingProof } from './binding-proof.mjs';
 import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms-client.mjs';
 import { attachWakeEndpoint } from './agent-wake.mjs';
-import { readColdWakeSettings } from './cold-wake-settings.mjs';
+import { readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler } from './daemon-launch.mjs';
-import { createSoulHomes } from './soul-home.mjs';
+import { createSoulHomes, installHarnesses } from './soul-home.mjs';
+import { defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { validateSoulPackage } from './soul-package.mjs';
 import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
+
+/**
+ * What a soul's harness inherits: the daemon's environment with the host's
+ * tools (AGENT_BOT_TOOL_PATH, such as GeniusBar's agent-comms) first on
+ * PATH, so a soul on a machine without them installed can still use them.
+ */
+export function soulEnvironment(env = process.env) {
+  const tools = env.AGENT_BOT_TOOL_PATH && path.isAbsolute(env.AGENT_BOT_TOOL_PATH) ? env.AGENT_BOT_TOOL_PATH : null;
+  return tools ? { ...env, PATH: [tools, env.PATH].filter(Boolean).join(path.delimiter) } : env;
+}
 
 const SCHEMA_VERSION = 1;
 const MAX_BODY_BYTES = 64 * 1024;
@@ -1066,13 +1077,14 @@ export async function runDaemon({
   // keeps its unconfigured error and cold wake reports `waiting`.
   const setup = (config ?? loadConfig({ home, env })).executor;
   const identities = (agentId) => readAgentIdentity(validateAgentId(agentId), { stateDir: stateDirectory({ env, home }) });
-  const executorFor = setup?.enabled === true
-    ? acpExecutorFor({ identities, policy: setup.policy ?? { version: 1, rules: [], fallback: 'deny' }, baseEnv: env })
+  // An embedded host turns the executor on for its own daemon (ADR-0276).
+  const executorFor = setup?.enabled === true || env.AGENT_BOT_EXECUTOR === '1'
+    ? acpExecutorFor({ identities, policy: setup?.policy ?? { version: 1, rules: [], fallback: 'deny' }, baseEnv: soulEnvironment(env) })
     : null;
   const executor = executorFor
     ? (input) => {
       const identity = identities(input.invocation.agentId);
-      return executorFor({ agentId: identity.id, harness: identity.harness, cwd: input.invocation.cwd ?? setup.cwd ?? home, env: {} })(input);
+      return executorFor({ agentId: identity.id, harness: identity.harness, cwd: input.invocation.cwd ?? setup?.cwd ?? home, env: {} })(input);
     }
     : undefined;
   // The comms supervisor idles until a pairing credential exists, then keeps
@@ -1081,6 +1093,14 @@ export async function runDaemon({
   // cold turn, else `waiting` (ADR-0008 decisions 7 to 9).
   let server;
   const onWake = (wake, ports) => server.wakePlane(wake, ports);
+  // One provisioner for the daemon's life, so concurrent launches of a new
+  // soul share its creation; it installs with this daemon's environment.
+  let homes;
+  const provisionHome = (soul) => {
+    homes ??= createSoulHomes({ stateDir: stateDirectory({ env, home }), bindings: server.bindings,
+      install: (dir) => installHarnesses(dir, { env }) });
+    return homes(soul);
+  };
   const onLaunch = createLaunchHandler({
     file: path.join(path.dirname(daemonStateFile({ env, home })), 'launch-requests.json'),
     identities,
@@ -1092,7 +1112,17 @@ export async function runDaemon({
         stateDir: stateDirectory({ env, home }), now });
     },
     lookupBinding: (agentId) => server.bindings.findAgent(agentId),
-    provisionHome: (soul) => createSoulHomes({ stateDir: stateDirectory({ env, home }), bindings: server.bindings })(soul),
+    provisionHome: (soul) => provisionHome(soul),
+    // ADR-0276: an existing soul's own harness, else a package's preference,
+    // else a registry harness on PATH.
+    defaultHarness: async ({ soul, package: packagePath }) => {
+      if (soul) return identities(soul).harness ?? defaultHarnessFor([], { available: (cmd) => onPath(cmd, env) });
+      let preferred = [];
+      try { preferred = JSON.parse(readFileSync(path.join(packagePath, 'soul.json'), 'utf8')).preferredHarnesses ?? []; } catch {}
+      return defaultHarnessFor(Array.isArray(preferred) ? preferred : [], { available: (cmd) => onPath(cmd, env) });
+    },
+    // A principal launched this soul to talk to it, so later messages wake it.
+    onLaunched: (agentId) => setColdWake(agentId, true, { env, home, now }),
     discard: (agentId) => retireAgentIdentity(agentId, { stateDir: stateDirectory({ env, home }), now }),
     executorFor,
   });

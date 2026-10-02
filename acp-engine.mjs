@@ -49,7 +49,7 @@ import {
   createContractExecutor,
   validateUpdate,
 } from './executor-contract.mjs';
-import { ACP_SPAWN_REGISTRY, resolveSpawn } from './acp-registry.mjs';
+import { ACP_SPAWN_REGISTRY, resolveSpawn, spawnCommand } from './acp-registry.mjs';
 
 export const ACP_PROTOCOL_VERSION = 1;
 export const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000;
@@ -278,7 +278,8 @@ export function createAcpExecutor({
     // down the whole tree — spawn-runner rows like npx launch the actual
     // adapter as a descendant, and signaling only the direct child would leak
     // it (still holding the inherited stdio pipes) past the turn.
-    const child = spawn(row.command, [...row.args], {
+    const { command, args } = spawnCommand(row, cwd);
+    const child = spawn(command, args, {
       cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: true,
     });
     const killTree = () => {

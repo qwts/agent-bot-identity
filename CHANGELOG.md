@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Souls carry their harnesses (#307, ADR-0276). When a soul home is made
+  from a package with `package.json` and `package-lock.json`, the daemon
+  runs `npm ci --ignore-scripts --omit=dev` in it, using the host's npm
+  (`AGENT_BOT_NPM`, an `npm-cli.js` run with this Node) or else `npm` from
+  PATH. A failed install fails the launch and removes the half-made home.
+  Registry rows name their npm binary (`soulBin`), so a home that installed
+  it runs the harness with this Node, without npx. `daemon install` carries
+  `AGENT_BOT_NPM` into the unit.
+- An embedded host can run souls without editing config (ADR-0276).
+  `AGENT_BOT_EXECUTOR=1` turns on the daemon's ACP executor, and `daemon
+  install` carries it into the unit. A principal launch turns on cold wake
+  for the soul it started, so later messages wake it.
+  `agent-bot harness auth status|login HARNESS --soul AGENT_ID` reports
+  `{harness, loggedIn}` and runs the harness's own sign-in (Claude: the CLI
+  installed in the soul's home, else `claude` from PATH).
+- Souls can use the host's tools. `AGENT_BOT_TOOL_PATH`, an absolute
+  directory such as GeniusBar's `agent-comms` and `agent-bot` shims, is
+  carried into the daemon unit and put first on every soul harness's PATH,
+  so a soul can read and answer chat on a machine with nothing installed.
+- The ACP executor runs souls without a GitHub App. `validateExecutorIdentity`
+  accepts `app: null`, and `acpExecutorFor` no longer refuses them. Before
+  this, every real launch of an App-less soul failed even after #297.
+
 - Principal launches start souls without a GitHub App (#297). A launched
   soul with no live binding gets a home, a private git worktree at
   `<state>/homes/<agentId>`, which the daemon binds before starting the

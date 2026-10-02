@@ -9,6 +9,7 @@ const PUBLIC_COMMANDS = new Set([
   'principal',
   'binding',
   'soul',
+  'harness',
   'daemon',
   'mcp',
   'reach-mcp',

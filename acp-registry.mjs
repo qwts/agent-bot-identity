@@ -31,6 +31,8 @@
 //                stores, so driving them here would never surface in the
 //                desktop apps this plane exists to reach (#141 census).
 //                Revisit only if that changes.
+import { accessSync, constants, existsSync, realpathSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const HARNESS_KEY_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
@@ -43,6 +45,10 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
     enabled: true,
     command: 'npx',
     args: Object.freeze(['--yes', '-p', '@zed-industries/claude-code-acp', 'claude-code-acp']),
+    soulBin: 'claude-code-acp',
+    // The Claude CLI the adapter installs with it; its store is ~/.claude.
+    signIn: Object.freeze({ package: '@anthropic-ai/claude-agent-sdk', script: 'cli.js', command: 'claude',
+      status: Object.freeze(['auth', 'status', '--json']), login: Object.freeze(['auth', 'login']) }),
     stripEnv: Object.freeze(['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT']),
     store: '~/.claude',
     auth: 'existing `claude` login (shared credential store)',
@@ -73,6 +79,7 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
     enabled: false,
     command: 'npx',
     args: Object.freeze(['--yes', '-p', '@zed-industries/codex-acp', 'codex-acp']),
+    soulBin: 'codex-acp',
     stripEnv: Object.freeze([]),
     store: '~/.codex',
     auth: 'existing `codex` login (shared credential store)',
@@ -101,7 +108,43 @@ export function validateSpawnRow(row) {
   if (!Array.isArray(row.stripEnv) || row.stripEnv.some((name) => typeof name !== 'string' || name.length === 0)) {
     failRegistry(`${row.harness}: stripEnv must be an array of variable names`);
   }
+  if (row.soulBin !== undefined && (typeof row.soulBin !== 'string' || !/^[a-z0-9][a-z0-9._-]*$/.test(row.soulBin))) {
+    failRegistry(`${row.harness}: soulBin must be an npm binary name`);
+  }
   return row;
+}
+
+/**
+ * The command for a row in a working directory (ADR-0276): a soul home
+ * that installed the row's npm binary runs it with this Node, so neither
+ * npx nor a global install is needed; otherwise the registry command.
+ */
+export function spawnCommand(row, cwd, { node = process.execPath } = {}) {
+  if (row.soulBin && cwd) {
+    const bin = join(cwd, 'node_modules', '.bin', row.soulBin);
+    if (existsSync(bin)) return { command: node, args: [realpathSync(bin)] };
+  }
+  return { command: row.command, args: [...row.args] };
+}
+
+/** Whether a bare command name is an executable on PATH. */
+export function onPath(command, env = process.env) {
+  if (!command || command.includes('/')) return false;
+  return (env.PATH ?? '').split(delimiter).filter(Boolean).some((dir) => {
+    try { accessSync(join(dir, command), constants.X_OK); return true; } catch { return false; }
+  });
+}
+
+/**
+ * A soul's harness when a launch names none (ADR-0276): its first
+ * preferred harness the registry enables, else the first enabled registry
+ * harness whose command is on PATH, else null.
+ */
+export function defaultHarnessFor(preferred = [], { registry = ACP_SPAWN_REGISTRY, available = (cmd) => onPath(cmd) } = {}) {
+  const enabled = (key) => registry[key]?.enabled === true;
+  return preferred.find(enabled)
+    ?? Object.values(registry).find((row) => row.enabled && available(row.command))?.harness
+    ?? null;
 }
 
 // Fail closed on both unknown and disabled harnesses: the caller learns why a
