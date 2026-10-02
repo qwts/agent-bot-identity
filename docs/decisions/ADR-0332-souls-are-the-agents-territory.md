@@ -62,11 +62,17 @@ devcontainer.
    Each path removes cleanly. Uninstalling deletes the install directory,
    the wrappers it wrote (each carries a marker line), and the services it
    started. It never deletes souls.
-2. **A machine runs one broker and one daemon, from one install.** An
-   installer that finds another install's broker or daemon running shows
+2. **Each OS user runs one broker and one daemon, from one install.** The
+   pair is per user, like everything else here: the services are user
+   LaunchAgents or `systemd --user` units, the wrappers go in that user's
+   `~/.local/bin`, and no install needs root. An installer that finds
+   another install's broker or daemon running for the same user shows
    which install it belongs to. It then offers to migrate that install's
    state, or cancels. It never starts a second pair beside the first. A
-   cancelled or failed install leaves the running pair untouched.
+   cancelled or failed install leaves the running pair untouched. Two OS
+   users on one machine each have their own pair and do not see each
+   other's; a machine-wide service would need a privileged coordinator,
+   which is out of scope.
 3. **Managed and unmanaged.** A soul is **managed** when a host such as
    GeniusBar launches its harness. Every other soul is **unmanaged**, and
    that is the default when no host is installed: the user starts the
@@ -229,6 +235,8 @@ devcontainer.
 ## Out of scope
 
 - **Managed-Machine**, a separate companion app.
+- A machine-wide broker or daemon shared by several OS users, and the
+  privileged coordinator it would need (see decision 2).
 - Windows-specific details of the wrappers and the confinement paths.
 
 ## Follow-up issues (once accepted)
