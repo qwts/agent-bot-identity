@@ -118,7 +118,8 @@ test('never refuses proposals, including a proposal to relax the policy', (t) =>
   assert.equal(revisionHistory(f.id, f.options).length, 1);
 });
 
-for (const file of ['policy.json', 'tools.json', 'mcp.json', 'config/mcp-servers.json', 'soul.json']) {
+for (const file of ['policy.json', 'tools.json', 'mcp.json', 'config/mcp-servers.json', 'mcpServers.json',
+  'config/mcpServers/main.json', 'soul.json']) {
   test(`${file} changes always require user review despite auto **`, (t) => {
     const f = fixture(t, { mode: 'auto', paths: ['**'] });
     if (file === 'soul.json') {
@@ -269,6 +270,16 @@ test('CLI denies cross-soul proposals even if their policy would auto-apply', (t
     'soul', 'revision', 'propose', f.id, f.packagePath, 'Unauthorized'], {
     encoding: 'utf8', env: { ...process.env, AGENT_BOT_ID: other.id, AGENT_BOT_STATE_HOME: f.stateDir },
   });
+  assert.equal(result.status, 1); assert.match(result.stderr, /only to its own package/);
+  assert.equal(revisionHistory(f.id, f.options).length, 1);
+});
+
+test('CLI denies soul actions from an unbound caller', (t) => {
+  const f = fixture(t, { mode: 'auto', paths: ['**'] }); update(f, 'AGENTS.md', 'Unbound');
+  // No Agent ID and no harness markers: an owner shell, where both lookups are null.
+  const env = { PATH: process.env.PATH, HOME: f.stateDir, AGENT_BOT_STATE_HOME: f.stateDir, GIT_CONFIG_GLOBAL: '/dev/null' };
+  const result = spawnSync(process.execPath, [new URL('../agent-bot.mjs', import.meta.url).pathname,
+    'soul', 'revision', 'propose', f.id, f.packagePath, 'Unbound'], { encoding: 'utf8', env, cwd: f.stateDir });
   assert.equal(result.status, 1); assert.match(result.stderr, /only to its own package/);
   assert.equal(revisionHistory(f.id, f.options).length, 1);
 });

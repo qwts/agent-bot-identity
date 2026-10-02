@@ -74,7 +74,8 @@ produce a new revision because its parent changes.
 
 `never` records a rejected proposal without advancing the head. `ask` records a
 pending proposal. `auto` applies only an allowed diff. Changes to `policy.json`
-and `soul.json`, or paths with a tool/MCP component or filename token, always
+and `soul.json`, paths with a tool component or filename token, or any path
+containing `mcp` (case-insensitive, so `mcpServers.json` is included), always
 require user approval. Tool configurations have no shared capability schema yet,
 so even tool removals or other potentially narrowing changes require approval.
 The canonical `tools.json` and `mcp.json` files are covered. Hosts introducing

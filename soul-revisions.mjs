@@ -191,8 +191,9 @@ function policyFor(tree) {
 function needsUser(diff) {
   // Unknown tool/MCP formats cannot safely be proven narrower. Treat every
   // change to their configuration (including removals) as user reviewed.
+  // Any `mcp` substring counts, so variants like `mcpServers.json` are caught.
   return diff.some(({ path }) => path === 'policy.json' || path === 'soul.json' ||
-    /(^|[/._-])(tools?|mcp)([/._-]|$)/i.test(path));
+    /(^|[/._-])tools?([/._-]|$)/i.test(path) || /mcp/i.test(path));
 }
 export function listSoulProposals(id, options = {}) {
   const records = events(rootFor(id, options));
@@ -275,8 +276,8 @@ export async function promoteSpaceContent(id, source, destination, { actor = 'so
 }
 
 export async function revisionCommand(args, { assertSoulTarget = (id) => {
-  const caller = currentAgentId();
-  if ((caller !== null && caller !== id) || (caller === null && resolveAgentSlug() !== null)) {
+  // The caller must be the bound soul itself; an unbound process is not one.
+  if (currentAgentId() !== id) {
     throw new Error('a soul may propose changes only to its own package; bind an Agent ID first');
   }
 }, assertUser = () => {
