@@ -33,7 +33,7 @@ test('enabled cold wake supplies message IDs, worktree and binding, and records 
   assert.equal(input.invocation.cwd, binding.worktree);
   assert.equal(input.env.AGENT_BOT_BINDING, binding.file);
   assert.match(input.message, /2 agent-comms messages waiting \(IDs: m1, m2\)/);
-  assert.match(input.message, /agent-comms inbox --full, act, and ack/);
+  assert.match(input.message, /agent-comms inbox read, act, and ack them with agent-comms inbox ack/);
   assert.deepEqual(receipts, [
     { event: 'cold-wake', agentId: id, decision: 'started' },
     { event: 'cold-wake', agentId: id, decision: 'finished' },
@@ -114,4 +114,65 @@ test('idle covers a wake that is still resolving its binding', async () => {
   assert.equal((await pending).outcome, 'cold');
   await idled;
   assert.equal(started, true);
+});
+
+test('with a relay, each waiting message gets its own turn, and the answer goes back as the reply', async () => {
+  const inbox = [
+    { id: 'm1', from: { principal: 'owner' }, body: 'hello' },
+    { id: 'm2', from: { account: 'acct', agentId: 'agent_peer' }, body: 'ping' },
+  ];
+  const sent = [];
+  const acked = [];
+  const relay = {
+    read: async (soul) => { assert.deepEqual(soul, { agentId: id, binding }); return inbox.filter((m) => !acked.includes(m.id)); },
+    reply: async (soul, reply) => { sent.push(reply); },
+    ack: async (soul, ids) => { acked.push(...ids); },
+  };
+  const prompts = [];
+  const executor = async ({ message }) => { prompts.push(message); return { reply: prompts.length === 1 ? '  hi there \n' : '' }; };
+  const receipts = [];
+  const wake = createColdWaker({ executor, settings: { [id]: true }, lookupBinding: async () => binding, identities: async () => githubIdentity, receipt: (r) => receipts.push(r.decision), relay });
+  assert.equal((await wake({ agentId: id, count: 2, messageIds: ['m1', 'm2'] })).outcome, 'cold');
+  await wake.idle();
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[0], /from owner\. Your final answer is sent back/);
+  assert.match(prompts[0], /\n\nhello$/);
+  assert.match(prompts[1], /from acct\/agent_peer/);
+  // An empty answer sends nothing but still acks the message.
+  assert.deepEqual(sent, [{ to: 'owner', replyTo: 'm1', body: 'hi there' }]);
+  assert.deepEqual(acked, ['m1', 'm2']);
+  assert.deepEqual(receipts, ['started', 'finished']);
+});
+
+test('with a relay, a failed reply leaves the message unacked and fails the wake', async () => {
+  const acked = [];
+  const relay = {
+    read: async () => [{ id: 'm1', from: { principal: 'owner' }, body: 'hello' }],
+    reply: async () => { throw Object.assign(new Error('agent-comms send failed: broker unreachable'), { code: 'broker-unavailable' }); },
+    ack: async (soul, ids) => { acked.push(...ids); },
+  };
+  const receipts = [];
+  const wake = createColdWaker({ executor: async () => ({ reply: 'hi' }), settings: { [id]: true }, lookupBinding: async () => binding, identities: async () => githubIdentity, receipt: (r) => receipts.push(r.decision), relay });
+  await wake({ agentId: id, count: 1, messageIds: ['m1'] });
+  await wake.idle();
+  assert.deepEqual(acked, []);
+  assert.deepEqual(receipts, ['started', 'failed']);
+});
+
+test('with a relay, a reply the broker refuses for good is acked unanswered', async () => {
+  for (const code of ['reply-depth-exceeded', 'unknown-recipient']) {
+    const inbox = [{ id: 'm1', from: { principal: 'owner' }, body: 'hello' }];
+    const acked = [];
+    const relay = {
+      read: async () => inbox.filter((m) => !acked.includes(m.id)),
+      reply: async () => { throw Object.assign(new Error(`agent-comms send failed: ${code}`), { code }); },
+      ack: async (soul, ids) => { acked.push(...ids); },
+    };
+    const receipts = [];
+    const wake = createColdWaker({ executor: async () => ({ reply: 'hi' }), settings: { [id]: true }, lookupBinding: async () => binding, identities: async () => githubIdentity, receipt: (r) => receipts.push(r.decision), relay });
+    await wake({ agentId: id, count: 1, messageIds: ['m1'] });
+    await wake.idle();
+    assert.deepEqual(acked, ['m1'], code);
+    assert.deepEqual(receipts, ['started', 'finished'], code);
+  }
 });

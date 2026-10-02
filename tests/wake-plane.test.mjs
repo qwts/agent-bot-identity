@@ -77,3 +77,18 @@ test('the cold turn executor supplies the contract ports and a turn deadline', a
   assert.equal(typeof seen.addArtifact, 'function');
   assert.equal(seen.signal.aborted, false);
 });
+
+test('the cold turn resolves with the agent text after its last tool call', async () => {
+  const run = coldTurnExecutor({
+    executorFor: () => async ({ appendEvent }) => {
+      appendEvent('update', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Let me look.' } });
+      appendEvent('update', { sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Read' });
+      appendEvent('update', { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'hmm' } });
+      appendEvent('update', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hi, ' } });
+      appendEvent('update', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'all good.' } });
+      return { stopReason: 'end_turn' };
+    },
+  });
+  const result = await run({ invocation: { agentId: ID, harness: 'codex', cwd: '/w' }, message: 'hi', attachments: [], env: {} });
+  assert.deepEqual(result, { stopReason: 'end_turn', reply: 'Hi, all good.' });
+});

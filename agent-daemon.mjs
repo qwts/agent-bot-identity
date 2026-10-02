@@ -84,6 +84,7 @@ import { createSoulHomes, installHarnesses } from './soul-home.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { validateSoulPackage } from './soul-package.mjs';
 import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
+import { createCommsRelay } from './comms-relay.mjs';
 
 /**
  * What a soul's harness inherits: the daemon's environment with the host's
@@ -1134,6 +1135,7 @@ export async function runDaemon({
     lookupSoul: (agentId) => server.bindings.findAgent(agentId),
     identities,
     executorFor,
+    relay: createCommsRelay({ env: soulEnvironment(env) }),
     // Receipts carry a soul and a decision, never message IDs or content.
     receipt: ({ event, agentId, decision, outcome }) => appendAuditReceipt({ event, agentId, decision: decision ?? outcome }, { env, home, now }),
   });
