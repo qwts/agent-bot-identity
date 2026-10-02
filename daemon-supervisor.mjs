@@ -96,6 +96,8 @@ export function supervisorEnvironment({ env = process.env, home = homedir() } = 
     // A host's own npm, which installs soul harnesses (ADR-0276).
     ...(env.AGENT_BOT_NPM && isAbsolute(env.AGENT_BOT_NPM) ? { AGENT_BOT_NPM: env.AGENT_BOT_NPM } : {}),
     ...(env.AGENT_BOT_EXECUTOR === '1' ? { AGENT_BOT_EXECUTOR: '1' } : {}),
+    // The host's agent-comms and agent-bot, put first on souls' PATH.
+    ...(env.AGENT_BOT_TOOL_PATH && isAbsolute(env.AGENT_BOT_TOOL_PATH) ? { AGENT_BOT_TOOL_PATH: env.AGENT_BOT_TOOL_PATH } : {}),
   };
 }
 

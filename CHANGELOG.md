@@ -17,6 +17,10 @@
   `agent-bot harness auth status|login HARNESS --soul AGENT_ID` reports
   `{harness, loggedIn}` and runs the harness's own sign-in (Claude: the CLI
   installed in the soul's home, else `claude` from PATH).
+- Souls can use the host's tools. `AGENT_BOT_TOOL_PATH`, an absolute
+  directory such as GeniusBar's `agent-comms` and `agent-bot` shims, is
+  carried into the daemon unit and put first on every soul harness's PATH,
+  so a soul can read and answer chat on a machine with nothing installed.
 - The ACP executor runs souls without a GitHub App. `validateExecutorIdentity`
   accepts `app: null`, and `acpExecutorFor` no longer refuses them. Before
   this, every real launch of an App-less soul failed even after #297.

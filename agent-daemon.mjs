@@ -84,6 +84,16 @@ import { createSoulHomes } from './soul-home.mjs';
 import { validateSoulPackage } from './soul-package.mjs';
 import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
 
+/**
+ * What a soul's harness inherits: the daemon's environment with the host's
+ * tools (AGENT_BOT_TOOL_PATH, such as GeniusBar's agent-comms) first on
+ * PATH, so a soul on a machine without them installed can still use them.
+ */
+export function soulEnvironment(env = process.env) {
+  const tools = env.AGENT_BOT_TOOL_PATH && path.isAbsolute(env.AGENT_BOT_TOOL_PATH) ? env.AGENT_BOT_TOOL_PATH : null;
+  return tools ? { ...env, PATH: [tools, env.PATH].filter(Boolean).join(path.delimiter) } : env;
+}
+
 const SCHEMA_VERSION = 1;
 const MAX_BODY_BYTES = 64 * 1024;
 const VOUCH_LIMIT = 60;
@@ -1068,7 +1078,7 @@ export async function runDaemon({
   const identities = (agentId) => readAgentIdentity(validateAgentId(agentId), { stateDir: stateDirectory({ env, home }) });
   // An embedded host turns the executor on for its own daemon (ADR-0276).
   const executorFor = setup?.enabled === true || env.AGENT_BOT_EXECUTOR === '1'
-    ? acpExecutorFor({ identities, policy: setup?.policy ?? { version: 1, rules: [], fallback: 'deny' }, baseEnv: env })
+    ? acpExecutorFor({ identities, policy: setup?.policy ?? { version: 1, rules: [], fallback: 'deny' }, baseEnv: soulEnvironment(env) })
     : null;
   const executor = executorFor
     ? (input) => {
