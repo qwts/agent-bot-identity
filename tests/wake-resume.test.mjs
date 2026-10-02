@@ -106,7 +106,7 @@ test('the first wake starts a session and every later wake resumes it', () => wi
     calls.push({ command, args, options });
     return { code: 0, stdout: CODEX_OUTPUT, stderr: '' };
   };
-  const execute = createResumeExecutor({ sessions, baseEnv: { PATH: '/usr/bin', SECRET_ELSEWHERE: 'kept' }, home: root, run });
+  const execute = createResumeExecutor({ sessions, baseEnv: { PATH: '/usr/bin', SECRET_ELSEWHERE: 'kept', AGENT_BOT_BINDING: '/daemon/own/binding.json' }, home: root, run });
   const invocation = { agentId: ID, harness: 'codex', cwd: '/work/tree' };
   const first = await execute({ invocation, message: 'one', env: { AGENT_BOT_BINDING: '/work/tree/.git/b.json' }, policy: 'workspace' });
   assert.equal(first.reply, 'pong');
@@ -117,6 +117,8 @@ test('the first wake starts a session and every later wake resumes it', () => wi
   assert.equal(sessions.get(ID, 'codex'), '01a0fe81-0f35-73a2-9d5f-d48c92029d1c');
   assert.equal(statSync(wakeSessionsFile({ env })).mode & 0o777, 0o600);
   await execute({ invocation, message: 'two', env: {}, policy: 'workspace' });
+  // A soul without a binding never inherits the daemon's.
+  assert.ok(!('AGENT_BOT_BINDING' in calls[1].options.env));
   assert.deepEqual(calls[1].args.slice(0, 3), ['exec', 'resume', '01a0fe81-0f35-73a2-9d5f-d48c92029d1c']);
   // A session belongs to its harness: a soul moved to OpenCode starts fresh.
   assert.equal(sessions.get(ID, 'opencode'), null);
@@ -221,19 +223,32 @@ test('a soul bound by its own session resolves to its recorded worktree, without
   const { writeFileSync, mkdirSync } = await import('node:fs');
   const worktree = path.join(root, 'tree');
   mkdirSync(worktree);
+  const git = (cwd, ...args) => spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: { ...env, GIT_CONFIG_GLOBAL: '/dev/null' } });
+  git(worktree, 'init', '-q');
+  git(worktree, 'config', 'agentBot.agentId', ID);
   const OTHER = 'agent_42442442-4244-4244-8244-424424424424';
   const GONE = 'agent_52552552-5255-4255-8255-525525525525';
+  const REPINNED = 'agent_72772772-7277-4277-8277-727727727727';
+  const UNPINNED = 'agent_82882882-8288-4288-8288-828828828828';
+  const bare = path.join(root, 'bare');
+  mkdirSync(bare);
+  git(bare, 'init', '-q');
   const record = (id, status, tree) => ({ id, status, spacePath: path.join(root, 'space', id), worktree: tree, worktrees: [tree], lastSeen: '2026-10-02T00:00:00.000Z' });
   const file = path.join(root, 'population.json');
   writeFileSync(file, JSON.stringify({ schemaVersion: 1, souls: {
     [ID]: record(ID, 'active', worktree),
     [OTHER]: record(OTHER, 'retired', worktree),
     [GONE]: record(GONE, 'active', path.join(root, 'deleted')),
+    // The record still names a worktree that now pins another soul, or none.
+    [REPINNED]: record(REPINNED, 'active', worktree),
+    [UNPINNED]: record(UNPINNED, 'active', bare),
   } }));
   const options = { env: { ...env, AGENT_BOT_POPULATION_PATH: file }, home: root };
   assert.deepEqual(recordedWorktree(ID, options), { agentId: ID, worktree, file: null });
   assert.equal(recordedWorktree(OTHER, options), null);
   assert.equal(recordedWorktree(GONE, options), null);
+  assert.equal(recordedWorktree(REPINNED, options), null);
+  assert.equal(recordedWorktree(UNPINNED, options), null);
   assert.equal(recordedWorktree('agent_62662662-6266-4266-8266-626626626626', options), null);
 }));
 

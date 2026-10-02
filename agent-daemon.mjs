@@ -47,7 +47,7 @@
 // key is created once per account; `daemon vouch-key` prints its SPKI form.
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { execFile, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir, userInfo } from 'node:os';
@@ -122,7 +122,7 @@ export function joinLaunchedSoul({ agentId, harness, name, binding }, { env = pr
  * binding: its worktree's git config pins the identity instead. The
  * population still records that worktree, so a resume wake (#323) can run
  * there. Resolves { agentId, worktree, file: null }, or null when the soul
- * is not active or its worktree is gone.
+ * is not active, its worktree is gone, or the worktree is not pinned to it.
  */
 export function recordedWorktree(agentId, { env = process.env, home = homedir() } = {}) {
   let soul;
@@ -131,7 +131,11 @@ export function recordedWorktree(agentId, { env = process.env, home = homedir() 
   const worktree = typeof soul?.worktree === 'string' && path.isAbsolute(soul.worktree) ? soul.worktree : null;
   if (!worktree) return null;
   try { if (!statSync(worktree).isDirectory()) return null; } catch { return null; }
-  return { agentId, worktree, file: null };
+  // A stale record or a repinned checkout must not run a wake as the wrong
+  // soul: the worktree's own pin has to name this soul.
+  let pinned = null;
+  try { pinned = execFileSync('git', ['-C', worktree, 'config', '--get', 'agentBot.agentId'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }).trim(); } catch { return null; }
+  return pinned === agentId ? { agentId, worktree, file: null } : null;
 }
 
 const SCHEMA_VERSION = 1;

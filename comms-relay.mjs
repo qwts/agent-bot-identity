@@ -21,7 +21,9 @@ export const FINAL_REPLY_ERRORS = new Set(['reply-depth-exceeded', 'unknown-reci
  */
 export function createCommsRelay({ env = process.env, run = execFile } = {}) {
   const asSoul = ({ agentId, binding }, args) => new Promise((resolve, reject) => {
-    const soulEnv = { ...env, ...(binding.file ? { AGENT_BOT_BINDING: binding.file } : {}), AGENT_BOT_ID: agentId, QWTS_AGENT_ID: agentId };
+    // Only the soul's own binding is presented, never one the daemon inherited.
+    const { AGENT_BOT_BINDING: _inherited, ...hostEnv } = env;
+    const soulEnv = { ...hostEnv, ...(binding.file ? { AGENT_BOT_BINDING: binding.file } : {}), AGENT_BOT_ID: agentId, QWTS_AGENT_ID: agentId };
     run('agent-comms', args, { cwd: binding.worktree, env: soulEnv, timeout: 30_000 }, (error, stdout = '', stderr = '') => {
       let result = null;
       try { result = JSON.parse(String(stdout)); } catch {}

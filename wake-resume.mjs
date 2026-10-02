@@ -206,8 +206,11 @@ export function createResumeExecutor({ sessions, baseEnv = process.env, home = h
     if (!RESUME_POLICIES.includes(policy)) throw new Error('resume wake needs a read-only or workspace policy');
     const sessionId = sessions.get(agentId, harness);
     const plan = row.plan({ sessionId, prompt: message, policy });
+    // Only the target's own binding is presented: one the daemon inherited
+    // never reaches a soul that has none.
+    const { AGENT_BOT_BINDING: _inherited, ...hostEnv } = baseEnv;
     const runEnv = {
-      ...baseEnv, ...env, ...plan.env,
+      ...hostEnv, ...env, ...plan.env,
       HOME: baseEnv.HOME || home,
       PATH: resumePath(baseEnv, home),
       QWTS_AGENT_ID: agentId,
