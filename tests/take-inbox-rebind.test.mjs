@@ -185,3 +185,48 @@ test('#299: after an MCP restart, take_inbox re-binds from the existing binding 
     close();
   }
 });
+
+test('#299: take_inbox names the daemon cause when the daemon cannot check the binding', async () => {
+  const { root, secret } = boundFixture();
+  const cause = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:7777'), { code: 'ECONNREFUSED' });
+  const client = {
+    async binding() {
+      throw Object.assign(new Error('fetch failed'), { cause });
+    },
+  };
+  const state = createMcpState({
+    client,
+    cwd: root,
+    env: { GH_APP_HOOK_INBOX_URL: 'https://gh-app-hook.example.invalid', GH_APP_HOOK_INBOX_TOKEN: 'tok' },
+    fetchImpl: async () => { throw new Error('the inbox must not be called'); },
+  });
+  state.secret = secret;
+  const { text, isError } = await callTakeInbox(state);
+  assert.equal(isError, true);
+  assert.match(text, /ECONNREFUSED: connect ECONNREFUSED 127\.0\.0\.1:7777/);
+  assert.match(text, /\[inbox-daemon-unreachable\]/);
+  assert.doesNotMatch(text, new RegExp(secret));
+});
+
+test('#299: take_inbox maps an unreadable 2xx body to inbox-unavailable, never the token', async () => {
+  const { root, secret } = boundFixture();
+  const inboxToken = 'inbox-secret-value';
+  const client = {
+    async binding() {
+      return { agentId: AGENT_ID, worktree: root, transcript: { provider: 'claude', id: 's' } };
+    },
+  };
+  const state = createMcpState({
+    client,
+    cwd: root,
+    env: { GH_APP_HOOK_INBOX_URL: 'https://gh-app-hook.example.invalid', GH_APP_HOOK_INBOX_TOKEN: inboxToken },
+    fetchImpl: async () => new Response('{not json', { status: 200, headers: { 'content-type': 'application/json' } }),
+  });
+  state.secret = secret;
+  const { text, isError } = await callTakeInbox(state);
+  assert.equal(isError, true);
+  assert.match(text, /gh-app-hook\.example\.invalid/);
+  assert.match(text, /unreadable response/);
+  assert.match(text, /\[inbox-unavailable\]/);
+  assert.doesNotMatch(text, new RegExp(inboxToken));
+});

@@ -633,7 +633,8 @@ function secureStoreCheck({ probe }) {
 // apart from a bad URL without ever echoing the bearer.
 function inboxHostForDoctor(inboxUrl) {
   try {
-    return new URL(inboxUrl).host || null;
+    const parsed = new URL(inboxUrl);
+    return /^https?:$/.test(parsed.protocol) ? parsed.host || null : null;
   } catch {
     return null;
   }
@@ -659,6 +660,16 @@ function inboxConfigurationCheck({ env, harnesses }) {
       id: 'inbox.configuration',
       status: 'not_applicable',
       message: 'no gh-app-hook inbox is configured and no harness wires its MCP server',
+      evidence,
+    });
+  }
+  if (url && evidence.host === null) {
+    return readinessCheck({
+      id: 'inbox.configuration',
+      status: 'warning',
+      code: 'inbox-url-invalid',
+      message: 'the inbox URL is set but is not a valid http(s) URL',
+      action: 'fix GH_APP_HOOK_INBOX_URL, then rerun doctor',
       evidence,
     });
   }

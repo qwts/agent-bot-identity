@@ -1457,6 +1457,20 @@ test('the inbox section reports presence without carrying the bearer', async () 
   assert.doesNotMatch(JSON.stringify(report), /token|Bearer /);
 });
 
+test('the inbox section warns on a malformed inbox URL instead of reporting ready', async () => {
+  for (const url of ['not a url', 'ftp://inbox.example.invalid']) {
+    const report = await collectReadiness(machineScopeOptions({
+      env: { HOME: tempRoot(), GH_APP_HOOK_INBOX_URL: url, GH_APP_HOOK_INBOX_TOKEN: 'super-secret-bearer-value' },
+      listHarnessMcpServers: () => [{ harness: 'opencode', mcp: 'agent-bot' }],
+    }));
+    const check = report.machine.checks.find((entry) => entry.id === 'inbox.configuration');
+    assert.equal(check.status, 'warning', url);
+    assert.equal(check.code, 'inbox-url-invalid');
+    assert.equal(check.evidence.host, null);
+    assert.doesNotMatch(JSON.stringify(report), /super-secret-bearer-value/);
+  }
+});
+
 test('the inbox section warns when a harness wires it but nothing is configured', async () => {
   const report = await collectReadiness(machineScopeOptions({
     listHarnessMcpServers: () => [{ harness: 'opencode', mcp: 'agent-bot' }],

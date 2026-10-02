@@ -180,6 +180,13 @@ function describeFetchCause(error) {
   return { kind: 'network', code, message };
 }
 
+// A daemon failure as text: the MCP surface returns only error.message, so
+// an undici cause (ECONNREFUSED behind 'fetch failed') must be in it.
+function daemonDetail(error) {
+  const cause = describeFetchCause(error);
+  return `${cause.code ? `${cause.code}: ` : ''}${cause.message}`;
+}
+
 // Restore the in-memory secret from the worktree's binding file after an MCP
 // restart (#299). The file is the durable binding; the token was single-use
 // and is gone. Throws inbox-not-bound when there is nothing to restore, and
@@ -191,7 +198,7 @@ async function ensureTakeBinding(state) {
     } catch (error) {
       throw inboxError(
         'inbox-daemon-unreachable',
-        `take_inbox failed: the daemon rejected the held binding (${sanitizeInboxDetail(error?.message ?? 'unknown error')}); run \`agent-bot daemon status\`, then \`agent-bot doctor\`, and re-bind with the bind tool`,
+        `take_inbox failed: the daemon rejected the held binding (${daemonDetail(error)}); run \`agent-bot daemon status\`, then \`agent-bot doctor\`, and re-bind with the bind tool`,
         { cause: error },
       );
     }
@@ -220,7 +227,7 @@ async function ensureTakeBinding(state) {
   } catch (error) {
     throw inboxError(
       'inbox-daemon-unreachable',
-      `take_inbox failed: the daemon rejected the worktree binding (${sanitizeInboxDetail(error?.message ?? 'unknown error')}); run \`agent-bot daemon status\`, then re-bind with the bind tool or \`agent-bot setup-worktree\` for a fresh token`,
+      `take_inbox failed: the daemon rejected the worktree binding (${daemonDetail(error)}); run \`agent-bot daemon status\`, then re-bind with the bind tool or \`agent-bot setup-worktree\` for a fresh token`,
       { cause: error },
     );
   }
@@ -300,7 +307,15 @@ async function takeInbox(state) {
       `take_inbox failed: inbox at ${host} returned HTTP ${response.status}; the broker may be down — wait and retry, then check broker status`,
     );
   }
-  return { event: await response.json() };
+  try {
+    return { event: await response.json() };
+  } catch (error) {
+    throw inboxError(
+      'inbox-unavailable',
+      `take_inbox failed: inbox at ${host} returned an unreadable response (${sanitizeInboxDetail(error?.message ?? 'bad body', token)}); wait and retry, then check broker status`,
+      { cause: error },
+    );
+  }
 }
 
 async function callTool(state, name, args = {}) {
