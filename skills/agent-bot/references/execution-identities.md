@@ -59,7 +59,7 @@ and wins over the worktree's own.
 6. Cold wake is off unless the owner turns it on per soul with
    `agent-bot soul cold-wake <agentId> on`, or with
    `agent-bot soul cold-wake <agentId> resume <read-only|workspace>`.
-   Resume wakes a Codex, OpenCode or Devin soul by resuming a daemon-owned
+   Resume wakes a Codex, OpenCode, Devin or Grok soul by resuming a daemon-owned
    session of its own harness for one headless turn per message, under that
    policy (#323). Agents do not change that setting.
 

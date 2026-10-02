@@ -36,6 +36,7 @@ function jsonLines(stdout) {
 // Each row turns (sessionId, prompt, policy) into one headless run, and the
 // run's output into { reply, sessionId }. `stdin` carries the prompt where
 // the harness reads it there, so a long message never meets argv limits.
+// docs/resume-harnesses.md is the checklist for adding a row.
 export const RESUME_HARNESSES = Object.freeze({
   codex: Object.freeze({
     command: 'codex',
@@ -121,6 +122,30 @@ export const RESUME_HARNESSES = Object.freeze({
         .map((s) => s.id);
     },
   }),
+  grok: Object.freeze({
+    command: 'grok',
+    // Grok saves the sandbox profile with the session and refuses a resume
+    // under another one, so a policy change starts a new session.
+    policyFixedAtStart: true,
+    plan({ sessionId, prompt, policy }) {
+      // Both policies run under Grok's OS sandbox. Read-only also denies
+      // edits and shell by rule and approves nothing else, so the denials
+      // hold even where the sandbox cannot be applied; a denied call fails
+      // and is reported to the model, never asked.
+      const mode = policy === 'workspace'
+        ? ['--sandbox', 'workspace', '--always-approve']
+        : ['--sandbox', 'read-only', '--permission-mode', 'dontAsk', '--deny', 'Edit', '--deny', 'Write', '--deny', 'Bash'];
+      const args = [...(sessionId ? ['--resume', sessionId] : []), '--prompt-file', '/dev/stdin', '--output-format', 'json', ...mode];
+      return { args, stdin: prompt, env: {} };
+    },
+    parse(stdout) {
+      let result;
+      try { result = JSON.parse(String(stdout)); } catch { return { reply: '', sessionId: null, failure: 'grok printed no JSON result' }; }
+      const sessionId = typeof result?.sessionId === 'string' ? result.sessionId : null;
+      const failure = result?.stopReason === 'refusal' ? 'grok refused the turn' : null;
+      return { reply: typeof result?.text === 'string' ? result.text : '', sessionId, failure };
+    },
+  }),
 });
 
 export function resumeHarnessSupported(harness) {
@@ -141,17 +166,19 @@ export function createWakeSessions({ file }) {
   };
   return {
     // A session belongs to one harness: a soul moved to another harness
-    // starts fresh rather than handing a foreign id to the new one.
-    get(agentId, harness) {
+    // starts fresh rather than handing a foreign id to the new one. Given a
+    // policy, it must also be the policy the session was started under.
+    get(agentId, harness, policy) {
       const entry = read()[validateAgentId(agentId)];
-      return entry?.harness === harness && typeof entry.sessionId === 'string' ? entry.sessionId : null;
+      if (entry?.harness !== harness || typeof entry.sessionId !== 'string') return null;
+      return policy === undefined || entry.policy === policy ? entry.sessionId : null;
     },
-    set(agentId, harness, sessionId) {
+    set(agentId, harness, sessionId, policy) {
       const id = validateAgentId(agentId);
       mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
       withLock(`${file}.lock`, 'wake sessions', () => {
         const sessions = read();
-        sessions[id] = { harness, sessionId };
+        sessions[id] = { harness, sessionId, ...(policy ? { policy } : {}) };
         const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
         try { writeFileSync(temp, `${JSON.stringify({ schemaVersion: 1, sessions }, null, 2)}\n`, { flag: 'wx', mode: 0o600 }); renameSync(temp, file); chmodSync(file, 0o600); }
         finally { rmSync(temp, { force: true }); }
@@ -204,7 +231,7 @@ export function createResumeExecutor({ sessions, baseEnv = process.env, home = h
     const row = RESUME_HARNESSES[harness];
     if (!row) throw new Error(`resume wake does not support the ${harness} harness`);
     if (!RESUME_POLICIES.includes(policy)) throw new Error('resume wake needs a read-only or workspace policy');
-    const sessionId = sessions.get(agentId, harness);
+    const sessionId = sessions.get(agentId, harness, row.policyFixedAtStart ? policy : undefined);
     const plan = row.plan({ sessionId, prompt: message, policy });
     // Only the target's own binding is presented: one the daemon inherited
     // never reaches a soul that has none.
@@ -235,7 +262,7 @@ export function createResumeExecutor({ sessions, baseEnv = process.env, home = h
       const created = (await listIds())?.filter((id) => !before.includes(id)) ?? [];
       if (created.length === 1) nextSession = created[0];
     }
-    if (nextSession && nextSession !== sessionId) sessions.set(agentId, harness, nextSession);
+    if (nextSession && nextSession !== sessionId) sessions.set(agentId, harness, nextSession, policy);
     return { reply: parsed.reply };
   };
 }
