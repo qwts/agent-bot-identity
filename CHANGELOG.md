@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.0
+
 - qwts conventions run only with `github-identity` on (#281, ADR-0274
   decisions 3, 5 and 6): `Agent-Identity` commit trailers, post-commit
   identity recording, `signed-commit`, and the `gh` shim, which now checks
