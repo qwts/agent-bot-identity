@@ -5,6 +5,9 @@ import path from 'node:path';
 import { HARNESS_SESSION_EVENT } from './executor-contract.mjs';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 
+/** Longest display name the broker accepts on a launch request. */
+export const LAUNCH_NAME_MAX = 128;
+
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, executorFor, turnTimeoutMs = 30 * 60_000 }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
@@ -47,7 +50,8 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       if (targets.length !== 1 || typeof targets[0] !== 'string' || !targets[0]) {
         throw new Error('launch requires exactly one soul or package');
       }
-      if (event.name !== undefined && (typeof event.name !== 'string' || !event.name || event.name.length > 100 || /[\u0000-\u001f\u007f]/.test(event.name))) throw new Error('invalid launch name');
+      // Same bound as agent-comms' broker launch contract (lib/broker/launch.mjs).
+      if (event.name !== undefined && (typeof event.name !== 'string' || !event.name.trim() || event.name.length > LAUNCH_NAME_MAX || /[\u0000-\u001f\u007f]/.test(event.name))) throw new Error('invalid launch name');
       const identity = event.soul ? await identities(event.soul) : await spawnPackage(event);
       if (!identity?.github?.appSlug) throw new Error('launching a soul without a GitHub App identity is unsupported (#297)');
       if (!executorFor) throw new Error('daemon ACP executor is disabled');

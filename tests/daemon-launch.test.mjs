@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createLaunchHandler } from '../daemon-launch.mjs';
+import { createLaunchHandler, LAUNCH_NAME_MAX } from '../daemon-launch.mjs';
 import { HARNESS_SESSION_EVENT } from '../executor-contract.mjs';
 import { mintAgentIdentity, readAgentIdentity } from '../agent-identity.mjs';
 
@@ -63,6 +63,8 @@ for (const [name, overrides, input, reason] of [
   ['no target', {}, { soul: undefined }, /exactly one/],
   ['malformed extra target', {}, { package: {} }, /exactly one/],
   ['bad name', {}, { name: '\n' }, /name/],
+  ['blank name', {}, { name: '   ' }, /name/],
+  ['name over the broker bound', {}, { name: 'n'.repeat(129) }, /name/],
   ['sync executor failure', { executorFor: () => { throw new Error('unsupported harness'); } }, {}, /unsupported harness/],
   ['no session', { executorFor: () => async () => {} }, {}, /before session creation/],
 ]) test(`launch fails closed: ${name}`, async (t) => {
@@ -71,6 +73,13 @@ for (const [name, overrides, input, reason] of [
   assert.equal(f.reports[0].status, 'failed');
   assert.equal(f.reports[0].agentId, null);
   assert.match(f.reports[0].detail, reason);
+});
+
+test('accepts any name the broker accepts, up to its 128-character bound', async (t) => {
+  const f = fixture(t);
+  await f.handler({ ...event, name: 'n'.repeat(LAUNCH_NAME_MAX) }, f.ports);
+  assert.equal(LAUNCH_NAME_MAX, 128);
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId });
 });
 
 test('restart fails accepted unfinished requests, reports once, never replays', async (t) => {
