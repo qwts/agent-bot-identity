@@ -5,7 +5,17 @@
 
 HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 IDENTITY_TOOL="$HOOK_DIR/../agent-identity.mjs"
-if [ -f "$IDENTITY_TOOL" ] && command -v node >/dev/null 2>&1; then
+GITHUB_IDENTITY_ON=0
+if command -v node >/dev/null 2>&1; then
+  GATE=0
+  node --input-type=module -e 'import(process.argv[1]).then(({isGateEnabled}) => process.exit(isGateEnabled("github-identity") ? 0 : 3)).catch((e) => { console.error("agent-bot: cannot read the github-identity gate: " + e.message); process.exit(1); })' "$HOOK_DIR/../config.mjs" || GATE=$?
+  case "$GATE" in
+    0) GITHUB_IDENTITY_ON=1 ;;
+    3) ;;
+    *) echo "warning: github-identity gate unreadable; commit $(git rev-parse HEAD 2>/dev/null) was not recorded" >&2 ;;
+  esac
+fi
+if [ "$GITHUB_IDENTITY_ON" = 1 ] && [ -f "$IDENTITY_TOOL" ]; then
   ID=$(node "$IDENTITY_TOOL" current 2>/dev/null || true)
   if [ -n "$ID" ]; then
     SHA=$(git rev-parse HEAD 2>/dev/null || true)

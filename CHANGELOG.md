@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- qwts conventions run only with `github-identity` on (#281, ADR-0274
+  decisions 3, 5 and 6): `Agent-Identity` commit trailers, post-commit
+  identity recording, `signed-commit`, and the `gh` shim, which now checks
+  the gate on every call and passes through to stock `gh` when it is off. An
+  unreadable or invalid config is not "off": the shim and the trailer hook
+  refuse, and post-commit warns. Installing with the gate off replaces an
+  older managed shim that lacks the call-time check. The App roster already
+  comes from configuration.
+
 - Soul revisions and self-proposals (#285, ADR-0275 decisions 4, 7 and 8).
   `agent-bot soul revision` records append-only, content-addressed package
   revisions. A user edit is a new revision, and undo is another one. A soul

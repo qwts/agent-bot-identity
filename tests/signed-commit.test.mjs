@@ -13,6 +13,14 @@ import {
   runSignedCommit,
 } from '../signed-commit.mjs';
 
+// signed-commit belongs to the github-identity add-on; state it explicitly
+// so these tests never depend on the caller's own config.
+function gateOnEnv(overrides = {}) {
+  const config = join(mkdtempSync(join(tmpdir(), 'agent-bot-config-')), 'config.json');
+  writeFileSync(config, JSON.stringify({ features: { 'github-identity': true } }));
+  return { ...process.env, AGENT_BOT_CONFIG: config, ...overrides };
+}
+
 test('parses the stable signed-commit options and rejects malformed input', () => {
   assert.deepEqual(parseSignedCommitArgs([
     '--base', 'main', '--branch', 'feature', '--repo', 'acme/widgets', '--dry-run', '--allow-default-branch',
@@ -59,7 +67,7 @@ test('non-dry publishing refuses to mint when no bot identity is stated', async 
   await assert.rejects(
     runSignedCommit(parseSignedCommitArgs(['--repo', 'acme/widgets']), {
       cwd,
-      env: { ...process.env, GH_AGENT_APP: '', AGENT_BOT_ACCOUNT: 'user' },
+      env: gateOnEnv({ GH_AGENT_APP: '', AGENT_BOT_ACCOUNT: 'user' }),
       mintImpl: async () => { minted = true; return { token: 'secret' }; },
     }),
     /no bot identity resolves here/,
@@ -88,6 +96,7 @@ test('dry-run previews a linear range without minting or network access', async 
   let output = '';
   const result = await runSignedCommit(parseSignedCommitArgs(['--dry-run']), {
     cwd,
+    env: gateOnEnv(),
     stdout: { write: (value) => { output += value; } },
     mintImpl: async () => { throw new Error('dry-run minted'); },
     fetchImpl: async () => { throw new Error('dry-run fetched'); },

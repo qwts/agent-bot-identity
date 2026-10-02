@@ -1,6 +1,9 @@
 export const GH_SHIM_MARKER = '# gh shim — agent bot identity. Managed by install-gh-shim.mjs';
 
-export function buildGhShim(tokenTool = null, { psPath = '/bin/ps', lsofPath = '/usr/sbin/lsof' } = {}) {
+// POSIX single-quote quoting: nothing inside is expanded by the shell.
+const shQuote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+
+export function buildGhShim(tokenTool = null, { psPath = '/bin/ps', lsofPath = '/usr/sbin/lsof', configModule = null } = {}) {
   const tokenSetup = tokenTool
     ? `TOKEN_TOOL="${tokenTool}"
 TOKEN_REQUIRES_NODE=1
@@ -17,7 +20,8 @@ token_enrich_pr_view() { "$TOKEN_TOOL" gh-pr-view-json; }`;
   return `#!/bin/sh
 ${GH_SHIM_MARKER}; do not edit in place.
 ${tokenSetup}
-# github-identity access is decided when this shim is installed from config.
+# Recheck the config gate at invocation: an already-installed shim must stop
+# intercepting GitHub operations as soon as the add-on is turned off.
 SELF="$0"
 case "$SELF" in
   */*) ;;
@@ -81,6 +85,17 @@ IFS=$OLDIFS
   REAL="$CAND"; break
 done
 [ -z "$REAL" ] && { echo "agent-bot gh shim: real gh not found on PATH" >&2; exit 127; }
+CONFIG_MODULE=${shQuote(configModule ?? '')}
+if [ -n "$CONFIG_MODULE" ]; then
+  # Exit 0: gate on; 3: gate off; anything else: config unreadable or invalid.
+  GATE=0
+  node --input-type=module -e 'import(process.argv[1]).then(({isGateEnabled}) => process.exit(isGateEnabled("github-identity") ? 0 : 3)).catch((e) => { console.error("agent-bot: cannot read the github-identity gate: " + e.message); process.exit(1); })' "$CONFIG_MODULE" || GATE=$?
+  case "$GATE" in
+    0) ;;
+    3) exec "$REAL" "$@" ;;
+    *) echo "agent-bot gh shim: refusing GitHub operations until the github-identity gate can be read" >&2; exit 1 ;;
+  esac
+fi
 
 # Experimental Codex desktop compatibility. Native GitHub operations are
 # direct children of the desktop bundle, whereas agent shell commands have a

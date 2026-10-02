@@ -22,7 +22,7 @@ import { homedir } from 'node:os';
 import {
   basename, dirname, isAbsolute, join, resolve,
 } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildGhShim, GH_SHIM_MARKER } from './gh-shim.mjs';
 import { isGateEnabled } from './config.mjs';
 import { ensureBlock, zshStartupDir } from './shell-path.mjs';
@@ -342,13 +342,22 @@ export function installGhShim({
   stat = statSync,
   execFile = execFileSync,
 } = {}) {
-  if (!isGateEnabled('github-identity', { env, home })) {
-    return { skipped: true, reason: 'github-identity is off' };
-  }
   const binDir = join(home, '.config', 'agent-bot', 'bin');
-  mkdir(binDir, { recursive: true });
   const shimPath = join(binDir, 'gh');
-  write(shimPath, buildGhShim(), { mode: 0o755 });
+  const shim = buildGhShim(null, { configModule: fileURLToPath(new URL('./config.mjs', import.meta.url)) });
+  if (!isGateEnabled('github-identity', { env, home })) {
+    // An older managed shim has no invocation-time gate check and would keep
+    // intercepting; replace it with this one, which passes through while off.
+    let existing = null;
+    try { existing = read(shimPath, 'utf8'); } catch { /* none installed */ }
+    if (existing === null || !existing.includes(GH_SHIM_MARKER)) {
+      return { skipped: true, reason: 'github-identity is off' };
+    }
+    write(shimPath, shim, { mode: 0o755 });
+    return { skipped: true, reason: 'github-identity is off', migrated: shimPath };
+  }
+  mkdir(binDir, { recursive: true });
+  write(shimPath, shim, { mode: 0o755 });
 
   const localBin = join(home, '.local', 'bin');
   mkdir(localBin, { recursive: true });
