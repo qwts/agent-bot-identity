@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.1
+
 - Embedded hosts supervise their own daemon (#302). `AGENT_BOT_SERVICE_LABEL`
   names the launchd label or systemd unit (one safe token, else a usage
   error) and is carried into the unit; `daemon disable` and `doctor` honour
