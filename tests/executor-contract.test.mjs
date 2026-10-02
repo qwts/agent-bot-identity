@@ -468,3 +468,13 @@ test('the daemon default stays fail-closed: no executor, stable refusal', async 
   });
   assert.equal(failed.error, UNCONFIGURED_EXECUTOR_ERROR);
 });
+
+test('a turn message must be the prompt text, so no daemon wake sends a harness an object (R4)', async () => {
+  let ran = false;
+  const executor = createContractExecutor({ harness: 'claude', identity: IDENTITY, policy: ALLOW_ALL, run: async () => { ran = true; } });
+  await assert.rejects(executor({
+    invocation: { agentId: IDENTITY.agentId }, message: { text: 'hi' }, attachments: [],
+    appendEvent: () => {}, addArtifact: () => {}, requestApproval: async () => ({ decision: 'deny' }), signal: new AbortController().signal,
+  }), /executor message must be the prompt text/);
+  assert.equal(ran, false);
+});

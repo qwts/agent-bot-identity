@@ -43,7 +43,7 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
     try {
       turn = Promise.resolve(executor({
         invocation: { agentId, harness: identity.harness, cwd: binding.worktree, cursor },
-        message: { text: prompt },
+        message: prompt,
         attachments: [],
         env: { AGENT_BOT_BINDING: binding.file },
       }));

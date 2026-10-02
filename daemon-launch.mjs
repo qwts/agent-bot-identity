@@ -77,7 +77,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         let started = false;
         Promise.resolve().then(() => executor({
           invocation: { agentId: identity.id, harness, cwd: binding.worktree },
-          message: { text: 'You were launched by a principal. Join agent-comms as usual, read your inbox, and handle incoming work.' },
+          message: 'You were launched by a principal. Join agent-comms as usual, read your inbox, and handle incoming work.',
           attachments: [], signal: AbortSignal.timeout(turnTimeoutMs),
           appendEvent: (type, data) => {
             if (type === HARNESS_SESSION_EVENT) { started = true; resolve(); }

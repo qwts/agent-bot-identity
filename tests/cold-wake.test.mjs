@@ -32,8 +32,8 @@ test('enabled cold wake supplies message IDs, worktree and binding, and records 
   await wake.idle();
   assert.equal(input.invocation.cwd, binding.worktree);
   assert.equal(input.env.AGENT_BOT_BINDING, binding.file);
-  assert.match(input.message.text, /2 agent-comms messages waiting \(IDs: m1, m2\)/);
-  assert.match(input.message.text, /agent-comms inbox --full, act, and ack/);
+  assert.match(input.message, /2 agent-comms messages waiting \(IDs: m1, m2\)/);
+  assert.match(input.message, /agent-comms inbox --full, act, and ack/);
   assert.deepEqual(receipts, [
     { event: 'cold-wake', agentId: id, decision: 'started' },
     { event: 'cold-wake', agentId: id, decision: 'finished' },
