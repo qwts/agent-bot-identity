@@ -63,6 +63,7 @@ import {
   ensureAgentIdentity,
   mintAgentIdentity,
   readAgentIdentity,
+  retireAgentIdentity,
   stateDirectory,
   validateAgentId,
 } from './agent-identity.mjs';
@@ -79,6 +80,8 @@ import { attachWakeEndpoint } from './agent-wake.mjs';
 import { readColdWakeSettings } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler } from './daemon-launch.mjs';
+import { createSoulHomes } from './soul-home.mjs';
+import { validateSoulPackage } from './soul-package.mjs';
 import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
 
 const SCHEMA_VERSION = 1;
@@ -1081,10 +1084,16 @@ export async function runDaemon({
   const onLaunch = createLaunchHandler({
     file: path.join(path.dirname(daemonStateFile({ env, home })), 'launch-requests.json'),
     identities,
-    // A package carries no App authority, and cold start needs one (#290).
-    // Refuse before minting so a failed launch leaves no identity behind (#297).
-    spawnPackage: async () => { throw new Error('launching from a package needs App-less cold start (#297)'); },
+    // A package spawn is a new root soul with no GitHub App (#297). The
+    // package is validated before minting, so a bad path mints nothing.
+    spawnPackage: async ({ package: packagePath, harness }) => {
+      validateSoulPackage(packagePath);
+      return mintAgentIdentity({ appSlug: null, harness, packagePath, useGithub: false,
+        stateDir: stateDirectory({ env, home }), now });
+    },
     lookupBinding: (agentId) => server.bindings.findAgent(agentId),
+    provisionHome: (soul) => createSoulHomes({ stateDir: stateDirectory({ env, home }), bindings: server.bindings })(soul),
+    discard: (agentId) => retireAgentIdentity(agentId, { stateDir: stateDirectory({ env, home }), now }),
     executorFor,
   });
   const comms = createCommsSupervisor({ env, home, now, onWake, onLaunch });

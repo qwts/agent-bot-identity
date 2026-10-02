@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Principal launches start souls without a GitHub App (#297). A launched
+  soul with no live binding gets a home, a private git worktree at
+  `<state>/homes/<agentId>`, which the daemon binds before starting the
+  harness. A package launch validates the package, spawns a root soul with
+  a genesis ID, and starts its home from a copy of the package. If that
+  first start fails, the new soul is retired. Cold wake also runs souls
+  without an App.
+
 ## 0.9.1
 
 - Embedded hosts supervise their own daemon (#302). `AGENT_BOT_SERVICE_LABEL`
