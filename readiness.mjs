@@ -625,10 +625,20 @@ function secureStoreCheck({ probe }) {
   });
 }
 
-// Inbox reachability, presence only. Reports what is configured and whether a
-// harness has the MCP server wired; it never reads the bearer, and it makes no
-// network call by default — a diagnostic that blocks on an unreachable third
-// party is worse than one that reports the configuration it can see.
+// Inbox reachability, presence only (#299). Reports what is configured and
+// whether a harness has the MCP server wired; it never reads the bearer, and
+// it makes no network call by default — a diagnostic that blocks on an
+// unreachable third party is worse than one that reports the configuration
+// it can see. The host is reported so a DNS/TLS/refused failure can be told
+// apart from a bad URL without ever echoing the bearer.
+function inboxHostForDoctor(inboxUrl) {
+  try {
+    return new URL(inboxUrl).host || null;
+  } catch {
+    return null;
+  }
+}
+
 function inboxConfigurationCheck({ env, harnesses }) {
   const url = typeof env.GH_APP_HOOK_INBOX_URL === 'string' ? env.GH_APP_HOOK_INBOX_URL : null;
   // Only an agent-bot entry counts as wired. A harness with some unrelated MCP
@@ -638,6 +648,7 @@ function inboxConfigurationCheck({ env, harnesses }) {
     : [];
   const evidence = {
     url_configured: Boolean(url),
+    host: url ? inboxHostForDoctor(url) : null,
     // Named for what it is, and deliberately free of the words the leak guard
     // screens for: this reports presence, never a value.
     credential_configured: typeof env.GH_APP_HOOK_INBOX_TOKEN === 'string' && env.GH_APP_HOOK_INBOX_TOKEN.length > 0,

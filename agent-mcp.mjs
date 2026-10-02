@@ -32,6 +32,12 @@ import { detectAgentHarness } from './detect-harness.mjs';
 
 const PROTOCOL_VERSION = '2025-06-18';
 
+// Inbox take timeout (#299): a hung broker connection must not stall the
+// tool forever. Matches the push timeout scale (5s) with headroom for a
+// cold Worker; the error names the timeout so it is distinguishable from a
+// refusal.
+export const INBOX_TIMEOUT_MS = 10_000;
+
 function serverVersion() {
   try {
     const root = dirname(fileURLToPath(import.meta.url));
@@ -138,40 +144,194 @@ function githubRepo(remote) {
   return `${match[1]}/${match[2]}`;
 }
 
+// Stable take_inbox error codes (#299). The MCP tool surface returns only
+// the message text to the agent, so the code is embedded as [code] as well
+// as carried on error.code for programmatic use.
+function inboxError(code, message, { cause = undefined } = {}) {
+  return Object.assign(new Error(`${message} [${code}]`), { code, ...(cause === undefined ? {} : { cause }) });
+}
+
+function inboxHost(inboxUrl) {
+  try {
+    return new URL(inboxUrl).host || 'inbox';
+  } catch {
+    return 'inbox';
+  }
+}
+
+// The bearer must never appear in an error, even when a lower layer echoes
+// it. Strip it from any detail derived from the request or its failure.
+function sanitizeInboxDetail(detail, token) {
+  let out = String(detail ?? '');
+  if (typeof token === 'string' && token !== '') out = out.split(token).join('[redacted]');
+  return out;
+}
+
+function describeFetchCause(error) {
+  const cause = error?.cause ?? error;
+  const code = cause?.code ?? error?.code ?? null;
+  const message = sanitizeInboxDetail(cause?.message ?? error?.message ?? 'network error');
+  // AbortSignal.timeout rejects with a TimeoutError DOMException; undici
+  // surfaces network failures as 'fetch failed' with the real reason in
+  // error.cause. Name both so the operator can tell a hang from a refusal.
+  if (error?.name === 'TimeoutError' || cause?.name === 'TimeoutError' || code === 'ABORT_ERR' || /timeout|aborted/i.test(message)) {
+    return { kind: 'timeout', code: code ?? 'TimeoutError', message };
+  }
+  return { kind: 'network', code, message };
+}
+
+// Restore the in-memory secret from the worktree's binding file after an MCP
+// restart (#299). The file is the durable binding; the token was single-use
+// and is gone. Throws inbox-not-bound when there is nothing to restore, and
+// inbox-daemon-unreachable when the daemon cannot validate it.
+async function ensureTakeBinding(state) {
+  if (state.secret) {
+    try {
+      return await state.client.binding(state.secret);
+    } catch (error) {
+      throw inboxError(
+        'inbox-daemon-unreachable',
+        `take_inbox failed: the daemon rejected the held binding (${sanitizeInboxDetail(error?.message ?? 'unknown error')}); run \`agent-bot daemon status\`, then \`agent-bot doctor\`, and re-bind with the bind tool`,
+        { cause: error },
+      );
+    }
+  }
+  let existing = null;
+  try {
+    existing = readBinding({ env: state.env, cwd: state.cwd });
+  } catch (error) {
+    throw inboxError(
+      'inbox-daemon-unreachable',
+      `take_inbox failed: the worktree binding could not be read (${sanitizeInboxDetail(error?.message ?? 'unknown error')}); run \`agent-bot doctor\`, then \`agent-bot setup-worktree\` if the binding is corrupt`,
+      { cause: error },
+    );
+  }
+  if (!existing) {
+    throw inboxError(
+      'inbox-not-bound',
+      'take_inbox failed: not bound — call the bind tool first (a restarted MCP server re-binds automatically when the worktree binding file exists)',
+    );
+  }
+  try {
+    const binding = await state.client.binding(existing.secret);
+    state.secret = existing.secret;
+    state.agentId = binding.agentId;
+    return binding;
+  } catch (error) {
+    throw inboxError(
+      'inbox-daemon-unreachable',
+      `take_inbox failed: the daemon rejected the worktree binding (${sanitizeInboxDetail(error?.message ?? 'unknown error')}); run \`agent-bot daemon status\`, then re-bind with the bind tool or \`agent-bot setup-worktree\` for a fresh token`,
+      { cause: error },
+    );
+  }
+}
+
 async function takeInbox(state) {
-  if (!state.secret) throw new Error('not bound — call the bind tool first');
-  const binding = await state.client.binding(state.secret);
+  const binding = await ensureTakeBinding(state);
   if (resolve(binding.worktree) !== resolve(state.cwd)) {
-    throw new Error('take_inbox only serves the bound worktree');
+    throw inboxError(
+      'inbox-wrong-worktree',
+      'take_inbox failed: this server only serves its bound worktree; run the MCP server from the bound worktree',
+    );
   }
   const app = git(state.cwd, 'config', '--worktree', '--get', 'agentBot.app');
   const repo = githubRepo(git(state.cwd, 'remote', 'get-url', 'origin'));
   const inboxUrl = state.env.GH_APP_HOOK_INBOX_URL;
   const token = state.env.GH_APP_HOOK_INBOX_TOKEN;
   if (typeof inboxUrl !== 'string' || inboxUrl === '' || typeof token !== 'string' || token === '') {
-    throw new Error('inbox is not configured for this MCP server');
+    throw inboxError(
+      'inbox-not-configured',
+      'take_inbox failed: the inbox is not configured for this MCP server; set GH_APP_HOOK_INBOX_URL and GH_APP_HOOK_INBOX_TOKEN from Proton Pass, then retry',
+    );
   }
-  const url = new URL('/inbox', inboxUrl);
+  const host = inboxHost(inboxUrl);
+  let url;
+  try {
+    url = new URL('/inbox', inboxUrl);
+  } catch (error) {
+    throw inboxError(
+      'inbox-not-configured',
+      `take_inbox failed: the inbox URL is invalid (${sanitizeInboxDetail(error?.message ?? 'bad URL', token)}); check GH_APP_HOOK_INBOX_URL, then run \`agent-bot doctor\``,
+      { cause: error },
+    );
+  }
   url.searchParams.set('app', app);
   url.searchParams.set('repo', repo);
-  const response = await state.fetchImpl(url, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}` },
-  });
+  let response;
+  try {
+    response = await state.fetchImpl(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(INBOX_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const cause = describeFetchCause(error);
+    const safeMessage = sanitizeInboxDetail(cause.message, token);
+    const causeCode = cause.code ? `${cause.code}: ` : '';
+    if (cause.kind === 'timeout') {
+      throw inboxError(
+        'inbox-broker-unreachable',
+        `take_inbox failed: broker ${host} timed out after ${INBOX_TIMEOUT_MS}ms (${causeCode}${safeMessage}); check GH_APP_HOOK_INBOX_URL and the broker status, then retry`,
+        { cause: error },
+      );
+    }
+    throw inboxError(
+      'inbox-broker-unreachable',
+      `take_inbox failed: broker ${host} unreachable (${causeCode}${safeMessage}); check GH_APP_HOOK_INBOX_URL and network/DNS/TLS, then retry`,
+      { cause: error },
+    );
+  }
   if (response.status === 204) return { event: null };
-  if (!response.ok) throw new Error(`inbox returned ${response.status}`);
+  if (response.status === 401) {
+    throw inboxError(
+      'inbox-auth-expired',
+      `take_inbox failed: inbox at ${host} rejected the bearer (HTTP 401); refresh GH_APP_HOOK_INBOX_TOKEN from Proton Pass, then retry`,
+    );
+  }
+  if (response.status === 400) {
+    throw inboxError(
+      'inbox-bad-request',
+      `take_inbox failed: inbox at ${host} rejected the request (HTTP 400 for app=${app} repo=${repo}); check the worktree binding with \`agent-bot doctor\``,
+    );
+  }
+  if (!response.ok) {
+    throw inboxError(
+      'inbox-unavailable',
+      `take_inbox failed: inbox at ${host} returned HTTP ${response.status}; the broker may be down — wait and retry, then check broker status`,
+    );
+  }
   return { event: await response.json() };
 }
 
 async function callTool(state, name, args = {}) {
   switch (name) {
     case 'bind': {
-      const existing = readBinding({ env: state.env, cwd: state.cwd });
+      let existing = null;
+      try {
+        existing = readBinding({ env: state.env, cwd: state.cwd });
+      } catch (error) {
+        throw inboxError(
+          'inbox-daemon-unreachable',
+          `bind failed: the worktree binding could not be read (${sanitizeInboxDetail(error?.message ?? 'unknown error')}); run \`agent-bot doctor\`, then \`agent-bot setup-worktree\` if the binding is corrupt`,
+          { cause: error },
+        );
+      }
       if (existing) {
-        const binding = await state.client.binding(existing.secret);
-        state.secret = existing.secret;
-        state.agentId = binding.agentId;
-        return binding;
+        try {
+          const binding = await state.client.binding(existing.secret);
+          state.secret = existing.secret;
+          state.agentId = binding.agentId;
+          return binding;
+        } catch (error) {
+          const cause = describeFetchCause(error);
+          const safeMessage = sanitizeInboxDetail(cause.message ?? error?.message ?? 'unknown error');
+          const causeCode = cause.code ? `${cause.code}: ` : '';
+          throw inboxError(
+            'inbox-daemon-unreachable',
+            `bind failed: the daemon is unreachable to re-bind this worktree (${causeCode}${safeMessage}); run \`agent-bot daemon status\` and \`agent-bot doctor\`, then retry`,
+            { cause: error },
+          );
+        }
       }
       if (typeof args.transcript_id !== 'string' || args.transcript_id === '') {
         throw new Error('bind requires transcript_id');
