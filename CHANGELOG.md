@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.10.2
+
+- `take_inbox` says what failed (#299, #317). A network failure names the
+  inbox host and the underlying cause (`ECONNREFUSED`, a timeout) with a
+  stable code such as `inbox-broker-unreachable`, `inbox-auth-expired` or
+  `inbox-daemon-unreachable`, plus the recovery step, and never the bearer.
+  Requests time out after 10 seconds. A restarted MCP server re-binds from
+  the worktree's binding file without a manual `bind`.
+- `doctor` reports the inbox host and warns on an inbox URL that is not a
+  valid http(s) URL (`inbox-url-invalid`). A network reachability probe is
+  tracked in #318.
+
 ## 0.10.1
 
 - A launched soul joins agent-comms before its first turn (#313), so the
