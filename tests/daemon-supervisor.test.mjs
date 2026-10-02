@@ -381,3 +381,21 @@ test('souls get the host tools first on PATH, and the unit keeps the tool path (
   assert.equal(soulEnvironment({ PATH: '/usr/bin' }).PATH, '/usr/bin');
   assert.equal(supervisorEnvironment({ env: { AGENT_BOT_TOOL_PATH: '/App/bin' }, home: '/u' }).AGENT_BOT_TOOL_PATH, '/App/bin');
 });
+
+test('a launched soul joins agent-comms as itself, with the host tools on PATH (R4)', async () => {
+  const { joinLaunchedSoul } = await import('../agent-daemon.mjs');
+  const soul = { agentId: 'agent_11111111-1111-4111-8111-111111111111', harness: 'claude', name: 'Starter',
+    binding: { worktree: '/state/homes/s', file: '/state/homes/s/.git/agent-binding.json' } };
+  const env = { AGENT_BOT_TOOL_PATH: '/App/bin', PATH: '/usr/bin' };
+  let seen;
+  const address = await joinLaunchedSoul(soul, { env, run: (cmd, args, opts, done) => {
+    seen = { cmd, args, cwd: opts.cwd, path: opts.env.PATH, binding: opts.env.AGENT_BOT_BINDING, id: opts.env.AGENT_BOT_ID };
+    done(null, '{"ok":true,"address":"friend/agent_1"}', '');
+  } });
+  assert.equal(address, 'friend/agent_1');
+  assert.deepEqual(seen, { cmd: 'agent-comms', args: ['join', '--harness', 'claude', '--name', 'Starter'], cwd: '/state/homes/s',
+    path: '/App/bin:/usr/bin', binding: soul.binding.file, id: soul.agentId });
+  await assert.rejects(joinLaunchedSoul(soul, { env, run: (_c, _a, _o, done) =>
+    done(Object.assign(new Error('exit 1'), { code: 1 }), '{"ok":false,"error":{"code":"broker-unreachable","message":"no broker"}}', '') }),
+  /joining agent-comms failed: no broker/);
+});

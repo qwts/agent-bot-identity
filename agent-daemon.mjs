@@ -47,7 +47,7 @@
 // key is created once per account; `daemon vouch-key` prints its SPKI form.
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir, userInfo } from 'node:os';
@@ -93,6 +93,26 @@ import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
 export function soulEnvironment(env = process.env) {
   const tools = env.AGENT_BOT_TOOL_PATH && path.isAbsolute(env.AGENT_BOT_TOOL_PATH) ? env.AGENT_BOT_TOOL_PATH : null;
   return tools ? { ...env, PATH: [tools, env.PATH].filter(Boolean).join(path.delimiter) } : env;
+}
+
+/**
+ * Joins a launched soul to agent-comms as itself, with the soul's binding and
+ * the environment its harness gets, before its first turn (R4). Resolves to
+ * the soul's address; a failed join fails the launch with agent-comms' own
+ * message.
+ */
+export function joinLaunchedSoul({ agentId, harness, name, binding }, { env = process.env, run = execFile } = {}) {
+  const args = ['join', '--harness', harness, ...(name ? ['--name', name] : [])];
+  const soulEnv = { ...soulEnvironment(env), AGENT_BOT_BINDING: binding.file, AGENT_BOT_ID: agentId, QWTS_AGENT_ID: agentId };
+  return new Promise((resolve, reject) => {
+    run('agent-comms', args, { cwd: binding.worktree, env: soulEnv, timeout: 30_000 }, (error, stdout = '', stderr = '') => {
+      let result = null;
+      try { result = JSON.parse(String(stdout)); } catch {}
+      if (!error && result?.ok === true) return resolve(result.address ?? null);
+      const detail = result?.error?.message ?? (String(stderr).trim().split('\n').pop() || error?.message || 'no result');
+      reject(new Error(`joining agent-comms failed: ${detail}`));
+    });
+  });
 }
 
 const SCHEMA_VERSION = 1;
@@ -1124,6 +1144,7 @@ export async function runDaemon({
     // A principal launched this soul to talk to it, so later messages wake it.
     onLaunched: (agentId) => setColdWake(agentId, true, { env, home, now }),
     discard: (agentId) => retireAgentIdentity(agentId, { stateDir: stateDirectory({ env, home }), now }),
+    joinSoul: (soul) => joinLaunchedSoul(soul, { env }),
     executorFor,
   });
   const comms = createCommsSupervisor({ env, home, now, onWake, onLaunch });

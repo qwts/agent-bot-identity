@@ -239,3 +239,18 @@ test('journal write failure prevents all launch side effects', async (t) => {
   assert.equal(f.calls.length, 0);
   assert.equal(f.reports.length, 0);
 });
+
+test('joins the soul to agent-comms before its first turn, and fails the launch when joining fails', async (t) => {
+  const order = [];
+  const joined = fixture(t, { joinSoul: async (soul) => { order.push(['join', soul]); } });
+  const run = joined.options.executorFor;
+  const handler = createLaunchHandler({ ...joined.options, executorFor: (args) => { order.push(['turn']); return run(args); } });
+  await handler(event, joined.ports);
+  assert.deepEqual(order, [['join', { agentId, harness: 'claude', name: 'Helper', binding: { worktree: '/work', file: '/private/binding' } }], ['turn']]);
+  assert.equal(joined.reports[0].status, 'launched');
+
+  const refused = fixture(t, { joinSoul: async () => { throw new Error('joining agent-comms failed: broker-unreachable'); } });
+  await refused.handler(event, refused.ports);
+  assert.equal(refused.calls.length, 0);
+  assert.deepEqual(refused.reports[0], { requestId: 'r1', status: 'failed', agentId: null, detail: 'joining agent-comms failed: broker-unreachable' });
+});

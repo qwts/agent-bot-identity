@@ -10,9 +10,12 @@ export const LAUNCH_NAME_MAX = 128;
 
 // `provisionHome` binds a soul that has no live binding (#297); `discard`
 // retires a soul this request spawned when its first start fails, so a
-// failed package launch leaves no active identity behind.
+// failed package launch leaves no active identity behind. `joinSoul` joins
+// the soul to agent-comms as itself before its first turn: the broker takes
+// `launched` only from a joined soul, and a harness not yet signed in (a
+// fresh install) cannot run the turn that would join it.
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
-  executorFor, turnTimeoutMs = 30 * 60_000 }) {
+  joinSoul = null, executorFor, turnTimeoutMs = 30 * 60_000 }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -69,6 +72,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       const binding = await lookupBinding(identity.id)
         ?? await provisionHome({ agentId: identity.id, harness, packagePath: event.package ?? null });
       if (!binding?.worktree || !binding?.file) throw new Error('soul binding is unavailable');
+      if (joinSoul) await joinSoul({ agentId: identity.id, harness, name: event.name ?? null, binding });
       const executor = executorFor({ agentId: identity.id, harness, cwd: binding.worktree,
         env: { AGENT_BOT_BINDING: binding.file, AGENT_BOT_ID: identity.id, QWTS_AGENT_ID: identity.id } });
       // An ACP session binding is the readiness boundary. A returned promise
