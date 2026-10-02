@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.0
+
 - Souls carry their harnesses (#307, ADR-0276). When a soul home is made
   from a package with `package.json` and `package-lock.json`, the daemon
   runs `npm ci --ignore-scripts --omit=dev` in it, using the host's npm
