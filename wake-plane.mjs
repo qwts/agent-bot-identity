@@ -39,13 +39,8 @@ export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onE
 export function acpExecutorFor({ identities, policy, baseEnv }) {
   return ({ agentId, harness, cwd, env }) => {
     const identity = identities(agentId);
+    // A soul without the github-identity add-on runs with no App (#297).
     const app = identity?.github?.appSlug ?? null;
-    // The ACP contract still binds a bot App. A soul with no github field
-    // wakes on a warm socket; a cold turn refuses instead of throwing on
-    // a missing field (#280).
-    if (!app) {
-      throw new Error('cold wake needs a GitHub App; this soul has no github identity');
-    }
     return createAcpExecutor({
       harness,
       identity: { app, agentId },

@@ -241,9 +241,11 @@ export function decidePermission(policy, { toolName } = {}) {
 
 // --- 4. identity binding --------------------------------------------------
 
-export function validateExecutorIdentity({ app, agentId } = {}) {
-  if (typeof app !== 'string' || !APP_SLUG_PATTERN.test(app)) {
-    fail('executor identity requires the agentBot.app slug');
+// The App is optional (ADR-0274): a soul without the github-identity add-on
+// runs with app null. One that names an App must name a valid slug.
+export function validateExecutorIdentity({ app = null, agentId } = {}) {
+  if (app !== null && (typeof app !== 'string' || !APP_SLUG_PATTERN.test(app))) {
+    fail('executor identity app must be null or an agentBot.app slug');
   }
   let id;
   try {

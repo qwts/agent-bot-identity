@@ -17,6 +17,9 @@
   `agent-bot harness auth status|login HARNESS --soul AGENT_ID` reports
   `{harness, loggedIn}` and runs the harness's own sign-in (Claude: the CLI
   installed in the soul's home, else `claude` from PATH).
+- The ACP executor runs souls without a GitHub App. `validateExecutorIdentity`
+  accepts `app: null`, and `acpExecutorFor` no longer refuses them. Before
+  this, every real launch of an App-less soul failed even after #297.
 
 - Principal launches start souls without a GitHub App (#297). A launched
   soul with no live binding gets a home, a private git worktree at

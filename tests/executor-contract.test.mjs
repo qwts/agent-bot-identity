@@ -198,7 +198,9 @@ test('executor construction fails closed on identity, policy, harness, and run',
   };
   createContractExecutor(good);
   assert.throws(() => createContractExecutor({ ...good, identity: { app: 'qwts-claude-agent' } }), /agentBot\.agentId/);
-  assert.throws(() => createContractExecutor({ ...good, identity: { agentId: AGENT_ID } }), /agentBot\.app/);
+  // A soul without the github-identity add-on runs with no App (#297).
+  createContractExecutor({ ...good, identity: { agentId: AGENT_ID } });
+  createContractExecutor({ ...good, identity: { app: null, agentId: AGENT_ID } });
   assert.throws(() => createContractExecutor({ ...good, identity: { app: 'Bad Slug', agentId: AGENT_ID } }), /agentBot\.app/);
   assert.throws(() => createContractExecutor({ ...good, identity: undefined }));
   assert.throws(() => createContractExecutor({ ...good, policy: { version: 1, rules: [], fallback: 'ask' } }));

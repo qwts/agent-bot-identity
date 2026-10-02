@@ -521,10 +521,9 @@ test('with github-identity off, bind, spawn, comms join, vouch, and wake need no
     policy: { version: 1, rules: [], fallback: 'deny' },
     baseEnv: env,
   });
-  assert.throws(
-    () => factory({ agentId, harness: 'codex', cwd: repo, env: {} }),
-    /no github identity/,
-  );
+  // A soul with no App still gets an executor (#297); codex is not enabled.
+  assert.throws(() => factory({ agentId, harness: 'codex', cwd: repo, env: {} }), /not enabled/);
+  assert.equal(typeof factory({ agentId, harness: 'claude', cwd: repo, env: {} }), 'function');
 });
 
 test('with the gate off, a bind never inherits a GitHub-backed soul by pin or transcript', (t) => {
