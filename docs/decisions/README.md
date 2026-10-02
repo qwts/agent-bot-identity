@@ -28,3 +28,4 @@ supersede them instead.
 | --- | --- | --- |
 | [ADR-0274](ADR-0274-product-is-mechanism-add-ons-and-sop-packs-carry-policy.md) | The product is mechanism; add-ons and SOP packs carry policy | Proposed |
 | [ADR-0275](ADR-0275-soul-packages-are-versioned-definitions-souls-can-grow.md) | Soul packages are versioned definitions that souls can grow | Proposed |
+| [ADR-0276](ADR-0276-souls-carry-their-harnesses-as-pinned-npm-dependencies.md) | Souls carry their harnesses as pinned npm dependencies | Proposed |
