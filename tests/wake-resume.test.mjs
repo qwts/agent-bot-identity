@@ -91,6 +91,50 @@ test('devin: the workspace policy runs sandboxed, and the session id comes from 
   assert.equal(devin.sessionsIn('not json', '/work'), null);
 });
 
+// Recorded from `grok -p --output-format json` (grok 1.0.46).
+const GROK_OUTPUT = JSON.stringify({ text: 'pong', stopReason: 'end_turn', sessionId: '01a0febc-23aa-7c30-96c7-9c3599afed0c', num_turns: 1 }, null, 2);
+
+test('grok: both policies run sandboxed, read-only denies edits and shell, and the JSON result is the reply', () => {
+  const grok = RESUME_HARNESSES.grok;
+  const workspace = grok.plan({ sessionId: 'g-1', prompt: 'hi', policy: 'workspace' });
+  assert.deepEqual(workspace.args.slice(0, 2), ['--resume', 'g-1']);
+  assert.deepEqual(workspace.args.slice(-3), ['--sandbox', 'workspace', '--always-approve']);
+  assert.ok(workspace.args.includes('/dev/stdin'));
+  assert.equal(workspace.stdin, 'hi');
+  const readOnly = grok.plan({ sessionId: null, prompt: 'hi', policy: 'read-only' }).args;
+  assert.ok(!readOnly.includes('--resume'));
+  assert.ok(!readOnly.includes('--always-approve'));
+  assert.equal(readOnly[readOnly.indexOf('--sandbox') + 1], 'read-only');
+  assert.equal(readOnly[readOnly.indexOf('--permission-mode') + 1], 'dontAsk');
+  for (const tool of ['Edit', 'Write', 'Bash']) assert.ok(readOnly.some((arg, i) => arg === tool && readOnly[i - 1] === '--deny'));
+  assert.deepEqual(grok.parse(GROK_OUTPUT), { reply: 'pong', sessionId: '01a0febc-23aa-7c30-96c7-9c3599afed0c', failure: null });
+  assert.equal(grok.parse(JSON.stringify({ text: '', stopReason: 'refusal', sessionId: 'g-1' })).failure, 'grok refused the turn');
+  assert.equal(grok.parse('error: not logged in').failure, 'grok printed no JSON result');
+});
+
+test('a harness that fixes its policy at start begins a new session when the policy changes', () => withState(async ({ env, root }) => {
+  const sessions = createWakeSessions({ file: wakeSessionsFile({ env }) });
+  let next = 0;
+  const calls = [];
+  const run = async (command, args) => {
+    calls.push(args);
+    next += 1;
+    return { code: 0, stdout: JSON.stringify({ text: 'pong', stopReason: 'end_turn', sessionId: `g-${next}` }), stderr: '' };
+  };
+  const execute = createResumeExecutor({ sessions, baseEnv: {}, home: root, run });
+  const turn = (policy) => execute({ invocation: { agentId: ID, harness: 'grok', cwd: root }, message: 'm', policy });
+  await turn('read-only');
+  await turn('read-only');
+  assert.deepEqual(calls[1].slice(0, 2), ['--resume', 'g-1']);
+  await turn('workspace');
+  assert.ok(!calls[2].includes('--resume'));
+  assert.equal(sessions.get(ID, 'grok', 'workspace'), 'g-3');
+  assert.equal(sessions.get(ID, 'grok', 'read-only'), null);
+  // A harness whose policy is per turn keeps its session across a change.
+  sessions.set(ID, 'codex', 'thread-1', 'read-only');
+  assert.equal(sessions.get(ID, 'codex'), 'thread-1');
+}));
+
 test('the PATH keeps the host tool path first and adds the harness install dirs', () => {
   const dirs = resumePath({ PATH: '/bundle/tools:/usr/bin' }, '/Users/me').split(':');
   assert.equal(dirs[0], '/bundle/tools');
