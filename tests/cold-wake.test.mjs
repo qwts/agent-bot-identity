@@ -14,13 +14,14 @@ test('cold wake is opt-in and reports waiting while disabled', async () => {
   assert.equal(calls, 0);
 });
 
-test('cold wake clearly reports no-App souls as unsupported without starting a turn', async () => {
+test('cold wake starts a turn for a soul without a GitHub App (#297)', async () => {
   let calls = 0;
   const receipts = [];
   const wake = createColdWaker({ executor: async () => { calls += 1; }, settings: { [id]: true }, lookupBinding: async () => binding, identities: async () => ({ harness: 'codex' }), receipt: (entry) => receipts.push(entry) });
-  assert.deepEqual(await wake({ agentId: id, count: 1, messageIds: ['m1'] }), { outcome: 'failed', detail: 'cold wake is unsupported without a GitHub App identity' });
-  assert.equal(calls, 0);
-  assert.deepEqual(receipts, [{ event: 'cold-wake', agentId: id, decision: 'unsupported' }]);
+  assert.deepEqual(await wake({ agentId: id, count: 1, messageIds: ['m1'] }), { outcome: 'cold', detail: 'turn started' });
+  await wake.idle();
+  assert.equal(calls, 1);
+  assert.deepEqual(receipts.map((entry) => entry.decision), ['started', 'finished']);
 });
 
 test('enabled cold wake supplies message IDs, worktree and binding, and records a secret-free receipt', async () => {

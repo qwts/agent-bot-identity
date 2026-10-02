@@ -18,6 +18,7 @@ function fixture(t, overrides = {}) {
   const options = { file, identities: () => ({ id: agentId, github: { appSlug: 'test-app' }, harness: 'muse' }),
     spawnPackage: () => { throw new Error('unexpected spawn'); },
     lookupBinding: () => ({ worktree: '/work', file: '/private/binding' }),
+    provisionHome: () => null,
     executorFor: (args) => { calls.push(args); return async (input) => {
       assert.equal(JSON.parse(readFileSync(file))[0].status, 'pending');
       assert.deepEqual(await input.requestApproval(), { decision: 'deny' });
@@ -52,8 +53,54 @@ test('waits for session readiness and reports async spawn errors as failed', asy
   assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'failed', agentId: null, detail: 'spawn unavailable' });
 });
 
+test('launches a soul without a GitHub App (#297)', async (t) => {
+  const f = fixture(t, { identities: () => ({ id: agentId, harness: 'claude' }) });
+  await f.handler(event, f.ports);
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId });
+});
+
+test('binds a soul home when the soul has no live binding', async (t) => {
+  const homes = [];
+  const f = fixture(t, { lookupBinding: () => null,
+    provisionHome: (soul) => { homes.push(soul); return { worktree: '/home/soul', file: '/home/soul/.git/agent-binding.json' }; } });
+  await f.handler(event, f.ports);
+  assert.deepEqual(homes, [{ agentId, harness: 'claude', packagePath: null }]);
+  assert.equal(f.calls[0].cwd, '/home/soul');
+  assert.equal(f.reports[0].status, 'launched');
+});
+
+const spawnedId = 'agent_22222222-2222-4222-8222-222222222222';
+const packageEvent = { ...event, soul: undefined, package: '/pkg' };
+
+test('a package launch spawns a soul, homes it with the package, and starts it', async (t) => {
+  const homes = [];
+  const f = fixture(t, { spawnPackage: (input) => { assert.equal(input.package, '/pkg'); return { id: spawnedId }; },
+    lookupBinding: () => null,
+    provisionHome: (soul) => { homes.push(soul); return { worktree: '/home/new', file: '/home/new/.git/agent-binding.json' }; } });
+  await f.handler(packageEvent, f.ports);
+  assert.deepEqual(homes, [{ agentId: spawnedId, harness: 'claude', packagePath: '/pkg' }]);
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId: spawnedId });
+});
+
+test('a package launch that cannot start retires the soul it spawned', async (t) => {
+  const retired = [];
+  const f = fixture(t, { spawnPackage: () => ({ id: spawnedId }), lookupBinding: () => null,
+    provisionHome: () => ({ worktree: '/home/new', file: '/b' }), discard: (id) => { retired.push(id); },
+    executorFor: () => async () => {} });
+  await f.handler(packageEvent, f.ports);
+  assert.equal(f.reports[0].status, 'failed');
+  assert.deepEqual(retired, [spawnedId]);
+});
+
+test('a package launch with the executor off mints nothing', async (t) => {
+  let spawns = 0;
+  const f = fixture(t, { executorFor: null, spawnPackage: () => { spawns += 1; return { id: spawnedId }; } });
+  await f.handler(packageEvent, f.ports);
+  assert.match(f.reports[0].detail, /executor is disabled/);
+  assert.equal(spawns, 0);
+});
+
 for (const [name, overrides, input, reason] of [
-  ['App-less soul', { identities: () => ({ id: agentId }) }, {}, /without a GitHub App/],
   ['missing binding', { lookupBinding: () => null }, {}, /binding is unavailable/],
   ['disabled executor', { executorFor: null }, {}, /executor is disabled/],
   ['unknown soul', { identities: () => { throw new Error('unknown soul'); } }, {}, /unknown soul/],
@@ -131,7 +178,7 @@ test('package mint uses genesis IDs, no inferred App authority, and is not repea
   const request = { ...event, soul: undefined, package: packagePath };
   await handler(request, f.ports);
   assert.ok(readAgentIdentity(identity.id, { stateDir }).genesis);
-  assert.match(f.reports[0].detail, /#297/);
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId: identity.id });
   await handler(request, f.ports);
   assert.equal(spawns, 1);
 });

@@ -8,7 +8,11 @@ import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 /** Longest display name the broker accepts on a launch request. */
 export const LAUNCH_NAME_MAX = 128;
 
-export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, executorFor, turnTimeoutMs = 30 * 60_000 }) {
+// `provisionHome` binds a soul that has no live binding (#297); `discard`
+// retires a soul this request spawned when its first start fails, so a
+// failed package launch leaves no active identity behind.
+export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {},
+  executorFor, turnTimeoutMs = 30 * 60_000 }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -43,6 +47,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
     const row = { requestId, status: 'pending', agentId: null, reported: false };
     requests.set(requestId, row);
     save(); // Accept durably before minting an identity or starting a process.
+    let spawned = null;
     try {
       if (event.account !== account) throw new Error('launch account does not match paired daemon');
       if (typeof event.harness !== 'string' || !HARNESS_KEY_PATTERN.test(event.harness)) throw new Error('invalid launch harness');
@@ -52,10 +57,12 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       }
       // Same bound as agent-comms' broker launch contract (lib/broker/launch.mjs).
       if (event.name !== undefined && (typeof event.name !== 'string' || !event.name.trim() || event.name.length > LAUNCH_NAME_MAX || /[\u0000-\u001f\u007f]/.test(event.name))) throw new Error('invalid launch name');
-      const identity = event.soul ? await identities(event.soul) : await spawnPackage(event);
-      if (!identity?.github?.appSlug) throw new Error('launching a soul without a GitHub App identity is unsupported (#297)');
+      // Every check that can fail without starting runs before a package spawn mints.
       if (!executorFor) throw new Error('daemon ACP executor is disabled');
-      const binding = await lookupBinding(identity.id);
+      const identity = event.soul ? await identities(event.soul) : await spawnPackage(event);
+      if (!event.soul) spawned = identity?.id ?? null;
+      const binding = await lookupBinding(identity.id)
+        ?? await provisionHome({ agentId: identity.id, harness: event.harness, packagePath: event.package ?? null });
       if (!binding?.worktree || !binding?.file) throw new Error('soul binding is unavailable');
       const executor = executorFor({ agentId: identity.id, harness: event.harness, cwd: binding.worktree,
         env: { AGENT_BOT_BINDING: binding.file, AGENT_BOT_ID: identity.id, QWTS_AGENT_ID: identity.id } });
@@ -78,6 +85,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       Object.assign(row, { status: 'launched', agentId: identity.id });
     } catch (error) {
       Object.assign(row, { status: 'failed', agentId: null, detail: error.message });
+      if (spawned) { try { await discard(spawned); } catch { /* the failure is already reported */ } }
     }
     save(); // Persist outcome before network I/O; retry only the report.
     await reportRow(row, report);
