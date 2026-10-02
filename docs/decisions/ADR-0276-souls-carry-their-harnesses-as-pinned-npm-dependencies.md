@@ -7,10 +7,11 @@
 ## Context
 
 The ACP registry starts `claude` and `codex` through `npx`, and `opencode`
-and `muse` from the user's PATH. A developer machine has all of these. A
-fresh Mac running an embedded host such as GeniusBar has only the host's
-bundled Node. It has no `npx` and no harness, so a soul cannot run until
-the user opens a terminal.
+from the user's PATH. `muse` runs the co-shipped `muse-acp.mjs` adapter
+with the daemon's Node, but that adapter needs `muse` on PATH. A developer
+machine has all of these. A fresh Mac running an embedded host such as
+GeniusBar has only the host's bundled Node. It has no `npx` and no harness,
+so a soul cannot run until the user opens a terminal.
 
 [ADR-0275](ADR-0275-soul-packages-are-versioned-definitions-souls-can-grow.md)
 gives each soul a package whose `preferredHarnesses` already orders the
@@ -20,21 +21,27 @@ that package (#297).
 ## Decision
 
 1. **A soul ships like any distributed npm app.** Its package may include
-   `package.json` and `package-lock.json`. The dependencies pin the harness
+   `package.json` and `package-lock.json`. Both are optional, as in format
+   1; a package without `package.json` installs nothing and runs on the
+   harnesses already available. The dependencies pin the harness
    adapters the soul runs on, such as the Claude Code ACP adapter, Copilot
    CLI, `pi-acp`, or the Codex ACP adapter. The package revision covers
    both files, so changing a pin is a new revision.
 2. **The first entry of `preferredHarnesses` is the soul's default.** Each
    registry row may name the npm binary that serves it in a soul's home.
-3. **The daemon installs a home's dependencies when it creates the home.**
-   It runs the host's `npm ci --ignore-scripts --omit=dev` inside the home,
+3. **The daemon installs a home's dependencies when it creates the home,**
+   only when the package has `package.json`. A `package.json` without
+   `package-lock.json` fails the launch, because the pins would not be
+   exact. With both, it runs the host's `npm ci --ignore-scripts --omit=dev`
+   inside the home,
    with no global install and no `npx`. A host passes its Node and npm. A
    failed install fails the launch with the npm error, and the new soul is
    retired as #297 requires.
 4. **Selection order:** the per-agent harness option, then the soul's
    default, then any registry harness on the user's PATH. A harness found
    in the home's `node_modules/.bin` runs from there. Otherwise the registry
-   command runs as before.
+   command runs as before: `npx` for `claude` and `codex`, PATH for
+   `opencode`, and the co-shipped adapter for `muse`.
 5. **Credentials stay the harness's own.** Each harness keeps its login
    store, such as `~/.claude` or the Copilot sign-in. Installing a harness
    grants it nothing, and a host offers each harness's own sign-in step.
