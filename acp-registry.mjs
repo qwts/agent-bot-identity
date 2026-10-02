@@ -46,6 +46,9 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
     command: 'npx',
     args: Object.freeze(['--yes', '-p', '@zed-industries/claude-code-acp', 'claude-code-acp']),
     soulBin: 'claude-code-acp',
+    // The Claude CLI the adapter installs with it; its store is ~/.claude.
+    signIn: Object.freeze({ package: '@anthropic-ai/claude-agent-sdk', script: 'cli.js', command: 'claude',
+      status: Object.freeze(['auth', 'status', '--json']), login: Object.freeze(['auth', 'login']) }),
     stripEnv: Object.freeze(['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT']),
     store: '~/.claude',
     auth: 'existing `claude` login (shared credential store)',

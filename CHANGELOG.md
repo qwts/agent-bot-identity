@@ -10,6 +10,13 @@
   Registry rows name their npm binary (`soulBin`), so a home that installed
   it runs the harness with this Node, without npx. `daemon install` carries
   `AGENT_BOT_NPM` into the unit.
+- An embedded host can run souls without editing config (ADR-0276).
+  `AGENT_BOT_EXECUTOR=1` turns on the daemon's ACP executor, and `daemon
+  install` carries it into the unit. A principal launch turns on cold wake
+  for the soul it started, so later messages wake it.
+  `agent-bot harness auth status|login HARNESS --soul AGENT_ID` reports
+  `{harness, loggedIn}` and runs the harness's own sign-in (Claude: the CLI
+  installed in the soul's home, else `claude` from PATH).
 
 - Principal launches start souls without a GitHub App (#297). A launched
   soul with no live binding gets a home, a private git worktree at

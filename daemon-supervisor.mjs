@@ -95,6 +95,7 @@ export function supervisorEnvironment({ env = process.env, home = homedir() } = 
     ...(label ? { [SERVICE_LABEL_VARIABLE]: label } : {}),
     // A host's own npm, which installs soul harnesses (ADR-0276).
     ...(env.AGENT_BOT_NPM && isAbsolute(env.AGENT_BOT_NPM) ? { AGENT_BOT_NPM: env.AGENT_BOT_NPM } : {}),
+    ...(env.AGENT_BOT_EXECUTOR === '1' ? { AGENT_BOT_EXECUTOR: '1' } : {}),
   };
 }
 

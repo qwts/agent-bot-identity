@@ -82,6 +82,16 @@ test('a package launch spawns a soul, homes it with the package, and starts it',
   assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId: spawnedId });
 });
 
+test('a launched soul is made reachable; a failed one is not', async (t) => {
+  const reachable = [];
+  const f = fixture(t, { onLaunched: (id) => { reachable.push(id); } });
+  await f.handler(event, f.ports);
+  assert.deepEqual(reachable, [agentId]);
+  const g = fixture(t, { onLaunched: (id) => { reachable.push(id); }, executorFor: () => async () => {} });
+  await g.handler(event, g.ports);
+  assert.deepEqual(reachable, [agentId]);
+});
+
 test('a package launch that cannot start retires the soul it spawned', async (t) => {
   const retired = [];
   const f = fixture(t, { spawnPackage: () => ({ id: spawnedId }), lookupBinding: () => null,

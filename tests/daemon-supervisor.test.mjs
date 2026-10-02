@@ -370,4 +370,6 @@ test('daemon install registers this runtime under the host label and is idempote
 test('the supervised daemon keeps the host npm only when it is an absolute path (ADR-0276)', () => {
   assert.equal(supervisorEnvironment({ env: { AGENT_BOT_NPM: '/App/npm/bin/npm-cli.js' }, home: '/u' }).AGENT_BOT_NPM, '/App/npm/bin/npm-cli.js');
   assert.equal('AGENT_BOT_NPM' in supervisorEnvironment({ env: { AGENT_BOT_NPM: 'npm-cli.js' }, home: '/u' }), false);
+  assert.equal(supervisorEnvironment({ env: { AGENT_BOT_EXECUTOR: '1' }, home: '/u' }).AGENT_BOT_EXECUTOR, '1');
+  assert.equal('AGENT_BOT_EXECUTOR' in supervisorEnvironment({ env: { AGENT_BOT_EXECUTOR: 'yes' }, home: '/u' }), false);
 });

@@ -11,7 +11,7 @@ export const LAUNCH_NAME_MAX = 128;
 // `provisionHome` binds a soul that has no live binding (#297); `discard`
 // retires a soul this request spawned when its first start fails, so a
 // failed package launch leaves no active identity behind.
-export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {},
+export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {},
   executorFor, turnTimeoutMs = 30 * 60_000 }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
@@ -83,6 +83,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         })).then(() => { if (!started) reject(new Error('harness ended before session creation')); }, reject);
       });
       Object.assign(row, { status: 'launched', agentId: identity.id });
+      try { await onLaunched(identity.id); } catch { /* the soul runs; only later wakes are affected */ }
     } catch (error) {
       Object.assign(row, { status: 'failed', agentId: null, detail: error.message });
       if (spawned) { try { await discard(spawned); } catch { /* the failure is already reported */ } }

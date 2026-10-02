@@ -77,7 +77,7 @@ import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs'
 import { PROOF_HEADER, parseBindingProof, signBindingProof } from './binding-proof.mjs';
 import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms-client.mjs';
 import { attachWakeEndpoint } from './agent-wake.mjs';
-import { readColdWakeSettings } from './cold-wake-settings.mjs';
+import { readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler } from './daemon-launch.mjs';
 import { createSoulHomes } from './soul-home.mjs';
@@ -1066,13 +1066,14 @@ export async function runDaemon({
   // keeps its unconfigured error and cold wake reports `waiting`.
   const setup = (config ?? loadConfig({ home, env })).executor;
   const identities = (agentId) => readAgentIdentity(validateAgentId(agentId), { stateDir: stateDirectory({ env, home }) });
-  const executorFor = setup?.enabled === true
-    ? acpExecutorFor({ identities, policy: setup.policy ?? { version: 1, rules: [], fallback: 'deny' }, baseEnv: env })
+  // An embedded host turns the executor on for its own daemon (ADR-0276).
+  const executorFor = setup?.enabled === true || env.AGENT_BOT_EXECUTOR === '1'
+    ? acpExecutorFor({ identities, policy: setup?.policy ?? { version: 1, rules: [], fallback: 'deny' }, baseEnv: env })
     : null;
   const executor = executorFor
     ? (input) => {
       const identity = identities(input.invocation.agentId);
-      return executorFor({ agentId: identity.id, harness: identity.harness, cwd: input.invocation.cwd ?? setup.cwd ?? home, env: {} })(input);
+      return executorFor({ agentId: identity.id, harness: identity.harness, cwd: input.invocation.cwd ?? setup?.cwd ?? home, env: {} })(input);
     }
     : undefined;
   // The comms supervisor idles until a pairing credential exists, then keeps
@@ -1093,6 +1094,8 @@ export async function runDaemon({
     },
     lookupBinding: (agentId) => server.bindings.findAgent(agentId),
     provisionHome: (soul) => createSoulHomes({ stateDir: stateDirectory({ env, home }), bindings: server.bindings })(soul),
+    // A principal launched this soul to talk to it, so later messages wake it.
+    onLaunched: (agentId) => setColdWake(agentId, true, { env, home, now }),
     discard: (agentId) => retireAgentIdentity(agentId, { stateDir: stateDirectory({ env, home }), now }),
     executorFor,
   });
