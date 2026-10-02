@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Soul revisions and self-proposals (#285, ADR-0275 decisions 4, 7 and 8).
+  `agent-bot soul revision` records append-only, content-addressed package
+  revisions. A user edit is a new revision, and undo is another one. A soul
+  proposes a revision; the package's `policy.json` decides `ask` (the
+  default, needing `approve` or `reject`), `auto` (only when every changed
+  path matches its globs), or `never`. Changes to `policy.json`,
+  `soul.json`, or tool/MCP configuration always need the user. Promoting a
+  file from Agent Space is an explicit revision that records its source.
+  `docs/soul-revisions.md` documents the format and commands.
+
 - The daemon handles principal `launch` frames from agent-comms (#295). It
   starts the named harness for an existing soul and reports `launch-result`
   by requestId, using a private journal so that no request is replayed after a
