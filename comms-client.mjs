@@ -517,6 +517,23 @@ export async function reportCommsWake(
   }, { paths });
 }
 
+// Launch results use a fresh connection authenticated with the daemon pair.
+export async function reportCommsLaunch(
+  { requestId, status, agentId = null, detail },
+  { credential = null, env = process.env, home = homedir(), paths = commsPaths({ env }),
+    clientFactory = (options) => new CommsClient(options) } = {},
+) {
+  if (typeof requestId !== 'string' || !requestId
+    || !['launched', 'failed'].includes(status)
+    || (status === 'launched' && (typeof agentId !== 'string' || !agentId))
+    || (status === 'failed' && agentId !== null)
+    || (detail !== undefined && typeof detail !== 'string')) fail('usage', 'invalid launch result');
+  const pair = resolvePairCredential(credential, { env, home });
+  const client = clientFactory({ socketPath: paths.socket, brokerUid: pair.brokerUid, mode: pair.mode ?? 'group' });
+  return client.request({ op: 'launch-result', auth: { daemon: pair.account, secret: pair.secret },
+    requestId, status, agentId, ...(detail === undefined ? {} : { detail }) }, { paths });
+}
+
 function checkWakeEvent(event) {
   if (!event || typeof event !== 'object'
     || typeof event.agentId !== 'string' || event.agentId === ''
@@ -539,6 +556,7 @@ export function createCommsSupervisor({
   paths = commsPaths({ env }),
   clientFactory = (options) => new CommsClient(options),
   onWake = null,
+  onLaunch = null,
   sleepImpl = sleepMs,
   now = () => new Date(),
 } = {}) {
@@ -554,6 +572,9 @@ export function createCommsSupervisor({
   const stopController = new AbortController();
 
   const reportFor = (pair) => (fields) => reportCommsWake(fields, { credential: pair, env, home, paths, clientFactory });
+
+  const launchPorts = (pair) => ({ account: pair.account,
+    report: (fields) => reportCommsLaunch(fields, { credential: pair, env, home, paths, clientFactory }) });
 
   const handleWake = onWake ?? (async (wake, { report }) => {
     await report({ agentId: wake.agentId, messageIds: wake.messageIds, outcome: 'waiting', detail: 'cold wake is not enabled' });
@@ -574,6 +595,14 @@ export function createCommsSupervisor({
           state.connected = true;
           state.lastError = null;
           backoffMs = COMMS_WATCH_MIN_BACKOFF_MS;
+          Promise.resolve().then(() => onLaunch?.recover?.(launchPorts(pair))).catch(noteError);
+          return;
+        }
+        if (event?.event === 'launch') {
+          Promise.resolve().then(() => onLaunch
+            ? onLaunch(event, launchPorts(pair))
+            : launchPorts(pair).report({ requestId: event.requestId, status: 'failed', agentId: null,
+              detail: 'daemon launch handler is unavailable' })).catch(noteError);
           return;
         }
         if (event?.event !== 'wake') return;

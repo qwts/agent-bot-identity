@@ -74,6 +74,7 @@ import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms
 import { attachWakeEndpoint } from './agent-wake.mjs';
 import { readColdWakeSettings } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
+import { createLaunchHandler } from './daemon-launch.mjs';
 import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
 
 const SCHEMA_VERSION = 1;
@@ -1073,7 +1074,16 @@ export async function runDaemon({
   // cold turn, else `waiting` (ADR-0008 decisions 7 to 9).
   let server;
   const onWake = (wake, ports) => server.wakePlane(wake, ports);
-  const comms = createCommsSupervisor({ env, home, now, onWake });
+  const onLaunch = createLaunchHandler({
+    file: path.join(path.dirname(daemonStateFile({ env, home })), 'launch-requests.json'),
+    identities,
+    // A package carries no App authority, and cold start needs one (#290).
+    // Refuse before minting so a failed launch leaves no identity behind (#297).
+    spawnPackage: async () => { throw new Error('launching from a package needs App-less cold start (#297)'); },
+    lookupBinding: (agentId) => server.bindings.findAgent(agentId),
+    executorFor,
+  });
+  const comms = createCommsSupervisor({ env, home, now, onWake, onLaunch });
   server = createDaemonServer({ env, home, config, now, comms, executor });
   server.wakePlane = createWakePlane({
     pool: server.warmPool,
