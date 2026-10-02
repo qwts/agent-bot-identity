@@ -29,10 +29,10 @@ on anything else.
 
 ## Decision
 
-1. **`soul.json` may declare runtimes with version ranges and a default,**
-   for example `"runtimes": { "node": "24.x", "python": "3.12" }`.
-   `runtimes` is optional; absent means today's behavior (host Node, no
-   Python). It rides as a preserved extension field: format-1 validation
+1. **`soul.json` may declare pinned runtimes and harnesses** in the shape
+   set out under [Manifest shape](#manifest-shape). Both fields are
+   optional; absent means today's behavior (host Node, no Python, harnesses
+   from ADR-0276 or PATH). It rides as a preserved extension field: format-1 validation
    already retains unknown manifest fields and covers them in the package
    revision, so adding it changes no validation code — a package that
    declares runtimes is a new revision like any other edit. Unknown runtime
@@ -82,6 +82,82 @@ on anything else.
    package approval in ADR-0275. As in ADR-0276, a signed catalog stays
    follow-up work; until then, review of the pin *is* the review.
 
+## Manifest shape
+
+This section is normative. A provisioner that reads a package resolves it
+exactly this way, so two provisioners agree on the same package.
+
+```json
+{
+  "runtimes": {
+    "node": {
+      "version": "24.11.1",
+      "sources": {
+        "darwin-arm64": { "url": "https://nodejs.org/dist/v24.11.1/node-v24.11.1-darwin-arm64.tar.gz", "sha256": "<64 hex>" },
+        "darwin-x64":   { "url": "https://nodejs.org/dist/v24.11.1/node-v24.11.1-darwin-x64.tar.gz",   "sha256": "<64 hex>" }
+      }
+    },
+    "python": { "version": "3.12.7", "via": "uv", "lock": "uv.lock" }
+  },
+  "harnesses": {
+    "opencode": {
+      "kind": "binary",
+      "version": "1.18.34",
+      "bin": "opencode",
+      "sources": {
+        "darwin-arm64": { "url": "https://github.com/…/opencode-darwin-arm64.zip", "sha256": "<64 hex>" }
+      }
+    },
+    "goose": { "kind": "uv-tool", "package": "goose-ai", "version": "1.9.0" }
+  }
+}
+```
+
+**Validation.** Checked when the daemon provisions a soul (decision 1),
+and failing as a decision-5 launch error:
+
+- `runtimes` keys are `node` or `python`; any other key is an error.
+- `version` is an exact version, never a range: what the daemon fetches is
+  what was reviewed (decision 8).
+- `node` requires `sources`. `python` requires `"via": "uv"`, and may name a
+  `lock` file (relative, inside the package) for the soul's Python
+  packages.
+- `harnesses` keys are harness keys from the registry vocabulary
+  (`config.mjs`). `kind` is `binary` or `uv-tool`.
+  - `binary` requires `version`, `bin` (the executable's name inside the
+    asset) and `sources`.
+  - `uv-tool` requires `package` and `version`.
+  - An npm harness stays in `package.json` (ADR-0276) and may not appear
+    here.
+- `sources` keys are platforms: `darwin-arm64`, `darwin-x64`,
+  `linux-x64`, `linux-arm64`. Each value has an `https` `url` and a
+  lowercase 64-hex `sha256`.
+- Unknown fields inside these objects are errors, so a typo never silently
+  drops a pin.
+
+**Resolution.** For each declared runtime or harness, the first match wins:
+
+1. **The per-agent override:** a path given in the launch request's
+   `overrides` (`{ "node": "/abs/path/node" }`).
+2. **The per-soul override:** the same map, set by the owner with
+   `agent-bot soul runtime <agentId> <name> <path>|--clear` and stored in
+   daemon state, outside the package.
+3. **The pinned artifact:** the `sources` entry for the host's platform,
+   fetched once into the cache under
+   `(kind, name, version, platform, sha256)` and verified before first use.
+   For `uv`, this step is uv installing the pinned version.
+4. **The host-bundled copy:** GeniusBar's Node, or a bundled uv.
+5. **PATH.**
+
+Steps 4 and 5 apply only to a runtime the soul did not declare. A
+declared runtime whose host platform has no `sources` entry, and no
+override, fails with the "unsupported platform" error. It never falls
+through to PATH.
+
+Override paths must be absolute and executable. They are used as-is,
+without a pin check (decision 4), and `doctor` reports their source as
+`override`.
+
 ## Consequences
 
 - Souls on `opencode`, `goose`, `muse`, or Python tooling work out of the
@@ -97,6 +173,6 @@ on anything else.
   explicit in decision 7.
 - Proprietary harnesses keep ADR-0276's rule: downloaded on the user's
   machine under their own license, never redistributed inside a host.
-- This record decides the schema shape, cache and GC, uv bundling, trust,
-  and override surface. Wire formats, provisioner code, and `doctor`
-  output follow after owner approval.
+- This record decides the manifest shape and its resolution, cache and GC,
+  uv bundling, trust, and the override surface. Provisioner code and
+  `doctor` output follow after owner approval.
