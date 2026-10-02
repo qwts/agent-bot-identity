@@ -28,6 +28,11 @@ const commitMsg = path.join(hooks, 'commit-msg');
 const postCommit = path.join(hooks, 'post-commit');
 const preCommit = path.join(hooks, 'pre-commit');
 
+// The trailer and recorder belong to the github-identity add-on; fixtures
+// turn it on explicitly instead of inheriting the caller's config.
+const gateOnConfig = path.join(root, 'gate-on-config.json');
+writeFileSync(gateOnConfig, JSON.stringify({ features: { 'github-identity': true } }));
+
 function fixture(name) {
   const repo = path.join(root, name);
   const stateDir = path.join(root, `${name}-state`);
@@ -52,6 +57,7 @@ function fixture(name) {
   const env = {
     ...process.env,
     AGENT_BOT_STATE_HOME: stateDir,
+    AGENT_BOT_CONFIG: gateOnConfig,
     CODEX_THREAD_ID: `${name}-thread`,
   };
   return { repo, stateDir, identity, git, env };
@@ -91,9 +97,23 @@ test('both add-on gates off leaves the commit trailer hook inert', () => {
   writeFileSync(path.join(home, '.config', 'agent-bot', 'config.json'), JSON.stringify({ features: { 'github-identity': false, 'persona-accounts': false } }));
   const message = path.join(repo, 'message.txt');
   writeFileSync(message, 'plain commit\n');
-  execFileSync(prepare, [message, 'message'], { cwd: repo, env: { ...env, HOME: home } });
+  const { AGENT_BOT_CONFIG: _gateOn, ...gateOffEnv } = env;
+  execFileSync(prepare, [message, 'message'], { cwd: repo, env: { ...gateOffEnv, HOME: home } });
   assert.doesNotMatch(readFileSync(message, 'utf8'), /^Agent-Identity:/m);
   assert.equal(git('config', '--get', 'commit.gpgsign'), 'false');
+});
+
+test('an unreadable gate config fails the trailer hook instead of dropping provenance', () => {
+  const { repo, env } = fixture('prepare-gate-broken');
+  const broken = path.join(root, 'broken-config.json');
+  writeFileSync(broken, '{ not json');
+  const message = path.join(repo, 'message.txt');
+  writeFileSync(message, 'plain commit\n');
+  assert.throws(
+    () => execFileSync(prepare, [message, 'message'], { cwd: repo, env: { ...env, AGENT_BOT_CONFIG: broken }, stdio: 'pipe' }),
+    (error) => error.status === 1 && /cannot read the github-identity gate/.test(String(error.stderr)),
+  );
+  assert.doesNotMatch(readFileSync(message, 'utf8'), /^Agent-Identity:/m);
 });
 
 test('post-commit records the commit artifact in the private registry', () => {

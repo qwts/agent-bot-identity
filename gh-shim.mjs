@@ -1,5 +1,8 @@
 export const GH_SHIM_MARKER = '# gh shim — agent bot identity. Managed by install-gh-shim.mjs';
 
+// POSIX single-quote quoting: nothing inside is expanded by the shell.
+const shQuote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+
 export function buildGhShim(tokenTool = null, { psPath = '/bin/ps', lsofPath = '/usr/sbin/lsof', configModule = null } = {}) {
   const tokenSetup = tokenTool
     ? `TOKEN_TOOL="${tokenTool}"
@@ -82,9 +85,16 @@ IFS=$OLDIFS
   REAL="$CAND"; break
 done
 [ -z "$REAL" ] && { echo "agent-bot gh shim: real gh not found on PATH" >&2; exit 127; }
-CONFIG_MODULE=${JSON.stringify(configModule ?? '')}
-if [ -n "$CONFIG_MODULE" ] && ! node --input-type=module -e 'import(process.argv[1]).then(({isGateEnabled}) => process.exit(isGateEnabled("github-identity") ? 0 : 1)).catch(() => process.exit(1))' "$CONFIG_MODULE"; then
-  exec "$REAL" "$@"
+CONFIG_MODULE=${shQuote(configModule ?? '')}
+if [ -n "$CONFIG_MODULE" ]; then
+  # Exit 0: gate on; 3: gate off; anything else: config unreadable or invalid.
+  GATE=0
+  node --input-type=module -e 'import(process.argv[1]).then(({isGateEnabled}) => process.exit(isGateEnabled("github-identity") ? 0 : 3)).catch((e) => { console.error("agent-bot: cannot read the github-identity gate: " + e.message); process.exit(1); })' "$CONFIG_MODULE" || GATE=$?
+  case "$GATE" in
+    0) ;;
+    3) exec "$REAL" "$@" ;;
+    *) echo "agent-bot gh shim: refusing GitHub operations until the github-identity gate can be read" >&2; exit 1 ;;
+  esac
 fi
 
 # Experimental Codex desktop compatibility. Native GitHub operations are
