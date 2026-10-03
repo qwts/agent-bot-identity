@@ -48,6 +48,9 @@ function run(executable, args) {
 }
 
 export function dispatchAgentBot(parsed) {
+  if (parsed.command === 'soul' && ['confinement', 'confinement-report'].includes(parsed.args[0])) {
+    return run(process.execPath, [join(ROOT, 'confinement.mjs'), ...parsed.args]);
+  }
   if (parsed.command === 'hook') {
     if (!HOOK_PATTERN.test(parsed.hook)) throw new Error(`invalid hook name: ${parsed.hook}`);
     const hook = join(ROOT, 'hooks', parsed.hook);
@@ -68,6 +71,6 @@ export function dispatchAgentBot(parsed) {
   const module = MODULES.get(parsed.command);
   if (!module) throw new Error(`unsupported command: ${parsed.command}`);
   const args = parsed.command === 'soul' && parsed.args[0] === 'cold-wake' ? parsed.args.slice(1) : parsed.args;
-  if (parsed.command === 'soul' && parsed.args[0] !== 'cold-wake') throw new Error('usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-] | soul pack validate PATH | soul revision <command> | soul dir AGENT_ID');
+  if (parsed.command === 'soul' && parsed.args[0] !== 'cold-wake') throw new Error('usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-] | soul pack validate PATH | soul revision <command> | soul dir AGENT_ID | soul confinement AGENT_ID off|warn|deny | soul confinement-report AGENT_ID [--json]');
   return run(process.execPath, [join(ROOT, module), ...args]);
 }

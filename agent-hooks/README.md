@@ -25,6 +25,13 @@ rarely — not *hooks*, which change constantly.
 Files run in lexicographic order, so `10-` runs before `50-`. A file that is
 not executable never runs.
 
+The runner also includes a soul write confinement check independent of these
+executables, so a project's hook directory does not replace it. It defaults
+to warn: outside file tool writes are logged and allowed, and check errors
+allow. Explicit owner-selected deny fails closed; off skips the check.
+Existing executable verdicts keep their usual fail modes. See
+[confinement](../docs/confinement.md) for allowed roots, reports and coverage.
+
 ## Events
 
 | Event | Fires | Blocking |

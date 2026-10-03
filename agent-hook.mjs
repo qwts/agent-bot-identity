@@ -31,6 +31,7 @@ import {
 } from './hook-dialects.mjs';
 
 import { readBinding } from './agent-binding.mjs';
+import { confinementCheck } from './confinement.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 
@@ -255,7 +256,10 @@ export function runHooks({ dialectKey, event, payload, dir, env = process.env })
   // clock is meant to guarantee. Each hook gets what is left of the deadline.
   const budget = budgetMs(dialectKey, event, requested);
   const deadline = now() + budget;
-  const results = [];
+  const results = [{ name: 'confinement', ...confinementCheck(envelope, {
+    env, binding, cwd: envelope.cwd ?? process.cwd(),
+    boundCheckout: binding ? repoRoot(envelope.cwd ?? process.cwd()) : null,
+  }) }];
 
   for (const file of discoverHooks(dir, event)) {
     const name = file.slice(dir.length + 1);
