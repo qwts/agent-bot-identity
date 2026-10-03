@@ -73,7 +73,7 @@ export function withReachRules(policy) {
 // fails the turn.
 export function acpExecutorFor({
   identities, policy, baseEnv, onHarnessSession = null, createExecutor = createAcpExecutor,
-  commsFor = () => true, reachEnv = {},
+  commsFor = () => true, reachEnv = {}, harnessDirsFor = () => [],
 }) {
   const turnPolicy = withReachRules(policy);
   return ({ agentId, harness, cwd, env }) => {
@@ -98,6 +98,8 @@ export function acpExecutorFor({
       identity: { app, agentId },
       policy: turnPolicy,
       cwd,
+      // Where the soul's own harness install lives when its checkout has none (#417).
+      harnessDirs: (() => { try { return harnessDirsFor(agentId) ?? []; } catch { return []; } })(),
       mcpServers,
       env: turnEnv,
     });

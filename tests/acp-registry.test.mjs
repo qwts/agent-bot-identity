@@ -19,6 +19,24 @@ test('a soul home that installed the row binary runs it with this Node (ADR-0276
   assert.throws(() => validateSpawnRow({ ...row, soulBin: '../x' }), /soulBin/);
 });
 
+test('a checkout without the row binary falls back to the soul\'s own harness directory (#417)', (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'soul-bin-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const row = ACP_SPAWN_REGISTRY.claude;
+  const checkout = path.join(root, 'repo');
+  const harnesses = path.join(root, 'harnesses');
+  mkdirSync(checkout);
+  mkdirSync(path.join(harnesses, 'node_modules', '.bin'), { recursive: true });
+  mkdirSync(path.join(harnesses, 'node_modules', 'adapter'));
+  writeFileSync(path.join(harnesses, 'node_modules', 'adapter', 'cli.js'), '');
+  symlinkSync('../adapter/cli.js', path.join(harnesses, 'node_modules', '.bin', row.soulBin));
+  assert.deepEqual(spawnCommand(row, checkout, { node: '/app/node' }), { command: row.command, args: [...row.args] });
+  assert.deepEqual(spawnCommand(row, checkout, { node: '/app/node', dirs: [harnesses] }),
+    { command: '/app/node', args: [realpathSync(path.join(harnesses, 'node_modules', 'adapter', 'cli.js'))] });
+  // A row with no soul binary keeps its registry command.
+  assert.deepEqual(spawnCommand(ACP_SPAWN_REGISTRY.opencode, checkout, { dirs: [harnesses] }), { command: 'opencode', args: ['acp'] });
+});
+
 test('a launch with no harness takes the soul preference, else an enabled harness on PATH (ADR-0276)', () => {
   assert.equal(defaultHarnessFor(['codex', 'claude'], { available: () => false }), 'codex', 'codex is enabled (#384)');
   assert.equal(defaultHarnessFor(['codex', 'claude'], {

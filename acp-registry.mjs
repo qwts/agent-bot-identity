@@ -198,12 +198,17 @@ export function validateSpawnRow(row) {
 /**
  * The command for a row in a working directory (ADR-0276): a soul home
  * that installed the row's npm binary runs it with this Node, so neither
- * npx nor a global install is needed; otherwise the registry command.
+ * npx nor a global install is needed. A joined soul's checkout installs
+ * nothing, so its own harness directory is tried next (`dirs`, #417);
+ * otherwise the registry command.
  */
-export function spawnCommand(row, cwd, { node = process.execPath } = {}) {
-  if (row.soulBin && cwd) {
-    const bin = join(cwd, 'node_modules', '.bin', row.soulBin);
-    if (existsSync(bin)) return { command: node, args: [realpathSync(bin)] };
+export function spawnCommand(row, cwd, { node = process.execPath, dirs = [] } = {}) {
+  if (row.soulBin) {
+    for (const dir of [cwd, ...dirs]) {
+      if (typeof dir !== 'string' || !dir) continue;
+      const bin = join(dir, 'node_modules', '.bin', row.soulBin);
+      if (existsSync(bin)) return { command: node, args: [realpathSync(bin)] };
+    }
   }
   return { command: row.command, args: [...row.args] };
 }

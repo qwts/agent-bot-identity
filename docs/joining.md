@@ -53,7 +53,12 @@ are delivered to its inbox but nothing wakes it.
    - `acp` runs an ACP turn through the soul's daemon binding. `join` makes
      that binding itself by spending the checkout's bind token with the
      daemon (#417); with no daemon running, `--wake acp` fails instead of
-     reporting a wake that cannot run.
+     reporting a wake that cannot run. The ACP adapter the turn runs (for
+     Claude, `claude-code-acp`) is installed from the pinned lockfile of the
+     soul's own package, or the bundled Starter, into the soul's private
+     `.soul-state/harnesses`. The checkout is never touched, and a GeniusBar
+     daemon needs no `npx` on its PATH. `--json` reports it as `adapter`.
+     A harness with no ACP lane is refused before the owner is asked.
    - The wake runs the soul's stored harness, so an existing soul must be
      joined with its own `--harness` to set its wake.
    - A webhook needs a URL and key: use `agent-bot soul cold-wake ID webhook`.

@@ -30,7 +30,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
+import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN, resolveSpawn } from './acp-registry.mjs';
 import { mintBindToken, readBinding } from './agent-binding.mjs';
 import { mintAgentIdentity, readAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
 import { listSouls, populationFile, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
@@ -38,7 +38,7 @@ import { describeSetting, ownerGate, readColdWakeSettings, setColdWake, wakeSett
 import { initAgentSpace } from './agent-space.mjs';
 import { daemonPreference, loadConfig } from './config.mjs';
 import { AGENT_ID_KEYS } from './resolve-agent.mjs';
-import { ensureSoulDirectory } from './soul-home.mjs';
+import { ensureSoulDirectory, installSoulHarnesses, soulHarnessesPath } from './soul-home.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
 import { linkWorktree, soulWorktreePath } from './soul-worktrees.mjs';
 import { resumeHarnessSupported } from './wake-resume.mjs';
@@ -58,6 +58,40 @@ export function bundledStarter({ env = process.env, root = ROOT } = {}) {
   if (env.AGENT_BOT_STARTER_TEMPLATE) return path.resolve(env.AGENT_BOT_STARTER_TEMPLATE);
   const candidate = path.resolve(root, '..', '..', 'souls', 'starter.soul');
   return existsSync(path.join(candidate, 'soul.json')) ? candidate : null;
+}
+
+// The npm package a registry row runs through `npx -p PACKAGE` (version dropped).
+function rowPackage(row) {
+  const spec = row.args?.[row.args.indexOf('-p') + 1];
+  if (row.args?.indexOf('-p') < 0 || typeof spec !== 'string') return null;
+  const at = spec.lastIndexOf('@');
+  return at > 0 ? spec.slice(0, at) : spec;
+}
+
+/**
+ * An ACP wake runs the harness's adapter. A soul home installs it; a joined
+ * checkout is someone's repository and does not, and a launchd daemon has
+ * no npx on PATH. So the adapter goes in the soul's own harness directory
+ * (#417), pinned by the soul's package if it declares it, else by the
+ * bundled Starter. Returns how the wake will find its adapter.
+ */
+async function ensureAcpHarness(agentId, harness, worktree, { env, options, installHarness }) {
+  const row = ACP_SPAWN_REGISTRY[harness];
+  if (!row?.soulBin) return 'not needed';
+  const has = (dir) => existsSync(path.join(dir, 'node_modules', '.bin', row.soulBin));
+  if (has(worktree)) return 'in checkout';
+  const own = soulHarnessesPath(agentId, options);
+  if (has(own)) return 'installed';
+  const wanted = rowPackage(row);
+  const declares = (dir) => {
+    try { return Boolean(dir && wanted && JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')).dependencies?.[wanted]); }
+    catch { return false; }
+  };
+  const source = [soulDirectory(agentId, options), bundledStarter({ env })].find(declares);
+  if (!source) return 'registry command';
+  try { await installHarness(agentId, source, options); }
+  catch (error) { throw new Error(`--wake acp could not install the ${harness} adapter: ${error.message}`); }
+  return has(own) ? 'installed' : 'registry command';
 }
 
 function gitIn(cwd, args) {
@@ -117,6 +151,7 @@ export function joinComms({ agentId, worktree, name, harness }, { env = process.
 export async function joinSoul({
   name, harness, template, soul = null, cwd = process.cwd(), wake = null, principal = null,
   env = process.env, home = homedir(), config, daemon = null, comms = joinComms, spawn = spawnSoulTemplate, gate = ownerGate,
+  installHarness = installSoulHarnesses,
 } = {}) {
   if (typeof name !== 'string' || !name.trim()) throw new Error('--name must be a nonempty string');
   if (typeof harness !== 'string' || !HARNESS_KEY_PATTERN.test(harness)) throw new Error('--harness must be a harness key');
@@ -143,6 +178,10 @@ export async function joinSoul({
   const existing = agentId ? readAgentIdentity(agentId, { stateDir }) : null;
   if (wake !== null && existing?.harness && existing.harness !== harness) {
     throw new Error(`${agentId} runs ${existing.harness}; join it with --harness ${existing.harness} to set its wake`);
+  }
+  if (wake === 'acp') {
+    try { resolveSpawn(ACP_SPAWN_REGISTRY, harness); }
+    catch { throw new Error(`${harness} has no ACP lane; use --wake resume:… or agent-bot soul cold-wake ... webhook`); }
   }
   if (wake?.startsWith('resume:') && !resumeHarnessSupported(harness)) throw new Error(`${harness} sessions cannot be resumed; use --wake acp or agent-bot soul cold-wake ... webhook`);
   // 6. The owner's consent comes before any change, so a refusal changes
@@ -212,6 +251,9 @@ export async function joinSoul({
     if (bound?.agentId !== agentId) throw new Error('the daemon bound this checkout to a different soul; wake was not turned on');
     bind = 'bound';
   }
+  const adapter = wake === 'acp'
+    ? await ensureAcpHarness(agentId, readAgentIdentity(agentId, { stateDir }).harness ?? harness, worktree, { env, options: { ...options, file }, installHarness })
+    : null;
 
   // 6. Wake, turned on before agent-comms registers the soul: a message
   //    delivered during registration must find the wake already on. A
@@ -233,7 +275,7 @@ export async function joinSoul({
   }
   const state = describeSetting(readColdWakeSettings({ env, home })[agentId]);
   return { agentId, soulDir: soulDirectory(agentId, { ...options, file }), worktree, address, created, bind,
-    wake: state, ...(authorization ? { authorization: authorization.method } : {}) };
+    wake: state, ...(adapter ? { adapter } : {}), ...(authorization ? { authorization: authorization.method } : {}) };
 }
 
 export function parseJoinArgs(argv) {

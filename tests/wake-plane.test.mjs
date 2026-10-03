@@ -173,3 +173,12 @@ test('a soul launched with comms off gets the reach server without its teammate 
     commsFor: () => { throw new Error('no population record'); } })({ agentId: ID, harness: 'claude', cwd: '/soul', env: {} });
   assert.equal(options.mcpServers({ invocation: {} })[0].env.some((pair) => pair.name === 'AGENT_BOT_REACH_COMMS'), false);
 });
+
+test('acpExecutorFor hands the engine the soul\'s own harness directory, and a failing lookup gives none (#417)', () => {
+  const agentId = 'agent_11111111-1111-4111-8111-111111111111';
+  const seen = [];
+  const createExecutor = (options) => { seen.push(options.harnessDirs); return async () => ({ stopReason: 'end_turn' }); };
+  acpExecutorFor({ identities: () => ({}), policy: {}, baseEnv: {}, createExecutor, harnessDirsFor: (id) => [`/souls/${id}/.soul-state/harnesses`] })({ agentId, harness: 'claude', cwd: '/repo', env: {} });
+  acpExecutorFor({ identities: () => ({}), policy: {}, baseEnv: {}, createExecutor, harnessDirsFor: () => { throw new Error('no soul folder'); } })({ agentId, harness: 'claude', cwd: '/repo', env: {} });
+  assert.deepEqual(seen, [[`/souls/${agentId}/.soul-state/harnesses`], []]);
+});

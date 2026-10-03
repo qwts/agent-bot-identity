@@ -81,7 +81,7 @@ import { readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
 import { createTeamStarter, defaultTeamTemplate, harnessLaunchable, teamLimits } from './team-start.mjs';
-import { createSoulHomes, installHarnesses, soulBindingForLaunch } from './soul-home.mjs';
+import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHarnessesPath } from './soul-home.mjs';
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { validateSoulPackage, writeSoulComms } from './soul-package.mjs';
@@ -1215,6 +1215,7 @@ export async function runDaemon({
       // launchd PATH does not reach.
       commsFor: (agentId) => showSoul(agentId, { file: populationFile({ env, home }) }).comms,
       reachEnv: { PATH: resumePath(soulEnvironment(env), home) },
+      harnessDirsFor: (agentId) => [soulHarnessesPath(agentId, { env, home, config, file: populationFile({ env, home }) })],
     })
     : null;
   const executor = executorFor

@@ -297,6 +297,7 @@ test('join --wake acp binds the checkout, so a new message wakes a joined Claude
   const joined = await joinSoul({ name: 'r8joiner', harness: 'claude', template: null, cwd: a.outside, env: a.env, home: a.home, config: {},
     wake: 'acp', daemon: daemon.client, gate: async () => ({ method: 'consent' }) });
   assert.equal(joined.bind, 'bound');
+  assert.equal(joined.adapter, 'registry command', 'no package pins the adapter here, so the registry command runs it');
   const binding = daemon.server.bindings.findAgent(joined.agentId);
   assert.equal(binding?.worktree, joined.worktree);
   assert.ok(binding?.file, 'the daemon binding has a file for the ACP turn');
@@ -343,4 +344,41 @@ test('join --wake turns the wake on before agent-comms registers the soul, and p
   assert.match(fresh.message, /broker down/);
   assert.ok(!Object.values(settings()).some((value, index) => Object.keys(settings())[index] !== joined.agentId && value !== false && value !== undefined),
     'a soul whose registration failed is left with its wake off');
+});
+
+test('join --wake acp installs the pinned adapter in the soul\'s own harness directory, never in the checkout (#417)', async (t) => {
+  const a = account(t);
+  const daemon = await startDaemon(t, a);
+  // The Starter template pins the Claude adapter, as GeniusBar's bundled one does.
+  const template = starter(a.root);
+  writeFileSync(path.join(template, 'package.json'), JSON.stringify({ name: 'starter-soul', private: true, dependencies: { '@zed-industries/claude-code-acp': '0.16.2' } }));
+  writeFileSync(path.join(template, 'package-lock.json'), JSON.stringify({ name: 'starter-soul', lockfileVersion: 3, packages: {} }));
+  const repo = path.join(a.root, 'someone-elses-repo');
+  mkdirSync(repo);
+  git(repo, 'init', '-q');
+  const installs = [];
+  const joined = await joinSoul({ name: 'claude-joiner', harness: 'claude', template: null, cwd: repo, env: { ...a.env, AGENT_BOT_STARTER_TEMPLATE: template },
+    home: a.home, config: {}, wake: 'acp', daemon: daemon.client, gate: async () => ({ method: 'consent' }),
+    installHarness: async (agentId, source, options) => {
+      installs.push(source);
+      const { installSoulHarnesses } = await import('../soul-home.mjs');
+      return installSoulHarnesses(agentId, source, { ...options, install: async (dir) => {
+        mkdirSync(path.join(dir, 'node_modules', '.bin'), { recursive: true });
+        writeFileSync(path.join(dir, 'node_modules', '.bin', 'claude-code-acp'), '');
+      } });
+    } });
+  assert.equal(joined.adapter, 'installed');
+  assert.deepEqual(installs, [template]);
+  const harnesses = path.join(joined.soulDir, '.soul-state', 'harnesses');
+  assert.ok(existsSync(path.join(harnesses, 'node_modules', '.bin', 'claude-code-acp')));
+  assert.equal(existsSync(path.join(repo, 'node_modules')), false, 'the checkout is left alone');
+  assert.equal(existsSync(path.join(repo, 'package.json')), false);
+
+  // Joining again finds the install and does not repeat it.
+  const again = await joinSoul({ name: 'claude-joiner', harness: 'claude', template: null, cwd: repo, env: { ...a.env, AGENT_BOT_STARTER_TEMPLATE: template },
+    home: a.home, config: {}, wake: 'acp', daemon: daemon.client, gate: async () => ({ method: 'consent' }), installHarness: async () => assert.fail('not reinstalled') });
+  assert.equal(again.adapter, 'installed');
+  // A harness with no ACP lane is refused before the owner is asked.
+  await assert.rejects(joinSoul({ name: 'g', harness: 'grokbot', template: null, cwd: a.outside, env: a.env, home: a.home, config: {}, wake: 'acp',
+    gate: async () => assert.fail('not asked') }), /grokbot has no ACP lane/);
 });
