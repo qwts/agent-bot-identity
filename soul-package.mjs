@@ -5,30 +5,12 @@ import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-// Shared with soul-builder: only exact build output is ignored; the marker is
-// informational and cannot authenticate generated content. Prefixes are root-relative.
-export const GENERATED_HARNESS_PATHS = Object.freeze([
-  '.claude/', '.codex/', '.cursor/', '.opencode/', '.devin/', '.gemini/',
-  '.github/copilot-instructions.md', 'CLAUDE.md', 'GEMINI.md',
-]);
-export const GENERATED_HARNESS_MARKER = '<!-- agent-bot soul-builder: generated -->';
-// Format 2's fixed contract. Generated paths are eligible only for exact-byte
-// matching against expectedGeneratedFiles, never for marker-based ignoring.
-export const PACKAGE_IGNORE_LIST = Object.freeze({
-  directories: Object.freeze(['worktrees/', '.soul-state/']),
-  generatedPaths: GENERATED_HARNESS_PATHS,
-  generatedMarker: GENERATED_HARNESS_MARKER,
-});
+import { buildHarnessFiles } from './soul-builder.mjs';
+import { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, isGeneratedPath } from './soul-harness-contract.mjs';
+export { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST };
 
 export function expectedGeneratedFiles(packageEntries) {
-  // #342 will derive soul-builder output from package content (AGENTS.md,
-  // skills, policy). Until then, nothing at generated paths is ignored.
-  return new Map();
-}
-
-function isGeneratedPath(path) {
-  return GENERATED_HARNESS_PATHS.some((candidate) => candidate.endsWith('/')
-    ? path.startsWith(candidate) : path === candidate);
+  return buildHarnessFiles(packageEntries);
 }
 
 const REVISION = /^sha256:[a-f0-9]{64}$(?![\s\S])/;

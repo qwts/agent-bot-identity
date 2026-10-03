@@ -11,6 +11,8 @@ import { promisify } from 'node:util';
 import { validateAgentId } from './agent-identity.mjs';
 import { populationFile, registerSoulDir, showSoul, soulDirectory } from './agent-population.mjs';
 
+import { buildSoulDirectory } from './soul-build.mjs';
+
 const run = promisify(execFile);
 export const INSTALL_TIMEOUT_MS = 10 * 60_000;
 
@@ -109,6 +111,7 @@ export function createSoulHomes({ stateDir, bindings, install = installHarnesses
           cpSync(path.join(packagePath, name), path.join(worktree, name), { recursive: true, verbatimSymlinks: true, force: false });
         }
       }
+      if (existsSync(path.join(worktree, 'AGENTS.md'))) buildSoulDirectory(worktree);
       await install(worktree);
       execFileSync('git', ['init', '-q'], { cwd: worktree, env: { PATH: process.env.PATH }, stdio: 'ignore' });
       appendFileSync(path.join(worktree, '.git', 'info', 'exclude'), 'node_modules/\n');
