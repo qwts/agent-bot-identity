@@ -16,6 +16,7 @@ import { inspectAgentSpace, resolveSpacesHome } from './agent-space.mjs';
 import { listSouls, populationFile } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
 import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness } from './config.mjs';
+import { preGateConfigStatus } from './config-migration.mjs';
 import { inspectAppCredentials } from './credential-reconciler.mjs';
 import { configuredAccountIdentity, accountName, detectHarness, HARNESSES } from './detect-harness.mjs';
 import { inspectClaudeWorktreeAdapter } from './sync-hooks.mjs';
@@ -103,6 +104,27 @@ export function configuredAppSlugs(config, explicit = []) {
     if (slug) slugs.add(slug);
   }
   return [...slugs].sort();
+}
+
+function featureGatesCheck({ home, env, config }) {
+  let preGate = { needed: false };
+  try { preGate = preGateConfigStatus({ home, env }); } catch { /* the gate report still stands */ }
+  if (preGate.needed) {
+    return readinessCheck({
+      id: 'config.feature_gates',
+      status: 'warning',
+      code: 'feature-gates-pre-gate-config',
+      message: 'config predates feature gates but its souls use GitHub Apps; github-identity and persona-accounts are off until the daemon next starts (#361)',
+      action: 'run: agent-bot daemon install (or restart the daemon) to keep both add-ons on',
+      evidence: { gates: gateStatus(config) },
+    });
+  }
+  return readinessCheck({
+    id: 'config.feature_gates',
+    status: 'ready',
+    message: 'feature gates resolved from user config or default off',
+    evidence: { gates: gateStatus(config) },
+  });
 }
 
 function organizationProfileCheck(config) {
@@ -1902,12 +1924,7 @@ export async function collectReadiness({
       if (Object.keys(config).length > 0) {
         machineChecks.push(organizationProfileCheck(config));
       }
-      machineChecks.push(readinessCheck({
-        id: 'config.feature_gates',
-        status: 'ready',
-        message: 'feature gates resolved from user config or default off',
-        evidence: { gates: gateStatus(config) },
-      }));
+      machineChecks.push(featureGatesCheck({ home, env, config }));
     } catch (error) {
       configValid = false;
       machineChecks.push(error?.code === 'profile-app-retired'

@@ -968,7 +968,9 @@ use the `apps` map with the exact slugs instead. `doctor` prints the resolved
   `off`.
 - `features.github-identity` and `features.persona-accounts` — optional add-on
   gates, both off unless explicitly set to `true`. qwts machines keep their
-  current behavior by setting both to `true` in this same config.
+  current behavior by setting both to `true` in this same config. A config
+  from before the gates (no `features` object) whose souls already carry a
+  GitHub App gets both set to `true` once when the daemon starts (#361).
 
 Settings precedence is environment override, then user setting, then default.
 `AGENT_BOT_SPACES_HOME` overrides `settings.spacesRoot`; without either, the
