@@ -1,7 +1,16 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
 import { createColdWaker } from '../cold-wake.mjs';
+
+// Relayed turns journal their thread (#392) under the identity state home.
+const stateHome = mkdtempSync(path.join(tmpdir(), 'cold-wake-state-'));
+process.env.AGENT_BOT_STATE_HOME = stateHome;
+after(() => rmSync(stateHome, { recursive: true, force: true }));
 
 const id = 'agent_12345678-1234-4123-8123-123456789abc';
 const binding = { worktree: '/work/tree', file: '/work/tree/.git/agent-bindings/child.json' };
@@ -140,7 +149,7 @@ test('with a relay, each waiting message gets its own turn, and the answer goes 
   assert.match(prompts[0], /\n\nhello$/);
   assert.match(prompts[1], /from acct\/agent_peer/);
   // An empty answer sends nothing but still acks the message.
-  assert.deepEqual(sent, [{ to: 'owner', replyTo: 'm1', body: 'hi there' }]);
+  assert.deepEqual(sent, [{ to: 'owner', replyTo: 'm1', body: 'hi there', correlation: 'm1' }]);
   assert.deepEqual(acked, ['m1', 'm2']);
   assert.deepEqual(receipts, ['started', 'finished']);
 });
@@ -171,7 +180,7 @@ test('a teammate\'s message is relayed like a person\'s, and NO_REPLY ends the e
   assert.match(prompts[0], new RegExp(`from acct/${bill.agentId}, another agent`));
   assert.match(prompts[0], /exactly NO_REPLY/);
   assert.match(prompts[0], /send_message/);
-  assert.deepEqual(sent, [{ to: `acct/${bill.agentId}`, replyTo: 'm1', body: 'Reviewed: looks good, one gap in step 3.' }]);
+  assert.deepEqual(sent, [{ to: `acct/${bill.agentId}`, replyTo: 'm1', body: 'Reviewed: looks good, one gap in step 3.', correlation: 'm1' }]);
   assert.deepEqual(acked, ['m1', 'm2']);
 });
 

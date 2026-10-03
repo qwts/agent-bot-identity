@@ -19,6 +19,7 @@ import { chmodSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, w
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { validateAgentId, withLock } from './agent-identity.mjs';
+import { REACH_CORRELATION_ENV } from './daemon-mcp.mjs';
 
 export const RESUME_POLICIES = Object.freeze(['read-only', 'workspace']);
 
@@ -234,10 +235,16 @@ export function createResumeExecutor({ sessions, baseEnv = process.env, home = h
     const sessionId = sessions.get(agentId, harness, row.policyFixedAtStart ? policy : undefined);
     const plan = row.plan({ sessionId, prompt: message, policy });
     // Only the target's own binding is presented: one the daemon inherited
-    // never reaches a soul that has none.
-    const { AGENT_BOT_BINDING: _inherited, ...hostEnv } = baseEnv;
+    // never reaches a soul that has none. The same holds for the thread key.
+    const { AGENT_BOT_BINDING: _inherited, [REACH_CORRELATION_ENV]: _thread, ...hostEnv } = baseEnv;
+    // A relayed turn's thread key (#392) reaches the harness's own reach
+    // server through its environment, so send_message and start_soul's brief
+    // stay in the woken message's thread on this lane too.
+    const correlation = typeof invocation.correlation === 'string' && invocation.correlation !== ''
+      && invocation.correlation.length <= 128 ? invocation.correlation : null;
     const runEnv = {
       ...hostEnv, ...env, ...plan.env,
+      ...(correlation ? { [REACH_CORRELATION_ENV]: correlation } : {}),
       HOME: baseEnv.HOME || home,
       PATH: resumePath(baseEnv, home),
       QWTS_AGENT_ID: agentId,

@@ -42,7 +42,9 @@ export function createCommsRelay({ env = process.env, run = execFile } = {}) {
   const asSoul = agentCommsAsSoul({ env, run });
   return {
     read: async (soul) => (await asSoul(soul, ['inbox', 'read'])).messages ?? [],
-    reply: (soul, { to, replyTo, body }) => asSoul(soul, ['send', to, '--body', body, '--reply-to', replyTo]),
+    reply: (soul, { to, replyTo, body, correlation = null }) => asSoul(soul, [
+      'send', to, '--body', body, '--reply-to', replyTo, ...(correlation ? ['--correlation', correlation] : []),
+    ]),
     brief: async (soul, messageId) => {
       try { return await asSoul(soul, ['task', 'brief', messageId]); }
       catch (error) {

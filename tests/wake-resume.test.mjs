@@ -168,6 +168,24 @@ test('the first wake starts a session and every later wake resumes it', () => wi
   assert.equal(sessions.get(ID, 'opencode'), null);
 }));
 
+// A relayed resume turn's sends stay in the woken message's thread (#392):
+// the harness's reach server reads the key from the turn's environment.
+test('a resume turn carries the woken message\'s thread key, and never an inherited one', () => withState(async ({ env, root }) => {
+  const sessions = createWakeSessions({ file: wakeSessionsFile({ env }) });
+  const calls = [];
+  const run = async (command, args, options) => {
+    calls.push(options.env);
+    return { code: 0, stdout: CODEX_OUTPUT, stderr: '' };
+  };
+  const execute = createResumeExecutor({ sessions, baseEnv: { AGENT_BOT_REACH_CORRELATION: 'msg_daemon' }, home: root, run });
+  await execute({ invocation: { agentId: ID, harness: 'codex', cwd: '/work/tree', correlation: 'msg_starter' }, message: 'm', env: {}, policy: 'workspace' });
+  assert.equal(calls.at(-1).AGENT_BOT_REACH_CORRELATION, 'msg_starter');
+  await execute({ invocation: { agentId: ID, harness: 'codex', cwd: '/work/tree' }, message: 'm', env: {}, policy: 'workspace' });
+  assert.ok(!('AGENT_BOT_REACH_CORRELATION' in calls.at(-1)));
+  await execute({ invocation: { agentId: ID, harness: 'codex', cwd: '/work/tree', correlation: 'x'.repeat(129) }, message: 'm', env: {}, policy: 'workspace' });
+  assert.ok(!('AGENT_BOT_REACH_CORRELATION' in calls.at(-1)));
+}));
+
 test('a failed turn throws with the harness detail and keeps the recorded session', () => withState(async ({ env, root }) => {
   const sessions = createWakeSessions({ file: wakeSessionsFile({ env }) });
   sessions.set(ID, 'devin', 'held-open');

@@ -151,6 +151,11 @@ test('acpExecutorFor injects the soul\'s reach server and allows its tools under
   // A store-backed invocation is stamped so fetch_context and post_reply work.
   const [stamped] = options.mcpServers({ invocation: { invocationId: 'invocation_44444444-4444-4444-8444-444444444444' } });
   assert.ok(stamped.env.some((pair) => pair.name === 'AGENT_BOT_REACH_INVOCATION'));
+  assert.equal('AGENT_BOT_REACH_CORRELATION' in vars, false);
+
+  // A relayed turn's thread key travels so its sends stay in the thread (#392).
+  const [threaded] = options.mcpServers({ invocation: { agentId, correlation: 'msg_starter' } });
+  assert.ok(threaded.env.some((pair) => pair.name === 'AGENT_BOT_REACH_CORRELATION' && pair.value === 'msg_starter'));
 });
 
 test('a soul launched with comms off gets the reach server without its teammate tools', () => {
