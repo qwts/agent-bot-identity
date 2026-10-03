@@ -31,6 +31,7 @@ Commands:
   secret             Read a password or API key from a secure-store provider
   skill              Print this release's agent skill bundle and source commit
   sop                Resolve the configured SOP and report its pinned commits
+  metrics            Collect or show optional read-only runtime metrics
 
 Cold start:
   ./agent-bot bootstrap --profile <path|-> [options]  Run from a fresh source checkout
