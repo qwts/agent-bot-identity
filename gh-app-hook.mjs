@@ -724,7 +724,10 @@ export class InboxDurable {
         let changed = false;
         const deliveries = record.deliveries.map((delivery) => {
           const replacement = outcomeByKey.get(`${record.id}\u0000${delivery.subscriberId}`);
-          if (replacement) {
+          // Apply an outcome only while the reservation it answers is still
+          // current. A later alarm may have reserved another attempt while
+          // this push ran; a stale outcome must never lower that count.
+          if (replacement && delivery.attempts === replacement.attempts) {
             changed = true;
             return replacement;
           }

@@ -783,3 +783,28 @@ test('InboxDurable recovers from a failed outcome save without losing the reserv
   assert.equal(map.get('record:rec-1').deliveries[0].attempts, 2);
   assert.equal(map.get('record:rec-1').deliveries[0].status, 'delivered');
 });
+
+test('InboxDurable keeps a newer reservation when a slower push finishes later', async (t) => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  t.mock.method(console, 'warn', () => {});
+  let calls = 0;
+  let durable;
+  const harness = fakeHarness({
+    subscribers: JSON.stringify({ 'qwts-grok-agent': [{ url: URL_A, key: KEY_A }] }),
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) {
+        // The first push hangs past its reservation; a second alarm runs.
+        now += 60 * 60_000;
+        await durable.alarm();
+      }
+      return new Response(null, { status: 503 });
+    },
+  });
+  durable = harness.durable;
+  await doFetch(durable, '/add', freshRecord());
+  await durable.alarm();
+  assert.equal(calls, 2);
+  assert.equal(harness.map.get('record:rec-1').deliveries[0].attempts, 2);
+});
