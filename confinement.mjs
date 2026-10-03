@@ -12,6 +12,7 @@ import { revisionHistory, revisionPackagePath } from './soul-revisions.mjs';
 import { assertOwnerAction } from './owner-gate.mjs';
 import { readBinding } from './agent-binding.mjs';
 import { supportsContext, vendorEvent } from './hook-dialects.mjs';
+import { vouchKeyPath, vouchStateDir } from './vouch.mjs';
 
 const MODES = ['off', 'warn', 'deny'];
 function readJson(file, fallback) {
@@ -176,12 +177,19 @@ export function credentialGuard(envelope, agentId, opts = {}) {
       if (contains(path.join(config, name), target) || contains(path.join(home, '.config', name), target)) return deny(`~/.config/${name}`);
     }
     if (path.basename(target) === 'private-key.pem') return deny('an App private key');
+    // The daemon's grant key and agent-bot-keyd's sockets (#397): a soul
+    // mints only through its relay, which asks the daemon first.
+    const state = vouchStateDir({ env, home });
+    if (target === vouchKeyPath(state) || path.basename(target) === 'vouch-key.pem') return deny("the daemon's signing key");
+    if (contains(path.join(state, 'keyd'), target)) return deny('agent-bot-keyd');
   }
   const command = typeof envelope.command === 'string' ? envelope.command : '';
   if (command) {
     if (SECRET_CLI.test(command)) return deny('a secret-store CLI (security, pass-cli)');
     if (command.includes('.soul-state/credentials')) return deny('a soul key store');
     if (command.includes('private-key.pem')) return deny('an App private key');
+    if (command.includes('vouch-key.pem')) return deny("the daemon's signing key");
+    if (/(?:^|[/\s'"])(?:keyd|owner)\.sock\b|agent-bot\/keyd(?:\/|\b)/.test(command)) return deny('agent-bot-keyd');
     for (const name of legacy) {
       const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       if (new RegExp(`\\.config/${escaped}(?![\\w.-])`).test(command)) return deny(`~/.config/${name}`);

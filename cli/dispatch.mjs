@@ -19,6 +19,7 @@ const MODULES = new Map([
   ['soul', 'cold-wake-settings.mjs'],
   ['harness', 'harness-auth.mjs'],
   ['daemon', 'agent-daemon.mjs'],
+  ['keyd', 'keyd-client.mjs'],
   ['mcp', 'agent-mcp.mjs'],
   ['reach-mcp', 'daemon-mcp.mjs'],
   ['wake', 'wake-listen.mjs'],

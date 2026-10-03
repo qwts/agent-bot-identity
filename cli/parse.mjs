@@ -12,6 +12,7 @@ const PUBLIC_COMMANDS = new Set([
   'soul',
   'harness',
   'daemon',
+  'keyd',
   'mcp',
   'reach-mcp',
   'wake',

@@ -84,7 +84,9 @@ export function appConfig({
   if (slug) {
     // The declaring soul's own key store first, then the legacy
     // ~/.config/<slug> folder with a one-time notice (#383).
-    const { appId, privateKeyPem } = resolveCredential(slug, { agentId, env, home, cwd });
+    const { appId, privateKeyPem, source, agentId: owner } = resolveCredential(slug, { agentId, env, home, cwd });
+    // agent-bot-keyd holds this soul's key and never returns it (#397).
+    if (source === 'keyd') return { slug, appId: null, privateKeyPem: null, keyd: { agentId: owner } };
     return { slug, appId, privateKeyPem };
   }
   throw new Error(
@@ -144,10 +146,20 @@ export function pickInstallation(installations, owner) {
 // for a slug, or for whatever appConfig() resolves when slug is omitted.
 // `agentId` names the soul the daemon is minting for, so its store is read
 // first; without one the caller's own Agent ID (if any) is used.
-export async function mint({ slug, env = process.env, agentId = null } = {}) {
+//
+// A soul whose key agent-bot-keyd holds mints through keyd: `viaKeyd` is
+// the daemon's in-process grant (keyd-client.mjs mintViaKeyd); anywhere
+// else the caller asks the daemon on its own binding.
+export async function mint({ slug, env = process.env, agentId = null, viaKeyd = null } = {}) {
   const config = loadConfig({ env });
   const argv = slug ? ['node', 'mint-token.mjs', '--app', slug] : process.argv;
-  const { appId, privateKeyPem } = appConfig({ argv, env, config, agentId });
+  const resolved = appConfig({ argv, env, config, agentId });
+  if (resolved.keyd) {
+    if (viaKeyd) return viaKeyd({ agentId: resolved.keyd.agentId, app: resolved.slug, config });
+    const { mintThroughDaemon } = await import('./keyd-client.mjs');
+    return mintThroughDaemon({ slug: resolved.slug, env });
+  }
+  const { appId, privateKeyPem } = resolved;
   const base = apiBase(config);
   const jwt = buildAppJwt(appId, privateKeyPem, Math.floor(Date.now() / 1000));
 

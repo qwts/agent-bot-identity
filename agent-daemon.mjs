@@ -69,6 +69,7 @@ import {
 } from './agent-identity.mjs';
 import { createInteractionService } from './agent-interaction.mjs';
 import { mint } from './mint-token.mjs';
+import { KEYD_TOOL_NAMES, grantTarget, keydRequest, mintViaKeyd, readKeydRecord, signKeydGrant } from './keyd-client.mjs';
 import { recoverInteractionStore } from './agent-jobs.mjs';
 import { appendAuditReceipt, principalsFile, resolvePrincipal } from './agent-principals.mjs';
 import { runSpawnHooks } from './agent-hook.mjs';
@@ -84,7 +85,7 @@ import { createTeamStarter, defaultTeamTemplate, harnessLaunchable, teamLimits }
 import { createSoulHomes, installHarnesses, soulBindingForLaunch } from './soul-home.mjs';
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
-import { validateSoulPackage, writeSoulComms } from './soul-package.mjs';
+import { soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
 import { editSoulRevision, revisionHistory } from './soul-revisions.mjs';
 import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
 import { recordSoulSession } from './metrics.mjs';
@@ -325,6 +326,8 @@ export function createDaemonServer({
   executor,
   taskReporter = null,
   mintImpl = mint,
+  // agent-bot-keyd's socket call (#397); tests pass a fake keyd.
+  keydCall = keydRequest,
   spawnHook = runSpawnHooks,
   now = () => new Date(),
   // #253 replaces this with its persistent lookup. The default reads the
@@ -392,7 +395,7 @@ export function createDaemonServer({
       }
       const authorization = req.headers.authorization ?? '';
       const presented = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
-      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/credential', 'POST /v0/spawn', 'POST /v0/team/start'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
+      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/credential', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
         sendJson(res, 401, { error: 'missing or invalid daemon token' });
         return;
       }
@@ -567,7 +570,10 @@ export function createDaemonServer({
             throw Object.assign(new Error(githubOn ? 'this soul has no GitHub App' : 'the github-identity add-on is off'), { statusCode: 409 });
           }
           try {
-            grant = await mintImpl({ slug: identity.github.appSlug, env, agentId: binding.agentId });
+            grant = await mintImpl({
+              slug: identity.github.appSlug, env, agentId: binding.agentId,
+              viaKeyd: (soul) => mintViaKeyd({ ...soul, env, home, now, request: keydCall }),
+            });
           } catch (error) {
             // A verified binding whose mint fails must still leave a receipt —
             // the audit stream has to account for every attempt, not only the
@@ -593,6 +599,50 @@ export function createDaemonServer({
             token: grant.token,
             expires_at: grant.expires_at,
           });
+          return;
+        }
+        // agent-bot-keyd grants (#397): a soul's `agent-bot-keyd mcp` relay
+        // asks here, on the soul's binding, before each keyd tool call. The
+        // daemon keeps the policy — binding, add-on gate, the soul's own App,
+        // a keyd-held key — and answers with a one-call grant signed by its
+        // account key, which keyd pinned. keyd checks the grant and mints;
+        // the key never leaves keyd and the grant is useless after 60s.
+        case 'POST /v0/keyd/grant': {
+          const body = parseJsonBody(await readBody(req));
+          const tool = body?.tool;
+          const receipt = (decision, agentId = null) => appendAuditReceipt({
+            event: 'credential-grant', ...(agentId ? { agentId } : {}),
+            operation: `keyd ${KEYD_TOOL_NAMES.includes(tool) ? tool : 'unknown'}`, decision,
+          }, { env, home, now });
+          if (!KEYD_TOOL_NAMES.includes(tool)) {
+            receipt('denied');
+            throw Object.assign(new Error('unknown keyd tool'), { statusCode: 400 });
+          }
+          let binding;
+          try { binding = requireBinding(req, bindings); }
+          catch (error) { receipt('denied'); throw error; }
+          let identity;
+          let declaration;
+          try {
+            identity = readAgentIdentity(binding.agentId, { stateDir: stateDirectory({ env, home }) });
+            declaration = soulCredentialsDeclaration(soulDirectory(binding.agentId, { file: populationFile({ env, home }), env, home }));
+          } catch (error) {
+            receipt('failed', binding.agentId);
+            throw error;
+          }
+          const githubOn = isGateEnabled('github-identity', { env, home, config });
+          const app = identity.github?.appSlug;
+          const refusal = !githubOn ? 'the github-identity add-on is off'
+            : !app ? 'this soul has no GitHub App'
+              : declaration?.app !== app || declaration?.store !== 'keyd' ? "agent-bot-keyd does not hold this soul's key"
+                : null;
+          if (refusal) {
+            receipt('denied', binding.agentId);
+            throw Object.assign(new Error(refusal), { statusCode: 409 });
+          }
+          const signed = signKeydGrant({ agentId: binding.agentId, app, tool, ...(await grantTarget({ env, config })) }, signingKey(), now);
+          receipt('granted', binding.agentId);
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, grant: signed });
           return;
         }
         // Comms pairing state (#255): who this daemon is paired as, and whether
@@ -1215,6 +1265,14 @@ export async function runDaemon({
       // launchd PATH does not reach.
       commsFor: (agentId) => showSoul(agentId, { file: populationFile({ env, home }) }).comms,
       reachEnv: { PATH: resumePath(soulEnvironment(env), home) },
+      // A soul whose soul.json says its key is in agent-bot-keyd gets keyd's
+      // relay, when this host installed keyd.
+      keydFor: (agentId) => {
+        const record = readKeydRecord({ env, home });
+        if (!record) return null;
+        const declaration = soulCredentialsDeclaration(soulDirectory(agentId, { file: populationFile({ env, home }), env, home }));
+        return declaration?.store === 'keyd' ? record.bin : null;
+      },
     })
     : null;
   const executor = executorFor
