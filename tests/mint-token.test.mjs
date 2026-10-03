@@ -136,7 +136,8 @@ test('GH_AGENT_APP mints its own App in any checkout, with no correction note', 
   }
   assert.equal(config.slug, 'you-claude-opus-agent');
   assert.equal(config.appId, '98765');
-  assert.equal(notes.join(''), '');
+  // The legacy-folder deprecation notice (#383) is not a correction note.
+  assert.equal(notes.join('').replace(/^agent-bot: the \S+ App key is read from .*\(deprecated\).*\n/m, ''), '');
 });
 
 // ENG-0339 acceptance (c): the account is the fallback input, so an unpinned

@@ -3,7 +3,8 @@
 // Prints the token to stdout for use as GH_TOKEN. Zero-dependency.
 //
 // App selection (first match wins):
-//   --app <slug>             — read ~/.config/<slug>/{app-id,private-key.pem}
+//   --app <slug>             — the declaring soul's key store, else the legacy
+//                              ~/.config/<slug>/{app-id,private-key.pem}
 //   GH_AGENT_APP=<slug>      — same lookup, set once per launcher environment
 //   git config agentBot.app  — the checkout's pin, so a token is minted for
 //                              the agent the commits are authored as
@@ -20,10 +21,10 @@
 import { createSign, createPrivateKey } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { resolveAgentSlug } from './resolve-agent.mjs';
+import { resolveAppCredential } from './soul-credentials.mjs';
 import { loadConfig, apiBase } from './config.mjs';
 import { formatMintGrant } from './cli/mint-output.mjs';
 import { ownerApprovalRequired, requireOwnerApproval, explicitAppArg } from './owner-approval.mjs';
@@ -50,6 +51,8 @@ export function appConfig({
   home = homedir(),
   cwd = process.cwd(),
   config,
+  agentId = null,
+  resolveCredential = resolveAppCredential,
 } = {}) {
   const flag = argv.indexOf('--app');
   if (flag !== -1 && !argv[flag + 1]) {
@@ -79,16 +82,10 @@ export function appConfig({
     config: config ?? loadConfig({ env }),
   });
   if (slug) {
-    const dir = join(home, '.config', slug);
-    try {
-      return {
-        slug,
-        appId: readFileSync(join(dir, 'app-id'), 'utf8').trim(),
-        privateKeyPem: readFileSync(join(dir, 'private-key.pem'), 'utf8'),
-      };
-    } catch {
-      throw new Error(`no app config for "${slug}" — expected ${dir}/app-id and ${dir}/private-key.pem`);
-    }
+    // The declaring soul's own key store first, then the legacy
+    // ~/.config/<slug> folder with a one-time notice (#383).
+    const { appId, privateKeyPem } = resolveCredential(slug, { agentId, env, home, cwd });
+    return { slug, appId, privateKeyPem };
   }
   throw new Error(
     'pass --app <slug>, set GH_AGENT_APP, configure ~/.config/agent-bot/config.json, or set GH_APP_ID with GH_APP_PRIVATE_KEY or GH_APP_PRIVATE_KEY_PATH',
@@ -145,10 +142,12 @@ export function pickInstallation(installations, owner) {
 
 // Programmatic entry point (used by git-credential-bot.mjs): mint a token
 // for a slug, or for whatever appConfig() resolves when slug is omitted.
-export async function mint({ slug, env = process.env } = {}) {
+// `agentId` names the soul the daemon is minting for, so its store is read
+// first; without one the caller's own Agent ID (if any) is used.
+export async function mint({ slug, env = process.env, agentId = null } = {}) {
   const config = loadConfig({ env });
   const argv = slug ? ['node', 'mint-token.mjs', '--app', slug] : process.argv;
-  const { appId, privateKeyPem } = appConfig({ argv, env, config });
+  const { appId, privateKeyPem } = appConfig({ argv, env, config, agentId });
   const base = apiBase(config);
   const jwt = buildAppJwt(appId, privateKeyPem, Math.floor(Date.now() / 1000));
 
