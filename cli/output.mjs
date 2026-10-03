@@ -15,7 +15,7 @@ Commands:
   population         List this account's census of souls
   principal          Enroll and authorize messaging principals (owner ceremony)
   binding            Revoke this worktree's soul binding
-  soul               Turn cold wake on or off for a soul (owner only); pack validate PATH; revision <command>; dir AGENT_ID
+  soul               Turn cold wake on or off (owner only); pack validate PATH; revision <command>; dir AGENT_ID; spawn TEMPLATE_PATH --name NAME [--harness H]
   daemon             Run, supervise, or disable the loopback daemon; vouch-key prints the soul public key
   mcp                Serve the agent-bot MCP tools (bind, whoami, population)
   reach-mcp          Serve the daemon reach-back MCP tools (fetch_context, post_reply)

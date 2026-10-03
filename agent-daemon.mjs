@@ -58,6 +58,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
 import { listSouls, populationFile, retireIdentityWithPopulation, upsertIdentitySoul } from './agent-population.mjs';
+import { spawnSoulTemplate } from './soul-templates.mjs';
 import {
   bindAgentLineage,
   ensureAgentIdentity,
@@ -1156,7 +1157,9 @@ export async function runDaemon({
     identities,
     // A package spawn is a new root soul with no GitHub App (#297). The
     // package is validated before minting, so a bad path mints nothing.
-    spawnPackage: async ({ package: packagePath, harness }) => {
+    spawnPackage: async ({ package: packagePath, harness, name }) => {
+      if (name !== undefined) return spawnSoulTemplate(packagePath, { name, harness, env, home, config, now,
+        stateDir: stateDirectory({ env, home }) });
       validateSoulPackage(packagePath);
       return mintAgentIdentity({ appSlug: null, harness, packagePath, useGithub: false,
         stateDir: stateDirectory({ env, home }), now });
