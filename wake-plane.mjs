@@ -91,6 +91,7 @@ export function acpExecutorFor({
       binding: typeof turnEnv.AGENT_BOT_BINDING === 'string' && path.isAbsolute(turnEnv.AGENT_BOT_BINDING)
         ? turnEnv.AGENT_BOT_BINDING : null,
       comms,
+      correlation: typeof invocation?.correlation === 'string' ? invocation.correlation : null,
     })];
     const executor = createExecutor({
       harness,

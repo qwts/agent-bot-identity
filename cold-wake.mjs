@@ -10,25 +10,38 @@
 //
 // A webhook soul (#334) runs no turn here: its harness's routine reads and
 // acks its own inbox, so the waker only calls the webhook.
+//
+// Each relayed turn is a fresh session, so the waker journals the messages a
+// soul receives and answers (soul-threads.mjs) and puts the woken message's
+// earlier thread into the prompt (#392): a soul woken by a teammate's answer
+// still knows who asked for the work.
 
 import { randomUUID } from 'node:crypto';
 
 import { wakeSetting } from './cold-wake-settings.mjs';
 import { FINAL_REPLY_ERRORS, senderAddress } from './comms-relay.mjs';
+import { NO_REPLY, formatThread, recordThreadMessage, stripNoReply, threadContext, threadKey } from './soul-threads.mjs';
 
 // The final answer a soul gives when a teammate's message needs no answer
 // back. Every relayed turn's answer is otherwise a reply, so two souls would
 // trade acknowledgements until the broker's reply-depth limit.
-export const NO_REPLY = 'NO_REPLY';
+export { NO_REPLY };
 
-export function relayPrompt(message) {
+export function relayPrompt(message, thread = []) {
   const fromSoul = typeof message.from?.principal !== 'string';
   return `You have an agent-comms message from ${senderAddress(message.from)}${fromSoul ? ', another agent' : ''}. Your final answer is sent back to them as your reply, so write it as the reply itself; you do not need to run agent-comms.`
     + (fromSoul ? ` If it needs no answer (a thanks, or a result you only had to receive), make your final answer exactly ${NO_REPLY} and nothing is sent. Use send_message to tell anyone else, such as the person who asked you for this work, what came of it.` : '')
-    + `\n\n${message.body}`;
+    + (thread.length > 0 ? ' This session does not remember earlier turns, so the conversation so far is below. If this message answers something you asked for on someone else\'s behalf, pass the result on to them with send_message.' : '')
+    + `\n\n${formatThread(thread)}${thread.length > 0 ? 'The new message:\n\n' : ''}${message.body}`;
 }
 
-export function createColdWaker({ executor, settings, lookupBinding, identities, receipt, relay = null, webhook = null, taskReporter = null, log = (line) => process.stderr.write(`cold-wake: ${line}\n`) }) {
+function recordInbound(agentId, message, threads) {
+  recordThreadMessage(agentId, {
+    dir: 'in', id: message.id, from: senderAddress(message.from), replyTo: message.replyTo, correlation: message.correlation, body: message.body,
+  }, threads);
+}
+
+export function createColdWaker({ executor, settings, lookupBinding, identities, receipt, relay = null, webhook = null, taskReporter = null, threads = {}, log = (line) => process.stderr.write(`cold-wake: ${line}\n`) }) {
   if (typeof executor !== 'function') throw new Error('cold waker requires an executor');
   if (typeof lookupBinding !== 'function') throw new Error('cold waker requires lookupBinding');
   if (typeof identities !== 'function') throw new Error('cold waker requires identities');
@@ -113,12 +126,21 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
             await relay.ack(soul, [message.id]);
             continue;
           }
-          const result = await executor({ invocation, message: relayPrompt(message), attachments: [], env, wake });
-          const body = typeof result?.reply === 'string' ? result.reply.trim() : '';
-          if (body && body !== NO_REPLY) {
-            await relay.reply(soul, { to: senderAddress(message.from), replyTo: message.id, body }).catch((error) => {
+          // The thread is read before this message joins the journal, and
+          // the turn's own sends (send_message) carry its thread key.
+          const thread = threadContext(agentId, message, threads);
+          recordInbound(agentId, message, threads);
+          const correlation = threadKey(message);
+          const turn = correlation ? { ...invocation, correlation } : invocation;
+          const result = await executor({ invocation: turn, message: relayPrompt(message, thread), attachments: [], env, wake });
+          const body = stripNoReply(result?.reply);
+          if (body) {
+            const to = senderAddress(message.from);
+            const sent = await relay.reply(soul, { to, replyTo: message.id, body, correlation }).catch((error) => {
               if (!FINAL_REPLY_ERRORS.has(error?.code)) throw error;
+              return null;
             });
+            if (sent) recordThreadMessage(agentId, { dir: 'out', id: sent.messageId, to, replyTo: message.id, correlation, body }, threads);
           }
           await relay.ack(soul, [message.id]);
         }

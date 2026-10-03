@@ -48,6 +48,7 @@ import {
 import { populationFile, showSoul } from './agent-population.mjs';
 import { agentCommsAsSoul } from './comms-relay.mjs';
 import { validateAgentId } from './agent-identity.mjs';
+import { recordThreadMessage } from './soul-threads.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
 import { AGENT_ID_KEYS, readGitConfig } from './resolve-agent.mjs';
 import { readBinding } from './agent-binding.mjs';
@@ -65,6 +66,11 @@ export const REACH_AGENT_ID_ENV = 'AGENT_BOT_REACH_AGENT_ID';
 // teammate tools for a soul launched with comms off.
 export const REACH_WORKTREE_ENV = 'AGENT_BOT_REACH_WORKTREE';
 export const REACH_COMMS_ENV = 'AGENT_BOT_REACH_COMMS';
+// The thread a relayed turn belongs to (#392): the woken message's
+// correlation, or its id. send_message and start_soul's brief carry it, so a
+// teammate's answer finds its way back into this soul's thread.
+export const REACH_CORRELATION_ENV = 'AGENT_BOT_REACH_CORRELATION';
+const MAX_CORRELATION_LENGTH = 128;
 export const BINDING_ENV = 'AGENT_BOT_BINDING';
 
 // The server's name in mcpServers[], and the tool names a harness derives
@@ -85,6 +91,9 @@ const STORE_ENV_PASSTHROUGH = [
   'AGENT_BOT_INTERACTION_HOME',
   'AGENT_BOT_POPULATION_PATH',
   'XDG_STATE_HOME',
+  // The soul thread journal lives under the identity state directory.
+  'AGENT_BOT_STATE_HOME',
+  'QWTS_AGENT_STATE_HOME',
   'HOME',
   // agent-comms must resolve under a harness that does not merge env, and a
   // launchd daemon's PATH is the one that was widened to reach it.
@@ -528,7 +537,13 @@ async function callTool(state, name, args = {}) {
         : boundedString(args.reply_to, 'reply_to', { max: 128 });
       const run = asSoul(state);
       const address = await resolveRecipient(run, soul, to);
-      const sent = await run(soul, ['send', address, '--body', body, ...(replyTo ? ['--reply-to', replyTo] : [])]);
+      const correlation = turnCorrelation(state);
+      const sent = await run(soul, [
+        'send', address, '--body', body,
+        ...(replyTo ? ['--reply-to', replyTo] : []),
+        ...(correlation ? ['--correlation', correlation] : []),
+      ]);
+      recordSent(state, soul, { id: sent.messageId, to: address, replyTo, correlation, body });
       return { sent: true, to: address, messageId: sent.messageId ?? null, wake: sent.wake ?? null };
     }
     case 'start_soul': {
@@ -547,7 +562,9 @@ async function callTool(state, name, args = {}) {
       const result = { started: true, agentId: started.agentId, name: started.name, harness: started.harness, parent: soul.agentId };
       if (brief !== null) {
         try {
-          const sent = await asSoul(state)(soul, ['send', started.agentId, '--body', brief]);
+          const correlation = turnCorrelation(state);
+          const sent = await asSoul(state)(soul, ['send', started.agentId, '--body', brief, ...(correlation ? ['--correlation', correlation] : [])]);
+          recordSent(state, soul, { id: sent.messageId, to: started.agentId, replyTo: null, correlation, body: brief });
           result.brief = { sent: true, messageId: sent.messageId ?? null };
         } catch (error) {
           result.brief = { sent: false, error: error.message };
@@ -558,6 +575,17 @@ async function callTool(state, name, args = {}) {
     default:
       throw new Error(`unknown tool: ${name}`);
   }
+}
+
+// The injected turn's thread key, when the daemon stamped one.
+function turnCorrelation(state) {
+  const value = state.env[REACH_CORRELATION_ENV];
+  return typeof value === 'string' && value !== '' && value.length <= MAX_CORRELATION_LENGTH ? value : null;
+}
+
+// Journals a send so a later cold wake can show it (#392). Best effort.
+function recordSent(state, soul, entry) {
+  recordThreadMessage(soul.agentId, { dir: 'out', ...entry }, { env: state.env, home: state.home, now: state.now });
 }
 
 // The daemon starts the teammate; this server only proves which soul asks.
@@ -595,7 +623,7 @@ async function startSoul(state, soul, request) {
 // so `invocationId` is optional; the soul's worktree and binding make the
 // teammate tools speak as it, and `comms: false` withholds them.
 export function reachMcpServerEntry({
-  invocationId = null, agentId, env = process.env, worktree = null, binding = null, comms = true,
+  invocationId = null, agentId, env = process.env, worktree = null, binding = null, comms = true, correlation = null,
 } = {}) {
   const vars = [{ name: REACH_AGENT_ID_ENV, value: validateAgentId(agentId) }];
   if (invocationId !== null && invocationId !== undefined) {
@@ -610,6 +638,9 @@ export function reachMcpServerEntry({
     vars.push({ name: BINDING_ENV, value: binding });
   }
   if (comms === false) vars.push({ name: REACH_COMMS_ENV, value: '0' });
+  if (typeof correlation === 'string' && correlation !== '' && correlation.length <= MAX_CORRELATION_LENGTH) {
+    vars.push({ name: REACH_CORRELATION_ENV, value: correlation });
+  }
   for (const name of STORE_ENV_PASSTHROUGH) {
     if (typeof env[name] === 'string' && env[name] !== '') {
       vars.push({ name, value: env[name] });

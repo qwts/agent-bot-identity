@@ -22,10 +22,13 @@ test('the relay runs agent-comms as the soul, in its worktree, with its binding'
   const relay = createCommsRelay({ env: { PATH: '/tools' }, run });
   assert.deepEqual(await relay.read(soul), [{ id: 'm1' }]);
   await relay.reply(soul, { to: 'owner', replyTo: 'm1', body: 'hi' });
+  await relay.reply(soul, { to: 'owner', replyTo: 'm2', body: 'yes', correlation: 'm1' });
   await relay.ack(soul, ['m1']);
   assert.deepEqual(calls.map((c) => c.args), [
     ['inbox', 'read'],
     ['send', 'owner', '--body', 'hi', '--reply-to', 'm1'],
+    // A reply stays in the thread it answers (#392).
+    ['send', 'owner', '--body', 'yes', '--reply-to', 'm2', '--correlation', 'm1'],
     ['inbox', 'ack', 'm1'],
   ]);
   for (const { command, options } of calls) {

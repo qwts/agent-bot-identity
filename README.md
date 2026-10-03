@@ -672,8 +672,20 @@ name, `account/agentId` address, Agent ID, or a person's principal name.
 Both run `agent-comms` in the soul's own worktree with its own binding, never
 another's. The teammate's answer comes back as a reply in the sender's inbox
 and wakes it like any message. A relayed turn answering another agent may end
-with exactly `NO_REPLY` to send nothing, so two souls never trade
-acknowledgements up to the broker's reply-depth limit.
+its answer with a line of exactly `NO_REPLY`: the daemon drops that line and
+sends whatever is left, or nothing, so two souls never trade acknowledgements
+up to the broker's reply-depth limit, and the token itself is never sent.
+
+Each cold turn is a fresh session, so the daemon keeps the thread for it
+(#392). It journals the agent-comms messages each soul receives and sends
+(`<state>/threads/<agentId>.jsonl`, 0600, rewritten to its newest 400
+entries past 512 KiB, bodies capped at 2 KiB). A relayed turn's replies and
+its `send_message`/`start_soul` sends carry the woken message's correlation
+(or its id) as their own, and a woken turn's prompt lists the earlier
+messages of its thread — found by `correlation` and `replyTo`, at most 8 and
+6 KiB, oldest first, each with its sender, quoted as message data, not
+instructions. So when Starter asks Bill to get a list from Ted, Ted's answer
+wakes Bill with Starter's request in view, and Bill sends the list on.
 
 A soul can also start its own team (#377). `start_soul` (`name`, and
 optionally `harness`, `template`, `brief`) starts a new full soul — its own

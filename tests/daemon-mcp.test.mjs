@@ -11,6 +11,7 @@ import {
   MAX_REPLY_TEXT_BYTES,
   REACH_AGENT_ID_ENV,
   REACH_COMMS_ENV,
+  REACH_CORRELATION_ENV,
   REACH_INVOCATION_ENV,
   REACH_WORKTREE_ENV,
   reachPolicyRules,
@@ -36,6 +37,7 @@ import {
   setOperations,
 } from '../agent-principals.mjs';
 import { upsertSoul } from '../agent-population.mjs';
+import { threadContext } from '../soul-threads.mjs';
 
 const AGENT_ID = 'agent_11111111-1111-4111-8111-111111111111';
 const OTHER_ID = 'agent_22222222-2222-4222-8222-222222222222';
@@ -526,6 +528,25 @@ test('send_message resolves a teammate by name and sends as the soul', async () 
   // A name no peer has may be a person: the broker decides.
   await call(state, 'send_message', { to: 'owner', body: 'done' });
   assert.deepEqual(calls.at(-1).args, ['send', 'owner', '--body', 'done']);
+});
+
+// A relayed turn's sends carry its thread key and are journaled, so the
+// teammate's answer wakes this soul with the request still in view (#392).
+test('send_message carries the turn\'s correlation and journals the send', async () => {
+  const { root } = scratch();
+  const { state, calls } = injectedSoul({ [REACH_CORRELATION_ENV]: 'msg_starter', AGENT_BOT_STATE_HOME: path.join(root, 'state') });
+  await call(state, 'send_message', { to: PEERS[0].agentId, body: 'Ted, your book list?' });
+  assert.deepEqual(calls.at(-1).args, ['send', PEERS[0].agentId, '--body', 'Ted, your book list?', '--correlation', 'msg_starter']);
+  const thread = threadContext(AGENT_ID, { id: 'msg_ted', replyTo: 'msg_1', correlation: 'msg_starter' }, { env: state.env, home: '/nonexistent' });
+  assert.deepEqual(thread.map((entry) => [entry.dir, entry.id, entry.to, entry.body]), [['out', 'msg_1', PEERS[0].agentId, 'Ted, your book list?']]);
+
+  // An over-long key is ignored rather than refused by the broker.
+  const long = injectedSoul({ [REACH_CORRELATION_ENV]: 'x'.repeat(129) });
+  await call(long.state, 'send_message', { to: 'owner', body: 'hi' });
+  assert.deepEqual(long.calls.at(-1).args, ['send', 'owner', '--body', 'hi']);
+  assert.equal(reachMcpServerEntry({ agentId: AGENT_ID, env: {}, correlation: 'x'.repeat(129) }).env.some((pair) => pair.name === REACH_CORRELATION_ENV), false);
+  assert.ok(reachMcpServerEntry({ agentId: AGENT_ID, env: { AGENT_BOT_STATE_HOME: '/state' }, correlation: 'msg_1' }).env
+    .some((pair) => pair.name === 'AGENT_BOT_STATE_HOME'), 'the journal location travels with the entry');
 });
 
 test('send_message refuses ambiguous names, bad input, and reports broker refusals', async () => {
