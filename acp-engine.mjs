@@ -55,6 +55,12 @@ export const ACP_PROTOCOL_VERSION = 1;
 export const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000;
 const CANCEL_GRACE_MS = 2_000;
 const STDERR_TAIL_BYTES = 2_048;
+// A finished turn lets the agent's process group exit on its own for this
+// long after stdin closes, then as long again after SIGTERM, before SIGKILL.
+// Claude Code buffers its session log and flushes it on exit, so a turn
+// that ended in an immediate SIGKILL left a log with no messages: no
+// transcript to resume and nothing for runtime metrics (#86).
+export const DEFAULT_EXIT_GRACE_MS = 2_000;
 
 function failEngine(message) {
   throw new Error(`acp engine: ${message}`);
@@ -233,6 +239,7 @@ export function createAcpExecutor({
   env: baseEnv = process.env,
   spawn = spawnChild,
   turnTimeoutMs = DEFAULT_TURN_TIMEOUT_MS,
+  exitGraceMs = DEFAULT_EXIT_GRACE_MS,
   log = () => {},
 } = {}) {
   const row = resolveSpawn(registry, harness);
@@ -244,6 +251,9 @@ export function createAcpExecutor({
   }
   if (!Number.isSafeInteger(turnTimeoutMs) || turnTimeoutMs <= 0) {
     failEngine('turnTimeoutMs must be a positive integer');
+  }
+  if (!Number.isSafeInteger(exitGraceMs) || exitGraceMs < 0) {
+    failEngine('exitGraceMs must be a non-negative integer');
   }
   if (baseEnv === null || typeof baseEnv !== 'object' || Array.isArray(baseEnv)) {
     failEngine('env must be an object of environment variables');
@@ -292,6 +302,39 @@ export function createAcpExecutor({
           // Already gone.
         }
       }
+    };
+    // The whole group, not just the direct child: a runner row's adapter and
+    // the harness it starts are descendants, and they write the session log.
+    const groupAlive = () => {
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const groupGone = async (ms) => {
+      const deadline = Date.now() + ms;
+      while (groupAlive()) {
+        if (Date.now() >= deadline) return false;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      return true;
+    };
+    const stopTree = async () => {
+      try {
+        child.stdin.end();
+      } catch {
+        // Already closed.
+      }
+      if (await groupGone(exitGraceMs)) return;
+      try {
+        process.kill(-child.pid, 'SIGTERM');
+      } catch {
+        // Already gone.
+      }
+      if (await groupGone(exitGraceMs)) return;
+      killTree();
     };
     let stderrTail = '';
     child.stderr.on('data', (data) => {
@@ -399,7 +442,10 @@ export function createAcpExecutor({
       clearTimeout(turnTimer);
       if (cancelTimer !== null) clearTimeout(cancelTimer);
       signal.removeEventListener('abort', onAbort);
-      killTree();
+      // An aborted or timed-out turn was already killed; a finished one exits
+      // gracefully so its harness can flush.
+      if (signal.aborted) killTree();
+      else await stopTree();
     }
   };
 

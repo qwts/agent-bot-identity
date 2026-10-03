@@ -2,6 +2,7 @@
 // JSON-RPC 2.0 on stdio, speaking just enough of the protocol to exercise
 // every engine path. The prompt text selects the scenario, so the test file
 // reads as a list of turns and this fixture stays a dumb switchboard.
+import { writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
 let nextId = 1;
@@ -153,4 +154,20 @@ lines.on('line', (line) => {
       }
     });
 });
-lines.on('close', () => process.exit(0));
+// FAKE_FLUSH_FILE stands in for a harness that writes its session log only
+// as it exits (Claude Code): a moment after stdin closes or, with
+// FAKE_IGNORE_EOF, only on SIGTERM. FAKE_IGNORE_TERM ignores SIGTERM too.
+const flush = () => {
+  if (process.env.FAKE_FLUSH_FILE) writeFileSync(process.env.FAKE_FLUSH_FILE, 'flushed\n');
+  process.exit(0);
+};
+process.on('SIGTERM', () => {
+  if (process.env.FAKE_IGNORE_TERM !== '1') flush();
+});
+lines.on('close', () => {
+  if (process.env.FAKE_IGNORE_EOF === '1') {
+    setInterval(() => {}, 1_000);
+    return;
+  }
+  setTimeout(flush, process.env.FAKE_FLUSH_FILE ? 100 : 0);
+});

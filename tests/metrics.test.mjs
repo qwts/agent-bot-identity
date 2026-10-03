@@ -4,7 +4,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statS
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mintAgentIdentity, stateDirectory } from '../agent-identity.mjs';
-import { claudeCallFromLine, collectMetrics, main, metricsDirectory, readNewLines, recordSession, showMetrics, worktreeSoul } from '../metrics.mjs';
+import { claudeCallFromLine, collectMetrics, main, metricsDirectory, readNewLines, recordSession, recordSoulSession, showMetrics, worktreeSoul } from '../metrics.mjs';
 
 const SESSION = '0f8e0c52-1b7d-4c1e-9d55-3a1f2b6c7d8e';
 const OTHER = '9a9a9a9a-0000-4000-8000-000000000000';
@@ -184,6 +184,20 @@ test('the session-start hook records a session for the worktree soul, and the co
   collectMetrics({ home: f.home, env: f.env });
   const observed = showMetrics({ home: f.home, env: f.env }).souls[soul.id].observations;
   assert.equal(observed.find((o) => o.metric === 'model_reported').value, 'claude-sonnet-5-5');
+});
+
+test('a daemon-run soul records its session by agent id, and the collector binds through it', () => {
+  const f = fixture();
+  const soul = mintAgentIdentity({ appSlug: null, useGithub: false, harness: 'claude', stateDir: f.stateDir, home: f.home, env: f.env });
+  assert.equal(recordSoulSession({ agentId: soul.id, provider: 'codex', sessionId: SESSION, env: f.env, home: f.home }), null, 'only Claude sessions have a collector');
+  assert.equal(recordSoulSession({ agentId: soul.id, provider: 'claude', sessionId: '../../etc', env: f.env, home: f.home }), null, 'a session id is never a path');
+  assert.equal(recordSoulSession({ agentId: 'not-an-agent', provider: 'claude', sessionId: SESSION, env: f.env, home: f.home }), null);
+  assert.equal(recordSoulSession({ agentId: soul.id, provider: 'claude', sessionId: SESSION, env: f.env, home: f.home }), soul.id);
+
+  writeFileSync(join(f.projects, '-work-a', `${SESSION}.jsonl`), `${call('msg_1', { model: 'claude-opus-5-5' })}\n`);
+  collectMetrics({ home: f.home, env: f.env });
+  const observed = showMetrics({ home: f.home, env: f.env }).souls[soul.id].observations;
+  assert.equal(observed.find((o) => o.metric === 'model_reported').value, 'claude-opus-5-5');
 });
 
 test('record-session never fails the session', () => {

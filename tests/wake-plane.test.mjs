@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { coldTurnExecutor, createWakePlane } from '../wake-plane.mjs';
+import { acpExecutorFor, coldTurnExecutor, createWakePlane } from '../wake-plane.mjs';
+import { HARNESS_SESSION_EVENT, UPDATE_EVENT } from '../executor-contract.mjs';
 
 const ID = 'agent_66666666-6666-4666-8666-666666666666';
 const soul = { agentId: ID, worktree: '/work/tree', gitDir: '/work/tree/.git', file: '/work/tree/.git/agent-binding.json' };
@@ -91,4 +92,32 @@ test('the cold turn resolves with the agent text after its last tool call', asyn
   });
   const result = await run({ invocation: { agentId: ID, harness: 'codex', cwd: '/w' }, message: 'hi', attachments: [], env: {} });
   assert.deepEqual(result, { stopReason: 'end_turn', reply: 'Hi, all good.' });
+});
+
+test('acpExecutorFor reports each turn\'s harness session binding and passes every event through', async () => {
+  const agentId = 'agent_11111111-1111-4111-8111-111111111111';
+  const seen = [];
+  const events = [];
+  const createExecutor = () => async ({ appendEvent }) => {
+    appendEvent(HARNESS_SESSION_EVENT, { harness: 'claude', mode: 'new', harnessSessionId: 'sess-1234abcd' });
+    appendEvent(UPDATE_EVENT, { sessionUpdate: 'agent_message_chunk' });
+    return { stopReason: 'end_turn' };
+  };
+  const factory = acpExecutorFor({ identities: () => ({}), policy: {}, baseEnv: {}, createExecutor, onHarnessSession: (b) => seen.push(b) });
+  const result = await factory({ agentId, harness: 'claude', cwd: '/soul', env: {} })({
+    appendEvent: (type) => { events.push(type); return { type }; },
+  });
+  assert.equal(result.stopReason, 'end_turn');
+  assert.deepEqual(seen, [{ agentId, harness: 'claude', harnessSessionId: 'sess-1234abcd' }]);
+  assert.deepEqual(events, [HARNESS_SESSION_EVENT, UPDATE_EVENT]);
+});
+
+test('a failing session recorder never fails the turn', async () => {
+  const createExecutor = () => async ({ appendEvent }) => {
+    appendEvent(HARNESS_SESSION_EVENT, { harness: 'claude', mode: 'new', harnessSessionId: 'sess-1234abcd' });
+    return { stopReason: 'end_turn' };
+  };
+  const factory = acpExecutorFor({ identities: () => ({}), policy: {}, baseEnv: {}, createExecutor, onHarnessSession: () => { throw new Error('disk full'); } });
+  const result = await factory({ agentId: 'agent_11111111-1111-4111-8111-111111111111', harness: 'claude', cwd: '/soul', env: {} })({ appendEvent: () => ({}) });
+  assert.equal(result.stopReason, 'end_turn');
 });

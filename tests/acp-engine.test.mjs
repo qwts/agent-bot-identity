@@ -1,9 +1,10 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawn as spawnChild } from 'node:child_process';
 
 import {
   ACP_SPAWN_REGISTRY,
@@ -192,6 +193,7 @@ test('executor construction fails closed before any process is spawned', () => {
   assert.throws(() => createAcpExecutor({ ...good, mcpServers: 'daemon' }), /mcpServers/);
   assert.throws(() => createAcpExecutor({ ...good, getHarnessSession: 'yes' }), /getHarnessSession/);
   assert.throws(() => createAcpExecutor({ ...good, turnTimeoutMs: 0 }), /turnTimeoutMs/);
+  assert.throws(() => createAcpExecutor({ ...good, exitGraceMs: -1 }), /exitGraceMs/);
   assert.throws(() => createAcpExecutor({ ...good, env: 'PATH=x' }), /env must be an object/);
   assert.throws(() => createAcpExecutor({ ...good, spawn: 'sh' }), /spawn must be a function/);
   assert.throws(() => createAcpExecutor({ ...good, log: 'stdout' }), /log must be a function/);
@@ -473,4 +475,49 @@ test('the whole process tree dies with the turn, not just the spawn runner', asy
       return true;
     }
   });
+});
+
+// --- teardown ---------------------------------------------------------------
+
+// A harness that writes its session log as it exits must get to exit: a
+// SIGKILL right after the turn left Claude Code logs with no messages.
+test('a finished turn lets the agent exit and flush after stdin closes', async () => {
+  const flushFile = path.join(scratch().root, 'flushed');
+  const { finished } = await turn({
+    message: 'hello',
+    executorOptions: { env: { ...process.env, FAKE_FLUSH_FILE: flushFile } },
+  });
+  assert.equal(finished.status, 'completed');
+  assert.equal(existsSync(flushFile), true);
+});
+
+test('an agent that ignores stdin EOF gets SIGTERM and still flushes', async () => {
+  const flushFile = path.join(scratch().root, 'flushed');
+  const { finished } = await turn({
+    message: 'hello',
+    executorOptions: { env: { ...process.env, FAKE_FLUSH_FILE: flushFile, FAKE_IGNORE_EOF: '1' }, exitGraceMs: 200 },
+  });
+  assert.equal(finished.status, 'completed');
+  assert.equal(existsSync(flushFile), true);
+});
+
+test('an agent that ignores EOF and SIGTERM is killed after the grace period', async () => {
+  const pids = [];
+  const flushFile = path.join(scratch().root, 'flushed');
+  const { finished } = await turn({
+    message: 'hello',
+    executorOptions: {
+      env: { ...process.env, FAKE_FLUSH_FILE: flushFile, FAKE_IGNORE_EOF: '1', FAKE_IGNORE_TERM: '1' },
+      exitGraceMs: 100,
+      spawn: (command, args, options) => {
+        const child = spawnChild(command, args, options);
+        pids.push(child.pid);
+        return child;
+      },
+    },
+  });
+  assert.equal(finished.status, 'completed');
+  assert.equal(existsSync(flushFile), false);
+  assert.equal(pids.length, 1);
+  assert.throws(() => process.kill(-pids[0], 0), /ESRCH/);
 });

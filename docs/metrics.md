@@ -12,13 +12,17 @@ agent-bot metrics show [--json]      # latest observations, no log reads
 ## Binding
 
 An observation belongs to a soul only through a harness session recorded for
-it. There are two sources:
+it. There are three sources:
 
 - the `transcript` the soul's identity was minted with;
 - the session-start hook `agent-hooks/session-start/30-record-session`, which
   records the session for the worktree's soul. It reads the live binding
   first, then the `agentbot.agentid` worktree pin, and ignores ambient
-  `GIT_*` overrides.
+  `GIT_*` overrides;
+- the daemon's ACP turns (launch, cold wake and `/v1`), which record each
+  turn's harness session binding for the soul they run. A daemon-run soul
+  works in its soul home, which is not a worktree, so the hook cannot place
+  it. The Claude ACP adapter uses the ACP session id as the Claude session id.
 
 Nothing is matched by name, path or model string. A soul whose recorded
 sessions have no log is listed under `missing`. Only Claude Code sessions
