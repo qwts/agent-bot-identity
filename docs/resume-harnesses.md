@@ -75,7 +75,8 @@ worktree:
 
 Then set a joined soul to `agent-bot soul cold-wake <agentId> resume read-only`
 and send it a message. Setting it is an owner action (#293): run it as the
-owner, outside any soul's worktree, and approve the authorization dialog, or
+owner, outside any soul's worktree, and approve the prompt (Touch ID or the
+login password through GeniusBar's keyd, otherwise the administrator dialog), or
 present the owner's principal with `--principal-stdin`. It should reply, and the census `lastWake` should read
 `cold`.
 
