@@ -135,6 +135,10 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
     save(); // Persist outcome before network I/O; retry only the report.
     await reportRow(row, report);
   };
+  // Every soul this daemon has launched, for the managed backfill (#409).
+  handle.launched = () => [...requests.values()]
+    .filter((row) => row.status === 'launched' && typeof row.agentId === 'string')
+    .map((row) => row.agentId);
   handle.recover = async ({ report }) => {
     for (const row of requests.values()) {
       if (row.status !== 'pending' && !row.reported) await reportRow(row, report);
