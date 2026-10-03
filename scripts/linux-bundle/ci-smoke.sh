@@ -4,7 +4,8 @@
 # it, and check what it left behind.
 #
 # The real user manager is never involved and no real HOME is touched:
-# AGENT_BOT_SYSTEMCTL and AGENT_BOT_PS are fakes and HOME is a temp directory.
+# AGENT_BOT_SYSTEMCTL and AGENT_BOT_PS are fakes, and HOME and the XDG config
+# and data directories (GitHub's runners set XDG_CONFIG_HOME) are a temp directory.
 # That is what makes this safe to run on a shared CI runner, and what makes it
 # the same check locally.
 #
@@ -84,12 +85,12 @@ run_for() {
 
   cd "$box"
   run_install() {
-    HOME="$home" SHELL=/bin/bash \
+    HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" SHELL=/bin/bash \
       AGENT_BOT_SYSTEMCTL="$box/fakes/systemctl" AGENT_BOT_PS="$box/fakes/ps" \
       sh ./install.sh "$@" > "$box/install.log" 2>&1
   }
   run_uninstall() {
-    HOME="$home" SHELL=/bin/bash \
+    HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" SHELL=/bin/bash \
       AGENT_BOT_SYSTEMCTL="$box/fakes/systemctl" AGENT_BOT_PS="$box/fakes/ps" \
       sh ./uninstall.sh > "$box/uninstall.log" 2>&1
   }
