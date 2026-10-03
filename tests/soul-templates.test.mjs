@@ -12,6 +12,9 @@ import { soulDisplayFilename, spawnSoulTemplate, templateSpawnCommand } from '..
 import { createSoulHomes } from '../soul-home.mjs';
 import { createLaunchHandler } from '../daemon-launch.mjs';
 import { HARNESS_SESSION_EVENT } from '../executor-contract.mjs';
+import { createTeamStarter } from '../team-start.mjs';
+import { createAcpExecutor } from '../acp-engine.mjs';
+import { fileURLToPath } from 'node:url';
 
 function fixture(t, formatVersion = 2) {
   const home = mkdtempSync(join(tmpdir(), 'soul-templates-'));
@@ -181,6 +184,65 @@ test('named daemon launch provisions the initialized instance rather than the te
     { account: 'worker', report: async (row) => { reports.push(row); } });
   assert.deepEqual(reports, [{ requestId: 'named-spawn', status: 'launched', agentId: spawned.id }]);
   assert.equal(json(join(f.template, 'soul.json')).name, 'Principal SW Engineer');
+});
+
+test('a soul starts its team end to end: census parents, real ACP turn, limits, receipts (#377)', async (t) => {
+  const f = fixture(t);
+  const lead = await spawnSoulTemplate(f.template, { ...f.options, name: 'Bill', harness: 'claude' });
+  const fakeAcp = fileURLToPath(new URL('./fixtures/fake-acp-agent.mjs', import.meta.url));
+  const registry = { claude: { harness: 'claude', enabled: true, command: process.execPath, args: [fakeAcp], stripEnv: [] } };
+  const turns = [];
+  const joins = [];
+  const launch = createLaunchHandler({ file: join(f.home, 'launch.json'),
+    spawnPackage: ({ package: packagePath, name, harness, parent }) =>
+      spawnSoulTemplate(packagePath, { ...f.options, name, harness, parentId: parent }),
+    identities: (agentId) => readAgentIdentity(agentId, { stateDir: f.options.stateDir }),
+    lookupBinding: () => null,
+    provisionHome: ({ agentId }) => {
+      const worktree = join(f.home, 'homes', agentId);
+      mkdirSync(worktree, { recursive: true });
+      return { worktree, file: join(worktree, 'agent-binding.json') };
+    },
+    joinSoul: async (soul) => { joins.push(soul); },
+    executorFor: ({ harness, cwd, env, agentId }) => {
+      const execute = createAcpExecutor({ harness, cwd, env: { ...process.env, ...env, HOME: f.home },
+        identity: { app: 'test-app', agentId }, policy: { version: 1, rules: [], fallback: 'deny' }, registry });
+      return (input) => { const turn = execute(input); turns.push({ input, turn }); return turn; };
+    },
+  });
+  const receipts = [];
+  const start = createTeamStarter({
+    souls: () => listSouls({ ...f.options, status: 'active' }),
+    identities: (agentId) => readAgentIdentity(agentId, { stateDir: f.options.stateDir }),
+    launch: ({ parent, ...event }) => new Promise((resolve, reject) => {
+      launch(event, { account: 'worker', parent, report: async (row) => resolve(row) }).catch(reject);
+    }),
+    receipt: (row) => receipts.push(row),
+    limits: { maxChildren: 2, maxDepth: 2 },
+    launchable: (harness) => harness in registry,
+    template: () => f.template,
+    account: 'worker',
+  });
+
+  const researcher = await start(lead.id, { name: 'Researcher' });
+  assert.equal(researcher.harness, 'claude', 'the caller\'s harness by default');
+  assert.equal(showSoul(researcher.agentId, f.options).parentId, lead.id);
+  assert.equal(readAgentIdentity(researcher.agentId, { stateDir: f.options.stateDir }).parentId, lead.id);
+  assert.equal(joins[0].parent, lead.id);
+  assert.match(turns[0].input.message, new RegExp(`started by ${lead.id}`));
+  await Promise.all(turns.map((entry) => entry.turn));
+
+  await start(lead.id, { name: 'Writer' });
+  await assert.rejects(start(lead.id, { name: 'Third' }), /limit 2/);
+  await assert.rejects(start(lead.id, { name: 'Muse', harness: 'muse' }), /not launchable/);
+  // The researcher (depth 1) may start one; its child (depth 2) may not.
+  const assistant = await start(researcher.agentId, { name: 'Assistant' });
+  await assert.rejects(start(assistant.agentId, { name: 'Too deep' }), /2 levels/);
+  await Promise.all(turns.map((entry) => entry.turn));
+
+  assert.deepEqual(listSouls({ ...f.options, status: 'active' }).filter((row) => row.parentId === lead.id).length, 2);
+  assert.deepEqual(receipts.map((row) => row.decision),
+    ['launched', 'launched', 'refused: child cap', 'refused: harness', 'launched', 'refused: depth']);
 });
 
 test('failed instance initialization retires its identity and removes the incomplete directory', async (t) => {

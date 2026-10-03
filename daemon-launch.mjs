@@ -25,6 +25,13 @@ export const LAUNCH_NAME_MAX = 128;
 // comms setting its soul.json has now; the setting holds until the next
 // launch, so a running soul's comms cannot be switched off under it. A
 // launch that names `comms` writes it to the soul's soul.json first.
+//
+// `parent` (#377) comes only from the daemon's own caller in the second
+// argument, never from the event: a soul starting its team passes itself, a
+// principal launch passes nothing, and the broker's event cannot name one.
+// A broker event's own `parent` field is dropped before anything sees it.
+const withoutParent = ({ parent: _ignored, ...fields }) => fields;
+
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
   joinSoul = null, recordLaunch = null, executorFor, turnTimeoutMs = 30 * 60_000 }) {
   let rows = [];
@@ -50,7 +57,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
     row.reported = true;
     save();
   };
-  const handle = async (event, { report, account }) => {
+  const handle = async (event, { report, account, parent = null }) => {
     const { requestId } = event;
     if (typeof requestId !== 'string' || !requestId || requestId.length > 256) throw new Error('invalid launch requestId');
     const prior = requests.get(requestId);
@@ -81,12 +88,13 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       if (event.comms !== undefined && typeof event.comms !== 'boolean') throw new Error('invalid launch comms');
       // Every check that can fail without starting runs before a package spawn mints.
       if (!executorFor) throw new Error('daemon ACP executor is disabled');
-      const identity = event.soul ? await identities(event.soul) : await spawnPackage({ ...event, harness });
+      if (parent !== null && event.soul) throw new Error('a team member is a new soul, not an existing one');
+      const identity = event.soul ? await identities(event.soul) : await spawnPackage({ ...withoutParent(event), harness, ...(parent ? { parent } : {}) });
       if (!event.soul) spawned = identity?.id ?? null;
       const binding = await lookupBinding(identity.id)
         ?? await provisionHome({ agentId: identity.id, harness, packagePath: event.package ?? null });
       if (!binding?.worktree || !binding?.file) throw new Error('soul binding is unavailable');
-      if (joinSoul) await joinSoul({ agentId: identity.id, harness, name: event.name ?? null, binding });
+      if (joinSoul) await joinSoul({ agentId: identity.id, harness, name: event.name ?? null, binding, ...(parent ? { parent } : {}) });
       if (recordLaunch) await recordLaunch({ agentId: identity.id, package: event.package ?? null, binding,
         ...(event.comms === undefined ? {} : { comms: event.comms, principal: event.principal ?? null }) });
       const executor = executorFor({ agentId: identity.id, harness, cwd: binding.worktree,
@@ -97,7 +105,9 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         let started = false;
         Promise.resolve().then(() => executor({
           invocation: { agentId: identity.id, harness, cwd: binding.worktree },
-          message: 'You were launched by a principal. Join agent-comms as usual, read your inbox, and handle incoming work.',
+          message: parent
+            ? `You were started by ${parent}, another agent soul, as part of its team. Join agent-comms as usual, read your inbox, and handle incoming work; your parent will brief you there.`
+            : 'You were launched by a principal. Join agent-comms as usual, read your inbox, and handle incoming work.',
           attachments: [], signal: AbortSignal.timeout(turnTimeoutMs),
           appendEvent: (type, data) => {
             if (type === HARNESS_SESSION_EVENT) { started = true; resolve(); }

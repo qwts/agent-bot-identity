@@ -29,8 +29,11 @@
 //     proposal flow, and the agent's option list is answered with an
 //     allow-or-reject option accordingly. The tool name offered to the policy
 //     is the harness's own name for the call — from the request's metadata,
-//     or from the tool_call update that announced the same toolCallId — and
-//     the ACP tool-call `kind` (execute, read, edit, fetch, ...) otherwise.
+//     or from the tool_call update that announced the same toolCallId — then,
+//     for a call to one of the MCP servers this engine injected, the
+//     canonical `mcp__<server>__<tool>` derived from the row's verified
+//     adapter wire shape (mcpToolNaming, #384), and the ACP tool-call `kind`
+//     (execute, read, edit, fetch, ...) otherwise.
 //   - Cancellation is cooperative and matches the contract: signal abort
 //     sends session/cancel, waits briefly for the harness to wind down, then
 //     kills the child; the run rejects so the service records 'cancelled'.
@@ -208,14 +211,79 @@ export function boundAcpUpdate(update) {
 // generic fallback, and anything unusable becomes 'other' (which a policy can
 // still target — and the contract denies malformed names regardless). The
 // call's title is never used: for a shell call it is the model's command.
-export function permissionToolName(toolCall, announced = null) {
+export function permissionToolName(toolCall, announced = null, { naming = null, serverNames = [] } = {}) {
   const meta = toolCall?._meta ?? toolCall?.meta ?? {};
-  for (const candidate of [meta.toolName, meta['claudecode/toolName'], meta.claudeCode?.toolName, announced, toolCall?.kind]) {
+  const record = typeof announced === 'string' ? { name: announced } : announced;
+  const mcp = mcpPermissionName(naming, toolCall, record, serverNames);
+  for (const candidate of [meta.toolName, meta['claudecode/toolName'], meta.claudeCode?.toolName, record?.name, mcp, toolCall?.kind]) {
     if (typeof candidate === 'string' && candidate.length > 0 && !/\s/.test(candidate)) {
       return candidate.slice(0, 200);
     }
   }
   return 'other';
+}
+
+// An MCP server or tool name part as adapters render it: OpenCode keys MCP
+// tools `<server>_<tool>` after replacing anything outside [A-Za-z0-9_-].
+const MCP_NAME_PART = /^[A-Za-z0-9_-]{1,64}$/;
+
+// What one tool_call announcement says about its call, for the permission
+// request that follows with the same toolCallId. Only the first `tool_call`
+// for an id records its kind, title and MCP invocation; a later update can
+// add the harness name (Claude) but never rewrite the shape.
+export function recordAnnouncement(previous, update) {
+  const name = announcedToolName(update);
+  if (update?.sessionUpdate === 'tool_call' && !previous) {
+    const raw = update.rawInput;
+    const invocation = raw && typeof raw === 'object' && !Array.isArray(raw)
+      && typeof raw.server === 'string' && typeof raw.tool === 'string'
+      ? { server: raw.server, tool: raw.tool }
+      : null;
+    return {
+      name,
+      kind: typeof update.kind === 'string' ? update.kind : null,
+      title: typeof update.title === 'string' ? update.title : null,
+      invocation,
+    };
+  }
+  if (name === null) return previous ?? null;
+  return { kind: null, title: null, invocation: null, ...previous, name };
+}
+
+// The canonical `mcp__<server>__<tool>` for a permission request, when the
+// row's adapter wire shape (acp-registry MCP_TOOL_NAMINGS) proves the call
+// is to one of the servers this engine injected; null otherwise. Every check
+// pairs adapter-built fields — never the model's arguments, and a title only
+// where the adapter derives it from the tool key alone:
+//   - codex-invocation: the announced rawInput {server, tool} (Codex's own
+//     routing), its matching `Tool: <server>/<tool>` title, and the approval
+//     request's `server_name` must all agree.
+//   - opencode-key: the request and its announcement both carry kind 'other'
+//     and the same title `<server>_<tool>`. A built-in tool's title is its
+//     own name; external_directory's model-chosen title rides on a call
+//     announced as execute/read, so it never pairs.
+export function mcpPermissionName(naming, toolCall, announced, serverNames = []) {
+  if (!announced || typeof announced !== 'object') return null;
+  const servers = serverNames.filter((name) => typeof name === 'string' && MCP_NAME_PART.test(name));
+  const canonical = (server, tool) => (servers.includes(server) && MCP_NAME_PART.test(tool)
+    ? `mcp__${server}__${tool}` : null);
+  if (naming === 'codex-invocation') {
+    const invocation = announced.invocation;
+    if (!invocation || announced.title !== `Tool: ${invocation.server}/${invocation.tool}`) return null;
+    if (toolCall?.rawInput?.server_name !== invocation.server) return null;
+    return canonical(invocation.server, invocation.tool);
+  }
+  if (naming === 'opencode-key') {
+    const title = toolCall?.title;
+    if (toolCall?.kind !== 'other' || announced.kind !== 'other') return null;
+    if (typeof title !== 'string' || title !== announced.title) return null;
+    const matches = servers
+      .filter((server) => title.startsWith(`${server}_`))
+      .map((server) => canonical(server, title.slice(server.length + 1)))
+      .filter(Boolean);
+    return matches.length === 1 ? matches[0] : null;
+  }
+  return null;
 }
 
 // The harness-reported tool name on a tool_call / tool_call_update, if any.
@@ -358,18 +426,20 @@ export function createAcpExecutor({
     let replaying = false;
     let skippedUpdates = 0;
     let streamError = null;
-    // toolCallId → the tool name the harness announced it with, for the
+    // toolCallId → what the harness announced about the call, for the
     // permission request that follows (bounded: one turn's calls).
     const announcedTools = new Map();
+    const serverNames = turnMcpServers.map((server) => server?.name).filter((name) => typeof name === 'string');
 
     const rpc = createRpcChannel(child, {
       log,
       onNotification: (method, params) => {
         if (method !== 'session/update' || replaying) return;
         if (sessionId === null || params.sessionId !== sessionId) return;
-        const announced = announcedToolName(params.update);
-        if (announced !== null && typeof params.update.toolCallId === 'string' && announcedTools.size < 4096) {
-          announcedTools.set(params.update.toolCallId, announced);
+        const toolCallId = params.update?.toolCallId;
+        if (typeof toolCallId === 'string' && (announcedTools.has(toolCallId) || announcedTools.size < 4096)) {
+          const record = recordAnnouncement(announcedTools.get(toolCallId), params.update);
+          if (record !== null) announcedTools.set(toolCallId, record);
         }
         const bounded = boundAcpUpdate(params.update);
         if (bounded === null) {
@@ -387,8 +457,15 @@ export function createAcpExecutor({
         if (method === 'session/request_permission') {
           if (signal.aborted) return { outcome: { outcome: 'cancelled' } };
           const toolCall = params.toolCall ?? {};
+          const toolName = permissionToolName(toolCall, announcedTools.get(toolCall.toolCallId) ?? null,
+            { naming: row.mcpToolNaming ?? null, serverNames });
+          // A request the adapter gave no verifiable name is decided by its ACP
+          // kind; say so, so a denied reach call is explainable from the log.
+          if (toolName === 'other' || toolName === toolCall.kind) {
+            log(`acp engine: ${harness} permission for ${typeof toolCall.toolCallId === 'string' ? toolCall.toolCallId.slice(0, 80) : 'an unidentified call'} has no verifiable tool name; policy sees '${toolName}'`);
+          }
           const decision = await requestPermission({
-            toolName: permissionToolName(toolCall, announcedTools.get(toolCall.toolCallId) ?? null),
+            toolName,
             summary: typeof toolCall.title === 'string' ? toolCall.title : null,
           });
           const optionId = pickOption(params.options, decision.outcome === 'allow');

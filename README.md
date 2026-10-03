@@ -675,8 +675,32 @@ and wakes it like any message. A relayed turn answering another agent may end
 with exactly `NO_REPLY` to send nothing, so two souls never trade
 acknowledgements up to the broker's reply-depth limit.
 
+A soul can also start its own team (#377). `start_soul` (`name`, and
+optionally `harness`, `template`, `brief`) starts a new full soul — its own
+soul directory, identity and inbox, not a subagent in the caller's session —
+through the daemon's principal launch path, with the caller recorded as its
+parent in the identity and the population census. The harness defaults to
+the caller's, the template to the owner's default (`"teams": { "template":
+PATH }` in config, else the Starter the install ships, as for
+`agent-bot join`). Comms are on for the new soul as for any
+launch, and `brief`, when given, is its first agent-comms message, sent by
+the parent. The tool returns `{agentId, name, harness, parent}`; `fleet`
+shows each teammate's `parent`.
+
+The server asks the daemon (`POST /v0/team/start`, authenticated by the
+soul's binding proof, never its secret), and every limit lives in the daemon:
+a soul starts souls only as itself; it may have at most `teams.maxChildren`
+active children (default 5) and a team nests at most `teams.maxDepth` levels
+below its root soul (default 2; each 1–100); the harness must be enabled in
+the ACP registry and launchable on the host. Starts are serialized, so
+concurrent calls cannot race past the cap. Every attempt, including
+unauthenticated and refused ones, appends a `team-start` audit receipt with
+the caller and the decision (`launched`, `refused: child cap`, `refused:
+depth`, `refused: harness`, `refused: not self`, `refused: template`,
+`failed`, `denied`), never the name, template or brief.
+
 agent-comms is part of every soul. Every daemon ACP turn (a launch or a cold
-wake) gets this server injected, with `fleet` and `send_message`, unless the
+wake) gets this server injected, with `fleet`, `send_message` and `start_soul`, unless the
 soul's `soul.json` has `"comms": false` when it is launched. The daemon reads
 that setting at launch only and records it in the population census with
 `"managed": true`; turns read the census, so editing `soul.json` while the
@@ -705,12 +729,28 @@ before it starts the soul.
 A cold turn has nobody to approve a tool call, so the daemon prepends an
 exact allow rule for each of this server's tools to the executor policy
 (`mcp__agent-reach__fetch_context`, `…__post_reply`, `…__report_status`,
-`…__clock_in`, `…__fleet`, `…__send_message` — Claude Code's MCP tool
-names). Nothing else is allowed by it; the configured policy and its
-`deny` fallback still decide every other tool. Claude's ACP adapter puts no
-tool name on its permission requests, so the engine names a request by the
-tool its `tool_call` update announced for the same `toolCallId`, never by
-the request's title (for a shell call, that is the model's command).
+`…__clock_in`, `…__fleet`, `…__send_message`, `…__start_soul` — the canonical
+`mcp__<server>__<tool>` names). Nothing else is allowed by it; the
+configured policy and its `deny` fallback still decide every other tool.
+
+Each adapter names an MCP tool call differently, and none puts a trustworthy
+tool name on its permission request, so the engine names a request from what
+the adapter itself announced for the same `toolCallId` on its `tool_call`
+update — never from the request's title alone (for a shell call, that is the
+model's command). Each ACP registry row declares how (`mcpToolNaming`), and
+the engine only names calls to a server it injected into that turn:
+
+| Harness | `mcpToolNaming` | How a reach call is recognized |
+|---|---|---|
+| Claude | `claude-meta` | `_meta.claudeCode.toolName` on the `tool_call` |
+| OpenCode | `opencode-key` | `tool_call` and request both kind `other`, same title `<server>_<tool>`, exactly one injected server prefix. OpenCode's default agent permission allows MCP tools without asking, so it rarely sends a request |
+| Codex | `codex-invocation` | `tool_call` rawInput `{server, tool}` with title `Tool: <server>/<tool>`, and the elicitation's `server_name` matches. The row is disabled |
+| Muse | none | muse-acp drops injected MCP servers; it has no reach tools |
+
+Gemini and Devin have no ACP registry row, so the daemon does not drive
+them. A request the engine cannot name is seen by the policy as its ACP
+kind (or `other`), so the deny fallback refuses it, and the engine logs
+`permission for <id> has no verifiable tool name`.
 
 It is **one server with two placements**:
 
