@@ -5,7 +5,8 @@
 // the soul's AGENTS.md and skills from its working directory, and installs
 // the harnesses the package pins (ADR-0276).
 import { execFile, execFileSync } from 'node:child_process';
-import { appendFileSync, chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { appendFileSync, chmodSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { validateAgentId } from './agent-identity.mjs';
@@ -51,11 +52,15 @@ export function ensureSoulDirectory(agentId, packagePath = null, options = {}) {
   }
   mkdirSync(state, { recursive: true, mode: 0o700 });
   chmodSync(state, 0o700);
-  try { writeFileSync(marker, `${agentId}\n`, { flag: 'wx', mode: 0o600 }); }
+  // Publish the marker atomically: a concurrent creator must never read it
+  // empty and mistake the directory for another soul's.
+  const pending = `${marker}.${process.pid}.${randomUUID()}`;
+  writeFileSync(pending, `${agentId}\n`, { flag: 'wx', mode: 0o600 });
+  try { linkSync(pending, marker); }
   catch (error) {
     if (error.code !== 'EEXIST') throw error;
     if (readFileSync(marker, 'utf8').trim() !== agentId) throw new Error('soul directory belongs to another Agent ID');
-  }
+  } finally { rmSync(pending, { force: true }); }
   registerSoulDir(agentId, directory, { file: options.file ?? populationFile(options) });
   const link = path.join(state, 'space');
   let present = false;
