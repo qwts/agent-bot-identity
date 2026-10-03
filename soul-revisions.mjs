@@ -7,7 +7,7 @@ import { cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFi
   readdirSync, renameSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { canonicalJson, computePackageRevision, validateSoulPackage } from './soul-package.mjs';
+import { canonicalJson, computePackageRevision, readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
 import { currentAgentId, readAgentIdentity, recordAgentPackageRevision, stateDirectory, validateAgentId, withLock } from './agent-identity.mjs';
 import { spacePath } from './agent-space.mjs';
 import { assertOwnerAction } from './owner-gate.mjs';
@@ -63,14 +63,23 @@ function append(root, event, options) {
   return record;
 }
 function snapshot(root, source, parentRevision, { preserve = false } = {}) {
-  // Reject links and special entries before copying. Inputs must be quiescent,
-  // just as for the package validator; verify the copied tree again below.
-  computePackageRevision(source);
+  // Use the same package inventory as hashing: never copy working state or
+  // follow its links. Inputs must be quiescent; verify the snapshot below.
+  const { entries } = readSoulPackageEntries(source);
   mkdirSync(join(root, 'objects'), { recursive: true, mode: 0o700 });
   const temp = mkdtempSync(join(root, '.package-'));
   const tree = join(temp, 'package.soul');
   try {
-    cpSync(source, tree, { recursive: true, dereference: false });
+    mkdirSync(tree);
+    for (const { path, mode, bytes } of entries) {
+      const file = join(tree, path);
+      if (mode === '040000') mkdirSync(file, { recursive: true });
+      else {
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, bytes);
+        chmodSync(file, mode === '100755' ? 0o755 : 0o644);
+      }
+    }
     const manifest = json(join(tree, 'soul.json'));
     if (!preserve) manifest.parentRevision = parentRevision;
     manifest.revision = ZERO;
@@ -138,19 +147,17 @@ export async function editSoulRevision(id, packagePath, { reason, expectedParent
   return revisionHistory(id, options).find((record) => record.revision === stored.revision);
 }
 
-function inventory(directory, prefix = '', result = new Map()) {
-  for (const name of readdirSync(directory)) {
-    const file = join(directory, name);
-    const path = prefix + name.normalize('NFC');
-    const stat = lstatSync(file);
-    if (stat.isDirectory()) { result.set(path, 'directory'); inventory(file, path + '/', result); }
+function inventory(directory) {
+  const result = new Map();
+  for (const { path, mode, bytes: raw } of readSoulPackageEntries(directory).entries) {
+    if (mode === '040000') result.set(path, 'directory');
     else {
-      let bytes = readFileSync(file);
+      let bytes = raw;
       if (path === 'soul.json') {
         const { revision, parentRevision, ...content } = JSON.parse(bytes);
         bytes = Buffer.from(canonicalJson(content));
       }
-      result.set(path, `${stat.mode & 0o111 ? 'x' : '-'}:${bytes.toString('base64')}`);
+      result.set(path, `${mode}:${bytes.toString('base64')}`);
     }
   }
   return result;
@@ -194,7 +201,7 @@ function needsUser(diff) {
   // Unknown tool/MCP formats cannot safely be proven narrower. Treat every
   // change to their configuration (including removals) as user reviewed.
   // Any `mcp` substring counts, so variants like `mcpServers.json` are caught.
-  return diff.some(({ path }) => path === 'policy.json' || path === 'soul.json' ||
+  return diff.some(({ path }) => path === 'bin' || path.startsWith('bin/') || path === 'policy.json' || path === 'soul.json' ||
     /(^|[/._-])tools?([/._-]|$)/i.test(path) || /mcp/i.test(path));
 }
 export function listSoulProposals(id, options = {}) {

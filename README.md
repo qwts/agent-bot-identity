@@ -455,7 +455,12 @@ parent's App and writes a separate 0600 file at
 `<git-dir>/agent-bindings/<childId>.json`, leaving the parent's binding intact.
 Use `identity spawn --package PATH` to derive the child ID from its starting
 [soul package genesis](docs/soul-genesis.md). This records the computed package
-revision and parent while keeping the spawn nonce private.
+revision and parent while keeping the spawn nonce private. Package format 1
+retains its existing hashes;
+[format 2](docs/soul-package.md#format-2-working-state-and-compatibility) excludes
+working state and harness files whose bytes exactly match soul-builder output
+for the package. The generated marker alone has no effect; until soul-builder
+ships (#342), nothing at generated paths is ignored. Older tools require format 1.
 With `identity spawn -- <command...>`, the command receives the child file as
 `AGENT_BOT_BINDING` and child ID as `QWTS_AGENT_ID` (and `AGENT_BOT_ID`); its
 exit status becomes the CLI's status. Parent revocation or expiry cascades to

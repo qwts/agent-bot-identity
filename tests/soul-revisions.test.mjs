@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mintAgentIdentity, readAgentIdentity, recordAgentPackageRevision } from '../agent-identity.mjs';
-import { computePackageRevision, validateSoulPackage } from '../soul-package.mjs';
+import { computePackageRevision, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, validateSoulPackage } from '../soul-package.mjs';
 import { adoptSoulPackage, createRevisionAppender, decideSoulProposal, diffSoulPackages,
   editSoulRevision, listSoulProposals, promoteSpaceContent, proposeSoulRevision,
   revisionCommand, revisionHistory, revisionPackagePath } from '../soul-revisions.mjs';
@@ -282,4 +282,61 @@ test('CLI denies soul actions from an unbound caller', (t) => {
     'soul', 'revision', 'propose', f.id, f.packagePath, 'Unbound'], { encoding: 'utf8', env, cwd: f.stateDir });
   assert.equal(result.status, 1); assert.match(result.stderr, /only to its own package/);
   assert.equal(revisionHistory(f.id, f.options).length, 1);
+});
+
+for (const change of ['add', 'modify', 'remove', 'mode']) {
+  test(`bin ${change} cannot auto-approve and uses the existing owner gate`, async (t) => {
+    const f = fixture(t, { mode: 'auto', paths: ['**'] });
+    if (change !== 'add') {
+      update(f, 'bin/run', 'original');
+      await editSoulRevision(f.id, f.packagePath, { ...f.options, reason: 'Install tool' });
+    }
+    if (change === 'remove') rmSync(join(f.packagePath, 'bin'), { recursive: true });
+    else if (change === 'mode') chmodSync(join(f.packagePath, 'bin/run'), 0o755);
+    else update(f, 'bin/run', 'new code');
+    const before = revisionHistory(f.id, f.options).length;
+    const p = propose(f);
+    assert.equal(p.requiresUser, true);
+    assert.equal(p.status, 'pending');
+    assert.equal(revisionHistory(f.id, f.options).length, before);
+    const args = ['approve', f.id, p.proposalId, 'Reviewed tool'];
+    await assert.rejects(revisionCommand(args, { ...f.options, assertUser: () => {
+      throw new Error('owner denied');
+    } }), /owner denied/);
+    assert.equal(revisionHistory(f.id, f.options).length, before);
+    let calls = 0;
+    const approved = await revisionCommand(args, { ...f.options, assertUser: (action) => {
+      assert.equal(action, `soul revision approve ${f.id}`);
+      calls++;
+      return { method: 'consent' };
+    } });
+    assert.equal(calls, 1);
+    assert.equal(approved.approval, 'user');
+    assert.deepEqual(approved.authorization, { method: 'consent' });
+  });
+}
+
+test('v2 snapshots and proposal diffs exclude working state but include marked harness files', async (t) => {
+  const f = fixture(t, { mode: 'auto', paths: ['**'] });
+  const manifest = JSON.parse(readFileSync(join(f.packagePath, 'soul.json')));
+  update(f, 'soul.json', { ...manifest, formatVersion: 2, ignore: PACKAGE_IGNORE_LIST });
+  await editSoulRevision(f.id, f.packagePath, { ...f.options, reason: 'Upgrade format' });
+  const before = revisionPackagePath(f.id, revisionHistory(f.id, f.options).at(-1).revision, f.options);
+  mkdirSync(join(f.packagePath, 'worktrees'));
+  symlinkSync('missing', join(f.packagePath, 'worktrees/checkout'));
+  update(f, '.soul-state/cache', 'private state');
+  assert.deepEqual(diffSoulPackages(before, f.packagePath), []);
+  const revision = computePackageRevision(f.packagePath);
+  const markedFiles = ['CLAUDE.md', '.claude/x.md', '.codex/nested/generated.md'];
+  for (const path of markedFiles) update(f, path, `${GENERATED_HARNESS_MARKER}\noutput`);
+  assert.notEqual(computePackageRevision(f.packagePath), revision);
+  update(f, '.codex/authored.md', 'authored');
+  const p = propose(f);
+  assert.deepEqual(p.diff, ['.claude', '.claude/x.md', '.codex', '.codex/authored.md',
+    '.codex/nested', '.codex/nested/generated.md', 'CLAUDE.md'].map((path) => ({ path, change: 'added' })));
+  const stored = revisionPackagePath(f.id, p.revision, f.options);
+  for (const path of ['worktrees', '.soul-state']) assert.equal(existsSync(join(stored, path)), false);
+  assert.equal(readFileSync(join(stored, '.codex/authored.md'), 'utf8'), 'authored');
+  for (const path of markedFiles) assert.equal(readFileSync(join(stored, path), 'utf8'), `${GENERATED_HARNESS_MARKER}\noutput`);
+  assert.equal(existsSync(join(f.packagePath, '.soul-state/cache')), true, 'source working state survives');
 });

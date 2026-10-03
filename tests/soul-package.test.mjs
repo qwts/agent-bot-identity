@@ -5,7 +5,7 @@ import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { canonicalJson, canonicalPackageBytes, computePackageRevision, skillField, validateSoulPackage } from '../soul-package.mjs';
+import { canonicalJson, canonicalPackageBytes, computePackageRevision, expectedGeneratedFiles, readSoulPackageEntries, GENERATED_HARNESS_MARKER, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST, skillField, validateSoulPackage } from '../soul-package.mjs';
 
 const vectors = JSON.parse(readFileSync(new URL('./fixtures/soul-package/vectors.json', import.meta.url)));
 const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
@@ -184,3 +184,124 @@ test('CLI validates with no identity, gives useful failures, and never mutates',
   const bad = run('pack', 'validate', root); assert.equal(bad.status, 1); assert.match(bad.stderr, /revision mismatch/);
   assert.match(run('cold-wake').stderr, /usage: agent-bot soul cold-wake/);
 });
+
+// Captured from main's unchanged implementation before issue #341 edits.
+test('format 1 retains the pre-341 revision hash', (t) => {
+  const root = fixture(t);
+  assert.equal(computePackageRevision(root),
+    'sha256:142f0d39da1abd4b1539e808c8ee2c3b1132b11905c56029226be4c3748ce3bc');
+  const old = computePackageRevision(root);
+  mkdirSync(join(root, 'worktrees'));
+  assert.notEqual(computePackageRevision(root), old, 'v1 still covers all unknown entries');
+});
+
+function version2(t) {
+  const root = fixture(t);
+  manifest(root, (m) => { m.formatVersion = 2; m.ignore = PACKAGE_IGNORE_LIST; });
+  seal(root);
+  return root;
+}
+
+test('format 2 records the fixed ignore contract and uses a new hash domain', (t) => {
+  const root = version2(t);
+  assert.ok(canonicalPackageBytes(root).subarray(0, 26).equals(Buffer.from('agent-bot-soul-package-v2\0')));
+  assert.ok(canonicalPackageBytes(root).includes(Buffer.from(canonicalJson(PACKAGE_IGNORE_LIST))));
+  assert.equal(validateSoulPackage(root).formatVersion, 2);
+  for (const ignore of [undefined, {}, { ...PACKAGE_IGNORE_LIST, directories: ['bin/'] },
+    { ...PACKAGE_IGNORE_LIST, generatedMarker: 'anything' }]) {
+    manifest(root, (m) => { m.ignore = ignore; });
+    assert.throws(() => computePackageRevision(root), /ignore list/);
+  }
+});
+
+test('only root working state is ignored before symlink and special-file validation', (t) => {
+  const root = version2(t), revision = computePackageRevision(root);
+  for (const directory of ['worktrees', '.soul-state']) {
+    mkdirSync(join(root, directory));
+    symlinkSync('missing', join(root, directory, 'checkout'));
+    writeFileSync(join(root, directory, 'cache'), 'working state');
+    assert.equal(spawnSync('mkfifo', [join(root, directory, 'pipe')]).status, 0);
+    assert.equal(computePackageRevision(root), revision);
+    writeFileSync(join(root, directory, 'cache'), 'different state');
+    assert.equal(validateSoulPackage(root).revision, revision);
+    rmSync(join(root, directory), { recursive: true });
+    symlinkSync('missing', join(root, directory));
+    assert.equal(validateSoulPackage(root).revision, revision);
+  }
+  mkdirSync(join(root, 'nested', 'worktrees'), { recursive: true });
+  mkdirSync(join(root, 'nested', '.soul-state'));
+  const nestedRevision = computePackageRevision(root);
+  assert.notEqual(nestedRevision, revision);
+  writeFileSync(join(root, 'nested', '.soul-state', 'cache'), 'covered');
+  assert.notEqual(computePackageRevision(root), nestedRevision);
+  symlinkSync('missing', join(root, 'nested', 'worktrees', 'checkout'));
+  assert.throws(() => computePackageRevision(root), /unsupported package entry/);
+});
+
+test('marked harness files remain package content until soul-builder ships', (t) => {
+  assert.deepEqual(expectedGeneratedFiles([]), new Map());
+  for (const candidate of GENERATED_HARNESS_PATHS) {
+    const root = version2(t), revision = computePackageRevision(root);
+    const file = candidate.endsWith('/') ? candidate + 'nested/generated.md' : candidate;
+    mkdirSync(dirname(join(root, file)), { recursive: true });
+    const bytes = Buffer.from(`${GENERATED_HARNESS_MARKER}\r\ngenerated\n`);
+    writeFileSync(join(root, file), bytes);
+    const markedRevision = computePackageRevision(root);
+    assert.notEqual(markedRevision, revision, file);
+    assert.ok(readSoulPackageEntries(root).entries.find((entry) => entry.path === file).bytes.equals(bytes));
+    writeFileSync(join(root, file), `generated changed\n${GENERATED_HARNESS_MARKER}\n`);
+    assert.notEqual(computePackageRevision(root), markedRevision, 'marked changes participate');
+    rmSync(join(root, file)); symlinkSync('missing', join(root, file));
+    assert.throws(() => computePackageRevision(root), /unsupported package entry/);
+  }
+});
+
+test('only exact expected build bytes at generated paths are ignored', (t) => {
+  for (const candidate of GENERATED_HARNESS_PATHS) {
+    const root = version2(t), revision = computePackageRevision(root);
+    const file = candidate.endsWith('/') ? candidate + 'nested/generated.md' : candidate;
+    const bytes = Buffer.from(`${GENERATED_HARNESS_MARKER}\noutput\n`);
+    const options = { expectedGeneratedFiles: (entries) => {
+      assert.ok(entries.some((entry) => entry.path === 'AGENTS.md'));
+      assert.ok(entries.some((entry) => entry.path === 'soul.json'));
+      assert.ok(entries.every((entry) => !GENERATED_HARNESS_PATHS.some((path) =>
+        path.endsWith('/') ? entry.path === path.slice(0, -1) || entry.path.startsWith(path) : entry.path === path)));
+      return new Map([[file, bytes]]);
+    } };
+    mkdirSync(dirname(join(root, file)), { recursive: true });
+    writeFileSync(join(root, file), bytes);
+    assert.equal(computePackageRevision(root, options), revision, file);
+    assert.equal(readSoulPackageEntries(root, options).entries.some((entry) => entry.path === file), false);
+    const changed = Buffer.from(bytes); changed[changed.length - 2] ^= 1;
+    writeFileSync(join(root, file), changed);
+    assert.notEqual(computePackageRevision(root, options), revision, 'one-byte difference participates');
+    assert.ok(readSoulPackageEntries(root, options).entries.find((entry) => entry.path === file).bytes.equals(changed));
+  }
+  const root = version2(t);
+  mkdirSync(join(root, '.codex'));
+  writeFileSync(join(root, '.codex/authored.md'), 'authored');
+  const authored = computePackageRevision(root);
+  const bytes = Buffer.from('output without a marker');
+  writeFileSync(join(root, '.codex/generated.md'), bytes);
+  const options = { expectedGeneratedFiles: () => new Map([
+    ['.codex/generated.md', bytes], ['other.md', bytes],
+  ]) };
+  assert.equal(computePackageRevision(root, options), authored, 'mixed containers retain authored files');
+  writeFileSync(join(root, 'other.md'), bytes);
+  assert.notEqual(computePackageRevision(root, options), authored, 'expected bytes outside generated paths are content');
+});
+
+for (const file of ['bin/run', 'workflows/review.md', 'sop/rules.md', 'agent-sop.toml']) {
+  test(`format 2 covers ${file}`, (t) => {
+    const root = version2(t), revision = computePackageRevision(root);
+    mkdirSync(dirname(join(root, file)), { recursive: true });
+    writeFileSync(join(root, file), 'initial');
+    const added = computePackageRevision(root);
+    assert.notEqual(added, revision);
+    writeFileSync(join(root, file), 'changed');
+    const changed = computePackageRevision(root);
+    assert.notEqual(changed, added);
+    chmodSync(join(root, file), 0o755);
+    assert.notEqual(computePackageRevision(root), changed);
+  });
+}
