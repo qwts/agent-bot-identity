@@ -598,6 +598,7 @@ export function createDaemonServer({
             appSlug: identity.github.appSlug,
             token: grant.token,
             expires_at: grant.expires_at,
+            installation_id: Number.isSafeInteger(grant.installation_id) ? grant.installation_id : null,
           });
           return;
         }

@@ -54,12 +54,13 @@ function storeInvocationId(invocation) {
   try { return validateInvocationId(invocation?.invocationId); } catch { return null; }
 }
 
-// The owner's policy with the soul's own reach-back tools (and keyd's, which
-// mint only for the calling soul) allowed first. A malformed policy passes
-// through untouched so the contract still refuses it.
-export function withReachRules(policy) {
+// The owner's policy with the soul's own reach-back tools allowed first, and
+// keyd's (which mint only for the calling soul) only for a soul that gets
+// keyd's relay: any other soul must not inherit an allow for those names. A
+// malformed policy passes through untouched so the contract still refuses it.
+export function withReachRules(policy, { keyd = false } = {}) {
   if (!policy || typeof policy !== 'object' || !Array.isArray(policy.rules)) return policy;
-  return { ...policy, rules: [...reachPolicyRules(), ...keydPolicyRules(), ...policy.rules] };
+  return { ...policy, rules: [...reachPolicyRules(), ...(keyd ? keydPolicyRules() : []), ...policy.rules] };
 }
 
 // The production executor factory: one ACP turn under the soul's own
@@ -79,7 +80,6 @@ export function acpExecutorFor({
   identities, policy, baseEnv, onHarnessSession = null, createExecutor = createAcpExecutor,
   commsFor = () => true, reachEnv = {}, keydFor = () => null,
 }) {
-  const turnPolicy = withReachRules(policy);
   return ({ agentId, harness, cwd, env }) => {
     const identity = identities(agentId);
     // A soul without the github-identity add-on runs with no App (#297).
@@ -103,7 +103,7 @@ export function acpExecutorFor({
     const executor = createExecutor({
       harness,
       identity: { app, agentId },
-      policy: turnPolicy,
+      policy: withReachRules(policy, { keyd: Boolean(keyd) }),
       cwd,
       mcpServers,
       env: turnEnv,

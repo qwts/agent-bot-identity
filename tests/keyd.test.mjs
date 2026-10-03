@@ -134,6 +134,13 @@ test('keydRequest speaks newline-delimited JSON-RPC and reports keyd refusals an
   assert.deepEqual(await keydRequest(socket, 'owner/status'), { pinned: true, version: '0.1.0' });
   await assert.rejects(keydRequest(socket, 'owner/import', {}), /the owner did not approve/);
   await assert.rejects(keydRequest(path.join(dir, 'missing'), 'owner/status'), { code: 'keyd-unavailable' });
+
+  // A keyd that hangs up mid-answer settles the call instead of leaving it pending.
+  const halfSocket = path.join(dir, 'half');
+  const half = net.createServer((connection) => { connection.on('data', () => connection.end('{"jsonrpc":"2.0"')); });
+  await new Promise((resolve) => half.listen(halfSocket, resolve));
+  t.after(() => half.close());
+  await assert.rejects(keydRequest(halfSocket, 'owner/status', {}, { timeoutMs: 60_000 }), { code: 'keyd-unavailable', message: /closed the connection/ });
 });
 
 test('the owner import sends every key at once with the daemon key to pin', async (t) => {
@@ -173,6 +180,37 @@ test('install writes a launchd unit for keyd serve and a record; uninstall remov
   assert.equal(removed.unloaded, true);
   assert.equal(existsSync(first.unitPath), false);
   assert.equal(readKeydRecord({ env, home }), null);
+});
+
+test('a unit that fails to load leaves no install record behind', (t) => {
+  const { env, home } = fixture(t);
+  const bin = path.join(home, 'agent-bot-keyd');
+  writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });
+  const loading = { ...env, AGENT_BOT_SUPERVISOR_SKIP_LOAD: '' };
+  const exec = (args) => { if (args[0] === 'bootstrap') throw new Error('Bootstrap failed: 5: Input/output error'); };
+  assert.throws(() => installKeyd({ bin, env: loading, home, platform: 'darwin', exec }), /Bootstrap failed/);
+  assert.equal(readKeydRecord({ env, home }), null, 'no record, so the daemon injects no relay');
+});
+
+test('uninstall removes the unit under the label install saved', (t) => {
+  const { env, home } = fixture(t);
+  const bin = path.join(home, 'agent-bot-keyd');
+  writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });
+  const custom = installKeyd({ bin, env: { ...env, AGENT_BOT_KEYD_SERVICE_LABEL: 'app.geniusbar.keyd' }, home, platform: 'darwin', exec: () => {} });
+  const removed = uninstallKeyd({ env, home, platform: 'darwin', exec: () => {} });
+  assert.equal(removed.label, 'app.geniusbar.keyd');
+  assert.equal(removed.unloaded, true);
+  assert.equal(existsSync(custom.unitPath), false);
+  assert.equal(readKeydRecord({ env, home }), null);
+});
+
+test('a bound keyd soul\'s mint through the daemon keeps the installation id', async (t) => {
+  const { env, home } = fixture(t);
+  const file = path.join(home, 'agent-binding.json');
+  writeFileSync(file, JSON.stringify({ v: 1, agentId: AGENT, parent: null, account: 'acct', daemon: 'http://127.0.0.1:4242/', secret: 'a'.repeat(43) }), { mode: 0o600 });
+  const fetchImpl = async () => new Response(JSON.stringify({ appSlug: SLUG, token: 'ghs_x', expires_at: '2026-10-03T09:00:00Z', installation_id: 77 }), { status: 200 });
+  const grant = await (await import('../keyd-client.mjs')).mintThroughDaemon({ slug: SLUG, env: { ...env, AGENT_BOT_BINDING: file }, fetchImpl });
+  assert.deepEqual(grant, { token: 'ghs_x', expires_at: '2026-10-03T09:00:00Z', installation_id: 77 });
 });
 
 test('status says whether keyd answers and whether the daemon key is pinned', async (t) => {
@@ -237,7 +275,9 @@ test('migrate-credentials --to keyd imports every key in one owner call and only
 test('turns of a keyd soul get the keyd relay and its allow rules; others do not', (t) => {
   const { env } = fixture(t);
   assert.deepEqual(keydPolicyRules().map((rule) => rule.tool), ['mcp__agent-bot-keyd__credential', 'mcp__agent-bot-keyd__git_credential']);
-  assert.deepEqual(withReachRules({ version: 1, rules: [], fallback: 'deny' }).rules.filter((rule) => rule.tool.includes('keyd')).length, 2);
+  const keydRules = (policy) => policy.rules.filter((rule) => rule.tool.includes('keyd')).length;
+  assert.equal(keydRules(withReachRules({ version: 1, rules: [], fallback: 'deny' })), 0, 'no keyd allow without the relay');
+  assert.equal(keydRules(withReachRules({ version: 1, rules: [], fallback: 'deny' }, { keyd: true })), 2);
   const entry = keydMcpServerEntry({ bin: '/Applications/GeniusBar.app/Contents/MacOS/agent-bot-keyd', binding: '/w/.git/agent-binding.json', env });
   assert.deepEqual(entry.args, ['mcp']);
   assert.deepEqual(entry.env.map((v) => v.name), ['AGENT_BOT_BINDING', 'HOME', 'XDG_STATE_HOME']);
@@ -248,10 +288,14 @@ test('turns of a keyd soul get the keyd relay and its allow rules; others do not
       policy: { version: 1, rules: [], fallback: 'deny' },
       baseEnv: env,
       keydFor,
-      createExecutor: ({ mcpServers }) => { captured = mcpServers; return () => {}; },
+      createExecutor: ({ mcpServers, policy }) => { captured = { mcpServers, policy }; return () => {}; },
     });
     factory({ agentId: AGENT, harness: 'claude', cwd: '/w', env: { AGENT_BOT_BINDING: '/w/.git/agent-binding.json' } });
-    return captured({ invocation: {} }).map((server) => server.name);
+    const names = captured.mcpServers({ invocation: {} }).map((server) => server.name);
+    // The keyd allow rules follow the relay: a soul without it must not
+    // inherit an allow for those tool names from another MCP server.
+    assert.equal(keydRules(captured.policy), names.includes('agent-bot-keyd') ? 2 : 0, `policy for ${names}`);
+    return names;
   };
   assert.deepEqual(servers(() => '/k/agent-bot-keyd'), ['agent-reach', 'agent-bot-keyd']);
   assert.deepEqual(servers(() => null), ['agent-reach']);
@@ -301,7 +345,9 @@ test('the daemon grants keyd calls only to a bound keyd soul, and receipts each 
   // The daemon's own broker route mints a keyd soul's token through keyd.
   const credential = await call('/v0/credential', { headers: asSoul, bearer: false });
   assert.equal(credential.status, 200);
-  assert.equal((await credential.json()).token, 'ghs_from_keyd');
+  const minted = await credential.json();
+  assert.equal(minted.token, 'ghs_from_keyd');
+  assert.equal(minted.installation_id, 9, 'keyd\'s installation id reaches the caller');
   assert.equal(keydCalls.length, 1);
   assert.equal(assertDaemonSigned(keydCalls[0]._meta[KEYD_GRANT_META], env, home).tool, 'credential');
 
@@ -317,4 +363,9 @@ test('the daemon grants keyd calls only to a bound keyd soul, and receipts each 
     .trim().split('\n').map((line) => JSON.parse(line)).filter((receipt) => receipt.event === 'credential-grant');
   assert.deepEqual(receipts.map((receipt) => receipt.decision), ['denied', 'denied', 'granted', 'denied']);
   assert.doesNotMatch(JSON.stringify(receipts), /v1\.|ghs_/);
+});
+
+test('agent-bot --help lists the keyd command and its actions', async () => {
+  const { helpText } = await import('../cli/output.mjs');
+  assert.match(helpText(), /^ {2}keyd {2,}.*install --bin PATH \| uninstall \| status/m);
 });

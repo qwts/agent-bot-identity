@@ -70,19 +70,27 @@ export function keydRequest(socketPath, method, params = {}, { timeoutMs = REQUE
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(socketPath);
     let buffer = '';
-    const fail = (error) => { socket.destroy(); reject(error); };
+    let settled = false;
+    const fail = (error) => { if (settled) return; settled = true; socket.destroy(); reject(error); };
     socket.setTimeout(timeoutMs, () => fail(Object.assign(new Error('agent-bot-keyd did not answer in time'), { code: 'keyd-timeout' })));
     socket.on('error', (error) => fail(Object.assign(new Error('agent-bot-keyd is not running'), { code: 'keyd-unavailable', cause: error.code })));
     socket.on('connect', () => socket.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })}\n`));
     socket.on('data', (chunk) => {
+      if (settled) return;
       buffer += chunk;
       const end = buffer.indexOf('\n');
       if (end < 0) return;
+      settled = true;
       socket.end();
       let message;
       try { message = JSON.parse(buffer.slice(0, end)); } catch { reject(new Error('agent-bot-keyd answered malformed JSON')); return; }
       if (message.error) reject(Object.assign(new Error(String(message.error.message ?? 'agent-bot-keyd refused')), { code: 'keyd-refused' }));
       else resolve(message.result);
+    });
+    // A keyd that crashes or hangs up before a full line would otherwise
+    // leave this pending forever: socket timeouts stop once it closes.
+    socket.on('close', () => {
+      if (!settled) fail(Object.assign(new Error('agent-bot-keyd closed the connection without an answer'), { code: 'keyd-unavailable' }));
     });
   });
 }
@@ -150,7 +158,8 @@ export async function mintThroughDaemon({ slug, env = process.env, cwd = process
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`the daemon refused a token: ${typeof body?.error === 'string' ? body.error : `HTTP ${response.status}`}`);
   if (body.appSlug !== slug) throw new Error(`this soul's App is ${body.appSlug}, not ${slug}`);
-  return { token: body.token, expires_at: body.expires_at, installation_id: null };
+  const installationId = Number(body.installation_id);
+  return { token: body.token, expires_at: body.expires_at, installation_id: Number.isSafeInteger(installationId) && installationId > 0 ? installationId : null };
 }
 
 // The owner's import (migrate-credentials --to keyd): every key in one call,
@@ -212,7 +221,6 @@ export function installKeyd({ bin, env = process.env, home = homedir(), platform
   try { previous = readFileSync(unit, 'utf8'); } catch { /* first install */ }
   const paths = keydPaths({ env, home });
   mkdirSync(paths.dir, { recursive: true, mode: 0o700 });
-  writeFileSync(paths.record, `${JSON.stringify({ bin, label })}\n`, { mode: 0o600 });
   const changed = previous !== body;
   if (changed) {
     mkdirSync(path.dirname(unit), { recursive: true });
@@ -223,12 +231,18 @@ export function installKeyd({ bin, env = process.env, home = homedir(), platform
       exec(['bootstrap', domain, unit], env);
     }
   }
+  // Published last: the daemon injects keyd's relay only for a record, so
+  // a unit that failed to write or load must not leave one behind.
+  writeFileSync(paths.record, `${JSON.stringify({ bin, label })}\n`, { mode: 0o600 });
   return { label, unitPath: unit, bin, changed, loaded: true };
 }
 
 export function uninstallKeyd({ env = process.env, home = homedir(), platform = process.platform, exec = launchctl } = {}) {
   if (platform !== 'darwin') return { unloaded: false, reason: 'unsupported-platform' };
-  const label = keydLabel(env);
+  // The label install saved wins over today's environment, so an install
+  // under a custom label is removed without repeating that variable.
+  const saved = readKeydRecord({ env, home })?.label;
+  const label = typeof saved === 'string' && /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(saved) ? saved : keydLabel(env);
   const unit = unitPath(label, home);
   const present = existsSync(unit);
   if (present && !supervisorSkipLoad(env)) {
