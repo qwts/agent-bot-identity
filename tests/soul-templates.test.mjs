@@ -275,3 +275,32 @@ test('a spawned instance keeps its template\'s comms setting', async (t) => {
   writeFileSync(join(f.template, 'soul.json'), JSON.stringify({ ...manifest, comms: 'off' }));
   assert.throws(() => validateSoulPackage(f.template), /comms must be a boolean/);
 });
+
+// #419: a team member whose first start failed used to keep its folder, so
+// every retry with that name was refused. Rollback leaves agent-comms,
+// retires the soul and archives its folder; the same name then spawns again.
+test('a rolled-back spawn frees its name for a retry', async (t) => {
+  const { discardFailedLaunch } = await import('../agent-daemon.mjs');
+  const f = fixture(t);
+  const first = await spawnSoulTemplate(f.template, { ...f.options, name: 'CodexR8', harness: 'codex' });
+  const folder = soulDirectory(first.id, f.options);
+  await assert.rejects(spawnSoulTemplate(f.template, { ...f.options, name: 'CodexR8' }), /soul directory already exists/);
+  const left = [];
+  const binding = { worktree: folder, file: join(folder, 'binding.json') };
+  const result = await discardFailedLaunch(first.id, { binding, joined: true },
+    { env: f.options.env, home: f.home, config: {}, leave: async (soul) => { left.push(soul); return true; } });
+  assert.deepEqual(left, [{ agentId: first.id, binding }]);
+  assert.equal(result.left, true);
+  assert.equal(showSoul(first.id, f.options).status, 'retired');
+  assert.equal(readAgentIdentity(first.id, { stateDir: f.options.stateDir }).status, 'retired');
+  assert.equal(existsSync(folder), false);
+  assert.deepEqual(result.archived.map(({ from }) => from), [folder]);
+  assert.equal(readFileSync(join(result.archived[0].to, '.soul-state', 'agent-id'), 'utf8').trim(), first.id);
+  const retry = await spawnSoulTemplate(f.template, { ...f.options, name: 'CodexR8' });
+  assert.notEqual(retry.id, first.id);
+  assert.equal(soulDirectory(retry.id, f.options), folder);
+  // A launch that never joined does not try to leave.
+  const quiet = await discardFailedLaunch(retry.id, { binding: null, joined: false },
+    { env: f.options.env, home: f.home, config: {}, leave: async () => { throw new Error('must not leave'); } });
+  assert.equal(quiet.left, true);
+});
