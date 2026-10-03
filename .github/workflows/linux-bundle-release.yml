@@ -1,0 +1,64 @@
+name: Linux bundle release
+
+# ADR-0332 decision 1: a headless-Linux CLI bundle is a release archive per
+# platform. This workflow publishes those archives, and SHA256SUMS, next to the
+# formula's tag on the same GitHub release, so a machine can check out one tag
+# and get every install path from it.
+#
+# It is triggered by the tag push alone. Agents and maintainers never push tags
+# from a session; a release is a maintainer decision made after the tag exists.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-bundle-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish the Linux CLI archives
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          # The build runs the pinned agent-comms CLI to check what it dispatches,
+          # so the release runs on the Node the archives ship.
+          node-version: 24
+      - name: Check the tag against the runtime version
+        # A tag that does not match package.json would publish archives named
+        # after a version this tree is not.
+        run: |
+          set -eu
+          tagged=${GITHUB_REF_NAME#v}
+          declared=$(node -p "require('./package.json').version")
+          test "$tagged" = "$declared" || { echo "tag $tagged does not match package.json $declared"; exit 1; }
+      - name: Build both platform archives and SHA256SUMS
+        # --require-verified refuses to publish an archive whose agent-comms pin
+        # does not dispatch the verbs this runtime calls. A release must ship a
+        # working pair or nothing.
+        run: node scripts/linux-bundle/build.mjs --platform all --out dist --require-verified
+      - name: Verify the assembled checksum file
+        run: cd dist && sha256sum --check --strict SHA256SUMS
+      - name: Smoke test each archive's install and uninstall
+        run: sh scripts/linux-bundle/ci-smoke.sh dist
+      - name: Upload the archives to the release for this tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          tag="$GITHUB_REF_NAME"
+          # The tag normally already has a release; create one if it does not,
+          # so publishing the archives never depends on release order.
+          if ! gh release view "$tag" > /dev/null 2>&1; then
+            gh release create "$tag" --title "$tag" --generate-notes
+          fi
+          gh release upload "$tag" dist/agent-bot-linux-*.tar.gz dist/SHA256SUMS --clobber

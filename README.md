@@ -93,6 +93,71 @@ own documents remain available while repository trust is pending. Printed
 text carries an ADR-0274 reference header: SOP documentation does not
 override harness or user instructions.
 
+## Machine install (headless Linux)
+
+This repository publishes a CLI bundle for headless Linux — a cloud agent's
+computer, a container, a build box. The archive holds a pinned Node,
+`agent-bot` and `agent-comms`, and `install.sh` puts both on PATH. It never
+needs root. It is
+[ADR-0332 decision 1](docs/decisions/ADR-0332-souls-are-the-agents-territory.md)'s
+third install path, beside Homebrew below and GeniusBar's wrappers.
+
+```bash
+tar -xzf agent-bot-linux-x64-v0.10.5.tar.gz
+cd agent-bot-linux-x64-v0.10.5
+./install.sh
+```
+
+`linux-arm64` is published from the same tag, and `SHA256SUMS` covers both.
+Verify the download before running the installer:
+
+```bash
+sha256sum --check --strict SHA256SUMS
+```
+
+Installing copies the bundle into `${XDG_DATA_HOME:-$HOME/.local/share}/agent-bot`,
+writes marked wrappers for `agent-bot`, `agent-comms` and `node` into
+`~/.local/bin`, adds `~/.local/bin` to `~/.profile` (or `~/.zprofile` for zsh)
+through one marked block, and writes `agent-bot-daemon.service` and
+`agent-comms-broker.service` into `~/.config/systemd/user`. Open a new login
+shell afterwards, or `. ~/.profile`.
+
+| Flag | Meaning |
+|------|---------|
+| `--prefix DIR` | install directory |
+| `--bin-dir DIR` | wrapper directory |
+| `--replace` | preserve a foreign file at a wrapper path as `<name>.before-agent-bot` |
+| `--migrate` | take the pair over from another install's broker and daemon |
+| `--no-services` | install the tree and the wrappers, write no units |
+
+A wrapper is a `#!/bin/sh` script carrying the marker line
+`# agent-bot-linux-cli-tool`. A file at a wrapper path without that marker
+belongs to another install — a Homebrew keg, a checkout, GeniusBar — and is
+never overwritten without `--replace`, which renames it to
+`<name>.before-agent-bot` and puts it back on uninstall.
+
+One OS user runs one broker and one daemon, from one install
+(ADR-0332 decision 2). The unit names are fixed, so `install.sh` reports another
+install's pair and refuses:
+
+```bash
+./install.sh            # exits non-zero and changes nothing
+./install.sh --migrate  # stops and disables that pair, starts this one
+```
+
+`--migrate` preserves the other install's unit files, and a failure while
+starting this install's pair restores them and re-enables the previous pair
+before exiting. Two OS users on one machine each have their own pair.
+
+Removing it is `./uninstall.sh`: it stops and disables the units this install
+wrote, removes the marked wrappers, restores any `.before-agent-bot` file,
+deletes exactly the marked PATH block, and removes the install directory. It
+never deletes souls — `~/.agent-bot/souls`, `$AGENT_BOT_SOULS_HOME` and every
+Agent Space are not read, moved or removed.
+
+Maintainer notes, the component pins, and how to build are in
+[`scripts/linux-bundle/README.md`](scripts/linux-bundle/README.md).
+
 ## Machine install (Homebrew)
 
 This repository is a Homebrew self-tap. Operators install the runtime from
