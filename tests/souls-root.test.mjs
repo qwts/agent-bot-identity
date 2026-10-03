@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { soulsHome } from '../souls-root.mjs';
 import { loadConfig, soulsRootSetting } from '../config.mjs';
-import { duplicateSoulDirs, locateSoulDir, registerSoulDir, showSoul, soulDirectory, upsertSoul } from '../agent-population.mjs';
+import { archiveSoulDirs, duplicateSoulDirs, locateSoulDir, orphanSoulDirs, soulDirsOf, registerSoulDir, showSoul, soulDirectory, upsertSoul } from '../agent-population.mjs';
 import { soulDirInfo } from '../soul-dir.mjs';
 
 const id = 'agent_33333333-3333-4333-8333-333333333333';
@@ -175,4 +175,51 @@ test('soul locate prints the JSON a host reads', (t) => {
     { encoding: 'utf8', env: { HOME: options.home, PATH: process.env.PATH } });
   assert.equal(usage.status, 1);
   assert.match(usage.stderr, /^soul locate: usage/);
+});
+
+// #419: a failed launch, or a removed soul, moves every folder carrying its
+// marker into the souls root's .archive, never deleting one. The archive is
+// not a soul folder, so it claims nothing; a retired soul's folder shows as an
+// orphan until it is archived.
+test('archiving moves every folder of a soul into .archive and keeps its contents', (t) => {
+  const options = scratch(t);
+  const { root } = soulsHome(options);
+  const own = path.join(root, 'test-soul.soul');
+  const copy = path.join(root, 'test-soul copy.soul');
+  const other = path.join(root, 'other.soul');
+  mark(own); mark(copy); mark(other, 'agent_44444444-4444-4444-8444-444444444444');
+  writeFileSync(path.join(own, 'soul.json'), '{"name":"test-soul"}\n');
+  registerSoulDir(id, own, { file: options.file });
+  assert.deepEqual(soulDirsOf(id, options), [copy, own].sort());
+  const now = () => new Date('2026-10-03T22:10:05.123Z');
+  const moved = archiveSoulDirs(id, { ...options, now });
+  const archive = path.join(root, '.archive');
+  assert.deepEqual(moved.map(({ from }) => from).sort(), [copy, own].sort());
+  assert.deepEqual(moved.map(({ to }) => path.basename(to)).sort(),
+    ['20261003T221005Z-test-soul copy.soul', '20261003T221005Z-test-soul.soul']);
+  assert.ok(moved.every(({ from, to }) => !existsSync(from) && path.dirname(to) === archive));
+  assert.equal(readFileSync(path.join(archive, '20261003T221005Z-test-soul.soul', 'soul.json'), 'utf8'), '{"name":"test-soul"}\n');
+  assert.ok(existsSync(other));
+  assert.deepEqual(soulDirsOf(id, options), []);
+  mark(own);
+  const again = archiveSoulDirs(id, { ...options, now });
+  assert.equal(path.basename(again[0].to), '20261003T221005Z-2-test-soul.soul');
+  assert.deepEqual(archiveSoulDirs(id, { ...options, now }), []);
+});
+
+test('a folder whose soul is retired or unknown is an orphan until archived', (t) => {
+  const options = scratch(t);
+  const { root } = soulsHome(options);
+  const own = path.join(root, 'test-soul.soul');
+  const stray = path.join(root, 'stray.soul');
+  const strayId = 'agent_55555555-5555-4555-8555-555555555555';
+  mark(own); mark(stray, strayId);
+  assert.deepEqual(orphanSoulDirs(options), [{ agentId: strayId, path: stray, status: 'unknown' }]);
+  upsertSoul({ id, name: 'test-soul', status: 'retired', spacePath: path.join(options.home, 'space') }, { file: options.file });
+  assert.deepEqual(orphanSoulDirs(options), [
+    { agentId: strayId, path: stray, status: 'unknown' },
+    { agentId: id, path: own, status: 'retired' },
+  ].sort((left, right) => left.path.localeCompare(right.path)));
+  archiveSoulDirs(id, options);
+  assert.deepEqual(orphanSoulDirs(options), [{ agentId: strayId, path: stray, status: 'unknown' }]);
 });

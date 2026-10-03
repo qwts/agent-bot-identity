@@ -10,6 +10,7 @@ import {
   chmodSync,
   closeSync,
   constants as fsConstants,
+  cpSync,
   existsSync,
   fstatSync,
   mkdirSync,
@@ -701,6 +702,60 @@ export function duplicateSoulDirs(options = {}) {
     duplicates.push({ agentId: id, soulDir: owner, copies: dirs.filter((dir) => !owner || !samePath(dir, owner)).sort() });
   }
   return duplicates.sort((left, right) => left.agentId.localeCompare(right.agentId));
+}
+
+// Every folder that carries this soul's marker: its registered folder (which
+// may sit outside the souls root) and any under the root, copies included.
+export function soulDirsOf(id, options = {}) {
+  const target = agentId(id);
+  const file = options.file ?? populationFile(options);
+  const dirs = [...(soulDirClaims(options).get(target) ?? [])];
+  const registered = readDocument(file).souls[target]?.soulDir;
+  if (registered && existsSync(registered) && markerOf(registered) === target
+    && !dirs.some((dir) => samePath(dir, registered))) dirs.push(registered);
+  return dirs.sort();
+}
+
+// Moves every folder of this soul (soulDirsOf) into `<souls root>/.archive/`
+// as `<UTC stamp>-<folder name>`, never deleting one (#419): a failed launch
+// rolls back this way, and `soul remove` archives a soul this way. A move
+// across file systems copies, then removes the original. Returns
+// [{ from, to }].
+export function archiveSoulDirs(id, { now = () => new Date(), rename = renameSync, ...options } = {}) {
+  const target = agentId(id);
+  const archive = path.join(soulsHome(options).root, '.archive');
+  const moved = [];
+  for (const from of soulDirsOf(target, options)) {
+    mkdirSync(archive, { recursive: true, mode: 0o700 });
+    const stamp = now().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+    let to = path.join(archive, `${stamp}-${path.basename(from)}`);
+    for (let n = 2; existsSync(to); n += 1) to = path.join(archive, `${stamp}-${n}-${path.basename(from)}`);
+    try { rename(from, to); }
+    catch (error) {
+      if (error.code !== 'EXDEV') throw error;
+      cpSync(from, to, { recursive: true, verbatimSymlinks: true, preserveTimestamps: true });
+      rmSync(from, { recursive: true, force: true });
+    }
+    moved.push({ from, to });
+  }
+  return moved;
+}
+
+// Folders under the souls root whose marker names a soul that is not active
+// here (#419): a launch that failed before rollback existed, or a soul
+// retired while its folder stayed. [{ agentId, path, status }], where status
+// is `retired`, or `unknown` when the census has no row. A finalized soul
+// keeps its folder on purpose and is not listed.
+export function orphanSoulDirs(options = {}) {
+  const file = options.file ?? populationFile(options);
+  const souls = readDocument(file).souls;
+  const orphans = [];
+  for (const [id, dirs] of soulDirClaims(options)) {
+    const status = souls[id]?.status ?? 'unknown';
+    if (status === 'active' || status === 'finalized') continue;
+    for (const dir of dirs) orphans.push({ agentId: id, path: dir, status });
+  }
+  return orphans.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 // What a folder opened as a soul package is (#80):

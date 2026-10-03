@@ -13,7 +13,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectAgentSpace, resolveSpacesHome } from './agent-space.mjs';
-import { duplicateSoulDirs, listSouls, populationFile } from './agent-population.mjs';
+import { duplicateSoulDirs, listSouls, orphanSoulDirs, populationFile } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
 import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness } from './config.mjs';
 import { preGateConfigStatus } from './config-migration.mjs';
@@ -1088,6 +1088,27 @@ function duplicateSoulDirsCheck({ home, env, config }) {
   });
 }
 
+// A soul folder whose soul is retired or unknown here (#419): left by a
+// launch that failed before rollback existed, or by a retirement that kept
+// the folder. Reported only when there is something to report.
+function orphanSoulDirsCheck({ home, env, config }) {
+  let orphans;
+  try { orphans = orphanSoulDirs({ home, env, config, file: populationFile({ home, env }) }); }
+  catch { return null; } // spaces.home already reports an unreadable census
+  if (orphans.length === 0) return null;
+  const shown = orphans.slice(0, 5).map(({ agentId, path, status }) => `${path} (${agentId}, ${status})`).join('; ')
+    + (orphans.length > 5 ? `; and ${orphans.length - 5} more` : '');
+  return readinessCheck({
+    id: 'souls.orphans',
+    // A warning: nothing runs from these folders, but a folder holds its name.
+    status: 'warning',
+    code: 'soul-folder-orphan',
+    message: `${orphans.length} soul folder(s) belong to no active soul: ${shown}`,
+    action: 'move each folder into the souls folder\'s .archive folder, or out of the souls folder, then rerun doctor',
+    evidence: { orphans },
+  });
+}
+
 function identityClassCheck({ home, env, access }) {
   const hook = env.AGENT_BOT_HOOK_BIN || installationPaths(home).agentHook;
   try {
@@ -1998,6 +2019,8 @@ export async function collectReadiness({
     if (unreferencedSouls) machineChecks.push(unreferencedSouls);
     const soulFolders = duplicateSoulDirsCheck({ home, env, config });
     if (soulFolders) machineChecks.push(soulFolders);
+    const orphanFolders = orphanSoulDirsCheck({ home, env, config });
+    if (orphanFolders) machineChecks.push(orphanFolders);
     const bindingSummary = worktreeBindingSummaryCheck({ home, env, roster });
     if (bindingSummary) machineChecks.push(bindingSummary);
     machineChecks.push(secureStoreCheck({ probe: probeSecretStore }));

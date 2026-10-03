@@ -403,3 +403,30 @@ test('a launched soul joins agent-comms as itself, with the host tools on PATH (
     done(Object.assign(new Error('exit 1'), { code: 1 }), '{"ok":false,"error":{"code":"broker-unreachable","message":"no broker"}}', '') }),
   /joining agent-comms failed: no broker/);
 });
+
+// #419: a rolled-back launch leaves agent-comms as itself. With the daemon's
+// binding the leave is vouched; without one it names the soul by ID and never
+// carries a stray binding from the caller's environment. A soul the hub does
+// not know has nothing to leave.
+test('a soul leaves agent-comms with its binding, or by ID without one', async () => {
+  const { leaveLaunchedSoul } = await import('../agent-daemon.mjs');
+  const agentId = 'agent_11111111-1111-4111-8111-111111111111';
+  const binding = { worktree: tmpdir(), file: '/state/homes/s/.git/agent-binding.json' };
+  const env = { AGENT_BOT_TOOL_PATH: '/App/bin', PATH: '/usr/bin', AGENT_BOT_BINDING: '/caller/binding.json' };
+  const seen = [];
+  const run = (reply) => (cmd, args, opts, done) => {
+    seen.push({ cmd, args, cwd: opts.cwd, binding: opts.env.AGENT_BOT_BINDING ?? null, id: opts.env.QWTS_AGENT_ID });
+    done(reply.error ?? null, reply.stdout, '');
+  };
+  assert.equal(await leaveLaunchedSoul({ agentId, binding }, { env, run: run({ stdout: '{"ok":true}' }) }), true);
+  assert.equal(await leaveLaunchedSoul({ agentId }, { env, cwd: '/nowhere', run: run({ stdout: '{"ok":true}' }) }), true);
+  assert.equal(await leaveLaunchedSoul({ agentId }, { env, run: run({ error: new Error('exit 1'),
+    stdout: '{"ok":false,"error":{"code":"not-joined","message":"this soul has not joined the hub from this account"}}' }) }), true);
+  assert.deepEqual(seen.slice(0, 2), [
+    { cmd: 'agent-comms', args: ['leave'], cwd: binding.worktree, binding: binding.file, id: agentId },
+    { cmd: 'agent-comms', args: ['leave'], cwd: '/nowhere', binding: null, id: agentId },
+  ]);
+  await assert.rejects(leaveLaunchedSoul({ agentId }, { env, run: run({ error: new Error('exit 1'),
+    stdout: '{"ok":false,"error":{"code":"broker-unreachable","message":"no broker"}}' }) }),
+  /leaving agent-comms failed: no broker/);
+});

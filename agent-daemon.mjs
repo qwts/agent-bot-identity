@@ -48,16 +48,16 @@
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { execFile, execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { homedir, userInfo } from 'node:os';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
-import { backfillManagedSouls, listSouls, locateSoulDir, populationFile, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
+import { archiveSoulDirs, backfillManagedSouls, listSouls, locateSoulDir, populationFile, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
 import {
   bindAgentLineage,
@@ -122,6 +122,47 @@ export function joinLaunchedSoul({ agentId, harness, name, binding, parent = nul
       reject(new Error(`joining agent-comms failed: ${detail}`));
     });
   });
+}
+
+/**
+ * Takes a soul out of agent-comms as itself (#419), the reverse of
+ * joinLaunchedSoul. With the daemon's binding the request is vouched; without
+ * one (`soul remove` from the CLI) it names the soul by ID, as an unbound
+ * session would. A soul the hub never joined, or one that already left,
+ * counts as left. Resolves to true, or rejects with agent-comms' message.
+ */
+export function leaveLaunchedSoul({ agentId, binding = null }, { env = process.env, run = execFile, cwd = tmpdir() } = {}) {
+  const { AGENT_BOT_BINDING: _binding, ...rest } = soulEnvironment(env);
+  const soulEnv = { ...rest, ...(binding?.file ? { AGENT_BOT_BINDING: binding.file } : {}), AGENT_BOT_ID: agentId, QWTS_AGENT_ID: agentId };
+  const where = binding?.worktree && existsSync(binding.worktree) ? binding.worktree : cwd;
+  return new Promise((resolve, reject) => {
+    run('agent-comms', ['leave'], { cwd: where, env: soulEnv, timeout: 30_000 }, (error, stdout = '', stderr = '') => {
+      let result = null;
+      try { result = JSON.parse(String(stdout)); } catch {}
+      if (!error && result?.ok === true) return resolve(true);
+      if (result?.error?.code === 'not-joined') return resolve(true);
+      const detail = result?.error?.message ?? (String(stderr).trim().split('\n').pop() || error?.message || 'no result');
+      reject(new Error(`leaving agent-comms failed: ${detail}`));
+    });
+  });
+}
+
+/**
+ * Rolls back a soul a launch spawned when its first start fails (#419): the
+ * agent-comms membership while the soul can still vouch, then the identity
+ * and census row, then its folder, archived so a retry can reuse the name.
+ * `rollback` is how far the launch got: `{ binding, joined }`. Returns what
+ * it did; a leave that fails is reported, not thrown, so the rest still runs.
+ */
+export async function discardFailedLaunch(agentId, { binding = null, joined = false } = {}, {
+  env = process.env, home = homedir(), config, now = () => new Date(), leave = (soul) => leaveLaunchedSoul(soul, { env }),
+} = {}) {
+  let left = !joined;
+  if (joined) { try { left = await leave({ agentId, binding }); } catch { /* reported as left: false; the soul is still retired */ } }
+  const file = populationFile({ env, home });
+  retireIdentityWithPopulation(agentId, { file, stateDir: stateDirectory({ env, home }), now });
+  const archived = archiveSoulDirs(agentId, { env, home, ...(config === undefined ? {} : { config }), now, file });
+  return { left, archived };
 }
 
 /**
@@ -1332,8 +1373,7 @@ export async function runDaemon({
     },
     // A principal launched this soul to talk to it, so later messages wake it.
     onLaunched: (agentId) => setColdWake(agentId, true, { env, home, now }),
-    discard: (agentId) => retireIdentityWithPopulation(agentId, { file: populationFile({ env, home }),
-      stateDir: stateDirectory({ env, home }), now }),
+    discard: (agentId, rollback) => discardFailedLaunch(agentId, rollback, { env, home, config, now }),
     joinSoul: (soul) => joinLaunchedSoul(soul, { env }),
     // The comms setting is read here, at launch only; turns read the census.
     recordLaunch: (launch) => recordLaunchComms(launch, { env, home, config }),
