@@ -17,27 +17,33 @@
 // and must print the absolute path of a directory it created. Empty output or
 // a non-zero exit fails worktree creation — there is no fallback to git.
 //
-// So this reproduces what Claude Code would have done — `<worktree root>/<repo>
-// /<name>` on branch `claude/<name>`, branched fresh from the default branch —
-// and adds the identity step. Two behaviors of the built-in path are NOT
+// A resolved soul owns new checkouts under its worktrees/ directory. Without
+// one, keep Claude's `<worktree root>/<repo>/<name>` layout. Branches are
+// `claude/<name>`, fresh from the default branch. Two built-in behaviors are NOT
 // reproduced: the `worktree.symlinkDirectories` and `worktree.sparsePaths`
 // settings. Remove the hook if a repo needs those.
 
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { readAgentIdentity, stateDirectory, withLock } from './agent-identity.mjs';
-import { loadConfig } from './config.mjs';
+import { ensureAgentIdentity, readAgentIdentity, stateDirectory, withLock } from './agent-identity.mjs';
+import { daemonPreference, harnessForSlug, isGateEnabled, loadConfig } from './config.mjs';
 import { configuredAccountIdentity } from './detect-harness.mjs';
+import { AGENT_ID_KEYS, resolveAgentSlug } from './resolve-agent.mjs';
+import { initAgentSpace } from './agent-space.mjs';
+import { showSoul, upsertIdentitySoul } from './agent-population.mjs';
+import { bindSoul } from './setup-worktree.mjs';
+import { daemonClient } from './agent-daemon.mjs';
+import { linkWorktree, placeWorktree, sanitizeWorktreeName, soulWorktreePath } from './soul-worktrees.mjs';
 
 const SETUP = join(dirname(fileURLToPath(import.meta.url)), 'setup-worktree.mjs');
 
-function git(args, cwd) {
-  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+function git(args, cwd, env = process.env) {
+  return execFileSync('git', args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
 // Claude Code generates names like `add-oauth-3f9c1a`. Anything outside this
@@ -188,11 +194,15 @@ function withCreationLock(commonDir, name, operation) {
 async function main() {
   const { baseRepo, name, sessionId } = parseHookInput(readStdin());
 
-  // A linked worktree's common dir points at the primary checkout: worktrees
-  // are always placed by the repository, never by whichever copy asked.
+  // A linked worktree's common dir points at the primary checkout.
   const commonDir = realpathSync(git(['rev-parse', '--path-format=absolute', '--git-common-dir'], baseRepo));
   const mainRepo = dirname(commonDir);
-  const app = process.env.GH_AGENT_APP?.trim() || configuredAccountIdentity(loadConfig())?.slug;
+  const config = loadConfig();
+  const app = resolveAgentSlug({ cwd: baseRepo, config, detect: false })
+    || configuredAccountIdentity(config)?.slug;
+  const useGithub = isGateEnabled('github-identity', { config });
+  const reuseApp = useGithub ? app : null;
+  const env = claudeTranscriptEnvironment(sessionId, { ...process.env, ...(app ? { GH_AGENT_APP: app } : {}) });
 
   let desktopConfig = null;
   try {
@@ -200,12 +210,87 @@ async function main() {
   } catch {
     /* no desktop config on this machine */
   }
-  const path = worktreePath(worktreeRoot({ desktopConfig }), mainRepo, name);
+  const legacyPath = worktreePath(worktreeRoot({ desktopConfig }), mainRepo, name);
   const branch = branchName(name);
+  let path = legacyPath;
+  let agentId = null;
+
+  // Old checkouts stay put, including ones made before soul placement. Find
+  // the branch through git rather than guessing its soul or harness directory.
+  const existing = git(['worktree', 'list', '--porcelain', '-z'], mainRepo).split('\0\0')
+    .map((entry) => entry.split('\0'))
+    .find((fields) => fields.includes(`branch refs/heads/${branch}`))
+    ?.find((field) => field.startsWith('worktree '))?.slice('worktree '.length);
+  if (existing || existsSync(legacyPath)) {
+    path = existing ?? legacyPath;
+    withCreationLock(commonDir, name, () => {
+      if (!canReuseWorktree(path, { commonDir, branch, sessionId, app: reuseApp })) {
+        throw new Error(`refusing to reuse an existing path: ${path}`);
+      }
+      // A checkout from before soul placement may carry no pin; it is reused
+      // as is. Linking is a convenience and never fails the hook.
+      let id = null;
+      try { id = git(['config', '--worktree', '--get', 'agentBot.agentId'], path); } catch { return; }
+      try {
+      const soulPath = soulWorktreePath(id, name);
+      const temporaryPath = resolve(process.env.TMPDIR ?? tmpdir(), 'agent-bot', id, sanitizeWorktreeName(name));
+      // Git lists canonical paths. Preserve the path printed at creation when
+      // HOME/TMPDIR is reached through an alias (e.g. /var on macOS).
+      for (const candidate of [legacyPath, temporaryPath, soulPath]) {
+        if (existsSync(candidate) && !lstatSync(candidate).isSymbolicLink()
+            && realpathSync(candidate) === realpathSync(path)) {
+          path = candidate;
+          break;
+        }
+      }
+      linkWorktree(id, path, { name });
+      } catch (error) { process.stderr.write(`worktree not linked into its soul: ${error.message}\n`); }
+    });
+    process.stdout.write(`${path}\n`);
+    return;
+  }
+  if (refExists(mainRepo, `refs/heads/${branch}`)) throw new Error(`branch ${branch} already exists`);
+
+  let currentId = process.env.AGENT_BOT_ID ?? process.env.QWTS_AGENT_ID ?? null;
+  for (const key of AGENT_ID_KEYS) {
+    if (currentId) break;
+    try { currentId = git(['config', '--worktree', '--get', key], baseRepo); } catch { /* no pin */ }
+  }
+  if (app || currentId) try {
+    const identity = ensureAgentIdentity({ currentId, appSlug: app,
+      harness: app ? harnessForSlug(app, config) : 'claude',
+      transcript: { provider: 'claude', id: sessionId },
+      useGithub,
+    });
+    agentId = identity.id;
+    // Honor the same daemon policy as setup before asking the census for a
+    // directory. No checkout is recorded until git has actually created it.
+    let registered = false;
+    try {
+      if (showSoul(agentId).status === 'retired') throw new Error(`soul ${agentId} is retired in the population census`);
+      registered = true;
+    }
+    catch (error) { if (!error.message.startsWith('no population record for ')) throw error; }
+    if (!registered) {
+      await bindSoul({ agentId, policy: daemonPreference({ config }), client: daemonClient(),
+        ensureLocal: () => {
+          const space = initAgentSpace(agentId);
+          upsertIdentitySoul(agentId, space.path);
+          return space;
+        },
+      });
+    }
+    path = placeWorktree(agentId, name, { repoCommonDir: commonDir }).path;
+  } catch (error) {
+    // Without a soul the hook keeps Claude's own layout rather than failing.
+    process.stderr.write(`worktree placed outside its soul: ${error.message}\n`);
+    agentId = null;
+    path = legacyPath;
+  }
 
   withCreationLock(commonDir, name, () => {
     if (existsSync(path)) {
-      if (canReuseWorktree(path, { commonDir, branch, sessionId, app })) return;
+      if (canReuseWorktree(path, { commonDir, branch, sessionId, app: reuseApp })) return;
       throw new Error(`refusing to reuse an existing path: ${path}`);
     }
     if (refExists(mainRepo, `refs/heads/${branch}`)) throw new Error(`branch ${branch} already exists`);
@@ -217,7 +302,11 @@ async function main() {
     }
 
     mkdirSync(dirname(path), { recursive: true });
-    git(['worktree', 'add', '--no-track', '-b', branch, path, resolveBaseRef(mainRepo)], mainRepo);
+    git(['worktree', 'add', '--no-track', '-b', branch, path, resolveBaseRef(mainRepo)], mainRepo, env);
+    if (agentId) {
+      try { linkWorktree(agentId, path, { name }); }
+      catch (error) { process.stderr.write(`worktree not linked into its soul: ${error.message}\n`); }
+    }
 
     // The identity step. Failing it does not fail the worktree. The governed
     // hook runs this only inside an agent account (ENG-0339), where the gh shim
@@ -230,7 +319,7 @@ async function main() {
         cwd: path,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: claudeTranscriptEnvironment(sessionId, { ...process.env, ...(app ? { GH_AGENT_APP: app } : {}) }),
+        env,
       });
     } catch (err) {
       process.stderr.write(`bot identity not applied to ${path}: ${err.message}\n`);

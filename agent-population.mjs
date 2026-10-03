@@ -506,7 +506,12 @@ export function registerSoulDir(id, directory, { file = populationFile() } = {})
 }
 
 function claimedByOther(directory, id) {
-  try { return readFileSync(path.join(directory, '.soul-state', 'agent-id'), 'utf8').trim() !== id; }
+  // An empty marker is one being written (older tools wrote it in place),
+  // not another soul's claim.
+  try {
+    const owner = readFileSync(path.join(directory, '.soul-state', 'agent-id'), 'utf8').trim();
+    return owner !== '' && owner !== id;
+  }
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 

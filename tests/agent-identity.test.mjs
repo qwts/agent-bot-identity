@@ -620,9 +620,12 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
     firstId,
   );
   const firstPopulation = JSON.parse(readFileSync(populationPath, 'utf8'));
+  assert.equal(firstPopulation.souls[firstId].soulDir, path.join(path.dirname(spacesDir), 'home', '.agent-bot', 'souls', `${displayName(firstId)}.soul`));
   assert.deepEqual(firstPopulation.souls[firstId], {
     id: firstId,
     name: displayName(firstId),
+    // setup links the checkout into the soul (#339), which registers its directory.
+    soulDir: firstPopulation.souls[firstId].soulDir,
     appSlug: app,
     parentId: id(42),
     status: 'active',
