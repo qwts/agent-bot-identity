@@ -97,6 +97,20 @@ after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
+test('doctor warns when a pre-gate config has souls with GitHub Apps (#361)', async () => {
+  const home = tempRoot();
+  mkdirSync(join(home, '.config', 'agent-bot'), { recursive: true });
+  writeFileSync(join(home, '.config', 'agent-bot', 'config.json'), JSON.stringify({ apps: { claude: 'org-claude-agent' } }));
+  const ids = join(home, '.local', 'state', 'agent-bot', 'agent-identities');
+  mkdirSync(ids, { recursive: true });
+  writeFileSync(join(ids, 'agent_a.json'), JSON.stringify({ id: 'agent_a', github: { appSlug: 'org-claude-agent' } }));
+  const report = await collectReadiness({ ...machineDependencies(home), scope: 'machine' });
+  const gates = report.machine.checks.find(({ id }) => id === 'config.feature_gates');
+  assert.equal(gates.status, 'warning');
+  assert.equal(gates.code, 'feature-gates-pre-gate-config');
+  assert.match(gates.action, /daemon install/);
+});
+
 test('doctor distinguishes dangling CLI targets and reports their evidence', async () => {
   const home = tempRoot();
   const target = '../../deleted-checkout/agent-bot';
