@@ -81,6 +81,7 @@ folder. The archive is not scanned for souls.
 about any folder under the souls root whose marker names a soul that is
 retired or unknown here, such as one a failed launch left before this
 rollback existed. Finalized souls keep their folders and are not listed.
+`agent-bot soul remove <agentId>` archives them the same way (#420).
 
 ## Repository worktrees
 

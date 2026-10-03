@@ -1255,6 +1255,7 @@ test('doctor warns about soul folders that belong to no active soul', async () =
   const check = report.machine.checks.find(({ id }) => id === 'souls.orphans');
   assert.equal(check.status, 'warning');
   assert.equal(check.code, 'soul-folder-orphan');
+  assert.match(check.action, /agent-bot soul remove/);
   assert.deepEqual(check.evidence, { orphans: [
     { agentId: ids.retired, path: dirs.retired, status: 'retired' },
     { agentId: ids.unknown, path: dirs.unknown, status: 'unknown' },
