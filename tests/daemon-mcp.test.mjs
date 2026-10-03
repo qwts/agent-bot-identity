@@ -7,9 +7,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  MAX_MESSAGE_BYTES,
   MAX_REPLY_TEXT_BYTES,
   REACH_AGENT_ID_ENV,
+  REACH_COMMS_ENV,
   REACH_INVOCATION_ENV,
+  REACH_WORKTREE_ENV,
+  reachPolicyRules,
   createReachState,
   handleMcpMessage,
   reachMcpServerEntry,
@@ -110,7 +114,7 @@ async function call(state, name, args = {}) {
 
 // --- protocol ---------------------------------------------------------------
 
-test('the reach server speaks the MCP handshake and lists its four tools', async () => {
+test('the reach server speaks the MCP handshake and lists its six tools', async () => {
   const state = createReachState({ env: {}, cwd: tmpdir() });
   const initialized = await handleMcpMessage(state, {
     jsonrpc: '2.0', id: 1, method: 'initialize', params: {},
@@ -120,8 +124,9 @@ test('the reach server speaks the MCP handshake and lists its four tools', async
   const listed = await handleMcpMessage(state, { jsonrpc: '2.0', id: 2, method: 'tools/list' });
   assert.deepEqual(
     listed.result.tools.map((tool) => tool.name),
-    ['fetch_context', 'post_reply', 'report_status', 'clock_in'],
+    ['fetch_context', 'post_reply', 'report_status', 'clock_in', 'fleet', 'send_message'],
   );
+  assert.match(initialized.result.instructions, /fleet/);
   const pinged = await handleMcpMessage(state, { jsonrpc: '2.0', id: 3, method: 'ping' });
   assert.deepEqual(pinged.result, {});
   const unknown = await handleMcpMessage(state, { jsonrpc: '2.0', id: 4, method: 'nope' });
@@ -421,6 +426,139 @@ test('reachMcpServerEntry stamps the invocation, identity, and store location', 
     }),
     /Agent ID/,
   );
+});
+
+test('reachMcpServerEntry without an invocation stamps the soul, its worktree, binding, and comms', () => {
+  const entry = reachMcpServerEntry({
+    agentId: AGENT_ID,
+    env: { PATH: '/opt/bin:/usr/bin', HOME: '/home/bot' },
+    worktree: '/souls/bill/worktree',
+    binding: '/souls/bill/binding.json',
+  });
+  const vars = Object.fromEntries(entry.env.map((pair) => [pair.name, pair.value]));
+  assert.equal(REACH_INVOCATION_ENV in vars, false);
+  assert.equal(vars[REACH_AGENT_ID_ENV], AGENT_ID);
+  assert.equal(vars[REACH_WORKTREE_ENV], '/souls/bill/worktree');
+  assert.equal(vars.AGENT_BOT_BINDING, '/souls/bill/binding.json');
+  assert.equal(vars.PATH, '/opt/bin:/usr/bin');
+  assert.equal(REACH_COMMS_ENV in vars, false, 'comms is on by default');
+  const off = reachMcpServerEntry({ agentId: AGENT_ID, env: {}, comms: false });
+  assert.equal(Object.fromEntries(off.env.map((pair) => [pair.name, pair.value]))[REACH_COMMS_ENV], '0');
+  assert.throws(() => reachMcpServerEntry({ agentId: AGENT_ID, worktree: 'relative' }), /absolute/);
+});
+
+test('the policy rules allow exactly this server\'s tools under Claude\'s MCP naming', () => {
+  assert.deepEqual(reachPolicyRules().map((rule) => [rule.tool, rule.outcome]), [
+    ['mcp__agent-reach__fetch_context', 'allow'],
+    ['mcp__agent-reach__post_reply', 'allow'],
+    ['mcp__agent-reach__report_status', 'allow'],
+    ['mcp__agent-reach__clock_in', 'allow'],
+    ['mcp__agent-reach__fleet', 'allow'],
+    ['mcp__agent-reach__send_message', 'allow'],
+  ]);
+});
+
+// --- teammates (fleet, send_message) ----------------------------------------
+
+const PEERS = [
+  { address: 'acct/agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', account: 'acct', agentId: 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'Ted - Starter', harness: 'claude', parent: null, verification: 'claimed' },
+  { address: 'acct/agent_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', account: 'acct', agentId: 'agent_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: 'Twin', harness: 'codex', parent: null, verification: 'claimed' },
+  { address: 'acct/agent_cccccccc-cccc-4ccc-8ccc-cccccccccccc', account: 'acct', agentId: 'agent_cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Twin', harness: 'opencode', parent: null, verification: 'claimed' },
+];
+
+// A fake agent-comms: records each call and answers peers and send.
+function fakeComms() {
+  const calls = [];
+  const run = (command, args, options, callback) => {
+    calls.push({ command, args, cwd: options.cwd, env: options.env });
+    if (args[0] === 'peers') return callback(null, JSON.stringify({ ok: true, peers: PEERS }), '');
+    if (args[0] === 'send') {
+      if (args[1] === 'nobody') return callback(Object.assign(new Error('exit 1')), JSON.stringify({ ok: false, error: { code: 'unknown-recipient', message: 'no soul you may message has that address' } }), '');
+      return callback(null, JSON.stringify({ ok: true, messageId: 'msg_1', seq: 7, duplicate: false, wake: 'cold' }), '');
+    }
+    return callback(new Error('unexpected'), '', 'unexpected');
+  };
+  return { calls, run };
+}
+
+function injectedSoul(extraEnv = {}) {
+  const comms = fakeComms();
+  const state = createReachState({
+    env: {
+      [REACH_AGENT_ID_ENV]: AGENT_ID,
+      [REACH_WORKTREE_ENV]: '/souls/bill/worktree',
+      AGENT_BOT_BINDING: '/souls/bill/binding.json',
+      PATH: '/opt/bin',
+      ...extraEnv,
+    },
+    home: '/nonexistent',
+    cwd: tmpdir(),
+    run: comms.run,
+  });
+  return { state, calls: comms.calls };
+}
+
+test('fleet lists the teammates the broker lets this soul message, as the soul', async () => {
+  const { state, calls } = injectedSoul();
+  const fleet = await call(state, 'fleet');
+  assert.equal(fleet.you, AGENT_ID);
+  assert.deepEqual(fleet.teammates.map((peer) => [peer.name, peer.harness]), [['Ted - Starter', 'claude'], ['Twin', 'codex'], ['Twin', 'opencode']]);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ['peers']);
+  assert.equal(calls[0].command, 'agent-comms');
+  assert.equal(calls[0].cwd, '/souls/bill/worktree');
+  assert.equal(calls[0].env.AGENT_BOT_BINDING, '/souls/bill/binding.json');
+  assert.equal(calls[0].env.AGENT_BOT_ID, AGENT_ID);
+});
+
+test('send_message resolves a teammate by name and sends as the soul', async () => {
+  const { state, calls } = injectedSoul();
+  const sent = await call(state, 'send_message', { to: 'ted - starter', body: 'Can you review the plan?\nThanks' });
+  assert.deepEqual(sent, { sent: true, to: PEERS[0].address, messageId: 'msg_1', wake: 'cold' });
+  assert.deepEqual(calls.map((entry) => entry.args), [
+    ['peers'],
+    ['send', PEERS[0].address, '--body', 'Can you review the plan?\nThanks'],
+  ]);
+  // Addresses and Agent IDs go straight through, with an optional reply_to.
+  await call(state, 'send_message', { to: PEERS[1].agentId, body: 'hi', reply_to: 'msg_0' });
+  assert.deepEqual(calls.at(-1).args, ['send', PEERS[1].agentId, '--body', 'hi', '--reply-to', 'msg_0']);
+  // A name no peer has may be a person: the broker decides.
+  await call(state, 'send_message', { to: 'owner', body: 'done' });
+  assert.deepEqual(calls.at(-1).args, ['send', 'owner', '--body', 'done']);
+});
+
+test('send_message refuses ambiguous names, bad input, and reports broker refusals', async () => {
+  const { state } = injectedSoul();
+  await assert.rejects(call(state, 'send_message', { to: 'Twin', body: 'hi' }), /2 teammates are named Twin/);
+  await assert.rejects(call(state, 'send_message', { to: '', body: 'hi' }), /to must be a non-empty string/);
+  await assert.rejects(call(state, 'send_message', { to: 'a\nb', body: 'hi' }), /single line/);
+  await assert.rejects(call(state, 'send_message', { to: 'owner', body: '   ' }), /body must be a non-empty/);
+  await assert.rejects(call(state, 'send_message', { to: 'owner', body: 'x'.repeat(MAX_MESSAGE_BYTES + 1) }), /at most/);
+  await assert.rejects(call(state, 'send_message', { to: 'nobody', body: 'hi' }), /no soul you may message/);
+});
+
+test('teammate tools need an identity, and comms off withholds them', async () => {
+  const anonymous = createReachState({ env: {}, home: '/nonexistent', cwd: tmpdir(), run: fakeComms().run });
+  await assert.rejects(call(anonymous, 'fleet'), /no reach-back identity/);
+
+  const { state, calls } = injectedSoul({ [REACH_COMMS_ENV]: '0' });
+  const listed = await handleMcpMessage(state, { jsonrpc: '2.0', id: 99, method: 'tools/list' });
+  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['fetch_context', 'post_reply', 'report_status', 'clock_in']);
+  await assert.rejects(call(state, 'send_message', { to: 'owner', body: 'hi' }), /turned off/);
+  assert.equal(calls.length, 0);
+});
+
+test('a registered server never presents an inherited binding to agent-comms', async () => {
+  const { root, env } = scratch();
+  const worktree = path.join(root, 'worktree');
+  mkdirSync(worktree, { recursive: true });
+  execFileSync('git', ['init'], { cwd: worktree, stdio: 'ignore' });
+  execFileSync('git', ['config', 'agentBot.agentId', AGENT_ID], { cwd: worktree, stdio: 'ignore' });
+  const comms = fakeComms();
+  const state = createReachState({ env: { ...env, AGENT_BOT_BINDING: '/someone/else.json' }, home: '/nonexistent', cwd: worktree, run: comms.run });
+  await call(state, 'fleet');
+  assert.equal(comms.calls[0].cwd, worktree);
+  assert.equal('AGENT_BOT_BINDING' in comms.calls[0].env, false);
 });
 
 // --- the loop (#146 done-when) ----------------------------------------------

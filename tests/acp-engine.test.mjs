@@ -223,6 +223,9 @@ test('permissionToolName prefers harness metadata, falls back to kind, never spa
   assert.equal(permissionToolName({ kind: 'execute' }), 'execute');
   assert.equal(permissionToolName({ kind: 'run the thing' }), 'other');
   assert.equal(permissionToolName(undefined), 'other');
+  assert.equal(permissionToolName({ _meta: { claudeCode: { toolName: 'Read' } } }), 'Read');
+  assert.equal(permissionToolName({ title: 'mcp__agent-reach__fleet' }, 'mcp__agent-reach__fleet'), 'mcp__agent-reach__fleet');
+  assert.equal(permissionToolName({ title: 'mcp__agent-reach__fleet' }), 'other', 'a title is never a name');
 });
 
 // --- full turns through the daemon service ----------------------------------
@@ -320,6 +323,14 @@ test('permission requests are answered from policy: allow picks allow, deny pick
     executorOptions: { policy: { version: 1, rules: [], fallback: 'deny' } },
   });
   assert.deepEqual(chunkTexts(denied.events), ['permission:{"outcome":"selected","optionId":"opt-reject"}']);
+});
+
+test('a Claude permission request is named by the tool its tool_call announced, never by its title', async () => {
+  const { events } = await turn({
+    message: 'claude-mcp-permission',
+    executorOptions: { policy: { version: 1, rules: [{ tool: 'mcp__agent-reach__send_message', outcome: 'allow' }], fallback: 'deny' } },
+  });
+  assert.deepEqual(chunkTexts(events).at(-1), 'mcp:allow bash:reject');
 });
 
 test('oversized chunks are truncated, foreign update kinds are skipped, turns survive', async () => {

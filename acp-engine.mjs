@@ -28,8 +28,9 @@
 //     the policy decides, only an 'approval' outcome escalates to the
 //     proposal flow, and the agent's option list is answered with an
 //     allow-or-reject option accordingly. The tool name offered to the policy
-//     is the ACP tool-call `kind` (execute, read, edit, fetch, ...) unless the
-//     harness supplies a more specific name in the tool call's metadata.
+//     is the harness's own name for the call — from the request's metadata,
+//     or from the tool_call update that announced the same toolCallId — and
+//     the ACP tool-call `kind` (execute, read, edit, fetch, ...) otherwise.
 //   - Cancellation is cooperative and matches the contract: signal abort
 //     sends session/cancel, waits briefly for the harness to wind down, then
 //     kills the child; the run rejects so the service records 'cancelled'.
@@ -200,17 +201,29 @@ export function boundAcpUpdate(update) {
 }
 
 // The policy speaks tool names; ACP permission requests speak tool calls. A
-// harness-specific name from the call's metadata wins, the ACP kind is the
+// harness-specific name from the call's metadata wins, then the name the
+// harness gave the same toolCallId when it announced the call (Claude's
+// adapter sends `_meta.claudeCode.toolName` on its tool_call update but no
+// name or kind on the permission request itself), then the ACP kind as the
 // generic fallback, and anything unusable becomes 'other' (which a policy can
-// still target — and the contract denies malformed names regardless).
-export function permissionToolName(toolCall) {
+// still target — and the contract denies malformed names regardless). The
+// call's title is never used: for a shell call it is the model's command.
+export function permissionToolName(toolCall, announced = null) {
   const meta = toolCall?._meta ?? toolCall?.meta ?? {};
-  for (const candidate of [meta.toolName, meta['claudecode/toolName'], toolCall?.kind]) {
+  for (const candidate of [meta.toolName, meta['claudecode/toolName'], meta.claudeCode?.toolName, announced, toolCall?.kind]) {
     if (typeof candidate === 'string' && candidate.length > 0 && !/\s/.test(candidate)) {
       return candidate.slice(0, 200);
     }
   }
   return 'other';
+}
+
+// The harness-reported tool name on a tool_call / tool_call_update, if any.
+export function announcedToolName(update) {
+  if (update?.sessionUpdate !== 'tool_call' && update?.sessionUpdate !== 'tool_call_update') return null;
+  const meta = update._meta ?? update.meta ?? {};
+  const name = meta.toolName ?? meta['claudecode/toolName'] ?? meta.claudeCode?.toolName;
+  return typeof name === 'string' && name.length > 0 ? name : null;
 }
 
 function pickOption(options, allowed) {
@@ -345,12 +358,19 @@ export function createAcpExecutor({
     let replaying = false;
     let skippedUpdates = 0;
     let streamError = null;
+    // toolCallId → the tool name the harness announced it with, for the
+    // permission request that follows (bounded: one turn's calls).
+    const announcedTools = new Map();
 
     const rpc = createRpcChannel(child, {
       log,
       onNotification: (method, params) => {
         if (method !== 'session/update' || replaying) return;
         if (sessionId === null || params.sessionId !== sessionId) return;
+        const announced = announcedToolName(params.update);
+        if (announced !== null && typeof params.update.toolCallId === 'string' && announcedTools.size < 4096) {
+          announcedTools.set(params.update.toolCallId, announced);
+        }
         const bounded = boundAcpUpdate(params.update);
         if (bounded === null) {
           skippedUpdates += 1;
@@ -368,7 +388,7 @@ export function createAcpExecutor({
           if (signal.aborted) return { outcome: { outcome: 'cancelled' } };
           const toolCall = params.toolCall ?? {};
           const decision = await requestPermission({
-            toolName: permissionToolName(toolCall),
+            toolName: permissionToolName(toolCall, announcedTools.get(toolCall.toolCallId) ?? null),
             summary: typeof toolCall.title === 'string' ? toolCall.title : null,
           });
           const optionId = pickOption(params.options, decision.outcome === 'allow');

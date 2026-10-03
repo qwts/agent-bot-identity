@@ -136,12 +136,43 @@ test('with a relay, each waiting message gets its own turn, and the answer goes 
   await wake.idle();
   assert.equal(prompts.length, 2);
   assert.match(prompts[0], /from owner\. Your final answer is sent back/);
+  assert.doesNotMatch(prompts[0], /NO_REPLY/, 'a person always gets the answer');
   assert.match(prompts[0], /\n\nhello$/);
   assert.match(prompts[1], /from acct\/agent_peer/);
   // An empty answer sends nothing but still acks the message.
   assert.deepEqual(sent, [{ to: 'owner', replyTo: 'm1', body: 'hi there' }]);
   assert.deepEqual(acked, ['m1', 'm2']);
   assert.deepEqual(receipts, ['started', 'finished']);
+});
+
+// Bill messages Ted through send_message; Ted's cold turn answers, and the
+// relay sends that answer back to Bill as a reply, exactly as it does for a
+// person. A teammate's message that needs no answer ends with NO_REPLY, so
+// two souls do not trade acknowledgements to the reply-depth limit.
+test('a teammate\'s message is relayed like a person\'s, and NO_REPLY ends the exchange', async () => {
+  const bill = { account: 'acct', agentId: 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' };
+  const inbox = [
+    { id: 'm1', from: bill, body: 'Ted, can you review the plan?' },
+    { id: 'm2', from: bill, body: 'Thanks!' },
+  ];
+  const sent = [];
+  const acked = [];
+  const relay = {
+    read: async () => inbox.filter((m) => !acked.includes(m.id)),
+    reply: async (soul, reply) => { sent.push(reply); },
+    ack: async (soul, ids) => { acked.push(...ids); },
+  };
+  const prompts = [];
+  const answers = ['Reviewed: looks good, one gap in step 3.', ' NO_REPLY \n'];
+  const executor = async ({ message }) => { prompts.push(message); return { reply: answers[prompts.length - 1] }; };
+  const wake = createColdWaker({ executor, settings: { [id]: true }, lookupBinding: async () => binding, identities: async () => githubIdentity, receipt: () => {}, relay });
+  await wake({ agentId: id, count: 2, messageIds: ['m1', 'm2'] });
+  await wake.idle();
+  assert.match(prompts[0], new RegExp(`from acct/${bill.agentId}, another agent`));
+  assert.match(prompts[0], /exactly NO_REPLY/);
+  assert.match(prompts[0], /send_message/);
+  assert.deepEqual(sent, [{ to: `acct/${bill.agentId}`, replyTo: 'm1', body: 'Reviewed: looks good, one gap in step 3.' }]);
+  assert.deepEqual(acked, ['m1', 'm2']);
 });
 
 test('with a relay, a failed reply leaves the message unacked and fails the wake', async () => {

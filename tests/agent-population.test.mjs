@@ -17,6 +17,7 @@ import {
   displayName,
   listSouls,
   populationFile,
+  recordSoulLaunch,
   showSoul,
   showSoulByName,
   updateSoulStatus,
@@ -46,6 +47,8 @@ function fixture(overrides = {}) {
     worktrees: [],
     transcriptLocator: { provider: 'codex', id: 'thread-1' },
     lastSeen: LAST_SEEN,
+    managed: false,
+    comms: true,
     ...overrides,
   };
 }
@@ -174,6 +177,37 @@ test('writes only a strict secret-free record and reads ignore unknown future fi
     /future schemaVersion/,
     'an older writer must not downgrade a future store',
   );
+});
+
+test('a managed launch records comms once; lifecycle writes carry it forward', () => {
+  const file = path.join(scratch(), 'population.json');
+  upsertSoul(fixture(), { file });
+  assert.deepEqual(recordSoulLaunch(FIRST_ID, { comms: false }, { file }), fixture({ managed: true, comms: false }));
+  // A lifecycle upsert that does not mention the launch facts keeps them.
+  const { managed: _m, comms: _c, ...lifecycle } = fixture({ status: 'finalized' });
+  upsertSoul(lifecycle, { file });
+  assert.deepEqual(listSouls({ file }), [fixture({ status: 'finalized', managed: true, comms: false })]);
+  // The next launch records what its soul.json says then.
+  recordSoulLaunch(FIRST_ID, { comms: true }, { file });
+  assert.equal(listSouls({ file })[0].comms, true);
+  assert.throws(() => upsertSoul(fixture({ id: SECOND_ID, comms: 'off' }), { file }), /comms must be a boolean/);
+});
+
+test('without a census row only the default can be recorded', () => {
+  const file = path.join(scratch(), 'population.json');
+  assert.equal(recordSoulLaunch(FIRST_ID, {}, { file }), null);
+  assert.throws(() => recordSoulLaunch(FIRST_ID, { comms: false }, { file }), /cannot record comms off/);
+});
+
+test('population show exposes managed and comms as JSON', () => {
+  const file = path.join(scratch(), 'population.json');
+  upsertSoul(fixture(), { file });
+  recordSoulLaunch(FIRST_ID, { comms: false }, { file });
+  const shown = runCli(['population', 'show', FIRST_ID, '--json'], file);
+  assert.equal(shown.status, 0, shown.stderr);
+  const row = JSON.parse(shown.stdout);
+  assert.equal(row.managed, true);
+  assert.equal(row.comms, false);
 });
 
 test('display names are deterministic, human-readable, and derived from the ID alone (#92)', () => {

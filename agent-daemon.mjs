@@ -57,7 +57,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
-import { listSouls, populationFile, retireIdentityWithPopulation, upsertIdentitySoul } from './agent-population.mjs';
+import { listSouls, populationFile, recordSoulLaunch, retireIdentityWithPopulation, showSoul, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
 import {
   bindAgentLineage,
@@ -79,7 +79,7 @@ import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms
 import { attachWakeEndpoint } from './agent-wake.mjs';
 import { readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
-import { createLaunchHandler } from './daemon-launch.mjs';
+import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
 import { createSoulHomes, installHarnesses, soulBindingForLaunch } from './soul-home.mjs';
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
@@ -1135,6 +1135,11 @@ export async function runDaemon({
       // A daemon-run soul's home is not a git worktree, so the session-start
       // hook cannot place its Claude session; the turn's binding does.
       onHarnessSession: ({ agentId, harness, harnessSessionId }) => recordSoulSession({ agentId, provider: harness, sessionId: harnessSessionId, env, home, now }),
+      // Every turn gets the soul's agent-comms tools unless its launch
+      // recorded comms off; the reach server runs agent-comms, which a
+      // launchd PATH does not reach.
+      commsFor: (agentId) => showSoul(agentId, { file: populationFile({ env, home }) }).comms,
+      reachEnv: { PATH: resumePath(soulEnvironment(env), home) },
     })
     : null;
   const executor = executorFor
@@ -1194,6 +1199,13 @@ export async function runDaemon({
     discard: (agentId) => retireIdentityWithPopulation(agentId, { file: populationFile({ env, home }),
       stateDir: stateDirectory({ env, home }), now }),
     joinSoul: (soul) => joinLaunchedSoul(soul, { env }),
+    // The comms setting is read here, at launch only; turns read the census.
+    recordLaunch: ({ agentId, package: packagePath }) => {
+      const file = populationFile({ env, home });
+      let directory = null;
+      try { directory = soulDirectory(agentId, { env, home, config, file }); } catch { /* no census row yet */ }
+      return recordSoulLaunch(agentId, { comms: launchCommsSetting({ soulDir: directory, packagePath }) }, { file });
+    },
     executorFor,
   });
   const comms = createCommsSupervisor({ env, home, now, onWake, onLaunch });

@@ -4,6 +4,13 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { HARNESS_SESSION_EVENT } from './executor-contract.mjs';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
+import { soulCommsSetting } from './soul-package.mjs';
+
+// A launch's comms setting: the soul's own soul.json (a spawned instance
+// carries its template's), else the launched package's, else on.
+export function launchCommsSetting({ soulDir = null, packagePath = null } = {}) {
+  return (soulDir && soulCommsSetting(soulDir)) ?? (packagePath && soulCommsSetting(packagePath)) ?? true;
+}
 
 /** Longest display name the broker accepts on a launch request. */
 export const LAUNCH_NAME_MAX = 128;
@@ -13,9 +20,12 @@ export const LAUNCH_NAME_MAX = 128;
 // failed package launch leaves no active identity behind. `joinSoul` joins
 // the soul to agent-comms as itself before its first turn: the broker takes
 // `launched` only from a joined soul, and a harness not yet signed in (a
-// fresh install) cannot run the turn that would join it.
+// fresh install) cannot run the turn that would join it. `recordLaunch`
+// records, before the first turn, that the daemon manages this soul and the
+// comms setting its soul.json has now; the setting holds until the next
+// launch, so a running soul's comms cannot be switched off under it.
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
-  joinSoul = null, executorFor, turnTimeoutMs = 30 * 60_000 }) {
+  joinSoul = null, recordLaunch = null, executorFor, turnTimeoutMs = 30 * 60_000 }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -73,6 +83,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         ?? await provisionHome({ agentId: identity.id, harness, packagePath: event.package ?? null });
       if (!binding?.worktree || !binding?.file) throw new Error('soul binding is unavailable');
       if (joinSoul) await joinSoul({ agentId: identity.id, harness, name: event.name ?? null, binding });
+      if (recordLaunch) await recordLaunch({ agentId: identity.id, package: event.package ?? null, binding });
       const executor = executorFor({ agentId: identity.id, harness, cwd: binding.worktree,
         env: { AGENT_BOT_BINDING: binding.file, AGENT_BOT_ID: identity.id, QWTS_AGENT_ID: identity.id } });
       // An ACP session binding is the readiness boundary. A returned promise

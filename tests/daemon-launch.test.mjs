@@ -259,3 +259,57 @@ test('joins the soul to agent-comms before its first turn, and fails the launch 
   assert.equal(refused.calls.length, 0);
   assert.deepEqual(refused.reports[0], { requestId: 'r1', status: 'failed', agentId: null, detail: 'joining agent-comms failed: broker-unreachable' });
 });
+
+test('a launch records the soul as managed with its comms setting before the first turn', async (t) => {
+  const order = [];
+  const f = fixture(t, {
+    recordLaunch: (launch) => { order.push(['record', launch]); },
+    executorFor: () => async (input) => { order.push(['turn']); input.appendEvent(HARNESS_SESSION_EVENT, {}); },
+  });
+  await f.handler(event, f.ports);
+  assert.deepEqual(order, [
+    ['record', { agentId, package: null, binding: { worktree: '/work', file: '/private/binding' } }],
+    ['turn'],
+  ]);
+  assert.equal(f.reports[0].status, 'launched');
+});
+
+test('a launch whose comms setting cannot be recorded never starts', async (t) => {
+  const f = fixture(t, { recordLaunch: () => { throw new Error('no population record; cannot record comms off'); } });
+  await f.handler(event, f.ports);
+  assert.equal(f.calls.length, 0);
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'failed', agentId: null, detail: 'no population record; cannot record comms off' });
+});
+
+test('comms is read from soul.json at launch only: later edits wait for the next launch', async (t) => {
+  const { upsertSoul, recordSoulLaunch, showSoul } = await import('../agent-population.mjs');
+  const { launchCommsSetting } = await import('../daemon-launch.mjs');
+  const root = mkdtempSync(path.join(tmpdir(), 'launch-comms-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const soulDir = path.join(root, 'Bill.soul');
+  mkdirSync(soulDir);
+  const population = path.join(root, 'population.json');
+  upsertSoul({ id: agentId, status: 'active', spacePath: path.join(root, 'space'), lastSeen: '2026-10-03T00:00:00.000Z' }, { file: population });
+  assert.equal(showSoul(agentId, { file: population }).comms, true, 'default on');
+  assert.equal(showSoul(agentId, { file: population }).managed, false);
+
+  assert.equal(launchCommsSetting({ soulDir }), true, 'no soul.json means on');
+  writeFileSync(path.join(soulDir, 'soul.json'), JSON.stringify({ comms: false }));
+  const handler = createLaunchHandler({
+    file: path.join(root, 'launch-requests.json'),
+    identities: () => ({ id: agentId, harness: 'claude' }),
+    spawnPackage: () => { throw new Error('unexpected spawn'); },
+    lookupBinding: () => ({ worktree: '/work', file: '/private/binding' }),
+    provisionHome: () => null,
+    recordLaunch: ({ agentId: id }) => recordSoulLaunch(id, { comms: launchCommsSetting({ soulDir }) }, { file: population }),
+    executorFor: () => async (input) => { input.appendEvent(HARNESS_SESSION_EVENT, {}); },
+  });
+  await handler(event, { account: 'worker', report: async () => {} });
+  assert.deepEqual([showSoul(agentId, { file: population }).managed, showSoul(agentId, { file: population }).comms], [true, false]);
+
+  // The soul is running: switching soul.json back on changes nothing yet.
+  writeFileSync(path.join(soulDir, 'soul.json'), JSON.stringify({ comms: true }));
+  assert.equal(showSoul(agentId, { file: population }).comms, false);
+  await handler({ ...event, requestId: 'r2' }, { account: 'worker', report: async () => {} });
+  assert.equal(showSoul(agentId, { file: population }).comms, true, 'the next launch picks it up');
+});

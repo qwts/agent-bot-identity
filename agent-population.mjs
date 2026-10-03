@@ -176,7 +176,20 @@ function normalizeSoul(record, { defaultLastSeen = null } = {}) {
     worktrees,
     transcriptLocator: transcriptLocator(record.transcriptLocator),
     lastSeen: canonicalTimestamp('lastSeen', record.lastSeen ?? defaultLastSeen),
+    // Managed: the daemon started this soul from a launch (GeniusBar or a
+    // package), rather than an already-running agent joining. Comms: the
+    // agent-comms teammate tools its turns get, fixed at that launch from its
+    // soul.json (`comms`, default on). Rows written before either existed
+    // read as unmanaged with comms on.
+    managed: booleanField('managed', record.managed, false),
+    comms: booleanField('comms', record.comms, true),
   };
+}
+
+function booleanField(name, value, fallback) {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== 'boolean') throw new Error(`${name} must be a boolean`);
+  return value;
 }
 
 export function populationFile({ env = process.env, home = homedir() } = {}) {
@@ -267,6 +280,10 @@ export function upsertSoul(
     const existing = current.souls[candidate.id];
     if (existing) {
       if (record.soulDir === undefined && existing.soulDir) candidate.soulDir = existing.soulDir;
+      // Launch facts are written only by recordSoulLaunch; a lifecycle upsert
+      // that does not mention them carries them forward.
+      if (record.managed === undefined) candidate.managed = existing.managed;
+      if (record.comms === undefined) candidate.comms = existing.comms;
       candidate.worktrees = [...new Set([...existing.worktrees, ...candidate.worktrees])];
       if (record.worktree === undefined) candidate.worktree = existing.worktree;
     }
@@ -501,6 +518,31 @@ export function registerSoulDir(id, directory, { file = populationFile() } = {})
     if (!existing) throw new Error(`no population record for ${target}`);
     const soul = normalizeSoul({ ...existing, soulDir: dir });
     if (existing.soulDir !== soul.soulDir) writeDocument(file, { ...current.souls, [target]: soul });
+    return soul;
+  });
+}
+
+// A managed launch records what it started with: the soul is managed, and
+// its comms setting is the one its soul.json had at this launch. Turns read
+// it from here, so editing soul.json while the soul runs changes nothing
+// until the next launch. Without a census row there is nothing to record,
+// which is the default (comms on) — so only an opt-out needs a row.
+export function recordSoulLaunch(id, { comms = true } = {}, { file = populationFile() } = {}) {
+  const target = agentId(id);
+  if (typeof comms !== 'boolean') throw new Error('comms must be a boolean');
+  ensurePrivateDirectory(path.dirname(file));
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
+    const existing = current.souls[target];
+    if (!existing) {
+      if (comms === false) throw new Error(`no population record for ${target}; cannot record comms off`);
+      return null;
+    }
+    const soul = normalizeSoul({ ...existing, managed: true, comms });
+    if (existing.managed !== soul.managed || existing.comms !== soul.comms) {
+      writeDocument(file, { ...current.souls, [target]: soul });
+    }
     return soul;
   });
 }

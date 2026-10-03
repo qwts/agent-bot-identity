@@ -7,8 +7,12 @@
 // Every part stays a port so the composition is testable without a broker,
 // a socket, or a harness.
 
+import path from 'node:path';
+
 import { createAcpExecutor } from './acp-engine.mjs';
+import { validateInvocationId } from './agent-jobs.mjs';
 import { createColdWaker } from './cold-wake.mjs';
+import { reachMcpServerEntry, reachPolicyRules } from './daemon-mcp.mjs';
 import { HARNESS_SESSION_EVENT, UPDATE_EVENT } from './executor-contract.mjs';
 import { createWakeDispatcher } from './wake-dispatch.mjs';
 
@@ -44,23 +48,57 @@ export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onE
   };
 }
 
+// Only a well-formed interaction-store id is stamped; a comms turn has none.
+function storeInvocationId(invocation) {
+  try { return validateInvocationId(invocation?.invocationId); } catch { return null; }
+}
+
+// The owner's policy with the soul's own reach-back tools allowed first. A
+// malformed policy passes through untouched so the contract still refuses it.
+export function withReachRules(policy) {
+  if (!policy || typeof policy !== 'object' || !Array.isArray(policy.rules)) return policy;
+  return { ...policy, rules: [...reachPolicyRules(), ...policy.rules] };
+}
+
 // The production executor factory: one ACP turn under the soul's own
-// identity, in its worktree, with its binding in the environment.
-// `onHarnessSession` sees each turn's harness session binding, so the daemon
-// can record which harness session belongs to which soul (the metrics
-// collector reads Claude's log by that id). A failing recorder never fails
-// the turn.
-export function acpExecutorFor({ identities, policy, baseEnv, onHarnessSession = null, createExecutor = createAcpExecutor }) {
+// identity, in its worktree, with its binding in the environment, and the
+// reach-back MCP server (#146) injected so the soul can see its teammates and
+// message them as itself. `commsFor(agentId)` is the soul's comms setting as
+// recorded at its launch (true unless that launch turned comms off); `false`
+// keeps the reach server but withholds its teammate tools. `reachEnv` adds
+// variables only the reach server needs, such as a PATH that reaches
+// agent-comms. `onHarnessSession` sees each turn's harness session binding,
+// so the daemon can record which harness session belongs to which soul (the
+// metrics collector reads Claude's log by that id). A failing recorder never
+// fails the turn.
+export function acpExecutorFor({
+  identities, policy, baseEnv, onHarnessSession = null, createExecutor = createAcpExecutor,
+  commsFor = () => true, reachEnv = {},
+}) {
+  const turnPolicy = withReachRules(policy);
   return ({ agentId, harness, cwd, env }) => {
     const identity = identities(agentId);
     // A soul without the github-identity add-on runs with no App (#297).
     const app = identity?.github?.appSlug ?? null;
+    const turnEnv = { ...baseEnv, ...env, QWTS_AGENT_ID: agentId, AGENT_BOT_ID: agentId };
+    let comms = true;
+    try { comms = commsFor(agentId) !== false; } catch { /* no recorded setting: the default */ }
+    const mcpServers = ({ invocation }) => [reachMcpServerEntry({
+      invocationId: storeInvocationId(invocation),
+      agentId,
+      env: { ...turnEnv, ...reachEnv },
+      worktree: typeof cwd === 'string' && path.isAbsolute(cwd) ? cwd : null,
+      binding: typeof turnEnv.AGENT_BOT_BINDING === 'string' && path.isAbsolute(turnEnv.AGENT_BOT_BINDING)
+        ? turnEnv.AGENT_BOT_BINDING : null,
+      comms,
+    })];
     const executor = createExecutor({
       harness,
       identity: { app, agentId },
-      policy,
+      policy: turnPolicy,
       cwd,
-      env: { ...baseEnv, ...env, QWTS_AGENT_ID: agentId, AGENT_BOT_ID: agentId },
+      mcpServers,
+      env: turnEnv,
     });
     if (typeof onHarnessSession !== 'function') return executor;
     return (input) => executor({
