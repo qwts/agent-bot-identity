@@ -50,13 +50,35 @@ function contains(root, target) {
   return rel === '' || (!path.isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${path.sep}`));
 }
 
+// The shared-temp fallback is granted only while each component we create is
+// a real directory owned by this user (or not there yet): a symlink planted in
+// a shared temp directory must not turn its target into soul territory.
+function tmpFallback(id, env, uid) {
+  const base = path.join(env.TMPDIR ?? tmpdir(), 'agent-bot');
+  for (const component of [base, path.join(base, id)]) {
+    let stat;
+    try { stat = lstatSync(component); } catch (error) { if (error.code === 'ENOENT') break; throw error; }
+    if (!stat.isDirectory() || stat.uid !== uid) return null;
+  }
+  return canonicalPath(path.join(base, id));
+}
+
+// A soul's identity comes from its binding, so a file tool may never rewrite
+// one, even inside a checkout that is otherwise the soul's territory.
+function isBindingFile(target, env) {
+  if (path.basename(target) === 'agent-binding.json') return true;
+  if (path.basename(path.dirname(target)) === 'agent-bindings') return true;
+  if (!env.AGENT_BOT_BINDING) return false;
+  try { return canonicalPath(env.AGENT_BOT_BINDING) === target; } catch { return true; }
+}
+
 export function allowedRoots(agentId, opts = {}) {
   const id = validateAgentId(agentId);
   const soul = soulDirectory(id, opts);
   const roots = [realpathSync(soul)];
   const env = opts.env ?? process.env;
-  const fallback = canonicalPath(path.join(env.TMPDIR ?? tmpdir(), 'agent-bot', id));
-  roots.push(fallback);
+  const fallback = tmpFallback(id, env, opts.uid ?? process.getuid());
+  if (fallback) roots.push(fallback);
   const census = showSoul(id, { file: opts.file ?? populationFile(opts) });
   const recordedCheckouts = new Set();
   for (const checkout of [...(census.worktrees ?? []), census.worktree].filter(Boolean)) {
@@ -75,7 +97,7 @@ export function allowedRoots(agentId, opts = {}) {
       if (stat.isDirectory()) roots.push(realpathSync(file));
       else if (stat.isSymbolicLink()) {
         const target = realpathSync(file);
-        if (recordedCheckouts.has(target) || contains(fallback, target)) roots.push(target);
+        if (recordedCheckouts.has(target) || (fallback && contains(fallback, target))) roots.push(target);
       }
     } catch { /* Dangling or unavailable entries grant nothing. */ }
   }
@@ -108,6 +130,7 @@ export function allowedRoots(agentId, opts = {}) {
 export function checkWrite(agentId, targetPath, opts = {}) {
   const roots = allowedRoots(agentId, opts);
   const target = canonicalPath(targetPath, opts.cwd);
+  if (isBindingFile(target, opts.env ?? process.env)) return { inside: false, path: target, roots };
   return { inside: roots.some((root) => contains(root, target)), path: target, roots };
 }
 

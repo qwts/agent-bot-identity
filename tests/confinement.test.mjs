@@ -86,6 +86,35 @@ test('a symlinked worktrees container cannot grant outside directories', (t) => 
   symlinkSync(home, path.join(soul, 'worktrees'));
   assert.equal(checkWrite(id, path.join(home, 'outside', 'new'), opts).inside, false);
 });
+test('a planted or foreign temp fallback grants nothing', (t) => {
+  const { home, opts } = fixture(t);
+  mkdirSync(path.join(home, 'outside'));
+  mkdirSync(path.join(opts.env.TMPDIR, 'agent-bot'), { recursive: true });
+  symlinkSync(path.join(home, 'outside'), path.join(opts.env.TMPDIR, 'agent-bot', id));
+  assert.equal(checkWrite(id, path.join(home, 'outside', 'new'), opts).inside, false);
+  rmSync(path.join(opts.env.TMPDIR, 'agent-bot', id));
+  rmSync(path.join(opts.env.TMPDIR, 'agent-bot'), { recursive: true });
+  symlinkSync(home, path.join(opts.env.TMPDIR, 'agent-bot'));
+  mkdirSync(path.join(home, id));
+  assert.equal(checkWrite(id, path.join(home, id, 'new'), opts).inside, false);
+  rmSync(path.join(opts.env.TMPDIR, 'agent-bot'));
+  mkdirSync(path.join(opts.env.TMPDIR, 'agent-bot', id), { recursive: true });
+  assert.equal(checkWrite(id, path.join(opts.env.TMPDIR, 'agent-bot', id, 'new'), opts).inside, true);
+  assert.equal(checkWrite(id, path.join(opts.env.TMPDIR, 'agent-bot', id, 'new'), { ...opts, uid: process.getuid() + 1 }).inside, false);
+});
+test('binding files are never territory, even inside the bound checkout', async (t) => {
+  const { home, soul, opts, envelope } = fixture(t);
+  const bound = path.join(home, 'bound'); mkdirSync(path.join(bound, '.git', 'agent-bindings'), { recursive: true });
+  const bindingOpts = { ...opts, binding: { agentId: id }, boundCheckout: bound };
+  assert.equal(checkWrite(id, path.join(bound, 'new'), bindingOpts).inside, true);
+  for (const file of [path.join(bound, '.git', 'agent-binding.json'), path.join(bound, '.git', 'agent-bindings', `${id}.json`), path.join(soul, 'agent-binding.json')]) {
+    assert.equal(checkWrite(id, file, bindingOpts).inside, false);
+  }
+  const custom = path.join(bound, 'custom-binding');
+  assert.equal(checkWrite(id, custom, { ...bindingOpts, env: { ...opts.env, AGENT_BOT_BINDING: custom } }).inside, false);
+  await setConfinementMode(id, 'deny', { ...opts, gate: owner });
+  assert.equal(confinementCheck(envelope(path.join(soul, 'agent-binding.json')), opts).decision, 'deny');
+});
 test('bound checkout must match the recorded worktree when present', (t) => {
   const { home, opts } = fixture(t);
   const bound = path.join(home, 'bound'); mkdirSync(bound);

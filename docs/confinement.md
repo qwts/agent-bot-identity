@@ -13,7 +13,9 @@ against real paths for:
 
 - the soul directory resolved by the population registry;
 - each entry under its `worktrees/`, including link targets elsewhere (#339);
-- `$TMPDIR/agent-bot/<agentId>` (OS tmp directory when TMPDIR is unset);
+- `$TMPDIR/agent-bot/<agentId>` (OS tmp directory when TMPDIR is unset), only
+  while `agent-bot` and `<agentId>` there are real directories owned by this
+  user, so a link planted in a shared temp directory grants nothing;
 - the checkout of the current soul binding;
 - absolute paths granted by the soul's `policy.json`:
 
@@ -24,6 +26,10 @@ against real paths for:
   }
 }
 ```
+
+Binding files (`agent-binding.json`, `agent-bindings/*.json` and any
+`AGENT_BOT_BINDING` file) are never territory, even inside the bound checkout:
+the binding names the soul whose mode applies.
 
 Keep any existing revision policy fields such as `mode` and `paths`. Relative
 paths and `~` grants are rejected. Policy changes use the existing owner-reviewed
