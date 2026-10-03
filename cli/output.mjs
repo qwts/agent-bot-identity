@@ -12,7 +12,7 @@ Commands:
   doctor             Diagnose installation and identity state
   identity           Manage transcript-bound execution identities
   space              Manage durable per-soul Agent Spaces
-  population         List the workstation-local census of souls
+  population         List this account's census of souls
   principal          Enroll and authorize messaging principals (owner ceremony)
   binding            Revoke this worktree's soul binding
   soul               Turn cold wake on or off for a soul (owner only); pack validate PATH; revision <command>

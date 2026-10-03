@@ -334,7 +334,7 @@ remote branch before and after replay, verifies every returned signature and
 tree, then resets the local branch to the published signed history. Start with
 `agent-bot signed-commit --dry-run`; the preview is network-free.
 
-`population` reads the workstation-local census at
+`population` reads the account-local census (one per OS user) at
 `$XDG_STATE_HOME/agent-bot/population.json` (or
 `$AGENT_BOT_POPULATION_PATH`). Records contain only the Agent ID, App slug,
 parent ID, status, Agent Space path, all known checkout references and the
