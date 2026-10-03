@@ -63,6 +63,7 @@ JSON `{ path, status, agentId?, name?, soulDir?, copies?, message? }`:
 | `copy` | another folder is the soul's own | is refused with `message` |
 | `duplicate` | several folders claim the soul, none registered | is refused |
 | `unregistered` | the marker names no active soul here | is refused |
+| `invalid` | `.soul-state/agent-id` is a link, not a small regular file, or not an Agent ID; its contents are never quoted | is refused |
 
 The daemon applies the same rule to launch requests, so opening an installed
 soul from Finder and launching it never creates a second soul.

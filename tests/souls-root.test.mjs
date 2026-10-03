@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { soulsHome } from '../souls-root.mjs';
@@ -140,6 +140,27 @@ test('a folder with no marker is a package; a marker for no active soul is refus
   const retired = path.join(options.home, 'retired.soul');
   mark(retired);
   assert.equal(locateSoulDir(retired, options).status, 'unregistered');
+});
+
+test('a linked, oversized or non-ID marker is invalid and never quoted (#400 review)', (t) => {
+  const options = scratch(t);
+  const secret = path.join(options.home, 'secret.txt');
+  writeFileSync(secret, 'TOP-SECRET-CONTENTS\n');
+  const linked = path.join(options.home, 'linked.soul');
+  mkdirSync(path.join(linked, '.soul-state'), { recursive: true });
+  symlinkSync(secret, path.join(linked, '.soul-state', 'agent-id'));
+  const notId = path.join(options.home, 'not-id.soul');
+  mark(notId, 'TOP-SECRET-CONTENTS');
+  const big = path.join(options.home, 'big.soul');
+  mark(big, `${id}${' '.repeat(400)}`);
+  const folder = path.join(options.home, 'folder.soul');
+  mkdirSync(path.join(folder, '.soul-state', 'agent-id'), { recursive: true });
+  for (const dir of [linked, notId, big, folder]) {
+    const located = locateSoulDir(dir, options);
+    assert.equal(located.status, 'invalid', dir);
+    assert.equal(located.agentId, undefined);
+    assert.doesNotMatch(JSON.stringify(located), /TOP-SECRET/);
+  }
 });
 
 test('soul locate prints the JSON a host reads', (t) => {

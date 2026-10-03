@@ -321,7 +321,7 @@ Hosts such as GeniusBar should read the shared location through:
 agent-bot soul dir AGENT_ID
 # JSON: { agentId, soulDir, home, soulsRoot, source, copies }
 agent-bot soul locate PATH
-# JSON: { path, status: package|installed|copy|duplicate|unregistered, ... }
+# JSON: { path, status: package|installed|copy|duplicate|unregistered|invalid, ... }
 ```
 
 This command resolves the census directory without creating a home; it also
