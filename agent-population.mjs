@@ -12,6 +12,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -606,6 +607,86 @@ export function soulDirectory(id, options = {}) {
   // marked falls back to one carrying this soul's ID suffix.
   const named = path.join(root, `${soul.name}.soul`);
   return claimedByOther(named, target) ? path.join(root, `${soul.name}-${target.slice(-8)}.soul`) : named;
+}
+
+// The marker's soul, or null when the folder has none (a package, not an
+// installed soul). An empty marker is one being written: no claim yet.
+function markerOf(directory) {
+  try { return readFileSync(path.join(directory, '.soul-state', 'agent-id'), 'utf8').trim() || null; }
+  catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null; throw error; }
+}
+
+function samePath(left, right) {
+  try { return realpathSync(left) === realpathSync(right); }
+  catch { return path.resolve(left) === path.resolve(right); }
+}
+
+// Every folder under the souls root whose marker claims a soul, by soul.
+// Copying a soul folder (a Finder Duplicate, #80) copies its marker, so one
+// soul can be claimed by several folders.
+function soulDirClaims(options = {}) {
+  const { root } = soulsHome(options);
+  let entries = [];
+  try { entries = readdirSync(root, { withFileTypes: true }); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const claims = new Map();
+  for (const entry of entries) {
+    if (!entry.name.endsWith('.soul') || !(entry.isDirectory() || entry.isSymbolicLink())) continue;
+    const directory = path.join(root, entry.name);
+    const id = markerOf(directory);
+    if (id) claims.set(id, [...(claims.get(id) ?? []), directory]);
+  }
+  return claims;
+}
+
+// Souls claimed by more than one folder: [{ agentId, soulDir, copies }].
+// `soulDir` is the census-registered folder when it still carries the
+// marker, else null (no folder is provably the soul's). `copies` are the
+// other folders; agent-bot never runs a soul from one of them.
+export function duplicateSoulDirs(options = {}) {
+  const file = options.file ?? populationFile(options);
+  const souls = readDocument(file).souls;
+  const duplicates = [];
+  for (const [id, dirs] of soulDirClaims(options)) {
+    if (dirs.length < 2) continue;
+    const registered = souls[id]?.soulDir;
+    const owner = registered && dirs.some((dir) => samePath(dir, registered)) ? registered : null;
+    duplicates.push({ agentId: id, soulDir: owner, copies: dirs.filter((dir) => !owner || !samePath(dir, owner)).sort() });
+  }
+  return duplicates.sort((left, right) => left.agentId.localeCompare(right.agentId));
+}
+
+// What a folder opened as a soul package is (#80):
+// - `package`: no soul marker; launching it starts a new soul.
+// - `installed`: the registered folder of an active soul; opening it means
+//   that soul, so a launch relaunches it instead of starting another.
+// - `copy`: carries the marker of a soul whose own folder is elsewhere.
+// - `duplicate`: several folders claim the soul and none is registered.
+// - `unregistered`: the marker names no active soul in this census.
+// Only `package` and `installed` may be launched; the rest carry a message.
+export function locateSoulDir(directory, options = {}) {
+  const dir = path.resolve(printableText('path', directory, { max: 4096 }));
+  const id = markerOf(dir);
+  if (!id) return { path: dir, status: 'package' };
+  const file = options.file ?? populationFile(options);
+  const soul = readDocument(file).souls[id];
+  if (!soul || soul.status !== 'active') {
+    return { path: dir, status: 'unregistered', agentId: id,
+      message: `${dir} belongs to soul ${id}, which is not an active soul here` };
+  }
+  const claims = soulDirClaims(options).get(id) ?? [];
+  if (!claims.some((claim) => samePath(claim, dir))) claims.push(dir);
+  const owner = soul.soulDir && existsSync(soul.soulDir) && markerOf(soul.soulDir) === id ? soul.soulDir
+    : claims.length === 1 ? dir : null;
+  const copies = claims.filter((claim) => !owner || !samePath(claim, owner)).sort();
+  const found = { path: dir, agentId: id, name: soul.name, soulDir: owner, copies };
+  if (owner && samePath(owner, dir)) return { ...found, status: 'installed' };
+  if (owner) {
+    return { ...found, status: 'copy',
+      message: `${dir} is a copy of soul ${id}, whose folder is ${owner}; open that soul instead and remove the copy` };
+  }
+  return { ...found, status: 'duplicate',
+    message: `${claims.length} folders claim soul ${id} (${claims.sort().join(', ')}); keep its own folder, remove the copies, then retry` };
 }
 
 // Agents refer to each other by name, so `show` accepts one — but the census

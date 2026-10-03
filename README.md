@@ -319,7 +319,9 @@ Hosts such as GeniusBar should read the shared location through:
 
 ```bash
 agent-bot soul dir AGENT_ID
-# JSON: { agentId, soulDir, home, soulsRoot, source }
+# JSON: { agentId, soulDir, home, soulsRoot, source, copies }
+agent-bot soul locate PATH
+# JSON: { path, status: package|installed|copy|duplicate|unregistered, ... }
 ```
 
 This command resolves the census directory without creating a home; it also

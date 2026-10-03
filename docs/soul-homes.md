@@ -40,9 +40,32 @@ Agent Space does not move: `.soul-state/space` links to the census's recorded
 space path. An existing link, including a dangling one, is kept.
 
 `agent-bot soul dir AGENT_ID` prints `{ agentId, soulDir, home, soulsRoot,
-source }`. `source` is `environment`, `setting`, or `default`. Hosts such as
+source, copies }`. `source` is `environment`, `setting`, or `default`. Hosts such as
 GeniusBar should use this contract for location reads, and harness auth uses
 this registry home too. Reading the directory does not provision a home.
+
+## Copied soul folders
+
+Copying a soul folder (a Finder Duplicate, for example) copies its
+`.soul-state/agent-id` marker, so two folders claim one soul (#80). The soul
+runs only from its census-registered folder; a copy is never used. `copies`
+in `soul dir` lists the others, and `agent-bot doctor` warns with code
+`soul-folder-duplicate` and names them. When no registered folder carries the
+marker, the claims are ambiguous and a moved-folder search refuses to pick one.
+
+`agent-bot soul locate PATH` says what a folder opened as a package is, as
+JSON `{ path, status, agentId?, name?, soulDir?, copies?, message? }`:
+
+| status | meaning | a package launch of it |
+| --- | --- | --- |
+| `package` | no soul marker | spawns a new soul |
+| `installed` | an active soul's registered folder | relaunches that soul |
+| `copy` | another folder is the soul's own | is refused with `message` |
+| `duplicate` | several folders claim the soul, none registered | is refused |
+| `unregistered` | the marker names no active soul here | is refused |
+
+The daemon applies the same rule to launch requests, so opening an installed
+soul from Finder and launching it never creates a second soul.
 
 ## Repository worktrees
 
