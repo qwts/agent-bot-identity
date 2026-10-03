@@ -1,5 +1,6 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -8,7 +9,7 @@ import { createColdWaker } from '../cold-wake.mjs';
 import { createCommsRelay } from '../comms-relay.mjs';
 import { createReachState, handleMcpMessage, reachMcpServerEntry } from '../daemon-mcp.mjs';
 import {
-  formatThread, recordThreadMessage, stripNoReply, threadContext, threadsDirectory,
+  clip, formatThread, recordThreadMessage, stripNoReply, threadContext, threadsDirectory,
 } from '../soul-threads.mjs';
 
 const roots = [];
@@ -47,7 +48,8 @@ test('the journal is private, bounded per entry, and follows replyTo and correla
   assert.equal(statSync(dir).mode & 0o777, 0o700);
   assert.equal(statSync(path.join(dir, `${BILL}.jsonl`)).mode & 0o777, 0o600);
   const big = readFileSync(path.join(dir, `${BILL}.jsonl`), 'utf8').trim().split('\n').map((line) => JSON.parse(line)).at(-1);
-  assert.ok(Buffer.byteLength(big.body) <= 2048 + 3);
+  assert.ok(Buffer.byteLength(big.body) <= 2048, 'the stored body fits the 2 KiB cap, marker included');
+  assert.ok(big.body.endsWith('…'));
 
   // Ted's answer replies to Bill's send: the request it served comes along.
   const thread = threadContext(BILL, { id: 'msg_t', replyTo: 'msg_b', correlation: 'msg_s' }, options);
@@ -73,6 +75,48 @@ test('a thread keeps the newest 8 messages within 6 KB, oldest first', () => {
   assert.ok(Buffer.byteLength(JSON.stringify(thread)) <= 6 * 1024);
   assert.equal(thread.at(-1).id, 'msg_11');
   assert.deepEqual(thread.map((entry) => entry.id), [...thread.map((entry) => entry.id)].sort((a, b) => Number(a.slice(4)) - Number(b.slice(4))));
+});
+
+test('clip keeps a body within its byte cap, marker included, without splitting a character', () => {
+  assert.equal(clip('a'.repeat(2048), 2048), 'a'.repeat(2048), 'a body at the cap is kept whole');
+  const over = clip('a'.repeat(2049), 2048);
+  assert.equal(Buffer.byteLength(over), 2048);
+  assert.equal(over, `${'a'.repeat(2045)}…`);
+  for (const prefix of ['', 'a', 'aa', 'aaa']) {
+    for (const char of ['é', '€', '😀']) {
+      const cut = clip(prefix + char.repeat(2048), 2048);
+      assert.ok(Buffer.byteLength(cut) <= 2048, `${JSON.stringify(prefix)}+${char} fits`);
+      assert.ok(Buffer.byteLength(cut) > 2048 - 3 - 4, `${JSON.stringify(prefix)}+${char} keeps what fits`);
+      assert.ok(!cut.includes('\uFFFD') && cut.endsWith('…'));
+    }
+  }
+  assert.equal(clip(undefined, 10), '');
+});
+
+// The daemon's relay and each turn's reach server append to one journal from
+// different processes. A rewrite must never drop a line appended meanwhile.
+test('concurrent writers never lose an append to a rewrite', async () => {
+  const { options } = scratch();
+  const moduleUrl = new URL('../soul-threads.mjs', import.meta.url).href;
+  const writer = (n) => new Promise((resolve, reject) => {
+    const script = `const { recordThreadMessage } = await import(${JSON.stringify(moduleUrl)});
+      for (let i = 0; i < 80; i += 1) {
+        if (!recordThreadMessage(${JSON.stringify(BILL)}, { dir: 'in', id: 'w${n}_' + i, from: 'owner', body: 'x'.repeat(200) },
+          { env: { AGENT_BOT_STATE_HOME: ${JSON.stringify(options.env.AGENT_BOT_STATE_HOME)} }, home: ${JSON.stringify(options.home)}, maxBytes: 4096, keep: 100000 })) process.exit(3);
+      }`;
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: 'inherit', env: { PATH: process.env.PATH, HOME: options.home } });
+    child.on('error', reject);
+    child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`writer ${n} exited ${code}`))));
+  });
+  await Promise.all([0, 1, 2, 3].map(writer));
+  // `keep` is larger than everything written, so every rewrite keeps every
+  // line: any id missing here was lost to a race.
+  const file = path.join(threadsDirectory(options), `${BILL}.jsonl`);
+  const ids = new Set(readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line).id));
+  for (const n of [0, 1, 2, 3]) {
+    for (let i = 0; i < 80; i += 1) assert.ok(ids.has(`w${n}_${i}`), `w${n}_${i} survived`);
+  }
+  assert.equal(ids.size, 320);
 });
 
 test('the journal rewrites itself before it grows without bound', () => {

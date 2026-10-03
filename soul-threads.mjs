@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
-import { stateDirectory, validateAgentId } from './agent-identity.mjs';
+import { stateDirectory, validateAgentId, withLock } from './agent-identity.mjs';
 
 export const NO_REPLY = 'NO_REPLY';
 
@@ -40,11 +40,27 @@ export function threadKey(message) {
   return typeof message?.id === 'string' && message.id !== '' ? message.id : null;
 }
 
-function clip(text, limit) {
+const CLIP_MARKER = '…';
+
+// At most `limit` UTF-8 bytes, the marker included; a cut never splits a
+// character.
+export function clip(text, limit) {
   const value = typeof text === 'string' ? text : '';
+  if (Buffer.byteLength(value, 'utf8') <= limit) return value;
+  const room = limit - Buffer.byteLength(CLIP_MARKER, 'utf8');
   const bytes = Buffer.from(value, 'utf8');
-  if (bytes.length <= limit) return value;
-  return `${bytes.subarray(0, limit).toString('utf8').replace(/�+$/u, '')}…`;
+  let end = Math.max(room, 0);
+  // Back up to the start of the character the cut lands in (continuation
+  // bytes are 10xxxxxx), and keep it only if it fits whole.
+  let start = end;
+  while (start > 0 && (bytes[start - 1] & 0xc0) === 0x80) start -= 1;
+  if (start > 0 && bytes[start - 1] >= 0xc0) {
+    const lead = bytes[start - 1];
+    const size = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : 2;
+    if (end - (start - 1) < size) end = start - 1;
+  }
+  const cut = bytes.subarray(0, end);
+  return `${cut.toString('utf8')}${CLIP_MARKER}`;
 }
 
 function stringOrNull(value) {
@@ -53,7 +69,9 @@ function stringOrNull(value) {
 
 // Records one message the soul received (`in`) or sent (`out`). Best effort:
 // a journal that cannot be written never fails the turn or the send.
-export function recordThreadMessage(agentId, entry, { env = process.env, home = homedir(), now = () => new Date() } = {}) {
+export function recordThreadMessage(agentId, entry, {
+  env = process.env, home = homedir(), now = () => new Date(), maxBytes = JOURNAL_MAX_BYTES, keep = JOURNAL_KEEP,
+} = {}) {
   try {
     const file = journalPath(agentId, { env, home });
     const dir = path.dirname(file);
@@ -69,13 +87,18 @@ export function recordThreadMessage(agentId, entry, { env = process.env, home = 
       correlation: stringOrNull(entry.correlation),
       body: clip(entry.body, ENTRY_BODY_LIMIT),
     });
-    appendFileSync(file, `${line}\n`, { mode: 0o600 });
-    if (statSync(file).size > JOURNAL_MAX_BYTES) {
-      const kept = readFileSync(file, 'utf8').split('\n').filter(Boolean).slice(-JOURNAL_KEEP);
-      const pending = `${file}.${process.pid}.tmp`;
-      writeFileSync(pending, `${kept.join('\n')}\n`, { mode: 0o600 });
-      renameSync(pending, file);
-    }
+    // The daemon and each turn's reach server write the same journal, so the
+    // append, the size check and the rewrite are one locked step: a rewrite
+    // never drops a line another process appended meanwhile.
+    withLock(`${file}.lock`, 'thread journal', () => {
+      appendFileSync(file, `${line}\n`, { mode: 0o600 });
+      if (statSync(file).size > maxBytes) {
+        const kept = readFileSync(file, 'utf8').split('\n').filter(Boolean).slice(-keep);
+        const pending = `${file}.${process.pid}.tmp`;
+        writeFileSync(pending, `${kept.join('\n')}\n`, { mode: 0o600 });
+        renameSync(pending, file);
+      }
+    });
     return true;
   } catch {
     return false;
