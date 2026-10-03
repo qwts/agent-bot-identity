@@ -101,7 +101,7 @@ test('a copied soul folder is located as a copy and reported, never as the soul 
   mark(own);
   registerSoulDir(id, own, options);
   assert.deepEqual(duplicateSoulDirs(options), []);
-  assert.deepEqual(locateSoulDir(own, options), { path: own, agentId: id, name: 'test-soul', soulDir: own, copies: [], status: 'installed' });
+  assert.deepEqual(locateSoulDir(own, options), { path: own, agentId: id, name: 'test-soul', handle: 'test-soul', soulDir: own, copies: [], status: 'installed' });
   // A Finder Duplicate copies the marker with the folder.
   mark(copy);
   assert.deepEqual(duplicateSoulDirs(options), [{ agentId: id, soulDir: own, copies: [copy] }]);

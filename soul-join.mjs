@@ -27,7 +27,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { mintBindToken, readBinding } from './agent-binding.mjs';
 import { mintAgentIdentity, readAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
-import { populationFile, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
+import { populationFile, recordSoulDisplayName, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
 import { initAgentSpace } from './agent-space.mjs';
 import { daemonPreference, loadConfig } from './config.mjs';
 import { AGENT_ID_KEYS } from './resolve-agent.mjs';
@@ -170,6 +170,9 @@ export async function joinSoul({
 
   // 5. agent-comms.
   const address = await comms({ agentId, worktree, name, harness }, { env });
+  // The census now shows this name; every command shows the same one (#429).
+  try { recordSoulDisplayName(agentId, name, { file }); }
+  catch (error) { process.stderr.write(`agent-bot join: display name not recorded: ${error.message}\n`); }
   return { agentId, soulDir: soulDirectory(agentId, { ...options, file }), worktree, address, created, bind };
 }
 

@@ -45,7 +45,7 @@ test('remove turns wake off, leaves agent-comms, retires the soul and archives i
   assert.equal(existsSync(f.folder), false);
   const archived = path.join(f.env.AGENT_BOT_SOULS_HOME, '.archive', '20261003T223000Z-R8Scout - Starter.soul');
   assert.equal(readFileSync(path.join(archived, 'soul.json'), 'utf8'), '{"name":"R8Scout - Starter"}\n');
-  assert.deepEqual(result, { agentId: id, name: 'r8scout', wake: 'off', comms: 'left', retired: true,
+  assert.deepEqual(result, { agentId: id, name: 'R8Scout - Starter', handle: 'r8scout', wake: 'off', comms: 'left', retired: true,
     archived: [{ from: f.folder, to: archived }] });
   assert.deepEqual(JSON.parse(f.out.join('')), result);
   const receipts = readFileSync(auditFile({ env: f.env, home: f.home }), 'utf8').trim().split('\n').map((line) => JSON.parse(line));

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { registerSoulDir, setSoulComms, showSoul, upsertSoul } from '../agent-population.mjs';
+import { recordSoulDisplayName, registerSoulDir, setSoulComms, showSoul, upsertSoul } from '../agent-population.mjs';
 import { computePackageRevision, validateSoulPackage, writeSoulComms } from '../soul-package.mjs';
 import { soulCommsCommand, soulRunning } from '../soul-comms.mjs';
 
@@ -56,11 +56,20 @@ test('writeSoulComms edits soul.json as a new revision and is a no-op when uncha
 test('show reports managed, comms and running by Agent ID or name, without the owner gate', async (t) => {
   const f = fixture(t, { comms: false });
   const shown = await soulCommsCommand([ID, 'show', '--json'], f.options);
-  assert.deepEqual(shown, { agentId: ID, name: 'bill', managed: true, comms: false, running: false });
+  assert.deepEqual(shown, { agentId: ID, name: 'bill', handle: 'bill', managed: true, comms: false, running: false });
   assert.deepEqual(JSON.parse(f.out[0]), shown);
   await soulCommsCommand(['bill'], f.options);
   assert.equal(f.out[1], `${ID} managed comms off\n`);
   assert.equal(f.gates.length, 0);
+});
+
+test('show names the soul as the census does, and finds it by that name (#429)', async (t) => {
+  const f = fixture(t);
+  recordSoulDisplayName(ID, 'Bill Researcher', { file: f.env.AGENT_BOT_POPULATION_PATH });
+  const shown = await soulCommsCommand(['Bill Researcher', 'show', '--json'], f.options);
+  assert.equal(shown.agentId, ID);
+  assert.equal(shown.name, 'Bill Researcher');
+  assert.equal(shown.handle, 'bill');
 });
 
 test('off and on change soul.json and the census row turns read, behind the owner gate', async (t) => {

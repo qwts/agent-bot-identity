@@ -57,7 +57,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
-import { archiveSoulDirs, backfillManagedSouls, listSouls, locateSoulDir, populationFile, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
+import { archiveSoulDirs, backfillManagedSouls, listSouls, locateSoulDir, populationFile, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
 import {
   bindAgentLineage,
@@ -1412,7 +1412,14 @@ export async function runDaemon({
     // A principal launched this soul to talk to it, so later messages wake it.
     onLaunched: (agentId) => setColdWake(agentId, true, { env, home, now }),
     discard: (agentId, rollback) => discardFailedLaunch(agentId, rollback, { env, home, config, now }),
-    joinSoul: (soul) => joinLaunchedSoul(soul, { env }),
+    joinSoul: async (soul) => {
+      const address = await joinLaunchedSoul(soul, { env });
+      // The census shows the launch name; every command shows it too (#429).
+      if (soul.name) {
+        try { recordSoulDisplayName(soul.agentId, soul.name, { file: populationFile({ env, home }) }); } catch { /* shown by soul.json name */ }
+      }
+      return address;
+    },
     // The comms setting is read here, at launch only; turns read the census.
     recordLaunch: (launch) => recordLaunchComms(launch, { env, home, config }),
     executorFor,
