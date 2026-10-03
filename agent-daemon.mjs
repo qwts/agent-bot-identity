@@ -85,6 +85,7 @@ import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { validateSoulPackage } from './soul-package.mjs';
 import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
+import { recordSoulSession } from './metrics.mjs';
 import { createTaskReporter } from './task-turns.mjs';
 import { createCommsRelay } from './comms-relay.mjs';
 import { createResumeExecutor, createWakeSessions, resumePath, wakeSessionsFile } from './wake-resume.mjs';
@@ -1127,7 +1128,14 @@ export async function runDaemon({
   const identities = (agentId) => readAgentIdentity(validateAgentId(agentId), { stateDir: stateDirectory({ env, home }) });
   // An embedded host turns the executor on for its own daemon (ADR-0276).
   const executorFor = setup?.enabled === true || env.AGENT_BOT_EXECUTOR === '1'
-    ? acpExecutorFor({ identities, policy: setup?.policy ?? { version: 1, rules: [], fallback: 'deny' }, baseEnv: soulEnvironment(env) })
+    ? acpExecutorFor({
+      identities,
+      policy: setup?.policy ?? { version: 1, rules: [], fallback: 'deny' },
+      baseEnv: soulEnvironment(env),
+      // A daemon-run soul's home is not a git worktree, so the session-start
+      // hook cannot place its Claude session; the turn's binding does.
+      onHarnessSession: ({ agentId, harness, harnessSessionId }) => recordSoulSession({ agentId, provider: harness, sessionId: harnessSessionId, env, home, now }),
+    })
     : null;
   const executor = executorFor
     ? (input) => {

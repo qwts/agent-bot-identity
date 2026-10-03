@@ -9,7 +9,7 @@
 
 import { createAcpExecutor } from './acp-engine.mjs';
 import { createColdWaker } from './cold-wake.mjs';
-import { UPDATE_EVENT } from './executor-contract.mjs';
+import { HARNESS_SESSION_EVENT, UPDATE_EVENT } from './executor-contract.mjs';
 import { createWakeDispatcher } from './wake-dispatch.mjs';
 
 // The broker port the dispatcher wants, over the supervisor's report.
@@ -46,17 +46,31 @@ export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onE
 
 // The production executor factory: one ACP turn under the soul's own
 // identity, in its worktree, with its binding in the environment.
-export function acpExecutorFor({ identities, policy, baseEnv }) {
+// `onHarnessSession` sees each turn's harness session binding, so the daemon
+// can record which harness session belongs to which soul (the metrics
+// collector reads Claude's log by that id). A failing recorder never fails
+// the turn.
+export function acpExecutorFor({ identities, policy, baseEnv, onHarnessSession = null, createExecutor = createAcpExecutor }) {
   return ({ agentId, harness, cwd, env }) => {
     const identity = identities(agentId);
     // A soul without the github-identity add-on runs with no App (#297).
     const app = identity?.github?.appSlug ?? null;
-    return createAcpExecutor({
+    const executor = createExecutor({
       harness,
       identity: { app, agentId },
       policy,
       cwd,
       env: { ...baseEnv, ...env, QWTS_AGENT_ID: agentId, AGENT_BOT_ID: agentId },
+    });
+    if (typeof onHarnessSession !== 'function') return executor;
+    return (input) => executor({
+      ...input,
+      appendEvent: (type, data) => {
+        if (type === HARNESS_SESSION_EVENT) {
+          try { onHarnessSession({ agentId, harness, harnessSessionId: data?.harnessSessionId }); } catch { /* best effort */ }
+        }
+        return input.appendEvent(type, data);
+      },
     });
   };
 }
