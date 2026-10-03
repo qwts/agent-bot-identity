@@ -251,7 +251,9 @@ function fetchCommsTree(pin, { cacheDir, offline }) {
     git('fetch', '-q', '--depth', '1', url, pin.ref);
     const tree = join(work, 'tree');
     mkdirSync(tree);
-    run('sh', ['-c', 'git -C "$1" archive FETCH_HEAD | tar -x -C "$2"', 'sh', work, tree]);
+    const tarball = join(work, 'tree.tar');
+    git('archive', '--format', 'tar', '-o', tarball, 'FETCH_HEAD');
+    run('tar', ['-xf', tarball, '-C', tree]);
     const keep = commsKeepSet(JSON.parse(readFileSync(join(tree, 'package.json'), 'utf8')));
     const staged = join(work, 'component');
     mkdirSync(staged);

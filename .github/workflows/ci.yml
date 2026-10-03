@@ -217,8 +217,10 @@ jobs:
           # so the lane runs on the Node the archive ships, not on an older one
           # the component's engines do not allow.
           node-version: 24
-      - name: Build the ${{ matrix.target }} archive
-        run: node scripts/linux-bundle/build.mjs --platform ${{ matrix.target }} --out dist
+      - name: Build the ${{ matrix.platform.target }} archive
+        env:
+          TARGET: ${{ matrix.platform.target }}
+        run: node scripts/linux-bundle/build.mjs --platform "$TARGET" --out dist
       - name: Verify the assembled checksum file
         run: cd dist && sha256sum --check --strict SHA256SUMS
       - name: Install and uninstall the archive against a fake systemctl

@@ -271,7 +271,7 @@ ensure_path_block() {
 remove_path_block() {
   STARTUP_FILE=${1:-$(login_startup_file)}
   path_block_present "$STARTUP_FILE" || return 0
-  TMP_FILE="$STARTUP_FILE.agent-bot.$$"
+  TMP_FILE=$(mktemp "$STARTUP_FILE.agent-bot.XXXXXX") || return 1
   awk -v begin="$PATH_BEGIN" -v end="$PATH_END" '
     $0 == begin { inblock = 1; next }
     $0 == end { inblock = 0; next }
@@ -293,8 +293,7 @@ remove_path_block() {
 detect_foreign_pair() {
   FOREIGN_COUNT=0
   FOREIGN_FINDINGS=''
-  SCRATCH="${TMPDIR:-/tmp}/agent-bot-bundle-probe.$$"
-  mkdir -p "$SCRATCH"
+  SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/agent-bot-bundle-probe.XXXXXX") || return 1
 
   # Our own prefix already holds a bundle: whatever pair is running belongs to
   # that install, and re-running install refreshes it rather than migrating.

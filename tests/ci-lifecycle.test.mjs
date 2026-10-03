@@ -62,7 +62,9 @@ test('the Linux bundle lane builds and installs an archive on both platforms', (
   assert.match(ci, /timeout-minutes: 25/);
   // The build is a plain node invocation; the archive is what CI tests, not a
   // hand-assembled copy of the tree.
-  assert.match(ci, /node scripts\/linux-bundle\/build\.mjs --platform \$\{\{ matrix\.target \}\} --out dist/);
+  assert.match(ci, /TARGET: \$\{\{ matrix\.platform\.target \}\}/);
+  assert.match(ci, /node scripts\/linux-bundle\/build\.mjs --platform "\$TARGET" --out dist/);
+  assert.doesNotMatch(ci, /matrix\.target\b/);
   assert.match(ci, /sha256sum --check --strict SHA256SUMS/);
   // The fake systemctl is what keeps this lane off the runner's user manager.
   assert.match(ci, /sh scripts\/linux-bundle\/ci-smoke\.sh dist/);
