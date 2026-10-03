@@ -253,7 +253,7 @@ Installation provides one executable at `~/.local/bin/agent-bot`:
 agent-bot bootstrap [--profile <path|->] [--config <path>] [--app <slug>] [--scope-app <slug>] [--with-gh-shim] [--json]
 agent-bot --version
 agent-bot setup-worktree [app-slug]
-agent-bot join --name NAME --harness H [--template PATH] [--soul AGENT_ID] [--json]
+agent-bot join --name NAME --harness H [--template PATH] [--soul AGENT_ID] [--wake resume:read-only|resume:workspace|acp] [--principal-stdin] [--json]
 agent-bot mint-token --app <slug> [--json]
 agent-bot doctor [--machine-only] [--app <slug>] [--json]
 agent-bot identity <ensure|spawn|bind|record|finalize|show|current>

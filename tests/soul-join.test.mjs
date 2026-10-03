@@ -197,7 +197,11 @@ test('a failed wake records why in the audit receipt, never a URL', async (t) =>
 });
 
 test('agent-bot join parses its flags; the CLI prints JSON; setup-worktree run by name says why it did nothing', async (t) => {
-  assert.deepEqual(parseJoinArgs(['--name', 'n', '--harness', 'codex', '--json']), { json: true, name: 'n', harness: 'codex' });
+  assert.deepEqual(parseJoinArgs(['--name', 'n', '--harness', 'codex', '--json']), { json: true, principalStdin: false, name: 'n', harness: 'codex' });
+  assert.deepEqual(parseJoinArgs(['--name', 'n', '--harness', 'codex', '--wake', 'resume:workspace', '--principal-stdin']),
+    { json: false, principalStdin: true, name: 'n', harness: 'codex', wake: 'resume:workspace' });
+  assert.throws(() => parseJoinArgs(['--name', 'n', '--harness', 'codex', '--wake', 'always']), /usage/);
+  assert.throws(() => parseJoinArgs(['--name', 'n', '--harness', 'codex', '--principal-stdin']), /only for --wake/);
   assert.throws(() => parseJoinArgs(['--name', 'n']), /usage: agent-bot join/);
   assert.throws(() => parseJoinArgs(['--name', 'n', '--harness', 'codex', '--bogus', 'x']), /usage/);
   assert.equal(bundledStarter({ env: {}, root: '/nowhere/components/agent-bot' }), null);
@@ -208,6 +212,7 @@ test('agent-bot join parses its flags; the CLI prints JSON; setup-worktree run b
   assert.equal(run.status, 0, run.stderr);
   const result = JSON.parse(run.stdout);
   assert.equal(result.address, `test/${result.agentId}`);
+  assert.equal(result.wake, 'off', 'join says when the soul will not wake');
 
   // The owner's account: the GitHub add-on is on, and this checkout states no App.
   const config = path.join(a.root, 'agent-bot-config.json');
@@ -223,4 +228,30 @@ test('agent-bot join parses its flags; the CLI prints JSON; setup-worktree run b
   const hook = spawnSync(process.execPath, [fileURLToPath(new URL('../setup-worktree.mjs', import.meta.url))], { cwd: repo, env, encoding: 'utf8' });
   assert.equal(hook.status, 0);
   assert.equal(hook.stderr, '');
+});
+
+test('join --wake asks the owner first, then sets the wake; a refusal or an unresumable harness changes nothing (#410)', async (t) => {
+  const a = account(t);
+  const base = { harness: 'codex', template: null, cwd: a.outside, env: a.env, home: a.home, config: {} };
+  const asked = [];
+  const joined = await joinSoul({ ...base, name: 'scout', wake: 'resume:workspace', principal: { principal: 'p' },
+    gate: async (action, { principal }) => { asked.push({ action, principal }); return { method: 'principal' }; } });
+  assert.deepEqual(asked, [{ action: 'join as scout and wake it on new messages (resume:workspace)', principal: { principal: 'p' } }]);
+  assert.equal(joined.wake, 'resume workspace');
+  assert.equal(joined.authorization, 'principal');
+  const settings = JSON.parse(readFileSync(path.join(a.env.XDG_STATE_HOME, 'agent-bot', 'cold-wake.json'), 'utf8')).settings;
+  assert.deepEqual(settings[joined.agentId], { lane: 'resume', policy: 'workspace' });
+
+  // A Claude session cannot be resumed; it wakes through an ACP turn.
+  const acp = await joinSoul({ ...base, name: 'claude-one', harness: 'claude', wake: 'acp', gate: async () => ({ method: 'consent' }) });
+  assert.equal(acp.wake, 'on');
+  assert.equal(acp.authorization, 'consent');
+
+  const souls = () => JSON.parse(readFileSync(a.env.AGENT_BOT_POPULATION_PATH, 'utf8')).souls;
+  const before = Object.keys(souls()).length;
+  await assert.rejects(joinSoul({ ...base, name: 'refused', wake: 'acp', gate: async () => { throw new Error('the owner said no'); } }), /the owner said no/);
+  await assert.rejects(joinSoul({ ...base, name: 'claude-two', harness: 'claude', wake: 'resume:read-only', gate: async () => assert.fail('not asked') }),
+    /claude sessions cannot be resumed/);
+  await assert.rejects(joinSoul({ ...base, name: 'bad', wake: 'sometimes', gate: async () => assert.fail('not asked') }), /--wake must be one of/);
+  assert.equal(Object.keys(souls()).length, before, 'nothing was created');
 });
