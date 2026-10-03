@@ -523,8 +523,12 @@ revision and parent while keeping the spawn nonce private. Package format 1
 retains its existing hashes;
 [format 2](docs/soul-package.md#format-2-working-state-and-compatibility) excludes
 working state and harness files whose bytes exactly match soul-builder output
-for the package. The generated marker alone has no effect; until soul-builder
-ships (#342), nothing at generated paths is ignored. Older tools require format 1.
+for the package. The generated marker alone has no effect. Run
+`agent-bot soul build [PATH] [--check]` to render marked Claude/Gemini aliases
+and skills; new package homes build automatically after copying. Builds refuse
+unmarked conflicts and checks report drift without writing. See the
+[per-harness table and rendering contract](docs/soul-builder.md). Older tools
+require format 1.
 With `identity spawn -- <command...>`, the command receives the child file as
 `AGENT_BOT_BINDING` and child ID as `QWTS_AGENT_ID` (and `AGENT_BOT_ID`); its
 exit status becomes the CLI's status. Parent revocation or expiry cascades to

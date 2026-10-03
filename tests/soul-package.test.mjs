@@ -238,7 +238,7 @@ test('only root working state is ignored before symlink and special-file validat
   assert.throws(() => computePackageRevision(root), /unsupported package entry/);
 });
 
-test('marked harness files remain package content until soul-builder ships', (t) => {
+test('arbitrary marked harness files remain package content', (t) => {
   assert.deepEqual(expectedGeneratedFiles([]), new Map());
   for (const candidate of GENERATED_HARNESS_PATHS) {
     const root = version2(t), revision = computePackageRevision(root);

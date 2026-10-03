@@ -127,9 +127,9 @@ these names remain package content. Generated paths ending in `/` cover files
 beneath that top-level folder; other paths name individual aliases. A regular
 file there is ignored only when its bytes exactly match the expected soul-builder
 output for this package. `expectedGeneratedFiles(packageEntries)` derives that
-output from non-generated package entries (AGENTS.md, skills, policy). Until
-soul-builder ships (#342), it returns an empty map and nothing at generated
-paths is ignored. A marked file that does not match is ordinary package content:
+output from non-generated package entries through the pure
+`buildHarnessFiles` renderer. See [soul-builder](soul-builder.md) for aliases,
+skill copies, safe writing and `agent-bot soul build [PATH] [--check]`. A marked file that does not match is ordinary package content:
 it affects the revision and appears in snapshots and proposal diffs. Hand-authored
 files and unknown files remain covered. Generated symlinks are rejected; builders
 must write regular alias files.

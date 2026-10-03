@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createSoulHomes, installHarnesses, npmCommand, soulHomePath, legacyHomePath, soulBindingForLaunch } from '../soul-home.mjs';
 
+import { GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
 import { createBindingRegistry } from '../agent-binding.mjs';
 import { displayName, populationFile, upsertSoul, showSoul } from '../agent-population.mjs';
 
@@ -30,7 +31,8 @@ test('provisions a git home from the package once, then rebinds it', async (t) =
   const pkg = path.join(root, 'pkg');
   mkdirSync(path.join(pkg, 'skills', 'hello'), { recursive: true });
   writeFileSync(path.join(pkg, 'AGENTS.md'), 'be kind\n');
-  writeFileSync(path.join(pkg, 'skills', 'hello', 'SKILL.md'), 'hi\n');
+  writeFileSync(path.join(pkg, 'skills', 'hello', 'SKILL.md'), '---\nname: hello\ndescription: Say hello\n---\nhi\n');
+  writeFileSync(path.join(pkg, 'soul.json'), JSON.stringify({ formatVersion: 2, name: 'test', description: 'test', displaySeed: 'test', preferredHarnesses: [], parentRevision: null, revision: `sha256:${'0'.repeat(64)}`, ignore: PACKAGE_IGNORE_LIST }));
   const bindings = fakeBindings();
   const installs = [];
   const options = census(root);
@@ -47,7 +49,8 @@ test('provisions a git home from the package once, then rebinds it', async (t) =
   assert.equal(statSync(path.join(directory, '.soul-state', 'agent-id')).mode & 0o777, 0o600);
   assert.equal(showSoul(agentId, { file: options.file }).soulDir, directory);
   assert.equal(readFileSync(path.join(home, 'AGENTS.md'), 'utf8'), 'be kind\n');
-  assert.equal(readFileSync(path.join(home, 'skills', 'hello', 'SKILL.md'), 'utf8'), 'hi\n');
+  assert.match(readFileSync(path.join(home, 'skills', 'hello', 'SKILL.md'), 'utf8'), /hi\n$/);
+  assert.equal(readFileSync(path.join(home, 'CLAUDE.md'), 'utf8'), `${GENERATED_HARNESS_MARKER}\n@AGENTS.md\n`);
   assert.equal(bindings.bound[0].gitDir, realpathSync(path.join(home, '.git')));
   writeFileSync(path.join(home, 'AGENTS.md'), 'grown\n');
   await provision({ agentId, harness: 'claude', packagePath: pkg });
