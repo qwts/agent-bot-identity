@@ -322,6 +322,7 @@ test('a turn woken by a soul that used send_message sends no final text', async 
   await wake({ agentId: id, count: 1, messageIds: ['n407a'] });
   await wake.idle();
   assert.match(prompts[0], /If you use send_message in this turn, your final answer is not sent at all/);
+  assert.match(prompts[0], /skip thanks, acknowledgements and progress notes/);
   assert.deepEqual(relay.sent, []);
   assert.deepEqual(relay.acked, ['n407a']);
 });
