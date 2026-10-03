@@ -38,6 +38,61 @@ organization-owned inputs and their acquisition procedure are governed from
 [`agent-sop`](https://github.com/qwts/agent-sop/blob/main/docs/reference/agent-bot-operations.md);
 if that procedure does not yet publish compatible input, bootstrap must stop.
 
+## SOP reference documents
+
+`agent-bot sop` reports repository commits and the pins in `org.json`
+(ENG-0355). Selection uses the current soul's `agent-sop.toml`, then
+`~/.config/agent-sop/config.toml`, then no SOP. Both configuration files use
+`schema_version = 1` and `[repos]` with required `org = "owner/repo@ref"`
+and optional `sop` and `comms` entries in the same format. Without `sop`,
+the org repository's `org.json` selects it. `--config PATH` changes the
+user fallback. `--soul AGENT_ID` selects a soul explicitly; otherwise the
+current Agent ID or binding identifies it through the population registry.
+Without a soul, bare command text output remains unchanged.
+
+```sh
+agent-bot sop list --soul AGENT_ID --json
+agent-bot sop show docs/review.md --soul AGENT_ID
+agent-bot sop list --soul AGENT_ID --workflow review
+agent-bot sop show docs/review.md --soul AGENT_ID --workflow review
+```
+
+`list` reports relative Markdown paths, their `source` (`sop` or `soul`),
+and the repository commit for SOP documents. The soul's `sop/` folder
+layers over the selected repository: a soul document at the same path wins,
+and soul documents remain available even with no repository selection.
+Repository Markdown is fetched at the resolved commit into
+`<state>/sop-cache/<commit>/`, with files 0444 and directories 0555. The
+state directory follows the identity state settings, including
+`AGENT_BOT_STATE_HOME`. No fetched content is executed or checked out.
+Absolute paths, traversal, and escaping document symlinks are refused;
+repository symlinks and directory symlinks are refused as well.
+
+A workflow is `<soul>/workflows/NAME.toml`. Its only field is a top-level
+array of quoted relative SOP paths; comments and multiline arrays work:
+
+```toml
+sop = ["docs/review.md", "docs/testing.md"]
+```
+
+With `--workflow NAME`, only those documents are listed, and showing any
+other path fails. Names use letters, digits, underscores, and hyphens.
+
+Choosing a soul with a different organization or SOP repository from the
+user's selection, or without any user selection, is a trust decision. The
+report includes `trust.required`, the reason, repository, and acceptance
+status. Repository documents are withheld until explicitly accepted:
+
+```sh
+agent-bot sop trust owner/sop-repo --soul AGENT_ID
+```
+
+Acceptance is recorded by repository and resolved commit in a 0600
+`<state>/sop-trust.json`; a new commit needs new acceptance. The soul's
+own documents remain available while repository trust is pending. Printed
+text carries an ADR-0274 reference header: SOP documentation does not
+override harness or user instructions.
+
 ## Machine install (Homebrew)
 
 This repository is a Homebrew self-tap. Operators install the runtime from

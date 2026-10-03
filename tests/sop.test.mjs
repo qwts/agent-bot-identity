@@ -16,11 +16,15 @@ import {
   formatSopReport,
   gitSubcommand,
   loadSopConfig,
-  main,
+  main as sopMain,
   parseOrgPins,
   parseTomlSubset,
-  resolveSop,
+  resolveSop as sopResolve,
 } from '../sop.mjs';
+
+const noSoul = { currentAgentId: () => null, readBinding: () => null };
+const resolveSop = (options) => sopResolve({ ...noSoul, ...options });
+const main = (argv, deps) => sopMain(argv, { ...noSoul, ...deps });
 
 const localRunGit = createRunGit({ allowProtocols: 'file' });
 const CLI = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
@@ -189,6 +193,7 @@ test('a missing config file is no SOP and exits 0; a broken file fails before gi
     inEffect: false,
     message: 'No SOP is in effect.',
     configPath: '/nowhere/.config/agent-sop/config.toml',
+    selection: { source: 'none', path: null },
   });
 
   let stderr = '';
@@ -251,6 +256,7 @@ test('resolves branch and tag refs, reports pins, and does not execute them', ()
   assert.deepEqual(report, {
     inEffect: true,
     configPath: '/cfg/config.toml',
+    selection: { source: 'user', path: '/cfg/config.toml' },
     schemaVersion: 1,
     repositories: {
       org: { repository: 'acme/org', ref: 'main', commit: ORG, selected: 'config' },
@@ -509,28 +515,32 @@ test('the sop command is routed and a missing default file exits 0', () => {
   try {
     const help = spawnSync(process.execPath, [CLI, 'sop', '--help'], {
       encoding: 'utf8',
-      env: { ...process.env, HOME: home },
+      cwd: home,
+      env: { ...process.env, HOME: home, AGENT_BOT_ID: '', QWTS_AGENT_ID: '', AGENT_BOT_BINDING: '' },
     });
     assert.equal(help.status, 0, help.stderr);
     assert.equal(help.stdout, USAGE);
 
     const none = spawnSync(process.execPath, [CLI, 'sop'], {
       encoding: 'utf8',
-      env: { ...process.env, HOME: home },
+      cwd: home,
+      env: { ...process.env, HOME: home, AGENT_BOT_ID: '', QWTS_AGENT_ID: '', AGENT_BOT_BINDING: '' },
     });
     assert.equal(none.status, 0, none.stderr);
     assert.equal(none.stdout, 'No SOP is in effect.\n');
 
     const json = spawnSync(process.execPath, [CLI, 'sop', '--json'], {
       encoding: 'utf8',
-      env: { ...process.env, HOME: home },
+      cwd: home,
+      env: { ...process.env, HOME: home, AGENT_BOT_ID: '', QWTS_AGENT_ID: '', AGENT_BOT_BINDING: '' },
     });
     assert.equal(json.status, 0, json.stderr);
     assert.equal(JSON.parse(json.stdout).inEffect, false);
 
     const usage = spawnSync(process.execPath, [CLI, 'sop', '--json', '--help'], {
       encoding: 'utf8',
-      env: { ...process.env, HOME: home },
+      cwd: home,
+      env: { ...process.env, HOME: home, AGENT_BOT_ID: '', QWTS_AGENT_ID: '', AGENT_BOT_BINDING: '' },
     });
     assert.equal(usage.status, 2, usage.stderr);
     assert.equal(usage.stdout, '');
@@ -540,7 +550,8 @@ test('the sop command is routed and a missing default file exits 0', () => {
     writeFileSync(join(home, '.config', 'agent-sop', 'config.toml'), 'schema_version = true\n');
     const bad = spawnSync(process.execPath, [CLI, 'sop'], {
       encoding: 'utf8',
-      env: { ...process.env, HOME: home },
+      cwd: home,
+      env: { ...process.env, HOME: home, AGENT_BOT_ID: '', QWTS_AGENT_ID: '', AGENT_BOT_BINDING: '' },
     });
     assert.equal(bad.status, 1, bad.stdout);
     assert.equal(bad.stdout, '');
