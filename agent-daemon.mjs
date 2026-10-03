@@ -85,6 +85,7 @@ import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { validateSoulPackage } from './soul-package.mjs';
 import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
+import { createTaskReporter } from './task-turns.mjs';
 import { createCommsRelay } from './comms-relay.mjs';
 import { createResumeExecutor, createWakeSessions, resumePath, wakeSessionsFile } from './wake-resume.mjs';
 import { migratePreGateConfig } from './config-migration.mjs';
@@ -300,6 +301,7 @@ export function createDaemonServer({
   config,
   token = randomBytes(32).toString('hex'),
   executor,
+  taskReporter = null,
   mintImpl = mint,
   spawnHook = runSpawnHooks,
   now = () => new Date(),
@@ -312,7 +314,7 @@ export function createDaemonServer({
 } = {}) {
   // One interaction service per server so in-flight executions and their
   // cancellation controllers live exactly as long as the daemon.
-  const interaction = createInteractionService({ env, home, config, executor, now });
+  const interaction = createInteractionService({ env, home, config, executor, taskReporter, now });
   const bindings = createBindingRegistry({ now, file: path.join(vouchStateDir({ env, home }), 'bindings.json'), account: env.USER ?? process.env.USER ?? 'unknown' });
   const findBinding = lookupBindingOverride
     ?? ((secret) => lookupRegistryBinding(bindings, secret, { now }));
@@ -877,6 +879,7 @@ async function handleInteractionRequest({ req, res, url, interaction, env, home 
       message: body.message,
       idempotencyKey: body.idempotencyKey,
       attachments: body.attachments,
+      taskId: body.taskId,
     }));
     return;
   }
@@ -1073,9 +1076,9 @@ export function daemonClient({
     async createSession({ transport, providerId, agentId, sessionId = null }) {
       return request('POST', '/v1/sessions', { transport, providerId, agentId, sessionId });
     },
-    async submitMessage(sessionId, { transport, providerId, message, idempotencyKey, attachments }) {
+    async submitMessage(sessionId, { transport, providerId, message, idempotencyKey, attachments, taskId }) {
       return request('POST', `/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
-        transport, providerId, message, idempotencyKey, attachments,
+        transport, providerId, message, idempotencyKey, attachments, taskId,
       });
     },
     async invocation(invocationId, { transport, providerId }) {
@@ -1186,7 +1189,18 @@ export async function runDaemon({
     executorFor,
   });
   const comms = createCommsSupervisor({ env, home, now, onWake, onLaunch });
-  server = createDaemonServer({ env, home, config, now, comms, executor });
+  const relay = createCommsRelay({ env: { ...soulEnvironment(env), PATH: resumePath(soulEnvironment(env), home) } });
+  const taskReporter = createTaskReporter({
+    file: path.join(path.dirname(daemonStateFile({ env, home })), 'task-turns.jsonl'),
+    now,
+    report: async (invocation) => {
+      const binding = server.bindings.findAgent(invocation.agentId) ?? recordedWorktree(invocation.agentId, { env, home });
+      if (!binding?.worktree) throw new Error('soul binding is unavailable');
+      return relay.report({ agentId: invocation.agentId, binding }, invocation);
+    },
+  });
+  server = createDaemonServer({ env, home, config, now, comms, executor, taskReporter });
+  await taskReporter.recover({ log: (line) => process.stderr.write(`agent-daemon: ${line}\n`) });
   server.wakePlane = createWakePlane({
     pool: server.warmPool,
     settings: () => readColdWakeSettings({ env, home }),
@@ -1203,7 +1217,8 @@ export async function runDaemon({
     // Webhook wake (#334) runs only for a soul the owner set to `webhook`.
     webhookWaker: createWebhookWaker({ read: (agentId) => readWebhook(agentId, { env, home }) }),
     // The relay runs agent-comms, which a launchd PATH does not reach.
-    relay: createCommsRelay({ env: { ...soulEnvironment(env), PATH: resumePath(soulEnvironment(env), home) } }),
+    relay,
+    taskReporter,
     // Receipts carry a soul and a decision, never message IDs or content.
     receipt: ({ event, agentId, decision, outcome }) => appendAuditReceipt({ event, agentId, decision: decision ?? outcome }, { env, home, now }),
   });

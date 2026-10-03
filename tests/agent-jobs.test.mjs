@@ -318,11 +318,23 @@ test('persisted job records carry no message bodies or free-form payloads', () =
   const { invocation } = seeded(options);
   assert.deepEqual(Object.keys(invocation).sort(), [
     'agentId', 'artifacts', 'createdAt', 'error', 'idempotencyKey',
-    'invocationId', 'principalId', 'sessionId', 'status', 'transport', 'updatedAt',
+    'invocationId', 'principalId', 'sessionId', 'status', 'taskId', 'transport', 'updatedAt',
   ]);
   const raw = JSON.parse(readFileSync(path.join(interactionHome(options), 'jobs.json'), 'utf8'));
   assert.deepEqual(
     Object.keys(raw.invocations[invocation.invocationId]).sort(),
     Object.keys(invocation).sort(),
   );
+});
+
+test('optional task IDs round-trip and invalid links are refused', () => {
+  const { options } = scratch();
+  const { session, invocation } = seeded(options);
+  assert.equal(invocation.taskId, null);
+  const input = { sessionId: session.sessionId, agentId: AGENT_ID, principalId: PRINCIPAL_ID, transport: 'telegram', idempotencyKey: 'linked', taskId: 'task_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' };
+  const linked = submitInvocation(input, options).invocation;
+  assert.equal(getInvocation(linked.invocationId, options).taskId, input.taskId);
+  for (const taskId of ['', 'task_bad', 'task_AAAAAAAA-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 42, {}]) {
+    assert.throws(() => submitInvocation({ ...input, taskId }, options), /invalid task ID/);
+  }
 });
