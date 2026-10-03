@@ -7,6 +7,8 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { validateAgentId, withLock } from './agent-identity.mjs';
+import { loadConfig } from './config.mjs';
+import { assertOwnerAction } from './owner-gate.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { RESUME_POLICIES } from './wake-resume.mjs';
 import { readWebhook, removeWebhook, saveWebhook } from './wake-webhook.mjs';
@@ -60,12 +62,36 @@ export function setColdWake(agentId, enabled, { env = process.env, home = homedi
 
 // Reads a secret from a file, or from stdin for `-`. The value is never
 // echoed.
-function readSecretFile(file) {
-  return readFileSync(file === '-' ? 0 : file, 'utf8').trim();
+function readSecretFile(file, readStdin) {
+  return (file === '-' ? readStdin() : readFileSync(file, 'utf8')).trim();
 }
-async function main() {
-  const usage = `usage: agent-bot soul cold-wake <agentId> [on|off|show|resume ${RESUME_POLICIES.join('|')}|webhook --url-file PATH --key-file PATH|-]`;
-  const argv = process.argv.slice(2);
+
+// The owner gate for cold wake changes (#293): any soul marker refuses, then
+// the owner proves themselves with a presented principal or the consent
+// dialog. Harness detection stays off here, as before: only stated markers
+// count.
+const ownerGate = (action, { principal, env, cwd }) => assertOwnerAction(action, { principal, env, cwd, detect: false });
+
+// `agent-bot soul cold-wake`. Every change (on, off, resume, webhook) passes
+// the owner gate; `show` is read-only and only refuses a marked soul. The
+// gate, stdin and output are injectable so tests need no dialog or broker.
+export async function coldWakeCommand(argv, {
+  gate = ownerGate,
+  readStdin = () => readFileSync(0, 'utf8'),
+  write = (text) => process.stdout.write(text),
+  env = process.env,
+  home = homedir(),
+  cwd = process.cwd(),
+} = {}) {
+  const usage = `usage: agent-bot soul cold-wake <agentId> [on|off|show|resume ${RESUME_POLICIES.join('|')}|webhook --url-file PATH --key-file PATH|-] [--principal-stdin]`;
+  const presented = argv.includes('--principal-stdin');
+  argv = argv.filter((arg) => arg !== '--principal-stdin');
+  // The principal is read once, before anything else could consume stdin.
+  const principal = () => {
+    if (!presented) return null;
+    try { return JSON.parse(readStdin()); }
+    catch { throw new Error('--principal-stdin needs the principal credential as JSON on stdin'); }
+  };
   if (argv[1] === 'webhook') {
     const [id, , ...flags] = argv;
     const files = {};
@@ -74,22 +100,33 @@ async function main() {
       files[flags[i]] = flags[i + 1];
     }
     if (!files['--url-file'] || !files['--key-file'] || (files['--url-file'] === '-' && files['--key-file'] === '-')) throw new Error(usage);
-    if (resolveAgentSlug({ detect: false }) !== null) throw new Error('cold wake settings are owner only');
-    const { host } = saveWebhook(validateAgentId(id), { url: readSecretFile(files['--url-file']), key: readSecretFile(files['--key-file']) });
-    setColdWake(id, { lane: 'webhook' });
-    process.stdout.write(`${id} cold wake webhook ${host}\n`);
-    return;
+    // Stdin carries one thing: the principal, or a webhook secret.
+    if (presented && (files['--url-file'] === '-' || files['--key-file'] === '-')) {
+      throw new Error('--principal-stdin uses stdin; pass the webhook URL and key as files, not -');
+    }
+    validateAgentId(id);
+    const authorization = await gate(`soul cold-wake ${id} webhook`, { principal: principal(), env, cwd });
+    const { host } = saveWebhook(id, { url: readSecretFile(files['--url-file'], readStdin), key: readSecretFile(files['--key-file'], readStdin) }, { env, home });
+    setColdWake(id, { lane: 'webhook' }, { env, home });
+    write(`${id} cold wake webhook ${host}\n`);
+    return authorization;
   }
   const [id, value, policy, ...rest] = argv;
   if (!id || rest.length || (value !== undefined && !['on', 'off', 'show', 'resume'].includes(value))) throw new Error(usage);
   if ((value === 'resume') !== (policy !== undefined) || (policy !== undefined && !RESUME_POLICIES.includes(policy))) throw new Error(usage);
-  if (resolveAgentSlug({ detect: false }) !== null) throw new Error('cold wake settings are owner only');
+  validateAgentId(id);
   if (value === undefined || value === 'show') {
-    const setting = describeSetting(readColdWakeSettings()[validateAgentId(id)]);
-    const webhook = setting === 'webhook' ? readWebhook(id) : null;
-    process.stdout.write(`${setting}${webhook ? ` ${new URL(webhook.url).host}` : setting === 'webhook' ? ' (no webhook stored)' : ''}\n`);
+    if (presented) throw new Error(usage);
+    if (resolveAgentSlug({ env, cwd, config: loadConfig({ env, home }), detect: false }) !== null) throw new Error('cold wake settings are owner only');
+    const setting = describeSetting(readColdWakeSettings({ env, home })[id]);
+    const webhook = setting === 'webhook' ? readWebhook(id, { env, home }) : null;
+    write(`${setting}${webhook ? ` ${new URL(webhook.url).host}` : setting === 'webhook' ? ' (no webhook stored)' : ''}\n`);
+    return null;
   }
-  else if (value === 'resume') { setColdWake(id, { lane: 'resume', policy }); process.stdout.write(`${id} cold wake resume ${policy}\n`); }
-  else { setColdWake(id, value === 'on'); process.stdout.write(`${id} cold wake ${value}\n`); }
+  const change = value === 'resume' ? `resume ${policy}` : value;
+  const authorization = await gate(`soul cold-wake ${id} ${change}`, { principal: principal(), env, cwd });
+  setColdWake(id, value === 'resume' ? { lane: 'resume', policy } : value === 'on', { env, home });
+  write(`${id} cold wake ${change}\n`);
+  return authorization;
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch((error) => { process.stderr.write(`agent-bot soul cold-wake: ${error.message}\n`); process.exit(1); });
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) coldWakeCommand(process.argv.slice(2)).catch((error) => { process.stderr.write(`agent-bot soul cold-wake: ${error.message}\n`); process.exit(1); });

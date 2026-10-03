@@ -63,8 +63,10 @@ export function ownerApprovalRequired({
 
 // Raise the macOS authorization dialog naming the operation; any dismissal,
 // cancellation, or unavailable dialog fails closed — no approval, no mint.
+// `outcome` names what did not happen, for callers other than mint-token.
 export function requireOwnerApproval({
   prompt,
+  outcome = 'no token minted',
   platform = process.platform,
   run = (argv) => execFileSync('/usr/bin/osascript', argv, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }),
 } = {}) {
@@ -82,8 +84,8 @@ export function requireOwnerApproval({
     const detail = `${error.stderr ?? ''} ${error.message ?? ''}`.trim();
     throw new Error(
       /-128|User canceled|cancelled/i.test(detail)
-        ? 'owner approval was cancelled — no token minted'
-        : `owner approval could not be completed${detail ? ` (${detail})` : ''} — no token minted`,
+        ? `owner approval was cancelled — ${outcome}`
+        : `owner approval could not be completed${detail ? ` (${detail})` : ''} — ${outcome}`,
       { cause: error },
     );
   }

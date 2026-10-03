@@ -66,7 +66,10 @@ and wins over the worktree's own.
    `agent-bot soul cold-wake <agentId> webhook --url-file PATH --key-file PATH`:
    the daemon POSTs a fixed request that names the soul's worktree and
    carries no message content, and the soul's routine reads, answers, and
-   acks its own inbox (#334). Agents do not change that setting.
+   acks its own inbox (#334). Agents do not change that setting: every change
+   goes through the owner gate (#293), which refuses any soul marker and then
+   asks for the owner's principal (`--principal-stdin`) or the macOS
+   authorization dialog.
 
 ## Read attribution from the census, not the trailer parser
 

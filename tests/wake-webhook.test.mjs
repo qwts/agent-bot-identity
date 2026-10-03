@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { readColdWakeSettings, setColdWake, wakeSetting } from '../cold-wake-settings.mjs';
+import { coldWakeCommand, readColdWakeSettings, setColdWake, wakeSetting } from '../cold-wake-settings.mjs';
 import { createColdWaker } from '../cold-wake.mjs';
 import { checkWebhook, createWebhookWaker, readWebhook, saveWebhook, webhookAsk, webhookFile } from '../wake-webhook.mjs';
 
@@ -107,16 +107,24 @@ test('a webhook soul is woken by its webhook alone: no relay, no turn, and only 
   assert.match(missing.detail, /not available in this daemon/);
 });
 
-test('soul cold-wake webhook stores the files it is given, shows only the host, and off removes the secret', () => withState(({ root, env }) => {
+test('soul cold-wake webhook stores the files it is given, shows only the host, and off removes the secret', () => withState(async ({ root, env }) => {
   const urlFile = path.join(root, 'hook.url');
   writeFileSync(urlFile, `${URL_WITH_TOKEN}\n`, { mode: 0o600 });
   const invoke = (args, input) => spawnSync(process.execPath, [cli, 'soul', 'cold-wake', ID, ...args], { encoding: 'utf8', env, cwd: root, input });
-  let result = invoke(['webhook', '--url-file', urlFile, '--key-file', '-'], `${KEY}\n`);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, `${ID} cold wake webhook hooks.example.com\n`);
-  assert.ok(!`${result.stdout}${result.stderr}`.includes(KEY) && !`${result.stdout}${result.stderr}`.includes('secret-path-token'));
+  // Changes run in process with the owner gate injected, so no dialog is raised.
+  const out = [];
+  const gates = [];
+  const change = (args, input = '') => coldWakeCommand([ID, ...args], { env, home: root, cwd: root,
+    gate: async (action) => { gates.push(action); return { method: 'consent' }; }, readStdin: () => input, write: (text) => out.push(text) });
+  await change(['webhook', '--url-file', urlFile, '--key-file', '-'], `${KEY}\n`);
+  assert.deepEqual(out, [`${ID} cold wake webhook hooks.example.com\n`]);
+  assert.deepEqual(gates, [`soul cold-wake ${ID} webhook`]);
+  assert.ok(!out.join('').includes(KEY) && !out.join('').includes('secret-path-token'));
   assert.deepEqual(wakeSetting(readColdWakeSettings({ env })[ID]), { lane: 'webhook' });
-  result = invoke(['show']);
+  // Stdin carries the principal or a secret, never both.
+  await assert.rejects(change(['webhook', '--url-file', urlFile, '--key-file', '-', '--principal-stdin'], KEY), /--principal-stdin uses stdin/);
+  assert.equal(gates.length, 1);
+  let result = invoke(['show']);
   assert.equal(result.stdout, 'webhook hooks.example.com\n');
   // An agent cannot set one.
   result = spawnSync(process.execPath, [cli, 'soul', 'cold-wake', ID, 'webhook', '--url-file', urlFile, '--key-file', '-'],
@@ -126,8 +134,7 @@ test('soul cold-wake webhook stores the files it is given, shows only the host, 
   // Both secrets from stdin, or a missing flag, is a usage error.
   assert.equal(invoke(['webhook', '--url-file', '-', '--key-file', '-'], KEY).status, 1);
   assert.equal(invoke(['webhook', '--url-file', urlFile]).status, 1);
-  result = invoke(['off']);
-  assert.equal(result.status, 0, result.stderr);
+  await change(['off']);
   assert.equal(existsSync(webhookFile(ID, { env })), false);
   assert.equal(readFileSync(path.join(root, 'state', 'agent-bot', 'cold-wake.json'), 'utf8').includes(KEY), false);
 }));
