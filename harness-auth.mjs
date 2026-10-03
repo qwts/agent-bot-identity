@@ -11,7 +11,6 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { ACP_SPAWN_REGISTRY, resolveSpawn } from './acp-registry.mjs';
-import { stateDirectory } from './agent-identity.mjs';
 import { soulHomePath } from './soul-home.mjs';
 
 const run = promisify(execFile);
@@ -50,7 +49,7 @@ async function main(argv) {
   if (sub !== 'auth' || !harness || flag !== '--soul' || !agentId) {
     throw new Error('usage: agent-bot harness auth status|login HARNESS --soul AGENT_ID');
   }
-  const home = soulHomePath(stateDirectory(), agentId);
+  const home = soulHomePath(agentId);
   const result = await harnessAuth(action, harness, { home: existsSync(home) ? home : null });
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }

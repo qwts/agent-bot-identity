@@ -15,6 +15,7 @@
 //     "apiBase": "https://api.github.com", // GitHub Enterprise Server / ghe.com
 //     "settings": {                        // durable, secret-free user policy
 //       "spacesRoot": "/absolute/path",
+//       "soulsRoot": "/absolute/path",
 //       "daemonPreference": "off"          // off | prefer | required
 //     },
 //     "scope": { "apps": ["you-claude-agent"] } // this account serves only these Apps
@@ -114,6 +115,20 @@ export function spacesRootSetting(config = loadConfig()) {
   return value;
 }
 
+export function soulsRootSetting(config = loadConfig()) {
+  const value = settingsSection(config).soulsRoot;
+  if (value === undefined) return null;
+  if (
+    typeof value !== 'string'
+    || value.length === 0
+    || value.includes('\0')
+    || !isAbsolute(value)
+  ) {
+    throw new Error('invalid settings.soulsRoot: expected a non-empty absolute path');
+  }
+  return value;
+}
+
 export function daemonPreference(
   { env = process.env, home = homedir(), config } = {},
 ) {
@@ -196,6 +211,7 @@ function validateSettings(config) {
   const settings = settingsSection(config);
   validateOwner(config);
   if (settings.spacesRoot !== undefined) spacesRootSetting(config);
+  if (settings.soulsRoot !== undefined) soulsRootSetting(config);
   if (settings.daemonPreference !== undefined) validateDaemonPreference(settings.daemonPreference);
   rosterScope(config);
   validateFeatures(config);

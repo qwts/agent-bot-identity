@@ -57,13 +57,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
-import { listSouls, populationFile, upsertIdentitySoul } from './agent-population.mjs';
+import { listSouls, populationFile, retireIdentityWithPopulation, upsertIdentitySoul } from './agent-population.mjs';
 import {
   bindAgentLineage,
   ensureAgentIdentity,
   mintAgentIdentity,
   readAgentIdentity,
-  retireAgentIdentity,
   stateDirectory,
   validateAgentId,
 } from './agent-identity.mjs';
@@ -80,7 +79,7 @@ import { attachWakeEndpoint } from './agent-wake.mjs';
 import { readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler } from './daemon-launch.mjs';
-import { createSoulHomes, installHarnesses } from './soul-home.mjs';
+import { createSoulHomes, installHarnesses, soulBindingForLaunch } from './soul-home.mjs';
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { validateSoulPackage } from './soul-package.mjs';
@@ -1141,7 +1140,14 @@ export async function runDaemon({
   // soul share its creation; it installs with this daemon's environment.
   let homes;
   const provisionHome = (soul) => {
-    homes ??= createSoulHomes({ stateDir: stateDirectory({ env, home }), bindings: server.bindings,
+    const file = populationFile({ env, home });
+    // Older package launches could have an identity and home without a
+    // census row. Register that provenance before resolving its directory.
+    if (!listSouls({ file }).some((record) => record.id === soul.agentId)) {
+      const space = initAgentSpace(soul.agentId, { env, home, config });
+      upsertIdentitySoul(soul.agentId, space.path, { file, stateDir: stateDirectory({ env, home }), now });
+    }
+    homes ??= createSoulHomes({ env, home, config, stateDir: stateDirectory({ env, home }), bindings: server.bindings,
       install: (dir) => installHarnesses(dir, { env }) });
     return homes(soul);
   };
@@ -1155,7 +1161,10 @@ export async function runDaemon({
       return mintAgentIdentity({ appSlug: null, harness, packagePath, useGithub: false,
         stateDir: stateDirectory({ env, home }), now });
     },
-    lookupBinding: (agentId) => server.bindings.findAgent(agentId),
+    lookupBinding: (agentId) => soulBindingForLaunch(agentId, {
+      stateDir: stateDirectory({ env, home }), bindings: server.bindings,
+      provision: provisionHome, harness: identities(agentId).harness ?? null,
+    }),
     provisionHome: (soul) => provisionHome(soul),
     // ADR-0276: an existing soul's own harness, else a package's preference,
     // else a registry harness on PATH.
@@ -1167,7 +1176,8 @@ export async function runDaemon({
     },
     // A principal launched this soul to talk to it, so later messages wake it.
     onLaunched: (agentId) => setColdWake(agentId, true, { env, home, now }),
-    discard: (agentId) => retireAgentIdentity(agentId, { stateDir: stateDirectory({ env, home }), now }),
+    discard: (agentId) => retireIdentityWithPopulation(agentId, { file: populationFile({ env, home }),
+      stateDir: stateDirectory({ env, home }), now }),
     joinSoul: (soul) => joinLaunchedSoul(soul, { env }),
     executorFor,
   });

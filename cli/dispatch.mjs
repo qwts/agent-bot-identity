@@ -56,6 +56,9 @@ export function dispatchAgentBot(parsed) {
     }
     return run(hook, parsed.args);
   }
+  if (parsed.command === 'soul' && parsed.args[0] === 'dir') {
+    return run(process.execPath, [join(ROOT, 'soul-dir.mjs'), ...parsed.args.slice(1)]);
+  }
   if (parsed.command === 'soul' && parsed.args[0] === 'pack') {
     return run(process.execPath, [join(ROOT, 'soul-package.mjs'), ...parsed.args.slice(1)]);
   }
@@ -65,6 +68,6 @@ export function dispatchAgentBot(parsed) {
   const module = MODULES.get(parsed.command);
   if (!module) throw new Error(`unsupported command: ${parsed.command}`);
   const args = parsed.command === 'soul' && parsed.args[0] === 'cold-wake' ? parsed.args.slice(1) : parsed.args;
-  if (parsed.command === 'soul' && parsed.args[0] !== 'cold-wake') throw new Error('usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-] | soul pack validate PATH | soul revision <command>');
+  if (parsed.command === 'soul' && parsed.args[0] !== 'cold-wake') throw new Error('usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-] | soul pack validate PATH | soul revision <command> | soul dir AGENT_ID');
   return run(process.execPath, [join(ROOT, module), ...args]);
 }

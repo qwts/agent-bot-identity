@@ -292,7 +292,7 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
       }
       save();
     },
-    bind({ agentId, worktree, gitDir, parent = null, app = null, transcript = null, harness = null, spawnedBy }) {
+    bind({ agentId, worktree, gitDir, parent = null, app = null, transcript = null, harness = null, spawnedBy, replacesWorktree = null }) {
       expire();
       if (spawnedBy) {
         const source = bindings.get(spawnedBy);
@@ -315,6 +315,14 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
         bindings.delete(hash(secret));
         save();
         throw error;
+      }
+      // A home migration replaces only bindings for the old home; other
+      // conversations belonging to this soul keep their own bindings.
+      if (replacesWorktree && replacesWorktree !== worktree) {
+        for (const [key, previous] of bindings) {
+          if (previous.agentId === agentId && previous.worktree === replacesWorktree) remove(key, previous);
+        }
+        save();
       }
       return secret;
     },
@@ -344,7 +352,7 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
       let found = null;
       for (const entry of bindings.values()) {
         if (entry.agentId !== agentId) continue;
-        if (!found || Date.parse(entry.lastUsedAt) > Date.parse(found.lastUsedAt)) found = entry;
+        if (!found || Date.parse(entry.lastUsedAt) >= Date.parse(found.lastUsedAt)) found = entry;
       }
       if (!found) return null;
       try {
