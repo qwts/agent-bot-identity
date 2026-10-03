@@ -140,7 +140,7 @@ mismatch, so a re-publish cannot enter an archive.
 ```json
 {
   "node": { "version": "24.21.0", "tarballs": { "linux-x64": { "url": "…", "sha256": "…" } } },
-  "agent_comms": { "repo": "qwts/agent-comms", "tag": "v0.3.3", "ref": "3948c9a8…", "bin": "bin/agent-comms.mjs" }
+  "agent_comms": { "repo": "qwts/agent-comms", "tag": "v0.3.4", "ref": "cc41482f…", "bin": "bin/agent-comms.mjs" }
 }
 ```
 
@@ -149,7 +149,7 @@ checksum before it is unpacked. `agent-comms` is pinned exactly the way GeniusBa
 pins it in its own `components.json` — repository, release tag, and the full
 commit that tag must resolve to — because the commit SHA *is* the integrity pin:
 
-1. `git ls-remote https://github.com/qwts/agent-comms.git refs/tags/v0.3.3*`
+1. `git ls-remote https://github.com/qwts/agent-comms.git refs/tags/v0.3.4*`
    must resolve to the pinned commit. An annotated tag is peeled (`^{}`); a
    lightweight tag is the commit. A moved tag fails the build.
 2. `git fetch --depth 1 <url> <ref>` into a temp repository, then
@@ -162,7 +162,7 @@ the same one GeniusBar bundles. It is **not** the unrelated npm package that
 shares the name: the verbs the runtime calls over the broker socket
 (`comms-client.mjs`) are what identify it, and the build checks them below.
 
-v0.3.3 has no npm dependencies, so there is nothing to resolve and no install
+v0.3.4 has no npm dependencies, so there is nothing to resolve and no install
 step in the archive: no `node_modules` tree, no `npm install`, and no third-party
 install script that could run on a maintainer's machine. Its entry point is
 `bin/agent-comms.mjs`, which is what `bundle/bin/agent-comms` launches and what
