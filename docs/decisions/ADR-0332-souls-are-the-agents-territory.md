@@ -1,6 +1,6 @@
 # ADR-0332: Souls are the agent's territory
 
-**Status:** Proposed
+**Status:** Accepted (2026-10-03)
 **Date:** 2026-10-02
 **Issue:** qwts/agent-bot-identity#332
 
@@ -10,8 +10,8 @@ Builds on [ADR-0274](ADR-0274-product-is-mechanism-add-ons-and-sop-packs-carry-p
 (soul packages), and
 [ADR-0276](ADR-0276-souls-carry-their-harnesses-as-pinned-npm-dependencies.md)
 and [ADR-0322](ADR-0322-souls-carry-their-runtimes-and-non-npm-harnesses.md)
-(what a soul carries). This record covers decisions only. Nothing is
-implemented until the owner approves it.
+(what a soul carries). This record covers decisions only. The owner
+accepted it on 2026-10-03; the follow-up issues below carry the work.
 
 ## Context
 
@@ -239,17 +239,18 @@ devcontainer.
   privileged coordinator it would need (see decision 2).
 - Windows-specific details of the wrappers and the confinement paths.
 
-## Follow-up issues (once accepted)
+## Follow-up issues
 
 1. Linux CLI bundle: release archives, `install.sh`, `uninstall.sh`, and
-   CI.
-2. Souls root and registry paths, and migrating homes into `.soul-state/`.
+   CI (#337).
+2. Souls root and registry paths, and migrating homes into `.soul-state/`
+   (#338).
 3. Worktrees inside the soul: `setup-worktree`, launch, and links for
-   harness-chosen locations.
-4. Confinement hooks: warn mode, then deny.
+   harness-chosen locations (#339).
+4. Confinement hooks: warn mode, then deny (#340).
 5. Package ignore list for working state, and a package format version
-   bump.
-6. soul-builder: generated harness folders.
+   bump (#341).
+6. soul-builder: generated harness folders (#342).
 7. `agent-bot sop`: per-soul selection, the `sop/` layer, and list, show,
-   and workflow filtering.
-8. Templates: spawning a named instance from a template package.
+   and workflow filtering (#343).
+8. Templates: spawning a named instance from a template package (#344).
