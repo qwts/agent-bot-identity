@@ -9,7 +9,7 @@ import { createColdWaker } from '../cold-wake.mjs';
 import { createCommsRelay } from '../comms-relay.mjs';
 import { createReachState, handleMcpMessage, reachMcpServerEntry } from '../daemon-mcp.mjs';
 import {
-  clip, formatThread, recordThreadMessage, stripNoReply, threadContext, threadsDirectory,
+  clip, formatThread, recordThreadMessage, sentMarks, sentSince, stripNoReply, threadContext, threadsDirectory,
 } from '../soul-threads.mjs';
 
 const roots = [];
@@ -243,8 +243,9 @@ test('A asks B to ask C and gets C\'s answer back through B', async () => {
   }
 
   const toStarter = broker.messages.filter((m) => m.to.agentId === SOULS.starter);
+  // Bill's first turn used send_message, so its final text ("Asking Ted
+  // now…") is not sent as well (#407): Starter hears only the answer.
   assert.deepEqual(toStarter.map((m) => m.body), [
-    'Asking Ted now; I will send it on.',
     'Ted\'s book list: Dune, Emma, Middlemarch.',
   ]);
   // Everything Bill and Ted said for this job carries the request's id.
@@ -256,4 +257,21 @@ test('A asks B to ask C and gets C\'s answer back through B', async () => {
   assert.match(prompts.bill[1], /pass the result on to them with send_message/);
   // NO_REPLY was never sent to anyone.
   assert.equal(broker.messages.some((m) => /NO_REPLY/.test(m.body)), false);
+});
+
+// A send journaled in the same millisecond a turn starts is still an earlier
+// send: the turn's own sends are told apart by mark, not by time (#407).
+test('sentSince counts only sends after the marks, even within one millisecond', () => {
+  const { options } = scratch();
+  const at = new Date('2026-10-03T12:00:00.000Z');
+  const fixed = { ...options, now: () => at };
+  recordThreadMessage(BILL, { dir: 'out', id: 'm-before', to: 'acct/ted', correlation: 'c1', body: 'earlier' }, fixed);
+  recordThreadMessage(BILL, { dir: 'out', to: 'acct/ted', correlation: 'c1', body: 'earlier, no id' }, fixed);
+  const before = sentMarks(BILL, { correlation: 'c1' }, options);
+  recordThreadMessage(BILL, { dir: 'out', id: 'm-turn', to: 'acct/ted', correlation: 'c1', body: 'this turn' }, fixed);
+  recordThreadMessage(BILL, { dir: 'out', id: 'm-other', to: 'acct/ted', correlation: 'c2', body: 'other thread' }, fixed);
+  recordThreadMessage(BILL, { dir: 'out', id: 'm-brief', to: 'acct/scout', correlation: 'c1', kind: 'brief', body: 'brief' }, fixed);
+  const own = sentSince(BILL, { before, correlation: 'c1' }, options);
+  assert.deepEqual(own.map((entry) => [entry.id, entry.kind ?? null]), [['m-turn', null], ['m-brief', 'brief']]);
+  assert.deepEqual(sentSince(BILL, { correlation: 'c1' }, options), []);
 });
