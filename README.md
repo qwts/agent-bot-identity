@@ -154,6 +154,40 @@ agent-bot secret get --provider <id> --collection <name> --item <title> --field 
 agent-bot skill path [--json]
 ```
 
+### Soul directories and homes
+
+Souls live under `~/.agent-bot/souls` by default. `AGENT_BOT_SOULS_HOME`
+overrides `settings.soulsRoot` in the user config, which overrides the default.
+The account-local population census records each soul's absolute `soulDir`;
+its default directory is `<soulsRoot>/<census-name>.soul`.
+
+A soul directory holds its package and `.soul-state/home`, the private git
+home used by a launched harness. `.soul-state/agent-id` identifies the soul.
+On the next home launch, an existing `<state>/homes/<agentId>` migrates here:
+a same-filesystem rename is atomic; a cross-filesystem copy is staged in
+`home.migrating` and promoted before the legacy copy is removed. Interrupted
+copies restart on the next launch, and completed migrations are not repeated.
+The daemon replaces the legacy home binding after migration.
+
+`.soul-state/space` links to the existing Agent Space; the space stays at its
+ENG-0172 location. Moving a registered directory within the souls root is
+rediscovered by its Agent ID marker on the next directory lookup. For moves
+outside that root, tooling must explicitly call `registerSoulDir(agentId, dir)`
+in `agent-population.mjs`.
+
+Hosts such as GeniusBar should read the shared location through:
+
+```bash
+agent-bot soul dir AGENT_ID
+# JSON: { agentId, soulDir, home, soulsRoot, source }
+```
+
+This command resolves the census directory without creating a home; it also
+re-registers a moved directory found one level below the souls root. Harness
+sign-in uses the same registry resolution. Working state in `.soul-state/`
+and `worktrees/` is separate from package content (package exclusions: #341).
+See [the home migration contract](docs/soul-homes.md) for recovery details.
+
 ### Organization profile v1
 
 `--profile` is the governed cold-start input. It accepts a JSON file or `-`

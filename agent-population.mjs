@@ -11,6 +11,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -28,6 +29,8 @@ import {
   validateAgentId,
   withLock,
 } from './agent-identity.mjs';
+
+import { soulsHome } from './souls-root.mjs';
 
 const SCHEMA_VERSION = 1;
 const APP_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
@@ -153,9 +156,16 @@ function normalizeSoul(record, { defaultLastSeen = null } = {}) {
   if (!NAME_PATTERN.test(name)) {
     throw new Error('name must be hyphen-separated segments of lowercase letters and digits');
   }
+  let soulDir;
+  if (record.soulDir !== undefined) {
+    soulDir = printableText('soulDir', record.soulDir, { max: 4096 });
+    if (!path.isAbsolute(soulDir)) throw new Error('soulDir must be absolute');
+    soulDir = path.normalize(soulDir);
+  }
   return {
     id,
     name,
+    ...(soulDir === undefined ? {} : { soulDir }),
     appSlug: appSlug(record.appSlug),
     parentId: record.parentId === undefined || record.parentId === null
       ? null
@@ -247,7 +257,7 @@ export function upsertSoul(
   record,
   { file = populationFile(), now = () => new Date() } = {},
 ) {
-  const candidate = normalizeSoul(record, { defaultLastSeen: now().toISOString() });
+  let candidate = normalizeSoul(record, { defaultLastSeen: now().toISOString() });
   ensurePrivateDirectory(path.dirname(file));
   return withLock(`${file}.lock`, 'population store', () => {
     const current = readDocument(file);
@@ -256,9 +266,11 @@ export function upsertSoul(
     }
     const existing = current.souls[candidate.id];
     if (existing) {
+      if (record.soulDir === undefined && existing.soulDir) candidate.soulDir = existing.soulDir;
       candidate.worktrees = [...new Set([...existing.worktrees, ...candidate.worktrees])];
       if (record.worktree === undefined) candidate.worktree = existing.worktree;
     }
+    candidate = normalizeSoul(candidate);
     if (existing && JSON.stringify(existing) === JSON.stringify(candidate)) return existing;
     const souls = { ...current.souls, [candidate.id]: candidate };
     writeDocument(file, souls);
@@ -475,6 +487,56 @@ export function showSoul(id, { file = populationFile() } = {}) {
   const soul = readDocument(file).souls[target];
   if (!soul) throw new Error(`no population record for ${target}`);
   return soul;
+}
+
+// Explicit registration also supports souls moved outside the configured root.
+export function registerSoulDir(id, directory, { file = populationFile() } = {}) {
+  const target = agentId(id);
+  const dir = printableText('soulDir', directory, { max: 4096 });
+  if (!path.isAbsolute(dir)) throw new Error('soulDir must be absolute');
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
+    const existing = current.souls[target];
+    if (!existing) throw new Error(`no population record for ${target}`);
+    const soul = normalizeSoul({ ...existing, soulDir: dir });
+    if (existing.soulDir !== soul.soulDir) writeDocument(file, { ...current.souls, [target]: soul });
+    return soul;
+  });
+}
+
+function claimedByOther(directory, id) {
+  try { return readFileSync(path.join(directory, '.soul-state', 'agent-id'), 'utf8').trim() !== id; }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
+
+function directoryMatches(directory, id) {
+  try { return readFileSync(path.join(directory, '.soul-state', 'agent-id'), 'utf8').trim() === id; }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
+
+export function soulDirectory(id, options = {}) {
+  const target = agentId(id);
+  const file = options.file ?? populationFile(options);
+  const soul = showSoul(target, { file });
+  if (soul.soulDir && existsSync(soul.soulDir) && directoryMatches(soul.soulDir, target)) return soul.soulDir;
+  const { root } = soulsHome(options);
+  if (soul.soulDir && !existsSync(soul.soulDir)) {
+    let entries = [];
+    try { entries = readdirSync(root, { withFileTypes: true }); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const matches = entries.filter((entry) => entry.name.endsWith('.soul') && (entry.isDirectory() || entry.isSymbolicLink()))
+      .map((entry) => path.join(root, entry.name)).filter((dir) => directoryMatches(dir, target));
+    if (matches.length > 1) throw new Error(`multiple soul directories for ${target}`);
+    if (matches.length === 1) {
+      registerSoulDir(target, matches[0], { file });
+      return matches[0];
+    }
+  }
+  // Names may collide (#92), so a default directory another soul already
+  // marked falls back to one carrying this soul's ID suffix.
+  const named = path.join(root, `${soul.name}.soul`);
+  return claimedByOther(named, target) ? path.join(root, `${soul.name}-${target.slice(-8)}.soul`) : named;
 }
 
 // Agents refer to each other by name, so `show` accepts one — but the census
