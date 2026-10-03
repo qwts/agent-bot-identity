@@ -97,6 +97,80 @@ async function handlePrompt({ sessionId, prompt }) {
     return { stopReason: 'end_turn' };
   }
 
+  // Recorded wire shapes (#384). codex-acp v0.16.0: an MCP call is announced
+  // as `Tool: <server>/<tool>` with Codex's McpInvocation as rawInput, and
+  // its approval (an MCP elicitation) reuses the call id with the elicitation
+  // event — server_name included — as rawInput. An exec call's title is the
+  // model's command and its rawInput has no server/tool.
+  if (text === 'codex-mcp-permission') {
+    const ask = (toolCall) => request('session/request_permission', {
+      sessionId,
+      toolCall,
+      options: [
+        { optionId: 'approved', name: 'Allow', kind: 'allow_once' },
+        { optionId: 'cancel', name: 'Cancel', kind: 'reject_once' },
+      ],
+    });
+    notifyUpdate(sessionId, {
+      sessionUpdate: 'tool_call', toolCallId: 'call_c1', title: 'Tool: agent-reach/send_message', status: 'in_progress',
+      rawInput: { server: 'agent-reach', tool: 'send_message', arguments: { to: 'Ted', body: 'hi' } },
+    });
+    const mcp = await ask({
+      toolCallId: 'call_c1', title: 'Approve send_message', status: 'pending',
+      rawInput: { server_name: 'agent-reach', id: 'mcp_tool_call_approval_call_c1', request: { message: 'Allow?' } },
+    });
+    notifyUpdate(sessionId, {
+      sessionUpdate: 'tool_call', toolCallId: 'call_c2', title: 'Tool: agent-reach/send_message', kind: 'execute',
+      status: 'pending', rawInput: { command: ['sh', '-c', 'agent-comms send'] },
+    });
+    const exec = await ask({
+      toolCallId: 'call_c2', title: 'Tool: agent-reach/send_message', kind: 'execute', status: 'pending',
+      rawInput: { server_name: 'agent-reach', command: ['sh', '-c', 'agent-comms send'] },
+    });
+    notifyUpdate(sessionId, {
+      sessionUpdate: 'tool_call', toolCallId: 'call_c3', title: 'Tool: user-server/send_message', status: 'in_progress',
+      rawInput: { server: 'user-server', tool: 'send_message', arguments: {} },
+    });
+    const foreign = await ask({
+      toolCallId: 'call_c3', title: 'Approve send_message', status: 'pending',
+      rawInput: { server_name: 'user-server', id: 'mcp_tool_call_approval_call_c3' },
+    });
+    chunk(sessionId, `mcp:${mcp.outcome.optionId} exec:${exec.outcome.optionId} foreign:${foreign.outcome.optionId}`);
+    return { stopReason: 'end_turn' };
+  }
+
+  // opencode v1.18.34 `opencode acp`: an MCP tool's key `<server>_<tool>` is
+  // the title of both its tool_call and its permission request, kind 'other'.
+  // external_directory's title is model-chosen, but it rides on the call id
+  // of the shell (execute) call that triggered it.
+  if (text === 'opencode-mcp-permission') {
+    const ask = (toolCall) => request('session/request_permission', {
+      sessionId,
+      toolCall,
+      options: [
+        { optionId: 'once', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'always', name: 'Always allow', kind: 'allow_always' },
+        { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
+      ],
+    });
+    notifyUpdate(sessionId, {
+      sessionUpdate: 'tool_call', toolCallId: 'call_o1', title: 'agent-reach_send_message', kind: 'other',
+      status: 'pending', locations: [], rawInput: { to: 'Ted', body: 'hi' },
+    });
+    const mcp = await ask({ toolCallId: 'call_o1', title: 'agent-reach_send_message', kind: 'other', status: 'pending', locations: [], rawInput: {} });
+    notifyUpdate(sessionId, {
+      sessionUpdate: 'tool_call', toolCallId: 'call_o2', title: 'ls ../elsewhere', kind: 'execute',
+      status: 'pending', locations: [], rawInput: { command: 'ls ../elsewhere', description: 'agent-reach_send_message' },
+    });
+    const outside = await ask({
+      toolCallId: 'call_o2', title: 'agent-reach_send_message', kind: 'other', status: 'pending', locations: [],
+      rawInput: { description: 'agent-reach_send_message' },
+    });
+    const unannounced = await ask({ toolCallId: 'call_o3', title: 'agent-reach_fleet', kind: 'other', status: 'pending', locations: [], rawInput: {} });
+    chunk(sessionId, `mcp:${mcp.outcome.optionId} outside:${outside.outcome.optionId} unannounced:${unannounced.outcome.optionId}`);
+    return { stopReason: 'end_turn' };
+  }
+
   if (text === 'oversize') {
     chunk(sessionId, 'x'.repeat(20_000));
     chunk(sessionId, 'after-oversize');

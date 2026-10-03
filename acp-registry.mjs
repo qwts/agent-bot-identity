@@ -37,6 +37,23 @@ import { fileURLToPath } from 'node:url';
 
 export const HARNESS_KEY_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 
+// How a row's adapter identifies an MCP tool call to the client (#384), so the
+// engine can name a permission request `mcp__<server>__<tool>` for the
+// servers it injected, whatever the harness. Each value is a verified wire
+// shape, recorded against the adapter source pinned in the row's notes:
+//   - claude-meta      — claude-code-acp: the tool_call update carries the
+//                        name in `_meta.claudeCode.toolName`.
+//   - codex-invocation — codex-acp: the tool_call update's rawInput is Codex's
+//                        McpInvocation `{ server, tool, arguments }` and its
+//                        title is `Tool: <server>/<tool>`; the approval request
+//                        reuses that toolCallId and carries `server_name`.
+//   - opencode-key     — `opencode acp`: an MCP tool's key is
+//                        `<server>_<tool>`; it is the title (kind 'other') of
+//                        both the tool_call and the permission request.
+// A row without one gets no MCP naming: its permission requests are named by
+// their ACP kind only, which the reach allow rules never match.
+export const MCP_TOOL_NAMINGS = Object.freeze(['claude-meta', 'codex-invocation', 'opencode-key']);
+
 const MUSE_ACP_PATH = fileURLToPath(new URL('./muse-acp.mjs', import.meta.url));
 
 export const ACP_SPAWN_REGISTRY = Object.freeze({
@@ -51,6 +68,7 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
       status: Object.freeze(['auth', 'status', '--json']), login: Object.freeze(['auth', 'login']) }),
     stripEnv: Object.freeze(['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT']),
     store: '~/.claude',
+    mcpToolNaming: 'claude-meta',
     auth: 'existing `claude` login (shared credential store)',
     notes: 'adapter-provided ACP, spawn verified in the #141 spike; upstream is renaming toward @agentclientprotocol/claude-agent-acp — repin when the verified package moves',
   }),
@@ -61,8 +79,9 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
     args: Object.freeze(['acp']),
     stripEnv: Object.freeze([]),
     store: '~/.local/share/opencode',
+    mcpToolNaming: 'opencode-key',
     auth: '`opencode auth login`',
-    notes: 'native ACP endpoint; proven end-to-end in the #141 spike (new turn + session/load resume)',
+    notes: 'native ACP endpoint; proven end-to-end in the #141 spike (new turn + session/load resume); MCP naming verified against opencode v1.18.34 src/acp (#384)',
   }),
   muse: Object.freeze({
     harness: 'muse',
@@ -82,8 +101,9 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
     soulBin: 'codex-acp',
     stripEnv: Object.freeze([]),
     store: '~/.codex',
+    mcpToolNaming: 'codex-invocation',
     auth: 'existing `codex` login (shared credential store)',
-    notes: 'decided: third-party ACP adapter lane; disabled until the spawn (and exact package pin) is verified — first-party app-server attach stays #148',
+    notes: 'decided: third-party ACP adapter lane; disabled until the spawn (and exact package pin) is verified — first-party app-server attach stays #148; MCP naming verified against codex-acp v0.16.0 / codex rust-v0.137.0 source (#384)',
   }),
 });
 
@@ -110,6 +130,9 @@ export function validateSpawnRow(row) {
   }
   if (row.soulBin !== undefined && (typeof row.soulBin !== 'string' || !/^[a-z0-9][a-z0-9._-]*$/.test(row.soulBin))) {
     failRegistry(`${row.harness}: soulBin must be an npm binary name`);
+  }
+  if (row.mcpToolNaming !== undefined && !MCP_TOOL_NAMINGS.includes(row.mcpToolNaming)) {
+    failRegistry(`${row.harness}: mcpToolNaming must be one of ${MCP_TOOL_NAMINGS.join(', ')}`);
   }
   return row;
 }

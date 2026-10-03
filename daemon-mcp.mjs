@@ -64,8 +64,10 @@ export const REACH_COMMS_ENV = 'AGENT_BOT_REACH_COMMS';
 export const BINDING_ENV = 'AGENT_BOT_BINDING';
 
 // The server's name in mcpServers[], and the tool names a harness derives
-// from it. Claude Code names an MCP tool `mcp__<server>__<tool>`; the daemon's
-// permission policy allows exactly these (see reachPolicyRules).
+// from it. Claude Code names an MCP tool `mcp__<server>__<tool>`; the ACP
+// engine normalizes every adapter it can verify to that canonical name (see
+// MCP_TOOL_NAMINGS in acp-registry.mjs), and the daemon's permission policy
+// allows exactly these (see reachPolicyRules).
 export const REACH_SERVER_NAME = 'agent-reach';
 export const REACH_TOOL_NAMES = Object.freeze([
   'fetch_context', 'post_reply', 'report_status', 'clock_in', 'fleet', 'send_message',
@@ -205,7 +207,7 @@ const TOOLS = [
 ];
 
 // The daemon's permission rules for this server: an exact allow for each of
-// its own tools under Claude Code's MCP naming, prepended to whatever policy
+// its own tools under the canonical `mcp__<server>__<tool>` naming, prepended to whatever policy
 // the owner configured. A cold turn has nobody to approve a call, so without
 // them the default deny policy refuses the soul its own reach-back channel.
 export function reachPolicyRules() {
