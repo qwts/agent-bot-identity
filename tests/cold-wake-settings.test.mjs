@@ -5,7 +5,8 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:f
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { coldWakeFile, readColdWakeSettings, setColdWake } from '../cold-wake-settings.mjs';
+import { coldWakeCommand, coldWakeFile, readColdWakeSettings, setColdWake } from '../cold-wake-settings.mjs';
+import { assertOwnerAction, consentOwner } from '../owner-gate.mjs';
 
 const id = 'agent_12345678-1234-4123-8123-123456789abc';
 const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
@@ -22,22 +23,72 @@ function invoke(env, ...args) {
   return spawnSync(process.execPath, [cli, 'soul', 'cold-wake', id, ...args], { encoding: 'utf8', env, cwd: env.HOME });
 }
 
-test('soul cold-wake supports on, off, and show, and refuses agent accounts', () => withState(({ env }) => {
-  let result = invoke(env, 'on');
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, `${id} cold wake on\n`);
-  result = invoke(env, 'show');
+// The owner gate stands in for the dialog: changes run in process, so no
+// test raises a real authorization dialog.
+function owned(env, gate = async () => ({ method: 'consent' })) {
+  const out = [];
+  const run = (args, extra = {}) => coldWakeCommand([id, ...args], { env, home: env.HOME, cwd: env.HOME, gate, write: (text) => out.push(text), ...extra });
+  return { run, out };
+}
+
+test('soul cold-wake supports on, off, and show, and refuses agent accounts', () => withState(async ({ env }) => {
+  const { run, out } = owned(env);
+  await run(['on']);
+  assert.equal(out.pop(), `${id} cold wake on\n`);
+  let result = invoke(env, 'show');
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, 'on\n');
-  result = invoke(env, 'off');
-  assert.equal(result.status, 0, result.stderr);
+  await run(['off']);
+  assert.equal(out.pop(), `${id} cold wake off\n`);
   result = invoke(env, 'show');
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, 'off\n');
 
+  // A marked caller is refused by the real gate before any dialog.
   result = invoke({ ...env, GH_AGENT_APP: 'you-codex-agent' }, 'on');
   assert.equal(result.status, 1);
+  assert.match(result.stderr, /soul cold-wake .* on is owner only/);
+  result = invoke({ ...env, GH_AGENT_APP: 'you-codex-agent' }, 'show');
+  assert.equal(result.status, 1);
   assert.match(result.stderr, /cold wake settings are owner only/);
+}));
+
+test('every cold wake change passes the owner gate, which names the action and soul; show does not', () => withState(async ({ env }) => {
+  const seen = [];
+  const { run } = owned(env, async (action, { principal }) => { seen.push({ action, principal }); return { method: 'consent' }; });
+  await run(['on']); await run(['off']); await run(['resume', 'read-only']);
+  await run(['show']); await run([]);
+  assert.deepEqual(seen.map((s) => s.action), [`soul cold-wake ${id} on`, `soul cold-wake ${id} off`, `soul cold-wake ${id} resume read-only`]);
+  assert.ok(seen.every((s) => s.principal === null));
+  // A refused gate changes nothing.
+  const denied = owned(env, async () => { throw new Error('owner approval was cancelled — nothing was changed'); });
+  await assert.rejects(denied.run(['on']), /cancelled/);
+  assert.deepEqual(readColdWakeSettings({ env })[id], { lane: 'resume', policy: 'read-only' });
+  // Usage errors are refused before the gate.
+  for (const args of [['resume'], ['on', 'workspace'], ['show', '--principal-stdin']]) await assert.rejects(denied.run(args), /usage/);
+}));
+
+test('cold wake: a principal on stdin reaches the gate; a bound soul is refused whatever it presents', () => withState(async ({ env }) => {
+  const credential = { principal: 'principal_12345678-1234-4123-8123-123456789abc', secret: 'f'.repeat(64), brokerUid: process.getuid() + 1, mode: 'group' };
+  const seen = [];
+  const { run } = owned(env, async (action, { principal }) => { seen.push(principal); return { method: 'principal', principal: principal.principal }; });
+  assert.deepEqual(await run(['on', '--principal-stdin'], { readStdin: () => JSON.stringify(credential) }), { method: 'principal', principal: credential.principal });
+  assert.deepEqual(seen, [credential]);
+  await assert.rejects(run(['on', '--principal-stdin'], { readStdin: () => 'nope' }), /needs the principal credential as JSON/);
+  // The real gate with a soul marker: neither proof is consulted.
+  const pass = { verifyPrincipal: () => assert.fail('a bound soul never reaches the principal'), consent: () => assert.fail('nor the dialog') };
+  for (const marker of [{ AGENT_BOT_ID: id }, { AGENT_BOT_BINDING: path.join(env.HOME, 'binding.json') }]) {
+    const soulEnv = { ...env, AGENT_BOT_CONFIG: path.join(env.HOME, 'no-config.json'), ...marker };
+    const gate = (action, { principal }) => assertOwnerAction(action, { principal, env: soulEnv, cwd: env.HOME, detect: false, ...pass });
+    await assert.rejects(owned(soulEnv, gate).run(['off', '--principal-stdin'], { readStdin: () => JSON.stringify(credential) }), /owner only/);
+    await assert.rejects(owned(soulEnv, gate).run(['off']), /owner only/);
+  }
+  assert.equal(readColdWakeSettings({ env })[id], true);
+  // The consent path names the action and soul in the dialog.
+  const prompts = [];
+  const consent = owned(env, (action) => consentOwner(action, { platform: 'darwin', run: (argv) => { prompts.push(argv.at(-1)); return ''; } }));
+  assert.deepEqual(await consent.run(['off']), { method: 'consent' });
+  assert.match(prompts[0], new RegExp(`soul cold-wake ${id} off`));
 }));
 
 test('unset soul reports off and its cold wake result is waiting', async () => withState(async ({ env }) => {

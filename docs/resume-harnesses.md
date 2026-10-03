@@ -74,7 +74,9 @@ worktree:
 4. If the policy is fixed at start, check what a mismatched resume does.
 
 Then set a joined soul to `agent-bot soul cold-wake <agentId> resume read-only`
-and send it a message. It should reply, and the census `lastWake` should read
+and send it a message. Setting it is an owner action (#293): run it as the
+owner, outside any soul's worktree, and approve the authorization dialog, or
+present the owner's principal with `--principal-stdin`. It should reply, and the census `lastWake` should read
 `cold`.
 
 ## 4. Docs

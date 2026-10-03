@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { readColdWakeSettings, setColdWake, wakeSetting } from '../cold-wake-settings.mjs';
+import { coldWakeCommand, readColdWakeSettings, setColdWake, wakeSetting } from '../cold-wake-settings.mjs';
 import { createColdWaker } from '../cold-wake.mjs';
 import { laneExecutor, createWakePlane } from '../wake-plane.mjs';
 import { RESUME_HARNESSES, createResumeExecutor, createWakeSessions, resumePath, runProcess, wakeSessionsFile } from '../wake-resume.mjs';
@@ -215,11 +215,13 @@ test('a resume setting is owner-set, shown, and audited; anything malformed is o
   assert.equal(wakeSetting('on'), null);
   assert.deepEqual(wakeSetting(true), { lane: 'acp' });
   const invoke = (...args) => spawnSync(process.execPath, [cli, 'soul', 'cold-wake', ID, ...args], { encoding: 'utf8', env, cwd: env.HOME });
-  let result = invoke('resume', 'read-only');
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, `${ID} cold wake resume read-only\n`);
+  // The change runs in process with the owner gate injected: no dialog.
+  const out = [];
+  await coldWakeCommand([ID, 'resume', 'read-only'], { env, home: env.HOME, cwd: env.HOME,
+    gate: async () => ({ method: 'consent' }), write: (text) => out.push(text) });
+  assert.deepEqual(out, [`${ID} cold wake resume read-only\n`]);
   assert.equal(invoke('show').stdout, 'resume read-only\n');
-  result = invoke('resume');
+  let result = invoke('resume');
   assert.equal(result.status, 1);
   assert.match(result.stderr, /usage: .*resume read-only\|workspace/);
   assert.equal(invoke('on', 'workspace').status, 1);
