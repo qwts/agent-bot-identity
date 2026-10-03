@@ -337,6 +337,11 @@ The owner can set `agent-bot soul confinement AGENT_ID off|warn|deny` with an
 owner proof and review `agent-bot soul confinement-report AGENT_ID [--json]`.
 Explicit deny is supported; warn remains the default until reports show no
 false positives. See [confinement](docs/confinement.md) for coverage and reports.
+Separately, in every mode, a soul is denied its key store, legacy
+`~/.config/<slug>` App folders and the `security`/`pass-cli` executables: a
+soul's GitHub App key lives in its own key store, read only by the daemon and
+the mint path, and `agent-bot identity migrate-credentials` (owner only) moves
+legacy keys there. See [soul credentials](docs/soul-credentials.md).
 
 ### Organization profile v1
 

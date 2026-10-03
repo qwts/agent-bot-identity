@@ -567,7 +567,7 @@ export function createDaemonServer({
             throw Object.assign(new Error(githubOn ? 'this soul has no GitHub App' : 'the github-identity add-on is off'), { statusCode: 409 });
           }
           try {
-            grant = await mintImpl({ slug: identity.github.appSlug, env });
+            grant = await mintImpl({ slug: identity.github.appSlug, env, agentId: binding.agentId });
           } catch (error) {
             // A verified binding whose mint fails must still leave a receipt —
             // the audit stream has to account for every attempt, not only the

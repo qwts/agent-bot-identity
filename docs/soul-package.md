@@ -76,6 +76,7 @@ Optional fields with a meaning:
 | Field | Type and constraint |
 | --- | --- |
 | `comms` | Boolean. agent-comms is part of every soul; `false` withholds the teammate tools (`fleet`, `send_message`) from the soul's daemon turns. Absent means `true`. Read when the soul is launched, so a hand edit applies from its next launch; `agent-bot soul comms <soul> on|off` changes it (and the census) while the soul is stopped, and a launch request may set it. Template instances copy it. |
+| `credentials` | Optional. `{ "github": { "app": "<slug>", "store": "keychain" \| "file" } }` names the GitHub App the soul acts as and where its key lives; `store` defaults to `keychain` on macOS and `file` elsewhere. Only these keys are accepted, so key material can never be put here. The key itself lives in the soul's store, never in the package. Template instances copy the declaration, not the key. See [soul credentials](soul-credentials.md). |
 
 Nonempty means not blank after ECMAScript `trim()`. For example:
 
