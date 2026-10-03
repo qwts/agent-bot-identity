@@ -18,6 +18,7 @@ import {
   listSouls,
   populationFile,
   recordSoulLaunch,
+  backfillManagedSouls,
   showSoul,
   showSoulByName,
   updateSoulStatus,
@@ -191,6 +192,20 @@ test('a managed launch records comms once; lifecycle writes carry it forward', (
   recordSoulLaunch(FIRST_ID, { comms: true }, { file });
   assert.equal(listSouls({ file })[0].comms, true);
   assert.throws(() => upsertSoul(fixture({ id: SECOND_ID, comms: 'off' }), { file }), /comms must be a boolean/);
+});
+
+test('launched souls without a managed flag are backfilled from the journal (#409)', () => {
+  const file = path.join(scratch(), 'population.json');
+  upsertSoul(fixture({ comms: false }), { file });
+  upsertSoul(fixture({ id: SECOND_ID }), { file });
+  // Only journal IDs with a row are marked; comms is untouched, junk is skipped.
+  assert.deepEqual(backfillManagedSouls([FIRST_ID, FIRST_ID, 'not-an-id', 'agent_00000000-0000-0000-0000-000000000000'], { file }), [FIRST_ID]);
+  const [first, second] = listSouls({ file }).sort((a, b) => (a.id === FIRST_ID ? -1 : 1));
+  assert.equal(first.managed, true);
+  assert.equal(first.comms, false);
+  assert.equal(second.managed, false, 'a soul that only joined stays unmanaged');
+  assert.deepEqual(backfillManagedSouls([FIRST_ID], { file }), [], 'idempotent');
+  assert.deepEqual(backfillManagedSouls([FIRST_ID], { file: path.join(scratch(), 'missing.json') }), []);
 });
 
 test('without a census row only the default can be recorded', () => {

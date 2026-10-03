@@ -548,6 +548,30 @@ export function recordSoulLaunch(id, { comms = true } = {}, { file = populationF
   });
 }
 
+// Souls the daemon launched before launches were recorded (#389) have no
+// managed flag and read as unmanaged (#409). The daemon's launch journal is
+// the evidence: every ID it reports launched is marked managed, once, with
+// its comms setting left as it is. IDs with no census row are skipped, and a
+// soul that only joined never appears in the journal.
+export function backfillManagedSouls(ids, { file = populationFile() } = {}) {
+  const targets = [...new Set(ids)].flatMap((id) => { try { return [agentId(id)]; } catch { return []; } });
+  if (!targets.length || !existsSync(file)) return [];
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
+    const souls = { ...current.souls };
+    const marked = [];
+    for (const target of targets) {
+      const existing = souls[target];
+      if (!existing || existing.managed) continue;
+      souls[target] = normalizeSoul({ ...existing, managed: true });
+      marked.push(target);
+    }
+    if (marked.length) writeDocument(file, souls);
+    return marked;
+  });
+}
+
 // The owner changed a soul's comms setting while it was not running
 // (`agent-bot soul comms`). Its next turn reads this row, so the change
 // applies from then; the managed flag is left as it is. Without a row the
