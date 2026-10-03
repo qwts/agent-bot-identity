@@ -4,3 +4,5 @@ node_modules/
 .env
 .env.*
 .guard/
+# Linux CLI bundle build output (scripts/linux-bundle).
+dist/

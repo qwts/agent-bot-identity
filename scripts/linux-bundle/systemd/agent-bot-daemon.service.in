@@ -1,0 +1,27 @@
+# agent-bot's user unit for the headless-Linux bundle (ADR-0332 decision 2).
+# install.sh substitutes the placeholders below with this install's bundled
+# Node, entrypoint, tool path and bundle root. Nothing else is templated, and
+# nothing here is secret.
+#
+# The daemon supervises souls, not the bundle: uninstall removes this unit, and
+# a cancelled or failed install never starts it.
+[Unit]
+Description=agent-bot identity daemon (Linux bundle)
+Documentation=https://github.com/qwts/agent-bot-identity
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=@AGENT_BOT_NODE@ @AGENT_BOT_ENTRY@ daemon run
+Environment=AGENT_BOT_NODE=@AGENT_BOT_NODE@
+Environment=AGENT_BOT_TOOL_PATH=@AGENT_BOT_TOOL_PATH@
+Environment=AGENT_BOT_BUNDLE_ROOT=@AGENT_BOT_BUNDLE_ROOT@
+Environment=PATH=@AGENT_BOT_BIN@:/usr/local/bin:/usr/bin:/bin
+Restart=always
+RestartSec=2
+# The daemon serves loopback only; it never needs to answer from the network.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

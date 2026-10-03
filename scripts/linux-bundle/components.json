@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "note": [
+    "Pinned components for the headless-Linux CLI bundle (ADR-0332 decision 1).",
+    "Node is pinned by version AND sha256: build.mjs refuses a download whose",
+    "checksum does not match. agent-comms is pinned by release tag and full",
+    "commit SHA, the way GeniusBar's components.json pins it, so git verifies",
+    "the content the archive is assembled from. Bump a pin, then re-run the",
+    "build; never edit an assembled archive."
+  ],
+  "platforms": [
+    "linux-x64",
+    "linux-arm64"
+  ],
+  "node": {
+    "version": "24.21.0",
+    "tarballs": {
+      "linux-x64": {
+        "url": "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.gz",
+        "sha256": "6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff"
+      },
+      "linux-arm64": {
+        "url": "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-arm64.tar.gz",
+        "sha256": "724282c3b43aec998aa9527380465b45d229e021b58035f5f4f63095eabfe5d5"
+      }
+    }
+  },
+  "agent_comms": {
+    "repo": "qwts/agent-comms",
+    "tag": "v0.3.2",
+    "ref": "9b1e9e70da38c59e77a47776aa619b6ab016b18e",
+    "bin": "bin/agent-comms.mjs",
+    "required_verbs": ["join", "inbox", "send", "broker"],
+    "pin_note": [
+      "The agent-comms this runtime talks to is the qwts repository GeniusBar",
+      "bundles, not the unrelated npm package that shares the name. The commit",
+      "SHA is the integrity pin: the tag must resolve to it before anything is",
+      "fetched, and only the package's own files entries are copied. v0.3.2 has no",
+      "npm dependencies, so nothing is resolved or installed into the archive.",
+      "The verbs are checked for real, by running the fetched CLI's --help."
+    ]
+  }
+}
