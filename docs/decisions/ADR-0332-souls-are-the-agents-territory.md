@@ -243,7 +243,8 @@ devcontainer.
 
 1. Linux CLI bundle: release archives, `install.sh`, `uninstall.sh`, and
    CI (#337).
-2. Souls root and registry paths, and migrating homes into `.soul-state/` (#338).
+2. Souls root and registry paths, and migrating homes into `.soul-state/`
+   (#338).
 3. Worktrees inside the soul: `setup-worktree`, launch, and links for
    harness-chosen locations (#339).
 4. Confinement hooks: warn mode, then deny (#340).
@@ -252,5 +253,4 @@ devcontainer.
 6. soul-builder: generated harness folders (#342).
 7. `agent-bot sop`: per-soul selection, the `sop/` layer, and list, show,
    and workflow filtering (#343).
-8. Templates: spawning a named instance from a template package.
- (#344).
+8. Templates: spawning a named instance from a template package (#344).
