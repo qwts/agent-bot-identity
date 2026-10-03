@@ -87,6 +87,7 @@ import { validateSoulPackage } from './soul-package.mjs';
 import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
 import { createCommsRelay } from './comms-relay.mjs';
 import { createResumeExecutor, createWakeSessions, resumePath, wakeSessionsFile } from './wake-resume.mjs';
+import { migratePreGateConfig } from './config-migration.mjs';
 
 /**
  * What a soul's harness inherits: the daemon's environment with the host's
@@ -1325,11 +1326,25 @@ function formatCommsStatus(comms) {
   return `comms: paired as ${comms.account}, account-watch ${comms.connected ? 'connected' : 'disconnected'}`;
 }
 
+// A config from before the feature gates keeps the add-ons it was running
+// with (#361). Never fatal: the daemon starts either way.
+function reportPreGateMigration() {
+  try {
+    const result = migratePreGateConfig();
+    if (result.migrated) {
+      process.stderr.write(`agent-bot: ${result.path} predates feature gates and its souls use GitHub Apps; turned on ${Object.keys(result.features).join(' and ')} to keep that behavior\n`);
+    }
+  } catch (error) {
+    process.stderr.write(`agent-bot: could not check the config for pre-gate add-ons: ${error.message}\n`);
+  }
+}
+
 async function main() {
   const [command = 'status', ...rest] = process.argv.slice(2);
   const json = rest.includes('--json');
   switch (command) {
     case 'run': {
+      reportPreGateMigration();
       await runDaemon({
         onListening: (state) => {
           process.stderr.write(`agent-bot daemon listening on 127.0.0.1:${state.port} (pid ${state.pid})\n`);
@@ -1384,6 +1399,7 @@ async function main() {
     case 'install': {
       const unexpected = rest.filter((arg) => arg !== '--json');
       if (unexpected.length > 0) throw new Error('usage: agent-bot daemon install [--json]');
+      reportPreGateMigration();
       const { ensureDaemonSupervisor } = await import('./daemon-supervisor.mjs');
       // This runtime exactly: the node running now and its agent-bot entry.
       const entry = fileURLToPath(new URL('./agent-bot.mjs', import.meta.url));
