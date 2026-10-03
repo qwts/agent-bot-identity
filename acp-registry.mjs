@@ -13,6 +13,8 @@
 //                CLAUDECODE nesting guard from a Claude Code parent, so the
 //                row strips it: the daemon is the parent here, not a session.
 //   - opencode — native `opencode acp`; shared store; `opencode auth login`.
+//                Its own agent ruleset (OPENCODE_DAEMON_PERMISSION) makes
+//                every privileged tool ask the daemon (#390).
 //   - codex    — DECISION (this issue's checklist item): drive Codex through
 //                the third-party ACP adapter lane (Zed's `codex-acp`) rather
 //                than a first-party `codex mcp-server`/app-server shim. A shim
@@ -60,6 +62,42 @@ export const HARNESS_KEY_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 // their ACP kind only, which the reach allow rules never match.
 export const MCP_TOOL_NAMINGS = Object.freeze(['claude-meta', 'codex-invocation', 'codex-mcp-title', 'opencode-key']);
 
+// OpenCode allows every tool by default ("*": "allow" in its built-in agent
+// rules) and a machine config may say the same, so an OpenCode soul would
+// rarely ask the daemon anything (#390). The row adds its own primary agent
+// through OPENCODE_CONFIG_CONTENT and selects it as the session mode on every
+// turn. An agent's own rules are evaluated after the user's (last match
+// wins), so this ruleset decides: everything asks the daemon except
+// read-only built-ins, and subagents (task) are off, since a subagent runs
+// under its own agent's rules rather than these. Souls start teams through
+// start_soul instead.
+export const OPENCODE_DAEMON_AGENT = 'agent-bot';
+const OPENCODE_DAEMON_PERMISSION = Object.freeze({
+  '*': 'ask',
+  read: { '*': 'allow', '*.env': 'ask', '*.env.*': 'ask', '*.env.example': 'allow' },
+  glob: 'allow',
+  grep: 'allow',
+  list: 'allow',
+  lsp: 'allow',
+  todowrite: 'allow',
+  todoread: 'allow',
+  skill: 'allow',
+  task: 'deny',
+  question: 'deny',
+  plan_enter: 'deny',
+  plan_exit: 'deny',
+});
+const OPENCODE_DAEMON_CONFIG = JSON.stringify({
+  default_agent: OPENCODE_DAEMON_AGENT,
+  agent: {
+    [OPENCODE_DAEMON_AGENT]: {
+      mode: 'primary',
+      description: 'Driven by the agent-bot daemon: every privileged tool asks the daemon policy.',
+      permission: OPENCODE_DAEMON_PERMISSION,
+    },
+  },
+});
+
 const MUSE_ACP_PATH = fileURLToPath(new URL('./muse-acp.mjs', import.meta.url));
 
 export const ACP_SPAWN_REGISTRY = Object.freeze({
@@ -84,6 +122,9 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
     command: 'opencode',
     args: Object.freeze(['acp']),
     stripEnv: Object.freeze([]),
+    // Set after stripEnv, so an inherited value never replaces the ruleset.
+    setEnv: Object.freeze({ OPENCODE_CONFIG_CONTENT: OPENCODE_DAEMON_CONFIG }),
+    sessionMode: OPENCODE_DAEMON_AGENT,
     store: '~/.local/share/opencode',
     mcpToolNaming: 'opencode-key',
     auth: '`opencode auth login`',
@@ -137,6 +178,10 @@ export function validateSpawnRow(row) {
   }
   if (!Array.isArray(row.stripEnv) || row.stripEnv.some((name) => typeof name !== 'string' || name.length === 0)) {
     failRegistry(`${row.harness}: stripEnv must be an array of variable names`);
+  }
+  if (row.setEnv !== undefined && (!row.setEnv || typeof row.setEnv !== 'object' || Array.isArray(row.setEnv)
+    || Object.entries(row.setEnv).some(([name, value]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || typeof value !== 'string'))) {
+    failRegistry(`${row.harness}: setEnv must map variable names to strings`);
   }
   if (row.soulBin !== undefined && (typeof row.soulBin !== 'string' || !/^[a-z0-9][a-z0-9._-]*$/.test(row.soulBin))) {
     failRegistry(`${row.harness}: soulBin must be an npm binary name`);

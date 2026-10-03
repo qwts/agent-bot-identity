@@ -40,6 +40,7 @@ async function handlePrompt({ sessionId, prompt }) {
     chunk(sessionId, JSON.stringify({
       CLAUDECODE: process.env.CLAUDECODE ?? null,
       FAKE_KEEP: process.env.FAKE_KEEP ?? null,
+      FAKE_SET: process.env.FAKE_SET ?? null,
       cwd: session.cwd,
       mcpServers: session.mcpServers,
       loaded: session.loaded,
