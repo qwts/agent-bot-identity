@@ -11,6 +11,8 @@
 // A webhook soul (#334) runs no turn here: its harness's routine reads and
 // acks its own inbox, so the waker only calls the webhook.
 
+import { randomUUID } from 'node:crypto';
+
 import { wakeSetting } from './cold-wake-settings.mjs';
 import { FINAL_REPLY_ERRORS, senderAddress } from './comms-relay.mjs';
 
@@ -18,7 +20,7 @@ export function relayPrompt(message) {
   return `You have an agent-comms message from ${senderAddress(message.from)}. Your final answer is sent back to them as your reply, so write it as the reply itself; you do not need to run agent-comms.\n\n${message.body}`;
 }
 
-export function createColdWaker({ executor, settings, lookupBinding, identities, receipt, relay = null, webhook = null }) {
+export function createColdWaker({ executor, settings, lookupBinding, identities, receipt, relay = null, webhook = null, taskReporter = null, log = (line) => process.stderr.write(`cold-wake: ${line}\n`) }) {
   if (typeof executor !== 'function') throw new Error('cold waker requires an executor');
   if (typeof lookupBinding !== 'function') throw new Error('cold waker requires lookupBinding');
   if (typeof identities !== 'function') throw new Error('cold waker requires identities');
@@ -79,6 +81,30 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
     const relayed = async () => {
       for (let messages = await relay.read(soul); messages.length; messages = await relay.read(soul)) {
         for (const message of messages) {
+          if (message.kind === 'task-event') {
+            const brief = await relay.brief?.(soul, message.id);
+            if (brief?.turn) {
+              const linked = { ...invocation, invocationId: `invocation_${randomUUID()}`, taskId: brief.taskId };
+              const report = async (phase, outcome) => {
+                if (!brief.linked) return;
+                try {
+                  if (taskReporter) await taskReporter[phase](linked, outcome);
+                  else await relay.report?.(soul, { ...linked, phase, ...(outcome ? { outcome } : {}) });
+                } catch (error) { log(`task invocation ${linked.invocationId} ${phase} report failed: ${error?.message ?? String(error)}`); }
+              };
+              await report('started');
+              try {
+                const result = await executor({ invocation: brief.linked ? linked : invocation, message: brief.prompt, attachments: [], env, wake });
+                await report('ended', result?.cancelled ? 'cancelled' : 'completed');
+              } catch (error) {
+                await report('ended', error?.name === 'AbortError' ? 'cancelled' : 'failed');
+                if (error?.name !== 'AbortError') await relay.ack(soul, [message.id]);
+                throw error;
+              }
+            }
+            await relay.ack(soul, [message.id]);
+            continue;
+          }
           const result = await executor({ invocation, message: relayPrompt(message), attachments: [], env, wake });
           const body = typeof result?.reply === 'string' ? result.reply.trim() : '';
           if (body) {

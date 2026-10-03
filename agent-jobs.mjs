@@ -242,6 +242,11 @@ function normalizeArtifact(record) {
   return { name, bytes: record.bytes, sha256, spacePath };
 }
 
+export function validateTaskId(value) {
+  if (value === undefined || value === null) return null;
+  return matchOrThrow(/^task_[0-9a-f-]{36}$/, value, 'invalid task ID');
+}
+
 function normalizeInvocation(record) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) {
     throw new Error('invocation record must be an object');
@@ -255,6 +260,7 @@ function normalizeInvocation(record) {
     agentId: agentIdOrThrow(record.agentId),
     principalId: principalIdOrThrow(record.principalId),
     transport: transportOrThrow(record.transport),
+    taskId: validateTaskId(record.taskId),
     status: record.status,
     idempotencyKey: matchOrThrow(IDEMPOTENCY_KEY_PATTERN, record.idempotencyKey, 'invalid idempotency key'),
     error: record.error === undefined || record.error === null
@@ -400,7 +406,7 @@ export function touchSession(
 // (principalId, idempotencyKey) pair always returns the invocation created by
 // the first delivery, flagged `created: false`.
 export function submitInvocation(
-  { sessionId, agentId, principalId, transport, idempotencyKey },
+  { sessionId, agentId, principalId, transport, idempotencyKey, taskId = null },
   {
     env = process.env,
     home = homedir(),
@@ -416,6 +422,7 @@ export function submitInvocation(
     agentId,
     principalId,
     transport,
+    taskId,
     status: 'queued',
     idempotencyKey,
     error: null,

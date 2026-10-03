@@ -16,7 +16,7 @@ export function senderAddress(from) {
 export const FINAL_REPLY_ERRORS = new Set(['reply-depth-exceeded', 'unknown-recipient']);
 
 /**
- * Returns { read, reply, ack }, each running `agent-comms` as the soul in
+ * Returns { read, reply, ack, brief, report }, each running `agent-comms` as the soul in
  * its worktree with its binding, and resolving to the parsed JSON result.
  */
 export function createCommsRelay({ env = process.env, run = execFile } = {}) {
@@ -35,6 +35,17 @@ export function createCommsRelay({ env = process.env, run = execFile } = {}) {
   return {
     read: async (soul) => (await asSoul(soul, ['inbox', 'read'])).messages ?? [],
     reply: (soul, { to, replyTo, body }) => asSoul(soul, ['send', to, '--body', body, '--reply-to', replyTo]),
+    brief: async (soul, messageId) => {
+      try { return await asSoul(soul, ['task', 'brief', messageId]); }
+      catch (error) {
+        if (error.code === 'unknown-command' || /unknown (?:task )?(?:subcommand|command)/i.test(error.message)) return null;
+        throw error;
+      }
+    },
+    report: (soul, { taskId, invocationId, phase, outcome }) => asSoul(soul, [
+      'task', 'invocation', taskId, '--id', invocationId, '--phase', phase,
+      ...(outcome ? ['--outcome', outcome] : []),
+    ]),
     ack: (soul, ids) => asSoul(soul, ['inbox', 'ack', ...ids]),
   };
 }

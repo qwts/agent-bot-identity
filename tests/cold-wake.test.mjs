@@ -176,3 +176,71 @@ test('with a relay, a reply the broker refuses for good is acked unanswered', as
     assert.deepEqual(receipts, ['started', 'finished'], code);
   }
 });
+
+test('task events use briefs, report linked execution and never send replies', async () => {
+  for (const brief of [null, { turn: false }, { turn: true, linked: false, prompt: 'review' }, { turn: true, linked: true, taskId: 'task_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', prompt: 'criteria' }]) {
+    let pending = true;
+    const turns = [];
+    const reports = [];
+    const relay = {
+      read: async () => pending ? [{ id: 'task-message', kind: 'task-event', body: '{}' }] : [],
+      brief: async () => brief,
+      ack: async (soul, ids) => { assert.deepEqual(ids, ['task-message']); pending = false; },
+      reply: async () => assert.fail('task events never receive replies'),
+    };
+    const wake = createColdWaker({ executor: async (input) => { turns.push(input); return { reply: 'never send this' }; }, settings: { [id]: true }, lookupBinding: async () => binding, identities: async () => githubIdentity, receipt() {}, relay,
+      taskReporter: { started(invocation) { reports.push(['started', invocation]); }, ended(invocation, outcome) { reports.push(['ended', invocation, outcome]); } },
+    });
+    await wake({ agentId: id, messageIds: ['task-message'] });
+    await wake.idle();
+    assert.equal(pending, false);
+    assert.equal(turns.length, brief?.turn ? 1 : 0);
+    if (brief?.turn) assert.equal(turns[0].message, brief.prompt);
+    assert.equal(reports.length, brief?.linked ? 2 : 0);
+    if (brief?.linked) {
+      assert.equal(reports[1][2], 'completed');
+      assert.equal(reports[0][1].taskId, brief.taskId);
+      assert.match(reports[0][1].invocationId, /^invocation_[0-9a-f-]{36}$/);
+    }
+  }
+});
+
+test('failed task turns report failure and acknowledge without replying', async () => {
+  const reports = [];
+  let acked = false;
+  const relay = {
+    read: async () => [{ id: 'task-message', kind: 'task-event' }],
+    brief: async () => ({ turn: true, linked: true, taskId: 'task_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', prompt: 'work' }),
+    ack: async () => { acked = true; },
+    reply: async () => assert.fail('task events never receive replies'),
+  };
+  const wake = createColdWaker({ executor: async () => { throw new Error('failed'); }, settings: { [id]: true }, lookupBinding: async () => binding, identities: async () => githubIdentity, receipt() {}, relay,
+    taskReporter: { started() { reports.push('started'); }, ended(invocation, outcome) { reports.push(outcome); } },
+  });
+  await wake({ agentId: id });
+  await wake.idle();
+  assert.deepEqual(reports, ['started', 'failed']);
+  assert.equal(acked, true);
+});
+
+test('task reporting errors do not fail a cold turn; cancellation is reported without a reply', async () => {
+  for (const cancelled of [false, true]) {
+    let pending = true;
+    const outcomes = [];
+    const logs = [];
+    const relay = {
+      read: async () => pending ? [{ id: 'event', kind: 'task-event' }] : [],
+      brief: async () => ({ turn: true, linked: true, taskId: 'task_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', prompt: 'work' }),
+      ack: async () => { pending = false; },
+      reply: async () => assert.fail('task events never receive replies'),
+    };
+    const wake = createColdWaker({ executor: async () => ({ cancelled, reply: 'unused' }), settings: { [id]: true }, lookupBinding: async () => binding, identities: async () => githubIdentity, receipt() {}, relay,
+      taskReporter: { started() { throw new Error('offline'); }, ended(invocation, outcome) { outcomes.push(outcome); throw new Error('offline'); } }, log: (line) => logs.push(line),
+    });
+    await wake({ agentId: id });
+    await wake.idle();
+    assert.equal(pending, false);
+    assert.deepEqual(outcomes, [cancelled ? 'cancelled' : 'completed']);
+    assert.equal(logs.length, 2);
+  }
+});

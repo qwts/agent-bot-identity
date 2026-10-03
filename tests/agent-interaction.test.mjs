@@ -559,3 +559,76 @@ test('daemon /v1 cancels running work and rejects malformed or foreign input', a
     assert.equal(cancelBody.stopped, true);
   });
 });
+
+test('linked invocations report execution facts, survive reporter errors and retain taskId on restart', async () => {
+  for (const fails of [false, true]) {
+    for (const reporterFails of [false, true]) {
+      const { env } = scratch();
+      seedSoul(env);
+      const principal = seedPrincipal(env);
+      const reports = [];
+      const logs = [];
+      const interaction = service(env, {
+        executor: async () => { if (fails) throw new Error('executor failed'); },
+        taskReporter: {
+          started(invocation) { reports.push(['started', invocation]); if (reporterFails) throw new Error('broker down'); },
+          ended(invocation, outcome) { reports.push(['ended', invocation, outcome]); if (reporterFails) throw new Error('broker down'); },
+          transition() { assert.fail('execution must not transition tasks'); },
+        },
+        log: (line) => logs.push(line),
+      });
+      const { session } = interaction.createOrContinueSession({ principal, transport: 'web', agentId: AGENT_ID });
+      const taskId = 'task_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      const { invocation } = interaction.submitMessage({ principal, transport: 'web', sessionId: session.sessionId, message: 'work', idempotencyKey: 'linked', taskId });
+      await waitFor(() => reports.length === 2);
+      const restarted = service(env).getInvocation({ principal, transport: 'web', invocationId: invocation.invocationId }).invocation;
+      assert.equal(restarted.taskId, taskId);
+      assert.equal(restarted.status, fails ? 'failed' : 'completed');
+      assert.equal(reports[0][0], 'started');
+      assert.equal(reports[1][2], restarted.status);
+      assert.equal(reports[0][1].invocationId, invocation.invocationId);
+      if (reporterFails) assert.equal(logs.filter((line) => line.includes('report failed')).length, 2);
+    }
+  }
+});
+
+test('linked cancellation reports cancelled after execution stops', async () => {
+  const { env } = scratch();
+  seedSoul(env);
+  const principal = seedPrincipal(env);
+  const reports = [];
+  const interaction = service(env, {
+    executor: ({ signal }) => new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(new Error('stopped')), { once: true })),
+    taskReporter: { started() { reports.push('started'); }, ended(invocation, outcome) { reports.push(outcome); } },
+  });
+  const { session } = interaction.createOrContinueSession({ principal, transport: 'web', agentId: AGENT_ID });
+  const { invocation } = interaction.submitMessage({ principal, transport: 'web', sessionId: session.sessionId, message: 'work', idempotencyKey: 'linked', taskId: 'task_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' });
+  await waitFor(() => reports.length === 1);
+  await interaction.cancelInvocation({ principal, transport: 'web', invocationId: invocation.invocationId });
+  assert.deepEqual(reports, ['started', 'cancelled']);
+});
+
+test('a task link submitted through /v1 remains readable after recreating the daemon service', async () => {
+  const { env } = scratch();
+  seedSoul(env);
+  seedPrincipal(env);
+  const taskId = 'task_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  let invocationId;
+  await withServer(env, async () => {}, async ({ call }) => {
+    const response = await call('/v1/sessions', { method: 'POST', body: { ...REQUESTER, agentId: AGENT_ID } });
+    const { session } = await response.json();
+    const submitted = await call(`/v1/sessions/${session.sessionId}/messages`, { method: 'POST', body: { ...REQUESTER, message: 'work', idempotencyKey: 'task-restart', taskId } });
+    assert.equal(submitted.status, 200);
+    const { invocation } = await submitted.json();
+    assert.equal(invocation.taskId, taskId);
+    invocationId = invocation.invocationId;
+    await waitFor(() => getInvocation(invocationId, { env, home: '/nonexistent' }).status === 'completed');
+  });
+  await withServer(env, async () => assert.fail('restart must not run a completed invocation'), async ({ call }) => {
+    const response = await call(`/v1/invocations/${invocationId}?${new URLSearchParams(REQUESTER)}`);
+    assert.equal(response.status, 200);
+    const { invocation } = await response.json();
+    assert.equal(invocation.taskId, taskId);
+    assert.equal(invocation.status, 'completed');
+  });
+});
