@@ -78,20 +78,31 @@ export async function soulCommsCommand(argv, {
   if (action === 'show') return print(before);
 
   const comms = action === 'on';
-  if (running) throw new Error(`${soul.id} is running; stop it before changing its comms setting (the setting is fixed while a soul runs)`);
+  const refuseRunning = () => Object.assign(new Error(`${soul.id} is running; stop it before changing its comms setting (the setting is fixed while a soul runs)`),
+    { code: 'soul-running' });
+  if (running) throw refuseRunning();
   const authorization = await gate(`soul comms ${soul.id} ${action}`, { principal });
   if (before.comms === comms) return print(before);
   if (!before.directory) throw new Error(`${soul.id} has no soul directory with a soul.json to change`);
+  // The owner may take a while to approve; the soul may have started since.
+  // This narrows, but does not close, the window: a turn that starts after
+  // this check reads the census at its own start.
+  if (await soulRunning(soul.id, { status, env, home })) throw refuseRunning();
   const previous = writeSoulComms(before.directory, comms);
+  const census = soul.comms !== false;
+  let censusWritten = false;
   try {
+    setSoulComms(soul.id, comms, { file });
+    censusWritten = true;
     // A soul with a revision chain records the change as an owner edit.
+    // History cannot be unwritten, so it is appended last.
     const stateDir = stateDirectory({ env, home });
     if (previous !== null && revisions.history(soul.id, { stateDir }).length) {
       await revisions.edit(soul.id, before.directory, { reason: `comms ${action}`, stateDir,
         ...(authorization?.method ? { authorization } : {}) });
     }
-    setSoulComms(soul.id, comms, { file });
   } catch (error) {
+    if (censusWritten) { try { setSoulComms(soul.id, census, { file }); } catch { /* reported by the original error */ } }
     if (previous !== null) writeFileSync(path.join(before.directory, 'soul.json'), previous);
     throw error;
   }
@@ -100,6 +111,10 @@ export async function soulCommsCommand(argv, {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   soulCommsCommand(process.argv.slice(2)).catch((error) => {
+    // --json callers get a stable code (`soul-running` while the soul runs).
+    if (process.argv.includes('--json')) {
+      process.stdout.write(`${JSON.stringify({ error: { code: error.code ?? 'soul-comms-failed', message: error.message } })}\n`);
+    }
     process.stderr.write(`agent-bot soul comms: ${error.message}\n`);
     process.exitCode = 1;
   });

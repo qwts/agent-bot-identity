@@ -722,7 +722,8 @@ agent-bot soul comms bill on
 owner edit when the soul has a revision chain) and update the census row, so
 the next turn uses the new setting. They are refused while the daemon has a
 turn in flight for the soul or its harness holds a warm connection; stop it
-first. GeniusBar's bridge reads the same JSON. A launch request may also carry
+first. With `--json`, a failure prints `{"error":{"code","message"}}`;
+that refusal's code is `soul-running`. GeniusBar's bridge reads the same JSON. A launch request may also carry
 `"comms": true|false`, which the daemon writes to the soul's `soul.json`
 before it starts the soul.
 

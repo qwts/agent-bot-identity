@@ -80,11 +80,21 @@ test('a running soul keeps its setting: the change is refused before the gate', 
   for (const status of [async () => ({ running: true, warmPool: { [ID]: 1 }, busy: [] }),
     async () => ({ running: true, warmPool: {}, busy: [ID] })]) {
     const f = fixture(t);
-    await assert.rejects(soulCommsCommand([ID, 'off'], { ...f.options, status }), /is running; stop it/);
+    await assert.rejects(soulCommsCommand([ID, 'off'], { ...f.options, status }), { code: 'soul-running', message: /is running; stop it/ });
     assert.equal(f.gates.length, 0);
     assert.equal('comms' in manifestOf(f.soulDir), false);
     assert.equal(showSoul(ID, { file: f.file }).comms, true);
   }
+});
+
+test('a soul that starts while the owner approves is still refused', async (t) => {
+  const f = fixture(t);
+  let calls = 0;
+  const status = async () => (++calls === 1 ? { running: false } : { running: true, warmPool: {}, busy: [ID] });
+  await assert.rejects(soulCommsCommand([ID, 'off'], { ...f.options, status }), { code: 'soul-running' });
+  assert.equal(f.gates.length, 1);
+  assert.equal('comms' in manifestOf(f.soulDir), false);
+  assert.equal(showSoul(ID, { file: f.file }).comms, true);
 });
 
 test('an owner refusal changes nothing', async (t) => {
@@ -104,7 +114,10 @@ test('a soul with a revision chain records the change as an owner edit; a failed
   const g = fixture(t);
   const before = readFileSync(path.join(g.soulDir, 'soul.json'), 'utf8');
   await assert.rejects(soulCommsCommand([ID, 'off'], { ...g.options,
-    revisions: { history: () => [{}], edit: async () => { throw new Error('stale edit'); } } }), /stale edit/);
+    revisions: { history: () => [{}], edit: async () => {
+      assert.equal(showSoul(ID, { file: g.file }).comms, false, 'the census is written before history');
+      throw new Error('stale edit');
+    } } }), /stale edit/);
   assert.equal(readFileSync(path.join(g.soulDir, 'soul.json'), 'utf8'), before);
   assert.equal(showSoul(ID, { file: g.file }).comms, true);
 });
@@ -128,4 +141,24 @@ test('setSoulComms needs a row only to turn comms off', (t) => {
   assert.equal(setSoulComms(other, true, { file: f.file }), null);
   assert.throws(() => setSoulComms(other, false, { file: f.file }), /cannot record comms off/);
   assert.throws(() => setSoulComms(ID, 'no', { file: f.file }), /comms must be a boolean/);
+});
+
+test('a launch that chooses comms records it, and a failed revision edit restores soul.json and the census', async (t) => {
+  const { recordLaunchComms } = await import('../agent-daemon.mjs');
+  const f = fixture(t);
+  const config = { souls: [] };
+  await recordLaunchComms({ agentId: ID, package: null, comms: false }, { env: f.env, home: f.home, config,
+    revisions: { history: () => [], edit: async () => assert.fail('no chain, no edit') } });
+  assert.equal(manifestOf(f.soulDir).comms, false);
+  assert.equal(showSoul(ID, { file: f.file }).comms, false);
+
+  const g = fixture(t);
+  const before = readFileSync(path.join(g.soulDir, 'soul.json'), 'utf8');
+  await assert.rejects(recordLaunchComms({ agentId: ID, package: null, comms: false, principal: 'p1' }, { env: g.env, home: g.home, config,
+    revisions: { history: () => [{}], edit: async (id, dir, options) => {
+      assert.deepEqual(options.authorization, { method: 'principal', principal: 'p1' });
+      throw new Error('stale edit');
+    } } }), /stale edit/);
+  assert.equal(readFileSync(path.join(g.soulDir, 'soul.json'), 'utf8'), before);
+  assert.equal(showSoul(ID, { file: g.file }).comms, true);
 });
