@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.8
+
 - Runtime metrics now reach souls the daemon runs (qwts/agent-comms#86). A launched or cold-woken Claude soul works in its soul home, which is not a git worktree, so the session-start hook could not place its session, and `metrics collect` found nothing for it. GeniusBar's Starter showed no Model or Context rows after chatting. Every daemon ACP turn now records its harness session binding for the soul in `metrics/sessions.json`. The Claude ACP adapter uses that id as the Claude session id, so the collector reads the right log. Recording is best effort and never fails a turn.
 - Daemon-run Claude souls keep their transcripts. Each ACP turn used to end in an immediate SIGKILL of the agent's process group. Claude Code writes its session log as it exits, so every daemon turn left a log with no messages: nothing to resume from and nothing for metrics to read. A finished turn now closes the agent's stdin and waits up to `exitGraceMs` (2 s) for the group to exit, then sends SIGTERM and waits again, and only then sends SIGKILL. Aborted and timed-out turns are still killed at once.
 
