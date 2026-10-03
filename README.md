@@ -675,8 +675,32 @@ and wakes it like any message. A relayed turn answering another agent may end
 with exactly `NO_REPLY` to send nothing, so two souls never trade
 acknowledgements up to the broker's reply-depth limit.
 
+A soul can also start its own team (#377). `start_soul` (`name`, and
+optionally `harness`, `template`, `brief`) starts a new full soul — its own
+soul directory, identity and inbox, not a subagent in the caller's session —
+through the daemon's principal launch path, with the caller recorded as its
+parent in the identity and the population census. The harness defaults to
+the caller's, the template to the owner's default (`"teams": { "template":
+PATH }` in config, else the Starter the install ships, as for
+`agent-bot join`). Comms are on for the new soul as for any
+launch, and `brief`, when given, is its first agent-comms message, sent by
+the parent. The tool returns `{agentId, name, harness, parent}`; `fleet`
+shows each teammate's `parent`.
+
+The server asks the daemon (`POST /v0/team/start`, authenticated by the
+soul's binding proof, never its secret), and every limit lives in the daemon:
+a soul starts souls only as itself; it may have at most `teams.maxChildren`
+active children (default 5) and a team nests at most `teams.maxDepth` levels
+below its root soul (default 2; each 1–100); the harness must be enabled in
+the ACP registry and launchable on the host. Starts are serialized, so
+concurrent calls cannot race past the cap. Every attempt, including
+unauthenticated and refused ones, appends a `team-start` audit receipt with
+the caller and the decision (`launched`, `refused: child cap`, `refused:
+depth`, `refused: harness`, `refused: not self`, `refused: template`,
+`failed`, `denied`), never the name, template or brief.
+
 agent-comms is part of every soul. Every daemon ACP turn (a launch or a cold
-wake) gets this server injected, with `fleet` and `send_message`, unless the
+wake) gets this server injected, with `fleet`, `send_message` and `start_soul`, unless the
 soul's `soul.json` has `"comms": false` when it is launched. The daemon reads
 that setting at launch only and records it in the population census with
 `"managed": true`; turns read the census, so editing `soul.json` while the
@@ -688,7 +712,7 @@ unmanaged with comms on.
 A cold turn has nobody to approve a tool call, so the daemon prepends an
 exact allow rule for each of this server's tools to the executor policy
 (`mcp__agent-reach__fetch_context`, `…__post_reply`, `…__report_status`,
-`…__clock_in`, `…__fleet`, `…__send_message` — the canonical
+`…__clock_in`, `…__fleet`, `…__send_message`, `…__start_soul` — the canonical
 `mcp__<server>__<tool>` names). Nothing else is allowed by it; the
 configured policy and its `deny` fallback still decide every other tool.
 

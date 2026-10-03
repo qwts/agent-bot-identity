@@ -87,6 +87,32 @@ test('a package launch spawns a soul, homes it with the package, and starts it',
   assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId: spawnedId });
 });
 
+test('a team start passes its parent to the spawn, the join, and the first turn; never with an existing soul (#377)', async (t) => {
+  const parent = 'agent_33333333-3333-4333-8333-333333333333';
+  const seen = {};
+  const f = fixture(t, {
+    spawnPackage: (input) => { seen.spawn = input.parent; return { id: spawnedId }; },
+    joinSoul: async (soul) => { seen.join = soul.parent; },
+    executorFor: () => async (input) => { seen.message = input.message; input.appendEvent(HARNESS_SESSION_EVENT, {}); },
+  });
+  await f.handler(packageEvent, { ...f.ports, parent });
+  assert.equal(f.reports[0].status, 'launched');
+  assert.equal(seen.spawn, parent);
+  assert.equal(seen.join, parent);
+  assert.match(seen.message, new RegExp(`started by ${parent}`));
+
+  // An event cannot name its own parent; only the daemon's caller can.
+  const forged = fixture(t, { spawnPackage: (input) => { seen.forged = input.parent; return { id: spawnedId }; }, joinSoul: async () => {} });
+  await forged.handler({ ...packageEvent, requestId: 'r2', parent }, forged.ports);
+  assert.equal(forged.reports[0].status, 'launched');
+  assert.equal(seen.forged, undefined);
+
+  const existing = fixture(t);
+  await existing.handler(event, { ...existing.ports, parent });
+  assert.equal(existing.calls.length, 0);
+  assert.match(existing.reports[0].detail, /new soul/);
+});
+
 test('a launch with no harness uses the default it resolves, and fails clearly without one', async (t) => {
   const asked = [];
   const f = fixture(t, { defaultHarness: (target) => { asked.push(target); return 'claude'; } });

@@ -23,7 +23,7 @@ function workingPath(path) {
 
 // Mechanism shared by CLI and authenticated daemon package launches. No
 // template code runs; the package is validated before a directory or ID exists.
-export async function spawnSoulTemplate(templatePath, { name, harness = null, ...options } = {}) {
+export async function spawnSoulTemplate(templatePath, { name, harness = null, parentId = null, ...options } = {}) {
   if (typeof name !== 'string' || !name.trim()) throw new Error('--name must be a nonempty string');
   if (harness !== null && (typeof harness !== 'string' || !HARNESS_KEY_PATTERN.test(harness))) {
     throw new Error('invalid harness');
@@ -64,7 +64,7 @@ export async function spawnSoulTemplate(templatePath, { name, harness = null, ..
     manifest.revision = computePackageRevision(directory);
     save();
     identity = mintAgentIdentity({ ...options, stateDir, appSlug: null, packagePath: directory,
-      parentId: null, harness, useGithub: false });
+      parentId, harness, useGithub: false });
     adoptSoulPackage(identity.id, directory, { ...revisionOptions, reason: 'Spawn template instance' });
     // The seed is hashed into revisions, so deriving it from the Agent ID
     // must happen after genesis. Record this initialization, never rewrite birth.

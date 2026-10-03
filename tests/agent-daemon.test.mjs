@@ -503,6 +503,51 @@ test('a binding proof authenticates once, for this daemon and this route only (#
   });
 });
 
+test('team start answers only to a bound soul, as itself, and says when it cannot (#377)', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  const asked = [];
+  const teamStarter = async (caller, body) => { asked.push({ caller, body }); return { agentId: 'agent_child', name: body.name }; };
+  await withServer(env, async ({ call, port }) => {
+    const bound = await (await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-team' } },
+    })).json();
+    const prove = () => signBindingProof({ secret: bound.secret, method: 'POST', path: '/v0/team/start', authority: `127.0.0.1:${port}` });
+
+    const anonymous = await call('/v0/team/start', { method: 'POST', token: null, body: { name: 'X' } });
+    assert.equal(anonymous.status, 401);
+    // The owner bearer alone is not a soul: there is no caller to start under.
+    const owner = await call('/v0/team/start', { method: 'POST', body: { name: 'X' } });
+    assert.equal(owner.status, 401);
+    assert.equal(asked.length, 0);
+    const denied = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8').trim().split('\n')
+      .map((line) => JSON.parse(line)).filter((row) => row.event === 'team-start');
+    assert.deepEqual(denied.map((row) => row.decision), ['denied', 'denied']);
+
+    const started = await call('/v0/team/start', { method: 'POST', token: null, headers: { [PROOF_HEADER]: prove() }, body: { name: 'Researcher', parent: 'agent_someone_else' } });
+    assert.equal(started.status, 200);
+    assert.deepEqual(await started.json(), { agentId: 'agent_child', name: 'Researcher' });
+    // The caller is the binding; the body's parent is passed along for the starter to refuse.
+    assert.deepEqual(asked, [{ caller: bound.agentId, body: { name: 'Researcher', parent: 'agent_someone_else' } }]);
+  }, { teamStarter });
+
+});
+
+test('a daemon without a team starter refuses a bound soul with 503', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  await withServer(env, async ({ call, port }) => {
+    const bound = await (await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-team' } },
+    })).json();
+    const proof = signBindingProof({ secret: bound.secret, method: 'POST', path: '/v0/team/start', authority: `127.0.0.1:${port}` });
+    const res = await call('/v0/team/start', { method: 'POST', token: null, headers: { [PROOF_HEADER]: proof }, body: { name: 'X' } });
+    assert.equal(res.status, 503);
+  });
+});
+
 test('bind refuses a wrong token and leaves the minted token in place', async () => {
   const { root, env } = scratchEnv();
   const { gitDir } = mintWorktreeToken(env, root);

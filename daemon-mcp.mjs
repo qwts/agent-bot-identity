@@ -21,6 +21,8 @@
 // without these tools a cold soul could answer people but never reach
 // another agent. They are on for every soul unless its launch turned comms
 // off (AGENT_BOT_REACH_COMMS=0, stamped by the engine from the census).
+// `start_soul` (#377) asks the daemon to start a new teammate soul with this
+// one as its parent; the daemon owns the limits and audits every attempt.
 //
 // The server writes to the interaction store directly (appendEvent takes a
 // cross-process lock), so it works whether or not the daemon that spawned the
@@ -48,6 +50,8 @@ import { agentCommsAsSoul } from './comms-relay.mjs';
 import { validateAgentId } from './agent-identity.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
 import { AGENT_ID_KEYS, readGitConfig } from './resolve-agent.mjs';
+import { readBinding } from './agent-binding.mjs';
+import { PROOF_HEADER, signBindingProof } from './binding-proof.mjs';
 
 const PROTOCOL_VERSION = '2025-06-18';
 
@@ -70,9 +74,9 @@ export const BINDING_ENV = 'AGENT_BOT_BINDING';
 // allows exactly these (see reachPolicyRules).
 export const REACH_SERVER_NAME = 'agent-reach';
 export const REACH_TOOL_NAMES = Object.freeze([
-  'fetch_context', 'post_reply', 'report_status', 'clock_in', 'fleet', 'send_message',
+  'fetch_context', 'post_reply', 'report_status', 'clock_in', 'fleet', 'send_message', 'start_soul',
 ]);
-const COMMS_TOOL_NAMES = new Set(['fleet', 'send_message']);
+const COMMS_TOOL_NAMES = new Set(['fleet', 'send_message', 'start_soul']);
 
 // Store-location variables forwarded into the injected entry so the spawned
 // server resolves the same interaction store even under a harness that does
@@ -94,6 +98,8 @@ export const MAX_STATUS_NOTE_BYTES = 1024;
 // A teammate message stays chat-sized, well inside the broker's 32 KiB body.
 export const MAX_MESSAGE_BYTES = 16 * 1024;
 const MAX_ADDRESS_LENGTH = 256;
+// Starting a soul can provision its home and install its harness first.
+const START_SOUL_TIMEOUT_MS = 15 * 60_000;
 
 // fetch_context thread history bounds: enough to reconstruct a conversation,
 // small enough that the result never balloons a session's context window.
@@ -204,6 +210,25 @@ const TOOLS = [
       required: ['to', 'body'],
     },
   },
+  {
+    name: 'start_soul',
+    description:
+      'Start a new teammate: a full agent soul of its own (its own folder, '
+      + 'identity, and inbox) with you as its parent, not a subagent in your '
+      + 'session. Use it when asked to set up a team. It joins agent-comms '
+      + 'and shows under you in fleet; pass brief to send it its first task '
+      + 'from you. The host limits how many teammates you may start.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'the new teammate\'s name, e.g. "Researcher"' },
+        harness: { type: 'string', description: 'harness to run it on (claude, opencode, …); defaults to yours' },
+        template: { type: 'string', description: 'absolute path of a soul template; defaults to the host\'s Starter' },
+        brief: { type: 'string', description: 'first message to send it, from you, at most 16 KiB' },
+      },
+      required: ['name'],
+    },
+  },
 ];
 
 // The daemon's permission rules for this server: an exact allow for each of
@@ -228,8 +253,9 @@ export function createReachState({
   cwd = process.cwd(),
   now = () => new Date(),
   run = undefined,
+  fetch: fetchImpl = undefined,
 } = {}) {
-  return { env, home, cwd, now, run };
+  return { env, home, cwd, now, run, fetch: fetchImpl };
 }
 
 // The soul agent-comms runs as: the identity this server speaks for, in the
@@ -488,8 +514,8 @@ async function callTool(state, name, args = {}) {
       const { peers = [] } = await asSoul(state)(soul, ['peers']);
       return {
         you: soul.agentId,
-        teammates: peers.map(({ name: peerName = null, address, account, agentId, harness = null, verification = null }) => ({
-          name: peerName, address, account, agentId, harness, verification,
+        teammates: peers.map(({ name: peerName = null, address, account, agentId, harness = null, parent = null, verification = null }) => ({
+          name: peerName, address, account, agentId, harness, parent, verification,
         })),
       };
     }
@@ -505,9 +531,59 @@ async function callTool(state, name, args = {}) {
       const sent = await run(soul, ['send', address, '--body', body, ...(replyTo ? ['--reply-to', replyTo] : [])]);
       return { sent: true, to: address, messageId: sent.messageId ?? null, wake: sent.wake ?? null };
     }
+    case 'start_soul': {
+      const soul = commsSoul(state, identity);
+      const request = { name: boundedString(args.name, 'name', { max: 128 }).trim() };
+      if (args.harness !== undefined && args.harness !== null && args.harness !== '') {
+        request.harness = boundedString(args.harness, 'harness', { max: 32 });
+      }
+      if (args.template !== undefined && args.template !== null && args.template !== '') {
+        request.template = boundedString(args.template, 'template', { max: 4096 });
+      }
+      const brief = args.brief === undefined || args.brief === null || args.brief === ''
+        ? null
+        : boundedString(args.brief, 'brief', { max: MAX_MESSAGE_BYTES, bytes: true });
+      const started = await startSoul(state, soul, request);
+      const result = { started: true, agentId: started.agentId, name: started.name, harness: started.harness, parent: soul.agentId };
+      if (brief !== null) {
+        try {
+          const sent = await asSoul(state)(soul, ['send', started.agentId, '--body', brief]);
+          result.brief = { sent: true, messageId: sent.messageId ?? null };
+        } catch (error) {
+          result.brief = { sent: false, error: error.message };
+        }
+      }
+      return result;
+    }
     default:
       throw new Error(`unknown tool: ${name}`);
   }
+}
+
+// The daemon starts the teammate; this server only proves which soul asks.
+// The binding is the soul's own (the injected entry's file, or the
+// registered worktree's), and its secret signs a one-request proof (#270)
+// rather than travelling. A binding for any other soul is refused here.
+async function startSoul(state, soul, request) {
+  const binding = soul.binding.file
+    ? readBinding({ env: { AGENT_BOT_BINDING: soul.binding.file } })
+    : readBinding({ env: {}, cwd: soul.binding.worktree });
+  if (!binding) throw new Error('starting a teammate needs this soul\'s daemon binding, and none was found');
+  if (binding.agentId !== soul.agentId) throw new Error('the binding here belongs to a different soul');
+  const target = new URL('/v0/team/start', binding.daemon);
+  const fetchImpl = state.fetch ?? fetch;
+  const res = await fetchImpl(target.href, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      [PROOF_HEADER]: signBindingProof({ secret: binding.secret, method: 'POST', path: target.pathname, authority: target.host }),
+    },
+    body: JSON.stringify(request),
+    signal: AbortSignal.timeout(START_SOUL_TIMEOUT_MS),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error ?? `the daemon refused to start the soul (HTTP ${res.status})`);
+  return payload;
 }
 
 // The injected placement's mcpServers[] entry, ACP-shaped ({name, value} env
@@ -580,7 +656,9 @@ export async function handleMcpMessage(state, message) {
             + 'once with the final answer.'
             + (commsEnabled(state)
               ? ' To work with other agents, call fleet to see your teammates and '
-                + 'send_message to reach one; their replies arrive in your inbox.'
+                + 'send_message to reach one; their replies arrive in your inbox. '
+                + 'When asked to set up a team, start_soul starts new teammate '
+                + 'souls under you.'
               : ''),
         }));
       case 'ping':

@@ -80,6 +80,7 @@ import { attachWakeEndpoint } from './agent-wake.mjs';
 import { readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
+import { createTeamStarter, defaultTeamTemplate, harnessLaunchable, teamLimits } from './team-start.mjs';
 import { createSoulHomes, installHarnesses, soulBindingForLaunch } from './soul-home.mjs';
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
@@ -107,8 +108,8 @@ export function soulEnvironment(env = process.env) {
  * the soul's address; a failed join fails the launch with agent-comms' own
  * message.
  */
-export function joinLaunchedSoul({ agentId, harness, name, binding }, { env = process.env, run = execFile } = {}) {
-  const args = ['join', '--harness', harness, ...(name ? ['--name', name] : [])];
+export function joinLaunchedSoul({ agentId, harness, name, binding, parent = null }, { env = process.env, run = execFile } = {}) {
+  const args = ['join', '--harness', harness, ...(name ? ['--name', name] : []), ...(parent ? ['--parent', parent] : [])];
   const soulEnv = { ...soulEnvironment(env), AGENT_BOT_BINDING: binding.file, AGENT_BOT_ID: agentId, QWTS_AGENT_ID: agentId };
   return new Promise((resolve, reject) => {
     run('agent-comms', args, { cwd: binding.worktree, env: soulEnv, timeout: 30_000 }, (error, stdout = '', stderr = '') => {
@@ -331,6 +332,9 @@ export function createDaemonServer({
   // Live comms watch state for GET /v0/comms/status. The supervisor is owned
   // by runDaemon; tests and embedding callers pass a stub with getState().
   comms = null,
+  // POST /v0/team/start (#377): (callerAgentId, body) => { agentId, ... }.
+  // runDaemon wires it to the launch handler; null refuses the route.
+  teamStarter = null,
 } = {}) {
   // One interaction service per server so in-flight executions and their
   // cancellation controllers live exactly as long as the daemon.
@@ -387,7 +391,7 @@ export function createDaemonServer({
       }
       const authorization = req.headers.authorization ?? '';
       const presented = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
-      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/credential', 'POST /v0/spawn'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
+      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/credential', 'POST /v0/spawn', 'POST /v0/team/start'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
         sendJson(res, 401, { error: 'missing or invalid daemon token' });
         return;
       }
@@ -476,6 +480,21 @@ export function createDaemonServer({
           try { warning = await spawnHook({ ...result, name: body.name ?? identity.id, harness, cwd: source.worktree, env }); }
           catch { warning = 'spawn hook failed'; }
           sendJson(res, 200, { ...result, ...(warning ? { warning } : {}) });
+          return;
+        }
+        // A soul starts a teammate as itself (#377): the binding is the
+        // caller, and the starter enforces the team limits and audits.
+        case 'POST /v0/team/start': {
+          let source;
+          try {
+            source = requireBinding(req, bindings);
+          } catch (error) {
+            appendAuditReceipt({ event: 'team-start', operation: 'start_soul', decision: 'denied' }, { env, home, now });
+            throw error;
+          }
+          if (!teamStarter) throw Object.assign(new Error('this daemon cannot start souls'), { statusCode: 503 });
+          const body = parseJsonBody(await readBody(req));
+          sendJson(res, 200, await teamStarter(source.agentId, body));
           return;
         }
         case 'GET /v0/binding': {
@@ -1193,11 +1212,12 @@ export async function runDaemon({
     identities,
     // A package spawn is a new root soul with no GitHub App (#297). The
     // package is validated before minting, so a bad path mints nothing.
-    spawnPackage: async ({ package: packagePath, harness, name }) => {
-      if (name !== undefined) return spawnSoulTemplate(packagePath, { name, harness, env, home, config, now,
+    // A team member (#377) is the same spawn with its parent recorded.
+    spawnPackage: async ({ package: packagePath, harness, name, parent = null }) => {
+      if (name !== undefined) return spawnSoulTemplate(packagePath, { name, harness, parentId: parent, env, home, config, now,
         stateDir: stateDirectory({ env, home }) });
       validateSoulPackage(packagePath);
-      return mintAgentIdentity({ appSlug: null, harness, packagePath, useGithub: false,
+      return mintAgentIdentity({ appSlug: null, harness, packagePath, useGithub: false, parentId: parent,
         stateDir: stateDirectory({ env, home }), now });
     },
     lookupBinding: (agentId) => soulBindingForLaunch(agentId, {
@@ -1238,7 +1258,24 @@ export async function runDaemon({
       return relay.report({ agentId: invocation.agentId, binding }, invocation);
     },
   });
-  server = createDaemonServer({ env, home, config, now, comms, executor, taskReporter });
+  // A soul's teammates go through the same launch handler as a principal's
+  // launch; only the parent differs, and only the daemon can set it.
+  const userConfig = config ?? loadConfig({ home, env });
+  const account = env.USER ?? process.env.USER ?? 'unknown';
+  const teamStarter = createTeamStarter({
+    souls: () => listSouls({ status: 'active', file: populationFile({ env, home }) }),
+    identities: (agentId) => { try { return identities(agentId); } catch { return null; } },
+    launch: (event) => new Promise((resolve, reject) => {
+      const { parent, ...request } = event;
+      onLaunch(request, { account, parent, report: async (row) => resolve(row) }).catch(reject);
+    }),
+    receipt: ({ agentId, decision }) => appendAuditReceipt({ event: 'team-start', agentId, operation: 'start_soul', decision }, { env, home, now }),
+    limits: teamLimits(userConfig),
+    launchable: (harness) => harnessLaunchable(harness, { env: soulEnvironment(env) }),
+    template: () => defaultTeamTemplate({ config: userConfig, env }),
+    account,
+  });
+  server = createDaemonServer({ env, home, config, now, comms, executor, taskReporter, teamStarter });
   await taskReporter.recover({ log: (line) => process.stderr.write(`agent-daemon: ${line}\n`) });
   server.wakePlane = createWakePlane({
     pool: server.warmPool,

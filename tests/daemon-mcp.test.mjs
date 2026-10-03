@@ -124,7 +124,7 @@ test('the reach server speaks the MCP handshake and lists its six tools', async 
   const listed = await handleMcpMessage(state, { jsonrpc: '2.0', id: 2, method: 'tools/list' });
   assert.deepEqual(
     listed.result.tools.map((tool) => tool.name),
-    ['fetch_context', 'post_reply', 'report_status', 'clock_in', 'fleet', 'send_message'],
+    ['fetch_context', 'post_reply', 'report_status', 'clock_in', 'fleet', 'send_message', 'start_soul'],
   );
   assert.match(initialized.result.instructions, /fleet/);
   const pinged = await handleMcpMessage(state, { jsonrpc: '2.0', id: 3, method: 'ping' });
@@ -455,6 +455,7 @@ test('the policy rules allow exactly this server\'s tools under Claude\'s MCP na
     ['mcp__agent-reach__clock_in', 'allow'],
     ['mcp__agent-reach__fleet', 'allow'],
     ['mcp__agent-reach__send_message', 'allow'],
+    ['mcp__agent-reach__start_soul', 'allow'],
   ]);
 });
 
@@ -546,6 +547,74 @@ test('teammate tools need an identity, and comms off withholds them', async () =
   assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['fetch_context', 'post_reply', 'report_status', 'clock_in']);
   await assert.rejects(call(state, 'send_message', { to: 'owner', body: 'hi' }), /turned off/);
   assert.equal(calls.length, 0);
+});
+
+// --- start_soul (#377) -------------------------------------------------------
+
+const CHILD_ID = 'agent_dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+
+// A binding file for the calling soul, as the daemon writes it: 0600, with
+// the daemon URL and a 43-character secret that only signs proofs.
+function bindingFile(root, agentId = AGENT_ID) {
+  const file = path.join(root, 'agent-binding.json');
+  writeFileSync(file, JSON.stringify({ v: 1, agentId, parent: null, account: 'acct',
+    daemon: 'http://127.0.0.1:4555/', secret: 'S'.repeat(43) }), { mode: 0o600 });
+  return file;
+}
+
+function fakeDaemon(reply = { status: 200, body: { agentId: CHILD_ID, name: 'Researcher', harness: 'claude', parent: AGENT_ID } }) {
+  const requests = [];
+  const fetch = async (url, init) => {
+    requests.push({ url, method: init.method, headers: init.headers, body: JSON.parse(init.body) });
+    return { ok: reply.status < 400, status: reply.status, json: async () => reply.body };
+  };
+  return { requests, fetch };
+}
+
+test('start_soul asks the daemon as the soul, with a proof and never the secret', async () => {
+  const { root } = scratch();
+  const comms = fakeComms();
+  const daemon = fakeDaemon();
+  const state = createReachState({
+    env: { [REACH_AGENT_ID_ENV]: AGENT_ID, [REACH_WORKTREE_ENV]: root, AGENT_BOT_BINDING: bindingFile(root) },
+    home: '/nonexistent', cwd: tmpdir(), run: comms.run, fetch: daemon.fetch,
+  });
+  const started = await call(state, 'start_soul', { name: ' Researcher ', harness: 'claude', brief: 'Survey ACP adapters.' });
+  assert.deepEqual(started, { started: true, agentId: CHILD_ID, name: 'Researcher', harness: 'claude', parent: AGENT_ID,
+    brief: { sent: true, messageId: 'msg_1' } });
+  assert.equal(daemon.requests.length, 1);
+  const [request] = daemon.requests;
+  assert.equal(request.url, 'http://127.0.0.1:4555/v0/team/start');
+  assert.deepEqual(request.body, { name: 'Researcher', harness: 'claude' });
+  assert.match(request.headers['x-agent-binding-proof'], /^v1\./);
+  assert.equal(JSON.stringify(request).includes('S'.repeat(43)), false, 'the secret never travels');
+  // The brief goes from the parent to the new soul, as the parent.
+  assert.deepEqual(comms.calls.map((entry) => entry.args), [['send', CHILD_ID, '--body', 'Survey ACP adapters.']]);
+  assert.equal(comms.calls[0].env.AGENT_BOT_ID, AGENT_ID);
+});
+
+test('start_soul reports daemon refusals, a foreign binding, and comms off', async () => {
+  const { root } = scratch();
+  const refused = fakeDaemon({ status: 429, body: { error: 'you already have 5 active teammates you started (limit 5)' } });
+  const env = { [REACH_AGENT_ID_ENV]: AGENT_ID, [REACH_WORKTREE_ENV]: root, AGENT_BOT_BINDING: bindingFile(root) };
+  const state = createReachState({ env, home: '/nonexistent', cwd: tmpdir(), run: fakeComms().run, fetch: refused.fetch });
+  await assert.rejects(call(state, 'start_soul', { name: 'Six' }), /limit 5/);
+  await assert.rejects(call(state, 'start_soul', { name: '' }), /name must be a non-empty string/);
+
+  const other = mkdtempSync(path.join(root, 'other-'));
+  const foreign = createReachState({ env: { ...env, AGENT_BOT_BINDING: bindingFile(other, OTHER_ID) },
+    home: '/nonexistent', cwd: tmpdir(), run: fakeComms().run, fetch: fakeDaemon().fetch });
+  await assert.rejects(call(foreign, 'start_soul', { name: 'X' }), /different soul/);
+
+  const off = createReachState({ env: { ...env, [REACH_COMMS_ENV]: '0' }, home: '/nonexistent', cwd: tmpdir(),
+    run: fakeComms().run, fetch: fakeDaemon().fetch });
+  await assert.rejects(call(off, 'start_soul', { name: 'X' }), /turned off/);
+});
+
+test('fleet shows each teammate\'s parent, so a team reads under its lead', async () => {
+  const { state } = injectedSoul();
+  const fleet = await call(state, 'fleet');
+  assert.equal(fleet.teammates.every((peer) => 'parent' in peer), true);
 });
 
 test('a registered server never presents an inherited binding to agent-comms', async () => {
