@@ -9,6 +9,7 @@ import { spawn as spawnChild } from 'node:child_process';
 import {
   ACP_SPAWN_REGISTRY,
   HARNESS_KEY_PATTERN,
+  OPENCODE_DAEMON_AGENT,
   resolveSpawn,
   validateSpawnRow,
 } from '../acp-registry.mjs';
@@ -67,6 +68,14 @@ const FAKE_REGISTRY = Object.freeze({
     stripEnv: Object.freeze([]),
     mcpToolNaming: 'codex-mcp-title',
     sessionMode: 'workspace-write',
+  }),
+  'set-env': Object.freeze({
+    harness: 'set-env',
+    enabled: true,
+    command: process.execPath,
+    args: Object.freeze([FIXTURE]),
+    stripEnv: Object.freeze(['FAKE_SET']),
+    setEnv: Object.freeze({ FAKE_SET: 'from-row' }),
   }),
   opencode: Object.freeze({
     harness: 'opencode',
@@ -198,6 +207,19 @@ test('the shipped registry rows validate and match the enablement checklist', ()
   assert.ok(ACP_SPAWN_REGISTRY.codex.args.includes('@agentclientprotocol/codex-acp@2.1.1'));
   assert.equal(ACP_SPAWN_REGISTRY.codex.mcpToolNaming, 'codex-mcp-title');
   assert.equal(ACP_SPAWN_REGISTRY.codex.sessionMode, 'workspace-write');
+  // OpenCode: its own daemon agent ruleset, selected on every session, makes
+  // privileged tools ask the daemon whatever the machine config allows (#390).
+  assert.equal(ACP_SPAWN_REGISTRY.opencode.sessionMode, OPENCODE_DAEMON_AGENT);
+  const opencodeConfig = JSON.parse(ACP_SPAWN_REGISTRY.opencode.setEnv.OPENCODE_CONFIG_CONTENT);
+  assert.equal(opencodeConfig.default_agent, OPENCODE_DAEMON_AGENT);
+  const daemonAgent = opencodeConfig.agent[OPENCODE_DAEMON_AGENT];
+  assert.equal(daemonAgent.mode, 'primary');
+  assert.equal(Object.keys(daemonAgent.permission)[0], '*', 'the catch-all must come first so later keys refine it');
+  assert.equal(daemonAgent.permission['*'], 'ask');
+  for (const governed of ['bash', 'edit', 'webfetch', 'external_directory']) {
+    assert.equal(daemonAgent.permission[governed], undefined, `${governed} must fall to the catch-all ask`);
+  }
+  assert.equal(daemonAgent.permission.task, 'deny');
   // Muse: the co-shipped muse-acp adapter row (#145).
   assert.equal(ACP_SPAWN_REGISTRY.muse.enabled, true);
   // The claude row strips the nesting guard a Claude Code parent would leak;
@@ -216,6 +238,9 @@ test('resolveSpawn fails closed on unknown, disabled, and mis-keyed rows', () =>
   assert.equal(resolveSpawn(ACP_SPAWN_REGISTRY, 'codex').command, 'npx');
   assert.throws(() => resolveSpawn({ codex: { ...ACP_SPAWN_REGISTRY.codex, enabled: false } }, 'codex'), /not enabled/);
   assert.throws(() => validateSpawnRow({ ...FAKE_REGISTRY.claude, sessionMode: 'Full Access' }), /sessionMode/);
+  assert.throws(() => validateSpawnRow({ ...FAKE_REGISTRY.claude, setEnv: ['A=1'] }), /setEnv/);
+  assert.throws(() => validateSpawnRow({ ...FAKE_REGISTRY.claude, setEnv: { 'BAD NAME': 'x' } }), /setEnv/);
+  assert.throws(() => validateSpawnRow({ ...FAKE_REGISTRY.claude, setEnv: { OK: 7 } }), /setEnv/);
   assert.throws(() => resolveSpawn(ACP_SPAWN_REGISTRY, 'Not A Key'), /harness must be a registry key/);
   assert.throws(() => resolveSpawn({ claude: { ...FAKE_REGISTRY.claude, harness: 'opencode' } }, 'claude'), /keyed as/);
   assert.throws(() => validateSpawnRow({ ...FAKE_REGISTRY.claude, args: ['ok', 7] }), /args/);
@@ -401,6 +426,14 @@ test('a row with a sessionMode sets it on every session, new or resumed', async 
   assert.equal(JSON.parse(chunkTexts(resumed.events).at(-1)).mode, 'workspace-write');
   const plain = await turn({ message: 'env-probe', executorOptions: { harness: 'codex' } });
   assert.equal(JSON.parse(chunkTexts(plain.events)[0]).mode, null);
+});
+
+test('a row\'s setEnv wins over the inherited environment', async () => {
+  const { events } = await turn({
+    message: 'env-probe',
+    executorOptions: { harness: 'set-env', env: { ...process.env, FAKE_SET: 'inherited' } },
+  });
+  assert.equal(JSON.parse(chunkTexts(events)[0]).FAKE_SET, 'from-row');
 });
 
 test('an OpenCode MCP permission is named by its tool key; a borrowed title never is', async () => {
