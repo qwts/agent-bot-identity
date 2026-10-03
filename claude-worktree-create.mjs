@@ -217,21 +217,22 @@ async function main() {
 
   // Old checkouts stay put, including ones made before soul placement. Find
   // the branch through git rather than guessing its soul or harness directory.
-  const existing = git(['worktree', 'list', '--porcelain', '-z'], mainRepo).split('\0\0')
+  const findExisting = () => git(['worktree', 'list', '--porcelain', '-z'], mainRepo).split('\0\0')
     .map((entry) => entry.split('\0'))
     .find((fields) => fields.includes(`branch refs/heads/${branch}`))
     ?.find((field) => field.startsWith('worktree '))?.slice('worktree '.length);
-  if (existing || existsSync(legacyPath)) {
-    path = existing ?? legacyPath;
-    withCreationLock(commonDir, name, () => {
-      if (!canReuseWorktree(path, { commonDir, branch, sessionId, app: reuseApp })) {
-        throw new Error(`refusing to reuse an existing path: ${path}`);
-      }
-      // A checkout from before soul placement may carry no pin; it is reused
-      // as is. Linking is a convenience and never fails the hook.
-      let id = null;
-      try { id = git(['config', '--worktree', '--get', 'agentBot.agentId'], path); } catch { return; }
-      try {
+  // Runs under the creation lock, so a concurrent creator that made the
+  // branch first is reused instead of reported as a collision.
+  const reuse = (existingPath) => {
+    path = existingPath;
+    if (!canReuseWorktree(path, { commonDir, branch, sessionId, app: reuseApp })) {
+      throw new Error(`refusing to reuse an existing path: ${path}`);
+    }
+    // A checkout from before soul placement may carry no pin; it is reused
+    // as is. Linking is a convenience and never fails the hook.
+    let id = null;
+    try { id = git(['config', '--worktree', '--get', 'agentBot.agentId'], path); } catch { return; }
+    try {
       const soulPath = soulWorktreePath(id, name);
       const temporaryPath = resolve(process.env.TMPDIR ?? tmpdir(), 'agent-bot', id, sanitizeWorktreeName(name));
       // Git lists canonical paths. Preserve the path printed at creation when
@@ -244,12 +245,14 @@ async function main() {
         }
       }
       linkWorktree(id, path, { name });
-      } catch (error) { process.stderr.write(`worktree not linked into its soul: ${error.message}\n`); }
-    });
+    } catch (error) { process.stderr.write(`worktree not linked into its soul: ${error.message}\n`); }
+  };
+  const existing = findExisting();
+  if (existing || existsSync(legacyPath)) {
+    withCreationLock(commonDir, name, () => reuse(existing ?? legacyPath));
     process.stdout.write(`${path}\n`);
     return;
   }
-  if (refExists(mainRepo, `refs/heads/${branch}`)) throw new Error(`branch ${branch} already exists`);
 
   let currentId = process.env.AGENT_BOT_ID ?? process.env.QWTS_AGENT_ID ?? null;
   for (const key of AGENT_ID_KEYS) {
@@ -289,6 +292,8 @@ async function main() {
   }
 
   withCreationLock(commonDir, name, () => {
+    const raced = findExisting();
+    if (raced) { reuse(raced); return; }
     if (existsSync(path)) {
       if (canReuseWorktree(path, { commonDir, branch, sessionId, app: reuseApp })) return;
       throw new Error(`refusing to reuse an existing path: ${path}`);
