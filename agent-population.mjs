@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
-// Workstation-local census of Agent souls. Identity JSON remains provenance;
-// this index answers population questions without teaching every consumer to
-// scan identity records and Agent Spaces independently.
+// Account-local census of Agent souls, one per OS user (ADR-0332). Identity
+// JSON remains provenance; this index answers population questions without
+// teaching every consumer to scan identity records and Agent Spaces
+// independently.
 
 import { randomUUID } from 'node:crypto';
 import {

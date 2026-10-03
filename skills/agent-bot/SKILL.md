@@ -1,6 +1,6 @@
 ---
 name: agent-bot
-description: Bootstrap, configure, and operate per-harness GitHub App identities and authorized secure-store reads for coding agents. Use for fresh-clone requests such as "install agent bot identities," source or installed agent-bot setup and diagnosis, bot credential minting, password or API-key retrieval, identity attribution, GitHub-verified bot commits, transcript-bound Agent IDs, Agent Spaces, and the workstation-local soul population. Do not use to bind a human's own checkout to a bot on harness detection alone, broaden password-manager access, or fall back to human credentials.
+description: Bootstrap, configure, and operate per-harness GitHub App identities and authorized secure-store reads for coding agents. Use for fresh-clone requests such as "install agent bot identities," source or installed agent-bot setup and diagnosis, bot credential minting, password or API-key retrieval, identity attribution, GitHub-verified bot commits, transcript-bound Agent IDs, Agent Spaces, and the account-local soul population. Do not use to bind a human's own checkout to a bot on harness detection alone, broaden password-manager access, or fall back to human credentials.
 metadata:
   qwts-contract: "1"
   qwts-cli: "agent-bot"

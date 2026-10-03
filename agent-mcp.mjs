@@ -80,7 +80,7 @@ const TOOLS = [
   },
   {
     name: 'population',
-    description: 'List the workstation population census of agent souls.',
+    description: 'List the population census of agent souls in this account.',
     inputSchema: {
       type: 'object',
       properties: {
