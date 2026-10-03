@@ -48,6 +48,9 @@ function run(executable, args) {
 }
 
 export function dispatchAgentBot(parsed) {
+  if (parsed.command === 'soul' && parsed.args[0] === 'spawn') {
+    return run(process.execPath, [join(ROOT, 'soul-templates.mjs'), ...parsed.args.slice(1)]);
+  }
   if (parsed.command === 'hook') {
     if (!HOOK_PATTERN.test(parsed.hook)) throw new Error(`invalid hook name: ${parsed.hook}`);
     const hook = join(ROOT, 'hooks', parsed.hook);
@@ -71,6 +74,6 @@ export function dispatchAgentBot(parsed) {
   const module = MODULES.get(parsed.command);
   if (!module) throw new Error(`unsupported command: ${parsed.command}`);
   const args = parsed.command === 'soul' && parsed.args[0] === 'cold-wake' ? parsed.args.slice(1) : parsed.args;
-  if (parsed.command === 'soul' && parsed.args[0] !== 'cold-wake') throw new Error('usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-] | soul build [PATH] [--check] | soul pack validate PATH | soul revision <command> | soul dir AGENT_ID');
+  if (parsed.command === 'soul' && parsed.args[0] !== 'cold-wake') throw new Error('usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-] | soul build [PATH] [--check] | soul pack validate PATH | soul revision <command> | soul dir AGENT_ID | soul spawn TEMPLATE_PATH --name NAME [--harness H]');
   return run(process.execPath, [join(ROOT, module), ...args]);
 }
