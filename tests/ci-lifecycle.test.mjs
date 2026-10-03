@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const ci = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const codeql = readFileSync(new URL('../.github/workflows/codeql.yml', import.meta.url), 'utf8');
+const linuxBundleRelease = readFileSync(new URL('../.github/workflows/linux-bundle-release.yml', import.meta.url), 'utf8');
 
 test('lifecycle workflow has governed triggers, actor fields, and draft skipping', () => {
   assert.match(ci, /^  pull_request:\n/m);
@@ -48,7 +49,43 @@ test('the ENG-0055 skill gate checks the packaged tree in every lane', () => {
   assert.match(ci, /cli-skill-gate@[0-9a-f]{40}/);
   assert.match(ci, /git archive HEAD \| tar -x/);
   assert.match(ci, /skill-workflows\.test\.mjs/);
-  assert.match(ci, /needs: \[policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime, skill-gate\]/);
+  assert.match(ci, /needs: \[policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime, skill-gate, linux-bundle\]/);
+});
+
+// ADR-0332 decision 1 makes the headless-Linux archives a release artifact, so
+// CI builds and installs one per platform and the stable gate depends on it.
+test('the Linux bundle lane builds and installs an archive on both platforms', () => {
+  assert.match(ci, /^  linux-bundle:\n/m);
+  assert.match(ci, /runs-on: \$\{\{ matrix\.platform\.runner \}\}/);
+  assert.match(ci, /runner: ubuntu-latest\n\s+target: linux-x64/);
+  assert.match(ci, /runner: ubuntu-24\.04-arm\n\s+target: linux-arm64/);
+  assert.match(ci, /timeout-minutes: 25/);
+  // The build is a plain node invocation; the archive is what CI tests, not a
+  // hand-assembled copy of the tree.
+  assert.match(ci, /TARGET: \$\{\{ matrix\.platform\.target \}\}/);
+  assert.match(ci, /node scripts\/linux-bundle\/build\.mjs --platform "\$TARGET" --out dist/);
+  assert.doesNotMatch(ci, /matrix\.target\b/);
+  assert.match(ci, /sha256sum --check --strict SHA256SUMS/);
+  // The fake systemctl is what keeps this lane off the runner's user manager.
+  assert.match(ci, /sh scripts\/linux-bundle\/ci-smoke\.sh dist/);
+  assert.match(ci, /test "\$LINUX_BUNDLE" = success/);
+});
+
+test('the Linux bundle release is tag-driven, verified, and uploaded beside the formula tag', () => {
+  assert.match(linuxBundleRelease, /^on:\n  push:\n    tags: \['v\*'\]$/m);
+  assert.doesNotMatch(linuxBundleRelease, /^  pull_request:/m);
+  assert.doesNotMatch(linuxBundleRelease, /^  workflow_dispatch:/m);
+  assert.match(linuxBundleRelease, /timeout-minutes: 30/);
+  // A release must ship a working pair or nothing: the agent-comms pin is
+  // verified, and the tag must match the runtime it names.
+  assert.match(linuxBundleRelease, /build\.mjs --platform all --out dist --require-verified/);
+  assert.match(linuxBundleRelease, /tagged=\$\{GITHUB_REF_NAME#v\}/);
+  assert.match(linuxBundleRelease, /sh scripts\/linux-bundle\/ci-smoke\.sh dist/);
+  assert.match(linuxBundleRelease, /sha256sum --check --strict SHA256SUMS/);
+  // The archives land on the release for the tag, created if it is not there.
+  assert.match(linuxBundleRelease, /gh release create "\$tag"/);
+  assert.match(linuxBundleRelease, /gh release upload "\$tag" dist\/agent-bot-linux-\*\.tar\.gz dist\/SHA256SUMS --clobber/);
+  assert.match(linuxBundleRelease, /permissions:\n  contents: write/);
 });
 
 test('advanced CodeQL is callable only through governed CI for both languages', () => {
@@ -60,7 +97,7 @@ test('advanced CodeQL is callable only through governed CI for both languages', 
 });
 
 test('every third-party action reference is immutable', () => {
-  for (const source of [ci, codeql]) {
+  for (const source of [ci, codeql, linuxBundleRelease]) {
     for (const match of source.matchAll(/uses:\s+[^\s@]+@([^\s]+)/g)) {
       assert.match(match[1], /^[0-9a-f]{40}$/);
     }

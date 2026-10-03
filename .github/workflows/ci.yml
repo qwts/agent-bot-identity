@@ -186,9 +186,54 @@ jobs:
           bundle-args-json: '["skill", "path"]'
           test-json: '["node", "--test", "tests/skill-workflows.test.mjs"]'
 
+  linux-bundle:
+    name: Linux CLI bundle
+    # ADR-0332 decision 1: the headless-Linux archives are a release artifact
+    # per platform, so CI builds one of them here and runs its install and
+    # uninstall against a fake systemctl. The build never executes a Linux
+    # binary, so an arm64 runner and an x64 runner assemble the same way.
+    # ADR-0332's consequences require CI to build and test each of the three
+    # release artifacts, so this lane runs in every lifecycle lane, like the
+    # skill gate.
+    needs: policy
+    if: needs.policy.result == 'success'
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - runner: ubuntu-latest
+            target: linux-x64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          # The build runs the pinned agent-comms CLI to check what it dispatches,
+          # so the lane runs on the Node the archive ships, not on an older one
+          # the component's engines do not allow.
+          node-version: 24
+      - name: Build the ${{ matrix.platform.target }} archive
+        env:
+          TARGET: ${{ matrix.platform.target }}
+        run: node scripts/linux-bundle/build.mjs --platform "$TARGET" --out dist
+      - name: Verify the assembled checksum file
+        run: cd dist && sha256sum --check --strict SHA256SUMS
+      - name: Install and uninstall the archive against a fake systemctl
+        # A real user manager is never involved and no real HOME is touched:
+        # AGENT_BOT_SYSTEMCTL and AGENT_BOT_PS are injected fakes and HOME is a
+        # throwaway directory, so this lane cannot start or stop anything on the
+        # runner. On a runner that matches the target it also runs the installed
+        # wrapper, which proves it reaches the bundled runtime.
+        run: sh scripts/linux-bundle/ci-smoke.sh dist
+
   gate:
     name: CI
-    needs: [policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime, skill-gate]
+    needs: [policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime, skill-gate, linux-bundle]
     if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -201,6 +246,7 @@ jobs:
           CODEQL: ${{ needs.codeql.result }}
           WORKFLOW_RUNTIME: ${{ needs.workflow-runtime.result }}
           SKILL_GATE: ${{ needs.skill-gate.result }}
+          LINUX_BUNDLE: ${{ needs.linux-bundle.result }}
           PREFLIGHT: ${{ needs.preflight-evidence.result }}
           PREFLIGHT_VALIDATED: ${{ needs.preflight-evidence.outputs.validated }}
           MERGE_VALIDATED: ${{ needs.merge-evidence.outputs.validated }}
@@ -208,6 +254,7 @@ jobs:
           test "$POLICY" = success
           test "$WORKFLOW_RUNTIME" = success
           test "$SKILL_GATE" = success
+          test "$LINUX_BUNDLE" = success
           case "$MODE" in
             full)
               if [ "$PREFLIGHT_VALIDATED" = true ]; then

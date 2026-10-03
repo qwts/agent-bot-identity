@@ -19,6 +19,8 @@
     "doctor": "node doctor.mjs",
     "install-hooks": "node install.mjs",
     "install-gh-shim": "node install-gh-shim.mjs",
-    "agent:identity": "node agent-bot.mjs identity"
+    "agent:identity": "node agent-bot.mjs identity",
+    "bundle:linux": "node scripts/linux-bundle/build.mjs --platform all --out dist",
+    "bundle:linux:smoke": "sh scripts/linux-bundle/ci-smoke.sh dist"
   }
 }

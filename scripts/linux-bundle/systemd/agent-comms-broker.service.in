@@ -1,0 +1,30 @@
+# agent-comms' broker unit for the headless-Linux bundle (ADR-0332 decision 2).
+# install.sh substitutes the placeholders below with this install's bundled
+# Node, agent-comms entry point, tool path and bundle root.
+#
+# The broker is the other half of the pair. Exactly one runs per OS user, and
+# install.sh refuses to start a second beside another install's.
+#
+# The arguments are agent-comms' own (lib/platform/service-startup.mjs,
+# single-account mode): `broker run --single-account`. The entry is the pinned
+# file rather than the bundle's launcher, so systemd execs the bundled Node
+# directly and no shell sits between the manager and the broker.
+[Unit]
+Description=agent-comms broker (agent-bot Linux bundle)
+Documentation=https://github.com/qwts/agent-bot-identity
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=@AGENT_BOT_NODE@ @AGENT_BOT_COMMS_ENTRY@ broker run --single-account
+Environment=AGENT_BOT_NODE=@AGENT_BOT_NODE@
+Environment=AGENT_BOT_TOOL_PATH=@AGENT_BOT_TOOL_PATH@
+Environment=AGENT_BOT_BUNDLE_ROOT=@AGENT_BOT_BUNDLE_ROOT@
+Environment=PATH=@AGENT_BOT_BIN@:/usr/local/bin:/usr/bin:/bin
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
