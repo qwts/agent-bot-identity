@@ -64,7 +64,7 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
       if (wake.lane !== 'webhook' && !identity?.harness) throw new Error('soul harness identity is unavailable');
     } catch (error) {
       land();
-      receipt({ event: 'cold-wake', agentId, decision: 'failed' });
+      receipt({ event: 'cold-wake', agentId, decision: 'failed', detail: error?.message || 'cold wake failed' });
       return { outcome: 'failed', detail: error?.message || 'cold wake failed' };
     }
     if (wake.lane === 'webhook') {
@@ -75,7 +75,7 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
         receipt({ event: 'cold-wake', agentId, decision: 'webhook' });
         return { outcome: 'cold', detail: 'webhook accepted' };
       } catch (error) {
-        receipt({ event: 'cold-wake', agentId, decision: 'failed' });
+        receipt({ event: 'cold-wake', agentId, decision: 'failed', detail: error?.message || 'webhook wake failed' });
         return { outcome: 'failed', detail: error?.message || 'webhook wake failed' };
       } finally {
         land();
@@ -133,12 +133,14 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
     } catch {
       // A launch that throws started no turn, so the wake is not `cold`.
       land();
-      receipt({ event: 'cold-wake', agentId, decision: 'failed' });
+      receipt({ event: 'cold-wake', agentId, decision: 'failed', detail: 'cold wake turn could not start' });
       return { outcome: 'failed', detail: 'cold wake turn could not start' };
     }
     turn.then(
       () => receipt({ event: 'cold-wake', agentId, decision: 'finished' }),
-      () => receipt({ event: 'cold-wake', agentId, decision: 'failed' }),
+      // A turn's own error can quote the model or a message, so its receipt
+      // says only that the turn failed.
+      () => receipt({ event: 'cold-wake', agentId, decision: 'failed', detail: 'cold wake turn failed' }),
     ).finally(land);
     receipt({ event: 'cold-wake', agentId, decision: 'started' });
     return { outcome: 'cold', detail: 'turn started' };

@@ -253,6 +253,7 @@ Installation provides one executable at `~/.local/bin/agent-bot`:
 agent-bot bootstrap [--profile <path|->] [--config <path>] [--app <slug>] [--scope-app <slug>] [--with-gh-shim] [--json]
 agent-bot --version
 agent-bot setup-worktree [app-slug]
+agent-bot join --name NAME --harness H [--template PATH] [--soul AGENT_ID] [--json]
 agent-bot mint-token --app <slug> [--json]
 agent-bot doctor [--machine-only] [--app <slug>] [--json]
 agent-bot identity <ensure|spawn|bind|record|finalize|show|current>
@@ -297,6 +298,16 @@ a same-filesystem rename is atomic; a cross-filesystem copy is staged in
 `home.migrating` and promoted before the legacy copy is removed. Interrupted
 copies restart on the next launch, and completed migrations are not repeated.
 The daemon replaces the legacy home binding after migration.
+
+### Joining without a GitHub App
+
+An agent nobody launched joins with
+`agent-bot join --name NAME --harness HARNESS`. It needs no GitHub App. It
+reuses or creates the soul, pins the current checkout (or the soul's own
+`worktrees/workspace` outside one) so a plain `agent-comms` resolves it,
+records that checkout for resume and webhook wakes, mints a bind token for
+the MCP `bind` tool, and runs `agent-comms join`. A soul with no recorded
+checkout is woken in its soul directory. See [joining](docs/joining.md).
 
 `.soul-state/space` links to the existing Agent Space; the space stays at its
 ENG-0172 location. Moving a registered directory within the souls root is

@@ -122,24 +122,43 @@ export function joinLaunchedSoul({ agentId, harness, name, binding }, { env = pr
 }
 
 /**
- * A soul an interactive session set up with `setup-worktree` has no daemon
- * binding: its worktree's git config pins the identity instead. The
- * population still records that worktree, so a resume wake (#323) can run
- * there. Resolves { agentId, worktree, file: null }, or null when the soul
- * is not active, its worktree is gone, or the worktree is not pinned to it.
+ * A soul an interactive session set up with `setup-worktree` or `agent-bot
+ * join` has no daemon binding: its worktree's git config pins the identity
+ * instead. The population still records that worktree, so a resume or
+ * webhook wake (#323, #334) can run there. A soul with no usable recorded
+ * worktree — one made by `soul spawn` and never joined from a checkout —
+ * falls back to its own soul directory, which its `.soul-state/agent-id`
+ * marker proves is this soul's (#382). Resolves { agentId, worktree,
+ * file: null }, or null when the soul is not active or neither place is
+ * provably this soul's.
  */
 export function recordedWorktree(agentId, { env = process.env, home = homedir() } = {}) {
   let soul;
-  try { soul = listSouls({ status: 'active', file: populationFile({ env, home }) }).find((record) => record.id === agentId); }
+  const file = populationFile({ env, home });
+  try { soul = listSouls({ status: 'active', file }).find((record) => record.id === agentId); }
   catch { return null; }
-  const worktree = typeof soul?.worktree === 'string' && path.isAbsolute(soul.worktree) ? soul.worktree : null;
-  if (!worktree) return null;
-  try { if (!statSync(worktree).isDirectory()) return null; } catch { return null; }
-  // A stale record or a repinned checkout must not run a wake as the wrong
-  // soul: the worktree's own pin has to name this soul.
-  let pinned = null;
-  try { pinned = execFileSync('git', ['-C', worktree, 'config', '--get', 'agentBot.agentId'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }).trim(); } catch { return null; }
-  return pinned === agentId ? { agentId, worktree, file: null } : null;
+  if (!soul) return null;
+  const worktree = typeof soul.worktree === 'string' && path.isAbsolute(soul.worktree) ? soul.worktree : null;
+  if (worktree && pinnedTo(worktree, agentId)) return { agentId, worktree, file: null };
+  let directory = null;
+  try { directory = soulDirectory(agentId, { env, home, file }); } catch { return null; }
+  try {
+    if (statSync(directory).isDirectory()
+        && readFileSync(path.join(directory, '.soul-state', 'agent-id'), 'utf8').trim() === agentId) {
+      return { agentId, worktree: directory, file: null };
+    }
+  } catch { /* no soul directory, or not this soul's */ }
+  return null;
+}
+
+// A stale record or a repinned checkout must not run a wake as the wrong
+// soul: the worktree's own pin has to name this soul.
+function pinnedTo(worktree, agentId) {
+  try { if (!statSync(worktree).isDirectory()) return false; } catch { return false; }
+  try {
+    return execFileSync('git', ['-C', worktree, 'config', '--get', 'agentBot.agentId'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }).trim() === agentId;
+  } catch { return false; }
 }
 
 const SCHEMA_VERSION = 1;
@@ -1240,7 +1259,7 @@ export async function runDaemon({
     relay,
     taskReporter,
     // Receipts carry a soul and a decision, never message IDs or content.
-    receipt: ({ event, agentId, decision, outcome }) => appendAuditReceipt({ event, agentId, decision: decision ?? outcome }, { env, home, now }),
+    receipt: ({ event, agentId, decision, outcome, detail = null }) => appendAuditReceipt({ event, agentId, decision: decision ?? outcome, detail }, { env, home, now }),
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);

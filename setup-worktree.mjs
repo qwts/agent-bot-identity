@@ -348,7 +348,15 @@ export async function main({
   }
   const previousSlug = pinnedSlug();
   const resolvedSlug = resolveAgentSlug({ explicit: process.argv[2], config, detect: false });
-  if (!resolvedSlug) return; // no bot identity stated for this checkout — human persona, nothing to do
+  if (!resolvedSlug) {
+    // No bot identity stated for this checkout — human persona, nothing to
+    // do. Run by name (not from a git hook), say so: an agent without a
+    // GitHub App joins with `agent-bot join` instead (#382).
+    if (process.env.AGENT_BOT_SETUP_HINT === '1') {
+      process.stderr.write('setup-worktree: no GitHub App is stated for this checkout, so nothing was configured. An agent without an App joins with: agent-bot join --name NAME --harness HARNESS\n');
+    }
+    return;
+  }
   const slug = validateAppSlug(resolvedSlug);
   if (previousSlug && previousSlug !== slug) {
     const layout = territoryHarness();

@@ -298,6 +298,32 @@ test('a soul bound by its own session resolves to its recorded worktree, without
   assert.equal(recordedWorktree('agent_62662662-6266-4266-8266-626626626626', options), null);
 }));
 
+test('a soul with no usable recorded worktree falls back to its own soul directory, proven by its marker (#382)', () => withState(async ({ root, env }) => {
+  const { recordedWorktree } = await import('../agent-daemon.mjs');
+  const { writeFileSync, mkdirSync } = await import('node:fs');
+  const SPAWNED = 'agent_92992992-9299-4299-8299-929929929929';
+  const FOREIGN = 'agent_a2aa2aa2-a2aa-42aa-82aa-a2aaa2aaa2aa';
+  const souls = path.join(root, 'souls');
+  const dir = (name, owner) => {
+    const directory = path.join(souls, `${name}.soul`);
+    mkdirSync(path.join(directory, '.soul-state'), { recursive: true });
+    writeFileSync(path.join(directory, '.soul-state', 'agent-id'), `${owner}\n`);
+    return directory;
+  };
+  const record = (id, soulDir, worktree = null) => ({ id, status: 'active', spacePath: path.join(root, 'space', id), soulDir, worktree, worktrees: worktree ? [worktree] : [], lastSeen: '2026-10-02T00:00:00.000Z' });
+  const spawned = dir('Dudles - Starter', SPAWNED);
+  const file = path.join(root, 'population.json');
+  writeFileSync(file, JSON.stringify({ schemaVersion: 1, souls: {
+    // Spawned from a template and never joined from a checkout.
+    [SPAWNED]: record(SPAWNED, spawned),
+    // Its recorded directory is marked as another soul's.
+    [FOREIGN]: record(FOREIGN, dir('Taken', SPAWNED)),
+  } }));
+  const options = { env: { ...env, AGENT_BOT_POPULATION_PATH: file, AGENT_BOT_SOULS_HOME: souls }, home: root };
+  assert.deepEqual(recordedWorktree(SPAWNED, options), { agentId: SPAWNED, worktree: spawned, file: null });
+  assert.equal(recordedWorktree(FOREIGN, options), null);
+}));
+
 test('only the resume lane runs without a binding file, and then presents none', async () => {
   const seen = [];
   const make = (setting) => createColdWaker({
