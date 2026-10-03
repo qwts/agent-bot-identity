@@ -1,0 +1,9 @@
+#!/bin/sh
+# Record this harness session for the worktree's soul, so the optional
+# read-only metrics collector can bind its session log by recorded session,
+# never by name or path (qwts/agent-comms#86, ADR-0007 decision 5).
+# Silent, and never fails the session.
+
+command -v agent-bot >/dev/null 2>&1 || exit 0
+agent-bot metrics record-session >/dev/null 2>&1
+exit 0
