@@ -348,7 +348,11 @@ export function createContractExecutor({ harness, identity, policy, run } = {}) 
     // policy refused, #408); a watcher that throws never changes one.
     const observe = (toolName, decision) => {
       if (typeof onPermission === 'function') {
-        try { onPermission({ toolName, ...decision }); } catch { /* observation only */ }
+        try {
+          const watched = onPermission({ toolName, ...decision });
+          // An async watcher's rejection is observation too, never unhandled.
+          if (typeof watched?.then === 'function') watched.then(undefined, () => {});
+        } catch { /* observation only */ }
       }
       return decision;
     };

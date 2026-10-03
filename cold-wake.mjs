@@ -27,7 +27,7 @@ import { randomUUID } from 'node:crypto';
 
 import { wakeSetting } from './cold-wake-settings.mjs';
 import { FINAL_REPLY_ERRORS, senderAddress } from './comms-relay.mjs';
-import { NO_REPLY, formatThread, recordThreadMessage, sentSince, stripNoReply, threadContext, threadKey } from './soul-threads.mjs';
+import { NO_REPLY, formatThread, recordThreadMessage, sentMarks, sentSince, stripNoReply, threadContext, threadKey } from './soul-threads.mjs';
 
 // The final answer a soul gives when a teammate's message needs no answer
 // back. Every relayed turn's answer is otherwise a reply, so two souls would
@@ -38,7 +38,7 @@ export function relayPrompt(message, thread = []) {
   const fromSoul = typeof message.from?.principal !== 'string';
   const sender = senderAddress(message.from);
   return `You have an agent-comms message from ${sender}${fromSoul ? ', another agent' : ''}. Your final answer is sent back to them as your reply, so write it as the reply itself, not notes on what you did; you do not need to run agent-comms.`
-    + (fromSoul ? ` If it needs no answer (a thanks, or a result you only had to receive), make your final answer exactly ${NO_REPLY} and nothing is sent. Use send_message to tell anyone else, such as the person who asked you for this work, what came of it. If you use send_message in this turn, your final answer is not sent at all, so send ${sender} anything they need to hear with send_message too. Send results, questions and blockers; skip thanks, acknowledgements and progress notes, since each message wakes its reader.` : '')
+    + (fromSoul ? ` If it needs no answer (a thanks, or a result you only had to receive), make your final answer exactly ${NO_REPLY} and nothing is sent. Use send_message to tell anyone else, such as the person who asked you for this work, what came of it. If you use send_message in this turn, your final answer is not sent at all, so send ${sender} anything they need to hear with send_message too. A start_soul brief does not count: after one, your final answer is still sent. Send results, questions and blockers; skip thanks, acknowledgements and progress notes, since each message wakes its reader.` : '')
     + (thread.length > 0 ? ' This session does not remember earlier turns, so the conversation so far is below. If this message answers something you asked for on someone else\'s behalf, pass the result on to them with send_message.' : '')
     + `\n\n${formatThread(thread)}${thread.length > 0 ? 'The new message:\n\n' : ''}${message.body}`;
 }
@@ -161,12 +161,16 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
           recordInbound(agentId, message, threads);
           const correlation = threadKey(message);
           const turn = correlation ? { ...invocation, correlation } : invocation;
-          const since = (typeof threads.now === 'function' ? threads.now() : new Date()).toISOString();
+          const before = sentMarks(agentId, { correlation }, threads);
           const result = await executor({ invocation: turn, message: relayPrompt(message, thread), attachments: [], env, wake });
           const to = senderAddress(message.from);
-          const own = sentSince(agentId, { since, correlation }, threads);
+          const own = sentSince(agentId, { before, correlation }, threads);
           const fromSoul = typeof message.from?.principal !== 'string';
-          const spoke = fromSoul ? own.length > 0 : own.some((entry) => sameAddress(entry.to, to));
+          // A start_soul brief briefs the teammate, not the requester, so
+          // only a send_message (or a brief to the requester) holds back the
+          // final answer to another soul.
+          const spoke = own.some((entry) => sameAddress(entry.to, to))
+            || (fromSoul && own.some((entry) => entry.kind !== 'brief'));
           const said = typeof result?.reply === 'string' ? result.reply.trim() : '';
           const body = spoke ? '' : (stripNoReply(result?.reply) || (said === '' ? deniedNotice(result?.denied) : null));
           if (body) {

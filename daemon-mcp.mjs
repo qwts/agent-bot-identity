@@ -580,7 +580,7 @@ async function callTool(state, name, args = {}) {
         try {
           const correlation = turnCorrelation(state);
           const sent = await asSoul(state)(soul, ['send', started.agentId, '--body', brief, ...(correlation ? ['--correlation', correlation] : [])]);
-          recordSent(state, soul, { id: sent.messageId, to: started.agentId, replyTo: null, correlation, body: brief });
+          recordSent(state, soul, { id: sent.messageId, to: started.agentId, replyTo: null, correlation, kind: 'brief', body: brief });
           result.brief = { sent: true, messageId: sent.messageId ?? null };
         } catch (error) {
           result.brief = { sent: false, error: error.message };

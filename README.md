@@ -696,8 +696,9 @@ wakes Bill with Starter's request in view, and Bill sends the list on.
 
 A relayed turn's final text goes back only when the turn did not already
 speak for itself (#407). A turn woken by another soul that used
-`send_message` or a `start_soul` brief sends no final text at all, so its
-narration ("Message sent to Ted…") never reaches anyone; a person still gets
+`send_message` sends no final text at all, so its narration ("Message sent
+to Ted…") never reaches anyone. A `start_soul` brief to a teammate does not
+hold the answer back, and a person still gets
 the final text unless the turn already messaged them. A comms turn has no
 interaction-store invocation, so its reach server leaves out
 `fetch_context`, `post_reply` and `report_status`; the prompt already holds

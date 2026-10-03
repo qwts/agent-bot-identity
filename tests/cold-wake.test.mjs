@@ -342,6 +342,23 @@ test('sends outside the turn\'s thread do not hold back its reply', async () => 
   assert.deepEqual(relay.sent.map((m) => m.body), ['4']);
 });
 
+// A start_soul brief briefs the teammate; the soul that asked still gets the
+// final answer (#407 review).
+test('a start_soul brief to a teammate does not hold back the reply', async () => {
+  const starter = { account: 'acct', agentId: 'agent_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' };
+  const relay = oneShotRelay([{ id: 'n407e', from: starter, body: 'Start a scout and tell me its name.' }]);
+  const prompts = [];
+  const wake = relayWaker(relay, async ({ message, invocation }) => {
+    prompts.push(message);
+    recordThreadMessage(id, { dir: 'out', id: 's-brief', to: 'agent_eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', correlation: invocation.correlation, kind: 'brief', body: 'Scout the repo.' });
+    return { reply: 'Started Scout.' };
+  });
+  await wake({ agentId: id, count: 1, messageIds: ['n407e'] });
+  await wake.idle();
+  assert.match(prompts[0], /A start_soul brief does not count/);
+  assert.deepEqual(relay.sent.map((m) => m.body), ['Started Scout.']);
+});
+
 // A person still gets the final text after the turn messaged someone else,
 // but not a second copy of an answer the turn already sent them.
 test('a person gets the final text unless the turn already messaged them', async () => {

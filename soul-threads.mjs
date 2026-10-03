@@ -85,6 +85,7 @@ export function recordThreadMessage(agentId, entry, {
       to: stringOrNull(entry.to),
       replyTo: stringOrNull(entry.replyTo),
       correlation: stringOrNull(entry.correlation),
+      ...(entry.kind === 'brief' ? { kind: 'brief' } : {}),
       body: clip(entry.body, ENTRY_BODY_LIMIT),
     });
     // The daemon and each turn's reach server write the same journal, so the
@@ -160,14 +161,30 @@ export function threadContext(agentId, message, {
   return thread;
 }
 
-// The messages the soul sent itself (send_message, a start_soul brief) since
-// `since` (an ISO time) under `correlation`: what a relayed turn already said
-// on its own, so the waker does not send its final text as well (#407).
-export function sentSince(agentId, { since, correlation = null } = {}, { env = process.env, home = homedir() } = {}) {
-  if (typeof since !== 'string' || since === '') return [];
+// A mark for each message the soul has sent under `correlation`: taken
+// before a relayed turn, so `sentSince` can tell that turn's own sends from
+// earlier ones even within the same millisecond (#407).
+export function sentMarks(agentId, { correlation = null } = {}, { env = process.env, home = homedir() } = {}) {
+  return new Set(readJournal(agentId, { env, home })
+    .filter((entry) => entry.dir === 'out' && (correlation === null || entry.correlation === correlation))
+    .map(sentMark));
+}
+
+// The messages the soul sent itself (send_message, a start_soul brief) under
+// `correlation` that are not in `before` (from `sentMarks`): what a relayed
+// turn already said on its own, so the waker does not send its final text as
+// well (#407).
+export function sentSince(agentId, { before, correlation = null } = {}, { env = process.env, home = homedir() } = {}) {
+  if (!(before instanceof Set)) return [];
   return readJournal(agentId, { env, home }).filter((entry) => entry.dir === 'out'
-    && typeof entry.at === 'string' && entry.at >= since
-    && (correlation === null || entry.correlation === correlation));
+    && (correlation === null || entry.correlation === correlation)
+    && !before.has(sentMark(entry)));
+}
+
+function sentMark(entry) {
+  return typeof entry.id === 'string' && entry.id !== ''
+    ? `id:${entry.id}`
+    : `at:${entry.at}|${entry.to}|${entry.body}`;
 }
 
 // The thread as prompt text. Every line is quoted message data.

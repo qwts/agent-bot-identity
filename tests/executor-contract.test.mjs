@@ -512,4 +512,16 @@ test('onPermission observes each decision without changing it', async () => {
   ]);
   const unharmed = await executor(port(() => { throw new Error('watcher broke'); }));
   assert.deepEqual(unharmed, decisions);
+  // An async watcher that rejects is observation too: no unhandled rejection.
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    const asyncUnharmed = await executor(port(async () => { throw new Error('async watcher broke'); }));
+    assert.deepEqual(asyncUnharmed, decisions);
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+  assert.deepEqual(unhandled, []);
 });
