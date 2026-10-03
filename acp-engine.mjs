@@ -211,10 +211,10 @@ export function boundAcpUpdate(update) {
 // generic fallback, and anything unusable becomes 'other' (which a policy can
 // still target — and the contract denies malformed names regardless). The
 // call's title is never used: for a shell call it is the model's command.
-export function permissionToolName(toolCall, announced = null, { naming = null, serverNames = [] } = {}) {
+export function permissionToolName(toolCall, announced = null, { naming = null, serverNames = [], requestMeta = null } = {}) {
   const meta = toolCall?._meta ?? toolCall?.meta ?? {};
   const record = typeof announced === 'string' ? { name: announced } : announced;
-  const mcp = mcpPermissionName(naming, toolCall, record, serverNames);
+  const mcp = mcpPermissionName(naming, toolCall, record, serverNames, requestMeta);
   for (const candidate of [meta.toolName, meta['claudecode/toolName'], meta.claudeCode?.toolName, record?.name, mcp, toolCall?.kind]) {
     if (typeof candidate === 'string' && candidate.length > 0 && !/\s/.test(candidate)) {
       return candidate.slice(0, 200);
@@ -244,10 +244,11 @@ export function recordAnnouncement(previous, update) {
       kind: typeof update.kind === 'string' ? update.kind : null,
       title: typeof update.title === 'string' ? update.title : null,
       invocation,
+      mcpCall: update._meta?.is_mcp_tool_call === true,
     };
   }
   if (name === null) return previous ?? null;
-  return { kind: null, title: null, invocation: null, ...previous, name };
+  return { kind: null, title: null, invocation: null, mcpCall: false, ...previous, name };
 }
 
 // The canonical `mcp__<server>__<tool>` for a permission request, when the
@@ -258,11 +259,15 @@ export function recordAnnouncement(previous, update) {
 //   - codex-invocation: the announced rawInput {server, tool} (Codex's own
 //     routing), its matching `Tool: <server>/<tool>` title, and the approval
 //     request's `server_name` must all agree.
+//   - codex-mcp-title: the announced rawInput {server, tool}, its matching
+//     `mcp.<server>.<tool>` title and `_meta.is_mcp_tool_call`, all from
+//     codex-acp 2.x's MCP reporter, plus the approval request's own
+//     `_meta.is_mcp_tool_approval`, set only for Codex's MCP tool approvals.
 //   - opencode-key: the request and its announcement both carry kind 'other'
 //     and the same title `<server>_<tool>`. A built-in tool's title is its
 //     own name; external_directory's model-chosen title rides on a call
 //     announced as execute/read, so it never pairs.
-export function mcpPermissionName(naming, toolCall, announced, serverNames = []) {
+export function mcpPermissionName(naming, toolCall, announced, serverNames = [], requestMeta = null) {
   if (!announced || typeof announced !== 'object') return null;
   const servers = serverNames.filter((name) => typeof name === 'string' && MCP_NAME_PART.test(name));
   const canonical = (server, tool) => (servers.includes(server) && MCP_NAME_PART.test(tool)
@@ -271,6 +276,13 @@ export function mcpPermissionName(naming, toolCall, announced, serverNames = [])
     const invocation = announced.invocation;
     if (!invocation || announced.title !== `Tool: ${invocation.server}/${invocation.tool}`) return null;
     if (toolCall?.rawInput?.server_name !== invocation.server) return null;
+    return canonical(invocation.server, invocation.tool);
+  }
+  if (naming === 'codex-mcp-title') {
+    const invocation = announced.invocation;
+    if (!invocation || announced.mcpCall !== true || announced.kind !== 'execute') return null;
+    if (announced.title !== `mcp.${invocation.server}.${invocation.tool}`) return null;
+    if (requestMeta?.is_mcp_tool_approval !== true || toolCall?.kind !== 'execute') return null;
     return canonical(invocation.server, invocation.tool);
   }
   if (naming === 'opencode-key') {
@@ -458,7 +470,7 @@ export function createAcpExecutor({
           if (signal.aborted) return { outcome: { outcome: 'cancelled' } };
           const toolCall = params.toolCall ?? {};
           const toolName = permissionToolName(toolCall, announcedTools.get(toolCall.toolCallId) ?? null,
-            { naming: row.mcpToolNaming ?? null, serverNames });
+            { naming: row.mcpToolNaming ?? null, serverNames, requestMeta: params._meta ?? null });
           // A request the adapter gave no verifiable name is decided by its ACP
           // kind; say so, so a denied reach call is explainable from the log.
           if (toolName === 'other' || toolName === toolCall.kind) {
@@ -517,6 +529,12 @@ export function createAcpExecutor({
         }
         sessionId = created.sessionId;
         bindHarnessSession({ mode: 'new', harnessSessionId: sessionId });
+      }
+      // A row whose adapter defaults to approving calls itself names the ACP
+      // session mode that routes approvals to this client (#384), so the
+      // daemon policy stays the authority on every turn, resumed or new.
+      if (row.sessionMode) {
+        await rpc.request('session/set_mode', { sessionId, modeId: row.sessionMode });
       }
 
       const result = await rpc.request('session/prompt', {

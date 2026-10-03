@@ -43,16 +43,22 @@ export const HARNESS_KEY_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 // shape, recorded against the adapter source pinned in the row's notes:
 //   - claude-meta      — claude-code-acp: the tool_call update carries the
 //                        name in `_meta.claudeCode.toolName`.
-//   - codex-invocation — codex-acp: the tool_call update's rawInput is Codex's
+//   - codex-invocation — @zed-industries/codex-acp 0.x (deprecated): the
+//                        tool_call update's rawInput is Codex's
 //                        McpInvocation `{ server, tool, arguments }` and its
 //                        title is `Tool: <server>/<tool>`; the approval request
 //                        reuses that toolCallId and carries `server_name`.
+//   - codex-mcp-title  — @agentclientprotocol/codex-acp 2.x: the tool_call is
+//                        kind 'execute', titled `mcp.<server>.<tool>`, with
+//                        rawInput `{ server, tool, arguments }` and
+//                        `_meta.is_mcp_tool_call`; the approval request reuses
+//                        that toolCallId and carries `_meta.is_mcp_tool_approval`.
 //   - opencode-key     — `opencode acp`: an MCP tool's key is
 //                        `<server>_<tool>`; it is the title (kind 'other') of
 //                        both the tool_call and the permission request.
 // A row without one gets no MCP naming: its permission requests are named by
 // their ACP kind only, which the reach allow rules never match.
-export const MCP_TOOL_NAMINGS = Object.freeze(['claude-meta', 'codex-invocation', 'opencode-key']);
+export const MCP_TOOL_NAMINGS = Object.freeze(['claude-meta', 'codex-invocation', 'codex-mcp-title', 'opencode-key']);
 
 const MUSE_ACP_PATH = fileURLToPath(new URL('./muse-acp.mjs', import.meta.url));
 
@@ -95,15 +101,19 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
   }),
   codex: Object.freeze({
     harness: 'codex',
-    enabled: false,
+    enabled: true,
     command: 'npx',
-    args: Object.freeze(['--yes', '-p', '@zed-industries/codex-acp', 'codex-acp']),
+    args: Object.freeze(['--yes', '-p', '@agentclientprotocol/codex-acp@2.1.1', 'codex-acp']),
     soulBin: 'codex-acp',
     stripEnv: Object.freeze([]),
     store: '~/.codex',
-    mcpToolNaming: 'codex-invocation',
+    mcpToolNaming: 'codex-mcp-title',
+    // The adapter's default mode ("agent") lets Codex's own reviewer approve
+    // calls, so the daemon policy would never be asked; workspace-write routes
+    // every approval, MCP tools included, to this client.
+    sessionMode: 'workspace-write',
     auth: 'existing `codex` login (shared credential store)',
-    notes: 'decided: third-party ACP adapter lane; disabled until the spawn (and exact package pin) is verified — first-party app-server attach stays #148; MCP naming verified against codex-acp v0.16.0 / codex rust-v0.137.0 source (#384)',
+    notes: 'third-party ACP adapter lane, pinned to @agentclientprotocol/codex-acp 2.1.1 (the @zed-industries package is deprecated): spawn, injected agent-reach MCP and default-deny reach rules verified live (#384); first-party app-server attach stays #148',
   }),
 });
 
@@ -130,6 +140,9 @@ export function validateSpawnRow(row) {
   }
   if (row.soulBin !== undefined && (typeof row.soulBin !== 'string' || !/^[a-z0-9][a-z0-9._-]*$/.test(row.soulBin))) {
     failRegistry(`${row.harness}: soulBin must be an npm binary name`);
+  }
+  if (row.sessionMode !== undefined && (typeof row.sessionMode !== 'string' || !/^[a-z0-9][a-z0-9_-]*$/.test(row.sessionMode))) {
+    failRegistry(`${row.harness}: sessionMode must be an ACP session mode id`);
   }
   if (row.mcpToolNaming !== undefined && !MCP_TOOL_NAMINGS.includes(row.mcpToolNaming)) {
     failRegistry(`${row.harness}: mcpToolNaming must be one of ${MCP_TOOL_NAMINGS.join(', ')}`);
