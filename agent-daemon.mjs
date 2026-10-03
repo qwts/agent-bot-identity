@@ -81,7 +81,7 @@ import { attachWakeEndpoint } from './agent-wake.mjs';
 import { readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
-import { createTeamStarter, defaultTeamTemplate, harnessLaunchable, teamLimits } from './team-start.mjs';
+import { createTeamStarter, defaultTeamTemplate, harnessLaunchProblem, teamLimits } from './team-start.mjs';
 import { createSoulHomes, installHarnesses, soulBindingForLaunch } from './soul-home.mjs';
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
@@ -98,10 +98,45 @@ import { migratePreGateConfig } from './config-migration.mjs';
  * What a soul's harness inherits: the daemon's environment with the host's
  * tools (AGENT_BOT_TOOL_PATH, such as GeniusBar's agent-comms) first on
  * PATH, so a soul on a machine without them installed can still use them.
+ * With `home`, the user's own tool directories follow (#418): a launchd
+ * daemon gets a bare PATH, while harness CLIs such as `opencode` live where
+ * the login shell (`loginPath`) or an installer put them.
  */
-export function soulEnvironment(env = process.env) {
+export function soulEnvironment(env = process.env, { home = null, loginPath = null } = {}) {
   const tools = env.AGENT_BOT_TOOL_PATH && path.isAbsolute(env.AGENT_BOT_TOOL_PATH) ? env.AGENT_BOT_TOOL_PATH : null;
-  return tools ? { ...env, PATH: [tools, env.PATH].filter(Boolean).join(path.delimiter) } : env;
+  if (!home) return tools ? { ...env, PATH: [tools, env.PATH].filter(Boolean).join(path.delimiter) } : env;
+  const dirs = [tools, ...(env.PATH ?? '').split(path.delimiter), ...(loginPath ?? '').split(path.delimiter),
+    ...userToolDirs(home)].filter((dir) => dir && path.isAbsolute(dir));
+  return { ...env, PATH: [...new Set(dirs)].join(path.delimiter) };
+}
+
+/** Where harness installers put their CLIs, after the login shell's PATH. */
+export function userToolDirs(home) {
+  return [path.join(home, '.local', 'bin'), path.join(home, '.opencode', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'];
+}
+
+const LOGIN_PATH_MARK = '__agent_bot_login_path__';
+
+/**
+ * The PATH the user's login shell builds (its .zshenv and .zprofile), read
+ * once when the daemon starts, or null when it cannot be read within the
+ * timeout. AGENT_BOT_LOGIN_PATH=0 skips it.
+ */
+export function loginShellPath({ env = process.env, home = homedir(), run = execFileSync, timeoutMs = 3000 } = {}) {
+  if (env.AGENT_BOT_LOGIN_PATH === '0') return null;
+  const shell = env.SHELL && path.isAbsolute(env.SHELL) && ['zsh', 'bash', 'sh'].includes(path.basename(env.SHELL))
+    ? env.SHELL : '/bin/zsh';
+  try {
+    const out = String(run(shell, ['-lc', `printf '%s%s' '${LOGIN_PATH_MARK}' "$PATH"`], {
+      env: { HOME: home, USER: env.USER ?? '', LOGNAME: env.LOGNAME ?? env.USER ?? '', SHELL: shell,
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin', ...(env.ZDOTDIR ? { ZDOTDIR: env.ZDOTDIR } : {}), TERM: 'dumb' },
+      stdio: ['ignore', 'pipe', 'ignore'], timeout: timeoutMs, encoding: 'utf8',
+    }));
+    const at = out.lastIndexOf(LOGIN_PATH_MARK);
+    if (at < 0) return null;
+    const found = out.slice(at + LOGIN_PATH_MARK.length).trim().split(path.delimiter).filter((dir) => path.isAbsolute(dir));
+    return found.length ? found.join(path.delimiter) : null;
+  } catch { return null; }
 }
 
 /**
@@ -1288,6 +1323,9 @@ export async function runDaemon({
   // becomes failed with its own stable reason, and pending cancellations
   // become cancelled — nothing is silently stranded.
   recoverInteractionStore({ env, home, now });
+  // Harness CLIs resolve the same way for every soul turn, launch check and
+  // relay (#418).
+  const harnessEnv = soulEnvironment(env, { home, loginPath: loginShellPath({ env, home }) });
   // The ACP executor is off unless the user config turns it on (#259):
   // `"executor": { "enabled": true, "policy": { ... } }`. Without it /v1
   // keeps its unconfigured error and cold wake reports `waiting`.
@@ -1298,7 +1336,7 @@ export async function runDaemon({
     ? acpExecutorFor({
       identities,
       policy: setup?.policy ?? { version: 1, rules: [], fallback: 'deny' },
-      baseEnv: soulEnvironment(env),
+      baseEnv: harnessEnv,
       // A daemon-run soul's home is not a git worktree, so the session-start
       // hook cannot place its Claude session; the turn's binding does.
       onHarnessSession: ({ agentId, harness, harnessSessionId }) => recordSoulSession({ agentId, provider: harness, sessionId: harnessSessionId, env, home, now }),
@@ -1306,7 +1344,7 @@ export async function runDaemon({
       // recorded comms off; the reach server runs agent-comms, which a
       // launchd PATH does not reach.
       commsFor: (agentId) => showSoul(agentId, { file: populationFile({ env, home }) }).comms,
-      reachEnv: { PATH: resumePath(soulEnvironment(env), home) },
+      reachEnv: { PATH: resumePath(harnessEnv, home) },
       // A soul whose soul.json says its key is in agent-bot-keyd gets keyd's
       // relay, when this host installed keyd.
       keydFor: (agentId) => {
@@ -1383,7 +1421,7 @@ export async function runDaemon({
   // journal (#409). A census that cannot be rewritten leaves them as they are.
   try { backfillManagedSouls(onLaunch.launched(), { file: populationFile({ env, home }) }); } catch { /* shown as unmanaged */ }
   const comms = createCommsSupervisor({ env, home, now, onWake, onLaunch });
-  const relay = createCommsRelay({ env: { ...soulEnvironment(env), PATH: resumePath(soulEnvironment(env), home) } });
+  const relay = createCommsRelay({ env: { ...harnessEnv, PATH: resumePath(harnessEnv, home) } });
   const taskReporter = createTaskReporter({
     file: path.join(path.dirname(daemonStateFile({ env, home })), 'task-turns.jsonl'),
     now,
@@ -1406,7 +1444,7 @@ export async function runDaemon({
     }),
     receipt: ({ agentId, decision }) => appendAuditReceipt({ event: 'team-start', agentId, operation: 'start_soul', decision }, { env, home, now }),
     limits: teamLimits(userConfig),
-    launchable: (harness) => harnessLaunchable(harness, { env: soulEnvironment(env) }),
+    launchable: (harness) => harnessLaunchProblem(harness, { env: harnessEnv }) ?? true,
     template: () => defaultTeamTemplate({ config: userConfig, env }),
     account,
   });
@@ -1422,7 +1460,7 @@ export async function runDaemon({
     // the owner set to `resume <policy>`.
     resumeExecutor: createResumeExecutor({
       sessions: createWakeSessions({ file: wakeSessionsFile({ env, home }) }),
-      baseEnv: soulEnvironment(env),
+      baseEnv: harnessEnv,
       home,
     }),
     // Webhook wake (#334) runs only for a soul the owner set to `webhook`.

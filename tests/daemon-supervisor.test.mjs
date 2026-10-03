@@ -383,7 +383,26 @@ test('souls get the host tools first on PATH, and the unit keeps the tool path (
   assert.equal(soulEnvironment({ AGENT_BOT_TOOL_PATH: '/App/bin', PATH: '/usr/bin:/bin' }).PATH, '/App/bin:/usr/bin:/bin');
   assert.equal(soulEnvironment({ AGENT_BOT_TOOL_PATH: 'bin', PATH: '/usr/bin' }).PATH, '/usr/bin');
   assert.equal(soulEnvironment({ PATH: '/usr/bin' }).PATH, '/usr/bin');
+  // With a home, the login shell's PATH and installer directories follow (#418).
+  assert.equal(soulEnvironment({ AGENT_BOT_TOOL_PATH: '/App/bin', PATH: '/usr/bin:/bin' }, { home: '/u', loginPath: '/u/.nvm/bin:/usr/bin:rel' }).PATH,
+    '/App/bin:/usr/bin:/bin:/u/.nvm/bin:/u/.local/bin:/u/.opencode/bin:/opt/homebrew/bin:/usr/local/bin');
   assert.equal(supervisorEnvironment({ env: { AGENT_BOT_TOOL_PATH: '/App/bin' }, home: '/u' }).AGENT_BOT_TOOL_PATH, '/App/bin');
+});
+
+test('the login shell PATH is read once, bounded, and skippable (#418)', async () => {
+  const { loginShellPath } = await import('../agent-daemon.mjs');
+  let seen;
+  const run = (cmd, args, opts) => { seen = { cmd, args, env: opts.env, timeout: opts.timeout }; return 'motd noise\n__agent_bot_login_path__/u/.local/bin:/opt/homebrew/bin:relative'; };
+  assert.equal(loginShellPath({ env: { SHELL: '/bin/bash', USER: 'u' }, home: '/u', run }), '/u/.local/bin:/opt/homebrew/bin');
+  assert.equal(seen.cmd, '/bin/bash');
+  assert.equal(seen.args[0], '-lc');
+  assert.equal(seen.env.HOME, '/u');
+  assert.equal(seen.timeout, 3000);
+  assert.equal(loginShellPath({ env: { SHELL: '/usr/bin/fish' }, home: '/u', run }), '/u/.local/bin:/opt/homebrew/bin');
+  assert.equal(seen.cmd, '/bin/zsh', 'an unknown shell falls back to zsh');
+  assert.equal(loginShellPath({ env: {}, home: '/u', run: () => { throw new Error('timed out'); } }), null);
+  assert.equal(loginShellPath({ env: {}, home: '/u', run: () => 'no marker' }), null);
+  assert.equal(loginShellPath({ env: { AGENT_BOT_LOGIN_PATH: '0' }, home: '/u', run: () => { throw new Error('must not run'); } }), null);
 });
 
 test('a launched soul joins agent-comms as itself, with the host tools on PATH (R4)', async () => {
