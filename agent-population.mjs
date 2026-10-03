@@ -8,8 +8,12 @@
 import { randomUUID } from 'node:crypto';
 import {
   chmodSync,
+  closeSync,
+  constants as fsConstants,
   existsSync,
+  fstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -24,6 +28,7 @@ import { pathToFileURL } from 'node:url';
 
 import {
   finalizeAgentIdentity,
+  isAgentId,
   readAgentIdentity,
   retireAgentIdentity,
   stateDirectory,
@@ -611,9 +616,27 @@ export function soulDirectory(id, options = {}) {
 
 // The marker's soul, or null when the folder has none (a package, not an
 // installed soul). An empty marker is one being written: no claim yet.
+// The folder may be an untrusted package, so the marker is read without
+// following a link, only as a small regular file, and only an Agent ID is
+// believed; anything else is INVALID_MARKER and its contents are never
+// echoed (a linked marker could otherwise leak any file the daemon can read).
+const INVALID_MARKER = Symbol('invalid soul marker');
+const MARKER_MAX_BYTES = 256;
 function markerOf(directory) {
-  try { return readFileSync(path.join(directory, '.soul-state', 'agent-id'), 'utf8').trim() || null; }
-  catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null; throw error; }
+  let fd;
+  try { fd = openSync(path.join(directory, '.soul-state', 'agent-id'), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK); }
+  catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
+    if (error.code === 'ELOOP' || error.code === 'EMLINK') return INVALID_MARKER;
+    throw error;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > MARKER_MAX_BYTES) return INVALID_MARKER;
+    const text = readFileSync(fd, 'utf8').trim();
+    if (!text) return null;
+    return isAgentId(text) ? text : INVALID_MARKER;
+  } finally { closeSync(fd); }
 }
 
 function samePath(left, right) {
@@ -634,7 +657,7 @@ function soulDirClaims(options = {}) {
     if (!entry.name.endsWith('.soul') || !(entry.isDirectory() || entry.isSymbolicLink())) continue;
     const directory = path.join(root, entry.name);
     const id = markerOf(directory);
-    if (id) claims.set(id, [...(claims.get(id) ?? []), directory]);
+    if (typeof id === 'string') claims.set(id, [...(claims.get(id) ?? []), directory]);
   }
   return claims;
 }
@@ -663,10 +686,16 @@ export function duplicateSoulDirs(options = {}) {
 // - `copy`: carries the marker of a soul whose own folder is elsewhere.
 // - `duplicate`: several folders claim the soul and none is registered.
 // - `unregistered`: the marker names no active soul in this census.
+// - `invalid`: the marker is a link, not a small regular file, or not an
+//   Agent ID; the message never quotes it.
 // Only `package` and `installed` may be launched; the rest carry a message.
 export function locateSoulDir(directory, options = {}) {
   const dir = path.resolve(printableText('path', directory, { max: 4096 }));
   const id = markerOf(dir);
+  if (id === INVALID_MARKER) {
+    return { path: dir, status: 'invalid',
+      message: `${dir} has an invalid soul marker: .soul-state/agent-id must be a regular file holding one Agent ID` };
+  }
   if (!id) return { path: dir, status: 'package' };
   const file = options.file ?? populationFile(options);
   const soul = readDocument(file).souls[id];
