@@ -654,6 +654,36 @@ possible — and a bounded thread history), `report_status` (interim progress),
 relays to its surface), and `clock_in` (an identity heartbeat carrying
 `agentBot.agentId`).
 
+It is also the soul's line to its teammates. `fleet` lists the souls it may
+message (the broker's `agent-comms peers` answer: name, address, harness),
+and `send_message` sends one an agent-comms message as the soul — by fleet
+name, `account/agentId` address, Agent ID, or a person's principal name.
+Both run `agent-comms` in the soul's own worktree with its own binding, never
+another's. The teammate's answer comes back as a reply in the sender's inbox
+and wakes it like any message. A relayed turn answering another agent may end
+with exactly `NO_REPLY` to send nothing, so two souls never trade
+acknowledgements up to the broker's reply-depth limit.
+
+agent-comms is part of every soul. Every daemon ACP turn (a launch or a cold
+wake) gets this server injected, with `fleet` and `send_message`, unless the
+soul's `soul.json` has `"comms": false` when it is launched. The daemon reads
+that setting at launch only and records it in the population census with
+`"managed": true`; turns read the census, so editing `soul.json` while the
+soul runs changes nothing until its next launch. `agent-bot population list
+--json` and `population show <soul> --json` expose `managed` (the daemon
+started this soul) and `comms` on every row; rows from before default to
+unmanaged with comms on.
+
+A cold turn has nobody to approve a tool call, so the daemon prepends an
+exact allow rule for each of this server's tools to the executor policy
+(`mcp__agent-reach__fetch_context`, `…__post_reply`, `…__report_status`,
+`…__clock_in`, `…__fleet`, `…__send_message` — Claude Code's MCP tool
+names). Nothing else is allowed by it; the configured policy and its
+`deny` fallback still decide every other tool. Claude's ACP adapter puts no
+tool name on its permission requests, so the engine names a request by the
+tool its `tool_call` update announced for the same `toolCallId`, never by
+the request's title (for a shell call, that is the model's command).
+
 It is **one server with two placements**:
 
 - **Injected** — the ACP drive engine passes a per-invocation entry in

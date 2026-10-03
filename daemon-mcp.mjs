@@ -14,6 +14,14 @@
 //                the ONLY lane for Cursor and VS Code/Copilot, which have no
 //                drive plane.
 //
+// Beyond the adapter thread, the server is the soul's line to its teammates:
+// `fleet` lists the souls it may message and `send_message` sends one, both
+// through `agent-comms` run AS the soul — its own binding and worktree, never
+// another's. A daemon-driven turn has nobody to approve a shell call, so
+// without these tools a cold soul could answer people but never reach
+// another agent. They are on for every soul unless its launch turned comms
+// off (AGENT_BOT_REACH_COMMS=0, stamped by the engine from the census).
+//
 // The server writes to the interaction store directly (appendEvent takes a
 // cross-process lock), so it works whether or not the daemon that spawned the
 // session is still the same process. Trust boundary: the store is 0600 files
@@ -36,6 +44,7 @@ import {
   validateInvocationId,
 } from './agent-jobs.mjs';
 import { populationFile, showSoul } from './agent-population.mjs';
+import { agentCommsAsSoul } from './comms-relay.mjs';
 import { validateAgentId } from './agent-identity.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
 import { AGENT_ID_KEYS, readGitConfig } from './resolve-agent.mjs';
@@ -47,6 +56,21 @@ const PROTOCOL_VERSION = '2025-06-18';
 // neither and falls back to worktree git config plus explicit arguments.
 export const REACH_INVOCATION_ENV = 'AGENT_BOT_REACH_INVOCATION';
 export const REACH_AGENT_ID_ENV = 'AGENT_BOT_REACH_AGENT_ID';
+// The soul's worktree, where `agent-comms` runs as the soul; its binding file
+// travels as AGENT_BOT_BINDING. `AGENT_BOT_REACH_COMMS=0` withholds the
+// teammate tools for a soul launched with comms off.
+export const REACH_WORKTREE_ENV = 'AGENT_BOT_REACH_WORKTREE';
+export const REACH_COMMS_ENV = 'AGENT_BOT_REACH_COMMS';
+export const BINDING_ENV = 'AGENT_BOT_BINDING';
+
+// The server's name in mcpServers[], and the tool names a harness derives
+// from it. Claude Code names an MCP tool `mcp__<server>__<tool>`; the daemon's
+// permission policy allows exactly these (see reachPolicyRules).
+export const REACH_SERVER_NAME = 'agent-reach';
+export const REACH_TOOL_NAMES = Object.freeze([
+  'fetch_context', 'post_reply', 'report_status', 'clock_in', 'fleet', 'send_message',
+]);
+const COMMS_TOOL_NAMES = new Set(['fleet', 'send_message']);
 
 // Store-location variables forwarded into the injected entry so the spawned
 // server resolves the same interaction store even under a harness that does
@@ -56,12 +80,18 @@ const STORE_ENV_PASSTHROUGH = [
   'AGENT_BOT_POPULATION_PATH',
   'XDG_STATE_HOME',
   'HOME',
+  // agent-comms must resolve under a harness that does not merge env, and a
+  // launchd daemon's PATH is the one that was widened to reach it.
+  'PATH',
 ];
 
 // A reply event must fit the store's 8 KiB event-data bound with the
 // identity stamp and JSON envelope; status notes stay chat-sized.
 export const MAX_REPLY_TEXT_BYTES = 6 * 1024;
 export const MAX_STATUS_NOTE_BYTES = 1024;
+// A teammate message stays chat-sized, well inside the broker's 32 KiB body.
+export const MAX_MESSAGE_BYTES = 16 * 1024;
+const MAX_ADDRESS_LENGTH = 256;
 
 // fetch_context thread history bounds: enough to reconstruct a conversation,
 // small enough that the result never balloons a session's context window.
@@ -147,15 +177,110 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'fleet',
+    description:
+      'List your teammates: the other agent souls you may message through '
+      + 'agent-comms, with each one\'s name, address, and harness. Use it to '
+      + 'find who to work with, then send_message to reach them.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'send_message',
+    description:
+      'Send an agent-comms message, as yourself, to a teammate (a name from '
+      + 'fleet, an address, or an Agent ID) or to a person by principal name. '
+      + 'Their answer arrives in your inbox later as a reply and wakes you; '
+      + 'each message stands alone, so include the context they need.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', description: 'teammate name, account/agentId address, Agent ID, or principal name' },
+        body: { type: 'string', description: 'the message, plain text, at most 16 KiB' },
+        reply_to: { type: 'string', description: 'message id you are answering, if this is a reply' },
+      },
+      required: ['to', 'body'],
+    },
+  },
 ];
+
+// The daemon's permission rules for this server: an exact allow for each of
+// its own tools under Claude Code's MCP naming, prepended to whatever policy
+// the owner configured. A cold turn has nobody to approve a call, so without
+// them the default deny policy refuses the soul its own reach-back channel.
+export function reachPolicyRules() {
+  return REACH_TOOL_NAMES.map((tool) => ({ tool: `mcp__${REACH_SERVER_NAME}__${tool}`, outcome: 'allow' }));
+}
+
+function commsEnabled(state) {
+  return state.env[REACH_COMMS_ENV] !== '0';
+}
+
+function toolsFor(state) {
+  return commsEnabled(state) ? TOOLS : TOOLS.filter((tool) => !COMMS_TOOL_NAMES.has(tool.name));
+}
 
 export function createReachState({
   env = process.env,
   home = homedir(),
   cwd = process.cwd(),
   now = () => new Date(),
+  run = undefined,
 } = {}) {
-  return { env, home, cwd, now };
+  return { env, home, cwd, now, run };
+}
+
+// The soul agent-comms runs as: the identity this server speaks for, in the
+// stamped worktree (injected) or the configured one (registered), with the
+// stamped binding file when there is one. Nothing here can name another soul.
+function commsSoul(state, identity) {
+  if (identity === null) {
+    throw new Error(
+      'no reach-back identity — set '
+      + `${REACH_AGENT_ID_ENV} or run from a worktree with agentBot.agentId configured`,
+    );
+  }
+  if (!commsEnabled(state)) throw new Error('agent-comms is turned off for this soul');
+  const stamped = state.env[REACH_WORKTREE_ENV];
+  const worktree = typeof stamped === 'string' && path.isAbsolute(stamped) ? stamped : state.cwd;
+  // Only an injected entry's binding is the soul's own; a registered server
+  // inherits whatever its desktop harness had, so agent-comms resolves the
+  // soul from the configured worktree instead.
+  const file = identity.placement === 'injected' ? state.env[BINDING_ENV] : null;
+  return {
+    agentId: identity.agentId,
+    binding: { worktree, file: typeof file === 'string' && file !== '' ? file : null },
+  };
+}
+
+function asSoul(state) {
+  return agentCommsAsSoul({ env: state.env, ...(state.run ? { run: state.run } : {}) });
+}
+
+// Addresses are single-line; a message body may span lines.
+function boundedString(value, label, { max, bytes = false }) {
+  if (typeof value !== 'string' || value.trim() === '') throw new Error(`${label} must be a non-empty string`);
+  if (!bytes && /[\u0000-\u001f\u007f]/.test(value)) throw new Error(`${label} must be a single line of text`);
+  if ((bytes ? Buffer.byteLength(value, 'utf8') : value.length) > max) {
+    throw new Error(`${label} must be at most ${max} ${bytes ? 'bytes' : 'characters'}`);
+  }
+  return value;
+}
+
+// A teammate is addressed by what the agent knows: an address or Agent ID
+// goes as is; a bare name resolves against the peers the broker lets this
+// soul see. A name no peer has may be a person (principal), so it goes as is
+// and the broker decides; a name several peers share is refused, not guessed.
+async function resolveRecipient(run, soul, to) {
+  if (to.includes('/') || to.startsWith('agent_')) return to;
+  const { peers = [] } = await run(soul, ['peers']);
+  const wanted = to.trim().toLowerCase();
+  const matches = peers.filter((peer) => typeof peer?.name === 'string' && peer.name.trim().toLowerCase() === wanted);
+  if (matches.length === 1) return matches[0].address;
+  if (matches.length > 1) {
+    throw new Error(`${matches.length} teammates are named ${to}; use an address: ${matches.map((peer) => peer.address).join(', ')}`);
+  }
+  return to;
 }
 
 function storeOptions(state) {
@@ -356,6 +481,28 @@ async function callTool(state, name, args = {}) {
         at: state.now().toISOString(),
       };
     }
+    case 'fleet': {
+      const soul = commsSoul(state, identity);
+      const { peers = [] } = await asSoul(state)(soul, ['peers']);
+      return {
+        you: soul.agentId,
+        teammates: peers.map(({ name: peerName = null, address, account, agentId, harness = null, verification = null }) => ({
+          name: peerName, address, account, agentId, harness, verification,
+        })),
+      };
+    }
+    case 'send_message': {
+      const soul = commsSoul(state, identity);
+      const to = boundedString(args.to, 'to', { max: MAX_ADDRESS_LENGTH }).trim();
+      const body = boundedString(args.body, 'body', { max: MAX_MESSAGE_BYTES, bytes: true });
+      const replyTo = args.reply_to === undefined || args.reply_to === null || args.reply_to === ''
+        ? null
+        : boundedString(args.reply_to, 'reply_to', { max: 128 });
+      const run = asSoul(state);
+      const address = await resolveRecipient(run, soul, to);
+      const sent = await run(soul, ['send', address, '--body', body, ...(replyTo ? ['--reply-to', replyTo] : [])]);
+      return { sent: true, to: address, messageId: sent.messageId ?? null, wake: sent.wake ?? null };
+    }
     default:
       throw new Error(`unknown tool: ${name}`);
   }
@@ -365,18 +512,33 @@ async function callTool(state, name, args = {}) {
 // pairs). The engine's per-invocation factory calls this with the invocation
 // and bound identity; store-location variables travel along so the spawned
 // server reads the same store even when the harness does not merge env.
-export function reachMcpServerEntry({ invocationId, agentId, env = process.env } = {}) {
-  const vars = [
-    { name: REACH_INVOCATION_ENV, value: validateInvocationId(invocationId) },
-    { name: REACH_AGENT_ID_ENV, value: validateAgentId(agentId) },
-  ];
+//
+// A comms turn (a cold wake or a launch) has no interaction-store invocation,
+// so `invocationId` is optional; the soul's worktree and binding make the
+// teammate tools speak as it, and `comms: false` withholds them.
+export function reachMcpServerEntry({
+  invocationId = null, agentId, env = process.env, worktree = null, binding = null, comms = true,
+} = {}) {
+  const vars = [{ name: REACH_AGENT_ID_ENV, value: validateAgentId(agentId) }];
+  if (invocationId !== null && invocationId !== undefined) {
+    vars.unshift({ name: REACH_INVOCATION_ENV, value: validateInvocationId(invocationId) });
+  }
+  if (worktree !== null) {
+    if (typeof worktree !== 'string' || !path.isAbsolute(worktree)) throw new Error('reach worktree must be an absolute path');
+    vars.push({ name: REACH_WORKTREE_ENV, value: worktree });
+  }
+  if (binding !== null) {
+    if (typeof binding !== 'string' || !path.isAbsolute(binding)) throw new Error('reach binding must be an absolute path');
+    vars.push({ name: BINDING_ENV, value: binding });
+  }
+  if (comms === false) vars.push({ name: REACH_COMMS_ENV, value: '0' });
   for (const name of STORE_ENV_PASSTHROUGH) {
     if (typeof env[name] === 'string' && env[name] !== '') {
       vars.push({ name, value: env[name] });
     }
   }
   return {
-    name: 'agent-reach',
+    name: REACH_SERVER_NAME,
     command: process.execPath,
     args: [fileURLToPath(import.meta.url)],
     env: vars,
@@ -413,12 +575,16 @@ export async function handleMcpMessage(state, message) {
             'Reach-back channel to the adapter thread that started this session. '
             + 'Call fetch_context first to receive the inbound message and thread '
             + 'history, report_status for interim progress, and post_reply exactly '
-            + 'once with the final answer.',
+            + 'once with the final answer.'
+            + (commsEnabled(state)
+              ? ' To work with other agents, call fleet to see your teammates and '
+                + 'send_message to reach one; their replies arrive in your inbox.'
+              : ''),
         }));
       case 'ping':
         return reply(rpcResult(id, {}));
       case 'tools/list':
-        return reply(rpcResult(id, { tools: TOOLS }));
+        return reply(rpcResult(id, { tools: toolsFor(state) }));
       case 'tools/call': {
         try {
           const result = await callTool(state, params.name, params.arguments ?? {});

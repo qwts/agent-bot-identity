@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readAgentIdentity } from '../agent-identity.mjs';
 import { listSouls, showSoul, soulDirectory } from '../agent-population.mjs';
-import { computePackageRevision, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST, validateSoulPackage } from '../soul-package.mjs';
+import { computePackageRevision, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST, soulCommsSetting, validateSoulPackage } from '../soul-package.mjs';
 import { editSoulRevision, revisionHistory, revisionPackagePath } from '../soul-revisions.mjs';
 import { soulDisplayFilename, spawnSoulTemplate, templateSpawnCommand } from '../soul-templates.mjs';
 import { createSoulHomes } from '../soul-home.mjs';
@@ -192,4 +192,24 @@ test('failed instance initialization retires its identity and removes the incomp
   assert.equal(json(join(f.options.stateDir, identityFile)).status, 'retired');
   assert.equal(listSouls(f.options).length, 0);
   assert.equal(validateSoulPackage(f.template).revision, f.manifest.revision);
+});
+
+// agent-comms is part of every soul; a template's `comms: false` opt-out
+// travels to its instances, and an invalid value never spawns.
+test('a spawned instance keeps its template\'s comms setting', async (t) => {
+  const f = fixture(t);
+  const withComms = await spawnSoulTemplate(f.template, { ...f.options, name: 'Bill' });
+  assert.equal(soulCommsSetting(soulDirectory(withComms.id, f.options)), true, 'absent means on');
+
+  const manifest = { ...f.manifest, comms: false };
+  writeFileSync(join(f.template, 'soul.json'), JSON.stringify(manifest));
+  manifest.revision = computePackageRevision(f.template);
+  writeFileSync(join(f.template, 'soul.json'), JSON.stringify(manifest));
+  const quiet = await spawnSoulTemplate(f.template, { ...f.options, name: 'Ted' });
+  const directory = soulDirectory(quiet.id, f.options);
+  assert.equal(json(join(directory, 'soul.json')).comms, false);
+  assert.equal(soulCommsSetting(directory), false);
+
+  writeFileSync(join(f.template, 'soul.json'), JSON.stringify({ ...manifest, comms: 'off' }));
+  assert.throws(() => validateSoulPackage(f.template), /comms must be a boolean/);
 });

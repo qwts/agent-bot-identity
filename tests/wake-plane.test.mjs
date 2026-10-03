@@ -121,3 +121,50 @@ test('a failing session recorder never fails the turn', async () => {
   const result = await factory({ agentId: 'agent_11111111-1111-4111-8111-111111111111', harness: 'claude', cwd: '/soul', env: {} })({ appendEvent: () => ({}) });
   assert.equal(result.stopReason, 'end_turn');
 });
+
+// Cross-agent comms (#146): every daemon turn gets the reach server, so a
+// cold soul can see its teammates and message them as itself.
+test('acpExecutorFor injects the soul\'s reach server and allows its tools under a deny policy', () => {
+  const agentId = 'agent_11111111-1111-4111-8111-111111111111';
+  let options = null;
+  const createExecutor = (opts) => { options = opts; return async () => ({ stopReason: 'end_turn' }); };
+  const policy = { version: 1, rules: [{ tool: 'Bash', outcome: 'deny' }], fallback: 'deny' };
+  acpExecutorFor({ identities: () => ({}), policy, baseEnv: { HOME: '/home/bot' }, createExecutor, reachEnv: { PATH: '/opt/bin' } })(
+    { agentId, harness: 'claude', cwd: '/souls/bill/worktree', env: { AGENT_BOT_BINDING: '/souls/bill/binding.json' } },
+  );
+  assert.deepEqual(policy.rules, [{ tool: 'Bash', outcome: 'deny' }], 'the owner policy object is not mutated');
+  assert.equal(options.policy.rules.at(-1).tool, 'Bash');
+  assert.ok(options.policy.rules.some((rule) => rule.tool === 'mcp__agent-reach__send_message' && rule.outcome === 'allow'));
+  assert.equal(options.policy.fallback, 'deny');
+
+  // A comms turn has no store invocation: the entry carries the soul alone.
+  const [entry] = options.mcpServers({ invocation: { agentId, harness: 'claude', cwd: '/souls/bill/worktree' } });
+  const vars = Object.fromEntries(entry.env.map((pair) => [pair.name, pair.value]));
+  assert.equal(entry.name, 'agent-reach');
+  assert.equal(vars.AGENT_BOT_REACH_AGENT_ID, agentId);
+  assert.equal(vars.AGENT_BOT_REACH_WORKTREE, '/souls/bill/worktree');
+  assert.equal(vars.AGENT_BOT_BINDING, '/souls/bill/binding.json');
+  assert.equal(vars.PATH, '/opt/bin');
+  assert.equal('AGENT_BOT_REACH_INVOCATION' in vars, false);
+  assert.equal('AGENT_BOT_REACH_COMMS' in vars, false, 'comms is on by default');
+
+  // A store-backed invocation is stamped so fetch_context and post_reply work.
+  const [stamped] = options.mcpServers({ invocation: { invocationId: 'invocation_44444444-4444-4444-8444-444444444444' } });
+  assert.ok(stamped.env.some((pair) => pair.name === 'AGENT_BOT_REACH_INVOCATION'));
+});
+
+test('a soul launched with comms off gets the reach server without its teammate tools', () => {
+  let options = null;
+  const createExecutor = (opts) => { options = opts; return async () => ({ stopReason: 'end_turn' }); };
+  const asked = [];
+  acpExecutorFor({ identities: () => ({}), policy: { version: 1, rules: [], fallback: 'deny' }, baseEnv: {}, createExecutor,
+    commsFor: (id) => { asked.push(id); return false; } })({ agentId: ID, harness: 'claude', cwd: '/soul', env: {} });
+  const [entry] = options.mcpServers({ invocation: {} });
+  assert.deepEqual(asked, [ID]);
+  assert.ok(entry.env.some((pair) => pair.name === 'AGENT_BOT_REACH_COMMS' && pair.value === '0'));
+
+  // An unreadable setting (no census row) is the default: on.
+  acpExecutorFor({ identities: () => ({}), policy: { version: 1, rules: [], fallback: 'deny' }, baseEnv: {}, createExecutor,
+    commsFor: () => { throw new Error('no population record'); } })({ agentId: ID, harness: 'claude', cwd: '/soul', env: {} });
+  assert.equal(options.mcpServers({ invocation: {} })[0].env.some((pair) => pair.name === 'AGENT_BOT_REACH_COMMS'), false);
+});

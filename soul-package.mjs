@@ -38,6 +38,9 @@ function validateManifest(manifest) {
       new Set(manifest.preferredHarnesses).size !== manifest.preferredHarnesses.length) {
     throw new Error('soul.json preferredHarnesses must be an array of unique nonempty strings');
   }
+  // agent-comms is part of every soul; `comms: false` opts a soul's managed
+  // launches out of the teammate tools. Absent means on.
+  if (manifest.comms !== undefined && typeof manifest.comms !== 'boolean') throw new Error('soul.json comms must be a boolean');
   if (typeof manifest.revision !== 'string' || !REVISION.test(manifest.revision)) throw new Error('soul.json revision must be sha256:<64 lowercase hex digits>');
   if (manifest.parentRevision !== null && (typeof manifest.parentRevision !== 'string' || !REVISION.test(manifest.parentRevision))) {
     throw new Error('soul.json parentRevision must be null or sha256:<64 lowercase hex digits>');
@@ -196,6 +199,16 @@ export function canonicalPackageBytes(packagePath, options) {
 
 export function computePackageRevision(packagePath, options) {
   return `sha256:${createHash('sha256').update(canonicalPackageBytes(packagePath, options)).digest('hex')}`;
+}
+
+// A soul directory's comms setting from its soul.json: false only when the
+// manifest says so, true otherwise, null when there is no readable manifest.
+export function soulCommsSetting(directory) {
+  let manifest;
+  try { manifest = JSON.parse(readFileSync(join(directory, 'soul.json'), 'utf8')); }
+  catch { return null; }
+  if (!object(manifest)) return null;
+  return manifest.comms !== false;
 }
 
 export function validateSoulPackage(packagePath) {

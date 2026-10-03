@@ -16,8 +16,16 @@ import { randomUUID } from 'node:crypto';
 import { wakeSetting } from './cold-wake-settings.mjs';
 import { FINAL_REPLY_ERRORS, senderAddress } from './comms-relay.mjs';
 
+// The final answer a soul gives when a teammate's message needs no answer
+// back. Every relayed turn's answer is otherwise a reply, so two souls would
+// trade acknowledgements until the broker's reply-depth limit.
+export const NO_REPLY = 'NO_REPLY';
+
 export function relayPrompt(message) {
-  return `You have an agent-comms message from ${senderAddress(message.from)}. Your final answer is sent back to them as your reply, so write it as the reply itself; you do not need to run agent-comms.\n\n${message.body}`;
+  const fromSoul = typeof message.from?.principal !== 'string';
+  return `You have an agent-comms message from ${senderAddress(message.from)}${fromSoul ? ', another agent' : ''}. Your final answer is sent back to them as your reply, so write it as the reply itself; you do not need to run agent-comms.`
+    + (fromSoul ? ` If it needs no answer (a thanks, or a result you only had to receive), make your final answer exactly ${NO_REPLY} and nothing is sent. Use send_message to tell anyone else, such as the person who asked you for this work, what came of it.` : '')
+    + `\n\n${message.body}`;
 }
 
 export function createColdWaker({ executor, settings, lookupBinding, identities, receipt, relay = null, webhook = null, taskReporter = null, log = (line) => process.stderr.write(`cold-wake: ${line}\n`) }) {
@@ -107,7 +115,7 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
           }
           const result = await executor({ invocation, message: relayPrompt(message), attachments: [], env, wake });
           const body = typeof result?.reply === 'string' ? result.reply.trim() : '';
-          if (body) {
+          if (body && body !== NO_REPLY) {
             await relay.reply(soul, { to: senderAddress(message.from), replyTo: message.id, body }).catch((error) => {
               if (!FINAL_REPLY_ERRORS.has(error?.code)) throw error;
             });

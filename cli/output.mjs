@@ -19,7 +19,7 @@ Commands:
                      confinement AGENT_ID off|warn|deny (owner only); confinement-report AGENT_ID [--json]
   daemon             Run, supervise, or disable the loopback daemon; vouch-key prints the soul public key
   mcp                Serve the agent-bot MCP tools (bind, whoami, population)
-  reach-mcp          Serve the daemon reach-back MCP tools (fetch_context, post_reply)
+  reach-mcp          Serve the daemon reach-back MCP tools (fetch_context, post_reply, fleet, send_message)
   wake               Hold this session's socket at the daemon's wake plane
   web                Pair a browser with the daemon's private web client
   telegram           Long-poll Telegram as a thin transport over the daemon

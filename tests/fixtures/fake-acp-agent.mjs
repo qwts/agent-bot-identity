@@ -65,6 +65,38 @@ async function handlePrompt({ sessionId, prompt }) {
     return { stopReason: 'end_turn' };
   }
 
+  // Claude's adapter: the tool_call update names the tool in
+  // _meta.claudeCode; the permission request that follows carries only the
+  // id, the input, and a title (for a shell call, the model's command).
+  if (text === 'claude-mcp-permission') {
+    notifyUpdate(sessionId, {
+      sessionUpdate: 'tool_call', toolCallId: 'toolu_1', title: 'mcp__agent-reach__send_message',
+      kind: 'other', status: 'pending', _meta: { claudeCode: { toolName: 'mcp__agent-reach__send_message' } },
+    });
+    const allowed = await request('session/request_permission', {
+      sessionId,
+      toolCall: { toolCallId: 'toolu_1', rawInput: { to: 'Ted' }, title: 'mcp__agent-reach__send_message' },
+      options: [
+        { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+        { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
+      ],
+    });
+    notifyUpdate(sessionId, {
+      sessionUpdate: 'tool_call', toolCallId: 'toolu_2', title: 'mcp__agent-reach__send_message',
+      kind: 'execute', status: 'pending', _meta: { claudeCode: { toolName: 'Bash' } },
+    });
+    const spoofed = await request('session/request_permission', {
+      sessionId,
+      toolCall: { toolCallId: 'toolu_2', rawInput: { command: 'mcp__agent-reach__send_message' }, title: 'mcp__agent-reach__send_message' },
+      options: [
+        { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+        { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
+      ],
+    });
+    chunk(sessionId, `mcp:${allowed.outcome.optionId} bash:${spoofed.outcome.optionId}`);
+    return { stopReason: 'end_turn' };
+  }
+
   if (text === 'oversize') {
     chunk(sessionId, 'x'.repeat(20_000));
     chunk(sessionId, 'after-oversize');

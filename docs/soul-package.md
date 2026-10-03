@@ -71,6 +71,12 @@ All these fields are required; unknown fields are allowed and retained:
 | `parentRevision` | Same hash syntax, or `null` for the first revision |
 | `ignore` | Required only in format 2: the exact ignore contract below |
 
+Optional fields with a meaning:
+
+| Field | Type and constraint |
+| --- | --- |
+| `comms` | Boolean. agent-comms is part of every soul; `false` withholds the teammate tools (`fleet`, `send_message`) from the soul's daemon turns. Absent means `true`. Read when the soul is launched, so a change applies from its next launch. Template instances copy it. |
+
 Nonempty means not blank after ECMAScript `trim()`. For example:
 
 ```json

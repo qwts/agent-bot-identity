@@ -634,6 +634,9 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
     worktrees: [worktreeTop],
     transcriptLocator: { provider: 'codex', id: 'thread-1' },
     lastSeen: firstPopulation.souls[firstId].lastSeen,
+    // A soul that set itself up is unmanaged, with agent-comms on.
+    managed: false,
+    comms: true,
   });
   assert.equal(
     new Date(firstPopulation.souls[firstId].lastSeen).toISOString(),
