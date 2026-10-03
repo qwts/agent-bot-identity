@@ -23,7 +23,8 @@ export const LAUNCH_NAME_MAX = 128;
 // fresh install) cannot run the turn that would join it. `recordLaunch`
 // records, before the first turn, that the daemon manages this soul and the
 // comms setting its soul.json has now; the setting holds until the next
-// launch, so a running soul's comms cannot be switched off under it.
+// launch, so a running soul's comms cannot be switched off under it. A
+// launch that names `comms` writes it to the soul's soul.json first.
 //
 // `parent` (#377) comes only from the daemon's own caller in the second
 // argument, never from the event: a soul starting its team passes itself, a
@@ -82,6 +83,9 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       }
       // Same bound as agent-comms' broker launch contract (lib/broker/launch.mjs).
       if (event.name !== undefined && (typeof event.name !== 'string' || !event.name.trim() || event.name.length > LAUNCH_NAME_MAX || /[\u0000-\u001f\u007f]/.test(event.name))) throw new Error('invalid launch name');
+      // Optional, chosen before start (#381): the soul's comms setting for
+      // this and later launches. Absent keeps what its soul.json says.
+      if (event.comms !== undefined && typeof event.comms !== 'boolean') throw new Error('invalid launch comms');
       // Every check that can fail without starting runs before a package spawn mints.
       if (!executorFor) throw new Error('daemon ACP executor is disabled');
       if (parent !== null && event.soul) throw new Error('a team member is a new soul, not an existing one');
@@ -91,7 +95,8 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         ?? await provisionHome({ agentId: identity.id, harness, packagePath: event.package ?? null });
       if (!binding?.worktree || !binding?.file) throw new Error('soul binding is unavailable');
       if (joinSoul) await joinSoul({ agentId: identity.id, harness, name: event.name ?? null, binding, ...(parent ? { parent } : {}) });
-      if (recordLaunch) await recordLaunch({ agentId: identity.id, package: event.package ?? null, binding });
+      if (recordLaunch) await recordLaunch({ agentId: identity.id, package: event.package ?? null, binding,
+        ...(event.comms === undefined ? {} : { comms: event.comms, principal: event.principal ?? null }) });
       const executor = executorFor({ agentId: identity.id, harness, cwd: binding.worktree,
         env: { AGENT_BOT_BINDING: binding.file, AGENT_BOT_ID: identity.id, QWTS_AGENT_ID: identity.id } });
       // An ACP session binding is the readiness boundary. A returned promise

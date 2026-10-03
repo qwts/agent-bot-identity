@@ -339,3 +339,17 @@ test('comms is read from soul.json at launch only: later edits wait for the next
   await handler({ ...event, requestId: 'r2' }, { account: 'worker', report: async () => {} });
   assert.equal(showSoul(agentId, { file: population }).comms, true, 'the next launch picks it up');
 });
+
+test('a launch can choose comms before start; an invalid choice never starts (#381)', async (t) => {
+  const records = [];
+  const f = fixture(t, { recordLaunch: (launch) => { records.push(launch); } });
+  await f.handler({ ...event, comms: false }, f.ports);
+  assert.deepEqual(records[0], { agentId, package: null, binding: { worktree: '/work', file: '/private/binding' },
+    comms: false, principal: 'p1' });
+  assert.equal(f.reports[0].status, 'launched');
+
+  const g = fixture(t, { recordLaunch: () => { throw new Error('unexpected record'); } });
+  await g.handler({ ...event, requestId: 'r2', comms: 'off' }, g.ports);
+  assert.equal(g.calls.length, 0);
+  assert.deepEqual(g.reports[0], { requestId: 'r2', status: 'failed', agentId: null, detail: 'invalid launch comms' });
+});

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, lstatSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -187,8 +187,12 @@ function frame(value) {
   return Buffer.concat([Buffer.from(`${bytes.length}:`), bytes, Buffer.from(',')]);
 }
 
+// `options.manifest` hashes the package as if soul.json held that manifest,
+// so an edit can be hashed before it is published.
 export function canonicalPackageBytes(packagePath, options) {
-  const { manifest, entries } = readSoulPackageEntries(packagePath, options);
+  const read = readSoulPackageEntries(packagePath, options);
+  const { entries } = read;
+  const manifest = options?.manifest ?? read.manifest;
   const { revision, parentRevision, ...content } = manifest;
   entries.find((entry) => entry.path === 'soul.json').bytes = Buffer.from(canonicalJson(content));
   return Buffer.concat([
@@ -209,6 +213,32 @@ export function soulCommsSetting(directory) {
   catch { return null; }
   if (!object(manifest)) return null;
   return manifest.comms !== false;
+}
+
+// Rewrites a soul directory's soul.json `comms` (absent means on, so `true`
+// removes the key) as an edit of its current revision: the old revision
+// becomes the parent and the revision is recomputed. The final manifest is
+// hashed off-path and published with one atomic rename. Returns null when
+// the setting already holds, else the previous manifest text to restore on
+// a later failure.
+export function writeSoulComms(directory, comms) {
+  if (typeof comms !== 'boolean') throw new Error('comms must be a boolean');
+  const file = join(directory, 'soul.json');
+  const before = readFileSync(file, 'utf8');
+  const manifest = JSON.parse(before);
+  if (!object(manifest)) throw new Error('soul.json must be an object');
+  if ((manifest.comms !== false) === comms) return null;
+  const { comms: _previous, ...rest } = manifest;
+  const next = { ...rest, ...(comms ? {} : { comms: false }), parentRevision: manifest.revision ?? null };
+  const final = { ...next, revision: computePackageRevision(directory, { manifest: next }) };
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, `${JSON.stringify(final, null, 2)}\n`, { flag: 'wx', mode: statSync(file).mode & 0o777 });
+    renameSync(temporary, file);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+  return before;
 }
 
 export function validateSoulPackage(packagePath) {

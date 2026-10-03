@@ -147,5 +147,8 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
   }
   // Resolves when every turn in flight has ended (tests and shutdown).
   coldWake.idle = () => Promise.all([...active.values()].map((flight) => flight.done));
+  // Souls with a turn in flight right now (`agent-bot soul comms` refuses
+  // to change a running soul's setting).
+  coldWake.busy = () => [...active.keys()];
   return coldWake;
 }

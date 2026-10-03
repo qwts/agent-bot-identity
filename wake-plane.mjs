@@ -167,5 +167,6 @@ export function createWakePlane({ pool, settings, lookupSoul, identities, execut
     return dispatch(wake);
   };
   onWake.idle = () => coldWake?.idle() ?? Promise.resolve();
+  onWake.busy = () => coldWake?.busy?.() ?? [];
   return onWake;
 }

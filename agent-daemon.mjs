@@ -57,7 +57,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
-import { listSouls, populationFile, recordSoulLaunch, retireIdentityWithPopulation, showSoul, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
+import { listSouls, populationFile, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
 import {
   bindAgentLineage,
@@ -84,7 +84,8 @@ import { createTeamStarter, defaultTeamTemplate, harnessLaunchable, teamLimits }
 import { createSoulHomes, installHarnesses, soulBindingForLaunch } from './soul-home.mjs';
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
-import { validateSoulPackage } from './soul-package.mjs';
+import { validateSoulPackage, writeSoulComms } from './soul-package.mjs';
+import { editSoulRevision, revisionHistory } from './soul-revisions.mjs';
 import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
 import { recordSoulSession } from './metrics.mjs';
 import { createTaskReporter } from './task-turns.mjs';
@@ -402,7 +403,10 @@ export function createDaemonServer({
       const route = `${req.method} ${url.pathname}`;
       switch (route) {
         case 'GET /v0/health': {
-          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid, warmPool: warmPool.list() });
+          // `busy`: souls with a daemon turn in flight (cold wake), beside
+          // the warm pool's connected harnesses.
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid, warmPool: warmPool.list(),
+            busy: server.wakePlane?.busy?.() ?? [] });
           return;
         }
         case 'POST /v0/space/ensure': {
@@ -994,6 +998,7 @@ export async function daemonStatus({
       port: state.port,
       startedAt: state.startedAt,
       warmPool: health.warmPool ?? {},
+      busy: Array.isArray(health.busy) ? health.busy : [],
       comms: await probeComms(state, { env, home, fetchImpl, timeoutMs }),
     };
   }
@@ -1136,6 +1141,38 @@ export function daemonClient({
   };
 }
 
+// Records a launch in the census before the first turn (#380). The principal
+// may have chosen comms before start (#381): it becomes the soul's own
+// setting, recorded as an edit when the soul has a revision chain. The
+// revision history cannot be unwritten, so it is appended last; an earlier
+// failure restores soul.json and the census comms.
+export async function recordLaunchComms({ agentId, package: packagePath, comms, principal = null }, {
+  env, home, config, revisions = { history: revisionHistory, edit: editSoulRevision },
+} = {}) {
+  const file = populationFile({ env, home });
+  let directory = null;
+  try { directory = soulDirectory(agentId, { env, home, config, file }); } catch { /* no census row yet */ }
+  let census = null;
+  try { census = showSoul(agentId, { file }).comms !== false; } catch { /* no census row yet */ }
+  const previous = typeof comms === 'boolean' && directory ? writeSoulComms(directory, comms) : null;
+  try {
+    const recorded = recordSoulLaunch(agentId, { comms: typeof comms === 'boolean' ? comms
+      : launchCommsSetting({ soulDir: directory, packagePath }) }, { file });
+    const stateDir = stateDirectory({ env, home });
+    if (previous !== null && revisions.history(agentId, { stateDir }).length) {
+      await revisions.edit(agentId, directory, { reason: `comms ${comms ? 'on' : 'off'} at launch`, stateDir,
+        ...(principal ? { authorization: { method: 'principal', principal } } : {}) });
+    }
+    return recorded;
+  } catch (error) {
+    if (previous !== null) {
+      writeFileSync(path.join(directory, 'soul.json'), previous);
+      if (census !== null) { try { setSoulComms(agentId, census, { file }); } catch { /* the launch fails either way */ } }
+    }
+    throw error;
+  }
+}
+
 export async function runDaemon({
   env = process.env,
   home = homedir(),
@@ -1239,12 +1276,7 @@ export async function runDaemon({
       stateDir: stateDirectory({ env, home }), now }),
     joinSoul: (soul) => joinLaunchedSoul(soul, { env }),
     // The comms setting is read here, at launch only; turns read the census.
-    recordLaunch: ({ agentId, package: packagePath }) => {
-      const file = populationFile({ env, home });
-      let directory = null;
-      try { directory = soulDirectory(agentId, { env, home, config, file }); } catch { /* no census row yet */ }
-      return recordSoulLaunch(agentId, { comms: launchCommsSetting({ soulDir: directory, packagePath }) }, { file });
-    },
+    recordLaunch: (launch) => recordLaunchComms(launch, { env, home, config }),
     executorFor,
   });
   const comms = createCommsSupervisor({ env, home, now, onWake, onLaunch });
