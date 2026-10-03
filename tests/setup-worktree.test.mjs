@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,8 +17,50 @@ import {
 import { helperSlug } from '../worktree-token.mjs';
 import { buildControlledPath } from './helpers/cold-home.mjs';
 import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
+import { showSoul } from '../agent-population.mjs';
 
 const SETUP = fileURLToPath(new URL('../setup-worktree.mjs', import.meta.url));
+
+test('setup links a Devin checkout into its soul without moving it', (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'setup-devin-worktree-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const repo = join(home, 'repo');
+  const worktree = join(home, '.devin', 'worktrees', 'x');
+  const population = join(home, 'population.json');
+  const env = hermeticGitEnv({}, {
+    PATH: process.env.PATH, HOME: home, TMPDIR: join(home, 'tmp'),
+    AGENT_BOT_SOULS_HOME: join(home, 'souls'), AGENT_BOT_STATE_HOME: join(home, 'state'),
+    AGENT_BOT_SPACES_HOME: join(home, 'spaces'), AGENT_BOT_POPULATION_PATH: population,
+    AGENT_BOT_TRANSCRIPT_PROVIDER: 'devin', AGENT_BOT_TRANSCRIPT_ID: 'devin-session',
+  });
+  mkdirSync(repo);
+  mkdirSync(join(home, '.config', 'agent-bot'), { recursive: true });
+  writeFileSync(join(home, '.config', 'agent-bot', 'config.json'), JSON.stringify({ settings: { daemonPreference: 'off' } }));
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, env, encoding: 'utf8' }).trim();
+  git(repo, 'init', '-q', '-b', 'main');
+  git(repo, 'config', 'user.name', 'Test');
+  git(repo, 'config', 'user.email', 'test@example.com');
+  git(repo, 'config', 'core.hooksPath', '/dev/null');
+  git(repo, 'commit', '--allow-empty', '-q', '-m', 'initial');
+  mkdirSync(dirname(worktree), { recursive: true });
+  git(repo, 'worktree', 'add', '-q', '-b', 'topic', worktree);
+  writeFileSync(join(worktree, 'local-work'), 'preserved');
+  const before = realpathSync(worktree);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = spawnSync(process.execPath, [SETUP], { cwd: worktree, env, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  const id = git(worktree, 'config', '--worktree', '--get', 'agentBot.agentId');
+  const soul = showSoul(id, { file: population });
+  const link = join(soul.soulDir, 'worktrees', 'x');
+  assert.ok(lstatSync(link).isSymbolicLink());
+  assert.equal(realpathSync(link), before);
+  assert.equal(realpathSync(worktree), before);
+  assert.equal(readFileSync(join(worktree, 'local-work'), 'utf8'), 'preserved');
+  assert.equal(existsSync(`${link}-2`), false);
+  assert.equal(soul.worktree, before);
+  assert.deepEqual(soul.worktrees, [before]);
+});
 
 test('accepts shell-safe GitHub App slugs', () => {
   assert.equal(validateAppSlug('you-codex-agent'), 'you-codex-agent');

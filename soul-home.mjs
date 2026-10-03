@@ -36,7 +36,8 @@ export function soulBindingForLaunch(agentId, { stateDir, bindings, provision, h
 }
 
 // Claim only an empty/unmarked soul directory, never another soul's state.
-function ensureSoulDirectory(agentId, packagePath, options) {
+export function ensureSoulDirectory(agentId, packagePath = null, options = {}) {
+  validateAgentId(agentId);
   const directory = soulDirectory(agentId, options);
   const state = path.join(directory, '.soul-state');
   const marker = path.join(state, 'agent-id');
@@ -50,14 +51,19 @@ function ensureSoulDirectory(agentId, packagePath, options) {
   }
   mkdirSync(state, { recursive: true, mode: 0o700 });
   chmodSync(state, 0o700);
-  if (!existsSync(marker)) writeFileSync(marker, `${agentId}\n`, { flag: 'wx', mode: 0o600 });
+  try { writeFileSync(marker, `${agentId}\n`, { flag: 'wx', mode: 0o600 }); }
+  catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    if (readFileSync(marker, 'utf8').trim() !== agentId) throw new Error('soul directory belongs to another Agent ID');
+  }
   registerSoulDir(agentId, directory, { file: options.file ?? populationFile(options) });
   const link = path.join(state, 'space');
   let present = false;
   try { lstatSync(link); present = true; } catch (error) { if (error.code !== 'ENOENT') throw error; }
   if (!present) {
     const soul = showSoul(agentId, { file: options.file ?? populationFile(options) });
-    symlinkSync(soul.spacePath, link, 'dir');
+    try { symlinkSync(soul.spacePath, link, 'dir'); }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
   }
   return directory;
 }

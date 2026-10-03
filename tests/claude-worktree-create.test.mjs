@@ -16,7 +16,8 @@ import {
   worktreePath,
   worktreeRoot,
 } from '../claude-worktree-create.mjs';
-import { readAgentIdentity } from '../agent-identity.mjs';
+import { mintAgentIdentity, readAgentIdentity } from '../agent-identity.mjs';
+import { showSoul } from '../agent-population.mjs';
 import { CLAUDE_WORKTREE_CREATE_COMMAND } from '../hook-dialects.mjs';
 import { installExecutable } from '../install.mjs';
 import { organizationProfileToConfig } from '../organization-profile.mjs';
@@ -165,6 +166,74 @@ test('creates the worktree in Claude\'s worktree layout and prints its path', ()
   );
 });
 
+test('creates a resolved soul checkout inside the soul and reuses it', () => {
+  const { home, repo } = fixture('soul-placement');
+  const stateDir = join(home, 'state');
+  const population = join(home, 'population.json');
+  const sessionId = 'soul-placement-session';
+  const identity = mintAgentIdentity({ useGithub: false, harness: 'claude', stateDir, env: {},
+    transcript: { provider: 'claude', id: sessionId } });
+  const env = hermeticGitEnv({}, {
+    PATH: process.env.PATH, HOME: home, TMPDIR: join(home, 'tmp'),
+    AGENT_BOT_ID: identity.id, AGENT_BOT_STATE_HOME: stateDir,
+    AGENT_BOT_SOULS_HOME: join(home, 'souls'), AGENT_BOT_SPACES_HOME: join(home, 'spaces'),
+    AGENT_BOT_POPULATION_PATH: population,
+  });
+  const invoke = () => execFileSync(process.execPath, [HOOK], {
+    cwd: repo, encoding: 'utf8', input: JSON.stringify({ cwd: repo, name: 'topic', session_id: sessionId }), env,
+  }).trim();
+  const printed = invoke();
+  const soul = showSoul(identity.id, { file: population });
+  assert.equal(printed, join(soul.soulDir, 'worktrees', 'topic'));
+  assert.equal(soul.worktree, realpathSync(printed));
+  assert.deepEqual(soul.worktrees, [realpathSync(printed)]);
+  assert.equal(invoke(), printed);
+  assert.equal(execFileSync('git', ['config', '--worktree', '--get', 'agentBot.agentId'], { cwd: printed, env, encoding: 'utf8' }).trim(), identity.id);
+});
+
+test('an existing Claude checkout stays in its harness location and is linked', () => {
+  const { home, repo } = fixture('legacy-soul-link');
+  const printed = runHook({ cwd: repo, name: 'topic', session_id: 'legacy-session' }, { home });
+  const config = (...args) => execFileSync('git', args, { cwd: printed, encoding: 'utf8' }).trim();
+  const id = config('config', '--worktree', '--get', 'agentBot.agentId');
+  const soul = showSoul(id, { file: join(home, '.local', 'state', 'agent-bot', 'population.json') });
+  const link = join(soul.soulDir, 'worktrees', 'topic');
+  assert.equal(runHook({ cwd: repo, name: 'topic', session_id: 'legacy-session' }, { home }), printed);
+  assert.equal(realpathSync(link), realpathSync(printed));
+  assert.equal(printed, join(home, '.claude', 'worktrees', 'sample', 'topic'));
+});
+
+test('concurrent soul worktree creators resolve one soul without GitHub or sockets', async () => {
+  const { home, repo } = fixture('concurrent-soul');
+  const population = join(home, 'population.json');
+  const env = hermeticGitEnv({}, {
+    PATH: process.env.PATH, HOME: home, TMPDIR: join(home, 'tmp'),
+    GH_AGENT_APP: 'fixture-claude-agent',
+    AGENT_BOT_STATE_HOME: join(home, 'state'), AGENT_BOT_SOULS_HOME: join(home, 'souls'),
+    AGENT_BOT_SPACES_HOME: join(home, 'spaces'), AGENT_BOT_POPULATION_PATH: population,
+  });
+  const invoke = () => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [HOOK], { cwd: repo, env, timeout: 30_000 });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (data) => { stdout += data; });
+    child.stderr.on('data', (data) => { stderr += data; });
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+    child.stdin.end(JSON.stringify({ cwd: repo, name: 'topic', session_id: 'concurrent-session' }));
+  });
+  const results = await Promise.all([invoke(), invoke()]);
+  for (const result of results) {
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    assert.equal(result.stdout, results[0].stdout);
+  }
+  const souls = Object.values(JSON.parse(readFileSync(population, 'utf8')).souls);
+  assert.equal(souls.length, 1);
+  assert.equal(results[0].stdout.trim(), join(souls[0].soulDir, 'worktrees', 'topic'));
+  assert.deepEqual(souls[0].worktrees, [realpathSync(results[0].stdout.trim())]);
+});
+
 // The wrapper's whole job: the desktop app spawns it with a PATH that need
 // not carry an nvm-installed node, under whatever /bin/sh the host has (dash
 // on most Linuxes) — so it reads nvm's layout instead of sourcing nvm.sh.
@@ -289,7 +358,6 @@ test('concurrent user-level Claude adapters share only the same bound session (#
     assert.equal(result.stdout, `${printed}\n`);
   }
 
-  assert.equal(printed, join(home, '.claude', 'worktrees', 'sample', 'topic-193'));
   assert.equal(git(printed, 'rev-parse', '--abbrev-ref', 'HEAD'), 'claude/topic-193');
   assert.equal(git(printed, 'config', '--worktree', '--get', 'agentBot.app'), app);
   const agentId = git(printed, 'config', '--worktree', '--get', 'agentBot.agentId');
@@ -297,6 +365,7 @@ test('concurrent user-level Claude adapters share only the same bound session (#
   const transcript = { provider: 'claude', id: sessionId, sha256: null };
   assert.deepEqual(readAgentIdentity(agentId, { stateDir }).transcript, transcript);
   const population = JSON.parse(readFileSync(populationPath, 'utf8'));
+  assert.equal(printed, join(population.souls[agentId].soulDir, 'worktrees', 'topic-193'));
   assert.equal(population.souls[agentId].appSlug, app);
   assert.deepEqual(population.souls[agentId].transcriptLocator, { provider: 'claude', id: sessionId });
   assert.equal(population.souls[agentId].worktree, realpathSync(printed));
