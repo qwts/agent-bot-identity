@@ -674,7 +674,7 @@ test('linked-worktree readiness verifies the complete identity boundary', async 
 });
 
 test('worktree readiness ignores ambient GIT_CONFIG_* and global identity', async () => {
-  const { collectOptions } = linkedWorktreeFixture();
+  const { collectOptions, env } = linkedWorktreeFixture();
   // Simulate an agent container that injects command-scope Git config into
   // every inherited environment: a conflicting App pin, a human identity, and
   // an insteadOf rewrite. None of it may reach the probe's subprocesses.
@@ -692,14 +692,57 @@ test('worktree readiness ignores ambient GIT_CONFIG_* and global identity', asyn
   const saved = new Map(Object.keys(poison).map((key) => [key, process.env[key]]));
   try {
     Object.assign(process.env, poison);
-    const report = await collectReadiness(collectOptions);
-    assert.equal(report.ready, true, `worktree not ready; failed checks: ${failedChecks(report)}`);
-    assert.doesNotMatch(JSON.stringify(report), /ambient-wrong-agent|Ambient Human/);
+    const { env: fixtureEnv, ...defaultOptions } = collectOptions;
+    for (const options of [collectOptions, defaultOptions, { ...collectOptions, env: { ...env, ...poison } }]) {
+      const ambient = process.env;
+      try {
+        process.env = hermeticGitEnv(ambient, { ...fixtureEnv, ...poison, GH_AGENT_APP: '' });
+        const report = await collectReadiness(options);
+        assert.equal(report.ready, true, `worktree not ready; failed checks: ${failedChecks(report)}`);
+        assert.doesNotMatch(JSON.stringify(report), /ambient-wrong-agent|Ambient Human/);
+      } finally {
+        process.env = ambient;
+      }
+    }
   } finally {
     for (const [key, value] of saved) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+  }
+});
+
+test('readiness Git config probes strip overrides and preserve hermetic config controls', async () => {
+  const { collectOptions, env, home } = linkedWorktreeFixture();
+  const globalConfig = join(home, '.gitconfig');
+  writeFileSync(globalConfig, '[user]\n\tname = Ambient Human\n');
+  const overrides = [
+    'GIT_CONFIG', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_PARAMETERS',
+    'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE',
+    'GIT_NAMESPACE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+    'GIT_CEILING_DIRECTORIES',
+  ];
+  for (const key of overrides) {
+    let configReads = 0;
+    const poisonedEnv = { ...env, GIT_CONFIG_GLOBAL: globalConfig, [key]: '/injected' };
+    const report = await collectReadiness({
+      ...collectOptions,
+      env: poisonedEnv,
+      git: (args, options) => {
+        if (args[0] === 'config') {
+          configReads++;
+          assert.equal(options.env[key], undefined, key);
+          assert.equal(options.env.GIT_CONFIG_GLOBAL, globalConfig);
+          assert.equal(options.env.GIT_CONFIG_NOSYSTEM, '1');
+        }
+        return execFileSync('git', args, {
+          ...options, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+        }).replace(/[\r\n]+$/, '');
+      },
+    });
+    assert.ok(configReads > 0, key);
+    assert.equal(report.ready, true, `${key}: ${failedChecks(report)}`);
+    assert.equal(poisonedEnv[key], '/injected');
   }
 });
 
@@ -1827,11 +1870,7 @@ test('the binding check ignores GIT_CONFIG_* injection in the default env path',
     const check = report.worktree.checks.find((entry) => entry.id === 'worktree.binding');
     assert.equal(check.status, 'ready');
     assert.equal(check.evidence.app_slug, 'org-claude-agent');
-    // Scoped to this check on purpose. The pre-existing worktree.app check reads
-    // the same git config and does echo the injected App, so a whole-report
-    // assertion would fail on a gap this change did not introduce. That is
-    // tracked separately rather than absorbed here.
-    assert.doesNotMatch(JSON.stringify(check), /ambient-wrong-agent/);
+    assert.doesNotMatch(JSON.stringify(report), /ambient-wrong-agent/);
   } finally {
     for (const [key, value] of saved) {
       if (value === undefined) delete process.env[key];
