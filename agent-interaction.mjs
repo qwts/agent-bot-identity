@@ -153,11 +153,11 @@ function publicSession(session) {
 function publicInvocation(invocation) {
   const {
     invocationId, sessionId, agentId, principalId, transport,
-    status, idempotencyKey, error, artifacts, createdAt, updatedAt,
+    taskId, status, idempotencyKey, error, artifacts, createdAt, updatedAt,
   } = invocation;
   return {
     invocationId, sessionId, agentId, principalId, transport,
-    status, idempotencyKey, error, artifacts, createdAt, updatedAt,
+    taskId, status, idempotencyKey, error, artifacts, createdAt, updatedAt,
   };
 }
 
@@ -186,6 +186,7 @@ export function createInteractionService({
   home = homedir(),
   config,
   executor = unconfiguredExecutor,
+  taskReporter = null,
   now = () => new Date(),
   // Server-side diagnostics only: whatever this writes never reaches the job
   // store, events, or clients.
@@ -306,6 +307,12 @@ export function createInteractionService({
     };
   }
 
+  async function reportTask(phase, invocation, outcome) {
+    if (!invocation.taskId || !taskReporter) return;
+    try { await taskReporter[phase](invocation, outcome); }
+    catch (error) { log(`task invocation ${invocation.invocationId} ${phase} report failed: ${error?.message ?? String(error)}`); }
+  }
+
   async function runInvocation(invocation, message, attachments, controller) {
     const id = invocation.invocationId;
     // Cancellation can land between submission and dispatch.
@@ -316,7 +323,9 @@ export function createInteractionService({
     }
     transitionInvocation(id, 'running', storeOptions);
     recordStatus(id, 'running');
+    if (invocation.taskId) await reportTask('started', invocation);
     try {
+      controller.signal.throwIfAborted();
       await executor({
         invocation: publicInvocation(invocation),
         message,
@@ -345,6 +354,8 @@ export function createInteractionService({
         transitionInvocation(id, 'failed', { ...storeOptions, error: text });
         recordStatus(id, 'failed', { error: text });
       }
+    } finally {
+      await reportTask('ended', invocation, getInvocation(id, storeOptions).status);
     }
   }
 
@@ -402,7 +413,7 @@ export function createInteractionService({
       return { session: publicSession(session), created: true };
     },
 
-    submitMessage({ principal, transport, sessionId, message, idempotencyKey, attachments }) {
+    submitMessage({ principal, transport, sessionId, message, idempotencyKey, attachments, taskId = null }) {
       const wantedTransport = validated(() => validateTransport(transport));
       const wantedSession = validated(() => validateSessionId(sessionId));
       const text = validateMessage(message);
@@ -431,6 +442,7 @@ export function createInteractionService({
         principalId: principal.principalId,
         transport: wantedTransport,
         idempotencyKey,
+        taskId,
       }, storeOptions));
       if (!created) {
         // Crash repair: a prior submit can die between committing the

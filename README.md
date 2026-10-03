@@ -728,6 +728,23 @@ semantics, deny-by-default principals); the browser never reads population,
 session, job, or Agent Space files, and browser storage holds no tokens and
 no daemon state.
 
+`POST /v1/sessions/:sessionId/messages` accepts optional `taskId` (a
+`task_` UUID or null). Invocation responses, reads and listings retain this
+link across service restarts. Linked execution reports started and ended
+facts as the invocation's soul, with completed, failed or cancelled outcomes;
+these facts never accept, update or complete a task. Reporting failures are
+logged and do not change the invocation outcome.
+
+For relayed cold wakes, `task-event` messages use `agent-comms task brief`
+to decide whether to run and which prompt to use. Assignee turns are linked;
+offerer review turns are unlinked. Skipped events are acknowledged without
+execution. Task events never receive reply messages. Older agent-comms
+versions without brief support acknowledge task events without a turn.
+Failed turns acknowledge their event; aborted turns leave it pending for replay. A private daemon
+`task-turns.jsonl` journal retains open execution facts; startup closes them
+as interrupted before accepting work, retrying failed recovery on the next
+restart. Completed history is compacted, while open entries are retained.
+
 Browser access is a local pairing ceremony, mirroring principal enrollment:
 
 ```bash

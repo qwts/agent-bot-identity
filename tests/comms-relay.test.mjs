@@ -49,3 +49,27 @@ test('an unmanaged soul with no binding file runs without the daemon\'s inherite
   await relay.read({ agentId: 'agent_1', binding: { worktree: '/home/soul', file: null } });
   assert.deepEqual(calls[0].env, { PATH: '/tools', AGENT_BOT_ID: 'agent_1', QWTS_AGENT_ID: 'agent_1' });
 });
+
+test('task commands use the soul port; only an unavailable brief falls back', async () => {
+  const calls = [];
+  const relay = createCommsRelay({ env: {}, run(command, args, options, done) {
+    calls.push(args);
+    done(null, JSON.stringify({ turn: true, linked: true, taskId: 'task_id', prompt: 'criteria' }));
+  } });
+  assert.equal((await relay.brief(soul, 'm1')).prompt, 'criteria');
+  await relay.report(soul, { taskId: 'task_id', invocationId: 'invocation_id', phase: 'started' });
+  await relay.report(soul, { taskId: 'task_id', invocationId: 'invocation_id', phase: 'ended', outcome: 'completed' });
+  assert.deepEqual(calls, [
+    ['task', 'brief', 'm1'],
+    ['task', 'invocation', 'task_id', '--id', 'invocation_id', '--phase', 'started'],
+    ['task', 'invocation', 'task_id', '--id', 'invocation_id', '--phase', 'ended', '--outcome', 'completed'],
+  ]);
+  const unavailable = createCommsRelay({ env: {}, run(command, args, options, done) {
+    done(new Error('exit 1'), '', 'Unknown command: task');
+  } });
+  assert.equal(await unavailable.brief(soul, 'm1'), null);
+  const refused = createCommsRelay({ env: {}, run(command, args, options, done) {
+    done(new Error('exit 1'), JSON.stringify({ ok: false, error: { code: 'forbidden', message: 'forbidden' } }));
+  } });
+  await assert.rejects(refused.brief(soul, 'm1'), { code: 'forbidden' });
+});
