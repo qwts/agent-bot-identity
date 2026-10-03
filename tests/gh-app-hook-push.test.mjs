@@ -673,3 +673,110 @@ test('InboxDurable alarm catches a failure and re-arms instead of dying', async 
 test('MAX_DELIVERY_ATTEMPTS is the agreed small cap', () => {
   assert.equal(MAX_DELIVERY_ATTEMPTS, 5);
 });
+
+for (const status of [204, 503]) {
+  test(`InboxDurable bounds pushes when outcome saves fail after HTTP ${status}, even across restarts`, async (t) => {
+    let now = 1_000_000;
+    let pushes = 0;
+    let failSave = false;
+    const warnings = [];
+    t.mock.method(Date, 'now', () => now);
+    t.mock.method(console, 'warn', (message) => warnings.push(message));
+    const { durable, state, env, map, alarmLog } = fakeHarness({
+      subscribers: JSON.stringify({ 'qwts-grok-agent': [{ url: URL_A, key: KEY_A }] }),
+      fetchImpl: async () => {
+        pushes += 1;
+        failSave = true;
+        return new Response(null, { status });
+      },
+    });
+    await doFetch(durable, '/add', freshRecord());
+    const originalPut = state.storage.put;
+    state.storage.put = async (key, value) => {
+      if (failSave) {
+        failSave = false;
+        throw new Error(`save failed for ${URL_A} with ${KEY_A}`);
+      }
+      await originalPut(key, structuredClone(value));
+    };
+    for (let attempt = 1; attempt <= MAX_DELIVERY_ATTEMPTS; attempt += 1) {
+      await new InboxDurable(state, env).alarm();
+      assert.equal(pushes, attempt);
+      const delivery = map.get('record:rec-1').deliveries[0];
+      assert.equal(delivery.attempts, attempt);
+      if (attempt < MAX_DELIVERY_ATTEMPTS) {
+        assert.equal(delivery.nextRetryAt, now + backoffMs(attempt));
+        assert.equal(alarmLog.at(-1), delivery.nextRetryAt);
+        now = delivery.nextRetryAt - 1;
+        await new InboxDurable(state, env).alarm();
+        assert.equal(pushes, attempt); // an early alarm cannot bypass the reservation
+        now += 1;
+      }
+    }
+    const delivery = map.get('record:rec-1').deliveries[0];
+    assert.equal(delivery.status, 'dead');
+    assert.equal(delivery.lastError, 'delivery outcome not saved');
+    assert.equal(delivery.nextRetryAt, null);
+    for (let retry = 0; retry < 10; retry += 1) {
+      now += 60 * 60_000;
+      await new InboxDurable(state, env).alarm();
+    }
+    assert.equal(pushes, MAX_DELIVERY_ATTEMPTS);
+    const response = await doFetch(new InboxDurable(state, env), '/deadletter', { app: 'qwts-grok-agent' });
+    assert.equal((await response.json()).length, 1);
+    assert.equal(warnings.length, MAX_DELIVERY_ATTEMPTS);
+    assert.ok(warnings.every((message) => !message.includes(KEY_A) && !message.includes(URL_A)));
+  });
+}
+
+test('InboxDurable never pushes without a saved attempt and backs off storage failures to a ceiling', async (t) => {
+  const now = 1_000_000;
+  let pushes = 0;
+  t.mock.method(Date, 'now', () => now);
+  t.mock.method(console, 'warn', () => {});
+  const { durable, state, map, alarmLog } = fakeHarness({
+    subscribers: JSON.stringify({ 'qwts-grok-agent': [{ url: URL_A, key: KEY_A }] }),
+    fetchImpl: async () => { pushes += 1; return new Response(null, { status: 204 }); },
+  });
+  await doFetch(durable, '/add', freshRecord());
+  const originalPut = state.storage.put;
+  state.storage.put = async () => { throw new Error('storage unavailable'); };
+  for (let failure = 1; failure <= 8; failure += 1) {
+    await durable.alarm();
+    assert.equal(alarmLog.at(-1), now + backoffMs(failure));
+  }
+  assert.equal(pushes, 0);
+  assert.equal(map.get('record:rec-1').deliveries[0].attempts, 0);
+  state.storage.put = originalPut;
+  await durable.alarm();
+  assert.equal(pushes, 1);
+  assert.equal(map.get('record:rec-1').deliveries[0].status, 'delivered');
+  // A successful run resets the consecutive storage-failure backoff.
+  state.storage.list = async () => { throw new Error('storage unavailable'); };
+  await durable.alarm();
+  assert.equal(alarmLog.at(-1), now + backoffMs(1));
+});
+
+test('InboxDurable recovers from a failed outcome save without losing the reserved attempt', async (t) => {
+  let now = 1_000_000;
+  let pushes = 0;
+  t.mock.method(Date, 'now', () => now);
+  t.mock.method(console, 'warn', () => {});
+  const { durable, state, env, map } = fakeHarness({
+    subscribers: JSON.stringify({ 'qwts-grok-agent': [{ url: URL_A, key: KEY_A }] }),
+    fetchImpl: async () => { pushes += 1; return new Response(null, { status: 204 }); },
+  });
+  await doFetch(durable, '/add', freshRecord());
+  const originalPut = state.storage.put;
+  state.storage.put = async (key, value) => {
+    if (value.deliveries[0].status === 'delivered') throw new Error('outcome save failed');
+    await originalPut(key, value);
+  };
+  await durable.alarm();
+  now = map.get('record:rec-1').deliveries[0].nextRetryAt;
+  state.storage.put = originalPut;
+  await new InboxDurable(state, env).alarm();
+  assert.equal(pushes, 2);
+  assert.equal(map.get('record:rec-1').deliveries[0].attempts, 2);
+  assert.equal(map.get('record:rec-1').deliveries[0].status, 'delivered');
+});

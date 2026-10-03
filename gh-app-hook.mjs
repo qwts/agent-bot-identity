@@ -562,6 +562,7 @@ export class InboxDurable {
     this.env = env;
     // Production uses the Worker runtime fetch; tests inject a fake here.
     this.fetchImpl = env?.fetchImpl ?? fetch;
+    this.alarmFailures = 0;
   }
 
   keyFor(id) {
@@ -667,14 +668,24 @@ export class InboxDurable {
   async alarm() {
     try {
       await this.runAlarm();
+      this.alarmFailures = 0;
     } catch (error) {
       // Cloudflare retries a *failed* alarm only six times, so a transiently
       // throwing alarm would silently drop the retry loop. Catch, log
-      // redacted, and re-arm; pushes are at-least-once, so a retry is safe.
+      // redacted, and re-arm with backoff. Durable attempt reservations
+      // prevent a failed outcome save from allowing unlimited re-pushes.
+      this.alarmFailures += 1;
+      let retryAt = Date.now() + backoffMs(this.alarmFailures);
+      try {
+        const { nextWake } = pruneRecords(await this.listRecords(), Date.now());
+        if (nextWake !== null) retryAt = Math.max(retryAt, nextWake);
+      } catch {
+        // Storage may still be unavailable; keep the alarm retry alive.
+      }
       const { subscribers } = await parseSubscribers(this.env?.SUBSCRIBERS ?? null);
       const secrets = subscribers.flatMap((subscriber) => [subscriber.key, subscriber.url]);
       console.warn(`gh-app-hook: alarm failed; re-armed: ${redactSecrets(error?.message ?? 'unknown error', secrets)}`);
-      await this.storage.setAlarm(Date.now() + 30_000);
+      await this.storage.setAlarm(retryAt);
     }
   }
 
@@ -682,7 +693,27 @@ export class InboxDurable {
     const now = Date.now();
     await this.migrateLegacy(now);
     const subscribers = await this.subscribers();
-    const snapshot = await this.listRecords();
+    const snapshot = await this.state.blockConcurrencyWhile(async () => {
+      const records = await this.listRecords();
+      const reserved = records.map((record) => ({
+        ...record,
+        deliveries: record.deliveries.map((delivery) => (
+          delivery.status === 'pending' && delivery.nextRetryAt !== null && delivery.nextRetryAt <= now
+            ? applyDeliveryAttempt(delivery, { ok: false, retryable: true, error: 'delivery outcome not saved' }, { now })
+            : delivery
+        )),
+      }));
+      // Persist the attempt and backoff BEFORE sending. If the outcome
+      // save fails or the object restarts, retries still consume the cap.
+      for (const [index, record] of reserved.entries()) {
+        if (record.deliveries.some((delivery, i) => delivery !== records[index].deliveries[i])) {
+          await this.storage.put(this.keyFor(record.id), record);
+        }
+      }
+      const { nextWake } = pruneRecords(reserved, now);
+      if (nextWake !== null) await this.storage.setAlarm(nextWake);
+      return records;
+    });
     // Outbound pushes run with bounded concurrency and no lock held, so a
     // hung receiver can't stall the object or other events.
     const outcomes = await collectAndPush(snapshot, subscribers, { now, fetchImpl: this.fetchImpl });
