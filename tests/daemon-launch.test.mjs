@@ -42,6 +42,14 @@ test('launch uses named harness and bound soul environment; duplicates never exe
   assert.equal(f.reports.length, 2);
 });
 
+test('the journal lists launched souls for the managed backfill, not failed ones (#409)', async (t) => {
+  const f = fixture(t);
+  await f.handler(event, f.ports);
+  const failing = createLaunchHandler({ ...f.options, executorFor: () => async () => { throw new Error('no session'); } });
+  await failing({ ...event, requestId: 'r2' }, f.ports);
+  assert.deepEqual(createLaunchHandler(f.options).launched(), [agentId]);
+});
+
 test('waits for session readiness and reports async spawn errors as failed', async (t) => {
   let rejectStart;
   const f = fixture(t, { executorFor: () => () => new Promise((_, reject) => { rejectStart = reject; }) });
