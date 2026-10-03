@@ -725,7 +725,10 @@ for (const status of [204, 503]) {
     const response = await doFetch(new InboxDurable(state, env), '/deadletter', { app: 'qwts-grok-agent' });
     assert.equal((await response.json()).length, 1);
     assert.equal(warnings.length, MAX_DELIVERY_ATTEMPTS);
-    assert.ok(warnings.every((message) => !message.includes(KEY_A) && !message.includes(URL_A)));
+    for (const message of warnings) {
+      assert.ok(!message.includes(KEY_A));
+      assert.doesNotMatch(message, /grok-routine\.invalid/); // URL_A's host
+    }
   });
 }
 
