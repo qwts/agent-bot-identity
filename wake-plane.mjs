@@ -14,6 +14,7 @@ import { validateInvocationId } from './agent-jobs.mjs';
 import { createColdWaker } from './cold-wake.mjs';
 import { reachMcpServerEntry, reachPolicyRules } from './daemon-mcp.mjs';
 import { HARNESS_SESSION_EVENT, UPDATE_EVENT } from './executor-contract.mjs';
+import { keydMcpServerEntry, keydPolicyRules } from './keyd-client.mjs';
 import { createWakeDispatcher } from './wake-dispatch.mjs';
 
 // The broker port the dispatcher wants, over the supervisor's report.
@@ -53,11 +54,13 @@ function storeInvocationId(invocation) {
   try { return validateInvocationId(invocation?.invocationId); } catch { return null; }
 }
 
-// The owner's policy with the soul's own reach-back tools allowed first. A
+// The owner's policy with the soul's own reach-back tools allowed first, and
+// keyd's (which mint only for the calling soul) only for a soul that gets
+// keyd's relay: any other soul must not inherit an allow for those names. A
 // malformed policy passes through untouched so the contract still refuses it.
-export function withReachRules(policy) {
+export function withReachRules(policy, { keyd = false } = {}) {
   if (!policy || typeof policy !== 'object' || !Array.isArray(policy.rules)) return policy;
-  return { ...policy, rules: [...reachPolicyRules(), ...policy.rules] };
+  return { ...policy, rules: [...reachPolicyRules(), ...(keyd ? keydPolicyRules() : []), ...policy.rules] };
 }
 
 // The production executor factory: one ACP turn under the soul's own
@@ -70,12 +73,13 @@ export function withReachRules(policy) {
 // agent-comms. `onHarnessSession` sees each turn's harness session binding,
 // so the daemon can record which harness session belongs to which soul (the
 // metrics collector reads Claude's log by that id). A failing recorder never
-// fails the turn.
+// fails the turn. `keydFor(agentId)` is the agent-bot-keyd binary when keyd
+// holds that soul's App key (#397); its relay is injected next to the reach
+// server so the soul mints tokens without ever seeing a key.
 export function acpExecutorFor({
   identities, policy, baseEnv, onHarnessSession = null, createExecutor = createAcpExecutor,
-  commsFor = () => true, reachEnv = {},
+  commsFor = () => true, reachEnv = {}, keydFor = () => null,
 }) {
-  const turnPolicy = withReachRules(policy);
   return ({ agentId, harness, cwd, env }) => {
     const identity = identities(agentId);
     // A soul without the github-identity add-on runs with no App (#297).
@@ -83,20 +87,23 @@ export function acpExecutorFor({
     const turnEnv = { ...baseEnv, ...env, QWTS_AGENT_ID: agentId, AGENT_BOT_ID: agentId };
     let comms = true;
     try { comms = commsFor(agentId) !== false; } catch { /* no recorded setting: the default */ }
+    let keyd = null;
+    try { keyd = app ? keydFor(agentId) : null; } catch { /* no keyd: the #395 stores */ }
+    const binding = typeof turnEnv.AGENT_BOT_BINDING === 'string' && path.isAbsolute(turnEnv.AGENT_BOT_BINDING)
+      ? turnEnv.AGENT_BOT_BINDING : null;
     const mcpServers = ({ invocation }) => [reachMcpServerEntry({
       invocationId: storeInvocationId(invocation),
       agentId,
       env: { ...turnEnv, ...reachEnv },
       worktree: typeof cwd === 'string' && path.isAbsolute(cwd) ? cwd : null,
-      binding: typeof turnEnv.AGENT_BOT_BINDING === 'string' && path.isAbsolute(turnEnv.AGENT_BOT_BINDING)
-        ? turnEnv.AGENT_BOT_BINDING : null,
+      binding,
       comms,
       correlation: typeof invocation?.correlation === 'string' ? invocation.correlation : null,
-    })];
+    }), ...(keyd ? [keydMcpServerEntry({ bin: keyd, binding, env: turnEnv })] : [])];
     const executor = createExecutor({
       harness,
       identity: { app, agentId },
-      policy: turnPolicy,
+      policy: withReachRules(policy, { keyd: Boolean(keyd) }),
       cwd,
       mcpServers,
       env: turnEnv,

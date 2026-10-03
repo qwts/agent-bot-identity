@@ -16,7 +16,8 @@ hand the soul short-lived installation tokens.
 }
 ```
 
-`store` is `keychain` (the macOS default) or `file` (the default elsewhere).
+`store` is `keychain` (the macOS default), `file` (the default elsewhere) or
+`keyd` (agent-bot-keyd, below).
 Any other key, under `credentials` or `credentials.github`, fails validation,
 so a key cannot be packaged by mistake. `soul spawn` copies the declaration
 into every instance. The key is not copied.
@@ -59,8 +60,65 @@ can read it.
 `pass-cli` executables and every credential path ([confinement](confinement.md)).
 That is a cooperative hook, not an OS boundary.
 
-Locking the item to the daemon needs a signed helper binary that the access
-list can name; that is a follow-up.
+Locking the item to a signed binary is what the `keyd` store does.
+
+## agent-bot-keyd (#397)
+
+GeniusBar ships `agent-bot-keyd`, a native MCP server signed with the app's
+Developer ID. It holds souls' App keys and signs App JWTs; agent-bot keeps
+the policy. Homebrew and Linux installs have no keyd and keep the stores
+above.
+
+- **Keys.** keyd creates a login-keychain item per key with the Security
+  framework (service `agent-bot.keyd.<agentId>`, account `github-app/<slug>`,
+  the same value encoding). An item created this way trusts only its
+  creator's designated requirement: keyd's Team ID and identifier. `security`,
+  `node` and every script get the system's allow/deny prompt instead of a
+  silent read. keyd never returns a key, over any channel.
+- **Sockets.** `<state>/keyd/` (0700) under agent-bot's state directory
+  (`$XDG_STATE_HOME/agent-bot` or `~/.local/state/agent-bot`) holds
+  `keyd.sock` (MCP: `credential`, `git_credential`) and `owner.sock` (owner
+  operations), both 0600. keyd also checks each peer's user ID. Every call
+  leaves a receipt in `keyd/audit.jsonl`, never a secret.
+- **Who may mint: daemon-signed grants.** keyd mints only on a grant the
+  daemon signed with its account Ed25519 key (the vouch key), which keyd
+  pinned in its own Keychain item on the first import:
+  `v1.<base64url(payload)>.<base64url(signature)>`, with payload
+  `{v, aud: "agent-bot-keyd", agentId, app, tool, iat, exp, nonce, apiBase,
+  installationId, owner, host}`. A grant lives 60 seconds and names one tool;
+  keyd spends each nonce once. Grants rather than keyd calling the daemon
+  back: keyd needs no daemon credential and no network path to it, and the
+  check is one signature.
+- **Souls.** A turn of a soul whose `store` is `keyd` gets keyd's relay,
+  `agent-bot-keyd mcp`, as an MCP server, with allow rules for
+  `mcp__agent-bot-keyd__credential` and `__git_credential`. For each call the
+  relay sends `POST /v0/keyd/grant {tool}` with the soul's binding proof (the
+  same proof every binding route takes). The daemon checks the binding, the
+  `github-identity` gate, that the soul's App is the declared one and that
+  keyd holds it, receipts a `credential-grant`, and signs. The relay forwards
+  the call with the grant to `keyd.sock`. The relay never opens the Keychain.
+- **The daemon's own mints.** `/v0/credential`, and through it the git
+  credential helper and `mint-token` run in a keyd soul's worktree, sign a
+  grant in-process and call keyd's `credential` tool.
+- **Owner operations.** `owner/import`, `owner/remove` and `owner/pin` go
+  to `owner.sock`, and keyd asks the owner itself (Touch ID or the login
+  password, through LocalAuthentication) before changing anything. A
+  different daemon key is refused until the owner pins it.
+
+What this does not stop: a process in the owner's account that can read the
+daemon's vouch key file can sign grants and get tokens, never keys.
+Confinement denies souls `vouch-key.pem` and keyd's directory and sockets in
+every tool; like the rest of confinement, that is a cooperative hook.
+
+```sh
+agent-bot keyd install --bin PATH [--json]   # GeniusBar runs this at setup
+agent-bot keyd status [--json]
+agent-bot keyd uninstall [--json]            # the Keychain items stay
+```
+
+`install` writes a launchd agent (`AGENT_BOT_KEYD_SERVICE_LABEL`, default
+`dev.qwts.agent-bot.keyd`; GeniusBar uses `app.geniusbar.keyd`) that runs
+`agent-bot-keyd serve`.
 
 ## Resolution at mint
 
@@ -83,6 +141,7 @@ material. No agent-facing command or MCP tool returns a key.
 ```sh
 agent-bot identity migrate-credentials --all --dry-run
 agent-bot identity migrate-credentials --soul AGENT_ID|NAME [--json] [--principal-stdin]
+agent-bot identity migrate-credentials --all --to keyd
 ```
 
 Owner only, through the owner gate: a caller with any soul marker is refused,
@@ -103,3 +162,9 @@ using that App no longer needs.
 The command never deletes anything. The legacy folder also holds `bot-uid`,
 `bot-avatar-url` and `app-id`, which other commands still read, so it names
 only the key file.
+
+`--to keyd` takes each soul's key from its current store, or the legacy
+folder, verifies it live, and hands all of them to keyd in one
+`owner/import`, so the owner answers one prompt. The first import also pins
+the daemon's grant key. Only after keyd stores and reads back every key does
+`soul.json` say `store: keyd`. The old copies stay where they were.

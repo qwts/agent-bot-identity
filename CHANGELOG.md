@@ -3,6 +3,13 @@
 ## Unreleased
 
 - Souls launched before 0.10.9 show as managed (#409). The managed flag is recorded at launch since #389, so Starter, Bill and Ted, launched from GeniusBar earlier, read `managed: false` and GeniusBar labelled them Unmanaged. On start the daemon now marks every soul its launch journal reports `launched` as managed, once, and leaves its comms setting as it is. A soul that only joined is never in the journal and stays unmanaged.
+- agent-bot-keyd holds souls' GitHub App keys on GeniusBar installs (#397). See [soul credentials](docs/soul-credentials.md#agent-bot-keyd-397).
+  - New store `keyd` in `soul.json`. Its keys live in Keychain items that only GeniusBar's signed `agent-bot-keyd` can read, and keyd never returns them.
+  - keyd mints only on a 60-second, single-use grant the daemon signs with its vouch key, which keyd pins on the owner's first import. Policy stays here: `POST /v0/keyd/grant` checks the soul's binding proof, the `github-identity` gate and the declared App, and receipts `credential-grant`.
+  - A keyd soul's turns get the `agent-bot-keyd` MCP relay (`credential`, `git_credential`) with exact allow rules. `/v0/credential`, the git credential helper and `mint-token` mint through keyd for such a soul.
+  - `agent-bot identity migrate-credentials --to keyd` moves keys in with one owner prompt. `agent-bot keyd install|status|uninstall` supervises keyd under launchd; GeniusBar calls it at setup.
+  - Confinement also denies a soul the daemon's `vouch-key.pem` and keyd's directory and sockets.
+  - Without keyd (Homebrew, Linux) nothing changes.
 
 ## 0.10.11
 
