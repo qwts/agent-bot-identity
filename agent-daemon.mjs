@@ -57,7 +57,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
-import { listSouls, populationFile, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
+import { backfillManagedSouls, listSouls, locateSoulDir, populationFile, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
 import {
   bindAgentLineage,
@@ -1321,6 +1321,7 @@ export async function runDaemon({
       provision: provisionHome, harness: identities(agentId).harness ?? null,
     }),
     provisionHome: (soul) => provisionHome(soul),
+    locatePackage: (packagePath) => locateSoulDir(packagePath, { env, home, config, file: populationFile({ env, home }) }),
     // ADR-0276: an existing soul's own harness, else a package's preference,
     // else a registry harness on PATH.
     defaultHarness: async ({ soul, package: packagePath }) => {
@@ -1338,6 +1339,9 @@ export async function runDaemon({
     recordLaunch: (launch) => recordLaunchComms(launch, { env, home, config }),
     executorFor,
   });
+  // Souls launched before 0.10.9 read as unmanaged until marked from the
+  // journal (#409). A census that cannot be rewritten leaves them as they are.
+  try { backfillManagedSouls(onLaunch.launched(), { file: populationFile({ env, home }) }); } catch { /* shown as unmanaged */ }
   const comms = createCommsSupervisor({ env, home, now, onWake, onLaunch });
   const relay = createCommsRelay({ env: { ...soulEnvironment(env), PATH: resumePath(soulEnvironment(env), home) } });
   const taskReporter = createTaskReporter({

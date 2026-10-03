@@ -1187,6 +1187,38 @@ test('doctor names active souls that no checkout references', async () => {
   assert.deepEqual(unverified.evidence.unverified, [ids.held]);
 });
 
+// A copied soul folder keeps the soul's marker (#80): doctor names it, and
+// says nothing while each soul has one folder.
+test('doctor warns when two soul folders claim one soul', async () => {
+  const home = tempRoot();
+  const census = join(home, '.local', 'state', 'agent-bot', 'population.json');
+  const id = 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const souls = join(home, '.agent-bot', 'souls');
+  const own = join(souls, 'Starter - Starter.soul');
+  const copy = join(souls, 'Starter - Starter copy.soul');
+  const mark = (dir) => {
+    mkdirSync(join(dir, '.soul-state'), { recursive: true });
+    writeFileSync(join(dir, '.soul-state', 'agent-id'), `${id}\n`);
+  };
+  mkdirSync(dirname(census), { recursive: true });
+  writeFileSync(census, `${JSON.stringify({ schemaVersion: 1, souls: { [id]: {
+    id, name: displayName(id), soulDir: own, appSlug: null, parentId: null, status: 'active',
+    spacePath: join(home, '.agent-space', id), worktree: null, worktrees: [], transcriptLocator: null,
+    lastSeen: '2026-10-03T20:04:04.110Z' } } }, null, 2)}\n`);
+  mark(own);
+  const dependencies = machineDependencies(home);
+  const single = await collectReadiness({ command: 'doctor', scope: 'machine', ...dependencies });
+  assert.equal(single.machine.checks.find(({ id: check }) => check === 'souls.folders'), undefined);
+  mark(copy);
+  const report = await collectReadiness({ command: 'doctor', scope: 'machine', ...dependencies });
+  const check = report.machine.checks.find(({ id: check }) => check === 'souls.folders');
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'soul-folder-duplicate');
+  assert.deepEqual(check.evidence, { duplicates: [{ agentId: id, soulDir: own, copies: [copy] }] });
+  assert.match(check.message, /copies .*Starter - Starter copy\.soul/);
+  assert.match(check.action, /keep each soul's own folder/);
+});
+
 test('soul reference checks ignore global pins and honor legacy worktree pins', async () => {
   const { home, worktree, id, env, worktreeGit } = linkedWorktreeFixture();
   const census = join(home, '.local', 'state', 'agent-bot', 'population.json');

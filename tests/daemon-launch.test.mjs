@@ -42,6 +42,14 @@ test('launch uses named harness and bound soul environment; duplicates never exe
   assert.equal(f.reports.length, 2);
 });
 
+test('the journal lists launched souls for the managed backfill, not failed ones (#409)', async (t) => {
+  const f = fixture(t);
+  await f.handler(event, f.ports);
+  const failing = createLaunchHandler({ ...f.options, executorFor: () => async () => { throw new Error('no session'); } });
+  await failing({ ...event, requestId: 'r2' }, f.ports);
+  assert.deepEqual(createLaunchHandler(f.options).launched(), [agentId]);
+});
+
 test('waits for session readiness and reports async spawn errors as failed', async (t) => {
   let rejectStart;
   const f = fixture(t, { executorFor: () => () => new Promise((_, reject) => { rejectStart = reject; }) });
@@ -84,6 +92,31 @@ test('a package launch spawns a soul, homes it with the package, and starts it',
     provisionHome: (soul) => { homes.push(soul); return { worktree: '/home/new', file: '/home/new/.git/agent-binding.json' }; } });
   await f.handler(packageEvent, f.ports);
   assert.deepEqual(homes, [{ agentId: spawnedId, harness: 'claude', packagePath: '/pkg' }]);
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId: spawnedId });
+});
+
+test('a package launch of an installed soul\'s own folder relaunches that soul, never spawns (#80)', async (t) => {
+  const f = fixture(t, { locatePackage: (pkg) => ({ path: pkg, status: 'installed', agentId, soulDir: pkg, copies: [] }),
+    provisionHome: () => { throw new Error('unexpected provision'); } });
+  await f.handler(packageEvent, f.ports);
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId });
+  assert.equal(f.calls[0].agentId, agentId);
+});
+
+test('a package launch of a copied soul folder is refused before anything is minted (#80)', async (t) => {
+  for (const status of ['copy', 'duplicate', 'unregistered']) {
+    const f = fixture(t, { locatePackage: (pkg) => ({ path: pkg, status, agentId, message: `${pkg} is a ${status}` }) });
+    await f.handler(packageEvent, f.ports);
+    assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'failed', agentId: null, detail: `/pkg is a ${status}` });
+    assert.equal(f.calls.length, 0);
+  }
+});
+
+test('a package with no soul marker still spawns a new soul (#80)', async (t) => {
+  const f = fixture(t, { locatePackage: (pkg) => ({ path: pkg, status: 'package' }),
+    spawnPackage: () => ({ id: spawnedId }), lookupBinding: () => null,
+    provisionHome: (soul) => ({ worktree: '/home/new', file: `/home/new/${soul.packagePath}` }) });
+  await f.handler(packageEvent, f.ports);
   assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId: spawnedId });
 });
 

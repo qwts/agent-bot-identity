@@ -32,8 +32,13 @@ export const LAUNCH_NAME_MAX = 128;
 // A broker event's own `parent` field is dropped before anything sees it.
 const withoutParent = ({ parent: _ignored, ...fields }) => fields;
 
+// `locatePackage` says what a package path is (#80). A folder that is an
+// installed soul's own launches that soul, never a new one; a copy of a soul
+// folder, or a marker naming no active soul here, is refused with its reason.
+const LAUNCHABLE = new Set(['package', 'installed']);
+
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
-  joinSoul = null, recordLaunch = null, executorFor, turnTimeoutMs = 30 * 60_000 }) {
+  joinSoul = null, recordLaunch = null, locatePackage = null, executorFor, turnTimeoutMs = 30 * 60_000 }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -75,9 +80,13 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       if (targets.length !== 1 || typeof targets[0] !== 'string' || !targets[0]) {
         throw new Error('launch requires exactly one soul or package');
       }
+      const located = event.package !== undefined && locatePackage ? await locatePackage(event.package) : null;
+      if (located && !LAUNCHABLE.has(located.status)) throw new Error(located.message ?? `cannot launch ${event.package}`);
+      const soul = located?.status === 'installed' ? located.agentId : event.soul;
+      const packagePath = soul ? null : event.package;
       // ADR-0276 order: the launch's own harness, else the soul's default,
       // else a registry harness found on PATH.
-      const harness = event.harness ?? await defaultHarness(event.soul ? { soul: event.soul } : { package: event.package });
+      const harness = event.harness ?? await defaultHarness(soul ? { soul } : { package: packagePath });
       if (typeof harness !== 'string' || !HARNESS_KEY_PATTERN.test(harness)) {
         throw new Error(event.harness === undefined ? 'no harness for this launch: name one, or install a harness' : 'invalid launch harness');
       }
@@ -88,14 +97,14 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       if (event.comms !== undefined && typeof event.comms !== 'boolean') throw new Error('invalid launch comms');
       // Every check that can fail without starting runs before a package spawn mints.
       if (!executorFor) throw new Error('daemon ACP executor is disabled');
-      if (parent !== null && event.soul) throw new Error('a team member is a new soul, not an existing one');
-      const identity = event.soul ? await identities(event.soul) : await spawnPackage({ ...withoutParent(event), harness, ...(parent ? { parent } : {}) });
-      if (!event.soul) spawned = identity?.id ?? null;
+      if (parent !== null && soul) throw new Error('a team member is a new soul, not an existing one');
+      const identity = soul ? await identities(soul) : await spawnPackage({ ...withoutParent(event), harness, ...(parent ? { parent } : {}) });
+      if (!soul) spawned = identity?.id ?? null;
       const binding = await lookupBinding(identity.id)
-        ?? await provisionHome({ agentId: identity.id, harness, packagePath: event.package ?? null });
+        ?? await provisionHome({ agentId: identity.id, harness, packagePath });
       if (!binding?.worktree || !binding?.file) throw new Error('soul binding is unavailable');
       if (joinSoul) await joinSoul({ agentId: identity.id, harness, name: event.name ?? null, binding, ...(parent ? { parent } : {}) });
-      if (recordLaunch) await recordLaunch({ agentId: identity.id, package: event.package ?? null, binding,
+      if (recordLaunch) await recordLaunch({ agentId: identity.id, package: packagePath, binding,
         ...(event.comms === undefined ? {} : { comms: event.comms, principal: event.principal ?? null }) });
       const executor = executorFor({ agentId: identity.id, harness, cwd: binding.worktree,
         env: { AGENT_BOT_BINDING: binding.file, AGENT_BOT_ID: identity.id, QWTS_AGENT_ID: identity.id } });
@@ -126,6 +135,10 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
     save(); // Persist outcome before network I/O; retry only the report.
     await reportRow(row, report);
   };
+  // Every soul this daemon has launched, for the managed backfill (#409).
+  handle.launched = () => [...requests.values()]
+    .filter((row) => row.status === 'launched' && typeof row.agentId === 'string')
+    .map((row) => row.agentId);
   handle.recover = async ({ report }) => {
     for (const row of requests.values()) {
       if (row.status !== 'pending' && !row.reported) await reportRow(row, report);

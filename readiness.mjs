@@ -13,7 +13,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectAgentSpace, resolveSpacesHome } from './agent-space.mjs';
-import { listSouls, populationFile } from './agent-population.mjs';
+import { duplicateSoulDirs, listSouls, populationFile } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
 import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness } from './config.mjs';
 import { preGateConfigStatus } from './config-migration.mjs';
@@ -1066,6 +1066,28 @@ function unreferencedSoulsCheck({ home, env, git }) {
   });
 }
 
+// A copied soul folder carries the soul's marker (#80). agent-bot only runs
+// the soul from its registered folder; this names the copies to remove.
+// Reported only when there is something to report.
+function duplicateSoulDirsCheck({ home, env, config }) {
+  let duplicates;
+  try { duplicates = duplicateSoulDirs({ home, env, config, file: populationFile({ home, env }) }); }
+  catch { return null; } // spaces.home already reports an unreadable census
+  if (duplicates.length === 0) return null;
+  const shown = duplicates.slice(0, 5).map(({ agentId, soulDir, copies }) =>
+    `${agentId} (${soulDir ? `its folder ${soulDir}; copies ${copies.join(', ')}` : `no registered folder among ${copies.join(', ')}`})`).join('; ')
+    + (duplicates.length > 5 ? `; and ${duplicates.length - 5} more` : '');
+  return readinessCheck({
+    id: 'souls.folders',
+    // A warning: the soul still runs from its own folder, and no copy is used.
+    status: 'warning',
+    code: 'soul-folder-duplicate',
+    message: `${duplicates.length} soul(s) are claimed by more than one folder: ${shown}`,
+    action: 'keep each soul\'s own folder, move the copies out of the souls folder or delete them, then rerun doctor',
+    evidence: { duplicates },
+  });
+}
+
 function identityClassCheck({ home, env, access }) {
   const hook = env.AGENT_BOT_HOOK_BIN || installationPaths(home).agentHook;
   try {
@@ -1974,6 +1996,8 @@ export async function collectReadiness({
     machineChecks.push(spacesHomeCheck({ home, env, config, inspectCutover }));
     const unreferencedSouls = unreferencedSoulsCheck({ home, env, git });
     if (unreferencedSouls) machineChecks.push(unreferencedSouls);
+    const soulFolders = duplicateSoulDirsCheck({ home, env, config });
+    if (soulFolders) machineChecks.push(soulFolders);
     const bindingSummary = worktreeBindingSummaryCheck({ home, env, roster });
     if (bindingSummary) machineChecks.push(bindingSummary);
     machineChecks.push(secureStoreCheck({ probe: probeSecretStore }));
