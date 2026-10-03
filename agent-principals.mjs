@@ -252,8 +252,15 @@ export function auditFile({ env = process.env, home = homedir() } = {}) {
   return path.join(interactionHome({ env, home }), 'audit.jsonl');
 }
 
+// Why a receipt's decision went the way it did (#382), one line. A URL is
+// never kept: a webhook's URL is a secret, and an error may carry one.
+function receiptDetail(value) {
+  const line = String(value).replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '<url>').replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').trim();
+  return line.length > 200 ? `${line.slice(0, 199)}…` : line;
+}
+
 export function appendAuditReceipt(
-  { event, principalId = null, transport = null, agentId = null, operation = null, decision = null },
+  { event, principalId = null, transport = null, agentId = null, operation = null, decision = null, detail = null },
   { env = process.env, home = homedir(), now = () => new Date() } = {},
 ) {
   const receipt = {
@@ -264,6 +271,7 @@ export function appendAuditReceipt(
     ...(agentId === null ? {} : { agentId: agentIdOrThrow(agentId, 'agentId') }),
     ...(operation === null ? {} : { operation: printableText('operation', operation, { max: 40 }) }),
     ...(decision === null ? {} : { decision: printableText('decision', decision, { max: 40 }) }),
+    ...(detail === null ? {} : { detail: receiptDetail(detail) }),
   };
   const file = auditFile({ env, home });
   ensurePrivateDirectory(path.dirname(file));

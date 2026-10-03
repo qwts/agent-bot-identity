@@ -8,6 +8,7 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const MODULES = new Map([
   ['bootstrap', 'bootstrap.mjs'],
   ['setup-worktree', 'setup-worktree.mjs'],
+  ['join', 'soul-join.mjs'],
   ['mint-token', 'mint-token.mjs'],
   ['doctor', 'doctor.mjs'],
   ['identity', 'agent-identity.mjs'],
@@ -42,8 +43,8 @@ const MODULES = new Map([
 
 const HOOK_PATTERN = /^[a-z][a-z0-9-]*$/;
 
-function run(executable, args) {
-  const result = spawnSync(executable, args, { stdio: 'inherit', env: process.env });
+function run(executable, args, env = process.env) {
+  const result = spawnSync(executable, args, { stdio: 'inherit', env });
   if (result.error) throw result.error;
   return result.status ?? 1;
 }
@@ -77,6 +78,11 @@ export function dispatchAgentBot(parsed) {
   }
   const module = MODULES.get(parsed.command);
   if (!module) throw new Error(`unsupported command: ${parsed.command}`);
+  // A person (or a harness startup script) ran it by name, not a git hook:
+  // setup-worktree may then say why it did nothing (#382).
+  if (parsed.command === 'setup-worktree') {
+    return run(process.execPath, [join(ROOT, module), ...parsed.args], { ...process.env, AGENT_BOT_SETUP_HINT: '1' });
+  }
   const args = parsed.command === 'soul' && parsed.args[0] === 'cold-wake' ? parsed.args.slice(1) : parsed.args;
   if (parsed.command === 'soul' && parsed.args[0] !== 'cold-wake') throw new Error('usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-] | soul build [PATH] [--check] | soul pack validate PATH | soul revision <command> | soul dir AGENT_ID | soul spawn TEMPLATE_PATH --name NAME [--harness H] | soul confinement AGENT_ID off|warn|deny | soul confinement-report AGENT_ID [--json]');
   return run(process.execPath, [join(ROOT, module), ...args]);

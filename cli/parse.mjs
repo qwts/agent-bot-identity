@@ -1,6 +1,7 @@
 const PUBLIC_COMMANDS = new Set([
   'bootstrap',
   'setup-worktree',
+  'join',
   'mint-token',
   'doctor',
   'identity',
