@@ -17,6 +17,7 @@ agent-bot soul revision edit ID PACKAGE 'Customize instructions'
 agent-bot soul revision propose ID PACKAGE 'Learned a better procedure'
 agent-bot soul revision list ID
 agent-bot soul revision approve ID PROPOSAL_ID 'Reviewed the proposed changes'
+agent-bot soul revision approve --principal-stdin ID PROPOSAL_ID 'Reviewed' < principal.json
 agent-bot soul revision reject ID PROPOSAL_ID 'Keep the current behavior'
 agent-bot soul revision history ID
 agent-bot soul revision promote ID notes/lesson.md knowledge/lesson.md 'Keep lesson'
@@ -41,12 +42,42 @@ revision. Approval uses those stored bytes, never the caller's later edits.
 Approving a stale proposal fails; resubmit it against the new head. Stale
 proposals can still be rejected. Rejected proposals cannot be approved later.
 
-The CLI's adopt, edit, approve, and reject commands use an owner-only guard:
-resolved Agent IDs or App identities cannot invoke them. Hosts that call module
-functions directly must authenticate user actions themselves. This is a local
-mechanism boundary, not isolation against an account that can rewrite runtime
-files. `revisionCommand` accepts an injectable `assertUser` for a host's own
-user-approval ceremony. The CLI also refuses cross-soul proposals and requires an Agent ID when an App
+The CLI's adopt, edit, approve, and reject commands are owner actions, gated by
+`owner-gate.mjs` (#293). A caller with no soul markers is not assumed to be the
+owner, because a soul can unset its markers. Each owner action needs both:
+
+1. **No soul marker.** An Agent ID (`AGENT_BOT_ID`, `QWTS_AGENT_ID`, or the
+   worktree's git config), a binding (`AGENT_BOT_BINDING` or the worktree's
+   `agent-binding.json`), or an App identity (`GH_AGENT_APP`, a pin, an agent
+   account, or a detected harness) refuses the action, whatever proof comes
+   with it. A marker that cannot be read also refuses.
+2. **An owner proof.**
+   - With `--principal-stdin`, the caller presents the owner's agent-comms
+     principal credential as JSON on stdin (`{ principal, secret, brokerUid,
+     mode }`, the shape agent-comms pairs). The CLI checks it with one
+     authenticated `health` request to the broker, after the usual custody
+     checks. The broker must run in a different account from the caller:
+     a broker in the caller's own account (single-account mode, or a group
+     broker still in the owner's account) cannot vouch, because any process
+     in that account could stand up a socket that answers. The CLI never reads
+     the principal from disk or the keychain itself. A host app such as
+     GeniusBar holds the principal and presents it the same way.
+   - Without it, the macOS authorization dialog (#204) names the action and
+     needs a person to authenticate. Cancelling it, or a platform without it,
+     refuses.
+
+The record of each owner action carries `authorization`: `{ method:
+"principal", principal }` or `{ method: "consent" }`. The secret is never
+recorded.
+
+This is still a local mechanism boundary, not isolation against a process
+that can rewrite runtime files: a process running as the account that owns the
+journal can write it directly, and any process in the owner's account can
+read a principal agent-comms stored there. Hosts that call module functions
+directly must authenticate user actions themselves and may pass the
+`authorization` to record. `revisionCommand` accepts an injectable `assertUser`
+for a host's own ceremony; it returns the authorization to record. The CLI also
+refuses cross-soul proposals and requires an Agent ID when an App
 identity is resolved. Hosts can supply `assertSoulTarget` for their authenticated
 soul boundary. There is no flag that changes a proposal into a user edit.
 
@@ -95,7 +126,8 @@ Each `objects/<64-hex>.soul` holds a full validated package. Numbered journal JS
 records carry `schemaVersion: 1`, `kind`, and `at`. Revision records contain
 `revision`, `parentRevision`, `author: user|soul`, and `reason`. Approved proposals
 also record `proposalId`, `approval: user|auto`, and, for user approval,
-`approvedBy` and `approvalReason`. The original author remains `soul`.
+`approvedBy` and `approvalReason`. The original author remains `soul`. User
+actions taken through the owner gate also record `authorization`.
 
 Proposal records contain `proposalId`, both revisions, `author: soul`, `reason`,
 `diff`, `requiresUser`, and initial `status: pending|rejected`. Reject decisions

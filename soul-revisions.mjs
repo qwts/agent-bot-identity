@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Local mechanism API: hosts must authenticate user actions before calling the
-// user entry points. The CLI uses the existing owner-only identity boundary.
+// user entry points. The CLI uses the owner gate (owner-gate.mjs, #293).
 import { randomUUID } from 'node:crypto';
 import { cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
   readdirSync, renameSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
@@ -10,10 +10,12 @@ import { pathToFileURL } from 'node:url';
 import { canonicalJson, computePackageRevision, validateSoulPackage } from './soul-package.mjs';
 import { currentAgentId, readAgentIdentity, recordAgentPackageRevision, stateDirectory, validateAgentId, withLock } from './agent-identity.mjs';
 import { spacePath } from './agent-space.mjs';
-import { resolveAgentSlug } from './resolve-agent.mjs';
+import { assertOwnerAction } from './owner-gate.mjs';
 
 const ZERO = `sha256:${'0'.repeat(64)}`;
 const json = (file) => JSON.parse(readFileSync(file, 'utf8'));
+// How the owner proved a user action (#293), recorded beside it when known.
+const authorized = (options) => (options.authorization ? { authorization: options.authorization } : {});
 const text = (value, label) => {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} is required`);
   return value;
@@ -107,7 +109,7 @@ export function adoptSoulPackage(id, packagePath, { reason = 'Adopt starting pac
     const stored = snapshot(root, packagePath, null, { preserve: true });
     if (identity.genesis && stored.revision !== identity.genesis.revision) throw new Error('starting package must match genesis');
     return append(root, { kind: 'revision', revision: stored.revision, parentRevision: stored.parentRevision,
-      author: 'user', reason }, options);
+      author: 'user', reason, ...authorized(options) }, options);
   });
 }
 
@@ -122,7 +124,7 @@ export function createRevisionAppender(packagePath, { reason, author = 'user', .
     assertParent(root, validated.parentRevision);
     const stored = snapshot(root, packagePath, validated.parentRevision, { preserve: true });
     return append(root, { kind: 'revision', revision: stored.revision,
-      parentRevision: stored.parentRevision, author, reason }, options);
+      parentRevision: stored.parentRevision, author, reason, ...authorized(options) }, options);
   });
 }
 export async function editSoulRevision(id, packagePath, { reason, expectedParent, ...options } = {}) {
@@ -229,11 +231,12 @@ export function decideSoulProposal(id, proposalId, decision, { reason, ...option
   return locked(id, options, (root) => {
     const proposal = listSoulProposals(id, options).find((item) => item.proposalId === proposalId);
     if (!proposal || proposal.status !== 'pending') throw new Error('proposal is not pending');
-    if (decision === 'reject') return append(root, { kind: 'decision', proposalId, author: 'user', reason }, options);
+    if (decision === 'reject') return append(root, { kind: 'decision', proposalId, author: 'user', reason, ...authorized(options) }, options);
     assertParent(root, proposal.parentRevision);
     storedPackage(root, proposal.revision);
     return append(root, { kind: 'revision', revision: proposal.revision, parentRevision: proposal.parentRevision,
-      author: 'soul', reason: proposal.reason, proposalId, approval: 'user', approvedBy: 'user', approvalReason: reason }, options);
+      author: 'soul', reason: proposal.reason, proposalId, approval: 'user', approvedBy: 'user', approvalReason: reason,
+      ...authorized(options) }, options);
   });
 }
 function safeRelative(value) {
@@ -280,16 +283,20 @@ export async function revisionCommand(args, { assertSoulTarget = (id) => {
   if (currentAgentId() !== id) {
     throw new Error('a soul may propose changes only to its own package; bind an Agent ID first');
   }
-}, assertUser = () => {
-  if (currentAgentId() !== null || resolveAgentSlug() !== null) throw new Error('revision user actions are owner only');
-}, ...options } = {}) {
+}, assertUser = (action, { principal }) => assertOwnerAction(action, { principal }),
+// The owner's principal credential, when the caller presents one; it is
+// passed only to assertUser and never stored.
+principal = null, ...options } = {}) {
   const [command, id, ...rest] = args;
   validateAgentId(id);
   const arities = { adopt: 2, edit: 2, propose: 2, approve: 2, reject: 2, list: 0, history: 0, promote: 3 };
   if (!(command in arities) || rest.length !== arities[command]) {
-    throw new Error('usage: soul revision adopt|edit|propose ID PATH REASON; approve|reject ID PROPOSAL REASON; list|history ID; promote ID SOURCE DESTINATION REASON');
+    throw new Error('usage: soul revision adopt|edit|propose ID PATH REASON; approve|reject ID PROPOSAL REASON; list|history ID; promote ID SOURCE DESTINATION REASON; adopt, edit, approve and reject take --principal-stdin');
   }
-  if (['adopt', 'edit', 'approve', 'reject'].includes(command)) await assertUser();
+  if (['adopt', 'edit', 'approve', 'reject'].includes(command)) {
+    const authorization = await assertUser(`soul revision ${command} ${id}`, { principal });
+    if (authorization?.method) options.authorization = authorization;
+  }
   if (['propose', 'promote'].includes(command)) await assertSoulTarget(id);
   if (command === 'adopt') return adoptSoulPackage(id, rest[0], { ...options, reason: rest[1] });
   if (command === 'edit') return editSoulRevision(id, rest[0], { ...options, reason: rest[1] });
@@ -299,7 +306,20 @@ export async function revisionCommand(args, { assertSoulTarget = (id) => {
   if (command === 'history') return revisionHistory(id, options);
   return promoteSpaceContent(id, rest[0], rest[1], { ...options, reason: rest[2] });
 }
+// `--principal-stdin` reads the owner's principal credential as JSON from
+// stdin (never argv, which every local user can read through ps).
+function cliArgs(argv) {
+  const args = argv.filter((arg) => arg !== '--principal-stdin');
+  if (args.length === argv.length) return { args };
+  let principal;
+  try { principal = JSON.parse(readFileSync(0, 'utf8')); }
+  catch { throw new Error('--principal-stdin needs the principal credential as JSON on stdin'); }
+  return { args, principal };
+}
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  revisionCommand(process.argv.slice(2)).then((result) => process.stdout.write(JSON.stringify(result) + '\n'))
+  Promise.resolve().then(() => {
+    const { args, principal } = cliArgs(process.argv.slice(2));
+    return revisionCommand(args, { principal });
+  }).then((result) => process.stdout.write(JSON.stringify(result) + '\n'))
     .catch((error) => { process.stderr.write(`agent-bot soul revision: ${error.message}\n`); process.exitCode = 1; });
 }

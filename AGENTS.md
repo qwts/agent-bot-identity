@@ -102,6 +102,12 @@ current harness:
   be confirmed through the macOS authorization dialog — the owner-approval
   gate in `owner-approval.mjs` (ENG-0353 direction). Stated identities mint
   as before.
+- Owner actions on soul revisions (`adopt`, `edit`, `approve`, `reject`) go
+  through `owner-gate.mjs` (#293): any soul marker (Agent ID, binding, App
+  identity, in the environment or the worktree) refuses, and the absence of
+  markers proves nothing. The owner proves themselves with a presented
+  agent-comms principal credential verified by a broker in another account,
+  or the consent dialog. Never load the principal on the caller's behalf.
 - Identity resolution for commits and tokens must share `resolve-agent.mjs`.
 - Bot territory is the macOS account, not the directory (ENG-0339): a
   rostered agent account (`<prefix>-<harness>-agent`, classified by exact
