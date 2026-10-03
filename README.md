@@ -214,7 +214,16 @@ agent-bot skill path [--json]
 Souls live under `~/.agent-bot/souls` by default. `AGENT_BOT_SOULS_HOME`
 overrides `settings.soulsRoot` in the user config, which overrides the default.
 The account-local population census records each soul's absolute `soulDir`;
-its default directory is `<soulsRoot>/<census-name>.soul`.
+its default directory is `<soulsRoot>/<census-name>.soul`. Named template
+instances use their manifest display name instead.
+
+Create independent tailored agents from one package with
+`agent-bot soul spawn TEMPLATE_PATH --name "Billy" [--harness H]`.
+For example, `Principal SW Engineer.soul` produces
+`Billy - Principal SW Engineer.soul`, with its own genesis identity and
+revision history. Edit each instance's `AGENTS.md` through the existing
+revision flow. See [soul templates](docs/soul-templates.md) for naming,
+provenance and initialization details.
 
 A soul directory holds its package and `.soul-state/home`, the private git
 home used by a launched harness. `.soul-state/agent-id` identifies the soul.

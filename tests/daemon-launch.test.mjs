@@ -74,7 +74,12 @@ const packageEvent = { ...event, soul: undefined, package: '/pkg' };
 
 test('a package launch spawns a soul, homes it with the package, and starts it', async (t) => {
   const homes = [];
-  const f = fixture(t, { spawnPackage: (input) => { assert.equal(input.package, '/pkg'); return { id: spawnedId }; },
+  const f = fixture(t, { spawnPackage: (input) => {
+    assert.equal(input.package, '/pkg');
+    assert.equal(input.name, 'Helper');
+    assert.equal(input.harness, 'claude');
+    return { id: spawnedId };
+  },
     lookupBinding: () => null,
     provisionHome: (soul) => { homes.push(soul); return { worktree: '/home/new', file: '/home/new/.git/agent-binding.json' }; } });
   await f.handler(packageEvent, f.ports);
