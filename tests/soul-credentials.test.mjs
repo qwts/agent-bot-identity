@@ -259,6 +259,13 @@ test('confinement denies a soul its key store, the legacy folder and secret-stor
   denied(check({ tool_name: 'Bash', tool_input: { command: `cat ~/.config/${SLUG}/private-key.pem` } }));
   denied(check({ tool_name: 'Bash', tool_input: { command: 'tar czf /tmp/x.tgz .soul-state/credentials' } }));
   denied(check({ tool_name: 'exec_command', tool_input: { cmd: 'env FOO=1 security list-keychains' } }, 'codex'));
+  // The daemon's grant key and agent-bot-keyd's sockets (#397).
+  const state = path.join(opts.env.XDG_STATE_HOME ?? path.join(home, '.local', 'state'), 'agent-bot');
+  denied(check({ tool_name: 'Read', tool_input: { file_path: path.join(state, 'vouch-key.pem') } }));
+  denied(check({ tool_name: 'Read', tool_input: { file_path: path.join(state, 'keyd', 'audit.jsonl') } }));
+  denied(check({ tool_name: 'Bash', tool_input: { command: `nc -U ${path.join(state, 'keyd', 'owner.sock')}` } }));
+  denied(check({ tool_name: 'Bash', tool_input: { command: 'cat ~/.local/state/agent-bot/vouch-key.pem' } }));
+  allowed(check({ tool_name: 'Bash', tool_input: { command: 'cargo test -p keyd' } }));
   allowed(check({ tool_name: 'Bash', tool_input: { command: 'git commit -m "security fix"' } }));
   allowed(check({ tool_name: 'Bash', tool_input: { command: 'grep -r security docs' } }));
   allowed(check({ tool_name: 'Read', tool_input: { file_path: path.join(soul, 'AGENTS.md') } }));

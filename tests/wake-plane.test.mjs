@@ -91,7 +91,22 @@ test('the cold turn resolves with the agent text after its last tool call', asyn
     },
   });
   const result = await run({ invocation: { agentId: ID, harness: 'codex', cwd: '/w' }, message: 'hi', attachments: [], env: {} });
-  assert.deepEqual(result, { stopReason: 'end_turn', reply: 'Hi, all good.' });
+  assert.deepEqual(result, { stopReason: 'end_turn', reply: 'Hi, all good.', denied: [] });
+});
+
+test('the cold turn names each tool the policy refused, once', async () => {
+  const run = coldTurnExecutor({
+    executorFor: () => async ({ onPermission }) => {
+      onPermission({ toolName: 'Read', outcome: 'allow', decidedBy: 'policy' });
+      onPermission({ toolName: 'Bash', outcome: 'deny', decidedBy: 'policy' });
+      onPermission({ toolName: 'Bash', outcome: 'deny', decidedBy: 'policy' });
+      onPermission({ toolName: 'Edit', outcome: 'deny', decidedBy: 'approval' });
+      return { stopReason: 'end_turn' };
+    },
+  });
+  const result = await run({ invocation: { agentId: ID, harness: 'claude', cwd: '/w' }, message: 'hi', attachments: [], env: {} });
+  assert.deepEqual(result.denied, ['Bash', 'Edit']);
+  assert.equal(result.reply, '');
 });
 
 test('acpExecutorFor reports each turn\'s harness session binding and passes every event through', async () => {

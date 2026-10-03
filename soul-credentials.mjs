@@ -27,6 +27,13 @@
 // the item is not locked to the daemon by the Keychain; it is encrypted at
 // rest, unreadable while the login keychain is locked, and kept from souls by
 // confinement. Locking it to the daemon needs a signed helper (follow-up).
+//
+// - keyd: that signed helper (#397). GeniusBar ships agent-bot-keyd, which
+//   keeps the key in a Keychain item only its own code signature can read.
+//   Nothing here ever reads that store: a keyd soul's key never leaves
+//   keyd, which mints on a grant the daemon signs (keyd-client.mjs).
+//   `migrate-credentials --to keyd` moves keys in. Where there is no keyd
+//   (Homebrew, Linux) souls keep using the two stores above.
 
 import { createPrivateKey, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -161,8 +168,15 @@ export function fileStore({ uid = process.getuid() } = {}) {
   };
 }
 
+// keyd's store has no read or write here: the key only enters keyd through
+// its owner channel and never comes back out.
+export function keydStore() {
+  const held = () => { throw Object.assign(new Error('this key is held by agent-bot-keyd, which never returns it'), { code: 'keyd-held' }); };
+  return { kind: 'keyd', read: held, write: held };
+}
+
 export function credentialStores(options = {}) {
-  return { keychain: keychainStore(options), file: fileStore(options) };
+  return { keychain: keychainStore(options), file: fileStore(options), keyd: keydStore() };
 }
 
 function storeFor(declaration, stores, platform) {
@@ -217,7 +231,9 @@ function readLegacy(slug, home) {
 
 // Mint-time resolution: the declaring soul's store first, then the legacy
 // ~/.config/<slug> folder with a one-time notice. A store that holds a
-// credential but cannot be read is an error, not a reason to fall back.
+// credential but cannot be read is an error, not a reason to fall back. A
+// keyd soul resolves to `source: 'keyd'` with no key: its mint goes through
+// keyd (mint-token.mjs).
 export function resolveAppCredential(slug, {
   agentId = null,
   env = process.env,
@@ -230,6 +246,7 @@ export function resolveAppCredential(slug, {
   slugOrThrow(slug);
   const storeOptions = { stores: stores ?? credentialStores({ env }), platform };
   for (const soul of declaringSouls(slug, { agentId, env, home, cwd })) {
+    if (soul.declaration.store === 'keyd') return { slug, appId: null, privateKeyPem: null, source: 'keyd', agentId: soul.agentId };
     const credential = readSoulCredential(soul, storeOptions);
     if (credential) return { slug, ...credential, source: storeFor(soul.declaration, storeOptions.stores, platform).kind, agentId: soul.agentId };
   }
@@ -245,10 +262,10 @@ export function resolveAppCredential(slug, {
 
 // --- agent-bot identity migrate-credentials ---------------------------------
 
-const USAGE = 'usage: agent-bot identity migrate-credentials [--soul AGENT_ID|NAME | --all] [--dry-run] [--json] [--principal-stdin]';
+const USAGE = 'usage: agent-bot identity migrate-credentials [--soul AGENT_ID|NAME | --all] [--to keyd] [--dry-run] [--json] [--principal-stdin]';
 
 function parseArgs(argv) {
-  const options = { soul: null, all: false, dryRun: false, json: false, principal: false };
+  const options = { soul: null, all: false, dryRun: false, json: false, principal: false, to: null };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === '--all') options.all = true;
@@ -256,6 +273,7 @@ function parseArgs(argv) {
     else if (arg === '--json') options.json = true;
     else if (arg === '--principal-stdin') options.principal = true;
     else if (arg === '--soul' && argv[index + 1] && !argv[index + 1].startsWith('--')) options.soul = argv[++index];
+    else if (arg === '--to' && argv[index + 1] === 'keyd') { options.to = 'keyd'; index++; }
     else throw new Error(USAGE);
   }
   if (options.all === Boolean(options.soul)) throw new Error(USAGE);
@@ -302,6 +320,7 @@ export async function migrateCredentialsCommand(argv, {
   verify = (credential) => verifyAppCredential(credential, { env }),
   revisions = { history: revisionHistory, edit: editSoulRevision },
   now = () => new Date(),
+  keyd = null,
 } = {}) {
   const options = parseArgs(argv);
   // A soul is refused before anything is read, dry run included: listing
@@ -318,8 +337,29 @@ export async function migrateCredentialsCommand(argv, {
   const file = populationFile({ env, home });
   const souls = options.all ? listSouls({ file }).filter((soul) => soul.status !== 'retired') : [resolveSoul(options.soul, file)];
   const authorization = options.dryRun ? null
-    : await gate(`identity migrate-credentials ${options.all ? '--all' : souls[0].id}`, { principal });
+    : await gate(`identity migrate-credentials ${options.all ? '--all' : souls[0].id}${options.to ? ` --to ${options.to}` : ''}`, { principal });
   const stateDir = stateDirectory({ env, home });
+  const declare = async (soul, soulDir, github) => {
+    // Record where the key now lives. A soul with a revision chain records
+    // it as an owner edit, like `soul comms`.
+    const previous = writeSoulCredentialsDeclaration(soulDir, github);
+    try {
+      if (previous !== null && revisions.history(soul.id, { stateDir }).length) {
+        await revisions.edit(soul.id, soulDir, { reason: 'declare per-soul credentials', stateDir,
+          ...(authorization?.method ? { authorization } : {}) });
+      }
+    } catch (error) {
+      writeFileSync(path.join(soulDir, 'soul.json'), previous);
+      throw error;
+    }
+  };
+  if (options.to === 'keyd') {
+    const client = keyd ?? await import('./keyd-client.mjs').then((module) => ({
+      importKeys: (items) => module.importIntoKeyd(items, { env, home }),
+    }));
+    return finishMigration(await migrateToKeyd(souls, { file, env, home, platform, stores, verify, options, client, declare }),
+      { options, env, home, now, write });
+  }
   const results = [];
   for (const soul of souls) {
     const row = { agentId: soul.id, name: soul.name ?? null, app: null, store: null, status: null, detail: null };
@@ -334,6 +374,7 @@ export async function migrateCredentialsCommand(argv, {
     if (!declaration) { Object.assign(row, { status: 'skipped', detail: 'no GitHub App' }); continue; }
     row.app = declaration.app;
     row.store = declaration.store ?? defaultCredentialStore(platform);
+    if (row.store === 'keyd') { Object.assign(row, { status: 'already-migrated' }); continue; }
     const target = { agentId: soul.id, soulDir, declaration };
     try {
       const stored = readSoulCredential(target, { stores, platform });
@@ -349,25 +390,72 @@ export async function migrateCredentialsCommand(argv, {
       const back = readSoulCredential(target, { stores, platform });
       if (!same(back, legacy)) throw new Error('the store did not return what was written');
       await verify(back);
-      if (!declared) {
-        // Record where the key now lives. A soul with a revision chain
-        // records it as an owner edit, like `soul comms`.
-        const previous = writeSoulCredentialsDeclaration(soulDir, { app: declaration.app, store: row.store });
-        try {
-          if (previous !== null && revisions.history(soul.id, { stateDir }).length) {
-            await revisions.edit(soul.id, soulDir, { reason: 'declare per-soul credentials', stateDir,
-              ...(authorization?.method ? { authorization } : {}) });
-          }
-        } catch (error) {
-          writeFileSync(path.join(soulDir, 'soul.json'), previous);
-          throw error;
-        }
-      }
+      if (!declared) await declare(soul, soulDir, { app: declaration.app, store: row.store });
       Object.assign(row, { status: 'migrated' });
     } catch (error) {
       Object.assign(row, { status: 'failed', detail: error.message });
     }
   }
+  return finishMigration(results, { options, env, home, now, write });
+}
+
+// --to keyd: each soul's key, from its current store or the legacy folder,
+// is checked live and handed to agent-bot-keyd in one owner import, so the
+// owner answers one Touch ID or password prompt for all of them. keyd pins
+// this daemon's grant key on the first import. Only then does soul.json say
+// `store: keyd`. The old copies are left where they were and reported.
+async function migrateToKeyd(souls, { file, env, home, platform, stores, verify, options, client, declare }) {
+  const results = [];
+  const moving = [];
+  for (const soul of souls) {
+    const row = { agentId: soul.id, name: soul.name ?? null, app: null, store: 'keyd', status: null, detail: null };
+    results.push(row);
+    let soulDir;
+    try { soulDir = soulDirectory(soul.id, { file, env, home }); }
+    catch { Object.assign(row, { status: 'skipped', detail: 'no soul directory' }); continue; }
+    let declared;
+    try { declared = soulCredentialsDeclaration(soulDir); }
+    catch (error) { Object.assign(row, { status: 'failed', detail: error.message }); continue; }
+    const declaration = declared ?? (soul.appSlug ? { app: soul.appSlug, store: defaultCredentialStore(platform) } : null);
+    if (!declaration) { Object.assign(row, { status: 'skipped', detail: 'no GitHub App' }); continue; }
+    row.app = declaration.app;
+    if (declaration.store === 'keyd') { Object.assign(row, { status: 'already-migrated' }); continue; }
+    try {
+      const from = declaration.store ?? defaultCredentialStore(platform);
+      let credential = readSoulCredential({ agentId: soul.id, soulDir, declaration }, { stores, platform });
+      let origin = from;
+      if (!credential) {
+        try { credential = readLegacy(declaration.app, home); origin = 'legacy'; }
+        catch { Object.assign(row, { status: 'skipped', detail: `no key in the ${from} store or ~/.config/${declaration.app}` }); continue; }
+      }
+      if (options.dryRun) { Object.assign(row, { status: 'would-migrate', detail: `from ${origin}` }); continue; }
+      await verify(credential);
+      moving.push({ soul, soulDir, row, origin, credential });
+    } catch (error) {
+      Object.assign(row, { status: 'failed', detail: error.message });
+    }
+  }
+  if (!moving.length) return results;
+  try {
+    await client.importKeys(moving.map(({ soul, row, credential }) => ({
+      agentId: soul.id, app: row.app, appId: credential.appId, privateKeyPem: credential.privateKeyPem,
+    })));
+  } catch (error) {
+    for (const { row } of moving) Object.assign(row, { status: 'failed', detail: error.message });
+    return results;
+  }
+  for (const { soul, soulDir, row, origin } of moving) {
+    try {
+      await declare(soul, soulDir, { app: row.app, store: 'keyd' });
+      Object.assign(row, { status: 'migrated', detail: `the ${origin} copy was kept` });
+    } catch (error) {
+      Object.assign(row, { status: 'failed', detail: `keyd holds the key, but soul.json was not updated: ${error.message}` });
+    }
+  }
+  return results;
+}
+
+function finishMigration(results, { options, env, home, now, write }) {
   // A legacy key is removable once every soul that declares or uses its App
   // holds the key in its own store. The folder keeps bot-uid and other
   // public metadata other commands still read, so only the key file is named.
