@@ -54,6 +54,7 @@ import {
 } from './agent-identity.mjs';
 import { initAgentSpace } from './agent-space.mjs';
 import { upsertIdentitySoul } from './agent-population.mjs';
+import { linkWorktree } from './soul-worktrees.mjs';
 
 export function prepareWorktreeBinding(options) {
   if (readBinding({ env: {}, gitDir: options.gitDir })) return 'binding reused';
@@ -254,6 +255,11 @@ async function bindExecutionIdentity({
       return local;
     },
   });
+  // Linking is a convenience (ADR-0332 decision 6); it never fails setup.
+  if (worktree) {
+    try { linkWorktree(executionIdentity.id, worktree); }
+    catch (error) { process.stderr.write(`setup-worktree: checkout not linked into its soul: ${error.message}\n`); }
+  }
   if (currentAgentId && currentAgentId !== executionIdentity.id) {
     process.stderr.write(
       `setup-worktree: ${currentAgentId} is no longer pinned here; run doctor to check its other recorded checkouts\n`,

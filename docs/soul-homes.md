@@ -43,3 +43,34 @@ space path. An existing link, including a dangling one, is kept.
 source }`. `source` is `environment`, `setting`, or `default`. Hosts such as
 GeniusBar should use this contract for location reads, and harness auth uses
 this registry home too. Reading the directory does not provision a home.
+
+## Repository worktrees
+
+ADR-0332 decision 6 makes repository checkouts discoverable from
+`<soulDir>/worktrees/` (0700). Claude's `WorktreeCreate` hook resolves the
+session's soul before creating a checkout and puts new worktrees at
+`<soulDir>/worktrees/<name>`. Without a resolved soul, it keeps Claude's
+configured worktree layout. Names used in the soul directory have separators
+and unsafe characters replaced, no leading dot, and at most 100 characters.
+
+`placeWorktree` in `soul-worktrees.mjs` compares the soul directory's device
+with the repository's common git directory. On different devices, or when
+the soul checkout path exceeds 900 characters, it selects
+`$TMPDIR/agent-bot/<agentId>/<name>` (the OS temporary directory when TMPDIR
+is unset). The creator adds the git worktree there, then `linkWorktree`
+links it from the soul. The shared provisioning logic writes the private
+`.soul-state/agent-id` marker and registers the soul directory without
+creating a home.
+
+`setup-worktree` configures an existing checkout and records its actual path
+in the census's `worktree` and `worktrees` fields. It also links checkouts
+outside the soul's `worktrees/`, including Devin, Codex, and older Claude
+checkouts. Nothing moves: existing checkouts keep their paths. Repeated
+setup reuses a matching link; a name already occupied by another checkout,
+directory, or dangling link gets a `-2`, `-3`, … suffix. A checkout already
+inside the soul's `worktrees/` needs no extra link. Claude also finds existing
+checkouts through git's worktree list and reuses only the same bound session.
+
+Launch does not create repository worktrees. It runs in an existing binding
+or provisions the git home at `.soul-state/home` as described above.
+`worktrees/` remains working state excluded from soul packages and revisions.
