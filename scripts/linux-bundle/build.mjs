@@ -224,7 +224,7 @@ export function tagCommit(lsRemote, tag) {
 // fetches the same component: the tag must resolve to the pinned commit before
 // anything is fetched, that commit is fetched shallow, and only what the package
 // declares it ships is copied out of the tree. The commit SHA is the integrity
-// pin, so there is no checksum to compare and no registry to resolve. v0.3.2 has
+// pin, so there is no checksum to compare and no registry to resolve. v0.3.3 has
 // no npm dependencies, so nothing is installed and no install script ever runs.
 function fetchCommsTree(pin, { cacheDir, offline }) {
   const cached = join(cacheDir, `agent-comms-${pin.ref}`);

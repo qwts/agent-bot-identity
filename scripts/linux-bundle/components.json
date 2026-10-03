@@ -27,15 +27,15 @@
   },
   "agent_comms": {
     "repo": "qwts/agent-comms",
-    "tag": "v0.3.2",
-    "ref": "9b1e9e70da38c59e77a47776aa619b6ab016b18e",
+    "tag": "v0.3.3",
+    "ref": "3948c9a8e548e5104cb1eb8d75e5f446fd3f4537",
     "bin": "bin/agent-comms.mjs",
     "required_verbs": ["join", "inbox", "send", "broker"],
     "pin_note": [
       "The agent-comms this runtime talks to is the qwts repository GeniusBar",
       "bundles, not the unrelated npm package that shares the name. The commit",
       "SHA is the integrity pin: the tag must resolve to it before anything is",
-      "fetched, and only the package's own files entries are copied. v0.3.2 has no",
+      "fetched, and only the package's own files entries are copied. v0.3.3 has no",
       "npm dependencies, so nothing is resolved or installed into the archive.",
       "The verbs are checked for real, by running the fetched CLI's --help."
     ]
