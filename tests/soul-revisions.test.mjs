@@ -316,7 +316,7 @@ for (const change of ['add', 'modify', 'remove', 'mode']) {
   });
 }
 
-test('v2 snapshots and proposal diffs exclude working state and generated files', async (t) => {
+test('v2 snapshots and proposal diffs exclude working state but include marked harness files', async (t) => {
   const f = fixture(t, { mode: 'auto', paths: ['**'] });
   const manifest = JSON.parse(readFileSync(join(f.packagePath, 'soul.json')));
   update(f, 'soul.json', { ...manifest, formatVersion: 2, ignore: PACKAGE_IGNORE_LIST });
@@ -325,13 +325,18 @@ test('v2 snapshots and proposal diffs exclude working state and generated files'
   mkdirSync(join(f.packagePath, 'worktrees'));
   symlinkSync('missing', join(f.packagePath, 'worktrees/checkout'));
   update(f, '.soul-state/cache', 'private state');
-  update(f, '.codex/nested/generated.md', `${GENERATED_HARNESS_MARKER}\noutput`);
   assert.deepEqual(diffSoulPackages(before, f.packagePath), []);
+  const revision = computePackageRevision(f.packagePath);
+  const markedFiles = ['CLAUDE.md', '.claude/x.md', '.codex/nested/generated.md'];
+  for (const path of markedFiles) update(f, path, `${GENERATED_HARNESS_MARKER}\noutput`);
+  assert.notEqual(computePackageRevision(f.packagePath), revision);
   update(f, '.codex/authored.md', 'authored');
   const p = propose(f);
-  assert.deepEqual(p.diff, [{ path: '.codex', change: 'added' }, { path: '.codex/authored.md', change: 'added' }]);
+  assert.deepEqual(p.diff, ['.claude', '.claude/x.md', '.codex', '.codex/authored.md',
+    '.codex/nested', '.codex/nested/generated.md', 'CLAUDE.md'].map((path) => ({ path, change: 'added' })));
   const stored = revisionPackagePath(f.id, p.revision, f.options);
-  for (const path of ['worktrees', '.soul-state', '.codex/nested']) assert.equal(existsSync(join(stored, path)), false);
+  for (const path of ['worktrees', '.soul-state']) assert.equal(existsSync(join(stored, path)), false);
   assert.equal(readFileSync(join(stored, '.codex/authored.md'), 'utf8'), 'authored');
+  for (const path of markedFiles) assert.equal(readFileSync(join(stored, path), 'utf8'), `${GENERATED_HARNESS_MARKER}\noutput`);
   assert.equal(existsSync(join(f.packagePath, '.soul-state/cache')), true, 'source working state survives');
 });

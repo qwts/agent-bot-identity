@@ -32,7 +32,7 @@ example.soul/
   agent-sop.toml             optional SOP selection
   worktrees/                working state (ignored in format 2)
   .soul-state/              working state (ignored in format 2)
-  .claude/ .codex/ …         generated harness output (marked files ignored in format 2)
+  .claude/ .codex/ …         generated harness output (exact build matches ignored in format 2)
   ...                       preserved extensions and arbitrary binary assets
 ```
 
@@ -118,16 +118,21 @@ The contract is fixed for format 2, exported as `PACKAGE_IGNORE_LIST` from
 `soul-package.mjs`, and validated exactly (object key order is immaterial;
 array order matters). It is part of the canonical manifest bytes. Producers
 such as soul-builder use `GENERATED_HARNESS_PATHS` and
-`GENERATED_HARNESS_MARKER` from the same module.
+`GENERATED_HARNESS_MARKER` from the same module. The marker is informational;
+it never authorizes ignoring a file.
 
 Only root-relative `worktrees` and `.soul-state` entries are skipped, before
 stat, symlink, special-file, or descendant validation. Nested entries with
 these names remain package content. Generated paths ending in `/` cover files
 beneath that top-level folder; other paths name individual aliases. A regular
-file there is ignored only when it contains an exact marker line (LF or CRLF).
-Hand-authored files and unknown files remain covered. Marker text elsewhere
-has no effect. Generated symlinks are rejected because they cannot safely be
-inspected for a marker; builders must write regular alias files.
+file there is ignored only when its bytes exactly match the expected soul-builder
+output for this package. `expectedGeneratedFiles(packageEntries)` derives that
+output from non-generated package entries (AGENTS.md, skills, policy). Until
+soul-builder ships (#342), it returns an empty map and nothing at generated
+paths is ignored. A marked file that does not match is ordinary package content:
+it affects the revision and appears in snapshots and proposal diffs. Hand-authored
+files and unknown files remain covered. Generated symlinks are rejected; builders
+must write regular alias files.
 
 Directories containing only ignored generated files are omitted recursively.
 Mixed directories retain their authored files and container entries. Truly
@@ -201,7 +206,7 @@ preimages and digests, not just two calls to the implementation.
 Every tool that reads/writes/copies a package **must preserve unknown files,
 unknown manifest fields, and directories**, with their bytes and normalized
 modes. Format 1 has no ignore list, including for dotfiles. Format 2 excludes
-only the working state and marked generated files specified above. Every other
+only the working state and generated files matching the build output specified above. Every other
 unknown file affects the hash just like a known one. No future tool may strip extensions when
 round-tripping a package. The validator is read-only, including on failure;
 this issue supplies no copying or editing tool.

@@ -5,18 +5,31 @@ import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-// Shared with soul-builder: only marked files are generated, so hand-authored
-// harness configuration remains package content. Prefixes are root-relative.
+// Shared with soul-builder: only exact build output is ignored; the marker is
+// informational and cannot authenticate generated content. Prefixes are root-relative.
 export const GENERATED_HARNESS_PATHS = Object.freeze([
   '.claude/', '.codex/', '.cursor/', '.opencode/', '.devin/', '.gemini/',
   '.github/copilot-instructions.md', 'CLAUDE.md', 'GEMINI.md',
 ]);
 export const GENERATED_HARNESS_MARKER = '<!-- agent-bot soul-builder: generated -->';
+// Format 2's fixed contract. Generated paths are eligible only for exact-byte
+// matching against expectedGeneratedFiles, never for marker-based ignoring.
 export const PACKAGE_IGNORE_LIST = Object.freeze({
   directories: Object.freeze(['worktrees/', '.soul-state/']),
   generatedPaths: GENERATED_HARNESS_PATHS,
   generatedMarker: GENERATED_HARNESS_MARKER,
 });
+
+export function expectedGeneratedFiles(packageEntries) {
+  // #342 will derive soul-builder output from package content (AGENTS.md,
+  // skills, policy). Until then, nothing at generated paths is ignored.
+  return new Map();
+}
+
+function isGeneratedPath(path) {
+  return GENERATED_HARNESS_PATHS.some((candidate) => candidate.endsWith('/')
+    ? path.startsWith(candidate) : path === candidate);
+}
 
 const REVISION = /^sha256:[a-f0-9]{64}$(?![\s\S])/;
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -110,7 +123,7 @@ function validateSkill(bytes, directory) {
   if (skillField(front, 'description').length > 1024) throw new Error('skill description exceeds 1024 characters');
 }
 
-export function readSoulPackageEntries(packagePath) {
+export function readSoulPackageEntries(packagePath, { expectedGeneratedFiles: buildExpected = expectedGeneratedFiles } = {}) {
   const root = resolve(packagePath);
   if (!lstatSync(root).isDirectory()) throw new Error('package must be a directory, not a symlink or archive');
   const manifestPath = join(root, 'soul.json');
@@ -125,7 +138,7 @@ export function readSoulPackageEntries(packagePath) {
   const ignoresState = manifest.formatVersion === 2;
   const entries = [];
   const names = new Set();
-  function walk(directory, prefix = '') {
+  function walk(directory, prefix = '', expected = new Map()) {
     let skipped = false;
     for (const rawName of readdirSync(directory, { encoding: 'buffer' })) {
       const name = utf8(rawName, 'path');
@@ -141,16 +154,14 @@ export function readSoulPackageEntries(packagePath) {
       if (stat.isDirectory()) {
         const index = entries.length;
         entries.push({ path, mode: '040000', bytes: Buffer.alloc(0) });
-        const omitted = walk(physical, `${path}/`);
+        const omitted = walk(physical, `${path}/`, expected);
         // Generated-only container directories must not change the revision.
         // Preserve genuinely empty directories and containers of authored files.
         if (omitted && entries.length === index + 1) entries.splice(index, 1);
         skipped ||= omitted;
       } else {
         const bytes = readFileSync(physical);
-        if (ignoresState && GENERATED_HARNESS_PATHS.some((candidate) => candidate.endsWith('/')
-          ? path.startsWith(candidate) : path === candidate) &&
-          bytes.toString('utf8').split(/\r?\n/).includes(GENERATED_HARNESS_MARKER)) {
+        if (ignoresState && isGeneratedPath(path) && expected.get(path)?.equals(bytes)) {
           skipped = true;
           continue;
         }
@@ -160,6 +171,17 @@ export function readSoulPackageEntries(packagePath) {
     return skipped;
   }
   walk(root);
+  if (ignoresState) {
+    // Derive expected output from source content before filtering candidates.
+    // Exclude generated containers too, so existing output cannot feed its build.
+    const packageEntries = entries.filter((entry) => !isGeneratedPath(entry.path) &&
+      !(entry.mode === '040000' && isGeneratedPath(`${entry.path}/`)));
+    packageEntries.sort((a, b) => Buffer.compare(Buffer.from(a.path), Buffer.from(b.path)));
+    const expected = buildExpected(packageEntries);
+    entries.length = 0;
+    names.clear();
+    walk(root, '', expected);
+  }
   const files = new Map(entries.filter((entry) => entry.mode !== '040000').map((entry) => [entry.path, entry]));
   for (const required of ['soul.json', 'AGENTS.md']) if (!files.has(required)) throw new Error(`missing required file: ${required}`);
   utf8(files.get('AGENTS.md').bytes, 'AGENTS.md');
@@ -180,8 +202,8 @@ function frame(value) {
   return Buffer.concat([Buffer.from(`${bytes.length}:`), bytes, Buffer.from(',')]);
 }
 
-export function canonicalPackageBytes(packagePath) {
-  const { manifest, entries } = readSoulPackageEntries(packagePath);
+export function canonicalPackageBytes(packagePath, options) {
+  const { manifest, entries } = readSoulPackageEntries(packagePath, options);
   const { revision, parentRevision, ...content } = manifest;
   entries.find((entry) => entry.path === 'soul.json').bytes = Buffer.from(canonicalJson(content));
   return Buffer.concat([
@@ -190,8 +212,8 @@ export function canonicalPackageBytes(packagePath) {
   ]);
 }
 
-export function computePackageRevision(packagePath) {
-  return `sha256:${createHash('sha256').update(canonicalPackageBytes(packagePath)).digest('hex')}`;
+export function computePackageRevision(packagePath, options) {
+  return `sha256:${createHash('sha256').update(canonicalPackageBytes(packagePath, options)).digest('hex')}`;
 }
 
 export function validateSoulPackage(packagePath) {

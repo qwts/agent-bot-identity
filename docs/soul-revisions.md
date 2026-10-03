@@ -125,7 +125,10 @@ is for authenticated user edits. Soul callers use `proposeSoulRevision`.
 
 Each `objects/<64-hex>.soul` holds a full validated package. Package formats 1
 and 2 are supported; format 2 snapshots and diffs exclude working state and
-marked generated files using the [package ignore contract](soul-package.md). Numbered journal JSON
+generated files whose bytes exactly match the package’s soul-builder output,
+using the [package ignore contract](soul-package.md). The marker alone has no
+effect. Until soul-builder ships (#342), nothing at generated paths is ignored;
+marked files are included in snapshots and proposal diffs. Numbered journal JSON
 records carry `schemaVersion: 1`, `kind`, and `at`. Revision records contain
 `revision`, `parentRevision`, `author: user|soul`, and `reason`. Approved proposals
 also record `proposalId`, `approval: user|auto`, and, for user approval,
