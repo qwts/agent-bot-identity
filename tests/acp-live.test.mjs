@@ -14,7 +14,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -181,10 +181,12 @@ const REACH_TOKEN = 'REACH_LOOP_TOKEN_4172';
 // (`muse exec` has no per-run MCP mount), so Muse's reach-back lane is
 // registered-only until the CLI grows one — an injected live test for it
 // could never pass and would misstate the enablement.
-// Codex runs under the daemon's own default-deny reach policy: its approvals
-// reach this client (the row's sessionMode), so the loop closes only when
-// every reach call is named and allowed by the exact `mcp__` rules (#384).
-const REACH_POLICY = { codex: { version: 1, rules: reachPolicyRules(), fallback: 'deny' } };
+// Codex and OpenCode run under the daemon's own default-deny reach policy:
+// their approvals reach this client (each row's sessionMode; OpenCode's also
+// selects its daemon agent ruleset, #390), so the loop closes only when every
+// reach call is named and allowed by the exact `mcp__` rules (#384).
+const DAEMON_POLICY = { version: 1, rules: reachPolicyRules(), fallback: 'deny' };
+const REACH_POLICY = { codex: DAEMON_POLICY, opencode: DAEMON_POLICY };
 
 for (const harness of ['opencode', 'claude', 'codex']) {
   test(`live ${harness}: injected reach server closes the loop with a reply event`, {
@@ -223,6 +225,41 @@ for (const harness of ['opencode', 'claude', 'codex']) {
     );
     assert.equal(reply.data.agentId, AGENT_ID);
     t.diagnostic(`${harness} injected reply: ${reply.data.text}`);
+  });
+}
+
+// The other half of #390: under the same default-deny policy, a shell write
+// outside the workspace must reach the daemon and be refused, even when the
+// harness's own config allows everything. The run's HOME is the caller's, so
+// a machine config saying "permission": "allow" is exercised as-is.
+for (const harness of ['opencode', 'codex']) {
+  test(`live ${harness}: the daemon policy refuses a shell write outside the workspace`, {
+    skip: REACH_LIVE.includes(harness) ? false : `set AGENT_BOT_REACH_LIVE=${harness} to run`,
+    timeout: 360_000,
+  }, async (t) => {
+    const { env, principal } = harnessFixture();
+    const workspace = mkdtempSync(path.join(tmpdir(), 'acp-live-ws-'));
+    const outside = mkdtempSync(path.join(tmpdir(), 'acp-live-out-'));
+    roots.push(workspace, outside);
+    const target = path.join(outside, 'escaped.txt');
+    const executor = createAcpExecutor({
+      harness,
+      identity: IDENTITY,
+      policy: DAEMON_POLICY,
+      cwd: workspace,
+      log: (line) => t.diagnostic(String(line)),
+    });
+    const interaction = createInteractionService({
+      env, home: '/nonexistent', config: {}, log: (line) => t.diagnostic(String(line)), executor,
+    });
+    const { finished } = await liveTurn({
+      principal,
+      interaction,
+      message: `Run this exact shell command once: touch ${target} — then reply DONE whether or not it worked.`,
+      key: `deny-${harness}-shell`,
+    });
+    assert.ok(['completed', 'failed'].includes(finished.status));
+    assert.equal(existsSync(target), false, `${harness} wrote outside the workspace without the daemon`);
   });
 }
 

@@ -376,6 +376,7 @@ export function createAcpExecutor({
 
     const env = { ...baseEnv };
     for (const name of row.stripEnv) delete env[name];
+    Object.assign(env, row.setEnv ?? {});
 
     // detached puts the agent in its own process group, so killTree can take
     // down the whole tree — spawn-runner rows like npx launch the actual
