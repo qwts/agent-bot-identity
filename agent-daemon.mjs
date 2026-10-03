@@ -57,7 +57,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
-import { listSouls, populationFile, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
+import { listSouls, locateSoulDir, populationFile, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
 import {
   bindAgentLineage,
@@ -1262,6 +1262,7 @@ export async function runDaemon({
       provision: provisionHome, harness: identities(agentId).harness ?? null,
     }),
     provisionHome: (soul) => provisionHome(soul),
+    locatePackage: (packagePath) => locateSoulDir(packagePath, { env, home, config, file: populationFile({ env, home }) }),
     // ADR-0276: an existing soul's own harness, else a package's preference,
     // else a registry harness on PATH.
     defaultHarness: async ({ soul, package: packagePath }) => {

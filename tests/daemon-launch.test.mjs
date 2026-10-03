@@ -87,6 +87,31 @@ test('a package launch spawns a soul, homes it with the package, and starts it',
   assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId: spawnedId });
 });
 
+test('a package launch of an installed soul\'s own folder relaunches that soul, never spawns (#80)', async (t) => {
+  const f = fixture(t, { locatePackage: (pkg) => ({ path: pkg, status: 'installed', agentId, soulDir: pkg, copies: [] }),
+    provisionHome: () => { throw new Error('unexpected provision'); } });
+  await f.handler(packageEvent, f.ports);
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId });
+  assert.equal(f.calls[0].agentId, agentId);
+});
+
+test('a package launch of a copied soul folder is refused before anything is minted (#80)', async (t) => {
+  for (const status of ['copy', 'duplicate', 'unregistered']) {
+    const f = fixture(t, { locatePackage: (pkg) => ({ path: pkg, status, agentId, message: `${pkg} is a ${status}` }) });
+    await f.handler(packageEvent, f.ports);
+    assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'failed', agentId: null, detail: `/pkg is a ${status}` });
+    assert.equal(f.calls.length, 0);
+  }
+});
+
+test('a package with no soul marker still spawns a new soul (#80)', async (t) => {
+  const f = fixture(t, { locatePackage: (pkg) => ({ path: pkg, status: 'package' }),
+    spawnPackage: () => ({ id: spawnedId }), lookupBinding: () => null,
+    provisionHome: (soul) => ({ worktree: '/home/new', file: `/home/new/${soul.packagePath}` }) });
+  await f.handler(packageEvent, f.ports);
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId: spawnedId });
+});
+
 test('a team start passes its parent to the spawn, the join, and the first turn; never with an existing soul (#377)', async (t) => {
   const parent = 'agent_33333333-3333-4333-8333-333333333333';
   const seen = {};

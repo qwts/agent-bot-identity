@@ -67,6 +67,9 @@ export function dispatchAgentBot(parsed) {
   if (parsed.command === 'soul' && parsed.args[0] === 'dir') {
     return run(process.execPath, [join(ROOT, 'soul-dir.mjs'), ...parsed.args.slice(1)]);
   }
+  if (parsed.command === 'soul' && parsed.args[0] === 'locate') {
+    return run(process.execPath, [join(ROOT, 'soul-dir.mjs'), ...parsed.args]);
+  }
   if (parsed.command === 'soul' && parsed.args[0] === 'build') {
     return run(process.execPath, [join(ROOT, 'soul-build.mjs'), ...parsed.args.slice(1)]);
   }
@@ -87,6 +90,6 @@ export function dispatchAgentBot(parsed) {
     return run(process.execPath, [join(ROOT, module), ...parsed.args], { ...process.env, AGENT_BOT_SETUP_HINT: '1' });
   }
   const args = parsed.command === 'soul' && parsed.args[0] === 'cold-wake' ? parsed.args.slice(1) : parsed.args;
-  if (parsed.command === 'soul' && parsed.args[0] !== 'cold-wake') throw new Error('usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-] | soul build [PATH] [--check] | soul pack validate PATH | soul revision <command> | soul comms <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul dir AGENT_ID | soul spawn TEMPLATE_PATH --name NAME [--harness H] | soul confinement AGENT_ID off|warn|deny | soul confinement-report AGENT_ID [--json]');
+  if (parsed.command === 'soul' && parsed.args[0] !== 'cold-wake') throw new Error('usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-] | soul build [PATH] [--check] | soul pack validate PATH | soul revision <command> | soul comms <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul dir AGENT_ID | soul locate PATH | soul spawn TEMPLATE_PATH --name NAME [--harness H] | soul confinement AGENT_ID off|warn|deny | soul confinement-report AGENT_ID [--json]');
   return run(process.execPath, [join(ROOT, module), ...args]);
 }
