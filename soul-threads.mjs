@@ -160,6 +160,16 @@ export function threadContext(agentId, message, {
   return thread;
 }
 
+// The messages the soul sent itself (send_message, a start_soul brief) since
+// `since` (an ISO time) under `correlation`: what a relayed turn already said
+// on its own, so the waker does not send its final text as well (#407).
+export function sentSince(agentId, { since, correlation = null } = {}, { env = process.env, home = homedir() } = {}) {
+  if (typeof since !== 'string' || since === '') return [];
+  return readJournal(agentId, { env, home }).filter((entry) => entry.dir === 'out'
+    && typeof entry.at === 'string' && entry.at >= since
+    && (correlation === null || entry.correlation === correlation));
+}
+
 // The thread as prompt text. Every line is quoted message data.
 export function formatThread(thread) {
   if (!Array.isArray(thread) || thread.length === 0) return '';

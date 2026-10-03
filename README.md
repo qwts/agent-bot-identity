@@ -694,6 +694,17 @@ messages of its thread — found by `correlation` and `replyTo`, at most 8 and
 instructions. So when Starter asks Bill to get a list from Ted, Ted's answer
 wakes Bill with Starter's request in view, and Bill sends the list on.
 
+A relayed turn's final text goes back only when the turn did not already
+speak for itself (#407). A turn woken by another soul that used
+`send_message` or a `start_soul` brief sends no final text at all, so its
+narration ("Message sent to Ted…") never reaches anyone; a person still gets
+the final text unless the turn already messaged them. A comms turn has no
+interaction-store invocation, so its reach server leaves out
+`fetch_context`, `post_reply` and `report_status`; the prompt already holds
+the message and its thread. A turn the policy stopped with nothing said
+answers with a short notice naming the refused tools, never the rules
+(#408).
+
 A soul can also start its own team (#377). `start_soul` (`name`, and
 optionally `harness`, `template`, `brief`) starts a new full soul — its own
 soul directory, identity and inbox, not a subagent in the caller's session —

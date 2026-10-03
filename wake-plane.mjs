@@ -24,12 +24,14 @@ export function wakeReporter(report) {
 // A cold turn has no principal watching it, so nothing may escalate to an
 // approval: whatever the policy does not allow outright is denied. The turn
 // resolves with its `reply`: the agent's message text after its last tool
-// call, which the cold waker's relay sends back.
+// call, which the cold waker's relay sends back, and `denied`: the tools the
+// policy refused, so a turn that stopped on one is not answered with silence.
 export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onEvent = () => {} }) {
   return async ({ invocation, message, attachments, env }) => {
     const executor = executorFor({ agentId: invocation.agentId, harness: invocation.harness, cwd: invocation.cwd, env });
     const signal = AbortSignal.timeout(turnTimeoutMs);
     let reply = '';
+    const denied = [];
     const collect = (type, update) => {
       if (type !== UPDATE_EVENT) return;
       if (update?.sessionUpdate === 'agent_message_chunk' && typeof update.content?.text === 'string') reply += update.content.text;
@@ -43,8 +45,11 @@ export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onE
       appendEvent: (type, data) => { collect(type, data); onEvent(type); return { type }; },
       addArtifact: () => { throw new Error('a cold turn has no artifact store'); },
       requestApproval: async () => ({ decision: 'deny' }),
+      onPermission: ({ toolName, outcome }) => {
+        if (outcome === 'deny' && typeof toolName === 'string' && !denied.includes(toolName)) denied.push(toolName);
+      },
     });
-    return { ...result, reply };
+    return { ...result, reply, denied };
   };
 }
 

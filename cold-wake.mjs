@@ -15,12 +15,19 @@
 // soul receives and answers (soul-threads.mjs) and puts the woken message's
 // earlier thread into the prompt (#392): a soul woken by a teammate's answer
 // still knows who asked for the work.
+//
+// The final text is sent only when the turn did not already speak for itself
+// (#407): a turn woken by another soul that used send_message has said what
+// it meant to, and its final text is usually narration; a turn that messaged
+// the sender directly would otherwise send the same answer twice. A turn the
+// policy stopped with nothing said gets a short notice naming the refused
+// tools instead of silence (#408).
 
 import { randomUUID } from 'node:crypto';
 
 import { wakeSetting } from './cold-wake-settings.mjs';
 import { FINAL_REPLY_ERRORS, senderAddress } from './comms-relay.mjs';
-import { NO_REPLY, formatThread, recordThreadMessage, stripNoReply, threadContext, threadKey } from './soul-threads.mjs';
+import { NO_REPLY, formatThread, recordThreadMessage, sentSince, stripNoReply, threadContext, threadKey } from './soul-threads.mjs';
 
 // The final answer a soul gives when a teammate's message needs no answer
 // back. Every relayed turn's answer is otherwise a reply, so two souls would
@@ -29,10 +36,32 @@ export { NO_REPLY };
 
 export function relayPrompt(message, thread = []) {
   const fromSoul = typeof message.from?.principal !== 'string';
-  return `You have an agent-comms message from ${senderAddress(message.from)}${fromSoul ? ', another agent' : ''}. Your final answer is sent back to them as your reply, so write it as the reply itself; you do not need to run agent-comms.`
-    + (fromSoul ? ` If it needs no answer (a thanks, or a result you only had to receive), make your final answer exactly ${NO_REPLY} and nothing is sent. Use send_message to tell anyone else, such as the person who asked you for this work, what came of it.` : '')
+  const sender = senderAddress(message.from);
+  return `You have an agent-comms message from ${sender}${fromSoul ? ', another agent' : ''}. Your final answer is sent back to them as your reply, so write it as the reply itself, not notes on what you did; you do not need to run agent-comms.`
+    + (fromSoul ? ` If it needs no answer (a thanks, or a result you only had to receive), make your final answer exactly ${NO_REPLY} and nothing is sent. Use send_message to tell anyone else, such as the person who asked you for this work, what came of it. If you use send_message in this turn, your final answer is not sent at all, so send ${sender} anything they need to hear with send_message too.` : '')
     + (thread.length > 0 ? ' This session does not remember earlier turns, so the conversation so far is below. If this message answers something you asked for on someone else\'s behalf, pass the result on to them with send_message.' : '')
     + `\n\n${formatThread(thread)}${thread.length > 0 ? 'The new message:\n\n' : ''}${message.body}`;
+}
+
+// Two spellings of one recipient: a bare agent id, or `account/agentId`.
+function sameAddress(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  return a === b || a.split('/').pop() === b.split('/').pop();
+}
+
+const DENIED_NOTICE_TOOLS = 3;
+
+// The reply a turn gets when the policy refused its tools and it said
+// nothing: which tools, never the rules behind them.
+export function deniedNotice(tools) {
+  const names = [...new Set((Array.isArray(tools) ? tools : [])
+    .map((name) => (typeof name === 'string' ? name.replace(/[^\w.:*/-]/g, '').slice(0, 64) : ''))
+    .filter(Boolean))];
+  if (names.length === 0) return null;
+  const shown = names.slice(0, DENIED_NOTICE_TOOLS);
+  const more = names.length - shown.length;
+  const list = shown.join(', ') + (more > 0 ? ` and ${more} more` : '');
+  return `I couldn't finish this: ${list} ${names.length === 1 ? 'is' : 'are'} not allowed for me here (my owner's policy for this agent).`;
 }
 
 function recordInbound(agentId, message, threads) {
@@ -132,10 +161,15 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
           recordInbound(agentId, message, threads);
           const correlation = threadKey(message);
           const turn = correlation ? { ...invocation, correlation } : invocation;
+          const since = (typeof threads.now === 'function' ? threads.now() : new Date()).toISOString();
           const result = await executor({ invocation: turn, message: relayPrompt(message, thread), attachments: [], env, wake });
-          const body = stripNoReply(result?.reply);
+          const to = senderAddress(message.from);
+          const own = sentSince(agentId, { since, correlation }, threads);
+          const fromSoul = typeof message.from?.principal !== 'string';
+          const spoke = fromSoul ? own.length > 0 : own.some((entry) => sameAddress(entry.to, to));
+          const said = typeof result?.reply === 'string' ? result.reply.trim() : '';
+          const body = spoke ? '' : (stripNoReply(result?.reply) || (said === '' ? deniedNotice(result?.denied) : null));
           if (body) {
-            const to = senderAddress(message.from);
             const sent = await relay.reply(soul, { to, replyTo: message.id, body, correlation }).catch((error) => {
               if (!FINAL_REPLY_ERRORS.has(error?.code)) throw error;
               return null;

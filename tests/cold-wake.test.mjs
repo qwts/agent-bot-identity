@@ -5,7 +5,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { createColdWaker } from '../cold-wake.mjs';
+import { createColdWaker, deniedNotice } from '../cold-wake.mjs';
+import { recordThreadMessage } from '../soul-threads.mjs';
 
 // Relayed turns journal their thread (#392) under the identity state home.
 const stateHome = mkdtempSync(path.join(tmpdir(), 'cold-wake-state-'));
@@ -283,4 +284,116 @@ test('task reporting errors do not fail a cold turn; cancellation is reported wi
     assert.deepEqual(outcomes, [cancelled ? 'cancelled' : 'completed']);
     assert.equal(logs.length, 2);
   }
+});
+
+// A relay that serves `inbox` once and records what the waker sends.
+function oneShotRelay(inbox) {
+  const sent = [];
+  const acked = [];
+  return {
+    sent,
+    acked,
+    read: async () => inbox.filter((m) => !acked.includes(m.id)),
+    reply: async (soul, reply) => { sent.push(reply); return { messageId: `r-${sent.length}` }; },
+    ack: async (soul, ids) => { acked.push(...ids); },
+  };
+}
+
+// What the reach server journals when the turn calls send_message.
+function sendDuringTurn(to, correlation, body = 'sent by the turn') {
+  recordThreadMessage(id, { dir: 'out', id: `s-${Math.random()}`, to, correlation, body });
+}
+
+function relayWaker(relay, executor) {
+  return createColdWaker({ executor, settings: { [id]: true }, lookupBinding: async () => binding, identities: async () => githubIdentity, receipt: () => {}, relay });
+}
+
+// #407: Bill, woken by Starter, asks Ted with send_message; his final text
+// is narration ("Message sent to Ted…") and must not reach Starter.
+test('a turn woken by a soul that used send_message sends no final text', async () => {
+  const starter = { account: 'acct', agentId: 'agent_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' };
+  const relay = oneShotRelay([{ id: 'n407a', from: starter, body: 'Bill, ask Ted for a tip.' }]);
+  const prompts = [];
+  const wake = relayWaker(relay, async ({ message, invocation }) => {
+    prompts.push(message);
+    sendDuringTurn('acct/agent_cccccccc-cccc-4ccc-8ccc-cccccccccccc', invocation.correlation);
+    return { reply: "Message sent to Ted. I'll wait for his reply." };
+  });
+  await wake({ agentId: id, count: 1, messageIds: ['n407a'] });
+  await wake.idle();
+  assert.match(prompts[0], /If you use send_message in this turn, your final answer is not sent at all/);
+  assert.deepEqual(relay.sent, []);
+  assert.deepEqual(relay.acked, ['n407a']);
+});
+
+// A send under another thread, or one from before the turn, is not this
+// turn speaking for itself.
+test('sends outside the turn\'s thread do not hold back its reply', async () => {
+  const peer = { account: 'acct', agentId: 'agent_dddddddd-dddd-4ddd-8ddd-dddddddddddd' };
+  sendDuringTurn(`acct/${peer.agentId}`, 'n407b', 'an earlier send in this thread');
+  const relay = oneShotRelay([{ id: 'n407b', from: peer, body: 'What is 2+2?' }]);
+  const wake = relayWaker(relay, async () => {
+    sendDuringTurn(`acct/${peer.agentId}`, 'some-other-thread');
+    return { reply: '4' };
+  });
+  await wake({ agentId: id, count: 1, messageIds: ['n407b'] });
+  await wake.idle();
+  assert.deepEqual(relay.sent.map((m) => m.body), ['4']);
+});
+
+// A person still gets the final text after the turn messaged someone else,
+// but not a second copy of an answer the turn already sent them.
+test('a person gets the final text unless the turn already messaged them', async () => {
+  const relay = oneShotRelay([
+    { id: 'n407c', from: { principal: 'owner' }, body: 'Ask Ted, then tell me.' },
+    { id: 'n407d', from: { principal: 'owner' }, body: 'Tell me when done.' },
+  ]);
+  let turn = 0;
+  const wake = relayWaker(relay, async ({ invocation }) => {
+    turn += 1;
+    if (turn === 1) {
+      sendDuringTurn('acct/agent_cccccccc-cccc-4ccc-8ccc-cccccccccccc', invocation.correlation);
+      return { reply: 'Asked Ted; I will tell you what he says.' };
+    }
+    sendDuringTurn('owner', invocation.correlation, 'Done.');
+    return { reply: 'Done.' };
+  });
+  await wake({ agentId: id, count: 2, messageIds: ['n407c', 'n407d'] });
+  await wake.idle();
+  assert.deepEqual(relay.sent.map((m) => [m.replyTo, m.body]), [['n407c', 'Asked Ted; I will tell you what he says.']]);
+  assert.deepEqual(relay.acked, ['n407c', 'n407d']);
+});
+
+// #408: a turn the policy stopped, having said nothing, answers with the
+// refused tools instead of silence; NO_REPLY and a real answer still win.
+test('a turn stopped by the policy with nothing said gets a notice', async () => {
+  const peer = { account: 'acct', agentId: 'agent_eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' };
+  const relay = oneShotRelay([
+    { id: 'n408a', from: peer, body: 'Count your files.' },
+    { id: 'n408b', from: peer, body: 'Thanks!' },
+    { id: 'n408c', from: { principal: 'owner' }, body: 'List the folder.' },
+  ]);
+  const results = [
+    { reply: '', denied: ['Bash'] },
+    { reply: 'NO_REPLY', denied: ['Bash'] },
+    { reply: 'I could not list it: shell use is not allowed for me.', denied: ['Bash'] },
+  ];
+  let turn = 0;
+  const wake = relayWaker(relay, async () => results[turn++]);
+  await wake({ agentId: id, count: 3, messageIds: ['n408a', 'n408b', 'n408c'] });
+  await wake.idle();
+  assert.deepEqual(relay.sent.map((m) => [m.replyTo, m.body]), [
+    ['n408a', "I couldn't finish this: Bash is not allowed for me here (my owner's policy for this agent)."],
+    ['n408c', 'I could not list it: shell use is not allowed for me.'],
+  ]);
+});
+
+test('the denial notice names at most three tools and nothing else', () => {
+  assert.equal(deniedNotice([]), null);
+  assert.equal(deniedNotice(undefined), null);
+  assert.equal(deniedNotice(['Bash', 'Bash']), "I couldn't finish this: Bash is not allowed for me here (my owner's policy for this agent).");
+  assert.equal(
+    deniedNotice(['Bash', 'Edit', 'mcp__x__y', 'WebFetch', 'Wri\nte']),
+    "I couldn't finish this: Bash, Edit, mcp__x__y and 2 more are not allowed for me here (my owner's policy for this agent).",
+  );
 });

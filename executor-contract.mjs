@@ -301,6 +301,7 @@ export function createContractExecutor({ harness, identity, policy, run } = {}) 
     addArtifact,
     requestApproval,
     signal,
+    onPermission = null,
   }) {
     if (!invocation || typeof appendEvent !== 'function'
       || typeof addArtifact !== 'function' || typeof requestApproval !== 'function'
@@ -343,12 +344,21 @@ export function createContractExecutor({ harness, identity, policy, run } = {}) 
       return stop;
     };
 
+    // The caller may watch each decision (a cold turn names the tools the
+    // policy refused, #408); a watcher that throws never changes one.
+    const observe = (toolName, decision) => {
+      if (typeof onPermission === 'function') {
+        try { onPermission({ toolName, ...decision }); } catch { /* observation only */ }
+      }
+      return decision;
+    };
+
     // Policy answers first; only an 'approval' outcome reaches the immutable
     // proposal flow, and its decision maps back to allow/deny. `decidedBy`
     // lets engines and audits distinguish the two paths.
     const requestPermission = async ({ toolName, operation = null, summary = null, ttlMs } = {}) => {
       const outcome = decidePermission(boundPolicy, { toolName });
-      if (outcome !== 'approval') return { outcome, decidedBy: 'policy' };
+      if (outcome !== 'approval') return observe(toolName, { outcome, decidedBy: 'policy' });
       const wantedSummary = typeof summary === 'string' && summary.length > 0
         ? summary.slice(0, MAX_SUMMARY_LENGTH)
         : `permission: ${toolName}`;
@@ -357,12 +367,12 @@ export function createContractExecutor({ harness, identity, policy, run } = {}) 
         summary: wantedSummary,
         ...(ttlMs === undefined ? {} : { ttlMs }),
       });
-      return {
+      return observe(toolName, {
         outcome: decision.decision === 'approve' ? 'allow' : 'deny',
         decidedBy: 'approval',
         ...(decision.expired ? { expired: true } : {}),
         ...(decision.cancelled ? { cancelled: true } : {}),
-      };
+      });
     };
 
     const result = await run({

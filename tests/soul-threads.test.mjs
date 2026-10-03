@@ -243,8 +243,9 @@ test('A asks B to ask C and gets C\'s answer back through B', async () => {
   }
 
   const toStarter = broker.messages.filter((m) => m.to.agentId === SOULS.starter);
+  // Bill's first turn used send_message, so its final text ("Asking Ted
+  // now…") is not sent as well (#407): Starter hears only the answer.
   assert.deepEqual(toStarter.map((m) => m.body), [
-    'Asking Ted now; I will send it on.',
     'Ted\'s book list: Dune, Emma, Middlemarch.',
   ]);
   // Everything Bill and Ted said for this job carries the request's id.

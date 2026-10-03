@@ -478,3 +478,38 @@ test('a turn message must be the prompt text, so no daemon wake sends a harness 
   }), /executor message must be the prompt text/);
   assert.equal(ran, false);
 });
+
+// A cold turn names the tools the policy refused (#408); the watcher sees
+// every decision and can never change or break one.
+test('onPermission observes each decision without changing it', async () => {
+  const seen = [];
+  const run = async ({ bindHarnessSession, emitStop, requestPermission }) => {
+    bindHarnessSession({ mode: 'new', harnessSessionId: 'harness-session-obs' });
+    const decisions = [
+      await requestPermission({ toolName: 'Read' }),
+      await requestPermission({ toolName: 'Bash' }),
+    ];
+    emitStop({ stopReason: 'end_turn' });
+    return decisions;
+  };
+  const port = (onPermission) => ({
+    invocation: { agentId: IDENTITY.agentId },
+    message: 'go',
+    attachments: [],
+    appendEvent: () => ({}),
+    addArtifact: () => ({}),
+    requestApproval: async () => ({ decision: 'deny' }),
+    signal: new AbortController().signal,
+    onPermission,
+  });
+  const policy = { version: 1, rules: [{ tool: 'Read', outcome: 'allow' }], fallback: 'deny' };
+  const executor = createContractExecutor({ harness: 'claude', identity: IDENTITY, policy, run });
+  const decisions = await executor(port((decision) => seen.push(decision)));
+  assert.deepEqual(decisions, [{ outcome: 'allow', decidedBy: 'policy' }, { outcome: 'deny', decidedBy: 'policy' }]);
+  assert.deepEqual(seen, [
+    { toolName: 'Read', outcome: 'allow', decidedBy: 'policy' },
+    { toolName: 'Bash', outcome: 'deny', decidedBy: 'policy' },
+  ]);
+  const unharmed = await executor(port(() => { throw new Error('watcher broke'); }));
+  assert.deepEqual(unharmed, decisions);
+});

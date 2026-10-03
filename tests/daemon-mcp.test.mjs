@@ -565,7 +565,8 @@ test('teammate tools need an identity, and comms off withholds them', async () =
 
   const { state, calls } = injectedSoul({ [REACH_COMMS_ENV]: '0' });
   const listed = await handleMcpMessage(state, { jsonrpc: '2.0', id: 99, method: 'tools/list' });
-  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['fetch_context', 'post_reply', 'report_status', 'clock_in']);
+  // A comms turn has no invocation, so only clock_in is left (#407).
+  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['clock_in']);
   await assert.rejects(call(state, 'send_message', { to: 'owner', body: 'hi' }), /turned off/);
   assert.equal(calls.length, 0);
 });
@@ -738,4 +739,18 @@ test('a daemon-driven session fetches its context and lands its reply in the thr
   const reply = events.find((event) => event.type === 'reply');
   assert.equal(reply.data.text, `reach-echo:summarize the incident as:${AGENT_ID}`);
   assert.equal(reply.data.agentId, AGENT_ID);
+});
+
+// #407: a comms turn's injected server has no invocation, so it offers no
+// fetch_context that can only fail, and says the prompt holds the message.
+test('a comms turn leaves out the invocation tools and refuses them by name', async () => {
+  const { state } = injectedSoul();
+  const listed = await handleMcpMessage(state, { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['clock_in', 'fleet', 'send_message', 'start_soul']);
+  const init = await handleMcpMessage(state, { jsonrpc: '2.0', id: 2, method: 'initialize', params: {} });
+  assert.doesNotMatch(init.result.instructions, /fetch_context/);
+  assert.match(init.result.instructions, /already holds the message/);
+  for (const name of ['fetch_context', 'post_reply', 'report_status']) {
+    await assert.rejects(call(state, name, { text: 'x', invocation_id: 'invocation_44444444-4444-4444-8444-444444444444' }), /not available in this turn/);
+  }
 });

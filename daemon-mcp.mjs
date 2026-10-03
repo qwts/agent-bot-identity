@@ -83,6 +83,10 @@ export const REACH_TOOL_NAMES = Object.freeze([
   'fetch_context', 'post_reply', 'report_status', 'clock_in', 'fleet', 'send_message', 'start_soul',
 ]);
 const COMMS_TOOL_NAMES = new Set(['fleet', 'send_message', 'start_soul']);
+// The tools that address an interaction-store invocation. A comms turn (a
+// cold wake or a launch) has none, so its injected server leaves them out
+// rather than offer a fetch_context that can only fail (#407).
+const INVOCATION_TOOL_NAMES = new Set(['fetch_context', 'post_reply', 'report_status']);
 
 // Store-location variables forwarded into the injected entry so the spawned
 // server resolves the same interaction store even under a harness that does
@@ -252,8 +256,17 @@ function commsEnabled(state) {
   return state.env[REACH_COMMS_ENV] !== '0';
 }
 
+// An injected server stamped with a soul but no invocation serves a comms
+// turn; a registered server has neither stamp and takes explicit ids.
+function invocationScoped(state) {
+  const injected = typeof state.env[REACH_AGENT_ID_ENV] === 'string' && state.env[REACH_AGENT_ID_ENV] !== '';
+  const stamped = typeof state.env[REACH_INVOCATION_ENV] === 'string' && state.env[REACH_INVOCATION_ENV] !== '';
+  return stamped || !injected;
+}
+
 function toolsFor(state) {
-  return commsEnabled(state) ? TOOLS : TOOLS.filter((tool) => !COMMS_TOOL_NAMES.has(tool.name));
+  return TOOLS.filter((tool) => (commsEnabled(state) || !COMMS_TOOL_NAMES.has(tool.name))
+    && (invocationScoped(state) || !INVOCATION_TOOL_NAMES.has(tool.name)));
 }
 
 export function createReachState({
@@ -416,6 +429,9 @@ function resolveAttachment(reference, soul) {
 }
 
 async function callTool(state, name, args = {}) {
+  if (INVOCATION_TOOL_NAMES.has(name) && !invocationScoped(state)) {
+    throw new Error(`${name} is not available in this turn: the message and its thread are already in your prompt, and your final answer is the reply`);
+  }
   const identity = resolveReachIdentity(state);
   const options = storeOptions(state);
   switch (name) {
@@ -681,10 +697,12 @@ export async function handleMcpMessage(state, message) {
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: 'agent-reach', version: serverVersion() },
           instructions:
-            'Reach-back channel to the adapter thread that started this session. '
-            + 'Call fetch_context first to receive the inbound message and thread '
-            + 'history, report_status for interim progress, and post_reply exactly '
-            + 'once with the final answer.'
+            (invocationScoped(state)
+              ? 'Reach-back channel to the adapter thread that started this session. '
+                + 'Call fetch_context first to receive the inbound message and thread '
+                + 'history, report_status for interim progress, and post_reply exactly '
+                + 'once with the final answer.'
+              : 'Your prompt already holds the message you are answering and its thread.')
             + (commsEnabled(state)
               ? ' To work with other agents, call fleet to see your teammates and '
                 + 'send_message to reach one; their replies arrive in your inbox. '
