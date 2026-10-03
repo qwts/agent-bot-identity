@@ -59,6 +59,15 @@ const FAKE_REGISTRY = Object.freeze({
     stripEnv: Object.freeze([]),
     mcpToolNaming: 'codex-invocation',
   }),
+  'codex-acp2': Object.freeze({
+    harness: 'codex-acp2',
+    enabled: true,
+    command: process.execPath,
+    args: Object.freeze([FIXTURE]),
+    stripEnv: Object.freeze([]),
+    mcpToolNaming: 'codex-mcp-title',
+    sessionMode: 'workspace-write',
+  }),
   opencode: Object.freeze({
     harness: 'opencode',
     enabled: true,
@@ -183,8 +192,12 @@ test('the shipped registry rows validate and match the enablement checklist', ()
   }
   assert.equal(ACP_SPAWN_REGISTRY.claude.enabled, true);
   assert.equal(ACP_SPAWN_REGISTRY.opencode.enabled, true);
-  // Codex: adapter lane decided, spawn not yet verified — registered, disabled.
-  assert.equal(ACP_SPAWN_REGISTRY.codex.enabled, false);
+  // Codex: the third-party adapter lane, verified live against an exact pin
+  // (#384); approvals go to the daemon, not Codex's own reviewer.
+  assert.equal(ACP_SPAWN_REGISTRY.codex.enabled, true);
+  assert.ok(ACP_SPAWN_REGISTRY.codex.args.includes('@agentclientprotocol/codex-acp@2.1.1'));
+  assert.equal(ACP_SPAWN_REGISTRY.codex.mcpToolNaming, 'codex-mcp-title');
+  assert.equal(ACP_SPAWN_REGISTRY.codex.sessionMode, 'workspace-write');
   // Muse: the co-shipped muse-acp adapter row (#145).
   assert.equal(ACP_SPAWN_REGISTRY.muse.enabled, true);
   // The claude row strips the nesting guard a Claude Code parent would leak;
@@ -200,7 +213,9 @@ test('the shipped registry rows validate and match the enablement checklist', ()
 test('resolveSpawn fails closed on unknown, disabled, and mis-keyed rows', () => {
   assert.equal(resolveSpawn(ACP_SPAWN_REGISTRY, 'opencode').command, 'opencode');
   assert.throws(() => resolveSpawn(ACP_SPAWN_REGISTRY, 'cursor'), /no ACP drive entry/);
-  assert.throws(() => resolveSpawn(ACP_SPAWN_REGISTRY, 'codex'), /not enabled/);
+  assert.equal(resolveSpawn(ACP_SPAWN_REGISTRY, 'codex').command, 'npx');
+  assert.throws(() => resolveSpawn({ codex: { ...ACP_SPAWN_REGISTRY.codex, enabled: false } }, 'codex'), /not enabled/);
+  assert.throws(() => validateSpawnRow({ ...FAKE_REGISTRY.claude, sessionMode: 'Full Access' }), /sessionMode/);
   assert.throws(() => resolveSpawn(ACP_SPAWN_REGISTRY, 'Not A Key'), /harness must be a registry key/);
   assert.throws(() => resolveSpawn({ claude: { ...FAKE_REGISTRY.claude, harness: 'opencode' } }, 'claude'), /keyed as/);
   assert.throws(() => validateSpawnRow({ ...FAKE_REGISTRY.claude, args: ['ok', 7] }), /args/);
@@ -366,6 +381,26 @@ test('a Codex MCP approval is named from its announced invocation; exec and fore
   });
   assert.equal(chunkTexts(events).at(-1), 'mcp:approved exec:cancel foreign:cancel');
   assert.ok(logs.some((line) => /codex permission for call_c2 has no verifiable tool name; policy sees 'execute'/.test(line)));
+});
+
+test('a codex-acp 2.x MCP approval is named from its marked announcement; exec, unmarked and foreign calls stay denied', async () => {
+  const { events } = await turn({
+    message: 'codex2-mcp-permission',
+    executorOptions: { harness: 'codex-acp2', policy: REACH_ONLY, mcpServers: REACH_SERVERS },
+  });
+  assert.equal(chunkTexts(events).at(-1), 'mcp:allow_once exec:cancel unmarked:cancel foreign:cancel');
+});
+
+test('a row with a sessionMode sets it on every session, new or resumed', async () => {
+  const fresh = await turn({ message: 'env-probe', executorOptions: { harness: 'codex-acp2' } });
+  assert.equal(JSON.parse(chunkTexts(fresh.events)[0]).mode, 'workspace-write');
+  const resumed = await turn({
+    message: 'env-probe',
+    executorOptions: { harness: 'codex-acp2', getHarnessSession: () => ({ harnessSessionId: 'fake-ses-7' }) },
+  });
+  assert.equal(JSON.parse(chunkTexts(resumed.events).at(-1)).mode, 'workspace-write');
+  const plain = await turn({ message: 'env-probe', executorOptions: { harness: 'codex' } });
+  assert.equal(JSON.parse(chunkTexts(plain.events)[0]).mode, null);
 });
 
 test('an OpenCode MCP permission is named by its tool key; a borrowed title never is', async () => {

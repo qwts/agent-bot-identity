@@ -20,7 +20,11 @@ test('a soul home that installed the row binary runs it with this Node (ADR-0276
 });
 
 test('a launch with no harness takes the soul preference, else an enabled harness on PATH (ADR-0276)', () => {
-  assert.equal(defaultHarnessFor(['codex', 'claude'], { available: () => false }), 'claude', 'codex is not enabled');
+  assert.equal(defaultHarnessFor(['codex', 'claude'], { available: () => false }), 'codex', 'codex is enabled (#384)');
+  assert.equal(defaultHarnessFor(['codex', 'claude'], {
+    registry: { ...ACP_SPAWN_REGISTRY, codex: { ...ACP_SPAWN_REGISTRY.codex, enabled: false } },
+    available: () => false,
+  }), 'claude', 'a disabled preference is skipped');
   assert.equal(defaultHarnessFor([], { available: (cmd) => cmd === 'opencode' }), 'opencode');
   assert.equal(defaultHarnessFor(['unknown'], { available: () => false }), null);
   assert.equal(onPath('sh', { PATH: '/bin' }), true);
