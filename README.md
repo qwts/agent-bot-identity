@@ -358,7 +358,7 @@ whenever it is unambiguous.
 
 Rows that predate binding carry `transcriptLocator: null` and show `?` in the
 PARENT column; `population list` counts them on every listing so the gap can
-never persist silently. `population backfill` repairs what the workstation's
+never persist silently. `population backfill` repairs what this account's
 own transcript stores still prove: it scans `~/.claude/projects` and
 `~/.codex/sessions` for session files that mention each unbound Agent ID and
 records the locator when exactly one transcript names it. An ID found in

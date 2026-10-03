@@ -22,7 +22,7 @@
 //   - pins core.hooksPath here while chaining any previous hooks path
 //   - mints/binds a transcript-bound Agent ID (ENG-0081)
 //   - initializes that soul's durable Agent Space
-//   - registers the soul in the workstation population census
+//   - registers the soul in this account's population census
 //     (through the loopback daemon when settings.daemonPreference selects it;
 //      see bindSoul for the prefer/required fallback policy)
 //
