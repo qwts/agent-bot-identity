@@ -83,7 +83,8 @@ import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
 import { createSoulHomes, installHarnesses, soulBindingForLaunch } from './soul-home.mjs';
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
-import { validateSoulPackage } from './soul-package.mjs';
+import { validateSoulPackage, writeSoulComms } from './soul-package.mjs';
+import { editSoulRevision, revisionHistory } from './soul-revisions.mjs';
 import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
 import { recordSoulSession } from './metrics.mjs';
 import { createTaskReporter } from './task-turns.mjs';
@@ -398,7 +399,10 @@ export function createDaemonServer({
       const route = `${req.method} ${url.pathname}`;
       switch (route) {
         case 'GET /v0/health': {
-          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid, warmPool: warmPool.list() });
+          // `busy`: souls with a daemon turn in flight (cold wake), beside
+          // the warm pool's connected harnesses.
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid, warmPool: warmPool.list(),
+            busy: server.wakePlane?.busy?.() ?? [] });
           return;
         }
         case 'POST /v0/space/ensure': {
@@ -975,6 +979,7 @@ export async function daemonStatus({
       port: state.port,
       startedAt: state.startedAt,
       warmPool: health.warmPool ?? {},
+      busy: Array.isArray(health.busy) ? health.busy : [],
       comms: await probeComms(state, { env, home, fetchImpl, timeoutMs }),
     };
   }
@@ -1219,11 +1224,21 @@ export async function runDaemon({
       stateDir: stateDirectory({ env, home }), now }),
     joinSoul: (soul) => joinLaunchedSoul(soul, { env }),
     // The comms setting is read here, at launch only; turns read the census.
-    recordLaunch: ({ agentId, package: packagePath }) => {
+    recordLaunch: async ({ agentId, package: packagePath, comms, principal = null }) => {
       const file = populationFile({ env, home });
       let directory = null;
       try { directory = soulDirectory(agentId, { env, home, config, file }); } catch { /* no census row yet */ }
-      return recordSoulLaunch(agentId, { comms: launchCommsSetting({ soulDir: directory, packagePath }) }, { file });
+      // The principal chose comms before start (#381): it becomes the soul's
+      // own setting, recorded as an edit when the soul has a revision chain.
+      if (typeof comms === 'boolean' && directory && writeSoulComms(directory, comms) !== null) {
+        const stateDir = stateDirectory({ env, home });
+        if (revisionHistory(agentId, { stateDir }).length) {
+          await editSoulRevision(agentId, directory, { reason: `comms ${comms ? 'on' : 'off'} at launch`, stateDir,
+            ...(principal ? { authorization: { method: 'principal', principal } } : {}) });
+        }
+      }
+      return recordSoulLaunch(agentId, { comms: typeof comms === 'boolean' ? comms
+        : launchCommsSetting({ soulDir: directory, packagePath }) }, { file });
     },
     executorFor,
   });

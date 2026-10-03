@@ -547,6 +547,28 @@ export function recordSoulLaunch(id, { comms = true } = {}, { file = populationF
   });
 }
 
+// The owner changed a soul's comms setting while it was not running
+// (`agent-bot soul comms`). Its next turn reads this row, so the change
+// applies from then; the managed flag is left as it is. Without a row the
+// default (on) already holds, so only an opt-out needs one.
+export function setSoulComms(id, comms, { file = populationFile() } = {}) {
+  const target = agentId(id);
+  if (typeof comms !== 'boolean') throw new Error('comms must be a boolean');
+  ensurePrivateDirectory(path.dirname(file));
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
+    const existing = current.souls[target];
+    if (!existing) {
+      if (comms === false) throw new Error(`no population record for ${target}; cannot record comms off`);
+      return null;
+    }
+    const soul = normalizeSoul({ ...existing, comms });
+    if (existing.comms !== soul.comms) writeDocument(file, { ...current.souls, [target]: soul });
+    return soul;
+  });
+}
+
 function claimedByOther(directory, id) {
   // An empty marker is one being written (older tools wrote it in place),
   // not another soul's claim.

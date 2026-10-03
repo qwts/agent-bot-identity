@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -209,6 +209,31 @@ export function soulCommsSetting(directory) {
   catch { return null; }
   if (!object(manifest)) return null;
   return manifest.comms !== false;
+}
+
+// Rewrites a soul directory's soul.json `comms` (absent means on, so `true`
+// removes the key) as an edit of its current revision: the old revision
+// becomes the parent and the revision is recomputed. Returns null when the
+// setting already holds, else the previous manifest text to restore on a
+// later failure.
+export function writeSoulComms(directory, comms) {
+  if (typeof comms !== 'boolean') throw new Error('comms must be a boolean');
+  const file = join(directory, 'soul.json');
+  const before = readFileSync(file, 'utf8');
+  const manifest = JSON.parse(before);
+  if (!object(manifest)) throw new Error('soul.json must be an object');
+  if ((manifest.comms !== false) === comms) return null;
+  const { comms: _previous, ...rest } = manifest;
+  const next = { ...rest, ...(comms ? {} : { comms: false }), parentRevision: manifest.revision ?? null };
+  const write = (value) => {
+    const temp = `${file}.${process.pid}.tmp`;
+    writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: statSync(file).mode & 0o777 });
+    renameSync(temp, file);
+  };
+  write(next);
+  try { write({ ...next, revision: computePackageRevision(directory) }); }
+  catch (error) { write(manifest); throw error; }
+  return before;
 }
 
 export function validateSoulPackage(packagePath) {

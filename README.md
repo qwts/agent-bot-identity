@@ -685,6 +685,23 @@ soul runs changes nothing until its next launch. `agent-bot population list
 started this soul) and `comms` on every row; rows from before default to
 unmanaged with comms on.
 
+The owner changes the setting with `agent-bot soul comms`, which takes an
+Agent ID or name:
+
+```sh
+agent-bot soul comms bill --json      # {"agentId":…,"name":"bill","managed":true,"comms":true,"running":false}
+agent-bot soul comms bill off         # owner-gated; refused while bill is running
+agent-bot soul comms bill on
+```
+
+`on` and `off` write `soul.json` as a new package revision (recorded as an
+owner edit when the soul has a revision chain) and update the census row, so
+the next turn uses the new setting. They are refused while the daemon has a
+turn in flight for the soul or its harness holds a warm connection; stop it
+first. GeniusBar's bridge reads the same JSON. A launch request may also carry
+`"comms": true|false`, which the daemon writes to the soul's `soul.json`
+before it starts the soul.
+
 A cold turn has nobody to approve a tool call, so the daemon prepends an
 exact allow rule for each of this server's tools to the executor policy
 (`mcp__agent-reach__fetch_context`, `…__post_reply`, `…__report_status`,

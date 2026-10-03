@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `agent-bot soul comms <soul> [show|on|off] [--json]` (#381) reports `{agentId, name, managed, comms, running}` and lets the owner turn agent-comms on or off for a stopped soul. The change is a new `soul.json` revision (an owner edit when the soul has a revision chain) and updates the census, so it applies from the next turn. It is refused while the soul has a turn in flight or a warm harness; the daemon's `/v0/health` and `daemon status` now list those busy souls. A launch request may carry `comms: true|false`, written to `soul.json` before the soul starts.
+
 ## 0.10.9
 
 - Daemon-run souls can work with each other. A soul GeniusBar launched or cold-woke had no way to reach another agent: the reach-back MCP server (#146) was never injected into daemon ACP turns, it had no tool to see or message teammates, and the default deny policy refused any shell call to `agent-comms`. Asked to work with Ted, Bill answered that he could only reply to messages sent to him. Every daemon ACP turn now gets the `agent-reach` server, with two new tools: `fleet` (the souls this soul may message, from `agent-comms peers`) and `send_message` (an agent-comms message by fleet name, address, Agent ID or principal name). Both run `agent-comms` as the soul, in its worktree, with its binding. The daemon policy gains an exact allow rule for each `mcp__agent-reach__*` tool and nothing else. The ACP engine now names Claude permission requests by the tool name announced on the matching `tool_call` update, since the adapter sends none on the request. A relayed reply to another agent may be `NO_REPLY` to end the exchange.

@@ -75,7 +75,7 @@ Optional fields with a meaning:
 
 | Field | Type and constraint |
 | --- | --- |
-| `comms` | Boolean. agent-comms is part of every soul; `false` withholds the teammate tools (`fleet`, `send_message`) from the soul's daemon turns. Absent means `true`. Read when the soul is launched, so a change applies from its next launch. Template instances copy it. |
+| `comms` | Boolean. agent-comms is part of every soul; `false` withholds the teammate tools (`fleet`, `send_message`) from the soul's daemon turns. Absent means `true`. Read when the soul is launched, so a hand edit applies from its next launch; `agent-bot soul comms <soul> on|off` changes it (and the census) while the soul is stopped, and a launch request may set it. Template instances copy it. |
 
 Nonempty means not blank after ECMAScript `trim()`. For example:
 
