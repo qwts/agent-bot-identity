@@ -974,7 +974,7 @@ async function main() {
       break;
     }
     default:
-      throw new Error('usage: agent-identity.mjs <ensure|spawn|bind|record|finalize|show|current>');
+      throw new Error('usage: agent-identity.mjs <ensure|spawn|bind|record|finalize|show|current|migrate-credentials>');
   }
 }
 

@@ -31,6 +31,28 @@ Binding files (`agent-binding.json`, `agent-bindings/*.json` and any
 `AGENT_BOT_BINDING` file) are never territory, even inside the bound checkout:
 the binding names the soul whose mode applies.
 
+The soul's key store, `<soul>/.soul-state/credentials/`, is never territory
+either, although it sits inside the soul directory.
+
+## Credentials stay behind the daemon
+
+A soul gets GitHub tokens from the daemon and the credential helper, never
+keys (#383, [soul credentials](soul-credentials.md)). For every tool call a
+soul makes, not only file writes, the runner refuses:
+
+- any path under any soul's `.soul-state/credentials/`;
+- any path under a legacy `~/.config/<slug>` App folder (one holding
+  `private-key.pem` or `app-id`), and any `private-key.pem`;
+- a shell command that runs `security` or `pass-cli` (in command position,
+  after `env`, `exec`, `sudo` and similar, or by path), or that names one of
+  the paths above.
+
+This guard denies in every confinement mode, `off` included, and a guard that
+cannot run refuses the call. It reads only what the tool call says, so like the
+write guard it is cooperative: an agent that hides a command from the hook (an
+interpreter one-liner, a script it wrote) is not stopped by it. The owner, with
+no soul marker, is never guarded.
+
 Keep any existing revision policy fields such as `mode` and `paths`. Relative
 paths and `~` grants are rejected. Policy changes use the existing owner-reviewed
 soul revision workflow. New target files resolve through their nearest existing
@@ -80,8 +102,9 @@ and Devin Desktop's legacy `pre_write_code` path. For dialects exposing
 `pre-file-write`. Unsupported or missing paths cannot be evaluated; in warn
 they allow, and in explicit deny they refuse recognized file tools.
 
-Shell commands, shell redirections, arbitrary patch commands, MCP tools,
-unknown tool names and reads are not covered. Shell write reporting is a
+Apart from the credential guard above, shell commands, shell redirections,
+arbitrary patch commands, MCP tools, unknown tool names and reads are not
+covered. Shell write reporting is a
 follow-up; this change does not parse arbitrary commands. Hook bypasses and
 filesystem races remain possible. The log and mode settings are cooperative
 account-local files, not an OS security boundary.

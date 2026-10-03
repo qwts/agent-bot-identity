@@ -43,6 +43,7 @@ async function handlePrompt({ sessionId, prompt }) {
       cwd: session.cwd,
       mcpServers: session.mcpServers,
       loaded: session.loaded,
+      mode: session.mode ?? null,
     }));
     return { stopReason: 'end_turn' };
   }
@@ -139,6 +140,41 @@ async function handlePrompt({ sessionId, prompt }) {
     return { stopReason: 'end_turn' };
   }
 
+  // @agentclientprotocol/codex-acp 2.1.1, as captured live (#384): an MCP
+  // call is announced kind 'execute', titled `mcp.<server>.<tool>`, with
+  // `_meta.is_mcp_tool_call`; its approval request carries only the call id,
+  // kind 'execute' and the request-level `_meta.is_mcp_tool_approval`. A
+  // shell call is announced 'Run command' with no MCP marker.
+  if (text === 'codex2-mcp-permission') {
+    const ask = (toolCall, meta) => request('session/request_permission', {
+      sessionId,
+      toolCall,
+      ...(meta ? { _meta: meta } : {}),
+      options: [
+        { optionId: 'allow_once', name: 'Allow', kind: 'allow_once' },
+        { optionId: 'allow_session', name: 'Allow for this session', kind: 'allow_always' },
+        { optionId: 'cancel', name: 'Cancel', kind: 'reject_once' },
+      ],
+    });
+    const announce = (toolCallId, title, rawInput, mcpCall) => notifyUpdate(sessionId, {
+      sessionUpdate: 'tool_call', toolCallId, kind: 'execute', title, status: 'in_progress', rawInput,
+      ...(mcpCall ? { _meta: { is_mcp_tool_call: true } } : {}),
+    });
+    const approval = { is_mcp_tool_approval: true };
+    announce('exec-m1', 'mcp.agent-reach.send_message',
+      { server: 'agent-reach', tool: 'send_message', arguments: { to: 'Ted', body: 'hi' } }, true);
+    const mcp = await ask({ toolCallId: 'exec-m1', kind: 'execute', status: 'pending' }, approval);
+    announce('exec-m2', 'Run command', { command: 'agent-comms send', cwd: '/tmp' }, false);
+    const exec = await ask({ toolCallId: 'exec-m2', title: 'Run command', kind: 'execute', status: 'pending' });
+    announce('exec-m3', 'mcp.agent-reach.send_message',
+      { server: 'agent-reach', tool: 'send_message', arguments: {} }, false);
+    const unmarked = await ask({ toolCallId: 'exec-m3', kind: 'execute', status: 'pending' }, approval);
+    announce('exec-m4', 'mcp.user-server.send_message', { server: 'user-server', tool: 'send_message', arguments: {} }, true);
+    const foreign = await ask({ toolCallId: 'exec-m4', kind: 'execute', status: 'pending' }, approval);
+    chunk(sessionId, `mcp:${mcp.outcome.optionId} exec:${exec.outcome.optionId} unmarked:${unmarked.outcome.optionId} foreign:${foreign.outcome.optionId}`);
+    return { stopReason: 'end_turn' };
+  }
+
   // opencode v1.18.34 `opencode acp`: an MCP tool's key `<server>_<tool>` is
   // the title of both its tool_call and its permission request, kind 'other'.
   // external_directory's title is model-chosen, but it rides on the call id
@@ -220,6 +256,12 @@ async function handle(method, params) {
     sessions.set(params.sessionId, { cwd: params.cwd, mcpServers: params.mcpServers, loaded: true });
     // History replay: the engine must NOT re-record this as a fresh event.
     chunk(params.sessionId, 'replayed-history-line');
+    return {};
+  }
+  if (method === 'session/set_mode') {
+    const session = sessions.get(params.sessionId);
+    if (!session) throw new Error(`unknown session ${params.sessionId}`);
+    session.mode = params.modeId;
     return {};
   }
   if (method === 'session/prompt') {

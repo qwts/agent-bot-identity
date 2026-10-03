@@ -11,7 +11,7 @@ Commands:
   join               Join agent-comms as a soul from here, with or without a GitHub App: --name N --harness H [--template PATH] [--soul ID] [--json]
   mint-token         Mint a GitHub App installation token
   doctor             Diagnose installation and identity state
-  identity           Manage transcript-bound execution identities
+  identity           Manage transcript-bound execution identities; migrate-credentials [--soul ID|--all] [--dry-run] [--json] moves App keys into each soul's key store (owner only)
   space              Manage durable per-soul Agent Spaces
   population         List this account's census of souls
   principal          Enroll and authorize messaging principals (owner ceremony)

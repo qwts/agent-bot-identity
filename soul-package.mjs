@@ -25,6 +25,27 @@ export function canonicalJson(value) {
   return JSON.stringify(value);
 }
 
+// Where a soul's secrets live, by name only (#383). soul.json is packaged,
+// exported and hashed into revisions, so it may never hold key material:
+// only the closed set of keys below is accepted, and the App is a slug.
+export const CREDENTIAL_STORES = Object.freeze(['keychain', 'file']);
+const APP_SLUG = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?$/;
+export function validateCredentialsDeclaration(credentials) {
+  if (!object(credentials)) throw new Error('soul.json credentials must be an object');
+  const extra = Object.keys(credentials).filter((key) => key !== 'github');
+  if (extra.length) throw new Error(`soul.json credentials accepts only github (found ${extra.join(', ')})`);
+  if (credentials.github === undefined) return credentials;
+  const github = credentials.github;
+  if (!object(github)) throw new Error('soul.json credentials.github must be an object');
+  const unknown = Object.keys(github).filter((key) => key !== 'app' && key !== 'store');
+  if (unknown.length) throw new Error(`soul.json credentials.github accepts only app and store (found ${unknown.join(', ')}); secrets never go in soul.json`);
+  if (typeof github.app !== 'string' || !APP_SLUG.test(github.app)) throw new Error('soul.json credentials.github.app must be a GitHub App slug');
+  if (github.store !== undefined && !CREDENTIAL_STORES.includes(github.store)) {
+    throw new Error(`soul.json credentials.github.store must be one of ${CREDENTIAL_STORES.join(', ')}`);
+  }
+  return credentials;
+}
+
 function validateManifest(manifest) {
   if (!object(manifest)) throw new Error('soul.json must be an object');
   if (![1, 2].includes(manifest.formatVersion)) throw new Error('unsupported soul.json formatVersion (expected 1 or 2)');
@@ -41,6 +62,7 @@ function validateManifest(manifest) {
   // agent-comms is part of every soul; `comms: false` opts a soul's managed
   // launches out of the teammate tools. Absent means on.
   if (manifest.comms !== undefined && typeof manifest.comms !== 'boolean') throw new Error('soul.json comms must be a boolean');
+  if (manifest.credentials !== undefined) validateCredentialsDeclaration(manifest.credentials);
   if (typeof manifest.revision !== 'string' || !REVISION.test(manifest.revision)) throw new Error('soul.json revision must be sha256:<64 lowercase hex digits>');
   if (manifest.parentRevision !== null && (typeof manifest.parentRevision !== 'string' || !REVISION.test(manifest.parentRevision))) {
     throw new Error('soul.json parentRevision must be null or sha256:<64 lowercase hex digits>');
@@ -229,7 +251,11 @@ export function writeSoulComms(directory, comms) {
   if (!object(manifest)) throw new Error('soul.json must be an object');
   if ((manifest.comms !== false) === comms) return null;
   const { comms: _previous, ...rest } = manifest;
-  const next = { ...rest, ...(comms ? {} : { comms: false }), parentRevision: manifest.revision ?? null };
+  publishManifestEdit(directory, file, { ...rest, ...(comms ? {} : { comms: false }), parentRevision: manifest.revision ?? null });
+  return before;
+}
+
+function publishManifestEdit(directory, file, next) {
   const final = { ...next, revision: computePackageRevision(directory, { manifest: next }) };
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
@@ -238,6 +264,29 @@ export function writeSoulComms(directory, comms) {
   } finally {
     rmSync(temporary, { force: true });
   }
+}
+
+// A soul directory's credentials.github declaration, or null (#383).
+export function soulCredentialsDeclaration(directory) {
+  let manifest;
+  try { manifest = JSON.parse(readFileSync(join(directory, 'soul.json'), 'utf8')); }
+  catch { return null; }
+  if (!object(manifest) || manifest.credentials === undefined) return null;
+  return validateCredentialsDeclaration(manifest.credentials).github ?? null;
+}
+
+// Declares where a soul's GitHub App credential lives, as an edit of its
+// current revision (see writeSoulComms). Returns null when it already holds,
+// else the previous manifest text to restore on a later failure.
+export function writeSoulCredentialsDeclaration(directory, github) {
+  validateCredentialsDeclaration({ github });
+  const file = join(directory, 'soul.json');
+  const before = readFileSync(file, 'utf8');
+  const manifest = JSON.parse(before);
+  if (!object(manifest)) throw new Error('soul.json must be an object');
+  const credentials = { ...(manifest.credentials ?? {}), github: { app: github.app, ...(github.store ? { store: github.store } : {}) } };
+  if (canonicalJson(credentials) === canonicalJson(manifest.credentials ?? null)) return null;
+  publishManifestEdit(directory, file, { ...manifest, credentials, parentRevision: manifest.revision ?? null });
   return before;
 }
 

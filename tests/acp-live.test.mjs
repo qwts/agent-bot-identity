@@ -20,7 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createAcpExecutor } from '../acp-engine.mjs';
-import { reachMcpServerEntry } from '../daemon-mcp.mjs';
+import { reachMcpServerEntry, reachPolicyRules } from '../daemon-mcp.mjs';
 import { HARNESS_SESSION_EVENT, STOP_EVENT, UPDATE_EVENT } from '../executor-contract.mjs';
 import { createInteractionService } from '../agent-interaction.mjs';
 import { readEvents } from '../agent-jobs.mjs';
@@ -120,7 +120,7 @@ function fullText(events) {
     .join('');
 }
 
-for (const harness of ['opencode', 'claude', 'muse']) {
+for (const harness of ['opencode', 'claude', 'muse', 'codex']) {
   test(`live ${harness}: new turn, then resume recalls the prior session`, {
     skip: LIVE.includes(harness) ? false : `set AGENT_BOT_ACP_LIVE=${harness} to run`,
     timeout: 360_000,
@@ -181,7 +181,12 @@ const REACH_TOKEN = 'REACH_LOOP_TOKEN_4172';
 // (`muse exec` has no per-run MCP mount), so Muse's reach-back lane is
 // registered-only until the CLI grows one — an injected live test for it
 // could never pass and would misstate the enablement.
-for (const harness of ['opencode', 'claude']) {
+// Codex runs under the daemon's own default-deny reach policy: its approvals
+// reach this client (the row's sessionMode), so the loop closes only when
+// every reach call is named and allowed by the exact `mcp__` rules (#384).
+const REACH_POLICY = { codex: { version: 1, rules: reachPolicyRules(), fallback: 'deny' } };
+
+for (const harness of ['opencode', 'claude', 'codex']) {
   test(`live ${harness}: injected reach server closes the loop with a reply event`, {
     skip: REACH_LIVE.includes(harness) ? false : `set AGENT_BOT_REACH_LIVE=${harness} to run`,
     timeout: 360_000,
@@ -190,7 +195,7 @@ for (const harness of ['opencode', 'claude']) {
     const executor = createAcpExecutor({
       harness,
       identity: IDENTITY,
-      policy: ALLOW_ALL,
+      policy: REACH_POLICY[harness] ?? ALLOW_ALL,
       mcpServers: ({ invocation, identity }) => [reachMcpServerEntry({
         invocationId: invocation.invocationId,
         agentId: identity.agentId,

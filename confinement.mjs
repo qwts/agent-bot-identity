@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -131,16 +131,82 @@ export function checkWrite(agentId, targetPath, opts = {}) {
   const roots = allowedRoots(agentId, opts);
   const target = canonicalPath(targetPath, opts.cwd);
   if (isBindingFile(target, opts.env ?? process.env)) return { inside: false, path: target, roots };
+  // The soul's key store is inside its directory but never its territory.
+  if (contains(path.join(roots[0], '.soul-state', 'credentials'), target)) return { inside: false, path: target, roots };
   return { inside: roots.some((root) => contains(root, target)), path: target, roots };
 }
 
-// Only recognized file tools. No command parsing, MCP inspection or reads.
+// Soul credentials stay behind the daemon (#383): a soul may not name a key
+// store path or run a secret-store CLI in any tool, whatever its confinement
+// mode. Like the write guard this is cooperative (a hook reads what the tool
+// call says), not an OS sandbox; it keeps the supported path honest.
+const SECRET_CLI = /(?:^|[;&|(`\n]|\$\()\s*(?:(?:\w+=\S*|env|exec|command|sudo|nohup|time|xargs)\s+(?:-\S+\s+)*)*(?:\S*\/)?security(?=$|[\s;&|)`])|\/usr\/bin\/security\b|(?:^|[^\w-])pass-cli(?![\w-])/;
+
+function legacyAppDirectories(home) {
+  const config = path.join(home, '.config');
+  let entries = [];
+  try { entries = readdirSync(config, { withFileTypes: true }); } catch { return []; }
+  return entries.filter((entry) => {
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) return false;
+    for (const name of ['private-key.pem', 'app-id']) {
+      try { lstatSync(path.join(config, entry.name, name)); return true; } catch { /* next */ }
+    }
+    return false;
+  }).map((entry) => entry.name);
+}
+
+function resolvedOrRaw(value, cwd) {
+  try { return canonicalPath(value, cwd); } catch { return path.resolve(cwd ?? process.cwd(), value); }
+}
+
+export function credentialGuard(envelope, agentId, opts = {}) {
+  const env = opts.env ?? process.env;
+  const home = opts.home ?? env.HOME ?? homedir();
+  const cwd = envelope.cwd ?? opts.cwd;
+  const legacy = legacyAppDirectories(home);
+  const deny = (what) => ({ decision: 'deny', reason: `soul credentials stay behind the daemon; ${what} is off limits to a soul` });
+  if (envelope.file_path) {
+    const target = resolvedOrRaw(envelope.file_path, cwd);
+    if (target.split(path.sep).join('/').includes('/.soul-state/credentials')) return deny('a soul key store');
+    let soul = null;
+    try { soul = realpathSync(soulDirectory(agentId, opts)); } catch { /* no soul directory */ }
+    if (soul && contains(path.join(soul, '.soul-state', 'credentials'), target)) return deny('a soul key store');
+    const config = resolvedOrRaw(path.join(home, '.config'), cwd);
+    for (const name of legacy) {
+      if (contains(path.join(config, name), target) || contains(path.join(home, '.config', name), target)) return deny(`~/.config/${name}`);
+    }
+    if (path.basename(target) === 'private-key.pem') return deny('an App private key');
+  }
+  const command = typeof envelope.command === 'string' ? envelope.command : '';
+  if (command) {
+    if (SECRET_CLI.test(command)) return deny('a secret-store CLI (security, pass-cli)');
+    if (command.includes('.soul-state/credentials')) return deny('a soul key store');
+    if (command.includes('private-key.pem')) return deny('an App private key');
+    for (const name of legacy) {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp(`\\.config/${escaped}(?![\\w.-])`).test(command)) return deny(`~/.config/${name}`);
+    }
+  }
+  return null;
+}
+
+// Recognized file tools for writes; every tool for the credential guard.
 export function confinementCheck(envelope, opts = {}) {
   const allow = { decision: 'allow' };
   const preTool = vendorEvent(envelope.harness, 'pre-tool-use');
   // The generated adapters may invoke both events for the same file tool.
   // Prefer the generic event, and use the file event for legacy dialects.
   if (envelope.event !== (preTool ? 'pre-tool-use' : 'pre-file-write')) return allow;
+  try {
+    const agentId = opts.binding?.agentId ?? currentAgentId({ env: opts.env ?? process.env, cwd: envelope.cwd ?? opts.cwd });
+    if (agentId) {
+      const denied = credentialGuard(envelope, agentId, opts);
+      if (denied) return denied;
+    }
+  } catch {
+    // A soul whose credential check cannot run is refused, in every mode.
+    return { decision: 'deny', reason: 'credential check failed; tool call refused' };
+  }
   if (preTool && !/^(Write|Edit|MultiEdit|NotebookEdit|create|edit|create_file|edit_file|write_file|replace_string_in_file|multi_replace_string_in_file)$/i.test(envelope.tool_name ?? '')) return allow;
   let mode = 'warn';
   try {
