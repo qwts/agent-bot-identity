@@ -30,13 +30,13 @@ spawn/install integration can call `adoptSoulPackage` after minting. Edits and
 proposals require an adopted package so their base contents are available for
 review. Inputs must be quiescent directories, as with package validation.
 
-An edit copies the supplied complete package tree, sets its parent to the current
+An edit copies the supplied package content (excluding format 2 working state), sets its parent to the current
 head, computes its revision, and appends it. Inputs are never modified. Undo uses
 an earlier snapshot's contents as a new edit, with the current head as parent.
 Unknown files, unknown manifest fields, binary bytes, directories, and execute
 bits survive. Manifest JSON formatting is normalized in stored snapshots.
 
-Proposals snapshot the complete candidate immediately and include a computed
+Proposals snapshot the candidate package content immediately and include a computed
 path diff (`added`, `modified`, `removed`), reason, author, timestamp, and base
 revision. Approval uses those stored bytes, never the caller's later edits.
 Approving a stale proposal fails; resubmit it against the new head. Stale
@@ -105,7 +105,8 @@ produce a new revision because its parent changes.
 
 `never` records a rejected proposal without advancing the head. `ask` records a
 pending proposal. `auto` applies only an allowed diff. Changes to `policy.json`
-and `soul.json`, paths with a tool component or filename token, or any path
+and `soul.json`, the top-level `bin` entry and all paths under `bin/`,
+paths with a tool component or filename token, or any path
 containing `mcp` (case-insensitive, so `mcpServers.json` is included), always
 require user approval. Tool configurations have no shared capability schema yet,
 so even tool removals or other potentially narrowing changes require approval.
@@ -122,7 +123,9 @@ implements the `recordAgentPackageRevision` append port; it verifies the complet
 prepared package's hash and current parent before appending. This low-level port
 is for authenticated user edits. Soul callers use `proposeSoulRevision`.
 
-Each `objects/<64-hex>.soul` holds a full validated package. Numbered journal JSON
+Each `objects/<64-hex>.soul` holds a full validated package. Package formats 1
+and 2 are supported; format 2 snapshots and diffs exclude working state and
+marked generated files using the [package ignore contract](soul-package.md). Numbered journal JSON
 records carry `schemaVersion: 1`, `kind`, and `at`. Revision records contain
 `revision`, `parentRevision`, `author: user|soul`, and `reason`. Approved proposals
 also record `proposalId`, `approval: user|auto`, and, for user approval,

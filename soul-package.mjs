@@ -1,9 +1,22 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
-import { lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+
+// Shared with soul-builder: only marked files are generated, so hand-authored
+// harness configuration remains package content. Prefixes are root-relative.
+export const GENERATED_HARNESS_PATHS = Object.freeze([
+  '.claude/', '.codex/', '.cursor/', '.opencode/', '.devin/', '.gemini/',
+  '.github/copilot-instructions.md', 'CLAUDE.md', 'GEMINI.md',
+]);
+export const GENERATED_HARNESS_MARKER = '<!-- agent-bot soul-builder: generated -->';
+export const PACKAGE_IGNORE_LIST = Object.freeze({
+  directories: Object.freeze(['worktrees/', '.soul-state/']),
+  generatedPaths: GENERATED_HARNESS_PATHS,
+  generatedMarker: GENERATED_HARNESS_MARKER,
+});
 
 const REVISION = /^sha256:[a-f0-9]{64}$(?![\s\S])/;
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -19,7 +32,10 @@ export function canonicalJson(value) {
 
 function validateManifest(manifest) {
   if (!object(manifest)) throw new Error('soul.json must be an object');
-  if (manifest.formatVersion !== 1) throw new Error('unsupported soul.json formatVersion (expected 1)');
+  if (![1, 2].includes(manifest.formatVersion)) throw new Error('unsupported soul.json formatVersion (expected 1 or 2)');
+  if (manifest.formatVersion === 2 && canonicalJson(manifest.ignore) !== canonicalJson(PACKAGE_IGNORE_LIST)) {
+    throw new Error('soul.json formatVersion 2 requires the exact supported ignore list');
+  }
   for (const key of ['name', 'description', 'displaySeed']) {
     if (!nonempty(manifest[key])) throw new Error(`soul.json ${key} must be a nonempty string`);
   }
@@ -94,34 +110,58 @@ function validateSkill(bytes, directory) {
   if (skillField(front, 'description').length > 1024) throw new Error('skill description exceeds 1024 characters');
 }
 
-function inspectPackage(packagePath) {
+export function readSoulPackageEntries(packagePath) {
   const root = resolve(packagePath);
   if (!lstatSync(root).isDirectory()) throw new Error('package must be a directory, not a symlink or archive');
+  const manifestPath = join(root, 'soul.json');
+  if (!existsSync(manifestPath)) throw new Error('missing required file: soul.json');
+  const manifestStat = lstatSync(manifestPath);
+  if (manifestStat.isSymbolicLink()) throw new Error('unsupported package entry: soul.json');
+  if (!manifestStat.isFile()) throw new Error('missing required file: soul.json');
+  const manifest = JSON.parse(utf8(readFileSync(manifestPath), 'soul.json'));
+  validateManifest(manifest);
+  // Inventory consumers must reject nonfinite JSON numbers before copying.
+  canonicalJson(manifest);
+  const ignoresState = manifest.formatVersion === 2;
   const entries = [];
   const names = new Set();
   function walk(directory, prefix = '') {
+    let skipped = false;
     for (const rawName of readdirSync(directory, { encoding: 'buffer' })) {
       const name = utf8(rawName, 'path');
       if (/[\\\x00-\x1f\x7f]/.test(name)) throw new Error('package paths cannot contain backslashes or control characters');
       const path = `${prefix}${name.normalize('NFC')}`;
       if (names.has(path)) throw new Error(`normalized path collision: ${path}`);
       names.add(path);
+      // Do not stat or descend into working state: it can contain links/FIFOs.
+      if (ignoresState && PACKAGE_IGNORE_LIST.directories.includes(`${path}/`)) continue;
       const physical = join(directory, name);
       const stat = lstatSync(physical);
       if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) throw new Error(`unsupported package entry: ${path}`);
       if (stat.isDirectory()) {
+        const index = entries.length;
         entries.push({ path, mode: '040000', bytes: Buffer.alloc(0) });
-        walk(physical, `${path}/`);
+        const omitted = walk(physical, `${path}/`);
+        // Generated-only container directories must not change the revision.
+        // Preserve genuinely empty directories and containers of authored files.
+        if (omitted && entries.length === index + 1) entries.splice(index, 1);
+        skipped ||= omitted;
       } else {
-        entries.push({ path, mode: stat.mode & 0o111 ? '100755' : '100644', bytes: readFileSync(physical) });
+        const bytes = readFileSync(physical);
+        if (ignoresState && GENERATED_HARNESS_PATHS.some((candidate) => candidate.endsWith('/')
+          ? path.startsWith(candidate) : path === candidate) &&
+          bytes.toString('utf8').split(/\r?\n/).includes(GENERATED_HARNESS_MARKER)) {
+          skipped = true;
+          continue;
+        }
+        entries.push({ path, mode: stat.mode & 0o111 ? '100755' : '100644', bytes });
       }
     }
+    return skipped;
   }
   walk(root);
   const files = new Map(entries.filter((entry) => entry.mode !== '040000').map((entry) => [entry.path, entry]));
   for (const required of ['soul.json', 'AGENTS.md']) if (!files.has(required)) throw new Error(`missing required file: ${required}`);
-  const manifest = JSON.parse(utf8(files.get('soul.json').bytes, 'soul.json'));
-  validateManifest(manifest);
   utf8(files.get('AGENTS.md').bytes, 'AGENTS.md');
   const skills = entries.find((entry) => entry.path === 'skills');
   if (skills && skills.mode !== '040000') throw new Error('skills must be a directory');
@@ -130,8 +170,6 @@ function inspectPackage(packagePath) {
     if (!skill) throw new Error(`missing required file: ${entry.path}/SKILL.md`);
     validateSkill(skill.bytes, entry.path.slice('skills/'.length));
   }
-  const { revision, parentRevision, ...content } = manifest;
-  files.get('soul.json').bytes = Buffer.from(canonicalJson(content));
   entries.sort((a, b) => Buffer.compare(Buffer.from(a.path), Buffer.from(b.path)));
   return { manifest, entries };
 }
@@ -143,9 +181,11 @@ function frame(value) {
 }
 
 export function canonicalPackageBytes(packagePath) {
-  const { manifest, entries } = inspectPackage(packagePath);
+  const { manifest, entries } = readSoulPackageEntries(packagePath);
+  const { revision, parentRevision, ...content } = manifest;
+  entries.find((entry) => entry.path === 'soul.json').bytes = Buffer.from(canonicalJson(content));
   return Buffer.concat([
-    Buffer.from('agent-bot-soul-package-v1\0'), frame(manifest.parentRevision ?? ''),
+    Buffer.from(`agent-bot-soul-package-v${manifest.formatVersion}\0`), frame(manifest.parentRevision ?? ''),
     ...entries.flatMap(({ path, mode, bytes }) => [frame(path), frame(mode), frame(bytes)]),
   ]);
 }
@@ -155,10 +195,10 @@ export function computePackageRevision(packagePath) {
 }
 
 export function validateSoulPackage(packagePath) {
-  const { manifest } = inspectPackage(packagePath);
+  const { manifest } = readSoulPackageEntries(packagePath);
   const revision = computePackageRevision(packagePath);
   if (revision !== manifest.revision) throw new Error(`revision mismatch: expected ${revision}, found ${manifest.revision}`);
-  return { formatVersion: 1, revision, parentRevision: manifest.parentRevision };
+  return { formatVersion: manifest.formatVersion, revision, parentRevision: manifest.parentRevision };
 }
 
 function main(args) {

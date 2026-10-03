@@ -1,10 +1,9 @@
-# Soul packages, format 1
+# Soul packages, formats 1 and 2
 
 A soul package is a portable definition, not a running soul or its memory.
-This specifies ADR-0275 decisions 1–3 for issue #283. Nothing in a package
+This specifies ADR-0275 decisions 1–3 (#283) and ADR-0332 decision 4 (#341). Nothing in a package
 executes during validation or grants authority. No organization or harness is
-required. Revision history storage, installation, approval, and runtime adoption
-belong to later work.
+required. Revision history and approval are described in [soul-revisions.md](soul-revisions.md).
 
 ## Layout
 
@@ -27,11 +26,18 @@ example.soul/
   tools.json                optional tool configuration request
   mcp.json                  optional MCP server configuration request
   policy.json               optional self-change policy
+  bin/                      tools; changes always require user approval
+  workflows/                package workflows
+  sop/                      optional carried SOP
+  agent-sop.toml             optional SOP selection
+  worktrees/                working state (ignored in format 2)
+  .soul-state/              working state (ignored in format 2)
+  .claude/ .codex/ …         generated harness output (marked files ignored in format 2)
   ...                       preserved extensions and arbitrary binary assets
 ```
 
 Only `soul.json` and `AGENTS.md` are required. Tool, MCP and policy files are
-opaque in format 1: this validator neither interprets nor authorizes them.
+opaque in both package formats: this validator neither interprets nor authorizes them.
 Their execution and policy schemas belong to their respective consumers. In
 particular, absence of a policy does not authorize automatic self-modification
 (ADR-0275 defaults to asking). Memory belongs in Agent Space, not this package.
@@ -40,7 +46,7 @@ Skills follow the open Agent Skills directory layout. `SKILL.md` begins with
 `---`, YAML front matter, and a closing `---`, on separate lines (LF or CRLF).
 Required fields are `name` (1–64 lowercase ASCII letters/digits, with single
 interior hyphens, matching its directory) and `description` (nonempty, at most
-1024 characters). The format-1 validator supports required string fields as
+1024 characters). The validator supports required string fields as
 plain single-line scalars, single/double-quoted single-line scalars, or literal
 and folded block scalars (`|`, `>`, optionally `+`/`-` and an indentation
 digit), each optionally followed by a ` #` comment. Block scalars are dedented,
@@ -56,13 +62,14 @@ All these fields are required; unknown fields are allowed and retained:
 
 | Field | Type and constraint |
 | --- | --- |
-| `formatVersion` | Integer, exactly `1`; other versions are rejected |
+| `formatVersion` | Integer, `1` or `2`; other versions are rejected |
 | `name` | Nonempty string, human-readable package name |
 | `description` | Nonempty string |
 | `displaySeed` | Nonempty string; an opaque stable display seed, not an identity |
 | `preferredHarnesses` | Array of unique nonempty strings; `[]` means no preference; no registry lookup |
 | `revision` | `sha256:` followed by exactly 64 lowercase hexadecimal digits |
 | `parentRevision` | Same hash syntax, or `null` for the first revision |
+| `ignore` | Required only in format 2: the exact ignore contract below |
 
 Nonempty means not blank after ECMAScript `trim()`. For example:
 
@@ -87,14 +94,67 @@ validator checks its syntax, not existence or ancestry. Immutability and chain
 storage must be enforced by future revision writers: edits, including undo,
 create a new revision with the previous revision as parent.
 
+## Format 2 working state and compatibility
+
+Keep packages with no working state on format 1 when they need to work with
+older agent-bot versions. Format 1 is unchanged: every entry participates,
+including unknown files and dotfiles, and existing hashes stay identical.
+There is no automatic upgrade. Before adding working state, explicitly set
+`formatVersion` to `2`, add the following `ignore` object, and recompute the
+revision (or submit the format change as an owner-reviewed revision):
+
+```json
+"ignore": {
+  "directories": ["worktrees/", ".soul-state/"],
+  "generatedPaths": [
+    ".claude/", ".codex/", ".cursor/", ".opencode/", ".devin/", ".gemini/",
+    ".github/copilot-instructions.md", "CLAUDE.md", "GEMINI.md"
+  ],
+  "generatedMarker": "<!-- agent-bot soul-builder: generated -->"
+}
+```
+
+The contract is fixed for format 2, exported as `PACKAGE_IGNORE_LIST` from
+`soul-package.mjs`, and validated exactly (object key order is immaterial;
+array order matters). It is part of the canonical manifest bytes. Producers
+such as soul-builder use `GENERATED_HARNESS_PATHS` and
+`GENERATED_HARNESS_MARKER` from the same module.
+
+Only root-relative `worktrees` and `.soul-state` entries are skipped, before
+stat, symlink, special-file, or descendant validation. Nested entries with
+these names remain package content. Generated paths ending in `/` cover files
+beneath that top-level folder; other paths name individual aliases. A regular
+file there is ignored only when it contains an exact marker line (LF or CRLF).
+Hand-authored files and unknown files remain covered. Marker text elsewhere
+has no effect. Generated symlinks are rejected because they cannot safely be
+inspected for a marker; builders must write regular alias files.
+
+Directories containing only ignored generated files are omitted recursively.
+Mixed directories retain their authored files and container entries. Truly
+empty directories still participate, as in format 1. Validation leaves all
+working state in place; revision snapshots and diffs use the same filtered
+inventory and do not copy ignored state into stored package objects.
+
+`bin/`, `workflows/`, `sop/`, and `agent-sop.toml` participate in both formats.
+Every `bin/` change, including deletion or execute-bit changes, requires the
+existing user approval path, even under an auto policy allowing `**`.
+
+Older agent-bot versions reject format 2 as unsupported; they cannot validate
+or revise it. The unknown-file preservation rule does not imply support for
+an unknown format version. They continue to handle unchanged format 1 packages
+normally. Downgrading a package containing working state would hash that state
+(and may reject its links); it is not a compatibility workaround.
+
 ## Canonical revision encoding
 
 The ID is `sha256:` plus the lowercase SHA-256 digest of the following bytes:
 
-1. ASCII `agent-bot-soul-package-v1` followed by one NUL byte.
+1. ASCII `agent-bot-soul-package-v1` (format 1) or
+   `agent-bot-soul-package-v2` (format 2), followed by one NUL byte.
 2. A netstring containing the parent revision's ASCII bytes, or an empty
    netstring (`0:,`) for `null`.
-3. For **every** entry beneath the root, in sorted order, three netstrings:
+3. For every included entry beneath the root (after format 2 ignores), in
+   sorted order, three netstrings:
    relative path, normalized mode, and content bytes.
 
 A netstring is ASCII decimal byte length (no leading zero except `0`), `:`,
@@ -114,7 +174,8 @@ bytes. Regular files have mode `100755` if any POSIX execute bit is set,
 otherwise `100644`. All other permission bits, ownership, timestamps, extended
 attributes, and the root mode are excluded. Transfers must preserve the execute
 bit distinction. Symlinks (including the package root) and all non-regular,
-non-directory entries are rejected, never followed or silently skipped. Validate
+non-directory entries are rejected in package content, never followed. Format 2
+working-state entries are excluded before these checks. Validate
 a quiescent directory; concurrent writers are not supported.
 
 File content is exact bytes, except `soul.json`. Parse that file as UTF-8 JSON
@@ -139,8 +200,9 @@ preimages and digests, not just two calls to the implementation.
 
 Every tool that reads/writes/copies a package **must preserve unknown files,
 unknown manifest fields, and directories**, with their bytes and normalized
-modes. There is no ignore list, including for dotfiles. An unknown file affects
-the hash just like a known one. No future tool may strip extensions when
+modes. Format 1 has no ignore list, including for dotfiles. Format 2 excludes
+only the working state and marked generated files specified above. Every other
+unknown file affects the hash just like a known one. No future tool may strip extensions when
 round-tripping a package. The validator is read-only, including on failure;
 this issue supplies no copying or editing tool.
 
