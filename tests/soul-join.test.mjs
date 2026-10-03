@@ -51,6 +51,24 @@ function account(t) {
   return { root, env, home: root, outside, broker: () => JSON.parse(readFileSync(env.FAKE_COMMS_BROKER, 'utf8')) };
 }
 
+// A real daemon on loopback; its client is the one `join` uses to bind.
+async function startDaemon(t, a) {
+  const server = createDaemonServer({ env: a.env, home: a.home, config: {} });
+  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+  t.after(() => new Promise((resolve) => { server.close(resolve); }));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const client = {
+    async bind(body) {
+      const response = await fetch(`${url}/v0/bind`, { method: 'POST',
+        headers: { authorization: `Bearer ${server.token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result?.error?.message ?? `bind failed: ${response.status}`);
+      return result;
+    },
+  };
+  return { server, client };
+}
+
 const comms = (a, cwd, args, extra = {}) => JSON.parse(execFileSync('agent-comms', args, { cwd, env: { ...a.env, ...extra }, encoding: 'utf8' }));
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 
@@ -236,16 +254,33 @@ test('join --wake asks the owner first, then sets the wake; a refusal or an unre
   const asked = [];
   const joined = await joinSoul({ ...base, name: 'scout', wake: 'resume:workspace', principal: { principal: 'p' },
     gate: async (action, { principal }) => { asked.push({ action, principal }); return { method: 'principal' }; } });
-  assert.deepEqual(asked, [{ action: 'join as scout and wake it on new messages (resume:workspace)', principal: { principal: 'p' } }]);
+  assert.deepEqual(asked, [{ action: 'create a new soul scout and wake it on new messages (resume:workspace)', principal: { principal: 'p' } }]);
   assert.equal(joined.wake, 'resume workspace');
   assert.equal(joined.authorization, 'principal');
   const settings = JSON.parse(readFileSync(path.join(a.env.XDG_STATE_HOME, 'agent-bot', 'cold-wake.json'), 'utf8')).settings;
   assert.deepEqual(settings[joined.agentId], { lane: 'resume', policy: 'workspace' });
 
-  // A Claude session cannot be resumed; it wakes through an ACP turn.
-  const acp = await joinSoul({ ...base, name: 'claude-one', harness: 'claude', wake: 'acp', gate: async () => ({ method: 'consent' }) });
+  // A Claude session cannot be resumed; it wakes through an ACP turn, which
+  // needs a daemon binding (#417).
+  const daemon = await startDaemon(t, a);
+  const acp = await joinSoul({ ...base, name: 'claude-one', harness: 'claude', wake: 'acp', daemon: daemon.client, gate: async () => ({ method: 'consent' }) });
   assert.equal(acp.wake, 'on');
+  assert.equal(acp.bind, 'bound');
   assert.equal(acp.authorization, 'consent');
+  // Without a daemon to bind it, an ACP wake is refused rather than reported on.
+  await assert.rejects(joinSoul({ ...base, name: 'claude-unbound', harness: 'claude', wake: 'acp', gate: async () => ({ method: 'consent' }),
+    daemon: { bind: async () => { throw new Error('connect ECONNREFUSED'); } } }), /--wake acp needs the agent-bot daemon to bind this checkout/);
+
+  // Reusing a soul: the consent names it, and its stored harness decides.
+  const reasked = [];
+  const reused = await joinSoul({ ...base, name: 'someone-else', soul: joined.agentId, cwd: a.outside, wake: 'resume:read-only',
+    gate: async (action) => { reasked.push(action); return { method: 'consent' }; } }).catch((error) => error);
+  assert.ok(!(reused instanceof Error), reused?.message);
+  const census = showSoul(joined.agentId, { file: a.env.AGENT_BOT_POPULATION_PATH }).name;
+  assert.deepEqual(reasked, [`wake the existing soul ${census} (${joined.agentId}) on new messages (resume:read-only)`]);
+  assert.ok(!reasked[0].includes('someone-else'), 'the caller-supplied name does not stand in for the target');
+  await assert.rejects(joinSoul({ ...base, harness: 'opencode', name: 'scout', soul: acp.agentId, cwd: a.outside, wake: 'resume:workspace',
+    gate: async () => assert.fail('not asked') }), new RegExp(`${acp.agentId} runs claude; join it with --harness claude`));
 
   const souls = () => JSON.parse(readFileSync(a.env.AGENT_BOT_POPULATION_PATH, 'utf8')).souls;
   const before = Object.keys(souls()).length;
@@ -254,4 +289,58 @@ test('join --wake asks the owner first, then sets the wake; a refusal or an unre
     /claude sessions cannot be resumed/);
   await assert.rejects(joinSoul({ ...base, name: 'bad', wake: 'sometimes', gate: async () => assert.fail('not asked') }), /--wake must be one of/);
   assert.equal(Object.keys(souls()).length, before, 'nothing was created');
+});
+
+test('join --wake acp binds the checkout, so a new message wakes a joined Claude soul through an ACP turn (#417)', async (t) => {
+  const a = account(t);
+  const daemon = await startDaemon(t, a);
+  const joined = await joinSoul({ name: 'r8joiner', harness: 'claude', template: null, cwd: a.outside, env: a.env, home: a.home, config: {},
+    wake: 'acp', daemon: daemon.client, gate: async () => ({ method: 'consent' }) });
+  assert.equal(joined.bind, 'bound');
+  const binding = daemon.server.bindings.findAgent(joined.agentId);
+  assert.equal(binding?.worktree, joined.worktree);
+  assert.ok(binding?.file, 'the daemon binding has a file for the ACP turn');
+  // The soul keeps its own harness and gains no GitHub App.
+  assert.equal(readAgentIdentity(joined.agentId, { stateDir: a.env.AGENT_BOT_STATE_HOME }).harness, 'claude');
+
+  const turns = [];
+  const receipts = [];
+  const coldWake = createColdWaker({
+    executor: async (turn) => { turns.push(turn); return { stopReason: 'end_turn' }; },
+    settings: JSON.parse(readFileSync(path.join(a.env.XDG_STATE_HOME, 'agent-bot', 'cold-wake.json'), 'utf8')).settings,
+    lookupBinding: async (agentId) => daemon.server.bindings.findAgent(agentId) ?? recordedWorktree(agentId, { env: a.env, home: a.home }),
+    identities: async (agentId) => readAgentIdentity(agentId, { stateDir: a.env.AGENT_BOT_STATE_HOME }),
+    receipt: (r) => receipts.push(r),
+  });
+  const wake = await coldWake({ agentId: joined.agentId, count: 1, messageIds: ['msg_1'] });
+  assert.notEqual(wake.outcome, 'failed', wake.detail);
+  await coldWake.idle?.();
+  assert.equal(turns.length, 1);
+  assert.deepEqual(turns[0].wake, { lane: 'acp' });
+  assert.equal(turns[0].invocation.harness, 'claude');
+  assert.equal(turns[0].invocation.cwd, joined.worktree);
+  assert.equal(turns[0].env.AGENT_BOT_BINDING, binding.file);
+  assert.ok(!receipts.some((r) => r.decision === 'failed'), JSON.stringify(receipts));
+});
+
+test('join --wake turns the wake on before agent-comms registers the soul, and puts it back when registration fails', async (t) => {
+  const a = account(t);
+  const settings = () => { try { return JSON.parse(readFileSync(path.join(a.env.XDG_STATE_HOME, 'agent-bot', 'cold-wake.json'), 'utf8')).settings; } catch { return {}; } };
+  const base = { harness: 'codex', template: null, cwd: a.outside, env: a.env, home: a.home, config: {}, gate: async () => ({ method: 'consent' }) };
+  // A message delivered during registration finds the wake already on.
+  const seen = [];
+  const joined = await joinSoul({ ...base, name: 'early', wake: 'resume:workspace',
+    comms: async ({ agentId }) => { seen.push(settings()[agentId]); return `test/${agentId}`; } });
+  assert.deepEqual(seen, [{ lane: 'resume', policy: 'workspace' }]);
+  assert.equal(joined.wake, 'resume workspace');
+
+  // A failed registration restores the previous setting.
+  await assert.rejects(joinSoul({ ...base, name: 'early', soul: joined.agentId, wake: 'resume:read-only',
+    comms: async () => { throw new Error('agent-comms join failed: broker down'); } }), /broker down/);
+  assert.deepEqual(settings()[joined.agentId], { lane: 'resume', policy: 'workspace' });
+  const fresh = await joinSoul({ ...base, name: 'never', wake: 'resume:workspace',
+    comms: async () => { throw new Error('agent-comms join failed: broker down'); } }).catch((error) => error);
+  assert.match(fresh.message, /broker down/);
+  assert.ok(!Object.values(settings()).some((value, index) => Object.keys(settings())[index] !== joined.agentId && value !== false && value !== undefined),
+    'a soul whose registration failed is left with its wake off');
 });

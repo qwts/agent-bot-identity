@@ -33,8 +33,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { mintBindToken, readBinding } from './agent-binding.mjs';
 import { mintAgentIdentity, readAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
-import { populationFile, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
-import { describeSetting, ownerGate, readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
+import { listSouls, populationFile, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
+import { describeSetting, ownerGate, readColdWakeSettings, setColdWake, wakeSetting } from './cold-wake-settings.mjs';
 import { initAgentSpace } from './agent-space.mjs';
 import { daemonPreference, loadConfig } from './config.mjs';
 import { AGENT_ID_KEYS } from './resolve-agent.mjs';
@@ -121,16 +121,13 @@ export async function joinSoul({
   if (typeof name !== 'string' || !name.trim()) throw new Error('--name must be a nonempty string');
   if (typeof harness !== 'string' || !HARNESS_KEY_PATTERN.test(harness)) throw new Error('--harness must be a harness key');
   if (wake !== null && !Object.hasOwn(JOIN_WAKES, wake)) throw new Error(`--wake must be one of ${Object.keys(JOIN_WAKES).join(', ')}`);
-  if (wake?.startsWith('resume:') && !resumeHarnessSupported(harness)) throw new Error(`${harness} sessions cannot be resumed; use --wake acp or agent-bot soul cold-wake ... webhook`);
-  // 6. The owner's consent comes first, so a refusal changes nothing.
-  const authorization = wake === null ? null
-    : await gate(`join as ${name} and wake it on new messages (${wake})`, { principal, env, cwd });
   const loaded = config === undefined ? loadConfig({ env, home }) : config;
   const options = { env, home, config: loaded };
   const stateDir = stateDirectory(options);
   const file = populationFile(options);
 
-  // 1. The soul.
+  // 1. The soul. Resolving it changes nothing, so the checks and the
+  //    owner's consent below can name the soul that is actually affected.
   let checkout = checkoutOf(cwd);
   const pinned = checkout ? pinnedSoul(checkout.worktree) : null;
   const binding = checkout ? readBinding({ env: {}, gitDir: checkout.gitDir }) : null;
@@ -140,10 +137,25 @@ export async function joinSoul({
     if (agentId && agentId !== claim) throw new Error(`this checkout is already pinned to ${claim}; join from another folder`);
     agentId = claim;
   }
+  if (agentId && !activeIdentity(agentId, stateDir)) throw new Error(`${agentId} is not an active soul`);
+  // A wake runs the soul's stored harness, not --harness: an existing soul
+  // must be joined with its own harness before it can wake.
+  const existing = agentId ? readAgentIdentity(agentId, { stateDir }) : null;
+  if (wake !== null && existing?.harness && existing.harness !== harness) {
+    throw new Error(`${agentId} runs ${existing.harness}; join it with --harness ${existing.harness} to set its wake`);
+  }
+  if (wake?.startsWith('resume:') && !resumeHarnessSupported(harness)) throw new Error(`${harness} sessions cannot be resumed; use --wake acp or agent-bot soul cold-wake ... webhook`);
+  // 6. The owner's consent comes before any change, so a refusal changes
+  //    nothing. It names the existing soul being changed, or says it is new.
+  let known = null;
+  if (existing) { try { known = listSouls({ file }).find((record) => record.id === agentId)?.name ?? null; } catch { /* unnamed */ } }
+  const authorization = wake === null ? null
+    : await gate(existing
+      ? `wake the existing soul ${known ?? 'unnamed'} (${agentId}) on new messages (${wake})`
+      : `create a new soul ${name} and wake it on new messages (${wake})`, { principal, env, cwd });
+
   let created = false;
-  if (agentId) {
-    if (!activeIdentity(agentId, stateDir)) throw new Error(`${agentId} is not an active soul`);
-  } else {
+  if (!agentId) {
     const source = template === undefined ? bundledStarter({ env }) : template;
     if (source) {
       agentId = (await spawn(source, { ...options, stateDir, file, name, harness })).id;
@@ -164,10 +176,11 @@ export async function joinSoul({
   //    spaces never diverge by invocation path.
   const { bindSoul } = await import('./setup-worktree.mjs');
   const { daemonClient } = await import('./agent-daemon.mjs');
+  const client = daemon ?? daemonClient({ env, home });
   await bindSoul({
     agentId,
     policy: daemonPreference({ env, home, config: loaded }),
-    client: daemon ?? daemonClient({ env, home }),
+    client,
     worktree,
     ensureLocal: () => {
       const local = initAgentSpace(agentId, options);
@@ -178,16 +191,46 @@ export async function joinSoul({
   try { linkWorktree(agentId, worktree, { ...options, file }); }
   catch (error) { process.stderr.write(`agent-bot join: checkout not linked into its soul: ${error.message}\n`); }
   let bind = 'binding reused';
+  let token = null;
   if (!readBinding({ env: {}, gitDir })) {
-    try { mintBindToken({ gitDir, worktree: realpathSync(worktree), agentId }); bind = 'bind token minted'; }
+    try { token = mintBindToken({ gitDir, worktree: realpathSync(worktree), agentId }).token; bind = 'bind token minted'; }
     catch { bind = 'bind token unavailable'; }
   }
+  // An ACP wake runs the soul through its daemon binding (#417), which a
+  // bind token alone does not make: spend the token now. A soul that has a
+  // conversation on record keeps it; one with none is bound to its join.
+  if (wake === 'acp' && !readBinding({ env: {}, gitDir })) {
+    if (!token) throw new Error('--wake acp needs a daemon binding, and no bind token could be minted in this checkout');
+    const identity = readAgentIdentity(agentId, { stateDir });
+    let bound;
+    try {
+      bound = await client.bind({ gitDir, token, harness: identity.harness ?? harness,
+        transcript: identity.transcript ?? { provider: 'agent-bot-join', id: agentId } });
+    } catch (error) {
+      throw new Error(`--wake acp needs the agent-bot daemon to bind this checkout: ${error.message}`);
+    }
+    if (bound?.agentId !== agentId) throw new Error('the daemon bound this checkout to a different soul; wake was not turned on');
+    bind = 'bound';
+  }
+
+  // 6. Wake, turned on before agent-comms registers the soul: a message
+  //    delivered during registration must find the wake already on. A
+  //    failed registration puts the previous setting back.
+  const previous = readColdWakeSettings({ env, home })[agentId];
+  if (wake !== null) setColdWake(agentId, JOIN_WAKES[wake], { env, home });
 
   // 5. agent-comms.
-  const address = await comms({ agentId, worktree, name, harness }, { env });
-
-  // 6. Wake.
-  if (wake !== null) setColdWake(agentId, JOIN_WAKES[wake], { env, home });
+  let address;
+  try {
+    address = await comms({ agentId, worktree, name, harness }, { env });
+  } catch (error) {
+    if (wake !== null) {
+      // A webhook's key is gone once another lane is set, so it is not restored.
+      const restore = wakeSetting(previous);
+      setColdWake(agentId, restore === null || restore.lane === 'webhook' ? false : restore.lane === 'acp' ? true : restore, { env, home });
+    }
+    throw error;
+  }
   const state = describeSetting(readColdWakeSettings({ env, home })[agentId]);
   return { agentId, soulDir: soulDirectory(agentId, { ...options, file }), worktree, address, created, bind,
     wake: state, ...(authorization ? { authorization: authorization.method } : {}) };

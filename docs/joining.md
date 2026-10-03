@@ -50,11 +50,19 @@ are delivered to its inbox but nothing wakes it.
    - `resume:read-only` or `resume:workspace` resumes its own harness
      session for one turn. Codex, OpenCode, Devin and Grok sessions can be
      resumed; Claude's cannot.
-   - `acp` runs an ACP turn, which needs a daemon binding.
+   - `acp` runs an ACP turn through the soul's daemon binding. `join` makes
+     that binding itself by spending the checkout's bind token with the
+     daemon (#417); with no daemon running, `--wake acp` fails instead of
+     reporting a wake that cannot run.
+   - The wake runs the soul's stored harness, so an existing soul must be
+     joined with its own `--harness` to set its wake.
    - A webhook needs a URL and key: use `agent-bot soul cold-wake ID webhook`.
 
    Cold wake is owner only (#293), so the owner gate runs before anything is
-   created, and a refusal changes nothing. The owner approves with
+   created, and a refusal changes nothing. The approval names the existing
+   soul being changed (name and Agent ID), or says a new soul is created.
+   The wake is turned on before agent-comms registers the soul, so a message
+   delivered meanwhile wakes it; a failed registration restores the old setting. The owner approves with
    `--principal-stdin` (the agent-comms principal on stdin, accepted only
    from a broker in another account) or the macOS approval dialog. The
    dialog asks for an administrator's password: that is the gate's proof
