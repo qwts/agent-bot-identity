@@ -15,8 +15,11 @@ import {
 import {
   boundAcpUpdate,
   createAcpExecutor,
+  mcpPermissionName,
   permissionToolName,
+  recordAnnouncement,
 } from '../acp-engine.mjs';
+import { REACH_SERVER_NAME, reachPolicyRules } from '../daemon-mcp.mjs';
 import {
   HARNESS_SESSION_EVENT,
   MAX_UPDATE_BYTES,
@@ -46,6 +49,23 @@ const FAKE_REGISTRY = Object.freeze({
     command: process.execPath,
     args: Object.freeze([FIXTURE]),
     stripEnv: Object.freeze(['CLAUDECODE']),
+    mcpToolNaming: 'claude-meta',
+  }),
+  codex: Object.freeze({
+    harness: 'codex',
+    enabled: true,
+    command: process.execPath,
+    args: Object.freeze([FIXTURE]),
+    stripEnv: Object.freeze([]),
+    mcpToolNaming: 'codex-invocation',
+  }),
+  opencode: Object.freeze({
+    harness: 'opencode',
+    enabled: true,
+    command: process.execPath,
+    args: Object.freeze([FIXTURE]),
+    stripEnv: Object.freeze([]),
+    mcpToolNaming: 'opencode-key',
   }),
 });
 
@@ -331,6 +351,72 @@ test('a Claude permission request is named by the tool its tool_call announced, 
     executorOptions: { policy: { version: 1, rules: [{ tool: 'mcp__agent-reach__send_message', outcome: 'allow' }], fallback: 'deny' } },
   });
   assert.deepEqual(chunkTexts(events).at(-1), 'mcp:allow bash:reject');
+});
+
+// The daemon's own reach rules over its default deny policy, as wake-plane
+// composes them: only the injected server's tools get through.
+const REACH_ONLY = { version: 1, rules: reachPolicyRules(), fallback: 'deny' };
+const REACH_SERVERS = [{ name: REACH_SERVER_NAME, command: 'agent-bot', args: ['reach-mcp'], env: [] }];
+
+test('a Codex MCP approval is named from its announced invocation; exec and foreign servers stay denied', async () => {
+  const logs = [];
+  const { events } = await turn({
+    message: 'codex-mcp-permission',
+    executorOptions: { harness: 'codex', policy: REACH_ONLY, mcpServers: REACH_SERVERS, log: (line) => logs.push(line) },
+  });
+  assert.equal(chunkTexts(events).at(-1), 'mcp:approved exec:cancel foreign:cancel');
+  assert.ok(logs.some((line) => /codex permission for call_c2 has no verifiable tool name; policy sees 'execute'/.test(line)));
+});
+
+test('an OpenCode MCP permission is named by its tool key; a borrowed title never is', async () => {
+  const { events } = await turn({
+    message: 'opencode-mcp-permission',
+    executorOptions: { harness: 'opencode', policy: REACH_ONLY, mcpServers: REACH_SERVERS },
+  });
+  assert.equal(chunkTexts(events).at(-1), 'mcp:once outside:reject unannounced:reject');
+});
+
+test('the Claude reach call is allowed by the daemon rules too', async () => {
+  const { events } = await turn({
+    message: 'claude-mcp-permission',
+    executorOptions: { policy: REACH_ONLY, mcpServers: REACH_SERVERS },
+  });
+  assert.deepEqual(chunkTexts(events).at(-1), 'mcp:allow bash:reject');
+});
+
+test('mcpPermissionName only names calls to injected servers, from adapter-built fields', () => {
+  const codexAnnounced = recordAnnouncement(undefined, {
+    sessionUpdate: 'tool_call', toolCallId: 'c', title: 'Tool: agent-reach/fleet', rawInput: { server: 'agent-reach', tool: 'fleet' },
+  });
+  const codexRequest = { toolCallId: 'c', rawInput: { server_name: 'agent-reach' } };
+  assert.equal(mcpPermissionName('codex-invocation', codexRequest, codexAnnounced, ['agent-reach']), 'mcp__agent-reach__fleet');
+  assert.equal(mcpPermissionName('codex-invocation', codexRequest, codexAnnounced, []), null, 'not injected');
+  assert.equal(mcpPermissionName('codex-invocation', { rawInput: { server_name: 'x' } }, codexAnnounced, ['agent-reach']), null);
+  assert.equal(mcpPermissionName('codex-invocation', codexRequest, { ...codexAnnounced, title: 'rm -rf /' }, ['agent-reach']), null);
+  assert.equal(mcpPermissionName('opencode-key', codexRequest, codexAnnounced, ['agent-reach']), null, 'shapes never cross');
+  assert.equal(mcpPermissionName(null, codexRequest, codexAnnounced, ['agent-reach']), null);
+
+  const openAnnounced = recordAnnouncement(undefined, { sessionUpdate: 'tool_call', toolCallId: 'o', title: 'agent-reach_fleet', kind: 'other' });
+  const openRequest = { toolCallId: 'o', title: 'agent-reach_fleet', kind: 'other' };
+  assert.equal(mcpPermissionName('opencode-key', openRequest, openAnnounced, ['agent-reach']), 'mcp__agent-reach__fleet');
+  assert.equal(mcpPermissionName('opencode-key', { ...openRequest, kind: 'execute' }, openAnnounced, ['agent-reach']), null);
+  assert.equal(mcpPermissionName('opencode-key', openRequest, { ...openAnnounced, kind: 'execute' }, ['agent-reach']), null);
+  assert.equal(mcpPermissionName('opencode-key', { ...openRequest, title: 'agent-reach_x y' },
+    { ...openAnnounced, title: 'agent-reach_x y' }, ['agent-reach']), null, 'not a tool key');
+  const sendKey = { title: 'agent-reach_send_message', kind: 'other' };
+  assert.equal(mcpPermissionName('opencode-key', sendKey, sendKey, ['agent-reach', 'agent-reach_send']), null,
+    'an ambiguous key is refused');
+  assert.equal(mcpPermissionName('codex-invocation', codexRequest, null, ['agent-reach']), null);
+});
+
+test('recordAnnouncement keeps the first tool_call shape and lets a later update add only the name', () => {
+  const first = recordAnnouncement(undefined, { sessionUpdate: 'tool_call', toolCallId: 'x', title: 'agent-reach_fleet', kind: 'other' });
+  const rewritten = recordAnnouncement(first, { sessionUpdate: 'tool_call', toolCallId: 'x', title: 'other', kind: 'execute' });
+  assert.equal(rewritten, first);
+  const named = recordAnnouncement(first, { sessionUpdate: 'tool_call_update', toolCallId: 'x', _meta: { claudeCode: { toolName: 'Read' } } });
+  assert.deepEqual(named, { ...first, name: 'Read' });
+  assert.equal(recordAnnouncement(undefined, { sessionUpdate: 'tool_call_update', toolCallId: 'x', title: 'y' }), null);
+  assert.equal(recordAnnouncement(undefined, { sessionUpdate: 'agent_message_chunk' }), null);
 });
 
 test('oversized chunks are truncated, foreign update kinds are skipped, turns survive', async () => {

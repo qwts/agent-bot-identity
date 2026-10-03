@@ -688,12 +688,28 @@ unmanaged with comms on.
 A cold turn has nobody to approve a tool call, so the daemon prepends an
 exact allow rule for each of this server's tools to the executor policy
 (`mcp__agent-reach__fetch_context`, `…__post_reply`, `…__report_status`,
-`…__clock_in`, `…__fleet`, `…__send_message` — Claude Code's MCP tool
-names). Nothing else is allowed by it; the configured policy and its
-`deny` fallback still decide every other tool. Claude's ACP adapter puts no
-tool name on its permission requests, so the engine names a request by the
-tool its `tool_call` update announced for the same `toolCallId`, never by
-the request's title (for a shell call, that is the model's command).
+`…__clock_in`, `…__fleet`, `…__send_message` — the canonical
+`mcp__<server>__<tool>` names). Nothing else is allowed by it; the
+configured policy and its `deny` fallback still decide every other tool.
+
+Each adapter names an MCP tool call differently, and none puts a trustworthy
+tool name on its permission request, so the engine names a request from what
+the adapter itself announced for the same `toolCallId` on its `tool_call`
+update — never from the request's title alone (for a shell call, that is the
+model's command). Each ACP registry row declares how (`mcpToolNaming`), and
+the engine only names calls to a server it injected into that turn:
+
+| Harness | `mcpToolNaming` | How a reach call is recognized |
+|---|---|---|
+| Claude | `claude-meta` | `_meta.claudeCode.toolName` on the `tool_call` |
+| OpenCode | `opencode-key` | `tool_call` and request both kind `other`, same title `<server>_<tool>`, exactly one injected server prefix. OpenCode's default agent permission allows MCP tools without asking, so it rarely sends a request |
+| Codex | `codex-invocation` | `tool_call` rawInput `{server, tool}` with title `Tool: <server>/<tool>`, and the elicitation's `server_name` matches. The row is disabled |
+| Muse | none | muse-acp drops injected MCP servers; it has no reach tools |
+
+Gemini and Devin have no ACP registry row, so the daemon does not drive
+them. A request the engine cannot name is seen by the policy as its ACP
+kind (or `other`), so the deny fallback refuses it, and the engine logs
+`permission for <id> has no verifiable tool name`.
 
 It is **one server with two placements**:
 
