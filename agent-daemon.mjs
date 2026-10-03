@@ -81,6 +81,7 @@ import { readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler } from './daemon-launch.mjs';
 import { createSoulHomes, installHarnesses } from './soul-home.mjs';
+import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { validateSoulPackage } from './soul-package.mjs';
 import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
@@ -1185,6 +1186,8 @@ export async function runDaemon({
       baseEnv: soulEnvironment(env),
       home,
     }),
+    // Webhook wake (#334) runs only for a soul the owner set to `webhook`.
+    webhookWaker: createWebhookWaker({ read: (agentId) => readWebhook(agentId, { env, home }) }),
     // The relay runs agent-comms, which a launchd PATH does not reach.
     relay: createCommsRelay({ env: { ...soulEnvironment(env), PATH: resumePath(soulEnvironment(env), home) } }),
     // Receipts carry a soul and a decision, never message IDs or content.

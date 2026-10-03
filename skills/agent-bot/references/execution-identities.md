@@ -61,7 +61,12 @@ and wins over the worktree's own.
    `agent-bot soul cold-wake <agentId> resume <read-only|workspace>`.
    Resume wakes a Codex, OpenCode, Devin or Grok soul by resuming a daemon-owned
    session of its own harness for one headless turn per message, under that
-   policy (#323). Agents do not change that setting.
+   policy (#323). A soul whose harness has no headless CLI but runs a
+   routine when a webhook fires (Grok Bot) is set with
+   `agent-bot soul cold-wake <agentId> webhook --url-file PATH --key-file PATH`:
+   the daemon POSTs a fixed request that names the soul's worktree and
+   carries no message content, and the soul's routine reads, answers, and
+   acks its own inbox (#334). Agents do not change that setting.
 
 ## Read attribution from the census, not the trailer parser
 
