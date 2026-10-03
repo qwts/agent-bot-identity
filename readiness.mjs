@@ -377,7 +377,7 @@ function checkoutHolds(soul, { git, env, worktree }) {
   if (!worktree) return 'unrecorded';
   for (const key of AGENT_ID_KEYS) {
     try {
-      const value = (git(['config', '--worktree', '--get', key], { cwd: worktree, env }) ?? '').trim();
+      const value = (git(['config', '--worktree', '--get', key], { cwd: worktree, env: readinessGitEnv(env) }) ?? '').trim();
       if (value === soul.id) return 'held';
       if (value) return 'repinned';
     } catch (error) {
@@ -484,6 +484,20 @@ function worktreeBindingSummaryCheck({ home, env, roster }) {
   });
 }
 
+// Read checkout configuration without command-scope injection or repository
+// overrides. Keep the controls used to isolate global and system config.
+function readinessGitEnv(env) {
+  const probeEnv = { ...env };
+  for (const key of Object.keys(probeEnv)) {
+    if (key === 'GIT_CONFIG_GLOBAL' || key === 'GIT_CONFIG_NOSYSTEM') continue;
+    if (/^GIT_CONFIG(?:_|$)/.test(key)
+      || /^GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|NAMESPACE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CEILING_DIRECTORIES)$/.test(key)) {
+      delete probeEnv[key];
+    }
+  }
+  return probeEnv;
+}
+
 // The current worktree in full detail. This one may fail: an App outside the
 // roster is a real misconfiguration of the worktree being diagnosed, not a
 // machine-wide observation, and a diagnostic that quietly tolerated it would
@@ -491,19 +505,7 @@ function worktreeBindingSummaryCheck({ home, env, roster }) {
 function currentWorktreeBindingCheck({ cwd, env, git, roster }) {
   // Read the pin through the injected git, exactly as the other worktree probes
   // do. `pinnedSlug` cannot be used here: it forwards no env to its subprocess.
-  //
-  // The caller's env is NOT passed through unmodified. `collectReadiness` defaults
-  // it to process.env, so command-scope GIT_CONFIG_COUNT/GIT_CONFIG_KEY_*/
-  // GIT_CONFIG_VALUE_* injection in a container would satisfy the first
-  // `--worktree --get` and report whatever App the container injected. Strip
-  // those, plus the repository-override variables, so the answer comes from the
-  // checkout's own configuration.
-  const probeEnv = { ...env };
-  for (const key of Object.keys(probeEnv)) {
-    if (/^GIT_(CONFIG|DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|NAMESPACE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CEILING_DIRECTORIES)/.test(key)) {
-      delete probeEnv[key];
-    }
-  }
+  const probeEnv = readinessGitEnv(env);
   let slug = null;
   let readable = true;
   for (const key of PIN_KEYS) {
@@ -1225,7 +1227,7 @@ function hooksCheck({ home, cwd, env, git, access }) {
   const paths = installationPaths(home);
   let configured = '';
   try {
-    configured = git(['config', '--global', '--get', 'core.hooksPath'], { cwd, env });
+    configured = git(['config', '--global', '--get', 'core.hooksPath'], { cwd, env: readinessGitEnv(env) });
   } catch {
     /* unset */
   }
@@ -1483,6 +1485,7 @@ function isHttpsRemote(value) {
 }
 
 function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
+  env = readinessGitEnv(env);
   const githubIdentityEnabled = isGateEnabled('github-identity', { env, home, config });
   let gitDir;
   let commonDir;
@@ -1503,8 +1506,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
   const primary = resolve(gitDir) === resolve(commonDir);
   // Every subprocess in this probe — including the pin reads inside
   // resolve-agent.mjs — must run through the injected runner with the caller's
-  // env. Mixing in ambient process.env lets a host's injected GIT_CONFIG_*
-  // pairs or global config answer for the worktree being probed.
+  // sanitized env, so ambient Git overrides cannot answer for the worktree.
   const run = (args, { cwd: probeCwd = cwd } = {}) => git(args, { cwd: probeCwd, env });
   const probe = gitProbe(git, cwd, env);
   let slug = null;
