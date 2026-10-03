@@ -72,10 +72,14 @@ const COMMAND_KEYS = [
 
 const PATH_KEYS = [
   ['tool_input', 'file_path'],
+  ['tool_input', 'notebook_path'],
+  ['toolArgs', 'file_path'],
+  ['toolArgs', 'filePath'],
   ['toolArgs', 'path'],
   ['tool_info', 'file_path'],
   ['tool_input', 'path'],
   ['file_path'],
+  ['path'],
 ];
 
 function dig(payload, keys) {
@@ -140,9 +144,9 @@ export const DIALECTS = [
       'agent-stop': 'Stop',
     },
     decision: 'claude-json',
-    // Documented: a SessionStart hook may add context to the session through
-    // `hookSpecificOutput.additionalContext`.
-    contextChannel: { 'session-start': 'claude-json' },
+    // SessionStart and PreToolUse can carry advisory text through
+    // `hookSpecificOutput.additionalContext`, without changing permission.
+    contextChannel: { 'session-start': 'claude-json', 'pre-tool-use': 'claude-json' },
     nativeFailMode: 'closed',
     timeoutFailMode: 'closed',
     timeoutCapMs: null,

@@ -232,7 +232,7 @@ test('doctor exposes declared gaps, unverified rows, and stale evidence', () => 
 
   // Context is reported next to event coverage, because a dialect can wire every
   // event and still have nowhere to put a SessionStart instruction.
-  assert.deepEqual(current.find((row) => row.key === 'claude').contextEvents, ['session-start']);
+  assert.deepEqual(current.find((row) => row.key === 'claude').contextEvents, ['session-start', 'pre-tool-use']);
   assert.equal(current.find((row) => row.key === 'claude').contextNote, null);
   assert.deepEqual(current.find((row) => row.key === 'cursor').contextEvents, []);
   assert.match(current.find((row) => row.key === 'cursor').contextNote, /no context field/);

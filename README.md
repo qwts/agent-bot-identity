@@ -317,6 +317,16 @@ sign-in uses the same registry resolution. Working state in `.soul-state/`
 and `worktrees/` is separate from package content (package exclusions: #341).
 See [the home migration contract](docs/soul-homes.md) for recovery details.
 
+Soul write confinement defaults to warn (#340): the shared hooks report file
+tool writes outside the soul directory, linked worktrees, its tmp directory,
+the bound checkout and absolute `policy.json` grants. Hooks are a guardrail,
+not a sandbox; shell commands, MCP tools and reads are not covered. The daemon
+continues using harness OS sandboxes for resume wake where available.
+The owner can set `agent-bot soul confinement AGENT_ID off|warn|deny` with an
+owner proof and review `agent-bot soul confinement-report AGENT_ID [--json]`.
+Explicit deny is supported; warn remains the default until reports show no
+false positives. See [confinement](docs/confinement.md) for coverage and reports.
+
 ### Organization profile v1
 
 `--profile` is the governed cold-start input. It accepts a JSON file or `-`
