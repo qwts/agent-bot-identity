@@ -202,7 +202,7 @@ test('components.json pins Node by checksum and agent-comms by commit', () => {
 test('the bundled Node satisfies the engines both halves declare', () => {
   // One runtime serves both halves of the pair, so a Node that either package
   // refuses makes the archive worse than useless. agent-bot's own package.json
-  // is read from the tree; agent-comms v0.3.2 declares
+  // is read from the tree; agent-comms v0.3.3 declares
   // `^22.22.2 || ^24.15.0 || >=26.0.0`, re-read this when the pin moves.
   const agentBot = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(agentBot.engines.node, '>=20');
@@ -211,7 +211,7 @@ test('the bundled Node satisfies the engines both halves declare', () => {
   const agentCommsAllows = (major === 22 && (minor > 22 || (minor === 22 && patch >= 2)))
     || (major === 24 && (minor > 15 || (minor === 15 && patch >= 0)))
     || major >= 26;
-  assert.ok(agentCommsAllows, `agent-comms v0.3.2 requires ^22.22.2 || ^24.15.0 || >=26.0.0, the bundle pins ${[major, minor, patch].join('.')}`);
+  assert.ok(agentCommsAllows, `agent-comms v0.3.3 requires ^22.22.2 || ^24.15.0 || >=26.0.0, the bundle pins ${[major, minor, patch].join('.')}`);
 });
 
 test('a pin without an integrity anchor is refused rather than trusted', () => {
