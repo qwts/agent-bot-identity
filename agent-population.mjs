@@ -190,7 +190,15 @@ function normalizeSoul(record, { defaultLastSeen = null } = {}) {
     // read as unmanaged with comms on.
     managed: booleanField('managed', record.managed, false),
     comms: booleanField('comms', record.comms, true),
+    // The name the owner chose at launch or join, as agent-comms' census
+    // shows it (#429). `name` stays the generated handle agents address.
+    ...displayNameField(record.displayName),
   };
+}
+
+function displayNameField(value) {
+  const shown = printableText('displayName', value, { max: 128, required: false });
+  return shown === null ? {} : { displayName: shown };
 }
 
 function booleanField(name, value, fallback) {
@@ -600,6 +608,36 @@ export function setSoulComms(id, comms, { file = populationFile() } = {}) {
   });
 }
 
+// Records the name a launch or join gave the soul (#429), so every command
+// shows the name the census does. Returns the row, or null with no row.
+export function recordSoulDisplayName(id, name, { file = populationFile() } = {}) {
+  const target = agentId(id);
+  const value = printableText('displayName', name, { max: 128 });
+  ensurePrivateDirectory(path.dirname(file));
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
+    const existing = current.souls[target];
+    if (!existing) return null;
+    const soul = normalizeSoul({ ...existing, displayName: value });
+    if (existing.displayName !== soul.displayName) writeDocument(file, { ...current.souls, [target]: soul });
+    return soul;
+  });
+}
+
+// The one name commands show for a soul (#429): the launch or join name,
+// else its soul.json name, else the generated handle.
+export function soulShownName(soul, directory = null) {
+  if (soul.displayName) return soul.displayName;
+  if (directory) {
+    try {
+      const manifest = JSON.parse(readFileSync(path.join(directory, 'soul.json'), 'utf8'));
+      if (typeof manifest?.name === 'string' && manifest.name.trim()) return manifest.name;
+    } catch { /* no readable soul.json */ }
+  }
+  return soul.name;
+}
+
 function claimedByOther(directory, id) {
   // An empty marker is one being written (older tools wrote it in place),
   // not another soul's claim.
@@ -787,7 +825,7 @@ export function locateSoulDir(directory, options = {}) {
   const owner = soul.soulDir && existsSync(soul.soulDir) && markerOf(soul.soulDir) === id ? soul.soulDir
     : claims.length === 1 ? dir : null;
   const copies = claims.filter((claim) => !owner || !samePath(claim, owner)).sort();
-  const found = { path: dir, agentId: id, name: soul.name, soulDir: owner, copies };
+  const found = { path: dir, agentId: id, name: soulShownName(soul, owner ?? dir), handle: soul.name, soulDir: owner, copies };
   if (owner && samePath(owner, dir)) return { ...found, status: 'installed' };
   if (owner) {
     return { ...found, status: 'copy',
@@ -801,9 +839,11 @@ export function locateSoulDir(directory, options = {}) {
 // stays keyed by Agent ID, and a name is only a handle: zero or several
 // matches fail with a stable message instead of guessing.
 export function showSoulByName(name, { file = populationFile() } = {}) {
-  const wanted = printableText('name', name, { max: 80 });
-  const matches = Object.values(readDocument(file).souls)
-    .filter((record) => record.name === wanted);
+  const wanted = printableText('name', name, { max: 128 });
+  const souls = Object.values(readDocument(file).souls);
+  // A handle first; else the name the owner chose, as shown (#429).
+  let matches = souls.filter((record) => record.name === wanted);
+  if (matches.length === 0) matches = souls.filter((record) => record.displayName === wanted);
   if (matches.length === 1) return matches[0];
   if (matches.length === 0) throw new Error('no population record with that name');
   throw new Error(

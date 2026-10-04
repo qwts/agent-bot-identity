@@ -80,6 +80,8 @@ test('join with no GitHub App and no checkout: new soul, its own workspace pinne
   assert.deepEqual(a.broker().joined[joined.agentId], { name: 'dudles', harness: 'grokbot' });
   // The census records the checkout, so cold wake finds it.
   assert.equal(showSoul(joined.agentId, { file: a.env.AGENT_BOT_POPULATION_PATH }).worktree, joined.worktree);
+  // The census name is the one every command shows (#429).
+  assert.equal(showSoul(joined.agentId, { file: a.env.AGENT_BOT_POPULATION_PATH }).displayName, 'dudles');
   assert.deepEqual(recordedWorktree(joined.agentId, { env: a.env, home: a.home }), { agentId: joined.agentId, worktree: joined.worktree, file: null });
   // The soul folder itself never becomes a repository.
   assert.equal(existsSync(path.join(joined.soulDir, '.git')), false);
