@@ -77,6 +77,19 @@ find_node() {
     return 0
   fi
 
+  # Inside GeniusBar.app (ADR-0276) this copy sits in
+  # Contents/Resources/components/agent-bot and the app carries its own Node
+  # in Contents/MacOS, because a stock Mac has none (#428).
+  case "$root" in
+    */Contents/Resources/components/agent-bot)
+      candidate=${root%/Resources/components/agent-bot}/MacOS/node
+      if supported_node "$candidate"; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+      ;;
+  esac
+
   if candidate=$(command -v node 2>/dev/null) && supported_node "$candidate"; then
     printf '%s\n' "$candidate"
     return 0
