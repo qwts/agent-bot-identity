@@ -85,7 +85,8 @@ export async function verifyPrincipalOwner(credential, {
 export function ownerActionSummary(action, { env = process.env, souls = null } = {}) {
   let names = new Map();
   try {
-    names = new Map((souls ?? listSouls({ file: populationFile({ env }) })).map((soul) => [soul.id, soul.name]));
+    // The name the census shows (#429): the launch or join name, else the handle.
+    names = new Map((souls ?? listSouls({ file: populationFile({ env }) })).map((soul) => [soul.id, soul.displayName ?? soul.name]));
   } catch { /* no population: Agent IDs alone */ }
   const label = (id) => (names.get(id) ? `${names.get(id)} (${id})` : id);
   const words = action.split(' ');
@@ -99,6 +100,8 @@ export function ownerActionSummary(action, { env = process.env, souls = null } =
     summary = `turn waking on new messages ${rest[0]} for ${label(id)}`;
   } else if (first === 'soul' && second === 'cold-wake' && rest[0] === 'resume' && rest.length === 2) {
     summary = `let ${label(id)} wake on new messages by resuming its session (${rest[1]})`;
+  } else if (first === 'soul' && second === 'remove' && rest.length === 0) {
+    summary = `remove ${label(id)} from this Mac (its folders are archived, not deleted)`;
   } else if (first === 'soul' && second === 'confinement' && rest.length === 1) {
     summary = `set file confinement to ${rest[0]} for ${label(id)}`;
   } else if (first === 'soul' && second === 'revision' && rest.length === 1) {

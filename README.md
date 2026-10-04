@@ -253,7 +253,7 @@ Installation provides one executable at `~/.local/bin/agent-bot`:
 agent-bot bootstrap [--profile <path|->] [--config <path>] [--app <slug>] [--scope-app <slug>] [--with-gh-shim] [--json]
 agent-bot --version
 agent-bot setup-worktree [app-slug]
-agent-bot join --name NAME --harness H [--template PATH] [--soul AGENT_ID] [--json]
+agent-bot join --name NAME --harness H [--template PATH] [--soul AGENT_ID] [--wake resume:read-only|resume:workspace|acp] [--principal-stdin] [--json]
 agent-bot mint-token --app <slug> [--json]
 agent-bot doctor [--machine-only] [--app <slug>] [--json]
 agent-bot identity <ensure|spawn|bind|record|finalize|show|current>
@@ -757,6 +757,20 @@ first. With `--json`, a failure prints `{"error":{"code","message"}}`;
 that refusal's code is `soul-running`. GeniusBar's bridge reads the same JSON. A launch request may also carry
 `"comms": true|false`, which the daemon writes to the soul's `soul.json`
 before it starts the soul.
+
+### Removing a soul
+
+`agent-bot soul remove <soul> [--json]` takes a soul out of this account
+without deleting anything (#420). It is owner-gated like `soul comms` and
+refused while the soul runs (`soul-running`). It turns cold wake off, leaves
+agent-comms as the soul, retires it (there is no un-retire), and moves every
+folder carrying its marker to `<souls root>/.archive/<UTC stamp>-<folder>`.
+Every step can be repeated, so removing a retired soul finishes a cleanup a
+failed launch or an earlier remove left behind:
+
+```sh
+agent-bot soul remove R8Scout --json   # {"agentId":…,"name":"R8Scout","wake":"off","comms":"left","retired":true,"archived":[{"from":…,"to":…}]}
+```
 
 A cold turn has nobody to approve a tool call, so the daemon prepends an
 exact allow rule for each of this server's tools to the executor policy

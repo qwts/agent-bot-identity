@@ -31,7 +31,7 @@ export function wakeSetting(value) {
   if (value?.lane === 'webhook') return { lane: 'webhook' };
   return null;
 }
-function describeSetting(value) {
+export function describeSetting(value) {
   const setting = wakeSetting(value);
   if (setting === null) return 'off';
   if (setting.lane === 'acp') return 'on';
@@ -70,7 +70,7 @@ function readSecretFile(file, readStdin) {
 // the owner proves themselves with a presented principal or the consent
 // dialog. Harness detection stays off here, as before: only stated markers
 // count.
-const ownerGate = (action, { principal, env, cwd }) => assertOwnerAction(action, { principal, env, cwd, detect: false });
+export const ownerGate = (action, { principal, env, cwd }) => assertOwnerAction(action, { principal, env, cwd, detect: false });
 
 // `agent-bot soul cold-wake`. Every change (on, off, resume, webhook) passes
 // the owner gate; `show` is read-only and only refuses a marked soul. The

@@ -1104,7 +1104,7 @@ function orphanSoulDirsCheck({ home, env, config }) {
     status: 'warning',
     code: 'soul-folder-orphan',
     message: `${orphans.length} soul folder(s) belong to no active soul: ${shown}`,
-    action: 'move each folder into the souls folder\'s .archive folder, or out of the souls folder, then rerun doctor',
+    action: 'run `agent-bot soul remove <agentId>` for each to archive its folder, then rerun doctor',
     evidence: { orphans },
   });
 }

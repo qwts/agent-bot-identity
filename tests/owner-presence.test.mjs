@@ -154,8 +154,12 @@ test('prompts name the soul by name and Agent ID, and the change', () => {
   assert.equal(say(`soul revision approve ${ID}`), `approve a revision of ${bill}`);
   assert.equal(say(`identity migrate-credentials ${ID} --to keyd`), `move the GitHub App key of ${bill} to agent-bot-keyd`);
   assert.equal(say('identity migrate-credentials --all'), "move every soul's GitHub App key");
+  assert.equal(say(`soul remove ${ID}`), `remove ${bill} from this Mac (its folders are archived, not deleted)`);
   // Anything else keeps its words, with each soul named.
-  assert.equal(say(`soul remove ${ID}`), `soul remove ${bill}`);
+  assert.equal(say(`soul spawn ${ID}`), `soul spawn ${bill}`);
+  // The name a launch or join gave the soul wins over its handle (#429).
+  assert.equal(ownerActionSummary(`soul comms ${ID} off`, { souls: [{ id: ID, name: 'mild-rowan-48', displayName: 'VMStarter' }] }),
+    `turn agent comms off for VMStarter (${ID})`);
   assert.equal(ownerActionSummary(`soul comms ${ID} off`, { souls: [] }), `turn agent comms off for ${ID}`);
   assert.ok(say(`trusting SOP repository ${'x'.repeat(500)}`).length <= 400);
 });
