@@ -6,46 +6,21 @@
 // (agent-interaction.mjs) until the owner decides, it expires, or the turn
 // ends. GeniusBar's approvals panel calls this command; the logic is here.
 //
-// Listing refuses a caller that carries a soul marker: a soul must not see
-// what its owner is being asked. Deciding goes through the owner gate (the
-// same one every owner-only change uses) and echoes the proposal's exact
-// operation digest, so a decision can only land on the operation it names.
+// Both refuse a caller that carries a soul marker: a soul must not see what
+// its owner is being asked. A decision echoes the proposal's exact operation
+// digest, so it can only land on the operation it names, and the daemon asks
+// for the owner's presence before it lands (#438); this command does not ask
+// a second time.
 
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 
 import { daemonClient } from './agent-daemon.mjs';
-import { populationFile, showSoul, soulDirectory, soulShownName } from './agent-population.mjs';
-import { assertOwnerAction, soulMarkers } from './owner-gate.mjs';
+import { shown } from './approval-action.mjs';
+import { soulMarkers } from './owner-gate.mjs';
 
 const USAGE = 'usage: agent-bot approvals list [--json] | approvals approve|deny <proposalId> [--json] [--principal-stdin]';
-
-function soulName(agentId, { env, home }) {
-  const file = populationFile({ env, home });
-  try {
-    const soul = showSoul(agentId, { file });
-    let directory = null;
-    try { directory = soulDirectory(agentId, { file, env, home }); } catch { /* no soul directory */ }
-    return soulShownName(soul, directory);
-  } catch {
-    return null;
-  }
-}
-
-function shown(proposal, opts) {
-  return {
-    proposalId: proposal.proposalId,
-    agentId: proposal.agentId,
-    soul: proposal.agentId ? soulName(proposal.agentId, opts) : null,
-    tool: proposal.tool ?? null,
-    summary: proposal.summary,
-    operationDigest: proposal.operationDigest,
-    createdAt: proposal.createdAt,
-    expiresAt: proposal.expiresAt,
-    status: proposal.status,
-  };
-}
 
 function refuseSoul({ env, cwd }) {
   const markers = soulMarkers({ env, cwd });
@@ -61,7 +36,6 @@ export async function approvalsCommand(argv, {
   cwd = process.cwd(),
   readStdin = () => readFileSync(0, 'utf8'),
   write = (text) => process.stdout.write(text),
-  gate = (action, { principal }) => assertOwnerAction(action, { principal, env, cwd }),
   client = daemonClient({ env, home, cwd }),
 } = {}) {
   const json = argv.includes('--json');
@@ -86,16 +60,13 @@ export async function approvalsCommand(argv, {
     catch { throw new Error('--principal-stdin needs the principal credential as JSON on stdin'); }
   }
   refuseSoul({ env, cwd });
-  // The proposal is read before the gate so the owner is asked about the
-  // exact soul and tool, and its digest is what the decision echoes.
+  // The proposal is read first: its digest is what the decision echoes.
   const { proposals } = await client.approvals();
   const proposal = proposals.find((row) => row.proposalId === target);
   if (!proposal) throw Object.assign(new Error(`${target} is not waiting on a decision`), { code: 'not-open' });
-  const row = shown(proposal, opts);
-  const who = row.soul ? `${row.soul} (${row.agentId})` : row.agentId;
-  const about = row.summary.length > 160 ? `${row.summary.slice(0, 157)}...` : row.summary;
-  await gate(`${action} ${row.tool ?? 'a tool'} for ${who}: ${about}`, { principal });
-  const result = await client.decideApproval({ proposalId: target, decision: action, digest: proposal.operationDigest });
+  const result = await client.decideApproval({
+    proposalId: target, decision: action, digest: proposal.operationDigest, ...(principal ? { principal } : {}),
+  });
   const decided = shown(result.proposal, opts);
   write(json ? `${JSON.stringify(decided)}\n` : `${decided.proposalId} ${decided.status}\n`);
   return decided;

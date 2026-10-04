@@ -141,6 +141,23 @@ export async function presenceOrConsent(action, {
   return consent(action, { summary });
 }
 
+// Deciding a soul's waiting tool request (#438) lets that soul act, so the
+// owner's presence is asked every time. A presented principal credential is
+// checked as well but never stands in for presence: the daemon token, or a
+// principal the daemon already trusts, proves a login, not the owner at the
+// Mac. The caller is the daemon, which runs as the owner and carries no soul
+// marker; the soul refusal stays with the command that called it.
+export async function confirmOwnerPresence(action, {
+  env = process.env,
+  principal = null,
+  verifyPrincipal = verifyPrincipalOwner,
+  consent = presenceOrConsent,
+} = {}) {
+  const vouched = principal ? await verifyPrincipal(principal, { env }) : null;
+  const proof = await consent(action, { env });
+  return vouched ? { ...proof, principal: vouched.principal } : proof;
+}
+
 // Returns the authorization to record: `{ method: 'principal', principal }`,
 // `{ method: 'presence', via: 'agent-bot-keyd' }` or `{ method: 'consent' }`.
 // Throws when the caller is a soul or unproven.
