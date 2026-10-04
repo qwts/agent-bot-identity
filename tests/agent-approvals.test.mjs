@@ -130,6 +130,33 @@ test('a denied, expired or aborted turn approval resolves as a deny', async () =
   assert.deepEqual(interaction.listProposalsForOwner(), { proposals: [] });
 });
 
+test('an expired or aborted turn approval writes one approval-decision receipt (#439)', async () => {
+  const { env } = scratch();
+  const interaction = service(env);
+  const auditFile = path.join(interactionHome({ env, home: '/nonexistent' }), 'audit.jsonl');
+  const decisions = () => readFileSync(auditFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+    .filter((row) => row.event === 'approval-decision');
+
+  await settledSoon(interaction.requestTurnApproval({ agentId: AGENT_ID, operation: OPERATION, summary: 'two', ttlMs: 20 }));
+  const controller = new AbortController();
+  const aborted = interaction.requestTurnApproval({ agentId: AGENT_ID, operation: OPERATION, summary: 'three', signal: controller.signal });
+  controller.abort();
+  controller.abort();
+  await settledSoon(aborted);
+
+  const rows = decisions();
+  assert.deepEqual(rows.map((row) => row.decision), ['expired', 'cancelled']);
+  for (const row of rows) assert.equal(row.agentId, AGENT_ID);
+
+  // An owner decision that beats the timer is the only receipt for its proposal.
+  const raced = interaction.requestTurnApproval({ agentId: AGENT_ID, operation: OPERATION, summary: 'four', ttlMs: 60 });
+  const [open] = interaction.listProposalsForOwner().proposals;
+  interaction.decideProposalAsOwner({ proposalId: open.proposalId, decision: 'deny', digest: open.operationDigest });
+  await settledSoon(raced);
+  await new Promise((resolve) => { setTimeout(resolve, 100); });
+  assert.deepEqual(decisions().map((row) => row.decision), ['expired', 'cancelled', 'denied']);
+});
+
 test('a turn proposal outlives no daemon: a restarted service does not list it', () => {
   const { env } = scratch();
   service(env).requestTurnApproval({ agentId: AGENT_ID, operation: OPERATION, summary: 'orphan', ttlMs: 60_000 });
