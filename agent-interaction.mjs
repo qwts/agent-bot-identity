@@ -364,6 +364,13 @@ export function createInteractionService({
             proposalId: proposal.proposalId,
             decision: 'expired',
           }, storeOptions);
+        } else {
+          appendAuditReceipt({
+            event: 'approval-decision',
+            agentId: proposal.agentId,
+            operation: 'approve',
+            decision: 'expired',
+          }, storeOptions);
         }
       } catch {
         /* already settled by the expiry timer */
@@ -785,11 +792,18 @@ export function createInteractionService({
           approvalWaiters.delete(proposal.proposalId);
           resolve(value);
         };
-        const expire = () => {
-          try { decideProposal(proposal.proposalId, { decision: 'expired' }, storeOptions); } catch { /* decided already */ }
+        // Only the call that moves the proposal out of open writes the
+        // receipt, so an automatic deny is audited exactly once (#439).
+        const expire = (outcome) => {
+          try {
+            decideProposal(proposal.proposalId, { decision: 'expired' }, storeOptions);
+          } catch {
+            return; // decided already, and that decision wrote its own receipt
+          }
+          appendAuditReceipt({ event: 'approval-decision', agentId: soul, operation: 'approve', decision: outcome }, storeOptions);
         };
-        const onAbort = () => { expire(); settle({ decision: 'deny', cancelled: true }); };
-        const timer = setTimeout(() => { expire(); settle({ decision: 'deny', expired: true }); },
+        const onAbort = () => { expire('cancelled'); settle({ decision: 'deny', cancelled: true }); };
+        const timer = setTimeout(() => { expire('expired'); settle({ decision: 'deny', expired: true }); },
           Math.max(0, new Date(proposal.expiresAt).getTime() - now().getTime()));
         timer.unref?.();
         if (signal?.aborted) { onAbort(); return; }
