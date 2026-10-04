@@ -83,4 +83,4 @@ present the owner's principal with `--principal-stdin`. It should reply, and the
 ## 4. Docs
 
 Add the harness to the list in `skills/agent-bot/references/execution-identities.md`
-and to this page, and add a CHANGELOG line.
+and to this page, and add a changelog fragment (`changes/<slug>.md`, see [changes/README.md](../changes/README.md)).

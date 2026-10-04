@@ -12,6 +12,10 @@ SOPs, decisions, and baselines there apply here by default.
 - **Security**: see the org
   [security policy](https://github.com/qwts/.github/blob/main/SECURITY.md);
   report vulnerabilities privately, never in a public issue.
+- **Changelog**: add your entry as `changes/<slug>.md`, never by editing
+  `CHANGELOG.md` (see [changes/README.md](changes/README.md)). The
+  `Changelog fragment` check enforces it; label a PR `skip-changelog` when it
+  needs no entry.
 
 Repo-specific gates and deltas, if any, are listed in this repo's `AGENTS.md`.
 
@@ -30,8 +34,12 @@ brew test agent-bot
 
 Release in two reviewed PRs so the tap stays installable throughout:
 
-1. Update `package.json` and `CHANGELOG.md`, validate, and merge the release PR
-   to `main`. Leave the formula's last published `url` and `sha256` unchanged.
+1. Run `node scripts/changelog.mjs assemble X.Y.Z`, which moves every
+   `changes/*.md` fragment under `## X.Y.Z` in `CHANGELOG.md` and deletes them.
+   Update `package.json` and `qwts-validated` in `skills/agent-bot/SKILL.md`,
+   validate, and merge the release PR to `main`. Leave the formula's last
+   published `url` and `sha256` unchanged. The formula PR in step 3 carries
+   the `skip-changelog` label.
 2. Create and push an annotated `vX.Y.Z` tag on that merged release commit.
    Never move an existing release tag.
 3. Download the tag's GitHub archive and compute its SHA-256. Verify the
