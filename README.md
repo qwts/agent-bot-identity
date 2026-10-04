@@ -804,13 +804,17 @@ agent-bot approvals deny proposal_…
 ```
 
 `list` returns `{ "approvals": [{ proposalId, agentId, soul, tool, summary,
-operationDigest, createdAt, expiresAt, status }] }`. `approve` and `deny` go
-through the owner gate, naming the soul and tool, and echo the proposal's
-operation digest, so a decision lands only on the operation it names. Both
-refuse a caller with a soul marker. An expired proposal, or a turn that ends
-or times out first, is a deny. A principal with the `approve` operation can
-decide for its own souls through `GET /v1/proposals` and
-`POST /v1/proposals/<id>/decision`. Proposals live only as long as the turn
+operationDigest, createdAt, expiresAt, status }] }`. `approve` and `deny`
+echo the proposal's operation digest, so a decision lands only on the
+operation it names, and refuse a caller with a soul marker. Before any
+decision lands, the daemon asks for the owner's presence (#438): keyd's
+Touch ID or login-password prompt naming the soul and tool, or the
+administrator dialog when keyd cannot ask. The daemon token alone never
+decides, and a `--principal-stdin` credential is checked as well, not
+instead. An expired proposal, or a turn that ends or times out first, is a
+deny. A principal with the `approve` operation can decide for its own souls
+through `GET /v1/proposals` and `POST /v1/proposals/<id>/decision`, which asks
+for the owner's presence the same way. Proposals live only as long as the turn
 that waits on them: after a daemon restart nothing is listed. Launch turns
 (`start_soul`, package launches) still deny instead of asking.
 

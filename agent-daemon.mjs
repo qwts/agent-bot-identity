@@ -71,7 +71,9 @@ import { createInteractionService } from './agent-interaction.mjs';
 import { mint } from './mint-token.mjs';
 import { KEYD_TOOL_NAMES, grantTarget, keydRequest, mintViaKeyd, readKeydRecord, signKeydGrant } from './keyd-client.mjs';
 import { recoverInteractionStore } from './agent-jobs.mjs';
-import { appendAuditReceipt, principalsFile, resolvePrincipal } from './agent-principals.mjs';
+import { appendAuditReceipt, assertAuthorized, principalsFile, resolvePrincipal } from './agent-principals.mjs';
+import { approvalAction, shown } from './approval-action.mjs';
+import { confirmOwnerPresence } from './owner-gate.mjs';
 import { runSpawnHooks } from './agent-hook.mjs';
 import { createWebLayer } from './agent-web.mjs';
 import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs';
@@ -251,6 +253,8 @@ const HEALTH_TIMEOUT_MS = 1_500;
 // so it needs a network-scale budget — the health-probe timeout would abort
 // legitimate mints on any slow round trip.
 const CREDENTIAL_TIMEOUT_MS = 30_000;
+// Longer than keyd's presence prompt, so the owner has time to answer.
+const OWNER_DECISION_TIMEOUT_MS = 180_000;
 
 export function daemonStateFile({ env = process.env, home = homedir() } = {}) {
   if (env.AGENT_BOT_DAEMON_STATE_PATH) return path.resolve(env.AGENT_BOT_DAEMON_STATE_PATH);
@@ -415,10 +419,42 @@ export function createDaemonServer({
   // POST /v0/team/start (#377): (callerAgentId, body) => { agentId, ... }.
   // runDaemon wires it to the launch handler; null refuses the route.
   teamStarter = null,
+  // Deciding a soul's tool request asks for the owner's presence (#438):
+  // (action, { principal }) => proof, throwing when the owner does not
+  // confirm. Tests pass a fake; the default asks keyd, then the dialog.
+  ownerGate = (action, { principal }) => confirmOwnerPresence(action, { env, principal }),
 } = {}) {
   // One interaction service per server so in-flight executions and their
   // cancellation controllers live exactly as long as the daemon.
   const interaction = createInteractionService({ env, home, config, executor, taskReporter, now });
+  // A decision lets a soul's tool run, so both decide routes ask the owner
+  // first (#438): the daemon token proves only a process in this account, and
+  // a transport principal only its provider login. The owner is asked about
+  // the open proposal by soul and tool; a refusal decides nothing.
+  async function confirmDecision({ proposalId, decision, principal = null, transport = null, credential = null }) {
+    if (decision !== 'approve' && decision !== 'deny') {
+      throw Object.assign(new Error('decision must be approve or deny'), { statusCode: 400 });
+    }
+    const proposal = interaction.listProposalsForOwner().proposals.find((row) => row.proposalId === proposalId);
+    if (!proposal) throw Object.assign(new Error('proposal is no longer open'), { statusCode: 409 });
+    if (principal) {
+      // A principal that may not approve this soul is refused, and audited,
+      // by the decision itself; it never gets to raise a prompt.
+      try { assertAuthorized({ principal, agentId: proposal.agentId, operation: 'approve' }); } catch { return; }
+    }
+    try {
+      await ownerGate(approvalAction(shown(proposal, { env, home }), decision), { principal: credential });
+    } catch (error) {
+      appendAuditReceipt({
+        event: 'approval-decision',
+        agentId: proposal.agentId,
+        operation: 'approve',
+        decision: 'owner-refused',
+        ...(principal ? { principalId: principal.principalId, transport } : {}),
+      }, { env, home, now });
+      throw Object.assign(new Error(`the owner did not confirm this decision: ${error.message}`), { statusCode: 403 });
+    }
+  }
   const bindings = createBindingRegistry({ now, file: path.join(vouchStateDir({ env, home }), 'bindings.json'), account: env.USER ?? process.env.USER ?? 'unknown' });
   const findBinding = lookupBindingOverride
     ?? ((secret) => lookupRegistryBinding(bindings, secret, { now }));
@@ -476,7 +512,7 @@ export function createDaemonServer({
         return;
       }
       if (url.pathname.startsWith('/v1/')) {
-        await handleInteractionRequest({ req, res, url, interaction, env, home });
+        await handleInteractionRequest({ req, res, url, interaction, env, home, confirmDecision });
         return;
       }
       const route = `${req.method} ${url.pathname}`;
@@ -740,14 +776,15 @@ export function createDaemonServer({
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, souls: withRoles(souls, { file: populationOverride(env, home), env, home }) });
           return;
         }
-        // The owner's approvals (#85). The CLI reaches these only after its
-        // owner gate; a soul's own calls never come here.
+        // The owner's approvals (#85). Listing needs the daemon token; deciding
+        // also needs the owner at the Mac (#438), asked here, not by the caller.
         case 'GET /v0/approvals': {
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, ...interaction.listProposalsForOwner() });
           return;
         }
         case 'POST /v0/approvals/decide': {
           const body = parseJsonBody(await readBody(req));
+          await confirmDecision({ proposalId: body.proposalId, decision: body.decision, credential: body.principal ?? null });
           sendJson(res, 200, interaction.decideProposalAsOwner({
             proposalId: body.proposalId,
             decision: body.decision,
@@ -1030,7 +1067,7 @@ async function handleVouchRequest({
 // resolves that pair to a locally enrolled principal, deny-by-default; the
 // interaction service then authorizes each operation before any soul lookup
 // or job mutation. Errors are stable and never reflect request contents.
-async function handleInteractionRequest({ req, res, url, interaction, env, home }) {
+async function handleInteractionRequest({ req, res, url, interaction, env, home, confirmDecision }) {
   const body = req.method === 'POST' ? parseJsonBody(await readBody(req)) : null;
   const transport = body ? body.transport : url.searchParams.get('transport');
   const providerId = body ? body.providerId : url.searchParams.get('providerId');
@@ -1085,6 +1122,7 @@ async function handleInteractionRequest({ req, res, url, interaction, env, home 
     return;
   }
   if (req.method === 'POST' && (match = url.pathname.match(/^\/v1\/proposals\/([^/]+)\/decision$/))) {
+    await confirmDecision({ proposalId: match[1], decision: body.decision, principal, transport });
     sendJson(res, 200, interaction.decideProposal({
       principal,
       transport,
@@ -1306,8 +1344,11 @@ export function daemonClient({
     async approvals() {
       return request('GET', '/v0/approvals');
     },
-    async decideApproval({ proposalId, decision, digest }) {
-      return request('POST', '/v0/approvals/decide', { proposalId, decision, digest });
+    // Waits while the daemon asks the owner (#438): Touch ID or a password.
+    async decideApproval({ proposalId, decision, digest, principal = null }) {
+      return request('POST', '/v0/approvals/decide', {
+        proposalId, decision, digest, ...(principal ? { principal } : {}),
+      }, {}, OWNER_DECISION_TIMEOUT_MS);
     },
     async artifacts(invocationId, { transport, providerId }) {
       return request('GET', `/v1/invocations/${encodeURIComponent(invocationId)}/artifacts?${new URLSearchParams({ transport, providerId })}`);

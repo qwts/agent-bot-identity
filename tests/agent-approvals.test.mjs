@@ -141,7 +141,7 @@ test('a principal sees and decides only the souls it may approve for', async () 
   const interaction = service(env);
   const principal = principalFor(env);
   const mine = interaction.requestTurnApproval({ agentId: AGENT_ID, operation: OPERATION, summary: 'mine' });
-  const theirs = interaction.requestTurnApproval({ agentId: OTHER_ID, operation: OPERATION, summary: 'theirs', ttlMs: 50 });
+  const theirs = interaction.requestTurnApproval({ agentId: OTHER_ID, operation: OPERATION, summary: 'theirs', ttlMs: 500 });
   const { proposals } = interaction.listProposals({ principal, transport: 'web' });
   assert.deepEqual(proposals.map((row) => row.agentId), [AGENT_ID]);
   const other = interaction.listProposalsForOwner().proposals.find((row) => row.agentId === OTHER_ID);
@@ -172,10 +172,8 @@ test('a cold turn asks the approvals port with the soul, the tool and its own si
   assert.ok(asked[0].signal instanceof AbortSignal);
 });
 
-test('daemon /v0/approvals needs the daemon token; /v1/proposals needs an approving principal', async () => {
-  const { env } = scratch();
-  principalFor(env);
-  const server = createDaemonServer({ env, home: '/nonexistent', config: {} });
+async function daemonFor(env, ownerGate) {
+  const server = createDaemonServer({ env, home: '/nonexistent', config: {}, ownerGate });
   await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
   const port = server.address().port;
   const call = (pathname, { method = 'GET', body, token = server.token } = {}) => fetch(`http://127.0.0.1:${port}${pathname}`, {
@@ -185,6 +183,32 @@ test('daemon /v0/approvals needs the daemon token; /v1/proposals needs an approv
       ...(body === undefined ? {} : { 'content-type': 'application/json' }),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  // Closing denies whatever still waits, so no turn outlives its test.
+  const close = () => {
+    for (const row of server.interaction.listProposalsForOwner().proposals) {
+      server.interaction.decideProposalAsOwner({ proposalId: row.proposalId, decision: 'deny', digest: row.operationDigest });
+    }
+    return new Promise((resolve) => { server.close(resolve); });
+  };
+  return { server, call, close };
+}
+
+function audits(env) {
+  try {
+    return readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+test('daemon /v0/approvals needs the daemon token; /v1/proposals needs an approving principal', async () => {
+  const { env } = scratch();
+  principalFor(env);
+  const asked = [];
+  const { server, call, close } = await daemonFor(env, async (action, { principal }) => {
+    asked.push({ action, principal });
+    return { method: 'presence', via: 'agent-bot-keyd' };
   });
   try {
     assert.equal((await call('/v0/approvals', { token: null })).status, 401);
@@ -208,8 +232,83 @@ test('daemon /v0/approvals needs the daemon token; /v1/proposals needs an approv
     assert.equal(decided.status, 200);
     assert.equal((await decided.json()).proposal.status, 'denied');
     assert.deepEqual(await settledSoon(waiting), { decision: 'deny' });
+    // Both decisions asked the owner, about the soul and the tool.
+    assert.equal(asked.length, 2);
+    assert.match(asked[0].action, /^approve Bash for .*agent_11111111-1111-4111-8111-111111111111.*: push$/);
+    assert.match(asked[1].action, /^deny Bash for .*agent_11111111/);
+    assert.deepEqual(asked.map((entry) => entry.principal), [null, null]);
   } finally {
-    await new Promise((resolve) => { server.close(resolve); });
+    await close();
+  }
+});
+
+test('the daemon token alone cannot decide: a refused owner gate decides nothing on either route (#438)', async () => {
+  const { env } = scratch();
+  principalFor(env);
+  let asked = 0;
+  const { server, call, close } = await daemonFor(env, async () => { asked += 1; throw new Error('the owner declined'); });
+  try {
+    const waiting = server.interaction.requestTurnApproval({ agentId: AGENT_ID, operation: OPERATION, summary: 'push', tool: 'Bash' });
+    const [row] = (await (await call('/v0/approvals')).json()).proposals;
+    const viaToken = await call('/v0/approvals/decide', { method: 'POST', body: { proposalId: row.proposalId, decision: 'approve', digest: row.operationDigest } });
+    assert.equal(viaToken.status, 403);
+    assert.match((await viaToken.json()).error, /owner did not confirm/);
+    const viaPrincipal = await call(`/v1/proposals/${row.proposalId}/decision`, {
+      method: 'POST',
+      body: { transport: 'web', providerId: 'owner-subject', decision: 'approve', digest: row.operationDigest },
+    });
+    assert.equal(viaPrincipal.status, 403);
+    assert.equal(asked, 2);
+    const still = (await (await call('/v0/approvals')).json()).proposals;
+    assert.deepEqual(still.map((proposal) => [proposal.proposalId, proposal.status]), [[row.proposalId, 'open']]);
+    const refused = audits(env).filter((receipt) => receipt.decision === 'owner-refused');
+    assert.equal(refused.length, 2);
+    assert.equal(refused[0].agentId, AGENT_ID);
+    assert.equal(refused[0].principalId, undefined);
+    assert.equal(refused[1].transport, 'web');
+    await assert.rejects(settledSoon(waiting, 50), /not settled/);
+  } finally {
+    await close();
+  }
+});
+
+test('the decide routes ask nobody for a closed proposal, a bad decision or a principal that may not approve', async () => {
+  const { env } = scratch();
+  principalFor(env, { operations: ['observe'] });
+  let asked = 0;
+  const { server, call, close } = await daemonFor(env, async () => { asked += 1; });
+  try {
+    server.interaction.requestTurnApproval({ agentId: AGENT_ID, operation: OPERATION, summary: 'push', tool: 'Bash' });
+    const [row] = (await (await call('/v0/approvals')).json()).proposals;
+    const unknown = await call('/v0/approvals/decide', { method: 'POST', body: { proposalId: 'proposal_44444444-4444-4444-8444-444444444444', decision: 'approve', digest: row.operationDigest } });
+    assert.equal(unknown.status, 409);
+    const badDecision = await call('/v0/approvals/decide', { method: 'POST', body: { proposalId: row.proposalId, decision: 'maybe', digest: row.operationDigest } });
+    assert.equal(badDecision.status, 400);
+    const observer = await call(`/v1/proposals/${row.proposalId}/decision`, {
+      method: 'POST',
+      body: { transport: 'web', providerId: 'owner-subject', decision: 'approve', digest: row.operationDigest },
+    });
+    assert.equal(observer.status, 403);
+    assert.equal(asked, 0);
+  } finally {
+    await close();
+  }
+});
+
+test('a principal credential sent to /v0/approvals/decide reaches the owner gate beside presence', async () => {
+  const { env } = scratch();
+  const asked = [];
+  const { server, call, close } = await daemonFor(env, async (action, { principal }) => { asked.push(principal); });
+  try {
+    const waiting = server.interaction.requestTurnApproval({ agentId: AGENT_ID, operation: OPERATION, summary: 'push', tool: 'Bash' });
+    const [row] = (await (await call('/v0/approvals')).json()).proposals;
+    const credential = { principal: 'principal_55555555-5555-4555-8555-555555555555', secret: 's', brokerUid: 1 };
+    const decided = await call('/v0/approvals/decide', { method: 'POST', body: { proposalId: row.proposalId, decision: 'approve', digest: row.operationDigest, principal: credential } });
+    assert.equal(decided.status, 200);
+    assert.deepEqual(asked, [credential]);
+    assert.deepEqual(await settledSoon(waiting), { decision: 'approve' });
+  } finally {
+    await close();
   }
 });
 
@@ -242,7 +341,7 @@ test('approvals list --json names the soul, tool, summary and expiry', async () 
   const { env, root } = scratch();
   let out = '';
   const rows = await approvalsCommand(['list', '--json'], {
-    env, home: root, cwd: root, client: fakeClient([ROW]), write: (text) => { out += text; }, gate: () => { throw new Error('no gate'); },
+    env, home: root, cwd: root, client: fakeClient([ROW]), write: (text) => { out += text; },
   });
   const parsed = JSON.parse(out);
   assert.deepEqual(parsed, { approvals: rows });
@@ -253,32 +352,38 @@ test('approvals list --json names the soul, tool, summary and expiry', async () 
   assert.equal('soul' in rows[0], true);
 });
 
-test('approvals approve gates on the owner and echoes the proposal digest', async () => {
+test('approvals approve leaves the owner prompt to the daemon and echoes the proposal digest', async () => {
   const { env, root } = scratch();
   const client = fakeClient([ROW]);
-  const gated = [];
   const decided = await approvalsCommand(['approve', ROW.proposalId, '--json'], {
     env, home: root, cwd: root, client, write: () => {},
-    gate: async (action, { principal }) => { gated.push({ action, principal }); },
   });
   assert.equal(decided.status, 'approved');
-  assert.match(gated[0].action, /^approve Bash for .*agent_11111111.*: git push$/);
-  assert.equal(gated[0].principal, null);
   assert.deepEqual(client.decisions, [{ proposalId: ROW.proposalId, decision: 'approve', digest: ROW.operationDigest }]);
+  const credential = { principal: 'principal_55555555-5555-4555-8555-555555555555', secret: 's', brokerUid: 1 };
+  await approvalsCommand(['deny', ROW.proposalId, '--principal-stdin'], {
+    env, home: root, cwd: root, client, write: () => {}, readStdin: () => JSON.stringify(credential),
+  });
+  assert.deepEqual(client.decisions[1], { proposalId: ROW.proposalId, decision: 'deny', digest: ROW.operationDigest, principal: credential });
 });
 
-test('a refused gate decides nothing; unknown proposals and soul callers are refused', async () => {
+test('a refused decision is reported; unknown proposals and soul callers are refused', async () => {
   const { env, root } = scratch();
   const client = fakeClient([ROW]);
+  client.decideApproval = async () => { throw new Error('the owner did not confirm this decision: declined'); };
   await assert.rejects(approvalsCommand(['deny', ROW.proposalId], {
-    env, home: root, cwd: root, client, write: () => {}, gate: async () => { throw new Error('owner declined'); },
-  }), /owner declined/);
-  assert.deepEqual(client.decisions, []);
+    env, home: root, cwd: root, client, write: () => {},
+  }), /did not confirm/);
   await assert.rejects(approvalsCommand(['deny', 'proposal_44444444-4444-4444-8444-444444444444'], {
-    env, home: root, cwd: root, client, write: () => {}, gate: async () => {},
+    env, home: root, cwd: root, client: fakeClient([ROW]), write: () => {},
   }), (error) => error.code === 'not-open');
   await assert.rejects(approvalsCommand(['list'], {
     env: { ...env, AGENT_BOT_ID: AGENT_ID }, home: root, cwd: root, client, write: () => {},
   }), (error) => error.code === 'not-owner');
+  const untouched = fakeClient([ROW]);
+  await assert.rejects(approvalsCommand(['approve', ROW.proposalId], {
+    env: { ...env, AGENT_BOT_ID: AGENT_ID }, home: root, cwd: root, client: untouched, write: () => {},
+  }), (error) => error.code === 'not-owner');
+  assert.deepEqual(untouched.decisions, []);
   await assert.rejects(approvalsCommand(['approve'], { env, home: root, cwd: root, client, write: () => {} }), /usage/);
 });
