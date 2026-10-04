@@ -548,6 +548,15 @@ meaning from the display string, the row stays keyed by Agent ID (names are
 handles and may collide; IDs cannot), and `population show` accepts a name
 whenever it is unambiguous.
 
+The JSON from `population list|show` and the daemon's `GET /v0/population`
+also carries four fields derived on read and never stored. These give the line
+GeniusBar shows under a soul's name:
+
+- `role`: the soul's `soul.json` `role`, up to 60 characters.
+- `description`: its `soul.json` description, up to 280 characters.
+- `children`: how many live souls name it as their parent.
+- `roleLine`: for example `Lead · 7 subagents`, `Research`, or `Research · 2 subagents`. A soul with a team but no role reads `Lead`. `roleLine` is null when there is no role and no team, and the host shows the harness instead.
+
 Rows that predate binding carry `transcriptLocator: null` and show `?` in the
 PARENT column; `population list` counts them on every listing so the gap can
 never persist silently. `population backfill` repairs what this account's
