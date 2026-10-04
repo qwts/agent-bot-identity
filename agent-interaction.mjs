@@ -67,6 +67,7 @@ import {
 } from './agent-principals.mjs';
 import { listSouls, populationFile, showSoul } from './agent-population.mjs';
 import { validateAgentId } from './agent-identity.mjs';
+import { readAsides } from './soul-asides.mjs';
 
 // Bounded message size (#55 req 6). Kept below the daemon's 64 KiB request
 // body cap so the whole JSON envelope of a maximal message still fits.
@@ -600,6 +601,19 @@ export function createInteractionService({
         storeOptions,
       ).filter((invocation) => soulAllowed(principal, invocation.agentId));
       return { invocations: invocations.map(publicInvocation) };
+    },
+
+    // The agent-comms messages that entered or left a soul's context (#404),
+    // for a principal allowed to observe that soul. `after` is an aside id.
+    listAsides({ principal, transport, agentId, after = null, limit }) {
+      const wantedTransport = validated(() => validateTransport(transport));
+      const target = agentIdOrFail(agentId);
+      authorize({ principal, transport: wantedTransport, agentId: target, operation: 'observe' });
+      resolveSoul(target);
+      if (after !== null && (typeof after !== 'string' || !/^aside_[0-9a-f-]{36}$/.test(after))) {
+        throw failure(400, 'after must be an aside id');
+      }
+      return { agentId: target, ...readAsides(target, { after, limit, env, home }) };
     },
 
     // Open, unexpired proposals over souls this principal may observe. The
