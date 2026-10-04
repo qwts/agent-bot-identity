@@ -1,1 +1,0 @@
-- Changelog entries are fragments: a PR adds `changes/<slug>.md` instead of editing `CHANGELOG.md`, and the release runs `node scripts/changelog.mjs assemble X.Y.Z` to move them under the version and delete them. A new `Changelog fragment` check fails a PR that adds none or edits `CHANGELOG.md` directly, unless it is labelled `skip-changelog`.
