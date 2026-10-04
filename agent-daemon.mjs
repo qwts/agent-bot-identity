@@ -82,7 +82,7 @@ import { readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
 import { createTeamStarter, defaultTeamTemplate, harnessLaunchProblem, teamLimits } from './team-start.mjs';
-import { createSoulHomes, installHarnesses, soulBindingForLaunch } from './soul-home.mjs';
+import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHarnessesPath } from './soul-home.mjs';
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
@@ -740,6 +740,21 @@ export function createDaemonServer({
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, souls });
           return;
         }
+        // The owner's approvals (#85). The CLI reaches these only after its
+        // owner gate; a soul's own calls never come here.
+        case 'GET /v0/approvals': {
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, ...interaction.listProposalsForOwner() });
+          return;
+        }
+        case 'POST /v0/approvals/decide': {
+          const body = parseJsonBody(await readBody(req));
+          sendJson(res, 200, interaction.decideProposalAsOwner({
+            proposalId: body.proposalId,
+            decision: body.decision,
+            digest: body.digest,
+          }));
+          return;
+        }
         default:
           sendJson(res, 404, { error: 'unknown route' });
       }
@@ -762,6 +777,7 @@ export function createDaemonServer({
   server.token = token;
   server.warmPool = warmPool;
   server.bindings = bindings;
+  server.interaction = interaction;
   return server;
 }
 
@@ -1053,6 +1069,31 @@ async function handleInteractionRequest({ req, res, url, interaction, env, home 
     }));
     return;
   }
+  if (req.method === 'GET' && (match = url.pathname.match(/^\/v1\/souls\/([^/]+)\/asides$/))) {
+    const limit = url.searchParams.get('limit');
+    sendJson(res, 200, interaction.listAsides({
+      principal,
+      transport,
+      agentId: match[1],
+      after: url.searchParams.get('after'),
+      ...(limit === null ? {} : { limit: Number(limit) }),
+    }));
+    return;
+  }
+  if (req.method === 'GET' && url.pathname === '/v1/proposals') {
+    sendJson(res, 200, interaction.listProposals({ principal, transport }));
+    return;
+  }
+  if (req.method === 'POST' && (match = url.pathname.match(/^\/v1\/proposals\/([^/]+)\/decision$/))) {
+    sendJson(res, 200, interaction.decideProposal({
+      principal,
+      transport,
+      proposalId: match[1],
+      decision: body.decision,
+      digest: body.digest,
+    }));
+    return;
+  }
   if (req.method === 'GET' && (match = url.pathname.match(/^\/v1\/invocations\/([^/]+)$/))) {
     sendJson(res, 200, interaction.getInvocation({ principal, transport, invocationId: match[1] }));
     return;
@@ -1262,6 +1303,12 @@ export function daemonClient({
     async cancel(invocationId, { transport, providerId }) {
       return request('POST', `/v1/invocations/${encodeURIComponent(invocationId)}/cancel`, { transport, providerId });
     },
+    async approvals() {
+      return request('GET', '/v0/approvals');
+    },
+    async decideApproval({ proposalId, decision, digest }) {
+      return request('POST', '/v0/approvals/decide', { proposalId, decision, digest });
+    },
     async artifacts(invocationId, { transport, providerId }) {
       return request('GET', `/v1/invocations/${encodeURIComponent(invocationId)}/artifacts?${new URLSearchParams({ transport, providerId })}`);
     },
@@ -1345,6 +1392,7 @@ export async function runDaemon({
       // launchd PATH does not reach.
       commsFor: (agentId) => showSoul(agentId, { file: populationFile({ env, home }) }).comms,
       reachEnv: { PATH: resumePath(harnessEnv, home) },
+      harnessDirsFor: (agentId) => [soulHarnessesPath(agentId, { env, home, config, file: populationFile({ env, home }) })],
       // A soul whose soul.json says its key is in agent-bot-keyd gets keyd's
       // relay, when this host installed keyd.
       keydFor: (agentId) => {
@@ -1477,6 +1525,9 @@ export async function runDaemon({
     taskReporter,
     // Receipts carry a soul and a decision, never message IDs or content.
     receipt: ({ event, agentId, decision, outcome, detail = null }) => appendAuditReceipt({ event, agentId, decision: decision ?? outcome, detail }, { env, home, now }),
+    // A policy `approval` outcome in a cold turn waits on a proposal the
+    // owner can decide (#85: `agent-bot approvals`, GeniusBar's panel).
+    approvals: (request) => server.interaction.requestTurnApproval(request),
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);

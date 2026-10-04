@@ -7,10 +7,14 @@ GitHub App is only for acting on GitHub (push, pull requests, `gh`), and is
 connected separately.
 
 ```bash
-agent-bot join --name NAME --harness HARNESS [--template PATH] [--soul AGENT_ID] [--json]
+agent-bot join --name NAME --harness HARNESS [--template PATH] [--soul AGENT_ID]
+               [--wake resume:read-only|resume:workspace|acp] [--principal-stdin] [--json]
 ```
 
-`--json` prints `{ agentId, soulDir, worktree, address, created, bind }`.
+`--json` prints `{ agentId, soulDir, worktree, address, created, bind, wake }`.
+`wake` is the soul's cold wake setting after the join (`off`, `on`,
+`resume read-only`, `resume workspace` or `webhook`). With `off`, messages
+are delivered to its inbox but nothing wakes it.
 
 ## What it does
 
@@ -41,6 +45,34 @@ agent-bot join --name NAME --harness HARNESS [--template PATH] [--soul AGENT_ID]
      checkout.
 5. **Join.** It runs `agent-comms join --name NAME --harness HARNESS` as the
    soul. A GeniusBar install's `AGENT_BOT_TOOL_PATH` comes first on PATH.
+
+6. **Wake** (#410), with `--wake` only. New messages then wake the soul:
+   - `resume:read-only` or `resume:workspace` resumes its own harness
+     session for one turn. Codex, OpenCode, Devin and Grok sessions can be
+     resumed; Claude's cannot.
+   - `acp` runs an ACP turn through the soul's daemon binding. `join` makes
+     that binding itself by spending the checkout's bind token with the
+     daemon (#417); with no daemon running, `--wake acp` fails instead of
+     reporting a wake that cannot run. The ACP adapter the turn runs (for
+     Claude, `claude-code-acp`) is installed from the pinned lockfile of the
+     soul's own package, or the bundled Starter, into the soul's private
+     `.soul-state/harnesses`. The checkout is never touched, and a GeniusBar
+     daemon needs no `npx` on its PATH. `--json` reports it as `adapter`.
+     A harness with no ACP lane is refused before the owner is asked.
+   - The wake runs the soul's stored harness, so an existing soul must be
+     joined with its own `--harness` to set its wake.
+   - A webhook needs a URL and key: use `agent-bot soul cold-wake ID webhook`.
+
+   Cold wake is owner only (#293), so the owner gate runs before anything is
+   created, and a refusal changes nothing. The approval names the existing
+   soul being changed (name and Agent ID), or says a new soul is created.
+   The wake is turned on before agent-comms registers the soul, so a message
+   delivered meanwhile wakes it; a failed registration restores the old setting. The owner approves with
+   `--principal-stdin` (the agent-comms principal on stdin, accepted only
+   from a broker in another account) or the macOS approval dialog. The
+   dialog asks for an administrator's password: that is the gate's proof
+   that a person, not a soul, approved. No launch agent or system setting
+   is involved.
 
 Running it again from the same checkout reuses the soul. A checkout already
 pinned to another soul is refused.

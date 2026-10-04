@@ -27,12 +27,16 @@
 // pinging it again or sending progress notes (#427): the prompt names the
 // teammates it is still waiting on, and the reach server refuses a second
 // message to one of them in the same thread (daemon-mcp.mjs).
+// Each relayed turn records asides (#404, soul-asides.mjs): what entered the
+// soul's context (the woken message and the thread shown with it), once the
+// turn's harness session exists, and the reply the relay sent from it.
 
 import { randomUUID } from 'node:crypto';
 
 import { wakeSetting } from './cold-wake-settings.mjs';
 import { FINAL_REPLY_ERRORS, senderAddress } from './comms-relay.mjs';
 import { NO_REPLY, formatThread, pendingReplies, recordThreadMessage, sameAddress, sentMarks, sentSince, stripNoReply, threadContext, threadKey } from './soul-threads.mjs';
+import { bindTurnSession, recordAside } from './soul-asides.mjs';
 
 // The final answer a soul gives when a teammate's message needs no answer
 // back. Every relayed turn's answer is otherwise a reply, so two souls would
@@ -66,6 +70,21 @@ export function deniedNotice(tools) {
 
 function threadNow(threads) {
   return typeof threads?.now === 'function' ? threads.now() : new Date();
+}
+
+// The asides for what a relayed turn's prompt put into the session: the
+// thread it re-showed, then the woken message.
+function recordDelivered(agentId, message, thread, { turnId, harnessSessionId }, threads) {
+  for (const entry of thread) {
+    recordAside(agentId, {
+      dir: entry.dir, via: 'thread-context', peer: entry.dir === 'out' ? entry.to : entry.from, messageId: entry.id,
+      replyTo: entry.replyTo, correlation: entry.correlation, body: entry.body, sentAt: entry.at, turnId, harnessSessionId,
+    }, threads);
+  }
+  recordAside(agentId, {
+    dir: 'in', via: 'relay-prompt', peer: senderAddress(message.from), messageId: message.id, replyTo: message.replyTo,
+    correlation: message.correlation, body: message.body, turnId, harnessSessionId,
+  }, threads);
 }
 
 function recordInbound(agentId, message, threads) {
@@ -164,10 +183,23 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
           const thread = threadContext(agentId, message, threads);
           recordInbound(agentId, message, threads);
           const correlation = threadKey(message);
-          const turn = correlation ? { ...invocation, correlation } : invocation;
+          const turnId = `turn_${randomUUID()}`;
+          const turn = correlation ? { ...invocation, correlation, turnId } : { ...invocation, turnId };
           const before = sentMarks(agentId, { correlation }, threads);
+          // The prompt enters the context once the turn's harness session
+          // exists; a lane that names no session ran the turn, so it did too.
+          // A turn that fails before either leaves no aside.
+          let delivered = null;
+          const deliver = (harnessSessionId = null) => {
+            if (delivered) return;
+            delivered = { harnessSessionId: typeof harnessSessionId === 'string' ? harnessSessionId : null };
+            // The turn's own sends (reach server) look this up (#404).
+            if (delivered.harnessSessionId) bindTurnSession(agentId, turnId, delivered.harnessSessionId, threads);
+            recordDelivered(agentId, message, thread, { turnId, ...delivered }, threads);
+          };
           const waitingOn = pendingReplies(agentId, { correlation, now: threadNow(threads) }, threads).map((entry) => entry.to);
-          const result = await executor({ invocation: turn, message: relayPrompt(message, thread, waitingOn), attachments: [], env, wake });
+          const result = await executor({ invocation: turn, message: relayPrompt(message, thread, waitingOn), attachments: [], env, wake, onSession: deliver });
+          deliver();
           const to = senderAddress(message.from);
           const own = sentSince(agentId, { before, correlation }, threads);
           const fromSoul = typeof message.from?.principal !== 'string';
@@ -183,7 +215,13 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
               if (!FINAL_REPLY_ERRORS.has(error?.code)) throw error;
               return null;
             });
-            if (sent) recordThreadMessage(agentId, { dir: 'out', id: sent.messageId, to, replyTo: message.id, correlation, body }, threads);
+            if (sent) {
+              recordThreadMessage(agentId, { dir: 'out', id: sent.messageId, to, replyTo: message.id, correlation, body }, threads);
+              recordAside(agentId, {
+                dir: 'out', via: 'final-reply', peer: to, messageId: sent.messageId, replyTo: message.id, correlation, body,
+                turnId, harnessSessionId: delivered.harnessSessionId,
+              }, threads);
+            }
           }
           await relay.ack(soul, [message.id]);
         }
