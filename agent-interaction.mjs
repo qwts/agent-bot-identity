@@ -36,6 +36,7 @@ import { realpathSync } from 'node:fs';
 
 import {
   DEFAULT_PROPOSAL_TTL_MS,
+  OWNER_DECIDER,
   addArtifact,
   appendEvent,
   createProposal,
@@ -162,12 +163,18 @@ function publicInvocation(invocation) {
   };
 }
 
+// A daemon turn's proposal (#85) has no invocation; its soul is on the record.
+function proposalSoul(proposal, invocation) {
+  return invocation?.agentId ?? proposal.agentId ?? null;
+}
+
 function publicProposal(proposal, invocation) {
   const { proposalId, invocationId, operationDigest: digest, summary, createdAt, expiresAt, status } = proposal;
   return {
     proposalId,
     invocationId,
-    agentId: invocation.agentId,
+    agentId: proposalSoul(proposal, invocation),
+    tool: proposal.tool ?? null,
     operationDigest: digest,
     summary,
     createdAt,
@@ -306,6 +313,97 @@ export function createInteractionService({
       }
       return outcome;
     };
+  }
+
+  // Open, unexpired proposals whose soul passes `allowed`. An invocation's
+  // proposal counts only while that invocation still waits on it; a daemon
+  // turn's proposal counts only while its turn is still waiting here.
+  function openProposals(allowed) {
+    const nowMs = now().getTime();
+    const proposals = [];
+    for (const proposal of listProposals({ status: 'open' }, storeOptions)) {
+      if (nowMs > new Date(proposal.expiresAt).getTime()) continue;
+      let invocation = null;
+      if (proposal.invocationId !== null) {
+        invocation = getInvocation(proposal.invocationId, storeOptions);
+        if (!invocation || invocation.status !== 'waiting-approval') continue;
+      } else if (!approvalWaiters.has(proposal.proposalId)) {
+        continue;
+      }
+      if (!allowed(proposalSoul(proposal, invocation))) continue;
+      proposals.push(publicProposal(proposal, invocation));
+    }
+    return proposals;
+  }
+
+  function proposalForDecision(proposalId, decision) {
+    const target = validated(() => validateProposalId(proposalId));
+    if (decision !== 'approve' && decision !== 'deny') {
+      throw failure(400, 'decision must be approve or deny');
+    }
+    const proposal = getProposal(target, storeOptions);
+    if (!proposal) throw failure(404, 'unknown proposal');
+    if (proposal.invocationId === null) return { proposal, invocation: null };
+    const invocation = getInvocation(proposal.invocationId, storeOptions);
+    if (!invocation) throw failure(404, 'unknown proposal');
+    return { proposal, invocation };
+  }
+
+  function settleProposal({ proposal, invocation, decision, digest, decidedBy, onMismatch = () => {} }) {
+    const waiting = invocation
+      ? invocation.status === 'waiting-approval'
+      : approvalWaiters.has(proposal.proposalId);
+    if (proposal.status !== 'open' || !waiting) {
+      throw failure(409, 'proposal is no longer open');
+    }
+    if (now().getTime() > new Date(proposal.expiresAt).getTime()) {
+      try {
+        decideProposal(proposal.proposalId, { decision: 'expired' }, storeOptions);
+        if (invocation) {
+          appendEvent(invocation.invocationId, 'approval-decision', {
+            proposalId: proposal.proposalId,
+            decision: 'expired',
+          }, storeOptions);
+        }
+      } catch {
+        /* already settled by the expiry timer */
+      }
+      const waiter = approvalWaiters.get(proposal.proposalId);
+      if (waiter) waiter({ decision: 'deny', expired: true });
+      throw failure(409, 'proposal is no longer open');
+    }
+    if (!digestsMatch(proposal.operationDigest, digest)) {
+      onMismatch();
+      throw failure(409, 'operation digest does not match the proposal');
+    }
+    let decided;
+    try {
+      decided = decideProposal(proposal.proposalId, {
+        decision: decision === 'approve' ? 'approved' : 'denied',
+        decidedBy,
+      }, storeOptions);
+    } catch {
+      throw failure(409, 'proposal is no longer open');
+    }
+    if (invocation) {
+      appendEvent(invocation.invocationId, 'approval-decision', {
+        proposalId: decided.proposalId,
+        decision: decided.status,
+        operationDigest: decided.operationDigest,
+        decidedBy: decided.decidedBy,
+      }, storeOptions);
+    } else {
+      appendAuditReceipt({
+        event: 'approval-decision',
+        agentId: decided.agentId,
+        operation: 'approve',
+        decision: decided.status,
+        ...(decidedBy === OWNER_DECIDER ? {} : { principalId: decidedBy }),
+      }, storeOptions);
+    }
+    const settle = approvalWaiters.get(decided.proposalId);
+    if (settle) settle({ decision });
+    return { proposal: publicProposal(decided, invocation) };
   }
 
   async function reportTask(phase, invocation, outcome) {
@@ -622,16 +720,13 @@ export function createInteractionService({
     listProposals({ principal, transport }) {
       const wantedTransport = validated(() => validateTransport(transport));
       authorizeListing(principal, wantedTransport, 'observe');
-      const nowMs = now().getTime();
-      const proposals = [];
-      for (const proposal of listProposals({ status: 'open' }, storeOptions)) {
-        if (nowMs > new Date(proposal.expiresAt).getTime()) continue;
-        const invocation = getInvocation(proposal.invocationId, storeOptions);
-        if (!invocation || invocation.status !== 'waiting-approval') continue;
-        if (!soulAllowed(principal, invocation.agentId)) continue;
-        proposals.push(publicProposal(proposal, invocation));
-      }
-      return { proposals };
+      return { proposals: openProposals((agentId) => soulAllowed(principal, agentId)) };
+    },
+
+    // The owner's view (#85): every open proposal. Only the local CLI, past
+    // the owner gate, and the daemon-token routes reach this.
+    listProposalsForOwner() {
+      return { proposals: openProposals(() => true) };
     },
 
     // Approve/deny an immutable proposal (#59 req 8). The caller must hold the
@@ -640,64 +735,67 @@ export function createInteractionService({
     // proposal is atomic in the store, so a decision can never land twice.
     decideProposal({ principal, transport, proposalId, decision, digest }) {
       const wantedTransport = validated(() => validateTransport(transport));
-      const target = validated(() => validateProposalId(proposalId));
-      if (decision !== 'approve' && decision !== 'deny') {
-        throw failure(400, 'decision must be approve or deny');
-      }
-      const proposal = getProposal(target, storeOptions);
-      if (!proposal) throw failure(404, 'unknown proposal');
-      const invocation = getInvocation(proposal.invocationId, storeOptions);
-      if (!invocation) throw failure(404, 'unknown proposal');
+      const { proposal, invocation } = proposalForDecision(proposalId, decision);
       authorize({
         principal,
         transport: wantedTransport,
-        agentId: invocation.agentId,
+        agentId: proposalSoul(proposal, invocation),
         operation: 'approve',
       });
-      if (proposal.status !== 'open' || invocation.status !== 'waiting-approval') {
-        throw failure(409, 'proposal is no longer open');
-      }
-      if (now().getTime() > new Date(proposal.expiresAt).getTime()) {
-        try {
-          decideProposal(proposal.proposalId, { decision: 'expired' }, storeOptions);
-          appendEvent(invocation.invocationId, 'approval-decision', {
-            proposalId: proposal.proposalId,
-            decision: 'expired',
-          }, storeOptions);
-        } catch {
-          /* already settled by the expiry timer */
-        }
-        const waiter = approvalWaiters.get(proposal.proposalId);
-        if (waiter) waiter({ decision: 'deny', expired: true });
-        throw failure(409, 'proposal is no longer open');
-      }
-      if (!digestsMatch(proposal.operationDigest, digest)) {
-        audit('denied', {
+      return settleProposal({
+        proposal,
+        invocation,
+        decision,
+        digest,
+        decidedBy: principal.principalId,
+        onMismatch: () => audit('denied', {
           principal,
           transport: wantedTransport,
-          agentId: invocation.agentId,
+          agentId: proposalSoul(proposal, invocation),
           operation: 'approve',
-        });
-        throw failure(409, 'operation digest does not match the proposal');
-      }
-      let decided;
-      try {
-        decided = decideProposal(proposal.proposalId, {
-          decision: decision === 'approve' ? 'approved' : 'denied',
-          decidedBy: principal.principalId,
-        }, storeOptions);
-      } catch {
-        throw failure(409, 'proposal is no longer open');
-      }
-      appendEvent(invocation.invocationId, 'approval-decision', {
-        proposalId: decided.proposalId,
-        decision: decided.status,
-        operationDigest: decided.operationDigest,
-        decidedBy: decided.decidedBy,
-      }, storeOptions);
-      const settle = approvalWaiters.get(decided.proposalId);
-      if (settle) settle({ decision });
-      return { proposal: publicProposal(decided, invocation) };
+        }),
+      });
+    },
+
+    // The owner's decision (#85), already past the owner gate in the caller.
+    decideProposalAsOwner({ proposalId, decision, digest }) {
+      const { proposal, invocation } = proposalForDecision(proposalId, decision);
+      return settleProposal({ proposal, invocation, decision, digest, decidedBy: OWNER_DECIDER });
+    },
+
+    // A daemon turn with no invocation record (a cold wake, #85) asks here.
+    // The proposal names the soul and the tool; the turn waits until the
+    // owner or an approving principal decides, the proposal expires, or the
+    // turn's own signal aborts. Anything but an approval is a deny.
+    requestTurnApproval({ agentId, operation, summary, tool = null, ttlMs = DEFAULT_PROPOSAL_TTL_MS, signal = null }) {
+      const soul = agentIdOrFail(agentId);
+      const digest = operationDigest(operation);
+      const proposal = createProposal(
+        { agentId: soul, tool, operationDigest: digest, summary },
+        { ...storeOptions, ttlMs },
+      );
+      appendAuditReceipt({ event: 'approval-requested', agentId: soul, operation: 'approve', decision: 'open' }, storeOptions);
+      return new Promise((resolve) => {
+        let finished = false;
+        const settle = (value) => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(timer);
+          signal?.removeEventListener?.('abort', onAbort);
+          approvalWaiters.delete(proposal.proposalId);
+          resolve(value);
+        };
+        const expire = () => {
+          try { decideProposal(proposal.proposalId, { decision: 'expired' }, storeOptions); } catch { /* decided already */ }
+        };
+        const onAbort = () => { expire(); settle({ decision: 'deny', cancelled: true }); };
+        const timer = setTimeout(() => { expire(); settle({ decision: 'deny', expired: true }); },
+          Math.max(0, new Date(proposal.expiresAt).getTime() - now().getTime()));
+        timer.unref?.();
+        if (signal?.aborted) { onAbort(); return; }
+        signal?.addEventListener?.('abort', onAbort, { once: true });
+        approvalWaiters.set(proposal.proposalId, settle);
+      });
     },
 
     // Bounded artifact resolution for download surfaces (#59 req 7). Bytes

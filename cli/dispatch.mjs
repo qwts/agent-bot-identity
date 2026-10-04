@@ -20,6 +20,7 @@ const MODULES = new Map([
   ['harness', 'harness-auth.mjs'],
   ['daemon', 'agent-daemon.mjs'],
   ['keyd', 'keyd-client.mjs'],
+  ['approvals', 'agent-approvals.mjs'],
   ['mcp', 'agent-mcp.mjs'],
   ['reach-mcp', 'daemon-mcp.mjs'],
   ['wake', 'wake-listen.mjs'],
