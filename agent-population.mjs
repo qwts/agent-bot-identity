@@ -903,6 +903,47 @@ function formatRow(record) {
   ].join('\t');
 }
 
+// The role line GeniusBar shows under a soul's name (Lovable X2): the soul's
+// own `role` from soul.json, else "Lead" for a soul with a team, then how
+// many live souls it started ("Lead · 7 subagents"). Null when there is
+// neither, and the host falls back to the harness. `description` is the
+// soul.json description, for a Details row. Derived on read, never stored.
+const ROLE_MAX = 60;
+
+function soulManifest(record, options) {
+  let directory;
+  try { directory = soulDirectory(record.id, options); } catch { return null; }
+  try { return JSON.parse(readFileSync(path.join(directory, 'soul.json'), 'utf8')); } catch { return null; }
+}
+
+function shortText(value, max) {
+  if (typeof value !== 'string') return null;
+  const text = value.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+  if (!text) return null;
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+export function withRoles(records, { file = populationFile(), env = process.env, home = homedir() } = {}) {
+  const children = new Map();
+  for (const soul of listSouls({ file })) {
+    if (soul.parentId === null || soul.status === 'retired') continue;
+    children.set(soul.parentId, (children.get(soul.parentId) ?? 0) + 1);
+  }
+  return records.map((record) => {
+    const manifest = soulManifest(record, { file, env, home });
+    const role = shortText(manifest?.role, ROLE_MAX);
+    const count = children.get(record.id) ?? 0;
+    const parts = [role ?? (count > 0 ? 'Lead' : null), count > 0 ? `${count} ${count === 1 ? 'subagent' : 'subagents'}` : null].filter(Boolean);
+    return {
+      ...record,
+      role,
+      description: shortText(manifest?.description, 280),
+      children: count,
+      roleLine: parts.length ? parts.join(' · ') : null,
+    };
+  });
+}
+
 function formatPopulation(records) {
   // Retired souls are tombstones, not census peers: list them in their own
   // section so an operator scanning the living population never mistakes a
@@ -935,7 +976,7 @@ async function main() {
     case 'list': {
       if (args.positional.length > 0) throw new Error('population list does not accept Agent IDs');
       const records = listSouls({ status: args.flags.get('status'), app: args.flags.get('app') });
-      if (args.flags.has('json')) process.stdout.write(`${JSON.stringify(records, null, 2)}\n`);
+      if (args.flags.has('json')) process.stdout.write(`${JSON.stringify(withRoles(records), null, 2)}\n`);
       else process.stdout.write(formatPopulation(records));
       break;
     }
@@ -948,7 +989,7 @@ async function main() {
       const soul = target.startsWith('agent_')
         ? showSoul(target)
         : showSoulByName(target);
-      process.stdout.write(`${JSON.stringify(soul, null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify(withRoles([soul])[0], null, 2)}\n`);
       break;
     }
     case 'backfill': {
