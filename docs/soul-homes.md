@@ -44,6 +44,28 @@ source, copies }`. `source` is `environment`, `setting`, or `default`. Hosts suc
 GeniusBar should use this contract for location reads, and harness auth uses
 this registry home too. Reading the directory does not provision a home.
 
+## Expired harness sign-in
+
+When a daemon turn fails because the soul's harness is signed out, the
+census row records it (#84). Claude's "Not logged in · Please run /login" and
+an ACP "Authentication required" are recorded as `signed-out`. An expired
+OAuth access token or a Codex refresh token that can no longer be used is
+recorded as `expired`:
+
+```json
+"harnessAuth": { "status": "expired", "harness": "claude", "since": "2026-10-03T10:00:00.000Z" }
+```
+
+`agent-bot population list|show --json` carries it, so GeniusBar can show a
+sign-in banner. Each sender waiting on the soul gets one short reply naming
+the sign-in, for example "I couldn't answer this: my Claude sign-in has
+expired. My owner needs to sign me in again before I can work on it." Their
+messages stay unread and are answered on a later wake. The field is gone once
+a turn runs again, or once `agent-bot harness auth status|login HARNESS
+--soul AGENT_ID` reports that harness signed in. The harness's own error text
+is never stored. The audit receipt reads `harness expired` or
+`harness signed-out`.
+
 ## Copied soul folders
 
 Copying a soul folder (a Finder Duplicate, for example) copies its
