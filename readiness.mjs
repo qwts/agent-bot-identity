@@ -1404,7 +1404,7 @@ function codexDesktopGhCheck({ home, inspect }) {
   });
 }
 
-function runtimeSkillCheck({ home, lstat, readlink, access, embeddedRoot = null }) {
+function runtimeSkillCheck({ home, lstat, readlink, access, embeddedRoot = null, app = null }) {
   const executable = installationPaths(home).executable;
   // An app-embedded runtime carries its skill bundle in place (#428).
   let runtimeRoot = embeddedRoot;
@@ -1426,7 +1426,10 @@ function runtimeSkillCheck({ home, lstat, readlink, access, embeddedRoot = null 
       status: 'failed',
       code: 'runtime-skill-incomplete',
       message: 'the runtime-owned agent-bot skill bundle is incomplete',
-      action: 'restore the checkout from the reviewed release, then rerun bootstrap',
+      action: app
+        ? `reinstall ${basename(app, '.app')} from its latest release; its skill bundle is incomplete`
+        : 'restore the checkout from the reviewed release, then rerun bootstrap',
+      ...(app ? { evidence: { install: 'app' } } : {}),
     });
   }
   return readinessCheck({
@@ -1902,6 +1905,26 @@ function notUsedByApp(check, app, message) {
     message: `${message} (not used by ${basename(app, '.app')})`, evidence: { install: 'app' } });
 }
 
+// GeniusBar installs no user-level identity hook: the souls it runs carry
+// their own identity, so a missing hook is not an "ephemeral session" there and
+// the source-checkout bootstrap is the wrong advice.
+function appIdentityClassCheck(check, app) {
+  if (check.status === 'ready') return check;
+  const name = basename(app, '.app');
+  return readinessCheck({ id: check.id, status: 'not_applicable', code: check.code,
+    message: `no user-level identity hook (not used by ${name}; the souls it runs carry their own identity)`,
+    evidence: { class: 'app', install: 'app' } });
+}
+
+// The app owns its daemon's launchd unit and environment; `agent-bot install`
+// from a shell would install a second, differently labelled service.
+function appServiceAction(check, app) {
+  if (check.status !== 'failed') return check;
+  const name = basename(app, '.app');
+  return readinessCheck({ ...check,
+    action: `open ${name} and choose Set up; it installs and restarts its own services` });
+}
+
 function appShellPathCheck(check, app) {
   if (check.status !== 'failed') return check;
   return readinessCheck({ id: check.id, status: 'warning', code: check.code,
@@ -1983,7 +2006,8 @@ export async function collectReadiness({
     machineChecks.push(nodeCheck(nodeVersion));
     machineChecks.push(gitCheck({ cwd, env, git }));
     machineChecks.push(app ? embeddedRuntimeCheck(app) : installedCliCheck({ home, lstat, readlink, statFile }));
-    machineChecks.push(identityClassCheck({ home, env, access }));
+    const identityClass = identityClassCheck({ home, env, access });
+    machineChecks.push(app ? appIdentityClassCheck(identityClass, app) : identityClass);
     const shellPath = shellPathCheck({ home, env, spawn });
     machineChecks.push(app ? appShellPathCheck(shellPath, app) : shellPath);
     try {
@@ -2062,13 +2086,15 @@ export async function collectReadiness({
     const hooks = hooksCheck({ home, cwd, env, git, access });
     machineChecks.push(app ? notUsedByApp(hooks, app, 'agent-bot git hooks are not installed') : hooks);
     const serviceEnv = app ? appServiceEnv(app, env) : env;
-    machineChecks.push(supervisorCheck({ home, env: serviceEnv, inspect: inspectDaemonSupervisor }));
-    machineChecks.push(await daemonHealthCheck({
+    const supervisor = supervisorCheck({ home, env: serviceEnv, inspect: inspectDaemonSupervisor });
+    machineChecks.push(app ? appServiceAction(supervisor, app) : supervisor);
+    const daemonHealth = await daemonHealthCheck({
       home,
       env: serviceEnv,
       probe: probeDaemon,
       skipLoad: supervisorSkipLoad(serviceEnv),
-    }));
+    });
+    machineChecks.push(app ? appServiceAction(daemonHealth, app) : daemonHealth);
     machineChecks.push(spacesRootCheck({ home, env, config }));
     machineChecks.push(spacesHomeCheck({ home, env, config, inspectCutover }));
     const unreferencedSouls = unreferencedSoulsCheck({ home, env, git });
@@ -2095,7 +2121,11 @@ export async function collectReadiness({
       readVersion: readPackageVersion,
       installedVersion: (options) => resolveInstalledVersion({ ...options, readVersion: readPackageVersion }),
     }));
-    machineChecks.push(coverageCheck(now));
+    const coverage = coverageCheck(now);
+    // Hook dialect coverage concerns the agent-bot hooks the app never installs.
+    machineChecks.push(app && coverage.status === 'warning'
+      ? notUsedByApp({ ...coverage, status: 'failed' }, app, 'harness hook dialects are reviewed for installed hooks only')
+      : coverage);
     if (configValid) {
       machineChecks.push(readinessCheck({
         id: 'hooks.claude_worktree',
@@ -2104,7 +2134,7 @@ export async function collectReadiness({
     }
     machineChecks.push(ghShimCheck({ home, required: expectedGhShim, inspect: inspectShellGh }));
     machineChecks.push(codexDesktopGhCheck({ home, inspect: inspectCodexDesktopGh }));
-    machineChecks.push(runtimeSkillCheck({ home, lstat, readlink, access, embeddedRoot: app ? ROOT : null }));
+    machineChecks.push(runtimeSkillCheck({ home, lstat, readlink, access, embeddedRoot: app ? ROOT : null, app }));
   } else {
     try {
       config = load({ home, env });
