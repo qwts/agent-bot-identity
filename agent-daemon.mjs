@@ -57,7 +57,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
-import { archiveSoulDirs, backfillManagedSouls, listSouls, locateSoulDir, populationFile, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
+import { archiveSoulDirs, backfillManagedSouls, listSouls, locateSoulDir, populationFile, recordHarnessAuth, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
 import {
   bindAgentLineage,
@@ -1523,6 +1523,12 @@ export async function runDaemon({
     // The relay runs agent-comms, which a launchd PATH does not reach.
     relay,
     taskReporter,
+    // A turn whose harness is signed out (#84) marks the soul in the census
+    // until a turn runs again.
+    authStatus: {
+      failed: (agentId, status) => recordHarnessAuth(agentId, status, { file: populationOverride(env, home), now }),
+      cleared: (agentId) => recordHarnessAuth(agentId, null, { file: populationOverride(env, home) }),
+    },
     // Receipts carry a soul and a decision, never message IDs or content.
     receipt: ({ event, agentId, decision, outcome, detail = null }) => appendAuditReceipt({ event, agentId, decision: decision ?? outcome, detail }, { env, home, now }),
     // A policy `approval` outcome in a cold turn waits on a proposal the

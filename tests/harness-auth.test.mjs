@@ -61,3 +61,40 @@ test('harness auth CLI uses the registered soul home and its installed CLI', (t)
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), { harness: 'claude', loggedIn: true });
 });
+
+test('sign-in failures are told apart from other turn failures (#84)', async () => {
+  const { harnessAuthFailure, harnessAuthNotice } = await import('../harness-auth.mjs');
+  for (const [text, want] of [
+    ['claude turn failed: Not logged in · Please run /login', 'signed-out'],
+    ['acp engine: agent error for session/new: Authentication required', 'signed-out'],
+    ['acp engine: agent error for session/prompt: OAuth access token has expired', 'expired'],
+    ['codex turn failed: Your refresh token has already been used to generate a new access token. Please try signing in again.', 'expired'],
+    ['codex turn failed: refresh_token_expired: Your refresh token has expired', 'expired'],
+    ['acp engine: agent process exited before the turn finished', null],
+    ['policy denied Bash', null],
+  ]) assert.equal(harnessAuthFailure(new Error(text)), want, text);
+  assert.equal(harnessAuthFailure({ harnessAuth: 'expired' }), 'expired');
+  assert.equal(harnessAuthFailure(null), null);
+  assert.match(harnessAuthNotice('codex', 'signed-out'), /my Codex sign-in is missing/);
+  assert.match(harnessAuthNotice('unknown', 'expired'), /my harness sign-in has expired/);
+});
+
+test('the census records, keeps and clears a soul\'s sign-in failure', async (t) => {
+  const { recordHarnessAuth, showSoul } = await import('../agent-population.mjs');
+  const root = mkdtempSync(path.join(tmpdir(), 'harness-auth-census-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'population.json');
+  const agent = 'agent_12345678-1234-4123-8123-123456789abc';
+  upsertSoul({ id: agent, appSlug: null, parentId: null, status: 'active', spacePath: root, transcriptLocator: null }, { file });
+  assert.equal(recordHarnessAuth('agent_99999999-9999-4999-8999-999999999999', null, { file }), null);
+  assert.equal('harnessAuth' in recordHarnessAuth(agent, null, { file }), false);
+  const first = recordHarnessAuth(agent, { status: 'signed-out', harness: 'claude' }, { file, now: () => new Date('2026-10-03T10:00:00.000Z') });
+  assert.deepEqual(first.harnessAuth, { status: 'signed-out', harness: 'claude', since: '2026-10-03T10:00:00.000Z' });
+  recordHarnessAuth(agent, { status: 'signed-out', harness: 'claude' }, { file, now: () => new Date('2026-10-03T11:00:00.000Z') });
+  assert.equal(showSoul(agent, { file }).harnessAuth.since, '2026-10-03T10:00:00.000Z');
+  assert.throws(() => recordHarnessAuth(agent, { status: 'weird', harness: 'claude' }, { file }), /harnessAuth.status/);
+  // Signing a different harness in leaves this failure in place.
+  assert.equal(recordHarnessAuth(agent, null, { file, only: 'codex' }).harnessAuth.status, 'signed-out');
+  assert.equal('harnessAuth' in recordHarnessAuth(agent, null, { file, only: 'claude' }), false);
+  assert.equal('harnessAuth' in showSoul(agent, { file }), false);
+});
