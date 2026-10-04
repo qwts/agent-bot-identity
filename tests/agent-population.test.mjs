@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -19,6 +20,8 @@ import {
   populationFile,
   recordSoulLaunch,
   recordSoulDisplayName,
+  registerSoulDir,
+  soulDirectory,
   backfillManagedSouls,
   locateSoulDir,
   soulShownName,
@@ -27,6 +30,7 @@ import {
   updateSoulStatus,
   upsertIdentitySoul,
   upsertSoul,
+  withRoles,
 } from '../agent-population.mjs';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 
@@ -343,7 +347,7 @@ test('population CLI lists, filters, and shows records', () => {
 
   const filtered = runCli(['population', 'list', '--status', 'active', '--app', 'qwts-codex-agent', '--json'], file);
   assert.equal(filtered.status, 0, filtered.stderr);
-  assert.deepEqual(JSON.parse(filtered.stdout), [fixture()]);
+  assert.deepEqual(JSON.parse(filtered.stdout), [{ ...fixture(), role: null, description: null, children: 0, roleLine: null }]);
 
   const shown = runCli(['population', 'show', SECOND_ID], file);
   assert.equal(shown.status, 0, shown.stderr);
@@ -556,4 +560,62 @@ test('the name chosen at launch or join is the one every command shows (#429)', 
   // A soul with no row is not created; bad names are refused.
   assert.equal(recordSoulDisplayName(SECOND_ID, 'Other', { file }), null);
   assert.throws(() => recordSoulDisplayName(FIRST_ID, 'bad\u0007name', { file }), /displayName must be printable text/);
+});
+
+test('the census role line comes from soul.json role and the soul\'s live team (Lovable X2)', () => {
+  const root = scratch();
+  const file = path.join(root, 'population.json');
+  const env = { AGENT_BOT_SOULS_HOME: path.join(root, 'souls') };
+  const lead = upsertSoul(fixture(), { file });
+  const solo = upsertSoul(fixture({ id: SECOND_ID, spacePath: `/spaces/${SECOND_ID}` }), { file });
+  const kids = ['33333333-3333-4333-8333-333333333333', '44444444-4444-4444-8444-444444444444', '55555555-5555-4555-8555-555555555555']
+    .map((tail, index) => upsertSoul(fixture({ id: `agent_${tail}`, parentId: FIRST_ID, spacePath: `/spaces/${tail}`, status: index === 2 ? 'retired' : 'active' }), { file }));
+  const writeManifest = (soul, manifest) => {
+    const dir = path.join(root, 'souls', `${soul.name}.soul`);
+    mkdirSync(path.join(dir, '.soul-state'), { recursive: true });
+    writeFileSync(path.join(dir, '.soul-state', 'agent-id'), soul.id);
+    writeFileSync(path.join(dir, 'soul.json'), JSON.stringify(manifest));
+  };
+  writeManifest(solo, { name: 'Scout', description: 'Finds sources.', role: 'Research' });
+  writeManifest(kids[0], { name: 'Kid', description: 'x'.repeat(400), role: `Data\nlead ${'y'.repeat(80)}` });
+
+  const rows = withRoles(listSouls({ file }), { file, env, home: root });
+  const byId = Object.fromEntries(rows.map((row) => [row.id, row]));
+  assert.deepEqual(
+    [byId[lead.id].role, byId[lead.id].children, byId[lead.id].roleLine, byId[lead.id].description],
+    [null, 2, 'Lead · 2 subagents', null],
+  );
+  assert.deepEqual([byId[solo.id].role, byId[solo.id].roleLine, byId[solo.id].description], ['Research', 'Research', 'Finds sources.']);
+  assert.equal(byId[kids[0].id].role.length, 60);
+  assert.match(byId[kids[0].id].role, /^Data lead y+…$/);
+  assert.equal(byId[kids[0].id].description.length, 280);
+  assert.equal(byId[kids[1].id].roleLine, null);
+  // Derived on read: the store is unchanged.
+  assert.equal('roleLine' in showSoul(FIRST_ID, { file }), false);
+});
+
+test('the role line reads a moved soul folder without rewriting the census', () => {
+  const root = scratch();
+  const file = path.join(root, 'population.json');
+  const souls = path.join(root, 'souls');
+  const env = { AGENT_BOT_SOULS_HOME: souls };
+  const soul = upsertSoul(fixture(), { file });
+  const original = path.join(souls, 'Scout.soul');
+  mkdirSync(path.join(original, '.soul-state'), { recursive: true });
+  writeFileSync(path.join(original, '.soul-state', 'agent-id'), soul.id);
+  writeFileSync(path.join(original, 'soul.json'), JSON.stringify({ name: 'Scout', role: 'Research' }));
+  registerSoulDir(soul.id, original, { file });
+  const moved = path.join(souls, 'Scout renamed.soul');
+  renameSync(original, moved);
+
+  const before = readFileSync(file, 'utf8');
+  const [row] = withRoles(listSouls({ file }), { file, env, home: root });
+  // The moved folder's soul.json is found...
+  assert.equal(row.roleLine, 'Research');
+  // ...but the census, its soulDir included, is left exactly as it was.
+  assert.equal(readFileSync(file, 'utf8'), before);
+  assert.equal(showSoul(soul.id, { file }).soulDir, original);
+  // soulDirectory still repairs the record when asked directly.
+  assert.equal(soulDirectory(soul.id, { file, env, home: root }), moved);
+  assert.equal(showSoul(soul.id, { file }).soulDir, moved);
 });
