@@ -90,6 +90,24 @@ JSON `{ path, status, agentId?, name?, soulDir?, copies?, message? }`:
 The daemon applies the same rule to launch requests, so opening an installed
 soul from Finder and launching it never creates a second soul.
 
+`agent-bot soul fork <copy-path> --name NAME [--harness H] [--json]` makes a
+`copy` a new soul instead (GeniusBar #83, "Make it a new soul"). It is
+owner-gated like `soul remove`, and it refuses any other status before asking.
+The copy keeps its folder and package and gets its own Agent ID, identity,
+genesis revision, census row (named NAME) and agent-comms membership, joined
+from a `worktrees/workspace` checkout in its folder as `agent-bot join` does.
+Its harness is the original's unless `--harness` names another. Afterwards
+`soul locate` reports the folder as `installed`. The original's folder,
+identity and membership are not changed.
+
+The copy's `.soul-state/` and `worktrees/` are the original's working state,
+including its harness sign-ins and git worktrees, so they move to
+`<souls root>/.archive/<UTC stamp>-<folder>-state/` before the new soul is
+minted. A `credentials` declaration names the original's GitHub App, so the
+fork drops it. If a fork fails after minting, it rolls back like a failed
+launch: it leaves agent-comms if it joined, retires the new soul, and archives
+the folder.
+
 ## Failed launches and archived folders
 
 A launch that spawns a new soul and then fails before its first session
