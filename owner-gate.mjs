@@ -102,6 +102,8 @@ export function ownerActionSummary(action, { env = process.env, souls = null } =
     summary = `let ${label(id)} wake on new messages by resuming its session (${rest[1]})`;
   } else if (first === 'soul' && second === 'remove' && rest.length === 0) {
     summary = `remove ${label(id)} from this Mac (its folders are archived, not deleted)`;
+  } else if (first === 'soul' && second === 'fork' && rest.length > 0) {
+    summary = `make a copy of ${label(id)} a new soul named ${rest.join(' ')}`;
   } else if (first === 'soul' && second === 'confinement' && rest.length === 1) {
     summary = `set file confinement to ${rest[0]} for ${label(id)}`;
   } else if (first === 'soul' && second === 'revision' && rest.length === 1) {

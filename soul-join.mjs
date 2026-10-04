@@ -155,7 +155,7 @@ export function joinComms({ agentId, worktree, name, harness }, { env = process.
 }
 
 export async function joinSoul({
-  name, harness, template, soul = null, cwd = process.cwd(), wake = null, principal = null,
+  name, harness, template, soul = null, cwd = process.cwd(), ownWorkspace = false, wake = null, principal = null,
   env = process.env, home = homedir(), config, daemon = null, comms = joinComms, spawn = spawnSoulTemplate, gate = ownerGate,
   installHarness = installSoulHarnesses,
 } = {}) {
@@ -169,7 +169,9 @@ export async function joinSoul({
 
   // 1. The soul. Resolving it changes nothing, so the checks and the
   //    owner's consent below can name the soul that is actually affected.
-  let checkout = checkoutOf(cwd);
+  // `ownWorkspace` (soul fork) joins in the soul's own workspace, never a
+  // checkout the caller happens to stand in.
+  let checkout = ownWorkspace ? null : checkoutOf(cwd);
   const pinned = checkout ? pinnedSoul(checkout.worktree) : null;
   const binding = checkout ? readBinding({ env: {}, gitDir: checkout.gitDir }) : null;
   let agentId = soul === null ? null : validateAgentId(soul);

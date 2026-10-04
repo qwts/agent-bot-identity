@@ -323,6 +323,8 @@ agent-bot soul dir AGENT_ID
 # JSON: { agentId, soulDir, home, soulsRoot, source, copies }
 agent-bot soul locate PATH
 # JSON: { path, status: package|installed|copy|duplicate|unregistered|invalid, ... }
+agent-bot soul fork COPY_PATH --name NAME [--json]
+# a Finder copy (status copy) becomes a new soul in place; see docs/soul-homes.md
 ```
 
 This command resolves the census directory without creating a home; it also
