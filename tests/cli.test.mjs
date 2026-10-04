@@ -41,6 +41,23 @@ test('stable CLI dispatches bootstrap from the source checkout', () => {
   assert.match(run.stdout, /--worktree-only/);
 });
 
+test('the launcher inside GeniusBar.app runs on the app\'s own Node when the Mac has none (#428)', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-launcher-app-'));
+  const contents = join(home, 'GeniusBar.app', 'Contents');
+  const component = join(contents, 'Resources', 'components', 'agent-bot');
+  mkdirSync(component, { recursive: true });
+  mkdirSync(join(contents, 'MacOS'), { recursive: true });
+  symlinkSync(process.execPath, join(contents, 'MacOS', 'node'));
+  writeFileSync(join(component, 'agent-bot'), readFileSync(LAUNCHER), { mode: 0o755 });
+  writeFileSync(join(component, 'agent-bot.mjs'), 'process.stdout.write(`${process.execPath}\\n`);\n');
+  const run = spawnSync(join(component, 'agent-bot'), [], {
+    encoding: 'utf8',
+    env: { HOME: home, PATH: '/usr/bin:/bin', AGENT_BOT_SYSTEM_NODE_DIRS: '' },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout.trim(), process.execPath);
+});
+
 test('portable launcher finds an nvm Node with a desktop-app PATH', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-launcher-'));
   const node = join(home, '.nvm', 'versions', 'node', 'v-test', 'bin', 'node');
