@@ -193,6 +193,25 @@ function normalizeSoul(record, { defaultLastSeen = null } = {}) {
     // The name the owner chose at launch or join, as agent-comms' census
     // shows it (#429). `name` stays the generated handle agents address.
     ...displayNameField(record.displayName),
+    // The harness sign-in a daemon turn found missing or expired (#84), so
+    // GeniusBar can ask the owner to sign the soul in again. Absent when the
+    // last turn ran, or nothing has failed.
+    ...harnessAuthField(record.harnessAuth),
+  };
+}
+
+export const HARNESS_AUTH_STATUSES = Object.freeze(['signed-out', 'expired']);
+
+function harnessAuthField(value) {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== 'object' || Array.isArray(value)) throw new Error('harnessAuth must be an object');
+  if (!HARNESS_AUTH_STATUSES.includes(value.status)) throw new Error(`harnessAuth.status must be one of ${HARNESS_AUTH_STATUSES.join(', ')}`);
+  return {
+    harnessAuth: {
+      status: value.status,
+      harness: printableText('harnessAuth.harness', value.harness, { max: 40 }),
+      since: canonicalTimestamp('harnessAuth.since', value.since),
+    },
   };
 }
 
@@ -621,6 +640,32 @@ export function recordSoulDisplayName(id, name, { file = populationFile() } = {}
     if (!existing) return null;
     const soul = normalizeSoul({ ...existing, displayName: value });
     if (existing.displayName !== soul.displayName) writeDocument(file, { ...current.souls, [target]: soul });
+    return soul;
+  });
+}
+
+// Records or clears (`null`) a soul's harness sign-in failure (#84). The
+// first failure's time is kept while the status stays the same. `only`
+// clears just a failure recorded for that harness. Returns the row, or null
+// with no row.
+export function recordHarnessAuth(id, value, { file = populationFile(), now = () => new Date(), only = null } = {}) {
+  const target = agentId(id);
+  ensurePrivateDirectory(path.dirname(file));
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
+    const existing = current.souls[target];
+    if (!existing) return null;
+    const before = existing.harnessAuth ?? null;
+    if (value === null && (before === null || (only !== null && before.harness !== only))) return normalizeSoul(existing);
+    const next = value === null ? null : {
+      status: value.status,
+      harness: value.harness,
+      since: before?.status === value.status && before?.harness === value.harness ? before.since : now().toISOString(),
+    };
+    const { harnessAuth: _dropped, ...rest } = existing;
+    const soul = normalizeSoul(next === null ? rest : { ...rest, harnessAuth: next });
+    if (JSON.stringify(before) !== JSON.stringify(soul.harnessAuth ?? null)) writeDocument(file, { ...current.souls, [target]: soul });
     return soul;
   });
 }

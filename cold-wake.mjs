@@ -22,11 +22,18 @@
 // the sender directly would otherwise send the same answer twice. A turn the
 // policy stopped with nothing said gets a short notice naming the refused
 // tools instead of silence (#408).
+//
+// A turn that fails because the harness is signed out or its sign-in expired
+// (#84) is reported through `authStatus`, so the census can show it, and each
+// waiting sender gets one short notice. Those messages stay unacked, so they
+// are answered on a wake after the owner signs the soul in again; the next
+// turn that runs clears the status.
 
 import { randomUUID } from 'node:crypto';
 
 import { wakeSetting } from './cold-wake-settings.mjs';
 import { FINAL_REPLY_ERRORS, senderAddress } from './comms-relay.mjs';
+import { harnessAuthFailure, harnessAuthNotice } from './harness-auth.mjs';
 import { NO_REPLY, formatThread, recordThreadMessage, sentMarks, sentSince, stripNoReply, threadContext, threadKey } from './soul-threads.mjs';
 
 // The final answer a soul gives when a teammate's message needs no answer
@@ -70,12 +77,21 @@ function recordInbound(agentId, message, threads) {
   }, threads);
 }
 
-export function createColdWaker({ executor, settings, lookupBinding, identities, receipt, relay = null, webhook = null, taskReporter = null, threads = {}, log = (line) => process.stderr.write(`cold-wake: ${line}\n`) }) {
+export function createColdWaker({ executor, settings, lookupBinding, identities, receipt, relay = null, webhook = null, taskReporter = null, authStatus = null, threads = {}, log = (line) => process.stderr.write(`cold-wake: ${line}\n`) }) {
   if (typeof executor !== 'function') throw new Error('cold waker requires an executor');
   if (typeof lookupBinding !== 'function') throw new Error('cold waker requires lookupBinding');
   if (typeof identities !== 'function') throw new Error('cold waker requires identities');
   if (typeof receipt !== 'function') throw new Error('cold waker requires receipt');
   const active = new Map();
+  // Messages already told about a sign-in failure, per soul, until a turn runs.
+  const noticed = new Map();
+  // A failing recorder never fails the turn.
+  const recordAuth = (agentId, failure, harness) => {
+    try {
+      if (failure) authStatus?.failed(agentId, { status: failure, harness });
+      else { noticed.delete(agentId); authStatus?.cleared(agentId); }
+    } catch (error) { log(`harness sign-in status for ${agentId} not recorded: ${error?.message ?? String(error)}`); }
+  };
   async function coldWake(event) {
     const { agentId, count, cursor, messageIds } = event ?? {};
     const currentSettings = typeof settings === 'function' ? await settings() : settings;
@@ -128,9 +144,28 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
     const soul = { agentId, binding };
     // Each read returns everything still unacked, so messages that merge
     // into this flight are answered before it lands.
+    const reply = async (message, to, body, correlation) => {
+      const sent = await relay.reply(soul, { to, replyTo: message.id, body, correlation }).catch((error) => {
+        if (!FINAL_REPLY_ERRORS.has(error?.code)) throw error;
+        return null;
+      });
+      if (sent) recordThreadMessage(agentId, { dir: 'out', id: sent.messageId, to, replyTo: message.id, correlation, body }, threads);
+    };
+    // Once the harness is signed out, the rest of the batch is not run: each
+    // sender is told once, and every message stays unacked.
+    let signedOut = null;
+    let ran = false;
+    const tell = async (message) => {
+      const told = noticed.get(agentId) ?? new Set();
+      noticed.set(agentId, told);
+      if (told.has(message.id) || message.kind === 'task-event') return;
+      told.add(message.id);
+      await reply(message, senderAddress(message.from), harnessAuthNotice(identity.harness, signedOut), threadKey(message));
+    };
     const relayed = async () => {
       for (let messages = await relay.read(soul); messages.length; messages = await relay.read(soul)) {
         for (const message of messages) {
+          if (signedOut) { await tell(message); continue; }
           if (message.kind === 'task-event') {
             const brief = await relay.brief?.(soul, message.id);
             if (brief?.turn) {
@@ -145,6 +180,7 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
               await report('started');
               try {
                 const result = await executor({ invocation: brief.linked ? linked : invocation, message: brief.prompt, attachments: [], env, wake });
+                ran = true;
                 await report('ended', result?.cancelled ? 'cancelled' : 'completed');
               } catch (error) {
                 await report('ended', error?.name === 'AbortError' ? 'cancelled' : 'failed');
@@ -162,7 +198,16 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
           const correlation = threadKey(message);
           const turn = correlation ? { ...invocation, correlation } : invocation;
           const before = sentMarks(agentId, { correlation }, threads);
-          const result = await executor({ invocation: turn, message: relayPrompt(message, thread), attachments: [], env, wake });
+          let result;
+          try {
+            result = await executor({ invocation: turn, message: relayPrompt(message, thread), attachments: [], env, wake });
+          } catch (error) {
+            signedOut = harnessAuthFailure(error);
+            if (!signedOut) throw error;
+            await tell(message);
+            continue;
+          }
+          ran = true;
           const to = senderAddress(message.from);
           const own = sentSince(agentId, { before, correlation }, threads);
           const fromSoul = typeof message.from?.principal !== 'string';
@@ -173,16 +218,13 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
             || (fromSoul && own.some((entry) => entry.kind !== 'brief'));
           const said = typeof result?.reply === 'string' ? result.reply.trim() : '';
           const body = spoke ? '' : (stripNoReply(result?.reply) || (said === '' ? deniedNotice(result?.denied) : null));
-          if (body) {
-            const sent = await relay.reply(soul, { to, replyTo: message.id, body, correlation }).catch((error) => {
-              if (!FINAL_REPLY_ERRORS.has(error?.code)) throw error;
-              return null;
-            });
-            if (sent) recordThreadMessage(agentId, { dir: 'out', id: sent.messageId, to, replyTo: message.id, correlation, body }, threads);
-          }
+          if (body) await reply(message, to, body, correlation);
           await relay.ack(soul, [message.id]);
         }
+        // Unacked messages would come back on every read.
+        if (signedOut) throw Object.assign(new Error('harness sign-in failed'), { harnessAuth: signedOut });
       }
+      return { ran };
     };
     const prompt = `There are ${Number.isSafeInteger(count) ? count : flight.ids.length} agent-comms messages waiting (IDs: ${flight.ids.join(', ')}). Read them with agent-comms inbox read, act, and ack them with agent-comms inbox ack.`;
     // The wake is reported `cold` once the turn starts (#259 req 3); the
@@ -197,10 +239,18 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
       return { outcome: 'failed', detail: 'cold wake turn could not start' };
     }
     turn.then(
-      () => receipt({ event: 'cold-wake', agentId, decision: 'finished' }),
+      (value) => {
+        // A turn that ran proves the sign-in; an empty relay read does not.
+        if (!relay || value?.ran) recordAuth(agentId, null);
+        receipt({ event: 'cold-wake', agentId, decision: 'finished' });
+      },
       // A turn's own error can quote the model or a message, so its receipt
-      // says only that the turn failed.
-      () => receipt({ event: 'cold-wake', agentId, decision: 'failed', detail: 'cold wake turn failed' }),
+      // says only that the turn failed, or that its harness is signed out.
+      (error) => {
+        const failure = harnessAuthFailure(error);
+        if (failure) recordAuth(agentId, failure, identity.harness);
+        receipt({ event: 'cold-wake', agentId, decision: 'failed', detail: failure ? `harness ${failure}` : 'cold wake turn failed' });
+      },
     ).finally(land);
     receipt({ event: 'cold-wake', agentId, decision: 'started' });
     return { outcome: 'cold', detail: 'turn started' };
