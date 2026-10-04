@@ -23,35 +23,40 @@
 // policy stopped with nothing said gets a short notice naming the refused
 // tools instead of silence (#408).
 //
+// A soul that handed work to a teammate waits for its reply rather than
+// pinging it again or sending progress notes (#427): the prompt names the
+// teammates it is still waiting on, and the reach server refuses a second
+// message to one of them in the same thread (daemon-mcp.mjs).
 // Each relayed turn records asides (#404, soul-asides.mjs): what entered the
 // soul's context (the woken message and the thread shown with it), once the
 // turn's harness session exists, and the reply the relay sent from it.
+// A turn that fails because the harness is signed out or its sign-in expired
+// (#84) is reported through `authStatus`, so the census can show it, and each
+// waiting sender gets one short notice. Those messages stay unacked, so they
+// are answered on a wake after the owner signs the soul in again; the next
+// turn that runs clears the status.
 
 import { randomUUID } from 'node:crypto';
 
 import { wakeSetting } from './cold-wake-settings.mjs';
 import { FINAL_REPLY_ERRORS, senderAddress } from './comms-relay.mjs';
-import { NO_REPLY, formatThread, recordThreadMessage, sentMarks, sentSince, stripNoReply, threadContext, threadKey } from './soul-threads.mjs';
+import { NO_REPLY, formatThread, pendingReplies, recordThreadMessage, sameAddress, sentMarks, sentSince, stripNoReply, threadContext, threadKey } from './soul-threads.mjs';
 import { bindTurnSession, recordAside } from './soul-asides.mjs';
+import { harnessAuthFailure, harnessAuthNotice } from './harness-auth.mjs';
 
 // The final answer a soul gives when a teammate's message needs no answer
 // back. Every relayed turn's answer is otherwise a reply, so two souls would
 // trade acknowledgements until the broker's reply-depth limit.
 export { NO_REPLY };
 
-export function relayPrompt(message, thread = []) {
+export function relayPrompt(message, thread = [], waitingOn = []) {
   const fromSoul = typeof message.from?.principal !== 'string';
   const sender = senderAddress(message.from);
   return `You have an agent-comms message from ${sender}${fromSoul ? ', another agent' : ''}. Your final answer is sent back to them as your reply, so write it as the reply itself, not notes on what you did; you do not need to run agent-comms.`
-    + (fromSoul ? ` If it needs no answer (a thanks, or a result you only had to receive), make your final answer exactly ${NO_REPLY} and nothing is sent. Use send_message to tell anyone else, such as the person who asked you for this work, what came of it. If you use send_message in this turn, your final answer is not sent at all, so send ${sender} anything they need to hear with send_message too. A start_soul brief does not count: after one, your final answer is still sent. Send results, questions and blockers; skip thanks, acknowledgements and progress notes, since each message wakes its reader.` : '')
+    + (fromSoul ? ` If it needs no answer (a thanks, or a result you only had to receive), make your final answer exactly ${NO_REPLY} and nothing is sent. Use send_message to tell anyone else, such as the person who asked you for this work, what came of it. If you use send_message in this turn, your final answer is not sent at all, so send ${sender} anything they need to hear with send_message too. A start_soul brief does not count: after one, your final answer is still sent, so if it would only say the work is under way, make it exactly ${NO_REPLY}; the teammate's reply wakes you, and you answer then. Send results, questions and blockers; skip thanks, acknowledgements and progress notes, since each message wakes its reader.` : '')
     + (thread.length > 0 ? ' This session does not remember earlier turns, so the conversation so far is below. If this message answers something you asked for on someone else\'s behalf, pass the result on to them with send_message.' : '')
+    + (waitingOn.length > 0 ? ` You are still waiting on ${waitingOn.join(', ')} in this conversation; ${waitingOn.length === 1 ? 'its reply wakes' : 'their replies wake'} you in a later turn. Do not message ${waitingOn.length === 1 ? 'it' : 'them'} again or send other agents progress notes meanwhile${fromSoul ? `; if you need ${waitingOn.length === 1 ? 'that reply' : 'those replies'} before answering, make your final answer exactly ${NO_REPLY}` : ''}.` : '')
     + `\n\n${formatThread(thread)}${thread.length > 0 ? 'The new message:\n\n' : ''}${message.body}`;
-}
-
-// Two spellings of one recipient: a bare agent id, or `account/agentId`.
-function sameAddress(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string') return false;
-  return a === b || a.split('/').pop() === b.split('/').pop();
 }
 
 const DENIED_NOTICE_TOOLS = 3;
@@ -67,6 +72,10 @@ export function deniedNotice(tools) {
   const more = names.length - shown.length;
   const list = shown.join(', ') + (more > 0 ? ` and ${more} more` : '');
   return `I couldn't finish this: ${list} ${names.length === 1 ? 'is' : 'are'} not allowed for me here (my owner's policy for this agent).`;
+}
+
+function threadNow(threads) {
+  return typeof threads?.now === 'function' ? threads.now() : new Date();
 }
 
 // The asides for what a relayed turn's prompt put into the session: the
@@ -90,12 +99,21 @@ function recordInbound(agentId, message, threads) {
   }, threads);
 }
 
-export function createColdWaker({ executor, settings, lookupBinding, identities, receipt, relay = null, webhook = null, taskReporter = null, threads = {}, log = (line) => process.stderr.write(`cold-wake: ${line}\n`) }) {
+export function createColdWaker({ executor, settings, lookupBinding, identities, receipt, relay = null, webhook = null, taskReporter = null, authStatus = null, threads = {}, log = (line) => process.stderr.write(`cold-wake: ${line}\n`) }) {
   if (typeof executor !== 'function') throw new Error('cold waker requires an executor');
   if (typeof lookupBinding !== 'function') throw new Error('cold waker requires lookupBinding');
   if (typeof identities !== 'function') throw new Error('cold waker requires identities');
   if (typeof receipt !== 'function') throw new Error('cold waker requires receipt');
   const active = new Map();
+  // Messages already told about a sign-in failure, per soul, until a turn runs.
+  const noticed = new Map();
+  // A failing recorder never fails the turn.
+  const recordAuth = (agentId, failure, harness) => {
+    try {
+      if (failure) authStatus?.failed(agentId, { status: failure, harness });
+      else { noticed.delete(agentId); authStatus?.cleared(agentId); }
+    } catch (error) { log(`harness sign-in status for ${agentId} not recorded: ${error?.message ?? String(error)}`); }
+  };
   async function coldWake(event) {
     const { agentId, count, cursor, messageIds } = event ?? {};
     const currentSettings = typeof settings === 'function' ? await settings() : settings;
@@ -148,9 +166,29 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
     const soul = { agentId, binding };
     // Each read returns everything still unacked, so messages that merge
     // into this flight are answered before it lands.
+    const reply = async (message, to, body, correlation) => {
+      const sent = await relay.reply(soul, { to, replyTo: message.id, body, correlation }).catch((error) => {
+        if (!FINAL_REPLY_ERRORS.has(error?.code)) throw error;
+        return null;
+      });
+      if (sent) recordThreadMessage(agentId, { dir: 'out', id: sent.messageId, to, replyTo: message.id, correlation, kind: 'reply', body }, threads);
+      return sent;
+    };
+    // Once the harness is signed out, the rest of the batch is not run: each
+    // sender is told once, and every message stays unacked.
+    let signedOut = null;
+    let ran = false;
+    const tell = async (message) => {
+      const told = noticed.get(agentId) ?? new Set();
+      noticed.set(agentId, told);
+      if (told.has(message.id) || message.kind === 'task-event') return;
+      told.add(message.id);
+      await reply(message, senderAddress(message.from), harnessAuthNotice(identity.harness, signedOut), threadKey(message));
+    };
     const relayed = async () => {
       for (let messages = await relay.read(soul); messages.length; messages = await relay.read(soul)) {
         for (const message of messages) {
+          if (signedOut) { await tell(message); continue; }
           if (message.kind === 'task-event') {
             const brief = await relay.brief?.(soul, message.id);
             if (brief?.turn) {
@@ -165,6 +203,7 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
               await report('started');
               try {
                 const result = await executor({ invocation: brief.linked ? linked : invocation, message: brief.prompt, attachments: [], env, wake });
+                ran = true;
                 await report('ended', result?.cancelled ? 'cancelled' : 'completed');
               } catch (error) {
                 await report('ended', error?.name === 'AbortError' ? 'cancelled' : 'failed');
@@ -194,8 +233,19 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
             if (delivered.harnessSessionId) bindTurnSession(agentId, turnId, delivered.harnessSessionId, threads);
             recordDelivered(agentId, message, thread, { turnId, ...delivered }, threads);
           };
-          const result = await executor({ invocation: turn, message: relayPrompt(message, thread), attachments: [], env, wake, onSession: deliver });
+          const waitingOn = pendingReplies(agentId, { correlation, now: threadNow(threads) }, threads).map((entry) => entry.to);
+          let result;
+          try {
+            result = await executor({ invocation: turn, message: relayPrompt(message, thread, waitingOn), attachments: [], env, wake, onSession: deliver });
+          } catch (error) {
+            // A signed-out harness never read the prompt, so no aside (#84).
+            signedOut = harnessAuthFailure(error);
+            if (!signedOut) throw error;
+            await tell(message);
+            continue;
+          }
           deliver();
+          ran = true;
           const to = senderAddress(message.from);
           const own = sentSince(agentId, { before, correlation }, threads);
           const fromSoul = typeof message.from?.principal !== 'string';
@@ -207,12 +257,8 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
           const said = typeof result?.reply === 'string' ? result.reply.trim() : '';
           const body = spoke ? '' : (stripNoReply(result?.reply) || (said === '' ? deniedNotice(result?.denied) : null));
           if (body) {
-            const sent = await relay.reply(soul, { to, replyTo: message.id, body, correlation }).catch((error) => {
-              if (!FINAL_REPLY_ERRORS.has(error?.code)) throw error;
-              return null;
-            });
+            const sent = await reply(message, to, body, correlation);
             if (sent) {
-              recordThreadMessage(agentId, { dir: 'out', id: sent.messageId, to, replyTo: message.id, correlation, body }, threads);
               recordAside(agentId, {
                 dir: 'out', via: 'final-reply', peer: to, messageId: sent.messageId, replyTo: message.id, correlation, body,
                 turnId, harnessSessionId: delivered.harnessSessionId,
@@ -221,7 +267,10 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
           }
           await relay.ack(soul, [message.id]);
         }
+        // Unacked messages would come back on every read.
+        if (signedOut) throw Object.assign(new Error('harness sign-in failed'), { harnessAuth: signedOut });
       }
+      return { ran };
     };
     const prompt = `There are ${Number.isSafeInteger(count) ? count : flight.ids.length} agent-comms messages waiting (IDs: ${flight.ids.join(', ')}). Read them with agent-comms inbox read, act, and ack them with agent-comms inbox ack.`;
     // The wake is reported `cold` once the turn starts (#259 req 3); the
@@ -236,10 +285,18 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
       return { outcome: 'failed', detail: 'cold wake turn could not start' };
     }
     turn.then(
-      () => receipt({ event: 'cold-wake', agentId, decision: 'finished' }),
+      (value) => {
+        // A turn that ran proves the sign-in; an empty relay read does not.
+        if (!relay || value?.ran) recordAuth(agentId, null);
+        receipt({ event: 'cold-wake', agentId, decision: 'finished' });
+      },
       // A turn's own error can quote the model or a message, so its receipt
-      // says only that the turn failed.
-      () => receipt({ event: 'cold-wake', agentId, decision: 'failed', detail: 'cold wake turn failed' }),
+      // says only that the turn failed, or that its harness is signed out.
+      (error) => {
+        const failure = harnessAuthFailure(error);
+        if (failure) recordAuth(agentId, failure, identity.harness);
+        receipt({ event: 'cold-wake', agentId, decision: 'failed', detail: failure ? `harness ${failure}` : 'cold wake turn failed' });
+      },
     ).finally(land);
     receipt({ event: 'cold-wake', agentId, decision: 'started' });
     return { outcome: 'cold', detail: 'turn started' };

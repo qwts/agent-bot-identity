@@ -548,6 +548,15 @@ meaning from the display string, the row stays keyed by Agent ID (names are
 handles and may collide; IDs cannot), and `population show` accepts a name
 whenever it is unambiguous.
 
+The JSON from `population list|show` and the daemon's `GET /v0/population`
+also carries four fields derived on read and never stored. These give the line
+GeniusBar shows under a soul's name:
+
+- `role`: the soul's `soul.json` `role`, up to 60 characters.
+- `description`: its `soul.json` description, up to 280 characters.
+- `children`: how many live souls name it as their parent.
+- `roleLine`: for example `Lead · 7 subagents`, `Research`, or `Research · 2 subagents`. A soul with a team but no role reads `Lead`. `roleLine` is null when there is no role and no team, and the host shows the harness instead.
+
 Rows that predate binding carry `transcriptLocator: null` and show `?` in the
 PARENT column; `population list` counts them on every listing so the gap can
 never persist silently. `population backfill` repairs what this account's
@@ -707,6 +716,13 @@ the message and its thread. A turn the policy stopped with nothing said
 answers with a short notice naming the refused tools, never the rules
 (#408).
 
+A soul waits for a teammate's answer rather than chasing it (#427). Until a
+teammate answers in a thread, or for 10 minutes, `send_message` refuses a
+second message to it in that thread, so a teammate still starting up is not
+woken again. The result of a send or a brief says the reply will wake the
+soul later, and a woken turn's prompt names the teammates it is still
+waiting on, asking for no re-sends or progress notes meanwhile.
+
 A soul can also start its own team (#377). `start_soul` (`name`, and
 optionally `harness`, `template`, `brief`) starts a new full soul — its own
 soul directory, identity and inbox, not a subagent in the caller's session —
@@ -788,13 +804,17 @@ agent-bot approvals deny proposal_…
 ```
 
 `list` returns `{ "approvals": [{ proposalId, agentId, soul, tool, summary,
-operationDigest, createdAt, expiresAt, status }] }`. `approve` and `deny` go
-through the owner gate, naming the soul and tool, and echo the proposal's
-operation digest, so a decision lands only on the operation it names. Both
-refuse a caller with a soul marker. An expired proposal, or a turn that ends
-or times out first, is a deny. A principal with the `approve` operation can
-decide for its own souls through `GET /v1/proposals` and
-`POST /v1/proposals/<id>/decision`. Proposals live only as long as the turn
+operationDigest, createdAt, expiresAt, status }] }`. `approve` and `deny`
+echo the proposal's operation digest, so a decision lands only on the
+operation it names, and refuse a caller with a soul marker. Before any
+decision lands, the daemon asks for the owner's presence (#438): keyd's
+Touch ID or login-password prompt naming the soul and tool, or the
+administrator dialog when keyd cannot ask. The daemon token alone never
+decides, and a `--principal-stdin` credential is checked as well, not
+instead. An expired proposal, or a turn that ends or times out first, is a
+deny. A principal with the `approve` operation can decide for its own souls
+through `GET /v1/proposals` and `POST /v1/proposals/<id>/decision`, which asks
+for the owner's presence the same way. Proposals live only as long as the turn
 that waits on them: after a daemon restart nothing is listed. Launch turns
 (`start_soul`, package launches) still deny instead of asking.
 

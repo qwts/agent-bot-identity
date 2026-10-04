@@ -193,6 +193,25 @@ function normalizeSoul(record, { defaultLastSeen = null } = {}) {
     // The name the owner chose at launch or join, as agent-comms' census
     // shows it (#429). `name` stays the generated handle agents address.
     ...displayNameField(record.displayName),
+    // The harness sign-in a daemon turn found missing or expired (#84), so
+    // GeniusBar can ask the owner to sign the soul in again. Absent when the
+    // last turn ran, or nothing has failed.
+    ...harnessAuthField(record.harnessAuth),
+  };
+}
+
+export const HARNESS_AUTH_STATUSES = Object.freeze(['signed-out', 'expired']);
+
+function harnessAuthField(value) {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== 'object' || Array.isArray(value)) throw new Error('harnessAuth must be an object');
+  if (!HARNESS_AUTH_STATUSES.includes(value.status)) throw new Error(`harnessAuth.status must be one of ${HARNESS_AUTH_STATUSES.join(', ')}`);
+  return {
+    harnessAuth: {
+      status: value.status,
+      harness: printableText('harnessAuth.harness', value.harness, { max: 40 }),
+      since: canonicalTimestamp('harnessAuth.since', value.since),
+    },
   };
 }
 
@@ -625,6 +644,32 @@ export function recordSoulDisplayName(id, name, { file = populationFile() } = {}
   });
 }
 
+// Records or clears (`null`) a soul's harness sign-in failure (#84). The
+// first failure's time is kept while the status stays the same. `only`
+// clears just a failure recorded for that harness. Returns the row, or null
+// with no row.
+export function recordHarnessAuth(id, value, { file = populationFile(), now = () => new Date(), only = null } = {}) {
+  const target = agentId(id);
+  ensurePrivateDirectory(path.dirname(file));
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
+    const existing = current.souls[target];
+    if (!existing) return null;
+    const before = existing.harnessAuth ?? null;
+    if (value === null && (before === null || (only !== null && before.harness !== only))) return normalizeSoul(existing);
+    const next = value === null ? null : {
+      status: value.status,
+      harness: value.harness,
+      since: before?.status === value.status && before?.harness === value.harness ? before.since : now().toISOString(),
+    };
+    const { harnessAuth: _dropped, ...rest } = existing;
+    const soul = normalizeSoul(next === null ? rest : { ...rest, harnessAuth: next });
+    if (JSON.stringify(before) !== JSON.stringify(soul.harnessAuth ?? null)) writeDocument(file, { ...current.souls, [target]: soul });
+    return soul;
+  });
+}
+
 // The one name commands show for a soul (#429): the launch or join name,
 // else its soul.json name, else the generated handle.
 export function soulShownName(soul, directory = null) {
@@ -653,28 +698,41 @@ function directoryMatches(directory, id) {
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 
-export function soulDirectory(id, options = {}) {
-  const target = agentId(id);
-  const file = options.file ?? populationFile(options);
-  const soul = showSoul(target, { file });
-  if (soul.soulDir && existsSync(soul.soulDir) && directoryMatches(soul.soulDir, target)) return soul.soulDir;
-  const { root } = soulsHome(options);
+// The `.soul` folders directly under the souls root, read once per call.
+function soulRootDirs(root) {
+  let entries = [];
+  try { entries = readdirSync(root, { withFileTypes: true }); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  return entries.filter((entry) => entry.name.endsWith('.soul') && (entry.isDirectory() || entry.isSymbolicLink()))
+    .map((entry) => path.join(root, entry.name));
+}
+
+// Where a soul's folder is, without changing the store: `moved` says the
+// recorded folder is gone and the soul's marker was found in another one.
+// `scan` lists the souls root's folders (memoized by callers that resolve
+// many souls).
+function resolveSoulDir(soul, root, scan) {
+  const target = soul.id;
+  if (soul.soulDir && existsSync(soul.soulDir) && directoryMatches(soul.soulDir, target)) return { directory: soul.soulDir, moved: false };
   if (soul.soulDir && !existsSync(soul.soulDir)) {
-    let entries = [];
-    try { entries = readdirSync(root, { withFileTypes: true }); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; }
-    const matches = entries.filter((entry) => entry.name.endsWith('.soul') && (entry.isDirectory() || entry.isSymbolicLink()))
-      .map((entry) => path.join(root, entry.name)).filter((dir) => directoryMatches(dir, target));
+    const matches = scan().filter((dir) => directoryMatches(dir, target));
     if (matches.length > 1) throw new Error(`multiple soul directories for ${target}`);
-    if (matches.length === 1) {
-      registerSoulDir(target, matches[0], { file });
-      return matches[0];
-    }
+    if (matches.length === 1) return { directory: matches[0], moved: true };
   }
   // Names may collide (#92), so a default directory another soul already
   // marked falls back to one carrying this soul's ID suffix.
   const named = path.join(root, `${soul.name}.soul`);
-  return claimedByOther(named, target) ? path.join(root, `${soul.name}-${target.slice(-8)}.soul`) : named;
+  return { directory: claimedByOther(named, target) ? path.join(root, `${soul.name}-${target.slice(-8)}.soul`) : named, moved: false };
+}
+
+export function soulDirectory(id, options = {}) {
+  const target = agentId(id);
+  const file = options.file ?? populationFile(options);
+  const soul = showSoul(target, { file });
+  const { root } = soulsHome(options);
+  const { directory, moved } = resolveSoulDir(soul, root, () => soulRootDirs(root));
+  if (moved) registerSoulDir(target, directory, { file });
+  return directory;
 }
 
 // The marker's soul, or null when the folder has none (a package, not an
@@ -903,6 +961,52 @@ function formatRow(record) {
   ].join('\t');
 }
 
+// The role line GeniusBar shows under a soul's name (Lovable X2): the soul's
+// own `role` from soul.json, else "Lead" for a soul with a team, then how
+// many live souls it started ("Lead · 7 subagents"). Null when there is
+// neither, and the host falls back to the harness. `description` is the
+// soul.json description, for a Details row. Derived on read, never stored.
+const ROLE_MAX = 60;
+
+// Reads only: a moved folder is found but not re-registered, and the record
+// given is used as is, so enriching N rows never rereads the store.
+function soulManifest(record, root, scan) {
+  let directory;
+  try { ({ directory } = resolveSoulDir(record, root, scan)); } catch { return null; }
+  try { return JSON.parse(readFileSync(path.join(directory, 'soul.json'), 'utf8')); } catch { return null; }
+}
+
+function shortText(value, max) {
+  if (typeof value !== 'string') return null;
+  const text = value.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+  if (!text) return null;
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+export function withRoles(records, { file = populationFile(), env = process.env, home = homedir() } = {}) {
+  const children = new Map();
+  for (const soul of listSouls({ file })) {
+    if (soul.parentId === null || soul.status === 'retired') continue;
+    children.set(soul.parentId, (children.get(soul.parentId) ?? 0) + 1);
+  }
+  const { root } = soulsHome({ env, home });
+  let dirs = null;
+  const scan = () => (dirs ??= soulRootDirs(root));
+  return records.map((record) => {
+    const manifest = soulManifest(record, root, scan);
+    const role = shortText(manifest?.role, ROLE_MAX);
+    const count = children.get(record.id) ?? 0;
+    const parts = [role ?? (count > 0 ? 'Lead' : null), count > 0 ? `${count} ${count === 1 ? 'subagent' : 'subagents'}` : null].filter(Boolean);
+    return {
+      ...record,
+      role,
+      description: shortText(manifest?.description, 280),
+      children: count,
+      roleLine: parts.length ? parts.join(' · ') : null,
+    };
+  });
+}
+
 function formatPopulation(records) {
   // Retired souls are tombstones, not census peers: list them in their own
   // section so an operator scanning the living population never mistakes a
@@ -935,7 +1039,7 @@ async function main() {
     case 'list': {
       if (args.positional.length > 0) throw new Error('population list does not accept Agent IDs');
       const records = listSouls({ status: args.flags.get('status'), app: args.flags.get('app') });
-      if (args.flags.has('json')) process.stdout.write(`${JSON.stringify(records, null, 2)}\n`);
+      if (args.flags.has('json')) process.stdout.write(`${JSON.stringify(withRoles(records), null, 2)}\n`);
       else process.stdout.write(formatPopulation(records));
       break;
     }
@@ -948,7 +1052,7 @@ async function main() {
       const soul = target.startsWith('agent_')
         ? showSoul(target)
         : showSoulByName(target);
-      process.stdout.write(`${JSON.stringify(soul, null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify(withRoles([soul])[0], null, 2)}\n`);
       break;
     }
     case 'backfill': {

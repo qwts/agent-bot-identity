@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mintAgentIdentity } from '../agent-identity.mjs';
-import { assertOwnerAction, consentOwner, soulMarkers, verifyPrincipalOwner } from '../owner-gate.mjs';
+import { assertOwnerAction, confirmOwnerPresence, consentOwner, soulMarkers, verifyPrincipalOwner } from '../owner-gate.mjs';
 import { computePackageRevision } from '../soul-package.mjs';
 import { adoptSoulPackage, listSoulProposals, proposeSoulRevision, revisionCommand, revisionHistory } from '../soul-revisions.mjs';
 
@@ -146,4 +146,26 @@ test('the CLI reads a presented principal from stdin and refuses an own-account 
   result = run('not json');
   assert.equal(result.status, 1); assert.match(result.stderr, /--principal-stdin needs the principal credential/);
   assert.equal(listSoulProposals(f.id, f.options)[0].status, 'pending');
+});
+
+test('a decision on a soul tool request asks for presence even when a principal verifies (#438)', async () => {
+  const broker = fakeBroker();
+  const asked = [];
+  const verifyPrincipal = (credential) => verifyPrincipalOwner(credential, { paths: { socket: '/broker.sock' }, clientFactory: broker.clientFactory });
+  const consent = async (action) => { asked.push(action); return { method: 'presence', via: 'agent-bot-keyd' }; };
+  assert.deepEqual(await confirmOwnerPresence('approve Bash for Bill', { principal: owner(), verifyPrincipal, consent }),
+    { method: 'presence', via: 'agent-bot-keyd', principal: PRINCIPAL });
+  assert.deepEqual(await confirmOwnerPresence('deny Bash for Bill', { verifyPrincipal, consent }),
+    { method: 'presence', via: 'agent-bot-keyd' });
+  assert.deepEqual(asked, ['approve Bash for Bill', 'deny Bash for Bill']);
+  assert.equal(broker.calls.length, 1);
+
+  // A principal that does not verify refuses before anyone is asked; a
+  // refused presence refuses even with a verified principal.
+  await assert.rejects(confirmOwnerPresence('approve Bash for Bill', { principal: owner({ brokerUid: process.getuid() }), verifyPrincipal, consent }),
+    /cannot vouch/);
+  assert.equal(asked.length, 2);
+  await assert.rejects(confirmOwnerPresence('approve Bash for Bill', {
+    principal: owner(), verifyPrincipal, consent: async () => { throw new Error('approve Bash for Bill was not approved: cancelled'); },
+  }), /not approved/);
 });

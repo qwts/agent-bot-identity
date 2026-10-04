@@ -47,8 +47,8 @@ import {
 } from './agent-jobs.mjs';
 import { populationFile, showSoul } from './agent-population.mjs';
 import { agentCommsAsSoul } from './comms-relay.mjs';
-import { validateAgentId } from './agent-identity.mjs';
-import { recordThreadMessage } from './soul-threads.mjs';
+import { isAgentId, validateAgentId } from './agent-identity.mjs';
+import { claimSend, recordThreadMessage } from './soul-threads.mjs';
 import { recordAside } from './soul-asides.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
 import { AGENT_ID_KEYS, readGitConfig } from './resolve-agent.mjs';
@@ -559,13 +559,27 @@ async function callTool(state, name, args = {}) {
       const run = asSoul(state);
       const address = await resolveRecipient(run, soul, to);
       const correlation = turnCorrelation(state);
-      const sent = await run(soul, [
-        'send', address, '--body', body,
-        ...(replyTo ? ['--reply-to', replyTo] : []),
-        ...(correlation ? ['--correlation', correlation] : []),
-      ]);
-      recordSent(state, soul, { id: sent.messageId, to: address, replyTo, correlation, body }, 'send_message');
-      return { sent: true, to: address, messageId: sent.messageId ?? null, wake: sent.wake ?? null };
+      // One message per teammate per thread until it answers (#427): a
+      // teammate still waking would otherwise be re-pinged, and each
+      // message wakes it again. The claim holds the thread while this send
+      // is in flight, so a concurrent call cannot pass too (#433).
+      const claim = claimSend(soul.agentId, { to: address, correlation, now: state.now() }, threadOptions(state));
+      if (claim.waiting) {
+        throw new Error(`${address} has not answered your message from ${claim.waiting.at} yet. It may still be starting up; `
+          + 'its reply will wake you in a later turn. Do not message it again in the meantime; '
+          + 'follow up after it answers.');
+      }
+      try {
+        const sent = await run(soul, [
+          'send', address, '--body', body,
+          ...(replyTo ? ['--reply-to', replyTo] : []),
+          ...(correlation ? ['--correlation', correlation] : []),
+        ]);
+        recordSent(state, soul, { id: sent.messageId, to: address, replyTo, correlation, body }, 'send_message');
+        return { sent: true, to: address, messageId: sent.messageId ?? null, wake: sent.wake ?? null, ...(isAgentId(address.split('/').pop()) ? awaitingNote(address) : {}) };
+      } finally {
+        claim.release();
+      }
     }
     case 'start_soul': {
       const soul = commsSoul(state, identity);
@@ -587,6 +601,7 @@ async function callTool(state, name, args = {}) {
           const sent = await asSoul(state)(soul, ['send', started.agentId, '--body', brief, ...(correlation ? ['--correlation', correlation] : [])]);
           recordSent(state, soul, { id: sent.messageId, to: started.agentId, replyTo: null, correlation, kind: 'brief', body: brief }, 'start_soul');
           result.brief = { sent: true, messageId: sent.messageId ?? null };
+          Object.assign(result, awaitingNote(started.name ?? started.agentId));
         } catch (error) {
           result.brief = { sent: false, error: error.message };
         }
@@ -604,16 +619,28 @@ function turnCorrelation(state) {
   return typeof value === 'string' && value !== '' && value.length <= MAX_CORRELATION_LENGTH ? value : null;
 }
 
+function threadOptions(state) {
+  return { env: state.env, home: state.home, now: state.now };
+}
+
 // Journals a send so a later cold wake can show it (#392), and records it as
 // an aside (#404): the send came out of this session. Best effort.
 function recordSent(state, soul, entry, via) {
-  const options = { env: state.env, home: state.home, now: state.now };
+  const options = threadOptions(state);
   recordThreadMessage(soul.agentId, { dir: 'out', ...entry }, options);
   const turn = state.env[REACH_TURN_ENV];
   recordAside(soul.agentId, {
     dir: 'out', via, peer: entry.to, messageId: entry.id, replyTo: entry.replyTo, correlation: entry.correlation,
     body: entry.body, turnId: typeof turn === 'string' && TURN_ID.test(turn) ? turn : null,
   }, options);
+}
+
+// What a sender should do next (#427): the teammate's reply wakes it later,
+// so waiting, re-sending and progress notes only add wakes.
+function awaitingNote(who) {
+  return {
+    next: `${who}'s reply will wake you in a later turn: do not wait for it or message it again, and send no progress notes to other agents.`,
+  };
 }
 
 // The daemon starts the teammate; this server only proves which soul asks.
