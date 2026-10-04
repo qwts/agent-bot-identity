@@ -22,31 +22,31 @@
 // the sender directly would otherwise send the same answer twice. A turn the
 // policy stopped with nothing said gets a short notice naming the refused
 // tools instead of silence (#408).
+//
+// A soul that handed work to a teammate waits for its reply rather than
+// pinging it again or sending progress notes (#427): the prompt names the
+// teammates it is still waiting on, and the reach server refuses a second
+// message to one of them in the same thread (daemon-mcp.mjs).
 
 import { randomUUID } from 'node:crypto';
 
 import { wakeSetting } from './cold-wake-settings.mjs';
 import { FINAL_REPLY_ERRORS, senderAddress } from './comms-relay.mjs';
-import { NO_REPLY, formatThread, recordThreadMessage, sentMarks, sentSince, stripNoReply, threadContext, threadKey } from './soul-threads.mjs';
+import { NO_REPLY, formatThread, pendingReplies, recordThreadMessage, sameAddress, sentMarks, sentSince, stripNoReply, threadContext, threadKey } from './soul-threads.mjs';
 
 // The final answer a soul gives when a teammate's message needs no answer
 // back. Every relayed turn's answer is otherwise a reply, so two souls would
 // trade acknowledgements until the broker's reply-depth limit.
 export { NO_REPLY };
 
-export function relayPrompt(message, thread = []) {
+export function relayPrompt(message, thread = [], waitingOn = []) {
   const fromSoul = typeof message.from?.principal !== 'string';
   const sender = senderAddress(message.from);
   return `You have an agent-comms message from ${sender}${fromSoul ? ', another agent' : ''}. Your final answer is sent back to them as your reply, so write it as the reply itself, not notes on what you did; you do not need to run agent-comms.`
-    + (fromSoul ? ` If it needs no answer (a thanks, or a result you only had to receive), make your final answer exactly ${NO_REPLY} and nothing is sent. Use send_message to tell anyone else, such as the person who asked you for this work, what came of it. If you use send_message in this turn, your final answer is not sent at all, so send ${sender} anything they need to hear with send_message too. A start_soul brief does not count: after one, your final answer is still sent. Send results, questions and blockers; skip thanks, acknowledgements and progress notes, since each message wakes its reader.` : '')
+    + (fromSoul ? ` If it needs no answer (a thanks, or a result you only had to receive), make your final answer exactly ${NO_REPLY} and nothing is sent. Use send_message to tell anyone else, such as the person who asked you for this work, what came of it. If you use send_message in this turn, your final answer is not sent at all, so send ${sender} anything they need to hear with send_message too. A start_soul brief does not count: after one, your final answer is still sent, so if it would only say the work is under way, make it exactly ${NO_REPLY}; the teammate's reply wakes you, and you answer then. Send results, questions and blockers; skip thanks, acknowledgements and progress notes, since each message wakes its reader.` : '')
     + (thread.length > 0 ? ' This session does not remember earlier turns, so the conversation so far is below. If this message answers something you asked for on someone else\'s behalf, pass the result on to them with send_message.' : '')
+    + (waitingOn.length > 0 ? ` You are still waiting on ${waitingOn.join(', ')} in this conversation; ${waitingOn.length === 1 ? 'its reply wakes' : 'their replies wake'} you in a later turn. Do not message ${waitingOn.length === 1 ? 'it' : 'them'} again or send other agents progress notes meanwhile${fromSoul ? `; if you need ${waitingOn.length === 1 ? 'that reply' : 'those replies'} before answering, make your final answer exactly ${NO_REPLY}` : ''}.` : '')
     + `\n\n${formatThread(thread)}${thread.length > 0 ? 'The new message:\n\n' : ''}${message.body}`;
-}
-
-// Two spellings of one recipient: a bare agent id, or `account/agentId`.
-function sameAddress(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string') return false;
-  return a === b || a.split('/').pop() === b.split('/').pop();
 }
 
 const DENIED_NOTICE_TOOLS = 3;
@@ -62,6 +62,10 @@ export function deniedNotice(tools) {
   const more = names.length - shown.length;
   const list = shown.join(', ') + (more > 0 ? ` and ${more} more` : '');
   return `I couldn't finish this: ${list} ${names.length === 1 ? 'is' : 'are'} not allowed for me here (my owner's policy for this agent).`;
+}
+
+function threadNow(threads) {
+  return typeof threads?.now === 'function' ? threads.now() : new Date();
 }
 
 function recordInbound(agentId, message, threads) {
@@ -162,7 +166,8 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
           const correlation = threadKey(message);
           const turn = correlation ? { ...invocation, correlation } : invocation;
           const before = sentMarks(agentId, { correlation }, threads);
-          const result = await executor({ invocation: turn, message: relayPrompt(message, thread), attachments: [], env, wake });
+          const waitingOn = pendingReplies(agentId, { correlation, now: threadNow(threads) }, threads).map((entry) => entry.to);
+          const result = await executor({ invocation: turn, message: relayPrompt(message, thread, waitingOn), attachments: [], env, wake });
           const to = senderAddress(message.from);
           const own = sentSince(agentId, { before, correlation }, threads);
           const fromSoul = typeof message.from?.principal !== 'string';
