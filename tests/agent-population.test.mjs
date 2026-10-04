@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -19,6 +20,8 @@ import {
   populationFile,
   recordSoulLaunch,
   recordSoulDisplayName,
+  registerSoulDir,
+  soulDirectory,
   backfillManagedSouls,
   locateSoulDir,
   soulShownName,
@@ -589,4 +592,30 @@ test('the census role line comes from soul.json role and the soul\'s live team (
   assert.equal(byId[kids[1].id].roleLine, null);
   // Derived on read: the store is unchanged.
   assert.equal('roleLine' in showSoul(FIRST_ID, { file }), false);
+});
+
+test('the role line reads a moved soul folder without rewriting the census', () => {
+  const root = scratch();
+  const file = path.join(root, 'population.json');
+  const souls = path.join(root, 'souls');
+  const env = { AGENT_BOT_SOULS_HOME: souls };
+  const soul = upsertSoul(fixture(), { file });
+  const original = path.join(souls, 'Scout.soul');
+  mkdirSync(path.join(original, '.soul-state'), { recursive: true });
+  writeFileSync(path.join(original, '.soul-state', 'agent-id'), soul.id);
+  writeFileSync(path.join(original, 'soul.json'), JSON.stringify({ name: 'Scout', role: 'Research' }));
+  registerSoulDir(soul.id, original, { file });
+  const moved = path.join(souls, 'Scout renamed.soul');
+  renameSync(original, moved);
+
+  const before = readFileSync(file, 'utf8');
+  const [row] = withRoles(listSouls({ file }), { file, env, home: root });
+  // The moved folder's soul.json is found...
+  assert.equal(row.roleLine, 'Research');
+  // ...but the census, its soulDir included, is left exactly as it was.
+  assert.equal(readFileSync(file, 'utf8'), before);
+  assert.equal(showSoul(soul.id, { file }).soulDir, original);
+  // soulDirectory still repairs the record when asked directly.
+  assert.equal(soulDirectory(soul.id, { file, env, home: root }), moved);
+  assert.equal(showSoul(soul.id, { file }).soulDir, moved);
 });
