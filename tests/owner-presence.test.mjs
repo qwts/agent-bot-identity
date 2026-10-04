@@ -172,3 +172,12 @@ test('with no keyd installed the gate uses the administrator dialog, as before',
   assert.deepEqual(await assertOwnerAction(`soul comms ${ID} off`, { env, markers: () => [], consent }), { method: 'consent' });
   assert.deepEqual(seen, [`turn agent comms off for ${ID}`]);
 });
+
+test('a long prompt is cut by code point, never inside an emoji', () => {
+  const action = `soul confinement ${ID} ${'a'.repeat(374)}😀😀`;
+  const summary = ownerActionSummary(action, { souls: [] });
+  assert.equal(Array.from(summary).length, 400); // 24 + 374 units put an emoji across the 399-unit cut
+  assert.ok(summary.endsWith('…'));
+  assert.equal(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(summary), false);
+  assert.doesNotThrow(() => JSON.parse(JSON.stringify({ summary })));
+});

@@ -112,7 +112,10 @@ export function ownerActionSummary(action, { env = process.env, souls = null } =
   }
   summary ??= action.replace(AGENT_ID, label);
   summary = summary.replace(/[\u0000-\u001f\u007f]/g, ' ');
-  return summary.length > MAX_SUMMARY ? `${summary.slice(0, MAX_SUMMARY - 1)}…` : summary;
+  // Truncate by code point, not UTF-16 unit, so an emoji at the boundary is
+  // never split into a lone surrogate that breaks keyd's JSON-RPC request.
+  const points = Array.from(summary);
+  return points.length > MAX_SUMMARY ? `${points.slice(0, MAX_SUMMARY - 1).join('')}…` : summary;
 }
 
 export async function consentOwner(action, { platform, run, summary = action } = {}) {
