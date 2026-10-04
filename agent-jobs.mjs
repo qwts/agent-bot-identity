@@ -726,6 +726,11 @@ export function compactEvents(
 // conversational "yes", a replay of an old proposal, or a UI rendering a
 // different operation than the one digested all fail closed. Proposals are
 // single-decision: once approved, denied, or expired they never reopen.
+//
+// A proposal belongs either to an interaction invocation or, for a daemon
+// turn with no invocation record (a cold wake, #85), directly to its soul:
+// `invocationId` is then null and `agentId` names the soul. The owner, deciding
+// locally through the owner gate, is recorded as `decidedBy: 'owner'`.
 
 const PROPOSAL_STATUSES = new Set(['open', 'approved', 'denied', 'expired']);
 const MAX_PROPOSAL_SUMMARY_LENGTH = 512;
@@ -765,14 +770,33 @@ export function operationDigest(operation) {
   return createHash('sha256').update(canonicalOperationJson(operation), 'utf8').digest('hex');
 }
 
+export const OWNER_DECIDER = 'owner';
+
+function decider(value) {
+  if (value === undefined || value === null) return null;
+  if (value === OWNER_DECIDER) return OWNER_DECIDER;
+  return matchOrThrow(PRINCIPAL_ID_PATTERN, value, 'invalid principal ID');
+}
+
 function normalizeProposal(record) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) {
     throw new Error('proposal record must be an object');
   }
   if (!PROPOSAL_STATUSES.has(record.status)) throw new Error('proposal status is not a known state');
+  const invocationId = record.invocationId === undefined || record.invocationId === null
+    ? null
+    : validateInvocationId(record.invocationId);
+  const agentId = record.agentId === undefined || record.agentId === null ? null : agentIdOrThrow(record.agentId);
+  if (invocationId === null && agentId === null) throw new Error('proposal needs an invocation or a soul');
   return {
     proposalId: matchOrThrow(PROPOSAL_ID_PATTERN, record.proposalId, 'invalid proposal ID'),
-    invocationId: validateInvocationId(record.invocationId),
+    invocationId,
+    ...(invocationId === null ? { agentId } : {}),
+    // The tool a permission proposal asks for, so a client can name it
+    // without re-deriving it from the digest. Display only: the digest binds.
+    ...(record.tool === undefined || record.tool === null
+      ? {}
+      : { tool: printableText('tool', record.tool, { max: 128 }) }),
     operationDigest: matchOrThrow(SHA256_PATTERN, record.operationDigest, 'operation digest must be a sha256 hex digest'),
     summary: printableText('summary', record.summary, { max: MAX_PROPOSAL_SUMMARY_LENGTH }),
     createdAt: canonicalTimestamp('createdAt', record.createdAt),
@@ -781,9 +805,7 @@ function normalizeProposal(record) {
     decidedAt: record.decidedAt === undefined || record.decidedAt === null
       ? null
       : canonicalTimestamp('decidedAt', record.decidedAt),
-    decidedBy: record.decidedBy === undefined || record.decidedBy === null
-      ? null
-      : matchOrThrow(PRINCIPAL_ID_PATTERN, record.decidedBy, 'invalid principal ID'),
+    decidedBy: decider(record.decidedBy),
   };
 }
 
@@ -805,7 +827,7 @@ function withProposalsLock(options, operation) {
 }
 
 export function createProposal(
-  { invocationId, operationDigest: digest, summary },
+  { invocationId = null, agentId = null, tool = null, operationDigest: digest, summary },
   {
     env = process.env,
     home = homedir(),
@@ -822,6 +844,8 @@ export function createProposal(
   const proposal = normalizeProposal({
     proposalId: idFactory(),
     invocationId,
+    agentId: invocationId === null ? agentId : null,
+    tool,
     operationDigest: digest,
     summary,
     createdAt: at.toISOString(),
@@ -830,7 +854,9 @@ export function createProposal(
     decidedAt: null,
     decidedBy: null,
   });
-  if (!getInvocation(proposal.invocationId, options)) throw new Error('unknown invocation');
+  if (proposal.invocationId !== null && !getInvocation(proposal.invocationId, options)) {
+    throw new Error('unknown invocation');
+  }
   return withProposalsLock(options, (file) => {
     const proposals = readProposals(options);
     if (proposals[proposal.proposalId]) throw new Error('proposal already exists');
@@ -878,9 +904,7 @@ export function decideProposal(
   if (!['approved', 'denied', 'expired'].includes(decision)) {
     throw new Error('proposal decision must be approved, denied, or expired');
   }
-  const decider = decidedBy === null
-    ? null
-    : matchOrThrow(PRINCIPAL_ID_PATTERN, decidedBy, 'invalid principal ID');
+  const decidedByValue = decider(decidedBy);
   return withProposalsLock(options, (file) => {
     const proposals = readProposals(options);
     const existing = proposals[target];
@@ -894,7 +918,7 @@ export function decideProposal(
       ...existing,
       status: decision,
       decidedAt: at.toISOString(),
-      decidedBy: decider,
+      decidedBy: decidedByValue,
     };
     writeJsonDocument(file, {
       schemaVersion: SCHEMA_VERSION,
