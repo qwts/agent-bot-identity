@@ -2028,3 +2028,95 @@ test('an unrelated MCP server in Qwen settings is not agent-bot wiring', async (
   }));
   assert.deepEqual(harnessMcpWiring({ home, cwd: tempRoot() }), []);
 });
+
+test('doctor on a GeniusBar Mac skips what the app does not install and points at its menu (#428)', async () => {
+  const home = tempRoot();
+  const app = '/Applications/GeniusBar.app';
+  const missing = () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); };
+  const report = await collectReadiness({
+    ...machineDependencies(home),
+    scope: 'machine',
+    embeddingApp: app,
+    lstat: missing,
+    access: missing,
+    spawn: () => ({ status: 1, stdout: '' }),
+    git: (args) => {
+      if (args[0] === '--version') return 'git version 2.50.1';
+      throw Object.assign(new Error('unset'), { status: 1 });
+    },
+    load: () => ({}),
+    inspectCredentials: async () => [],
+  });
+  const byId = Object.fromEntries(report.machine.checks.map((check) => [check.id, check]));
+  assert.equal(byId['runtime.installed_cli'].status, 'ready');
+  assert.match(byId['runtime.installed_cli'].message, /inside GeniusBar\.app \(\/Applications\/GeniusBar\.app\)/);
+  assert.equal(byId['runtime.harness_path'].status, 'warning');
+  assert.match(byId['runtime.harness_path'].action, /in GeniusBar, choose Command-line tools/);
+  for (const id of ['config.runtime', 'account.app', 'hooks.installation']) {
+    assert.equal(byId[id].status, 'not_applicable', id);
+    assert.match(byId[id].message, /not used by GeniusBar/, id);
+  }
+  // Nothing tells a GeniusBar user to run a source-checkout bootstrap.
+  const failed = report.machine.checks.filter((check) => check.status === 'failed');
+  assert.deepEqual(failed.map(({ id }) => id).filter((id) => ['runtime.installed_cli', 'runtime.harness_path',
+    'config.runtime', 'account.app', 'hooks.installation'].includes(id)), []);
+  assert.doesNotMatch(renderReadinessReport(report), /source checkout bootstrap|bootstrap --machine-only/);
+});
+
+test('doctor from a source checkout still fails what it needs installed', async () => {
+  const home = tempRoot();
+  const report = await collectReadiness({ ...machineDependencies(home), scope: 'machine', embeddingApp: null,
+    lstat: () => null, spawn: () => ({ status: 1, stdout: '' }) });
+  const byId = Object.fromEntries(report.machine.checks.map((check) => [check.id, check]));
+  assert.equal(byId['runtime.installed_cli'].status, 'failed');
+  assert.equal(byId['runtime.harness_path'].status, 'failed');
+});
+
+test('doctor on a GeniusBar Mac inspects the daemon unit the app installed (#428)', async () => {
+  const home = tempRoot();
+  const app = join(home, 'GeniusBar.app');
+  mkdirSync(join(app, 'Contents'), { recursive: true });
+  writeFileSync(join(app, 'Contents', 'Info.plist'),
+    '<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key>\n  <string>app.geniusbar</string></dict></plist>');
+  const labels = [];
+  await collectReadiness({ ...machineDependencies(home), scope: 'machine', embeddingApp: app,
+    inspectDaemonSupervisor: ({ env }) => { labels.push(env.AGENT_BOT_SERVICE_LABEL); return { supported: true, applied: true, loaded: true, platform: 'darwin', kind: 'launchd' }; } });
+  assert.deepEqual(labels, ['app.geniusbar.agent-bot']);
+  // A label the caller set wins.
+  labels.length = 0;
+  await collectReadiness({ ...machineDependencies(home), scope: 'machine', embeddingApp: app, env: { HOME: home, AGENT_BOT_SERVICE_LABEL: 'custom.label' },
+    inspectDaemonSupervisor: ({ env }) => { labels.push(env.AGENT_BOT_SERVICE_LABEL); return { supported: true, applied: true, loaded: true, platform: 'darwin', kind: 'launchd' }; } });
+  assert.deepEqual(labels, ['custom.label']);
+});
+
+test('doctor on a GeniusBar Mac never sends its user to agent-bot install or the source bootstrap (#428)', async () => {
+  const home = tempRoot();
+  const app = '/Applications/GeniusBar.app';
+  const missing = () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); };
+  const report = await collectReadiness({
+    ...machineDependencies(home),
+    scope: 'machine',
+    embeddingApp: app,
+    access: missing,
+    inspectDaemonSupervisor: () => ({ supported: true, applied: false, loaded: false, platform: 'darwin', kind: 'launchd' }),
+    probeDaemon: async () => ({ running: false }),
+    load: () => ({}),
+    inspectCredentials: async () => [],
+  });
+  const byId = Object.fromEntries(report.machine.checks.map((check) => [check.id, check]));
+  // No user-level identity hook is the app's design, not an ephemeral session.
+  assert.equal(byId['identity.class'].status, 'not_applicable');
+  assert.match(byId['identity.class'].message, /not used by GeniusBar/);
+  assert.equal(byId['identity.class'].action, null);
+  // The app's own services are reinstalled from the app, not `agent-bot install`.
+  for (const id of ['daemon.supervisor', 'daemon.health']) {
+    assert.equal(byId[id].status, 'failed', id);
+    assert.equal(byId[id].action, 'open GeniusBar and choose Set up; it installs and restarts its own services', id);
+  }
+  // An incomplete in-app skill bundle means reinstalling the app.
+  assert.equal(byId['skill.runtime'].status, 'failed');
+  assert.match(byId['skill.runtime'].action, /^reinstall GeniusBar from its latest release/);
+  const actions = report.machine.checks.map((check) => check.action ?? '').join('\n');
+  assert.doesNotMatch(actions, /agent-bot install|bootstrap|restore the checkout/);
+  assert.doesNotMatch(renderReadinessReport(report), /agent-bot install|source checkout bootstrap|restore the checkout/);
+});

@@ -10,7 +10,7 @@ import {
   statSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectAgentSpace, resolveSpacesHome } from './agent-space.mjs';
 import { duplicateSoulDirs, listSouls, orphanSoulDirs, populationFile } from './agent-population.mjs';
@@ -24,7 +24,7 @@ import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
 import { daemonStatus } from './agent-daemon.mjs';
 import { inspectSupervisor, supervisorSkipLoad } from './daemon-supervisor.mjs';
-import { homebrewRuntimeRoot, inspectExecutableLink, installationPaths, isManagedExecutable } from './install.mjs';
+import { embeddingAppBundle, homebrewRuntimeRoot, inspectExecutableLink, installationPaths, isManagedExecutable } from './install.mjs';
 import { inspectConfiguredCodexDesktopGh, inspectShellGhShim } from './install-gh-shim.mjs';
 import {
   OrganizationProfileError,
@@ -1404,11 +1404,12 @@ function codexDesktopGhCheck({ home, inspect }) {
   });
 }
 
-function runtimeSkillCheck({ home, lstat, readlink, access }) {
+function runtimeSkillCheck({ home, lstat, readlink, access, embeddedRoot = null, app = null }) {
   const executable = installationPaths(home).executable;
-  let runtimeRoot = null;
+  // An app-embedded runtime carries its skill bundle in place (#428).
+  let runtimeRoot = embeddedRoot;
   try {
-    const stat = optionalLstat(executable, lstat);
+    const stat = runtimeRoot ? null : optionalLstat(executable, lstat);
     if (stat?.isSymbolicLink()) {
       const target = resolve(dirname(executable), readlink(executable));
       runtimeRoot = homebrewRuntimeRoot(target) ?? dirname(target);
@@ -1425,7 +1426,10 @@ function runtimeSkillCheck({ home, lstat, readlink, access }) {
       status: 'failed',
       code: 'runtime-skill-incomplete',
       message: 'the runtime-owned agent-bot skill bundle is incomplete',
-      action: 'restore the checkout from the reviewed release, then rerun bootstrap',
+      action: app
+        ? `reinstall ${basename(app, '.app')} from its latest release; its skill bundle is incomplete`
+        : 'restore the checkout from the reviewed release, then rerun bootstrap',
+      ...(app ? { evidence: { install: 'app' } } : {}),
     });
   }
   return readinessCheck({
@@ -1869,6 +1873,66 @@ function firstActionableFailure(report) {
   };
 }
 
+// An app-embedded runtime (#428): GeniusBar installs no ~/.local/bin
+// entrypoint, git hooks or organization config by design, so those checks do
+// not apply there, and a missing shell PATH entry only needs its menu item.
+function embeddedRuntimeCheck(app) {
+  return readinessCheck({
+    id: 'runtime.installed_cli',
+    status: 'ready',
+    message: `agent-bot runs inside ${basename(app)} (${app})`,
+    evidence: { install: 'app', app },
+  });
+}
+
+// The app supervises the daemon under `<bundle id>.agent-bot` (GeniusBar's
+// bridge sets AGENT_BOT_SERVICE_LABEL so), which a shell running the app's
+// agent-bot does not inherit; read the bundle id to find that unit.
+function appServiceEnv(app, env) {
+  if (env.AGENT_BOT_SERVICE_LABEL) return env;
+  try {
+    const plist = readFileSync(join(app, 'Contents', 'Info.plist'), 'utf8');
+    const id = /<key>CFBundleIdentifier<\/key>\s*<string>([A-Za-z0-9_][A-Za-z0-9_.-]*)<\/string>/.exec(plist)?.[1];
+    return id ? { ...env, AGENT_BOT_SERVICE_LABEL: `${id}.agent-bot` } : env;
+  } catch {
+    return env;
+  }
+}
+
+function notUsedByApp(check, app, message) {
+  if (check.status !== 'failed') return check;
+  return readinessCheck({ id: check.id, status: 'not_applicable', code: check.code,
+    message: `${message} (not used by ${basename(app, '.app')})`, evidence: { install: 'app' } });
+}
+
+// GeniusBar installs no user-level identity hook: the souls it runs carry
+// their own identity, so a missing hook is not an "ephemeral session" there and
+// the source-checkout bootstrap is the wrong advice.
+function appIdentityClassCheck(check, app) {
+  if (check.status === 'ready') return check;
+  const name = basename(app, '.app');
+  return readinessCheck({ id: check.id, status: 'not_applicable', code: check.code,
+    message: `no user-level identity hook (not used by ${name}; the souls it runs carry their own identity)`,
+    evidence: { class: 'app', install: 'app' } });
+}
+
+// The app owns its daemon's launchd unit and environment; `agent-bot install`
+// from a shell would install a second, differently labelled service.
+function appServiceAction(check, app) {
+  if (check.status !== 'failed') return check;
+  const name = basename(app, '.app');
+  return readinessCheck({ ...check,
+    action: `open ${name} and choose Set up; it installs and restarts its own services` });
+}
+
+function appShellPathCheck(check, app) {
+  if (check.status !== 'failed') return check;
+  return readinessCheck({ id: check.id, status: 'warning', code: check.code,
+    message: `agent-bot is not on PATH for your shells; souls ${basename(app, '.app')} runs do not need it`,
+    action: `in ${basename(app, '.app')}, choose Command-line tools… to add agent-bot to your PATH`,
+    evidence: { install: 'app' } });
+}
+
 export function buildReadinessReport({
   command,
   scope,
@@ -1929,8 +1993,10 @@ export async function collectReadiness({
   installedCliVersion: resolveInstalledVersion = installedCliVersion,
   listHarnessMcpServers = defaultListHarnessMcpServers,
   probeSessionContext = defaultProbeSessionContext,
+  embeddingApp = embeddingAppBundle(ROOT),
 } = {}) {
   const machineChecks = [];
+  const app = embeddingApp;
   let config = {};
   let configValid = true;
   let mappings = [];
@@ -1939,9 +2005,11 @@ export async function collectReadiness({
   if (scope !== 'worktree') {
     machineChecks.push(nodeCheck(nodeVersion));
     machineChecks.push(gitCheck({ cwd, env, git }));
-    machineChecks.push(installedCliCheck({ home, lstat, readlink, statFile }));
-    machineChecks.push(identityClassCheck({ home, env, access }));
-    machineChecks.push(shellPathCheck({ home, env, spawn }));
+    machineChecks.push(app ? embeddedRuntimeCheck(app) : installedCliCheck({ home, lstat, readlink, statFile }));
+    const identityClass = identityClassCheck({ home, env, access });
+    machineChecks.push(app ? appIdentityClassCheck(identityClass, app) : identityClass);
+    const shellPath = shellPathCheck({ home, env, spawn });
+    machineChecks.push(app ? appShellPathCheck(shellPath, app) : shellPath);
     try {
       config = load({ home, env });
       mappings = HARNESSES
@@ -1960,11 +2028,14 @@ export async function collectReadiness({
           evidence: { source: 'runtime-config', mappings: [] },
         }));
       } else {
-        machineChecks.push(configCheck({
+        const runtimeConfig = configCheck({
           config,
           detectedHarness: detectHarness(env),
           mappings,
-        }));
+        });
+        machineChecks.push(app && runtimeConfig.code === 'config-missing'
+          ? notUsedByApp(runtimeConfig, app, 'no organization runtime config is installed')
+          : runtimeConfig);
       }
       if (Object.keys(config).length > 0) {
         machineChecks.push(organizationProfileCheck(config));
@@ -1983,7 +2054,14 @@ export async function collectReadiness({
         : failedConfigCheck());
     }
     const account = accountName(env);
-    if (!configValid || Object.keys(config).length === 0) {
+    if (app && configValid && Object.keys(config).length === 0) {
+      machineChecks.push(readinessCheck({
+        id: 'account.app',
+        status: 'not_applicable',
+        message: `no organization config, so no account-level bot identity (not used by ${basename(app, '.app')})`,
+        evidence: { account, install: 'app' },
+      }));
+    } else if (!configValid || Object.keys(config).length === 0) {
       machineChecks.push(readinessCheck({
         id: 'account.app',
         status: 'failed',
@@ -2005,14 +2083,18 @@ export async function collectReadiness({
         evidence: { account, harness, app_slug: slug },
       }));
     }
-    machineChecks.push(hooksCheck({ home, cwd, env, git, access }));
-    machineChecks.push(supervisorCheck({ home, env, inspect: inspectDaemonSupervisor }));
-    machineChecks.push(await daemonHealthCheck({
+    const hooks = hooksCheck({ home, cwd, env, git, access });
+    machineChecks.push(app ? notUsedByApp(hooks, app, 'agent-bot git hooks are not installed') : hooks);
+    const serviceEnv = app ? appServiceEnv(app, env) : env;
+    const supervisor = supervisorCheck({ home, env: serviceEnv, inspect: inspectDaemonSupervisor });
+    machineChecks.push(app ? appServiceAction(supervisor, app) : supervisor);
+    const daemonHealth = await daemonHealthCheck({
       home,
-      env,
+      env: serviceEnv,
       probe: probeDaemon,
-      skipLoad: supervisorSkipLoad(env),
-    }));
+      skipLoad: supervisorSkipLoad(serviceEnv),
+    });
+    machineChecks.push(app ? appServiceAction(daemonHealth, app) : daemonHealth);
     machineChecks.push(spacesRootCheck({ home, env, config }));
     machineChecks.push(spacesHomeCheck({ home, env, config, inspectCutover }));
     const unreferencedSouls = unreferencedSoulsCheck({ home, env, git });
@@ -2039,7 +2121,11 @@ export async function collectReadiness({
       readVersion: readPackageVersion,
       installedVersion: (options) => resolveInstalledVersion({ ...options, readVersion: readPackageVersion }),
     }));
-    machineChecks.push(coverageCheck(now));
+    const coverage = coverageCheck(now);
+    // Hook dialect coverage concerns the agent-bot hooks the app never installs.
+    machineChecks.push(app && coverage.status === 'warning'
+      ? notUsedByApp({ ...coverage, status: 'failed' }, app, 'harness hook dialects are reviewed for installed hooks only')
+      : coverage);
     if (configValid) {
       machineChecks.push(readinessCheck({
         id: 'hooks.claude_worktree',
@@ -2048,7 +2134,7 @@ export async function collectReadiness({
     }
     machineChecks.push(ghShimCheck({ home, required: expectedGhShim, inspect: inspectShellGh }));
     machineChecks.push(codexDesktopGhCheck({ home, inspect: inspectCodexDesktopGh }));
-    machineChecks.push(runtimeSkillCheck({ home, lstat, readlink, access }));
+    machineChecks.push(runtimeSkillCheck({ home, lstat, readlink, access, embeddedRoot: app ? ROOT : null, app }));
   } else {
     try {
       config = load({ home, env });
