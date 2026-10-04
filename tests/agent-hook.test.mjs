@@ -2,7 +2,7 @@ import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
-  chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync,
+  chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -234,13 +234,15 @@ test('a printed allow alongside exit 2 is still a deny', () => {
 // One budget for the whole run, not one per hook: n slow hooks must not take
 // n × budget and sail past the vendor's own timer into its fail-open path.
 test('the timeout budget covers the whole run, not each hook', () => {
-  const slow = '#!/bin/sh\nsleep 30\n';
+  // Each hook logs that it started. Counting starts proves the budget is shared
+  // without timing the run, which also times Node startup on a loaded runner.
+  const started = path.join(root, `started-${seq + 1}`);
+  const slow = `#!/bin/sh\necho "$0" >> '${started}'\nsleep 30\n`;
   const dir = hooksDir({
     'pre-command/10-slow': slow,
     'pre-command/20-slow': slow,
     'pre-command/30-slow': slow,
   });
-  const started = process.hrtime.bigint();
   const result = spawnSync(
     process.execPath,
     [runner, '--dialect', 'copilot', '--event', 'pre-command'],
@@ -251,10 +253,11 @@ test('the timeout budget covers the whole run, not each hook', () => {
       env: { ...process.env, AGENT_BOT_HOOKS_DIR: dir, AGENT_HOOK_TIMEOUT_MS: '1200' },
     },
   );
-  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
-  // Three hooks under a per-hook budget would take ~3.6s; one shared deadline
-  // keeps the whole run inside it.
-  assert.ok(elapsedMs < 2600, `run took ${elapsedMs}ms — budget is not shared`);
+  // A per-hook budget would start all three; one shared deadline is spent by
+  // the first, so the rest are refused before they run.
+  let ran = [];
+  try { ran = readFileSync(started, 'utf8').trim().split('\n'); } catch { /* none started */ }
+  assert.ok(ran.length <= 1, `hooks that started: ${ran.join(', ')} — budget is not shared`);
   assert.equal(JSON.parse(result.stdout).permissionDecision, 'deny');
 });
 

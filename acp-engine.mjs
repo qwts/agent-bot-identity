@@ -65,6 +65,10 @@ const STDERR_TAIL_BYTES = 2_048;
 // that ended in an immediate SIGKILL left a log with no messages: no
 // transcript to resume and nothing for runtime metrics (#86).
 export const DEFAULT_EXIT_GRACE_MS = 2_000;
+// SIGKILL cannot be ignored, but the group lingers until the kernel and
+// libuv's SIGCHLD handler reap its members; bound that wait so a wedged
+// (uninterruptible) process cannot hang the turn.
+const KILL_REAP_MS = 2_000;
 
 function failEngine(message) {
   throw new Error(`acp engine: ${message}`);
@@ -400,12 +404,14 @@ export function createAcpExecutor({
     };
     // The whole group, not just the direct child: a runner row's adapter and
     // the harness it starts are descendants, and they write the session log.
+    // Only ESRCH means gone: macOS answers EPERM while the group still holds
+    // zombie or exiting members.
     const groupAlive = () => {
       try {
         process.kill(-child.pid, 0);
         return true;
-      } catch {
-        return false;
+      } catch (error) {
+        return error?.code !== 'ESRCH';
       }
     };
     const groupGone = async (ms) => {
@@ -430,6 +436,7 @@ export function createAcpExecutor({
       }
       if (await groupGone(exitGraceMs)) return;
       killTree();
+      await groupGone(KILL_REAP_MS);
     };
     let stderrTail = '';
     child.stderr.on('data', (data) => {
@@ -560,9 +567,14 @@ export function createAcpExecutor({
       if (cancelTimer !== null) clearTimeout(cancelTimer);
       signal.removeEventListener('abort', onAbort);
       // An aborted or timed-out turn was already killed; a finished one exits
-      // gracefully so its harness can flush.
-      if (signal.aborted) killTree();
-      else await stopTree();
+      // gracefully so its harness can flush. Either way the turn resolves
+      // only once the tree is reaped, so nothing outlives it.
+      if (signal.aborted) {
+        killTree();
+        await groupGone(KILL_REAP_MS);
+      } else {
+        await stopTree();
+      }
     }
   };
 

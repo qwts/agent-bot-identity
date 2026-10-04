@@ -1,6 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -629,13 +629,16 @@ test('a turn that outlives its timeout fails instead of hanging the daemon', asy
 test('the whole process tree dies with the turn, not just the spawn runner', async () => {
   const RUNNER = fileURLToPath(new URL('./fixtures/spawn-runner.mjs', import.meta.url));
   const logs = [];
-  const { finished, events } = await turn({
+  const pidFile = path.join(scratch().root, 'grandchild.pid');
+  const { finished } = await turn({
     message: 'hang',
     expectStatus: 'failed',
     logs,
     executorOptions: {
-      // Allow the nested Node process to start on slower CI hosts before the
-      // deadline proves that the entire tree is terminated.
+      env: { ...process.env, SPAWN_RUNNER_PID_FILE: pidFile },
+      // The runner records the grandchild's pid right after spawning it, so
+      // only one Node boot has to beat the deadline, not two plus the ACP
+      // handshake (which a loaded runner could not always fit in 2.5s).
       turnTimeoutMs: 2500,
       registry: {
         claude: {
@@ -649,8 +652,7 @@ test('the whole process tree dies with the turn, not just the spawn runner', asy
   // The deadline fires even though the grandchild holds the stdio pipes open.
   assert.equal(finished.error, EXECUTION_FAILED_ERROR);
   assert.ok(logs.some((line) => /turn exceeded 2500ms/.test(line)));
-  const pidText = chunkTexts(events).find((text) => text.startsWith('pid:'));
-  const agentPid = Number(pidText.slice('pid:'.length));
+  const agentPid = Number(readFileSync(pidFile, 'utf8'));
   assert.ok(Number.isSafeInteger(agentPid) && agentPid > 0);
   await waitFor(() => {
     try {
