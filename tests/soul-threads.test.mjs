@@ -9,7 +9,7 @@ import { createColdWaker } from '../cold-wake.mjs';
 import { createCommsRelay } from '../comms-relay.mjs';
 import { createReachState, handleMcpMessage, reachMcpServerEntry } from '../daemon-mcp.mjs';
 import {
-  clip, formatThread, recordThreadMessage, sentMarks, sentSince, stripNoReply, threadContext, threadsDirectory,
+  PENDING_REPLY_TTL_MS, clip, formatThread, pendingReplies, recordThreadMessage, sentMarks, sentSince, stripNoReply, threadContext, threadsDirectory,
 } from '../soul-threads.mjs';
 
 const roots = [];
@@ -274,4 +274,34 @@ test('sentSince counts only sends after the marks, even within one millisecond',
   const own = sentSince(BILL, { before, correlation: 'c1' }, options);
   assert.deepEqual(own.map((entry) => [entry.id, entry.kind ?? null]), [['m-turn', null], ['m-brief', 'brief']]);
   assert.deepEqual(sentSince(BILL, { correlation: 'c1' }, options), []);
+});
+
+// The souls a soul is still waiting on in a thread (#427): its latest send to
+// each soul with no answer since, within the window. People never count.
+test('pendingReplies lists the souls not yet answering in this thread', () => {
+  const { options } = scratch();
+  const TED = 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const TWIN = 'agent_cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  let clock = Date.parse('2026-10-03T12:00:00Z');
+  const at = (step = 0) => ({ ...options, now: () => new Date(clock += step) });
+  const record = (entry, step = 1000) => recordThreadMessage(BILL, entry, at(step));
+  record({ dir: 'in', id: 'm0', from: 'owner', correlation: 'c1', body: 'Ask Ted and Twin.' });
+  record({ dir: 'out', id: 'm1', to: `acct/${TED}`, correlation: 'c1', body: 'Ted?' });
+  record({ dir: 'out', id: 'm2', to: TWIN, correlation: 'c1', kind: 'brief', body: 'Twin, scout.' });
+  record({ dir: 'out', id: 'm3', to: 'owner', correlation: 'c1', body: 'On it.' });
+  record({ dir: 'out', id: 'm4', to: TED, correlation: 'c2', body: 'Other thread.' });
+  const waiting = (now = clock) => pendingReplies(BILL, { correlation: 'c1', now: new Date(now) }, options).map((entry) => entry.id);
+  assert.deepEqual(waiting(), ['m1', 'm2'], 'a person is never waited on');
+  // Ted answers by replyTo, Twin by correlation: neither is pending after.
+  record({ dir: 'in', id: 'm5', from: `acct/${TED}`, replyTo: 'm1', body: 'Here.' });
+  assert.deepEqual(waiting(), ['m2']);
+  record({ dir: 'in', id: 'm6', from: TWIN, correlation: 'c1', body: 'Scouted.' });
+  assert.deepEqual(waiting(), []);
+  // A new message to Ted waits again; past the window it no longer holds.
+  record({ dir: 'out', id: 'm7', to: TED, correlation: 'c1', body: 'One more?' });
+  assert.deepEqual(waiting(), ['m7']);
+  assert.deepEqual(waiting(clock + PENDING_REPLY_TTL_MS + 1), []);
+  assert.deepEqual(pendingReplies(BILL, { correlation: null }, options), [], 'no thread, nothing held');
+  assert.deepEqual(pendingReplies(BILL, { correlation: 'c2' }, options).map((entry) => entry.id), [],
+    'm4 is older than the window at the real clock');
 });

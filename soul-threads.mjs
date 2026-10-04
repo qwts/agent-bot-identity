@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
-import { stateDirectory, validateAgentId, withLock } from './agent-identity.mjs';
+import { isAgentId, stateDirectory, validateAgentId, withLock } from './agent-identity.mjs';
 
 export const NO_REPLY = 'NO_REPLY';
 
@@ -25,6 +25,10 @@ export const THREAD_BYTES_LIMIT = 6 * 1024;
 const ENTRY_BODY_LIMIT = 2048;
 const JOURNAL_KEEP = 400;
 const JOURNAL_MAX_BYTES = 512 * 1024;
+// How long a send to another soul counts as awaiting its reply (#427): long
+// enough for a cold start and a model turn, short enough that a reply that
+// never comes stops holding the thread.
+export const PENDING_REPLY_TTL_MS = 10 * 60 * 1000;
 
 export function threadsDirectory({ env = process.env, home = homedir() } = {}) {
   return path.join(stateDirectory({ env, home }), 'threads');
@@ -179,6 +183,41 @@ export function sentSince(agentId, { before, correlation = null } = {}, { env = 
   return readJournal(agentId, { env, home }).filter((entry) => entry.dir === 'out'
     && (correlation === null || entry.correlation === correlation)
     && !before.has(sentMark(entry)));
+}
+
+// Two spellings of one recipient: a bare agent id, or `account/agentId`.
+export function sameAddress(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  return a === b || a.split('/').pop() === b.split('/').pop();
+}
+
+// The souls this soul is waiting on in the thread `correlation` (#427): the
+// latest send (send_message or a start_soul brief) to each soul that has not
+// answered in this thread since, newer than `ttlMs`. A send to a person is
+// never pending: people answer when they choose, and nothing wakes on it.
+// Oldest first, one entry per soul.
+export function pendingReplies(agentId, { correlation, now = new Date(), ttlMs = PENDING_REPLY_TTL_MS } = {}, {
+  env = process.env, home = homedir(),
+} = {}) {
+  if (typeof correlation !== 'string' || correlation === '') return [];
+  const entries = readJournal(agentId, { env, home });
+  const waiting = new Map();
+  for (const entry of entries) {
+    const peer = typeof entry.to === 'string' ? entry.to : entry.from;
+    if (typeof peer !== 'string' || !isAgentId(peer.split('/').pop())) continue;
+    const key = peer.split('/').pop();
+    if (entry.dir === 'out' && entry.correlation === correlation) {
+      waiting.set(key, entry);
+    } else if (entry.dir === 'in' && waiting.has(key)
+      && (entry.correlation === correlation || entry.replyTo === waiting.get(key).id)) {
+      waiting.delete(key);
+    }
+  }
+  const cutoff = now.getTime() - ttlMs;
+  return [...waiting.values()].filter((entry) => {
+    const at = Date.parse(entry.at);
+    return Number.isFinite(at) && at >= cutoff;
+  });
 }
 
 function sentMark(entry) {
