@@ -48,16 +48,16 @@
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { execFile, execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { homedir, userInfo } from 'node:os';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
-import { backfillManagedSouls, listSouls, locateSoulDir, populationFile, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
+import { archiveSoulDirs, backfillManagedSouls, listSouls, locateSoulDir, populationFile, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
 import {
   bindAgentLineage,
@@ -81,7 +81,7 @@ import { attachWakeEndpoint } from './agent-wake.mjs';
 import { readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
-import { createTeamStarter, defaultTeamTemplate, harnessLaunchable, teamLimits } from './team-start.mjs';
+import { createTeamStarter, defaultTeamTemplate, harnessLaunchProblem, teamLimits } from './team-start.mjs';
 import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHarnessesPath } from './soul-home.mjs';
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
@@ -98,10 +98,45 @@ import { migratePreGateConfig } from './config-migration.mjs';
  * What a soul's harness inherits: the daemon's environment with the host's
  * tools (AGENT_BOT_TOOL_PATH, such as GeniusBar's agent-comms) first on
  * PATH, so a soul on a machine without them installed can still use them.
+ * With `home`, the user's own tool directories follow (#418): a launchd
+ * daemon gets a bare PATH, while harness CLIs such as `opencode` live where
+ * the login shell (`loginPath`) or an installer put them.
  */
-export function soulEnvironment(env = process.env) {
+export function soulEnvironment(env = process.env, { home = null, loginPath = null } = {}) {
   const tools = env.AGENT_BOT_TOOL_PATH && path.isAbsolute(env.AGENT_BOT_TOOL_PATH) ? env.AGENT_BOT_TOOL_PATH : null;
-  return tools ? { ...env, PATH: [tools, env.PATH].filter(Boolean).join(path.delimiter) } : env;
+  if (!home) return tools ? { ...env, PATH: [tools, env.PATH].filter(Boolean).join(path.delimiter) } : env;
+  const dirs = [tools, ...(env.PATH ?? '').split(path.delimiter), ...(loginPath ?? '').split(path.delimiter),
+    ...userToolDirs(home)].filter((dir) => dir && path.isAbsolute(dir));
+  return { ...env, PATH: [...new Set(dirs)].join(path.delimiter) };
+}
+
+/** Where harness installers put their CLIs, after the login shell's PATH. */
+export function userToolDirs(home) {
+  return [path.join(home, '.local', 'bin'), path.join(home, '.opencode', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'];
+}
+
+const LOGIN_PATH_MARK = '__agent_bot_login_path__';
+
+/**
+ * The PATH the user's login shell builds (its .zshenv and .zprofile), read
+ * once when the daemon starts, or null when it cannot be read within the
+ * timeout. AGENT_BOT_LOGIN_PATH=0 skips it.
+ */
+export function loginShellPath({ env = process.env, home = homedir(), run = execFileSync, timeoutMs = 3000 } = {}) {
+  if (env.AGENT_BOT_LOGIN_PATH === '0') return null;
+  const shell = env.SHELL && path.isAbsolute(env.SHELL) && ['zsh', 'bash', 'sh'].includes(path.basename(env.SHELL))
+    ? env.SHELL : '/bin/zsh';
+  try {
+    const out = String(run(shell, ['-lc', `printf '%s%s' '${LOGIN_PATH_MARK}' "$PATH"`], {
+      env: { HOME: home, USER: env.USER ?? '', LOGNAME: env.LOGNAME ?? env.USER ?? '', SHELL: shell,
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin', ...(env.ZDOTDIR ? { ZDOTDIR: env.ZDOTDIR } : {}), TERM: 'dumb' },
+      stdio: ['ignore', 'pipe', 'ignore'], timeout: timeoutMs, encoding: 'utf8',
+    }));
+    const at = out.lastIndexOf(LOGIN_PATH_MARK);
+    if (at < 0) return null;
+    const found = out.slice(at + LOGIN_PATH_MARK.length).trim().split(path.delimiter).filter((dir) => path.isAbsolute(dir));
+    return found.length ? found.join(path.delimiter) : null;
+  } catch { return null; }
 }
 
 /**
@@ -122,6 +157,47 @@ export function joinLaunchedSoul({ agentId, harness, name, binding, parent = nul
       reject(new Error(`joining agent-comms failed: ${detail}`));
     });
   });
+}
+
+/**
+ * Takes a soul out of agent-comms as itself (#419), the reverse of
+ * joinLaunchedSoul. With the daemon's binding the request is vouched; without
+ * one (`soul remove` from the CLI) it names the soul by ID, as an unbound
+ * session would. A soul the hub never joined, or one that already left,
+ * counts as left. Resolves to true, or rejects with agent-comms' message.
+ */
+export function leaveLaunchedSoul({ agentId, binding = null }, { env = process.env, run = execFile, cwd = tmpdir() } = {}) {
+  const { AGENT_BOT_BINDING: _binding, ...rest } = soulEnvironment(env);
+  const soulEnv = { ...rest, ...(binding?.file ? { AGENT_BOT_BINDING: binding.file } : {}), AGENT_BOT_ID: agentId, QWTS_AGENT_ID: agentId };
+  const where = binding?.worktree && existsSync(binding.worktree) ? binding.worktree : cwd;
+  return new Promise((resolve, reject) => {
+    run('agent-comms', ['leave'], { cwd: where, env: soulEnv, timeout: 30_000 }, (error, stdout = '', stderr = '') => {
+      let result = null;
+      try { result = JSON.parse(String(stdout)); } catch {}
+      if (!error && result?.ok === true) return resolve(true);
+      if (result?.error?.code === 'not-joined') return resolve(true);
+      const detail = result?.error?.message ?? (String(stderr).trim().split('\n').pop() || error?.message || 'no result');
+      reject(new Error(`leaving agent-comms failed: ${detail}`));
+    });
+  });
+}
+
+/**
+ * Rolls back a soul a launch spawned when its first start fails (#419): the
+ * agent-comms membership while the soul can still vouch, then the identity
+ * and census row, then its folder, archived so a retry can reuse the name.
+ * `rollback` is how far the launch got: `{ binding, joined }`. Returns what
+ * it did; a leave that fails is reported, not thrown, so the rest still runs.
+ */
+export async function discardFailedLaunch(agentId, { binding = null, joined = false } = {}, {
+  env = process.env, home = homedir(), config, now = () => new Date(), leave = (soul) => leaveLaunchedSoul(soul, { env }),
+} = {}) {
+  let left = !joined;
+  if (joined) { try { left = await leave({ agentId, binding }); } catch { /* reported as left: false; the soul is still retired */ } }
+  const file = populationFile({ env, home });
+  retireIdentityWithPopulation(agentId, { file, stateDir: stateDirectory({ env, home }), now });
+  const archived = archiveSoulDirs(agentId, { env, home, ...(config === undefined ? {} : { config }), now, file });
+  return { left, archived };
 }
 
 /**
@@ -1247,6 +1323,9 @@ export async function runDaemon({
   // becomes failed with its own stable reason, and pending cancellations
   // become cancelled — nothing is silently stranded.
   recoverInteractionStore({ env, home, now });
+  // Harness CLIs resolve the same way for every soul turn, launch check and
+  // relay (#418).
+  const harnessEnv = soulEnvironment(env, { home, loginPath: loginShellPath({ env, home }) });
   // The ACP executor is off unless the user config turns it on (#259):
   // `"executor": { "enabled": true, "policy": { ... } }`. Without it /v1
   // keeps its unconfigured error and cold wake reports `waiting`.
@@ -1257,7 +1336,7 @@ export async function runDaemon({
     ? acpExecutorFor({
       identities,
       policy: setup?.policy ?? { version: 1, rules: [], fallback: 'deny' },
-      baseEnv: soulEnvironment(env),
+      baseEnv: harnessEnv,
       // A daemon-run soul's home is not a git worktree, so the session-start
       // hook cannot place its Claude session; the turn's binding does.
       onHarnessSession: ({ agentId, harness, harnessSessionId }) => recordSoulSession({ agentId, provider: harness, sessionId: harnessSessionId, env, home, now }),
@@ -1265,7 +1344,7 @@ export async function runDaemon({
       // recorded comms off; the reach server runs agent-comms, which a
       // launchd PATH does not reach.
       commsFor: (agentId) => showSoul(agentId, { file: populationFile({ env, home }) }).comms,
-      reachEnv: { PATH: resumePath(soulEnvironment(env), home) },
+      reachEnv: { PATH: resumePath(harnessEnv, home) },
       harnessDirsFor: (agentId) => [soulHarnessesPath(agentId, { env, home, config, file: populationFile({ env, home }) })],
       // A soul whose soul.json says its key is in agent-bot-keyd gets keyd's
       // relay, when this host installed keyd.
@@ -1333,9 +1412,15 @@ export async function runDaemon({
     },
     // A principal launched this soul to talk to it, so later messages wake it.
     onLaunched: (agentId) => setColdWake(agentId, true, { env, home, now }),
-    discard: (agentId) => retireIdentityWithPopulation(agentId, { file: populationFile({ env, home }),
-      stateDir: stateDirectory({ env, home }), now }),
-    joinSoul: (soul) => joinLaunchedSoul(soul, { env }),
+    discard: (agentId, rollback) => discardFailedLaunch(agentId, rollback, { env, home, config, now }),
+    joinSoul: async (soul) => {
+      const address = await joinLaunchedSoul(soul, { env });
+      // The census shows the launch name; every command shows it too (#429).
+      if (soul.name) {
+        try { recordSoulDisplayName(soul.agentId, soul.name, { file: populationFile({ env, home }) }); } catch { /* shown by soul.json name */ }
+      }
+      return address;
+    },
     // The comms setting is read here, at launch only; turns read the census.
     recordLaunch: (launch) => recordLaunchComms(launch, { env, home, config }),
     executorFor,
@@ -1344,7 +1429,7 @@ export async function runDaemon({
   // journal (#409). A census that cannot be rewritten leaves them as they are.
   try { backfillManagedSouls(onLaunch.launched(), { file: populationFile({ env, home }) }); } catch { /* shown as unmanaged */ }
   const comms = createCommsSupervisor({ env, home, now, onWake, onLaunch });
-  const relay = createCommsRelay({ env: { ...soulEnvironment(env), PATH: resumePath(soulEnvironment(env), home) } });
+  const relay = createCommsRelay({ env: { ...harnessEnv, PATH: resumePath(harnessEnv, home) } });
   const taskReporter = createTaskReporter({
     file: path.join(path.dirname(daemonStateFile({ env, home })), 'task-turns.jsonl'),
     now,
@@ -1367,7 +1452,7 @@ export async function runDaemon({
     }),
     receipt: ({ agentId, decision }) => appendAuditReceipt({ event: 'team-start', agentId, operation: 'start_soul', decision }, { env, home, now }),
     limits: teamLimits(userConfig),
-    launchable: (harness) => harnessLaunchable(harness, { env: soulEnvironment(env) }),
+    launchable: (harness) => harnessLaunchProblem(harness, { env: harnessEnv }) ?? true,
     template: () => defaultTeamTemplate({ config: userConfig, env }),
     account,
   });
@@ -1383,7 +1468,7 @@ export async function runDaemon({
     // the owner set to `resume <policy>`.
     resumeExecutor: createResumeExecutor({
       sessions: createWakeSessions({ file: wakeSessionsFile({ env, home }) }),
-      baseEnv: soulEnvironment(env),
+      baseEnv: harnessEnv,
       home,
     }),
     // Webhook wake (#334) runs only for a soul the owner set to `webhook`.

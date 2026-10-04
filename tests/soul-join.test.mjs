@@ -84,6 +84,23 @@ function starter(root) {
   return template;
 }
 
+// A Starter that pins the Claude adapter, as GeniusBar's bundled one does,
+// and an install that fakes npm: an ACP wake installs it (#417), and an
+// adapter row never falls back to npx (#418).
+function pinnedStarter(root) {
+  const template = starter(root);
+  writeFileSync(path.join(template, 'package.json'), JSON.stringify({ name: 'starter-soul', private: true, dependencies: { '@zed-industries/claude-code-acp': '0.16.2' } }));
+  writeFileSync(path.join(template, 'package-lock.json'), JSON.stringify({ name: 'starter-soul', lockfileVersion: 3, packages: {} }));
+  const installHarness = async (agentId, source, options) => {
+    const { installSoulHarnesses } = await import('../soul-home.mjs');
+    return installSoulHarnesses(agentId, source, { ...options, install: async (dir) => {
+      mkdirSync(path.join(dir, 'node_modules', '.bin'), { recursive: true });
+      writeFileSync(path.join(dir, 'node_modules', '.bin', 'claude-code-acp'), '');
+    } });
+  };
+  return { template, installHarness };
+}
+
 test('join with no GitHub App and no checkout: new soul, its own workspace pinned, recorded, bindable and joined', async (t) => {
   const a = account(t);
   const joined = await joinSoul({ name: 'dudles', harness: 'grokbot', template: null, cwd: a.outside, env: a.env, home: a.home, config: {} });
@@ -98,6 +115,8 @@ test('join with no GitHub App and no checkout: new soul, its own workspace pinne
   assert.deepEqual(a.broker().joined[joined.agentId], { name: 'dudles', harness: 'grokbot' });
   // The census records the checkout, so cold wake finds it.
   assert.equal(showSoul(joined.agentId, { file: a.env.AGENT_BOT_POPULATION_PATH }).worktree, joined.worktree);
+  // The census name is the one every command shows (#429).
+  assert.equal(showSoul(joined.agentId, { file: a.env.AGENT_BOT_POPULATION_PATH }).displayName, 'dudles');
   assert.deepEqual(recordedWorktree(joined.agentId, { env: a.env, home: a.home }), { agentId: joined.agentId, worktree: joined.worktree, file: null });
   // The soul folder itself never becomes a repository.
   assert.equal(existsSync(path.join(joined.soulDir, '.git')), false);
@@ -263,7 +282,9 @@ test('join --wake asks the owner first, then sets the wake; a refusal or an unre
   // A Claude session cannot be resumed; it wakes through an ACP turn, which
   // needs a daemon binding (#417).
   const daemon = await startDaemon(t, a);
-  const acp = await joinSoul({ ...base, name: 'claude-one', harness: 'claude', wake: 'acp', daemon: daemon.client, gate: async () => ({ method: 'consent' }) });
+  const pinned = pinnedStarter(a.root);
+  const acp = await joinSoul({ ...base, env: { ...a.env, AGENT_BOT_STARTER_TEMPLATE: pinned.template }, installHarness: pinned.installHarness,
+    name: 'claude-one', harness: 'claude', wake: 'acp', daemon: daemon.client, gate: async () => ({ method: 'consent' }) });
   assert.equal(acp.wake, 'on');
   assert.equal(acp.bind, 'bound');
   assert.equal(acp.authorization, 'consent');
@@ -294,10 +315,17 @@ test('join --wake asks the owner first, then sets the wake; a refusal or an unre
 test('join --wake acp binds the checkout, so a new message wakes a joined Claude soul through an ACP turn (#417)', async (t) => {
   const a = account(t);
   const daemon = await startDaemon(t, a);
-  const joined = await joinSoul({ name: 'r8joiner', harness: 'claude', template: null, cwd: a.outside, env: a.env, home: a.home, config: {},
-    wake: 'acp', daemon: daemon.client, gate: async () => ({ method: 'consent' }) });
+  // No package pins the adapter, and an adapter row never falls back to npx
+  // (#418), so the wake is refused rather than reported on.
+  await assert.rejects(joinSoul({ name: 'unpinned', harness: 'claude', template: null, cwd: a.outside,
+    env: { ...a.env, AGENT_BOT_STARTER_TEMPLATE: path.join(a.root, 'no-starter') }, home: a.home, config: {},
+    wake: 'acp', daemon: daemon.client, gate: async () => ({ method: 'consent' }) }),
+  /--wake acp needs the claude adapter @zed-industries\/claude-code-acp@0\.16\.2/);
+  const pinned = pinnedStarter(a.root);
+  const joined = await joinSoul({ name: 'r8joiner', harness: 'claude', template: null, cwd: a.outside, env: { ...a.env, AGENT_BOT_STARTER_TEMPLATE: pinned.template },
+    home: a.home, config: {}, wake: 'acp', daemon: daemon.client, gate: async () => ({ method: 'consent' }), installHarness: pinned.installHarness });
   assert.equal(joined.bind, 'bound');
-  assert.equal(joined.adapter, 'registry command', 'no package pins the adapter here, so the registry command runs it');
+  assert.equal(joined.adapter, 'installed');
   const binding = daemon.server.bindings.findAgent(joined.agentId);
   assert.equal(binding?.worktree, joined.worktree);
   assert.ok(binding?.file, 'the daemon binding has a file for the ACP turn');

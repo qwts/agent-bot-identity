@@ -178,6 +178,26 @@ test('a package launch that cannot start retires the soul it spawned', async (t)
   assert.deepEqual(retired, [spawnedId]);
 });
 
+// #419: the rollback hears how far the launch got, so it leaves agent-comms
+// only after a join was attempted, and has the binding to leave as itself.
+test('a failed launch hands discard the binding and whether it joined', async (t) => {
+  const discarded = [];
+  const discard = (id, rollback) => { discarded.push([id, rollback]); };
+  const binding = { worktree: '/home/new', file: '/b' };
+  const base = { spawnPackage: () => ({ id: spawnedId }), lookupBinding: () => null, provisionHome: () => binding, discard };
+  const joined = fixture(t, { ...base, joinSoul: async () => {}, executorFor: () => async () => {} });
+  await joined.handler(packageEvent, joined.ports);
+  const refused = fixture(t, { ...base, joinSoul: async () => { throw new Error('joining agent-comms failed: no'); } });
+  await refused.handler({ ...packageEvent, requestId: 'r2' }, refused.ports);
+  const unbound = fixture(t, { ...base, provisionHome: () => null });
+  await unbound.handler({ ...packageEvent, requestId: 'r3' }, unbound.ports);
+  assert.deepEqual(discarded, [
+    [spawnedId, { binding, joined: true }],
+    [spawnedId, { binding, joined: true }],
+    [spawnedId, { binding: null, joined: false }],
+  ]);
+});
+
 test('a package launch with the executor off mints nothing', async (t) => {
   let spawns = 0;
   const f = fixture(t, { executorFor: null, spawnPackage: () => { spawns += 1; return { id: spawnedId }; } });

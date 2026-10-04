@@ -1219,6 +1219,49 @@ test('doctor warns when two soul folders claim one soul', async () => {
   assert.match(check.action, /keep each soul's own folder/);
 });
 
+// A failed launch used to leave its folder behind (#419): doctor names a
+// folder whose soul is retired or unknown, and stays quiet for active and
+// finalized souls.
+test('doctor warns about soul folders that belong to no active soul', async () => {
+  const home = tempRoot();
+  const census = join(home, '.local', 'state', 'agent-bot', 'population.json');
+  const souls = join(home, '.agent-bot', 'souls');
+  const ids = {
+    active: 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    finalized: 'agent_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    retired: 'agent_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    unknown: 'agent_dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+  };
+  const dirs = Object.fromEntries(Object.keys(ids).map((key) => [key, join(souls, `${key}.soul`)]));
+  const row = (key, status) => ({ id: ids[key], name: displayName(ids[key]), soulDir: dirs[key], appSlug: null,
+    parentId: null, status, spacePath: join(home, '.agent-space', ids[key]), worktree: null, worktrees: [],
+    transcriptLocator: null, lastSeen: '2026-10-03T20:04:04.110Z' });
+  mkdirSync(dirname(census), { recursive: true });
+  writeFileSync(census, `${JSON.stringify({ schemaVersion: 1, souls: {
+    [ids.active]: row('active', 'active'), [ids.finalized]: row('finalized', 'finalized'),
+    [ids.retired]: row('retired', 'retired') } }, null, 2)}\n`);
+  for (const key of ['active', 'finalized']) {
+    mkdirSync(join(dirs[key], '.soul-state'), { recursive: true });
+    writeFileSync(join(dirs[key], '.soul-state', 'agent-id'), `${ids[key]}\n`);
+  }
+  const dependencies = machineDependencies(home);
+  const quiet = await collectReadiness({ command: 'doctor', scope: 'machine', ...dependencies });
+  assert.equal(quiet.machine.checks.find(({ id }) => id === 'souls.orphans'), undefined);
+  for (const key of ['retired', 'unknown']) {
+    mkdirSync(join(dirs[key], '.soul-state'), { recursive: true });
+    writeFileSync(join(dirs[key], '.soul-state', 'agent-id'), `${ids[key]}\n`);
+  }
+  const report = await collectReadiness({ command: 'doctor', scope: 'machine', ...dependencies });
+  const check = report.machine.checks.find(({ id }) => id === 'souls.orphans');
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'soul-folder-orphan');
+  assert.match(check.action, /agent-bot soul remove/);
+  assert.deepEqual(check.evidence, { orphans: [
+    { agentId: ids.retired, path: dirs.retired, status: 'retired' },
+    { agentId: ids.unknown, path: dirs.unknown, status: 'unknown' },
+  ] });
+});
+
 test('soul reference checks ignore global pins and honor legacy worktree pins', async () => {
   const { home, worktree, id, env, worktreeGit } = linkedWorktreeFixture();
   const census = join(home, '.local', 'state', 'agent-bot', 'population.json');

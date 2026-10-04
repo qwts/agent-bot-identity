@@ -104,9 +104,14 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
   claude: Object.freeze({
     harness: 'claude',
     enabled: true,
-    command: 'npx',
-    args: Object.freeze(['--yes', '-p', '@zed-industries/claude-code-acp', 'claude-code-acp']),
+    command: 'claude-code-acp',
+    args: Object.freeze([]),
     soulBin: 'claude-code-acp',
+    // The version a soul's package pins (GeniusBar's Starter); named so a
+    // missing adapter fails with its package, never through npx (#418).
+    adapter: Object.freeze({ package: '@zed-industries/claude-code-acp', version: '0.16.2' }),
+    cli: 'claude',
+    installHint: 'install Claude Code (https://claude.com/claude-code) and run `claude` once to sign in',
     // The Claude CLI the adapter installs with it; its store is ~/.claude.
     signIn: Object.freeze({ package: '@anthropic-ai/claude-agent-sdk', script: 'cli.js', command: 'claude',
       status: Object.freeze(['auth', 'status', '--json']), login: Object.freeze(['auth', 'login']) }),
@@ -121,6 +126,8 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
     enabled: true,
     command: 'opencode',
     args: Object.freeze(['acp']),
+    cli: 'opencode',
+    installHint: 'install OpenCode (https://opencode.ai) and run `opencode auth login`',
     stripEnv: Object.freeze([]),
     // Set after stripEnv, so an inherited value never replaces the ruleset.
     setEnv: Object.freeze({ OPENCODE_CONFIG_CONTENT: OPENCODE_DAEMON_CONFIG }),
@@ -143,9 +150,14 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
   codex: Object.freeze({
     harness: 'codex',
     enabled: true,
-    command: 'npx',
-    args: Object.freeze(['--yes', '-p', '@agentclientprotocol/codex-acp@2.1.1', 'codex-acp']),
+    command: 'codex-acp',
+    args: Object.freeze([]),
     soulBin: 'codex-acp',
+    // Pinned in the soul's package like the Claude adapter (#418); it brings
+    // its own Codex binary, so only the `codex` login is needed.
+    adapter: Object.freeze({ package: '@agentclientprotocol/codex-acp', version: '2.1.1' }),
+    cli: 'codex',
+    installHint: 'install Codex (https://developers.openai.com/codex) and run `codex login`',
     stripEnv: Object.freeze([]),
     store: '~/.codex',
     mcpToolNaming: 'codex-mcp-title',
@@ -186,6 +198,11 @@ export function validateSpawnRow(row) {
   if (row.soulBin !== undefined && (typeof row.soulBin !== 'string' || !/^[a-z0-9][a-z0-9._-]*$/.test(row.soulBin))) {
     failRegistry(`${row.harness}: soulBin must be an npm binary name`);
   }
+  if (row.adapter !== undefined && (!row.soulBin || !row.adapter || typeof row.adapter.package !== 'string'
+    || !/^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(row.adapter.package)
+    || typeof row.adapter.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(row.adapter.version))) {
+    failRegistry(`${row.harness}: adapter must name an npm package and an exact version, with a soulBin`);
+  }
   if (row.sessionMode !== undefined && (typeof row.sessionMode !== 'string' || !/^[a-z0-9][a-z0-9_-]*$/.test(row.sessionMode))) {
     failRegistry(`${row.harness}: sessionMode must be an ACP session mode id`);
   }
@@ -199,8 +216,10 @@ export function validateSpawnRow(row) {
  * The command for a row in a working directory (ADR-0276): a soul home
  * that installed the row's npm binary runs it with this Node, so neither
  * npx nor a global install is needed. A joined soul's checkout installs
- * nothing, so its own harness directory is tried next (`dirs`, #417);
- * otherwise the registry command.
+ * nothing, so its own harness directory is tried next (`dirs`, #417). A row
+ * with no adapter runs its registry command. An adapter row never falls back
+ * to npx (#418): a GeniusBar Mac has none, and an unpinned download is not
+ * what the soul declared. It throws, naming the package the soul must pin.
  */
 export function spawnCommand(row, cwd, { node = process.execPath, dirs = [] } = {}) {
   if (row.soulBin) {
@@ -209,6 +228,10 @@ export function spawnCommand(row, cwd, { node = process.execPath, dirs = [] } = 
       const bin = join(dir, 'node_modules', '.bin', row.soulBin);
       if (existsSync(bin)) return { command: node, args: [realpathSync(bin)] };
     }
+  }
+  if (row.adapter) {
+    throw new Error(`acp registry: the ${row.harness} harness needs its ACP adapter ${row.adapter.package}@${row.adapter.version}, `
+      + 'which this soul\'s package does not install');
   }
   return { command: row.command, args: [...row.args] };
 }
@@ -224,12 +247,12 @@ export function onPath(command, env = process.env) {
 /**
  * A soul's harness when a launch names none (ADR-0276): its first
  * preferred harness the registry enables, else the first enabled registry
- * harness whose command is on PATH, else null.
+ * harness whose CLI (`cli`, else its command) is on PATH, else null.
  */
 export function defaultHarnessFor(preferred = [], { registry = ACP_SPAWN_REGISTRY, available = (cmd) => onPath(cmd) } = {}) {
   const enabled = (key) => registry[key]?.enabled === true;
   return preferred.find(enabled)
-    ?? Object.values(registry).find((row) => row.enabled && available(row.command))?.harness
+    ?? Object.values(registry).find((row) => row.enabled && available(row.cli ?? row.command))?.harness
     ?? null;
 }
 

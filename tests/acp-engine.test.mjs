@@ -204,7 +204,12 @@ test('the shipped registry rows validate and match the enablement checklist', ()
   // Codex: the third-party adapter lane, verified live against an exact pin
   // (#384); approvals go to the daemon, not Codex's own reviewer.
   assert.equal(ACP_SPAWN_REGISTRY.codex.enabled, true);
-  assert.ok(ACP_SPAWN_REGISTRY.codex.args.includes('@agentclientprotocol/codex-acp@2.1.1'));
+  assert.deepEqual(ACP_SPAWN_REGISTRY.codex.adapter, { package: '@agentclientprotocol/codex-acp', version: '2.1.1' });
+  // Adapter rows run a pinned install, never npx (#418).
+  for (const row of Object.values(ACP_SPAWN_REGISTRY)) {
+    assert.notEqual(row.command, 'npx', `${row.harness} must not run through npx`);
+    if (row.soulBin) assert.ok(row.adapter, `${row.harness} pins its adapter`);
+  }
   assert.equal(ACP_SPAWN_REGISTRY.codex.mcpToolNaming, 'codex-mcp-title');
   assert.equal(ACP_SPAWN_REGISTRY.codex.sessionMode, 'workspace-write');
   // OpenCode: its own daemon agent ruleset, selected on every session, makes
@@ -235,7 +240,9 @@ test('the shipped registry rows validate and match the enablement checklist', ()
 test('resolveSpawn fails closed on unknown, disabled, and mis-keyed rows', () => {
   assert.equal(resolveSpawn(ACP_SPAWN_REGISTRY, 'opencode').command, 'opencode');
   assert.throws(() => resolveSpawn(ACP_SPAWN_REGISTRY, 'cursor'), /no ACP drive entry/);
-  assert.equal(resolveSpawn(ACP_SPAWN_REGISTRY, 'codex').command, 'npx');
+  assert.equal(resolveSpawn(ACP_SPAWN_REGISTRY, 'codex').command, 'codex-acp');
+  assert.throws(() => validateSpawnRow({ ...ACP_SPAWN_REGISTRY.codex, adapter: { package: 'x', version: '^1.0.0' } }), /exact version/);
+  assert.throws(() => validateSpawnRow({ ...ACP_SPAWN_REGISTRY.codex, soulBin: undefined }), /adapter/);
   assert.throws(() => resolveSpawn({ codex: { ...ACP_SPAWN_REGISTRY.codex, enabled: false } }, 'codex'), /not enabled/);
   assert.throws(() => validateSpawnRow({ ...FAKE_REGISTRY.claude, sessionMode: 'Full Access' }), /sessionMode/);
   assert.throws(() => validateSpawnRow({ ...FAKE_REGISTRY.claude, setEnv: ['A=1'] }), /setEnv/);
@@ -302,6 +309,19 @@ test('a full ACP turn drives spawn, bind, stream, and stop through the contract'
   assert.deepEqual(kinds, ['agent_message_chunk', 'tool_call', 'tool_call_update']);
   const stop = events.find((event) => event.type === STOP_EVENT);
   assert.deepEqual(stop.data, { stopReason: 'end_turn' });
+});
+
+test('an adapter row whose home lacks the adapter fails the turn, never runs npx (#418)', async () => {
+  const adapterRow = { ...FAKE_REGISTRY.claude, command: 'fake-acp', args: [], soulBin: 'fake-acp',
+    adapter: { package: '@example/fake-acp', version: '1.0.0' } };
+  const home = mkdtempSync(path.join(tmpdir(), 'no-adapter-home-'));
+  roots.push(home);
+  const logs = [];
+  const { finished } = await turn({
+    message: 'no-adapter', expectStatus: 'failed', logs,
+    executorOptions: { registry: { claude: adapterRow }, cwd: home },
+  });
+  assert.equal(finished.status, 'failed');
 });
 
 test('the engine strips nesting guards, keeps the rest, and injects mcpServers', async () => {

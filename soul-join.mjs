@@ -33,7 +33,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN, resolveSpawn } from './acp-registry.mjs';
 import { mintBindToken, readBinding } from './agent-binding.mjs';
 import { mintAgentIdentity, readAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
-import { listSouls, populationFile, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
+import { listSouls, populationFile, recordSoulDisplayName, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
 import { describeSetting, ownerGate, readColdWakeSettings, setColdWake, wakeSetting } from './cold-wake-settings.mjs';
 import { initAgentSpace } from './agent-space.mjs';
 import { daemonPreference, loadConfig } from './config.mjs';
@@ -82,16 +82,22 @@ async function ensureAcpHarness(agentId, harness, worktree, { env, options, inst
   if (has(worktree)) return 'in checkout';
   const own = soulHarnessesPath(agentId, options);
   if (has(own)) return 'installed';
-  const wanted = rowPackage(row);
+  const wanted = row.adapter?.package ?? rowPackage(row);
   const declares = (dir) => {
     try { return Boolean(dir && wanted && JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')).dependencies?.[wanted]); }
     catch { return false; }
   };
   const source = [soulDirectory(agentId, options), bundledStarter({ env })].find(declares);
-  if (!source) return 'registry command';
+  // An adapter row never falls back to npx (#418), so a wake with no pinned
+  // adapter to install could never run: refuse it rather than report it on.
+  const missing = () => new Error(`--wake acp needs the ${harness} adapter ${row.adapter.package}@${row.adapter.version}, `
+    + 'which neither this soul\'s package nor the bundled Starter pins');
+  if (!source) { if (row.adapter) throw missing(); return 'registry command'; }
   try { await installHarness(agentId, source, options); }
   catch (error) { throw new Error(`--wake acp could not install the ${harness} adapter: ${error.message}`); }
-  return has(own) ? 'installed' : 'registry command';
+  if (has(own)) return 'installed';
+  if (row.adapter) throw missing();
+  return 'registry command';
 }
 
 function gitIn(cwd, args) {
@@ -273,6 +279,9 @@ export async function joinSoul({
     }
     throw error;
   }
+  // The census now shows this name; every command shows the same one (#429).
+  try { recordSoulDisplayName(agentId, name, { file }); }
+  catch (error) { process.stderr.write(`agent-bot join: display name not recorded: ${error.message}\n`); }
   const state = describeSetting(readColdWakeSettings({ env, home })[agentId]);
   return { agentId, soulDir: soulDirectory(agentId, { ...options, file }), worktree, address, created, bind,
     wake: state, ...(adapter ? { adapter } : {}), ...(authorization ? { authorization: authorization.method } : {}) };
