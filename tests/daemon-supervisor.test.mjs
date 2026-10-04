@@ -383,7 +383,26 @@ test('souls get the host tools first on PATH, and the unit keeps the tool path (
   assert.equal(soulEnvironment({ AGENT_BOT_TOOL_PATH: '/App/bin', PATH: '/usr/bin:/bin' }).PATH, '/App/bin:/usr/bin:/bin');
   assert.equal(soulEnvironment({ AGENT_BOT_TOOL_PATH: 'bin', PATH: '/usr/bin' }).PATH, '/usr/bin');
   assert.equal(soulEnvironment({ PATH: '/usr/bin' }).PATH, '/usr/bin');
+  // With a home, the login shell's PATH and installer directories follow (#418).
+  assert.equal(soulEnvironment({ AGENT_BOT_TOOL_PATH: '/App/bin', PATH: '/usr/bin:/bin' }, { home: '/u', loginPath: '/u/.nvm/bin:/usr/bin:rel' }).PATH,
+    '/App/bin:/usr/bin:/bin:/u/.nvm/bin:/u/.local/bin:/u/.opencode/bin:/opt/homebrew/bin:/usr/local/bin');
   assert.equal(supervisorEnvironment({ env: { AGENT_BOT_TOOL_PATH: '/App/bin' }, home: '/u' }).AGENT_BOT_TOOL_PATH, '/App/bin');
+});
+
+test('the login shell PATH is read once, bounded, and skippable (#418)', async () => {
+  const { loginShellPath } = await import('../agent-daemon.mjs');
+  let seen;
+  const run = (cmd, args, opts) => { seen = { cmd, args, env: opts.env, timeout: opts.timeout }; return 'motd noise\n__agent_bot_login_path__/u/.local/bin:/opt/homebrew/bin:relative'; };
+  assert.equal(loginShellPath({ env: { SHELL: '/bin/bash', USER: 'u' }, home: '/u', run }), '/u/.local/bin:/opt/homebrew/bin');
+  assert.equal(seen.cmd, '/bin/bash');
+  assert.equal(seen.args[0], '-lc');
+  assert.equal(seen.env.HOME, '/u');
+  assert.equal(seen.timeout, 3000);
+  assert.equal(loginShellPath({ env: { SHELL: '/usr/bin/fish' }, home: '/u', run }), '/u/.local/bin:/opt/homebrew/bin');
+  assert.equal(seen.cmd, '/bin/zsh', 'an unknown shell falls back to zsh');
+  assert.equal(loginShellPath({ env: {}, home: '/u', run: () => { throw new Error('timed out'); } }), null);
+  assert.equal(loginShellPath({ env: {}, home: '/u', run: () => 'no marker' }), null);
+  assert.equal(loginShellPath({ env: { AGENT_BOT_LOGIN_PATH: '0' }, home: '/u', run: () => { throw new Error('must not run'); } }), null);
 });
 
 test('a launched soul joins agent-comms as itself, with the host tools on PATH (R4)', async () => {
@@ -402,4 +421,31 @@ test('a launched soul joins agent-comms as itself, with the host tools on PATH (
   await assert.rejects(joinLaunchedSoul(soul, { env, run: (_c, _a, _o, done) =>
     done(Object.assign(new Error('exit 1'), { code: 1 }), '{"ok":false,"error":{"code":"broker-unreachable","message":"no broker"}}', '') }),
   /joining agent-comms failed: no broker/);
+});
+
+// #419: a rolled-back launch leaves agent-comms as itself. With the daemon's
+// binding the leave is vouched; without one it names the soul by ID and never
+// carries a stray binding from the caller's environment. A soul the hub does
+// not know has nothing to leave.
+test('a soul leaves agent-comms with its binding, or by ID without one', async () => {
+  const { leaveLaunchedSoul } = await import('../agent-daemon.mjs');
+  const agentId = 'agent_11111111-1111-4111-8111-111111111111';
+  const binding = { worktree: tmpdir(), file: '/state/homes/s/.git/agent-binding.json' };
+  const env = { AGENT_BOT_TOOL_PATH: '/App/bin', PATH: '/usr/bin', AGENT_BOT_BINDING: '/caller/binding.json' };
+  const seen = [];
+  const run = (reply) => (cmd, args, opts, done) => {
+    seen.push({ cmd, args, cwd: opts.cwd, binding: opts.env.AGENT_BOT_BINDING ?? null, id: opts.env.QWTS_AGENT_ID });
+    done(reply.error ?? null, reply.stdout, '');
+  };
+  assert.equal(await leaveLaunchedSoul({ agentId, binding }, { env, run: run({ stdout: '{"ok":true}' }) }), true);
+  assert.equal(await leaveLaunchedSoul({ agentId }, { env, cwd: '/nowhere', run: run({ stdout: '{"ok":true}' }) }), true);
+  assert.equal(await leaveLaunchedSoul({ agentId }, { env, run: run({ error: new Error('exit 1'),
+    stdout: '{"ok":false,"error":{"code":"not-joined","message":"this soul has not joined the hub from this account"}}' }) }), true);
+  assert.deepEqual(seen.slice(0, 2), [
+    { cmd: 'agent-comms', args: ['leave'], cwd: binding.worktree, binding: binding.file, id: agentId },
+    { cmd: 'agent-comms', args: ['leave'], cwd: '/nowhere', binding: null, id: agentId },
+  ]);
+  await assert.rejects(leaveLaunchedSoul({ agentId }, { env, run: run({ error: new Error('exit 1'),
+    stdout: '{"ok":false,"error":{"code":"broker-unreachable","message":"no broker"}}' }) }),
+  /leaving agent-comms failed: no broker/);
 });

@@ -91,7 +91,7 @@ export function withReachRules(policy, { keyd = false } = {}) {
 // server so the soul mints tokens without ever seeing a key.
 export function acpExecutorFor({
   identities, policy, baseEnv, onHarnessSession = null, createExecutor = createAcpExecutor,
-  commsFor = () => true, reachEnv = {}, keydFor = () => null,
+  commsFor = () => true, reachEnv = {}, keydFor = () => null, harnessDirsFor = () => [],
 }) {
   return ({ agentId, harness, cwd, env }) => {
     const identity = identities(agentId);
@@ -119,6 +119,8 @@ export function acpExecutorFor({
       identity: { app, agentId },
       policy: withReachRules(policy, { keyd: Boolean(keyd) }),
       cwd,
+      // Where the soul's own harness install lives when its checkout has none (#417).
+      harnessDirs: (() => { try { return harnessDirsFor(agentId) ?? []; } catch { return []; } })(),
       mcpServers,
       env: turnEnv,
     });

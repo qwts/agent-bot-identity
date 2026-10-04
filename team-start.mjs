@@ -47,14 +47,24 @@ export function teamLimits(config = {}) {
 }
 
 /**
- * Whether the daemon can start a soul on this harness: an enabled registry
- * row whose command is on PATH, or whose ACP adapter installs into the soul
- * home (soulBin) and runs on the bundled Node.
+ * Why the daemon cannot start a soul on this harness here, or null when it
+ * can: an enabled registry row whose command is on PATH (or absolute), or
+ * whose ACP adapter installs into the soul home (soulBin) and runs on the
+ * bundled Node. A refusal names the missing command and how to install it
+ * (#418).
  */
-export function harnessLaunchable(harness, { registry = ACP_SPAWN_REGISTRY, env = process.env } = {}) {
+export function harnessLaunchProblem(harness, { registry = ACP_SPAWN_REGISTRY, env = process.env } = {}) {
   const row = registry[harness];
-  if (!row || row.enabled !== true) return false;
-  return Boolean(row.soulBin) || onPath(row.command, env) || path.isAbsolute(row.command);
+  if (!row) return 'agent-bot has no such harness';
+  if (row.enabled !== true) return 'it is disabled in agent-bot';
+  if (row.soulBin || onPath(row.command, env) || path.isAbsolute(row.command)) return null;
+  return `the \`${row.command}\` command is not on this host's PATH (${(env.PATH ?? '').split(path.delimiter).filter(Boolean).join(', ') || 'empty'})`
+    + (row.installHint ? `; ${row.installHint}` : '');
+}
+
+/** Whether the daemon can start a soul on this harness (see harnessLaunchProblem). */
+export function harnessLaunchable(harness, options = {}) {
+  return harnessLaunchProblem(harness, options) === null;
 }
 
 /**
@@ -79,7 +89,7 @@ export async function defaultTeamTemplate({ config = {}, env = process.env,
  * the audit line.
  */
 export function createTeamStarter({
-  souls, identities, launch, receipt, limits = TEAM_DEFAULTS, launchable = (harness) => harnessLaunchable(harness),
+  souls, identities, launch, receipt, limits = TEAM_DEFAULTS, launchable = (harness) => harnessLaunchProblem(harness) ?? true,
   template = () => null, account = process.env.USER ?? 'unknown',
 }) {
   // Starts run one at a time, so two concurrent requests cannot both pass
@@ -111,8 +121,11 @@ export function createTeamStarter({
     if (typeof harness !== 'string' || !HARNESS_KEY_PATTERN.test(harness)) {
       throw new TeamStartError('name a harness: the caller has none recorded', { decision: 'refused: harness' });
     }
-    if (!launchable(harness)) {
-      throw new TeamStartError(`harness '${harness}' is not launchable on this host`, { decision: 'refused: harness' });
+    // launchable() answers true, or false or the reason it cannot (#418).
+    const ready = launchable(harness);
+    if (ready !== true) {
+      throw new TeamStartError(`harness '${harness}' is not launchable on this host${typeof ready === 'string' ? `: ${ready}` : ''}`,
+        { decision: 'refused: harness' });
     }
     const packagePath = requestedTemplate ?? await template();
     if (typeof packagePath !== 'string' || !path.isAbsolute(packagePath)) {

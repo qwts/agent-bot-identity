@@ -11,7 +11,7 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { stateDirectory, validateAgentId } from './agent-identity.mjs';
-import { populationFile, setSoulComms, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
+import { populationFile, setSoulComms, showSoul, showSoulByName, soulDirectory, soulShownName } from './agent-population.mjs';
 import { daemonStatus } from './agent-daemon.mjs';
 import { assertOwnerAction } from './owner-gate.mjs';
 import { soulCommsSetting, writeSoulComms } from './soul-package.mjs';
@@ -39,7 +39,7 @@ function describe(soul, { file, env, home, running }) {
   let directory = null;
   try { directory = soulDirectory(soul.id, { file, env, home }); } catch { /* no soul directory */ }
   const setting = directory ? soulCommsSetting(directory) : null;
-  return { agentId: soul.id, name: soul.name ?? null, managed: soul.managed === true,
+  return { agentId: soul.id, name: soulShownName(soul, directory), handle: soul.name, managed: soul.managed === true,
     comms: setting ?? soul.comms !== false, running, directory };
 }
 

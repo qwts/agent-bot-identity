@@ -25,6 +25,31 @@ export function soulHomePath(agentId, options = {}) {
   return path.join(soulDirectory(agentId, options), '.soul-state', 'home');
 }
 
+/**
+ * A joined soul's own harness install (#417): its checkout is someone's
+ * repository, so the ACP adapter it wakes with lives here instead, under
+ * the soul's private state, never in its shareable package.
+ */
+export function soulHarnessesPath(agentId, options = {}) {
+  return path.join(soulDirectory(agentId, options), '.soul-state', 'harnesses');
+}
+
+/**
+ * Installs the pinned harnesses from `source` (a directory with package.json
+ * and package-lock.json, such as the soul's own package or the bundled
+ * Starter) into the soul's harness directory. Returns the directory, or
+ * null when `source` pins nothing.
+ */
+export async function installSoulHarnesses(agentId, source, { install = installHarnesses, ...options } = {}) {
+  if (!source || !existsSync(path.join(source, 'package.json')) || !existsSync(path.join(source, 'package-lock.json'))) return null;
+  const directory = soulHarnessesPath(agentId, options);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
+  for (const name of ['package.json', 'package-lock.json']) cpSync(path.join(source, name), path.join(directory, name));
+  await install(directory, { env: options.env });
+  return directory;
+}
+
 // Preserve live checkout bindings; home launches always provision so a
 // migration interrupted after rebinding still finishes cleanup next launch.
 export function soulBindingForLaunch(agentId, { stateDir, bindings, provision, harness = null }) {

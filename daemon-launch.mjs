@@ -16,8 +16,10 @@ export function launchCommsSetting({ soulDir = null, packagePath = null } = {}) 
 export const LAUNCH_NAME_MAX = 128;
 
 // `provisionHome` binds a soul that has no live binding (#297); `discard`
-// retires a soul this request spawned when its first start fails, so a
-// failed package launch leaves no active identity behind. `joinSoul` joins
+// rolls back a soul this request spawned when its first start fails, so a
+// failed package launch leaves no active identity, folder or agent-comms
+// membership behind (#419). It gets `{ binding, joined }`: what this request
+// got as far as. `joinSoul` joins
 // the soul to agent-comms as itself before its first turn: the broker takes
 // `launched` only from a joined soul, and a harness not yet signed in (a
 // fresh install) cannot run the turn that would join it. `recordLaunch`
@@ -74,6 +76,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
     requests.set(requestId, row);
     save(); // Accept durably before minting an identity or starting a process.
     let spawned = null;
+    const rollback = { binding: null, joined: false };
     try {
       if (event.account !== account) throw new Error('launch account does not match paired daemon');
       const targets = [event.soul, event.package].filter((value) => value !== undefined);
@@ -103,7 +106,11 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       const binding = await lookupBinding(identity.id)
         ?? await provisionHome({ agentId: identity.id, harness, packagePath });
       if (!binding?.worktree || !binding?.file) throw new Error('soul binding is unavailable');
-      if (joinSoul) await joinSoul({ agentId: identity.id, harness, name: event.name ?? null, binding, ...(parent ? { parent } : {}) });
+      rollback.binding = binding;
+      if (joinSoul) {
+        rollback.joined = true; // a join that fails after the broker records it still needs a leave
+        await joinSoul({ agentId: identity.id, harness, name: event.name ?? null, binding, ...(parent ? { parent } : {}) });
+      }
       if (recordLaunch) await recordLaunch({ agentId: identity.id, package: packagePath, binding,
         ...(event.comms === undefined ? {} : { comms: event.comms, principal: event.principal ?? null }) });
       const executor = executorFor({ agentId: identity.id, harness, cwd: binding.worktree,
@@ -130,7 +137,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       try { await onLaunched(identity.id); } catch { /* the soul runs; only later wakes are affected */ }
     } catch (error) {
       Object.assign(row, { status: 'failed', agentId: null, detail: error.message });
-      if (spawned) { try { await discard(spawned); } catch { /* the failure is already reported */ } }
+      if (spawned) { try { await discard(spawned, rollback); } catch { /* the failure is already reported */ } }
     }
     save(); // Persist outcome before network I/O; retry only the report.
     await reportRow(row, report);

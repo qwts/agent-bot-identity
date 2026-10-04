@@ -18,7 +18,10 @@ import {
   listSouls,
   populationFile,
   recordSoulLaunch,
+  recordSoulDisplayName,
   backfillManagedSouls,
+  locateSoulDir,
+  soulShownName,
   showSoul,
   showSoulByName,
   updateSoulStatus,
@@ -519,4 +522,38 @@ test('worktree history rejects invalid arrays and paths without reflecting their
     writeFileSync(file, JSON.stringify({ schemaVersion: 1, souls: { [FIRST_ID]: record } }));
     assert.throws(() => listSouls({ file }), invalid);
   }
+});
+
+test('the name chosen at launch or join is the one every command shows (#429)', () => {
+  const dir = scratch();
+  const file = path.join(dir, 'population.json');
+  const soulDir = path.join(dir, 'VMStarter - Starter.soul');
+  mkdirSync(path.join(soulDir, '.soul-state'), { recursive: true });
+  writeFileSync(path.join(soulDir, '.soul-state', 'agent-id'), `${FIRST_ID}\n`);
+  writeFileSync(path.join(soulDir, 'soul.json'), JSON.stringify({ name: 'VMStarter - Starter' }));
+  upsertSoul(fixture({ soulDir }), { file });
+  const handle = displayName(FIRST_ID);
+
+  // Before a launch name is recorded, soul.json's name stands in; with no
+  // folder, the generated handle.
+  const before = showSoul(FIRST_ID, { file });
+  assert.equal(before.displayName, undefined);
+  assert.equal(soulShownName(before, soulDir), 'VMStarter - Starter');
+  assert.equal(soulShownName(before), handle);
+
+  assert.equal(recordSoulDisplayName(FIRST_ID, 'VMStarter', { file }).displayName, 'VMStarter');
+  const soul = showSoul(FIRST_ID, { file });
+  assert.equal(soul.name, handle, 'the handle agents address is unchanged');
+  assert.equal(soulShownName(soul, soulDir), 'VMStarter');
+  const located = locateSoulDir(soulDir, { file, env: {}, home: dir, config: {} });
+  assert.equal(located.name, 'VMStarter');
+  assert.equal(located.handle, handle);
+
+  // Either name finds the soul.
+  assert.equal(showSoulByName('VMStarter', { file }).id, FIRST_ID);
+  assert.equal(showSoulByName(handle, { file }).id, FIRST_ID);
+
+  // A soul with no row is not created; bad names are refused.
+  assert.equal(recordSoulDisplayName(SECOND_ID, 'Other', { file }), null);
+  assert.throws(() => recordSoulDisplayName(FIRST_ID, 'bad\u0007name', { file }), /displayName must be printable text/);
 });

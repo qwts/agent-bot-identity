@@ -68,6 +68,21 @@ JSON `{ path, status, agentId?, name?, soulDir?, copies?, message? }`:
 The daemon applies the same rule to launch requests, so opening an installed
 soul from Finder and launching it never creates a second soul.
 
+## Failed launches and archived folders
+
+A launch that spawns a new soul and then fails before its first session
+starts rolls back what it made (#419). If it joined agent-comms, the soul
+leaves as itself. The identity and census row are retired, and every folder
+carrying the soul's marker moves to `<souls root>/.archive/<UTC stamp>-<folder
+name>`. Nothing is deleted, and a retry with the same name gets a fresh
+folder. The archive is not scanned for souls.
+
+`agent-bot doctor` warns with code `soul-folder-orphan` (`souls.orphans`)
+about any folder under the souls root whose marker names a soul that is
+retired or unknown here, such as one a failed launch left before this
+rollback existed. Finalized souls keep their folders and are not listed.
+`agent-bot soul remove <agentId>` archives them the same way (#420).
+
 ## Repository worktrees
 
 ADR-0332 decision 6 makes repository checkouts discoverable from
