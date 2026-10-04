@@ -8,7 +8,7 @@ import { createColdWaker } from '../cold-wake.mjs';
 import { REACH_AGENT_ID_ENV, REACH_TURN_ENV, REACH_WORKTREE_ENV, createReachState, handleMcpMessage, reachMcpServerEntry } from '../daemon-mcp.mjs';
 import { createInteractionService } from '../agent-interaction.mjs';
 import { upsertSoul } from '../agent-population.mjs';
-import { asidesDirectory, readAsides, recordAside, soulAsidesCommand, teamOf } from '../soul-asides.mjs';
+import { asidesDirectory, bindTurnSession, readAsides, recordAside, soulAsidesCommand, teamOf, turnSession } from '../soul-asides.mjs';
 
 // Everything lives under a scratch root; nothing here touches the real HOME.
 const root = mkdtempSync(path.join(tmpdir(), 'soul-asides-'));
@@ -71,7 +71,7 @@ function waker(relay, options, executor) {
 
 const shape = (aside) => [aside.dir, aside.via, aside.peer.agentId ?? aside.peer.address, aside.body];
 
-test('recordAside writes a private, bounded journal and never records NO_REPLY', () => {
+test('recordAside writes a private, bounded journal and never records a NO_REPLY final answer', () => {
   const { env, options } = scratch();
   writeCensus(env, [{ id: BILL, name: 'Bill' }, { id: TED, name: 'Ted' }]);
   const aside = recordAside(BILL, { dir: 'out', via: 'send_message', peer: `acct/${TED}`, messageId: 'm1', body: 'x'.repeat(5000) }, options);
@@ -83,6 +83,60 @@ test('recordAside writes a private, bounded journal and never records NO_REPLY',
   assert.equal(statSync(asidesDirectory(options)).mode & 0o777, 0o700);
   assert.equal(statSync(path.join(asidesDirectory(options), `${BILL}.jsonl`)).mode & 0o777, 0o600);
   assert.deepEqual(readAsides(BILL, options).asides.map((entry) => entry.messageId), ['m1']);
+});
+
+test('a real message whose body is NO_REPLY is still an aside', () => {
+  const { env, options } = scratch();
+  writeCensus(env, [{ id: BILL, name: 'Bill' }, { id: TED, name: 'Ted' }]);
+  assert.ok(recordAside(BILL, { dir: 'out', via: 'send_message', peer: TED, messageId: 's1', body: 'NO_REPLY' }, options));
+  assert.ok(recordAside(TED, { dir: 'in', via: 'relay-prompt', peer: BILL, messageId: 's1', body: 'NO_REPLY' }, options));
+  assert.equal(recordAside(TED, { dir: 'out', via: 'final-reply', peer: BILL, body: 'NO_REPLY' }, options), null);
+  assert.deepEqual(readAsides(BILL, options).asides.map((entry) => entry.body), ['NO_REPLY']);
+  assert.deepEqual(readAsides(TED, options).asides.map((entry) => entry.via), ['relay-prompt']);
+});
+
+test('a trim keeps the newest asides within both the count and half the byte limit', () => {
+  const { env, options } = scratch();
+  writeCensus(env, [{ id: BILL, name: 'Bill' }, { id: TED, name: 'Ted' }]);
+  const file = path.join(asidesDirectory(options), `${BILL}.jsonl`);
+  const maxBytes = 20_000;
+  let trims = 0;
+  let last = 0;
+  for (let index = 0; index < 60; index += 1) {
+    recordAside(BILL, { dir: 'out', via: 'send_message', peer: TED, messageId: `m${index}`, body: 'y'.repeat(1500) }, { ...options, maxBytes, keep: 1000, rows: [] });
+    const size = statSync(file).size;
+    assert.ok(size <= maxBytes, `journal ${size} bytes exceeds ${maxBytes}`);
+    if (size < last) trims += 1;
+    last = size;
+  }
+  // Byte-bounded: after a trim the file is at most half the limit, so the
+  // next appends do not rewrite it again straight away.
+  assert.ok(trims >= 1 && trims <= 10, `trimmed ${trims} times`);
+  const ids = readAsides(BILL, options).asides.map((entry) => entry.messageId);
+  assert.equal(ids.at(-1), 'm59');
+  assert.ok(ids.length < 60);
+  // Count-bounded too: a trim with room for many keeps only `keep`.
+  for (let index = 0; index < 5; index += 1) {
+    recordAside(TED, { dir: 'out', via: 'send_message', peer: BILL, messageId: `k${index}`, body: 'z' }, { ...options, rows: [] });
+  }
+  const tedFile = path.join(asidesDirectory(options), `${TED}.jsonl`);
+  recordAside(TED, { dir: 'out', via: 'send_message', peer: BILL, messageId: 'k5', body: 'z' }, { ...options, maxBytes: statSync(tedFile).size, keep: 2, rows: [] });
+  assert.deepEqual(readAsides(TED, options).asides.map((entry) => entry.messageId), ['k4', 'k5']);
+});
+
+test('a reach-server send names its turn\'s harness session once the turn bound it', () => {
+  const { env, options } = scratch();
+  writeCensus(env, [{ id: BILL, name: 'Bill' }, { id: TED, name: 'Ted' }]);
+  const turn = 'turn_22222222-2222-4222-8222-222222222222';
+  assert.equal(turnSession(BILL, turn, options), null);
+  assert.equal(bindTurnSession(BILL, turn, 'sess-bill', options), true);
+  assert.equal(bindTurnSession(BILL, null, 'sess-x', options), false);
+  assert.equal(turnSession(BILL, turn, options), 'sess-bill');
+  const aside = recordAside(BILL, { dir: 'out', via: 'send_message', peer: TED, messageId: 'm1', body: 'hi', turnId: turn }, options);
+  assert.equal(aside.harnessSessionId, 'sess-bill');
+  const other = recordAside(BILL, { dir: 'out', via: 'send_message', peer: TED, messageId: 'm2', body: 'hi', turnId: 'turn_33333333-3333-4333-8333-333333333333' }, options);
+  assert.equal(other.harnessSessionId, null);
+  assert.equal(statSync(path.join(asidesDirectory(options), `${BILL}.turns.json`)).mode & 0o777, 0o600);
 });
 
 test('a peer is named by its soul.json name when its folder is known', () => {
@@ -138,9 +192,11 @@ test('a cold-wake relay A→B with a reply leaves mirrored asides linked by corr
   assert.equal(response.result.isError, undefined);
 
   const sessions = { [TED]: 'sess-ted', [BILL]: 'sess-bill' };
+  const turns = {};
   const wake = waker(net.relay, options, async ({ invocation, onSession }) => {
     onSession(sessions[invocation.agentId]);
     assert.match(invocation.turnId, /^turn_/);
+    turns[invocation.agentId] = invocation.turnId;
     return { reply: invocation.agentId === TED ? 'Use small commits.' : 'NO_REPLY' };
   });
   await wake({ agentId: TED, count: 1, messageIds: ['msg_ask'] });
@@ -172,6 +228,17 @@ test('a cold-wake relay A→B with a reply leaves mirrored asides linked by corr
   for (const aside of [...ted.slice(1), bill[2]]) assert.equal(aside.correlation, key);
   // Bill's NO_REPLY sent nothing and recorded nothing outbound.
   assert.equal(bill.filter((aside) => aside.via === 'final-reply').length, 0);
+  // A send Bill's woken turn made through its reach server names that
+  // turn's harness session (bound when the session started).
+  const later = createReachState({
+    env: { ...env, [REACH_AGENT_ID_ENV]: BILL, [REACH_WORKTREE_ENV]: '/work/tree', AGENT_BOT_BINDING: '/work/tree/b.json', [REACH_TURN_ENV]: turns[BILL] },
+    home: options.home, cwd: tmpdir(), run,
+  });
+  await handleMcpMessage(later, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'send_message', arguments: { to: TED, body: 'Thanks' } } });
+  const sent = readAsides(BILL, options).asides.at(-1);
+  assert.equal(sent.via, 'send_message');
+  assert.equal(sent.turnId, turns[BILL]);
+  assert.equal(sent.harnessSessionId, 'sess-bill');
 });
 
 test('an unread message, and a turn that fails before its session, leave no aside', async () => {

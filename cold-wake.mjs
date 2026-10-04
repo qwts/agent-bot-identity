@@ -32,7 +32,7 @@ import { randomUUID } from 'node:crypto';
 import { wakeSetting } from './cold-wake-settings.mjs';
 import { FINAL_REPLY_ERRORS, senderAddress } from './comms-relay.mjs';
 import { NO_REPLY, formatThread, recordThreadMessage, sentMarks, sentSince, stripNoReply, threadContext, threadKey } from './soul-threads.mjs';
-import { recordAside } from './soul-asides.mjs';
+import { bindTurnSession, recordAside } from './soul-asides.mjs';
 
 // The final answer a soul gives when a teammate's message needs no answer
 // back. Every relayed turn's answer is otherwise a reply, so two souls would
@@ -190,6 +190,8 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
           const deliver = (harnessSessionId = null) => {
             if (delivered) return;
             delivered = { harnessSessionId: typeof harnessSessionId === 'string' ? harnessSessionId : null };
+            // The turn's own sends (reach server) look this up (#404).
+            if (delivered.harnessSessionId) bindTurnSession(agentId, turnId, delivered.harnessSessionId, threads);
             recordDelivered(agentId, message, thread, { turnId, ...delivered }, threads);
           };
           const result = await executor({ invocation: turn, message: relayPrompt(message, thread), attachments: [], env, wake, onSession: deliver });

@@ -18,7 +18,8 @@
 // Messages that only reached a mailbox, were acked without a turn, or that a
 // soul read itself with `agent-comms inbox read` (a batch wake or a live
 // session) leave no aside here: the daemon cannot see what entered those
-// contexts. NO_REPLY is never recorded.
+// contexts. A turn's final answer of NO_REPLY sends nothing, so it is never
+// recorded; a real message whose body happens to be NO_REPLY is.
 //
 // Asides are daemon state like the thread journal: 0700 directory, 0600
 // files, bounded, and read only by the owner (`agent-bot soul asides`, which
@@ -40,6 +41,13 @@ export const ASIDE_VIA = Object.freeze(['relay-prompt', 'thread-context', 'send_
 const BODY_LIMIT = 2048;
 const KEEP = 2000;
 const MAX_BYTES = 2 * 1024 * 1024;
+// A trim keeps the newest asides up to half the byte limit (and KEEP), so
+// the file grows for a while before the next trim instead of every append
+// rereading and rewriting it.
+const TRIM_FRACTION = 0.5;
+// Turn -> harness session, so a reach-server send (which starts before its
+// turn's session id exists) records the session its turn went into.
+const TURN_SESSIONS_KEEP = 64;
 export const READ_LIMIT_DEFAULT = 200;
 const READ_LIMIT_MAX = 1000;
 // A parent chain longer than this is corrupt; it reads as no team.
@@ -51,6 +59,64 @@ export function asidesDirectory({ env = process.env, home = homedir() } = {}) {
 
 function asidesPath(agentId, options) {
   return path.join(asidesDirectory(options), `${validateAgentId(agentId)}.jsonl`);
+}
+
+function turnSessionsPath(agentId, options) {
+  return path.join(asidesDirectory(options), `${validateAgentId(agentId)}.turns.json`);
+}
+
+function readTurnSessions(file) {
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+// Records which harness session a turn's prompt went into. The cold waker
+// calls this when the session exists, before the prompt is sent, so every
+// send the turn makes afterwards can name it. Best effort.
+export function bindTurnSession(agentId, turnId, harnessSessionId, { env = process.env, home = homedir() } = {}) {
+  try {
+    if (!stringOrNull(turnId) || !stringOrNull(harnessSessionId)) return false;
+    const file = turnSessionsPath(agentId, { env, home });
+    const dir = path.dirname(file);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    chmodSync(dir, 0o700);
+    withLock(`${file}.lock`, 'aside turn sessions', () => {
+      const entries = Object.entries(readTurnSessions(file)).filter(([key]) => key !== turnId);
+      entries.push([turnId, harnessSessionId]);
+      const pending = `${file}.${process.pid}.tmp`;
+      writeFileSync(pending, JSON.stringify(Object.fromEntries(entries.slice(-TURN_SESSIONS_KEEP))), { mode: 0o600 });
+      renameSync(pending, file);
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function turnSession(agentId, turnId, { env = process.env, home = homedir() } = {}) {
+  if (!stringOrNull(turnId)) return null;
+  try {
+    return stringOrNull(readTurnSessions(turnSessionsPath(agentId, { env, home }))[turnId]);
+  } catch {
+    return null;
+  }
+}
+
+// The newest lines that fit both `keep` and `budget` bytes.
+function newestWithin(lines, keep, budget) {
+  const kept = [];
+  let bytes = 0;
+  for (let index = lines.length - 1; index >= 0 && kept.length < keep; index -= 1) {
+    const size = Buffer.byteLength(lines[index]) + 1;
+    if (bytes + size > budget) break;
+    kept.push(lines[index]);
+    bytes += size;
+  }
+  return kept.reverse();
 }
 
 function stringOrNull(value) {
@@ -107,7 +173,7 @@ export function recordAside(agentId, entry, {
   try {
     if (!ASIDE_VIA.includes(entry?.via)) return null;
     const body = typeof entry.body === 'string' ? entry.body : '';
-    if (body.trim() === NO_REPLY) return null;
+    if (entry.via === 'final-reply' && body.trim() === NO_REPLY) return null;
     const census = rows ?? censusRows({ env, home });
     const aside = {
       id: `aside_${randomUUID()}`,
@@ -121,7 +187,7 @@ export function recordAside(agentId, entry, {
       correlation: stringOrNull(entry.correlation),
       teamId: teamOf(validateAgentId(agentId), census),
       turnId: stringOrNull(entry.turnId),
-      harnessSessionId: stringOrNull(entry.harnessSessionId),
+      harnessSessionId: stringOrNull(entry.harnessSessionId) ?? turnSession(agentId, entry.turnId, { env, home }),
       ...(entry.via === 'thread-context' ? { sentAt: stringOrNull(entry.sentAt) } : {}),
       body: clip(body, BODY_LIMIT),
     };
@@ -134,9 +200,10 @@ export function recordAside(agentId, entry, {
     withLock(`${file}.lock`, 'aside journal', () => {
       appendFileSync(file, `${JSON.stringify(aside)}\n`, { mode: 0o600 });
       if (statSync(file).size > maxBytes) {
-        const kept = readFileSync(file, 'utf8').split('\n').filter(Boolean).slice(-keep);
+        const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean);
+        const kept = newestWithin(lines, keep, Math.floor(maxBytes * TRIM_FRACTION));
         const pending = `${file}.${process.pid}.tmp`;
-        writeFileSync(pending, `${kept.join('\n')}\n`, { mode: 0o600 });
+        writeFileSync(pending, kept.length > 0 ? `${kept.join('\n')}\n` : '', { mode: 0o600 });
         renameSync(pending, file);
       }
     });
