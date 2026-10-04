@@ -716,6 +716,13 @@ the message and its thread. A turn the policy stopped with nothing said
 answers with a short notice naming the refused tools, never the rules
 (#408).
 
+A soul waits for a teammate's answer rather than chasing it (#427). Until a
+teammate answers in a thread, or for 10 minutes, `send_message` refuses a
+second message to it in that thread, so a teammate still starting up is not
+woken again. The result of a send or a brief says the reply will wake the
+soul later, and a woken turn's prompt names the teammates it is still
+waiting on, asking for no re-sends or progress notes meanwhile.
+
 A soul can also start its own team (#377). `start_soul` (`name`, and
 optionally `harness`, `template`, `brief`) starts a new full soul — its own
 soul directory, identity and inbox, not a subagent in the caller's session —
@@ -767,6 +774,21 @@ first. With `--json`, a failure prints `{"error":{"code","message"}}`;
 that refusal's code is `soul-running`. GeniusBar's bridge reads the same JSON. A launch request may also carry
 `"comms": true|false`, which the daemon writes to the soul's `soul.json`
 before it starts the soul.
+
+Messages between souls show up as asides (#404). The daemon records each
+agent-comms message that actually entered or left a soul's context: the
+message a cold turn was woken with and the thread re-shown with it, the
+reply the relay sent, and the soul's own `send_message` and `start_soul`
+briefs. A message that stayed in a mailbox, or that a soul read itself with
+`agent-comms inbox read`, leaves none. The owner reads them, and GeniusBar
+renders them:
+
+```sh
+agent-bot soul asides bill --json   # {"agentId":…,"asides":[{"dir":"out","via":"send_message","peer":{"name":"ted",…},"teamId":null,"body":"…"}],"next":null}
+```
+
+A principal allowed to observe the soul reads the same list from the daemon
+at `GET /v1/souls/<agentId>/asides?after=<asideId>`.
 
 ### Approving a soul's tool call
 

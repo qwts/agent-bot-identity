@@ -62,13 +62,21 @@ owner, because a soul can unset its markers. Each owner action needs both:
      in that account could stand up a socket that answers. The CLI never reads
      the principal from disk or the keychain itself. A host app such as
      GeniusBar holds the principal and presents it the same way.
-   - Without it, the macOS authorization dialog (#204) names the action and
-     needs a person to authenticate. Cancelling it, or a platform without it,
-     refuses.
+   - Without it, where GeniusBar's `agent-bot-keyd` is installed and a
+     person can be asked, keyd asks for Touch ID, or the login password on a
+     Mac without it, naming the soul (name and Agent ID) and the change. No
+     administrator account is needed. keyd signs the approval with its own
+     key, which agent-bot pins from the code-signed binary, so a socket that
+     merely answers cannot approve (#416).
+   - Otherwise (no keyd, an unsigned keyd, no GUI session such as ssh or a
+     headless Mac), the macOS authorization dialog (#204) names the action and
+     needs a person to authenticate as an administrator. Cancelling it, or a
+     platform without it, refuses. A "no" through keyd never falls back to
+     this dialog.
 
 The record of each owner action carries `authorization`: `{ method:
-"principal", principal }` or `{ method: "consent" }`. The secret is never
-recorded.
+"principal", principal }`, `{ method: "presence", via: "agent-bot-keyd" }` or
+`{ method: "consent" }`. The secret is never recorded.
 
 This is still a local mechanism boundary, not isolation against a process
 that can rewrite runtime files: a process running as the account that owns the

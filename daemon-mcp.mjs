@@ -47,8 +47,9 @@ import {
 } from './agent-jobs.mjs';
 import { populationFile, showSoul } from './agent-population.mjs';
 import { agentCommsAsSoul } from './comms-relay.mjs';
-import { validateAgentId } from './agent-identity.mjs';
-import { recordThreadMessage } from './soul-threads.mjs';
+import { isAgentId, validateAgentId } from './agent-identity.mjs';
+import { claimSend, recordThreadMessage } from './soul-threads.mjs';
+import { recordAside } from './soul-asides.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
 import { AGENT_ID_KEYS, readGitConfig } from './resolve-agent.mjs';
 import { readBinding } from './agent-binding.mjs';
@@ -71,6 +72,10 @@ export const REACH_COMMS_ENV = 'AGENT_BOT_REACH_COMMS';
 // teammate's answer finds its way back into this soul's thread.
 export const REACH_CORRELATION_ENV = 'AGENT_BOT_REACH_CORRELATION';
 const MAX_CORRELATION_LENGTH = 128;
+// The daemon's id for the relayed turn this server serves (#404), so a send's
+// aside joins the turn's other asides. Opaque to the agent.
+export const REACH_TURN_ENV = 'AGENT_BOT_REACH_TURN';
+const TURN_ID = /^turn_[0-9a-f-]{36}$/;
 export const BINDING_ENV = 'AGENT_BOT_BINDING';
 
 // The server's name in mcpServers[], and the tool names a harness derives
@@ -554,13 +559,27 @@ async function callTool(state, name, args = {}) {
       const run = asSoul(state);
       const address = await resolveRecipient(run, soul, to);
       const correlation = turnCorrelation(state);
-      const sent = await run(soul, [
-        'send', address, '--body', body,
-        ...(replyTo ? ['--reply-to', replyTo] : []),
-        ...(correlation ? ['--correlation', correlation] : []),
-      ]);
-      recordSent(state, soul, { id: sent.messageId, to: address, replyTo, correlation, body });
-      return { sent: true, to: address, messageId: sent.messageId ?? null, wake: sent.wake ?? null };
+      // One message per teammate per thread until it answers (#427): a
+      // teammate still waking would otherwise be re-pinged, and each
+      // message wakes it again. The claim holds the thread while this send
+      // is in flight, so a concurrent call cannot pass too (#433).
+      const claim = claimSend(soul.agentId, { to: address, correlation, now: state.now() }, threadOptions(state));
+      if (claim.waiting) {
+        throw new Error(`${address} has not answered your message from ${claim.waiting.at} yet. It may still be starting up; `
+          + 'its reply will wake you in a later turn. Do not message it again in the meantime; '
+          + 'follow up after it answers.');
+      }
+      try {
+        const sent = await run(soul, [
+          'send', address, '--body', body,
+          ...(replyTo ? ['--reply-to', replyTo] : []),
+          ...(correlation ? ['--correlation', correlation] : []),
+        ]);
+        recordSent(state, soul, { id: sent.messageId, to: address, replyTo, correlation, body }, 'send_message');
+        return { sent: true, to: address, messageId: sent.messageId ?? null, wake: sent.wake ?? null, ...(isAgentId(address.split('/').pop()) ? awaitingNote(address) : {}) };
+      } finally {
+        claim.release();
+      }
     }
     case 'start_soul': {
       const soul = commsSoul(state, identity);
@@ -580,8 +599,9 @@ async function callTool(state, name, args = {}) {
         try {
           const correlation = turnCorrelation(state);
           const sent = await asSoul(state)(soul, ['send', started.agentId, '--body', brief, ...(correlation ? ['--correlation', correlation] : [])]);
-          recordSent(state, soul, { id: sent.messageId, to: started.agentId, replyTo: null, correlation, kind: 'brief', body: brief });
+          recordSent(state, soul, { id: sent.messageId, to: started.agentId, replyTo: null, correlation, kind: 'brief', body: brief }, 'start_soul');
           result.brief = { sent: true, messageId: sent.messageId ?? null };
+          Object.assign(result, awaitingNote(started.name ?? started.agentId));
         } catch (error) {
           result.brief = { sent: false, error: error.message };
         }
@@ -599,9 +619,28 @@ function turnCorrelation(state) {
   return typeof value === 'string' && value !== '' && value.length <= MAX_CORRELATION_LENGTH ? value : null;
 }
 
-// Journals a send so a later cold wake can show it (#392). Best effort.
-function recordSent(state, soul, entry) {
-  recordThreadMessage(soul.agentId, { dir: 'out', ...entry }, { env: state.env, home: state.home, now: state.now });
+function threadOptions(state) {
+  return { env: state.env, home: state.home, now: state.now };
+}
+
+// Journals a send so a later cold wake can show it (#392), and records it as
+// an aside (#404): the send came out of this session. Best effort.
+function recordSent(state, soul, entry, via) {
+  const options = threadOptions(state);
+  recordThreadMessage(soul.agentId, { dir: 'out', ...entry }, options);
+  const turn = state.env[REACH_TURN_ENV];
+  recordAside(soul.agentId, {
+    dir: 'out', via, peer: entry.to, messageId: entry.id, replyTo: entry.replyTo, correlation: entry.correlation,
+    body: entry.body, turnId: typeof turn === 'string' && TURN_ID.test(turn) ? turn : null,
+  }, options);
+}
+
+// What a sender should do next (#427): the teammate's reply wakes it later,
+// so waiting, re-sending and progress notes only add wakes.
+function awaitingNote(who) {
+  return {
+    next: `${who}'s reply will wake you in a later turn: do not wait for it or message it again, and send no progress notes to other agents.`,
+  };
 }
 
 // The daemon starts the teammate; this server only proves which soul asks.
@@ -639,7 +678,7 @@ async function startSoul(state, soul, request) {
 // so `invocationId` is optional; the soul's worktree and binding make the
 // teammate tools speak as it, and `comms: false` withholds them.
 export function reachMcpServerEntry({
-  invocationId = null, agentId, env = process.env, worktree = null, binding = null, comms = true, correlation = null,
+  invocationId = null, agentId, env = process.env, worktree = null, binding = null, comms = true, correlation = null, turnId = null,
 } = {}) {
   const vars = [{ name: REACH_AGENT_ID_ENV, value: validateAgentId(agentId) }];
   if (invocationId !== null && invocationId !== undefined) {
@@ -657,6 +696,7 @@ export function reachMcpServerEntry({
   if (typeof correlation === 'string' && correlation !== '' && correlation.length <= MAX_CORRELATION_LENGTH) {
     vars.push({ name: REACH_CORRELATION_ENV, value: correlation });
   }
+  if (typeof turnId === 'string' && TURN_ID.test(turnId)) vars.push({ name: REACH_TURN_ENV, value: turnId });
   for (const name of STORE_ENV_PASSTHROUGH) {
     if (typeof env[name] === 'string' && env[name] !== '') {
       vars.push({ name, value: env[name] });

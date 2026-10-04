@@ -24,7 +24,8 @@
 //     call keyd's `credential` tool.
 //   - Owner operations (import, remove, pin) go to keyd's owner socket.
 //     keyd asks the owner itself (Touch ID or the login password) before
-//     changing anything.
+//     changing anything. So does `owner/presence`, the owner gate's proof
+//     (owner-presence.mjs, #416).
 //
 //   agent-bot keyd install --bin PATH [--json]   supervise keyd under launchd
 //   agent-bot keyd uninstall [--json]            unload it (its keys stay)
@@ -84,8 +85,12 @@ export function keydRequest(socketPath, method, params = {}, { timeoutMs = REQUE
       socket.end();
       let message;
       try { message = JSON.parse(buffer.slice(0, end)); } catch { reject(new Error('agent-bot-keyd answered malformed JSON')); return; }
-      if (message.error) reject(Object.assign(new Error(String(message.error.message ?? 'agent-bot-keyd refused')), { code: 'keyd-refused' }));
-      else resolve(message.result);
+      if (message.error) {
+        reject(Object.assign(new Error(String(message.error.message ?? 'agent-bot-keyd refused')),
+          { code: 'keyd-refused', rpcCode: Number.isInteger(message.error.code) ? message.error.code : null }));
+      } else {
+        resolve(message.result);
+      }
     });
     // A keyd that crashes or hangs up before a full line would otherwise
     // leave this pending forever: socket timeouts stop once it closes.

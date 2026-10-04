@@ -297,8 +297,8 @@ test('join --wake asks the owner first, then sets the wake; a refusal or an unre
   const reused = await joinSoul({ ...base, name: 'someone-else', soul: joined.agentId, cwd: a.outside, wake: 'resume:read-only',
     gate: async (action) => { reasked.push(action); return { method: 'consent' }; } }).catch((error) => error);
   assert.ok(!(reused instanceof Error), reused?.message);
-  const census = showSoul(joined.agentId, { file: a.env.AGENT_BOT_POPULATION_PATH }).name;
-  assert.deepEqual(reasked, [`wake the existing soul ${census} (${joined.agentId}) on new messages (resume:read-only)`]);
+  // The census name it joined as (#429), not the generated handle.
+  assert.deepEqual(reasked, [`wake the existing soul scout (${joined.agentId}) on new messages (resume:read-only)`]);
   assert.ok(!reasked[0].includes('someone-else'), 'the caller-supplied name does not stand in for the target');
   await assert.rejects(joinSoul({ ...base, harness: 'opencode', name: 'scout', soul: acp.agentId, cwd: a.outside, wake: 'resume:workspace',
     gate: async () => assert.fail('not asked') }), new RegExp(`${acp.agentId} runs claude; join it with --harness claude`));

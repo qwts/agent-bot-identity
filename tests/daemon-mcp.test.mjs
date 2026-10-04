@@ -37,7 +37,7 @@ import {
   setOperations,
 } from '../agent-principals.mjs';
 import { upsertSoul } from '../agent-population.mjs';
-import { threadContext } from '../soul-threads.mjs';
+import { recordThreadMessage, threadContext } from '../soul-threads.mjs';
 
 const AGENT_ID = 'agent_11111111-1111-4111-8111-111111111111';
 const OTHER_ID = 'agent_22222222-2222-4222-8222-222222222222';
@@ -517,7 +517,8 @@ test('fleet lists the teammates the broker lets this soul message, as the soul',
 test('send_message resolves a teammate by name and sends as the soul', async () => {
   const { state, calls } = injectedSoul();
   const sent = await call(state, 'send_message', { to: 'ted - starter', body: 'Can you review the plan?\nThanks' });
-  assert.deepEqual(sent, { sent: true, to: PEERS[0].address, messageId: 'msg_1', wake: 'cold' });
+  assert.deepEqual(sent, { sent: true, to: PEERS[0].address, messageId: 'msg_1', wake: 'cold',
+    next: `${PEERS[0].address}'s reply will wake you in a later turn: do not wait for it or message it again, and send no progress notes to other agents.` });
   assert.deepEqual(calls.map((entry) => entry.args), [
     ['peers'],
     ['send', PEERS[0].address, '--body', 'Can you review the plan?\nThanks'],
@@ -526,8 +527,70 @@ test('send_message resolves a teammate by name and sends as the soul', async () 
   await call(state, 'send_message', { to: PEERS[1].agentId, body: 'hi', reply_to: 'msg_0' });
   assert.deepEqual(calls.at(-1).args, ['send', PEERS[1].agentId, '--body', 'hi', '--reply-to', 'msg_0']);
   // A name no peer has may be a person: the broker decides.
-  await call(state, 'send_message', { to: 'owner', body: 'done' });
+  const toPerson = await call(state, 'send_message', { to: 'owner', body: 'done' });
   assert.deepEqual(calls.at(-1).args, ['send', 'owner', '--body', 'done']);
+  assert.equal(toPerson.next, undefined, 'a person\'s answer wakes nothing');
+});
+
+// One message per teammate per thread until it answers (#427): a teammate
+// still starting up is not pinged again, and each ping would wake it again.
+test('send_message refuses a second message to a teammate that has not answered in this thread', async () => {
+  const { root } = scratch();
+  const stateHome = path.join(root, 'state');
+  const { state, calls } = injectedSoul({ [REACH_CORRELATION_ENV]: 'msg_starter', AGENT_BOT_STATE_HOME: stateHome });
+  await call(state, 'send_message', { to: PEERS[0].agentId, body: 'Ted, your book list?' });
+  await assert.rejects(call(state, 'send_message', { to: 'Ted - Starter', body: 'Ted? Any news?' }),
+    /has not answered your message from .* Do not message it again/);
+  assert.equal(calls.filter((entry) => entry.args[0] === 'send').length, 1, 'the re-ping never reached the broker');
+  // Other teammates and people are unaffected.
+  await call(state, 'send_message', { to: PEERS[1].agentId, body: 'Twin, a second opinion?' });
+  await call(state, 'send_message', { to: 'owner', body: 'Asked Ted and Twin.' });
+  await call(state, 'send_message', { to: 'owner', body: 'Still on it.' });
+  // Once Ted answers in this thread, the soul may write to Ted again.
+  recordThreadMessage(AGENT_ID, { dir: 'in', id: 'msg_ted', from: PEERS[0].address, replyTo: 'msg_1', correlation: 'msg_starter', body: 'Three books.' },
+    { env: state.env, home: '/nonexistent' });
+  await call(state, 'send_message', { to: PEERS[0].agentId, body: 'Thanks, one more?' });
+  // Another thread, or a turn with no thread, is not held.
+  const other = injectedSoul({ [REACH_CORRELATION_ENV]: 'msg_other', AGENT_BOT_STATE_HOME: stateHome });
+  await call(other.state, 'send_message', { to: PEERS[1].agentId, body: 'Twin, separate question.' });
+  const unthreaded = injectedSoul({ AGENT_BOT_STATE_HOME: stateHome });
+  await call(unthreaded.state, 'send_message', { to: PEERS[1].agentId, body: 'hi' });
+  await call(unthreaded.state, 'send_message', { to: PEERS[1].agentId, body: 'hi again' });
+});
+
+// Two send_message calls in flight at once (#433): the check and the claim
+// are one locked step, so only one reaches the broker; a failed send frees
+// the teammate again.
+test('concurrent send_message calls to one teammate reach the broker once', async () => {
+  const { root } = scratch();
+  const comms = fakeComms();
+  let failNext = false;
+  const run = (command, args, options, callback) => {
+    if (args[0] !== 'send') return comms.run(command, args, options, callback);
+    if (failNext) {
+      failNext = false;
+      comms.calls.push({ command, args });
+      return setTimeout(() => callback(new Error('exit 1'), JSON.stringify({ ok: false, error: { code: 'unavailable', message: 'broker down' } }), ''), 20);
+    }
+    return setTimeout(() => comms.run(command, args, options, callback), 20);
+  };
+  const state = createReachState({
+    env: {
+      [REACH_AGENT_ID_ENV]: AGENT_ID, [REACH_WORKTREE_ENV]: '/souls/bill/worktree', AGENT_BOT_BINDING: '/souls/bill/binding.json',
+      PATH: '/opt/bin', [REACH_CORRELATION_ENV]: 'msg_starter', AGENT_BOT_STATE_HOME: path.join(root, 'state'),
+    },
+    home: '/nonexistent', cwd: tmpdir(), run,
+  });
+  const sends = () => comms.calls.filter((entry) => entry.args[0] === 'send').length;
+  failNext = true;
+  await assert.rejects(call(state, 'send_message', { to: PEERS[0].agentId, body: 'Ted?' }));
+  const results = await Promise.allSettled([
+    call(state, 'send_message', { to: PEERS[0].agentId, body: 'Ted, your book list?' }),
+    call(state, 'send_message', { to: 'Ted - Starter', body: 'Ted, also your films?' }),
+  ]);
+  assert.deepEqual(results.map((result) => result.status).sort(), ['fulfilled', 'rejected']);
+  assert.match(results.find((result) => result.status === 'rejected').reason.message, /Do not message it again/);
+  assert.equal(sends(), 2, 'the failed send, then exactly one of the two concurrent sends');
 });
 
 // A relayed turn's sends carry its thread key and are journaled, so the
@@ -603,7 +666,8 @@ test('start_soul asks the daemon as the soul, with a proof and never the secret'
   });
   const started = await call(state, 'start_soul', { name: ' Researcher ', harness: 'claude', brief: 'Survey ACP adapters.' });
   assert.deepEqual(started, { started: true, agentId: CHILD_ID, name: 'Researcher', harness: 'claude', parent: AGENT_ID,
-    brief: { sent: true, messageId: 'msg_1' } });
+    brief: { sent: true, messageId: 'msg_1' },
+    next: 'Researcher\'s reply will wake you in a later turn: do not wait for it or message it again, and send no progress notes to other agents.' });
   assert.equal(daemon.requests.length, 1);
   const [request] = daemon.requests;
   assert.equal(request.url, 'http://127.0.0.1:4555/v0/team/start');

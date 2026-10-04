@@ -30,8 +30,9 @@ export function wakeReporter(report) {
 // resolves with its `reply`: the agent's message text after its last tool
 // call, which the cold waker's relay sends back, and `denied`: the tools the
 // policy refused, so a turn that stopped on one is not answered with silence.
+// `onSession` hears the harness session the turn's prompt goes into (#404).
 export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onEvent = () => {}, approvals = null }) {
-  return async ({ invocation, message, attachments, env }) => {
+  return async ({ invocation, message, attachments, env, onSession = null }) => {
     const executor = executorFor({ agentId: invocation.agentId, harness: invocation.harness, cwd: invocation.cwd, env });
     const signal = AbortSignal.timeout(turnTimeoutMs);
     let reply = '';
@@ -46,7 +47,14 @@ export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onE
       message,
       attachments,
       signal,
-      appendEvent: (type, data) => { collect(type, data); onEvent(type); return { type }; },
+      appendEvent: (type, data) => {
+        if (type === HARNESS_SESSION_EVENT && typeof onSession === 'function') {
+          try { onSession(data?.harnessSessionId ?? null); } catch { /* observation only */ }
+        }
+        collect(type, data);
+        onEvent(type);
+        return { type };
+      },
       addArtifact: () => { throw new Error('a cold turn has no artifact store'); },
       requestApproval: approvals
         ? ({ operation, summary, ttlMs } = {}) => approvals({
@@ -116,6 +124,7 @@ export function acpExecutorFor({
       binding,
       comms,
       correlation: typeof invocation?.correlation === 'string' ? invocation.correlation : null,
+      turnId: typeof invocation?.turnId === 'string' ? invocation.turnId : null,
     }), ...(keyd ? [keydMcpServerEntry({ bin: keyd, binding, env: turnEnv })] : [])];
     const executor = createExecutor({
       harness,
@@ -157,7 +166,7 @@ export function laneExecutor({ acpTurn = null, resumeTurn = null }) {
 // onWake for createCommsSupervisor. `coldWake` is null when the daemon has
 // no ACP executor, no resume executor, and no webhook waker, which leaves
 // every soul without a warm socket `waiting`.
-export function createWakePlane({ pool, settings, lookupSoul, identities, executorFor = null, resumeExecutor = null, webhookWaker = null, relay = null, taskReporter = null, receipt, turnTimeoutMs, approvals = null }) {
+export function createWakePlane({ pool, settings, lookupSoul, identities, executorFor = null, resumeExecutor = null, webhookWaker = null, relay = null, taskReporter = null, authStatus = null, receipt, turnTimeoutMs, approvals = null }) {
   const coldWake = executorFor || resumeExecutor || webhookWaker
     ? createColdWaker({
       executor: laneExecutor({ acpTurn: executorFor ? coldTurnExecutor({ executorFor, turnTimeoutMs, approvals }) : null, resumeTurn: resumeExecutor }),
@@ -167,6 +176,7 @@ export function createWakePlane({ pool, settings, lookupSoul, identities, execut
       relay,
       taskReporter,
       webhook: webhookWaker,
+      authStatus,
       receipt,
     })
     : null;

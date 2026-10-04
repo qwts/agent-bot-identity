@@ -79,6 +79,15 @@ export function isHomebrewAgentBotPath(path) {
 
 // The keg's bin/agent-bot is a shell wrapper that execs libexec/agent-bot;
 // the runtime files (skills included) live beside the latter, not the wrapper.
+// The app that embeds this runtime (ADR-0276): GeniusBar ships agent-bot in
+// <App>.app/Contents/Resources/components/agent-bot and runs it on its own
+// Node, with no ~/.local/bin entrypoint, git hooks or organization config.
+// Returns the .app path, or null for a source checkout or Homebrew keg.
+export function embeddingAppBundle(path) {
+  const match = String(path).replaceAll('\\', '/').match(/^(.*\.app)\/Contents\/Resources\/components\/agent-bot\/?$/);
+  return match ? match[1] : null;
+}
+
 export function homebrewRuntimeRoot(path) {
   const match = String(path).replaceAll('\\', '/').match(HOMEBREW_AGENT_BOT);
   return match ? join(match[1], 'libexec') : null;
