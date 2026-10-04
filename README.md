@@ -262,6 +262,7 @@ agent-bot space export [agent-id] [--out <path>] [--gist]
 agent-bot space import <pack|gist:id|gist-url> [--force]
 agent-bot space retire <agent-id> [--delete-space]
 agent-bot population <list|show|backfill> [agent-id|name] [--dry-run] [--json]
+agent-bot approvals list [--json] | approvals approve|deny <proposalId> [--json] [--principal-stdin]
 agent-bot soul cold-wake <agent-id> [on|off|show|resume <read-only|workspace>|webhook --url-file PATH --key-file PATH|->] [--principal-stdin]
 agent-bot daemon <run|start|status|stop|disable|vouch-key|pair-comms> [--json]
 agent-bot mcp
@@ -757,6 +758,30 @@ first. With `--json`, a failure prints `{"error":{"code","message"}}`;
 that refusal's code is `soul-running`. GeniusBar's bridge reads the same JSON. A launch request may also carry
 `"comms": true|false`, which the daemon writes to the soul's `soul.json`
 before it starts the soul.
+
+### Approving a soul's tool call
+
+A soul's policy can answer a tool call with `approval` instead of allow or
+deny. A daemon turn (a cold wake) then waits on an immutable proposal that
+names the soul, the tool, a short summary and an expiry (15 minutes by
+default), and the owner decides (#85):
+
+```bash
+agent-bot approvals list --json
+agent-bot approvals approve proposal_… [--principal-stdin]
+agent-bot approvals deny proposal_…
+```
+
+`list` returns `{ "approvals": [{ proposalId, agentId, soul, tool, summary,
+operationDigest, createdAt, expiresAt, status }] }`. `approve` and `deny` go
+through the owner gate, naming the soul and tool, and echo the proposal's
+operation digest, so a decision lands only on the operation it names. Both
+refuse a caller with a soul marker. An expired proposal, or a turn that ends
+or times out first, is a deny. A principal with the `approve` operation can
+decide for its own souls through `GET /v1/proposals` and
+`POST /v1/proposals/<id>/decision`. Proposals live only as long as the turn
+that waits on them: after a daemon restart nothing is listed. Launch turns
+(`start_soul`, package launches) still deny instead of asking.
 
 ### Removing a soul
 
