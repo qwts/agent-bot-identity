@@ -9,7 +9,7 @@ import { createColdWaker } from '../cold-wake.mjs';
 import { createCommsRelay } from '../comms-relay.mjs';
 import { createReachState, handleMcpMessage, reachMcpServerEntry } from '../daemon-mcp.mjs';
 import {
-  clip, formatThread, recordThreadMessage, sentMarks, sentSince, stripNoReply, threadContext, threadsDirectory,
+  PENDING_REPLY_TTL_MS, claimSend, clip, formatThread, pendingReplies, recordThreadMessage, sentMarks, sentSince, stripNoReply, threadContext, threadsDirectory,
 } from '../soul-threads.mjs';
 
 const roots = [];
@@ -257,6 +257,12 @@ test('A asks B to ask C and gets C\'s answer back through B', async () => {
   assert.match(prompts.bill[1], /pass the result on to them with send_message/);
   // NO_REPLY was never sent to anyone.
   assert.equal(broker.messages.some((m) => /NO_REPLY/.test(m.body)), false);
+  // Ted's final answer to Bill is journaled as a reply, so Ted is not left
+  // waiting on Bill, and may still ask Bill something in this thread (#433).
+  const tedSent = readFileSync(path.join(threadsDirectory(options), `${SOULS.ted}.jsonl`), 'utf8').trim().split('\n')
+    .map((line) => JSON.parse(line)).filter((entry) => entry.dir === 'out');
+  assert.deepEqual(tedSent.map((entry) => entry.kind), ['reply']);
+  assert.deepEqual(pendingReplies(SOULS.ted, { correlation: request.id, now: new Date(tedSent[0].at) }, options), []);
 });
 
 // A send journaled in the same millisecond a turn starts is still an earlier
@@ -274,4 +280,75 @@ test('sentSince counts only sends after the marks, even within one millisecond',
   const own = sentSince(BILL, { before, correlation: 'c1' }, options);
   assert.deepEqual(own.map((entry) => [entry.id, entry.kind ?? null]), [['m-turn', null], ['m-brief', 'brief']]);
   assert.deepEqual(sentSince(BILL, { correlation: 'c1' }, options), []);
+});
+
+// The souls a soul is still waiting on in a thread (#427): its latest send to
+// each soul with no answer since, within the window. People never count.
+test('pendingReplies lists the souls not yet answering in this thread', () => {
+  const { options } = scratch();
+  const TED = 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const TWIN = 'agent_cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  let clock = Date.parse('2026-10-03T12:00:00Z');
+  const at = (step = 0) => ({ ...options, now: () => new Date(clock += step) });
+  const record = (entry, step = 1000) => recordThreadMessage(BILL, entry, at(step));
+  record({ dir: 'in', id: 'm0', from: 'owner', correlation: 'c1', body: 'Ask Ted and Twin.' });
+  record({ dir: 'out', id: 'm1', to: `acct/${TED}`, correlation: 'c1', body: 'Ted?' });
+  record({ dir: 'out', id: 'm2', to: TWIN, correlation: 'c1', kind: 'brief', body: 'Twin, scout.' });
+  record({ dir: 'out', id: 'm3', to: 'owner', correlation: 'c1', body: 'On it.' });
+  record({ dir: 'out', id: 'm4', to: TED, correlation: 'c2', body: 'Other thread.' });
+  const waiting = (now = clock) => pendingReplies(BILL, { correlation: 'c1', now: new Date(now) }, options).map((entry) => entry.id);
+  assert.deepEqual(waiting(), ['m1', 'm2'], 'a person is never waited on');
+  // Ted answers by replyTo, Twin by correlation: neither is pending after.
+  record({ dir: 'in', id: 'm5', from: `acct/${TED}`, replyTo: 'm1', body: 'Here.' });
+  assert.deepEqual(waiting(), ['m2']);
+  record({ dir: 'in', id: 'm6', from: TWIN, correlation: 'c1', body: 'Scouted.' });
+  assert.deepEqual(waiting(), []);
+  // A new message to Ted waits again; past the window it no longer holds.
+  record({ dir: 'out', id: 'm7', to: TED, correlation: 'c1', body: 'One more?' });
+  assert.deepEqual(waiting(), ['m7']);
+  assert.deepEqual(waiting(clock + PENDING_REPLY_TTL_MS + 1), []);
+  assert.deepEqual(pendingReplies(BILL, { correlation: null }, options), [], 'no thread, nothing held');
+  const other = (now) => pendingReplies(BILL, { correlation: 'c2', now: new Date(now) }, options).map((entry) => entry.id);
+  assert.deepEqual(other(clock), ['m4'], 'each thread holds only its own sends');
+  assert.deepEqual(other(clock + PENDING_REPLY_TTL_MS + 1), [], 'past the window, m4 no longer holds');
+});
+
+// A cold wake's final answer answers the teammate; it asks nothing, so it
+// never holds the thread against a later question (#433).
+test('a final reply never counts as a send awaiting an answer', () => {
+  const { options } = scratch();
+  const TED = 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const now = () => new Date('2026-10-03T12:00:00Z');
+  recordThreadMessage(BILL, { dir: 'in', id: 'm1', from: `acct/${TED}`, correlation: 'c1', body: 'Bill, your list?' }, { ...options, now });
+  recordThreadMessage(BILL, { dir: 'out', id: 'm2', to: `acct/${TED}`, replyTo: 'm1', correlation: 'c1', kind: 'reply', body: 'Here it is.' }, { ...options, now });
+  assert.deepEqual(pendingReplies(BILL, { correlation: 'c1', now: now() }, options), []);
+  const journal = readFileSync(path.join(threadsDirectory(options), `${BILL}.jsonl`), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(journal[1].kind, 'reply', 'the origin is kept in the journal');
+  recordThreadMessage(BILL, { dir: 'out', id: 'm3', to: TED, correlation: 'c1', kind: 'other', body: 'A question?' }, { ...options, now });
+  assert.deepEqual(pendingReplies(BILL, { correlation: 'c1', now: now() }, options).map((entry) => [entry.id, entry.kind]), [['m3', undefined]],
+    'a request still waits; an unknown kind is not kept');
+});
+
+// The pending check and the claim are one locked step (#433): of two sends
+// to one teammate in one thread, only one is let through.
+test('claimSend lets one send per teammate and thread through at a time', () => {
+  const { options } = scratch();
+  const TED = 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const TWIN = 'agent_cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const now = new Date();
+  const claim = (to, correlation = 'c1') => claimSend(BILL, { to, correlation, now }, options);
+  const first = claim(`acct/${TED}`);
+  assert.equal(first.waiting, undefined);
+  assert.equal(claim(TED).waiting?.inFlight, true, 'a send still in flight holds the teammate');
+  assert.equal(claim(TWIN).waiting, undefined, 'other teammates are free');
+  assert.equal(claim(TED, 'c2').waiting, undefined, 'other threads are free');
+  assert.equal(claim('owner').waiting, undefined, 'people are never held');
+  assert.equal(claim(TED, null).waiting, undefined, 'a turn with no thread is never held');
+  // A failed send releases its claim; a journaled one holds through the journal.
+  first.release();
+  const retry = claim(TED);
+  assert.equal(retry.waiting, undefined);
+  recordThreadMessage(BILL, { dir: 'out', id: 'm1', to: TED, correlation: 'c1', body: 'Ted?' }, { ...options, now: () => now });
+  retry.release();
+  assert.equal(claim(TED).waiting?.id, 'm1');
 });

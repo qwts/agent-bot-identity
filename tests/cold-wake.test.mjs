@@ -359,6 +359,29 @@ test('a start_soul brief to a teammate does not hold back the reply', async () =
   assert.deepEqual(relay.sent.map((m) => m.body), ['Started Scout.']);
 });
 
+// #427: woken by one teammate's answer while another is still waking, the
+// soul is told who it is still waiting on, so it neither re-pings nor sends
+// progress notes; a person's message gets the same notice without NO_REPLY.
+test('the prompt names the teammates the soul is still waiting on in this thread', async () => {
+  const ted = { account: 'acct', agentId: 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' };
+  const twin = 'acct/agent_cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  recordThreadMessage(id, { dir: 'out', id: 'w427-ted', to: `acct/${ted.agentId}`, correlation: 'c427', body: 'Ted, a tip?' });
+  recordThreadMessage(id, { dir: 'out', id: 'w427-twin', to: twin, correlation: 'c427', kind: 'brief', body: 'Twin, scout.' });
+  const relay = oneShotRelay([
+    { id: 'n427a', from: ted, replyTo: 'w427-ted', correlation: 'c427', body: 'Tip: small commits.' },
+    { id: 'n427b', from: { principal: 'owner' }, correlation: 'c427', body: 'Any news?' },
+  ]);
+  const prompts = [];
+  const wake = relayWaker(relay, async ({ message }) => { prompts.push(message); return { reply: 'NO_REPLY' }; });
+  await wake({ agentId: id, count: 2, messageIds: ['n427a', 'n427b'] });
+  await wake.idle();
+  assert.match(prompts[0], new RegExp(`still waiting on ${twin} in this conversation; its reply wakes you`));
+  assert.doesNotMatch(prompts[0], /waiting on acct\/agent_aaaa/, 'Ted just answered');
+  assert.match(prompts[0], /make your final answer exactly NO_REPLY\./);
+  assert.match(prompts[1], /still waiting on acct\/agent_cccc/);
+  assert.doesNotMatch(prompts[1], /NO_REPLY/, 'a person always gets the answer');
+});
+
 // A person still gets the final text after the turn messaged someone else,
 // but not a second copy of an answer the turn already sent them.
 test('a person gets the final text unless the turn already messaged them', async () => {

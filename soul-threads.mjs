@@ -10,12 +10,13 @@
 // journal is daemon state: 0700 directory, 0600 files, bounded, never read by
 // the agent itself, and its contents reach a prompt only as quoted data.
 
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
-import { stateDirectory, validateAgentId, withLock } from './agent-identity.mjs';
+import { isAgentId, stateDirectory, validateAgentId, withLock } from './agent-identity.mjs';
 
 export const NO_REPLY = 'NO_REPLY';
 
@@ -25,6 +26,15 @@ export const THREAD_BYTES_LIMIT = 6 * 1024;
 const ENTRY_BODY_LIMIT = 2048;
 const JOURNAL_KEEP = 400;
 const JOURNAL_MAX_BYTES = 512 * 1024;
+// How long a send to another soul counts as awaiting its reply (#427): long
+// enough for a cold start and a model turn, short enough that a reply that
+// never comes stops holding the thread.
+export const PENDING_REPLY_TTL_MS = 10 * 60 * 1000;
+// How long a send still in flight holds its teammate (#433) before the
+// claim counts as left behind by a process that died mid-send.
+const SEND_CLAIM_STALE_MS = 2 * 60 * 1000;
+// Kinds of sent entry: a start_soul brief, and a cold wake's final answer.
+const ENTRY_KINDS = new Set(['brief', 'reply']);
 
 export function threadsDirectory({ env = process.env, home = homedir() } = {}) {
   return path.join(stateDirectory({ env, home }), 'threads');
@@ -85,7 +95,7 @@ export function recordThreadMessage(agentId, entry, {
       to: stringOrNull(entry.to),
       replyTo: stringOrNull(entry.replyTo),
       correlation: stringOrNull(entry.correlation),
-      ...(entry.kind === 'brief' ? { kind: 'brief' } : {}),
+      ...(ENTRY_KINDS.has(entry.kind) ? { kind: entry.kind } : {}),
       body: clip(entry.body, ENTRY_BODY_LIMIT),
     });
     // The daemon and each turn's reach server write the same journal, so the
@@ -179,6 +189,80 @@ export function sentSince(agentId, { before, correlation = null } = {}, { env = 
   return readJournal(agentId, { env, home }).filter((entry) => entry.dir === 'out'
     && (correlation === null || entry.correlation === correlation)
     && !before.has(sentMark(entry)));
+}
+
+// Two spellings of one recipient: a bare agent id, or `account/agentId`.
+export function sameAddress(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  return a === b || a.split('/').pop() === b.split('/').pop();
+}
+
+// The souls this soul is waiting on in the thread `correlation` (#427): the
+// latest send (send_message or a start_soul brief) to each soul that has not
+// answered in this thread since, newer than `ttlMs`. A send to a person is
+// never pending: people answer when they choose, and nothing wakes on it.
+// A cold wake's final answer (kind 'reply') is an answer, not a request, so
+// it never holds the thread (#433). Oldest first, one entry per soul.
+export function pendingReplies(agentId, { correlation, now = new Date(), ttlMs = PENDING_REPLY_TTL_MS } = {}, {
+  env = process.env, home = homedir(),
+} = {}) {
+  if (typeof correlation !== 'string' || correlation === '') return [];
+  const entries = readJournal(agentId, { env, home });
+  const waiting = new Map();
+  for (const entry of entries) {
+    if (entry.kind === 'reply') continue;
+    const peer = typeof entry.to === 'string' ? entry.to : entry.from;
+    if (typeof peer !== 'string' || !isAgentId(peer.split('/').pop())) continue;
+    const key = peer.split('/').pop();
+    if (entry.dir === 'out' && entry.correlation === correlation) {
+      waiting.set(key, entry);
+    } else if (entry.dir === 'in' && waiting.has(key)
+      && (entry.correlation === correlation || entry.replyTo === waiting.get(key).id)) {
+      waiting.delete(key);
+    }
+  }
+  const cutoff = now.getTime() - ttlMs;
+  return [...waiting.values()].filter((entry) => {
+    const at = Date.parse(entry.at);
+    return Number.isFinite(at) && at >= cutoff;
+  });
+}
+
+// Claims this soul's one send to `to` in the thread `correlation` (#433).
+// The pending check and the claim are one step under the journal lock, so
+// two concurrent send_message calls cannot both pass it. Returns
+// { waiting } (the unanswered send, or the one still in flight) or
+// { release }, to call once the send is journaled or has failed. A
+// journal that cannot be locked falls back to the plain check.
+export function claimSend(agentId, { to, correlation, now = new Date(), ttlMs } = {}, {
+  env = process.env, home = homedir(),
+} = {}) {
+  const free = { release() {} };
+  const peer = typeof to === 'string' ? to.split('/').pop() : null;
+  if (typeof correlation !== 'string' || correlation === '' || !isAgentId(peer)) return free;
+  const options = { env, home };
+  const check = () => pendingReplies(agentId, { correlation, now, ttlMs }, options).find((entry) => sameAddress(entry.to, to));
+  try {
+    const file = journalPath(agentId, options);
+    const claims = path.join(path.dirname(file), `${validateAgentId(agentId)}.sending`);
+    const claim = path.join(claims, createHash('sha256').update(`${correlation}\n${peer}`).digest('hex'));
+    mkdirSync(claims, { recursive: true, mode: 0o700 });
+    return withLock(`${file}.lock`, 'thread journal', () => {
+      const waiting = check();
+      if (waiting) return { waiting };
+      try {
+        const held = statSync(claim);
+        if (Date.now() - held.mtimeMs < SEND_CLAIM_STALE_MS) return { waiting: { to, at: held.mtime.toISOString(), inFlight: true } };
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+      writeFileSync(claim, '', { mode: 0o600 });
+      return { release: () => rmSync(claim, { force: true }) };
+    });
+  } catch {
+    const waiting = check();
+    return waiting ? { waiting } : free;
+  }
 }
 
 function sentMark(entry) {
