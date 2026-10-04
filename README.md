@@ -759,6 +759,21 @@ that refusal's code is `soul-running`. GeniusBar's bridge reads the same JSON. A
 `"comms": true|false`, which the daemon writes to the soul's `soul.json`
 before it starts the soul.
 
+Messages between souls show up as asides (#404). The daemon records each
+agent-comms message that actually entered or left a soul's context: the
+message a cold turn was woken with and the thread re-shown with it, the
+reply the relay sent, and the soul's own `send_message` and `start_soul`
+briefs. A message that stayed in a mailbox, or that a soul read itself with
+`agent-comms inbox read`, leaves none. The owner reads them, and GeniusBar
+renders them:
+
+```sh
+agent-bot soul asides bill --json   # {"agentId":…,"asides":[{"dir":"out","via":"send_message","peer":{"name":"ted",…},"teamId":null,"body":"…"}],"next":null}
+```
+
+A principal allowed to observe the soul reads the same list from the daemon
+at `GET /v1/souls/<agentId>/asides?after=<asideId>`.
+
 ### Approving a soul's tool call
 
 A soul's policy can answer a tool call with `approval` instead of allow or

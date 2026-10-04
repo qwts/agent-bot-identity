@@ -1069,6 +1069,17 @@ async function handleInteractionRequest({ req, res, url, interaction, env, home 
     }));
     return;
   }
+  if (req.method === 'GET' && (match = url.pathname.match(/^\/v1\/souls\/([^/]+)\/asides$/))) {
+    const limit = url.searchParams.get('limit');
+    sendJson(res, 200, interaction.listAsides({
+      principal,
+      transport,
+      agentId: match[1],
+      after: url.searchParams.get('after'),
+      ...(limit === null ? {} : { limit: Number(limit) }),
+    }));
+    return;
+  }
   if (req.method === 'GET' && url.pathname === '/v1/proposals') {
     sendJson(res, 200, interaction.listProposals({ principal, transport }));
     return;
