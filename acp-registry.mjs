@@ -215,15 +215,19 @@ export function validateSpawnRow(row) {
 /**
  * The command for a row in a working directory (ADR-0276): a soul home
  * that installed the row's npm binary runs it with this Node, so neither
- * npx nor a global install is needed; a row with no adapter runs its
- * registry command. An adapter row never falls back to npx (#418): a GeniusBar
- * Mac has none, and an unpinned download is not what the soul declared. It
- * throws, naming the package the soul's package must pin.
+ * npx nor a global install is needed. A joined soul's checkout installs
+ * nothing, so its own harness directory is tried next (`dirs`, #417). A row
+ * with no adapter runs its registry command. An adapter row never falls back
+ * to npx (#418): a GeniusBar Mac has none, and an unpinned download is not
+ * what the soul declared. It throws, naming the package the soul must pin.
  */
-export function spawnCommand(row, cwd, { node = process.execPath } = {}) {
-  if (row.soulBin && cwd) {
-    const bin = join(cwd, 'node_modules', '.bin', row.soulBin);
-    if (existsSync(bin)) return { command: node, args: [realpathSync(bin)] };
+export function spawnCommand(row, cwd, { node = process.execPath, dirs = [] } = {}) {
+  if (row.soulBin) {
+    for (const dir of [cwd, ...dirs]) {
+      if (typeof dir !== 'string' || !dir) continue;
+      const bin = join(dir, 'node_modules', '.bin', row.soulBin);
+      if (existsSync(bin)) return { command: node, args: [realpathSync(bin)] };
+    }
   }
   if (row.adapter) {
     throw new Error(`acp registry: the ${row.harness} harness needs its ACP adapter ${row.adapter.package}@${row.adapter.version}, `
