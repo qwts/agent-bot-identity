@@ -327,6 +327,7 @@ export function createAcpExecutor({
   policy,
   registry = ACP_SPAWN_REGISTRY,
   cwd = process.cwd(),
+  harnessDirs = [],
   mcpServers = [],
   getHarnessSession = null,
   env: baseEnv = process.env,
@@ -382,7 +383,7 @@ export function createAcpExecutor({
     // down the whole tree — spawn-runner rows like npx launch the actual
     // adapter as a descendant, and signaling only the direct child would leak
     // it (still holding the inherited stdio pipes) past the turn.
-    const { command, args } = spawnCommand(row, cwd);
+    const { command, args } = spawnCommand(row, cwd, { dirs: harnessDirs });
     const child = spawn(command, args, {
       cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: true,
     });

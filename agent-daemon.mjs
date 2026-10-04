@@ -57,7 +57,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
-import { archiveSoulDirs, backfillManagedSouls, listSouls, locateSoulDir, populationFile, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
+import { archiveSoulDirs, backfillManagedSouls, listSouls, locateSoulDir, populationFile, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
 import {
   bindAgentLineage,
@@ -82,7 +82,7 @@ import { readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
 import { createTeamStarter, defaultTeamTemplate, harnessLaunchProblem, teamLimits } from './team-start.mjs';
-import { createSoulHomes, installHarnesses, soulBindingForLaunch } from './soul-home.mjs';
+import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHarnessesPath } from './soul-home.mjs';
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
@@ -1345,6 +1345,7 @@ export async function runDaemon({
       // launchd PATH does not reach.
       commsFor: (agentId) => showSoul(agentId, { file: populationFile({ env, home }) }).comms,
       reachEnv: { PATH: resumePath(harnessEnv, home) },
+      harnessDirsFor: (agentId) => [soulHarnessesPath(agentId, { env, home, config, file: populationFile({ env, home }) })],
       // A soul whose soul.json says its key is in agent-bot-keyd gets keyd's
       // relay, when this host installed keyd.
       keydFor: (agentId) => {
@@ -1412,7 +1413,14 @@ export async function runDaemon({
     // A principal launched this soul to talk to it, so later messages wake it.
     onLaunched: (agentId) => setColdWake(agentId, true, { env, home, now }),
     discard: (agentId, rollback) => discardFailedLaunch(agentId, rollback, { env, home, config, now }),
-    joinSoul: (soul) => joinLaunchedSoul(soul, { env }),
+    joinSoul: async (soul) => {
+      const address = await joinLaunchedSoul(soul, { env });
+      // The census shows the launch name; every command shows it too (#429).
+      if (soul.name) {
+        try { recordSoulDisplayName(soul.agentId, soul.name, { file: populationFile({ env, home }) }); } catch { /* shown by soul.json name */ }
+      }
+      return address;
+    },
     // The comms setting is read here, at launch only; turns read the census.
     recordLaunch: (launch) => recordLaunchComms(launch, { env, home, config }),
     executorFor,

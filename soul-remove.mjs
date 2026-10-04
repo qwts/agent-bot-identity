@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { stateDirectory, validateAgentId } from './agent-identity.mjs';
-import { archiveSoulDirs, populationFile, retireIdentityWithPopulation, showSoul, showSoulByName } from './agent-population.mjs';
+import { archiveSoulDirs, populationFile, retireIdentityWithPopulation, showSoul, showSoulByName, soulDirectory, soulShownName } from './agent-population.mjs';
 import { leaveLaunchedSoul } from './agent-daemon.mjs';
 import { readColdWakeSettings, setColdWake, wakeSetting } from './cold-wake-settings.mjs';
 import { assertOwnerAction } from './owner-gate.mjs';
@@ -59,7 +59,9 @@ export async function soulRemoveCommand(argv, {
   if (await running()) throw refuseRunning();
 
   // Each step is safe to repeat, so a remove that stops part way can be rerun.
-  const result = { agentId: soul.id, name: soul.name ?? null, wake: 'off', comms: 'left', retired: true, archived: [] };
+  let directory = null;
+  try { directory = soulDirectory(soul.id, { file, env, home }); } catch { /* no soul directory */ }
+  const result = { agentId: soul.id, name: soulShownName(soul, directory), handle: soul.name, wake: 'off', comms: 'left', retired: true, archived: [] };
   if (wakeSetting(readColdWakeSettings({ env, home })[soul.id]) !== null) setColdWake(soul.id, false, { env, home, now });
   // Leave while the soul is still active: the hub sees it go as itself.
   try { await leave({ agentId: soul.id }); }
