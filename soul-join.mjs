@@ -193,7 +193,12 @@ export async function joinSoul({
   // 6. The owner's consent comes before any change, so a refusal changes
   //    nothing. It names the existing soul being changed, or says it is new.
   let known = null;
-  if (existing) { try { known = listSouls({ file }).find((record) => record.id === agentId)?.name ?? null; } catch { /* unnamed */ } }
+  if (existing) {
+    try {
+      const record = listSouls({ file }).find((soul) => soul.id === agentId);
+      known = record ? record.displayName ?? record.name : null; // the census name (#429)
+    } catch { /* unnamed */ }
+  }
   const authorization = wake === null ? null
     : await gate(existing
       ? `wake the existing soul ${known ?? 'unnamed'} (${agentId}) on new messages (${wake})`
