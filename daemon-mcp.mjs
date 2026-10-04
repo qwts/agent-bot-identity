@@ -48,7 +48,7 @@ import {
 import { populationFile, showSoul } from './agent-population.mjs';
 import { agentCommsAsSoul } from './comms-relay.mjs';
 import { isAgentId, validateAgentId } from './agent-identity.mjs';
-import { pendingReplies, recordThreadMessage, sameAddress } from './soul-threads.mjs';
+import { claimSend, recordThreadMessage } from './soul-threads.mjs';
 import { recordAside } from './soul-asides.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
 import { AGENT_ID_KEYS, readGitConfig } from './resolve-agent.mjs';
@@ -561,21 +561,25 @@ async function callTool(state, name, args = {}) {
       const correlation = turnCorrelation(state);
       // One message per teammate per thread until it answers (#427): a
       // teammate still waking would otherwise be re-pinged, and each
-      // message wakes it again.
-      const waiting = pendingReplies(soul.agentId, { correlation, now: state.now() }, threadOptions(state))
-        .find((entry) => sameAddress(entry.to, address));
-      if (waiting) {
-        throw new Error(`${address} has not answered your message from ${waiting.at} yet. It may still be starting up; `
+      // message wakes it again. The claim holds the thread while this send
+      // is in flight, so a concurrent call cannot pass too (#433).
+      const claim = claimSend(soul.agentId, { to: address, correlation, now: state.now() }, threadOptions(state));
+      if (claim.waiting) {
+        throw new Error(`${address} has not answered your message from ${claim.waiting.at} yet. It may still be starting up; `
           + 'its reply will wake you in a later turn. Do not message it again in the meantime; '
           + 'follow up after it answers.');
       }
-      const sent = await run(soul, [
-        'send', address, '--body', body,
-        ...(replyTo ? ['--reply-to', replyTo] : []),
-        ...(correlation ? ['--correlation', correlation] : []),
-      ]);
-      recordSent(state, soul, { id: sent.messageId, to: address, replyTo, correlation, body }, 'send_message');
-      return { sent: true, to: address, messageId: sent.messageId ?? null, wake: sent.wake ?? null, ...(isAgentId(address.split('/').pop()) ? awaitingNote(address) : {}) };
+      try {
+        const sent = await run(soul, [
+          'send', address, '--body', body,
+          ...(replyTo ? ['--reply-to', replyTo] : []),
+          ...(correlation ? ['--correlation', correlation] : []),
+        ]);
+        recordSent(state, soul, { id: sent.messageId, to: address, replyTo, correlation, body }, 'send_message');
+        return { sent: true, to: address, messageId: sent.messageId ?? null, wake: sent.wake ?? null, ...(isAgentId(address.split('/').pop()) ? awaitingNote(address) : {}) };
+      } finally {
+        claim.release();
+      }
     }
     case 'start_soul': {
       const soul = commsSoul(state, identity);

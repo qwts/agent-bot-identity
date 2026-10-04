@@ -558,6 +558,41 @@ test('send_message refuses a second message to a teammate that has not answered 
   await call(unthreaded.state, 'send_message', { to: PEERS[1].agentId, body: 'hi again' });
 });
 
+// Two send_message calls in flight at once (#433): the check and the claim
+// are one locked step, so only one reaches the broker; a failed send frees
+// the teammate again.
+test('concurrent send_message calls to one teammate reach the broker once', async () => {
+  const { root } = scratch();
+  const comms = fakeComms();
+  let failNext = false;
+  const run = (command, args, options, callback) => {
+    if (args[0] !== 'send') return comms.run(command, args, options, callback);
+    if (failNext) {
+      failNext = false;
+      comms.calls.push({ command, args });
+      return setTimeout(() => callback(new Error('exit 1'), JSON.stringify({ ok: false, error: { code: 'unavailable', message: 'broker down' } }), ''), 20);
+    }
+    return setTimeout(() => comms.run(command, args, options, callback), 20);
+  };
+  const state = createReachState({
+    env: {
+      [REACH_AGENT_ID_ENV]: AGENT_ID, [REACH_WORKTREE_ENV]: '/souls/bill/worktree', AGENT_BOT_BINDING: '/souls/bill/binding.json',
+      PATH: '/opt/bin', [REACH_CORRELATION_ENV]: 'msg_starter', AGENT_BOT_STATE_HOME: path.join(root, 'state'),
+    },
+    home: '/nonexistent', cwd: tmpdir(), run,
+  });
+  const sends = () => comms.calls.filter((entry) => entry.args[0] === 'send').length;
+  failNext = true;
+  await assert.rejects(call(state, 'send_message', { to: PEERS[0].agentId, body: 'Ted?' }));
+  const results = await Promise.allSettled([
+    call(state, 'send_message', { to: PEERS[0].agentId, body: 'Ted, your book list?' }),
+    call(state, 'send_message', { to: 'Ted - Starter', body: 'Ted, also your films?' }),
+  ]);
+  assert.deepEqual(results.map((result) => result.status).sort(), ['fulfilled', 'rejected']);
+  assert.match(results.find((result) => result.status === 'rejected').reason.message, /Do not message it again/);
+  assert.equal(sends(), 2, 'the failed send, then exactly one of the two concurrent sends');
+});
+
 // A relayed turn's sends carry its thread key and are journaled, so the
 // teammate's answer wakes this soul with the request still in view (#392).
 test('send_message carries the turn\'s correlation and journals the send', async () => {

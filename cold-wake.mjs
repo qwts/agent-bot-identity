@@ -216,7 +216,7 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
               return null;
             });
             if (sent) {
-              recordThreadMessage(agentId, { dir: 'out', id: sent.messageId, to, replyTo: message.id, correlation, body }, threads);
+              recordThreadMessage(agentId, { dir: 'out', id: sent.messageId, to, replyTo: message.id, correlation, kind: 'reply', body }, threads);
               recordAside(agentId, {
                 dir: 'out', via: 'final-reply', peer: to, messageId: sent.messageId, replyTo: message.id, correlation, body,
                 turnId, harnessSessionId: delivered.harnessSessionId,
