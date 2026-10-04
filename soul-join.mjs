@@ -308,13 +308,14 @@ export function parseJoinArgs(argv) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const { json, principalStdin, ...options } = parseJoinArgs(process.argv.slice(2));
+    const { json, principalStdin, name, harness, template, soul, wake } = parseJoinArgs(process.argv.slice(2));
     let principal = null;
     if (principalStdin) {
       try { principal = JSON.parse(readFileSync(0, 'utf8')); }
       catch { throw new Error('--principal-stdin needs the principal credential as JSON on stdin'); }
     }
-    const result = await joinSoul({ ...options, principal });
+    // Only the parsed flags reach joinSoul; its env stays process.env.
+    const result = await joinSoul({ name, harness, template, soul, wake, principal });
     if (json) process.stdout.write(`${JSON.stringify(result)}\n`);
     else {
       process.stdout.write(`joined agent-comms as ${result.address}${result.created ? ' (new soul)' : ''}\n`
