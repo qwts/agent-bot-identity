@@ -40,8 +40,11 @@ const withoutParent = ({ parent: _ignored, ...fields }) => fields;
 // renames an existing one (#432). A copy of a soul's folder carries that
 // soul's marker; with `forkCopy` (the `soul fork` mechanism) the launch
 // makes the copy a new soul, named by the launch, and the original is never
-// touched. Without it, or without a name, a copy is refused with its
-// reason, as a marker naming no active soul here always is.
+// touched. Only a principal's launch may: the fork rewrites the copy in
+// place and archives its working state, which `soul fork` keeps owner only,
+// and a soul starting its team (#377) chooses its own template path. Without
+// the port, a name, or a principal, a copy is refused with its reason, as a
+// marker naming no active soul here always is.
 const LAUNCHABLE = new Set(['package', 'installed']);
 
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
@@ -89,7 +92,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         throw new Error('launch requires exactly one soul or package');
       }
       const located = event.package !== undefined && locatePackage ? await locatePackage(event.package) : null;
-      const copied = located?.status === 'copy' && forkCopy !== null;
+      const copied = located?.status === 'copy' && forkCopy !== null && parent === null;
       if (located && !LAUNCHABLE.has(located.status) && !copied) throw new Error(located.message ?? `cannot launch ${event.package}`);
       const soul = located?.status === 'installed' ? located.agentId : event.soul;
       const packagePath = soul ? null : event.package;

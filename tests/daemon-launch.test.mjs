@@ -143,6 +143,14 @@ test('a forked copy that cannot start is rolled back like any spawned soul (#432
   assert.deepEqual(discarded, [[spawnedId, { binding: { worktree: '/home/new', file: '/b' }, joined: false }]]);
 });
 
+test('a team start never forks a copy: a soul cannot rewrite another soul\'s copied folder as its teammate (#432)', async (t) => {
+  const f = fixture(t, { locatePackage: (pkg) => ({ path: pkg, status: 'copy', agentId, message: `${pkg} is a copy` }),
+    forkCopy: () => { throw new Error('unexpected fork'); }, spawnPackage: () => { throw new Error('unexpected spawn'); } });
+  await f.handler(packageEvent, { ...f.ports, parent: agentId });
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'failed', agentId: null, detail: '/pkg is a copy' });
+  assert.equal(f.calls.length, 0);
+});
+
 test('a copied soul folder launched without a name is refused before anything is minted (#432)', async (t) => {
   const f = fixture(t, { locatePackage: (pkg) => ({ path: pkg, status: 'copy', agentId, message: `${pkg} is a copy` }),
     forkCopy: () => { throw new Error('unexpected fork'); } });
