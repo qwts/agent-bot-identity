@@ -60,6 +60,9 @@ export function supervisorPaths(home = homedir(), platform = process.platform, e
       kind: 'launchd',
       label,
       unitPath: join(home, 'Library', 'LaunchAgents', `${label}.plist`),
+      // launchd sends a job's stdio to /dev/null unless the unit names a
+      // file, so the daemon's stderr diagnostics would be lost without one.
+      logPath: join(home, 'Library', 'Logs', 'agent-bot', 'daemon.log'),
     };
   }
   if (platform === 'linux') {
@@ -69,6 +72,8 @@ export function supervisorPaths(home = homedir(), platform = process.platform, e
       kind: 'systemd',
       label,
       unitPath: join(home, '.config', 'systemd', 'user', label),
+      // systemd's journal captures the unit's stdio.
+      logPath: null,
     };
   }
   return {
@@ -76,6 +81,7 @@ export function supervisorPaths(home = homedir(), platform = process.platform, e
     kind: null,
     label: null,
     unitPath: null,
+    logPath: null,
   };
 }
 
@@ -142,8 +148,13 @@ function environmentEntries(environment = {}) {
   return Object.entries(environment).filter(([, value]) => typeof value === 'string' && value.length > 0);
 }
 
-export function renderLaunchdPlist({ executable, programArguments, environment = {}, label = LAUNCHD_LABEL }) {
+// `logPath`, when given, receives the job's stdout and stderr (the daemon's
+// own diagnostics); without it launchd discards both.
+export function renderLaunchdPlist({ executable, programArguments, environment = {}, label = LAUNCHD_LABEL, logPath = null }) {
   const program = checkProgram({ executable, programArguments });
+  const logBlock = typeof logPath === 'string' && logPath.length > 0
+    ? `\n  <key>StandardOutPath</key>\n  <string>${xmlEscape(logPath)}</string>\n  <key>StandardErrorPath</key>\n  <string>${xmlEscape(logPath)}</string>`
+    : '';
   const envXml = environmentEntries(environment).map(([key, value]) => (
     `    <key>${xmlEscape(key)}</key>\n    <string>${xmlEscape(value)}</string>`
   )).join('\n');
@@ -163,7 +174,7 @@ ${program.map((arg) => `    <string>${xmlEscape(arg)}</string>`).join('\n')}
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
-  <true/>${envBlock}
+  <true/>${logBlock}${envBlock}
 </dict>
 </plist>
 `;
@@ -192,8 +203,8 @@ WantedBy=default.target
 `;
 }
 
-export function renderSupervisorUnit({ kind, executable, programArguments, environment = {}, label }) {
-  if (kind === 'launchd') return renderLaunchdPlist({ executable, programArguments, environment, label });
+export function renderSupervisorUnit({ kind, executable, programArguments, environment = {}, label, logPath = null }) {
+  if (kind === 'launchd') return renderLaunchdPlist({ executable, programArguments, environment, label, logPath });
   if (kind === 'systemd') return renderSystemdUnit({ executable, programArguments, environment });
   throw new Error(`unsupported supervisor kind: ${kind}`);
 }
@@ -371,9 +382,13 @@ export async function ensureDaemonSupervisor({
   const stableExecutable = stableHomebrewPath(executable);
   const stableArguments = stableDaemonProgramArguments(programArguments);
   const body = renderSupervisorUnit({
-    kind: paths.kind, executable: stableExecutable, programArguments: stableArguments, environment, label: paths.label,
+    kind: paths.kind, executable: stableExecutable, programArguments: stableArguments, environment, label: paths.label, logPath: paths.logPath,
   });
   mkdir(dirname(paths.unitPath), { recursive: true });
+  // launchd opens the log file itself, but only inside a directory that
+  // exists; a unit written before this file existed differs from this body,
+  // so `daemon install` repairs it.
+  if (paths.logPath) mkdir(dirname(paths.logPath), { recursive: true, mode: 0o700 });
   let previous = null;
   try {
     previous = read(paths.unitPath, 'utf8');

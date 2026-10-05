@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +15,7 @@ import {
   inspectSupervisor,
   isInactiveSupervisorError,
   renderLaunchdPlist,
+  renderSupervisorUnit,
   renderSystemdUnit,
   stableHomebrewPath,
   supervisorEnvironment,
@@ -30,6 +31,19 @@ test('launchd unit is secret-free, loopback-agnostic, and keep-alive', () => {
   assert.match(plist, /<key>KeepAlive<\/key>\s*<true\/>/s);
   assert.match(plist, /<key>RunAtLoad<\/key>\s*<true\/>/s);
   assert.doesNotMatch(plist, /token|BEGIN |127\.0\.0\.1|AGENT_BOT_DAEMON_HOST|AGENT_BOT_DAEMON_PORT/);
+});
+
+test('launchd unit files the daemon\'s stdout and stderr under the user\'s logs when given a log path', () => {
+  const bare = renderLaunchdPlist({ executable: '/u/.local/bin/agent-bot' });
+  assert.doesNotMatch(bare, /StandardOutPath|StandardErrorPath/);
+  const { logPath } = supervisorPaths('/u', 'darwin', {});
+  assert.equal(logPath, '/u/Library/Logs/agent-bot/daemon.log');
+  const plist = renderLaunchdPlist({ executable: '/u/.local/bin/agent-bot', logPath });
+  assert.match(plist, /<key>StandardOutPath<\/key>\s*<string>\/u\/Library\/Logs\/agent-bot\/daemon\.log<\/string>/s);
+  assert.match(plist, /<key>StandardErrorPath<\/key>\s*<string>\/u\/Library\/Logs\/agent-bot\/daemon\.log<\/string>/s);
+  // journald captures the systemd unit's stdio; no file is named there.
+  assert.equal(supervisorPaths('/u', 'linux', {}).logPath, null);
+  assert.doesNotMatch(renderSupervisorUnit({ kind: 'systemd', executable: '/u/.local/bin/agent-bot' }), /daemon\.log/);
 });
 
 test('launchd unit XML-escapes the executable path', () => {
@@ -93,6 +107,11 @@ test('ensure writes and loads a launchd unit without calling disable', async () 
   const body = readFileSync(result.unitPath, 'utf8');
   assert.match(body, /KeepAlive/);
   assert.match(body, /agent-bot/);
+  // The daemon's stdio lands in a log file whose directory install creates
+  // (launchd opens the file itself, but never the directory).
+  const logPath = join(home, 'Library', 'Logs', 'agent-bot', 'daemon.log');
+  assert.match(body, new RegExp(`<key>StandardErrorPath</key>\\s*<string>${logPath.replaceAll('/', '\\/')}</string>`, 's'));
+  assert.equal(statSync(join(home, 'Library', 'Logs', 'agent-bot')).isDirectory(), true);
   assert.equal(result.applied, true);
   assert.equal(result.loaded, true);
   assert.ok(commands.some((row) => row[0] === 'launchctl' && (row[1] === 'load' || row[1] === 'bootstrap')));
@@ -244,6 +263,7 @@ test('a host label names the launchd and systemd units; the default is unchanged
     kind: 'launchd',
     label: 'app.geniusbar.agent-bot',
     unitPath: '/u/Library/LaunchAgents/app.geniusbar.agent-bot.plist',
+    logPath: '/u/Library/Logs/agent-bot/daemon.log',
   });
   assert.equal(supervisorPaths('/u', 'linux', env).unitPath, '/u/.config/systemd/user/app.geniusbar.agent-bot.service');
   assert.equal(supervisorPaths('/u', 'darwin', {}).label, LAUNCHD_LABEL);

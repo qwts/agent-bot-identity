@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn as spawnChild } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 
 import {
   ACP_SPAWN_REGISTRY,
@@ -14,6 +16,7 @@ import {
   validateSpawnRow,
 } from '../acp-registry.mjs';
 import {
+  DEFAULT_EXIT_GRACE_MS,
   boundAcpUpdate,
   createAcpExecutor,
   mcpPermissionName,
@@ -562,6 +565,31 @@ test('attachments without a reach channel are refused rather than silently dropp
   });
   assert.equal(failed.error, EXECUTION_FAILED_ERROR);
   assert.ok(logs.some((line) => /attachments need an injected reach-back MCP server/.test(line)));
+});
+
+test('a command the daemon\'s PATH does not reach fails the turn at once, naming the command', async () => {
+  // What node's spawn hands back for ENOENT: no pid, stdio pipes, then an
+  // 'error' followed by 'close' on the next tick.
+  const spawned = [];
+  const spawn = (command, args) => {
+    spawned.push([command, ...args]);
+    const child = Object.assign(new EventEmitter(), {
+      pid: undefined, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: () => false,
+    });
+    process.nextTick(() => {
+      child.emit('error', Object.assign(new Error(`spawn ${command} ENOENT`), { code: 'ENOENT', syscall: `spawn ${command}`, path: command }));
+      child.emit('close', -2);
+    });
+    return child;
+  };
+  const registry = { opencode: { ...FAKE_REGISTRY.claude, harness: 'opencode', command: 'opencode', args: ['acp'], mcpToolNaming: 'opencode-key' } };
+  const logs = [];
+  const started = Date.now();
+  await turn({ message: 'ping', expectStatus: 'failed', logs, executorOptions: { harness: 'opencode', registry, spawn } });
+  assert.deepEqual(spawned, [['opencode', 'acp']]);
+  assert.ok(logs.some((line) => line.includes("acp engine: cannot start opencode: not found on the daemon's PATH (spawn opencode ENOENT)")), logs.join('\n'));
+  // No process group to reap: the turn does not wait out the exit grace.
+  assert.ok(Date.now() - started < DEFAULT_EXIT_GRACE_MS, `took ${Date.now() - started}ms`);
 });
 
 test('an attached turn proceeds when a reach channel is injected', async () => {

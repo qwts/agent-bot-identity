@@ -99,6 +99,15 @@ function recordInbound(agentId, message, threads) {
   }, threads);
 }
 
+// One line's worth of a turn error for the daemon log: its code (or class)
+// and a bounded message. The audit receipt never carries this (a turn's
+// error can quote the model or a message); the log is where it is read.
+function describeError(error) {
+  const code = typeof error?.code === 'string' ? error.code : (error?.name ?? 'Error');
+  const message = String(error?.message ?? error).replace(/\s+/g, ' ').trim();
+  return `${code}: ${message.length > 200 ? `${message.slice(0, 200)}…` : message}`;
+}
+
 export function createColdWaker({ executor, settings, lookupBinding, identities, receipt, relay = null, webhook = null, taskReporter = null, authStatus = null, threads = {}, log = (line) => process.stderr.write(`cold-wake: ${line}\n`) }) {
   if (typeof executor !== 'function') throw new Error('cold waker requires an executor');
   if (typeof lookupBinding !== 'function') throw new Error('cold waker requires lookupBinding');
@@ -207,7 +216,10 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
                 await report('ended', result?.cancelled ? 'cancelled' : 'completed');
               } catch (error) {
                 await report('ended', error?.name === 'AbortError' ? 'cancelled' : 'failed');
-                if (error?.name !== 'AbortError') await relay.ack(soul, [message.id]);
+                if (error?.name !== 'AbortError') {
+                  log(`task ${brief.taskId} turn for ${agentId} failed: ${describeError(error)}`);
+                  await relay.ack(soul, [message.id]);
+                }
                 throw error;
               }
             }
@@ -295,6 +307,7 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
       (error) => {
         const failure = harnessAuthFailure(error);
         if (failure) recordAuth(agentId, failure, identity.harness);
+        log(`cold wake turn for ${agentId} failed: ${describeError(error)}`);
         receipt({ event: 'cold-wake', agentId, decision: 'failed', detail: failure ? `harness ${failure}` : 'cold wake turn failed' });
       },
     ).finally(land);

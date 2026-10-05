@@ -100,10 +100,12 @@ export function withReachRules(policy, { keyd = false } = {}) {
 // metrics collector reads Claude's log by that id). A failing recorder never
 // fails the turn. `keydFor(agentId)` is the agent-bot-keyd binary when keyd
 // holds that soul's App key (#397); its relay is injected next to the reach
-// server so the soul mints tokens without ever seeing a key.
+// server so the soul mints tokens without ever seeing a key. `log` receives
+// the engine's one-line diagnostics (`acp engine: …`); without it they are
+// dropped.
 export function acpExecutorFor({
   identities, policy, baseEnv, onHarnessSession = null, createExecutor = createAcpExecutor,
-  commsFor = () => true, reachEnv = {}, keydFor = () => null, harnessDirsFor = () => [],
+  commsFor = () => true, reachEnv = {}, keydFor = () => null, harnessDirsFor = () => [], log = null,
 }) {
   return ({ agentId, harness, cwd, env }) => {
     const identity = identities(agentId);
@@ -135,6 +137,7 @@ export function acpExecutorFor({
       harnessDirs: (() => { try { return harnessDirsFor(agentId) ?? []; } catch { return []; } })(),
       mcpServers,
       env: turnEnv,
+      ...(typeof log === 'function' ? { log } : {}),
     });
     if (typeof onHarnessSession !== 'function') return executor;
     return (input) => executor({
