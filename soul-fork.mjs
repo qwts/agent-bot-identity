@@ -16,13 +16,18 @@
 // fork drops it. Owner only. A fork that fails after minting rolls back like
 // a failed launch (#419): it leaves agent-comms, the new soul is retired, and
 // the folder is archived, never deleted.
+//
+// The daemon's package launch of a copy (#432) is the same fork, authorized
+// by the launch instead of the owner gate and with `join: null`: the launch
+// joins and starts the new soul itself, as it does a template instance, and
+// the original is never relaunched or renamed.
 import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { leaveLaunchedSoul } from './agent-daemon.mjs';
-import { mintAgentIdentity, readAgentIdentity, retireAgentIdentity, stateDirectory } from './agent-identity.mjs';
+import { mintAgentIdentity, readAgentIdentity, retireAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { archiveSoulDirs, locateSoulDir, populationFile, recordSoulDisplayName, registerSoulDir,
   retireIdentityWithPopulation, upsertIdentitySoul } from './agent-population.mjs';
@@ -106,7 +111,7 @@ function archiveFolder(folder, archive, now) {
 }
 
 export async function forkSoul({
-  copy, name, harness = undefined, principal = null,
+  copy, name, harness = undefined, principal = null, parentId = null,
   env = process.env, home = homedir(), cwd = process.cwd(), config, now = () => new Date(),
   gate = (action, { principal: presented }) => assertOwnerAction(action, { principal: presented, env, cwd }),
   join = joinSoul,
@@ -115,6 +120,7 @@ export async function forkSoul({
 } = {}) {
   validName(name);
   if (harness !== undefined && (typeof harness !== 'string' || !HARNESS_KEY_PATTERN.test(harness))) throw new Error('--harness must be a harness key');
+  if (parentId !== null) validateAgentId(parentId);
   const loaded = config === undefined ? loadConfig({ env, home }) : config;
   const options = { env, home, config: loaded };
   const stateDir = stateDirectory(options);
@@ -163,7 +169,7 @@ export async function forkSoul({
     next.revision = computePackageRevision(folder);
     save();
     const revisionOptions = { stateDir, now };
-    identity = mintAgentIdentity({ ...options, stateDir, now, appSlug: null, packagePath: folder, harness: runs, useGithub: false });
+    identity = mintAgentIdentity({ ...options, stateDir, now, appSlug: null, packagePath: folder, harness: runs, parentId, useGithub: false });
     result.agentId = identity.id;
     adoptSoulPackage(identity.id, folder, { ...revisionOptions, reason: `Fork of ${original}` });
     // The seed is hashed into revisions, so it changes after genesis, as a spawn's does.
@@ -181,12 +187,15 @@ export async function forkSoul({
     recordSoulDisplayName(identity.id, name, { file });
     // agent-comms, as `agent-bot join` registers a soul: its own workspace
     // checkout in its folder, pinned, recorded, then `agent-comms join`.
-    const joinedSoul = await join({ name, harness: runs, soul: identity.id, ownWorkspace: true, env, home, config: loaded,
-      comms: (soul, commsOptions) => {
-        joined = true; // a join that fails after the hub records it still needs a leave
-        return comms(soul, commsOptions);
-      } });
-    result.address = joinedSoul.address;
+    // A launch (`join: null`) joins the soul itself from its home.
+    if (join !== null) {
+      const joinedSoul = await join({ name, harness: runs, soul: identity.id, ownWorkspace: true, env, home, config: loaded,
+        comms: (soul, commsOptions) => {
+          joined = true; // a join that fails after the hub records it still needs a leave
+          return comms(soul, commsOptions);
+        } });
+      result.address = joinedSoul.address;
+    }
   } catch (error) {
     const rollback = { left: !joined, retired: false, archived: [] };
     try {

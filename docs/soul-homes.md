@@ -82,13 +82,18 @@ JSON `{ path, status, agentId?, name?, soulDir?, copies?, message? }`:
 | --- | --- | --- |
 | `package` | no soul marker | spawns a new soul |
 | `installed` | an active soul's registered folder | relaunches that soul |
-| `copy` | another folder is the soul's own | is refused with `message` |
+| `copy` | another folder is the soul's own | forks it: a new soul in that folder, named by the launch (#432) |
 | `duplicate` | several folders claim the soul, none registered | is refused |
 | `unregistered` | the marker names no active soul here | is refused |
 | `invalid` | `.soul-state/agent-id` is a link, not a small regular file, or not an Agent ID; its contents are never quoted | is refused |
 
 The daemon applies the same rule to launch requests, so opening an installed
-soul from Finder and launching it never creates a second soul.
+soul from Finder and launching it never creates a second soul. Nor does it
+rename one: the name on a package launch is for the soul the launch makes,
+so an installed folder relaunches its soul under its own name, and a launch
+of a copy forks it (below) into a new soul with that name (#432). A copy
+launched without a name is refused and nothing changes. The soul the copy
+came from, and a template an instance is spawned from, are never renamed.
 
 `agent-bot soul fork <copy-path> --name NAME [--harness H] [--json]` makes a
 `copy` a new soul instead (GeniusBar #83, "Make it a new soul"). It is

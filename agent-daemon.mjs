@@ -1490,6 +1490,17 @@ export async function runDaemon({
     }),
     provisionHome: (soul) => provisionHome(soul),
     locatePackage: (packagePath) => locateSoulDir(packagePath, { env, home, config, file: populationFile({ env, home }) }),
+    // A copy of a soul's folder becomes a new soul (#432): the `soul fork`
+    // mechanism, authorized by this launch rather than the owner gate, and
+    // joined below from its home as any launched soul is. The original soul
+    // and its folder are never touched. Loaded here, not at the top: the
+    // fork imports `agent-bot join`, whose CLI awaits this module.
+    forkCopy: async ({ package: copy, name, harness, parent = null }) => {
+      const { forkSoul } = await import('./soul-fork.mjs');
+      const forked = await forkSoul({ copy, name, harness, parentId: parent, env, home, config, now,
+        gate: async () => ({ method: 'launch' }), join: null });
+      return { id: forked.agentId, ...forked };
+    },
     // ADR-0276: an existing soul's own harness, else a package's preference,
     // else a registry harness on PATH.
     defaultHarness: async ({ soul, package: packagePath }) => {

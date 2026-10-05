@@ -112,6 +112,65 @@ test('a package launch of a copied soul folder is refused before anything is min
   }
 });
 
+// #432: a copy of a soul's folder carries its marker. Launching it must make
+// a new soul and never rename the one it was copied from.
+test('a package launch of a copied soul folder forks it into a new soul, named by the launch (#432)', async (t) => {
+  const forks = [];
+  const joins = [];
+  const f = fixture(t, { locatePackage: (pkg) => ({ path: pkg, status: 'copy', agentId, soulDir: '/souls/Bill.soul', message: `${pkg} is a copy` }),
+    forkCopy: (input) => { forks.push(input); return { id: spawnedId }; },
+    identities: () => { throw new Error('the original soul is never consulted'); },
+    lookupBinding: () => null,
+    provisionHome: (soul) => ({ worktree: '/home/new', file: `/home/new/${soul.agentId}` }),
+    joinSoul: async (soul) => { joins.push(soul); } });
+  await f.handler(packageEvent, f.ports);
+  assert.equal(forks.length, 1);
+  assert.deepEqual([forks[0].package, forks[0].name, forks[0].harness, forks[0].parent], ['/pkg', 'Helper', 'claude', undefined]);
+  assert.equal(joins.length, 1);
+  assert.equal(joins[0].agentId, spawnedId);
+  assert.equal(joins[0].name, 'Helper');
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId: spawnedId });
+  assert.equal(f.calls[0].agentId, spawnedId);
+});
+
+test('a forked copy that cannot start is rolled back like any spawned soul (#432)', async (t) => {
+  const discarded = [];
+  const f = fixture(t, { locatePackage: (pkg) => ({ path: pkg, status: 'copy', agentId, message: `${pkg} is a copy` }),
+    forkCopy: () => ({ id: spawnedId }), lookupBinding: () => null, provisionHome: () => ({ worktree: '/home/new', file: '/b' }),
+    discard: (id, rollback) => { discarded.push([id, rollback]); }, executorFor: () => async () => {} });
+  await f.handler(packageEvent, f.ports);
+  assert.equal(f.reports[0].status, 'failed');
+  assert.deepEqual(discarded, [[spawnedId, { binding: { worktree: '/home/new', file: '/b' }, joined: false }]]);
+});
+
+test('a team start never forks a copy: a soul cannot rewrite another soul\'s copied folder as its teammate (#432)', async (t) => {
+  const f = fixture(t, { locatePackage: (pkg) => ({ path: pkg, status: 'copy', agentId, message: `${pkg} is a copy` }),
+    forkCopy: () => { throw new Error('unexpected fork'); }, spawnPackage: () => { throw new Error('unexpected spawn'); } });
+  await f.handler(packageEvent, { ...f.ports, parent: agentId });
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'failed', agentId: null, detail: '/pkg is a copy' });
+  assert.equal(f.calls.length, 0);
+});
+
+test('a copied soul folder launched without a name is refused before anything is minted (#432)', async (t) => {
+  const f = fixture(t, { locatePackage: (pkg) => ({ path: pkg, status: 'copy', agentId, message: `${pkg} is a copy` }),
+    forkCopy: () => { throw new Error('unexpected fork'); } });
+  await f.handler({ ...packageEvent, name: undefined }, f.ports);
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'failed', agentId: null,
+    detail: `/pkg is a copy of soul ${agentId}'s folder; name the launch to start it as a new soul` });
+  assert.equal(f.calls.length, 0);
+});
+
+test('a package launch of an installed soul\'s folder keeps that soul\'s name; only a soul launch renames (#432)', async (t) => {
+  const joins = [];
+  const installed = fixture(t, { locatePackage: (pkg) => ({ path: pkg, status: 'installed', agentId, soulDir: pkg, copies: [] }),
+    joinSoul: async (soul) => { joins.push(soul.name); } });
+  await installed.handler(packageEvent, installed.ports);
+  const bySoul = fixture(t, { joinSoul: async (soul) => { joins.push(soul.name); } });
+  await bySoul.handler(event, bySoul.ports);
+  assert.deepEqual(joins, [null, 'Helper']);
+  assert.deepEqual(installed.reports[0], { requestId: 'r1', status: 'launched', agentId });
+});
+
 test('a package with no soul marker still spawns a new soul (#80)', async (t) => {
   const f = fixture(t, { locatePackage: (pkg) => ({ path: pkg, status: 'package' }),
     spawnPackage: () => ({ id: spawnedId }), lookupBinding: () => null,
