@@ -27,6 +27,13 @@ function maskedFrame(opcode, text = '') {
   return frame;
 }
 
+// Poll for an outcome instead of sleeping a fixed beat: under a loaded
+// parallel suite the response can take longer than any small constant.
+async function until(predicate, ms = 5_000) {
+  const deadline = Date.now() + ms;
+  while (!predicate() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+}
+
 async function handshake(socket, secret = 'valid') {
   socket.write(`GET /v0/wake HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nx-agent-binding: ${secret}\r\n\r\n`);
 }
@@ -49,7 +56,7 @@ test('wake endpoint authenticates, handshakes, sends ready, parses masked frames
     let data = '';
     f.socket.on('data', (chunk) => { data += chunk.toString('latin1'); });
     await handshake(f.socket);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await until(() => data.includes('"event":"ready"'));
     assert.match(data, /101 Switching Protocols/);
     assert.ok(data.includes('Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo='));
     assert.equal(f.pool.has(ID), true);
@@ -60,7 +67,7 @@ test('wake endpoint authenticates, handshakes, sends ready, parses masked frames
     const closed = once(f.socket, 'close');
     f.socket.destroy();
     await closed;
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await until(() => !f.pool.has(ID));
     assert.equal(f.pool.has(ID), false);
   } finally { await f.close(); }
 });
@@ -70,8 +77,9 @@ test('wake endpoint refuses a bad binding with HTTP 401 before upgrade', async (
   try {
     let data = '';
     f.socket.on('data', (chunk) => { data += chunk.toString(); });
+    const ended = once(f.socket, 'end');
     await handshake(f.socket, 'wrong');
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await Promise.race([ended, until(() => data.includes('\r\n\r\n'))]);
     assert.match(data, /401 Unauthorized/);
     assert.doesNotMatch(data, /101 Switching Protocols/);
     assert.equal(f.pool.list()[ID], undefined);
