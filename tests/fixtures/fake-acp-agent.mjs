@@ -41,6 +41,7 @@ async function handlePrompt({ sessionId, prompt }) {
       CLAUDECODE: process.env.CLAUDECODE ?? null,
       FAKE_KEEP: process.env.FAKE_KEEP ?? null,
       FAKE_SET: process.env.FAKE_SET ?? null,
+      CODEX_CONFIG: process.env.CODEX_CONFIG ?? null,
       cwd: session.cwd,
       mcpServers: session.mcpServers,
       loaded: session.loaded,

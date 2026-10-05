@@ -456,6 +456,18 @@ test('a row\'s setEnv wins over the inherited environment', async () => {
   assert.equal(JSON.parse(chunkTexts(events)[0]).FAKE_SET, 'from-row');
 });
 
+test('a Codex spawn carries CODEX_CONFIG, so the sandbox reaches the agent-comms socket', async () => {
+  // The shipped codex row's env on the fixture agent: an inherited
+  // CODEX_CONFIG never replaces the daemon's.
+  const registry = { ...FAKE_REGISTRY, codex: { ...FAKE_REGISTRY.codex, setEnv: ACP_SPAWN_REGISTRY.codex.setEnv } };
+  const { events } = await turn({
+    message: 'env-probe',
+    executorOptions: { harness: 'codex', registry, env: { ...process.env, CODEX_CONFIG: '{"sandbox_mode":"danger-full-access"}' } },
+  });
+  const probe = JSON.parse(chunkTexts(events)[0]);
+  assert.deepEqual(JSON.parse(probe.CODEX_CONFIG), { sandbox_workspace_write: { network_access: true } });
+});
+
 test('an OpenCode MCP permission is named by its tool key; a borrowed title never is', async () => {
   const { events } = await turn({
     message: 'opencode-mcp-permission',

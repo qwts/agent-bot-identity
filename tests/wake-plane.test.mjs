@@ -168,6 +168,16 @@ test('acpExecutorFor injects the soul\'s reach server and allows its tools under
   assert.ok(stamped.env.some((pair) => pair.name === 'AGENT_BOT_REACH_INVOCATION'));
   assert.equal('AGENT_BOT_REACH_CORRELATION' in vars, false);
 
+  // A task turn's invocation is minted for task reporting and is not in the
+  // store: it is never stamped, so the reach server withholds the invocation
+  // tools instead of offering ones that fail with "unknown invocation" (#407).
+  const [taskLinked] = options.mcpServers({ invocation: {
+    agentId, invocationId: 'invocation_55555555-5555-4555-8555-555555555555', taskId: 'task_1', correlation: 'msg_task',
+  } });
+  assert.equal(taskLinked.env.some((pair) => pair.name === 'AGENT_BOT_REACH_INVOCATION'), false);
+  assert.ok(taskLinked.env.some((pair) => pair.name === 'AGENT_BOT_REACH_AGENT_ID' && pair.value === agentId));
+  assert.ok(taskLinked.env.some((pair) => pair.name === 'AGENT_BOT_REACH_CORRELATION' && pair.value === 'msg_task'));
+
   // A relayed turn's thread key travels so its sends stay in the thread (#392).
   const [threaded] = options.mcpServers({ invocation: { agentId, correlation: 'msg_starter' } });
   assert.ok(threaded.env.some((pair) => pair.name === 'AGENT_BOT_REACH_CORRELATION' && pair.value === 'msg_starter'));

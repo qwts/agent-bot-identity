@@ -75,7 +75,12 @@ export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onE
 }
 
 // Only a well-formed interaction-store id is stamped; a comms turn has none.
+// A task turn's invocation (cold-wake.mjs, `taskId` set) is minted for task
+// reporting alone and is never in the store: stamping it would offer
+// fetch_context, post_reply and report_status, and every call would fail
+// with "unknown invocation", so the reach server withholds them instead (#407).
 function storeInvocationId(invocation) {
+  if (invocation?.taskId !== undefined && invocation.taskId !== null) return null;
   try { return validateInvocationId(invocation?.invocationId); } catch { return null; }
 }
 
