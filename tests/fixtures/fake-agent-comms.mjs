@@ -40,4 +40,8 @@ if (command === 'join') {
   for (const m of state.messages) if (m.to === me && process.argv.slice(4).includes(m.id)) m.acked = true;
   save();
   out({ ok: true });
+} else if (command === 'leave') {
+  delete state.joined[me];
+  save();
+  out({ ok: true });
 } else fail('unknown-command', `unknown command ${command}`);

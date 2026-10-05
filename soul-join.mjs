@@ -33,7 +33,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN, resolveSpawn } from './acp-registry.mjs';
 import { mintBindToken, readBinding } from './agent-binding.mjs';
 import { mintAgentIdentity, readAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
-import { listSouls, populationFile, recordSoulDisplayName, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
+import { archiveSoulDirs, listSouls, populationFile, recordSoulDisplayName, retireIdentityWithPopulation, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
 import { describeSetting, ownerGate, readColdWakeSettings, setColdWake, wakeSetting } from './cold-wake-settings.mjs';
 import { initAgentSpace } from './agent-space.mjs';
 import { daemonPreference, loadConfig } from './config.mjs';
@@ -157,7 +157,7 @@ export function joinComms({ agentId, worktree, name, harness }, { env = process.
 export async function joinSoul({
   name, harness, template, soul = null, cwd = process.cwd(), ownWorkspace = false, wake = null, principal = null,
   env = process.env, home = homedir(), config, daemon = null, comms = joinComms, spawn = spawnSoulTemplate, gate = ownerGate,
-  installHarness = installSoulHarnesses,
+  installHarness = installSoulHarnesses, leave = null,
 } = {}) {
   if (typeof name !== 'string' || !name.trim()) throw new Error('--name must be a nonempty string');
   if (typeof harness !== 'string' || !HARNESS_KEY_PATTERN.test(harness)) throw new Error('--harness must be a harness key');
@@ -218,6 +218,11 @@ export async function joinSoul({
     created = true;
   }
 
+  // Everything after soul creation is wrapped so a failure on a newly
+  // created soul rolls back exactly like the failed-launch path (#421):
+  // leave agent-comms, retire the soul, archive its folder (#435).
+  let joined = false;
+  try {
   // 2. The place, and 3. the pin.
   if (!checkout) checkout = soulWorkspace(agentId, { ...options, file });
   const { worktree, gitDir } = checkout;
@@ -278,6 +283,7 @@ export async function joinSoul({
   let address;
   try {
     address = await comms({ agentId, worktree, name, harness }, { env });
+    joined = true;
   } catch (error) {
     if (wake !== null) {
       // A webhook's key is gone once another lane is set, so it is not restored.
@@ -292,6 +298,22 @@ export async function joinSoul({
   const state = describeSetting(readColdWakeSettings({ env, home })[agentId]);
   return { agentId, soulDir: soulDirectory(agentId, { ...options, file }), worktree, address, created, bind,
     wake: state, ...(adapter ? { adapter } : {}), ...(authorization ? { authorization: authorization.method } : {}) };
+  } catch (error) {
+    // Roll back a newly created soul on any failure after creation (#435),
+    // exactly like the failed-launch path from #421.
+    if (created) {
+      try {
+        if (joined) {
+          const { leaveLaunchedSoul } = await import('./agent-daemon.mjs');
+          const leaveFn = leave ?? ((soul) => leaveLaunchedSoul(soul, { env }));
+          try { await leaveFn({ agentId }); } catch { /* best effort */ }
+        }
+        retireIdentityWithPopulation(agentId, { file, stateDir });
+        archiveSoulDirs(agentId, { env, home, file });
+      } catch { /* the join's own error is the one reported */ }
+    }
+    throw error;
+  }
 }
 
 export function parseJoinArgs(argv) {

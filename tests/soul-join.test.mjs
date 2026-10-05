@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -409,4 +409,74 @@ test('join --wake acp installs the pinned adapter in the soul\'s own harness dir
   // A harness with no ACP lane is refused before the owner is asked.
   await assert.rejects(joinSoul({ name: 'g', harness: 'grokbot', template: null, cwd: a.outside, env: a.env, home: a.home, config: {}, wake: 'acp',
     gate: async () => assert.fail('not asked') }), /grokbot has no ACP lane/);
+});
+
+test('join --wake acp refused by daemon rolls back the created soul, comms membership and folder (#435)', async (t) => {
+  const a = account(t);
+  const souls = () => { try { return JSON.parse(readFileSync(a.env.AGENT_BOT_POPULATION_PATH, 'utf8')).souls; } catch { return {}; } };
+  const activeSouls = () => Object.values(souls()).filter((s) => s.status !== 'retired');
+  const base = { harness: 'claude', template: null, cwd: a.outside, env: a.env, home: a.home, config: {},
+    gate: async () => ({ method: 'consent' }) };
+  // The daemon refuses the bind, which happens after the soul is created.
+  await assert.rejects(joinSoul({ ...base, name: 'doomed', wake: 'acp',
+    daemon: { bind: async () => { throw new Error('connect ECONNREFUSED'); } } }),
+  /--wake acp needs the agent-bot daemon/);
+  // The created soul was rolled back: retired, not active; no comms membership; folder archived.
+  assert.equal(activeSouls().length, 0, 'no active soul left behind');
+  // Comms was never joined (failure happened before comms join), so broker may not exist.
+  const brokerFile = a.env.FAKE_COMMS_BROKER;
+  const joined = existsSync(brokerFile) ? JSON.parse(readFileSync(brokerFile, 'utf8')).joined : {};
+  assert.deepEqual(joined, {}, 'no comms membership left behind');
+  const soulsHome = a.env.AGENT_BOT_SOULS_HOME;
+  const soulFolders = existsSync(soulsHome)
+    ? readdirSync(soulsHome).filter((d) => !d.startsWith('.'))
+    : [];
+  assert.equal(soulFolders.length, 0, 'no soul folder left behind');
+});
+
+test('join --wake acp refused by missing adapter rolls back the created soul (#435)', async (t) => {
+  const a = account(t);
+  const souls = () => { try { return JSON.parse(readFileSync(a.env.AGENT_BOT_POPULATION_PATH, 'utf8')).souls; } catch { return {}; } };
+  const base = { harness: 'claude', template: null, cwd: a.outside, env: a.env, home: a.home, config: {},
+    gate: async () => ({ method: 'consent' }) };
+  const daemon = await startDaemon(t, a);
+  // No Starter pins the adapter — the refusal happens after the soul is created.
+  await assert.rejects(joinSoul({ ...base, name: 'unpinned-rollback', wake: 'acp',
+    env: { ...a.env, AGENT_BOT_STARTER_TEMPLATE: path.join(a.root, 'no-starter') },
+    daemon: daemon.client }),
+  /--wake acp needs the claude adapter/);
+  // The created soul must have been rolled back.
+  const activeSouls = Object.values(souls()).filter((s) => s.status !== 'retired');
+  assert.equal(activeSouls.length, 0, 'no active soul left behind after adapter refusal');
+  // Comms was never joined (failure happened before comms join), so broker may not exist.
+  const brokerFile = a.env.FAKE_COMMS_BROKER;
+  const joined = existsSync(brokerFile) ? JSON.parse(readFileSync(brokerFile, 'utf8')).joined : {};
+  assert.deepEqual(joined, {}, 'no comms membership left behind after adapter refusal');
+});
+
+test('join --wake comms failure after soul creation rolls back the created soul (#435)', async (t) => {
+  const a = account(t);
+  const souls = () => { try { return JSON.parse(readFileSync(a.env.AGENT_BOT_POPULATION_PATH, 'utf8')).souls; } catch { return {}; } };
+  const base = { harness: 'codex', template: null, cwd: a.outside, env: a.env, home: a.home, config: {},
+    gate: async () => ({ method: 'consent' }) };
+  // comms join fails after the soul is created (wake: resume doesn't need daemon bind).
+  await assert.rejects(joinSoul({ ...base, name: 'comms-fail', wake: 'resume:workspace',
+    comms: async () => { throw new Error('agent-comms join failed: broker down'); } }),
+  /broker down/);
+  const activeSouls = Object.values(souls()).filter((s) => s.status !== 'retired');
+  assert.equal(activeSouls.length, 0, 'no active soul left behind after comms failure');
+});
+
+test('a successful join --wake is unchanged by the rollback guard (#435)', async (t) => {
+  const a = account(t);
+  const base = { harness: 'codex', template: null, cwd: a.outside, env: a.env, home: a.home, config: {},
+    gate: async () => ({ method: 'consent' }) };
+  const joined = await joinSoul({ ...base, name: 'healthy', wake: 'resume:workspace' });
+  assert.equal(joined.created, true);
+  assert.equal(joined.address, `test/${joined.agentId}`);
+  assert.equal(joined.wake, 'resume workspace');
+  // The soul is active, in comms, and its folder exists.
+  assert.equal(showSoul(joined.agentId, { file: a.env.AGENT_BOT_POPULATION_PATH }).status, 'active');
+  assert.deepEqual(a.broker().joined[joined.agentId], { name: 'healthy', harness: 'codex' });
+  assert.ok(existsSync(joined.soulDir), 'soul folder exists');
 });
