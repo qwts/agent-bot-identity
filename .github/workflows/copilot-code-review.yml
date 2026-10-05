@@ -1,0 +1,30 @@
+# Copilot runs its setup on a self-hosted Ubuntu x64 runner (Copilot
+# supports only Ubuntu x64 and Windows x64, so the arm64 CI runners
+# cannot take it). The label is served by the owner x64 Ubuntu VM.
+name: Copilot code review setup
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  copilot-setup-steps:
+    runs-on: copilot-ubuntu-x64
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify review runner platform
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          . /etc/os-release
+          test "$ID" = ubuntu
+          test "$(uname -m)" = x86_64
+          test "$RUNNER_ENVIRONMENT" = self-hosted
+          printf "Runner: %s\nOS: %s\nArchitecture: %s\nEnvironment: %s\n" \
+            "$RUNNER_NAME" "$PRETTY_NAME" "$(uname -m)" "$RUNNER_ENVIRONMENT"
