@@ -1434,6 +1434,9 @@ export async function runDaemon({
       commsFor: (agentId) => showSoul(agentId, { file: populationFile({ env, home }) }).comms,
       reachEnv: { PATH: resumePath(harnessEnv, home) },
       harnessDirsFor: (agentId) => [soulHarnessesPath(agentId, { env, home, config, file: populationFile({ env, home }) })],
+      // Engine diagnostics (a spawn that failed, a nameless permission) go
+      // to the daemon's stderr, which the supervisor unit files as a log.
+      log: (line) => process.stderr.write(`${line}\n`),
       // A soul whose soul.json says its key is in agent-bot-keyd gets keyd's
       // relay, when this host installed keyd.
       keydFor: (agentId) => {

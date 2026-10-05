@@ -78,6 +78,26 @@ test('cold wake reports failures and single-flights concurrent wakes per soul', 
   assert.deepEqual(await unbound({ agentId: id, count: 1, messageIds: ['m5'] }), { outcome: 'failed', detail: 'soul binding is unavailable' });
 });
 
+test('a failed turn leaves its error code and a bounded message in the daemon log, never in the receipt', async () => {
+  const logs = [];
+  const receipts = [];
+  const spawnFailure = Object.assign(new Error('spawn opencode ENOENT'), { code: 'ENOENT' });
+  const wake = createColdWaker({ executor: async () => { throw spawnFailure; }, settings: { [id]: true }, lookupBinding: async () => binding, identities: async () => githubIdentity, receipt: (value) => receipts.push(value), log: (line) => logs.push(line) });
+  await wake({ agentId: id, count: 1, messageIds: ['m1'] });
+  await wake.idle();
+  assert.deepEqual(receipts.at(-1), { event: 'cold-wake', agentId: id, decision: 'failed', detail: 'cold wake turn failed' });
+  assert.deepEqual(logs, [`cold wake turn for ${id} failed: ENOENT: spawn opencode ENOENT`]);
+
+  // Without a code the class names the error; a long or multi-line message
+  // (one that could quote the model) is cut to a single bounded line.
+  logs.length = 0;
+  const noisy = createColdWaker({ executor: async () => { throw new TypeError(`${'x'.repeat(300)}\nsecond line`); }, settings: { [id]: true }, lookupBinding: async () => binding, identities: async () => githubIdentity, receipt() {}, log: (line) => logs.push(line) });
+  await noisy({ agentId: id, count: 1, messageIds: ['m2'] });
+  await noisy.idle();
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], new RegExp(`^cold wake turn for ${id} failed: TypeError: x{200}…$`));
+});
+
 test('cold waker reads the current setting for each wake', async () => {
   let enabled = true;
   let calls = 0;
@@ -256,13 +276,19 @@ test('failed task turns report failure and acknowledge without replying', async 
     ack: async () => { acked = true; },
     reply: async () => assert.fail('task events never receive replies'),
   };
+  const logs = [];
   const wake = createColdWaker({ executor: async () => { throw new Error('failed'); }, settings: { [id]: true }, lookupBinding: async () => binding, identities: async () => githubIdentity, receipt() {}, relay,
-    taskReporter: { started() { reports.push('started'); }, ended(invocation, outcome) { reports.push(outcome); } },
+    taskReporter: { started() { reports.push('started'); }, ended(invocation, outcome) { reports.push(outcome); } }, log: (line) => logs.push(line),
   });
   await wake({ agentId: id });
   await wake.idle();
   assert.deepEqual(reports, ['started', 'failed']);
   assert.equal(acked, true);
+  // The log names the task that failed, then the wake it failed.
+  assert.deepEqual(logs, [
+    `task task_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa turn for ${id} failed: Error: failed`,
+    `cold wake turn for ${id} failed: Error: failed`,
+  ]);
 });
 
 test('task reporting errors do not fail a cold turn; cancellation is reported without a reply', async () => {

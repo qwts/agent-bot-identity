@@ -79,7 +79,7 @@ function failEngine(message) {
 // Minimal client for one child process: outgoing requests and notifications,
 // incoming responses, notifications, and agent-initiated requests. Non-JSON
 // stdout lines are tolerated (adapters occasionally log around the protocol).
-function createRpcChannel(child, { onNotification, onRequest, log }) {
+function createRpcChannel(child, { onNotification, onRequest, log, command = null }) {
   let nextId = 1;
   const pending = new Map();
   let closed = false;
@@ -137,7 +137,11 @@ function createRpcChannel(child, { onNotification, onRequest, log }) {
   });
   child.on('error', (error) => {
     closed = true;
-    rejectAll(new Error(`acp engine: failed to run agent process: ${error.message}`));
+    // A command launchd's bare PATH does not reach is the usual way a daemon
+    // turn dies at spawn; name it, so the failure is diagnosable from the log.
+    rejectAll(new Error(error?.code === 'ENOENT' && typeof command === 'string'
+      ? `acp engine: cannot start ${command}: not found on the daemon's PATH (${error.message})`
+      : `acp engine: failed to run agent process: ${error.message}`));
   });
 
   return {
@@ -407,6 +411,8 @@ export function createAcpExecutor({
     // Only ESRCH means gone: macOS answers EPERM while the group still holds
     // zombie or exiting members.
     const groupAlive = () => {
+      // A spawn that failed (ENOENT) has no pid and so no group to wait on.
+      if (child.pid === undefined) return false;
       try {
         process.kill(-child.pid, 0);
         return true;
@@ -454,6 +460,7 @@ export function createAcpExecutor({
 
     const rpc = createRpcChannel(child, {
       log,
+      command,
       onNotification: (method, params) => {
         if (method !== 'session/update' || replaying) return;
         if (sessionId === null || params.sessionId !== sessionId) return;

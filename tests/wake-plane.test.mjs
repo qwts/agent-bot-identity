@@ -207,3 +207,13 @@ test('acpExecutorFor hands the engine the soul\'s own harness directory, and a f
   acpExecutorFor({ identities: () => ({}), policy: {}, baseEnv: {}, createExecutor, harnessDirsFor: () => { throw new Error('no soul folder'); } })({ agentId, harness: 'claude', cwd: '/repo', env: {} });
   assert.deepEqual(seen, [[`/souls/${agentId}/.soul-state/harnesses`], []]);
 });
+
+test('acpExecutorFor hands the daemon\'s log to the engine, and leaves the engine\'s default without one', () => {
+  const agentId = 'agent_11111111-1111-4111-8111-111111111111';
+  const seen = [];
+  const createExecutor = (options) => { seen.push('log' in options ? options.log : 'absent'); return async () => ({ stopReason: 'end_turn' }); };
+  const log = () => {};
+  acpExecutorFor({ identities: () => ({}), policy: {}, baseEnv: {}, createExecutor, log })({ agentId, harness: 'claude', cwd: '/repo', env: {} });
+  acpExecutorFor({ identities: () => ({}), policy: {}, baseEnv: {}, createExecutor })({ agentId, harness: 'claude', cwd: '/repo', env: {} });
+  assert.deepEqual(seen, [log, 'absent']);
+});

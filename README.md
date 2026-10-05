@@ -583,7 +583,10 @@ the per-start bearer token recorded in the `0600` state file at
 `$XDG_STATE_HOME/agent-bot/daemon.json`, which keeps other local accounts on a
 shared machine out. `install`, `update`, and `bootstrap` write and load a
 user-level supervisor (`launchd` on macOS, a systemd user unit on Linux) that
-execs `daemon run` at login and restarts it on failure. `start` is recovery
+execs `daemon run` at login and restarts it on failure. On macOS the unit
+files the daemon's stdout and stderr under
+`~/Library/Logs/agent-bot/daemon.log`; on Linux they are in the user journal
+(`journalctl --user -u agent-bot-daemon`). `start` is recovery
 when the supervisor is not in use; `status`/`stop` probe and terminate the
 recorded daemon; `disable` unloads the supervisor. MCP remains per-conversation
 stdio and is never supervised. With `settings.daemonPreference` set to
