@@ -54,3 +54,13 @@ test('a launch with no harness takes the soul preference, else an enabled harnes
   assert.equal(onPath('sh', { PATH: '/bin' }), true);
   assert.equal(onPath('/bin/sh', { PATH: '/bin' }), false);
 });
+
+test('the codex row opens the workspace-write sandbox to the network so the soul reaches agent-comms', () => {
+  // Codex's workspace-write sandbox blocks network by default, and the broker
+  // socket counts as network; the resume lane passes the same setting as a
+  // -c flag (wake-resume.mjs), the ACP lane through codex-acp's CODEX_CONFIG.
+  const row = ACP_SPAWN_REGISTRY.codex;
+  assert.equal(row.sessionMode, 'workspace-write');
+  assert.deepEqual(JSON.parse(row.setEnv.CODEX_CONFIG), { sandbox_workspace_write: { network_access: true } });
+  assert.doesNotThrow(() => validateSpawnRow(row));
+});

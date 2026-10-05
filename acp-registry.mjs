@@ -98,6 +98,16 @@ const OPENCODE_DAEMON_CONFIG = JSON.stringify({
   },
 });
 
+// Codex's workspace-write sandbox turns network access off, and the
+// agent-comms broker is a unix socket that counts as network: under the
+// default sandbox `agent-comms task show` answers daemon-unreachable, Codex
+// asks to escalate, and the daemon policy denies it, so a task turn can never
+// accept or report its task. codex-acp merges CODEX_CONFIG (a JSON object)
+// into the session config, key by key under sandbox_workspace_write, so the
+// adapter's own writable_roots survive. The resume lane passes the same
+// setting as `-c sandbox_workspace_write.network_access=true` (wake-resume.mjs).
+const CODEX_DAEMON_CONFIG = JSON.stringify({ sandbox_workspace_write: { network_access: true } });
+
 const MUSE_ACP_PATH = fileURLToPath(new URL('./muse-acp.mjs', import.meta.url));
 
 export const ACP_SPAWN_REGISTRY = Object.freeze({
@@ -159,6 +169,9 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
     cli: 'codex',
     installHint: 'install Codex (https://developers.openai.com/codex) and run `codex login`',
     stripEnv: Object.freeze([]),
+    // Set after stripEnv, like the OpenCode ruleset: the sandbox must reach
+    // the agent-comms socket (see CODEX_DAEMON_CONFIG).
+    setEnv: Object.freeze({ CODEX_CONFIG: CODEX_DAEMON_CONFIG }),
     store: '~/.codex',
     mcpToolNaming: 'codex-mcp-title',
     // The adapter's default mode ("agent") lets Codex's own reviewer approve
