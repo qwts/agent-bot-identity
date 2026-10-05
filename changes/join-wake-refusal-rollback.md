@@ -1,1 +1,0 @@
-- `agent-bot join --wake` now rolls back a newly created soul when a post-creation step fails (no daemon, no pinned adapter, agent-comms refused), exactly like the failed-launch path from #421: leave agent-comms, retire the soul, archive its folder. Previously the soul was left behind with no wake and no membership. (#435)
