@@ -57,8 +57,12 @@ test('the ENG-0055 skill gate checks the packaged tree in every lane', () => {
 test('the Linux bundle lane builds and installs an archive on both platforms', () => {
   assert.match(ci, /^  linux-bundle:\n/m);
   assert.match(ci, /runs-on: \$\{\{ matrix\.platform\.runner \}\}/);
-  assert.match(ci, /runner: ubuntu-latest\n\s+target: linux-x64/);
-  assert.match(ci, /runner: ubuntu-24\.04-arm\n\s+target: linux-arm64/);
+  // Each lane's runner is a repo variable with the hosted label as the
+  // default, so a hosted-runner outage is survived by setting LINUX_RUNNER
+  // and LINUX_ARM_RUNNER to a self-hosted label, with no workflow change.
+  assert.match(ci, /runner: \$\{\{ vars\.LINUX_RUNNER \|\| 'ubuntu-latest' \}\}\n\s+target: linux-x64/);
+  assert.match(ci, /runner: \$\{\{ vars\.LINUX_ARM_RUNNER \|\| 'ubuntu-24\.04-arm' \}\}\n\s+target: linux-arm64/);
+  assert.doesNotMatch(ci, /runs-on: ubuntu-latest/);
   assert.match(ci, /timeout-minutes: 25/);
   // The build is a plain node invocation; the archive is what CI tests, not a
   // hand-assembled copy of the tree.
