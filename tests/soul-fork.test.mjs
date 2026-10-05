@@ -9,11 +9,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readAgentIdentity } from '../agent-identity.mjs';
 import { auditFile } from '../agent-principals.mjs';
-import { locateSoulDir, showSoul } from '../agent-population.mjs';
+import { listSouls, locateSoulDir, recordSoulDisplayName, showSoul } from '../agent-population.mjs';
+import { createLaunchHandler } from '../daemon-launch.mjs';
+import { HARNESS_SESSION_EVENT } from '../executor-contract.mjs';
 import { ownerActionSummary } from '../owner-gate.mjs';
 import { forkSoul, parseForkArgs } from '../soul-fork.mjs';
+import { createSoulHomes } from '../soul-home.mjs';
 import { joinSoul } from '../soul-join.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, validateSoulPackage } from '../soul-package.mjs';
+import { spawnSoulTemplate } from '../soul-templates.mjs';
 
 const FAKE_COMMS = fileURLToPath(new URL('./fixtures/fake-agent-comms.mjs', import.meta.url));
 const CLI = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
@@ -188,4 +192,117 @@ test('soul fork parses its flags, the owner prompt names the change, and the CLI
   try { execFileSync(process.execPath, [CLI, 'soul', 'fork', a.root, '--json'], { env: a.env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); }
   catch (error) { out = error.stderr; }
   assert.match(out, /usage: agent-bot soul fork/);
+});
+
+// #432: the daemon's package launch, wired as agent-daemon wires it. A copy
+// of a soul's folder is forked into a new soul with agent-comms left to the
+// launch; an installed folder relaunches its soul; a template spawns an
+// instance. Nothing a launch does renames an existing soul or a template.
+function launcher(a) {
+  const file = a.env.AGENT_BOT_POPULATION_PATH;
+  const stateDir = a.env.AGENT_BOT_STATE_HOME;
+  const bound = new Map();
+  const bindings = {
+    findAgent: (agentId) => bound.get(agentId) ?? null,
+    bind: ({ agentId, worktree, gitDir, harness }) => { bound.set(agentId, { agentId, worktree, gitDir, harness, file: path.join(gitDir, 'agent-binding.json') }); },
+  };
+  const homes = createSoulHomes({ ...a.options, stateDir, bindings, install: async () => {} });
+  const joins = [];
+  const reports = [];
+  const handler = createLaunchHandler({ file: path.join(a.root, 'launch-requests.json'),
+    identities: (agentId) => readAgentIdentity(agentId, { stateDir }),
+    spawnPackage: ({ package: template, name, harness }) => spawnSoulTemplate(template, { ...a.options, name, harness, stateDir, file }),
+    locatePackage: (pkg) => locateSoulDir(pkg, { ...a.options, file }),
+    forkCopy: async ({ package: copy, name, harness, parent = null }) => {
+      const forked = await forkSoul({ copy, name, harness, parentId: parent, ...a.options,
+        now: () => new Date('2026-10-04T04:00:00.000Z'), gate: async () => ({ method: 'launch' }), join: null });
+      return { id: forked.agentId, ...forked };
+    },
+    lookupBinding: () => null,
+    provisionHome: (soul) => homes(soul),
+    joinSoul: async (soul) => {
+      joins.push(soul);
+      if (soul.name) recordSoulDisplayName(soul.agentId, soul.name, { file });
+    },
+    executorFor: () => async ({ appendEvent }) => { appendEvent(HARNESS_SESSION_EVENT, {}); },
+  });
+  const launch = async (requestId, request) => {
+    await handler({ requestId, account: 'worker', harness: 'claude', ...request }, { account: 'worker', report: async (row) => { reports.push(row); } });
+    return reports.at(-1);
+  };
+  return { launch, joins, reports, file };
+}
+
+test('a package launch of a Finder copy makes it a new soul; the original keeps its folder, name and identity (#432)', async (t) => {
+  const a = await account(t);
+  const { launch, joins, file } = launcher(a);
+  const before = a.snapshot();
+  const originalIdentity = readAgentIdentity(a.bill.agentId, { stateDir: a.env.AGENT_BOT_STATE_HOME });
+
+  const row = await launch('copy', { package: a.copy, name: 'Ted' });
+
+  assert.equal(row.status, 'launched', row.detail);
+  assert.notEqual(row.agentId, a.bill.agentId);
+  // Two souls now, the new one in the copy's folder, named by the launch.
+  assert.deepEqual(listSouls({ status: 'active', file }).map((soul) => soul.id).sort(), [a.bill.agentId, row.agentId].sort());
+  const ted = showSoul(row.agentId, { file });
+  assert.equal(ted.displayName, 'Ted');
+  assert.equal(ted.soulDir, a.copy);
+  assert.equal(readFileSync(path.join(a.copy, '.soul-state', 'agent-id'), 'utf8'), `${row.agentId}\n`);
+  assert.deepEqual([locateSoulDir(a.copy, { ...a.options, file }).status, locateSoulDir(a.copy, { ...a.options, file }).agentId], ['installed', row.agentId]);
+  assert.equal(JSON.parse(readFileSync(path.join(a.copy, 'soul.json'), 'utf8')).name, 'Ted - Starter');
+  // The launch joined and started it from a home inside its own folder.
+  assert.equal(joins.length, 1);
+  assert.deepEqual([joins[0].agentId, joins[0].name], [row.agentId, 'Ted']);
+  assert.equal(joins[0].binding.worktree, path.join(a.copy, '.soul-state', 'home'));
+  assert.equal(JSON.parse(readFileSync(path.join(joins[0].binding.worktree, 'soul.json'), 'utf8')).name, 'Ted - Starter');
+  // The original: same files, identity, name, folder and agent-comms membership.
+  assert.deepEqual(a.snapshot(), before);
+  assert.deepEqual(readAgentIdentity(a.bill.agentId, { stateDir: a.env.AGENT_BOT_STATE_HOME }), originalIdentity);
+  const bill = showSoul(a.bill.agentId, { file });
+  assert.deepEqual([bill.status, bill.displayName, bill.soulDir], ['active', 'Bill', a.bill.soulDir]);
+  assert.deepEqual(a.broker().joined[a.bill.agentId], { name: 'Bill', harness: 'claude' });
+  assert.equal(locateSoulDir(a.bill.soulDir, { ...a.options, file }).agentId, a.bill.agentId);
+  const receipts = readFileSync(auditFile({ env: a.env, home: a.root }), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.deepEqual(receipts.filter(({ event }) => event === 'soul-fork').map(({ agentId, decision }) => ({ agentId, decision })),
+    [{ agentId: row.agentId, decision: 'forked' }]);
+});
+
+test('a package launch of an installed soul\'s own folder relaunches it under its own name (#432)', async (t) => {
+  const a = await account(t);
+  const { launch, joins, file } = launcher(a);
+  const row = await launch('own', { package: a.bill.soulDir, name: 'Zed' });
+  assert.deepEqual(row, { requestId: 'own', status: 'launched', agentId: a.bill.agentId });
+  assert.equal(joins[0].name, null);
+  assert.equal(showSoul(a.bill.agentId, { file }).displayName, 'Bill');
+  assert.equal(listSouls({ status: 'active', file }).length, 1);
+});
+
+test('a package launch of a template spawns a named instance each time and never renames the template (#432)', async (t) => {
+  const a = await account(t);
+  const { launch, file } = launcher(a);
+  const template = path.join(a.root, 'Starter.soul');
+  const before = readFileSync(path.join(template, 'soul.json'), 'utf8');
+  const ted = await launch('ted', { package: template, name: 'Ted' });
+  const ann = await launch('ann', { package: template, name: 'Ann' });
+  assert.equal(ted.status, 'launched', ted.detail);
+  assert.equal(ann.status, 'launched', ann.detail);
+  assert.equal(new Set([a.bill.agentId, ted.agentId, ann.agentId]).size, 3);
+  assert.equal(readFileSync(path.join(template, 'soul.json'), 'utf8'), before);
+  assert.deepEqual(listSouls({ status: 'active', file }).map((soul) => soul.displayName).sort(), ['Ann', 'Bill', 'Ted']);
+  assert.equal(showSoul(a.bill.agentId, { file }).displayName, 'Bill');
+});
+
+test('a package launch of a copy without a name is refused before anything changes (#432)', async (t) => {
+  const a = await account(t);
+  const { launch, joins, file } = launcher(a);
+  const before = snapshot(a.copy);
+  const row = await launch('unnamed', { package: a.copy });
+  assert.equal(row.status, 'failed');
+  assert.match(row.detail, /is a copy of soul .*; name the launch to start it as a new soul/);
+  assert.deepEqual(snapshot(a.copy), before);
+  assert.equal(locateSoulDir(a.copy, { ...a.options, file }).status, 'copy');
+  assert.equal(joins.length, 0);
+  assert.equal(listSouls({ status: 'active', file }).length, 1);
+  assert.equal(existsSync(path.join(a.env.AGENT_BOT_SOULS_HOME, '.archive')), false);
 });

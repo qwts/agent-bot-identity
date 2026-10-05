@@ -35,12 +35,17 @@ export const LAUNCH_NAME_MAX = 128;
 const withoutParent = ({ parent: _ignored, ...fields }) => fields;
 
 // `locatePackage` says what a package path is (#80). A folder that is an
-// installed soul's own launches that soul, never a new one; a copy of a soul
-// folder, or a marker naming no active soul here, is refused with its reason.
+// installed soul's own launches that soul, never a new one, and under its
+// own name: the launch's name is for a soul the launch makes, so it never
+// renames an existing one (#432). A copy of a soul's folder carries that
+// soul's marker; with `forkCopy` (the `soul fork` mechanism) the launch
+// makes the copy a new soul, named by the launch, and the original is never
+// touched. Without it, or without a name, a copy is refused with its
+// reason, as a marker naming no active soul here always is.
 const LAUNCHABLE = new Set(['package', 'installed']);
 
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
-  joinSoul = null, recordLaunch = null, locatePackage = null, executorFor, turnTimeoutMs = 30 * 60_000 }) {
+  joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, executorFor, turnTimeoutMs = 30 * 60_000 }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -84,7 +89,8 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         throw new Error('launch requires exactly one soul or package');
       }
       const located = event.package !== undefined && locatePackage ? await locatePackage(event.package) : null;
-      if (located && !LAUNCHABLE.has(located.status)) throw new Error(located.message ?? `cannot launch ${event.package}`);
+      const copied = located?.status === 'copy' && forkCopy !== null;
+      if (located && !LAUNCHABLE.has(located.status) && !copied) throw new Error(located.message ?? `cannot launch ${event.package}`);
       const soul = located?.status === 'installed' ? located.agentId : event.soul;
       const packagePath = soul ? null : event.package;
       // ADR-0276 order: the launch's own harness, else the soul's default,
@@ -98,10 +104,14 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       // Optional, chosen before start (#381): the soul's comms setting for
       // this and later launches. Absent keeps what its soul.json says.
       if (event.comms !== undefined && typeof event.comms !== 'boolean') throw new Error('invalid launch comms');
+      if (copied && event.name === undefined) {
+        throw new Error(`${event.package} is a copy of soul ${located.agentId}'s folder; name the launch to start it as a new soul`);
+      }
       // Every check that can fail without starting runs before a package spawn mints.
       if (!executorFor) throw new Error('daemon ACP executor is disabled');
       if (parent !== null && soul) throw new Error('a team member is a new soul, not an existing one');
-      const identity = soul ? await identities(soul) : await spawnPackage({ ...withoutParent(event), harness, ...(parent ? { parent } : {}) });
+      const request = { ...withoutParent(event), harness, ...(parent ? { parent } : {}) };
+      const identity = soul ? await identities(soul) : copied ? await forkCopy(request) : await spawnPackage(request);
       if (!soul) spawned = identity?.id ?? null;
       const binding = await lookupBinding(identity.id)
         ?? await provisionHome({ agentId: identity.id, harness, packagePath });
@@ -109,7 +119,9 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       rollback.binding = binding;
       if (joinSoul) {
         rollback.joined = true; // a join that fails after the broker records it still needs a leave
-        await joinSoul({ agentId: identity.id, harness, name: event.name ?? null, binding, ...(parent ? { parent } : {}) });
+        // An installed soul relaunched from its folder keeps its name (#432).
+        const name = located?.status === 'installed' ? null : event.name ?? null;
+        await joinSoul({ agentId: identity.id, harness, name, binding, ...(parent ? { parent } : {}) });
       }
       if (recordLaunch) await recordLaunch({ agentId: identity.id, package: packagePath, binding,
         ...(event.comms === undefined ? {} : { comms: event.comms, principal: event.principal ?? null }) });
