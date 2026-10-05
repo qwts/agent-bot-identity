@@ -309,7 +309,7 @@ export async function joinSoul({
           try { await leaveFn({ agentId }); } catch { /* best effort */ }
         }
         retireIdentityWithPopulation(agentId, { file, stateDir });
-        archiveSoulDirs(agentId, { env, home, file });
+        archiveSoulDirs(agentId, { ...options, file });
       } catch { /* the join's own error is the one reported */ }
     }
     throw error;
