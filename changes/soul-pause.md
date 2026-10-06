@@ -1,1 +1,0 @@
-- `agent-bot soul pause` cancels a soul's in-flight turns and keeps wakes, launches, and interactive turns paused until `soul resume`; population and daemon status expose the durable pause flag, with matching daemon client methods and audited routes for per-soul controls (#478).
