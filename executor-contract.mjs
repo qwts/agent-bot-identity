@@ -53,7 +53,7 @@
 //    re-exports the shape so engines validate references they pass onward.
 
 import { SOUL_MODES } from './soul-mode.mjs';
-import { classifyRisk } from './permission-risk.mjs';
+import { classifyRisk, isComputerUse } from './permission-risk.mjs';
 import { validateAgentId } from './agent-identity.mjs';
 
 export const EXECUTOR_CONTRACT_VERSION = 1;
@@ -305,6 +305,7 @@ export function createContractExecutor({ harness, identity, policy, run, mode = 
     requestApproval,
     signal,
     onPermission = null,
+    computerUseEnabled = () => true,
   }) {
     if (!invocation || typeof appendEvent !== 'function'
       || typeof addArtifact !== 'function' || typeof requestApproval !== 'function'
@@ -361,10 +362,13 @@ export function createContractExecutor({ harness, identity, policy, run, mode = 
       return decision;
     };
 
-    // Policy allow/deny is final. Approval outcomes are decided by autopilot,
-    // risk, an owner approval earlier in this turn, or a fresh proposal.
-    // `decidedBy` is policy, autopilot, risk, turn, or approval respectively.
+    // The computer-use switch takes precedence over policy and mode.
+    // Otherwise policy allow/deny is final. Approval outcomes are decided by
+    // autopilot, risk, an owner approval earlier in this turn, or a fresh proposal.
+    // `decidedBy` names computer-use, policy, autopilot, risk, turn, or approval.
     const requestPermission = async ({ toolName, operation = null, summary = null, ttlMs } = {}) => {
+      const computerUseOff = () => isComputerUse(toolName) && computerUseEnabled() !== true;
+      if (computerUseOff()) return observe(toolName, { outcome: 'deny', decidedBy: 'computer-use' }, summary);
       const outcome = decidePermission(boundPolicy, { toolName });
       if (outcome !== 'approval') return observe(toolName, { outcome, decidedBy: 'policy' }, summary);
       if (mode === 'autopilot') return observe(toolName, { outcome: 'allow', decidedBy: 'autopilot' }, summary);
@@ -381,6 +385,8 @@ export function createContractExecutor({ harness, identity, policy, run, mode = 
         summary: wantedSummary,
         ...(ttlMs === undefined ? {} : { ttlMs }),
       });
+      // The owner may have switched off while this proposal was waiting.
+      if (computerUseOff()) return observe(toolName, { outcome: 'deny', decidedBy: 'computer-use' }, summary);
       if (decision.decision === 'approve') approvedTools.add(toolName);
       return observe(toolName, {
         outcome: decision.decision === 'approve' ? 'allow' : 'deny',

@@ -85,6 +85,19 @@ for. `agent-bot skill path` prints the installed release's copy of this skill.
 | remote-write | `mint-token` | Each run mints a new short-lived token; repeating is safe. |
 | remote-write | `signed-commit` | Never blindly rerun. Follow the printed recovery in [verified-publish.md](references/verified-publish.md), and inspect the remote branch head before any second attempt. |
 
+## Control computer use
+
+`agent-bot soul computer-use <agentId|name> [show|on|off] [--json] [--principal-stdin]`
+defaults to show. Changes require the same owner gate as `soul mode`, accepting
+a presented principal on stdin. JSON is `{agentId, computerUse: true|false}`.
+The durable flag defaults to true and appears beside `paused` in soul,
+population, and daemon health/status JSON. Off denies computer-use proposals
+without prompting in Safe and Auto-Pilot modes, leaving other tools unchanged.
+With the daemon running, off also stops the soul's turns when computer use is
+active and returns `stopped: true`. Changes and denials leave `computer-use`
+audit receipts. `POST /v0/soul/computer-use` accepts `{agentId, enabled}` and an
+optional presented `principal`; `daemonClient.setComputerUse` uses this route.
+
 ## Stop or pause a soul
 
 `agent-bot soul stop <agentId|name> [--json]` asks the loopback daemon to

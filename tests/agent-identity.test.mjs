@@ -638,6 +638,7 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
     managed: false,
     comms: true,
     paused: false,
+    computerUse: true,
   });
   assert.equal(
     new Date(firstPopulation.souls[firstId].lastSeen).toISOString(),
