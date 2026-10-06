@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.22
+
+- `agent-bot soul templates [--json]` lists validated templates from the souls root, the configured team template, and any bundled Starter, with launchable package paths and per-package errors for local discovery (#374).
+
 ## 0.10.21
 
 - `agent-bot approvals approve <proposalId> --scope session` and daemon approval routes can approve a tool for the soul’s current harness session. Grants stay in daemon memory and clear on session change, stop, pause, or restart; decision JSON exposes `scope` and `approved_session` for approval cards (#486).
