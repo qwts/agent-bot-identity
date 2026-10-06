@@ -1,0 +1,1 @@
+- `agent-bot approvals approve <proposalId> --scope session` and daemon approval routes can approve a tool for the soul’s current harness session. Grants stay in daemon memory and clear on session change, stop, pause, or restart; decision JSON exposes `scope` and `approved_session` for approval cards (#486).

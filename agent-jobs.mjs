@@ -790,7 +790,11 @@ function normalizeProposal(record) {
   if (invocationId === null && agentId === null) throw new Error('proposal needs an invocation or a soul');
   const risk = record.risk === undefined ? 'external' : record.risk;
   if (!['safe', 'destructive', 'external'].includes(risk)) throw new Error('invalid proposal risk');
+  const scope = record.scope === undefined ? 'once' : record.scope;
+  if (!['once', 'session'].includes(scope) || (scope === 'session' && record.status !== 'approved')) throw new Error('invalid proposal scope');
   return {
+    scope,
+    decision: record.status === 'open' ? null : (record.status === 'approved' && scope === 'session' ? 'approved_session' : record.status),
     risk,
     proposalId: matchOrThrow(PROPOSAL_ID_PATTERN, record.proposalId, 'invalid proposal ID'),
     invocationId,
@@ -900,7 +904,7 @@ export function listProposals(
 // is the bookkeeping move to `expired`.
 export function decideProposal(
   proposalId,
-  { decision, decidedBy = null },
+  { decision, decidedBy = null, scope = 'once' },
   { env = process.env, home = homedir(), now = () => new Date() } = {},
 ) {
   const options = { env, home };
@@ -908,6 +912,7 @@ export function decideProposal(
   if (!['approved', 'denied', 'expired'].includes(decision)) {
     throw new Error('proposal decision must be approved, denied, or expired');
   }
+  if (!['once', 'session'].includes(scope) || (scope === 'session' && decision !== 'approved')) throw new Error('invalid proposal scope');
   const decidedByValue = decider(decidedBy);
   return withProposalsLock(options, (file) => {
     const proposals = readProposals(options);
@@ -921,6 +926,8 @@ export function decideProposal(
     const decided = {
       ...existing,
       status: decision,
+      scope,
+      decision: decision === 'approved' && scope === 'session' ? 'approved_session' : decision,
       decidedAt: at.toISOString(),
       decidedBy: decidedByValue,
     };

@@ -37,6 +37,7 @@ import {
   enrollPrincipal,
   setOperations,
 } from '../agent-principals.mjs';
+import { createTurnRegistry } from '../wake-plane.mjs';
 import { upsertSoul } from '../agent-population.mjs';
 
 const AGENT_ID = 'agent_11111111-1111-4111-8111-111111111111';
@@ -843,4 +844,31 @@ test('synchronous and asynchronous model cache failures never fail a turn', asyn
     } });
     assert.equal(JSON.parse(chunkTexts(events)[0]).model, 'chosen');
   }
+});
+
+
+test('interactive ACP turns reuse session grants from the real harness binding and discard them on change', async () => {
+  const { env } = scratch();
+  seedSoul(env);
+  const principal = seedPrincipal(env);
+  const turns = createTurnRegistry();
+  let harnessSessionId = 'fake-ses-42';
+  const decisions = [];
+  const engine = createAcpExecutor({ harness: 'claude', identity: IDENTITY, registry: FAKE_REGISTRY,
+    policy: { version: 1, rules: [], fallback: 'approval' },
+    getHarnessSession: () => ({ harnessSessionId }),
+  });
+  const interaction = service(env, { turns, executor: (input) => engine({ ...input, onPermission: (row) => decisions.push(row) }) });
+  const session = begin(interaction, principal);
+  for (let index = 0; index < 3; index++) {
+    if (index === 2) harnessSessionId = 'fake-ses-43';
+    const { invocation } = interaction.submitMessage({ principal, transport: 'web', sessionId: session.sessionId,
+      message: 'need-permission', idempotencyKey: `session-grant-${index}` });
+    if (index !== 1) {
+      const proposal = await waitFor(() => interaction.listProposalsForOwner().proposals[0]);
+      interaction.decideProposalAsOwner({ proposalId: proposal.proposalId, digest: proposal.operationDigest, decision: 'approve', scope: 'session' });
+    }
+    await waitFor(() => interaction.getInvocation({ principal, transport: 'web', invocationId: invocation.invocationId }).invocation.status === 'completed');
+  }
+  assert.deepEqual(decisions.map((row) => row.decidedBy), ['approval', 'session', 'approval']);
 });

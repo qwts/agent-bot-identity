@@ -20,7 +20,7 @@ import { daemonClient } from './agent-daemon.mjs';
 import { shown } from './approval-action.mjs';
 import { soulMarkers } from './owner-gate.mjs';
 
-const USAGE = 'usage: agent-bot approvals list [--json] | approvals approve|deny <proposalId> [--json] [--principal-stdin]';
+const USAGE = 'usage: agent-bot approvals list [--json] | approvals approve <proposalId> [--scope once|session] [--json] [--principal-stdin] | approvals deny <proposalId> [--json] [--principal-stdin]';
 
 function refuseSoul({ env, cwd }) {
   const markers = soulMarkers({ env, cwd });
@@ -40,7 +40,15 @@ export async function approvalsCommand(argv, {
 } = {}) {
   const json = argv.includes('--json');
   const presented = argv.includes('--principal-stdin');
-  const [action, target, ...rest] = argv.filter((arg) => arg !== '--json' && arg !== '--principal-stdin');
+  const args = argv.filter((arg) => arg !== '--json' && arg !== '--principal-stdin');
+  const scopeIndex = args.indexOf('--scope');
+  let scope = 'once';
+  if (scopeIndex !== -1) {
+    scope = args[scopeIndex + 1];
+    if (args[0] !== 'approve' || !['once', 'session'].includes(scope)) throw new Error(USAGE);
+    args.splice(scopeIndex, 2);
+  }
+  const [action, target, ...rest] = args;
   const opts = { env, home };
   if (action === 'list') {
     if (target !== undefined || presented) throw new Error(USAGE);
@@ -65,7 +73,7 @@ export async function approvalsCommand(argv, {
   const proposal = proposals.find((row) => row.proposalId === target);
   if (!proposal) throw Object.assign(new Error(`${target} is not waiting on a decision`), { code: 'not-open' });
   const result = await client.decideApproval({
-    proposalId: target, decision: action, digest: proposal.operationDigest, ...(principal ? { principal } : {}),
+    proposalId: target, decision: action, ...(scopeIndex !== -1 ? { scope } : {}), digest: proposal.operationDigest, ...(principal ? { principal } : {}),
   });
   const decided = { ...shown(result.proposal, opts), invocationId: result.proposal.invocationId ?? null, risk: result.proposal.risk ?? 'external' };
   write(json ? `${JSON.stringify(decided)}\n` : `${decided.proposalId} ${decided.status}\n`);

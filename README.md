@@ -262,7 +262,7 @@ agent-bot space export [agent-id] [--out <path>] [--gist]
 agent-bot space import <pack|gist:id|gist-url> [--force]
 agent-bot space retire <agent-id> [--delete-space]
 agent-bot population <list|show|backfill> [agent-id|name] [--dry-run] [--json]
-agent-bot approvals list [--json] | approvals approve|deny <proposalId> [--json] [--principal-stdin]
+agent-bot approvals list [--json] | approvals approve <proposalId> [--scope once|session] [--json] [--principal-stdin] | approvals deny <proposalId> [--json] [--principal-stdin]
 agent-bot soul cold-wake <agent-id> [on|off|show|resume <read-only|workspace>|webhook --url-file PATH --key-file PATH|->] [--principal-stdin]
 agent-bot soul mode <agentId|name> [show|safe|autopilot] [--json] [--principal-stdin]
 agent-bot soul computer-use <agentId|name> [show|on|off] [--json] [--principal-stdin]
@@ -816,12 +816,12 @@ default), and the owner decides (#85):
 
 ```bash
 agent-bot approvals list --json
-agent-bot approvals approve proposal_… [--principal-stdin]
+agent-bot approvals approve proposal_… [--scope once|session] [--principal-stdin]
 agent-bot approvals deny proposal_…
 ```
 
 `list` returns `{ "approvals": [{ proposalId, agentId, soul, tool, summary,
-operationDigest, createdAt, expiresAt, status }] }`. `approve` and `deny`
+operationDigest, createdAt, expiresAt, status, scope, decision }] }`. `approve` and `deny`
 echo the proposal's operation digest, so a decision lands only on the
 operation it names, and refuse a caller with a soul marker. Before any
 decision lands, the daemon asks for the owner's presence (#438): keyd's
@@ -834,6 +834,17 @@ through `GET /v1/proposals` and `POST /v1/proposals/<id>/decision`, which asks
 for the owner's presence the same way. Proposals live only as long as the turn
 that waits on them: after a daemon restart nothing is listed. Launch turns
 (`start_soul`, package launches) still deny instead of asking.
+
+Approval scope defaults to `once`, which also allows the same tool for the
+rest of the current turn. `--scope session` allows the exact tool for that
+soul across turns in the same harness session. Grants live only in daemon
+memory and clear on a session change, `soul stop`, `soul pause`, or daemon
+restart. Policy deny and computer-use off still win. Decision records expose
+`scope` and `decision: "approved_session"` for “Approved for this session”;
+once and deny decisions remain `approved` and `denied`. The proposal's
+`status` stays `approved` for either approval scope. Lists still contain only
+waiting proposals (`decision: null`, `scope: "once"`). Both daemon decision
+routes accept `scope: "once" | "session"`; session scope requires approve.
 
 ### Removing a soul
 

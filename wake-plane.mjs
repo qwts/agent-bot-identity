@@ -8,6 +8,7 @@
 // a socket, or a harness.
 
 import path from 'node:path';
+import { createSessionGrants } from './session-approvals.mjs';
 import { assertSoulUnpaused } from './agent-population.mjs';
 
 import { createAcpExecutor } from './acp-engine.mjs';
@@ -23,6 +24,7 @@ import { createWakeDispatcher } from './wake-dispatch.mjs';
 // A soul may have overlapping interactive sessions; stop reaches every turn.
 export function createTurnRegistry({ isPaused = () => false } = {}) {
   const active = new Map();
+  const sessionGrants = createSessionGrants();
   const track = (agentId, controller) => {
     const turns = active.get(agentId) ?? new Set();
     active.set(agentId, turns);
@@ -34,8 +36,10 @@ export function createTurnRegistry({ isPaused = () => false } = {}) {
   };
   return {
     track,
+    sessionGrants,
     busy: () => [...active.keys()],
     stop(agentId) {
+      sessionGrants.clear(agentId);
       let stopped = false;
       for (const controller of active.get(agentId) ?? []) {
         if (!controller.signal.aborted) { controller.abort(); stopped = true; }
@@ -49,7 +53,7 @@ export function createTurnRegistry({ isPaused = () => false } = {}) {
       const release = track(input.invocation.agentId, controller);
       try {
         signal.throwIfAborted();
-        const result = await executor({ ...input, signal });
+        const result = await executor({ ...input, signal, sessionGrants });
         signal.throwIfAborted();
         return result;
       } catch (error) {
@@ -86,7 +90,8 @@ export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onE
       if (update?.sessionUpdate === 'agent_message_chunk' && typeof update.content?.text === 'string') reply += update.content.text;
       else if (update?.sessionUpdate === 'tool_call') reply = '';
     };
-    const result = await turns.run({ invocation }, async ({ signal }) => executor({
+    const result = await turns.run({ invocation }, async ({ signal, sessionGrants }) => executor({
+      sessionGrants,
       invocation,
       message,
       attachments,
