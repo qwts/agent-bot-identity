@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.15
+
+- Add proposal risk levels and live daemon computer-use activity signals for GeniusBar.
+- Add owner-controlled per-soul Safe and Auto-Pilot modes, with turn-scoped tool approvals and permission audit receipts.
+- Store an owner-selected model per soul, expose it and cached ACP model choices through the CLI, and apply it on every daemon turn and optional launch selection.
+
 ## 0.10.14
 
 - Add filtered audit log listing and live tailing for GeniusBar, including receipts for tool permissions allowed or denied by daemon policy.
