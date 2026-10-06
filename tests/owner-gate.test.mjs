@@ -215,6 +215,38 @@ test('unmarked CLI without a credential refuses noninteractive consent and audit
   assert.equal(listSoulProposals(f.id, f.options)[0].status, 'pending');
 });
 
+test('revision edit accepts keyd presence without a terminal and records the proof', async (t) => {
+  const f = fixture(t);
+  assert.ok(!process.stdin.isTTY && !process.stderr.isTTY);
+  const authorization = { method: 'presence', via: 'agent-bot-keyd' };
+  const calls = [];
+  const record = await revisionCommand(['edit', f.id, f.packagePath, 'Customize', '--json'], {
+    ...f.options, presence: async (summary, { env }) => {
+      calls.push(summary);
+      assert.equal(env.HOME, f.root);
+      return authorization;
+    },
+  });
+  assert.deepEqual(record.authorization, authorization);
+  assert.deepEqual(revisionHistory(f.id, f.options).at(-1).authorization, authorization);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], new RegExp(f.id));
+});
+
+test('revision edit treats keyd refusal as final, without reaching the terminal-only dialog fallback', async (t) => {
+  const f = fixture(t);
+  let calls = 0;
+  await assert.rejects(revisionCommand(['edit', f.id, f.packagePath, 'Customize'], {
+    ...f.options, presence: async () => {
+      calls++;
+      throw Object.assign(new Error('Touch ID cancelled'), { code: 'owner-declined' });
+    },
+  }), (error) => error.code === 'owner-credential-required' && /not approved: Touch ID cancelled/.test(error.message)
+    && !/interactive terminal/.test(error.message));
+  assert.equal(calls, 1);
+  assert.equal(revisionHistory(f.id, f.options).length, 1);
+});
+
 test('broker errors cannot reflect a credential into owner errors or audit', async (t) => {
   const f = fixture(t);
   const broker = fakeBroker({ fail: { code: SECRET, message: SECRET } });

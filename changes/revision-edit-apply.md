@@ -1,0 +1,1 @@
+- `soul revision edit` accepts owner approval through agent-bot-keyd without a terminal, and `--apply` publishes the recorded edit into the soul’s package folder so GeniusBar customization takes effect while preserving working state (qwts/GeniusBar#64).

@@ -4,13 +4,14 @@
 // user entry points. The CLI uses the owner gate (owner-gate.mjs, #293).
 import { randomUUID } from 'node:crypto';
 import { cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
-  readdirSync, renameSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+  readdirSync, renameSync, rmSync, rmdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { canonicalJson, computePackageRevision, readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
 import { currentAgentId, readAgentIdentity, recordAgentPackageRevision, stateDirectory, validateAgentId, withLock } from './agent-identity.mjs';
 import { spacePath } from './agent-space.mjs';
-import { assertOwnerAction, ownerCredentialRequired, presenceOrConsent } from './owner-gate.mjs';
+import { assertOwnerAction, consentOwner, ownerCredentialRequired, presenceOrConsent } from './owner-gate.mjs';
+import { soulDirectory } from './agent-population.mjs';
 import { appendAuditReceipt } from './agent-principals.mjs';
 
 const ZERO = `sha256:${'0'.repeat(64)}`;
@@ -137,8 +138,23 @@ export function createRevisionAppender(packagePath, { reason, author = 'user', .
       parentRevision: stored.parentRevision, author, reason, ...authorized(options) }, options);
   });
 }
-export async function editSoulRevision(id, packagePath, { reason, expectedParent, ...options } = {}) {
+export async function editSoulRevision(id, packagePath, { reason, expectedParent, apply = false, ...options } = {}) {
   text(reason, 'reason');
+  if (apply) return locked(id, options, (root) => {
+    if (expectedParent !== undefined) assertParent(root, expectedParent);
+    const directory = resolve(soulDirectory(id, { ...options, readOnly: true }));
+    assertApplyPath(resolve(packagePath));
+    assertApplyPath(directory);
+    const stored = snapshot(root, packagePath, requireHead(root).revision);
+    // Preflight the entire destination before recording or touching any file.
+    const publish = prepareApply(directory, stored, resolve(packagePath) === directory);
+    assertParent(root, stored.parentRevision);
+    const record = append(root, { kind: 'revision', revision: stored.revision,
+      parentRevision: stored.parentRevision, author: 'user', reason, ...authorized(options) }, options);
+    // withLock is synchronous: recording and applying must not cross an await.
+    if (requireHead(root).revision !== stored.revision) throw new Error('stale apply: recorded head moved');
+    return { ...record, applied: true, changed: publish() };
+  });
   const stored = locked(id, options, (root) => {
     if (expectedParent !== undefined) assertParent(root, expectedParent);
     return snapshot(root, packagePath, requireHead(root).revision);
@@ -146,6 +162,76 @@ export async function editSoulRevision(id, packagePath, { reason, expectedParent
   await recordAgentPackageRevision(id, stored.packagePath, { ...options,
     appendRevision: createRevisionAppender(stored.packagePath, { ...options, reason }) });
   return revisionHistory(id, options).find((record) => record.revision === stored.revision);
+}
+
+function assertApplyPath(file) {
+  const parent = dirname(file);
+  if (parent !== file) assertApplyPath(parent);
+  try {
+    if (lstatSync(file).isSymbolicLink()) throw new Error('apply cannot follow symlinks');
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+const workingState = (path) => /^(?:\.soul-state|worktrees)(?:\/|$)/.test(path);
+
+function prepareApply(directory, stored, inPlace) {
+  const right = new Map(readSoulPackageEntries(stored.packagePath).entries.map((entry) => [entry.path, entry]));
+  if ([...right.keys()].some(workingState)) throw new Error('apply cannot overwrite working state');
+  const left = new Map();
+  function walk(folder, prefix = '') {
+    for (const name of readdirSync(folder)) {
+      const path = prefix + name;
+      if (workingState(path)) continue; // Do not even stat working-state links.
+      const file = join(folder, name), stat = lstatSync(file);
+      if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) {
+        throw new Error(`unsupported apply destination entry: ${path}`);
+      }
+      const mode = stat.isDirectory() ? '040000' : stat.mode & 0o111 ? '100755' : '100644';
+      left.set(path, { path, mode, bytes: stat.isDirectory() ? Buffer.alloc(0) : readFileSync(file) });
+      if (stat.isDirectory()) walk(file, `${path}/`);
+    }
+  }
+  if (!lstatSync(directory).isDirectory()) throw new Error('apply destination must be a directory');
+  walk(directory);
+  if (inPlace) {
+    // Preserve all current manifest fields; only the revision pointers change.
+    const manifest = JSON.parse(left.get('soul.json').bytes);
+    right.set('soul.json', { ...left.get('soul.json'), bytes: Buffer.from(JSON.stringify({ ...manifest,
+      revision: stored.revision, parentRevision: stored.parentRevision }) + '\n') });
+  }
+  const changed = (inPlace ? ['soul.json'] : [...new Set([...left.keys(), ...right.keys()])].sort())
+    .filter((path) => {
+      const before = left.get(path), after = right.get(path);
+      return !before || !after || before.mode !== after.mode || !before.bytes.equals(after.bytes);
+    });
+  return () => {
+    // Remove children first, without recursive deletion or following links.
+    for (const path of [...changed].sort((a, b) => b.split('/').length - a.split('/').length)) {
+      const before = left.get(path), after = right.get(path);
+      if (!before || (after && before.mode === after.mode) ||
+          (after && before.mode !== '040000' && after.mode !== '040000')) continue;
+      const file = join(directory, path);
+      assertApplyPath(file);
+      if (before.mode === '040000') rmdirSync(file);
+      else rmSync(file);
+    }
+    // Parents precede children; publish the manifest last.
+    const writes = changed.filter((path) => path !== 'soul.json').sort();
+    if (changed.includes('soul.json')) writes.push('soul.json');
+    for (const path of writes) {
+      const entry = right.get(path);
+      if (!entry) continue;
+      const file = join(directory, path);
+      assertApplyPath(file);
+      if (entry.mode === '040000') { mkdirSync(file, { recursive: true }); continue; }
+      const temporary = join(dirname(file), `.${randomUUID()}.tmp`);
+      try {
+        writeFileSync(temporary, entry.bytes, { flag: 'wx', mode: 0o600 });
+        chmodSync(temporary, entry.mode === '100755' ? 0o755 : 0o644);
+        renameSync(temporary, file);
+      } finally { rmSync(temporary, { force: true }); }
+    }
+    return changed;
+  };
 }
 
 function inventory(directory) {
@@ -293,21 +379,24 @@ export async function revisionCommand(args, { assertSoulTarget = (id) => {
   }
 }, assertUser = (action, { principal }) => assertOwnerAction(action, {
   principal, env: options.env, cwd: options.cwd,
-  consent: (action, context) => {
-    if (!process.stdin.isTTY || !process.stderr.isTTY) {
-      throw ownerCredentialRequired('owner consent requires an interactive terminal; --yes cannot approve');
-    }
-    return presenceOrConsent(action, context);
-  },
+  consent: (action, context) => presenceOrConsent(action, { ...context, presence,
+    consent: (action, context) => {
+      if (!process.stdin.isTTY || !process.stderr.isTTY) {
+        throw ownerCredentialRequired('owner consent requires an interactive terminal; --yes cannot approve');
+      }
+      return consentOwner(action, context);
+    },
+  }),
 }),
 // The owner's principal credential, when the caller presents one; it is
 // passed only to assertUser and never stored.
-principal = null, ...options } = {}) {
-  const [command, id, ...rest] = args;
+principal = null, presence, ...options } = {}) {
+  const apply = args.includes('--apply');
+  const [command, id, ...rest] = args.filter((arg) => arg !== '--json' && arg !== '--apply');
   validateAgentId(id);
   const arities = { adopt: 2, edit: 2, propose: 2, approve: 2, reject: 2, list: 0, history: 0, promote: 3 };
-  if (!(command in arities) || rest.length !== arities[command]) {
-    throw new Error('usage: soul revision adopt|edit|propose ID PATH REASON; approve|reject ID PROPOSAL REASON; list|history ID; promote ID SOURCE DESTINATION REASON; adopt, edit, approve and reject take --principal-stdin');
+  if (!(command in arities) || rest.length !== arities[command] || (apply && command !== 'edit')) {
+    throw new Error('usage: soul revision adopt|edit|propose ID PATH REASON; edit accepts --apply; approve|reject ID PROPOSAL REASON; list|history ID; promote ID SOURCE DESTINATION REASON; all accept --json; adopt, edit, approve and reject take --principal-stdin');
   }
   if (['adopt', 'edit', 'approve', 'reject'].includes(command)) {
     let authorization;
@@ -321,7 +410,7 @@ principal = null, ...options } = {}) {
   }
   if (['propose', 'promote'].includes(command)) await assertSoulTarget(id);
   if (command === 'adopt') return adoptSoulPackage(id, rest[0], { ...options, reason: rest[1] });
-  if (command === 'edit') return editSoulRevision(id, rest[0], { ...options, reason: rest[1] });
+  if (command === 'edit') return editSoulRevision(id, rest[0], { ...options, apply, reason: rest[1] });
   if (command === 'propose') return proposeSoulRevision(id, rest[0], { ...options, reason: rest[1] });
   if (command === 'approve' || command === 'reject') return decideSoulProposal(id, rest[0], command, { ...options, reason: rest[1] });
   if (command === 'list') return listSoulProposals(id, options);
