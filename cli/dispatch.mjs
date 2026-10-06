@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,7 @@ const MODULES = new Map([
   ['daemon', 'agent-daemon.mjs'],
   ['keyd', 'keyd-client.mjs'],
   ['approvals', 'agent-approvals.mjs'],
+  ['audit', 'agent-audit.mjs'],
   ['mcp', 'agent-mcp.mjs'],
   ['reach-mcp', 'daemon-mcp.mjs'],
   ['wake', 'wake-listen.mjs'],
@@ -49,6 +50,24 @@ function run(executable, args, env = process.env) {
   const result = spawnSync(executable, args, { stdio: 'inherit', env });
   if (result.error) throw result.error;
   return result.status ?? 1;
+}
+
+// A following reader must remain interruptible while its child is running.
+// The synchronous dispatcher used by finite commands cannot forward SIGINT.
+function follow(executable, args) {
+  const child = spawn(executable, args, { stdio: 'inherit' });
+  const interrupt = () => child.kill('SIGINT');
+  process.on('SIGINT', interrupt);
+  child.once('error', (error) => {
+    process.stderr.write(`agent-bot: ${error.message}\n`);
+    process.exitCode = 1;
+    process.off('SIGINT', interrupt);
+  });
+  child.once('exit', (code, signal) => {
+    process.off('SIGINT', interrupt);
+    process.exitCode = code ?? (signal === 'SIGINT' ? 130 : 1);
+  });
+  return 0;
 }
 
 export function dispatchAgentBot(parsed) {
@@ -98,6 +117,9 @@ export function dispatchAgentBot(parsed) {
   }
   const module = MODULES.get(parsed.command);
   if (!module) throw new Error(`unsupported command: ${parsed.command}`);
+  if (parsed.command === 'audit' && parsed.args[0] === 'tail') {
+    return follow(process.execPath, [join(ROOT, module), ...parsed.args]);
+  }
   // A person (or a harness startup script) ran it by name, not a git hook:
   // setup-worktree may then say why it did nothing (#382).
   if (parsed.command === 'setup-worktree') {

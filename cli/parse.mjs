@@ -14,6 +14,7 @@ const PUBLIC_COMMANDS = new Set([
   'daemon',
   'keyd',
   'approvals',
+  'audit',
   'mcp',
   'reach-mcp',
   'wake',

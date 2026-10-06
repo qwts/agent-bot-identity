@@ -1388,6 +1388,36 @@ export async function recordLaunchComms({ agentId, package: packagePath, comms, 
   }
 }
 
+// Observe policy decisions in both interactive and cold ACP turns. Approval
+// decisions already have their own receipts. The writer owns detail sanitizing.
+export function withPermissionReceipts(executor, {
+  env = process.env, home = homedir(), now = () => new Date(),
+} = {}) {
+  return (input) => executor({
+    ...input,
+    onPermission: (record) => {
+      try {
+        if (record.decidedBy === 'policy' && ['allow', 'deny'].includes(record.outcome)) {
+          const tool = typeof record.toolName === 'string' ? record.toolName : null;
+          const operation = tool && !/[\u0000-\u0020\u007f-\u009f]/.test(tool)
+            ? (tool.length > 40 ? `${tool.slice(0, 39)}…` : tool) : null;
+          appendAuditReceipt({
+            event: 'permission', agentId: input.invocation.agentId,
+            operation, decision: record.outcome,
+            // A contract-valid 200-character tool consumes the entire detail
+            // budget; keep its full name rather than clip it for a summary.
+            detail: tool?.length === 200 ? tool
+              : [tool, record.summary].filter((value) => typeof value === 'string' && value.length).join(': '),
+          }, { env, home, now });
+        }
+      } catch { /* receipt failures must not change a policy decision */ }
+      // Keep the cold turn's denied-tool collector even if the receipt store
+      // is unavailable. The contract isolates this observer's errors too.
+      return input.onPermission?.(record);
+    },
+  });
+}
+
 export async function runDaemon({
   env = process.env,
   home = homedir(),
@@ -1420,7 +1450,7 @@ export async function runDaemon({
   const setup = (config ?? loadConfig({ home, env })).executor;
   const identities = (agentId) => readAgentIdentity(validateAgentId(agentId), { stateDir: stateDirectory({ env, home }) });
   // An embedded host turns the executor on for its own daemon (ADR-0276).
-  const executorFor = setup?.enabled === true || env.AGENT_BOT_EXECUTOR === '1'
+  const configuredExecutorFor = setup?.enabled === true || env.AGENT_BOT_EXECUTOR === '1'
     ? acpExecutorFor({
       identities,
       policy: setup?.policy ?? { version: 1, rules: [], fallback: 'deny' },
@@ -1446,6 +1476,9 @@ export async function runDaemon({
         return declaration?.store === 'keyd' ? record.bin : null;
       },
     })
+    : null;
+  const executorFor = configuredExecutorFor
+    ? (request) => withPermissionReceipts(configuredExecutorFor(request), { env, home, now })
     : null;
   const executor = executorFor
     ? (input) => {
