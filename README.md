@@ -673,9 +673,10 @@ retains its existing hashes;
 [format 2](docs/soul-package.md#format-2-working-state-and-compatibility) excludes
 working state and harness files whose bytes exactly match soul-builder output
 for the package. The generated marker alone has no effect. Run
-`agent-bot soul build [PATH] [--check]` to render marked Claude/Gemini aliases
-and skills; new package homes build automatically after copying. Builds refuse
-unmarked conflicts and checks report drift without writing. See the
+`agent-bot soul build [PATH] [--check] [--json]` to render marked Claude/Gemini
+aliases, skills, and the soul's own MCP entry; new package homes build
+automatically after copying. Builds refuse unmarked conflicts and checks report
+drift without writing. See the
 [per-harness table and rendering contract](docs/soul-builder.md). Older tools
 require format 1.
 With `identity spawn -- <command...>`, the command receives the child file as
@@ -935,7 +936,12 @@ It is **one server with two placements**:
 Writes fail closed on identity: an invocation belonging to a different soul
 than the server speaks for is refused before any event is appended.
 
-Registered-placement snippets per harness:
+A soul's own builder renders these registered-placement snippets for the first
+four harnesses, so a soul opened by hand in its own directory reaches its
+teammates without anyone editing a config file (`#378`; see
+[docs/soul-builder.md](docs/soul-builder.md)). Identity is still the working
+directory's `agentBot.agentId` pin, and a soul that declares its own MCP
+servers keeps them. Manual snippets per harness:
 
 ```json
 // Claude Code — .mcp.json

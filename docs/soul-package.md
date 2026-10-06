@@ -115,7 +115,8 @@ revision (or submit the format change as an owner-reviewed revision):
   "directories": ["worktrees/", ".soul-state/"],
   "generatedPaths": [
     ".claude/", ".codex/", ".cursor/", ".opencode/", ".devin/", ".gemini/",
-    ".github/copilot-instructions.md", "CLAUDE.md", "GEMINI.md"
+    ".github/copilot-instructions.md", ".mcp.json", "CLAUDE.md", "GEMINI.md",
+    "opencode.json"
   ],
   "generatedMarker": "<!-- agent-bot soul-builder: generated -->"
 }
@@ -126,7 +127,11 @@ The contract is fixed for format 2, exported as `PACKAGE_IGNORE_LIST` from
 array order matters). It is part of the canonical manifest bytes. Producers
 such as soul-builder use `GENERATED_HARNESS_PATHS` and
 `GENERATED_HARNESS_MARKER` from the same module. The marker is informational;
-it never authorizes ignoring a file.
+it never authorizes ignoring a file. `.mcp.json` and `opencode.json` joined the
+list with the soul builder's MCP entry (#378); `.codex/config.toml` and
+`.gemini/settings.json` were already covered by their directory prefixes. A
+package carrying an older list must refresh it to the current contract and
+recompute its revision — the list is exact, so an out-of-date one is refused.
 
 Only root-relative `worktrees` and `.soul-state` entries are skipped, before
 stat, symlink, special-file, or descendant validation. Nested entries with
@@ -136,7 +141,8 @@ file there is ignored only when its bytes exactly match the expected soul-builde
 output for this package. `expectedGeneratedFiles(packageEntries)` derives that
 output from non-generated package entries through the pure
 `buildHarnessFiles` renderer. See [soul-builder](soul-builder.md) for aliases,
-skill copies, safe writing and `agent-bot soul build [PATH] [--check]`. A marked file that does not match is ordinary package content:
+skill copies, MCP entries, merges, safe writing and
+`agent-bot soul build [PATH] [--check] [--json]`. A marked file that does not match is ordinary package content:
 it affects the revision and appears in snapshots and proposal diffs. Hand-authored
 files and unknown files remain covered. Generated symlinks are rejected; builders
 must write regular alias files.
