@@ -1,0 +1,1 @@
+- Souls can opt into a per-soul `pass-cli` credential store and move existing keys with `identity migrate-credentials --to pass-cli`; daemon and mint readers use the selected item while soul callers are refused and keys stay out of command arguments and diagnostics (#396).

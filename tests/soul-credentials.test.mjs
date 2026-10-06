@@ -18,7 +18,11 @@ import { computePackageRevision, PACKAGE_IGNORE_LIST, readSoulPackageEntries, so
   validateCredentialsDeclaration, validateSoulPackage } from '../soul-package.mjs';
 import { adoptSoulPackage, editSoulRevision, revisionPackagePath } from '../soul-revisions.mjs';
 import { spawnSoulTemplate } from '../soul-templates.mjs';
-import { credentialStores, fileStore, keychainItem, keychainStore, migrateCredentialsCommand,
+import { fakePassCli } from './fixtures/fake-pass-cli.mjs';
+import { runPass } from '../secret-providers/pass-cli.mjs';
+import { ensurePrivateKey } from '../ensure-private-key.mjs';
+import { inspectLocalAppCredential } from '../credential-reconciler.mjs';
+import { credentialStores, passCliItem, passCliStore, fileStore, keychainItem, keychainStore, migrateCredentialsCommand,
   resolveAppCredential } from '../soul-credentials.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -330,4 +334,155 @@ test('migration reports unknown remaining files and never deletes them', async (
   assert.equal(report.apps[0].legacyFolderRemovable, false);
   assert.deepEqual(report.apps[0].remainingFiles, ['owner-notes.txt']);
   assert.equal(readFileSync(path.join(home, '.config', SLUG, 'owner-notes.txt'), 'utf8'), 'keep');
+});
+
+function passFixture(t, options = {}) {
+  const f = fixture(t, { declare: { app: SLUG, store: 'file' }, ...options });
+  const pass = fakePassCli();
+  f.stores['pass-cli'] = passCliStore({ env: f.env, cwd: f.home, passRun: pass.run });
+  return { ...f, pass };
+}
+
+test('pass-cli store names one item per soul/App and round-trips/deletes with no secret argv', (t) => {
+  const f = passFixture(t);
+  const target = { agentId: id, slug: SLUG };
+  const store = f.stores['pass-cli'];
+  const credential = { appId: '12345', privateKeyPem: PEM, webhookSecret: 'fake-webhook-secret' };
+  assert.equal(passCliItem(id, SLUG), `agent-bot.soul.${id}/github-app/${SLUG}`);
+  assert.throws(() => store.read(target), { code: 'missing-item' });
+  assert.equal(store.write(target, credential), undefined);
+  assert.deepEqual(store.read(target), credential);
+  store.write(target, credential);
+  assert.equal(f.pass.items.size, 1);
+  assert.throws(() => store.write(target, { ...credential, appId: '999' }), { code: 'credential-conflict' });
+  assert.deepEqual(store.read(target), credential);
+  const other = { agentId: id.replace('44444444-', '55555555-'), slug: SLUG };
+  store.write(other, credential);
+  assert.equal(f.pass.items.size, 2);
+  store.delete(target);
+  assert.equal(f.pass.items.size, 1);
+  assert.throws(() => store.read(target), { code: 'missing-item' });
+  assert.deepEqual(store.read(other), credential);
+  assertNoSecret(JSON.stringify(f.pass.calls), 'pass-cli argv');
+  assert.ok(!JSON.stringify(f.pass.calls).includes(credential.webhookSecret));
+  assert.equal(existsSync(f.env.FAKE_KEYCHAIN), false);
+});
+
+test('pass-cli refuses soul-marked read/write/delete before any provider call', (t) => {
+  const f = passFixture(t);
+  for (const marker of ['AGENT_BOT_ID', 'QWTS_AGENT_ID', 'AGENT_BOT_BINDING', 'GH_AGENT_APP']) {
+    const store = passCliStore({ env: { ...f.env, [marker]: id }, cwd: f.home,
+      passRun: () => assert.fail('soul must not reach pass-cli') });
+    for (const method of ['read', 'write', 'delete']) {
+      assert.throws(() => store[method]({ agentId: id, slug: SLUG }, { appId: '12345', privateKeyPem: PEM }), { code: 'owner-only' });
+    }
+  }
+});
+
+test('pass-cli errors never expose provider output, thrown causes, or malformed values', (t) => {
+  const f = passFixture(t);
+  const target = { agentId: id, slug: SLUG };
+  for (const code of ['ENOENT', 'ETIMEDOUT', 'unrecognized']) {
+    const injected = () => { throw Object.assign(new Error(PEM), { code, stdout: PEM, stderr: PEM, cause: new Error(PEM) }); };
+    for (const run of [() => runPass([], { run: injected, env: f.env }), injected]) {
+      const store = passCliStore({ env: f.env, cwd: f.home, passRun: run });
+      for (const method of ['read', 'write', 'delete']) {
+        assert.throws(() => store[method](target, { appId: '12345', privateKeyPem: PEM }), (error) => {
+          assertNoSecret(`${error.stack} ${JSON.stringify(error)}`, 'thrown error');
+          assert.equal(error.cause, undefined);
+          if (code === 'ENOENT') assert.equal(error.code, 'provider-unavailable');
+          return true;
+        });
+      }
+    }
+  }
+  f.stores['pass-cli'].write(target, { appId: '12345', privateKeyPem: PEM });
+  const item = [...f.pass.items.values()][0];
+  item.content.note = PEM;
+  assert.throws(() => f.stores['pass-cli'].read(target), (error) => {
+    assertNoSecret(error.stack, 'malformed credential'); return true;
+  });
+  const malformed = passCliStore({ env: f.env, cwd: f.home, passRun: () => PEM });
+  assert.throws(() => malformed.read(target), (error) => {
+    assertNoSecret(error.stack, 'malformed provider JSON'); return true;
+  });
+});
+
+test('pass-cli refuses ambiguous titles and mismatched provider item identity', (t) => {
+  const f = passFixture(t);
+  const target = { agentId: id, slug: SLUG };
+  f.stores['pass-cli'].write(target, { appId: '12345', privateKeyPem: PEM });
+  const item = [...f.pass.items.values()][0];
+  f.pass.items.set('duplicate', { ...item, id: 'duplicate' });
+  assert.throws(() => f.stores['pass-cli'].read(target), { code: 'ambiguous-item' });
+  assert.throws(() => f.stores['pass-cli'].delete(target), { code: 'ambiguous-item' });
+  f.pass.items.delete('duplicate');
+  const store = passCliStore({ env: f.env, cwd: f.home, passRun: (args, options) => {
+    const value = f.pass.run(args, options);
+    return args[1] === 'view' ? JSON.stringify({ item: { ...item, id: 'wrong-item' } }) : value;
+  } });
+  assert.throws(() => store.read(target), /malformed credential data/);
+});
+
+test('migration into pass-cli retains file source, declares after readback, and is used by mint/preparation/reconciler', async (t) => {
+  const f = passFixture(t, { legacy: false });
+  const credential = { appId: '12345', privateKeyPem: PEM, webhookSecret: 'fake-webhook-secret' };
+  f.stores.file.write({ soulDir: f.soul, slug: SLUG }, credential);
+  const out = [];
+  const verified = [];
+  const options = { ...f.opts, stores: f.stores, markers: () => [], gate: ownerGate,
+    verify: async (value) => { verified.push(value.appId); }, write: (text) => out.push(text) };
+  const dry = await migrateCredentialsCommand(['--all', '--to', 'pass-cli', '--dry-run', '--json'], options);
+  assert.equal(dry.souls[0].status, 'would-migrate');
+  assert.equal(f.pass.calls.length, 0);
+  assert.equal(verified.length, 0);
+  const report = await migrateCredentialsCommand(['--all', '--to', 'pass-cli', '--json'], options);
+  assert.equal(report.souls[0].status, 'migrated');
+  assert.equal(report.souls[0].store, 'pass-cli');
+  assert.deepEqual(soulCredentialsDeclaration(f.soul), { app: SLUG, store: 'pass-cli' });
+  assert.deepEqual(f.stores.file.read({ soulDir: f.soul, slug: SLUG }), credential);
+  assert.deepEqual(report.deleted, []);
+  assert.equal(resolveAppCredential(SLUG, { ...f.opts, stores: f.stores }).source, 'pass-cli');
+  const prepared = ensurePrivateKey({ slug: SLUG, env: f.env, home: f.home, stores: f.stores,
+    provider: { restore: () => assert.fail('a stored credential must not restore') } });
+  assert.equal(prepared.localStatus, 'ready');
+  assert.equal(prepared.path, `pass-cli:Agent Identities/${passCliItem(id, SLUG)}`);
+  assert.equal(inspectLocalAppCredential({ slug: SLUG, ...f.opts, stores: f.stores }).status, 'ready');
+  const again = await migrateCredentialsCommand(['--all', '--to', 'pass-cli'], options);
+  assert.equal(again.souls[0].status, 'already-migrated');
+  assert.equal(f.pass.items.size, 1);
+  assertNoSecret(out.join(''), 'migration stdout');
+  assertNoSecret(readFileSync(auditFile(f.opts), 'utf8'), 'migration audit');
+  assertNoSecret(readFileSync(path.join(f.soul, 'soul.json'), 'utf8'), 'declaration');
+  f.stores['pass-cli'].delete({ agentId: id, slug: SLUG });
+  assert.throws(() => resolveAppCredential(SLUG, { ...f.opts, stores: f.stores }), { code: 'missing-item' });
+  assert.throws(() => ensurePrivateKey({ slug: SLUG, env: f.env, home: f.home, stores: f.stores }), { code: 'missing-item' });
+  assert.equal(inspectLocalAppCredential({ slug: SLUG, ...f.opts, stores: f.stores }).status, 'failed');
+});
+
+test('pass-cli migration refuses a soul caller, even in dry-run', async (t) => {
+  const f = passFixture(t);
+  await assert.rejects(() => migrateCredentialsCommand(['--all', '--to', 'pass-cli', '--dry-run'], {
+    ...f.opts, env: { ...f.env, AGENT_BOT_ID: id }, stores: f.stores,
+    gate: () => assert.fail('soul cannot request approval'), write: () => assert.fail('no output'),
+  }), { code: 'owner-only' });
+  assert.equal(f.pass.calls.length, 0);
+});
+
+test('failed pass-cli migration keeps the declaration and redacts verifier/provider secrets', async (t) => {
+  for (const failure of ['verify', 'write', 'readback']) {
+    const f = passFixture(t);
+    const output = [];
+    const store = f.stores['pass-cli'];
+    if (failure === 'write') store.write = () => { throw new Error(PEM); };
+    if (failure === 'readback') store.read = () => ({ appId: '000', privateKeyPem: PEM });
+    const report = await migrateCredentialsCommand(['--all', '--to', 'pass-cli', '--json'], {
+      ...f.opts, stores: f.stores, markers: () => [], gate: ownerGate,
+      verify: async () => { if (failure === 'verify') throw new Error(PEM); }, write: (text) => output.push(text),
+    });
+    assert.equal(report.souls[0].status, 'failed');
+    assert.equal(soulCredentialsDeclaration(f.soul).store, 'file');
+    assertNoSecret(output.join(''), 'failed migration');
+    assert.ok(existsSync(path.join(f.home, '.config', SLUG, 'private-key.pem')));
+  }
 });

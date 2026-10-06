@@ -16,8 +16,10 @@ hand the soul short-lived installation tokens.
 }
 ```
 
-`store` is `keychain` (the macOS default), `file` (the default elsewhere) or
-`keyd` (agent-bot-keyd, below).
+`store` is `keychain` (the macOS default), `file` (the default elsewhere),
+`pass-cli` (opt-in Proton Pass), or `keyd` (agent-bot-keyd, below).
+The platform default is unchanged; select pass-cli in this per-soul declaration
+or migrate with `--to pass-cli`.
 Any other key, under `credentials` or `credentials.github`, fails validation,
 so a key cannot be packaged by mistake. `soul spawn` copies the declaration
 into every instance. The key is not copied.
@@ -34,11 +36,39 @@ into every instance. The key is not copied.
   a link, a loosened mode or another owner. `.soul-state/` is never packaged,
   exported or hashed into a revision.
 
-pass-cli is not a soul store. `ensure-private-key` restores from pass-cli
-into the App-scoped private file store (or an already declared App Keychain
-store), with the issuer in `identityApps[slug].id`. It never creates or writes
-the legacy folder. An interrupted legacy publication is retained for owner
-inspection; its backups are not replayed or deleted.
+- **pass-cli**: one note item per soul/App credential in the existing
+  **Agent Identities** vault. Its exact title is
+  `agent-bot.soul.<agentId>/github-app/<slug>`: the Keychain service and
+  account joined by `/`. For example,
+  `agent-bot.soul.agent_44444444-4444-4444-8444-444444444444/github-app/you-claude-agent`.
+  The note contains the same base64 JSON credential as the other stores,
+  including `webhookSecret` when present. Creation uses
+  `pass-cli item create note --from-template -` with the template on stdin;
+  no key is put on argv or in a temporary file. Requires pass-cli with note
+  template support, an existing authorized session, and write access to the
+  vault. The store never logs in, unlocks, or creates a vault automatically.
+  Vault/title ambiguity and missing, locked, malformed, or unreadable items
+  fail closed. Reads resolve and validate stable vault/item IDs. A write of
+  the same credential is idempotent; a different existing value is refused
+  and preserved, since the CLI's field-update interface puts values on argv.
+  The owner must explicitly remove that item before migrating a replacement.
+  The internal delete operation trashes then deletes the selected item;
+  migration never deletes a source or destination item.
+
+Only owner/daemon processes can use the pass-cli store; soul-marked callers
+are refused before any provider call. As with Keychain, confinement is the
+cooperative boundary, not an OS-level restriction on every process in the
+account. Provider error output and nested errors are not exposed.
+
+`ensure-private-key`, the reconciler, and mint resolution read an existing
+pass-cli soul declaration directly. Preparation reports its non-file location
+as `pass-cli:Agent Identities/agent-bot.soul.<agentId>/github-app/<slug>`.
+App `connect --pass-cli ITEM` remains a separate import operation using the
+shared pass-cli runner: it restores into the App-scoped private file store
+(or an already declared App Keychain store), with the issuer in
+`identityApps[slug].id`. It never creates or writes the legacy folder.
+An interrupted legacy publication is retained for owner inspection; its
+backups are not replayed or deleted.
 
 ### What the Keychain access list can and cannot enforce
 
@@ -148,6 +178,8 @@ material. No agent-facing command or MCP tool returns a key.
 agent-bot identity migrate-credentials --all --dry-run
 agent-bot identity migrate-credentials --soul AGENT_ID|NAME [--json] [--principal-stdin]
 agent-bot identity migrate-credentials --all --to keyd
+agent-bot identity migrate-credentials --soul AGENT_ID --to pass-cli --dry-run
+agent-bot identity migrate-credentials --soul AGENT_ID --to pass-cli
 ```
 
 Owner only, through the owner gate: a caller with any soul marker is refused,
@@ -198,3 +230,15 @@ folder, verifies it live, and hands all of them to keyd in one
 `owner/import`, so the owner answers one prompt. The first import also pins
 the daemon's grant key. Only after keyd stores and reads back every key does
 `soul.json` say `store: keyd`. The old copies stay where they were.
+
+`--to pass-cli` takes the credential from the soul's current readable store,
+then the managed App store or legacy folder if no current credential exists.
+It verifies the source, creates and reads back the note, then publishes
+`store: "pass-cli"` as a soul revision. Existing file/Keychain/legacy copies
+are retained. A failed verification, write, readback, or revision update does
+not change the declaration. A keyd-held key cannot be exported this way.
+The normal report names `store: "pass-cli"` and uses `would-migrate`,
+`migrated`, `already-migrated`, or `failed` like the other stores. An already
+selected pass-cli store with a missing item can also be populated from the
+managed/legacy source by migration; ordinary reads never fall back on that
+missing item. Dry runs never write or perform live verification.

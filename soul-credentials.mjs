@@ -10,6 +10,8 @@
 //   `agent-bot.soul.<agentId>`, account `github-app/<slug>`, written and read
 //   with the `security` CLI. The secret travels on `security -i`'s stdin,
 //   never on a command line another process could read.
+// - pass-cli (opt-in): one note in Agent Identities, title
+//   `agent-bot.soul.<agentId>/github-app/<slug>`, created via stdin.
 // - file (elsewhere, or by choice): `<soul>/.soul-state/credentials/`,
 //   directory 0700, one file per App, 0600. `.soul-state/` is never packaged,
 //   exported or hashed into a revision.
@@ -33,7 +35,7 @@
 //   Nothing here ever reads that store: a keyd soul's key never leaves
 //   keyd, which mints on a grant the daemon signs (keyd-client.mjs).
 //   `migrate-credentials --to keyd` moves keys in. Where there is no keyd
-//   (Homebrew, Linux) souls keep using the two stores above.
+//   (Homebrew, Linux) souls keep using the readable stores above.
 
 import { createPrivateKey, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -51,6 +53,7 @@ import { readManagedAppCredential, readAppMetadata, migrateAppMetadata, legacyAp
 import { profileAppSlugs } from './organization-profile.mjs';
 import { loadConfig } from './config.mjs';
 import { editSoulRevision, revisionHistory } from './soul-revisions.mjs';
+import { createPassCredentialStore } from './secret-providers/pass-cli-credentials.mjs';
 
 const APP_SLUG = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?$/;
 const SECURITY = '/usr/bin/security';
@@ -68,6 +71,28 @@ export function defaultCredentialStore(platform = process.platform) {
 
 export function keychainItem(agentId, slug) {
   return { service: `agent-bot.soul.${validateAgentId(agentId)}`, account: `github-app/${slugOrThrow(slug)}` };
+}
+
+// Same service/account namespace as Keychain, joined into one item title.
+export function passCliItem(agentId, slug) {
+  const { service, account } = keychainItem(agentId, slug);
+  return `${service}/${account}`;
+}
+
+export function passCliStore({ env = process.env, cwd = process.cwd(), passRun } = {}) {
+  const provider = createPassCredentialStore({ env, run: passRun });
+  const item = ({ agentId, slug }) => {
+    if (soulMarkers({ env, cwd }).length) {
+      throw Object.assign(new Error('soul credential stores are unavailable to a soul caller'), { code: 'owner-only' });
+    }
+    return passCliItem(agentId, slug);
+  };
+  return {
+    kind: 'pass-cli',
+    read(target) { return decode(provider.read(item(target))); },
+    write(target, credential) { provider.write(item(target), encode(credential)); },
+    delete(target) { provider.delete(item(target)); },
+  };
 }
 
 export function credentialsDirectory(soulDir) {
@@ -183,7 +208,7 @@ export function keydStore() {
 }
 
 export function credentialStores(options = {}) {
-  return { keychain: keychainStore(options), file: fileStore(options), keyd: keydStore() };
+  return { keychain: keychainStore(options), file: fileStore(options), 'pass-cli': passCliStore(options), keyd: keydStore() };
 }
 
 function storeFor(declaration, stores, platform) {
@@ -297,7 +322,7 @@ export function legacyKeyRemovable(slug, { env = process.env, home = homedir(), 
 
 // --- agent-bot identity migrate-credentials ---------------------------------
 
-const USAGE = 'usage: agent-bot identity migrate-credentials [--soul AGENT_ID|NAME | --all] [--to keyd] [--dry-run] [--json] [--principal-stdin]';
+const USAGE = 'usage: agent-bot identity migrate-credentials [--soul AGENT_ID|NAME | --all] [--to keyd|pass-cli] [--dry-run] [--json] [--principal-stdin]';
 
 function parseArgs(argv) {
   const options = { soul: null, all: false, dryRun: false, json: false, principal: false, to: null };
@@ -308,7 +333,7 @@ function parseArgs(argv) {
     else if (arg === '--json') options.json = true;
     else if (arg === '--principal-stdin') options.principal = true;
     else if (arg === '--soul' && argv[index + 1] && !argv[index + 1].startsWith('--')) options.soul = argv[++index];
-    else if (arg === '--to' && argv[index + 1] === 'keyd') { options.to = 'keyd'; index++; }
+    else if (arg === '--to' && ['keyd', 'pass-cli'].includes(argv[index + 1])) options.to = argv[++index];
     else throw new Error(USAGE);
   }
   if (options.all === Boolean(options.soul)) throw new Error(USAGE);
@@ -388,6 +413,10 @@ export async function migrateCredentialsCommand(argv, {
       throw error;
     }
   };
+  if (options.to === 'pass-cli') {
+    return finishMigration(await migrateToPassCli(souls, { file, env, home, platform, stores, verify, options, declare }),
+      { options, env, home, now, write, stores });
+  }
   if (options.to === 'keyd') {
     const client = keyd ?? await import('./keyd-client.mjs').then((module) => ({
       importKeys: (items) => module.importIntoKeyd(items, { env, home }),
@@ -412,7 +441,11 @@ export async function migrateCredentialsCommand(argv, {
     if (row.store === 'keyd') { Object.assign(row, { status: 'already-migrated' }); continue; }
     const target = { agentId: soul.id, soulDir, declaration };
     try {
-      const stored = readSoulCredential(target, { stores, platform });
+      let stored;
+      try { stored = readSoulCredential(target, { stores, platform }); }
+      catch (error) {
+        if (row.store !== 'pass-cli' || error.code !== 'missing-item') throw error;
+      }
       let legacy = null;
       legacy = readManagedAppCredential(declaration.app, { env, home, stores });
       if (!legacy) { try { legacy = readLegacy(declaration.app, home, env); } catch { /* reported below */ } }
@@ -430,10 +463,60 @@ export async function migrateCredentialsCommand(argv, {
       if (!declared) await declare(soul, soulDir, { app: declaration.app, store: row.store });
       Object.assign(row, { status: 'migrated' });
     } catch (error) {
-      Object.assign(row, { status: 'failed', detail: error.message });
+      Object.assign(row, { status: 'failed', detail: row.store === 'pass-cli' ? 'could not verify or store the soul credential in pass-cli; the source was kept' : error.message });
     }
   }
   return finishMigration(results, { options, env, home, now, write, stores });
+}
+
+// Explicit destination migration preserves the source and publishes the new
+// declaration only after verification/readback. A missing destination is
+// expected here; normal reads fail closed on missing pass-cli items.
+async function migrateToPassCli(souls, { file, env, home, platform, stores, verify, options, declare }) {
+  const results = [];
+  for (const soul of souls) {
+    const row = { agentId: soul.id, name: soul.name ?? null, app: null, store: 'pass-cli', status: null, detail: null };
+    results.push(row);
+    let soulDir;
+    try { soulDir = soulDirectory(soul.id, { file, env, home }); }
+    catch { Object.assign(row, { status: 'skipped', detail: 'no soul directory' }); continue; }
+    try {
+      const declaration = soulCredentialsDeclaration(soulDir)
+        ?? (soul.appSlug ? { app: soul.appSlug, store: defaultCredentialStore(platform) } : null);
+      if (!declaration) { Object.assign(row, { status: 'skipped', detail: 'no GitHub App' }); continue; }
+      row.app = declaration.app;
+      if (declaration.store === 'keyd') throw new Error('keyd-held');
+      const source = { agentId: soul.id, soulDir, declaration };
+      const destination = { ...source, declaration: { app: row.app, store: 'pass-cli' } };
+      let credential;
+      try { credential = readSoulCredential(source, { stores, platform }); }
+      catch (error) {
+        if (declaration.store !== 'pass-cli' || error.code !== 'missing-item') throw error;
+      }
+      let origin = declaration.store ?? defaultCredentialStore(platform);
+      if (!credential) {
+        credential = readManagedAppCredential(row.app, { env, home, stores });
+        origin = credential ? 'managed-app' : 'legacy';
+        credential ??= readLegacy(row.app, home, env);
+      }
+      if (origin === 'pass-cli') {
+        if (!options.dryRun) await verify(credential);
+        Object.assign(row, { status: 'already-migrated' });
+        continue;
+      }
+      if (options.dryRun) { Object.assign(row, { status: 'would-migrate', detail: `from ${origin}` }); continue; }
+      await verify(credential);
+      writeSoulCredential(destination, credential, { stores, platform });
+      const back = readSoulCredential(destination, { stores, platform });
+      if (!same(back, credential) || back.webhookSecret !== credential.webhookSecret) throw new Error('readback failed');
+      await declare(soul, soulDir, destination.declaration);
+      Object.assign(row, { status: 'migrated', detail: `the ${origin} copy was kept` });
+    } catch {
+      // Neither provider nor verifier errors may reflect the credential.
+      Object.assign(row, { status: 'failed', detail: 'could not verify, store, or declare the soul credential in pass-cli; the source was kept' });
+    }
+  }
+  return results;
 }
 
 // --to keyd: each soul's key, from its current store or the legacy folder,
