@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.25
+
+- App IDs, bot user IDs and avatars now live in `identityApps[slug]` instead of legacy App folders. Create/connect and provider restore fill the new stores; `identity migrate-credentials` copies existing metadata, and migration/doctor report remaining files and an owner removal command without deleting anything (#399).
+- Soul launch forms can read package prefill fields from `soul locate PATH [--json]` and send a persistent launch `brief`, included after the soul’s identity on its first turn (qwts/GeniusBar#120).
+- `agent-bot soul build` now renders the soul's own MCP entry for each harness — `.mcp.json` (Claude Code), `.gemini/settings.json` (Gemini), `.codex/config.toml` (Codex) and `opencode.json` (OpenCode), all running `agent-bot reach-mcp` from PATH — so a soul opened by hand in its own directory can reach its teammates as well as a daemon-run turn. `soul.json` `comms: false` renders none, a soul that already ships one of these files keeps its own servers (only the `agent-bot` entry is added or replaced), and `soul build --check --json` reports every harness's rendered primitives plus `unsupported` for what a later slice cannot honor (#378).
+  - `.mcp.json` and `opencode.json` joined the fixed format-2 `generatedPaths` contract, so a package carrying the older list must refresh it and recompute its revision.
+
 ## 0.10.24
 
 - `agent-bot soul templates` lists every soul package shipped beside the bundled Starter whose soul.json says `template: true`, so GeniusBar's built-in lead (GeniusBar#73) appears in the launch picker; `join` and `start_soul` still default to Starter.

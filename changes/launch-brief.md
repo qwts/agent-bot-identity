@@ -1,1 +1,0 @@
-- Soul launch forms can read package prefill fields from `soul locate PATH [--json]` and send a persistent launch `brief`, included after the soul’s identity on its first turn (qwts/GeniusBar#120).
