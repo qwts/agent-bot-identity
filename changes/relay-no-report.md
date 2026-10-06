@@ -1,1 +1,0 @@
-- The daemon's relay sets `AGENT_COMMS_NO_DELIVERY_REPORT=1` on every agent-comms call it makes as a soul, so its own mailbox reads (cold wake, the delivered-asides route) are never reported back to it as deliveries (qwts/agent-comms#100).

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.26
+
+- Bound live sessions can report agent-comms inbox reads and hook injections through `POST /v0/asides/delivered`, recording verified incoming asides once per retained message so conversations include live-session deliveries (qwts/agent-comms#100).
+- Souls can opt into a per-soul `pass-cli` credential store and move existing keys with `identity migrate-credentials --to pass-cli`; daemon and mint readers use the selected item while soul callers are refused and keys stay out of command arguments and diagnostics (#396).
+- The daemon's relay sets `AGENT_COMMS_NO_DELIVERY_REPORT=1` on every agent-comms call it makes as a soul, so its own mailbox reads (cold wake, the delivered-asides route) are never reported back to it as deliveries (qwts/agent-comms#100).
+- `soul revision edit` accepts owner approval through agent-bot-keyd without a terminal, and `--apply` publishes the recorded edit into the soul’s package folder so GeniusBar customization takes effect while preserving working state (qwts/GeniusBar#64).
+
 ## 0.10.25
 
 - App IDs, bot user IDs and avatars now live in `identityApps[slug]` instead of legacy App folders. Create/connect and provider restore fill the new stores; `identity migrate-credentials` copies existing metadata, and migration/doctor report remaining files and an owner removal command without deleting anything (#399).
