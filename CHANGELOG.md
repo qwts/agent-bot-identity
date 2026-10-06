@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.19
+
+- `agent-bot soul pause` cancels a soul's in-flight turns and keeps wakes, launches, and interactive turns paused until `soul resume`; population and daemon status expose the durable pause flag, with matching daemon client methods and audited routes for per-soul controls (#478).
+
 ## 0.10.18
 
 - Add `agent-bot soul stop <agentId|name> [--json]` to cancel running daemon turns with an audited loopback request (#474).
