@@ -110,6 +110,7 @@ export function withReachRules(policy, { keyd = false } = {}) {
 // dropped.
 export function acpExecutorFor({
   identities, policy, baseEnv, onHarnessSession = null, createExecutor = createAcpExecutor,
+  identityFor = null,
   commsFor = () => true, modeFor = () => 'safe', modelFor = () => null, onModels = null, reachEnv = {}, keydFor = () => null, harnessDirsFor = () => [], log = null,
 }) {
   return ({ agentId, harness, cwd, env }) => {
@@ -139,6 +140,7 @@ export function acpExecutorFor({
       // Read once per turn: a mode change applies to the next turn.
       mode: modeFor(agentId),
       model: modelFor(agentId),
+      identityFor,
       onModels: (models) => onModels?.(agentId, models),
       policy: withReachRules(policy, { keyd: Boolean(keyd) }),
       cwd,

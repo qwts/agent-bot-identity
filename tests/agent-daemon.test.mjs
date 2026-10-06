@@ -17,7 +17,9 @@ import {
   isLoopbackPeer,
   startDaemon,
   stopDaemon,
+  soulPromptIdentity,
 } from '../agent-daemon.mjs';
+import { displayName, recordSoulDisplayName, upsertSoul } from '../agent-population.mjs';
 import { verifySoulToken, vouchKeyPath, vouchStateDir } from '../vouch.mjs';
 import { ensureAgentIdentity, stateDirectory } from '../agent-identity.mjs';
 import { mintBindToken, readBinding } from '../agent-binding.mjs';
@@ -62,6 +64,41 @@ function mintIdentity(env, { id = AGENT_ID } = {}) {
     now: () => new Date('2026-08-12T08:00:00.000Z'),
   });
 }
+
+test('prompt identity reads current population names and lineage without exposing private fields', () => {
+  const { env } = scratchEnv();
+  const file = env.AGENT_BOT_POPULATION_PATH;
+  const parentId = 'agent_22222222-2222-4222-8222-222222222222';
+  const seed = (id, fields = {}) => upsertSoul({ id, name: 'stored-handle', status: 'active',
+    spacePath: '/private/space', worktree: '/private/worktree', ...fields }, { file });
+  assert.equal(soulPromptIdentity(AGENT_ID, { env }), null);
+  seed(parentId, { displayName: 'VMTwo' });
+  seed(AGENT_ID, { displayName: 'VMThree', parentId });
+  assert.deepEqual(soulPromptIdentity(AGENT_ID, { env }), {
+    name: 'VMThree', agentId: AGENT_ID, parent: { name: 'VMTwo', agentId: parentId },
+  });
+  recordSoulDisplayName(AGENT_ID, 'Renamed child', { file });
+  recordSoulDisplayName(parentId, 'Renamed parent', { file });
+  assert.deepEqual(soulPromptIdentity(AGENT_ID, { env }), {
+    name: 'Renamed child', agentId: AGENT_ID, parent: { name: 'Renamed parent', agentId: parentId },
+  });
+  seed(AGENT_ID);
+  assert.deepEqual(soulPromptIdentity(AGENT_ID, { env }), { name: 'stored-handle', agentId: AGENT_ID, parent: null });
+});
+
+test('prompt identity uses derived names for legacy rows and missing parents', () => {
+  const { env } = scratchEnv();
+  const file = env.AGENT_BOT_POPULATION_PATH;
+  const parentId = 'agent_22222222-2222-4222-8222-222222222222';
+  upsertSoul({ id: AGENT_ID, parentId, status: 'active', spacePath: '/private/space' }, { file });
+  const document = JSON.parse(readFileSync(file, 'utf8'));
+  delete document.souls[AGENT_ID].name;
+  writeFileSync(file, JSON.stringify(document));
+  assert.deepEqual(soulPromptIdentity(AGENT_ID, { env }), {
+    name: displayName(AGENT_ID), agentId: AGENT_ID,
+    parent: { name: displayName(parentId), agentId: parentId },
+  });
+});
 
 async function withServer(env, run, options = {}) {
   const server = createDaemonServer({

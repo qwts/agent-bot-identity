@@ -57,7 +57,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
-import { archiveSoulDirs, backfillManagedSouls, listSouls, locateSoulDir, populationFile, recordHarnessAuth, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul, withRoles } from './agent-population.mjs';
+import { archiveSoulDirs, backfillManagedSouls, displayName, listSouls, locateSoulDir, populationFile, recordHarnessAuth, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul, withRoles } from './agent-population.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
 import {
   bindAgentLineage,
@@ -1404,6 +1404,19 @@ export async function recordLaunchSettings(launch, options = {}) {
   return recorded;
 }
 
+// Read a fresh census snapshot for each new session or launch. Only public
+// names and IDs leave this lookup; no paths, bindings or credentials do.
+export function soulPromptIdentity(agentId, { env = process.env, home = homedir() } = {}) {
+  const souls = listSouls({ file: populationFile({ env, home }) });
+  const soul = souls.find((record) => record.id === agentId);
+  if (!soul) return null;
+  const named = (id) => {
+    const record = souls.find((candidate) => candidate.id === id);
+    return { name: record?.displayName || record?.name || displayName(id), agentId: id };
+  };
+  return { ...named(agentId), parent: soul.parentId ? named(soul.parentId) : null };
+}
+
 // Observe policy and mode decisions in interactive and cold ACP turns. Approval
 // decisions already have their own receipts. The writer owns detail sanitizing.
 export function withPermissionReceipts(executor, {
@@ -1491,6 +1504,7 @@ export async function runDaemon({
   // keeps its unconfigured error and cold wake reports `waiting`.
   const setup = (config ?? loadConfig({ home, env })).executor;
   const identities = (agentId) => readAgentIdentity(validateAgentId(agentId), { stateDir: stateDirectory({ env, home }) });
+  const identityFor = (agentId) => soulPromptIdentity(agentId, { env, home });
   // An embedded host turns the executor on for its own daemon (ADR-0276).
   const configuredExecutorFor = setup?.enabled === true || env.AGENT_BOT_EXECUTOR === '1'
     ? acpExecutorFor({
@@ -1499,6 +1513,7 @@ export async function runDaemon({
       baseEnv: harnessEnv,
       modeFor: (agentId) => soulMode(agentId, { env, home }),
       modelFor: (agentId) => soulModel(agentId, { env, home }).model,
+      identityFor,
       onModels: (agentId, models) => recordSoulModels(agentId, models, { env, home }),
       // A daemon-run soul's home is not a git worktree, so the session-start
       // hook cannot place its Claude session; the turn's binding does.
@@ -1556,6 +1571,7 @@ export async function runDaemon({
   const onLaunch = createLaunchHandler({
     file: path.join(path.dirname(daemonStateFile({ env, home })), 'launch-requests.json'),
     identities,
+    identityFor,
     // A package spawn is a new root soul with no GitHub App (#297). The
     // package is validated before minting, so a bad path mints nothing.
     // A team member (#377) is the same spawn with its parent recorded.

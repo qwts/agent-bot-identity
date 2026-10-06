@@ -6,6 +6,7 @@ import { HARNESS_SESSION_EVENT } from './executor-contract.mjs';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { validateModelId } from './soul-model.mjs';
 import { soulCommsSetting } from './soul-package.mjs';
+import { displayName } from './agent-population.mjs';
 
 // A launch's comms setting: the soul's own soul.json (a spawned instance
 // carries its template's), else the launched package's, else on.
@@ -49,7 +50,7 @@ const withoutParent = ({ parent: _ignored, ...fields }) => fields;
 const LAUNCHABLE = new Set(['package', 'installed']);
 
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
-  joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, executorFor, turnTimeoutMs = 30 * 60_000 }) {
+  joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, executorFor, turnTimeoutMs = 30 * 60_000 }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -132,6 +133,15 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         ...(event.comms === undefined ? {} : { comms: event.comms }),
         ...(event.model === undefined ? {} : { model: event.model }),
         ...(event.comms === undefined && event.model === undefined ? {} : { principal: event.principal ?? null }) });
+      // Best effort: the soul launches even if the population cannot be read.
+      const lookup = async (id) => { try { return await identityFor?.(id) ?? null; } catch { return null; } };
+      const ownIdentity = await lookup(identity.id);
+      const parentId = parent ?? ownIdentity?.parent?.agentId ?? identity.parentId ?? null;
+      const parentIdentity = parentId ? await lookup(parentId) : null;
+      const identityText = `You are ${ownIdentity?.name || displayName(identity.id)} (agent id ${identity.id}). `
+        + (parentId
+          ? `Your parent is ${parentIdentity?.name || ownIdentity?.parent?.name || displayName(parentId)} (agent id ${parentId}). `
+          : 'You have no parent agent. ');
       const executor = executorFor({ agentId: identity.id, harness, cwd: binding.worktree,
         env: { AGENT_BOT_BINDING: binding.file, AGENT_BOT_ID: identity.id, QWTS_AGENT_ID: identity.id } });
       // An ACP session binding is the readiness boundary. A returned promise
@@ -140,9 +150,9 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         let started = false;
         Promise.resolve().then(() => executor({
           invocation: { agentId: identity.id, harness, cwd: binding.worktree },
-          message: parent
+          message: identityText + (parent
             ? `You were started by ${parent}, another agent soul, as part of its team. Join agent-comms as usual, read your inbox, and handle incoming work; your parent will brief you there.`
-            : 'You were launched by a principal. Join agent-comms as usual, read your inbox, and handle incoming work.',
+            : 'You were launched by a principal. Join agent-comms as usual, read your inbox, and handle incoming work.'),
           attachments: [], signal: AbortSignal.timeout(turnTimeoutMs),
           appendEvent: (type, data) => {
             if (type === HARNESS_SESSION_EVENT) { started = true; resolve(); }
