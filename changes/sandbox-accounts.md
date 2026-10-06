@@ -1,1 +1,0 @@
-- `agent-bot sandbox status|plan|on|off|account|override|resolve` and daemon routes `GET/POST /v0/sandbox`, `POST /v0/sandbox/override` report the persona account (`missing | creating | ready`), give the owner the exact steps to create and onboard it (never run with admin rights by agent-bot), and keep the global switch, account name and per-soul overrides (#376, GeniusBar#66).

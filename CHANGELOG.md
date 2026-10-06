@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.24
+
+- `agent-bot soul templates` lists every soul package shipped beside the bundled Starter whose soul.json says `template: true`, so GeniusBar's built-in lead (GeniusBar#73) appears in the launch picker; `join` and `start_soul` still default to Starter.
+- Manage GitHub App identities through secret-free `identity apps list` and `identity app create`, `connect`, `rotate-key`, and `assign` commands and authenticated daemon routes. Manifest creation uses a one-time loopback callback and pollable jobs; credentials use App-scoped Keychain/private file stores, and list reuses doctor mint history without minting (#373).
+- Soul revision owner actions now expose principal-authenticated daemon routes, reject and audit soul bindings with `owner-credential-required`, and refuse noninteractive CLI consent; GeniusBar can list pending revisions and use the reserved consent contract (#293).
+- `agent-bot sandbox status|plan|on|off|account|override|resolve` and daemon routes `GET/POST /v0/sandbox`, `POST /v0/sandbox/override` report the persona account (`missing | creating | ready`), give the owner the exact steps to create and onboard it (never run with admin rights by agent-bot), and keep the global switch, account name and per-soul overrides (#376, GeniusBar#66).
+
 ## 0.10.23
 
 - `agent-bot soul profile <agentId|name> [--json] [--file RELATIVE_PATH]` and authenticated `GET /v0/soul/profile` expose a read-only customization profile, allowed files, skills, credential declarations and offline SOP availability without fetching repositories or reading secret stores (#375).
