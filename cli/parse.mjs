@@ -28,6 +28,7 @@ const PUBLIC_COMMANDS = new Set([
   'secret',
   'skill',
   'sop',
+  'sandbox',
   'metrics',
 ]);
 

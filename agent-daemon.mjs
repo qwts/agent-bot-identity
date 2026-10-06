@@ -85,6 +85,7 @@ import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms
 import { attachWakeEndpoint } from './agent-wake.mjs';
 import { soulMode } from './soul-mode.mjs';
 import { readSoulProfile } from './soul-profile.mjs';
+import { readSandboxStatus, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount } from './sandbox.mjs';
 import { soulModel, setSoulModel, recordSoulModels } from './soul-model.mjs';
 import { ownerGate as soulSettingOwnerGate, readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
@@ -836,6 +837,41 @@ export function createDaemonServer({
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, agentId, record });
           return;
         }
+        case 'GET /v0/sandbox': {
+          // Persona account status (#376): account facts, the owner's steps
+          // and each soul's resolution. Secret-free by construction.
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, ...readSandboxStatus({ env, home }) });
+          return;
+        }
+        case 'POST /v0/sandbox': {
+          const body = parseJsonBody(await readBody(req));
+          if (body.enabled !== undefined && typeof body.enabled !== 'boolean') throw Object.assign(new Error('enabled must be a boolean'), { statusCode: 400 });
+          if (body.account !== undefined) {
+            try { validateSandboxAccount(body.account); }
+            catch (error) { throw Object.assign(new Error(error.message), { statusCode: 400 }); }
+          }
+          if (body.enabled === undefined && body.account === undefined) throw Object.assign(new Error('provide enabled and/or account'), { statusCode: 400 });
+          const action = [body.enabled === undefined ? null : `sandbox ${body.enabled ? 'on' : 'off'}`, body.account === undefined ? null : `sandbox account ${body.account}`].filter(Boolean).join(', ');
+          await settingGate(action, { principal: body.principal ?? null });
+          if (body.account !== undefined) setSandboxAccount(body.account, { env, home });
+          if (body.enabled !== undefined) setSandboxEnabled(body.enabled, { env, home });
+          appendAuditReceipt({ event: 'sandbox', operation: 'set', decision: action }, { env, home, now });
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, ...readSandboxStatus({ env, home }) });
+          return;
+        }
+        case 'POST /v0/sandbox/override': {
+          const body = parseJsonBody(await readBody(req));
+          const agentId = requireAgentId(body.agentId);
+          if (!['inherit', 'sandboxed', 'unrestricted'].includes(body.override)) throw Object.assign(new Error('override must be inherit, sandboxed or unrestricted'), { statusCode: 400 });
+          const file = populationFile({ env, home });
+          try { showSoul(agentId, { file }); }
+          catch { throw Object.assign(new Error('unknown soul'), { statusCode: 404 }); }
+          await settingGate(`sandbox override ${agentId} ${body.override}`, { principal: body.principal ?? null });
+          const result = setSandboxOverride(agentId, body.override, { env, home });
+          appendAuditReceipt({ event: 'sandbox', agentId, operation: 'override', decision: body.override }, { env, home, now });
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, ...result });
+          return;
+        }
         case 'GET /v0/soul/profile': {
           const agentId = url.searchParams.get('agentId');
           if (!agentId) {
@@ -1430,6 +1466,15 @@ export function daemonClient({
     },
     async soulProfile(agentId) {
       return request('GET', `/v0/soul/profile?agentId=${encodeURIComponent(agentId)}`);
+    },
+    async sandboxStatus() {
+      return request('GET', '/v0/sandbox');
+    },
+    async setSandbox({ enabled, account, principal = null }) {
+      return request('POST', '/v0/sandbox', { ...(enabled === undefined ? {} : { enabled }), ...(account === undefined ? {} : { account }), principal });
+    },
+    async setSandboxOverride({ agentId, override, principal = null }) {
+      return request('POST', '/v0/sandbox/override', { agentId, override, principal });
     },
     // The daemon writes the shared secret in the private git dir. Callers
     // must never log it or return it to the conversation.

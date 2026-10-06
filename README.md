@@ -271,6 +271,10 @@ agent-bot soul pause <agentId|name> [--json]
 agent-bot soul resume <agentId|name> [--json]
 agent-bot soul show <agentId|name> [--json]
 agent-bot soul profile <agentId|name> [--json] [--file RELATIVE_PATH]
+agent-bot sandbox status|plan [--json]
+agent-bot sandbox on|off|account NAME [--json] [--principal-stdin]
+agent-bot sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin]
+agent-bot sandbox resolve <agentId|name> [--json]
 agent-bot daemon <run|start|status|stop|disable|vouch-key|pair-comms> [--json]
 agent-bot mcp
 agent-bot web open [--principal <principal-id>] [--no-browser] [--json]
@@ -302,6 +306,10 @@ For example, `Principal SW Engineer.soul` produces
 revision history. Edit each instance's `AGENTS.md` through the existing
 revision flow. See [soul templates](docs/soul-templates.md) for naming,
 provenance and initialization details.
+
+[Sandbox](docs/sandbox.md) covers the persona account for sandboxed souls
+(`agent-bot sandbox`): status, the owner's steps, the switch and per-soul
+overrides (#376).
 
 A soul directory holds its package and `.soul-state/home`, the private git
 home used by a launched harness. `.soul-state/agent-id` identifies the soul.
