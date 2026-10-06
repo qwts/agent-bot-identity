@@ -23,6 +23,30 @@ export function bundledStarter({ env = process.env, root = dirname(fileURLToPath
   return existsSync(join(candidate, 'soul.json')) ? candidate : null;
 }
 
+/**
+ * Every soul package the install ships, Starter first (GeniusBar#73): the
+ * other `*.soul` directories beside it whose soul.json says `template: true`.
+ * Starter stays the default for join and start_soul; listing shows them all.
+ */
+export function bundledSouls({ env = process.env, root = dirname(fileURLToPath(import.meta.url)) } = {}) {
+  const starter = bundledStarter({ env, root });
+  const souls = starter ? [starter] : [];
+  // An explicit Starter override replaces the bundle lookup entirely.
+  if (env.AGENT_BOT_STARTER_TEMPLATE) return souls;
+  const bundle = starter ? dirname(starter) : resolve(root, '..', '..', 'souls');
+  let children;
+  try { children = readdirSync(bundle, { withFileTypes: true }); } catch { return souls; }
+  for (const child of children.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!child.isDirectory() || !child.name.endsWith('.soul')) continue;
+    const directory = join(bundle, child.name);
+    if (souls.includes(directory)) continue;
+    try {
+      if (JSON.parse(readFileSync(join(directory, 'soul.json'), 'utf8')).template === true) souls.push(directory);
+    } catch { /* not a readable package; the validator reports it if a path names it */ }
+  }
+  return souls;
+}
+
 // Local package data only: no census, identity, credential or SOP lookup.
 export function listSoulTemplates({ env = process.env, home = homedir() } = {}) {
   const config = loadConfig({ env, home });
@@ -60,8 +84,7 @@ export function listSoulTemplates({ env = process.env, home = homedir() } = {}) 
     else errors.push({ package: typeof configured === 'string' ? configured : null,
       message: 'teams.template must be an absolute package path' });
   }
-  const starter = bundledStarter({ env });
-  if (starter) add(starter, 'bundled');
+  for (const bundled of bundledSouls({ env })) add(bundled, 'bundled');
   try {
     for (const child of readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       if (child.isDirectory() && child.name.endsWith('.soul')) add(join(root, child.name), 'souls-root');

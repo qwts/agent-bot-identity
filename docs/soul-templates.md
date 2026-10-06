@@ -40,10 +40,12 @@ agent-bot soul templates --json
 ```
 
 Listing reads local packages without network or secret access. It includes the
-configured `teams.template`, any bundled Starter (the same lookup as `join` and
-`start_soul`), and direct `*.soul` directories under the souls root marked
-`"template": true` with no `.soul-state/agent-id`. Configured and bundled packages
-do not need the template flag. Every listed package passes package validation.
+configured `teams.template`, the bundled souls (the Starter `join` and
+`start_soul` use, plus every other `*.soul` shipped beside it whose soul.json
+says `"template": true`, such as GeniusBar's built-in lead), and direct `*.soul`
+directories under the souls root marked `"template": true` with no
+`.soul-state/agent-id`. Configured packages and the bundled Starter do not need
+the template flag. Every listed package passes package validation.
 Invalid packages appear in `errors` without stopping the list.
 
 Plain output is `name — description (harness, source)`, with `none` when there
