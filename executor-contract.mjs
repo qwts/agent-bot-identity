@@ -346,10 +346,10 @@ export function createContractExecutor({ harness, identity, policy, run } = {}) 
 
     // The caller may watch each decision (a cold turn names the tools the
     // policy refused, #408); a watcher that throws never changes one.
-    const observe = (toolName, decision) => {
+    const observe = (toolName, decision, summary = null) => {
       if (typeof onPermission === 'function') {
         try {
-          const watched = onPermission({ toolName, ...decision });
+          const watched = onPermission({ toolName, ...decision, ...(typeof summary === 'string' ? { summary } : {}) });
           // An async watcher's rejection is observation too, never unhandled.
           if (typeof watched?.then === 'function') watched.then(undefined, () => {});
         } catch { /* observation only */ }
@@ -362,7 +362,7 @@ export function createContractExecutor({ harness, identity, policy, run } = {}) 
     // lets engines and audits distinguish the two paths.
     const requestPermission = async ({ toolName, operation = null, summary = null, ttlMs } = {}) => {
       const outcome = decidePermission(boundPolicy, { toolName });
-      if (outcome !== 'approval') return observe(toolName, { outcome, decidedBy: 'policy' });
+      if (outcome !== 'approval') return observe(toolName, { outcome, decidedBy: 'policy' }, summary);
       const wantedSummary = typeof summary === 'string' && summary.length > 0
         ? summary.slice(0, MAX_SUMMARY_LENGTH)
         : `permission: ${toolName}`;

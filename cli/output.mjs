@@ -21,6 +21,7 @@ Commands:
   daemon             Run, supervise, or disable the loopback daemon; vouch-key prints the soul public key
   keyd               Supervise agent-bot-keyd, the signed key holder GeniusBar ships: install --bin PATH | uninstall | status [--json]
   approvals          Tool-permission requests souls are waiting on: list [--json] | approve|deny PROPOSAL_ID [--json] [--principal-stdin]
+  audit              Read audit receipts: list [--json] [--since ISO-8601|-P1D] [--agent ID] [--event KIND] [--limit N] | tail [--json] [--agent ID]
   mcp                Serve the agent-bot MCP tools (bind, whoami, population)
   reach-mcp          Serve the daemon reach-back MCP tools (fetch_context, post_reply, fleet, send_message)
   wake               Hold this session's socket at the daemon's wake plane
