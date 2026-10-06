@@ -82,6 +82,7 @@ import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs'
 import { PROOF_HEADER, parseBindingProof, signBindingProof } from './binding-proof.mjs';
 import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms-client.mjs';
 import { attachWakeEndpoint } from './agent-wake.mjs';
+import { soulMode } from './soul-mode.mjs';
 import { readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
@@ -1394,7 +1395,7 @@ export async function recordLaunchComms({ agentId, package: packagePath, comms, 
   }
 }
 
-// Observe policy decisions in both interactive and cold ACP turns. Approval
+// Observe policy and mode decisions in interactive and cold ACP turns. Approval
 // decisions already have their own receipts. The writer owns detail sanitizing.
 export function withPermissionReceipts(executor, {
   env = process.env, home = homedir(), now = () => new Date(),
@@ -1424,10 +1425,11 @@ export function withPermissionReceipts(executor, {
             receipt('start', computerUse.start(agentId, record.toolName, turn));
           }
           try {
-            if (record.decidedBy === 'policy' && ['allow', 'deny'].includes(record.outcome)) {
+            if (['policy', 'autopilot', 'risk', 'turn'].includes(record.decidedBy) && ['allow', 'deny'].includes(record.outcome)) {
               const tool = typeof record.toolName === 'string' ? record.toolName : null;
-              const operation = tool && !/[\u0000-\u0020\u007f-\u009f]/.test(tool)
+              let operation = tool && !/[\u0000-\u0020\u007f-\u009f]/.test(tool)
                 ? (tool.length > 40 ? `${tool.slice(0, 39)}…` : tool) : null;
+              if (operation && record.decidedBy !== 'policy' && `${record.decidedBy}:${tool}`.length <= 40) operation = `${record.decidedBy}:${tool}`;
               appendAuditReceipt({
                 event: 'permission', agentId: input.invocation.agentId,
                 operation, decision: record.outcome,
@@ -1486,6 +1488,7 @@ export async function runDaemon({
       identities,
       policy: setup?.policy ?? { version: 1, rules: [], fallback: 'deny' },
       baseEnv: harnessEnv,
+      modeFor: (agentId) => soulMode(agentId, { env, home }),
       // A daemon-run soul's home is not a git worktree, so the session-start
       // hook cannot place its Claude session; the turn's binding does.
       onHarnessSession: ({ agentId, harness, harnessSessionId }) => recordSoulSession({ agentId, provider: harness, sessionId: harnessSessionId, env, home, now }),

@@ -33,7 +33,7 @@ function executor(requests, opts) {
     harness: 'claude', identity: { app: 'qwts-claude-agent', agentId: AGENT_ID },
     policy: { version: 1, rules: [
       { tool: 'Read', outcome: 'allow' }, { tool: LONG_TOOL, outcome: 'allow' },
-      { tool: 'Edit', outcome: 'approval' },
+      { tool: 'WebFetch', outcome: 'approval' },
     ], fallback: 'deny' },
     run: async ({ bindHarnessSession, requestPermission, emitStop }) => {
       bindHarnessSession({ mode: 'new', harnessSessionId: 'receipt-session' });
@@ -89,7 +89,7 @@ test('cold turns write policy receipts without duplicating approval decisions', 
   const opts = scratch(t);
   let approvals = 0;
   const run = coldTurnExecutor({
-    executorFor: () => executor([{ toolName: 'Read' }, { toolName: 'Bash' }, { toolName: 'Edit' }], opts),
+    executorFor: () => executor([{ toolName: 'Read' }, { toolName: 'Bash' }, { toolName: 'WebFetch' }], opts),
     approvals: async () => { approvals += 1; return { decision: 'deny' }; },
     turnTimeoutMs: 1000,
   });
@@ -97,12 +97,12 @@ test('cold turns write policy receipts without duplicating approval decisions', 
     invocation: { agentId: AGENT_ID, harness: 'claude', cwd: opts.home },
     message: 'go', attachments: [], env: opts.env,
   });
-  assert.deepEqual(result.denied, ['Bash', 'Edit']);
+  assert.deepEqual(result.denied, ['Bash', 'WebFetch']);
   assert.equal(approvals, 1);
   assert.equal(result.results[2].decidedBy, 'approval');
   assert.deepEqual(receipts(opts).map((row) => row.operation), ['Read', 'Bash']);
   // An approval that allows the tool is also excluded from policy receipts.
-  await executor([{ toolName: 'Edit' }], opts)(port());
+  await executor([{ toolName: 'WebFetch' }], opts)(port());
   assert.equal(receipts(opts).length, 2);
 });
 
@@ -134,3 +134,26 @@ test('malformed tool requests remain denied and receipt failures do not change d
   assert.equal(result.results[0].outcome, 'allow');
   assert.equal(seen.length, 1);
 });
+
+for (const mode of ['safe', 'autopilot']) {
+  test(`${mode} decisions leave permission receipts with bounded deciders`, async (t) => {
+    const opts = scratch(t);
+    const contract = createContractExecutor({ harness: 'claude', identity: { agentId: AGENT_ID }, mode,
+      policy: { version: 1, rules: [], fallback: 'approval' },
+      run: async ({ requestPermission, emitStop }) => {
+        for (const toolName of ['Read', 'Bash', 'Bash', LONG_TOOL, LONG_TOOL]) await requestPermission({ toolName, summary: 'request summary' });
+        emitStop({ stopReason: 'end_turn' });
+      } });
+    let approvals = 0;
+    await withPermissionReceipts(contract, opts)(port({ requestApproval: async () => { approvals += 1; return { decision: 'approve' }; } }));
+    const rows = receipts(opts);
+    assert.equal(approvals, mode === 'safe' ? 2 : 0);
+    assert.deepEqual(rows.map((row) => row.operation), mode === 'safe'
+      ? ['risk:Read', 'turn:Bash', `${LONG_TOOL.slice(0, 39)}…`]
+      : ['autopilot:Read', 'autopilot:Bash', 'autopilot:Bash', `${LONG_TOOL.slice(0, 39)}…`, `${LONG_TOOL.slice(0, 39)}…`]);
+    assert.ok(rows.every((row) => row.event === 'permission' && row.decision === 'allow'));
+    assert.equal(rows[0].detail, 'Read: request summary');
+    assert.equal(rows[1].detail, 'Bash: request summary');
+    assert.ok(rows.every((row) => row.operation.length <= 40 && row.detail.length <= 200));
+  });
+}

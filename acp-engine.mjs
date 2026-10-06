@@ -333,6 +333,8 @@ export function createAcpExecutor({
   harness,
   identity,
   policy,
+  // The soul's Safe / Auto-Pilot mode, read by the daemon at turn start.
+  mode = 'safe',
   registry = ACP_SPAWN_REGISTRY,
   cwd = process.cwd(),
   harnessDirs = [],
@@ -585,5 +587,5 @@ export function createAcpExecutor({
     }
   };
 
-  return createContractExecutor({ harness, identity, policy, run });
+  return createContractExecutor({ harness, identity, policy, run, mode });
 }
