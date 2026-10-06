@@ -3,14 +3,16 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createSoulHomes, installHarnesses, npmCommand, soulHomePath, legacyHomePath, soulBindingForLaunch } from '../soul-home.mjs';
+import { createSoulHomes, installHarnesses, installSoulHarnesses, soulHarnessesPath, npmCommand, soulHomePath, legacyHomePath, soulBindingForLaunch } from '../soul-home.mjs';
 
 import { GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
 import { createBindingRegistry } from '../agent-binding.mjs';
+import { mintAgentIdentity } from '../agent-identity.mjs';
 import { displayName, populationFile, upsertSoul, showSoul } from '../agent-population.mjs';
 
 function census(root) {
-  const options = { env: {}, home: root, config: {} };
+  const options = { env: {}, home: root, config: {}, stateDir: root };
+  mintAgentIdentity({ ...options, idFactory: () => agentId, harness: 'claude', useGithub: false });
   options.file = populationFile(options);
   upsertSoul({ id: agentId, status: 'active', spacePath: path.join(root, 'spaces', agentId) }, { file: options.file });
   return options;
@@ -33,6 +35,7 @@ test('provisions a git home from the package once, then rebinds it', async (t) =
   writeFileSync(path.join(pkg, 'AGENTS.md'), 'be kind\n');
   writeFileSync(path.join(pkg, 'skills', 'hello', 'SKILL.md'), '---\nname: hello\ndescription: Say hello\n---\nhi\n');
   writeFileSync(path.join(pkg, 'soul.json'), JSON.stringify({ formatVersion: 2, name: 'test', description: 'test', displaySeed: 'test', preferredHarnesses: [], parentRevision: null, revision: `sha256:${'0'.repeat(64)}`, ignore: PACKAGE_IGNORE_LIST }));
+  pinnedPackage(pkg);
   const bindings = fakeBindings();
   const installs = [];
   const options = census(root);
@@ -68,7 +71,8 @@ test('a failed harness install removes the half-made home', async (t) => {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const options = census(root);
   const provision = createSoulHomes({ ...options, stateDir: root, bindings: fakeBindings(), install: async () => { throw new Error('npm said no'); } });
-  await assert.rejects(provision({ agentId }), /npm said no/);
+  const pkg = pinnedPackage(path.join(root, 'pkg'));
+  await assert.rejects(provision({ agentId, packagePath: pkg }), /npm said no/);
   assert.equal(existsSync(soulHomePath(agentId, options)), false);
 });
 
@@ -95,8 +99,9 @@ test('two launches of the same new soul share one creation', async (t) => {
   const bindings = fakeBindings();
   const options = census(root);
   const provision = createSoulHomes({ ...options, stateDir: root, bindings, install: async () => { installs += 1; await gate; } });
-  const first = provision({ agentId });
-  const second = provision({ agentId });
+  const pkg = pinnedPackage(path.join(root, 'pkg'));
+  const first = provision({ agentId, packagePath: pkg });
+  const second = provision({ agentId, packagePath: pkg });
   release();
   const [a, b] = await Promise.all([first, second]);
   assert.equal(installs, 1);
@@ -221,4 +226,147 @@ test('launch migrates a live legacy binding and reprovisions the new home for re
   const external = { worktree: checkout, file: '/binding' };
   assert.equal(soulBindingForLaunch(agentId, { stateDir: root,
     bindings: { findAgent: () => external }, provision: () => assert.fail('live checkout must be kept') }), external);
+});
+
+const claudePackage = '@zed-industries/claude-code-acp';
+const codexPackage = '@agentclientprotocol/codex-acp';
+
+function pinnedPackage(directory) {
+  mkdirSync(directory, { recursive: true });
+  const dependencies = { [claudePackage]: '0.16.1', [codexPackage]: '2.1.0' };
+  const manifest = { name: 'two-adapters', private: true, dependencies,
+    devDependencies: { tooling: '1.0.0' }, optionalDependencies: { unrelated: '1.0.0' },
+    peerDependencies: { unrelated: '1.0.0' }, workspaces: ['extra/*'] };
+  const entry = (fields = {}) => ({ version: '1.0.0', resolved: 'https://example.invalid/pinned.tgz', integrity: 'sha512-pin', ...fields });
+  const packages = {
+    '': manifest,
+    [`node_modules/${claudePackage}`]: entry({ version: '0.16.1', dependencies: { shared: '1.0.0', 'claude-only': '1.0.0', nested: '2.0.0' } }),
+    [`node_modules/${codexPackage}`]: entry({ version: '2.1.0', dependencies: { shared: '1.0.0', 'codex-only': '1.0.0', nested: '1.0.0' } }),
+    'node_modules/shared': entry({ peerDependencies: { peer: '1.0.0', absent: '*' }, peerDependenciesMeta: { absent: { optional: true } } }),
+    'node_modules/peer': entry({ dependencies: { shared: '1.0.0' } }), // cycle
+    'node_modules/claude-only': entry({ optionalDependencies: { platform: '1.0.0', missing: '*' } }),
+    'node_modules/codex-only': entry(),
+    'node_modules/platform': entry({ optional: true, os: ['darwin'] }),
+    [`node_modules/${claudePackage}/node_modules/nested`]: entry({ version: '2.0.0', dependencies: { shared: '1.0.0' } }),
+    'node_modules/nested': entry(),
+    'node_modules/tooling': entry({ dev: true }),
+    'node_modules/unrelated': entry(),
+  };
+  writeFileSync(path.join(directory, 'package.json'), JSON.stringify(manifest));
+  writeFileSync(path.join(directory, 'package-lock.json'), JSON.stringify({ name: manifest.name, lockfileVersion: 3, requires: true, packages }));
+  return directory;
+}
+
+for (const harness of ['claude', 'codex']) {
+  test(`installs only ${harness}'s locked adapter and reachable dependencies`, async (t) => {
+    const root = mkdtempSync(path.join(tmpdir(), 'soul-prune-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const options = census(root);
+    const source = pinnedPackage(path.join(root, 'pkg'));
+    const original = readFileSync(path.join(source, 'package-lock.json'), 'utf8');
+    const calls = [];
+    const dir = await installSoulHarnesses(agentId, source, { ...options, harness,
+      install: (directory, opts) => installHarnesses(directory, { ...opts,
+        runImpl: async (command, args, settings) => calls.push({ command, args, cwd: settings.cwd }) }) });
+    assert.equal(dir, soulHarnessesPath(agentId, options));
+    const manifest = JSON.parse(readFileSync(path.join(dir, 'package.json')));
+    const lock = JSON.parse(readFileSync(path.join(dir, 'package-lock.json')));
+    const adapter = harness === 'claude' ? claudePackage : codexPackage;
+    assert.deepEqual(manifest.dependencies, { [adapter]: harness === 'claude' ? '0.16.1' : '2.1.0' }, 'template pins win over registry versions');
+    for (const field of ['devDependencies', 'optionalDependencies', 'peerDependencies', 'workspaces']) assert.equal(manifest[field], undefined);
+    assert.deepEqual(lock.packages[''].dependencies, manifest.dependencies);
+    const wanted = ['', `node_modules/${adapter}`, 'node_modules/shared', 'node_modules/peer',
+      ...(harness === 'claude' ? ['node_modules/claude-only', 'node_modules/platform', `node_modules/${claudePackage}/node_modules/nested`]
+        : ['node_modules/codex-only', 'node_modules/nested'])];
+    assert.deepEqual(Object.keys(lock.packages).sort(), wanted.sort());
+    const sourceLock = JSON.parse(original);
+    for (const location of wanted.filter(Boolean)) assert.deepEqual(lock.packages[location], sourceLock.packages[location]);
+    assert.equal(readFileSync(path.join(source, 'package-lock.json'), 'utf8'), original);
+    assert.equal(Object.keys(JSON.parse(readFileSync(path.join(source, 'package.json'))).dependencies).length, 2);
+    assert.deepEqual(calls, [{ command: 'npm', args: ['ci', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund'], cwd: dir }]);
+  });
+}
+
+test('unknown and adapter-free harnesses, missing pins and absent package files install nothing', async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'soul-no-adapter-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const options = census(root);
+  const source = pinnedPackage(path.join(root, 'pkg'));
+  const install = async () => assert.fail('nothing to install');
+  for (const harness of ['unknown', 'muse', 'opencode']) {
+    assert.equal(await installSoulHarnesses(agentId, source, { ...options, harness, install }), null);
+  }
+  writeFileSync(path.join(source, 'package.json'), '{}');
+  assert.equal(await installSoulHarnesses(agentId, source, { ...options, harness: 'claude', install }), null);
+  assert.equal(await installSoulHarnesses(agentId, null, { ...options, install }), null);
+  rmSync(path.join(source, 'package-lock.json'));
+  assert.equal(await installSoulHarnesses(agentId, source, { ...options, install }), null);
+  assert.equal(existsSync(soulHarnessesPath(agentId, options)), false);
+});
+
+test('an omitted harness uses the identity record', async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'soul-population-harness-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const options = census(root);
+  const source = pinnedPackage(path.join(root, 'pkg'));
+  const dir = await installSoulHarnesses(agentId, source, { ...options, install: async () => {} });
+  assert.deepEqual(JSON.parse(readFileSync(path.join(dir, 'package.json'))).dependencies, { [claudePackage]: '0.16.1' });
+});
+
+test('invalid or incomplete adapter locks fail before npm runs', async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'soul-bad-lock-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const options = census(root);
+  const source = pinnedPackage(path.join(root, 'pkg'));
+  const lockPath = path.join(source, 'package-lock.json');
+  const lock = JSON.parse(readFileSync(lockPath));
+  delete lock.packages['node_modules/shared'];
+  writeFileSync(lockPath, JSON.stringify(lock));
+  await assert.rejects(installSoulHarnesses(agentId, source, { ...options, install: async () => assert.fail('bad lock') }), /missing shared/);
+  lock.lockfileVersion = 1;
+  writeFileSync(lockPath, JSON.stringify(lock));
+  await assert.rejects(installSoulHarnesses(agentId, source, options), /v3 package-lock/);
+});
+
+test('home relaunch switches harnesses, retries failures and skips unchanged installs', async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'soul-switch-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const options = census(root);
+  const source = pinnedPackage(path.join(root, 'pkg'));
+  const bindings = fakeBindings();
+  const seen = [];
+  let fail = false;
+  const provision = createSoulHomes({ ...options, stateDir: root, bindings, install: async (dir) => {
+    const deps = JSON.parse(readFileSync(path.join(dir, 'package.json'))).dependencies;
+    seen.push(Object.keys(deps));
+    if (fail) throw new Error('install failed');
+    mkdirSync(path.join(dir, 'node_modules'), { recursive: true });
+  } });
+  await provision({ agentId, packagePath: source });
+  const launch = (harness) => soulBindingForLaunch(agentId, { stateDir: root, bindings, provision, harness });
+  await launch('claude');
+  fail = true;
+  await assert.rejects(launch('codex'), /install failed/);
+  fail = false;
+  await launch('claude');
+  await launch('codex');
+  await launch('codex');
+  assert.deepEqual(seen, [[claudePackage], [codexPackage], [claudePackage], [codexPackage]]);
+  const home = soulHomePath(agentId, options);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(home, 'package.json'))).dependencies, { [codexPackage]: '2.1.0' });
+  await launch('muse');
+  assert.equal(existsSync(path.join(home, 'node_modules')), false);
+  assert.equal(seen.length, 4);
+});
+
+test('a live checkout prepares the launch harness without replacing its binding', async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'soul-live-harness-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const binding = { worktree: root, file: '/binding' };
+  const calls = [];
+  const result = await soulBindingForLaunch(agentId, { stateDir: root, harness: 'codex',
+    bindings: { findAgent: () => binding }, provision: () => assert.fail('live binding'),
+    prepareHarness: async (...args) => calls.push(args) });
+  assert.equal(result, binding);
+  assert.deepEqual(calls, [[agentId, 'codex', root]]);
 });

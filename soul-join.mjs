@@ -75,7 +75,7 @@ function rowPackage(row) {
  * (#417), pinned by the soul's package if it declares it, else by the
  * bundled Starter. Returns how the wake will find its adapter.
  */
-async function ensureAcpHarness(agentId, harness, worktree, { env, options, installHarness }) {
+export async function ensureAcpHarness(agentId, harness, worktree, { env, options, installHarness = installSoulHarnesses }) {
   const row = ACP_SPAWN_REGISTRY[harness];
   if (!row?.soulBin) return 'not needed';
   const has = (dir) => existsSync(path.join(dir, 'node_modules', '.bin', row.soulBin));
@@ -93,7 +93,7 @@ async function ensureAcpHarness(agentId, harness, worktree, { env, options, inst
   const missing = () => new Error(`--wake acp needs the ${harness} adapter ${row.adapter.package}@${row.adapter.version}, `
     + 'which neither this soul\'s package nor the bundled Starter pins');
   if (!source) { if (row.adapter) throw missing(); return 'registry command'; }
-  try { await installHarness(agentId, source, options); }
+  try { await installHarness(agentId, source, { ...options, harness }); }
   catch (error) { throw new Error(`--wake acp could not install the ${harness} adapter: ${error.message}`); }
   if (has(own)) return 'installed';
   if (row.adapter) throw missing();

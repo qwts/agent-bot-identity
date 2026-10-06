@@ -32,9 +32,14 @@ function fixture(t, overrides = {}) {
 }
 
 test('launch uses named harness and bound soul environment; duplicates never execute twice', async (t) => {
-  const f = fixture(t);
+  const lookups = [];
+  const f = fixture(t, { lookupBinding: (id, options) => {
+    lookups.push({ id, ...options });
+    return { worktree: '/work', file: '/private/binding' };
+  } });
   await Promise.all([f.handler(event, f.ports), f.handler(event, f.ports)]);
   assert.equal(f.calls.length, 1);
+  assert.deepEqual(lookups, [{ id: agentId, harness: 'claude' }], 'the launch override reaches harness provisioning');
   assert.deepEqual(f.calls[0], { agentId, harness: 'claude', cwd: '/work',
     env: { AGENT_BOT_BINDING: '/private/binding', AGENT_BOT_ID: agentId, QWTS_AGENT_ID: agentId } });
   assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId });
