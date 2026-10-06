@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { locateSoulDir } from '../agent-population.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
-import { bundledStarter, listSoulTemplates, templateListCommand } from '../soul-templates.mjs';
+import { bundledSouls, bundledStarter, listSoulTemplates, templateListCommand } from '../soul-templates.mjs';
 
 function fixture(t) {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'soul-template-list-')));
@@ -127,6 +127,22 @@ test('bundled Starter lookup uses the shipped layout and honors the explicit ove
   const starter = f.pkg(join(f.home, 'Resources', 'souls', 'starter.soul'));
   assert.equal(bundledStarter({ env: {}, root }), starter);
   assert.equal(bundledStarter({ env: { AGENT_BOT_STARTER_TEMPLATE: f.root }, root }), f.root);
+});
+
+test('every bundled template is listed as bundled, Starter first, and only packages marked template', (t) => {
+  const f = fixture(t);
+  const root = join(f.home, 'Resources', 'components', 'agent-bot');
+  assert.deepEqual(bundledSouls({ env: {}, root }), []);
+  const starter = f.pkg(join(f.home, 'Resources', 'souls', 'starter.soul'), { name: 'Starter', template: undefined });
+  const lead = f.pkg(join(f.home, 'Resources', 'souls', 'geniusbar.soul'), { name: 'GeniusBar', template: true });
+  f.pkg(join(f.home, 'Resources', 'souls', 'aside.soul'), { name: 'Aside', template: false });
+  mkdirSync(join(f.home, 'Resources', 'souls', 'notes'), { recursive: true });
+  assert.deepEqual(bundledSouls({ env: {}, root }), [starter, lead]);
+  // An explicit Starter override replaces the bundle lookup entirely.
+  assert.deepEqual(bundledSouls({ env: { AGENT_BOT_STARTER_TEMPLATE: f.root }, root }), [f.root]);
+  f.env.AGENT_BOT_STARTER_TEMPLATE = starter;
+  const listed = listSoulTemplates(f.options);
+  assert.deepEqual(listed.templates.map(({ name, source }) => [name, source]), [['Starter', 'bundled']]);
 });
 
 test('CLI emits the JSON contract and one plain line per template; rejects all extra arguments', (t) => {

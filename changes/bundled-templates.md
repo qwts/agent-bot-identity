@@ -1,0 +1,1 @@
+- `agent-bot soul templates` lists every soul package shipped beside the bundled Starter whose soul.json says `template: true`, so GeniusBar's built-in lead (GeniusBar#73) appears in the launch picker; `join` and `start_soul` still default to Starter.
