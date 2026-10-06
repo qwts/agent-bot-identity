@@ -586,7 +586,13 @@ user-level supervisor (`launchd` on macOS, a systemd user unit on Linux) that
 execs `daemon run` at login and restarts it on failure. On macOS the unit
 files the daemon's stdout and stderr under
 `~/Library/Logs/agent-bot/daemon.log`; on Linux they are in the user journal
-(`journalctl --user -u agent-bot-daemon`). `start` is recovery
+(`journalctl --user -u agent-bot-daemon`). The daemon checks the macOS log at
+startup and every ten minutes. Above 5 MiB it copies the log to `daemon.log.1`
+(replacing the previous backup) and truncates the live file; both use mode
+0600. Set `AGENT_BOT_DAEMON_LOG_MAX_BYTES` to a positive integer byte count
+when running `daemon install` to override the cap (invalid values use 5 MiB).
+The log can exceed the cap between checks; journald is unaffected.
+`start` is recovery
 when the supervisor is not in use; `status`/`stop` probe and terminate the
 recorded daemon; `disable` unloads the supervisor. MCP remains per-conversation
 stdio and is never supervised. With `settings.daemonPreference` set to
