@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.16
+
+- The daemon now checks its macOS launchd log at startup and every ten minutes, copying logs above 5 MiB to a single `daemon.log.1` backup before truncating the live file, so long-running installations no longer accumulate an unbounded live log. Both files use mode 0600; `AGENT_BOT_DAEMON_LOG_MAX_BYTES` overrides the cap with a positive integer byte count. Linux journald is unchanged, and no system configuration or root access is required (#452).
+- Souls now receive their own population name, Agent ID and parent name/ID in their launch turn and the first prompt of every new ACP harness session, including cold wakes (GeniusBar #119). Previously a soul launched from a template could introduce itself as Starter and deny having a parent. Resumed sessions keep their existing prompts, and the identity preamble contains only bounded public names and IDs.
+
 ## 0.10.15
 
 - Add proposal risk levels and live daemon computer-use activity signals for GeniusBar.
