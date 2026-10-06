@@ -22,6 +22,7 @@
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { readAgentIdentity, stateDirectory } from './agent-identity.mjs';
 import { accountHarness, accountName, detectHarness } from './detect-harness.mjs';
 import { PROFILE_HARNESSES } from './organization-profile.mjs';
 import { appLifecycleStatus, loadConfig, slugForHarness } from './config.mjs';
@@ -122,6 +123,17 @@ export function resolveAgentSlug({
   if (env.GH_AGENT_APP) return requireActiveProfileApp(env.GH_AGENT_APP, cfg);
   const pinned = pinnedSlug(cwd, { git });
   if (pinned) return requireActiveProfileApp(pinned, cfg);
+  // Managed App assignments are explicit soul identity metadata. Existing
+  // explicit App/environment/worktree choices retain their precedence.
+  if (cfg.identityApps && Object.keys(cfg.identityApps).length) {
+    const id = env.AGENT_BOT_ID ?? env.QWTS_AGENT_ID ?? readGitConfig(cwd, AGENT_ID_KEYS, { git });
+    if (id) {
+      const identity = readAgentIdentity(id, { stateDir: stateDirectory({ env, home: env.HOME }) });
+      if (identity.status === 'retired') throw new Error('selected soul is retired');
+      const app = identity.github?.appSlug;
+      if (app && cfg.identityApps[app]) return requireActiveProfileApp(app, cfg);
+    }
+  }
   // ENG-0339: the account is the persona, so its input outranks environment
   // detection — a harness account resolves to its own App whatever tool runs
   // there. In the owner's account it yields nothing.

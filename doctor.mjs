@@ -12,6 +12,8 @@ import {
   requireReadinessSchema,
 } from './readiness.mjs';
 
+import { cacheAppDoctorRows } from './identity-app-store.mjs';
+
 export { hookCoverage };
 
 export const DOCTOR_USAGE = `usage: agent-bot doctor [options]
@@ -66,6 +68,7 @@ export async function main(
   {
     collect = collectReadiness,
     output = process.stdout,
+    cache = cacheAppDoctorRows,
   } = {},
 ) {
   const options = parseDoctorArgs(argv);
@@ -98,6 +101,7 @@ export async function main(
       explicitApps: options.apps,
     });
   }
+  try { cache(report); } catch { /* cached mint history is advisory; readiness still reports */ }
   output.write(options.json ? renderReadinessJson(report) : renderReadinessReport(report));
   process.exitCode = report.ready ? 0 : 1;
   return report;

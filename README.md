@@ -1526,6 +1526,9 @@ agent-bot identity show <agent-id>
 agent-bot identity ensure
 ```
 
+Manage GitHub Apps with `identity apps list` and `identity app create`,
+`connect`, `rotate-key`, or `assign`; see [commands and daemon API](docs/identity-apps.md).
+
 `setup-worktree` and `identity ensure` are idempotent on a pinned checkout.
 With no transcript in view — the harness startup hook and git's
 `post-checkout` hook run setup this way every session — the pinned soul

@@ -627,6 +627,20 @@ export function backfillManagedSouls(ids, { file = populationFile() } = {}) {
 }
 
 // Computer use is durable across daemon restarts and lifecycle upserts.
+// Called by the owner-gated App API while the identity mutation holds its lock.
+export function setSoulApp(id, app, { file = populationFile() } = {}) {
+  const target = agentId(id), normalized = appSlug(app);
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion');
+    const existing = current.souls[target];
+    if (!existing || existing.status === 'retired') throw new Error('cannot assign an absent or retired soul');
+    const soul = normalizeSoul({ ...existing, appSlug: normalized });
+    writeDocument(file, { ...current.souls, [target]: soul });
+    return soul;
+  });
+}
+
 export function setSoulComputerUse(id, computerUse, { file = populationFile() } = {}) {
   const target = agentId(id);
   if (typeof computerUse !== 'boolean') throw new Error('computerUse must be a boolean');

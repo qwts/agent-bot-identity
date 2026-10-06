@@ -123,13 +123,15 @@ agent-bot keyd uninstall [--json]            # the Keychain items stay
 ## Resolution at mint
 
 For an App slug, the mint path (`mint-token`, the git credential helper, the
-daemon's `/v0/credential`) checks two places in order:
+daemon's `/v0/credential`) checks these places in order:
 
-1. **The soul's store.** The soul is the one that declares the App: the soul
-   the daemon is minting for, else the caller's own soul, else any soul in the
-   census. If its store holds the key, that key is used. If a store holds the
-   key but cannot read it, the mint fails; it does not fall back.
-2. **The legacy `~/.config/<slug>/{app-id,private-key.pem}`.** The first use
+1. **The selected soul's keyd store.** A keyd declaration for the selected
+   soul always stays with the signed helper.
+2. **Managed App store.** Apps registered through the [managed App API](identity-apps.md)
+   use the same readable backends with an App namespace.
+3. **The soul's store.** The selected soul, else any declaring soul in the
+   census. An unreadable store fails closed rather than falling back.
+4. **The legacy `~/.config/<slug>/{app-id,private-key.pem}`.** The first use
    prints a one-time deprecation notice on stderr.
 
 `GH_APP_ID` with `GH_APP_PRIVATE_KEY` or `GH_APP_PRIVATE_KEY_PATH` keeps

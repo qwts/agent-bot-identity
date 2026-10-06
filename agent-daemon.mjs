@@ -84,6 +84,7 @@ import { PROOF_HEADER, parseBindingProof, signBindingProof } from './binding-pro
 import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms-client.mjs';
 import { attachWakeEndpoint } from './agent-wake.mjs';
 import { soulMode } from './soul-mode.mjs';
+import { createIdentityAppJobs, identityAppOperation, identityAppFailure, listIdentityApps } from './identity-apps.mjs';
 import { readSoulProfile } from './soul-profile.mjs';
 import { readSandboxStatus, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount } from './sandbox.mjs';
 import { soulModel, setSoulModel, recordSoulModels } from './soul-model.mjs';
@@ -437,6 +438,8 @@ export function createDaemonServer({
   settingGate = (action, { principal }) => soulSettingOwnerGate(action, { principal, env, cwd: home }),
   revisionPrincipal = (credential) => verifyPrincipalOwner(credential, { env }),
 } = {}) {
+  const appOptions = { env, home, gate: settingGate };
+  const appJobs = createIdentityAppJobs(appOptions);
   // One interaction service per server so in-flight executions and their
   // cancellation controllers live exactly as long as the daemon.
   const interaction = createInteractionService({ env, home, config, executor, taskReporter, now, turns });
@@ -534,6 +537,27 @@ export function createDaemonServer({
       }
       if (url.pathname.startsWith('/v1/')) {
         await handleInteractionRequest({ req, res, url, interaction, env, home, confirmDecision });
+        return;
+      }
+      // Same bearer and loopback checks as population; mutations also prove owner.
+      if (url.pathname === '/v0/identity/apps' || url.pathname.startsWith('/v0/identity/apps/')) {
+        try {
+          if (req.method === 'GET' && url.pathname === '/v0/identity/apps') {
+            sendJson(res, 200, listIdentityApps(appOptions));
+          } else if (req.method === 'GET' && /^\/v0\/identity\/apps\/jobs\/[a-f0-9-]+$/.test(url.pathname)) {
+            sendJson(res, 200, appJobs.get(url.pathname.split('/').at(-1)));
+          } else if (req.method === 'POST' && /^\/v0\/identity\/apps\/(create|connect|rotate-key|assign)$/.test(url.pathname)) {
+            let body;
+            try { body = parseJsonBody(await readBody(req)); }
+            catch { sendJson(res, 400, { error: 'Invalid App request JSON.', code: 'identity-app-invalid' }); return; }
+            const action = url.pathname.split('/').at(-1);
+            sendJson(res, action === 'create' ? 202 : 200, action === 'create'
+              ? await appJobs.start(body) : await identityAppOperation(action, body, appOptions));
+          } else sendJson(res, 404, { error: 'Unknown App route.', code: 'identity-app-not-found' });
+        } catch (error) {
+          const failure = identityAppFailure(error);
+          sendJson(res, error.statusCode ?? 409, { error: failure.message, code: failure.code });
+        }
         return;
       }
       const route = `${req.method} ${url.pathname}`;
@@ -959,6 +983,7 @@ export function createDaemonServer({
         ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable'].includes(error.code) ? { code: error.code } : {}) });
     }
   });
+  server.once('close', () => appJobs.close());
   server.on('listening', () => {
     const address = server.address();
     bindings.rewrite(`http://${address.address === '::1' ? '[::1]' : '127.0.0.1'}:${address.port}`);

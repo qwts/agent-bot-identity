@@ -98,7 +98,7 @@ export function configuredAppSlugs(config, explicit = []) {
     }
     return scope;
   }
-  const slugs = new Set([...profileAppSlugs(config), ...explicit]);
+  const slugs = new Set([...profileAppSlugs(config), ...Object.keys(config.identityApps ?? {}), ...Object.values(config.apps ?? {}), ...explicit]);
   for (const { key } of HARNESSES) {
     const slug = slugForHarness(key, config);
     if (slug) slugs.add(slug);
@@ -2171,7 +2171,7 @@ export async function collectReadiness({
       try {
         results = await inspectCredentials({
           slugs: roster,
-          home,
+          home, env, config,
           ...(verifyApps ? {} : { verify: null }),
         });
       } catch {

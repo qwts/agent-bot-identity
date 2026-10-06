@@ -559,6 +559,15 @@ function mutateIdentity(id, stateDir, now, mutator, { afterWrite = null } = {}) 
   });
 }
 
+// Owner-authorized callers use this atomic identity/census mutation for App assignment.
+export function assignAgentApp(id, appSlug, { stateDir = stateDirectory(), now = () => new Date(), afterWrite } = {}) {
+  return mutateIdentity(id, stateDir, now, (record) => {
+    if (record.status === 'retired') throw new Error('cannot assign a retired soul');
+    record.github = { appSlug, credentialProvider: 'worktree-token' };
+    return record;
+  }, { afterWrite });
+}
+
 export function bindAgentTranscript(id, transcript, {
   stateDir = stateDirectory(),
   now = () => new Date(),
