@@ -9,6 +9,7 @@ import {
   renameSync,
   statSync,
   writeFileSync,
+  symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -24,6 +25,7 @@ import {
   soulDirectory,
   backfillManagedSouls,
   locateSoulDir,
+  packageManifest,
   soulShownName,
   showSoul,
   showSoulByName,
@@ -560,6 +562,49 @@ test('the name chosen at launch or join is the one every command shows (#429)', 
   // A soul with no row is not created; bad names are refused.
   assert.equal(recordSoulDisplayName(SECOND_ID, 'Other', { file }), null);
   assert.throws(() => recordSoulDisplayName(FIRST_ID, 'bad\u0007name', { file }), /displayName must be printable text/);
+});
+
+test('locating a package reports what its soul.json says, bounded and printable (#120)', () => {
+  const root = scratch();
+  const file = path.join(root, 'population.json');
+  const options = { file, env: {}, home: root, config: {} };
+  const pkg = path.join(root, 'Luna.soul');
+  mkdirSync(pkg, { recursive: true });
+  writeFileSync(path.join(pkg, 'soul.json'), JSON.stringify({
+    name: '  Luna - Starter ', description: 'A friendly first soul.', preferredHarnesses: ['codex', 7, ' ', 'claude'],
+  }));
+  assert.deepEqual(locateSoulDir(pkg, options), {
+    path: pkg, status: 'package', name: 'Luna - Starter', description: 'A friendly first soul.', preferredHarnesses: ['codex', 'claude'],
+  });
+
+  // Unusable values are left out, never quoted; no manifest is still a package.
+  writeFileSync(path.join(pkg, 'soul.json'), JSON.stringify({ name: 'bad\u0007name', description: 'x'.repeat(513), preferredHarnesses: 'claude' }));
+  assert.deepEqual(locateSoulDir(pkg, options), { path: pkg, status: 'package' });
+  writeFileSync(path.join(pkg, 'soul.json'), '{not json');
+  assert.deepEqual(locateSoulDir(pkg, options), { path: pkg, status: 'package' });
+  const bare = path.join(root, 'Bare.soul');
+  mkdirSync(bare, { recursive: true });
+  assert.deepEqual(locateSoulDir(bare, options), { path: bare, status: 'package' });
+  assert.deepEqual(packageManifest(bare), {});
+
+  // An untrusted package's soul.json is read like the marker: a link, a FIFO
+  // (which must not block the daemon) or an oversized file is no manifest.
+  const linked = path.join(root, 'Linked.soul');
+  mkdirSync(linked, { recursive: true });
+  writeFileSync(path.join(root, 'elsewhere.json'), JSON.stringify({ name: 'Leaked' }));
+  symlinkSync(path.join(root, 'elsewhere.json'), path.join(linked, 'soul.json'));
+  assert.deepEqual(packageManifest(linked), {});
+  const piped = path.join(root, 'Piped.soul');
+  mkdirSync(piped, { recursive: true });
+  if (spawnSync('mkfifo', [path.join(piped, 'soul.json')]).status === 0) {
+    const started = Date.now();
+    assert.deepEqual(packageManifest(piped), {});
+    assert.ok(Date.now() - started < 2_000, 'a FIFO soul.json must not block');
+  }
+  const huge = path.join(root, 'Huge.soul');
+  mkdirSync(huge, { recursive: true });
+  writeFileSync(path.join(huge, 'soul.json'), JSON.stringify({ name: 'Huge', description: 'x'.repeat(70_000) }));
+  assert.deepEqual(packageManifest(huge), {});
 });
 
 test('the census role line comes from soul.json role and the soul\'s live team (Lovable X2)', () => {

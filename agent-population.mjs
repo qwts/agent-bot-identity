@@ -683,6 +683,50 @@ export function soulShownName(soul, directory = null) {
   return soul.name;
 }
 
+// What a package's soul.json offers a launch form: only well-formed,
+// printable, bounded values; anything else is left out rather than quoted.
+const MANIFEST_TEXT = /^[^\u0000-\u001f\u007f]+$/;
+function manifestText(value, max) {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  return text && text.length <= max && MANIFEST_TEXT.test(text) ? text : null;
+}
+// The package is untrusted and may sit on an agent-chosen path, so its
+// soul.json is opened like the marker: no link following, no blocking on a
+// FIFO, and only a small regular file is parsed (Cursor security review on
+// #456). Anything else reads as no manifest.
+const MANIFEST_MAX_BYTES = 64 * 1024;
+function readPackageManifest(directory) {
+  let fd;
+  try { fd = openSync(path.join(directory, 'soul.json'), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK); }
+  catch { return null; }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > MANIFEST_MAX_BYTES) return null;
+    return readFileSync(fd, 'utf8');
+  } catch { return null; } finally { closeSync(fd); }
+}
+
+export function packageManifest(directory) {
+  let manifest;
+  try {
+    const text = readPackageManifest(directory);
+    if (text === null) return {};
+    manifest = JSON.parse(text);
+  } catch { return {}; }
+  if (!manifest || typeof manifest !== 'object') return {};
+  const out = {};
+  const name = manifestText(manifest.name, 128);
+  if (name) out.name = name;
+  const description = manifestText(manifest.description, 512);
+  if (description) out.description = description;
+  if (Array.isArray(manifest.preferredHarnesses)) {
+    const harnesses = manifest.preferredHarnesses.slice(0, 8).map((h) => manifestText(h, 64)).filter(Boolean);
+    if (harnesses.length) out.preferredHarnesses = harnesses;
+  }
+  return out;
+}
+
 function claimedByOther(directory, id) {
   // An empty marker is one being written (older tools wrote it in place),
   // not another soul's claim.
@@ -864,6 +908,8 @@ export function orphanSoulDirs(options = {}) {
 // - `invalid`: the marker is a link, not a small regular file, or not an
 //   Agent ID; the message never quotes it.
 // Only `package` and `installed` may be launched; the rest carry a message.
+// A package also carries what its soul.json says about itself (name,
+// description, preferredHarnesses), so a launch form can prefill (#120).
 export function locateSoulDir(directory, options = {}) {
   const dir = path.resolve(printableText('path', directory, { max: 4096 }));
   const id = markerOf(dir);
@@ -871,7 +917,7 @@ export function locateSoulDir(directory, options = {}) {
     return { path: dir, status: 'invalid',
       message: `${dir} has an invalid soul marker: .soul-state/agent-id must be a regular file holding one Agent ID` };
   }
-  if (!id) return { path: dir, status: 'package' };
+  if (!id) return { path: dir, status: 'package', ...packageManifest(dir) };
   const file = options.file ?? populationFile(options);
   const soul = readDocument(file).souls[id];
   if (!soul || soul.status !== 'active') {
