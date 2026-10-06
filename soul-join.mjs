@@ -29,7 +29,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN, resolveSpawn } from './acp-registry.mjs';
 import { mintBindToken, readBinding } from './agent-binding.mjs';
 import { mintAgentIdentity, readAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
@@ -39,26 +39,15 @@ import { initAgentSpace } from './agent-space.mjs';
 import { daemonPreference, loadConfig } from './config.mjs';
 import { AGENT_ID_KEYS } from './resolve-agent.mjs';
 import { ensureSoulDirectory, installSoulHarnesses, soulHarnessesPath } from './soul-home.mjs';
-import { spawnSoulTemplate } from './soul-templates.mjs';
+import { bundledStarter, spawnSoulTemplate } from './soul-templates.mjs';
+export { bundledStarter } from './soul-templates.mjs';
 import { linkWorktree, soulWorktreePath } from './soul-worktrees.mjs';
 import { resumeHarnessSupported } from './wake-resume.mjs';
 
-const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const USAGE = 'usage: agent-bot join --name NAME --harness H [--template PATH] [--soul AGENT_ID] [--wake resume:read-only|resume:workspace|acp] [--principal-stdin] [--json]';
 /** `--wake` values: a resume policy (#323) or an ACP turn (#259). A webhook needs its URL and key; use `soul cold-wake`. */
 export const JOIN_WAKES = { 'resume:read-only': { lane: 'resume', policy: 'read-only' }, 'resume:workspace': { lane: 'resume', policy: 'workspace' }, acp: true };
 export const WORKSPACE_NAME = 'workspace';
-
-/**
- * The Starter template this install ships, if any: AGENT_BOT_STARTER_TEMPLATE,
- * else GeniusBar's bundle layout (Resources/components/agent-bot next to
- * Resources/souls/starter.soul). Homebrew and source installs ship none.
- */
-export function bundledStarter({ env = process.env, root = ROOT } = {}) {
-  if (env.AGENT_BOT_STARTER_TEMPLATE) return path.resolve(env.AGENT_BOT_STARTER_TEMPLATE);
-  const candidate = path.resolve(root, '..', '..', 'souls', 'starter.soul');
-  return existsSync(path.join(candidate, 'soul.json')) ? candidate : null;
-}
 
 // The npm package a registry row runs through `npx -p PACKAGE` (version dropped).
 function rowPackage(row) {

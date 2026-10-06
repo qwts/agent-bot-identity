@@ -20,6 +20,7 @@ import path from 'node:path';
 
 import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN, onPath } from './acp-registry.mjs';
 import { LAUNCH_NAME_MAX } from './daemon-launch.mjs';
+import { bundledStarter } from './soul-templates.mjs';
 
 export const TEAM_DEFAULTS = Object.freeze({ maxChildren: 5, maxDepth: 2 });
 // A parent chain longer than this is corrupt; refuse rather than walk it.
@@ -71,12 +72,10 @@ export function harnessLaunchable(harness, options = {}) {
  * The template a new teammate starts from when the caller names none: the
  * owner's configured default (`"teams": { "template": PATH }`), else the
  * Starter this install ships (the same one `agent-bot join` uses). Null when
- * there is none. soul-join is imported only when needed: `agent-bot join`
- * loads the daemon module, which loads this one, while soul-join is still
- * its entry script.
+ * there is none.
  */
 export async function defaultTeamTemplate({ config = {}, env = process.env,
-  starter = async () => (await import('./soul-join.mjs')).bundledStarter({ env }) } = {}) {
+  starter = () => bundledStarter({ env }) } = {}) {
   const configured = config?.teams?.template;
   if (typeof configured === 'string' && path.isAbsolute(configured)) return configured;
   return starter();

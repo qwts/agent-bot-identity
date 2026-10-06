@@ -85,6 +85,19 @@ for. `agent-bot skill path` prints the installed release's copy of this skill.
 | remote-write | `mint-token` | Each run mints a new short-lived token; repeating is safe. |
 | remote-write | `signed-commit` | Never blindly rerun. Follow the printed recovery in [verified-publish.md](references/verified-publish.md), and inspect the remote branch head before any second attempt. |
 
+## List and spawn soul templates
+
+```bash
+agent-bot soul templates [--json]
+agent-bot soul spawn TEMPLATE_PATH --name NAME [--harness H]
+```
+
+Listing is read-only and secret-free. It discovers marked, unlaunched packages
+in the souls root, `teams.template` from config, and any bundled Starter.
+JSON includes `templates`, `soulsRoot`, and per-package `errors`; each template's
+absolute `package` path can be passed to spawn or a named package launch.
+Spawning writes a new local soul with its own identity and revision history.
+
 ## Control computer use
 
 `agent-bot soul computer-use <agentId|name> [show|on|off] [--json] [--principal-stdin]`
