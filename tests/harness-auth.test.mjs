@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { authCommand, harnessAuth } from '../harness-auth.mjs';
+import { authCommand, harnessAuth, LOGIN_TIMEOUT_MS } from '../harness-auth.mjs';
 import { ACP_SPAWN_REGISTRY } from '../acp-registry.mjs';
 
 const row = ACP_SPAWN_REGISTRY.claude;
@@ -18,7 +18,96 @@ test('uses the Claude CLI installed in the soul home, else claude on PATH', (t) 
   mkdirSync(sdk, { recursive: true });
   writeFileSync(path.join(sdk, 'cli.js'), '');
   assert.deepEqual(authCommand(row, home, { node: '/app/node' }), { command: '/app/node', args: [path.join(sdk, 'cli.js')] });
-  assert.throws(() => authCommand(ACP_SPAWN_REGISTRY.opencode, home), /no sign-in support/);
+  assert.throws(() => authCommand(ACP_SPAWN_REGISTRY.muse, home), /no sign-in support/);
+});
+
+test('Codex and OpenCode use the soul-installed CLI before PATH', (t) => {
+  const home = mkdtempSync(path.join(tmpdir(), 'harness-auth-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  for (const harness of ['codex', 'opencode']) {
+    assert.deepEqual(authCommand(ACP_SPAWN_REGISTRY[harness], home), { command: harness, args: [] });
+  }
+  const codex = path.join(home, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+  mkdirSync(path.dirname(codex), { recursive: true });
+  writeFileSync(codex, '');
+  assert.deepEqual(authCommand(ACP_SPAWN_REGISTRY.codex, home, { node: '/app/node' }), { command: '/app/node', args: [codex] });
+  const opencode = path.join(home, 'node_modules', '.bin', 'opencode');
+  mkdirSync(path.dirname(opencode), { recursive: true });
+  writeFileSync(opencode, '');
+  assert.deepEqual(authCommand(ACP_SPAWN_REGISTRY.opencode, home), { command: opencode, args: [] });
+});
+
+const statusCases = {
+  claude: [
+    ['signed in', { stdout: '{"loggedIn":true,"account":"private"}' }, true],
+    ['signed out', { stdout: '{"loggedIn":false}' }, false],
+    ['unreadable output', { stdout: 'not json' }, false],
+    ['non-zero exit', new Error('exit 1'), false],
+  ],
+  codex: [
+    ['signed in', { stdout: '', stderr: 'Logged in using ChatGPT' }, true],
+    ['signed out', Object.assign(new Error('exit 1'), { code: 1, stderr: 'Not logged in' }), false],
+    // Codex promises an exit-code result, regardless of human-readable text.
+    ['unreadable output', { stdout: 'unknown output' }, true],
+    ['non-zero exit', Object.assign(new Error('exit 2'), { code: 2, stdout: 'Logged in using ChatGPT' }), false],
+  ],
+  opencode: [
+    ['signed in', { stdout: '\x1b[90m┌  Credentials\n│\n●  OpenAI oauth\n└  1 credentials\x1b[0m\n' }, true],
+    ['signed out', { stdout: '┌  Credentials\n│\n└  0 credentials\n' }, false],
+    ['unreadable output', { stdout: 'Credentials unavailable: 1 credentials' }, false],
+    ['non-zero exit', Object.assign(new Error('exit 1'), { code: 1, stdout: '└  1 credentials\n' }), false],
+  ],
+};
+
+for (const [harness, cases] of Object.entries(statusCases)) {
+  for (const [name, output, loggedIn] of cases) {
+    test(`${harness} status: ${name}`, async () => {
+      const runImpl = async (command, args, options) => {
+        assert.equal(command, harness);
+        assert.deepEqual(args, ACP_SPAWN_REGISTRY[harness].signIn.status);
+        assert.equal(options.timeout, 30_000);
+        if (output instanceof Error) throw output;
+        return output;
+      };
+      assert.deepEqual(await harnessAuth('status', harness, { home: null, env: {}, runImpl }), { harness, loggedIn });
+    });
+  }
+}
+
+test('Claude keeps reading JSON from a non-zero status', async () => {
+  const runImpl = async () => { throw Object.assign(new Error('exit 1'), { stdout: '{"loggedIn":true}' }); };
+  assert.deepEqual(await harnessAuth('status', 'claude', { env: {}, runImpl }), { harness: 'claude', loggedIn: true });
+});
+
+test('OpenCode recognizes provider environment variables without returning details', async () => {
+  for (const count of ['1 environment variable', '2 environment variables', '12 credentials']) {
+    const runImpl = async () => ({ stdout: `└  0 credentials\n\n┌  Environment\n│\n●  Provider ENV_VAR\n└  ${count}\n` });
+    assert.deepEqual(await harnessAuth('status', 'opencode', { env: {}, runImpl }), { harness: 'opencode', loggedIn: true });
+  }
+});
+
+for (const harness of ['codex', 'opencode']) {
+  test(`${harness} login skips terminal prompts then checks status`, async () => {
+    const login = harness === 'codex' ? ['login', '--device-auth']
+      : ['auth', 'login', '--provider', 'openai', '--method', 'ChatGPT Pro/Plus (headless)'];
+    const calls = [];
+    const runImpl = async (command, args, options) => {
+      calls.push(args);
+      assert.equal(options.timeout, calls.length === 1 ? LOGIN_TIMEOUT_MS : 30_000);
+      return { stdout: harness === 'codex' ? '' : '└  1 credentials\n' };
+    };
+    assert.deepEqual(await harnessAuth('login', harness, { env: {}, runImpl }), { harness, loggedIn: true });
+    assert.deepEqual(calls, [login, ACP_SPAWN_REGISTRY[harness].signIn.status]);
+    let attempts = 0;
+    await assert.rejects(harnessAuth('login', harness, { env: {}, runImpl: async () => { attempts++; throw new Error('cancelled'); } }), /sign-in did not finish: cancelled/);
+    assert.equal(attempts, 1);
+  });
+}
+
+test('a harness without sign-in support keeps refusing status and login', async () => {
+  for (const action of ['status', 'login']) {
+    await assert.rejects(harnessAuth(action, 'muse', { env: {}, runImpl: () => assert.fail('unsupported harness must not spawn') }), /harness 'muse' has no sign-in support/);
+  }
 });
 
 test('reports loggedIn from the harness status, and signs in before re-checking', async () => {

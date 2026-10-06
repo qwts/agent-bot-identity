@@ -21,8 +21,10 @@ export const LOGIN_TIMEOUT_MS = 10 * 60_000;
 export function authCommand(row, home, { node = process.execPath } = {}) {
   const auth = row.signIn;
   if (!auth) throw new Error(`harness '${row.harness}' has no sign-in support`);
-  const script = home ? path.join(home, 'node_modules', ...auth.package.split('/'), auth.script) : null;
-  return script && existsSync(script) ? { command: node, args: [script] } : { command: auth.command, args: [] };
+  const script = home && auth.package ? path.join(home, 'node_modules', ...auth.package.split('/'), auth.script) : null;
+  if (script && existsSync(script)) return { command: node, args: [script] };
+  const bin = home && !auth.package ? path.join(home, 'node_modules', '.bin', auth.command) : null;
+  return { command: bin && existsSync(bin) ? bin : auth.command, args: [] };
 }
 
 export async function harnessAuth(action, harness, { home, env = process.env, node = process.execPath,
@@ -38,10 +40,22 @@ export async function harnessAuth(action, harness, { home, env = process.env, no
     catch (error) { throw new Error(`${harness} sign-in did not finish: ${String(error.message ?? error).split('\n')[0]}`); }
   }
   let output;
-  try { output = (await runImpl(command, [...args, ...row.signIn.status], { ...options, timeout: 30_000 })).stdout; }
+  let succeeded = false;
+  try {
+    output = (await runImpl(command, [...args, ...row.signIn.status], { ...options, timeout: 30_000 })).stdout;
+    succeeded = true;
+  }
   catch (error) { output = error.stdout ?? ''; }
   let loggedIn = false;
-  try { loggedIn = JSON.parse(String(output)).loggedIn === true; } catch { /* unreadable status is signed out */ }
+  const read = row.signIn.read;
+  if (read === 'exit-code') loggedIn = succeeded;
+  else if (read === 'json') {
+    try { loggedIn = JSON.parse(String(output)).loggedIn === true; } catch { /* unreadable status is signed out */ }
+  } else if (succeeded) {
+    // OpenCode decorates its provider count with terminal colours.
+    const plain = String(output).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+    loggedIn = read.loggedIn.test(plain);
+  }
   return { harness, loggedIn };
 }
 

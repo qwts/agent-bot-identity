@@ -5,6 +5,24 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ACP_SPAWN_REGISTRY, defaultHarnessFor, onPath, spawnCommand, validateSpawnRow } from '../acp-registry.mjs';
 
+test('every sign-in row declares complete commands and a status reader', () => {
+  const rows = Object.values(ACP_SPAWN_REGISTRY).filter((row) => row.signIn);
+  assert.deepEqual(rows.map((row) => row.harness).sort(), ['claude', 'codex', 'opencode']);
+  for (const row of rows) {
+    assert.doesNotThrow(() => validateSpawnRow(row));
+    assert.ok(Object.isFrozen(row.signIn));
+    for (const field of ['command', 'status', 'login', 'read']) {
+      assert.throws(() => validateSpawnRow({ ...row, signIn: { ...row.signIn, [field]: undefined } }), /signIn/);
+    }
+  }
+  for (const signIn of [{}, { ...ACP_SPAWN_REGISTRY.claude.signIn, read: 'unknown' },
+    { ...ACP_SPAWN_REGISTRY.claude.signIn, script: undefined },
+    { ...ACP_SPAWN_REGISTRY.codex.signIn, status: [] },
+    { ...ACP_SPAWN_REGISTRY.opencode.signIn, read: { loggedIn: 'credentials' } }]) {
+    assert.throws(() => validateSpawnRow({ ...ACP_SPAWN_REGISTRY.claude, signIn }), /signIn/);
+  }
+});
+
 test('a soul home that installed the row binary runs it with this Node (ADR-0276)', (t) => {
   const home = mkdtempSync(path.join(tmpdir(), 'soul-bin-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));

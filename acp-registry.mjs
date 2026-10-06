@@ -124,7 +124,7 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
     installHint: 'install Claude Code (https://claude.com/claude-code) and run `claude` once to sign in',
     // The Claude CLI the adapter installs with it; its store is ~/.claude.
     signIn: Object.freeze({ package: '@anthropic-ai/claude-agent-sdk', script: 'cli.js', command: 'claude',
-      status: Object.freeze(['auth', 'status', '--json']), login: Object.freeze(['auth', 'login']) }),
+      status: Object.freeze(['auth', 'status', '--json']), login: Object.freeze(['auth', 'login']), read: 'json' }),
     stripEnv: Object.freeze(['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT']),
     store: '~/.claude',
     mcpToolNaming: 'claude-meta',
@@ -138,6 +138,10 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
     args: Object.freeze(['acp']),
     cli: 'opencode',
     installHint: 'install OpenCode (https://opencode.ai) and run `opencode auth login`',
+    // Any stored provider or provider environment variable can serve a turn.
+    signIn: Object.freeze({ command: 'opencode', status: Object.freeze(['auth', 'list']),
+      login: Object.freeze(['auth', 'login', '--provider', 'openai', '--method', 'ChatGPT Pro/Plus (headless)']),
+      read: Object.freeze({ loggedIn: /(?:^|\n)\s*└\s+[1-9]\d* (?:credentials|environment variables?)\s*(?:\n|$)/ }) }),
     stripEnv: Object.freeze([]),
     // Set after stripEnv, so an inherited value never replaces the ruleset.
     setEnv: Object.freeze({ OPENCODE_CONFIG_CONTENT: OPENCODE_DAEMON_CONFIG }),
@@ -168,6 +172,8 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
     adapter: Object.freeze({ package: '@agentclientprotocol/codex-acp', version: '2.1.1' }),
     cli: 'codex',
     installHint: 'install Codex (https://developers.openai.com/codex) and run `codex login`',
+    signIn: Object.freeze({ package: '@openai/codex', script: 'bin/codex.js', command: 'codex',
+      status: Object.freeze(['login', 'status']), login: Object.freeze(['login', '--device-auth']), read: 'exit-code' }),
     stripEnv: Object.freeze([]),
     // Set after stripEnv, like the OpenCode ruleset: the sandbox must reach
     // the agent-comms socket (see CODEX_DAEMON_CONFIG).
@@ -221,6 +227,17 @@ export function validateSpawnRow(row) {
   }
   if (row.mcpToolNaming !== undefined && !MCP_TOOL_NAMINGS.includes(row.mcpToolNaming)) {
     failRegistry(`${row.harness}: mcpToolNaming must be one of ${MCP_TOOL_NAMINGS.join(', ')}`);
+  }
+  if (row.signIn !== undefined) {
+    const auth = row.signIn;
+    if (!auth || typeof auth.command !== 'string' || !auth.command
+      || ['status', 'login'].some((key) => !Array.isArray(auth[key]) || !auth[key].length
+        || auth[key].some((arg) => typeof arg !== 'string' || !arg))
+      || !(['json', 'exit-code'].includes(auth.read) || auth.read?.loggedIn instanceof RegExp)
+      || ((auth.package !== undefined || auth.script !== undefined)
+        && (typeof auth.package !== 'string' || !auth.package || typeof auth.script !== 'string' || !auth.script))) {
+      failRegistry(`${row.harness}: signIn requires a command, status, login, read and paired package/script`);
+    }
   }
   return row;
 }
