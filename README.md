@@ -341,11 +341,22 @@ Hosts such as GeniusBar should read the shared location through:
 ```bash
 agent-bot soul dir AGENT_ID
 # JSON: { agentId, soulDir, home, soulsRoot, source, copies }
-agent-bot soul locate PATH
+agent-bot soul locate PATH [--json]
 # JSON: { path, status: package|installed|copy|duplicate|unregistered|invalid, ... }
 agent-bot soul fork COPY_PATH --name NAME [--json]
 # a Finder copy (status copy) becomes a new soul in place; see docs/soul-homes.md
 ```
+
+`soul locate` emits JSON with or without `--json`. For `package`, `installed`
+and `copy`, it includes the package's `name`, `description`, `preferredHarnesses`
+and `template` for launch prefill. Missing or invalid metadata uses `null`
+(or `[]` for harnesses); a readable manifest without `template` defaults to false.
+
+Launch events accept an optional `brief`: a trimmed string of 1–4000 characters,
+with no control characters except newline and tab. The daemon includes it after
+the soul's identity in the launch message and records it in the population;
+`soul show --json` reports `brief`. Omission on relaunch preserves the recorded
+brief; an explicit empty string clears it. Whitespace-only strings are invalid.
 
 This command resolves the census directory without creating a home; it also
 re-registers a moved directory found one level below the souls root. Harness

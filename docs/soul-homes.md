@@ -75,8 +75,14 @@ in `soul dir` lists the others, and `agent-bot doctor` warns with code
 `soul-folder-duplicate` and names them. When no registered folder carries the
 marker, the claims are ambiguous and a moved-folder search refuses to pick one.
 
-`agent-bot soul locate PATH` says what a folder opened as a package is, as
-JSON `{ path, status, agentId?, name?, soulDir?, copies?, message? }`:
+`agent-bot soul locate PATH [--json]` says what a folder opened as a package is, as
+JSON `{ path, status, agentId?, name, description, preferredHarnesses, template,
+soulDir?, copies?, message? }`. For `package`, `installed`, and `copy`, prefill
+fields come from that folder's `soul.json`. Missing or invalid fields are `null`
+or `[]` for harnesses; an omitted `template` in a readable manifest is `false`.
+The default output is already JSON; `--json` is an explicit equivalent.
+
+The status determines what launching the folder does:
 
 | status | meaning | a package launch of it |
 | --- | --- | --- |

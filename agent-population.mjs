@@ -193,6 +193,7 @@ function normalizeSoul(record, { defaultLastSeen = null } = {}) {
     // read as unmanaged with comms on.
     managed: booleanField('managed', record.managed, false),
     comms: booleanField('comms', record.comms, true),
+    ...(record.brief === undefined ? {} : { brief: normalizeLaunchBrief(record.brief) }),
     paused: booleanField('paused', record.paused, false),
     computerUse: booleanField('computerUse', record.computerUse, true),
     // Sandbox override (#376): `sandboxed` always runs this soul in the
@@ -336,6 +337,7 @@ export function upsertSoul(
       // that does not mention them carries them forward.
       if (record.managed === undefined) candidate.managed = existing.managed;
       if (record.comms === undefined) candidate.comms = existing.comms;
+      if (record.brief === undefined) candidate.brief = existing.brief;
       if (record.paused === undefined) candidate.paused = existing.paused;
       if (record.computerUse === undefined) candidate.computerUse = existing.computerUse;
       if (record.sandbox === undefined) candidate.sandbox = existing.sandbox;
@@ -577,14 +579,23 @@ export function registerSoulDir(id, directory, { file = populationFile() } = {})
   });
 }
 
+// Empty string is the explicit clear operation; omission preserves the launch choice.
+export function normalizeLaunchBrief(brief) {
+  if (typeof brief !== 'string' || /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(brief)) throw new Error('invalid launch brief');
+  const text = brief.trim();
+  if (brief !== '' && (!text || text.length > 4000)) throw new Error('invalid launch brief');
+  return text;
+}
+
 // A managed launch records what it started with: the soul is managed, and
 // its comms setting is the one its soul.json had at this launch. Turns read
 // it from here, so editing soul.json while the soul runs changes nothing
 // until the next launch. Without a census row there is nothing to record,
 // which is the default (comms on) — so only an opt-out needs a row.
-export function recordSoulLaunch(id, { comms = true } = {}, { file = populationFile() } = {}) {
+export function recordSoulLaunch(id, { comms = true, brief } = {}, { file = populationFile() } = {}) {
   const target = agentId(id);
   if (typeof comms !== 'boolean') throw new Error('comms must be a boolean');
+  if (brief !== undefined) brief = normalizeLaunchBrief(brief);
   ensurePrivateDirectory(path.dirname(file));
   return withLock(`${file}.lock`, 'population store', () => {
     const current = readDocument(file);
@@ -594,8 +605,8 @@ export function recordSoulLaunch(id, { comms = true } = {}, { file = populationF
       if (comms === false) throw new Error(`no population record for ${target}; cannot record comms off`);
       return null;
     }
-    const soul = normalizeSoul({ ...existing, managed: true, comms });
-    if (existing.managed !== soul.managed || existing.comms !== soul.comms) {
+    const soul = normalizeSoul({ ...existing, managed: true, comms, ...(brief === undefined ? {} : { brief }) });
+    if (existing.managed !== soul.managed || existing.comms !== soul.comms || existing.brief !== soul.brief) {
       writeDocument(file, { ...current.souls, [target]: soul });
     }
     return soul;

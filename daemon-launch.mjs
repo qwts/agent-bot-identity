@@ -6,7 +6,7 @@ import { HARNESS_SESSION_EVENT } from './executor-contract.mjs';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { validateModelId } from './soul-model.mjs';
 import { soulCommsSetting } from './soul-package.mjs';
-import { assertSoulUnpaused, displayName } from './agent-population.mjs';
+import { assertSoulUnpaused, displayName, normalizeLaunchBrief } from './agent-population.mjs';
 import { createTurnRegistry } from './wake-plane.mjs';
 
 // A launch's comms setting: the soul's own soul.json (a spawned instance
@@ -110,6 +110,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       if (event.name !== undefined && (typeof event.name !== 'string' || !event.name.trim() || event.name.length > LAUNCH_NAME_MAX || /[\u0000-\u001f\u007f]/.test(event.name))) throw new Error('invalid launch name');
       // Optional, chosen before start (#381): the soul's comms setting for
       // this and later launches. Absent keeps what its soul.json says.
+      const brief = event.brief === undefined ? undefined : normalizeLaunchBrief(event.brief);
       if (event.model !== undefined) validateModelId(event.model);
       if (event.comms !== undefined && typeof event.comms !== 'boolean') throw new Error('invalid launch comms');
       if (copied && event.name === undefined) {
@@ -131,10 +132,12 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         const name = located?.status === 'installed' ? null : event.name ?? null;
         await joinSoul({ agentId: identity.id, harness, name, binding, ...(parent ? { parent } : {}) });
       }
-      if (recordLaunch) await recordLaunch({ agentId: identity.id, package: packagePath, binding,
+      const recorded = recordLaunch ? await recordLaunch({ agentId: identity.id, package: packagePath, binding,
         ...(event.comms === undefined ? {} : { comms: event.comms }),
         ...(event.model === undefined ? {} : { model: event.model }),
-        ...(event.comms === undefined && event.model === undefined ? {} : { principal: event.principal ?? null }) });
+        ...(brief === undefined ? {} : { brief }),
+        ...(event.comms === undefined && event.model === undefined ? {} : { principal: event.principal ?? null }) }) : null;
+      const launchBrief = brief ?? recorded?.brief;
       // Best effort: the soul launches even if the population cannot be read.
       const lookup = async (id) => { try { return await identityFor?.(id) ?? null; } catch { return null; } };
       const ownIdentity = await lookup(identity.id);
@@ -153,7 +156,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         let started = false;
         Promise.resolve().then(() => turns.run({
           invocation: { agentId: identity.id, harness, cwd: binding.worktree },
-          message: identityText + (parent
+          message: identityText + (launchBrief ? `\n\nYour brief from the person who launched you:\n${launchBrief}\n\n` : '') + (parent
             ? `You were started by ${parent}, another agent soul, as part of its team. Join agent-comms as usual, read your inbox, and handle incoming work; your parent will brief you there.`
             : 'You were launched by a principal. Join agent-comms as usual, read your inbox, and handle incoming work.'),
           attachments: [],
