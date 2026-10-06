@@ -13,6 +13,11 @@ import {
   validateIssuer,
 } from '../ensure-private-key.mjs';
 
+import { appStoreTarget, readManagedAppCredential } from '../identity-app-store.mjs';
+import { loadConfig } from '../config.mjs';
+const managed = (home) => readManagedAppCredential('bot-app', { home });
+const managedPath = (home) => join(appStoreTarget('bot-app', { home }).soulDir, '.soul-state', 'credentials', 'github-app-bot-app.json');
+
 function passRun(handler) {
   return (args) => {
     if (args[0] === 'info') return '{}';
@@ -151,8 +156,8 @@ test('the key restores from the "Private Key" field when the item has no attachm
     validateKey: () => true,
   });
   assert.equal(result.appIdWritten, true);
-  assert.equal(readFileSync(privateKeyPath('bot-app', home), 'utf8'), 'field material\n');
-  assert.equal(statSync(privateKeyPath('bot-app', home)).mode & 0o777, 0o600);
+  assert.equal(managed(home).privateKeyPem, 'field material\n');
+  assert.equal(statSync(managedPath(home)).mode & 0o777, 0o600);
   assert.ok(!calls.some((args) => args.includes('download')));
 });
 
@@ -176,7 +181,7 @@ test('a private-key.pem attachment stays preferred over the field', () => {
     }),
     validateKey: () => true,
   });
-  assert.equal(readFileSync(privateKeyPath('bot-app', home), 'utf8'), 'attachment material\n');
+  assert.equal(managed(home).privateKeyPem, 'attachment material\n');
 });
 
 // Two conflicting .pem attachments must fail closed even when a "Private Key"
@@ -269,7 +274,7 @@ test('the issuer is read from a custom field, a flat field, or a note line', () 
   assert.equal(selectIssuer(parsePassItemView(viewWith({}))), null);
 });
 
-test('ensurePrivateKey writes the app-id beside the key from one item view', () => {
+test('ensurePrivateKey writes the issuer into config and the key into the managed store from one item view', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-key-'));
   const calls = [];
   const result = ensurePrivateKey({
@@ -285,8 +290,9 @@ test('ensurePrivateKey writes the app-id beside the key from one item view', () 
     validateKey: () => true,
   });
   assert.equal(result.appIdWritten, true);
-  assert.equal(readFileSync(appIdPath('bot-app', home), 'utf8'), '4376641\n');
-  assert.equal(statSync(privateKeyPath('bot-app', home)).mode & 0o777, 0o600);
+  assert.equal(existsSync(appIdPath('bot-app', home)), false);
+  assert.equal(`${loadConfig({ home }).identityApps['bot-app'].id}\n`, '4376641\n');
+  assert.equal(statSync(managedPath(home)).mode & 0o777, 0o600);
   // Both present -> fully idempotent, no pass-cli call at all.
   const before = calls.length;
   assert.equal(ensurePrivateKey({ slug: 'bot-app', home, validateKey: () => true }).downloaded, false);
@@ -317,7 +323,8 @@ test('an app-id attachment is downloaded and validated when no field carries it'
     validateKey: () => true,
   });
   assert.equal(result.appIdWritten, true);
-  assert.equal(readFileSync(appIdPath('bot-app', home), 'utf8'), '4376641\n');
+  assert.equal(existsSync(appIdPath('bot-app', home)), false);
+  assert.equal(`${loadConfig({ home }).identityApps['bot-app'].id}\n`, '4376641\n');
   assert.deepEqual(downloads, ['attachment-2', 'attachment-1']);
 });
 
@@ -369,7 +376,7 @@ test('a field beats an attachment, so no second download happens', () => {
     }),
     validateKey: () => true,
   });
-  assert.equal(readFileSync(appIdPath('bot-app', home), 'utf8'), '4394024\n');
+  assert.equal(`${loadConfig({ home }).identityApps['bot-app'].id}\n`, '4394024\n');
   assert.deepEqual(downloads, ['attachment-1']);
 });
 
@@ -388,7 +395,8 @@ test('a present key with a missing app-id still triggers the issuer restore', ()
   });
   assert.equal(result.downloaded, false);
   assert.equal(result.appIdWritten, true);
-  assert.equal(readFileSync(appIdPath('bot-app', home), 'utf8'), '4469551\n');
+  assert.equal(existsSync(appIdPath('bot-app', home)), false);
+  assert.equal(`${loadConfig({ home }).identityApps['bot-app'].id}\n`, '4469551\n');
   // Session probe, then only the view — the existing key is never re-downloaded.
   assert.deepEqual(calls.map((args) => args[1]), ['view']);
 });

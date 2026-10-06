@@ -1,3 +1,4 @@
+import { readAppMetadata } from '../identity-app-store.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -222,8 +223,8 @@ test('botUid backfills the avatar cache on the cached-UID path', async () => {
 
   assert.equal(uid, '111'); // the cached UID stays authoritative
   assert.equal(
-    readFileSync(join(configDir, 'bot-avatar-url'), 'utf8'),
-    'https://avatars.githubusercontent.com/in/42?v=4\n',
+    readAppMetadata('you-codex-agent', { home, legacy: false }).botAvatarUrl,
+    'https://avatars.githubusercontent.com/in/42?v=4',
   );
   assert.equal(readFileSync(join(configDir, 'bot-uid'), 'utf8'), '111\n');
 });
@@ -245,7 +246,8 @@ test('botUid writes both caches on a fresh lookup and rejects non-https avatars'
   const uid = await botUid('you-codex-agent', 'https://api.github.com', null, { home, fetchImpl });
 
   assert.equal(uid, '999');
-  assert.equal(readFileSync(join(configDir, 'bot-uid'), 'utf8'), '999\n');
+  assert.equal(readAppMetadata('you-codex-agent', { home, legacy: false }).botUid, '999');
+  assert.equal(existsSync(join(configDir, 'bot-uid')), false);
   assert.equal(existsSync(join(configDir, 'bot-avatar-url')), false);
 });
 
@@ -265,8 +267,10 @@ test('botUid tolerates an unwritable config dir when the UID is already cached',
     id: 999,
     avatar_url: 'https://avatars.githubusercontent.com/in/42?v=4',
   });
-  chmodSync(configDir, 0o500);
-  t.after(() => chmodSync(configDir, 0o700));
+  const metadataDir = join(home, '.config', 'agent-bot');
+  mkdirSync(metadataDir);
+  chmodSync(metadataDir, 0o500);
+  t.after(() => chmodSync(metadataDir, 0o700));
 
   const uid = await botUid('you-codex-agent', 'https://api.github.com', null, { home, fetchImpl });
 
@@ -277,8 +281,10 @@ test('botUid tolerates an unwritable config dir when the UID is already cached',
 test('botUid still fails when nothing is cached and the cache cannot be written', async (t) => {
   const { home, configDir } = uidFixture('you-codex-agent');
   const fetchImpl = fakeProfileFetch({ id: 999 });
-  chmodSync(configDir, 0o500);
-  t.after(() => chmodSync(configDir, 0o700));
+  const metadataDir = join(home, '.config', 'agent-bot');
+  mkdirSync(metadataDir);
+  chmodSync(metadataDir, 0o500);
+  t.after(() => chmodSync(metadataDir, 0o700));
 
   await assert.rejects(
     botUid('you-codex-agent', 'https://api.github.com', null, { home, fetchImpl }),

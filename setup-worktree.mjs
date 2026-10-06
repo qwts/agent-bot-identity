@@ -36,7 +36,6 @@
 
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -54,6 +53,7 @@ import {
 } from './agent-identity.mjs';
 import { initAgentSpace } from './agent-space.mjs';
 import { upsertIdentitySoul } from './agent-population.mjs';
+import { readAppMetadata, writeAppMetadata } from './identity-app-store.mjs';
 import { linkWorktree } from './soul-worktrees.mjs';
 
 export function prepareWorktreeBinding(options) {
@@ -123,23 +123,12 @@ function rewriteOriginUrls() {
 
 export async function botUid(slug, base, verifiedToken, {
   home = homedir(),
+  env = process.env,
   fetchImpl = fetch,
 } = {}) {
-  const configDir = join(home, '.config', slug);
-  const cachePath = join(configDir, 'bot-uid');
-  const avatarPath = join(configDir, 'bot-avatar-url');
-  let cachedUid = null;
-  try {
-    cachedUid = readFileSync(cachePath, 'utf8').trim() || null;
-  } catch {
-    /* not cached yet */
-  }
-  let cachedAvatar = null;
-  try {
-    cachedAvatar = readFileSync(avatarPath, 'utf8').trim() || null;
-  } catch {
-    /* not cached yet */
-  }
+  const metadata = readAppMetadata(slug, { home, env });
+  const cachedUid = metadata.botUid ?? null;
+  const cachedAvatar = metadata.botAvatarUrl ?? null;
   // An upgraded installation can hold a UID cached before the avatar cache
   // existed, and a non-numeric app-id (client ID) gives gh-pr-view-json no
   // fallback. Only a complete cache skips the profile lookup.
@@ -166,11 +155,9 @@ export async function botUid(slug, base, verifiedToken, {
   }
   const uid = cachedUid ?? String(profile.id);
   try {
-    mkdirSync(configDir, { recursive: true });
-    if (!cachedUid) writeFileSync(cachePath, `${uid}\n`);
-    if (typeof profile.avatar_url === 'string' && /^https:\/\//.test(profile.avatar_url)) {
-      writeFileSync(avatarPath, `${profile.avatar_url}\n`);
-    }
+    writeAppMetadata(slug, { botUid: uid,
+      ...(typeof profile.avatar_url === 'string' && /^https:\/\//.test(profile.avatar_url)
+        ? { botAvatarUrl: profile.avatar_url } : {}) }, { home, env });
   } catch (error) {
     // A read-only config dir must not break a worktree that could bind before
     // this backfill existed: cache writes are best-effort on the cached path.

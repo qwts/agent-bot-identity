@@ -3,7 +3,7 @@
 // Prints the token to stdout for use as GH_TOKEN. Zero-dependency.
 //
 // App selection (first match wins):
-//   --app <slug>             — the declaring soul's key store, else the legacy
+//   --app <slug>             — the App/soul key store, else the legacy
 //                              ~/.config/<slug>/{app-id,private-key.pem}
 //   GH_AGENT_APP=<slug>      — same lookup, set once per launcher environment
 //   git config agentBot.app  — the checkout's pin, so a token is minted for
@@ -79,12 +79,12 @@ export function appConfig({
     explicit: explicitSlug,
     env,
     cwd,
-    config: config ?? loadConfig({ env }),
+    config: config ?? loadConfig({ env, home }),
   });
   if (slug) {
     // The declaring soul's own key store first, then the legacy
     // ~/.config/<slug> folder with a one-time notice (#383).
-    const { appId, privateKeyPem, source, agentId: owner } = resolveCredential(slug, { agentId, env, home, cwd });
+    const { appId, privateKeyPem, source, agentId: owner } = resolveCredential(slug, { agentId, env, home, cwd, config });
     // agent-bot-keyd holds this soul's key and never returns it (#397).
     if (source === 'keyd') return { slug, appId: null, privateKeyPem: null, keyd: { agentId: owner } };
     return { slug, appId, privateKeyPem };

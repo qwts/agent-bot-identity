@@ -20,6 +20,8 @@ import {
   recoverCredentialTransaction,
 } from '../ensure-private-key.mjs';
 
+import { readManagedAppCredential } from '../identity-app-store.mjs';
+
 function tempHome() {
   return mkdtempSync(join(tmpdir(), 'agent-credential-roster-'));
 }
@@ -110,8 +112,10 @@ test('a fake provider repairs malformed files only after both replacements valid
   });
   assert.deepEqual(result.restored, ['app-id', 'private-key']);
   assert.ok(destinations.every((path) => path.endsWith('.tmp')));
-  assert.equal(readFileSync(appIdPath('repair-agent', home), 'utf8'), '4394024\n');
-  assert.equal(readFileSync(privateKeyPath('repair-agent', home), 'utf8'), 'replacement key');
+  assert.equal(readManagedAppCredential('repair-agent', { home }).appId, '4394024');
+  assert.equal(readFileSync(appIdPath('repair-agent', home), 'utf8'), 'not-an-id\n');
+  assert.ok(readManagedAppCredential('repair-agent', { home }).privateKeyPem === 'replacement key');
+  assert.equal(readFileSync(privateKeyPath('repair-agent', home), 'utf8'), 'bad key');
 });
 
 test('provider or validation failure leaves existing credential files untouched', () => {
@@ -132,13 +136,12 @@ test('provider or validation failure leaves existing credential files untouched'
   assert.equal(readFileSync(privateKeyPath('broken-agent', home), 'utf8'), 'old malformed key');
 });
 
-test('a second publication rename failure rolls both credential halves back', () => {
+test('a managed-store publication failure leaves legacy credential halves untouched', () => {
   const home = tempHome();
   const slug = 'rollback-agent';
   const issuer = appIdPath(slug, home);
   const key = privateKeyPath(slug, home);
   writeCredential(home, slug, 'not-an-id', 'old malformed key');
-  let failKeyPublication = true;
   assert.throws(() => ensurePrivateKey({
     slug,
     home,
@@ -149,19 +152,13 @@ test('a second publication rename failure rolls both credential halves back', ()
         writeFileSync(privateKeyDestination, 'new valid key');
       },
     },
-    rename: (source, destination) => {
-      if (failKeyPublication && destination === key && source.endsWith('.tmp')) {
-        failKeyPublication = false;
-        throw new Error('simulated second publication failure');
-      }
-      renameSync(source, destination);
-    },
+    stores: { file: { read: () => null, write: () => { throw new Error('simulated store publication failure'); } } },
   }), /credential provider could not restore/);
   assert.equal(readFileSync(issuer, 'utf8'), 'not-an-id\n');
   assert.equal(readFileSync(key, 'utf8'), 'old malformed key');
 });
 
-test('the next reconciliation recovers a process interrupted between pair renames', () => {
+test('an interrupted legacy pair publication is preserved for owner inspection', () => {
   const home = tempHome();
   const slug = 'interrupted-agent';
   const directory = dirname(appIdPath(slug, home));
@@ -174,9 +171,9 @@ test('the next reconciliation recovers a process interrupted between pair rename
     issuerExisted: true,
     keyExisted: true,
   }));
-  assert.equal(recoverCredentialTransaction({ slug, directory }), true);
-  assert.equal(readFileSync(appIdPath(slug, home), 'utf8'), '4376641\n');
-  assert.equal(readFileSync(privateKeyPath(slug, home), 'utf8'), 'old key');
+  assert.throws(() => recoverCredentialTransaction({ slug, directory }), { code: 'credential-transaction-pending' });
+  assert.equal(readFileSync(appIdPath(slug, home), 'utf8'), 'new-issuer\n');
+  assert.equal(readFileSync(join(directory, '.private-key.pem.agent-bot-backup'), 'utf8'), 'old key');
 });
 
 test('roster reconciliation is sorted, deduplicated, and skips all minting after a local failure', async () => {

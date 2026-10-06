@@ -1,0 +1,1 @@
+- App IDs, bot user IDs and avatars now live in `identityApps[slug]` instead of legacy App folders. Create/connect and provider restore fill the new stores; `identity migrate-credentials` copies existing metadata, and migration/doctor report remaining files and an owner removal command without deleting anything (#399).

@@ -12,7 +12,7 @@ import {
   requireReadinessSchema,
 } from './readiness.mjs';
 
-import { cacheAppDoctorRows } from './identity-app-store.mjs';
+import { cacheAppDoctorRows, legacyAppFolderStatus } from './identity-app-store.mjs';
 
 export { hookCoverage };
 
@@ -69,6 +69,7 @@ export async function main(
     collect = collectReadiness,
     output = process.stdout,
     cache = cacheAppDoctorRows,
+    appMetadataOptions = {},
   } = {},
 ) {
   const options = parseDoctorArgs(argv);
@@ -101,8 +102,17 @@ export async function main(
       explicitApps: options.apps,
     });
   }
+  for (const row of report.machine?.apps ?? []) {
+    try { Object.assign(row, legacyAppFolderStatus(row.slug, { ...appMetadataOptions,
+      ...([row.credential?.status, row.live_mint?.status].includes('failed') ? { keyRemovable: false } : {}) })); }
+    catch { Object.assign(row, { legacyFolderRemovable: false, remainingFiles: ['<unreadable-metadata>'], removalCommand: null }); }
+  }
   try { cache(report); } catch { /* cached mint history is advisory; readiness still reports */ }
   output.write(options.json ? renderReadinessJson(report) : renderReadinessReport(report));
+  if (!options.json) for (const row of report.machine?.apps ?? []) {
+    output.write(`${row.slug} legacyFolderRemovable: ${row.legacyFolderRemovable}; remaining: ${row.remainingFiles.join(', ') || '-'}\n`);
+    if (row.removalCommand) output.write(`owner may remove (not deleted): ${row.removalCommand}\n`);
+  }
   process.exitCode = report.ready ? 0 : 1;
   return report;
 }

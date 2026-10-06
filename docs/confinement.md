@@ -41,8 +41,11 @@ keys (#383, [soul credentials](soul-credentials.md)). For every tool call a
 soul makes, not only file writes, the runner refuses:
 
 - any path under any soul's `.soul-state/credentials/`;
-- any path under a legacy `~/.config/<slug>` App folder (one holding
-  `private-key.pem` or `app-id`), and any `private-key.pem`;
+- any path under a legacy `~/.config/<slug>` App folder (named in `identityApps`, or holding
+  `private-key.pem`, `app-id` or credential transaction backups), and any `private-key.pem`;
+  App-scoped stores use the same protected `.soul-state/credentials` path.
+  Public `identityApps[slug]` metadata in config is not a key store; legacy
+  folder detection remains conservative until the owner removes that folder;
 - a shell command that runs `security` or `pass-cli` (in command position,
   after `env`, `exec`, `sudo` and similar, or by path), or that names one of
   the paths above.

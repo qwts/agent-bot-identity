@@ -190,9 +190,15 @@ function publishBootstrapConfig({
       }
       throw new Error(`${destination} exists and is not a regular agent-bot config file`);
     }
-    const current = loadConfig({ home, env: { ...env, AGENT_BOT_CONFIG: destination } });
+    const installed = loadConfig({ home, env: { ...env, AGENT_BOT_CONFIG: destination } });
+    // App records are local runtime state, not organization policy. Compare
+    // policy without them, and retain them whenever a profile is advanced.
+    // An explicit config carrying different records remains a conflict.
+    const preserveApps = config.identityApps === undefined && installed.identityApps !== undefined;
+    const { identityApps, ...policy } = installed;
+    const current = preserveApps ? policy : installed;
     if (isDeepStrictEqual(current, config) || (preserveLocalFeatures && isProjectedRuntimeConfig(current) && sameProfileProjection(current, config))) {
-      return { config: current, path: destination, updated: false };
+      return { config: installed, path: destination, updated: false };
     }
     // Adding a roster scope to an unscoped config projected from the same
     // profile only narrows what this account serves, and a config that is
@@ -218,6 +224,7 @@ function publishBootstrapConfig({
     if (preserveLocalFeatures && advancingProfile && current.features !== undefined) {
       config = { ...config, features: current.features };
     }
+    if (preserveApps) config = { ...config, identityApps };
   }
 
   mkdir(dirname(destination), { recursive: true });

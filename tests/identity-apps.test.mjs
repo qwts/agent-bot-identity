@@ -49,6 +49,7 @@ async function github(t, f) {
     if (req.url.startsWith('/app-manifests/')) {
       conversions++; res.end(JSON.stringify({ id: 123, slug: 'fixture-app', pem: KEY, webhook_secret: 'fixture-webhook-value' }));
     } else if (req.url === '/app') res.end(JSON.stringify({ id: 123, slug: 'fixture-app' }));
+    else if (req.url === '/users/fixture-app%5Bbot%5D') res.end(JSON.stringify({ id: 456, avatar_url: 'https://avatars.githubusercontent.com/u/456?v=4' }));
     else if (req.url.startsWith('/app/installations?')) res.end(JSON.stringify(rows));
     else if (req.url === '/app/installations/7/access_tokens') res.end(JSON.stringify({ token: 'ghs_fake_installation', expires_at: '2030-01-01T00:00:00Z' }));
     else { res.writeHead(404); res.end('{}'); }
@@ -80,6 +81,8 @@ for (const platform of ['linux', 'darwin']) test(`connect uses ${platform === 'd
   const f = fixture(t, { platform }), api = await github(t, f);
   const result = await connect(f); noSecrets(result);
   assert.deepEqual(result, { id: '123', slug: 'fixture-app', installUrl: 'https://github.com/apps/fixture-app/installations/new' });
+  assert.equal(loadConfig(f.options).identityApps['fixture-app'].botUid, '456');
+  assert.equal(loadConfig(f.options).identityApps['fixture-app'].botAvatarUrl, 'https://avatars.githubusercontent.com/u/456?v=4');
   const before = api.calls.length;
   const listed = listIdentityApps(f.options); noSecrets(listed);
   assert.deepEqual(listed.apps[0], { slug: 'fixture-app', botLogin: 'fixture-app[bot]', issuerPresent: true, keyPresent: true,
@@ -324,4 +327,27 @@ test('connect repairs a missing managed credential without allowing silent rotat
   assert.equal(listIdentityApps(f.options).apps[0].keyPresent, true);
   await assert.rejects(connect(f, { keyFile: f.newKeyFile }), { code: 'identity-app-exists' });
   assert.ok(readManagedAppCredential('fixture-app', f.options).privateKeyPem === KEY, 'repair preserved the selected key');
+});
+
+test('connect upgrades metadata-only records without discarding public App fields', async (t) => {
+  const f = fixture(t); await github(t, f);
+  const config = loadConfig(f.options);
+  config.identityApps = { 'fixture-app': { id: '123', botUid: '456', botAvatarUrl: 'https://avatars.githubusercontent.com/u/456?v=4' } };
+  writeFileSync(f.env.AGENT_BOT_CONFIG, JSON.stringify(config));
+  await connect(f);
+  const record = loadConfig(f.options).identityApps['fixture-app'];
+  assert.equal(record.store, 'file'); assert.equal(record.botUid, '456');
+  assert.equal(existsSync(path.join(f.home, '.config', 'fixture-app')), false);
+});
+
+test('manifest retains the one-time key when the public bot profile is temporarily unavailable', async (t) => {
+  const f = fixture(t); await github(t, f);
+  const flow = await identityAppOperation('create', { manifest: true }, { ...f.options,
+    fetchImpl: (url, options) => url.includes('/users/') ? Promise.resolve({ ok: false, status: 503 }) : fetch(url, options) });
+  t.after(flow.cancel);
+  const { manifest, state } = await page(flow); await callback(manifest, state);
+  const result = await flow.completion;
+  assert.equal(result.metadataPending, true); noSecrets(result);
+  assert.ok(readManagedAppCredential('fixture-app', f.options).privateKeyPem === KEY);
+  assert.equal(loadConfig(f.options).identityApps['fixture-app'].id, '123');
 });

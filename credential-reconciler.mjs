@@ -10,7 +10,9 @@ import {
   validateIssuer,
   validatePrivateKey,
 } from './ensure-private-key.mjs';
-import { readManagedAppCredential } from './identity-app-store.mjs';
+import { loadConfig } from './config.mjs';
+import { resolveAppCredential } from './soul-credentials.mjs';
+import { readAppMetadata, readManagedAppCredential } from './identity-app-store.mjs';
 import { mint } from './mint-token.mjs';
 
 export class CredentialReconciliationError extends Error {
@@ -47,7 +49,7 @@ function localFailure(error) {
     'provider-session-required': 'unlock the secret store with: pass-cli login',
     'provider-locked': 'unlock the secret store with: pass-cli session unlock',
     'credential-transaction-invalid': 'inspect the App credential directory and repair its transaction marker',
-    'credential-transaction-pending': 'run explicit credential reconciliation to recover the interrupted publication',
+    'credential-transaction-pending': 'ask the owner to inspect the interrupted legacy publication; files are retained',
     'credential-transaction-recovery-failed': 'repair App credential file permissions and retry recovery',
   };
   const code = error?.code ?? 'credential-restore-failed';
@@ -135,14 +137,24 @@ export function inspectLocalAppCredential({
   read = readFileSync,
   exists = existsSync,
   validateKey = validatePrivateKey,
-  env, config, stores,
+  env = process.env, config = loadConfig({ env, home }), stores,
 } = {}) {
-  if (config?.identityApps?.[slug]) {
+  if (config?.identityApps?.[slug]?.store) {
     try {
       const credential = readManagedAppCredential(slug, { env, home, config, stores });
       if (!validateIssuer(credential.appId) || !validateKey(credential.privateKeyPem)) throw new Error();
       return { status: 'ready', restored: [], evidence: { components: [{ component: 'app-id', status: 'ready' }, { component: 'private-key', status: 'ready' }] } };
     } catch { return { status: 'failed', code: 'managed-app-credential-unavailable', action: 'reconnect the App or unlock its credential store', evidence: { components: [] } }; }
+  }
+  try {
+    const credential = resolveAppCredential(slug, { env, home, cwd: home, config, stores, readOnly: true });
+    if (credential.source === 'keyd') return { status: 'ready', restored: [], evidence: { components: [] } };
+    if (credential.source !== 'legacy') {
+      if (!validateIssuer(credential.appId) || !validateKey(credential.privateKeyPem)) throw new Error('invalid soul credential');
+      return { status: 'ready', restored: [], evidence: { components: [{ component: 'app-id', status: 'ready' }, { component: 'private-key', status: 'ready' }] } };
+    }
+  } catch (error) {
+    if (!error.message.startsWith('no app config for')) return { status: 'failed', code: 'soul-credential-unavailable', action: 'unlock or repair the soul credential store', evidence: { components: [] } };
   }
   const issuerPath = appIdPath(slug, home);
   const keyPath = privateKeyPath(slug, home);
@@ -156,7 +168,9 @@ export function inspectLocalAppCredential({
     };
   }
   const components = [
-    inspectComponent({ component: 'app-id', path: issuerPath, read, validate: validateIssuer }),
+    config.identityApps?.[slug]?.id
+      ? { component: 'app-id', status: validateIssuer(readAppMetadata(slug, { env, home, config }).id) ? 'ready' : 'malformed' }
+      : inspectComponent({ component: 'app-id', path: issuerPath, read, validate: validateIssuer }),
     inspectComponent({ component: 'private-key', path: keyPath, read, validate: validateKey }),
   ];
   const deficiency = components.find((component) => component.status !== 'ready');

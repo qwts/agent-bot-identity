@@ -1,3 +1,4 @@
+import { readManagedAppCredential, readAppMetadata } from '../identity-app-store.mjs';
 // Hermetic fresh-machine bootstrap coverage (ENG issue #67).
 //
 // Every scenario runs the public source launcher (`./agent-bot bootstrap`)
@@ -147,11 +148,11 @@ test('cold machine bootstrap: delegate refusal, complete install, idempotent rer
     assert.equal(report.machine.apps[0].live_mint.status, 'ready');
     assert.equal(report.machine.apps[0].live_mint.evidence.installation_id, 1);
     assert.equal(
-      readFileSync(join(fixture.home, '.config', SLUG, 'app-id'), 'utf8').trim(),
+      readAppMetadata(SLUG, { home: fixture.home, env: fixture.env }).id,
       '12345',
     );
     assert.equal(
-      readFileSync(join(fixture.home, '.config', SLUG, 'private-key.pem'), 'utf8'),
+      readManagedAppCredential(SLUG, { home: fixture.home, env: fixture.env }).privateKeyPem,
       github.privateKeyPem,
     );
     assert.equal(statSync(configPath).mode & 0o777, 0o600);
@@ -176,7 +177,7 @@ test('cold machine bootstrap: delegate refusal, complete install, idempotent rer
     );
     assert.equal(git(fixture, worktree, 'config', '--worktree', '--get', 'commit.gpgsign'), 'false');
     assert.equal(
-      readFileSync(join(fixture.home, '.config', SLUG, 'bot-uid'), 'utf8').trim(),
+      readAppMetadata(SLUG, { home: fixture.home, env: fixture.env }).botUid,
       MOCK_BOT_UID,
     );
 
