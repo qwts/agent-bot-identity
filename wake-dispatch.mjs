@@ -104,7 +104,7 @@ function validateEvent(event) {
 }
 
 function assertPorts(ports) {
-  const { pool, coldWake, report, receipt } = ports;
+  const { pool, coldWake, report, receipt, isPaused = () => false } = ports;
   if (!pool || typeof pool.has !== 'function' || typeof pool.send !== 'function') {
     failDispatch('pool must provide has(agentId) and send(agentId, frame)');
   }
@@ -112,6 +112,7 @@ function assertPorts(ports) {
     failDispatch('coldWake must be a function or null');
   }
   if (typeof report !== 'function') failDispatch('report must be a function');
+  if (typeof isPaused !== 'function') failDispatch('isPaused must be a function');
   if (receipt !== null && receipt !== undefined && typeof receipt !== 'function') {
     failDispatch('receipt must be a function or null');
   }
@@ -139,7 +140,7 @@ function dropSockets(pool, agentId) {
 // cold path means the outcome is `waiting`, never a fabricated `cold`.
 export async function dispatchWake(event, ports) {
   assertPorts(ports ?? {});
-  const { pool, coldWake, report, receipt } = ports;
+  const { pool, coldWake, report, receipt, isPaused = () => false } = ports;
   const wake = validateEvent(event);
   const agentId = wake.agentId;
   const messageIds = [...wake.messageIds];
@@ -147,7 +148,11 @@ export async function dispatchWake(event, ports) {
   let outcome = null;
   let detail = null;
 
-  if (pool.has(agentId)) {
+  const paused = isPaused(agentId);
+  if (paused) {
+    outcome = 'waiting';
+    detail = 'soul is paused';
+  } else if (pool.has(agentId)) {
     const frame = wakeFrame(wake);
     let delivered;
     let sendFailed = false;
@@ -225,7 +230,7 @@ export async function dispatchWake(event, ports) {
     await report(agentId, messageIds, outcome, detail);
   } finally {
     if (typeof receipt === 'function') {
-      receipt({ event: 'wake', agentId, count: wake.count, outcome });
+      receipt({ event: 'wake', agentId, count: wake.count, outcome, ...(paused ? { decision: 'paused' } : {}) });
     }
   }
   return { agentId, messageIds, outcome, detail, count: wake.count };

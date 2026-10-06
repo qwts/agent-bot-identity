@@ -57,7 +57,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
-import { archiveSoulDirs, backfillManagedSouls, displayName, listSouls, locateSoulDir, populationFile, recordHarnessAuth, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, showSoul, soulDirectory, upsertIdentitySoul, withRoles } from './agent-population.mjs';
+import { archiveSoulDirs, backfillManagedSouls, displayName, listSouls, locateSoulDir, populationFile, recordHarnessAuth, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, setSoulPaused, soulPaused, showSoul, soulDirectory, upsertIdentitySoul, withRoles } from './agent-population.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
 import {
   bindAgentLineage,
@@ -529,6 +529,7 @@ export function createDaemonServer({
           // the warm pool's connected harnesses.
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid, warmPool: warmPool.list(),
             busy: server.wakePlane?.busy?.() ?? turns.busy(),
+            souls: withRoles(listSouls({ file: populationFile({ env, home }) }), { file: populationFile({ env, home }), env, home }),
             computerUse: computerUse.list().map(({ agentId, since }) => ({ agentId, since })) });
           return;
         }
@@ -784,7 +785,10 @@ export function createDaemonServer({
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, souls: withRoles(souls, { file: populationOverride(env, home), env, home }) });
           return;
         }
+        case 'POST /v0/soul/pause':
+        case 'POST /v0/soul/resume':
         case 'POST /v0/soul/stop': {
+          const action = url.pathname.split('/').at(-1);
           const body = parseJsonBody(await readBody(req));
           const agentId = requireAgentId(body.agentId);
           // Like approvals: the local owner presents the daemon token;
@@ -807,10 +811,12 @@ export function createDaemonServer({
           }
           try { showSoul(agentId, { file: populationFile({ env, home }) }); }
           catch { throw Object.assign(new Error('unknown soul'), { statusCode: 404 }); }
-          const stopped = server.wakePlane?.stop?.(agentId) ?? turns.stop(agentId);
-          appendAuditReceipt({ event: 'stop', agentId, transport, principalId: principal?.principalId ?? null,
-            operation: 'cancel', decision: stopped ? 'stopped' : 'idle' }, { env, home, now });
-          sendJson(res, 200, { agentId, stopped, ...(!stopped ? { reason: 'idle' } : {}) });
+          const stopped = action === 'resume' ? false : (server.wakePlane?.stop?.(agentId) ?? turns.stop(agentId));
+          if (action !== 'stop') setSoulPaused(agentId, action === 'pause', { file: populationFile({ env, home }) });
+          appendAuditReceipt({ event: action, agentId, transport, principalId: principal?.principalId ?? null,
+            operation: 'cancel', decision: action === 'stop' ? (stopped ? 'stopped' : 'idle') : (action === 'pause' ? 'paused' : 'resumed') }, { env, home, now });
+          sendJson(res, 200, action === 'stop' ? { agentId, stopped, ...(!stopped ? { reason: 'idle' } : {}) }
+            : { agentId, paused: action === 'pause', ...(action === 'pause' ? { stopped } : {}) });
           return;
         }
         // The owner's approvals (#85). Listing needs the daemon token; deciding
@@ -834,7 +840,7 @@ export function createDaemonServer({
       }
     } catch (error) {
       const failure = operationError(error);
-      sendJson(res, failure.statusCode, { error: failure.message });
+      sendJson(res, failure.statusCode, { error: failure.message, ...(error.code === 'soul-paused' ? { code: error.code } : {}) });
     }
   });
   server.on('listening', () => {
@@ -1242,6 +1248,7 @@ export async function daemonStatus({
       startedAt: state.startedAt,
       warmPool: health.warmPool ?? {},
       busy: Array.isArray(health.busy) ? health.busy : [],
+      souls: Array.isArray(health.souls) ? health.souls : [],
       computerUse: Array.isArray(health.computerUse) ? health.computerUse : [],
       comms: await probeComms(state, { env, home, fetchImpl, timeoutMs }),
     };
@@ -1306,7 +1313,8 @@ export function daemonClient({
       signal: AbortSignal.timeout(requestTimeoutMs),
     });
     const payload = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(`daemon ${method} ${pathname} failed: ${payload.error ?? `HTTP ${res.status}`}`);
+    if (!res.ok) throw Object.assign(new Error(`daemon ${method} ${pathname} failed: ${payload.error ?? `HTTP ${res.status}`}`),
+      payload.code === 'soul-paused' ? { code: payload.code } : {});
     return payload;
   }
   return {
@@ -1382,6 +1390,12 @@ export function daemonClient({
     },
     async approvals() {
       return request('GET', '/v0/approvals');
+    },
+    async pauseSoul(agentId, requester = {}) {
+      return request('POST', '/v0/soul/pause', { ...requester, agentId });
+    },
+    async resumeSoul(agentId, requester = {}) {
+      return request('POST', '/v0/soul/resume', { ...requester, agentId });
     },
     async stopSoul(agentId, requester = {}) {
       return request('POST', '/v0/soul/stop', { ...requester, agentId });
@@ -1574,7 +1588,8 @@ export async function runDaemon({
     })
     : null;
   const computerUse = createComputerUseActivity({ now });
-  const turns = createTurnRegistry();
+  const isPaused = (agentId) => soulPaused(agentId, { file: populationFile({ env, home }) });
+  const turns = createTurnRegistry({ isPaused });
   const executorFor = configuredExecutorFor
     ? (request) => withPermissionReceipts(configuredExecutorFor(request), { env, home, now, computerUse })
     : null;
@@ -1606,7 +1621,7 @@ export async function runDaemon({
     return homes(soul);
   };
   const onLaunch = createLaunchHandler({
-    turns,
+    turns, isPaused,
     file: path.join(path.dirname(daemonStateFile({ env, home })), 'launch-requests.json'),
     identities,
     identityFor,
@@ -1698,7 +1713,7 @@ export async function runDaemon({
   server = createDaemonServer({ env, home, config, now, comms, executor, taskReporter, teamStarter, computerUse, turns });
   await taskReporter.recover({ log: (line) => process.stderr.write(`agent-daemon: ${line}\n`) });
   server.wakePlane = createWakePlane({
-    turns,
+    turns, isPaused,
     pool: server.warmPool,
     settings: () => readColdWakeSettings({ env, home }),
     lookupSoul: (agentId) => server.bindings.findAgent(agentId) ?? recordedWorktree(agentId, { env, home }),

@@ -192,6 +192,7 @@ function normalizeSoul(record, { defaultLastSeen = null } = {}) {
     // read as unmanaged with comms on.
     managed: booleanField('managed', record.managed, false),
     comms: booleanField('comms', record.comms, true),
+    paused: booleanField('paused', record.paused, false),
     // The name the owner chose at launch or join, as agent-comms' census
     // shows it (#429). `name` stays the generated handle agents address.
     ...displayNameField(record.displayName),
@@ -320,6 +321,7 @@ export function upsertSoul(
       // that does not mention them carries them forward.
       if (record.managed === undefined) candidate.managed = existing.managed;
       if (record.comms === undefined) candidate.comms = existing.comms;
+      if (record.paused === undefined) candidate.paused = existing.paused;
       candidate.worktrees = [...new Set([...existing.worktrees, ...candidate.worktrees])];
       if (record.worktree === undefined) candidate.worktree = existing.worktree;
     }
@@ -605,6 +607,31 @@ export function backfillManagedSouls(ids, { file = populationFile() } = {}) {
     if (marked.length) writeDocument(file, souls);
     return marked;
   });
+}
+
+// Pause is durable across daemon restarts and lifecycle upserts.
+export function setSoulPaused(id, paused, { file = populationFile() } = {}) {
+  const target = agentId(id);
+  if (typeof paused !== 'boolean') throw new Error('paused must be a boolean');
+  ensurePrivateDirectory(path.dirname(file));
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
+    const existing = current.souls[target];
+    if (!existing) throw new Error(`no population record for ${target}`);
+    const soul = normalizeSoul({ ...existing, paused });
+    if (existing.paused !== paused) writeDocument(file, { ...current.souls, [target]: soul });
+    return soul;
+  });
+}
+
+// Unknown souls have no pause setting; unreadable population data fails closed.
+export function soulPaused(id, { file = populationFile() } = {}) {
+  return readDocument(file).souls[agentId(id)]?.paused === true;
+}
+
+export function assertSoulUnpaused(paused) {
+  if (paused) throw Object.assign(new Error('soul is paused'), { code: 'soul-paused', statusCode: 409 });
 }
 
 // The owner changed a soul's comms setting while it was not running

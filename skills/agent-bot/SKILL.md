@@ -85,7 +85,7 @@ for. `agent-bot skill path` prints the installed release's copy of this skill.
 | remote-write | `mint-token` | Each run mints a new short-lived token; repeating is safe. |
 | remote-write | `signed-commit` | Never blindly rerun. Follow the printed recovery in [verified-publish.md](references/verified-publish.md), and inspect the remote branch head before any second attempt. |
 
-## Stop a running turn
+## Stop or pause a soul
 
 `agent-bot soul stop <agentId|name> [--json]` asks the loopback daemon to
 cancel the soul's current cold, launch, or interactive turn. The local caller
@@ -94,6 +94,16 @@ is needed. JSON is `{agentId, stopped: true}` or
 `{agentId, stopped: false, reason: "idle"}`. The daemon records a `stop`
 receipt, and the turn remains busy until cancellation finishes. Later wakes
 still run; this command does not pause cold wake.
+
+`agent-bot soul pause <agentId|name> [--json]` cancels the current turn and
+persists `paused: true`. Wakes wait without acknowledging inbox messages;
+launches and interactive turns are refused with `soul-paused`. JSON is
+`{agentId, paused: true, stopped: true|false}`.
+`agent-bot soul resume <agentId|name> [--json]` clears the flag, returning
+`{agentId, paused: false}`; the next inbox poll can wake the soul normally.
+Both use the same caller gate as stop and record `pause` or `resume` receipts.
+`agent-bot soul show <agentId|name> --json`, population JSON, and daemon health
+and status soul lists expose `paused` (false by default).
 
 ## Verify the outcome
 

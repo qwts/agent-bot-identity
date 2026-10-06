@@ -4,14 +4,16 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'no
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
-import { createDaemonServer, daemonClient, withPermissionReceipts } from '../agent-daemon.mjs';
+import { execFile, spawnSync } from 'node:child_process';
+import { promisify } from 'node:util';
+import { createDaemonServer, daemonClient, daemonStatus, withPermissionReceipts } from '../agent-daemon.mjs';
 import { createTurnRegistry, createWakePlane } from '../wake-plane.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
 import { createLaunchHandler } from '../daemon-launch.mjs';
-import { upsertSoul } from '../agent-population.mjs';
+import { showSoul, soulPaused, upsertSoul } from '../agent-population.mjs';
 import { appendAuditReceipt, enrollPrincipal, bindTransport, authorizeSouls, setOperations } from '../agent-principals.mjs';
 import { soulStopCommand } from '../soul-stop.mjs';
+import { soulPauseCommand, soulResumeCommand } from '../soul-pause.mjs';
 import { parseAgentBotArgs } from '../cli/parse.mjs';
 import { createResumeExecutor, runProcess } from '../wake-resume.mjs';
 
@@ -194,4 +196,122 @@ test('registry keeps overlapping turns until they settle and retains turn timeou
     { turnTimeoutMs: 5 }), { name: 'AbortError' });
     assert.deepEqual(turns.busy(), []);
   } finally { clearInterval(keepAlive); }
+});
+
+test('pause cancels ACP, persists across clients, exposes health, and resume allows the next wake', async (t) => {
+  const f = await fixture(t);
+  let first = true;
+  const plane = createWakePlane({ turns: f.turns, isPaused: (id) => soulPaused(id, { file: f.env.AGENT_BOT_POPULATION_PATH }),
+    pool: { has: () => false, send: () => assert.fail('no warm turn') }, settings: { [ID]: true },
+    lookupSoul: () => ({ worktree: f.home, file: path.join(f.home, 'binding.json') }), identities: () => ({ harness: 'claude' }),
+    executorFor: () => (input) => { const message = first ? 'hang' : 'ping'; first = false; return f.executor({ ...input, message }); },
+    receipt: (record) => appendAuditReceipt(record, f) });
+  f.server.wakePlane = plane;
+  const wake = { event: 'wake', agentId: ID, count: 1, cursor: 1, messageIds: ['m1'] };
+  const ports = { report: async () => {} };
+  await plane(wake, ports);
+  await until(() => f.ready() === 1);
+  assert.deepEqual(await f.client.pauseSoul(ID), { agentId: ID, paused: true, stopped: true });
+  await plane.idle();
+  assert.equal(readFileSync(f.env.FAKE_CANCEL_FILE, 'utf8'), 'cancelled\n');
+  assert.deepEqual(plane.busy(), []);
+  assert.equal(showSoul(ID, { file: f.env.AGENT_BOT_POPULATION_PATH }).paused, true);
+  assert.deepEqual(await daemonClient(f).pauseSoul(ID), { agentId: ID, paused: true, stopped: false });
+  assert.equal((await plane(wake, ports)).outcome, 'waiting');
+  assert.equal(f.ready(), 1);
+  assert.ok(f.receipts().some((r) => r.decision === 'paused' && r.event === 'wake'));
+  assert.ok(f.receipts().some((r) => r.event === 'pause' && r.transport === 'owner'));
+  assert.equal((await daemonStatus(f)).souls.find((r) => r.id === ID).paused, true);
+  assert.equal((await f.client.population()).find((r) => r.id === ID).paused, true);
+  const shown = spawnSync(process.execPath, [cli, 'soul', 'show', 'stop-me', '--json'], { env: f.env, cwd: f.home, encoding: 'utf8' });
+  assert.equal(shown.status, 0, shown.stderr);
+  assert.equal(JSON.parse(shown.stdout).paused, true);
+  assert.deepEqual(await f.client.resumeSoul(ID), { agentId: ID, paused: false });
+  assert.equal((await daemonStatus(f)).souls.find((r) => r.id === ID).paused, false);
+  await plane(wake, ports);
+  await plane.idle();
+  assert.ok(f.receipts().some((r) => r.event === 'resume' && r.decision === 'resumed'));
+  assert.ok(f.receipts().some((r) => r.event === 'cold-wake' && r.decision === 'finished'));
+});
+
+test('pause and resume routes use stop token and cancel gates, and reject interactive turns while paused', async (t) => {
+  const f = await fixture(t);
+  const options = { env: f.env, home: f.home, file: f.env.AGENT_BOT_PRINCIPALS_PATH };
+  const principal = enrollPrincipal({ label: 'owner' }, options);
+  bindTransport(principal.principalId, { transport: 'cli', providerId: 'local' }, options);
+  authorizeSouls(principal.principalId, [ID], options);
+  setOperations(principal.principalId, ['message', 'observe', 'cancel'], options);
+  const requester = { transport: 'cli', providerId: 'local' };
+  const { session } = await f.client.createSession({ ...requester, agentId: ID });
+  const { invocation } = await f.client.submitMessage(session.sessionId, { ...requester, message: 'hang', idempotencyKey: 'pause' });
+  await until(() => f.ready() === 1);
+  assert.deepEqual(await f.client.pauseSoul(ID, requester), { agentId: ID, paused: true, stopped: true });
+  await until(async () => (await f.client.invocation(invocation.invocationId, requester)).invocation.status === 'cancelled');
+  await assert.rejects(f.client.createSession({ ...requester, agentId: ID }), { code: 'soul-paused' });
+  await assert.rejects(f.client.submitMessage(session.sessionId, { ...requester, message: 'ping', idempotencyKey: 'paused' }), { code: 'soul-paused' });
+  const observed = await fetch(`${f.url}/v1/souls/${ID}/asides?${new URLSearchParams(requester)}`, {
+    headers: { authorization: `Bearer ${f.server.token}` },
+  });
+  assert.equal(observed.status, 200, 'pausing must not block observation');
+  assert.deepEqual(await f.client.resumeSoul(ID, requester), { agentId: ID, paused: false });
+  for (const action of ['pause', 'resume']) {
+    assert.ok(f.receipts().some((r) => r.event === action && r.principalId === principal.principalId && r.transport === 'cli'));
+    const post = (body, token) => fetch(`${f.url}/v0/soul/${action}`, { method: 'POST', headers: { 'content-type': 'application/json',
+      ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
+    assert.equal((await post({ agentId: ID })).status, 401);
+    const missing = await post({ agentId: OTHER }, f.server.token);
+    assert.equal(missing.status, 404);
+    assert.deepEqual(await missing.json(), { error: 'unknown soul' });
+    assert.equal((await post({ agentId: 'invalid' }, f.server.token)).status, 400);
+    await assert.rejects(f.client[`${action}Soul`](OTHER, requester), /not authorized/);
+    setOperations(principal.principalId, ['message', 'observe'], options);
+    await assert.rejects(f.client[`${action}Soul`](ID, requester), /not authorized/);
+    setOperations(principal.principalId, ['message', 'observe', 'cancel'], options);
+  }
+  const resumed = await f.client.submitMessage(session.sessionId, { ...requester, message: 'ping', idempotencyKey: 'resumed' });
+  await until(async () => (await f.client.invocation(resumed.invocation.invocationId, requester)).invocation.status === 'completed');
+});
+
+test('pause and resume CLI resolve names, enforce caller gates and match stop unknown-soul errors', async (t) => {
+  const f = await fixture(t);
+  const lines = [];
+  const options = { ...f, cwd: f.home, write: (text) => lines.push(text) };
+  for (const [action, command, paused] of [['pause', soulPauseCommand, true], ['resume', soulResumeCommand, false]]) {
+    const child = await promisify(execFile)(process.execPath, [cli, 'soul', action, 'stop-me', '--json'], { env: f.env, cwd: f.home });
+    assert.deepEqual(JSON.parse(child.stdout), { agentId: ID, paused, ...(paused ? { stopped: false } : {}) });
+    await command(['stop-me', '--json'], options);
+    assert.deepEqual(JSON.parse(lines.pop()), { agentId: ID, paused, ...(paused ? { stopped: false } : {}) });
+    await command([ID], options);
+    assert.equal(lines.pop(), `${ID} ${paused ? 'paused' : 'resumed'}\n`);
+    for (const args of [[], [ID, 'extra'], ['--unknown']]) await assert.rejects(command(args, options), /usage:/);
+    await assert.rejects(command([ID], { ...options, env: { ...f.env, AGENT_BOT_ID: ID } }), { code: 'not-owner' });
+    for (const target of [OTHER, 'no-such-soul']) {
+      const stopError = await soulStopCommand([target], options).catch((error) => error);
+      await assert.rejects(command([target], options), { message: stopError.message });
+    }
+    // Synchronous child only for local failures; successful daemon calls need
+    // the parent's event loop to serve the request.
+    const parsed = spawnSync(process.execPath, [cli, 'soul', action, '--json'], { env: f.env, cwd: f.home, encoding: 'utf8' });
+    assert.equal(parsed.status, 1);
+    assert.match(JSON.parse(parsed.stdout).error.message, new RegExp(`usage: agent-bot soul ${action}`));
+  }
+  rmSync(f.env.AGENT_BOT_DAEMON_STATE_PATH);
+  for (const command of [soulPauseCommand, soulResumeCommand]) await assert.rejects(command([ID], options), /daemon is not running/);
+});
+
+test('pause aborts all registered turns before persisting the flag and keeps them busy until release', async (t) => {
+  const f = await fixture(t);
+  const controllers = [new AbortController(), new AbortController()];
+  const releases = controllers.map((controller) => {
+    controller.signal.addEventListener('abort', () => {
+      assert.equal(showSoul(ID, { file: f.env.AGENT_BOT_POPULATION_PATH }).paused, false);
+    }, { once: true });
+    return f.turns.track(ID, controller);
+  });
+  try {
+    assert.deepEqual(await f.client.pauseSoul(ID), { agentId: ID, paused: true, stopped: true });
+    assert.ok(controllers.every((controller) => controller.signal.aborted));
+    assert.deepEqual(f.turns.busy(), [ID]);
+    assert.deepEqual(await f.client.pauseSoul(ID), { agentId: ID, paused: true, stopped: false });
+  } finally { releases.forEach((release) => release()); }
 });
