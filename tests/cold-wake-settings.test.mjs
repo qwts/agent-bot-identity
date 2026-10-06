@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -98,6 +98,64 @@ test('unset soul reports off and its cold wake result is waiting', async () => w
   const { createColdWaker } = await import('../cold-wake.mjs');
   const wake = createColdWaker({ executor: async () => assert.fail('disabled wake must not execute'), settings: () => readColdWakeSettings({ env }), lookupBinding: async () => ({}), identities: async () => ({}), receipt() {} });
   assert.deepEqual(await wake({ agentId: id, count: 1, messageIds: ['m1'] }), { outcome: 'waiting', detail: 'cold wake is disabled' });
+}));
+
+test('cold-wake show and the no-verb form emit one JSON line for every lane', () => withState(async ({ env }) => {
+  const cases = [
+    [undefined, 'off', null, null],
+    [false, 'off', null, null],
+    [true, 'on', null, 'acp'],
+    [{ lane: 'resume', policy: 'read-only' }, 'resume', 'read-only', 'resume'],
+    [{ lane: 'resume', policy: 'workspace' }, 'resume', 'workspace', 'resume'],
+    [{ lane: 'webhook' }, 'webhook', null, 'webhook'],
+  ];
+  const { run, out } = owned(env, () => assert.fail('show never needs owner approval'));
+  for (const [value, setting, policy, lane] of cases) {
+    if (value !== undefined) setColdWake(id, value, { env });
+    const expected = `${JSON.stringify({ agentId: id, setting, policy, lane })}\n`;
+    for (const args of [['show', '--json'], ['--json']]) {
+      const result = invoke(env, ...args);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stderr, '');
+      assert.equal(result.stdout, expected);
+      await run(args);
+      assert.equal(out.pop(), expected);
+    }
+  }
+  // Unknown stored values normalize to off, like the plain output.
+  writeFileSync(coldWakeFile({ env }), JSON.stringify({ settings: { [id]: { lane: 'resume', policy: 'unknown' } } }));
+  assert.deepEqual(JSON.parse(invoke(env, '--json').stdout), { agentId: id, setting: 'off', policy: null, lane: null });
+}));
+
+test('cold-wake JSON errors go to stdout with exit 1', () => withState(({ env }) => {
+  const check = (result, message) => {
+    assert.equal(result.status, 1);
+    assert.equal(result.stderr, '');
+    assert.equal(result.stdout.split('\n').length, 2);
+    const error = JSON.parse(result.stdout).error;
+    assert.equal(error.code, 'cold-wake-failed');
+    assert.match(error.message, message);
+  };
+  check(invoke({ ...env, GH_AGENT_APP: 'you-codex-agent' }, 'show', '--json'), /owner only/);
+  check(spawnSync(process.execPath, [cli, 'soul', 'cold-wake', 'invalid', 'show', '--json'], { encoding: 'utf8', env, cwd: env.HOME }), /agent/i);
+  setColdWake(id, true, { env });
+  writeFileSync(coldWakeFile({ env }), 'not json');
+  check(invoke(env, 'show', '--json'), /settings could not be read/);
+}));
+
+test('--json refuses setters and malformed show arguments before approval', () => withState(async ({ env }) => {
+  const { run } = owned(env, () => assert.fail('usage errors must not request approval'));
+  for (const args of [['on', '--json'], ['off', '--json'], ['resume', 'workspace', '--json'],
+    ['webhook', '--url-file', 'unused', '--key-file', 'unused', '--json'],
+    ['show', '--json', '--json'], ['show', '--json', '--principal-stdin'], ['show', 'extra', '--json']]) {
+    await assert.rejects(run(args), /usage/);
+    const result = invoke(env, ...args);
+    assert.equal(result.status, 1);
+    assert.equal(result.stderr, '');
+    assert.equal(JSON.parse(result.stdout).error.code, 'cold-wake-failed');
+    assert.match(JSON.parse(result.stdout).error.message, /usage/);
+    assert.deepEqual(readColdWakeSettings({ env }), {});
+  }
 }));
 
 test('cold-wake settings persist atomically with mode 0600', () => withState(({ root, env }) => {

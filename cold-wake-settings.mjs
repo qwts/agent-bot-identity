@@ -83,7 +83,11 @@ export async function coldWakeCommand(argv, {
   home = homedir(),
   cwd = process.cwd(),
 } = {}) {
-  const usage = `usage: agent-bot soul cold-wake <agentId> [on|off|show|resume ${RESUME_POLICIES.join('|')}|webhook --url-file PATH --key-file PATH|-] [--principal-stdin]`;
+  const usage = `usage: agent-bot soul cold-wake <agentId> [on|off|show|resume ${RESUME_POLICIES.join('|')}|webhook --url-file PATH --key-file PATH|-] [--principal-stdin] [--json (show only)]`;
+  const json = argv.includes('--json');
+  if (argv.filter((arg) => arg === '--json').length > 1) throw new Error(usage);
+  argv = argv.filter((arg) => arg !== '--json');
+  if (json && argv[1] !== undefined && argv[1] !== 'show') throw new Error(usage);
   const presented = argv.includes('--principal-stdin');
   argv = argv.filter((arg) => arg !== '--principal-stdin');
   // The principal is read once, before anything else could consume stdin.
@@ -118,7 +122,13 @@ export async function coldWakeCommand(argv, {
   if (value === undefined || value === 'show') {
     if (presented) throw new Error(usage);
     if (resolveAgentSlug({ env, cwd, config: loadConfig({ env, home }), detect: false }) !== null) throw new Error('cold wake settings are owner only');
-    const setting = describeSetting(readColdWakeSettings({ env, home })[id]);
+    const value = readColdWakeSettings({ env, home })[id];
+    const setting = describeSetting(value);
+    if (json) {
+      const wake = wakeSetting(value);
+      write(`${JSON.stringify({ agentId: id, setting: setting.split(' ')[0], policy: wake?.policy ?? null, lane: wake?.lane ?? null })}\n`);
+      return null;
+    }
     const webhook = setting === 'webhook' ? readWebhook(id, { env, home }) : null;
     write(`${setting}${webhook ? ` ${new URL(webhook.url).host}` : setting === 'webhook' ? ' (no webhook stored)' : ''}\n`);
     return null;
@@ -129,4 +139,8 @@ export async function coldWakeCommand(argv, {
   write(`${id} cold wake ${change}\n`);
   return authorization;
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) coldWakeCommand(process.argv.slice(2)).catch((error) => { process.stderr.write(`agent-bot soul cold-wake: ${error.message}\n`); process.exit(1); });
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) coldWakeCommand(process.argv.slice(2)).catch((error) => {
+  if (process.argv.includes('--json')) process.stdout.write(`${JSON.stringify({ error: { code: 'cold-wake-failed', message: error.message } })}\n`);
+  else process.stderr.write(`agent-bot soul cold-wake: ${error.message}\n`);
+  process.exitCode = 1;
+});
