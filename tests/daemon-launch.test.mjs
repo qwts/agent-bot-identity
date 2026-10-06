@@ -556,3 +556,61 @@ test('invalid launch model is refused before provisioning or starting', async (t
     assert.equal(f.calls.length, 0);
   }
 });
+
+test('launch brief is validated before minting, recording or starting', async (t) => {
+  for (const brief of [null, 42, false, [], {}, ' ', '\n\t', 'x'.repeat(4001), 'a\rb', '\0x', 'x\x7f', 'x\x85', '\x1fx']) {
+    const f = fixture(t, { spawnPackage: () => assert.fail('must not mint'),
+      recordLaunch: () => assert.fail('must not record') });
+    await f.handler({ ...packageEvent, brief }, f.ports);
+    assert.equal(f.reports[0].detail, 'invalid launch brief');
+    assert.equal(f.calls.length, 0);
+  }
+});
+
+test('brief renders after identity, records before the turn, survives upsert/relaunch, and clears explicitly', async (t) => {
+  const { recordLaunchSettings } = await import('../agent-daemon.mjs');
+  const { populationFile, showSoul } = await import('../agent-population.mjs');
+  const f = fixture(t);
+  const options = { home: f.root, env: { HOME: f.root, XDG_STATE_HOME: path.join(f.root, 'state') }, config: {} };
+  const file = populationFile(options);
+  const row = { id: agentId, status: 'active', spacePath: path.join(f.root, 'space') };
+  upsertSoul(row, { file });
+  const messages = [];
+  const handler = createLaunchHandler({ ...f.options,
+    recordLaunch: (launch) => recordLaunchSettings(launch, options),
+    executorFor: () => async (input) => {
+      messages.push(input.message);
+      const brief = showSoul(agentId, { file }).brief;
+      if (brief) assert.ok(input.message.includes(`Your brief from the person who launched you:\n${brief}`));
+      input.appendEvent(HARNESS_SESSION_EVENT, {});
+    },
+  });
+  await handler({ ...event, brief: '  Review the code.\n\tReport findings.  ' }, f.ports);
+  const brief = 'Review the code.\n\tReport findings.';
+  assert.equal(showSoul(agentId, { file }).brief, brief);
+  const { spawnSync } = await import('node:child_process');
+  const shown = spawnSync(process.execPath, [path.join(import.meta.dirname, '..', 'agent-bot.mjs'), 'soul', 'show', agentId, '--json'],
+    { encoding: 'utf8', env: { HOME: f.root, PATH: process.env.PATH, AGENT_BOT_POPULATION_PATH: file } });
+  assert.equal(shown.status, 0, shown.stderr);
+  assert.equal(JSON.parse(shown.stdout).brief, brief);
+  assert.match(messages[0], /You have no parent agent\. \n\nYour brief from the person who launched you:\nReview/);
+  upsertSoul({ ...row, status: 'active' }, { file });
+  assert.equal(showSoul(agentId, { file }).brief, brief);
+  await handler({ ...event, requestId: 'relaunch' }, f.ports);
+  assert.equal(messages[1], messages[0]);
+  await handler({ ...event, requestId: 'clear', brief: '' }, f.ports);
+  assert.equal(showSoul(agentId, { file }).brief, '');
+  assert.doesNotMatch(messages[2], /Your brief/);
+  await handler({ ...event, requestId: 'after-clear' }, f.ports);
+  assert.doesNotMatch(messages[3], /Your brief/);
+  assert.ok(f.reports.every((row) => row.status === 'launched'));
+  assert.doesNotMatch(readFileSync(f.options.file, 'utf8'), /Review the code/);
+});
+
+test('brief accepts both length boundaries and trims before recording', async (t) => {
+  for (const brief of ['x', 'x'.repeat(4000), '\t x \n', '']) {
+    const f = fixture(t, { recordLaunch: (launch) => { assert.equal(launch.brief, brief.trim()); } });
+    await f.handler({ ...event, brief }, f.ports);
+    assert.equal(f.reports[0].status, 'launched');
+  }
+});

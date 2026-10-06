@@ -522,6 +522,7 @@ test('account-watch routes launches and recovery with fresh daemon-authenticated
   const onLaunch = async (event, { account, report }) => {
     assert.equal(account, 'worker');
     assert.equal(event.soul, 'soul');
+    assert.equal(event.brief, 'Review this change.\nReport findings.');
     await report({ requestId: event.requestId, status: 'launched', agentId: 'soul' });
   };
   onLaunch.recover = async ({ report }) => {
@@ -533,7 +534,7 @@ test('account-watch routes launches and recovery with fresh daemon-authenticated
     if (line.op === 'account-watch') {
       watchSocket = socket;
       send({ event: 'ready' });
-      send({ event: 'launch', requestId: 'new', principal: 'p', account: 'worker', soul: 'soul', harness: 'claude' });
+      send({ event: 'launch', requestId: 'new', principal: 'p', account: 'worker', soul: 'soul', harness: 'claude', brief: 'Review this change.\nReport findings.' });
     } else {
       assert.notEqual(socket, watchSocket);
       reports.push(line);

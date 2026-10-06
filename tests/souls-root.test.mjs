@@ -170,7 +170,7 @@ test('soul locate prints the JSON a host reads', (t) => {
   const result = spawnSync(process.execPath, [path.join(import.meta.dirname, '..', 'soul-dir.mjs'), 'locate', pkg],
     { encoding: 'utf8', env: { HOME: options.home, PATH: process.env.PATH } });
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), { path: pkg, status: 'package' });
+  assert.deepEqual(JSON.parse(result.stdout), { path: pkg, status: 'package', name: null, description: null, preferredHarnesses: [], template: null });
   const usage = spawnSync(process.execPath, [path.join(import.meta.dirname, '..', 'soul-dir.mjs'), 'locate'],
     { encoding: 'utf8', env: { HOME: options.home, PATH: process.env.PATH } });
   assert.equal(usage.status, 1);
@@ -222,4 +222,58 @@ test('a folder whose soul is retired or unknown is an orphan until archived', (t
   ].sort((left, right) => left.path.localeCompare(right.path)));
   archiveSoulDirs(id, options);
   assert.deepEqual(orphanSoulDirs(options), [{ agentId: strayId, path: stray, status: 'unknown' }]);
+});
+
+test('locate CLI prefills package, installed and copy from their own manifest with either JSON spelling', (t) => {
+  const options = scratch(t);
+  const root = soulsHome(options).root;
+  const own = path.join(root, 'Own.soul');
+  const copy = path.join(root, 'Copy.soul');
+  const pkg = path.join(root, 'Package.soul');
+  mark(own);
+  registerSoulDir(id, own, options);
+  mark(copy);
+  mkdirSync(pkg);
+  for (const [dir, status] of [[pkg, 'package'], [own, 'installed'], [copy, 'copy']]) {
+    const fields = { name: `${status} name`, description: 'What this soul does', preferredHarnesses: ['codex', 'claude'], template: true };
+    writeFileSync(path.join(dir, 'soul.json'), JSON.stringify(fields));
+    for (const flags of [[], ['--json']]) {
+      const result = spawnSync(process.execPath, [path.join(import.meta.dirname, '..', 'agent-bot.mjs'), 'soul', 'locate', dir, ...flags],
+        { encoding: 'utf8', env: { HOME: options.home, PATH: process.env.PATH, AGENT_BOT_POPULATION_PATH: options.file } });
+      assert.equal(result.status, 0, result.stderr);
+      const output = JSON.parse(result.stdout);
+      assert.equal(output.status, status);
+      for (const key of Object.keys(fields)) assert.deepEqual(output[key], fields[key]);
+    }
+  }
+});
+
+test('locate metadata tolerates missing, malformed and unsafe manifests and invalid markers', async (t) => {
+  const { locateSoulInfo } = await import('../soul-dir.mjs');
+  const options = scratch(t);
+  const pkg = path.join(options.home, 'Package.soul');
+  mkdirSync(pkg);
+  const manifest = path.join(pkg, 'soul.json');
+  const empty = { name: null, description: null, preferredHarnesses: [], template: null };
+  const check = () => {
+    const found = locateSoulInfo(pkg, options);
+    for (const key of Object.keys(empty)) assert.deepEqual(found[key], empty[key]);
+  };
+  check();
+  for (const content of ['{', 'null', '[]', '42']) { writeFileSync(manifest, content); check(); }
+  writeFileSync(manifest, JSON.stringify({ name: 42, description: {}, preferredHarnesses: 'claude', template: 'true' }));
+  check();
+  writeFileSync(manifest, JSON.stringify({ name: 'Valid', preferredHarnesses: [], template: false }));
+  assert.equal(locateSoulInfo(pkg, options).template, false);
+  writeFileSync(manifest, JSON.stringify({ name: 'Valid' }));
+  assert.equal(locateSoulInfo(pkg, options).template, false);
+  rmSync(manifest);
+  symlinkSync('/dev/zero', manifest);
+  check();
+  rmSync(manifest);
+  writeFileSync(manifest, ' '.repeat(65537));
+  check();
+  mark(pkg, 'invalid marker');
+  assert.equal(locateSoulInfo(pkg, options).status, 'invalid');
+  check();
 });

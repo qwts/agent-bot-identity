@@ -1573,7 +1573,7 @@ export function daemonClient({
 // setting, recorded as an edit when the soul has a revision chain. The
 // revision history cannot be unwritten, so it is appended last; an earlier
 // failure restores soul.json and the census comms.
-export async function recordLaunchComms({ agentId, package: packagePath, comms, principal = null }, {
+export async function recordLaunchComms({ agentId, package: packagePath, comms, brief, principal = null }, {
   env, home, config, revisions = { history: revisionHistory, edit: editSoulRevision },
 } = {}) {
   const file = populationFile({ env, home });
@@ -1583,7 +1583,7 @@ export async function recordLaunchComms({ agentId, package: packagePath, comms, 
   try { census = showSoul(agentId, { file }).comms !== false; } catch { /* no census row yet */ }
   const previous = typeof comms === 'boolean' && directory ? writeSoulComms(directory, comms) : null;
   try {
-    const recorded = recordSoulLaunch(agentId, { comms: typeof comms === 'boolean' ? comms
+    const recorded = recordSoulLaunch(agentId, { ...(brief === undefined ? {} : { brief }), comms: typeof comms === 'boolean' ? comms
       : launchCommsSetting({ soulDir: directory, packagePath }) }, { file });
     const stateDir = stateDirectory({ env, home });
     if (previous !== null && revisions.history(agentId, { stateDir }).length) {
