@@ -1,0 +1,1 @@
+- `agent-bot soul locate PATH` on a package now also reports the package's `name`, `description` and `preferredHarnesses` from its soul.json (bounded, printable values only), so a launch form can prefill the companion's name and harness. (GeniusBar #120)

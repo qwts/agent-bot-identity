@@ -24,6 +24,7 @@ import {
   soulDirectory,
   backfillManagedSouls,
   locateSoulDir,
+  packageManifest,
   soulShownName,
   showSoul,
   showSoulByName,
@@ -560,6 +561,30 @@ test('the name chosen at launch or join is the one every command shows (#429)', 
   // A soul with no row is not created; bad names are refused.
   assert.equal(recordSoulDisplayName(SECOND_ID, 'Other', { file }), null);
   assert.throws(() => recordSoulDisplayName(FIRST_ID, 'bad\u0007name', { file }), /displayName must be printable text/);
+});
+
+test('locating a package reports what its soul.json says, bounded and printable (#120)', () => {
+  const root = scratch();
+  const file = path.join(root, 'population.json');
+  const options = { file, env: {}, home: root, config: {} };
+  const pkg = path.join(root, 'Luna.soul');
+  mkdirSync(pkg, { recursive: true });
+  writeFileSync(path.join(pkg, 'soul.json'), JSON.stringify({
+    name: '  Luna - Starter ', description: 'A friendly first soul.', preferredHarnesses: ['codex', 7, ' ', 'claude'],
+  }));
+  assert.deepEqual(locateSoulDir(pkg, options), {
+    path: pkg, status: 'package', name: 'Luna - Starter', description: 'A friendly first soul.', preferredHarnesses: ['codex', 'claude'],
+  });
+
+  // Unusable values are left out, never quoted; no manifest is still a package.
+  writeFileSync(path.join(pkg, 'soul.json'), JSON.stringify({ name: 'bad\u0007name', description: 'x'.repeat(513), preferredHarnesses: 'claude' }));
+  assert.deepEqual(locateSoulDir(pkg, options), { path: pkg, status: 'package' });
+  writeFileSync(path.join(pkg, 'soul.json'), '{not json');
+  assert.deepEqual(locateSoulDir(pkg, options), { path: pkg, status: 'package' });
+  const bare = path.join(root, 'Bare.soul');
+  mkdirSync(bare, { recursive: true });
+  assert.deepEqual(locateSoulDir(bare, options), { path: bare, status: 'package' });
+  assert.deepEqual(packageManifest(bare), {});
 });
 
 test('the census role line comes from soul.json role and the soul\'s live team (Lovable X2)', () => {
