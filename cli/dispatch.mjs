@@ -92,6 +92,9 @@ export function dispatchAgentBot(parsed) {
   if (parsed.command === 'soul' && parsed.args[0] === 'spawn') {
     return run(process.execPath, [join(ROOT, 'soul-templates.mjs'), '--spawn', ...parsed.args.slice(1)]);
   }
+  if (parsed.command === 'identity' && ['app', 'apps'].includes(parsed.args[0])) {
+    return run(process.execPath, [join(ROOT, 'identity-apps.mjs'), ...parsed.args]);
+  }
   if (parsed.command === 'identity' && parsed.args[0] === 'migrate-credentials') {
     return run(process.execPath, [join(ROOT, 'soul-credentials.mjs'), ...parsed.args.slice(1)]);
   }

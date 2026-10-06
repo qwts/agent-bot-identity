@@ -1,0 +1,1 @@
+- Manage GitHub App identities through secret-free `identity apps list` and `identity app create`, `connect`, `rotate-key`, and `assign` commands and authenticated daemon routes. Manifest creation uses a one-time loopback callback and pollable jobs; credentials use App-scoped Keychain/private file stores, and list reuses doctor mint history without minting (#373).

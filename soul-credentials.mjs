@@ -47,6 +47,7 @@ import { listSouls, populationFile, showSoul, showSoulByName, soulDirectory } fr
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { assertOwnerAction, soulMarkers } from './owner-gate.mjs';
 import { CREDENTIAL_STORES, soulCredentialsDeclaration, writeSoulCredentialsDeclaration } from './soul-package.mjs';
+import { readManagedAppCredential } from './identity-app-store.mjs';
 import { editSoulRevision, revisionHistory } from './soul-revisions.mjs';
 
 const APP_SLUG = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?$/;
@@ -78,8 +79,8 @@ export function legacyCredentialDirectory(slug, home = homedir()) {
 // The stored value is one opaque token: base64 of {appId, privateKeyPem}.
 // base64 needs no quoting on `security -i`'s line, and a PEM's newlines
 // would otherwise end the command.
-function encode({ appId, privateKeyPem }) {
-  return Buffer.from(JSON.stringify({ appId: String(appId), privateKeyPem })).toString('base64');
+function encode({ appId, privateKeyPem, webhookSecret }) {
+  return Buffer.from(JSON.stringify({ appId: String(appId), privateKeyPem, ...(webhookSecret ? { webhookSecret } : {}) })).toString('base64');
 }
 function decode(text) {
   let value;
@@ -88,7 +89,7 @@ function decode(text) {
   if (!value || typeof value.appId !== 'string' || !/^\d+$/.test(value.appId) || typeof value.privateKeyPem !== 'string') {
     throw new Error('stored credential is malformed');
   }
-  return { appId: value.appId, privateKeyPem: value.privateKeyPem };
+  return { appId: value.appId, privateKeyPem: value.privateKeyPem, ...(typeof value.webhookSecret === 'string' ? { webhookSecret: value.webhookSecret } : {}) };
 }
 
 // `security` is injectable (tests use a fake): AGENT_BOT_SECURITY_BIN is read
@@ -102,16 +103,20 @@ export function keychainStore({ env = process.env, run = spawnSync } = {}) {
   const call = (args, input) => run(bin, args, { input, encoding: 'utf8', env, stdio: ['pipe', 'pipe', 'pipe'], timeout: 15_000 });
   return {
     kind: 'keychain',
-    read({ agentId, slug }) {
-      const { service, account } = keychainItem(agentId, slug);
+    read({ agentId, slug, appScoped = false }) {
+      const { service, account } = appScoped
+        ? { service: `agent-bot.app.${slugOrThrow(slug)}`, account: `github-app/${slug}` }
+        : keychainItem(agentId, slug);
       const result = call(['find-generic-password', '-s', service, '-a', account, '-w']);
       if (result.error) throw new Error('the keychain could not be read (security did not start)');
       if (result.status === KEYCHAIN_NOT_FOUND) return null;
       if (result.status !== 0) throw new Error(`the keychain could not be read (security exited ${result.status})`);
       return decode(result.stdout);
     },
-    write({ agentId, slug }, credential) {
-      const { service, account } = keychainItem(agentId, slug);
+    write({ agentId, slug, appScoped = false }, credential) {
+      const { service, account } = appScoped
+        ? { service: `agent-bot.app.${slugOrThrow(slug)}`, account: `github-app/${slug}` }
+        : keychainItem(agentId, slug);
       // -U updates an existing item in place. Nothing secret is on argv.
       const line = `add-generic-password -U -s "${service}" -a "${account}" -l "agent-bot ${account}" -D "agent-bot soul credential" -w "${encode(credential)}"\n`;
       const result = call(['-i'], line);
@@ -194,7 +199,7 @@ export function writeSoulCredential({ agentId, soulDir, declaration }, credentia
 }
 
 // The souls whose soul.json declares this App, the caller's own soul first.
-function declaringSouls(slug, { agentId, env, home, cwd }) {
+function declaringSouls(slug, { agentId, env, home, cwd, readOnly = false }) {
   const file = populationFile({ env, home });
   const ids = [];
   const own = agentId ?? (() => { try { return currentAgentId({ env, cwd }); } catch { return null; } })();
@@ -204,7 +209,7 @@ function declaringSouls(slug, { agentId, env, home, cwd }) {
   const found = [];
   for (const id of ids) {
     let soulDir;
-    try { soulDir = soulDirectory(id, { file, env, home }); } catch { continue; }
+    try { soulDir = soulDirectory(id, { file, env, home, readOnly }); } catch { continue; }
     const declaration = soulCredentialsDeclaration(soulDir);
     if (declaration?.app === slug) found.push({ agentId: id, soulDir, declaration });
   }
@@ -242,10 +247,18 @@ export function resolveAppCredential(slug, {
   stores,
   platform = process.platform,
   warn = (text) => process.stderr.write(text),
+  readOnly = false,
 } = {}) {
   slugOrThrow(slug);
+  const declared = declaringSouls(slug, { agentId, env, home, cwd, readOnly });
+  // A signed-helper soul must never acquire a readable key through this API.
+  const own = agentId ?? (() => { try { return currentAgentId({ env, cwd }); } catch { return null; } })();
+  const held = declared.find((soul) => soul.agentId === own && soul.declaration.store === 'keyd');
+  if (held) return { slug, appId: null, privateKeyPem: null, source: 'keyd', agentId: held.agentId };
+  const managed = readManagedAppCredential(slug, { env, home, stores: stores ?? credentialStores({ env }) });
+  if (managed) return { slug, ...managed, source: 'managed-app', agentId: null };
   const storeOptions = { stores: stores ?? credentialStores({ env }), platform };
-  for (const soul of declaringSouls(slug, { agentId, env, home, cwd })) {
+  for (const soul of declared) {
     if (soul.declaration.store === 'keyd') return { slug, appId: null, privateKeyPem: null, source: 'keyd', agentId: soul.agentId };
     const credential = readSoulCredential(soul, storeOptions);
     if (credential) return { slug, ...credential, source: storeFor(soul.declaration, storeOptions.stores, platform).kind, agentId: soul.agentId };
@@ -256,7 +269,7 @@ export function resolveAppCredential(slug, {
     const dir = legacyCredentialDirectory(slug, home);
     throw new Error(`no app config for "${slug}" — no soul key store holds it and ${dir}/app-id and ${dir}/private-key.pem are missing`);
   }
-  legacyNotice(slug, { env, home, warn });
+  if (!readOnly) legacyNotice(slug, { env, home, warn });
   return { slug, ...legacy, source: 'legacy', agentId: null };
 }
 

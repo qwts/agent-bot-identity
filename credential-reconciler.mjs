@@ -10,6 +10,7 @@ import {
   validateIssuer,
   validatePrivateKey,
 } from './ensure-private-key.mjs';
+import { readManagedAppCredential } from './identity-app-store.mjs';
 import { mint } from './mint-token.mjs';
 
 export class CredentialReconciliationError extends Error {
@@ -134,7 +135,15 @@ export function inspectLocalAppCredential({
   read = readFileSync,
   exists = existsSync,
   validateKey = validatePrivateKey,
+  env, config, stores,
 } = {}) {
+  if (config?.identityApps?.[slug]) {
+    try {
+      const credential = readManagedAppCredential(slug, { env, home, config, stores });
+      if (!validateIssuer(credential.appId) || !validateKey(credential.privateKeyPem)) throw new Error();
+      return { status: 'ready', restored: [], evidence: { components: [{ component: 'app-id', status: 'ready' }, { component: 'private-key', status: 'ready' }] } };
+    } catch { return { status: 'failed', code: 'managed-app-credential-unavailable', action: 'reconnect the App or unlock its credential store', evidence: { components: [] } }; }
+  }
   const issuerPath = appIdPath(slug, home);
   const keyPath = privateKeyPath(slug, home);
   const journal = join(dirname(issuerPath), '.agent-bot-credential-transaction.json');
@@ -170,14 +179,15 @@ export function inspectLocalAppCredential({
 export async function inspectAppCredentials({
   slugs,
   home = homedir(),
+  env, config, stores,
   inspect = inspectLocalAppCredential,
   inspectSession = inspectProtonPassSession,
-  verify = async (slug) => mint({ slug }),
+  verify = async (slug) => mint({ slug, ...(env ? { env } : {}) }),
 } = {}) {
   const roster = validateRoster(slugs ?? []);
   const results = roster.map((slug) => ({
     slug,
-    local: inspect({ slug, home }),
+    local: inspect({ slug, home, env, config, stores }),
     live: { status: 'skipped', code: 'local-roster-incomplete' },
   }));
   if (results.some((result) => result.local.status === 'failed')) {
