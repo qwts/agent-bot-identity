@@ -41,6 +41,10 @@ const AGENT_ID = /agent_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 const MAX_SUMMARY = 400;
 const PRINCIPAL = /^principal_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+export function ownerCredentialRequired(message = 'an authenticated owner principal or explicit owner consent is required') {
+  return Object.assign(new Error(message), { code: 'owner-credential-required', statusCode: 403 });
+}
+
 // The soul markers this caller carries. A marker that cannot be read counts,
 // so a broken binding or config refuses rather than reading as the owner.
 export function soulMarkers({ env = process.env, cwd = process.cwd(), detect = true } = {}) {
@@ -73,8 +77,9 @@ export async function verifyPrincipalOwner(credential, {
   const client = clientFactory({ socketPath: paths.socket, brokerUid: credential.brokerUid, mode: 'group' });
   try {
     await client.request({ op: 'health', auth: { principal: credential.principal, secret: credential.secret } }, { paths });
-  } catch (error) {
-    throw new Error(`the broker did not accept the owner principal (${error.code ?? 'error'}: ${error.message})`);
+  } catch {
+    // A broker/transport error can reflect the credential. Never relay it.
+    throw ownerCredentialRequired('the broker did not accept the owner principal');
   }
   return { method: 'principal', principal: credential.principal };
 }
@@ -173,6 +178,6 @@ export async function assertOwnerAction(action, {
   consent = presenceOrConsent,
 } = {}) {
   const found = markers({ env, cwd, detect });
-  if (found.length) throw new Error(`${action} is owner only; this caller has a soul's ${found.join(', ')}`);
+  if (found.length) throw ownerCredentialRequired(`${action} is owner only; this caller has a soul's ${found.join(', ')}`);
   return principal ? verifyPrincipal(principal, { env }) : consent(action, { env });
 }

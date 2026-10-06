@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mintAgentIdentity } from '../agent-identity.mjs';
+import { auditFile } from '../agent-principals.mjs';
 import { assertOwnerAction, confirmOwnerPresence, consentOwner, soulMarkers, verifyPrincipalOwner } from '../owner-gate.mjs';
 import { computePackageRevision } from '../soul-package.mjs';
 import { adoptSoulPackage, listSoulProposals, proposeSoulRevision, revisionCommand, revisionHistory } from '../soul-revisions.mjs';
@@ -25,7 +26,8 @@ function fixture(t) {
   writeFileSync(join(packagePath, 'AGENTS.md'), 'Initial\n');
   manifest.revision = computePackageRevision(packagePath);
   writeFileSync(join(packagePath, 'soul.json'), JSON.stringify(manifest));
-  const options = { stateDir: join(root, 'state'), now: () => new Date('2026-10-02T12:00:00Z') };
+  const env = { PATH: process.env.PATH, HOME: root, AGENT_BOT_CONFIG: join(root, 'no-config.json') };
+  const options = { env, home: root, cwd: root, stateDir: join(root, 'state'), now: () => new Date('2026-10-02T12:00:00Z') };
   const { id } = mintAgentIdentity({ ...options, appSlug: 'test-agent', packagePath });
   adoptSoulPackage(id, packagePath, { ...options, reason: 'Start' });
   writeFileSync(join(packagePath, 'AGENTS.md'), 'Proposed\n');
@@ -53,7 +55,8 @@ test('a soul with its markers unset is still refused when the principal does not
     verifyPrincipal: (credential) => verifyPrincipalOwner(credential, { paths: { socket: '/nonexistent' }, clientFactory: broker.clientFactory }) });
   await assert.rejects(revisionCommand(['approve', f.id, f.proposal.proposalId, 'Mine now'],
     { ...f.options, assertUser, principal: owner({ secret: 'b'.repeat(64) }) }),
-  (error) => /did not accept the owner principal \(unauthenticated/.test(error.message) && !error.message.includes('b'.repeat(64)));
+  (error) => error.code === 'owner-credential-required' && /did not accept the owner principal/.test(error.message)
+    && !error.message.includes('b'.repeat(64)));
   assert.equal(broker.calls.length, 1);
   assert.equal(listSoulProposals(f.id, f.options)[0].status, 'pending');
   assert.equal(revisionHistory(f.id, f.options).length, 1);
@@ -168,4 +171,57 @@ test('a decision on a soul tool request asks for presence even when a principal 
   await assert.rejects(confirmOwnerPresence('approve Bash for Bill', {
     principal: owner(), verifyPrincipal, consent: async () => { throw new Error('approve Bash for Bill was not approved: cancelled'); },
   }), /not approved/);
+});
+
+test('a worktree binding refuses every owner revision action with stripped env, before any owner proof', async (t) => {
+  const f = fixture(t);
+  const env = f.options.env;
+  const worktree = join(f.root, 'bound');
+  mkdirSync(worktree);
+  execFileSync('git', ['init', '-q', worktree], { env, stdio: 'ignore' });
+  writeFileSync(join(worktree, '.git', 'agent-binding.json'), JSON.stringify({
+    v: 1, secret: 's'.repeat(43), account: 'test', daemon: 'http://127.0.0.1:1', agentId: f.id, parent: null,
+  }), { mode: 0o600 });
+  assert.deepEqual(soulMarkers({ env, cwd: worktree }), ['agent binding']);
+  const assertUser = (action, { principal }) => assertOwnerAction(action, {
+    env, cwd: worktree, principal,
+    verifyPrincipal: () => assert.fail('binding must refuse before principal verification'),
+    consent: () => assert.fail('binding must refuse before consent'),
+  });
+  for (const command of ['approve', 'reject', 'adopt', 'edit']) {
+    await assert.rejects(revisionCommand([command, f.id, f.proposal.proposalId, 'Review'], {
+      ...f.options, principal: owner(), assertUser,
+    }), { code: 'owner-credential-required' });
+  }
+  const audit = readFileSync(auditFile(f.options), 'utf8');
+  const receipts = audit.trim().split('\n').map(JSON.parse);
+  assert.equal(receipts.length, 4);
+  assert.ok(receipts.every((r) => r.agentId === f.id && r.decision === 'owner-credential-required'));
+  assert.ok(!audit.includes(SECRET) && !audit.includes('s'.repeat(43)));
+  assert.equal(listSoulProposals(f.id, f.options)[0].status, 'pending');
+});
+
+test('unmarked CLI without a credential refuses noninteractive consent and audits without touching keychain', (t) => {
+  const f = fixture(t);
+  for (const command of ['approve', 'reject', 'adopt', 'edit']) {
+    const result = spawnSync(process.execPath, [new URL('../soul-revisions.mjs', import.meta.url).pathname,
+      command, f.id, f.proposal.proposalId, 'Review'], {
+      cwd: f.root, env: { ...f.options.env, AGENT_BOT_STATE_HOME: f.options.stateDir }, encoding: 'utf8',
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /owner-credential-required: owner consent requires an interactive terminal/);
+  }
+  assert.equal(readFileSync(auditFile(f.options), 'utf8').trim().split('\n').length, 4);
+  assert.equal(listSoulProposals(f.id, f.options)[0].status, 'pending');
+});
+
+test('broker errors cannot reflect a credential into owner errors or audit', async (t) => {
+  const f = fixture(t);
+  const broker = fakeBroker({ fail: { code: SECRET, message: SECRET } });
+  await assert.rejects(revisionCommand(['approve', f.id, f.proposal.proposalId, 'Review'], {
+    ...f.options, principal: owner(), assertUser: gate({ markers: () => [],
+      verifyPrincipal: (credential) => verifyPrincipalOwner(credential, { clientFactory: broker.clientFactory }),
+    }),
+  }), (error) => error.code === 'owner-credential-required' && !error.message.includes(SECRET));
+  assert.ok(!readFileSync(auditFile(f.options), 'utf8').includes(SECRET));
 });

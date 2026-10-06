@@ -26,7 +26,7 @@ function fixture(t, policy, { genesis = true } = {}) {
   if (policy !== undefined) writeFileSync(join(packagePath, 'policy.json'), JSON.stringify(policy));
   manifest.revision = computePackageRevision(packagePath);
   writeFileSync(join(packagePath, 'soul.json'), JSON.stringify(manifest));
-  const options = { stateDir: join(root, 'state'), now: () => new Date('2026-10-01T12:00:00Z') };
+  const options = { env: { HOME: root }, home: root, stateDir: join(root, 'state'), now: () => new Date('2026-10-01T12:00:00Z') };
   const identity = mintAgentIdentity({ ...options, appSlug: 'test-agent', packagePath: genesis ? packagePath : null });
   const initial = adoptSoulPackage(identity.id, packagePath, options);
   return { ...options, root, options, packagePath, id: identity.id, identity, initial };

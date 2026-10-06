@@ -1,0 +1,1 @@
+- Soul revision owner actions now expose principal-authenticated daemon routes, reject and audit soul bindings with `owner-credential-required`, and refuse noninteractive CLI consent; GeniusBar can list pending revisions and use the reserved consent contract (#293).

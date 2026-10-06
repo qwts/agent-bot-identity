@@ -76,7 +76,7 @@ import { isComputerUse } from './permission-risk.mjs';
 import { appendAuditReceipt, assertAuthorized, principalsFile, resolvePrincipal } from './agent-principals.mjs';
 import { validateApprovalScope } from './session-approvals.mjs';
 import { approvalAction, shown } from './approval-action.mjs';
-import { confirmOwnerPresence } from './owner-gate.mjs';
+import { confirmOwnerPresence, ownerCredentialRequired, verifyPrincipalOwner } from './owner-gate.mjs';
 import { runSpawnHooks } from './agent-hook.mjs';
 import { createWebLayer } from './agent-web.mjs';
 import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs';
@@ -95,7 +95,7 @@ import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHarnessesP
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
-import { editSoulRevision, revisionHistory } from './soul-revisions.mjs';
+import { editSoulRevision, listSoulProposals, revisionCommand, revisionHistory } from './soul-revisions.mjs';
 import { acpExecutorFor, createWakePlane, createTurnRegistry } from './wake-plane.mjs';
 import { recordSoulSession } from './metrics.mjs';
 import { createTaskReporter } from './task-turns.mjs';
@@ -434,6 +434,7 @@ export function createDaemonServer({
   ownerGate = (action, { principal }) => confirmOwnerPresence(action, { env, principal }),
   // Settings accept a verified principal instead of presence, like soul mode.
   settingGate = (action, { principal }) => soulSettingOwnerGate(action, { principal, env, cwd: home }),
+  revisionPrincipal = (credential) => verifyPrincipalOwner(credential, { env }),
 } = {}) {
   // One interaction service per server so in-flight executions and their
   // cancellation controllers live exactly as long as the daemon.
@@ -519,6 +520,13 @@ export function createDaemonServer({
       }
       const authorization = req.headers.authorization ?? '';
       const presented = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+      // Even an invalid/expired binding marks a soul request. Refuse before
+      // bearer auth, parsing the body, or attempting principal verification.
+      const revisionAction = req.method === 'POST' && /^\/v0\/soul\/revisions\/(approve|reject|adopt|edit)$/.exec(url.pathname)?.[1];
+      if (revisionAction && ('x-agent-binding' in req.headers || PROOF_HEADER in req.headers)) {
+        appendAuditReceipt({ event: 'soul-revision', operation: revisionAction, decision: 'owner-credential-required' }, { env, home, now });
+        throw ownerCredentialRequired('a soul binding cannot authorize an owner revision action');
+      }
       if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/credential', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
         sendJson(res, 401, { error: 'missing or invalid daemon token' });
         return;
@@ -790,6 +798,44 @@ export function createDaemonServer({
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, souls: withRoles(souls, { file: populationOverride(env, home), env, home }) });
           return;
         }
+        case 'GET /v0/soul/revisions': {
+          const agentId = requireAgentId(url.searchParams.get('agentId'));
+          const proposals = listSoulProposals(agentId, { stateDir: stateDirectory({ env, home }) })
+            .filter((proposal) => proposal.status === 'pending')
+            .map(({ proposalId, revision, parentRevision, author, reason, diff, requiresUser, status, at }) =>
+              ({ proposalId, revision, parentRevision, author, reason, diff, requiresUser, status, at }));
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, agentId, proposals });
+          return;
+        }
+        case 'POST /v0/soul/revisions/approve':
+        case 'POST /v0/soul/revisions/reject':
+        case 'POST /v0/soul/revisions/adopt':
+        case 'POST /v0/soul/revisions/edit': {
+          const body = parseJsonBody(await readBody(req));
+          const agentId = requireAgentId(body.agentId);
+          const target = ['approve', 'reject'].includes(revisionAction) ? body.proposalId : body.packagePath;
+          if (typeof target !== 'string' || !target.trim() || typeof body.reason !== 'string' || !body.reason.trim()
+            || (body.consent !== undefined && body.consent !== true) || (body.consent && body.principal != null)) {
+            throw Object.assign(new Error('provide a target and reason, and either principal or consent: true'), { statusCode: 400 });
+          }
+          const record = await revisionCommand([revisionAction, agentId, target, body.reason], {
+            env, home, now, stateDir: stateDirectory({ env, home }), principal: body.principal ?? null,
+            ...(body.expectedParent === undefined ? {} : { expectedParent: body.expectedParent }),
+            assertUser: async (_action, { principal }) => {
+              if (body.consent) {
+                // Reserved host ceremony contract: no client-supplied boolean
+                // or assertion grants consent, and this route raises no GUI.
+                throw Object.assign(new Error('daemon owner consent is not implemented; use the interactive CLI'), {
+                  code: 'owner-consent-unavailable', statusCode: 501,
+                });
+              }
+              if (!principal) throw ownerCredentialRequired();
+              return revisionPrincipal(principal);
+            },
+          });
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, agentId, record });
+          return;
+        }
         case 'GET /v0/soul/profile': {
           const agentId = url.searchParams.get('agentId');
           if (!agentId) {
@@ -873,7 +919,8 @@ export function createDaemonServer({
       }
     } catch (error) {
       const failure = operationError(error);
-      sendJson(res, failure.statusCode, { error: failure.message, ...(error.code === 'soul-paused' ? { code: error.code } : {}) });
+      sendJson(res, failure.statusCode, { error: failure.message,
+        ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable'].includes(error.code) ? { code: error.code } : {}) });
     }
   });
   server.on('listening', () => {
