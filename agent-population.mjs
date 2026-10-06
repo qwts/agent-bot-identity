@@ -691,10 +691,28 @@ function manifestText(value, max) {
   const text = value.trim();
   return text && text.length <= max && MANIFEST_TEXT.test(text) ? text : null;
 }
+// The package is untrusted and may sit on an agent-chosen path, so its
+// soul.json is opened like the marker: no link following, no blocking on a
+// FIFO, and only a small regular file is parsed (Cursor security review on
+// #456). Anything else reads as no manifest.
+const MANIFEST_MAX_BYTES = 64 * 1024;
+function readPackageManifest(directory) {
+  let fd;
+  try { fd = openSync(path.join(directory, 'soul.json'), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK); }
+  catch { return null; }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > MANIFEST_MAX_BYTES) return null;
+    return readFileSync(fd, 'utf8');
+  } catch { return null; } finally { closeSync(fd); }
+}
+
 export function packageManifest(directory) {
   let manifest;
   try {
-    manifest = JSON.parse(readFileSync(path.join(directory, 'soul.json'), 'utf8'));
+    const text = readPackageManifest(directory);
+    if (text === null) return {};
+    manifest = JSON.parse(text);
   } catch { return {}; }
   if (!manifest || typeof manifest !== 'object') return {};
   const out = {};

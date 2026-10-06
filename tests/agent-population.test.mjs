@@ -9,6 +9,7 @@ import {
   renameSync,
   statSync,
   writeFileSync,
+  symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -585,6 +586,25 @@ test('locating a package reports what its soul.json says, bounded and printable 
   mkdirSync(bare, { recursive: true });
   assert.deepEqual(locateSoulDir(bare, options), { path: bare, status: 'package' });
   assert.deepEqual(packageManifest(bare), {});
+
+  // An untrusted package's soul.json is read like the marker: a link, a FIFO
+  // (which must not block the daemon) or an oversized file is no manifest.
+  const linked = path.join(root, 'Linked.soul');
+  mkdirSync(linked, { recursive: true });
+  writeFileSync(path.join(root, 'elsewhere.json'), JSON.stringify({ name: 'Leaked' }));
+  symlinkSync(path.join(root, 'elsewhere.json'), path.join(linked, 'soul.json'));
+  assert.deepEqual(packageManifest(linked), {});
+  const piped = path.join(root, 'Piped.soul');
+  mkdirSync(piped, { recursive: true });
+  if (spawnSync('mkfifo', [path.join(piped, 'soul.json')]).status === 0) {
+    const started = Date.now();
+    assert.deepEqual(packageManifest(piped), {});
+    assert.ok(Date.now() - started < 2_000, 'a FIFO soul.json must not block');
+  }
+  const huge = path.join(root, 'Huge.soul');
+  mkdirSync(huge, { recursive: true });
+  writeFileSync(path.join(huge, 'soul.json'), JSON.stringify({ name: 'Huge', description: 'x'.repeat(70_000) }));
+  assert.deepEqual(packageManifest(huge), {});
 });
 
 test('the census role line comes from soul.json role and the soul\'s live team (Lovable X2)', () => {
