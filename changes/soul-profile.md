@@ -1,0 +1,1 @@
+- `agent-bot soul profile <agentId|name> [--json] [--file RELATIVE_PATH]` and authenticated `GET /v0/soul/profile` expose a read-only customization profile, allowed files, skills, credential declarations and offline SOP availability without fetching repositories or reading secret stores (#375).

@@ -756,6 +756,12 @@ function walkDocuments(root, source, commit) {
 
 function cachedDocuments(repo, commit, options) {
   const parent = join(sopState(options), 'sop-cache');
+  if (options.offline) {
+    const cache = join(parent, commit);
+    if (!existsSync(cache)) fail('documents-unavailable-offline', 'Pinned SOP documents are not cached locally');
+    if (!lstatSync(parent).isDirectory() || !lstatSync(cache).isDirectory()) fail('path-unsafe', 'SOP cache must be regular directories');
+    return cache;
+  }
   mkdirSync(parent, { recursive: true, mode: 0o700 });
   if (lstatSync(parent).isSymbolicLink()) fail('path-unsafe', 'SOP cache must not be a symlink');
   chmodSync(parent, 0o700);

@@ -142,6 +142,12 @@ Both use the same caller gate as stop and record `pause` or `resume` receipts.
 `agent-bot soul show <agentId|name> --json`, population JSON, and daemon health
 and status soul lists expose `paused` (false by default).
 
+`agent-bot soul profile <agentId|name> [--json] [--file RELATIVE_PATH]` reads
+the soul’s profile, allowed package and generated files, skills, declared
+credential names, and offline SOP availability. File contents require an
+inventoried UTF-8 path and are capped at 256 KiB. It never reads credential
+stores or fetches SOPs. See [soul-profile.md](../../docs/soul-profile.md).
+
 ## Verify the outcome
 
 Check the relevant local identity state before mutating GitHub. After a write,

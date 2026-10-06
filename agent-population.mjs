@@ -13,6 +13,7 @@ import {
   cpSync,
   existsSync,
   fstatSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -807,18 +808,28 @@ function soulRootDirs(root) {
 // recorded folder is gone and the soul's marker was found in another one.
 // `scan` lists the souls root's folders (memoized by callers that resolve
 // many souls).
-function resolveSoulDir(soul, root, scan) {
+function resolveSoulDir(soul, root, scan, readOnly = false) {
   const target = soul.id;
-  if (soul.soulDir && existsSync(soul.soulDir) && directoryMatches(soul.soulDir, target)) return { directory: soul.soulDir, moved: false };
+  const marker = (dir) => {
+    for (const entry of [dir, path.join(dir, '.soul-state')]) {
+      try { if (!lstatSync(entry).isDirectory()) return INVALID_MARKER; }
+      catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    }
+    return markerOf(dir);
+  };
+  const matches = (dir) => readOnly ? marker(dir) === target : directoryMatches(dir, target);
+  if (soul.soulDir && existsSync(soul.soulDir) && matches(soul.soulDir)) return { directory: soul.soulDir, moved: false };
   if (soul.soulDir && !existsSync(soul.soulDir)) {
-    const matches = scan().filter((dir) => directoryMatches(dir, target));
-    if (matches.length > 1) throw new Error(`multiple soul directories for ${target}`);
-    if (matches.length === 1) return { directory: matches[0], moved: true };
+    const found = scan().filter(matches);
+    if (found.length > 1) throw new Error(`multiple soul directories for ${target}`);
+    if (found.length === 1) return { directory: found[0], moved: true };
   }
   // Names may collide (#92), so a default directory another soul already
   // marked falls back to one carrying this soul's ID suffix.
   const named = path.join(root, `${soul.name}.soul`);
-  return { directory: claimedByOther(named, target) ? path.join(root, `${soul.name}-${target.slice(-8)}.soul`) : named, moved: false };
+  const owner = readOnly ? marker(named) : null;
+  const claimed = readOnly ? owner !== null && owner !== target : claimedByOther(named, target);
+  return { directory: claimed ? path.join(root, `${soul.name}-${target.slice(-8)}.soul`) : named, moved: false };
 }
 
 export function soulDirectory(id, options = {}) {
@@ -826,8 +837,8 @@ export function soulDirectory(id, options = {}) {
   const file = options.file ?? populationFile(options);
   const soul = showSoul(target, { file });
   const { root } = soulsHome(options);
-  const { directory, moved } = resolveSoulDir(soul, root, () => soulRootDirs(root));
-  if (moved) registerSoulDir(target, directory, { file });
+  const { directory, moved } = resolveSoulDir(soul, root, () => soulRootDirs(root), options.readOnly);
+  if (moved && !options.readOnly) registerSoulDir(target, directory, { file });
   return directory;
 }
 

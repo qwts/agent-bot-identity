@@ -80,6 +80,9 @@ export function dispatchAgentBot(parsed) {
   if (parsed.command === 'soul' && parsed.args[0] === 'show') {
     return run(process.execPath, [join(ROOT, 'agent-population.mjs'), ...parsed.args]);
   }
+  if (parsed.command === 'soul' && parsed.args[0] === 'profile') {
+    return run(process.execPath, [join(ROOT, 'soul-profile.mjs'), ...parsed.args.slice(1)]);
+  }
   if (parsed.command === 'soul' && ['confinement', 'confinement-report'].includes(parsed.args[0])) {
     return run(process.execPath, [join(ROOT, 'confinement.mjs'), ...parsed.args]);
   }
@@ -141,6 +144,6 @@ export function dispatchAgentBot(parsed) {
     return run(process.execPath, [join(ROOT, module), ...parsed.args], { ...process.env, AGENT_BOT_SETUP_HINT: '1' });
   }
   const args = parsed.command === 'soul' && parsed.args[0] === 'cold-wake' ? parsed.args.slice(1) : parsed.args;
-  if (parsed.command === 'soul' && parsed.args[0] !== 'cold-wake') throw new Error('usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-] | soul build [PATH] [--check] | soul pack validate PATH | soul revision <command> | soul model <agentId|name> [show|set <modelId>|clear] [--json] [--principal-stdin] | soul mode <agentId|name> [show|safe|autopilot] [--json] [--principal-stdin] | soul computer-use <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul stop <agentId|name> [--json] | soul pause|resume <agentId|name> [--json] | soul show <agentId|name> [--json] | soul comms <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul remove <agentId|name> [--json] [--principal-stdin] | soul fork <copy-path> --name NAME [--harness H] [--json] [--principal-stdin] | soul asides <agentId|name> [--after ASIDE_ID] [--limit N] [--json] | soul dir AGENT_ID | soul locate PATH | soul templates [--json] | soul spawn TEMPLATE_PATH --name NAME [--harness H] | soul confinement AGENT_ID off|warn|deny | soul confinement-report AGENT_ID [--json]');
+  if (parsed.command === 'soul' && parsed.args[0] !== 'cold-wake') throw new Error('usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-] | soul build [PATH] [--check] | soul pack validate PATH | soul revision <command> | soul model <agentId|name> [show|set <modelId>|clear] [--json] [--principal-stdin] | soul mode <agentId|name> [show|safe|autopilot] [--json] [--principal-stdin] | soul computer-use <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul stop <agentId|name> [--json] | soul pause|resume <agentId|name> [--json] | soul show <agentId|name> [--json] | soul profile <agentId|name> [--json] [--file RELATIVE_PATH] | soul comms <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul remove <agentId|name> [--json] [--principal-stdin] | soul fork <copy-path> --name NAME [--harness H] [--json] [--principal-stdin] | soul asides <agentId|name> [--after ASIDE_ID] [--limit N] [--json] | soul dir AGENT_ID | soul locate PATH | soul templates [--json] | soul spawn TEMPLATE_PATH --name NAME [--harness H] | soul confinement AGENT_ID off|warn|deny | soul confinement-report AGENT_ID [--json]');
   return run(process.execPath, [join(ROOT, module), ...args]);
 }

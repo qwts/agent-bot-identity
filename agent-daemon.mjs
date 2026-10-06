@@ -84,6 +84,7 @@ import { PROOF_HEADER, parseBindingProof, signBindingProof } from './binding-pro
 import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms-client.mjs';
 import { attachWakeEndpoint } from './agent-wake.mjs';
 import { soulMode } from './soul-mode.mjs';
+import { readSoulProfile } from './soul-profile.mjs';
 import { soulModel, setSoulModel, recordSoulModels } from './soul-model.mjs';
 import { ownerGate as soulSettingOwnerGate, readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
@@ -789,6 +790,19 @@ export function createDaemonServer({
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, souls: withRoles(souls, { file: populationOverride(env, home), env, home }) });
           return;
         }
+        case 'GET /v0/soul/profile': {
+          const agentId = url.searchParams.get('agentId');
+          if (!agentId) {
+            sendJson(res, 400, { error: 'agentId is required' });
+            return;
+          }
+          try { sendJson(res, 200, readSoulProfile(agentId, { env, home })); }
+          catch (error) {
+            if (error.code !== 'soul-not-found') throw error;
+            sendJson(res, 404, { error: error.message, code: error.code });
+          }
+          return;
+        }
         case 'POST /v0/soul/computer-use': {
           const body = parseJsonBody(await readBody(req));
           const agentId = requireAgentId(body.agentId);
@@ -1366,6 +1380,9 @@ export function daemonClient({
       const query = params.toString();
       const { souls } = await request('GET', `/v0/population${query ? `?${query}` : ''}`);
       return souls;
+    },
+    async soulProfile(agentId) {
+      return request('GET', `/v0/soul/profile?agentId=${encodeURIComponent(agentId)}`);
     },
     // The daemon writes the shared secret in the private git dir. Callers
     // must never log it or return it to the conversation.
