@@ -1,1 +1,0 @@
-- Add `agent-bot soul stop <agentId|name> [--json]` to cancel running daemon turns with an audited loopback request (#474).

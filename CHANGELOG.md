@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.18
+
+- Add `agent-bot soul stop <agentId|name> [--json]` to cancel running daemon turns with an audited loopback request (#474).
+
 ## 0.10.17
 
 - Souls install only their own harness adapter (#426). A Claude soul made from Starter no longer installs the pinned Codex adapter and its roughly 330 MB binary. Home launches and ACP joins select the adapter named by the harness registry, keep its template lockfile pin, and prune the install manifest and v3 lockfile to that adapter and its reachable dependencies before running `npm ci --ignore-scripts --omit=dev`. A home relaunched with another harness reinstalls for that choice; a joined checkout uses the soul's private harness directory. Harnesses without an adapter and packages without a matching pin install nothing, and the daemon never falls back to npx.
