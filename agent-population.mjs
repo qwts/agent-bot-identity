@@ -38,6 +38,7 @@ import {
 } from './agent-identity.mjs';
 
 import { readSoulModes } from './soul-mode.mjs';
+import { readSoulModels } from './soul-model.mjs';
 import { soulsHome } from './souls-root.mjs';
 
 const SCHEMA_VERSION = 1;
@@ -1032,6 +1033,7 @@ function shortText(value, max) {
 
 export function withRoles(records, { file = populationFile(), env = process.env, home = homedir() } = {}) {
   const modes = readSoulModes({ env, home });
+  const models = readSoulModels({ env, home });
   const children = new Map();
   for (const soul of listSouls({ file })) {
     if (soul.parentId === null || soul.status === 'retired') continue;
@@ -1048,6 +1050,7 @@ export function withRoles(records, { file = populationFile(), env = process.env,
     return {
       ...record,
       mode: modes[record.id] ?? 'safe',
+      model: models[record.id]?.model ?? null,
       role,
       description: shortText(manifest?.description, 280),
       children: count,

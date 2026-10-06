@@ -748,3 +748,46 @@ test('an agent that ignores EOF and SIGTERM is killed after the grace period', a
   assert.equal(pids.length, 1);
   assert.throws(() => process.kill(-pids[0], 0), /ESRCH/);
 });
+
+
+for (const resume of [false, true]) {
+  test(`model selection and discovery on session/${resume ? 'load' : 'new'}`, async () => {
+    const models = { availableModels: [{ modelId: 'default', name: 'Default' }, { modelId: 'chosen', name: 'Chosen', description: 'Test model' }], currentModelId: 'default' };
+    for (const selected of ['chosen', 'default', null]) {
+      const seen = [];
+      const { events } = await turn({ message: 'model-probe', executorOptions: {
+        model: selected, onModels: (block) => seen.push(block),
+        env: { ...process.env, FAKE_ACP_MODELS: JSON.stringify(models) },
+        ...(resume ? { getHarnessSession: () => ({ harnessSessionId: 'fake-resume' }) } : {}),
+      } });
+      const result = JSON.parse(chunkTexts(events)[0]);
+      assert.deepEqual(seen, [models]);
+      assert.equal(result.model, selected ?? 'default');
+      assert.deepEqual(result.requests, selected === 'chosen' ? [{ sessionId: resume ? 'fake-resume' : 'fake-ses-1', modelId: 'chosen' }] : []);
+    }
+  });
+}
+
+test('model selection without discovery and set_model failure both preserve the turn', async () => {
+  for (const fail of [false, true]) {
+    const logs = [];
+    const { events } = await turn({ message: 'model-probe', executorOptions: {
+      model: 'chosen', log: (line) => logs.push(line), onModels: () => assert.fail('no models block'),
+      env: { ...process.env, FAKE_ACP_MODEL_ERROR: fail ? '1' : '' },
+    } });
+    const result = JSON.parse(chunkTexts(events)[0]);
+    assert.equal(result.model, fail ? null : 'chosen');
+    assert.deepEqual(result.requests, [{ sessionId: 'fake-ses-1', modelId: 'chosen' }]);
+    assert.equal(logs.length, fail ? 1 : 0);
+    if (fail) assert.match(logs[0], /session\/set_model failed.*model unavailable/);
+  }
+});
+
+test('synchronous and asynchronous model cache failures never fail a turn', async () => {
+  for (const onModels of [() => { throw new Error('cache failed'); }, async () => { throw new Error('cache failed'); }]) {
+    const { events } = await turn({ message: 'model-probe', executorOptions: { model: 'chosen', onModels,
+      env: { ...process.env, FAKE_ACP_MODELS: JSON.stringify({ availableModels: [], currentModelId: 'default' }) },
+    } });
+    assert.equal(JSON.parse(chunkTexts(events)[0]).model, 'chosen');
+  }
+});

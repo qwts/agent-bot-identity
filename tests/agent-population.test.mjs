@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync,
   symlinkSync,
@@ -349,7 +350,7 @@ test('population CLI lists, filters, and shows records', () => {
 
   const filtered = runCli(['population', 'list', '--status', 'active', '--app', 'qwts-codex-agent', '--json'], file);
   assert.equal(filtered.status, 0, filtered.stderr);
-  assert.deepEqual(JSON.parse(filtered.stdout), [{ ...fixture(), mode: 'safe', role: null, description: null, children: 0, roleLine: null }]);
+  assert.deepEqual(JSON.parse(filtered.stdout), [{ ...fixture(), mode: 'safe', model: null, role: null, description: null, children: 0, roleLine: null }]);
 
   const shown = runCli(['population', 'show', SECOND_ID], file);
   assert.equal(shown.status, 0, shown.stderr);
@@ -663,4 +664,22 @@ test('the role line reads a moved soul folder without rewriting the census', () 
   // soulDirectory still repairs the record when asked directly.
   assert.equal(soulDirectory(soul.id, { file, env, home: root }), moved);
   assert.equal(showSoul(soul.id, { file }).soulDir, moved);
+});
+
+test('population projects selected models per soul without writing the census', async (t) => {
+  const { setSoulModel } = await import('../soul-model.mjs');
+  const root = scratch();
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const env = { HOME: root, XDG_STATE_HOME: path.join(root, 'state'), AGENT_BOT_INTERACTION_HOME: path.join(root, 'interaction') };
+  const file = path.join(root, 'population.json');
+  upsertSoul(fixture(), { file });
+  upsertSoul(fixture({ id: SECOND_ID }), { file });
+  const options = { file, env, home: root };
+  const before = readFileSync(file, 'utf8');
+  assert.ok(withRoles(listSouls({ file }), options).every((row) => row.model === null));
+  setSoulModel(FIRST_ID, 'chosen', options);
+  const rows = withRoles(listSouls({ file }), options);
+  assert.equal(rows.find((row) => row.id === FIRST_ID).model, 'chosen');
+  assert.equal(rows.find((row) => row.id === SECOND_ID).model, null);
+  assert.equal(readFileSync(file, 'utf8'), before);
 });

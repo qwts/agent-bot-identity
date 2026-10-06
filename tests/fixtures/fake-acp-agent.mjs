@@ -9,6 +9,7 @@ let nextId = 1;
 const pending = new Map();
 let sessionCounter = 0;
 const sessions = new Map();
+const models = process.env.FAKE_ACP_MODELS ? JSON.parse(process.env.FAKE_ACP_MODELS) : null;
 
 function write(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
@@ -35,6 +36,11 @@ async function handlePrompt({ sessionId, prompt }) {
   const session = sessions.get(sessionId);
   if (!session) throw new Error(`unknown session ${sessionId}`);
   const text = prompt?.[0]?.text ?? '';
+
+  if (text === 'model-probe') {
+    chunk(sessionId, JSON.stringify({ model: session.model ?? models?.currentModelId ?? null, requests: session.modelRequests ?? [] }));
+    return { stopReason: 'end_turn' };
+  }
 
   if (text === 'env-probe') {
     chunk(sessionId, JSON.stringify({
@@ -252,12 +258,20 @@ async function handle(method, params) {
     sessionCounter += 1;
     const sessionId = `fake-ses-${sessionCounter}`;
     sessions.set(sessionId, { cwd: params.cwd, mcpServers: params.mcpServers, loaded: false });
-    return { sessionId };
+    return { sessionId, ...(models ? { models } : {}) };
   }
   if (method === 'session/load') {
     sessions.set(params.sessionId, { cwd: params.cwd, mcpServers: params.mcpServers, loaded: true });
     // History replay: the engine must NOT re-record this as a fresh event.
     chunk(params.sessionId, 'replayed-history-line');
+    return models ? { models } : {};
+  }
+  if (method === 'session/set_model') {
+    const session = sessions.get(params.sessionId);
+    if (!session) throw new Error(`unknown session ${params.sessionId}`);
+    (session.modelRequests ??= []).push(params);
+    if (process.env.FAKE_ACP_MODEL_ERROR) throw new Error('model unavailable');
+    session.model = params.modelId;
     return {};
   }
   if (method === 'session/set_mode') {
