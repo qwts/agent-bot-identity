@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import process from 'node:process';
-import { execFileSync } from 'node:child_process';
 import { createPrivateKey, randomUUID } from 'node:crypto';
 import {
   existsSync,
@@ -16,8 +15,10 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadConfig } from './config.mjs';
 import { appStoreTarget, readAppMetadata, readManagedAppCredential, updateAppConfig } from './identity-app-store.mjs';
-import { credentialStores, resolveAppCredential } from './soul-credentials.mjs';
+import { credentialStores, passCliItem, resolveAppCredential } from './soul-credentials.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
+import { runPass, classifyPassCliFailure, STORE_UNAVAILABLE_CODES } from './secret-providers/pass-cli.mjs';
+export { classifyPassCliFailure, PROVIDER_SESSION_REQUIRED, PROVIDER_LOCKED, PROVIDER_UNAVAILABLE, STORE_UNAVAILABLE_CODES } from './secret-providers/pass-cli.mjs';
 
 export const AGENT_IDENTITIES_VAULT = 'Agent Identities';
 
@@ -76,8 +77,8 @@ export function parsePassItemView(text) {
   let data;
   try {
     data = JSON.parse(text);
-  } catch (error) {
-    throw new Error(`pass-cli item view returned non-JSON: ${error.message}`);
+  } catch {
+    throw new Error('pass-cli item view returned non-JSON');
   }
   const item = data?.item && typeof data.item === 'object' ? data.item : data;
   const shareId = pickString(data?.shareId, data?.share_id, item?.shareId, item?.share_id);
@@ -206,79 +207,6 @@ export function selectPrivateKeyField(fields) {
   const value = (fields ?? new Map()).get('privatekey');
   if (!value) return null;
   return value.endsWith('\n') ? value : `${value}\n`;
-}
-
-export const PROVIDER_SESSION_REQUIRED = 'provider-session-required';
-export const PROVIDER_LOCKED = 'provider-locked';
-export const PROVIDER_UNAVAILABLE = 'provider-unavailable';
-export const STORE_UNAVAILABLE_CODES = Object.freeze([
-  PROVIDER_SESSION_REQUIRED,
-  PROVIDER_LOCKED,
-  PROVIDER_UNAVAILABLE,
-]);
-
-const PASS_CLI_FAILURE_CODES = new Set([
-  ...STORE_UNAVAILABLE_CODES,
-  'missing-item',
-  'ambiguous-item',
-  'provider-failure',
-]);
-
-function passCliText(error) {
-  return `${error?.stderr ?? ''}\n${error?.stdout ?? ''}\n${error?.message ?? ''}`;
-}
-
-// Classify a pass-cli failure without splicing provider output into the
-// operator action. Locked / missing sessions are a store gate, not an item
-// defect — they must not be reported as missing-issuer or a generic restore.
-export function classifyPassCliFailure(error) {
-  if (error?.code && PASS_CLI_FAILURE_CODES.has(error.code)) {
-    return { code: error.code };
-  }
-  if (error?.code === 'ENOENT') {
-    return { code: PROVIDER_UNAVAILABLE };
-  }
-  const text = passCliText(error);
-  if (/no session|authenticated client|not logged in|unauthenticated/i.test(text)) {
-    return { code: PROVIDER_SESSION_REQUIRED };
-  }
-  if (/session is locked|session locked|unlock the (?:current )?session|requires.*unlock/i.test(text)) {
-    return { code: PROVIDER_LOCKED };
-  }
-  if (/not found|no item/i.test(text)) {
-    return { code: 'missing-item' };
-  }
-  if (/ambiguous|multiple/i.test(text)) {
-    return { code: 'ambiguous-item' };
-  }
-  return { code: 'provider-failure' };
-}
-
-function passCliFailure(error) {
-  const { code } = classifyPassCliFailure(error);
-  const detail = {
-    [PROVIDER_UNAVAILABLE]: 'was not found',
-    [PROVIDER_SESSION_REQUIRED]: 'has no session',
-    [PROVIDER_LOCKED]: 'session is locked',
-    'missing-item': 'item not found',
-    'ambiguous-item': 'item selection is ambiguous',
-    'provider-failure': 'provider command failed',
-  }[code];
-  const wrapped = new Error(`pass-cli ${detail}`);
-  wrapped.code = code;
-  wrapped.cause = error;
-  return wrapped;
-}
-
-function runPass(args) {
-  try {
-    return execFileSync('pass-cli', args, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  } catch (error) {
-    throw passCliFailure(error);
-  }
 }
 
 export function inspectProtonPassSession({ run = runPass } = {}) {
@@ -472,7 +400,8 @@ export function ensurePrivateKey({
   const needKey = force || !key || !validateKey(key);
   const target = appStoreTarget(slug, { env, home });
   const kind = config.identityApps?.[slug]?.store ?? 'file';
-  const storedPath = kind === 'file' ? join(target.soulDir, '.soul-state', 'credentials', `github-app-${slug}.json`) : `keychain:agent-bot.app.${slug}`;
+  const storedPath = stored?.source === 'pass-cli' ? `pass-cli:Agent Identities/${passCliItem(stored.agentId, slug)}`
+    : kind === 'file' ? join(target.soulDir, '.soul-state', 'credentials', `github-app-${slug}.json`) : `keychain:agent-bot.app.${slug}`;
   if (!needKey && !needId) return { path: stored ? storedPath : legacyPath, idPath,
     downloaded: false, appIdWritten: false, localStatus: 'ready', restored: [] };
 

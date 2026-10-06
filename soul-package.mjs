@@ -30,7 +30,7 @@ export function canonicalJson(value) {
 // only the closed set of keys below is accepted, and the App is a slug.
 // `keyd` is agent-bot-keyd's Keychain, which only that signed binary reads
 // (#397).
-export const CREDENTIAL_STORES = Object.freeze(['keychain', 'file', 'keyd']);
+export const CREDENTIAL_STORES = Object.freeze(['keychain', 'file', 'keyd', 'pass-cli']);
 const APP_SLUG = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?$/;
 export function validateCredentialsDeclaration(credentials) {
   if (!object(credentials)) throw new Error('soul.json credentials must be an object');
