@@ -34,7 +34,7 @@ test('the relay runs agent-comms as the soul, in its worktree, with its binding'
   for (const { command, options } of calls) {
     assert.equal(command, 'agent-comms');
     assert.equal(options.cwd, '/home/soul');
-    assert.deepEqual(options.env, { PATH: '/tools', AGENT_BOT_BINDING: soul.binding.file, AGENT_BOT_ID: 'agent_1', QWTS_AGENT_ID: 'agent_1' });
+    assert.deepEqual(options.env, { PATH: '/tools', AGENT_BOT_BINDING: soul.binding.file, AGENT_BOT_ID: 'agent_1', QWTS_AGENT_ID: 'agent_1', AGENT_COMMS_NO_DELIVERY_REPORT: '1' });
   }
 });
 

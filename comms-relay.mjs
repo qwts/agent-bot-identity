@@ -23,7 +23,10 @@ export const FINAL_REPLY_ERRORS = new Set(['reply-depth-exceeded', 'unknown-reci
 export function agentCommsAsSoul({ env = process.env, run = execFile } = {}) {
   return ({ agentId, binding }, args) => new Promise((resolve, reject) => {
     const { AGENT_BOT_BINDING: _inherited, ...hostEnv } = env;
-    const soulEnv = { ...hostEnv, ...(binding.file ? { AGENT_BOT_BINDING: binding.file } : {}), AGENT_BOT_ID: agentId, QWTS_AGENT_ID: agentId };
+    // The daemon's own mailbox reads are not deliveries: agent-comms reports
+    // what `inbox read` printed to this daemon (agent-comms#100), and a read
+    // made for the relay or the delivered route must not come back as one.
+    const soulEnv = { ...hostEnv, ...(binding.file ? { AGENT_BOT_BINDING: binding.file } : {}), AGENT_BOT_ID: agentId, QWTS_AGENT_ID: agentId, AGENT_COMMS_NO_DELIVERY_REPORT: '1' };
     run('agent-comms', args, { cwd: binding.worktree, env: soulEnv, timeout: 30_000 }, (error, stdout = '', stderr = '') => {
       let result = null;
       try { result = JSON.parse(String(stdout)); } catch {}
