@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.21
+
+- `agent-bot approvals approve <proposalId> --scope session` and daemon approval routes can approve a tool for the soul’s current harness session. Grants stay in daemon memory and clear on session change, stop, pause, or restart; decision JSON exposes `scope` and `approved_session` for approval cards (#486).
+
 ## 0.10.20
 
 - `agent-bot soul computer-use <agentId|name> [show|on|off]` lets the owner disable computer use for one soul in Safe or Auto-Pilot mode, stops active computer-use turns, and exposes the durable setting through population and daemon APIs (#482).
