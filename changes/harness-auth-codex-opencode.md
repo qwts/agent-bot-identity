@@ -1,1 +1,0 @@
-- Add Codex and OpenCode harness sign-in status/login support and JSON output for soul cold-wake show.

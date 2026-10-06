@@ -1,1 +1,0 @@
-- Add filtered audit log listing and live tailing for GeniusBar, including receipts for tool permissions allowed or denied by daemon policy.

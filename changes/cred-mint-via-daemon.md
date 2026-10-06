@@ -1,1 +1,0 @@
-- Soul-bound Git and gh callers now obtain GitHub credentials through the daemon and fail closed when it is unavailable, keeping key-store reads out of caller processes. (#398)

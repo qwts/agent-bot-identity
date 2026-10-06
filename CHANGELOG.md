@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.14
+
+- Add filtered audit log listing and live tailing for GeniusBar, including receipts for tool permissions allowed or denied by daemon policy.
+- Soul-bound Git and gh callers now obtain GitHub credentials through the daemon and fail closed when it is unavailable, keeping key-store reads out of caller processes. (#398)
+- Add Codex and OpenCode harness sign-in status/login support and JSON output for soul cold-wake show.
+- `agent-bot soul locate PATH` on a package now also reports the package's `name`, `description` and `preferredHarnesses` from its soul.json (bounded, printable values only), so a launch form can prefill the companion's name and harness. (GeniusBar #120)
+
 ## 0.10.13
 
 - An ACP turn now resolves only after the agent's process group is reaped. After the SIGKILL fallback, the engine waits up to 2s for the group to disappear. It no longer reads macOS's EPERM, which the kernel returns for a group of zombies, as "gone". Before this, a turn could finish while its killed tree was still exiting, which made the "ignores EOF and SIGTERM" test flaky on CI. The process-tree test reads the grandchild's pid from the spawn runner, so only one Node boot has to beat the deadline instead of two plus the ACP handshake. The wake-endpoint tests now wait for the response instead of sleeping a fixed 20ms. The shared hook budget is now proven by counting the hooks that started, not by timing Node startup.
