@@ -52,6 +52,7 @@
 //    executor resolves inside the soul's Agent Space boundary. The contract
 //    re-exports the shape so engines validate references they pass onward.
 
+import { classifyRisk } from './permission-risk.mjs';
 import { validateAgentId } from './agent-identity.mjs';
 
 export const EXECUTOR_CONTRACT_VERSION = 1;
@@ -367,6 +368,8 @@ export function createContractExecutor({ harness, identity, policy, run } = {}) 
         ? summary.slice(0, MAX_SUMMARY_LENGTH)
         : `permission: ${toolName}`;
       const decision = await requestApproval({
+        tool: toolName,
+        risk: classifyRisk({ toolName, summary, operation }),
         operation: operation ?? { permission: { toolName } },
         summary: wantedSummary,
         ...(ttlMs === undefined ? {} : { ttlMs }),

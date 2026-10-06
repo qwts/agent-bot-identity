@@ -98,6 +98,37 @@ function begin(interaction, principal) {
 
 const ALLOW_ALL = { version: 1, rules: [], fallback: 'allow' };
 
+for (const [toolName, operation, risk] of [
+  ['Read', { path: 'README.md' }, 'safe'],
+  ['Bash', { command: 'git reset --hard' }, 'destructive'],
+  ['WebFetch', { url: 'https://example.com' }, 'external'],
+]) {
+  test(`approval proposals preserve ${risk} risk through the contract and decision`, async () => {
+    const { env } = scratch();
+    seedSoul(env);
+    const principal = seedPrincipal(env);
+    const executor = createContractExecutor({
+      harness: 'claude', identity: IDENTITY,
+      policy: { version: 1, rules: [], fallback: 'approval' },
+      run: async ({ requestPermission, emitStop }) => {
+        await requestPermission({ toolName, operation, summary: 'permission request' });
+        emitStop({ stopReason: 'end_turn' });
+      },
+    });
+    const interaction = service(env, { executor });
+    const session = begin(interaction, principal);
+    const { invocation } = interaction.submitMessage({ principal, transport: 'web', sessionId: session.sessionId,
+      message: 'go', idempotencyKey: `risk-${risk}` });
+    const proposal = await waitFor(() => interaction.listProposalsForOwner().proposals[0]);
+    assert.equal(proposal.risk, risk);
+    assert.equal(proposal.tool, toolName);
+    const decided = interaction.decideProposalAsOwner({ proposalId: proposal.proposalId,
+      decision: 'approve', digest: proposal.operationDigest });
+    assert.equal(decided.proposal.risk, risk);
+    await waitFor(() => interaction.getInvocation({ principal, transport: 'web', invocationId: invocation.invocationId }).invocation.status === 'completed');
+  });
+}
+
 // --- validators -----------------------------------------------------------
 
 test('harness binding validates harness, mode, and opaque session id', () => {

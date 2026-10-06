@@ -46,7 +46,7 @@ export async function approvalsCommand(argv, {
     if (target !== undefined || presented) throw new Error(USAGE);
     refuseSoul({ env, cwd });
     const { proposals } = await client.approvals();
-    const rows = proposals.map((proposal) => shown(proposal, opts));
+    const rows = proposals.map((proposal) => ({ ...shown(proposal, opts), invocationId: proposal.invocationId ?? null, risk: proposal.risk ?? 'external' }));
     if (json) write(`${JSON.stringify({ approvals: rows })}\n`);
     else if (!rows.length) write('no approvals waiting\n');
     else for (const row of rows) write(`${row.proposalId} ${row.soul ?? row.agentId} ${row.tool ?? '-'} until ${row.expiresAt}: ${row.summary}\n`);
@@ -67,7 +67,7 @@ export async function approvalsCommand(argv, {
   const result = await client.decideApproval({
     proposalId: target, decision: action, digest: proposal.operationDigest, ...(principal ? { principal } : {}),
   });
-  const decided = shown(result.proposal, opts);
+  const decided = { ...shown(result.proposal, opts), invocationId: result.proposal.invocationId ?? null, risk: result.proposal.risk ?? 'external' };
   write(json ? `${JSON.stringify(decided)}\n` : `${decided.proposalId} ${decided.status}\n`);
   return decided;
 }
