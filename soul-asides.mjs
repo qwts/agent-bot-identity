@@ -14,12 +14,13 @@
 //   - `send_message` / `start_soul`: a soul's own sends, from the reach
 //     server that made them.
 //   - `final-reply`: the reply the relay sent from a turn's final answer.
+//   - `inbox-read` / `hook-inject`: a bound live session reports the IDs it
+//     read or injected; the daemon verifies their bodies in the soul's mailbox.
 //
 // Messages that only reached a mailbox, were acked without a turn, or that a
-// soul read itself with `agent-comms inbox read` (a batch wake or a live
-// session) leave no aside here: the daemon cannot see what entered those
-// contexts. A turn's final answer of NO_REPLY sends nothing, so it is never
-// recorded; a real message whose body happens to be NO_REPLY is.
+// soul read without reporting delivery leave no aside here. A turn's final
+// answer of NO_REPLY sends nothing, so it is never recorded; a real message
+// whose body happens to be NO_REPLY is.
 //
 // Asides are daemon state like the thread journal: 0700 directory, 0600
 // files, bounded, and read only by the owner (`agent-bot soul asides`, which
@@ -37,7 +38,7 @@ import { isAgentId, stateDirectory, validateAgentId, withLock } from './agent-id
 import { listSouls, populationFile, showSoul, showSoulByName } from './agent-population.mjs';
 import { NO_REPLY, clip } from './soul-threads.mjs';
 
-export const ASIDE_VIA = Object.freeze(['relay-prompt', 'thread-context', 'send_message', 'start_soul', 'final-reply']);
+export const ASIDE_VIA = Object.freeze(['relay-prompt', 'thread-context', 'send_message', 'start_soul', 'final-reply', 'inbox-read', 'hook-inject']);
 const BODY_LIMIT = 2048;
 const KEEP = 2000;
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -167,9 +168,9 @@ export function describePeer(address, rows) {
 
 // Records one aside for `agentId`. Best effort, like the thread journal: an
 // aside that cannot be written never fails a turn or a send.
-export function recordAside(agentId, entry, {
+function writeAside(agentId, entry, {
   env = process.env, home = homedir(), now = () => new Date(), keep = KEEP, maxBytes = MAX_BYTES, rows = null,
-} = {}) {
+} = {}, deduplicate = false) {
   try {
     if (!ASIDE_VIA.includes(entry?.via)) return null;
     const body = typeof entry.body === 'string' ? entry.body : '';
@@ -197,7 +198,19 @@ export function recordAside(agentId, entry, {
     chmodSync(dir, 0o700);
     // The daemon and each turn's reach server append to the same file, so
     // the append and any trim are one locked step.
-    withLock(`${file}.lock`, 'aside journal', () => {
+    return withLock(`${file}.lock`, 'aside journal', () => {
+      // Check the entire retained journal, not just its first page. The
+      // check and append share a lock across concurrent delivery reports.
+      if (deduplicate && aside.messageId && existsSync(file)) {
+        for (const line of readFileSync(file, 'utf8').split('\n')) {
+          try {
+            const previous = JSON.parse(line);
+            if (previous?.dir === 'in' && !previous.reshown && previous.messageId === aside.messageId) {
+              return { aside: previous, recorded: false };
+            }
+          } catch { /* skip torn lines, as readAsides does */ }
+        }
+      }
       appendFileSync(file, `${JSON.stringify(aside)}\n`, { mode: 0o600 });
       if (statSync(file).size > maxBytes) {
         const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean);
@@ -206,11 +219,22 @@ export function recordAside(agentId, entry, {
         writeFileSync(pending, kept.length > 0 ? `${kept.join('\n')}\n` : '', { mode: 0o600 });
         renameSync(pending, file);
       }
+      return { aside, recorded: true };
     });
-    return aside;
   } catch {
     return null;
   }
+}
+
+export function recordAside(agentId, entry, options) {
+  return writeAside(agentId, entry, options)?.aside ?? null;
+}
+
+// Delivery reports deduplicate incoming messages while the bounded journal
+// retains them, including messages already delivered through cold wake.
+export function recordDeliveredAside(agentId, entry, options) {
+  if (!['inbox-read', 'hook-inject'].includes(entry?.via) || !stringOrNull(entry.messageId)) return null;
+  return writeAside(agentId, { ...entry, dir: 'in' }, options, true);
 }
 
 // Asides oldest first. `after` is an aside id: only later asides are

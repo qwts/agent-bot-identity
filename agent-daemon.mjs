@@ -101,7 +101,8 @@ import { editSoulRevision, listSoulProposals, revisionCommand, revisionHistory }
 import { acpExecutorFor, createWakePlane, createTurnRegistry } from './wake-plane.mjs';
 import { recordSoulSession } from './metrics.mjs';
 import { createTaskReporter } from './task-turns.mjs';
-import { createCommsRelay } from './comms-relay.mjs';
+import { createCommsRelay, senderAddress } from './comms-relay.mjs';
+import { recordDeliveredAside } from './soul-asides.mjs';
 import { createResumeExecutor, createWakeSessions, resumePath, wakeSessionsFile } from './wake-resume.mjs';
 import { migratePreGateConfig } from './config-migration.mjs';
 
@@ -427,6 +428,8 @@ export function createDaemonServer({
   // Live comms watch state for GET /v0/comms/status. The supervisor is owned
   // by runDaemon; tests and embedding callers pass a stub with getState().
   comms = null,
+  // Same mailbox reader as cold wake; tests inject a broker-free relay.
+  asideRelay = createCommsRelay({ env: soulEnvironment(env, { home }) }),
   // POST /v0/team/start (#377): (callerAgentId, body) => { agentId, ... }.
   // runDaemon wires it to the launch handler; null refuses the route.
   teamStarter = null,
@@ -531,7 +534,7 @@ export function createDaemonServer({
         appendAuditReceipt({ event: 'soul-revision', operation: revisionAction, decision: 'owner-credential-required' }, { env, home, now });
         throw ownerCredentialRequired('a soul binding cannot authorize an owner revision action');
       }
-      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/credential', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
+      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/credential', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start', 'POST /v0/asides/delivered'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
         sendJson(res, 401, { error: 'missing or invalid daemon token' });
         return;
       }
@@ -562,6 +565,48 @@ export function createDaemonServer({
       }
       const route = `${req.method} ${url.pathname}`;
       switch (route) {
+        case 'POST /v0/asides/delivered': {
+          const source = requireBinding(req, bindings);
+          const body = parseJsonBody(await readBody(req));
+          if (!Array.isArray(body.messageIds) || body.messageIds.length < 1 || body.messageIds.length > 200
+            || body.messageIds.some((id) => typeof id !== 'string' || !id.trim())
+            || new Set(body.messageIds).size !== body.messageIds.length
+            || !['inbox-read', 'hook-inject'].includes(body.via)
+            || (body.harnessSessionId !== undefined && (typeof body.harnessSessionId !== 'string' || !body.harnessSessionId.trim()))) {
+            throw Object.assign(new Error('invalid aside delivery fields'), { statusCode: 400 });
+          }
+          const binding = { worktree: source.worktree, file: source.spawnedBy
+            ? childBindingPath(source.gitDir, source.agentId) : path.join(source.gitDir, 'agent-binding.json') };
+          let messages;
+          try {
+            messages = await asideRelay.read({ agentId: source.agentId, binding });
+            if (!Array.isArray(messages)) throw new Error('invalid inbox');
+          } catch {
+            throw Object.assign(new Error('could not read soul mailbox'), { statusCode: 502 });
+          }
+          const mailbox = new Map(messages.filter((message) => message && typeof message.id === 'string').map((message) => [message.id, message]));
+          const recorded = [];
+          const skipped = [];
+          for (const id of body.messageIds) {
+            const message = mailbox.get(id);
+            if (!message) { skipped.push({ id, reason: 'not-in-mailbox' }); continue; }
+            if (message.to?.agentId !== source.agentId || message.to?.principal) {
+              skipped.push({ id, reason: 'not-addressed-to-soul' }); continue;
+            }
+            let peer;
+            try { peer = senderAddress(message.from); }
+            catch { skipped.push({ id, reason: 'invalid-message' }); continue; }
+            if (typeof message.body !== 'string') { skipped.push({ id, reason: 'invalid-message' }); continue; }
+            const result = recordDeliveredAside(source.agentId, {
+              via: body.via, peer, messageId: id, replyTo: message.replyTo, correlation: message.correlation,
+              harnessSessionId: body.harnessSessionId, body: message.body,
+            }, { env, home, now });
+            if (result?.recorded) recorded.push(id);
+            else skipped.push({ id, reason: result ? 'already-recorded' : 'record-failed' });
+          }
+          sendJson(res, 200, { recorded, skipped });
+          return;
+        }
         case 'GET /v0/health': {
           // `busy`: souls with any daemon turn in flight, beside
           // the warm pool's connected harnesses.
@@ -1870,7 +1915,7 @@ export async function runDaemon({
     template: () => defaultTeamTemplate({ config: userConfig, env }),
     account,
   });
-  server = createDaemonServer({ env, home, config, now, comms, executor, taskReporter, teamStarter, computerUse, turns });
+  server = createDaemonServer({ env, home, config, now, comms, executor, taskReporter, teamStarter, computerUse, turns, asideRelay: relay });
   await taskReporter.recover({ log: (line) => process.stderr.write(`agent-daemon: ${line}\n`) });
   server.wakePlane = createWakePlane({
     turns, isPaused,

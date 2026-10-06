@@ -8,7 +8,7 @@ import { createColdWaker } from '../cold-wake.mjs';
 import { REACH_AGENT_ID_ENV, REACH_TURN_ENV, REACH_WORKTREE_ENV, createReachState, handleMcpMessage, reachMcpServerEntry } from '../daemon-mcp.mjs';
 import { createInteractionService } from '../agent-interaction.mjs';
 import { upsertSoul } from '../agent-population.mjs';
-import { asidesDirectory, bindTurnSession, readAsides, recordAside, soulAsidesCommand, teamOf, turnSession } from '../soul-asides.mjs';
+import { ASIDE_VIA, asidesDirectory, bindTurnSession, readAsides, recordAside, recordDeliveredAside, soulAsidesCommand, teamOf, turnSession } from '../soul-asides.mjs';
 
 // Everything lives under a scratch root; nothing here touches the real HOME.
 const root = mkdtempSync(path.join(tmpdir(), 'soul-asides-'));
@@ -93,6 +93,28 @@ test('a real message whose body is NO_REPLY is still an aside', () => {
   assert.equal(recordAside(TED, { dir: 'out', via: 'final-reply', peer: BILL, body: 'NO_REPLY' }, options), null);
   assert.deepEqual(readAsides(BILL, options).asides.map((entry) => entry.body), ['NO_REPLY']);
   assert.deepEqual(readAsides(TED, options).asides.map((entry) => entry.via), ['relay-prompt']);
+});
+
+test('live delivery vias are accepted by recordAside without marking them reshown', () => {
+  const { options } = scratch();
+  for (const via of ['inbox-read', 'hook-inject']) {
+    assert.ok(ASIDE_VIA.includes(via));
+    const aside = recordAside(BILL, { dir: 'in', via, body: 'NO_REPLY' }, options);
+    assert.equal(aside.via, via);
+    assert.equal(aside.reshown, false);
+    assert.equal(aside.body, 'NO_REPLY');
+  }
+});
+
+test('delivery deduplication scans beyond the first journal page and remains per soul', () => {
+  const { options } = scratch();
+  for (let i = 0; i < 205; i += 1) {
+    recordAside(BILL, { dir: 'in', via: 'relay-prompt', messageId: `m${i}`, body: 'hi' }, options);
+  }
+  const entry = { via: 'inbox-read', messageId: 'm204', body: 'hi' };
+  assert.equal(recordDeliveredAside(BILL, entry, options).recorded, false);
+  assert.equal(recordDeliveredAside(TED, entry, options).recorded, true);
+  assert.equal(readAsides(BILL, { ...options, limit: 1000 }).asides.length, 205);
 });
 
 test('a trim keeps the newest asides within both the count and half the byte limit', () => {

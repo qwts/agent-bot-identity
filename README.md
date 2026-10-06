@@ -826,16 +826,18 @@ Messages between souls show up as asides (#404). The daemon records each
 agent-comms message that actually entered or left a soul's context: the
 message a cold turn was woken with and the thread re-shown with it, the
 reply the relay sent, and the soul's own `send_message` and `start_soul`
-briefs. A message that stayed in a mailbox, or that a soul read itself with
-`agent-comms inbox read`, leaves none. The owner reads them, and GeniusBar
-renders them:
+briefs. Bound live sessions can also report inbox reads and hook injections
+through [`POST /v0/asides/delivered`](docs/daemon-api.md#delivered-aside-api).
+A message that stayed in a mailbox, or was read without a delivery report,
+leaves none. The owner reads them, and GeniusBar renders them:
 
 ```sh
 agent-bot soul asides bill --json   # {"agentId":…,"asides":[{"dir":"out","via":"send_message","peer":{"name":"ted",…},"teamId":null,"body":"…"}],"next":null}
 ```
 
 A principal allowed to observe the soul reads the same list from the daemon
-at `GET /v1/souls/<agentId>/asides?after=<asideId>`.
+at `GET /v1/souls/<agentId>/asides?after=<asideId>`. See
+[asides](docs/asides.md) for delivery, deduplication, and retention semantics.
 
 ### Approving a soul's tool call
 

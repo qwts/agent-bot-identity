@@ -1,0 +1,1 @@
+- Bound live sessions can report agent-comms inbox reads and hook injections through `POST /v0/asides/delivered`, recording verified incoming asides once per retained message so conversations include live-session deliveries (qwts/agent-comms#100).
