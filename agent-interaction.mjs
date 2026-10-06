@@ -68,6 +68,7 @@ import {
 } from './agent-principals.mjs';
 import { listSouls, populationFile, showSoul } from './agent-population.mjs';
 import { validateAgentId } from './agent-identity.mjs';
+import { classifyRisk } from './permission-risk.mjs';
 import { readAsides } from './soul-asides.mjs';
 
 // Bounded message size (#55 req 6). Kept below the daemon's 64 KiB request
@@ -175,6 +176,7 @@ function publicProposal(proposal, invocation) {
     invocationId,
     agentId: proposalSoul(proposal, invocation),
     tool: proposal.tool ?? null,
+    risk: proposal.risk ?? 'external',
     operationDigest: digest,
     summary,
     createdAt,
@@ -264,12 +266,13 @@ export function createInteractionService({
   // digest of the exact operation; the wait settles on a decision, expiry, or
   // cancellation, and execution resumes only through the legal transitions.
   function makeRequestApproval(id, controller) {
-    return async ({ operation, summary, ttlMs = DEFAULT_PROPOSAL_TTL_MS } = {}) => {
+    return async ({ operation, summary, tool = operation?.permission?.toolName ?? null,
+      risk = classifyRisk({ toolName: tool, summary, operation }), ttlMs = DEFAULT_PROPOSAL_TTL_MS } = {}) => {
       const digest = operationDigest(operation);
       transitionInvocation(id, 'waiting-approval', storeOptions);
       recordStatus(id, 'waiting-approval');
       const proposal = createProposal(
-        { invocationId: id, operationDigest: digest, summary },
+        { invocationId: id, tool, risk, operationDigest: digest, summary },
         { ...storeOptions, ttlMs },
       );
       appendEvent(id, 'approval-requested', {
@@ -295,6 +298,7 @@ export function createInteractionService({
             appendEvent(id, 'approval-decision', {
               proposalId: proposal.proposalId,
               decision: 'expired',
+              detail: `risk: ${proposal.risk}`,
             }, storeOptions);
           } catch {
             /* a concurrent decision beat the expiry timer */
@@ -363,6 +367,7 @@ export function createInteractionService({
           appendEvent(invocation.invocationId, 'approval-decision', {
             proposalId: proposal.proposalId,
             decision: 'expired',
+            detail: `risk: ${proposal.risk}`,
           }, storeOptions);
         } else {
           appendAuditReceipt({
@@ -370,6 +375,7 @@ export function createInteractionService({
             agentId: proposal.agentId,
             operation: 'approve',
             decision: 'expired',
+            detail: `risk: ${proposal.risk}`,
           }, storeOptions);
         }
       } catch {
@@ -398,6 +404,7 @@ export function createInteractionService({
         decision: decided.status,
         operationDigest: decided.operationDigest,
         decidedBy: decided.decidedBy,
+        detail: `risk: ${decided.risk}`,
       }, storeOptions);
     } else {
       appendAuditReceipt({
@@ -405,6 +412,7 @@ export function createInteractionService({
         agentId: decided.agentId,
         operation: 'approve',
         decision: decided.status,
+        detail: `risk: ${decided.risk}`,
         ...(decidedBy === OWNER_DECIDER ? {} : { principalId: decidedBy }),
       }, storeOptions);
     }
@@ -774,11 +782,12 @@ export function createInteractionService({
     // The proposal names the soul and the tool; the turn waits until the
     // owner or an approving principal decides, the proposal expires, or the
     // turn's own signal aborts. Anything but an approval is a deny.
-    requestTurnApproval({ agentId, operation, summary, tool = null, ttlMs = DEFAULT_PROPOSAL_TTL_MS, signal = null }) {
+    requestTurnApproval({ agentId, operation, summary, tool = null,
+      risk = classifyRisk({ toolName: tool, summary, operation }), ttlMs = DEFAULT_PROPOSAL_TTL_MS, signal = null }) {
       const soul = agentIdOrFail(agentId);
       const digest = operationDigest(operation);
       const proposal = createProposal(
-        { agentId: soul, tool, operationDigest: digest, summary },
+        { agentId: soul, tool, risk, operationDigest: digest, summary },
         { ...storeOptions, ttlMs },
       );
       appendAuditReceipt({ event: 'approval-requested', agentId: soul, operation: 'approve', decision: 'open' }, storeOptions);
@@ -800,7 +809,7 @@ export function createInteractionService({
           } catch {
             return; // decided already, and that decision wrote its own receipt
           }
-          appendAuditReceipt({ event: 'approval-decision', agentId: soul, operation: 'approve', decision: outcome }, storeOptions);
+          appendAuditReceipt({ event: 'approval-decision', agentId: soul, operation: 'approve', decision: outcome, detail: `risk: ${proposal.risk}` }, storeOptions);
         };
         const onAbort = () => { expire('cancelled'); settle({ decision: 'deny', cancelled: true }); };
         const timer = setTimeout(() => { expire('expired'); settle({ decision: 'deny', expired: true }); },

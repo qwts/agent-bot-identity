@@ -788,7 +788,10 @@ function normalizeProposal(record) {
     : validateInvocationId(record.invocationId);
   const agentId = record.agentId === undefined || record.agentId === null ? null : agentIdOrThrow(record.agentId);
   if (invocationId === null && agentId === null) throw new Error('proposal needs an invocation or a soul');
+  const risk = record.risk === undefined ? 'external' : record.risk;
+  if (!['safe', 'destructive', 'external'].includes(risk)) throw new Error('invalid proposal risk');
   return {
+    risk,
     proposalId: matchOrThrow(PROPOSAL_ID_PATTERN, record.proposalId, 'invalid proposal ID'),
     invocationId,
     ...(invocationId === null ? { agentId } : {}),
@@ -796,7 +799,7 @@ function normalizeProposal(record) {
     // without re-deriving it from the digest. Display only: the digest binds.
     ...(record.tool === undefined || record.tool === null
       ? {}
-      : { tool: printableText('tool', record.tool, { max: 128 }) }),
+      : { tool: printableText('tool', record.tool, { max: 200 }) }),
     operationDigest: matchOrThrow(SHA256_PATTERN, record.operationDigest, 'operation digest must be a sha256 hex digest'),
     summary: printableText('summary', record.summary, { max: MAX_PROPOSAL_SUMMARY_LENGTH }),
     createdAt: canonicalTimestamp('createdAt', record.createdAt),
@@ -827,7 +830,7 @@ function withProposalsLock(options, operation) {
 }
 
 export function createProposal(
-  { invocationId = null, agentId = null, tool = null, operationDigest: digest, summary },
+  { invocationId = null, agentId = null, tool = null, risk = 'external', operationDigest: digest, summary },
   {
     env = process.env,
     home = homedir(),
@@ -846,6 +849,7 @@ export function createProposal(
     invocationId,
     agentId: invocationId === null ? agentId : null,
     tool,
+    risk,
     operationDigest: digest,
     summary,
     createdAt: at.toISOString(),

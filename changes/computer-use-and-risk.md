@@ -1,0 +1,1 @@
+- Add proposal risk levels and live daemon computer-use activity signals for GeniusBar.

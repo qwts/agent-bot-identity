@@ -71,6 +71,8 @@ import { createInteractionService } from './agent-interaction.mjs';
 import { mint } from './mint-token.mjs';
 import { KEYD_TOOL_NAMES, grantTarget, keydRequest, mintViaKeyd, readKeydRecord, signKeydGrant } from './keyd-client.mjs';
 import { recoverInteractionStore } from './agent-jobs.mjs';
+import { createComputerUseActivity } from './computer-use-activity.mjs';
+import { isComputerUse } from './permission-risk.mjs';
 import { appendAuditReceipt, assertAuthorized, principalsFile, resolvePrincipal } from './agent-principals.mjs';
 import { approvalAction, shown } from './approval-action.mjs';
 import { confirmOwnerPresence } from './owner-gate.mjs';
@@ -410,6 +412,7 @@ export function createDaemonServer({
   keydCall = keydRequest,
   spawnHook = runSpawnHooks,
   now = () => new Date(),
+  computerUse = createComputerUseActivity({ now }),
   // #253 replaces this with its persistent lookup. The default reads the
   // in-memory registry and does not change how bindings are stored.
   lookupBinding: lookupBindingOverride = null,
@@ -521,7 +524,8 @@ export function createDaemonServer({
           // `busy`: souls with a daemon turn in flight (cold wake), beside
           // the warm pool's connected harnesses.
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid, warmPool: warmPool.list(),
-            busy: server.wakePlane?.busy?.() ?? [] });
+            busy: server.wakePlane?.busy?.() ?? [],
+            computerUse: computerUse.list().map(({ agentId, since }) => ({ agentId, since })) });
           return;
         }
         case 'POST /v0/space/ensure': {
@@ -1193,9 +1197,9 @@ export async function daemonStatus({
   try {
     state = readStateFile(file);
   } catch (error) {
-    return { running: false, reason: error.message, comms: readCommsStatus({ env, home }) };
+    return { running: false, computerUse: [], reason: error.message, comms: readCommsStatus({ env, home }) };
   }
-  if (!state) return { running: false, reason: 'no daemon state file', comms: readCommsStatus({ env, home }) };
+  if (!state) return { running: false, computerUse: [], reason: 'no daemon state file', comms: readCommsStatus({ env, home }) };
   const health = await probeHealth(state, { fetchImpl, timeoutMs });
   if (health) {
     return {
@@ -1205,11 +1209,13 @@ export async function daemonStatus({
       startedAt: state.startedAt,
       warmPool: health.warmPool ?? {},
       busy: Array.isArray(health.busy) ? health.busy : [],
+      computerUse: Array.isArray(health.computerUse) ? health.computerUse : [],
       comms: await probeComms(state, { env, home, fetchImpl, timeoutMs }),
     };
   }
   return {
     running: false,
+    computerUse: [],
     reason: 'daemon state file is stale (health probe failed)',
     stale: state,
     comms: readCommsStatus({ env, home }),
@@ -1392,30 +1398,55 @@ export async function recordLaunchComms({ agentId, package: packagePath, comms, 
 // decisions already have their own receipts. The writer owns detail sanitizing.
 export function withPermissionReceipts(executor, {
   env = process.env, home = homedir(), now = () => new Date(),
+  computerUse = createComputerUseActivity({ now }),
 } = {}) {
-  return (input) => executor({
-    ...input,
-    onPermission: (record) => {
+  return async (input) => {
+    // The contract validates the invocation; a missing agent just tracks nothing.
+    const agentId = typeof input.invocation?.agentId === 'string' ? input.invocation.agentId : null;
+    const turn = Symbol('computer-use turn');
+    let finished = false;
+    const receipt = (operation, record) => {
+      if (!record) return;
       try {
-        if (record.decidedBy === 'policy' && ['allow', 'deny'].includes(record.outcome)) {
-          const tool = typeof record.toolName === 'string' ? record.toolName : null;
-          const operation = tool && !/[\u0000-\u0020\u007f-\u009f]/.test(tool)
-            ? (tool.length > 40 ? `${tool.slice(0, 39)}…` : tool) : null;
-          appendAuditReceipt({
-            event: 'permission', agentId: input.invocation.agentId,
-            operation, decision: record.outcome,
-            // A contract-valid 200-character tool consumes the entire detail
-            // budget; keep its full name rather than clip it for a summary.
-            detail: tool?.length === 200 ? tool
-              : [tool, record.summary].filter((value) => typeof value === 'string' && value.length).join(': '),
-          }, { env, home, now });
-        }
-      } catch { /* receipt failures must not change a policy decision */ }
-      // Keep the cold turn's denied-tool collector even if the receipt store
-      // is unavailable. The contract isolates this observer's errors too.
-      return input.onPermission?.(record);
-    },
-  });
+        appendAuditReceipt({ event: 'computer-use', agentId, operation, detail: record.tool }, { env, home, now });
+      } catch { /* activity reporting must not affect the turn */ }
+    };
+    const stop = () => {
+      finished = true;
+      if (agentId) receipt('stop', computerUse.stop(agentId, turn));
+    };
+    input.signal?.addEventListener('abort', stop, { once: true });
+    try {
+      return await executor({
+        ...input,
+        onPermission: (record) => {
+          if (agentId && !finished && !input.signal?.aborted && record.outcome === 'allow' && isComputerUse(record.toolName)) {
+            receipt('start', computerUse.start(agentId, record.toolName, turn));
+          }
+          try {
+            if (record.decidedBy === 'policy' && ['allow', 'deny'].includes(record.outcome)) {
+              const tool = typeof record.toolName === 'string' ? record.toolName : null;
+              const operation = tool && !/[\u0000-\u0020\u007f-\u009f]/.test(tool)
+                ? (tool.length > 40 ? `${tool.slice(0, 39)}…` : tool) : null;
+              appendAuditReceipt({
+                event: 'permission', agentId: input.invocation.agentId,
+                operation, decision: record.outcome,
+                // A contract-valid 200-character tool consumes the entire detail
+                // budget; keep its full name rather than clip it for a summary.
+                detail: tool?.length === 200 ? tool
+                  : [tool, record.summary].filter((value) => typeof value === 'string' && value.length).join(': '),
+              }, { env, home, now });
+            }
+          } catch { /* receipt failures must not change a policy decision */ }
+          // Preserve collectors even when the audit store is unavailable.
+          return input.onPermission?.(record);
+        },
+      });
+    } finally {
+      input.signal?.removeEventListener('abort', stop);
+      stop();
+    }
+  };
 }
 
 export async function runDaemon({
@@ -1477,8 +1508,9 @@ export async function runDaemon({
       },
     })
     : null;
+  const computerUse = createComputerUseActivity({ now });
   const executorFor = configuredExecutorFor
-    ? (request) => withPermissionReceipts(configuredExecutorFor(request), { env, home, now })
+    ? (request) => withPermissionReceipts(configuredExecutorFor(request), { env, home, now, computerUse })
     : null;
   const executor = executorFor
     ? (input) => {
@@ -1591,7 +1623,7 @@ export async function runDaemon({
     template: () => defaultTeamTemplate({ config: userConfig, env }),
     account,
   });
-  server = createDaemonServer({ env, home, config, now, comms, executor, taskReporter, teamStarter });
+  server = createDaemonServer({ env, home, config, now, comms, executor, taskReporter, teamStarter, computerUse });
   await taskReporter.recover({ log: (line) => process.stderr.write(`agent-daemon: ${line}\n`) });
   server.wakePlane = createWakePlane({
     pool: server.warmPool,

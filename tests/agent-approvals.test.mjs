@@ -246,6 +246,7 @@ test('daemon /v0/approvals needs the daemon token; /v1/proposals needs an approv
     assert.equal(listed.proposals.length, 1);
     const [row] = listed.proposals;
     assert.equal(row.tool, 'Bash');
+    assert.equal(row.risk, 'external');
 
     const viaPrincipal = await (await call('/v1/proposals?transport=web&providerId=owner-subject')).json();
     assert.deepEqual(viaPrincipal.proposals.map((proposal) => proposal.proposalId), [row.proposalId]);
@@ -357,12 +358,48 @@ const ROW = {
   invocationId: null,
   agentId: AGENT_ID,
   tool: 'Bash',
+  risk: 'destructive',
   operationDigest: 'c'.repeat(64),
   summary: 'git push',
   createdAt: '2026-10-03T10:00:00.000Z',
   expiresAt: '2026-10-03T10:15:00.000Z',
   status: 'open',
 };
+
+test('daemon approval routes and receipts retain all three risk levels', async () => {
+  const { env } = scratch();
+  const { server, call, close } = await daemonFor(env, async () => ({ method: 'presence' }));
+  try {
+    for (const [tool, operation, risk] of [
+      ['Read', { path: 'README.md' }, 'safe'],
+      ['Bash', { command: 'git reset --hard' }, 'destructive'],
+      ['WebFetch', { url: 'https://example.com' }, 'external'],
+    ]) {
+      const pending = server.interaction.requestTurnApproval({ agentId: AGENT_ID, tool, operation, summary: 'request' });
+      const [row] = (await (await call('/v0/approvals')).json()).proposals;
+      assert.equal(row.risk, risk);
+      const response = await call('/v0/approvals/decide', { method: 'POST', body: {
+        proposalId: row.proposalId, decision: 'approve', digest: row.operationDigest,
+      } });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).proposal.risk, risk);
+      assert.deepEqual(await pending, { decision: 'approve' });
+    }
+    const receipts = readFileSync(path.join(interactionHome({ env }), 'audit.jsonl'), 'utf8')
+      .trim().split('\n').map((line) => JSON.parse(line)).filter((row) => row.event === 'approval-decision');
+    assert.deepEqual(receipts.map((row) => row.detail), ['risk: safe', 'risk: destructive', 'risk: external']);
+    assert.ok(receipts.every((row) => row.detail.length <= 200));
+  } finally { await close(); }
+});
+
+test('approvals CLI defaults legacy proposal risk to external', async () => {
+  const { env, root } = scratch();
+  const { risk, ...legacy } = ROW;
+  const client = fakeClient([legacy]);
+  const options = { env, home: root, cwd: root, client, write: () => {} };
+  assert.equal((await approvalsCommand(['list', '--json'], options))[0].risk, 'external');
+  assert.equal((await approvalsCommand(['approve', ROW.proposalId, '--json'], options)).risk, 'external');
+});
 
 test('approvals list --json names the soul, tool, summary and expiry', async () => {
   const { env, root } = scratch();
@@ -374,6 +411,7 @@ test('approvals list --json names the soul, tool, summary and expiry', async () 
   assert.deepEqual(parsed, { approvals: rows });
   assert.equal(rows[0].agentId, AGENT_ID);
   assert.equal(rows[0].tool, 'Bash');
+  assert.equal(rows[0].risk, 'destructive');
   assert.equal(rows[0].summary, 'git push');
   assert.equal(rows[0].expiresAt, ROW.expiresAt);
   assert.equal('soul' in rows[0], true);
@@ -386,6 +424,7 @@ test('approvals approve leaves the owner prompt to the daemon and echoes the pro
     env, home: root, cwd: root, client, write: () => {},
   });
   assert.equal(decided.status, 'approved');
+  assert.equal(decided.risk, 'destructive');
   assert.deepEqual(client.decisions, [{ proposalId: ROW.proposalId, decision: 'approve', digest: ROW.operationDigest }]);
   const credential = { principal: 'principal_55555555-5555-4555-8555-555555555555', secret: 's', brokerUid: 1 };
   await approvalsCommand(['deny', ROW.proposalId, '--principal-stdin'], {
