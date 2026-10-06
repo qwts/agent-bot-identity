@@ -148,6 +148,8 @@ credential names, and offline SOP availability. File contents require an
 inventoried UTF-8 path and are capped at 256 KiB. It never reads credential
 stores or fetches SOPs. See [soul-profile.md](../../docs/soul-profile.md).
 
+`agent-bot sandbox status|plan|on|off|account NAME|override <agentId|name> [inherit|sandboxed|unrestricted]|resolve <agentId|name> [--json]` reports the persona account for sandboxed souls (`missing | creating | ready`), lists the owner's steps to create and onboard it (agent-bot never runs them), and keeps the global switch and per-soul overrides (#376). Writes are owner actions.
+
 ## Verify the outcome
 
 Check the relevant local identity state before mutating GitHub. After a write,

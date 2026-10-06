@@ -35,6 +35,7 @@ const MODULES = new Map([
   ['secret', 'secret.mjs'],
   ['skill', 'skill.mjs'],
   ['sop', 'sop.mjs'],
+  ['sandbox', 'sandbox.mjs'],
   ['metrics', 'metrics.mjs'],
   ['credential', 'git-credential-bot.mjs'],
   ['worktree-token', 'worktree-token.mjs'],

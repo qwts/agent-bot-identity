@@ -195,6 +195,11 @@ function normalizeSoul(record, { defaultLastSeen = null } = {}) {
     comms: booleanField('comms', record.comms, true),
     paused: booleanField('paused', record.paused, false),
     computerUse: booleanField('computerUse', record.computerUse, true),
+    // Sandbox override (#376): `sandboxed` always runs this soul in the
+    // persona account, `unrestricted` always in the owner's; a row without
+    // the field follows the global switch (inherit), so only an override
+    // needs a row.
+    ...sandboxField(record.sandbox),
     // The name the owner chose at launch or join, as agent-comms' census
     // shows it (#429). `name` stays the generated handle agents address.
     ...displayNameField(record.displayName),
@@ -206,6 +211,14 @@ function normalizeSoul(record, { defaultLastSeen = null } = {}) {
 }
 
 export const HARNESS_AUTH_STATUSES = Object.freeze(['signed-out', 'expired']);
+
+export const SANDBOX_OVERRIDES = Object.freeze(['inherit', 'sandboxed', 'unrestricted']);
+
+function sandboxField(value) {
+  if (value === undefined || value === null || value === 'inherit') return {};
+  if (!SANDBOX_OVERRIDES.includes(value)) throw new Error(`sandbox must be one of ${SANDBOX_OVERRIDES.join(', ')}`);
+  return { sandbox: value };
+}
 
 function harnessAuthField(value) {
   if (value === undefined || value === null) return {};
@@ -325,6 +338,7 @@ export function upsertSoul(
       if (record.comms === undefined) candidate.comms = existing.comms;
       if (record.paused === undefined) candidate.paused = existing.paused;
       if (record.computerUse === undefined) candidate.computerUse = existing.computerUse;
+      if (record.sandbox === undefined) candidate.sandbox = existing.sandbox;
       candidate.worktrees = [...new Set([...existing.worktrees, ...candidate.worktrees])];
       if (record.worktree === undefined) candidate.worktree = existing.worktree;
     }
@@ -676,6 +690,22 @@ export function setSoulComms(id, comms, { file = populationFile() } = {}) {
     }
     const soul = normalizeSoul({ ...existing, comms });
     if (existing.comms !== soul.comms) writeDocument(file, { ...current.souls, [target]: soul });
+    return soul;
+  });
+}
+
+// Records a soul's sandbox override (#376). Returns the row.
+export function setSoulSandbox(id, sandbox, { file = populationFile() } = {}) {
+  const target = agentId(id);
+  if (!SANDBOX_OVERRIDES.includes(sandbox)) throw new Error(`sandbox must be one of ${SANDBOX_OVERRIDES.join(', ')}`);
+  ensurePrivateDirectory(path.dirname(file));
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
+    const existing = current.souls[target];
+    if (!existing) throw new Error(`no population record for ${target}`);
+    const soul = normalizeSoul({ ...existing, sandbox });
+    if (existing.sandbox !== soul.sandbox) writeDocument(file, { ...current.souls, [target]: soul });
     return soul;
   });
 }
