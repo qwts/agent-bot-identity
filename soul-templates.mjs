@@ -31,7 +31,9 @@ export function bundledStarter({ env = process.env, root = dirname(fileURLToPath
 export function bundledSouls({ env = process.env, root = dirname(fileURLToPath(import.meta.url)) } = {}) {
   const starter = bundledStarter({ env, root });
   const souls = starter ? [starter] : [];
-  const bundle = starter && !env.AGENT_BOT_STARTER_TEMPLATE ? dirname(starter) : resolve(root, '..', '..', 'souls');
+  // An explicit Starter override replaces the bundle lookup entirely.
+  if (env.AGENT_BOT_STARTER_TEMPLATE) return souls;
+  const bundle = starter ? dirname(starter) : resolve(root, '..', '..', 'souls');
   let children;
   try { children = readdirSync(bundle, { withFileTypes: true }); } catch { return souls; }
   for (const child of children.sort((a, b) => a.name.localeCompare(b.name))) {
