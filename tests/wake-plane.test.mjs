@@ -217,3 +217,40 @@ test('acpExecutorFor hands the daemon\'s log to the engine, and leaves the engin
   acpExecutorFor({ identities: () => ({}), policy: {}, baseEnv: {}, createExecutor })({ agentId, harness: 'claude', cwd: '/repo', env: {} });
   assert.deepEqual(seen, [log, 'absent']);
 });
+
+test('ACP turns bind each soul mode at creation and reread it for the next turn', async (t) => {
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { default: path } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const { createAcpExecutor } = await import('../acp-engine.mjs');
+  const { setSoulMode, soulMode } = await import('../soul-mode.mjs');
+  const home = mkdtempSync(path.join(tmpdir(), 'wake-mode-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = { HOME: home, XDG_STATE_HOME: path.join(home, 'state'), AGENT_BOT_INTERACTION_HOME: path.join(home, 'interaction') };
+  const registry = { claude: { harness: 'claude', enabled: true, command: process.execPath,
+    args: [fileURLToPath(new URL('./fixtures/fake-acp-agent.mjs', import.meta.url))], stripEnv: [] } };
+  const modes = [];
+  const factory = acpExecutorFor({ identities: () => ({}), baseEnv: env,
+    policy: { version: 1, rules: [], fallback: 'approval' },
+    modeFor: (agentId) => soulMode(agentId, { env, home }),
+    createExecutor: (options) => { modes.push(options.mode); return createAcpExecutor({ ...options, registry }); } });
+  const request = { agentId: ID, harness: 'claude', cwd: home, env: {} };
+  let approvals = 0;
+  const port = () => ({ invocation: { agentId: ID }, message: 'need-permission', attachments: [],
+    appendEvent: () => ({}), addArtifact: () => ({}), signal: new AbortController().signal,
+    requestApproval: async () => { approvals += 1; return { decision: 'deny' }; } });
+  const safeTurn = factory(request);
+  setSoulMode(ID, 'autopilot', { env, home });
+  await safeTurn(port());
+  assert.equal(approvals, 1, 'the current turn keeps its starting mode');
+  const seen = [];
+  await factory(request)({ ...port(), onPermission: (record) => seen.push(record) });
+  assert.equal(approvals, 1, 'the next turn uses autopilot without asking');
+  assert.equal(seen[0].decidedBy, 'autopilot');
+  assert.deepEqual(modes, ['safe', 'autopilot']);
+  const otherSoul = { ...request, agentId: 'agent_77777777-7777-4777-8777-777777777777' };
+  const other = factory(otherSoul);
+  await other({ ...port(), invocation: { agentId: otherSoul.agentId } });
+  assert.equal(approvals, 2, 'another soul retains its default Safe mode');
+});

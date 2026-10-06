@@ -1,0 +1,1 @@
+- Add owner-controlled per-soul Safe and Auto-Pilot modes, with turn-scoped tool approvals and permission audit receipts.

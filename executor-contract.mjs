@@ -36,10 +36,10 @@
 //
 // 3. Permissions are policy, never conversation. An executor answers a
 //    harness's "may I run this tool?" from a pre-declared, validated policy.
-//    The only escalation path is the daemon's immutable approval capability
-//    (#59 req 8): a rule (or the fallback) that says `approval` parks the
-//    invocation behind a digest-bound proposal. A conversational "yes" still
-//    has no pathway to authorize anything.
+//    Only `approval` outcomes consult the soul's mode: Auto-Pilot allows;
+//    Safe allows safe-risk tools and tools approved earlier in this turn.
+//    Remaining requests park behind an immutable, digest-bound proposal.
+//    A conversational "yes" still has no pathway to authorize anything.
 //
 // 4. Identity is a construction precondition. An executor exists only for a
 //    specific harness key and bot identity — the `agentBot.app` slug and
@@ -52,6 +52,7 @@
 //    executor resolves inside the soul's Agent Space boundary. The contract
 //    re-exports the shape so engines validate references they pass onward.
 
+import { SOUL_MODES } from './soul-mode.mjs';
 import { classifyRisk } from './permission-risk.mjs';
 import { validateAgentId } from './agent-identity.mjs';
 
@@ -286,12 +287,13 @@ export function validateAttachmentReference(reference) {
 //   - ends a surviving turn with emitStop (engines that die mid-turn land on
 //     'failed' through the service's own handling),
 //   - treats `signal` abort as the instruction to stop promptly.
-export function createContractExecutor({ harness, identity, policy, run } = {}) {
+export function createContractExecutor({ harness, identity, policy, run, mode = 'safe' } = {}) {
   if (typeof harness !== 'string' || !HARNESS_PATTERN.test(harness)) {
     fail('executor requires a harness key');
   }
   const boundIdentity = validateExecutorIdentity(identity ?? {});
   const boundPolicy = validatePermissionPolicy(policy ?? {});
+  if (!SOUL_MODES.includes(mode)) fail(`executor mode must be one of: ${SOUL_MODES.join(', ')}`);
   if (typeof run !== 'function') fail('executor requires a run function');
 
   return async function contractExecutor({
@@ -324,6 +326,7 @@ export function createContractExecutor({ harness, identity, policy, run } = {}) 
     // letting a malformed event log read as a completed turn.
     let bound = false;
     let stopped = false;
+    const approvedTools = new Set();
 
     const bindHarnessSession = ({ mode, harnessSessionId } = {}) => {
       const binding = validateHarnessBinding({ harness, mode, harnessSessionId });
@@ -358,22 +361,27 @@ export function createContractExecutor({ harness, identity, policy, run } = {}) 
       return decision;
     };
 
-    // Policy answers first; only an 'approval' outcome reaches the immutable
-    // proposal flow, and its decision maps back to allow/deny. `decidedBy`
-    // lets engines and audits distinguish the two paths.
+    // Policy allow/deny is final. Approval outcomes are decided by autopilot,
+    // risk, an owner approval earlier in this turn, or a fresh proposal.
+    // `decidedBy` is policy, autopilot, risk, turn, or approval respectively.
     const requestPermission = async ({ toolName, operation = null, summary = null, ttlMs } = {}) => {
       const outcome = decidePermission(boundPolicy, { toolName });
       if (outcome !== 'approval') return observe(toolName, { outcome, decidedBy: 'policy' }, summary);
+      if (mode === 'autopilot') return observe(toolName, { outcome: 'allow', decidedBy: 'autopilot' }, summary);
+      const risk = classifyRisk({ toolName, summary, operation });
+      if (risk === 'safe') return observe(toolName, { outcome: 'allow', decidedBy: 'risk' }, summary);
+      if (approvedTools.has(toolName)) return observe(toolName, { outcome: 'allow', decidedBy: 'turn' }, summary);
       const wantedSummary = typeof summary === 'string' && summary.length > 0
         ? summary.slice(0, MAX_SUMMARY_LENGTH)
         : `permission: ${toolName}`;
       const decision = await requestApproval({
         tool: toolName,
-        risk: classifyRisk({ toolName, summary, operation }),
+        risk,
         operation: operation ?? { permission: { toolName } },
         summary: wantedSummary,
         ...(ttlMs === undefined ? {} : { ttlMs }),
       });
+      if (decision.decision === 'approve') approvedTools.add(toolName);
       return observe(toolName, {
         outcome: decision.decision === 'approve' ? 'allow' : 'deny',
         decidedBy: 'approval',

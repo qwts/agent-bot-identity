@@ -103,7 +103,7 @@ for (const [toolName, operation, risk] of [
   ['Bash', { command: 'git reset --hard' }, 'destructive'],
   ['WebFetch', { url: 'https://example.com' }, 'external'],
 ]) {
-  test(`approval proposals preserve ${risk} risk through the contract and decision`, async () => {
+  test(`approval policy handles ${risk} risk through the contract`, async () => {
     const { env } = scratch();
     seedSoul(env);
     const principal = seedPrincipal(env);
@@ -119,6 +119,11 @@ for (const [toolName, operation, risk] of [
     const session = begin(interaction, principal);
     const { invocation } = interaction.submitMessage({ principal, transport: 'web', sessionId: session.sessionId,
       message: 'go', idempotencyKey: `risk-${risk}` });
+    if (risk === 'safe') {
+      await waitFor(() => interaction.getInvocation({ principal, transport: 'web', invocationId: invocation.invocationId }).invocation.status === 'completed');
+      assert.deepEqual(interaction.listProposalsForOwner().proposals, []);
+      return;
+    }
     const proposal = await waitFor(() => interaction.listProposalsForOwner().proposals[0]);
     assert.equal(proposal.risk, risk);
     assert.equal(proposal.tool, toolName);
@@ -555,4 +560,79 @@ test('onPermission observes each decision without changing it', async () => {
     process.off('unhandledRejection', onUnhandled);
   }
   assert.deepEqual(unhandled, []);
+});
+
+function permissionPort(requestApproval, onPermission = null) {
+  return { invocation: { agentId: AGENT_ID }, message: 'go', attachments: [],
+    appendEvent: () => ({}), addArtifact: () => ({}), requestApproval,
+    signal: new AbortController().signal, onPermission };
+}
+
+function permissionExecutor(requests, { mode = 'safe', fallback = 'approval' } = {}) {
+  return createContractExecutor({ harness: 'claude', identity: IDENTITY, mode,
+    policy: { version: 1, rules: [], fallback },
+    run: async ({ requestPermission, emitStop }) => {
+      const results = [];
+      for (const request of requests) results.push(await requestPermission(request));
+      emitStop({ stopReason: 'end_turn' });
+      return results;
+    } });
+}
+
+for (const mode of ['safe', 'autopilot']) {
+  for (const outcome of ['allow', 'deny']) {
+    test(`${mode} leaves policy ${outcome} unchanged`, async () => {
+      const execute = permissionExecutor([{ toolName: 'Read' }, { toolName: 'Bash', summary: 'rm -rf work' }], { mode, fallback: outcome });
+      assert.deepEqual(await execute(permissionPort(() => assert.fail('policy decision must not ask'))), [
+        { outcome, decidedBy: 'policy' }, { outcome, decidedBy: 'policy' },
+      ]);
+    });
+  }
+}
+
+test('autopilot allows approval outcomes without proposals and observes summaries', async () => {
+  const seen = [];
+  const requests = [{ toolName: 'Read', summary: 'read file' }, { toolName: 'Bash', summary: 'rm -rf work' }, { toolName: 'WebFetch' }];
+  const outcomes = await permissionExecutor(requests, { mode: 'autopilot' })(permissionPort(() => assert.fail('autopilot must not ask'), (record) => seen.push(record)));
+  assert.ok(outcomes.every((decision) => decision.outcome === 'allow' && decision.decidedBy === 'autopilot'));
+  assert.equal(seen[1].summary, 'rm -rf work');
+  assert.equal(seen.length, 3);
+});
+
+test('safe mode allows safe risk, remembers approved exact tools only within a turn, and still asks for external tools', async () => {
+  const proposals = [];
+  const seen = [];
+  const execute = permissionExecutor([
+    { toolName: 'Read', summary: 'inspect file' },
+    { toolName: 'Bash', summary: 'rm -rf work', operation: { command: 'rm -rf work' } },
+    { toolName: 'Bash', summary: 'another command' },
+    { toolName: 'WebFetch', summary: 'fetch page' },
+    { toolName: 'bash', summary: 'case-sensitive tool name' },
+  ]);
+  const port = permissionPort(async (proposal) => { proposals.push(proposal); return { decision: 'approve' }; }, (record) => seen.push(record));
+  const expected = ['risk', 'approval', 'turn', 'approval', 'approval'];
+  assert.deepEqual((await execute(port)).map((decision) => decision.decidedBy), expected);
+  assert.deepEqual(proposals.map((proposal) => proposal.tool), ['Bash', 'WebFetch', 'bash']);
+  assert.equal(proposals[0].risk, 'destructive');
+  assert.deepEqual(proposals[0].operation, { command: 'rm -rf work' });
+  assert.equal(proposals[1].risk, 'external');
+  assert.equal(seen[0].summary, 'inspect file');
+  assert.equal(seen[2].summary, 'another command');
+  assert.deepEqual((await execute(port)).map((decision) => decision.decidedBy), expected);
+  assert.equal(proposals.length, 6, 'a new turn asks again');
+});
+
+test('denial, expiry and cancellation do not unlock a tool', async () => {
+  for (const decision of [{ decision: 'deny' }, { decision: 'deny', expired: true }, { decision: 'deny', cancelled: true }]) {
+    let proposals = 0;
+    const result = await permissionExecutor([{ toolName: 'Bash' }, { toolName: 'Bash' }, { toolName: 'Bash' }])(
+      permissionPort(async () => { proposals += 1; return proposals === 1 ? decision : { decision: 'approve' }; }));
+    assert.equal(proposals, 2);
+    assert.deepEqual(result.map((row) => row.decidedBy), ['approval', 'approval', 'turn']);
+    assert.equal(result[0].outcome, 'deny');
+  }
+});
+
+test('executor construction rejects unknown modes', () => {
+  assert.throws(() => permissionExecutor([], { mode: 'unknown' }), /executor mode must be/);
 });

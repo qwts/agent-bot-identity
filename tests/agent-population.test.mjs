@@ -349,7 +349,7 @@ test('population CLI lists, filters, and shows records', () => {
 
   const filtered = runCli(['population', 'list', '--status', 'active', '--app', 'qwts-codex-agent', '--json'], file);
   assert.equal(filtered.status, 0, filtered.stderr);
-  assert.deepEqual(JSON.parse(filtered.stdout), [{ ...fixture(), role: null, description: null, children: 0, roleLine: null }]);
+  assert.deepEqual(JSON.parse(filtered.stdout), [{ ...fixture(), mode: 'safe', role: null, description: null, children: 0, roleLine: null }]);
 
   const shown = runCli(['population', 'show', SECOND_ID], file);
   assert.equal(shown.status, 0, shown.stderr);
