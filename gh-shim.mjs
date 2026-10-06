@@ -14,7 +14,7 @@ token_enrich_pr_view() { node "$TOKEN_TOOL" --enrich-gh-pr-view "$1"; }`
     : `TOKEN_TOOL="$HOME/.local/bin/agent-bot"
 TOKEN_REQUIRES_NODE=""
 token_tool() { "$TOKEN_TOOL" worktree-token "$@"; }
-token_mint_app() { "$TOKEN_TOOL" mint-token --app "$1"; }
+token_mint_app() { "$TOKEN_TOOL" worktree-token --mint-app "$1"; }
 token_expand_inbox_query() { "$TOKEN_TOOL" gh-inbox-query "$1" "$2"; }
 token_enrich_pr_view() { "$TOKEN_TOOL" gh-pr-view-json; }`;
   return `#!/bin/sh
@@ -186,6 +186,7 @@ AGENT_CONTEXT=""
 [ -n "$CLAUDE_CODE_ENTRYPOINT" ] && AGENT_CONTEXT=1
 [ -n "$AI_AGENT" ] && AGENT_CONTEXT=1
 [ -n "$GH_AGENT_APP" ] && AGENT_CONTEXT=1
+[ -n "$AGENT_BOT_ID$QWTS_AGENT_ID$AGENT_BOT_BINDING" ] && AGENT_CONTEXT=1
 [ -n "$AGENT_BOT_ACCOUNT" ] && AGENT_CONTEXT=1
 if [ -z "$AGENT_CONTEXT" ]; then
   env | grep -q '^CODEX_' && AGENT_CONTEXT=1
@@ -199,6 +200,8 @@ IDENTITY_HINT=""
 if command -v git >/dev/null 2>&1; then
   PIN=$(git config --get agentBot.app 2>/dev/null || git config --get qwts.agentApp 2>/dev/null || true)
   [ -n "$PIN" ] && IDENTITY_HINT=1
+  SOUL_ID=$(git config --get agentBot.agentId 2>/dev/null || git config --get qwts.agentId 2>/dev/null || true)
+  [ -n "$SOUL_ID" ] && IDENTITY_HINT=1
   HELPERS=$(git config --get-all credential.helper 2>/dev/null || true)
   case "$HELPERS" in
     *git-credential-bot.mjs*|*agent-bot*credential*) IDENTITY_HINT=1 ;;
@@ -210,12 +213,17 @@ fi
 # environment describes, used only by the Codex desktop path below.
 SLUG=""
 AGENT_SLUG=""
+SOUL_BOUND=""
 if ! token_tool_available; then
   if [ -n "$AGENT_CONTEXT$IDENTITY_HINT" ]; then
     echo "agent-bot: token helper or Node is unavailable — refusing stock human gh" >&2
     exit 1
   fi
 else
+  SOUL_BOUND=$(token_tool --soul-bound) || {
+    echo "agent-bot: soul binding detection failed — refusing stock human gh" >&2
+    exit 1
+  }
   SLUG=$(token_tool --slug 2>/dev/null) || {
     echo "agent-bot: identity resolution failed — refusing stock human gh" >&2
     exit 1
@@ -227,9 +235,17 @@ else
 fi
 CHECKOUT_SLUG="$SLUG"
 
+# A soul never acts with an inherited token. Whatever the parent exported
+# (the owner's, another bot's) is dropped before anything runs; the daemon
+# mints this soul's own below, and stock gh never sees a human login here.
+if [ -n "$SOUL_BOUND" ]; then
+  unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN
+fi
+
 # The native desktop UI acts as the configured Codex App by caller identity
-# rather than by cwd or account.
-if [ -n "$CODEX_DESKTOP_CONTEXT" ]; then
+# rather than by cwd or account. A soul-bound process is never that UI: it
+# takes the daemon path below instead of delegating or caching.
+if [ -n "$CODEX_DESKTOP_CONTEXT" ] && [ -z "$SOUL_BOUND" ]; then
   # Installing the toolkit must remain inert until Codex has an App mapping.
   # Delegate unchanged so the native desktop UI keeps its existing identity.
   [ -n "$AGENT_SLUG" ] || exec "$REAL" "$@"
@@ -237,7 +253,7 @@ if [ -n "$CODEX_DESKTOP_CONTEXT" ]; then
 fi
 
 TOKEN_MINTED_BY_SHIM=""
-if [ -n "$CODEX_DESKTOP_CONTEXT" ] && [ -z "$GH_TOKEN" ]; then
+if [ -n "$CODEX_DESKTOP_CONTEXT" ] && [ -z "$SOUL_BOUND" ] && [ -z "$GH_TOKEN" ]; then
   # PR operations normally have a checkout cwd, so reuse the same private
   # per-checkout token cache as agent shells only when that checkout resolves
   # to the configured Codex App. A Codex window may inspect another harness's
@@ -302,6 +318,11 @@ fi
 # answered locally with no network, and the human persona asks GitHub through
 # stock gh.
 if [ "$1" = "whoami" ]; then
+  # A soul with no App resolvable here still never asks GitHub as the human.
+  if [ -n "$SOUL_BOUND" ] && [ -z "$SLUG" ]; then
+    echo "soul-bound — the daemon chooses the App; no App resolves here"
+    exit 0
+  fi
   if [ -n "$GH_TOKEN" ]; then
     LOGIN="$TOKEN_LOGIN"
     if [ -z "$LOGIN" ]; then
@@ -326,7 +347,7 @@ if [ "$1" = "whoami" ]; then
 fi
 # A bot identity mints; a failed mint aborts rather than running gh as the
 # human. No identity is the delegate: stock gh, untouched.
-if [ -z "$GH_TOKEN" ] && [ -n "$SLUG" ]; then
+if [ -z "$GH_TOKEN" ] && [ -n "$SLUG$SOUL_BOUND" ]; then
   TOKEN=$(token_tool) || {
     echo "agent-bot: token mint failed for \${SLUG}[bot] — refusing to run gh as the human" >&2
     exit 1

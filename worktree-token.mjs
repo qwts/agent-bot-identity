@@ -19,17 +19,18 @@
 // bot is the delegate and gets stock gh. The directory is not consulted at
 // all — a primary checkout in an agent account mints like any other.
 //
-// Tokens are cached per checkout inside the private git dir (never in the
-// working tree) and reused until 5 minutes before expiry. Outside a
-// repository the cache lives in the account's private agent-bot state
-// directory, keyed by App.
+// Soul-bound callers ask the daemon on every mint. Owner tokens are cached
+// per checkout inside the private git dir (never in the working tree) and
+// reused until 5 minutes before expiry. Outside a repository the owner cache
+// lives in the account's private agent-bot state directory, keyed by App.
 
 import process from 'node:process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { mint } from './mint-token.mjs';
+import { isSoulBound, mintCredential } from './git-credential-bot.mjs';
+import { ownerApprovalRequired, requireOwnerApproval } from './owner-approval.mjs';
 import { configuredAccountIdentity, accountName, detectAgentHarness } from './detect-harness.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
@@ -101,6 +102,28 @@ async function main() {
     return;
   }
 
+  const soulBound = isSoulBound();
+  // The shim must not delegate a soul with no resolved App to human gh.
+  if (process.argv.includes('--soul-bound')) {
+    if (soulBound) process.stdout.write('1\n');
+    return;
+  }
+  // Desktop gh can request an App independently of its checkout. Preserve
+  // mint-token's owner approval on that explicit, uncached local path.
+  const appFlag = process.argv.indexOf('--mint-app');
+  if (appFlag !== -1) {
+    const slug = process.argv[appFlag + 1];
+    if (!slug || slug.startsWith('--')) throw new Error('--mint-app requires an App slug');
+    if (!soulBound && ownerApprovalRequired({ argv: ['node', 'mint-token.mjs', '--app', slug] })) {
+      requireOwnerApproval({
+        prompt: `Approve a GitHub App installation token for ${slug}[bot] — mint-token was run in the owner's account with no stated agent identity.`,
+      });
+    }
+    const grant = await mintCredential({ slug, soulBound });
+    process.stdout.write(`${grant.token}\n`);
+    return;
+  }
+
   let gitDir = null;
   try {
     gitDir = git('rev-parse', '--absolute-git-dir');
@@ -134,7 +157,15 @@ async function main() {
     if (slug) process.stdout.write(`${slug}\n`);
     return;
   }
-  if (!slug) return; // human persona — print nothing
+  if (!slug && !soulBound) return; // human persona — print nothing
+
+  // A cached token cannot establish that this binding is still authorized.
+  // Soul callers always ask the daemon, even if a local cache exists.
+  if (soulBound) {
+    const grant = await mintCredential({ slug, soulBound });
+    process.stdout.write(`${grant.token}\n`);
+    return;
+  }
 
   const cache = cachePath(gitDir, slug);
   try {
@@ -147,7 +178,7 @@ async function main() {
     /* no usable cache */
   }
 
-  const grant = await mint({ slug });
+  const grant = await mintCredential({ slug, soulBound });
   try {
     writeFileSync(cache, `${JSON.stringify({ slug, token: grant.token, expires_at: grant.expires_at })}\n`, {
       mode: 0o600,
