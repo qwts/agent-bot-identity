@@ -7,6 +7,7 @@ import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { validateModelId } from './soul-model.mjs';
 import { soulCommsSetting } from './soul-package.mjs';
 import { displayName } from './agent-population.mjs';
+import { createTurnRegistry } from './wake-plane.mjs';
 
 // A launch's comms setting: the soul's own soul.json (a spawned instance
 // carries its template's), else the launched package's, else on.
@@ -50,7 +51,7 @@ const withoutParent = ({ parent: _ignored, ...fields }) => fields;
 const LAUNCHABLE = new Set(['package', 'installed']);
 
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
-  joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, executorFor, turnTimeoutMs = 30 * 60_000 }) {
+  joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -148,19 +149,19 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       // alone is not evidence that the harness spawned successfully.
       await new Promise((resolve, reject) => {
         let started = false;
-        Promise.resolve().then(() => executor({
+        Promise.resolve().then(() => turns.run({
           invocation: { agentId: identity.id, harness, cwd: binding.worktree },
           message: identityText + (parent
             ? `You were started by ${parent}, another agent soul, as part of its team. Join agent-comms as usual, read your inbox, and handle incoming work; your parent will brief you there.`
             : 'You were launched by a principal. Join agent-comms as usual, read your inbox, and handle incoming work.'),
-          attachments: [], signal: AbortSignal.timeout(turnTimeoutMs),
+          attachments: [],
           appendEvent: (type, data) => {
             if (type === HARNESS_SESSION_EVENT) { started = true; resolve(); }
             return { type, data };
           },
           addArtifact: () => { throw new Error('a launch turn has no artifact store'); },
           requestApproval: async () => ({ decision: 'deny' }),
-        })).then(() => { if (!started) reject(new Error('harness ended before session creation')); }, reject);
+        }, executor, { turnTimeoutMs })).then(() => { if (!started) reject(new Error('harness ended before session creation')); }, reject);
       });
       Object.assign(row, { status: 'launched', agentId: identity.id });
       try { await onLaunched(identity.id); } catch { /* the soul runs; only later wakes are affected */ }

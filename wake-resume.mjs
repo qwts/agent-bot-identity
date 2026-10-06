@@ -192,8 +192,9 @@ export function createWakeSessions({ file }) {
 
 // Resolves { code, stdout, stderr }; rejects only when the process cannot
 // start. Output past the cap is dropped rather than buffered without bound.
-export function runProcess(command, args, { cwd, env, stdin = null, timeoutMs }) {
+export function runProcess(command, args, { cwd, env, stdin = null, timeoutMs, signal }) {
   return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
     const child = spawn(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
@@ -201,8 +202,11 @@ export function runProcess(command, args, { cwd, env, stdin = null, timeoutMs })
     child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout = take(stdout, chunk); });
     child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr = take(stderr, chunk); });
     const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
-    child.once('error', (error) => { clearTimeout(timer); reject(error); });
-    child.once('close', (code, signal) => { clearTimeout(timer); resolve({ code: signal ? null : code, signal, stdout, stderr }); });
+    const abort = () => child.kill('SIGTERM');
+    signal?.addEventListener('abort', abort, { once: true });
+    const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); };
+    child.once('error', (error) => { cleanup(); reject(error); });
+    child.once('close', (code, exitSignal) => { cleanup(); resolve({ code: exitSignal ? null : code, signal: exitSignal, stdout, stderr }); });
     child.stdin.on('error', () => { /* a harness that exits early closes its stdin */ });
     child.stdin.end(stdin ?? '');
   });
@@ -227,7 +231,7 @@ function lastLine(text) {
  * records, leaving the message unacked for the next wake.
  */
 export function createResumeExecutor({ sessions, baseEnv = process.env, home = homedir(), run = runProcess, turnTimeoutMs = 30 * 60_000 }) {
-  return async ({ invocation, message, env = {}, policy }) => {
+  return async ({ invocation, message, env = {}, policy, signal }) => {
     const { agentId, harness, cwd } = invocation;
     const row = RESUME_HARNESSES[harness];
     if (!row) throw new Error(`resume wake does not support the ${harness} harness`);
@@ -254,11 +258,12 @@ export function createResumeExecutor({ sessions, baseEnv = process.env, home = h
     // the worktree before and after a fresh turn; only a single new one is
     // recorded, so a wake never adopts another soul's or project's session.
     const listIds = async () => {
-      const listed = await run(row.command, row.listArgs, { cwd, env: runEnv, stdin: null, timeoutMs: 30_000 }).catch(() => null);
+      const listed = await run(row.command, row.listArgs, { cwd, env: runEnv, stdin: null, timeoutMs: 30_000, signal }).catch(() => null);
       return listed?.code === 0 ? row.sessionsIn(listed.stdout, cwd) : null;
     };
     const before = !sessionId && row.listArgs ? await listIds() : null;
-    const result = await run(row.command, plan.args, { cwd, env: runEnv, stdin: plan.stdin, timeoutMs: turnTimeoutMs });
+    const result = await run(row.command, plan.args, { cwd, env: runEnv, stdin: plan.stdin, timeoutMs: turnTimeoutMs, signal });
+    signal?.throwIfAborted();
     const parsed = row.parse(result.stdout);
     if (result.code !== 0 || parsed.failure) {
       const detail = parsed.failure || lastLine(result.stderr) || lastLine(result.stdout) || (result.signal ? `stopped by ${result.signal}` : `exit ${result.code}`);

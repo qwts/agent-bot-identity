@@ -17,6 +17,49 @@ import { HARNESS_SESSION_EVENT, UPDATE_EVENT } from './executor-contract.mjs';
 import { keydMcpServerEntry, keydPolicyRules } from './keyd-client.mjs';
 import { createWakeDispatcher } from './wake-dispatch.mjs';
 
+// Shared by cold, launch and interactive turns. Keep each controller until
+// its executor settles: abort requests cancellation, it does not prove exit.
+// A soul may have overlapping interactive sessions; stop reaches every turn.
+export function createTurnRegistry() {
+  const active = new Map();
+  const track = (agentId, controller) => {
+    const turns = active.get(agentId) ?? new Set();
+    active.set(agentId, turns);
+    turns.add(controller);
+    return () => {
+      turns.delete(controller);
+      if (!turns.size) active.delete(agentId);
+    };
+  };
+  return {
+    track,
+    busy: () => [...active.keys()],
+    stop(agentId) {
+      let stopped = false;
+      for (const controller of active.get(agentId) ?? []) {
+        if (!controller.signal.aborted) { controller.abort(); stopped = true; }
+      }
+      return stopped;
+    },
+    async run(input, executor, { turnTimeoutMs = 30 * 60_000 } = {}) {
+      const controller = new AbortController();
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(turnTimeoutMs), ...(input.signal ? [input.signal] : [])]);
+      const release = track(input.invocation.agentId, controller);
+      try {
+        signal.throwIfAborted();
+        const result = await executor({ ...input, signal });
+        signal.throwIfAborted();
+        return result;
+      } catch (error) {
+        if (signal.aborted) throw new DOMException('turn cancelled', 'AbortError');
+        throw error;
+      } finally {
+        release();
+      }
+    },
+  };
+}
+
 // The broker port the dispatcher wants, over the supervisor's report.
 export function wakeReporter(report) {
   return (agentId, messageIds, outcome, detail) => report({ agentId, messageIds, outcome, detail: detail ?? '' });
@@ -31,10 +74,9 @@ export function wakeReporter(report) {
 // call, which the cold waker's relay sends back, and `denied`: the tools the
 // policy refused, so a turn that stopped on one is not answered with silence.
 // `onSession` hears the harness session the turn's prompt goes into (#404).
-export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onEvent = () => {}, approvals = null }) {
+export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onEvent = () => {}, approvals = null, turns = createTurnRegistry() }) {
   return async ({ invocation, message, attachments, env, onSession = null }) => {
     const executor = executorFor({ agentId: invocation.agentId, harness: invocation.harness, cwd: invocation.cwd, env });
-    const signal = AbortSignal.timeout(turnTimeoutMs);
     let reply = '';
     const denied = [];
     const collect = (type, update) => {
@@ -42,7 +84,7 @@ export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onE
       if (update?.sessionUpdate === 'agent_message_chunk' && typeof update.content?.text === 'string') reply += update.content.text;
       else if (update?.sessionUpdate === 'tool_call') reply = '';
     };
-    const result = await executor({
+    const result = await turns.run({ invocation }, async ({ signal }) => executor({
       invocation,
       message,
       attachments,
@@ -69,7 +111,7 @@ export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onE
       onPermission: ({ toolName, outcome }) => {
         if (outcome === 'deny' && typeof toolName === 'string' && !denied.includes(toolName)) denied.push(toolName);
       },
-    });
+    }), { turnTimeoutMs });
     return { ...result, reply, denied };
   };
 }
@@ -180,10 +222,11 @@ export function laneExecutor({ acpTurn = null, resumeTurn = null }) {
 // onWake for createCommsSupervisor. `coldWake` is null when the daemon has
 // no ACP executor, no resume executor, and no webhook waker, which leaves
 // every soul without a warm socket `waiting`.
-export function createWakePlane({ pool, settings, lookupSoul, identities, executorFor = null, resumeExecutor = null, webhookWaker = null, relay = null, taskReporter = null, authStatus = null, receipt, turnTimeoutMs, approvals = null }) {
+export function createWakePlane({ pool, settings, lookupSoul, identities, executorFor = null, resumeExecutor = null, webhookWaker = null, relay = null, taskReporter = null, authStatus = null, receipt, turnTimeoutMs, approvals = null, turns = createTurnRegistry() }) {
   const coldWake = executorFor || resumeExecutor || webhookWaker
     ? createColdWaker({
-      executor: laneExecutor({ acpTurn: executorFor ? coldTurnExecutor({ executorFor, turnTimeoutMs, approvals }) : null, resumeTurn: resumeExecutor }),
+      executor: laneExecutor({ acpTurn: executorFor ? coldTurnExecutor({ executorFor, turnTimeoutMs, approvals, turns }) : null,
+        resumeTurn: resumeExecutor ? (input) => turns.run(input, resumeExecutor, { turnTimeoutMs }) : null }),
       settings,
       lookupBinding: async (agentId) => lookupSoul(agentId),
       identities: async (agentId) => identities(agentId),
@@ -218,6 +261,7 @@ export function createWakePlane({ pool, settings, lookupSoul, identities, execut
     return dispatch(wake);
   };
   onWake.idle = () => coldWake?.idle() ?? Promise.resolve();
-  onWake.busy = () => coldWake?.busy?.() ?? [];
+  onWake.busy = () => [...new Set([...turns.busy(), ...(coldWake?.busy?.() ?? [])])];
+  onWake.stop = turns.stop;
   return onWake;
 }

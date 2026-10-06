@@ -305,6 +305,10 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
       // A turn's own error can quote the model or a message, so its receipt
       // says only that the turn failed, or that its harness is signed out.
       (error) => {
+        if (error?.name === 'AbortError') {
+          receipt({ event: 'cold-wake', agentId, decision: 'cancelled' });
+          return;
+        }
         const failure = harnessAuthFailure(error);
         if (failure) recordAuth(agentId, failure, identity.harness);
         log(`cold wake turn for ${agentId} failed: ${describeError(error)}`);
