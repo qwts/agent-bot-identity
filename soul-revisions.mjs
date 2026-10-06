@@ -10,7 +10,8 @@ import { pathToFileURL } from 'node:url';
 import { canonicalJson, computePackageRevision, readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
 import { currentAgentId, readAgentIdentity, recordAgentPackageRevision, stateDirectory, validateAgentId, withLock } from './agent-identity.mjs';
 import { spacePath } from './agent-space.mjs';
-import { assertOwnerAction } from './owner-gate.mjs';
+import { assertOwnerAction, ownerCredentialRequired, presenceOrConsent } from './owner-gate.mjs';
+import { appendAuditReceipt } from './agent-principals.mjs';
 
 const ZERO = `sha256:${'0'.repeat(64)}`;
 const json = (file) => JSON.parse(readFileSync(file, 'utf8'));
@@ -290,7 +291,15 @@ export async function revisionCommand(args, { assertSoulTarget = (id) => {
   if (currentAgentId() !== id) {
     throw new Error('a soul may propose changes only to its own package; bind an Agent ID first');
   }
-}, assertUser = (action, { principal }) => assertOwnerAction(action, { principal }),
+}, assertUser = (action, { principal }) => assertOwnerAction(action, {
+  principal, env: options.env, cwd: options.cwd,
+  consent: (action, context) => {
+    if (!process.stdin.isTTY || !process.stderr.isTTY) {
+      throw ownerCredentialRequired('owner consent requires an interactive terminal; --yes cannot approve');
+    }
+    return presenceOrConsent(action, context);
+  },
+}),
 // The owner's principal credential, when the caller presents one; it is
 // passed only to assertUser and never stored.
 principal = null, ...options } = {}) {
@@ -301,7 +310,13 @@ principal = null, ...options } = {}) {
     throw new Error('usage: soul revision adopt|edit|propose ID PATH REASON; approve|reject ID PROPOSAL REASON; list|history ID; promote ID SOURCE DESTINATION REASON; adopt, edit, approve and reject take --principal-stdin');
   }
   if (['adopt', 'edit', 'approve', 'reject'].includes(command)) {
-    const authorization = await assertUser(`soul revision ${command} ${id}`, { principal });
+    let authorization;
+    try { authorization = await assertUser(`soul revision ${command} ${id}`, { principal }); }
+    catch (error) {
+      const failure = error.code === 'owner-consent-unavailable' ? error : ownerCredentialRequired(error.message);
+      appendAuditReceipt({ event: 'soul-revision', agentId: id, operation: command, decision: failure.code }, options);
+      throw failure;
+    }
     if (authorization?.method) options.authorization = authorization;
   }
   if (['propose', 'promote'].includes(command)) await assertSoulTarget(id);
@@ -328,5 +343,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const { args, principal } = cliArgs(process.argv.slice(2));
     return revisionCommand(args, { principal });
   }).then((result) => process.stdout.write(JSON.stringify(result) + '\n'))
-    .catch((error) => { process.stderr.write(`agent-bot soul revision: ${error.message}\n`); process.exitCode = 1; });
+    .catch((error) => { process.stderr.write(`agent-bot soul revision: ${error.code ? `${error.code}: ` : ''}${error.message}\n`); process.exitCode = 1; });
 }

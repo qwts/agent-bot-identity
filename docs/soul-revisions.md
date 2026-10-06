@@ -2,7 +2,7 @@
 
 The revision mechanism stores package snapshots and an append-only journal at
 `<identity state directory>/soul-revisions/<agentId>/`. It does not execute
-package code, grant tools, alter an identity, or add daemon routes. Hosts remain
+package code, grant tools, or alter an identity. Hosts remain
 responsible for authenticating the actor and approving requested tool authority
 on their bound connections.
 
@@ -73,6 +73,12 @@ owner, because a soul can unset its markers. Each owner action needs both:
      needs a person to authenticate as an administrator. Cancelling it, or a
      platform without it, refuses. A "no" through keyd never falls back to
      this dialog.
+
+CLI consent requires an interactive terminal; neither stripped environment
+markers nor `--yes` proves ownership. Refusals use `owner-credential-required`
+and append a secret-free `soul-revision` audit receipt. Invalid principals never
+fall back to consent. Daemon clients use the same principal verification via
+the [revision API](daemon-api.md); daemon consent is a reserved contract only.
 
 The record of each owner action carries `authorization`: `{ method:
 "principal", principal }`, `{ method: "presence", via: "agent-bot-keyd" }` or

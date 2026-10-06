@@ -613,6 +613,10 @@ unreachable, and `required` fails closed rather than diverging from the
 daemon-owned stores. After the supervisor path has been applied, `doctor`
 treats a missing supervisor or a down daemon as not-ready.
 
+The [daemon revision API](docs/daemon-api.md) lists pending soul revisions and
+accepts owner actions with a presented agent-comms principal credential (#293).
+The population bearer alone cannot approve a revision.
+
 ### MCP server: bind a conversation to its identity
 
 `agent-bot mcp` serves the sanctioned agent-bot MCP tools over stdio, so any
