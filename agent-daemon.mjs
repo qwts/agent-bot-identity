@@ -94,7 +94,7 @@ import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
 import { editSoulRevision, revisionHistory } from './soul-revisions.mjs';
-import { acpExecutorFor, createWakePlane } from './wake-plane.mjs';
+import { acpExecutorFor, createWakePlane, createTurnRegistry } from './wake-plane.mjs';
 import { recordSoulSession } from './metrics.mjs';
 import { createTaskReporter } from './task-turns.mjs';
 import { createCommsRelay } from './comms-relay.mjs';
@@ -409,6 +409,7 @@ export function createDaemonServer({
   config,
   token = randomBytes(32).toString('hex'),
   executor,
+  turns = createTurnRegistry(),
   taskReporter = null,
   mintImpl = mint,
   // agent-bot-keyd's socket call (#397); tests pass a fake keyd.
@@ -432,7 +433,7 @@ export function createDaemonServer({
 } = {}) {
   // One interaction service per server so in-flight executions and their
   // cancellation controllers live exactly as long as the daemon.
-  const interaction = createInteractionService({ env, home, config, executor, taskReporter, now });
+  const interaction = createInteractionService({ env, home, config, executor, taskReporter, now, turns });
   // A decision lets a soul's tool run, so both decide routes ask the owner
   // first (#438): the daemon token proves only a process in this account, and
   // a transport principal only its provider login. The owner is asked about
@@ -524,10 +525,10 @@ export function createDaemonServer({
       const route = `${req.method} ${url.pathname}`;
       switch (route) {
         case 'GET /v0/health': {
-          // `busy`: souls with a daemon turn in flight (cold wake), beside
+          // `busy`: souls with any daemon turn in flight, beside
           // the warm pool's connected harnesses.
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid, warmPool: warmPool.list(),
-            busy: server.wakePlane?.busy?.() ?? [],
+            busy: server.wakePlane?.busy?.() ?? turns.busy(),
             computerUse: computerUse.list().map(({ agentId, since }) => ({ agentId, since })) });
           return;
         }
@@ -781,6 +782,35 @@ export function createDaemonServer({
             file: populationOverride(env, home),
           });
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, souls: withRoles(souls, { file: populationOverride(env, home), env, home }) });
+          return;
+        }
+        case 'POST /v0/soul/stop': {
+          const body = parseJsonBody(await readBody(req));
+          const agentId = requireAgentId(body.agentId);
+          // Like approvals: the local owner presents the daemon token;
+          // adapters additionally identify their enrolled transport principal.
+          // Stopping grants no tool permission and needs no presence dialog.
+          let principal = null;
+          const transport = body.transport ?? 'owner';
+          if (body.transport !== undefined || body.providerId !== undefined) {
+            try {
+              principal = resolvePrincipal({ transport: body.transport, providerId: body.providerId }, { file: principalsFile({ env, home }) });
+            } catch {
+              throw Object.assign(new Error('invalid transport principal'), { statusCode: 400 });
+            }
+            try { assertAuthorized({ principal, agentId, operation: 'cancel' }); }
+            catch (error) {
+              appendAuditReceipt({ event: 'denied-request', agentId, transport, principalId: principal?.principalId ?? null,
+                operation: 'cancel', decision: 'denied' }, { env, home, now });
+              throw error;
+            }
+          }
+          try { showSoul(agentId, { file: populationFile({ env, home }) }); }
+          catch { throw Object.assign(new Error('unknown soul'), { statusCode: 404 }); }
+          const stopped = server.wakePlane?.stop?.(agentId) ?? turns.stop(agentId);
+          appendAuditReceipt({ event: 'stop', agentId, transport, principalId: principal?.principalId ?? null,
+            operation: 'cancel', decision: stopped ? 'stopped' : 'idle' }, { env, home, now });
+          sendJson(res, 200, { agentId, stopped, ...(!stopped ? { reason: 'idle' } : {}) });
           return;
         }
         // The owner's approvals (#85). Listing needs the daemon token; deciding
@@ -1353,6 +1383,9 @@ export function daemonClient({
     async approvals() {
       return request('GET', '/v0/approvals');
     },
+    async stopSoul(agentId, requester = {}) {
+      return request('POST', '/v0/soul/stop', { ...requester, agentId });
+    },
     // Waits while the daemon asks the owner (#438): Touch ID or a password.
     async decideApproval({ proposalId, decision, digest, principal = null }) {
       return request('POST', '/v0/approvals/decide', {
@@ -1541,6 +1574,7 @@ export async function runDaemon({
     })
     : null;
   const computerUse = createComputerUseActivity({ now });
+  const turns = createTurnRegistry();
   const executorFor = configuredExecutorFor
     ? (request) => withPermissionReceipts(configuredExecutorFor(request), { env, home, now, computerUse })
     : null;
@@ -1572,6 +1606,7 @@ export async function runDaemon({
     return homes(soul);
   };
   const onLaunch = createLaunchHandler({
+    turns,
     file: path.join(path.dirname(daemonStateFile({ env, home })), 'launch-requests.json'),
     identities,
     identityFor,
@@ -1660,9 +1695,10 @@ export async function runDaemon({
     template: () => defaultTeamTemplate({ config: userConfig, env }),
     account,
   });
-  server = createDaemonServer({ env, home, config, now, comms, executor, taskReporter, teamStarter, computerUse });
+  server = createDaemonServer({ env, home, config, now, comms, executor, taskReporter, teamStarter, computerUse, turns });
   await taskReporter.recover({ log: (line) => process.stderr.write(`agent-daemon: ${line}\n`) });
   server.wakePlane = createWakePlane({
+    turns,
     pool: server.warmPool,
     settings: () => readColdWakeSettings({ env, home }),
     lookupSoul: (agentId) => server.bindings.findAgent(agentId) ?? recordedWorktree(agentId, { env, home }),

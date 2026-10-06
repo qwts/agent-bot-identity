@@ -85,6 +85,16 @@ for. `agent-bot skill path` prints the installed release's copy of this skill.
 | remote-write | `mint-token` | Each run mints a new short-lived token; repeating is safe. |
 | remote-write | `signed-commit` | Never blindly rerun. Follow the printed recovery in [verified-publish.md](references/verified-publish.md), and inspect the remote branch head before any second attempt. |
 
+## Stop a running turn
+
+`agent-bot soul stop <agentId|name> [--json]` asks the loopback daemon to
+cancel the soul's current cold, launch, or interactive turn. The local caller
+must pass the same soul-marker check as `approvals`; no owner presence dialog
+is needed. JSON is `{agentId, stopped: true}` or
+`{agentId, stopped: false, reason: "idle"}`. The daemon records a `stop`
+receipt, and the turn remains busy until cancellation finishes. Later wakes
+still run; this command does not pause cold wake.
+
 ## Verify the outcome
 
 Check the relevant local identity state before mutating GitHub. After a write,

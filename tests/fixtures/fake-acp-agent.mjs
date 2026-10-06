@@ -303,6 +303,7 @@ lines.on('line', (line) => {
     return;
   }
   if (payload.method === 'session/cancel') {
+    if (process.env.FAKE_CANCEL_FILE) writeFileSync(process.env.FAKE_CANCEL_FILE, 'cancelled\n');
     const session = sessions.get(payload.params?.sessionId);
     if (session?.onCancel) session.onCancel();
     return;

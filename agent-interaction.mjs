@@ -197,6 +197,7 @@ export function createInteractionService({
   config,
   executor = unconfiguredExecutor,
   taskReporter = null,
+  turns = null,
   now = () => new Date(),
   // Server-side diagnostics only: whatever this writes never reaches the job
   // store, events, or clients.
@@ -438,6 +439,16 @@ export function createInteractionService({
     transitionInvocation(id, 'running', storeOptions);
     recordStatus(id, 'running');
     if (invocation.taskId) await reportTask('started', invocation);
+    // A soul-wide stop can abort this controller without going through the
+    // invocation cancel route. Preserve the store's cancellation transition.
+    const onAbort = () => {
+      if (['running', 'waiting-approval'].includes(getInvocation(id, storeOptions).status)) {
+        transitionInvocation(id, 'cancel-requested', storeOptions);
+        recordStatus(id, 'cancel-requested');
+      }
+    };
+    controller.signal.addEventListener('abort', onAbort, { once: true });
+    const release = turns?.track(invocation.agentId, controller);
     try {
       controller.signal.throwIfAborted();
       await executor({
@@ -469,6 +480,8 @@ export function createInteractionService({
         recordStatus(id, 'failed', { error: text });
       }
     } finally {
+      controller.signal.removeEventListener('abort', onAbort);
+      release?.();
       await reportTask('ended', invocation, getInvocation(id, storeOptions).status);
     }
   }
