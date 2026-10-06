@@ -89,6 +89,16 @@ test('supervisor paths follow the user-level convention', () => {
   assert.equal(supervisorPaths('/u', 'win32').kind, null);
 });
 
+test('supervised units retain the log cap override and normalize invalid values', () => {
+  assert.equal('AGENT_BOT_DAEMON_LOG_MAX_BYTES' in supervisorEnvironment({ env: {}, home: '/u' }), false);
+  for (const [value, expected] of [['1024', '1024'], ['bad', '5242880']]) {
+    const environment = supervisorEnvironment({ env: { AGENT_BOT_DAEMON_LOG_MAX_BYTES: value }, home: '/u' });
+    assert.equal(environment.AGENT_BOT_DAEMON_LOG_MAX_BYTES, expected);
+    assert.match(renderLaunchdPlist({ executable: '/u/agent-bot', environment }),
+      new RegExp(`<key>AGENT_BOT_DAEMON_LOG_MAX_BYTES</key>\\s*<string>${expected}</string>`));
+  }
+});
+
 test('ensure writes and loads a launchd unit without calling disable', async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-supervisor-'));
   const commands = [];

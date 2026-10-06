@@ -87,6 +87,7 @@ import { soulModel, setSoulModel, recordSoulModels } from './soul-model.mjs';
 import { readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
+import { createDaemonLogCheck, daemonLogPath, DAEMON_LOG_CHECK_INTERVAL_MS } from './daemon-log.mjs';
 import { createTeamStarter, defaultTeamTemplate, harnessLaunchProblem, teamLimits } from './team-start.mjs';
 import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHarnessesPath } from './soul-home.mjs';
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
@@ -1491,6 +1492,8 @@ export async function runDaemon({
   if (existing.running) {
     throw new Error(`daemon already running (pid ${existing.pid}, port ${existing.port})`);
   }
+  const checkLog = createDaemonLogCheck({ env, logPath: daemonLogPath(home) });
+  checkLog();
   // Reconcile jobs orphaned by a previous daemon before accepting new work
   // (#56 req 8): executing work becomes failed, never-dispatched queued work
   // becomes failed with its own stable reason, and pending cancellations
@@ -1700,7 +1703,11 @@ export async function runDaemon({
   };
   writeStateFile(file, state);
   comms.start();
+  const logTimer = setInterval(checkLog, DAEMON_LOG_CHECK_INTERVAL_MS);
+  logTimer.unref();
+  server.once('close', () => clearInterval(logTimer));
   const shutdown = () => {
+    clearInterval(logTimer);
     try {
       comms.stop();
     } catch {

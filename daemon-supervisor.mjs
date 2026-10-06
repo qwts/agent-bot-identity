@@ -27,6 +27,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import process from 'node:process';
 
 import { daemonStateFile, daemonStatus, stopDaemon } from './agent-daemon.mjs';
+import { daemonLogMaxBytes, daemonLogPath } from './daemon-log.mjs';
 
 export const LAUNCHD_LABEL = 'dev.qwts.agent-bot.daemon';
 export const SYSTEMD_UNIT = 'agent-bot-daemon.service';
@@ -62,7 +63,7 @@ export function supervisorPaths(home = homedir(), platform = process.platform, e
       unitPath: join(home, 'Library', 'LaunchAgents', `${label}.plist`),
       // launchd sends a job's stdio to /dev/null unless the unit names a
       // file, so the daemon's stderr diagnostics would be lost without one.
-      logPath: join(home, 'Library', 'Logs', 'agent-bot', 'daemon.log'),
+      logPath: daemonLogPath(home),
     };
   }
   if (platform === 'linux') {
@@ -97,6 +98,8 @@ export function supervisorEnvironment({ env = process.env, home = homedir() } = 
   const label = hostServiceLabel(env);
   return {
     AGENT_BOT_DAEMON_STATE_PATH: daemonStateFile({ env, home }),
+    ...(env.AGENT_BOT_DAEMON_LOG_MAX_BYTES !== undefined
+      ? { AGENT_BOT_DAEMON_LOG_MAX_BYTES: String(daemonLogMaxBytes(env)) } : {}),
     // The supervised daemon resolves the same label as the host that installed it.
     ...(label ? { [SERVICE_LABEL_VARIABLE]: label } : {}),
     // A host's own npm, which installs soul harnesses (ADR-0276).
