@@ -90,7 +90,7 @@ function starter(root) {
 function pinnedStarter(root) {
   const template = starter(root);
   writeFileSync(path.join(template, 'package.json'), JSON.stringify({ name: 'starter-soul', private: true, dependencies: { '@zed-industries/claude-code-acp': '0.16.2' } }));
-  writeFileSync(path.join(template, 'package-lock.json'), JSON.stringify({ name: 'starter-soul', lockfileVersion: 3, packages: {} }));
+  writeFileSync(path.join(template, 'package-lock.json'), JSON.stringify({ name: 'starter-soul', lockfileVersion: 3, packages: { '': { dependencies: { '@zed-industries/claude-code-acp': '0.16.2' } }, 'node_modules/@zed-industries/claude-code-acp': { version: '0.16.2' } } }));
   const installHarness = async (agentId, source, options) => {
     const { installSoulHarnesses } = await import('../soul-home.mjs');
     return installSoulHarnesses(agentId, source, { ...options, install: async (dir) => {
@@ -380,7 +380,7 @@ test('join --wake acp installs the pinned adapter in the soul\'s own harness dir
   // The Starter template pins the Claude adapter, as GeniusBar's bundled one does.
   const template = starter(a.root);
   writeFileSync(path.join(template, 'package.json'), JSON.stringify({ name: 'starter-soul', private: true, dependencies: { '@zed-industries/claude-code-acp': '0.16.2' } }));
-  writeFileSync(path.join(template, 'package-lock.json'), JSON.stringify({ name: 'starter-soul', lockfileVersion: 3, packages: {} }));
+  writeFileSync(path.join(template, 'package-lock.json'), JSON.stringify({ name: 'starter-soul', lockfileVersion: 3, packages: { '': { dependencies: { '@zed-industries/claude-code-acp': '0.16.2' } }, 'node_modules/@zed-industries/claude-code-acp': { version: '0.16.2' } } }));
   const repo = path.join(a.root, 'someone-elses-repo');
   mkdirSync(repo);
   git(repo, 'init', '-q');
@@ -388,6 +388,7 @@ test('join --wake acp installs the pinned adapter in the soul\'s own harness dir
   const joined = await joinSoul({ name: 'claude-joiner', harness: 'claude', template: null, cwd: repo, env: { ...a.env, AGENT_BOT_STARTER_TEMPLATE: template },
     home: a.home, config: {}, wake: 'acp', daemon: daemon.client, gate: async () => ({ method: 'consent' }),
     installHarness: async (agentId, source, options) => {
+      assert.equal(options.harness, 'claude');
       installs.push(source);
       const { installSoulHarnesses } = await import('../soul-home.mjs');
       return installSoulHarnesses(agentId, source, { ...options, install: async (dir) => {

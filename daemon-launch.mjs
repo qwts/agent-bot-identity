@@ -119,7 +119,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       const request = { ...withoutParent(event), harness, ...(parent ? { parent } : {}) };
       const identity = soul ? await identities(soul) : copied ? await forkCopy(request) : await spawnPackage(request);
       if (!soul) spawned = identity?.id ?? null;
-      const binding = await lookupBinding(identity.id)
+      const binding = await lookupBinding(identity.id, { harness })
         ?? await provisionHome({ agentId: identity.id, harness, packagePath });
       if (!binding?.worktree || !binding?.file) throw new Error('soul binding is unavailable');
       rollback.binding = binding;

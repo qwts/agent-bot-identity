@@ -1585,9 +1585,13 @@ export async function runDaemon({
       return mintAgentIdentity({ appSlug: null, harness, packagePath, useGithub: false, parentId: parent,
         stateDir: stateDirectory({ env, home }), now });
     },
-    lookupBinding: (agentId) => soulBindingForLaunch(agentId, {
+    lookupBinding: (agentId, { harness } = {}) => soulBindingForLaunch(agentId, {
       stateDir: stateDirectory({ env, home }), bindings: server.bindings,
-      provision: provisionHome, harness: identities(agentId).harness ?? null,
+      provision: provisionHome, harness: harness ?? identities(agentId).harness ?? null,
+      prepareHarness: async (id, selected, worktree) => {
+        const { ensureAcpHarness } = await import('./soul-join.mjs');
+        await ensureAcpHarness(id, selected, worktree, { env, options: { env, home, config } });
+      },
     }),
     provisionHome: (soul) => provisionHome(soul),
     locatePackage: (packagePath) => locateSoulDir(packagePath, { env, home, config, file: populationFile({ env, home }) }),

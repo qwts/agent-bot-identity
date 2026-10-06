@@ -3,16 +3,17 @@
 // a soul spawned from a package or one whose binding expired. A package
 // spawn starts its home from a copy of the package, so the harness reads
 // the soul's AGENTS.md and skills from its working directory, and installs
-// the harnesses the package pins (ADR-0276).
+// only its own harness adapter from the package's pins (ADR-0276, #426).
 import { execFile, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, chmodSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { validateAgentId } from './agent-identity.mjs';
+import { readAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
 import { populationFile, registerSoulDir, showSoul, soulDirectory } from './agent-population.mjs';
 
 import { buildSoulDirectory } from './soul-build.mjs';
+import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
 
 const run = promisify(execFile);
 export const INSTALL_TIMEOUT_MS = 10 * 60_000;
@@ -35,24 +36,87 @@ export function soulHarnessesPath(agentId, options = {}) {
 }
 
 /**
- * Installs the pinned harnesses from `source` (a directory with package.json
+ * Installs the soul's pinned adapter from `source` (a directory with package.json
  * and package-lock.json, such as the soul's own package or the bundled
  * Starter) into the soul's harness directory. Returns the directory, or
- * null when `source` pins nothing.
+ * null when `source` does not pin this harness's adapter. An omitted harness
+ * uses the identity record; the registry names the package, not its pin.
  */
-export async function installSoulHarnesses(agentId, source, { install = installHarnesses, ...options } = {}) {
-  if (!source || !existsSync(path.join(source, 'package.json')) || !existsSync(path.join(source, 'package-lock.json'))) return null;
+export async function installSoulHarnesses(agentId, source, { install = installHarnesses, harness, ...options } = {}) {
+  harness ??= recordedHarness(agentId, options);
+  const pinned = pinnedHarness(source, harness);
+  if (!pinned) return null;
   const directory = soulHarnessesPath(agentId, options);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
-  for (const name of ['package.json', 'package-lock.json']) cpSync(path.join(source, name), path.join(directory, name));
+  writePinnedHarness(directory, pinned);
   await install(directory, { env: options.env });
   return directory;
 }
 
+function recordedHarness(agentId, options) {
+  const stateDir = options.stateDir ?? stateDirectory(options);
+  // Old census-only homes may have no identity file yet.
+  if (!existsSync(path.join(stateDir, `${validateAgentId(agentId)}.json`))) return null;
+  return readAgentIdentity(agentId, { stateDir }).harness ?? null;
+}
+
+// Keep npm ci's exact pins and package locations, including nested versions,
+// shared dependencies, platform optional packages and installed peers. No
+// resolution/download step is needed to derive this subset of a v3 lockfile.
+function pinnedHarness(source, harness) {
+  const adapter = ACP_SPAWN_REGISTRY[harness]?.adapter?.package;
+  if (!adapter || !source || !existsSync(path.join(source, 'package.json'))
+      || !existsSync(path.join(source, 'package-lock.json'))) return null;
+  const manifest = JSON.parse(readFileSync(path.join(source, 'package.json'), 'utf8'));
+  if (!manifest.dependencies?.[adapter]) return null;
+  const lock = JSON.parse(readFileSync(path.join(source, 'package-lock.json'), 'utf8'));
+  if (lock.lockfileVersion !== 3 || !lock.packages) throw new Error('a soul adapter needs a v3 package-lock.json');
+  const dependencies = { [adapter]: manifest.dependencies[adapter] };
+  const root = { ...(manifest.name ? { name: manifest.name } : {}),
+    ...(manifest.version ? { version: manifest.version } : {}), dependencies };
+  const packages = { '': root };
+  const parent = (location) => location.slice(0, Math.max(0, location.lastIndexOf('/node_modules/')));
+  const resolve = (location, name) => {
+    for (;;) {
+      const candidate = `${location ? `${location}/` : ''}node_modules/${name}`;
+      if (Object.hasOwn(lock.packages, candidate)) return candidate;
+      if (!location) return null;
+      location = parent(location);
+    }
+  };
+  const pending = [{ location: '', entry: root }];
+  while (pending.length) {
+    const { location, entry } = pending.pop();
+    for (const kind of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+      for (const name of Object.keys(entry[kind] ?? {})) {
+        const found = resolve(kind === 'peerDependencies' ? parent(location) : location, name);
+        if (!found) {
+          if (kind === 'optionalDependencies' || Object.hasOwn(entry.optionalDependencies ?? {}, name)
+              || (kind === 'peerDependencies' && entry.peerDependenciesMeta?.[name]?.optional)) continue;
+          throw new Error(`soul adapter lockfile is missing ${name} required by ${location || adapter}`);
+        }
+        if (Object.hasOwn(packages, found)) continue;
+        const dependency = lock.packages[found];
+        if (dependency.link) throw new Error('soul adapter lockfile must not use workspace or linked packages');
+        packages[found] = dependency;
+        pending.push({ location: found, entry: dependency });
+      }
+    }
+  }
+  return { manifest: { ...root, private: true },
+    lock: { ...(lock.name ? { name: lock.name } : {}), ...(lock.version ? { version: lock.version } : {}),
+      lockfileVersion: 3, requires: true, packages } };
+}
+
+function writePinnedHarness(directory, { manifest, lock }) {
+  writeFileSync(path.join(directory, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+  writeFileSync(path.join(directory, 'package-lock.json'), `${JSON.stringify(lock, null, 2)}\n`);
+}
+
 // Preserve live checkout bindings; home launches always provision so a
 // migration interrupted after rebinding still finishes cleanup next launch.
-export function soulBindingForLaunch(agentId, { stateDir, bindings, provision, harness = null }) {
+export function soulBindingForLaunch(agentId, { stateDir, bindings, provision, harness = null, prepareHarness = null }) {
   const binding = bindings.findAgent(agentId);
   const worktree = binding?.worktree;
   if (worktree && (worktree === legacyHomePath(stateDir, agentId)
@@ -60,6 +124,7 @@ export function soulBindingForLaunch(agentId, { stateDir, bindings, provision, h
       || !existsSync(worktree))) {
     return provision({ agentId, harness });
   }
+  if (worktree && prepareHarness) return Promise.resolve(prepareHarness(agentId, harness, worktree)).then(() => binding);
   return binding;
 }
 
@@ -138,27 +203,49 @@ export function createSoulHomes({ stateDir, bindings, install = installHarnesses
   // One creation per home at a time: a second launch of the same new soul
   // waits for the first instead of racing it through copy and install.
   const creating = new Map();
-  async function create(worktree, packagePath) {
+  async function provisionHarness(worktree, source, harness) {
+    const marker = path.join(path.dirname(worktree), 'home-harness');
+    const selected = JSON.stringify(harness);
+    const managed = existsSync(marker);
+    if (managed && readFileSync(marker, 'utf8') === selected) return;
+    const pinned = pinnedHarness(source, harness);
+    if (!pinned && !managed) return;
+    // Invalidate before installing: npm ci may remove the previous install
+    // before failing, so even a switch back must retry.
+    rmSync(marker, { force: true });
+    if (pinned) {
+      writePinnedHarness(worktree, pinned);
+      await install(worktree, { env: options.env });
+    } else if (managed) {
+      // Only remove installs this provisioner owns. Legacy homes without a
+      // package source keep their existing dependencies during migration.
+      rmSync(path.join(worktree, 'node_modules'), { recursive: true, force: true });
+    }
+    writeFileSync(marker, selected, { mode: 0o600 });
+  }
+  async function create(worktree, packagePath, harness) {
     mkdirSync(worktree, { recursive: true, mode: 0o700 });
     try {
       if (packagePath) {
         for (const name of readdirSync(packagePath)) {
-          if (['.soul-state', 'worktrees'].includes(name)) continue;
+          if (['.soul-state', 'worktrees', 'node_modules'].includes(name)) continue;
           cpSync(path.join(packagePath, name), path.join(worktree, name), { recursive: true, verbatimSymlinks: true, force: false });
         }
       }
       if (existsSync(path.join(worktree, 'AGENTS.md'))) buildSoulDirectory(worktree);
-      await install(worktree);
+      await provisionHarness(worktree, packagePath, harness);
       execFileSync('git', ['init', '-q'], { cwd: worktree, env: { PATH: process.env.PATH }, stdio: 'ignore' });
       appendFileSync(path.join(worktree, '.git', 'info', 'exclude'), 'node_modules/\n');
     } catch (error) {
       // A half-made home is removed, so the next launch starts it afresh.
       rmSync(worktree, { recursive: true, force: true });
+      rmSync(path.join(path.dirname(worktree), 'home-harness'), { force: true });
       throw error;
     }
   }
   return async function provision({ agentId, harness = null, packagePath = null }) {
     validateAgentId(agentId);
+    harness ??= recordedHarness(agentId, { ...options, stateDir });
     const directory = ensureSoulDirectory(agentId, packagePath, options);
     const worktree = path.join(directory, '.soul-state', 'home');
     while (creating.has(worktree)) await creating.get(worktree).catch(() => {});
@@ -178,11 +265,10 @@ export function createSoulHomes({ stateDir, bindings, install = installHarnesses
         rename(staging, worktree);
       }
     }
-    if (!existsSync(path.join(worktree, '.git'))) {
-      const made = create(worktree, directory);
-      creating.set(worktree, made);
-      try { await made; } finally { creating.delete(worktree); }
-    }
+    const made = existsSync(path.join(worktree, '.git'))
+      ? provisionHarness(worktree, directory, harness) : create(worktree, directory, harness);
+    creating.set(worktree, made);
+    try { await made; } finally { creating.delete(worktree); }
     const gitDir = realpathSync(path.join(worktree, '.git'));
     const migrated = existsSync(migratedFrom) && readFileSync(migratedFrom, 'utf8').trim() === legacy;
     const previous = bindings.findAgent(agentId);
