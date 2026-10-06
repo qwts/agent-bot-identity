@@ -1,16 +1,84 @@
 #!/usr/bin/env node
 
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { mintAgentIdentity, retireAgentIdentity, stateDirectory } from './agent-identity.mjs';
-import { populationFile, registerSoulDir, retireIdentityWithPopulation, upsertIdentitySoul } from './agent-population.mjs';
+import { packageManifest, populationFile, registerSoulDir, retireIdentityWithPopulation, upsertIdentitySoul } from './agent-population.mjs';
 import { initAgentSpace } from './agent-space.mjs';
+import { loadConfig } from './config.mjs';
 import { computePackageRevision, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST,
   readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
 import { adoptSoulPackage, editSoulRevision, revisionPackagePath } from './soul-revisions.mjs';
 import { soulsHome } from './souls-root.mjs';
+
+/** The Starter shipped by this install, shared by join, start_soul and listing. */
+export function bundledStarter({ env = process.env, root = dirname(fileURLToPath(import.meta.url)) } = {}) {
+  if (env.AGENT_BOT_STARTER_TEMPLATE) return resolve(env.AGENT_BOT_STARTER_TEMPLATE);
+  // GeniusBar: Resources/components/agent-bot beside Resources/souls.
+  // Homebrew and source installs normally ship no Starter.
+  const candidate = resolve(root, '..', '..', 'souls', 'starter.soul');
+  return existsSync(join(candidate, 'soul.json')) ? candidate : null;
+}
+
+// Local package data only: no census, identity, credential or SOP lookup.
+export function listSoulTemplates({ env = process.env, home = homedir() } = {}) {
+  const config = loadConfig({ env, home });
+  const { root } = soulsHome({ env, home, config });
+  const templates = [];
+  const errors = [];
+  const seen = new Set();
+  const add = (candidate, source) => {
+    let directory = resolve(candidate);
+    try {
+      // Canonicalize parent-directory aliases, but do not make a linked package
+      // acceptable to the validator (which deliberately refuses symlinks).
+      if (seen.has(directory)) return;
+      seen.add(directory);
+      const canonical = realpathSync(directory);
+      if (canonical !== directory && seen.has(canonical)) return;
+      seen.add(canonical);
+      if (source === 'souls-root') {
+        try { lstatSync(join(directory, '.soul-state', 'agent-id')); return; }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+      }
+      validateSoulPackage(directory);
+      if (source === 'souls-root' && JSON.parse(readFileSync(join(directory, 'soul.json'), 'utf8')).template !== true) return;
+      const manifest = packageManifest(directory);
+      const preferredHarnesses = manifest.preferredHarnesses ?? [];
+      directory = canonical;
+      templates.push({ name: manifest.name ?? '', description: manifest.description ?? '',
+        preferredHarnesses, defaultHarness: preferredHarnesses[0] ?? null,
+        package: directory, revision: manifest.revision ?? null, source });
+    } catch (error) { errors.push({ package: directory, message: error.message }); }
+  };
+  const configured = config.teams?.template;
+  if (configured !== undefined) {
+    if (typeof configured === 'string' && isAbsolute(configured)) add(configured, 'config');
+    else errors.push({ package: typeof configured === 'string' ? configured : null,
+      message: 'teams.template must be an absolute package path' });
+  }
+  const starter = bundledStarter({ env });
+  if (starter) add(starter, 'bundled');
+  try {
+    for (const child of readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      if (child.isDirectory() && child.name.endsWith('.soul')) add(join(root, child.name), 'souls-root');
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') errors.push({ package: root, message: error.message });
+  }
+  templates.sort((a, b) => a.name.localeCompare(b.name));
+  return { templates, soulsRoot: root, errors };
+}
+
+export function templateListCommand(args, options) {
+  if (args.length > 1 || (args.length === 1 && args[0] !== '--json')) {
+    throw new Error('usage: agent-bot soul templates [--json]');
+  }
+  return listSoulTemplates(options);
+}
 
 export function soulDisplayFilename(displayName) {
   return displayName.replace(/[/\\:*?"<>|\u0000-\u001f\u007f-\u009f]/g, '-').replace(/[. ]+$/, '') + '.soul';
@@ -108,6 +176,19 @@ export async function templateSpawnCommand(args) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  try { process.stdout.write(`${JSON.stringify(await templateSpawnCommand(process.argv.slice(2)))}\n`); }
-  catch (error) { process.stderr.write(`agent-bot soul spawn: ${error.message}\n`); process.exitCode = 1; }
+  const listing = process.argv[2] === '--list';
+  try {
+    if (listing) {
+      const args = process.argv.slice(3);
+      const result = templateListCommand(args);
+      if (args.includes('--json')) process.stdout.write(`${JSON.stringify(result)}\n`);
+      else {
+        for (const row of result.templates) process.stdout.write(`${row.name} — ${row.description} (${row.defaultHarness ?? 'none'}, ${row.source})\n`);
+        for (const error of result.errors) process.stderr.write(`agent-bot soul templates: ${error.package}: ${error.message}\n`);
+      }
+    } else {
+      const args = process.argv.slice(process.argv[2] === '--spawn' ? 3 : 2);
+      process.stdout.write(`${JSON.stringify(await templateSpawnCommand(args))}\n`);
+    }
+  } catch (error) { process.stderr.write(`agent-bot soul ${listing ? 'templates' : 'spawn'}: ${error.message}\n`); process.exitCode = 1; }
 }

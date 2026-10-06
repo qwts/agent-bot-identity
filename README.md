@@ -290,6 +290,10 @@ The account-local population census records each soul's absolute `soulDir`;
 its default directory is `<soulsRoot>/<census-name>.soul`. Named template
 instances use their manifest display name instead.
 
+List available local templates with `agent-bot soul templates [--json]`.
+The list includes marked, unlaunched packages in the souls root, the configured
+`teams.template`, and any bundled Starter; invalid packages are reported separately.
+
 Create independent tailored agents from one package with
 `agent-bot soul spawn TEMPLATE_PATH --name "Billy" [--harness H]`.
 For example, `Principal SW Engineer.soul` produces

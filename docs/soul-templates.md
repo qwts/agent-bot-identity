@@ -32,6 +32,33 @@ executable modes and empty directories are copied. `.soul-state/`,
 package format 2 so their working state does not enter subsequent revisions,
 even when the template uses format 1. The instance sets `template: false`.
 
+## Listing templates
+
+```bash
+agent-bot soul templates
+agent-bot soul templates --json
+```
+
+Listing reads local packages without network or secret access. It includes the
+configured `teams.template`, any bundled Starter (the same lookup as `join` and
+`start_soul`), and direct `*.soul` directories under the souls root marked
+`"template": true` with no `.soul-state/agent-id`. Configured and bundled packages
+do not need the template flag. Every listed package passes package validation.
+Invalid packages appear in `errors` without stopping the list.
+
+Plain output is `name — description (harness, source)`, with `none` when there
+is no preferred harness. JSON is `{ templates, soulsRoot, errors }`. Each row
+contains `name`, `description`, `preferredHarnesses`, `defaultHarness` (the first
+preferred harness or `null`), absolute `package`, `revision`, and `source`
+(`config`, `bundled`, or `souls-root`). Display fields use the same caps as
+`soul locate`; unavailable text is empty. Revision is `null` when `soul locate`
+provides none. Errors contain `package` and `message`.
+
+Rows sort by name and deduplicate by resolved package path, preferring config,
+then bundled, then souls-root. Pass a row's `package` to `soul spawn` or a named
+`{ package, name, harness }` launch. A missing souls root gives an empty local
+scan and is not created. SOP-sourced templates are not included yet.
+
 ## Identity and history
 
 Each instance mints a new root identity using `mintAgentIdentity` and the
