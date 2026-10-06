@@ -40,7 +40,10 @@ test('pure output is sorted, deterministic, input-independent and confined to th
   }
   assert.equal(a.get('CLAUDE.md').toString(), `${MARKER}\n@AGENTS.md\n`);
   assert.equal(a.get('GEMINI.md').toString(), `${MARKER}\n@AGENTS.md\n`);
-  assert.ok([...a.keys()].every((p) => !/^\.(codex|cursor|opencode|devin)\//.test(p)), 'native/compatible harnesses receive no duplicate folder');
+  // Codex now receives `.codex/config.toml` for its MCP entry (#378) and
+  // OpenCode its `opencode.json`; neither gets a duplicate skills folder.
+  assert.ok(a.has('.codex/config.toml') && a.has('opencode.json'));
+  assert.ok([...a.keys()].every((p) => !/^\.(cursor|opencode|devin)\//.test(p)), 'compatible harnesses receive no duplicate folder');
   assert.throws(() => buildHarnessFiles([{ path: 'skills/../escape', bytes: Buffer.alloc(0) }]), /unsafe/);
 });
 

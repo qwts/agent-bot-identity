@@ -1,8 +1,12 @@
 // Shared with soul-builder: only exact build output is ignored; the marker is
 // informational and cannot authenticate generated content. Prefixes are root-relative.
+// `.codex/` and `.gemini/` already cover their MCP config files
+// (`.codex/config.toml`, `.gemini/settings.json`, #378); only the two root
+// files need naming. Array order is part of the canonical format-2 ignore
+// list, so entries are only ever appended or deliberately reordered.
 export const GENERATED_HARNESS_PATHS = Object.freeze([
   '.claude/', '.codex/', '.cursor/', '.opencode/', '.devin/', '.gemini/',
-  '.github/copilot-instructions.md', 'CLAUDE.md', 'GEMINI.md',
+  '.github/copilot-instructions.md', '.mcp.json', 'CLAUDE.md', 'GEMINI.md', 'opencode.json',
 ]);
 export const GENERATED_HARNESS_MARKER = '<!-- agent-bot soul-builder: generated -->';
 // Format 2's fixed contract. Generated paths are eligible only for exact-byte
