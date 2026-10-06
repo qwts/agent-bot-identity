@@ -18,8 +18,8 @@
 class AgentBot < Formula
   desc "Per-harness GitHub App identities for coding agents"
   homepage "https://github.com/qwts/agent-bot-identity"
-  url "https://github.com/qwts/agent-bot-identity/archive/refs/tags/v0.10.22.tar.gz"
-  sha256 "eb03798fc426928c36fc2aa42306f343f92be2859374fa248658a4eca76c5646"
+  url "https://github.com/qwts/agent-bot-identity/archive/refs/tags/v0.10.23.tar.gz"
+  sha256 "875b2d78424fd509bb7a4951aea0cbfafbef8290875e4db28662e443b750219b"
   license "MIT"
   head "https://github.com/qwts/agent-bot-identity.git", branch: "main"
 
