@@ -14,6 +14,8 @@ containing spaces.
 ```sh
 agent-bot soul revision adopt ID PACKAGE 'Starting package'
 agent-bot soul revision edit ID PACKAGE 'Customize instructions'
+agent-bot soul revision edit ID COPY 'Customize instructions' --apply --json
+agent-bot soul revision edit ID COPY 'Customize instructions' --apply --principal-stdin < principal.json
 agent-bot soul revision propose ID PACKAGE 'Learned a better procedure'
 agent-bot soul revision list ID
 agent-bot soul revision approve ID PROPOSAL_ID 'Reviewed the proposed changes'
@@ -31,10 +33,31 @@ proposals require an adopted package so their base contents are available for
 review. Inputs must be quiescent directories, as with package validation.
 
 An edit copies the supplied package content (excluding format 2 working state), sets its parent to the current
-head, computes its revision, and appends it. Inputs are never modified. Undo uses
+head, computes its revision, and appends it. Without `--apply`, inputs are never modified. Undo uses
 an earlier snapshot's contents as a new edit, with the current head as parent.
 Unknown files, unknown manifest fields, binary bytes, directories, and execute
 bits survive. Manifest JSON formatting is normalized in stored snapshots.
+
+`edit ID PATH REASON --apply [--json]` also publishes the recorded snapshot into
+the soul's own package folder, resolved by `soulDirectory(ID)` (the folder
+reported by `soul profile`). After owner approval, it preflights the source and
+destination, records the revision, and adds, replaces, or removes differing
+paths. Files are written to sibling temporary files and renamed individually;
+`soul.json` is published last with the new `revision` and `parentRevision`.
+Execute bits are preserved. Symlinks are refused, and `.soul-state/` and
+`worktrees/` are never traversed or changed. When PATH is the soul folder itself,
+only the manifest's revision fields are rewritten; all other files stay in place.
+A running soul is allowed: package files are read per turn.
+
+The per-soul revision lock covers snapshotting, recording, and publication, and
+a moved recorded head refuses application. Publication is atomic per file, not
+for the whole folder: an I/O failure after recording can leave a recorded revision
+and a partially updated folder. The command fails in that case. On success the
+returned JSON revision record adds `applied: true` and `changed: [paths]`, a sorted
+list of relative paths (including changed directories and `soul.json`). These
+publication fields are returned only, not added to the append-only history record.
+Without `--apply`, the response and record-only behavior are unchanged. All
+revision commands already print JSON; `--json` is an explicit optional spelling.
 
 Proposals snapshot the candidate package content immediately and include a computed
 path diff (`added`, `modified`, `removed`), reason, author, timestamp, and base
@@ -74,8 +97,13 @@ owner, because a soul can unset its markers. Each owner action needs both:
      platform without it, refuses. A "no" through keyd never falls back to
      this dialog.
 
-CLI consent requires an interactive terminal; neither stripped environment
-markers nor `--yes` proves ownership. Refusals use `owner-credential-required`
+Only the CLI's consent-dialog fallback requires an interactive terminal (both
+stdin and stderr). Keyd presence works without a terminal or a principal, so an
+app can invoke an owner revision action directly. If keyd is unavailable, a
+noninteractive caller receives `owner-credential-required: owner consent requires
+an interactive terminal; --yes cannot approve`. A keyd refusal never reaches the
+dialog fallback. Neither stripped environment markers nor `--yes` proves
+ownership. Refusals use `owner-credential-required`
 and append a secret-free `soul-revision` audit receipt. Invalid principals never
 fall back to consent. Daemon clients use the same principal verification via
 the [revision API](daemon-api.md); daemon consent is a reserved contract only.
