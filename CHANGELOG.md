@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.23
+
+- `agent-bot soul profile <agentId|name> [--json] [--file RELATIVE_PATH]` and authenticated `GET /v0/soul/profile` expose a read-only customization profile, allowed files, skills, credential declarations and offline SOP availability without fetching repositories or reading secret stores (#375).
+
 ## 0.10.22
 
 - `agent-bot soul templates [--json]` lists validated templates from the souls root, the configured team template, and any bundled Starter, with launchable package paths and per-package errors for local discovery (#374).
