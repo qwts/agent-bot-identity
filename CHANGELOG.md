@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.17
+
+- Souls install only their own harness adapter (#426). A Claude soul made from Starter no longer installs the pinned Codex adapter and its roughly 330 MB binary. Home launches and ACP joins select the adapter named by the harness registry, keep its template lockfile pin, and prune the install manifest and v3 lockfile to that adapter and its reachable dependencies before running `npm ci --ignore-scripts --omit=dev`. A home relaunched with another harness reinstalls for that choice; a joined checkout uses the soul's private harness directory. Harnesses without an adapter and packages without a matching pin install nothing, and the daemon never falls back to npx.
+
 ## 0.10.16
 
 - The daemon now checks its macOS launchd log at startup and every ten minutes, copying logs above 5 MiB to a single `daemon.log.1` backup before truncating the live file, so long-running installations no longer accumulate an unbounded live log. Both files use mode 0600; `AGENT_BOT_DAEMON_LOG_MAX_BYTES` overrides the cap with a positive integer byte count. Linux journald is unchanged, and no system configuration or root access is required (#452).
