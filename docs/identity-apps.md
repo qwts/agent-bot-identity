@@ -32,7 +32,9 @@ Issues write permissions, disables webhooks, and requests no user OAuth.
 The listener checks the host and state nonce, exchanges the code, and closes.
 JSON CLI output is newline-delimited: a pending `{status,localUrl}` followed by
 `{id,slug,installUrl}` or an error. The install URL is the next owner action;
-creating an App does not install it. Cancellation and timeout close the listener.
+creating an App does not install it. If the bot profile lookup is temporarily
+unavailable, the result adds `metadataPending: true`: the one-time App key
+and ID are still saved, and setup-worktree backfills UID/avatar on lookup. Cancellation and timeout close the listener.
 
 `connect` verifies the supplied ID/key with `GET /app`, discovers its slug,
 and caches installations. It works before installation and can restore an
@@ -61,8 +63,13 @@ managed Apps even before assignment. Restart running sessions that carry an
 old explicit App environment or pin after updating those values.
 
 Apps created before a soul exists use the #395 Keychain/file-store machinery
-with an App namespace. Config `identityApps[slug]` stores ID, store name,
-fingerprint and installation metadata only. macOS uses Keychain service
+with an App namespace. Config `identityApps[slug]` stores public `id`, `botUid`, `botAvatarUrl`,
+store name, fingerprint and installation metadata only. Create and connect
+resolve the bot user profile and save its UID and HTTPS avatar at creation;
+rotation preserves/refreshes that metadata. The App ID and bot user ID are
+different identifiers. Metadata-only records created by migration have no
+`store` until an App-scoped key is connected. Several souls can share this
+single App metadata record. macOS uses Keychain service
 `agent-bot.app.SLUG`; other platforms use private files below identity state
 `identity-apps/SLUG/.soul-state/credentials/`. Managed credentials precede
 legacy readable stores. A soul's existing `keyd` declaration remains
@@ -100,3 +107,9 @@ Upstream error bodies and provider output are never reflected.
 References: [GitHub manifest flow](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest),
 [GitHub private keys](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps),
 [per-soul stores](soul-credentials.md).
+
+Legacy `~/.config/<slug>` metadata is a read fallback only. Run
+`agent-bot identity migrate-credentials --all` to copy it into App records;
+the per-App report and doctor name remaining files and provide an owner
+removal command once the folder is fully redundant. Nothing is deleted by
+agent-bot. See [migration report fields](soul-credentials.md#migrating).

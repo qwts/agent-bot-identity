@@ -29,6 +29,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolveAgentSlug, AGENT_ID_KEYS } from './resolve-agent.mjs';
 import { harnessForSlug, isGateEnabled, loadConfig } from './config.mjs';
 import { deriveSoulId, spawnNonce, validateGenesis } from './soul-genesis.mjs';
+import { readAppMetadata } from './identity-app-store.mjs';
 import { computePackageRevision } from './soul-package.mjs';
 
 const SCHEMA_VERSION = 1;
@@ -800,7 +801,7 @@ function parseCli(argv) {
 
 function botUidForSlug(slug, home = homedir()) {
   try {
-    return readFileSync(path.join(home, '.config', slug, 'bot-uid'), 'utf8').trim() || null;
+    return readAppMetadata(slug, { home }).botUid ?? null;
   } catch {
     return null;
   }

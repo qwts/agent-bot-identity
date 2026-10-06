@@ -11,7 +11,7 @@ Commands:
   join               Join agent-comms as a soul from here, with or without a GitHub App: --name N --harness H [--template PATH] [--soul ID] [--json]
   mint-token         Mint a GitHub App installation token
   doctor             Diagnose installation and identity state
-  identity           Manage execution identities and Apps (apps list; app create/connect/rotate-key/assign); migrate-credentials [--soul ID|--all] [--dry-run] [--json] moves App keys into each soul's key store (owner only)
+  identity           Manage execution identities and Apps (apps list; app create/connect/rotate-key/assign); migrate-credentials [--soul ID|--all] [--dry-run] [--json] moves App keys into each soul's key store and public metadata into config; reports removable legacy folders (owner only)
   space              Manage durable per-soul Agent Spaces
   population         List this account's census of souls
   principal          Enroll and authorize messaging principals (owner ceremony)
@@ -30,7 +30,7 @@ Commands:
   install            Install the CLI and Git hooks
   update             Refresh the CLI and global Git hooks from this checkout
   install-gh-shim    Install the fail-closed gh shim and optional desktop adapter
-  ensure-private-key Restore an App private key and app-id with pass-cli
+  ensure-private-key Restore an App key into its managed store and ID into config with pass-cli
   signed-commit      Replay local commits with GitHub-verified signatures
   secret             Read a password or API key from a secure-store provider
   skill              Print this release's agent skill bundle and source commit

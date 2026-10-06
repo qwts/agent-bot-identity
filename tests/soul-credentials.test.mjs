@@ -6,6 +6,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadConfig } from '../config.mjs';
+import { legacyAppFolderStatus, readAppMetadata } from '../identity-app-store.mjs';
 import { registerSoulDir, upsertSoul } from '../agent-population.mjs';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { auditFile } from '../agent-principals.mjs';
@@ -58,6 +60,7 @@ function fixture(t, { declare = { app: SLUG, store: 'keychain' }, legacy = true 
     writeFileSync(path.join(dir, 'app-id'), '12345\n');
     writeFileSync(path.join(dir, 'private-key.pem'), PEM, { mode: 0o600 });
     writeFileSync(path.join(dir, 'bot-uid'), '42\n');
+    writeFileSync(path.join(dir, 'bot-avatar-url'), 'https://avatars.githubusercontent.com/u/42?v=4\n');
   }
   const stores = credentialStores({ env });
   return { home, env, opts, soul, stores };
@@ -192,6 +195,9 @@ test('migrate-credentials copies into the store, verifies, reports removable key
   const dry = await migrateCredentialsCommand(['--all', '--dry-run', '--json'], { ...common,
     gate: async () => { throw new Error('a dry run needs no approval'); }, verify: async () => { throw new Error('not in a dry run'); } });
   assert.equal(dry.souls[0].status, 'would-migrate');
+  assert.deepEqual(dry.apps[0].metadata, { status: 'would-migrate', fields: ['id', 'botUid', 'botAvatarUrl'] });
+  assert.equal(dry.apps[0].legacyFolderRemovable, false);
+  assert.equal(loadConfig({ env, home }).identityApps, undefined);
   assert.equal(existsSync(env.FAKE_KEYCHAIN), false);
   const verified = [];
   const gated = [];
@@ -204,6 +210,11 @@ test('migrate-credentials copies into the store, verifies, reports removable key
   assert.equal(report.souls[0].store, 'keychain');
   assert.deepEqual(report.removableLegacyKeys, [path.join(home, '.config', SLUG, 'private-key.pem')]);
   assert.deepEqual(report.deleted, []);
+  assert.deepEqual(report.apps[0].metadata, { status: 'migrated', fields: ['id', 'botUid', 'botAvatarUrl'] });
+  assert.equal(report.apps[0].legacyFolderRemovable, true);
+  assert.deepEqual(report.apps[0].remainingFiles, []);
+  assert.match(report.apps[0].removalCommand, /^rm -rf -- /);
+  assert.deepEqual(loadConfig({ env, home }).identityApps[SLUG], { id: '12345', botUid: '42', botAvatarUrl: 'https://avatars.githubusercontent.com/u/42?v=4' });
   assert.equal(readFileSync(path.join(home, '.config', SLUG, 'private-key.pem'), 'utf8'), PEM, 'the legacy key is untouched');
   assert.deepEqual(soulCredentialsDeclaration(soul), { app: SLUG, store: 'keychain' });
   assert.doesNotThrow(() => validateSoulPackage(soul));
@@ -224,6 +235,7 @@ test('a failed live check reports the soul as failed and keeps the legacy key', 
     markers: () => [], write: () => {}, gate: ownerGate, verify: async () => { throw new Error('GitHub refused the stored key (GET /app -> 401)'); } });
   assert.equal(report.souls[0].status, 'failed');
   assert.deepEqual(report.removableLegacyKeys, []);
+  assert.equal(legacyAppFolderStatus(SLUG, { env, home, stores }).legacyFolderRemovable, false);
   assert.ok(existsSync(path.join(home, '.config', SLUG, 'private-key.pem')));
 });
 
@@ -277,4 +289,45 @@ test('confinement denies a soul its key store, the legacy folder and secret-stor
   const owner = confinementCheck(normalizeEnvelope({ dialectKey: 'claude', event: 'pre-tool-use',
     payload: { cwd: home, tool_name: 'Bash', tool_input: { command: 'security find-generic-password -w' } } }), { ...opts, env, binding: null });
   allowed(owner);
+});
+
+test('metadata migration handles previously migrated keys, then all readers survive owner removal', async (t) => {
+  const { env, home, stores, soul } = fixture(t);
+  stores.keychain.write({ agentId: id, slug: SLUG }, { appId: '12345', privateKeyPem: PEM });
+  const before = readFileSync(path.join(soul, 'soul.json'), 'utf8');
+  const report = await migrateCredentialsCommand(['--all', '--json'], { env, home, cwd: home, stores,
+    markers: () => [], gate: ownerGate, verify: async () => true, write: () => {} });
+  assert.equal(report.souls[0].status, 'already-migrated');
+  assert.equal(report.apps[0].metadata.status, 'migrated');
+  assert.equal(report.apps[0].legacyFolderRemovable, true);
+  assert.equal(readFileSync(path.join(soul, 'soul.json'), 'utf8'), before);
+  assert.equal(legacyAppFolderStatus(SLUG, { env, home, stores }).legacyFolderRemovable, true);
+  rmSync(path.join(home, '.config', SLUG), { recursive: true }); // owner action, test only
+  assert.equal(readAppMetadata(SLUG, { env, home }).botUid, '42');
+  const credential = resolveAppCredential(SLUG, { env, home, stores, cwd: home });
+  assert.equal(credential.source, 'keychain');
+  assert.equal(credential.appId, '12345');
+  assert.ok(credential.privateKeyPem === PEM);
+});
+
+test('one selected soul cannot make a shared legacy folder removable for an unmigrated soul', async (t) => {
+  const { env, home, stores, opts } = fixture(t);
+  upsertSoul({ id: 'agent_55555555-5555-4555-8555-555555555555', name: 'other', status: 'active', appSlug: SLUG, spacePath: path.join(home, 'other-space') }, opts);
+  const report = await migrateCredentialsCommand(['--soul', 'ted', '--json'], { env, home, cwd: home, stores,
+    markers: () => [], gate: ownerGate, verify: async () => true, write: () => {} });
+  assert.equal(report.souls[0].status, 'migrated');
+  assert.equal(report.apps[0].legacyFolderRemovable, false);
+  assert.deepEqual(report.apps[0].remainingFiles, ['private-key.pem']);
+  assert.deepEqual(report.removableLegacyKeys, []);
+  assert.equal(report.apps[0].removalCommand, null);
+});
+
+test('migration reports unknown remaining files and never deletes them', async (t) => {
+  const { env, home, stores } = fixture(t);
+  writeFileSync(path.join(home, '.config', SLUG, 'owner-notes.txt'), 'keep');
+  const report = await migrateCredentialsCommand(['--all'], { env, home, cwd: home, stores,
+    markers: () => [], gate: ownerGate, verify: async () => true, write: () => {} });
+  assert.equal(report.apps[0].legacyFolderRemovable, false);
+  assert.deepEqual(report.apps[0].remainingFiles, ['owner-notes.txt']);
+  assert.equal(readFileSync(path.join(home, '.config', SLUG, 'owner-notes.txt'), 'utf8'), 'keep');
 });

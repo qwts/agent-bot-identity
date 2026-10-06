@@ -47,7 +47,9 @@ import { listSouls, populationFile, showSoul, showSoulByName, soulDirectory } fr
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { assertOwnerAction, soulMarkers } from './owner-gate.mjs';
 import { CREDENTIAL_STORES, soulCredentialsDeclaration, writeSoulCredentialsDeclaration } from './soul-package.mjs';
-import { readManagedAppCredential } from './identity-app-store.mjs';
+import { readManagedAppCredential, readAppMetadata, migrateAppMetadata, legacyAppFolderStatus } from './identity-app-store.mjs';
+import { profileAppSlugs } from './organization-profile.mjs';
+import { loadConfig } from './config.mjs';
 import { editSoulRevision, revisionHistory } from './soul-revisions.mjs';
 
 const APP_SLUG = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?$/;
@@ -86,7 +88,7 @@ function decode(text) {
   let value;
   try { value = JSON.parse(Buffer.from(text.trim(), 'base64').toString('utf8')); }
   catch { throw new Error('stored credential is malformed'); }
-  if (!value || typeof value.appId !== 'string' || !/^\d+$/.test(value.appId) || typeof value.privateKeyPem !== 'string') {
+  if (!value || typeof value.appId !== 'string' || !/^(?:[0-9]+|Iv[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)?)$/.test(value.appId) || typeof value.privateKeyPem !== 'string') {
     throw new Error('stored credential is malformed');
   }
   return { appId: value.appId, privateKeyPem: value.privateKeyPem, ...(typeof value.webhookSecret === 'string' ? { webhookSecret: value.webhookSecret } : {}) };
@@ -226,10 +228,10 @@ function legacyNotice(slug, { env, home, warn }) {
   warn(`agent-bot: the ${slug} App key is read from ~/.config/${slug} (deprecated); the owner can move it into the soul's key store with \`agent-bot identity migrate-credentials\`\n`);
 }
 
-function readLegacy(slug, home) {
+function readLegacy(slug, home, env = process.env, config) {
   const dir = legacyCredentialDirectory(slug, home);
   return {
-    appId: readFileSync(path.join(dir, 'app-id'), 'utf8').trim(),
+    appId: readAppMetadata(slug, { home, env, config }).id ?? (() => { throw new Error('missing App ID'); })(),
     privateKeyPem: readFileSync(path.join(dir, 'private-key.pem'), 'utf8'),
   };
 }
@@ -248,6 +250,7 @@ export function resolveAppCredential(slug, {
   platform = process.platform,
   warn = (text) => process.stderr.write(text),
   readOnly = false,
+  config = loadConfig({ env, home }),
 } = {}) {
   slugOrThrow(slug);
   const declared = declaringSouls(slug, { agentId, env, home, cwd, readOnly });
@@ -255,7 +258,7 @@ export function resolveAppCredential(slug, {
   const own = agentId ?? (() => { try { return currentAgentId({ env, cwd }); } catch { return null; } })();
   const held = declared.find((soul) => soul.agentId === own && soul.declaration.store === 'keyd');
   if (held) return { slug, appId: null, privateKeyPem: null, source: 'keyd', agentId: held.agentId };
-  const managed = readManagedAppCredential(slug, { env, home, stores: stores ?? credentialStores({ env }) });
+  const managed = readManagedAppCredential(slug, { env, home, config, stores: stores ?? credentialStores({ env }) });
   if (managed) return { slug, ...managed, source: 'managed-app', agentId: null };
   const storeOptions = { stores: stores ?? credentialStores({ env }), platform };
   for (const soul of declared) {
@@ -264,13 +267,32 @@ export function resolveAppCredential(slug, {
     if (credential) return { slug, ...credential, source: storeFor(soul.declaration, storeOptions.stores, platform).kind, agentId: soul.agentId };
   }
   let legacy;
-  try { legacy = readLegacy(slug, home); }
+  try { legacy = readLegacy(slug, home, env, config); }
   catch {
     const dir = legacyCredentialDirectory(slug, home);
     throw new Error(`no app config for "${slug}" — no soul key store holds it and ${dir}/app-id and ${dir}/private-key.pem are missing`);
   }
   if (!readOnly) legacyNotice(slug, { env, home, warn });
   return { slug, ...legacy, source: 'legacy', agentId: null };
+}
+
+// A selected migration cannot declare a shared App's key redundant while
+// another census soul still depends on the legacy copy. Read-only for doctor.
+export function legacyKeyRemovable(slug, { env = process.env, home = homedir(), config = loadConfig({ env, home }), stores = credentialStores({ env }) } = {}) {
+  try {
+    const managed = readManagedAppCredential(slug, { env, home, config, stores });
+    const declared = declaringSouls(slug, { env, home, cwd: home, readOnly: true });
+    const users = listSouls({ file: populationFile({ env, home }) }).filter((soul) => soul.appSlug === slug && soul.status !== 'retired');
+    if (!managed && users.some((soul) => !declared.some((entry) => entry.agentId === soul.id))) return false;
+    if (!managed && !declared.length) return false;
+    for (const soul of declared) {
+      // keyd declarations are published only after owner/import readback.
+      if (soul.declaration.store === 'keyd') continue;
+      const credential = managed ?? readSoulCredential(soul, { stores });
+      if (!credential?.appId || !credential.privateKeyPem) return false;
+    }
+    return true;
+  } catch { return false; }
 }
 
 // --- agent-bot identity migrate-credentials ---------------------------------
@@ -371,7 +393,7 @@ export async function migrateCredentialsCommand(argv, {
       importKeys: (items) => module.importIntoKeyd(items, { env, home }),
     }));
     return finishMigration(await migrateToKeyd(souls, { file, env, home, platform, stores, verify, options, client, declare }),
-      { options, env, home, now, write });
+      { options, env, home, now, write, stores });
   }
   const results = [];
   for (const soul of souls) {
@@ -392,24 +414,26 @@ export async function migrateCredentialsCommand(argv, {
     try {
       const stored = readSoulCredential(target, { stores, platform });
       let legacy = null;
-      try { legacy = readLegacy(declaration.app, home); } catch { /* reported below */ }
+      legacy = readManagedAppCredential(declaration.app, { env, home, stores });
+      if (!legacy) { try { legacy = readLegacy(declaration.app, home, env); } catch { /* reported below */ } }
       if (stored && (!legacy || same(stored, legacy))) {
+        if (!options.dryRun) await verify(stored);
         Object.assign(row, { status: 'already-migrated' });
         continue;
       }
       if (!legacy) { Object.assign(row, { status: 'skipped', detail: `no legacy key in ~/.config/${declaration.app}` }); continue; }
       if (options.dryRun) { Object.assign(row, { status: 'would-migrate' }); continue; }
+      await verify(legacy);
       writeSoulCredential(target, legacy, { stores, platform });
       const back = readSoulCredential(target, { stores, platform });
       if (!same(back, legacy)) throw new Error('the store did not return what was written');
-      await verify(back);
       if (!declared) await declare(soul, soulDir, { app: declaration.app, store: row.store });
       Object.assign(row, { status: 'migrated' });
     } catch (error) {
       Object.assign(row, { status: 'failed', detail: error.message });
     }
   }
-  return finishMigration(results, { options, env, home, now, write });
+  return finishMigration(results, { options, env, home, now, write, stores });
 }
 
 // --to keyd: each soul's key, from its current store or the legacy folder,
@@ -438,7 +462,11 @@ async function migrateToKeyd(souls, { file, env, home, platform, stores, verify,
       let credential = readSoulCredential({ agentId: soul.id, soulDir, declaration }, { stores, platform });
       let origin = from;
       if (!credential) {
-        try { credential = readLegacy(declaration.app, home); origin = 'legacy'; }
+        try {
+          credential = readManagedAppCredential(declaration.app, { env, home, stores });
+          origin = credential ? 'managed-app' : 'legacy';
+          credential ??= readLegacy(declaration.app, home, env);
+        }
         catch { Object.assign(row, { status: 'skipped', detail: `no key in the ${from} store or ~/.config/${declaration.app}` }); continue; }
       }
       if (options.dryRun) { Object.assign(row, { status: 'would-migrate', detail: `from ${origin}` }); continue; }
@@ -468,22 +496,34 @@ async function migrateToKeyd(souls, { file, env, home, platform, stores, verify,
   return results;
 }
 
-function finishMigration(results, { options, env, home, now, write }) {
-  // A legacy key is removable once every soul that declares or uses its App
-  // holds the key in its own store. The folder keeps bot-uid and other
-  // public metadata other commands still read, so only the key file is named.
+function finishMigration(results, { options, env, home, now, write, stores }) {
   const bySlug = new Map();
   for (const row of results.filter((entry) => entry.app)) {
     const list = bySlug.get(row.app) ?? [];
     list.push(row);
     bySlug.set(row.app, list);
   }
+  if (options.all) {
+    const config = loadConfig({ env, home });
+    for (const slug of new Set([...Object.keys(config.identityApps ?? {}), ...Object.values(config.apps ?? {}), ...profileAppSlugs(config)])) {
+      if (!bySlug.has(slug)) bySlug.set(slug, []);
+    }
+  }
   const removable = [];
+  const apps = [];
   for (const [slug, rows] of bySlug) {
+    let metadata;
+    try { metadata = migrateAppMetadata(slug, { env, home, dryRun: options.dryRun }); }
+    catch { metadata = { status: 'failed', fields: [] }; }
+    const keyRemovable = !options.dryRun
+      && rows.every((entry) => ['migrated', 'already-migrated'].includes(entry.status))
+      && legacyKeyRemovable(slug, { env, home, stores });
+    let folder;
+    try { folder = legacyAppFolderStatus(slug, { env, home, stores, keyRemovable }); }
+    catch { folder = { legacyFolderRemovable: false, remainingFiles: ['<unreadable-metadata>'], removalCommand: null }; }
+    apps.push({ slug, metadata, ...folder });
     const keyFile = path.join(legacyCredentialDirectory(slug, home), 'private-key.pem');
-    let exists = true;
-    try { lstatSync(keyFile); } catch { exists = false; }
-    if (exists && rows.every((entry) => ['migrated', 'already-migrated'].includes(entry.status))) removable.push(keyFile);
+    try { if (keyRemovable && lstatSync(keyFile).isFile()) removable.push(keyFile); } catch { /* no legacy key */ }
   }
   if (!options.dryRun) {
     for (const row of results.filter((entry) => entry.status === 'migrated' || entry.status === 'failed')) {
@@ -491,11 +531,15 @@ function finishMigration(results, { options, env, home, now, write }) {
         decision: row.status }, { env, home, now });
     }
   }
-  const report = { schemaVersion: 1, dryRun: options.dryRun, souls: results, removableLegacyKeys: removable, deleted: [] };
+  const report = { schemaVersion: 1, dryRun: options.dryRun, souls: results, apps, removableLegacyKeys: removable, deleted: [] };
   if (options.json) write(`${JSON.stringify(report)}\n`);
   else {
     for (const row of results) {
       write(`${row.agentId} ${row.app ?? '-'} ${row.store ?? '-'} ${row.status}${row.detail ? ` (${row.detail})` : ''}\n`);
+    }
+    for (const app of apps) {
+      write(`${app.slug} metadata ${app.metadata.status}: ${app.metadata.fields.join(', ') || '-'}; legacyFolderRemovable: ${app.legacyFolderRemovable}; remaining: ${app.remainingFiles.join(', ') || '-'}\n`);
+      if (app.removalCommand) write(`owner may remove (not deleted): ${app.removalCommand}\n`);
     }
     if (removable.length) write(`legacy key files nothing needs any more (not deleted):\n${removable.map((entry) => `  ${entry}\n`).join('')}`);
   }
@@ -504,7 +548,7 @@ function finishMigration(results, { options, env, home, now, write }) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   migrateCredentialsCommand(process.argv.slice(2)).then((report) => {
-    if (report.souls.some((row) => row.status === 'failed')) process.exitCode = 1;
+    if (report.souls.some((row) => row.status === 'failed') || report.apps.some((row) => row.metadata.status === 'failed')) process.exitCode = 1;
   }).catch((error) => {
     if (process.argv.includes('--json')) {
       process.stdout.write(`${JSON.stringify({ error: { code: error.code ?? 'migrate-credentials-failed', message: error.message } })}\n`);

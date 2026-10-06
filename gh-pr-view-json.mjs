@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readAppMetadata } from './identity-app-store.mjs';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
@@ -24,21 +24,12 @@ export function cachedBotAvatarUrl(slug, home = process.env.HOME) {
   if (!APP_LOGIN.test(`app/${slug}`) || typeof home !== 'string' || home.length === 0) {
     return '';
   }
-  const configDir = join(home, '.config', slug);
   try {
-    const cached = readFileSync(join(configDir, 'bot-avatar-url'), 'utf8').trim();
-    if (validAvatarUrl(cached)) return cached;
-  } catch {
-    /* older setup; try the numeric App ID below */
-  }
-  try {
-    const appId = readFileSync(join(configDir, 'app-id'), 'utf8').trim();
-    return /^(?:[1-9][0-9]*)$/.test(appId)
-      ? `https://avatars.githubusercontent.com/in/${appId}?v=4`
-      : '';
-  } catch {
-    return '';
-  }
+    const { botAvatarUrl, id } = readAppMetadata(slug, { home });
+    if (validAvatarUrl(botAvatarUrl)) return botAvatarUrl;
+    return /^(?:[1-9][0-9]*)$/.test(id ?? '')
+      ? `https://avatars.githubusercontent.com/in/${id}?v=4` : '';
+  } catch { return ''; }
 }
 
 export function enrichGhPrViewJson(value, lookupAvatarUrl) {

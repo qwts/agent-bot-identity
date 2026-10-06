@@ -17,7 +17,7 @@ import { soulCredentialsDeclaration } from './soul-package.mjs';
 import { credentialStores, defaultCredentialStore, resolveAppCredential } from './soul-credentials.mjs';
 import { createProtonPassCredentialProvider, validateIssuer, validatePrivateKey } from './ensure-private-key.mjs';
 import { buildAppJwt, pickInstallation } from './mint-token.mjs';
-import { MINT_CODES, appStoreTarget, readAppDoctorCache, updateAppConfig, validAppSlug } from './identity-app-store.mjs';
+import { MINT_CODES, appStoreTarget, readAppDoctorCache, readAppMetadata, updateAppConfig, validAppSlug } from './identity-app-store.mjs';
 
 export class IdentityAppError extends Error {
   constructor(code, message, statusCode = 409) { super(message); Object.assign(this, { code, statusCode }); }
@@ -104,7 +104,7 @@ function keyInput(body, options) {
     fail('identity-app-key-unavailable', 'Could not read the replacement key; check the file or unlock the selected pass-cli item.');
   }
 }
-function persist(app, credential, cachedInstallations, options, { replace = false, previousFingerprint = null } = {}) {
+function persist(app, credential, cachedInstallations, options, { replace = false, previousFingerprint = null, metadata = {} } = {}) {
   active(app, options.config);
   const kind = options.config.identityApps?.[app]?.store ?? defaultCredentialStore(options.platform);
   if (!['file', 'keychain'].includes(kind)) fail('identity-app-store', 'This App requires a supported file or Keychain store.');
@@ -113,7 +113,7 @@ function persist(app, credential, cachedInstallations, options, { replace = fals
   return updateAppConfig((config) => {
     active(app, config);
     const previous = config.identityApps?.[app];
-    if (previous && !replace) {
+    if (previous?.store && !replace) {
       // A verified connect can repair an absent item, but cannot silently
       // rotate a present key or treat a locked store as empty.
       const stored = options.stores[kind].read(appStoreTarget(app, options));
@@ -128,13 +128,13 @@ function persist(app, credential, cachedInstallations, options, { replace = fals
       const declaration = soulCredentialsDeclaration(directory);
       if (declaration?.app === app && declaration.store === 'keyd') fail('identity-app-keyd-held', `App ${app} is held by keyd; manage its keys through the keyd owner workflow.`);
     }
-    if (previous) {
+    if (previous?.store) {
       const before = options.stores[kind].read(appStoreTarget(app, options));
       if (before) rollback = () => options.stores[kind].write(appStoreTarget(app, options), before);
     }
     options.stores[kind].write(appStoreTarget(app, options), credential);
     config.identityApps ??= {};
-    config.identityApps[app] = { id: String(credential.appId), store: kind, keyFingerprint, installations: cachedInstallations };
+    config.identityApps[app] = { ...previous, ...metadata, id: String(credential.appId), store: kind, keyFingerprint, installations: cachedInstallations };
     return { id: String(credential.appId), slug: app, installUrl: installUrl(app) };
   }, { ...options, rollback: () => rollback?.() });
 }
@@ -155,8 +155,8 @@ export function listIdentityApps(options = {}) {
       keyPresent = Boolean(credential.privateKeyPem);
     } catch {
       // Report independent presence for incomplete legacy installations.
-      if (!config.identityApps?.[app]) {
-        issuerPresent = existsSync(path.join(home, '.config', app, 'app-id'));
+      if (!config.identityApps?.[app]?.store) {
+        issuerPresent = Boolean(readAppMetadata(app, opts).id);
         keyPresent = existsSync(path.join(home, '.config', app, 'private-key.pem'));
       }
     }
@@ -170,6 +170,17 @@ export function listIdentityApps(options = {}) {
       souls: souls.filter((s) => s.appSlug === app).map((s) => s.id), liveMint };
   }) };
 }
+async function botMetadata(app, options) {
+  // /app's id is the App issuer, never the bot user's UID.
+  const profile = await github('GET', `/users/${encodeURIComponent(`${app}[bot]`)}`, null, options);
+  if (!Number.isSafeInteger(profile.id) || profile.id <= 0 || typeof profile.avatar_url !== 'string') {
+    fail('identity-app-github', 'GitHub returned invalid bot metadata.');
+  }
+  let url;
+  try { url = new URL(profile.avatar_url); } catch { fail('identity-app-github', 'GitHub returned invalid bot metadata.'); }
+  if (url.protocol !== 'https:' || url.username || url.password) fail('identity-app-github', 'GitHub returned invalid bot metadata.');
+  return { botUid: String(profile.id), botAvatarUrl: profile.avatar_url };
+}
 async function connect(body, options) {
   if (typeof body.id !== 'string' || !validateIssuer(body.id)) fail('identity-app-invalid', 'A valid App ID is required.', 400);
   const credential = { appId: body.id, privateKeyPem: keyInput(body, options) };
@@ -177,7 +188,7 @@ async function connect(body, options) {
   const app = slug(info.slug);
   if (String(info.id) !== body.id) fail('identity-app-mismatch', 'GitHub returned a different App ID.');
   const rows = await appInstallations(credential, options);
-  return persist(app, credential, installations(rows), options);
+  return persist(app, credential, installations(rows), options, { metadata: await botMetadata(app, options) });
 }
 async function rotate(body, options) {
   const app = slug(body.slug), previous = options.config.identityApps?.[app];
@@ -196,13 +207,13 @@ async function rotate(body, options) {
   catch { fail('identity-app-installation', `Install App ${app}, or configure owner to select an installation, then retry.`); }
   const grant = await github('POST', `/app/installations/${installation.id}/access_tokens`, credential, options);
   if (typeof grant.token !== 'string' || !grant.token) fail('identity-app-mint-failed', `App ${app} returned no installation token; the stored key was not changed.`);
-  const result = persist(app, credential, installations(rows), options, { replace: Boolean(previous), previousFingerprint: previous?.keyFingerprint ?? null });
+  const result = persist(app, credential, installations(rows), options, { replace: Boolean(previous?.store), previousFingerprint: previous?.keyFingerprint ?? null, metadata: await botMetadata(app, options) });
   return { ...result, retired: fingerprint(old.privateKeyPem), action: 'Delete the retired key in the App settings on github.com.' };
 }
 function assign(body, options) {
   const app = slug(body.slug);
   active(app, options.config);
-  if (!options.config.identityApps?.[app]) fail('identity-app-not-found', `App ${app} is not managed; connect it first.`, 404);
+  if (!options.config.identityApps?.[app]?.store) fail('identity-app-not-found', `App ${app} is not managed; connect it first.`, 404);
   if (Boolean(body.harness) === Boolean(body.soul)) fail('identity-app-invalid', 'Supply exactly one harness or soul.', 400);
   if (body.harness) {
     if (!PROFILE_HARNESSES.includes(body.harness)) fail('identity-app-invalid', 'Unknown harness.', 400);
@@ -268,8 +279,13 @@ export async function startAppManifest(body, options) {
       if (settled) return;
       const app = slug(data.slug);
       if (!Number.isSafeInteger(data.id) || data.id <= 0 || !validatePrivateKey(data.pem) || typeof data.webhook_secret !== 'string') fail('identity-app-github', 'GitHub returned invalid App credentials.');
-      const result = persist(app, { appId: String(data.id), privateKeyPem: data.pem, webhookSecret: data.webhook_secret }, [], options);
-      finish(null, result);
+      const credential = { appId: String(data.id), privateKeyPem: data.pem, webhookSecret: data.webhook_secret };
+      // Conversion is a one-time handoff of the key. A profile outage must
+      // not discard that credential; setup can backfill the public profile.
+      const metadata = await botMetadata(app, options).catch(() => ({}));
+      if (settled) return;
+      const result = persist(app, credential, [], options, { metadata });
+      finish(null, metadata.botUid ? result : { ...result, metadataPending: true });
     } catch (error) {
       if (!res.headersSent) reply(400, 'App operation failed.');
       finish(error instanceof IdentityAppError ? error : new IdentityAppError('identity-app-store', 'Could not store the App; reconnect it using its settings on github.com.'));

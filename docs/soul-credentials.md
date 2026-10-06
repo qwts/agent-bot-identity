@@ -34,8 +34,11 @@ into every instance. The key is not copied.
   a link, a loosened mode or another owner. `.soul-state/` is never packaged,
   exported or hashed into a revision.
 
-pass-cli is not a soul store yet. `ensure-private-key` still restores the
-legacy folder from pass-cli.
+pass-cli is not a soul store. `ensure-private-key` restores from pass-cli
+into the App-scoped private file store (or an already declared App Keychain
+store), with the issuer in `identityApps[slug].id`. It never creates or writes
+the legacy folder. An interrupted legacy publication is retained for owner
+inspection; its backups are not replayed or deleted.
 
 ### What the Keychain access list can and cannot enforce
 
@@ -131,7 +134,8 @@ daemon's `/v0/credential`) checks these places in order:
    use the same readable backends with an App namespace.
 3. **The soul's store.** The selected soul, else any declaring soul in the
    census. An unreadable store fails closed rather than falling back.
-4. **The legacy `~/.config/<slug>/{app-id,private-key.pem}`.** The first use
+4. **The legacy `~/.config/<slug>/{app-id,private-key.pem}`.** The issuer
+   prefers `identityApps[slug].id`; the legacy `app-id` is a read fallback. The first use
    prints a one-time deprecation notice on stderr.
 
 `GH_APP_ID` with `GH_APP_PRIVATE_KEY` or `GH_APP_PRIVATE_KEY_PATH` keeps
@@ -150,20 +154,44 @@ Owner only, through the owner gate: a caller with any soul marker is refused,
 dry run included. For each soul with a GitHub App (declared, or the census
 `appSlug`), the command:
 
-1. copies the legacy key into the soul's store;
-2. reads it back;
-3. verifies it live with an App JWT against `GET /app`. This proves GitHub
-   accepts the key without minting an installation token;
+1. verifies the source key live with an App JWT against `GET /app`, proving
+   GitHub accepts it without minting an installation token;
+2. copies it into the soul's store;
+3. reads it back and requires an exact match to the verified credential;
 4. if the soul had no declaration, writes one into `soul.json` as a new
-   revision.
+   revision;
+5. copies public `app-id`, `bot-uid` and `bot-avatar-url` into the config's
+   `identityApps[slug]` record as `id`, `botUid` and `botAvatarUrl`, preserving
+   existing authoritative values and store/installation fields. This also
+   runs for keys migrated earlier. `--all` includes configured Apps without
+   souls for metadata migration.
 
 Each migration leaves a `credential-migrate` audit receipt with no key
-material. The report lists the legacy `private-key.pem` files that every soul
-using that App no longer needs.
+material. The report retains `souls`, `removableLegacyKeys` and `deleted: []`,
+and adds one `apps[]` row per slug:
 
-The command never deletes anything. The legacy folder also holds `bot-uid`,
-`bot-avatar-url` and `app-id`, which other commands still read, so it names
-only the key file.
+- `slug`, `metadata: {status, fields}`: status is `migrated`,
+  `already-migrated`, `would-migrate` (dry run), or `failed`; fields are the
+  public config field names copied or proposed.
+- `legacyFolder`, `legacyFolderExists`, `legacyFolderRemovable`.
+- `remainingFiles`: names still blocking removal. Unknown files, directories,
+  symlinks, unreadable entries and conflicting metadata block removal.
+- `removalCommand`: shell-quoted owner command when removable, otherwise null.
+
+`doctor --json` includes the same folder fields in `machine.apps[]`; text
+output prints them and the owner command. A nonexistent folder reports
+`legacyFolderExists: false`, `legacyFolderRemovable: false` and no command.
+All souls using a shared App must have an independent credential before its
+legacy key is removable; selecting just one soul cannot bypass this check.
+A keyd declaration records a completed owner import; doctor does not read the
+keyd key. A dry run never declares a legacy key removable.
+
+The command never deletes the folder or its contents. Inspect the report and
+run `removalCommand` yourself only when `legacyFolderRemovable` is true.
+Public metadata has one source of truth per App, even when several souls use
+it. Readers prefer config and fall back by missing field while legacy files
+exist. An App record with only public metadata does not declare a managed
+key store or hide an existing per-soul key.
 
 `--to keyd` takes each soul's key from its current store, or the legacy
 folder, verifies it live, and hands all of them to keyd in one

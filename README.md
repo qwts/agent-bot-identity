@@ -1161,23 +1161,20 @@ GitHub → Settings → Developer settings → GitHub Apps → **New GitHub App*
 
 ### 2. Store each App's credentials
 
+Enable the `github-identity` add-on in your runtime config, then connect the
+App using the downloaded key (the owner gate requires approval):
+
 ```bash
-mkdir -p ~/.config/you-claude-agent
-echo '<app id>' > ~/.config/you-claude-agent/app-id
-mv ~/Downloads/you-claude-agent.*.pem ~/.config/you-claude-agent/private-key.pem
-chmod 600 ~/.config/you-claude-agent/private-key.pem
+agent-bot identity app connect --id '<numeric App ID>' --key-file /absolute/path/to/downloaded-key.pem
 ```
 
-Keep an escrow copy of each key in your password manager; the files here are
-disposable runtime copies.
-
-`app-id` may hold either the numeric **App ID** or the **client ID** — GitHub
-accepts both as the JWT issuer and now recommends the latter. Note that neither
-is recoverable from the REST API afterwards: `/apps/{slug}` and every `/app/*`
-route require a JWT you cannot build without this value, and
-`/user/installations` needs a GitHub App user-to-server token, which a `gh`
-OAuth token is not. Read it off the App's settings page once and keep it
-somewhere durable.
+The key goes into the App-scoped Keychain/private file store. Public metadata
+lives in `~/.config/agent-bot/config.json` under `identityApps[slug]`:
+`id`, `botUid` and `botAvatarUrl`, alongside the store declaration and cached
+installations. Keep an escrow copy of each key in your password manager.
+For older installations, `identity migrate-credentials --all` copies the
+metadata and reports which legacy folders the owner may remove; agent-bot
+never deletes them. See [soul credentials](docs/soul-credentials.md).
 
 With **pass-cli** (Proton Pass) both halves can be restored instead of copied by
 hand. Store the key as a `private-key.pem` attachment on an item titled with the
@@ -1193,10 +1190,12 @@ attachment, which is why all three are accepted:
 agent-bot ensure-private-key --app you-claude-agent
 ```
 
-One `item view` provisions whichever of the two files is missing or malformed,
-so a fresh machine needs no manual copying. Restored files are staged,
-validated, and atomically installed with private permissions; valid existing
-files are preserved without contacting the provider. `setup-worktree` performs
+One `item view` provisions whichever credential component is missing or
+malformed, so a fresh machine needs no manual copying. Downloads are staged
+privately and validated, then the credential is published in the App store
+and the issuer in config. New restores use the private file store; existing
+App store declarations are retained. Valid legacy files remain readable but
+are never modified. The issuer can be a numeric App ID or a client ID. `setup-worktree` performs
 the same reconciliation and a live mint before changing the remote, resolving
 the bot UID, or writing worktree identity. Missing, ambiguous, malformed,
 revoked, or mismatched credentials therefore fail closed with the App slug and
@@ -1204,10 +1203,11 @@ operator action instead of leaving a partially configured worktree.
 
 ### 3. Write the config
 
-`~/.config/agent-bot/config.json`:
+`~/.config/agent-bot/config.json` (merge these settings into the existing file,
+preserving `identityApps`):
 
 ```json
-{ "prefix": "you" }
+{ "prefix": "you", "features": { "github-identity": true } }
 ```
 
 `"you"` is a placeholder — the prefix must reproduce how *you named your

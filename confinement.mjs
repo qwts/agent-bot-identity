@@ -6,6 +6,7 @@ import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { loadConfig } from './config.mjs';
 import { currentAgentId, stateDirectory, validateAgentId, withLock } from './agent-identity.mjs';
 import { populationFile, showSoul, soulDirectory } from './agent-population.mjs';
 import { revisionHistory, revisionPackagePath } from './soul-revisions.mjs';
@@ -143,13 +144,15 @@ export function checkWrite(agentId, targetPath, opts = {}) {
 // call says), not an OS sandbox; it keeps the supported path honest.
 const SECRET_CLI = /(?:^|[;&|(`\n]|\$\()\s*(?:(?:\w+=\S*|env|exec|command|sudo|nohup|time|xargs)\s+(?:-\S+\s+)*)*(?:\S*\/)?security(?=$|[\s;&|)`])|\/usr\/bin\/security\b|(?:^|[^\w-])pass-cli(?![\w-])/;
 
-function legacyAppDirectories(home) {
+function legacyAppDirectories(home, env) {
+  const known = loadConfig({ home, env }).identityApps ?? {};
   const config = path.join(home, '.config');
   let entries = [];
   try { entries = readdirSync(config, { withFileTypes: true }); } catch { return []; }
   return entries.filter((entry) => {
     if (!entry.isDirectory() && !entry.isSymbolicLink()) return false;
-    for (const name of ['private-key.pem', 'app-id']) {
+    if (Object.hasOwn(known, entry.name)) return true;
+    for (const name of ['private-key.pem', 'app-id', '.private-key.pem.agent-bot-backup', '.agent-bot-credential-transaction.json']) {
       try { lstatSync(path.join(config, entry.name, name)); return true; } catch { /* next */ }
     }
     return false;
@@ -164,7 +167,7 @@ export function credentialGuard(envelope, agentId, opts = {}) {
   const env = opts.env ?? process.env;
   const home = opts.home ?? env.HOME ?? homedir();
   const cwd = envelope.cwd ?? opts.cwd;
-  const legacy = legacyAppDirectories(home);
+  const legacy = legacyAppDirectories(home, env);
   const deny = (what) => ({ decision: 'deny', reason: `soul credentials stay behind the daemon; ${what} is off limits to a soul` });
   if (envelope.file_path) {
     const target = resolvedOrRaw(envelope.file_path, cwd);
