@@ -193,6 +193,7 @@ function normalizeSoul(record, { defaultLastSeen = null } = {}) {
     managed: booleanField('managed', record.managed, false),
     comms: booleanField('comms', record.comms, true),
     paused: booleanField('paused', record.paused, false),
+    computerUse: booleanField('computerUse', record.computerUse, true),
     // The name the owner chose at launch or join, as agent-comms' census
     // shows it (#429). `name` stays the generated handle agents address.
     ...displayNameField(record.displayName),
@@ -322,6 +323,7 @@ export function upsertSoul(
       if (record.managed === undefined) candidate.managed = existing.managed;
       if (record.comms === undefined) candidate.comms = existing.comms;
       if (record.paused === undefined) candidate.paused = existing.paused;
+      if (record.computerUse === undefined) candidate.computerUse = existing.computerUse;
       candidate.worktrees = [...new Set([...existing.worktrees, ...candidate.worktrees])];
       if (record.worktree === undefined) candidate.worktree = existing.worktree;
     }
@@ -607,6 +609,27 @@ export function backfillManagedSouls(ids, { file = populationFile() } = {}) {
     if (marked.length) writeDocument(file, souls);
     return marked;
   });
+}
+
+// Computer use is durable across daemon restarts and lifecycle upserts.
+export function setSoulComputerUse(id, computerUse, { file = populationFile() } = {}) {
+  const target = agentId(id);
+  if (typeof computerUse !== 'boolean') throw new Error('computerUse must be a boolean');
+  ensurePrivateDirectory(path.dirname(file));
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
+    const existing = current.souls[target];
+    if (!existing) throw new Error(`no population record for ${target}`);
+    const soul = normalizeSoul({ ...existing, computerUse });
+    if (existing.computerUse !== computerUse) writeDocument(file, { ...current.souls, [target]: soul });
+    return soul;
+  });
+}
+
+// Unregistered souls retain the default; corrupt population data fails closed.
+export function soulComputerUse(id, { file = populationFile() } = {}) {
+  return readDocument(file).souls[agentId(id)]?.computerUse !== false;
 }
 
 // Pause is durable across daemon restarts and lifecycle upserts.

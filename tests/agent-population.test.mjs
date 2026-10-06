@@ -61,6 +61,7 @@ function fixture(overrides = {}) {
     managed: false,
     comms: true,
     paused: false,
+    computerUse: true,
     ...overrides,
   };
 }

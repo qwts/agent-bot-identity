@@ -57,7 +57,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
 import { initAgentSpace, spacePath } from './agent-space.mjs';
-import { archiveSoulDirs, backfillManagedSouls, displayName, listSouls, locateSoulDir, populationFile, recordHarnessAuth, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, setSoulPaused, soulPaused, showSoul, soulDirectory, upsertIdentitySoul, withRoles } from './agent-population.mjs';
+import { archiveSoulDirs, backfillManagedSouls, displayName, listSouls, locateSoulDir, populationFile, recordHarnessAuth, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, setSoulComputerUse, soulComputerUse, setSoulPaused, soulPaused, showSoul, soulDirectory, upsertIdentitySoul, withRoles } from './agent-population.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
 import {
   bindAgentLineage,
@@ -84,7 +84,7 @@ import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms
 import { attachWakeEndpoint } from './agent-wake.mjs';
 import { soulMode } from './soul-mode.mjs';
 import { soulModel, setSoulModel, recordSoulModels } from './soul-model.mjs';
-import { readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
+import { ownerGate as soulSettingOwnerGate, readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
 import { createDaemonLogCheck, daemonLogPath, DAEMON_LOG_CHECK_INTERVAL_MS } from './daemon-log.mjs';
@@ -430,6 +430,8 @@ export function createDaemonServer({
   // (action, { principal }) => proof, throwing when the owner does not
   // confirm. Tests pass a fake; the default asks keyd, then the dialog.
   ownerGate = (action, { principal }) => confirmOwnerPresence(action, { env, principal }),
+  // Settings accept a verified principal instead of presence, like soul mode.
+  settingGate = (action, { principal }) => soulSettingOwnerGate(action, { principal, env, cwd: home }),
 } = {}) {
   // One interaction service per server so in-flight executions and their
   // cancellation controllers live exactly as long as the daemon.
@@ -783,6 +785,21 @@ export function createDaemonServer({
             file: populationOverride(env, home),
           });
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, souls: withRoles(souls, { file: populationOverride(env, home), env, home }) });
+          return;
+        }
+        case 'POST /v0/soul/computer-use': {
+          const body = parseJsonBody(await readBody(req));
+          const agentId = requireAgentId(body.agentId);
+          if (typeof body.enabled !== 'boolean') throw Object.assign(new Error('enabled must be a boolean'), { statusCode: 400 });
+          const file = populationFile({ env, home });
+          try { showSoul(agentId, { file }); }
+          catch { throw Object.assign(new Error('unknown soul'), { statusCode: 404 }); }
+          await settingGate(`switch ${agentId} computer use ${body.enabled ? 'on' : 'off'}`, { principal: body.principal ?? null });
+          setSoulComputerUse(agentId, body.enabled, { file });
+          const stopped = !body.enabled && computerUse.list().some((row) => row.agentId === agentId)
+            ? (server.wakePlane?.stop?.(agentId) ?? turns.stop(agentId)) : false;
+          appendAuditReceipt({ event: 'computer-use', agentId, operation: 'set', decision: body.enabled ? 'on' : 'off' }, { env, home, now });
+          sendJson(res, 200, { agentId, computerUse: body.enabled, ...(stopped ? { stopped: true } : {}) });
           return;
         }
         case 'POST /v0/soul/pause':
@@ -1391,6 +1408,9 @@ export function daemonClient({
     async approvals() {
       return request('GET', '/v0/approvals');
     },
+    async setComputerUse(agentId, enabled, { principal = null } = {}) {
+      return request('POST', '/v0/soul/computer-use', { agentId, enabled, ...(principal ? { principal } : {}) }, {}, OWNER_DECISION_TIMEOUT_MS);
+    },
     async pauseSoul(agentId, requester = {}) {
       return request('POST', '/v0/soul/pause', { ...requester, agentId });
     },
@@ -1490,11 +1510,15 @@ export function withPermissionReceipts(executor, {
     try {
       return await executor({
         ...input,
+        computerUseEnabled: () => soulComputerUse(agentId, { file: populationFile({ env, home }) }),
         onPermission: (record) => {
           if (agentId && !finished && !input.signal?.aborted && record.outcome === 'allow' && isComputerUse(record.toolName)) {
             receipt('start', computerUse.start(agentId, record.toolName, turn));
           }
           try {
+            if (record.decidedBy === 'computer-use' && record.outcome === 'deny') {
+              appendAuditReceipt({ event: 'computer-use', agentId, operation: 'permission', decision: 'off', detail: record.toolName }, { env, home, now });
+            }
             if (['policy', 'autopilot', 'risk', 'turn'].includes(record.decidedBy) && ['allow', 'deny'].includes(record.outcome)) {
               const tool = typeof record.toolName === 'string' ? record.toolName : null;
               let operation = tool && !/[\u0000-\u0020\u007f-\u009f]/.test(tool)
