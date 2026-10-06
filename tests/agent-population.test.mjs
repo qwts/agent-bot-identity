@@ -60,6 +60,7 @@ function fixture(overrides = {}) {
     lastSeen: LAST_SEEN,
     managed: false,
     comms: true,
+    paused: false,
     ...overrides,
   };
 }

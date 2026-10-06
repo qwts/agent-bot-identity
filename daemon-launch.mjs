@@ -6,7 +6,7 @@ import { HARNESS_SESSION_EVENT } from './executor-contract.mjs';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { validateModelId } from './soul-model.mjs';
 import { soulCommsSetting } from './soul-package.mjs';
-import { displayName } from './agent-population.mjs';
+import { assertSoulUnpaused, displayName } from './agent-population.mjs';
 import { createTurnRegistry } from './wake-plane.mjs';
 
 // A launch's comms setting: the soul's own soul.json (a spawned instance
@@ -51,7 +51,7 @@ const withoutParent = ({ parent: _ignored, ...fields }) => fields;
 const LAUNCHABLE = new Set(['package', 'installed']);
 
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
-  joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
+  isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -70,8 +70,8 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
   }
   if (rows.length) save();
   const reportRow = async (row, report) => {
-    const { requestId, status, agentId, detail } = row;
-    await report({ requestId, status, agentId, ...(detail ? { detail } : {}) });
+    const { requestId, status, agentId, detail, code } = row;
+    await report({ requestId, status, agentId, ...(detail ? { detail } : {}), ...(code ? { code } : {}) });
     row.reported = true;
     save();
   };
@@ -98,6 +98,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       const copied = located?.status === 'copy' && forkCopy !== null && parent === null;
       if (located && !LAUNCHABLE.has(located.status) && !copied) throw new Error(located.message ?? `cannot launch ${event.package}`);
       const soul = located?.status === 'installed' ? located.agentId : event.soul;
+      if (soul) assertSoulUnpaused(isPaused(soul));
       const packagePath = soul ? null : event.package;
       // ADR-0276 order: the launch's own harness, else the soul's default,
       // else a registry harness found on PATH.
@@ -143,6 +144,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         + (parentId
           ? `Your parent is ${parentIdentity?.name || ownIdentity?.parent?.name || displayName(parentId)} (agent id ${parentId}). `
           : 'You have no parent agent. ');
+      assertSoulUnpaused(isPaused(identity.id));
       const executor = executorFor({ agentId: identity.id, harness, cwd: binding.worktree,
         env: { AGENT_BOT_BINDING: binding.file, AGENT_BOT_ID: identity.id, QWTS_AGENT_ID: identity.id } });
       // An ACP session binding is the readiness boundary. A returned promise
@@ -166,7 +168,10 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       Object.assign(row, { status: 'launched', agentId: identity.id });
       try { await onLaunched(identity.id); } catch { /* the soul runs; only later wakes are affected */ }
     } catch (error) {
-      Object.assign(row, { status: 'failed', agentId: null, detail: error.message });
+      // The broker's launch-result wire carries detail, so retain the code
+      // there too; local callers and the journal also get a structured code.
+      Object.assign(row, { status: 'failed', agentId: null, detail: error.code === 'soul-paused' ? `soul-paused: ${error.message}` : error.message,
+        ...(error.code === 'soul-paused' ? { code: error.code } : {}) });
       if (spawned) { try { await discard(spawned, rollback); } catch { /* the failure is already reported */ } }
     }
     save(); // Persist outcome before network I/O; retry only the report.

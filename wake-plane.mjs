@@ -8,6 +8,7 @@
 // a socket, or a harness.
 
 import path from 'node:path';
+import { assertSoulUnpaused } from './agent-population.mjs';
 
 import { createAcpExecutor } from './acp-engine.mjs';
 import { validateInvocationId } from './agent-jobs.mjs';
@@ -20,7 +21,7 @@ import { createWakeDispatcher } from './wake-dispatch.mjs';
 // Shared by cold, launch and interactive turns. Keep each controller until
 // its executor settles: abort requests cancellation, it does not prove exit.
 // A soul may have overlapping interactive sessions; stop reaches every turn.
-export function createTurnRegistry() {
+export function createTurnRegistry({ isPaused = () => false } = {}) {
   const active = new Map();
   const track = (agentId, controller) => {
     const turns = active.get(agentId) ?? new Set();
@@ -42,6 +43,7 @@ export function createTurnRegistry() {
       return stopped;
     },
     async run(input, executor, { turnTimeoutMs = 30 * 60_000 } = {}) {
+      assertSoulUnpaused(isPaused(input.invocation.agentId));
       const controller = new AbortController();
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(turnTimeoutMs), ...(input.signal ? [input.signal] : [])]);
       const release = track(input.invocation.agentId, controller);
@@ -222,9 +224,10 @@ export function laneExecutor({ acpTurn = null, resumeTurn = null }) {
 // onWake for createCommsSupervisor. `coldWake` is null when the daemon has
 // no ACP executor, no resume executor, and no webhook waker, which leaves
 // every soul without a warm socket `waiting`.
-export function createWakePlane({ pool, settings, lookupSoul, identities, executorFor = null, resumeExecutor = null, webhookWaker = null, relay = null, taskReporter = null, authStatus = null, receipt, turnTimeoutMs, approvals = null, turns = createTurnRegistry() }) {
+export function createWakePlane({ isPaused = () => false, pool, settings, lookupSoul, identities, executorFor = null, resumeExecutor = null, webhookWaker = null, relay = null, taskReporter = null, authStatus = null, receipt, turnTimeoutMs, approvals = null, turns = createTurnRegistry() }) {
   const coldWake = executorFor || resumeExecutor || webhookWaker
     ? createColdWaker({
+      isPaused,
       executor: laneExecutor({ acpTurn: executorFor ? coldTurnExecutor({ executorFor, turnTimeoutMs, approvals, turns }) : null,
         resumeTurn: resumeExecutor ? (input) => turns.run(input, resumeExecutor, { turnTimeoutMs }) : null }),
       settings,
@@ -252,6 +255,7 @@ export function createWakePlane({ pool, settings, lookupSoul, identities, execut
   let currentReport = null;
   const dispatch = createWakeDispatcher({
     pool,
+    isPaused,
     coldWake: cold,
     report: (...args) => wakeReporter(currentReport)(...args),
     receipt,

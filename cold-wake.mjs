@@ -37,6 +37,7 @@
 // turn that runs clears the status.
 
 import { randomUUID } from 'node:crypto';
+import { assertSoulUnpaused } from './agent-population.mjs';
 
 import { wakeSetting } from './cold-wake-settings.mjs';
 import { FINAL_REPLY_ERRORS, senderAddress } from './comms-relay.mjs';
@@ -108,11 +109,19 @@ function describeError(error) {
   return `${code}: ${message.length > 200 ? `${message.slice(0, 200)}…` : message}`;
 }
 
-export function createColdWaker({ executor, settings, lookupBinding, identities, receipt, relay = null, webhook = null, taskReporter = null, authStatus = null, threads = {}, log = (line) => process.stderr.write(`cold-wake: ${line}\n`) }) {
+export function createColdWaker({ isPaused = () => false, executor, settings, lookupBinding, identities, receipt, relay = null, webhook = null, taskReporter = null, authStatus = null, threads = {}, log = (line) => process.stderr.write(`cold-wake: ${line}\n`) }) {
   if (typeof executor !== 'function') throw new Error('cold waker requires an executor');
   if (typeof lookupBinding !== 'function') throw new Error('cold waker requires lookupBinding');
   if (typeof identities !== 'function') throw new Error('cold waker requires identities');
   if (typeof receipt !== 'function') throw new Error('cold waker requires receipt');
+  const runTurn = (input) => {
+    assertSoulUnpaused(isPaused(input.invocation.agentId));
+    return executor(input);
+  };
+  const pausedWake = (agentId) => {
+    receipt({ event: 'cold-wake', agentId, decision: 'paused' });
+    return { outcome: 'waiting', detail: 'soul is paused' };
+  };
   const active = new Map();
   // Messages already told about a sign-in failure, per soul, until a turn runs.
   const noticed = new Map();
@@ -125,6 +134,7 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
   };
   async function coldWake(event) {
     const { agentId, count, cursor, messageIds } = event ?? {};
+    if (isPaused(agentId)) return pausedWake(agentId);
     const currentSettings = typeof settings === 'function' ? await settings() : settings;
     // The setting picks the lane (#323): an ACP turn or a resumed harness
     // session. The executor receives it as `wake`.
@@ -151,6 +161,7 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
       if (wake.lane === 'webhook' && !webhook) throw new Error('webhook wake is not available in this daemon');
       identity = wake.lane === 'webhook' ? null : await identities(agentId);
       if (wake.lane !== 'webhook' && !identity?.harness) throw new Error('soul harness identity is unavailable');
+      if (isPaused(agentId)) { land(); return pausedWake(agentId); }
     } catch (error) {
       land();
       receipt({ event: 'cold-wake', agentId, decision: 'failed', detail: error?.message || 'cold wake failed' });
@@ -197,9 +208,11 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
     const relayed = async () => {
       for (let messages = await relay.read(soul); messages.length; messages = await relay.read(soul)) {
         for (const message of messages) {
+          assertSoulUnpaused(isPaused(agentId));
           if (signedOut) { await tell(message); continue; }
           if (message.kind === 'task-event') {
             const brief = await relay.brief?.(soul, message.id);
+            assertSoulUnpaused(isPaused(agentId));
             if (brief?.turn) {
               const linked = { ...invocation, invocationId: `invocation_${randomUUID()}`, taskId: brief.taskId };
               const report = async (phase, outcome) => {
@@ -211,12 +224,12 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
               };
               await report('started');
               try {
-                const result = await executor({ invocation: brief.linked ? linked : invocation, message: brief.prompt, attachments: [], env, wake });
+                const result = await runTurn({ invocation: brief.linked ? linked : invocation, message: brief.prompt, attachments: [], env, wake });
                 ran = true;
                 await report('ended', result?.cancelled ? 'cancelled' : 'completed');
               } catch (error) {
                 await report('ended', error?.name === 'AbortError' ? 'cancelled' : 'failed');
-                if (error?.name !== 'AbortError') {
+                if (error?.name !== 'AbortError' && error?.code !== 'soul-paused') {
                   log(`task ${brief.taskId} turn for ${agentId} failed: ${describeError(error)}`);
                   await relay.ack(soul, [message.id]);
                 }
@@ -248,7 +261,7 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
           const waitingOn = pendingReplies(agentId, { correlation, now: threadNow(threads) }, threads).map((entry) => entry.to);
           let result;
           try {
-            result = await executor({ invocation: turn, message: relayPrompt(message, thread, waitingOn), attachments: [], env, wake, onSession: deliver });
+            result = await runTurn({ invocation: turn, message: relayPrompt(message, thread, waitingOn), attachments: [], env, wake, onSession: deliver });
           } catch (error) {
             // A signed-out harness never read the prompt, so no aside (#84).
             signedOut = harnessAuthFailure(error);
@@ -289,8 +302,9 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
     // turn itself runs on, and wakes that arrive meanwhile merge into it.
     let turn;
     try {
-      turn = relay ? relayed() : Promise.resolve(executor({ invocation, message: prompt, attachments: [], env, wake }));
-    } catch {
+      turn = relay ? relayed() : Promise.resolve(runTurn({ invocation, message: prompt, attachments: [], env, wake }));
+    } catch (error) {
+      if (error?.code === 'soul-paused') { land(); return pausedWake(agentId); }
       // A launch that throws started no turn, so the wake is not `cold`.
       land();
       receipt({ event: 'cold-wake', agentId, decision: 'failed', detail: 'cold wake turn could not start' });
@@ -305,6 +319,7 @@ export function createColdWaker({ executor, settings, lookupBinding, identities,
       // A turn's own error can quote the model or a message, so its receipt
       // says only that the turn failed, or that its harness is signed out.
       (error) => {
+        if (error?.code === 'soul-paused') { pausedWake(agentId); return; }
         if (error?.name === 'AbortError') {
           receipt({ event: 'cold-wake', agentId, decision: 'cancelled' });
           return;

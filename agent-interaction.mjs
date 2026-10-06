@@ -66,7 +66,7 @@ import {
   assertAuthorized,
   validateTransport,
 } from './agent-principals.mjs';
-import { listSouls, populationFile, showSoul } from './agent-population.mjs';
+import { assertSoulUnpaused, listSouls, populationFile, showSoul } from './agent-population.mjs';
 import { validateAgentId } from './agent-identity.mjs';
 import { classifyRisk } from './permission-risk.mjs';
 import { readAsides } from './soul-asides.mjs';
@@ -438,7 +438,6 @@ export function createInteractionService({
     }
     transitionInvocation(id, 'running', storeOptions);
     recordStatus(id, 'running');
-    if (invocation.taskId) await reportTask('started', invocation);
     // A soul-wide stop can abort this controller without going through the
     // invocation cancel route. Preserve the store's cancellation transition.
     const onAbort = () => {
@@ -450,7 +449,9 @@ export function createInteractionService({
     controller.signal.addEventListener('abort', onAbort, { once: true });
     const release = turns?.track(invocation.agentId, controller);
     try {
+      if (invocation.taskId) await reportTask('started', invocation);
       controller.signal.throwIfAborted();
+      assertSoulUnpaused(resolveSoul(invocation.agentId).paused);
       await executor({
         invocation: publicInvocation(invocation),
         message,
@@ -518,7 +519,7 @@ export function createInteractionService({
       const wantedTransport = validated(() => validateTransport(transport));
       const target = agentIdOrFail(agentId);
       authorize({ principal, transport: wantedTransport, agentId: target, operation: 'message' });
-      resolveSoul(target);
+      assertSoulUnpaused(resolveSoul(target).paused);
       if (sessionId !== null && sessionId !== undefined) {
         const wantedSession = validated(() => validateSessionId(sessionId));
         const session = getSession(wantedSession, storeOptions);
@@ -562,7 +563,7 @@ export function createInteractionService({
         agentId: session.agentId,
         operation: 'message',
       });
-      resolveSoul(session.agentId);
+      assertSoulUnpaused(resolveSoul(session.agentId).paused);
       const { invocation, created } = validated(() => submitInvocation({
         sessionId: session.sessionId,
         agentId: session.agentId,

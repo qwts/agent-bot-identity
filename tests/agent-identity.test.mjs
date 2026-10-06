@@ -637,6 +637,7 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
     // A soul that set itself up is unmanaged, with agent-comms on.
     managed: false,
     comms: true,
+    paused: false,
   });
   assert.equal(
     new Date(firstPopulation.souls[firstId].lastSeen).toISOString(),
