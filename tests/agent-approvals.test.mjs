@@ -453,3 +453,61 @@ test('a refused decision is reported; unknown proposals and soul callers are ref
   assert.deepEqual(untouched.decisions, []);
   await assert.rejects(approvalsCommand(['approve'], { env, home: root, cwd: root, client, write: () => {} }), /usage/);
 });
+
+for (const route of ['owner', 'principal']) {
+  test(`${route} route validates scope before the owner gate and records a session decision`, async () => {
+    const { env } = scratch();
+    principalFor(env);
+    const prompts = [];
+    const { server, call, close } = await daemonFor(env, async (action) => prompts.push(action));
+    try {
+      const waiting = server.interaction.requestTurnApproval({ agentId: AGENT_ID, tool: 'Bash', operation: OPERATION, summary: 'push' });
+      const [proposal] = server.interaction.listProposalsForOwner().proposals;
+      const pathname = route === 'owner' ? '/v0/approvals/decide' : `/v1/proposals/${proposal.proposalId}/decision`;
+      const body = { proposalId: proposal.proposalId, decision: 'approve', digest: proposal.operationDigest,
+        ...(route === 'principal' ? { transport: 'web', providerId: 'owner-subject' } : {}) };
+      for (const scope of ['forever', '', null, 1]) {
+        assert.equal((await call(pathname, { method: 'POST', body: { ...body, scope } })).status, 400);
+      }
+      assert.equal((await call(pathname, { method: 'POST', body: { ...body, decision: 'deny', scope: 'session' } })).status, 400);
+      assert.equal(prompts.length, 0);
+      const response = await call(pathname, { method: 'POST', body: { ...body, scope: 'session' } });
+      assert.equal(response.status, 200);
+      const decided = (await response.json()).proposal;
+      assert.equal(decided.scope, 'session');
+      assert.equal(decided.decision, 'approved_session');
+      assert.equal(decided.status, 'approved');
+      assert.deepEqual(await waiting, { decision: 'approve', scope: 'session' });
+      assert.match(prompts[0], /for this session/);
+      const stored = getProposal(proposal.proposalId, { env, home: '/nonexistent' });
+      assert.equal(stored.scope, 'session');
+      assert.equal(stored.decision, 'approved_session');
+      assert.ok(audits(env).some((row) => row.decision === 'approved_session'));
+    } finally { await close(); }
+  });
+}
+
+test('CLI accepts once/session only on approve and exposes scope and decision in JSON', async () => {
+  const { env, root } = scratch();
+  const client = fakeClient([ROW]);
+  const options = { env, home: root, cwd: root, client, write: () => {} };
+  for (const args of [
+    ['approve', ROW.proposalId, '--scope'], ['approve', ROW.proposalId, '--scope', 'forever'],
+    ['approve', ROW.proposalId, '--scope', 'once', '--scope', 'session'],
+    ['deny', ROW.proposalId, '--scope', 'session'], ['list', '--scope', 'once'],
+  ]) await assert.rejects(approvalsCommand(args, options), /usage/);
+  assert.equal(client.decisions.length, 0);
+  for (const scope of ['once', 'session']) {
+    await approvalsCommand(['approve', ROW.proposalId, '--scope', scope, '--json'], options);
+    assert.equal(client.decisions.at(-1).scope, scope);
+  }
+  let output;
+  const decided = { ...ROW, status: 'approved', scope: 'session', decision: 'approved_session' };
+  await approvalsCommand(['list', '--json'], { ...options, client: fakeClient([decided]), write: (text) => { output = JSON.parse(text); } });
+  assert.equal(output.approvals[0].scope, 'session');
+  assert.equal(output.approvals[0].decision, 'approved_session');
+  const defaults = decideProposal(createProposal({ agentId: AGENT_ID, tool: 'Bash', summary: 'push', operationDigest: ROW.operationDigest }, { env }).proposalId,
+    { decision: 'approved', decidedBy: 'owner' }, { env });
+  assert.equal(defaults.scope, 'once');
+  assert.equal(defaults.decision, 'approved');
+});

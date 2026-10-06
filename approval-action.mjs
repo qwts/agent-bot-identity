@@ -30,13 +30,15 @@ export function shown(proposal, opts) {
     createdAt: proposal.createdAt,
     expiresAt: proposal.expiresAt,
     status: proposal.status,
+    scope: proposal.scope ?? 'once',
+    decision: proposal.decision ?? (proposal.status === 'open' ? null : proposal.status),
   };
 }
 
 // `approve Bash for Bill (agent_…): git push`, the summary clipped so the
 // prompt stays readable.
-export function approvalAction(row, decision) {
+export function approvalAction(row, decision, scope = 'once') {
   const who = row.soul ? `${row.soul} (${row.agentId})` : row.agentId;
   const about = row.summary.length > MAX_ABOUT ? `${row.summary.slice(0, MAX_ABOUT - 3)}...` : row.summary;
-  return `${decision} ${row.tool ?? 'a tool'} for ${who}: ${about}`;
+  return `${decision} ${row.tool ?? 'a tool'} for ${who}${scope === 'session' ? ' for this session' : ''}: ${about}`;
 }

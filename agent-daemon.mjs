@@ -74,6 +74,7 @@ import { recoverInteractionStore } from './agent-jobs.mjs';
 import { createComputerUseActivity } from './computer-use-activity.mjs';
 import { isComputerUse } from './permission-risk.mjs';
 import { appendAuditReceipt, assertAuthorized, principalsFile, resolvePrincipal } from './agent-principals.mjs';
+import { validateApprovalScope } from './session-approvals.mjs';
 import { approvalAction, shown } from './approval-action.mjs';
 import { confirmOwnerPresence } from './owner-gate.mjs';
 import { runSpawnHooks } from './agent-hook.mjs';
@@ -440,10 +441,11 @@ export function createDaemonServer({
   // first (#438): the daemon token proves only a process in this account, and
   // a transport principal only its provider login. The owner is asked about
   // the open proposal by soul and tool; a refusal decides nothing.
-  async function confirmDecision({ proposalId, decision, principal = null, transport = null, credential = null }) {
+  async function confirmDecision({ proposalId, decision, scope = 'once', principal = null, transport = null, credential = null }) {
     if (decision !== 'approve' && decision !== 'deny') {
       throw Object.assign(new Error('decision must be approve or deny'), { statusCode: 400 });
     }
+    validateApprovalScope(scope, decision);
     const proposal = interaction.listProposalsForOwner().proposals.find((row) => row.proposalId === proposalId);
     if (!proposal) throw Object.assign(new Error('proposal is no longer open'), { statusCode: 409 });
     if (principal) {
@@ -452,7 +454,7 @@ export function createDaemonServer({
       try { assertAuthorized({ principal, agentId: proposal.agentId, operation: 'approve' }); } catch { return; }
     }
     try {
-      await ownerGate(approvalAction(shown(proposal, { env, home }), decision), { principal: credential });
+      await ownerGate(approvalAction(shown(proposal, { env, home }), decision, scope), { principal: credential });
     } catch (error) {
       appendAuditReceipt({
         event: 'approval-decision',
@@ -844,10 +846,10 @@ export function createDaemonServer({
         }
         case 'POST /v0/approvals/decide': {
           const body = parseJsonBody(await readBody(req));
-          await confirmDecision({ proposalId: body.proposalId, decision: body.decision, credential: body.principal ?? null });
+          await confirmDecision({ proposalId: body.proposalId, decision: body.decision, scope: body.scope, credential: body.principal ?? null });
           sendJson(res, 200, interaction.decideProposalAsOwner({
             proposalId: body.proposalId,
-            decision: body.decision,
+            decision: body.decision, scope: body.scope,
             digest: body.digest,
           }));
           return;
@@ -1182,12 +1184,12 @@ async function handleInteractionRequest({ req, res, url, interaction, env, home,
     return;
   }
   if (req.method === 'POST' && (match = url.pathname.match(/^\/v1\/proposals\/([^/]+)\/decision$/))) {
-    await confirmDecision({ proposalId: match[1], decision: body.decision, principal, transport });
+    await confirmDecision({ proposalId: match[1], decision: body.decision, scope: body.scope, principal, transport });
     sendJson(res, 200, interaction.decideProposal({
       principal,
       transport,
       proposalId: match[1],
-      decision: body.decision,
+      decision: body.decision, scope: body.scope,
       digest: body.digest,
     }));
     return;
@@ -1421,9 +1423,9 @@ export function daemonClient({
       return request('POST', '/v0/soul/stop', { ...requester, agentId });
     },
     // Waits while the daemon asks the owner (#438): Touch ID or a password.
-    async decideApproval({ proposalId, decision, digest, principal = null }) {
+    async decideApproval({ proposalId, decision, digest, scope = 'once', principal = null }) {
       return request('POST', '/v0/approvals/decide', {
-        proposalId, decision, digest, ...(principal ? { principal } : {}),
+        proposalId, decision, digest, scope, ...(principal ? { principal } : {}),
       }, {}, OWNER_DECISION_TIMEOUT_MS);
     },
     async artifacts(invocationId, { transport, providerId }) {
@@ -1519,7 +1521,7 @@ export function withPermissionReceipts(executor, {
             if (record.decidedBy === 'computer-use' && record.outcome === 'deny') {
               appendAuditReceipt({ event: 'computer-use', agentId, operation: 'permission', decision: 'off', detail: record.toolName }, { env, home, now });
             }
-            if (['policy', 'autopilot', 'risk', 'turn'].includes(record.decidedBy) && ['allow', 'deny'].includes(record.outcome)) {
+            if (['policy', 'autopilot', 'risk', 'turn', 'session'].includes(record.decidedBy) && ['allow', 'deny'].includes(record.outcome)) {
               const tool = typeof record.toolName === 'string' ? record.toolName : null;
               let operation = tool && !/[\u0000-\u0020\u007f-\u009f]/.test(tool)
                 ? (tool.length > 40 ? `${tool.slice(0, 39)}…` : tool) : null;

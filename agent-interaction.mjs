@@ -26,6 +26,7 @@
 // digest — delivered by a principal holding the reserved 'approve' operation
 // — resumes it. A conversational "yes" has no pathway to authorize anything.
 
+import { validateApprovalScope } from './session-approvals.mjs';
 import { homedir } from 'node:os';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -182,6 +183,8 @@ function publicProposal(proposal, invocation) {
     createdAt,
     expiresAt,
     status,
+    scope: proposal.scope,
+    decision: proposal.decision,
   };
 }
 
@@ -354,7 +357,7 @@ export function createInteractionService({
     return { proposal, invocation };
   }
 
-  function settleProposal({ proposal, invocation, decision, digest, decidedBy, onMismatch = () => {} }) {
+  function settleProposal({ proposal, invocation, decision, scope, digest, decidedBy, onMismatch = () => {} }) {
     const waiting = invocation
       ? invocation.status === 'waiting-approval'
       : approvalWaiters.has(proposal.proposalId);
@@ -395,6 +398,7 @@ export function createInteractionService({
       decided = decideProposal(proposal.proposalId, {
         decision: decision === 'approve' ? 'approved' : 'denied',
         decidedBy,
+        scope,
       }, storeOptions);
     } catch {
       throw failure(409, 'proposal is no longer open');
@@ -402,7 +406,8 @@ export function createInteractionService({
     if (invocation) {
       appendEvent(invocation.invocationId, 'approval-decision', {
         proposalId: decided.proposalId,
-        decision: decided.status,
+        decision: decided.decision,
+        scope: decided.scope,
         operationDigest: decided.operationDigest,
         decidedBy: decided.decidedBy,
         detail: `risk: ${decided.risk}`,
@@ -412,13 +417,14 @@ export function createInteractionService({
         event: 'approval-decision',
         agentId: decided.agentId,
         operation: 'approve',
-        decision: decided.status,
+        decision: decided.decision,
+        scope: decided.scope,
         detail: `risk: ${decided.risk}`,
         ...(decidedBy === OWNER_DECIDER ? {} : { principalId: decidedBy }),
       }, storeOptions);
     }
     const settle = approvalWaiters.get(decided.proposalId);
-    if (settle) settle({ decision });
+    if (settle) settle({ decision, ...(scope === 'session' ? { scope } : {}) });
     return { proposal: publicProposal(decided, invocation) };
   }
 
@@ -460,6 +466,7 @@ export function createInteractionService({
         addArtifact: (artifact) => addArtifact(id, artifact, storeOptions),
         requestApproval: makeRequestApproval(id, controller),
         signal: controller.signal,
+        sessionGrants: turns?.sessionGrants,
       });
       // An executor that finished before honoring a cancel request still
       // completed; cancel reporting stays accurate (stopped: false).
@@ -762,7 +769,8 @@ export function createInteractionService({
     // reserved 'approve' operation for the soul, and must echo the exact
     // operation digest; a mismatched or stale digest is refused. Consuming the
     // proposal is atomic in the store, so a decision can never land twice.
-    decideProposal({ principal, transport, proposalId, decision, digest }) {
+    decideProposal({ principal, transport, proposalId, decision, digest, scope = 'once' }) {
+      validateApprovalScope(scope, decision);
       const wantedTransport = validated(() => validateTransport(transport));
       const { proposal, invocation } = proposalForDecision(proposalId, decision);
       authorize({
@@ -775,6 +783,7 @@ export function createInteractionService({
         proposal,
         invocation,
         decision,
+        scope,
         digest,
         decidedBy: principal.principalId,
         onMismatch: () => audit('denied', {
@@ -787,9 +796,10 @@ export function createInteractionService({
     },
 
     // The owner's decision (#85), already past the owner gate in the caller.
-    decideProposalAsOwner({ proposalId, decision, digest }) {
+    decideProposalAsOwner({ proposalId, decision, digest, scope = 'once' }) {
+      validateApprovalScope(scope, decision);
       const { proposal, invocation } = proposalForDecision(proposalId, decision);
-      return settleProposal({ proposal, invocation, decision, digest, decidedBy: OWNER_DECIDER });
+      return settleProposal({ proposal, invocation, decision, scope, digest, decidedBy: OWNER_DECIDER });
     },
 
     // A daemon turn with no invocation record (a cold wake, #85) asks here.

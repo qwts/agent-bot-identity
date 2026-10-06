@@ -98,6 +98,17 @@ active and returns `stopped: true`. Changes and denials leave `computer-use`
 audit receipts. `POST /v0/soul/computer-use` accepts `{agentId, enabled}` and an
 optional presented `principal`; `daemonClient.setComputerUse` uses this route.
 
+## Approve a tool call
+
+`agent-bot approvals list --json` shows waiting proposals. The owner decides
+with `approvals approve <proposalId> [--scope once|session] [--json]` or
+`approvals deny <proposalId> [--json]`; both require the daemon's owner gate.
+The default `once` also allows the tool for the rest of that turn. `session`
+allows that exact tool for that soul across turns in the same harness session,
+until the session changes, the soul stops or pauses, or the daemon restarts.
+Policy deny and computer-use off still win. JSON exposes `scope` and
+`decision` (`approved_session`, `approved`, or `denied` after a decision).
+
 ## Stop or pause a soul
 
 `agent-bot soul stop <agentId|name> [--json]` asks the loopback daemon to

@@ -306,6 +306,7 @@ export function createContractExecutor({ harness, identity, policy, run, mode = 
     signal,
     onPermission = null,
     computerUseEnabled = () => true,
+    sessionGrants = null,
   }) {
     if (!invocation || typeof appendEvent !== 'function'
       || typeof addArtifact !== 'function' || typeof requestApproval !== 'function'
@@ -328,10 +329,12 @@ export function createContractExecutor({ harness, identity, policy, run, mode = 
     let bound = false;
     let stopped = false;
     const approvedTools = new Set();
+    let sessionGrant = null;
 
     const bindHarnessSession = ({ mode, harnessSessionId } = {}) => {
       const binding = validateHarnessBinding({ harness, mode, harnessSessionId });
       appendEvent(HARNESS_SESSION_EVENT, binding);
+      sessionGrant = sessionGrants?.bind(boundIdentity.agentId, binding.harnessSessionId) ?? null;
       bound = true;
       return binding;
     };
@@ -364,8 +367,8 @@ export function createContractExecutor({ harness, identity, policy, run, mode = 
 
     // The computer-use switch takes precedence over policy and mode.
     // Otherwise policy allow/deny is final. Approval outcomes are decided by
-    // autopilot, risk, an owner approval earlier in this turn, or a fresh proposal.
-    // `decidedBy` names computer-use, policy, autopilot, risk, turn, or approval.
+    // autopilot, risk, an owner approval earlier in this turn or session, or a fresh proposal.
+    // `decidedBy` names computer-use, policy, autopilot, risk, turn, session, or approval.
     const requestPermission = async ({ toolName, operation = null, summary = null, ttlMs } = {}) => {
       const computerUseOff = () => isComputerUse(toolName) && computerUseEnabled() !== true;
       if (computerUseOff()) return observe(toolName, { outcome: 'deny', decidedBy: 'computer-use' }, summary);
@@ -375,6 +378,8 @@ export function createContractExecutor({ harness, identity, policy, run, mode = 
       const risk = classifyRisk({ toolName, summary, operation });
       if (risk === 'safe') return observe(toolName, { outcome: 'allow', decidedBy: 'risk' }, summary);
       if (approvedTools.has(toolName)) return observe(toolName, { outcome: 'allow', decidedBy: 'turn' }, summary);
+      if (sessionGrant?.has(toolName)) return observe(toolName, { outcome: 'allow', decidedBy: 'session' }, summary);
+      const proposedSession = sessionGrant;
       const wantedSummary = typeof summary === 'string' && summary.length > 0
         ? summary.slice(0, MAX_SUMMARY_LENGTH)
         : `permission: ${toolName}`;
@@ -387,7 +392,10 @@ export function createContractExecutor({ harness, identity, policy, run, mode = 
       });
       // The owner may have switched off while this proposal was waiting.
       if (computerUseOff()) return observe(toolName, { outcome: 'deny', decidedBy: 'computer-use' }, summary);
-      if (decision.decision === 'approve') approvedTools.add(toolName);
+      if (decision.decision === 'approve' && !signal.aborted) {
+        approvedTools.add(toolName);
+        if (decision.scope === 'session') proposedSession?.add(toolName);
+      }
       return observe(toolName, {
         outcome: decision.decision === 'approve' ? 'allow' : 'deny',
         decidedBy: 'approval',
