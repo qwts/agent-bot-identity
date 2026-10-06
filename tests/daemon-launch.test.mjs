@@ -465,3 +465,47 @@ test('a launch can choose comms before start; an invalid choice never starts (#3
   assert.equal(g.calls.length, 0);
   assert.deepEqual(g.reports[0], { requestId: 'r2', status: 'failed', agentId: null, detail: 'invalid launch comms' });
 });
+
+test('launch persists the selected model after census recording and before the first turn', async (t) => {
+  const { recordLaunchSettings } = await import('../agent-daemon.mjs');
+  const { populationFile, upsertSoul, showSoul } = await import('../agent-population.mjs');
+  const { soulModel, setSoulModel } = await import('../soul-model.mjs');
+  const { auditFile } = await import('../agent-principals.mjs');
+  const f = fixture(t);
+  const env = { HOME: f.root, XDG_STATE_HOME: path.join(f.root, 'state'), AGENT_BOT_INTERACTION_HOME: path.join(f.root, 'interaction') };
+  const options = { env, home: f.root, config: {}, now: () => new Date('2026-10-05T00:00:00.000Z') };
+  const population = populationFile(options);
+  upsertSoul({ id: agentId, status: 'active', spacePath: path.join(f.root, 'space'), lastSeen: '2026-10-05T00:00:00.000Z' }, { file: population });
+  const seen = [];
+  const handler = createLaunchHandler({ ...f.options,
+    recordLaunch: (launch) => recordLaunchSettings(launch, options),
+    executorFor: () => {
+      assert.equal(showSoul(agentId, { file: population }).managed, true);
+      seen.push(soulModel(agentId, options).model);
+      return async (input) => input.appendEvent(HARNESS_SESSION_EVENT, {});
+    },
+  });
+  await handler({ ...event, model: 'chosen' }, f.ports);
+  assert.equal(f.reports[0].status, 'launched');
+  assert.deepEqual(seen, ['chosen']);
+  const receipt = JSON.parse(readFileSync(auditFile(options), 'utf8').trim());
+  assert.deepEqual(receipt, { at: '2026-10-05T00:00:00.000Z', event: 'soul-model', agentId, operation: 'set', decision: 'chosen' });
+  const before = readFileSync(auditFile(options), 'utf8');
+  await handler({ ...event, requestId: 'no-model' }, f.ports);
+  assert.deepEqual(seen, ['chosen', 'chosen']);
+  assert.equal(readFileSync(auditFile(options), 'utf8'), before);
+  setSoulModel(spawnedId, 'original', options);
+  await assert.rejects(recordLaunchSettings({ agentId: spawnedId, model: 'new', comms: false }, options), /no population record/);
+  assert.equal(soulModel(spawnedId, options).model, 'original');
+});
+
+test('invalid launch model is refused before provisioning or starting', async (t) => {
+  for (const model of [null, '', ' ', false, 42, 'x'.repeat(121), 'bad\nmodel', 'bad\x85model']) {
+    const f = fixture(t, { spawnPackage: () => assert.fail('invalid model must not mint'),
+      recordLaunch: () => assert.fail('invalid model must not record') });
+    await f.handler({ ...packageEvent, model }, f.ports);
+    assert.equal(f.reports[0].status, 'failed');
+    assert.match(f.reports[0].detail, /modelId/);
+    assert.equal(f.calls.length, 0);
+  }
+});

@@ -110,7 +110,7 @@ export function withReachRules(policy, { keyd = false } = {}) {
 // dropped.
 export function acpExecutorFor({
   identities, policy, baseEnv, onHarnessSession = null, createExecutor = createAcpExecutor,
-  commsFor = () => true, modeFor = () => 'safe', reachEnv = {}, keydFor = () => null, harnessDirsFor = () => [], log = null,
+  commsFor = () => true, modeFor = () => 'safe', modelFor = () => null, onModels = null, reachEnv = {}, keydFor = () => null, harnessDirsFor = () => [], log = null,
 }) {
   return ({ agentId, harness, cwd, env }) => {
     const identity = identities(agentId);
@@ -138,6 +138,8 @@ export function acpExecutorFor({
       identity: { app, agentId },
       // Read once per turn: a mode change applies to the next turn.
       mode: modeFor(agentId),
+      model: modelFor(agentId),
+      onModels: (models) => onModels?.(agentId, models),
       policy: withReachRules(policy, { keyd: Boolean(keyd) }),
       cwd,
       // Where the soul's own harness install lives when its checkout has none (#417).

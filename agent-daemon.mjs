@@ -83,6 +83,7 @@ import { PROOF_HEADER, parseBindingProof, signBindingProof } from './binding-pro
 import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms-client.mjs';
 import { attachWakeEndpoint } from './agent-wake.mjs';
 import { soulMode } from './soul-mode.mjs';
+import { soulModel, setSoulModel, recordSoulModels } from './soul-model.mjs';
 import { readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
@@ -1395,6 +1396,14 @@ export async function recordLaunchComms({ agentId, package: packagePath, comms, 
   }
 }
 
+// The launch is already authorized by its principal. Persist its model after
+// census/comms recording succeeds and before the first executor is created.
+export async function recordLaunchSettings(launch, options = {}) {
+  const recorded = await recordLaunchComms(launch, options);
+  if (launch.model !== undefined) setSoulModel(launch.agentId, launch.model, options);
+  return recorded;
+}
+
 // Observe policy and mode decisions in interactive and cold ACP turns. Approval
 // decisions already have their own receipts. The writer owns detail sanitizing.
 export function withPermissionReceipts(executor, {
@@ -1489,6 +1498,8 @@ export async function runDaemon({
       policy: setup?.policy ?? { version: 1, rules: [], fallback: 'deny' },
       baseEnv: harnessEnv,
       modeFor: (agentId) => soulMode(agentId, { env, home }),
+      modelFor: (agentId) => soulModel(agentId, { env, home }).model,
+      onModels: (agentId, models) => recordSoulModels(agentId, models, { env, home }),
       // A daemon-run soul's home is not a git worktree, so the session-start
       // hook cannot place its Claude session; the turn's binding does.
       onHarnessSession: ({ agentId, harness, harnessSessionId }) => recordSoulSession({ agentId, provider: harness, sessionId: harnessSessionId, env, home, now }),
@@ -1592,7 +1603,7 @@ export async function runDaemon({
       return address;
     },
     // The comms setting is read here, at launch only; turns read the census.
-    recordLaunch: (launch) => recordLaunchComms(launch, { env, home, config }),
+    recordLaunch: (launch) => recordLaunchSettings(launch, { env, home, config, now }),
     executorFor,
   });
   // Souls launched before 0.10.9 read as unmanaged until marked from the

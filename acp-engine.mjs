@@ -335,6 +335,8 @@ export function createAcpExecutor({
   policy,
   // The soul's Safe / Auto-Pilot mode, read by the daemon at turn start.
   mode = 'safe',
+  model = null,
+  onModels = null,
   registry = ACP_SPAWN_REGISTRY,
   cwd = process.cwd(),
   harnessDirs = [],
@@ -530,12 +532,14 @@ export function createAcpExecutor({
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
       });
 
+      let sessionModels = null;
       const prior = getHarnessSession === null ? null : await getHarnessSession(invocation);
       if (prior && typeof prior.harnessSessionId === 'string') {
         sessionId = prior.harnessSessionId;
         replaying = true;
         try {
-          await rpc.request('session/load', { sessionId, cwd, mcpServers: [...turnMcpServers] });
+          const loaded = await rpc.request('session/load', { sessionId, cwd, mcpServers: [...turnMcpServers] });
+          sessionModels = loaded?.models ?? null;
         } finally {
           replaying = false;
         }
@@ -546,7 +550,16 @@ export function createAcpExecutor({
           failEngine('agent returned no sessionId for session/new');
         }
         sessionId = created.sessionId;
+        sessionModels = created.models ?? null;
         bindHarnessSession({ mode: 'new', harnessSessionId: sessionId });
+      }
+      if (sessionModels && onModels) {
+        try { await onModels({ availableModels: sessionModels.availableModels, currentModelId: sessionModels.currentModelId }); }
+        catch { /* Model discovery must never fail a turn. */ }
+      }
+      if (model !== null && model !== sessionModels?.currentModelId) {
+        try { await rpc.request('session/set_model', { sessionId, modelId: model }); }
+        catch (error) { log(`acp engine: session/set_model failed; continuing with the harness model: ${error.message}`); }
       }
       // A row whose adapter defaults to approving calls itself names the ACP
       // session mode that routes approvals to this client (#384), so the

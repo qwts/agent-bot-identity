@@ -254,3 +254,41 @@ test('ACP turns bind each soul mode at creation and reread it for the next turn'
   await other({ ...port(), invocation: { agentId: otherSoul.agentId } });
   assert.equal(approvals, 2, 'another soul retains its default Safe mode');
 });
+
+test('ACP model selection is captured per turn and discovery is cached for the correct soul', async (t) => {
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { default: path } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const { createAcpExecutor } = await import('../acp-engine.mjs');
+  const { setSoulModel, soulModel, recordSoulModels } = await import('../soul-model.mjs');
+  const home = mkdtempSync(path.join(tmpdir(), 'wake-model-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const models = { availableModels: [{ modelId: 'default', name: 'Default' }], currentModelId: 'default' };
+  const env = { HOME: home, XDG_STATE_HOME: path.join(home, 'state'), AGENT_BOT_INTERACTION_HOME: path.join(home, 'interaction'), FAKE_ACP_MODELS: JSON.stringify(models) };
+  const registry = { claude: { harness: 'claude', enabled: true, command: process.execPath,
+    args: [fileURLToPath(new URL('./fixtures/fake-acp-agent.mjs', import.meta.url))], stripEnv: [] } };
+  const selected = [];
+  const discovered = [];
+  const factory = acpExecutorFor({ identities: () => ({}), baseEnv: env, policy: { version: 1, rules: [], fallback: 'deny' },
+    modelFor: (id) => soulModel(id, { env, home }).model,
+    onModels: (id, block) => { discovered.push([id, block]); recordSoulModels(id, block, { env, home }); },
+    createExecutor: (options) => { selected.push(options.model); return createAcpExecutor({ ...options, registry }); } });
+  const request = { agentId: ID, harness: 'claude', cwd: home, env: {} };
+  const observed = [];
+  const port = (id = ID) => ({ invocation: { agentId: id }, message: 'model-probe', attachments: [],
+    appendEvent: (type, data) => { if (data.content?.text) observed.push(JSON.parse(data.content.text).model); return {}; },
+    addArtifact: () => ({}), signal: new AbortController().signal, requestApproval: async () => ({ decision: 'deny' }) });
+  setSoulModel(ID, 'first', { env, home });
+  const firstTurn = factory(request);
+  setSoulModel(ID, 'second', { env, home });
+  await firstTurn(port());
+  await factory(request)(port());
+  const other = 'agent_77777777-7777-4777-8777-777777777777';
+  await factory({ ...request, agentId: other })(port(other));
+  assert.deepEqual(selected, ['first', 'second', null]);
+  assert.deepEqual(observed, ['first', 'second', 'default']);
+  assert.deepEqual(discovered, [[ID, models], [ID, models], [other, models]]);
+  assert.equal(soulModel(ID, { env, home }).model, 'second');
+  assert.deepEqual(soulModel(other, { env, home }).available, models.availableModels);
+});

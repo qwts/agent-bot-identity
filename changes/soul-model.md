@@ -1,0 +1,1 @@
+- Store an owner-selected model per soul, expose it and cached ACP model choices through the CLI, and apply it on every daemon turn and optional launch selection.

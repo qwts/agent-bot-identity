@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { HARNESS_SESSION_EVENT } from './executor-contract.mjs';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
+import { validateModelId } from './soul-model.mjs';
 import { soulCommsSetting } from './soul-package.mjs';
 
 // A launch's comms setting: the soul's own soul.json (a spawned instance
@@ -106,6 +107,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       if (event.name !== undefined && (typeof event.name !== 'string' || !event.name.trim() || event.name.length > LAUNCH_NAME_MAX || /[\u0000-\u001f\u007f]/.test(event.name))) throw new Error('invalid launch name');
       // Optional, chosen before start (#381): the soul's comms setting for
       // this and later launches. Absent keeps what its soul.json says.
+      if (event.model !== undefined) validateModelId(event.model);
       if (event.comms !== undefined && typeof event.comms !== 'boolean') throw new Error('invalid launch comms');
       if (copied && event.name === undefined) {
         throw new Error(`${event.package} is a copy of soul ${located.agentId}'s folder; name the launch to start it as a new soul`);
@@ -127,7 +129,9 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         await joinSoul({ agentId: identity.id, harness, name, binding, ...(parent ? { parent } : {}) });
       }
       if (recordLaunch) await recordLaunch({ agentId: identity.id, package: packagePath, binding,
-        ...(event.comms === undefined ? {} : { comms: event.comms, principal: event.principal ?? null }) });
+        ...(event.comms === undefined ? {} : { comms: event.comms }),
+        ...(event.model === undefined ? {} : { model: event.model }),
+        ...(event.comms === undefined && event.model === undefined ? {} : { principal: event.principal ?? null }) });
       const executor = executorFor({ agentId: identity.id, harness, cwd: binding.worktree,
         env: { AGENT_BOT_BINDING: binding.file, AGENT_BOT_ID: identity.id, QWTS_AGENT_ID: identity.id } });
       // An ACP session binding is the readiness boundary. A returned promise
