@@ -270,6 +270,7 @@ agent-bot soul stop <agentId|name> [--json]
 agent-bot soul pause <agentId|name> [--json]
 agent-bot soul resume <agentId|name> [--json]
 agent-bot soul show <agentId|name> [--json]
+agent-bot soul profile <agentId|name> [--json] [--file RELATIVE_PATH]
 agent-bot daemon <run|start|status|stop|disable|vouch-key|pair-comms> [--json]
 agent-bot mcp
 agent-bot web open [--principal <principal-id>] [--no-browser] [--json]
