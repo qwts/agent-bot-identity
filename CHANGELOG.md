@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.20
+
+- `agent-bot soul computer-use <agentId|name> [show|on|off]` lets the owner disable computer use for one soul in Safe or Auto-Pilot mode, stops active computer-use turns, and exposes the durable setting through population and daemon APIs (#482).
+
 ## 0.10.19
 
 - `agent-bot soul pause` cancels a soul's in-flight turns and keeps wakes, launches, and interactive turns paused until `soul resume`; population and daemon status expose the durable pause flag, with matching daemon client methods and audited routes for per-soul controls (#478).
