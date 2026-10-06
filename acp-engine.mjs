@@ -337,6 +337,8 @@ export function createAcpExecutor({
   mode = 'safe',
   model = null,
   onModels = null,
+  // Public soul identity, looked up only for a new session's first prompt.
+  identityFor = null,
   registry = ACP_SPAWN_REGISTRY,
   cwd = process.cwd(),
   harnessDirs = [],
@@ -354,6 +356,9 @@ export function createAcpExecutor({
   }
   if (getHarnessSession !== null && typeof getHarnessSession !== 'function') {
     failEngine('getHarnessSession must be a function when provided');
+  }
+  if (identityFor !== null && typeof identityFor !== 'function') {
+    failEngine('identityFor must be a function when provided');
   }
   if (!Number.isSafeInteger(turnTimeoutMs) || turnTimeoutMs <= 0) {
     failEngine('turnTimeoutMs must be a positive integer');
@@ -533,6 +538,7 @@ export function createAcpExecutor({
       });
 
       let sessionModels = null;
+      let promptMessage = message;
       const prior = getHarnessSession === null ? null : await getHarnessSession(invocation);
       if (prior && typeof prior.harnessSessionId === 'string') {
         sessionId = prior.harnessSessionId;
@@ -552,6 +558,17 @@ export function createAcpExecutor({
         sessionId = created.sessionId;
         sessionModels = created.models ?? null;
         bindHarnessSession({ mode: 'new', harnessSessionId: sessionId });
+        // Best effort: an unreadable population never fails the turn.
+        let soul = null;
+        try { soul = await identityFor?.(identity.agentId); } catch { soul = null; }
+        if (soul) {
+          // Cap each public field so even a custom callback cannot produce
+          // an unbounded preamble. Keep it to one plain line, under 450 chars.
+          const plain = (value, max) => String(value).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').slice(0, max);
+          const named = (record) => `${plain(record.name, 128)} (agent id ${plain(record.agentId, 64)})`;
+          const parent = soul.parent ? `Your parent is ${named(soul.parent)}.` : 'You have no parent agent.';
+          promptMessage = `[agent-bot] You are ${named(soul)}. ${parent}\n\n${message}`;
+        }
       }
       if (sessionModels && onModels) {
         try { await onModels({ availableModels: sessionModels.availableModels, currentModelId: sessionModels.currentModelId }); }
@@ -570,7 +587,7 @@ export function createAcpExecutor({
 
       const result = await rpc.request('session/prompt', {
         sessionId,
-        prompt: [{ type: 'text', text: message }],
+        prompt: [{ type: 'text', text: promptMessage }],
       });
       if (streamError) throw streamError;
       if (signal.aborted) throw new Error('acp engine: turn aborted');

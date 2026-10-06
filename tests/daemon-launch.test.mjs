@@ -6,6 +6,8 @@ import path from 'node:path';
 import { createLaunchHandler, LAUNCH_NAME_MAX } from '../daemon-launch.mjs';
 import { HARNESS_SESSION_EVENT } from '../executor-contract.mjs';
 import { mintAgentIdentity, readAgentIdentity } from '../agent-identity.mjs';
+import { displayName, upsertSoul } from '../agent-population.mjs';
+import { soulPromptIdentity } from '../agent-daemon.mjs';
 
 const agentId = 'agent_11111111-1111-4111-8111-111111111111';
 const event = { event: 'launch', requestId: 'r1', principal: 'p1', account: 'worker', soul: agentId, harness: 'claude', name: 'Helper' };
@@ -79,6 +81,46 @@ test('binds a soul home when the soul has no live binding', async (t) => {
 
 const spawnedId = 'agent_22222222-2222-4222-8222-222222222222';
 const packageEvent = { ...event, soul: undefined, package: '/pkg' };
+
+test('launch turns name the soul and its parent from the latest population record', async (t) => {
+  for (const parent of [agentId, null]) {
+    let message;
+    const f = fixture(t, {
+      spawnPackage: () => ({ id: spawnedId }),
+      executorFor: () => async (input) => { message = input.message; input.appendEvent(HARNESS_SESSION_EVENT, {}); },
+    });
+    const env = { AGENT_BOT_POPULATION_PATH: path.join(f.root, 'population.json') };
+    const seed = (id, name, parentId) => upsertSoul({ id, name: 'generated-handle', displayName: name,
+      parentId, status: 'active', spacePath: '/private/space' }, { file: env.AGENT_BOT_POPULATION_PATH });
+    seed(agentId, 'VMTwo', null);
+    seed(spawnedId, 'Old name', parent);
+    const handler = createLaunchHandler({ ...f.options,
+      recordLaunch: () => seed(spawnedId, 'VMThree', parent),
+      identityFor: (id) => soulPromptIdentity(id, { env }),
+    });
+    await handler(packageEvent, { ...f.ports, parent });
+    assert.equal(f.reports[0].status, 'launched');
+    assert.ok(message.startsWith(`You are VMThree (agent id ${spawnedId}). `));
+    assert.ok(message.includes(parent
+      ? `Your parent is VMTwo (agent id ${agentId}).`
+      : 'You have no parent agent.'));
+    assert.ok(message.endsWith(parent
+      ? `You were started by ${agentId}, another agent soul, as part of its team. Join agent-comms as usual, read your inbox, and handle incoming work; your parent will brief you there.`
+      : 'You were launched by a principal. Join agent-comms as usual, read your inbox, and handle incoming work.'));
+    assert.ok(!message.includes('/private/'));
+  }
+});
+
+test('launch identity falls back to the short Agent ID display name', async (t) => {
+  let message;
+  const f = fixture(t, { executorFor: () => async (input) => {
+    message = input.message;
+    input.appendEvent(HARNESS_SESSION_EVENT, {});
+  } });
+  await f.handler(event, f.ports);
+  assert.equal(f.reports[0].status, 'launched');
+  assert.ok(message.startsWith(`You are ${displayName(agentId)} (agent id ${agentId}). You have no parent agent.`));
+});
 
 test('a package launch spawns a soul, homes it with the package, and starts it', async (t) => {
   const homes = [];

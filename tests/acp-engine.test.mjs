@@ -300,6 +300,59 @@ test('permissionToolName prefers harness metadata, falls back to kind, never spa
 
 // --- full turns through the daemon service ----------------------------------
 
+test('a new ACP session prepends public identity and parent to its first prompt', async () => {
+  const parentId = 'agent_22222222-2222-4222-8222-222222222222';
+  const seen = [];
+  const { events } = await turn({ message: 'ping', executorOptions: {
+    identityFor: (id) => {
+      seen.push(id);
+      return { name: 'VMThree', agentId: id, parent: { name: 'VMTwo', agentId: parentId }, binding: '/private/binding' };
+    },
+  } });
+  assert.deepEqual(seen, [AGENT_ID]);
+  assert.equal(events.find((event) => event.type === HARNESS_SESSION_EVENT).data.mode, 'new');
+  assert.deepEqual(chunkTexts(events), [
+    `pong: [agent-bot] You are VMThree (agent id ${AGENT_ID}). Your parent is VMTwo (agent id ${parentId}).\n\nping`,
+  ]);
+});
+
+test('a new root soul session explicitly has no parent', async () => {
+  const { events } = await turn({ message: 'ping', executorOptions: {
+    identityFor: (agentId) => ({ name: 'VMThree', agentId, parent: null }),
+  } });
+  assert.deepEqual(chunkTexts(events), [
+    `pong: [agent-bot] You are VMThree (agent id ${AGENT_ID}). You have no parent agent.\n\nping`,
+  ]);
+});
+
+test('resumed ACP sessions never look up or prepend identity', async () => {
+  const { events } = await turn({ message: 'ping', executorOptions: {
+    getHarnessSession: () => ({ harnessSessionId: 'fake-ses-42' }),
+    identityFor: () => assert.fail('a resumed session already has its identity'),
+  } });
+  assert.equal(events.find((event) => event.type === HARNESS_SESSION_EVENT).data.mode, 'resume');
+  assert.deepEqual(chunkTexts(events), ['pong: ping']);
+});
+
+test('missing and null identity callbacks leave the prompt unchanged', async () => {
+  for (const executorOptions of [{}, { identityFor: () => null }]) {
+    const { events } = await turn({ message: 'ping', executorOptions });
+    assert.deepEqual(chunkTexts(events), ['pong: ping']);
+  }
+});
+
+test('identity preambles stay bounded and on one plain line', async () => {
+  const { events } = await turn({ message: 'ping', executorOptions: {
+    identityFor: () => ({ name: 'N\n'.repeat(200), agentId: 'i'.repeat(200),
+      parent: { name: 'P\u2028'.repeat(200), agentId: 'p'.repeat(200) } }),
+  } });
+  const text = chunkTexts(events)[0].slice('pong: '.length);
+  const [preamble, message] = text.split('\n\n');
+  assert.ok(preamble.length < 450);
+  assert.ok(!/[\r\n\u2028\u2029]/.test(preamble));
+  assert.equal(message, 'ping');
+});
+
 test('a full ACP turn drives spawn, bind, stream, and stop through the contract', async () => {
   const { finished, events } = await turn({ message: 'ping' });
   assert.equal(finished.status, 'completed');

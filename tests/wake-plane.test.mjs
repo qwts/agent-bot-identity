@@ -8,6 +8,36 @@ const ID = 'agent_66666666-6666-4666-8666-666666666666';
 const soul = { agentId: ID, worktree: '/work/tree', gitDir: '/work/tree/.git', file: '/work/tree/.git/agent-binding.json' };
 const coldPool = { has: () => false, send: () => 0 };
 
+test('ACP factory supplies fresh identity to every new session, including later cold turns', async (t) => {
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { default: path } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const { createAcpExecutor } = await import('../acp-engine.mjs');
+  const { soulPromptIdentity } = await import('../agent-daemon.mjs');
+  const { recordSoulDisplayName, upsertSoul } = await import('../agent-population.mjs');
+  const home = mkdtempSync(path.join(tmpdir(), 'wake-identity-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = { HOME: home, AGENT_BOT_POPULATION_PATH: path.join(home, 'population.json') };
+  const registry = { claude: { harness: 'claude', enabled: true, command: process.execPath,
+    args: [fileURLToPath(new URL('./fixtures/fake-acp-agent.mjs', import.meta.url))], stripEnv: [] } };
+  upsertSoul({ id: ID, displayName: 'VMThree', status: 'active', spacePath: home }, { file: env.AGENT_BOT_POPULATION_PATH });
+  const factory = acpExecutorFor({ identities: () => ({}), baseEnv: env, policy: { version: 1, rules: [], fallback: 'deny' },
+    identityFor: (id) => soulPromptIdentity(id, { env, home }),
+    createExecutor: (options) => createAcpExecutor({ ...options, registry }),
+  });
+  const executor = factory({ agentId: ID, harness: 'claude', cwd: home, env: {} });
+  const observed = [];
+  const input = { invocation: { agentId: ID }, message: 'ping', attachments: [],
+    appendEvent: (_type, data) => { if (data.content?.text) observed.push(data.content.text); return {}; },
+    addArtifact: () => ({}), signal: new AbortController().signal, requestApproval: async () => ({ decision: 'deny' }) };
+  await executor(input);
+  recordSoulDisplayName(ID, 'Renamed', { file: env.AGENT_BOT_POPULATION_PATH });
+  await executor(input);
+  assert.deepEqual(observed, ['VMThree', 'Renamed'].map((name) =>
+    `pong: [agent-bot] You are ${name} (agent id ${ID}). You have no parent agent.\n\nping`));
+});
+
 function plane({ pool = coldPool, settings = { [ID]: true }, executorFor = null, receipts = [] } = {}) {
   return createWakePlane({
     pool,
