@@ -34,7 +34,7 @@ test('the relay runs agent-comms as the soul, in its worktree, with its binding'
   for (const { command, options } of calls) {
     assert.equal(command, 'agent-comms');
     assert.equal(options.cwd, '/home/soul');
-    assert.deepEqual(options.env, { PATH: '/tools', AGENT_BOT_BINDING: soul.binding.file, AGENT_BOT_ID: 'agent_1', QWTS_AGENT_ID: 'agent_1' });
+    assert.deepEqual(options.env, { PATH: '/tools', AGENT_BOT_BINDING: soul.binding.file, AGENT_BOT_ID: 'agent_1', QWTS_AGENT_ID: 'agent_1', AGENT_COMMS_NO_DELIVERY_REPORT: '1' });
   }
 });
 
@@ -50,7 +50,7 @@ test('an unmanaged soul with no binding file runs without the daemon\'s inherite
   const run = (command, args, options, done) => { calls.push(options); done(null, JSON.stringify({ ok: true, messages: [] }), ''); };
   const relay = createCommsRelay({ env: { PATH: '/tools', AGENT_BOT_BINDING: '/daemon/own/binding.json' }, run });
   await relay.read({ agentId: 'agent_1', binding: { worktree: '/home/soul', file: null } });
-  assert.deepEqual(calls[0].env, { PATH: '/tools', AGENT_BOT_ID: 'agent_1', QWTS_AGENT_ID: 'agent_1' });
+  assert.deepEqual(calls[0].env, { PATH: '/tools', AGENT_BOT_ID: 'agent_1', QWTS_AGENT_ID: 'agent_1', AGENT_COMMS_NO_DELIVERY_REPORT: '1' });
 });
 
 test('task commands use the soul port; only an unavailable brief falls back', async () => {
