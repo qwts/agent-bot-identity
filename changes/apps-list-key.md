@@ -1,1 +1,0 @@
-- `agent-bot identity apps list --json` rows gain `key: {fingerprint, updatedAt} | null` (the managed App key's public SHA256 fingerprint and when connect/rotation stored it) so a companion's sheet can show which key it holds and when it was issued without reading the key.

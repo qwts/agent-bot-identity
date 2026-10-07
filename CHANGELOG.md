@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.33
+
+- `agent-bot identity apps list --json` rows gain `key: {fingerprint, updatedAt} | null` (the managed App key's public SHA256 fingerprint and when connect/rotation stored it) so a companion's sheet can show which key it holds and when it was issued without reading the key.
+- `agent-bot doctor --probe-inbox` adds an opt-in `inbox.reachability` check that sends one bounded (5s), bearer-free request to the gh-app-hook inbox and reports DNS, TLS, refused, timeout or HTTP status with the host only, so a dead DNS name or down broker no longer reads as ready; the default doctor run still makes no network call (#318).
+
 ## 0.10.32
 
 - A soul made before 0.10.25 works again with `soul build`, forks, revisions and Customize: its earlier format-2 ignore list is accepted (an unknown list is still refused), and an existing soul home is rebuilt before each launch so it gains the agent-bot MCP entry a harness opened inside it needs to reach the fleet; a conflicting hand-edited generated file is reported on the daemon's stderr and the launch proceeds (#378, GeniusBar#73).
