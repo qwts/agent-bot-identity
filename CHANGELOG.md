@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.45
+
+- The SOP pack's persona mapping decides which souls run in their own macOS account (GeniusBar#66, ADR-0274 decision 3): `persona.toml` at the SOP repository's root maps souls by name (`[soul.NAME]`) or soul.json role (`[role.ROLE]`), with a `[persona]` default, to `sandbox = "sandboxed" | "unrestricted"` and an account. `agent-bot sop persona [--json]` records it online in `<state>/sop-persona.json`; `agent-bot sandbox status|resolve`, the override commands, `GET /v0/sandbox` and the daemon's launch path read the record offline and resolve the pack first (`source: sop`), then the soul's override, then the global switch. A pack decision never turns `features.persona-accounts` on: with the gate off it is reported with a `reason` while the soul runs unrestricted. An override on a pack-decided soul is refused naming the pack (`inherit` still clears one), and an unrecorded, stale, absent or invalid mapping leaves the user setting in charge and says so.
+
 ## 0.10.44
 
 - `agent-bot` puts a host's `AGENT_BOT_TOOL_PATH` first on its own PATH, so the daemon's and the CLI's git calls use GeniusBar's bundled git on a Mac without the Command Line Tools, as the souls' harnesses already did (GeniusBar#102).
