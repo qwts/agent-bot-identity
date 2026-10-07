@@ -1833,8 +1833,8 @@ export async function runDaemon({
     // A package spawn is a new root soul with no GitHub App (#297). The
     // package is validated before minting, so a bad path mints nothing.
     // A team member (#377) is the same spawn with its parent recorded.
-    spawnPackage: async ({ package: packagePath, harness, name, parent = null }) => {
-      if (name !== undefined) return spawnSoulTemplate(packagePath, { name, harness, parentId: parent, env, home, config, now,
+    spawnPackage: async ({ package: packagePath, harness, name, role = null, parent = null }) => {
+      if (name !== undefined) return spawnSoulTemplate(packagePath, { name, role, harness, parentId: parent, env, home, config, now,
         stateDir: stateDirectory({ env, home }) });
       validateSoulPackage(packagePath);
       return mintAgentIdentity({ appSlug: null, harness, packagePath, useGithub: false, parentId: parent,
@@ -1855,9 +1855,9 @@ export async function runDaemon({
     // joined below from its home as any launched soul is. The original soul
     // and its folder are never touched. Loaded here, not at the top: the
     // fork imports `agent-bot join`, whose CLI awaits this module.
-    forkCopy: async ({ package: copy, name, harness, parent = null }) => {
+    forkCopy: async ({ package: copy, name, role = null, harness, parent = null }) => {
       const { forkSoul } = await import('./soul-fork.mjs');
-      const forked = await forkSoul({ copy, name, harness, parentId: parent, env, home, config, now,
+      const forked = await forkSoul({ copy, name, role, harness, parentId: parent, env, home, config, now,
         gate: async () => ({ method: 'launch' }), join: null });
       return { id: forked.agentId, ...forked };
     },

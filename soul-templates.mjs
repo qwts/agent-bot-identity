@@ -114,8 +114,12 @@ function workingPath(path) {
 
 // Mechanism shared by CLI and authenticated daemon package launches. No
 // template code runs; the package is validated before a directory or ID exists.
-export async function spawnSoulTemplate(templatePath, { name, harness = null, parentId = null, ...options } = {}) {
+export async function spawnSoulTemplate(templatePath, { name, role = null, harness = null, parentId = null, ...options } = {}) {
   if (typeof name !== 'string' || !name.trim()) throw new Error('--name must be a nonempty string');
+  // The instance's role (#535): soul.json `role`, as `population list` reads it (60 chars).
+  if (role !== null && (typeof role !== 'string' || !role.trim() || role.trim().length > 60 || /[\u0000-\u001f\u007f]/.test(role))) {
+    throw new Error('--role must be 1 to 60 printable characters');
+  }
   if (harness !== null && (typeof harness !== 'string' || !HARNESS_KEY_PATTERN.test(harness))) {
     throw new Error('invalid harness');
   }
@@ -148,7 +152,7 @@ export async function spawnSoulTemplate(templatePath, { name, harness = null, pa
       }
     }
     const manifest = { ...template, formatVersion: 2, ignore: PACKAGE_IGNORE_LIST,
-      name: displayName, template: false, templateRevision: template.revision, parentRevision: null };
+      name: displayName, ...(role === null ? {} : { role: role.trim() }), template: false, templateRevision: template.revision, parentRevision: null };
     const manifestPath = join(directory, 'soul.json');
     const save = () => writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
     save();
@@ -187,10 +191,10 @@ export async function spawnSoulTemplate(templatePath, { name, harness = null, pa
 export async function templateSpawnCommand(args) {
   const [templatePath, ...flags] = args;
   const options = {};
-  const usage = 'usage: agent-bot soul spawn TEMPLATE_PATH --name NAME [--harness H]';
+  const usage = 'usage: agent-bot soul spawn TEMPLATE_PATH --name NAME [--harness H] [--role ROLE]';
   if (!templatePath || templatePath.startsWith('-')) throw new Error(usage);
   for (let i = 0; i < flags.length; i += 2) {
-    const key = { '--name': 'name', '--harness': 'harness' }[flags[i]];
+    const key = { '--name': 'name', '--harness': 'harness', '--role': 'role' }[flags[i]];
     if (!key || options[key] !== undefined || !flags[i + 1] || flags[i + 1].startsWith('--')) throw new Error(usage);
     options[key] = flags[i + 1];
   }

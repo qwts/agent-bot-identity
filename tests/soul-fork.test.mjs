@@ -161,6 +161,16 @@ test('a failed agent-comms join rolls the fork back: left, retired, folder archi
   assert.deepEqual(receipts.filter(({ event }) => event === 'soul-fork').map(({ decision }) => decision), ['rolled-back']);
 });
 
+test('fork can set the fork\'s role in its manifest; a bad role is refused before anything changes (#535)', async (t) => {
+  const f = await account(t);
+  for (const role of ['', '  ', 'x'.repeat(61), 'a\nb', 7]) {
+    await assert.rejects(f.fork({ role, gate: async () => assert.fail('asked') }), /--role must be 1 to 60 printable characters/);
+  }
+  const ted = await f.fork({ role: '  Researcher  ' });
+  assert.equal(JSON.parse(readFileSync(path.join(ted.soulDir, 'soul.json'), 'utf8')).role, 'Researcher');
+  assert.equal(Object.hasOwn(JSON.parse(readFileSync(path.join(f.bill.soulDir, 'soul.json'), 'utf8')), 'role'), false);
+});
+
 test('fork refuses an installed soul, a package, or a refused owner, before changing anything', async (t) => {
   const a = await account(t);
   const file = a.env.AGENT_BOT_POPULATION_PATH;

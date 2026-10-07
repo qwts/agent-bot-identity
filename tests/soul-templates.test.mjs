@@ -52,6 +52,17 @@ function fixture(t, formatVersion = 2) {
 }
 const json = (file) => JSON.parse(readFileSync(file, 'utf8'));
 
+test('a spawn can set the instance\'s role in its manifest; a bad role never spawns (#535)', async (t) => {
+  const f = fixture(t, 2);
+  const billy = await spawnSoulTemplate(f.template, { ...f.options, name: 'Billy', role: '  Researcher  ' });
+  assert.equal(json(join(billy.soulDir, 'soul.json')).role, 'Researcher');
+  const shiela = await spawnSoulTemplate(f.template, { ...f.options, name: 'Shiela' });
+  assert.equal(Object.hasOwn(json(join(shiela.soulDir, 'soul.json')), 'role'), false);
+  for (const role of ['', '  ', 'x'.repeat(61), 'a\nb', 7]) {
+    await assert.rejects(spawnSoulTemplate(f.template, { ...f.options, name: 'Nope', role }), /--role must be 1 to 60 printable characters/);
+  }
+});
+
 for (const formatVersion of [1, 2]) test(`format ${formatVersion}: independent instances preserve template and exclude working files`, async (t) => {
   const f = fixture(t, formatVersion);
   const before = readFileSync(join(f.template, 'soul.json'));
