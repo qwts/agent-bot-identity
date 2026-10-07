@@ -5,6 +5,8 @@ import { existsSync, lstatSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
+import { RUNTIME_NAMES, normalizeHarnessInstall, normalizeRuntimeDeclaration } from './runtime-catalog.mjs';
 import { buildHarnessFiles, envProblem, PERMISSION_RULE } from './soul-builder.mjs';
 import { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS, isGeneratedPath } from './soul-harness-contract.mjs';
 export { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS };
@@ -54,14 +56,34 @@ export function validateCredentialsDeclaration(credentials) {
   return credentials;
 }
 
+// What a soul needs provisioned per soul (#583 slice 3, ADR-0583 decision 6;
+// ADR-0322): `runtimes.node|python|go`, each a version or range resolved
+// through the pin catalog, or an object pinning exact `sources` per platform
+// (definition: they change the revision and are reviewed with it). Any
+// other key or shape fails, so a typo never silently drops a pin.
+export function validateRuntimesDeclaration(runtimes) {
+  if (!object(runtimes)) throw new Error('soul.json runtimes must be an object');
+  for (const [name, value] of Object.entries(runtimes)) {
+    if (!RUNTIME_NAMES.includes(name)) throw new Error(`soul.json runtimes.${name} is not a runtime agent-bot provisions (${RUNTIME_NAMES.join(', ')})`);
+    normalizeRuntimeDeclaration(name, value, `soul.json runtimes.${name}`);
+  }
+  return runtimes;
+}
+
 // Harness settings are a closed declaration; unrelated manifest extensions stay
 // opaque. Keep failures path-specific, including overrides that no adapter renders.
+// `install` (a pinned non-npm download, ADR-0322 decision 3) is only ever per
+// harness and never for one whose adapter is an npm pin (ADR-0276).
 const HARNESS_NAMES = ['claude', 'codex', 'gemini', 'opencode', 'cursor', 'copilot', 'devin', 'muse', 'kiro'];
-function validateHarnessSettings(settings, path) {
+function validateHarnessSettings(settings, path, harness = null) {
   if (!object(settings)) throw new Error(`${path} must be an object`);
   for (const [key, value] of Object.entries(settings)) {
     const field = `${path}.${key}`;
-    if (key === 'model') {
+    if (key === 'install') {
+      if (!harness) throw new Error(`${field} is only accepted under harnesses.<name>`);
+      if (ACP_SPAWN_REGISTRY[harness]?.adapter) throw new Error(`${field}: ${harness} is an npm harness, pinned in package.json (ADR-0276)`);
+      normalizeHarnessInstall(value, field, { defaultBin: ACP_SPAWN_REGISTRY[harness]?.command ?? null });
+    } else if (key === 'model') {
       if (!nonempty(value)) throw new Error(`${field} must be a nonempty string`);
     } else if (key === 'reasoningEffort') {
       if (!['low', 'medium', 'high'].includes(value)) throw new Error(`${field} must be low, medium or high`);
@@ -138,12 +160,16 @@ function validateManifest(manifest) {
   if (manifest.credentials !== undefined) validateCredentialsDeclaration(manifest.credentials);
   if (manifest.appearance !== undefined) validateAppearanceDeclaration(manifest.appearance);
   if (manifest.skills !== undefined) validateSkillsDeclaration(manifest.skills);
+  if (manifest.runtimes !== undefined) validateRuntimesDeclaration(manifest.runtimes);
   if (manifest.harness !== undefined) validateHarnessSettings(manifest.harness, 'soul.json harness');
   if (manifest.harnesses !== undefined) {
     if (!object(manifest.harnesses)) throw new Error('soul.json harnesses must be an object');
     for (const [name, settings] of Object.entries(manifest.harnesses)) {
       if (!HARNESS_NAMES.includes(name)) throw new Error(`soul.json harnesses.${name} is an unknown harness`);
-      validateHarnessSettings(settings, `soul.json harnesses.${name}`);
+      validateHarnessSettings(settings, `soul.json harnesses.${name}`, name);
+      if (settings.install?.kind === 'uv-tool' && manifest.runtimes?.python === undefined) {
+        throw new Error(`soul.json harnesses.${name}.install is a uv tool, which needs runtimes.python`);
+      }
     }
   }
   if (typeof manifest.revision !== 'string' || !REVISION.test(manifest.revision)) throw new Error('soul.json revision must be sha256:<64 lowercase hex digits>');

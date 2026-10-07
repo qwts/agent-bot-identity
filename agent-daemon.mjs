@@ -98,6 +98,7 @@ import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHarnessesP
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
+import { harnessInstallDeclared, pendingSoulRuntimes, provisionSoulRuntimes, soulRuntimeEnv } from './soul-runtimes.mjs';
 import { editSoulRevision, listSoulProposals, revisionCommand, revisionHistory } from './soul-revisions.mjs';
 import { acpExecutorFor, createWakePlane, createTurnRegistry } from './wake-plane.mjs';
 import { recordSoulSession } from './metrics.mjs';
@@ -1787,6 +1788,9 @@ export async function runDaemon({
       commsFor: (agentId) => showSoul(agentId, { file: populationFile({ env, home }) }).comms,
       reachEnv: { PATH: resumePath(harnessEnv, home) },
       harnessDirsFor: (agentId) => [soulHarnessesPath(agentId, { env, home, config, file: populationFile({ env, home }) })],
+      // The soul's provisioned runtimes and harness installs first on its
+      // PATH, with their env (#583 slice 3); read per turn from its stamps.
+      runtimeEnvFor: ({ agentId, harness, env: turnEnv }) => soulRuntimeEnv(agentId, { env: turnEnv, home, config, file: populationFile({ env, home }), harness }),
       // Engine diagnostics (a spawn that failed, a nameless permission) go
       // to the daemon's stderr, which the supervisor unit files as a log.
       log: (line) => process.stderr.write(`${line}\n`),
@@ -1832,6 +1836,14 @@ export async function runDaemon({
     homes ??= createSoulHomes({ env, home, config, stateDir: stateDirectory({ env, home }), bindings: server.bindings,
       install: (dir) => installHarnesses(dir, { env }) });
     return homes(soul);
+  };
+  // Whether the launched soul's (or package's) soul.json pins a download for
+  // the harness: then its absence from the host PATH is not a problem.
+  const launchDeclaresHarnessInstall = (harness, { soul = null, package: packagePath = null } = {}) => {
+    try {
+      const dir = soul ? soulDirectory(soul, { env, home, config, file: populationFile({ env, home }), readOnly: true }) : packagePath;
+      return harnessInstallDeclared(dir, harness);
+    } catch { return false; }
   };
   const onLaunch = createLaunchHandler({
     turns, isPaused,
@@ -1881,7 +1893,15 @@ export async function runDaemon({
     onLaunched: (agentId) => setColdWake(agentId, true, { env, home, now }),
     discard: (agentId, rollback) => discardFailedLaunch(agentId, rollback, { env, home, config, now }),
     // Refused before a spawn mints: the registry row, enabled, and its command on the soul's PATH.
-    harnessProblem: (harness) => harnessLaunchProblem(harness, { env: harnessEnv }),
+    harnessProblem: (harness, target) => harnessLaunchProblem(harness, { env: harnessEnv, declared: launchDeclaresHarnessInstall(harness, target) }),
+    // What the soul declares and lacks is installed into its folder before
+    // it joins (#583 slice 3): runtimes from the pin catalog, non-npm
+    // harnesses from their pinned downloads. Nothing lands on the host.
+    runtimes: {
+      pending: ({ agentId }) => pendingSoulRuntimes(agentId, { env, home, config, file: populationFile({ env, home }) }),
+      install: ({ agentId, harness }) => provisionSoulRuntimes(agentId, { env, home, config, file: populationFile({ env, home }), harness,
+        log: (line) => process.stderr.write(`soul runtimes: ${line}\n`) }),
+    },
     // What the soul gets (#376): its override over the global switch, and
     // for a sandboxed one the account's readiness and the owner's steps.
     sandboxFor: ({ agentId, name = null, role = null }) => launchSandbox(agentId, { env, home, name, role }),

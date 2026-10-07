@@ -690,6 +690,28 @@ test('launch progress is reported stage by stage, best effort, and kept in the j
   assert.equal(h.reports[0].status, 'launched');
 });
 
+test('a declared runtime missing from the soul is installed at launch as its own stage, and a failed install is a coded failure (#583 slice 3)', async (t) => {
+  const installs = [];
+  const f = fixture(t, { joinSoul: async () => 'addr', runtimes: { pending: async ({ agentId: id, harness }) => (harness === 'claude' ? ['node'] : []), install: async (args) => { installs.push(args); } } });
+  const stages = [];
+  await f.handler(event, { ...f.ports, progress: async ({ stage }) => { stages.push(stage); } });
+  assert.deepEqual(stages, ['checking', 'account', 'runtimes', 'joining', 'harness']);
+  assert.deepEqual(installs, [{ agentId, harness: 'claude' }]);
+  assert.equal(f.reports[0].status, 'launched');
+  // Nothing pending: no stage is reported and nothing is installed.
+  const g = fixture(t, { joinSoul: async () => 'addr', runtimes: { pending: async () => [], install: async () => { throw new Error('unexpected install'); } } });
+  const quiet = [];
+  await g.handler({ ...event, requestId: 'r2' }, { ...g.ports, progress: async ({ stage }) => { quiet.push(stage); } });
+  assert.deepEqual(quiet, ['checking', 'account', 'joining', 'harness']);
+  // The install's coded error reaches the result and the journal; the harness never starts.
+  const error = Object.assign(new Error('node 24.21.0 for Billy.soul hashed sha256:abc, expected sha256:def'), { code: 'runtime-checksum-mismatch' });
+  const h = fixture(t, { joinSoul: async () => { throw new Error('joined before its runtimes'); }, runtimes: { pending: async () => ['node'], install: async () => { throw error; } } });
+  await h.handler({ ...event, requestId: 'r3' }, h.ports);
+  assert.deepEqual(h.reports[0], { requestId: 'r3', status: 'failed', agentId: null, detail: `runtime-checksum-mismatch: ${error.message}`, code: 'runtime-checksum-mismatch' });
+  assert.equal(JSON.parse(readFileSync(h.options.file)).find((row) => row.requestId === 'r3').code, 'runtime-checksum-mismatch');
+  assert.deepEqual(h.calls, [], 'no turn ran');
+});
+
 // Sandbox resolution at launch (#376). `sandboxFor` stands in for
 // sandbox.mjs's launchSandbox; the steps are the real plan for the checks.
 const READY = { supported: true, exists: true, standard: true, home: { path: '/Users/geniusbar-agent', exists: true }, devTools: true, paired: true, fleet: true, harnessSignIn: 'unknown' };

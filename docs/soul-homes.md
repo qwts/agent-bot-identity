@@ -19,6 +19,13 @@ is kept. Home creation copies package content without `.soul-state/` or
 `worktrees/`, installs pinned harnesses, and initializes git as before.
 Package revision exclusions are tracked separately in #341.
 
+Runtimes and non-npm harnesses the package declares (`runtimes`,
+`harnesses.<name>.install` in `soul.json`) are provisioned under
+`.soul-state/runtimes/<name>/<version>/` from pinned, checksum-verified
+downloads, by `agent-bot soul runtimes install` or by the daemon at launch;
+they are reconstructible life, never part of the package, and a copied soul
+folder provisions its own. See [soul-runtimes.md](soul-runtimes.md).
+
 On launch, provisioning checks the legacy `<state>/homes/<agentId>`:
 
 1. If the new home lacks `.git` and the legacy home has it, write

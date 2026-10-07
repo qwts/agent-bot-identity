@@ -12,10 +12,13 @@ import { buildSoulDirectory } from '../soul-build.mjs';
 import { CLASSIFICATIONS, SOUL_LAYOUT } from '../soul-env-contract.mjs';
 import { ENV_CAPABILITIES, readSoulEnvironment, soulEnvCommand } from '../soul-env.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS } from '../soul-package.mjs';
+import { resolveCatalogPin } from '../runtime-catalog.mjs';
+import { INSTALL_STAMP } from '../soul-runtimes.mjs';
 
 const ID = 'agent_12345678-1234-4234-8234-123456789abc';
 const OTHER = 'agent_12345678-1234-4234-8234-123456789def';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const NODE_PIN = resolveCatalogPin('node', '24').version;
 const put = (file, contents) => { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, contents); };
 
 // A real-shaped census: identity record, population row, souls root, spaces
@@ -36,7 +39,7 @@ function fixture(t, { installed = true, ignore = PACKAGE_IGNORE_LIST, link = tru
     status: 'active', parentId: null, appSlug: null }, { file });
   const manifest = { formatVersion: 2, ignore, name: 'Billy - Starter', description: 'Starter instance', displaySeed: ID,
     preferredHarnesses: ['codex'], revision: `sha256:${'0'.repeat(64)}`, parentRevision: null, template: false,
-    credentials: { github: { app: 'billy-app', store: 'file' } }, runtimes: { node: { version: '24.11.1' } } };
+    credentials: { github: { app: 'billy-app', store: 'file' } }, runtimes: { node: '24' } };
   if (installed) {
     put(path.join(dir, 'soul.json'), JSON.stringify(manifest));
     put(path.join(dir, 'AGENTS.md'), '# Billy\n');
@@ -90,7 +93,7 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
     'runtimes', 'providers', 'launch', 'readiness', 'migration', 'retention', 'errors']);
   assert.equal(result.schemaVersion, 1);
   assert.deepEqual(result.engine, { version: JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version, contractVersion: 1, capabilities: [...ENV_CAPABILITIES] });
-  assert.deepEqual(result.engine.capabilities, ['env', 'revision-prepare']);
+  assert.deepEqual(result.engine.capabilities, ['env', 'revision-prepare', 'runtimes']);
   assert.deepEqual(result.identity, { agentId: ID, name: 'billy', displayName: 'Billy - Starter', status: 'active', harness: 'codex',
     genesis: { revision: null, parentSoul: null }, revision: f.manifest.revision, parentRevision: null, template: false, formatVersion: 2 });
   assert.deepEqual(result.root, { soulDir: f.dir, soulsRoot: f.env.AGENT_BOT_SOULS_HOME, source: 'environment', registered: true, marker: 'ok',
@@ -141,17 +144,19 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
     declared: [{ name: 'codex', kind: 'npm', package: '@agentclientprotocol/codex-acp', version: '2.1.1', source: 'package.json' }],
     installed: [{ name: 'codex', kind: 'npm', package: '@agentclientprotocol/codex-acp', version: '2.1.1', location: '.soul-state/home',
       bin: path.join(f.dir, '.soul-state', 'home', 'node_modules', '.bin', 'codex-acp'), status: 'ok' }] });
-  assert.deepEqual(result.runtimes, { declared: { node: { version: '24.11.1' } }, installed: [],
-    missing: [{ name: 'node', version: '24.11.1', reason: 'not provisioned' }], unsupported: [] });
+  assert.deepEqual(result.runtimes, { declared: { node: '24' }, installed: [],
+    missing: [{ name: 'node', version: NODE_PIN, declared: '24', requiredBy: [], reason: 'not provisioned' }], unsupported: [] });
   assert.deepEqual(result.providers, {});
   assert.equal(result.launch.supported, true);
   assert.equal(result.launch.lane, 'acp');
   assert.equal(result.launch.cwd, path.join(f.dir, '.soul-state', 'home'));
-  assert.deepEqual(result.launch.routing, { HOME: 'host', PATH: 'host', TMPDIR: 'host' });
+  assert.deepEqual(result.launch.routing, { HOME: 'host', PATH: 'host', TMPDIR: 'host', env: [], runtimes: {
+    node: { source: 'missing', version: NODE_PIN, bin: null }, python: { source: 'host', version: null, bin: null }, go: { source: 'host', version: null, bin: null } } });
   assert.equal(result.launch.limitations.length, 1);
   assert.equal(result.launch.limitations[0].harness, 'codex');
   assert.match(result.launch.limitations[0].message, /shared on the host/);
-  assert.deepEqual(result.readiness, { ready: true, problems: [] });
+  assert.deepEqual(result.readiness, { ready: true, problems: [{ code: 'runtime-missing', severity: 'warning', component: 'runtimes',
+    message: `node ${NODE_PIN} is declared but not installed in the soul; the next launch installs it.`, action: `agent-bot soul runtimes install ${ID}` }] });
   assert.deepEqual(result.migration, { status: 'pending', journal: '.soul-state/migration.json',
     steps: [{ id: 'space-into-soul', status: 'pending', from: f.space, to: path.join(f.dir, '.soul-state', 'space') }] });
   assert.deepEqual(result.retention, {
@@ -203,7 +208,7 @@ test('generated drift, a legacy harness install, copies and unregistered roots a
   const result = readSoulEnvironment(ID, f.options);
   assert.deepEqual(snapshot(f.home), before, 'drift is reported, not rebuilt');
   assert.ok(component(result, 'generated').drift.length > 0);
-  assert.deepEqual(result.readiness.problems.map((p) => p.code).sort(), ['generated-drift', 'root-duplicate']);
+  assert.deepEqual(result.readiness.problems.map((p) => p.code).sort(), ['generated-drift', 'root-duplicate', 'runtime-missing']);
   assert.equal(result.readiness.problems.find((p) => p.code === 'generated-drift').action, `agent-bot soul build ${JSON.stringify(f.dir)}`);
   assert.equal(result.readiness.ready, true, 'warnings do not make a soul unready');
   assert.deepEqual(result.root.copies, [copy]);
@@ -218,13 +223,57 @@ test('generated drift, a legacy harness install, copies and unregistered roots a
   assert.equal(joined.harnesses.launchable, true, 'a joined soul launches from .soul-state/harnesses (#417)');
   rmSync(path.join(f.dir, '.soul-state', 'harnesses'), { recursive: true, force: true });
   const missing = readSoulEnvironment(ID, f.options);
-  assert.deepEqual(missing.readiness.problems.map((p) => p.code).sort(), ['generated-drift', 'harness-missing']);
+  assert.deepEqual(missing.readiness.problems.map((p) => p.code).sort(), ['generated-drift', 'harness-missing', 'runtime-missing']);
   assert.equal(missing.harnesses.launchable, false);
   writeFileSync(path.join(f.dir, '.soul-state', 'agent-id'), 'not-an-agent-id\n');
   const invalid = readSoulEnvironment(ID, f.options);
   assert.equal(invalid.root.marker, 'invalid');
   assert.equal(invalid.readiness.ready, false);
   assert.ok(invalid.readiness.problems.some((p) => p.code === 'marker-invalid' && p.severity === 'error'));
+});
+
+test('an installed runtime and a declared non-npm harness install are reported from their stamps, with the launch routing (#583 slice 3)', (t) => {
+  const f = fixture(t);
+  const stamp = (dir, record) => put(path.join(dir, INSTALL_STAMP), JSON.stringify(record));
+  const runtimes = path.join(f.dir, '.soul-state', 'runtimes');
+  stamp(path.join(runtimes, 'node', NODE_PIN), { name: 'node', version: NODE_PIN, bin: 'bin' });
+  put(path.join(runtimes, 'node', NODE_PIN, 'bin', 'node'), '');
+  put(path.join(runtimes, 'node', 'last-install.json'), JSON.stringify({ version: NODE_PIN, status: 'ok', at: '2026-10-07T00:00:00.000Z' }));
+  // Go declared but its last attempt failed offline: the coded error surfaces.
+  const goPin = resolveCatalogPin('go', '1').version;
+  put(path.join(runtimes, 'go', 'last-install.json'), JSON.stringify({ version: goPin, status: 'failed', code: 'runtime-download-failed', message: 'go: could not download', at: '2026-10-07T00:00:00.000Z' }));
+  const sha = 'a'.repeat(64);
+  f.manifest.runtimes = { node: '24', go: '1' };
+  f.manifest.harnesses = { opencode: { install: { kind: 'archive', version: '1.2.3', url: 'https://example.com/opencode-{platform}.zip', sha256: { 'darwin-arm64': sha, 'linux-x64': sha, 'darwin-x64': sha, 'linux-arm64': sha, 'win32-x64': sha } } } };
+  f.manifest.revision = computePackageRevision(f.dir, { manifest: f.manifest });
+  put(path.join(f.dir, 'soul.json'), JSON.stringify(f.manifest));
+  stamp(path.join(runtimes, 'harnesses', 'opencode', '1.2.3'), { name: 'opencode', version: '1.2.3', bin: '.' });
+  put(path.join(runtimes, 'harnesses', 'opencode', '1.2.3', 'opencode'), '');
+  const before = snapshot(f.home);
+  const result = readSoulEnvironment(ID, f.options);
+  assert.deepEqual(snapshot(f.home), before, 'reporting installs nothing');
+  assert.deepEqual(result.runtimes.installed, [{ name: 'node', version: NODE_PIN, declared: '24', requiredBy: [], source: 'catalog',
+    path: path.join(runtimes, 'node', NODE_PIN), bin: path.join(runtimes, 'node', NODE_PIN, 'bin') }]);
+  assert.deepEqual(result.runtimes.missing, [{ name: 'go', version: goPin, declared: '1', requiredBy: [], reason: 'last install failed: runtime-download-failed' }]);
+  assert.deepEqual(result.harnesses.declared.map((h) => [h.name, h.kind, h.version, h.source]), [['codex', 'npm', '2.1.1', 'package.json'], ['opencode', 'archive', '1.2.3', 'soul.json']]);
+  assert.deepEqual(result.harnesses.installed.find((h) => h.name === 'opencode'), { name: 'opencode', kind: 'archive', package: null, version: '1.2.3',
+    location: '.soul-state/runtimes/harnesses', bin: path.join(runtimes, 'harnesses', 'opencode', '1.2.3', 'opencode'), status: 'ok' });
+  assert.equal(result.launch.routing.PATH, 'soul-runtimes');
+  assert.deepEqual(result.launch.routing.env, ['npm_config_cache']);
+  assert.deepEqual(result.launch.routing.runtimes.node, { source: 'soul', version: NODE_PIN, bin: path.join(runtimes, 'node', NODE_PIN, 'bin') });
+  assert.deepEqual(result.launch.routing.runtimes.go, { source: 'missing', version: goPin, bin: null });
+  assert.deepEqual(result.launch.routing.runtimes['harness:opencode'], { source: 'soul', version: '1.2.3', bin: path.join(runtimes, 'harnesses', 'opencode', '1.2.3') });
+  const failed = result.readiness.problems.find((p) => p.code === 'runtime-download-failed');
+  assert.deepEqual(failed, { code: 'runtime-download-failed', severity: 'error', component: 'runtimes', message: 'go: could not download', action: `agent-bot soul runtimes install ${ID}` });
+  assert.equal(result.readiness.ready, false, 'a failed install is a launch failure until retried');
+  // An exact version the catalog does not pin, without sources, is unsupported.
+  f.manifest.runtimes = { node: '24.0.0' };
+  put(path.join(f.dir, 'soul.json'), JSON.stringify(f.manifest));
+  const unsupported = readSoulEnvironment(ID, f.options);
+  assert.deepEqual(unsupported.runtimes.missing, []);
+  assert.equal(unsupported.runtimes.unsupported[0].name, 'node');
+  assert.match(unsupported.runtimes.unsupported[0].reason, /no catalog pin for node 24\.0\.0/);
+  assert.ok(unsupported.readiness.problems.some((p) => p.code === 'runtime-unsupported-platform' && p.severity === 'error'));
 });
 
 test('an unmarked generated file is a conflict, which makes the soul unready', (t) => {

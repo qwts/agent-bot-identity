@@ -14,12 +14,13 @@ import { duplicateSoulDirs, locateSoulDir, populationFile, showSoul, showSoulByN
 import { inspectAgentSpace } from './agent-space.mjs';
 import { buildSoulDirectory } from './soul-build.mjs';
 import { ENV_CONTRACT_VERSION, GENERATED_HARNESS_MARKER, GENERATED_HARNESS_PATHS, RETENTION, SOUL_LAYOUT, classificationContract } from './soul-env-contract.mjs';
+import { inspectSoulRuntimes, runtimeLaunchEnv } from './soul-runtimes.mjs';
 import { soulsHome } from './souls-root.mjs';
 
 export const ENV_SCHEMA_VERSION = 1;
 // What this engine can do for a host, so a client gates each later slice
 // of #583 on the engine it talks to rather than on a version number.
-export const ENV_CAPABILITIES = Object.freeze(['env', 'revision-prepare']);
+export const ENV_CAPABILITIES = Object.freeze(['env', 'revision-prepare', 'runtimes']);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const USAGE = 'usage: agent-bot soul env <agentId|name> [--json]';
 const MANIFEST_MAX_BYTES = 64 * 1024;
@@ -143,7 +144,7 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
     harnesses: { selected: null, declared: [], installed: [], launchable: null },
     runtimes: { declared: {}, installed: [], missing: [], unsupported: [] },
     providers: {},
-    launch: { supported: null, lane: null, cwd: null, routing: { HOME: 'host', PATH: 'host', TMPDIR: 'host' }, limitations: [] },
+    launch: { supported: null, lane: null, cwd: null, routing: { HOME: 'host', PATH: 'host', TMPDIR: 'host', runtimes: {}, env: [] }, limitations: [] },
     readiness: { ready: false, problems: [] },
     migration: { status: 'none', journal: `${STATE}/migration.json`, steps: [] },
     retention: Object.fromEntries(RETENTION.map((kind) => [kind, []])),
@@ -331,24 +332,61 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
   if (present(`${STATE}/harnesses`)) {
     result.migration.steps.push({ id: 'harnesses-into-runtimes', status: 'pending', from: path.join(root, STATE, 'harnesses'), to: path.join(root, STATE, 'runtimes', 'harnesses') });
   }
+  // Declared runtimes and non-npm harness installs against what is
+  // provisioned under .soul-state/runtimes (slice 3), read from the install
+  // stamps. The descriptor never installs: a launch or `soul runtimes
+  // install` does, and the last failed attempt surfaces here with its code.
+  const install = `agent-bot soul runtimes install ${soul.id}`;
+  let provisioned = null;
+  try { provisioned = inspectSoulRuntimes(root, { manifest: manifest ?? {}, env, home }); }
+  catch (error) { errors.push({ area: 'runtimes', message: `Runtimes could not be inspected: ${error.message}` }); }
+  for (const row of provisioned?.runtimes ?? []) {
+    const entry = { name: row.name, version: row.version, declared: row.declared, requiredBy: row.requiredBy };
+    if (row.status === 'installed') result.runtimes.installed.push({ ...entry, source: row.source, path: row.path, bin: path.join(row.path, row.bin) });
+    else if (row.status === 'unsupported') {
+      result.runtimes.unsupported.push({ ...entry, reason: row.reason });
+      problem('runtime-unsupported-platform', 'error', 'runtimes', `${row.name}: ${row.reason}`, `declare runtimes.${row.name} sources for ${provisioned.platform ?? 'this platform'} in a revision`);
+    } else {
+      result.runtimes.missing.push({ ...entry, reason: row.lastError ? `last install failed: ${row.lastError.code}` : 'not provisioned' });
+      if (row.lastError) problem(row.lastError.code, 'error', 'runtimes', row.lastError.message, install);
+      else problem('runtime-missing', 'warning', 'runtimes', `${row.name} ${row.version} is declared but not installed in the soul; the next launch installs it.`, install);
+    }
+  }
+  for (const entry of provisioned?.harnesses ?? []) {
+    result.harnesses.declared.push({ name: entry.name, kind: entry.kind, package: entry.package, version: entry.version, source: 'soul.json' });
+    if (entry.status === 'installed') {
+      result.harnesses.installed.push({ name: entry.name, kind: entry.kind, package: entry.package, version: entry.version, location: `${STATE}/runtimes/harnesses`,
+        bin: path.join(entry.path, entry.bin, entry.executable), status: 'ok' });
+    } else if (entry.status === 'unsupported') {
+      problem('runtime-unsupported-platform', 'error', 'runtimes', `${entry.name}: ${entry.reason}`, `declare harnesses.${entry.name}.install.sha256 for ${provisioned.platform ?? 'this platform'} in a revision`);
+    } else if (entry.lastError) problem(entry.lastError.code, 'error', 'runtimes', entry.lastError.message, install);
+  }
+  for (const entry of provisioned?.invalid ?? []) problem('runtime-declaration-invalid', 'error', 'manifest', entry.message);
   const selected = result.identity.harness ?? harnessNames[0] ?? null;
   result.harnesses.selected = selected;
   if (selected) {
     const row = ACP_SPAWN_REGISTRY[selected];
-    const declared = result.harnesses.declared.some((entry) => entry.name === selected);
+    const pinned = result.harnesses.declared.find((entry) => entry.name === selected) ?? null;
     const installed = result.harnesses.installed.some((entry) => entry.name === selected);
-    // A harness without an npm adapter (opencode, kiro) runs from the host
-    // PATH today, which the descriptor reports as not contained, not as
-    // missing: the declaration says nothing about where it must come from.
-    result.harnesses.launchable = row?.adapter?.package ? installed : row ? true : false;
-    if (declared && !installed) problem('harness-missing', 'warning', 'home', `${selected} is pinned in package.json but not installed in the soul; the next launch installs it into the home.`);
+    // A harness without an npm adapter (opencode, kiro) and without a
+    // declared install runs from the host PATH, which the descriptor
+    // reports as not contained, not as missing: the declaration says
+    // nothing about where it must come from.
+    result.harnesses.launchable = row?.adapter?.package || pinned ? installed : row ? true : false;
+    if (pinned && !installed) {
+      problem('harness-missing', 'warning', pinned.kind === 'npm' ? 'home' : 'runtimes', pinned.kind === 'npm'
+        ? `${selected} is pinned in package.json but not installed in the soul; the next launch installs it into the home.`
+        : `${selected} ${pinned.version} is declared in soul.json but not installed in the soul; the next launch installs it.`, pinned.kind === 'npm' ? null : install);
+    }
     result.launch.supported = Boolean(row?.enabled);
     result.launch.lane = row?.enabled ? 'acp' : null;
   }
-  // No runtime provisioner exists yet (slice 3), so every declared runtime
-  // is missing; saying so is the honest state of a soul that declares one.
-  for (const [name, declaration] of Object.entries(result.runtimes.declared)) {
-    result.runtimes.missing.push({ name, version: text(object(declaration) ? declaration.version : null), reason: 'not provisioned' });
+  if (provisioned) {
+    const routed = runtimeLaunchEnv(provisioned, { env, harness: selected, node: process.execPath });
+    result.launch.routing.runtimes = routed.routing;
+    result.launch.routing.env = Object.keys(routed.env).filter((name) => name !== 'PATH').sort();
+    result.launch.routing.PATH = Object.values(routed.routing).some((entry) => entry.source === 'soul' || entry.source === 'override') ? 'soul-runtimes'
+      : routed.env.PATH ? 'host-bundled' : 'host';
   }
 
   result.migration.status = result.migration.steps.length ? 'pending' : 'none';
@@ -372,6 +410,7 @@ export function formatSoulEnvironment(result) {
     '', `harnesses declared: ${result.harnesses.declared.map((h) => `${h.name}@${h.version}`).join(', ') || '-'}`,
     `harnesses installed: ${result.harnesses.installed.map((h) => `${h.name}@${h.version ?? '?'} (${h.location})`).join(', ') || '-'}`,
     `runtimes declared: ${Object.keys(result.runtimes.declared).join(', ') || '-'}`,
+    `runtimes installed: ${result.runtimes.installed.map((r) => `${r.name}@${r.version}`).join(', ') || '-'}`,
     `migration: ${result.migration.status}${result.migration.steps.length ? ` (${result.migration.steps.map((s) => s.id).join(', ')})` : ''}`];
   if (result.readiness.problems.length) lines.push('', 'problems', ...result.readiness.problems.map((p) => `${p.severity} ${p.code}: ${cleanLine(p.message)}${p.action ? ` -> ${cleanLine(p.action)}` : ''}`));
   if (result.errors.length) lines.push('', 'errors', ...result.errors.map((error) => `${error.area}: ${cleanLine(error.message)}`));

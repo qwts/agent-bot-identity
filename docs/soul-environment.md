@@ -12,6 +12,8 @@ GeniusBar read both instead of carrying their own path lists.
 agent-bot soul env <agentId|name> [--json]
 agent-bot soul revision prepare <agentId|name> [--json] [--dest PATH]
 agent-bot soul revision prepare --discard STAGING
+agent-bot soul runtimes <agentId|name> [--json]
+agent-bot soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin]
 ```
 
 `soul env` is read-only. It never provisions a home, creates the Agent Space
@@ -59,8 +61,8 @@ rules are frozen; values are only ever appended.
 scalars `null`, collections `[]`), in this order:
 
 - `schemaVersion` 1; `engine` `{ version, contractVersion, capabilities }`.
-  `capabilities` is `["env", "revision-prepare"]` today; a client gates each
-  later slice on it.
+  `capabilities` is `["env", "revision-prepare", "runtimes"]` today; a
+  client gates each later slice on it.
 - `identity`: `agentId`, `name`, `displayName`, `status`, `harness`,
   `genesis { revision, parentSoul }`, the manifest's `revision`,
   `parentRevision`, `template`, `formatVersion`.
@@ -82,17 +84,25 @@ scalars `null`, collections `[]`), in this order:
   directory) and `confinementLog`; `temp.entries[]` (revision stagings);
   `host-tools.entries[]` `{ name, path, source: engine | host }`.
 - `classification`: the contract's `enum` and `rules`.
-- `harnesses`: `selected`, `declared[]` (the `package.json` pins),
-  `installed[]` (adapters found in `.soul-state/home/node_modules` or a
-  joined soul's `.soul-state/harnesses`, with `version`, `bin`, `status`),
-  `launchable`.
-- `runtimes`: `declared` from `soul.json` (`{}` when absent), `installed`
-  `[]`, `missing[]` (every declared runtime, reason `not provisioned`, until
-  slice 3 provisions them), `unsupported[]`.
+- `harnesses`: `selected`, `declared[]` (the `package.json` pins, `source`
+  `package.json`, and the `soul.json` `harnesses.<name>.install` pins,
+  `source` `soul.json` with `kind` `archive | uv-tool`), `installed[]`
+  (adapters found in `.soul-state/home/node_modules` or a joined soul's
+  `.soul-state/harnesses`, and installs under
+  `.soul-state/runtimes/harnesses`, each with `version`, `bin`, `location`,
+  `status`), `launchable`.
+- `runtimes`: `declared` from `soul.json` (`{}` when absent), `installed[]`
+  `{ name, version, declared, requiredBy, source, path, bin }` read from
+  each install's stamp, `missing[]` (reason `not provisioned` or `last
+  install failed: <code>`), `unsupported[]` (no download for this host).
+  See [soul-runtimes.md](soul-runtimes.md).
 - `providers`: `{}` until slice 4.
 - `launch`: `supported`, `lane` (`acp` or `null`), `cwd` (the home),
-  `routing { HOME, PATH, TMPDIR }` (all `host` today), `limitations[]`: one
-  per harness whose native state is shared on the host.
+  `routing { HOME, PATH, TMPDIR, runtimes, env }` (`HOME` and `TMPDIR` are
+  `host` today; `PATH` is `soul-runtimes`, `host-bundled` or `host`;
+  `runtimes` maps `node`, `python`, `go` and `harness:<name>` to
+  `{ source, version, bin }`; `env` names the variables the launch sets),
+  `limitations[]`: one per harness whose native state is shared on the host.
 - `readiness`: `ready` (no error-severity problem) and `problems[]`
   `{ code, severity, component, message, action }`.
 - `migration`: `status` (`pending | none`), `journal`, `steps[]`
@@ -114,7 +124,11 @@ scalars `null`, collections `[]`), in this order:
 | `home-missing` | warning | No `.soul-state/home`; the next launch provisions it |
 | `generated-drift` | warning | `agent-bot soul build "<soulDir>"` |
 | `generated-conflict` | error | A generated path was hand-edited (no marker); the builder refuses |
-| `harness-missing` | warning | The pinned adapter is not installed in the soul; the next launch installs it |
+| `harness-missing` | warning | The pinned adapter or harness install is not in the soul; the next launch installs it |
+| `runtime-missing` | warning | A declared runtime is not installed; `agent-bot soul runtimes install <id>` or the next launch |
+| `runtime-unsupported-platform` | error | No download for this host; declare `sources` for it in a revision |
+| `runtime-download-failed`, `runtime-checksum-mismatch`, `runtime-install-failed` | error | The last install of that version failed; the message says why and the action is the install command |
+| `runtime-declaration-invalid` | error | `soul.json` `runtimes` or `harnesses.<name>.install` is refused; fix it in a revision |
 
 Warnings leave `ready` true. Codes are appended, never renamed.
 

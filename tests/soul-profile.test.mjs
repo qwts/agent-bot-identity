@@ -324,7 +324,7 @@ test('daemon env route sits beside profile: same authentication, the direct desc
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.schemaVersion, 1);
-  assert.deepEqual(body.engine.capabilities, ['env', 'revision-prepare']);
+  assert.deepEqual(body.engine.capabilities, ['env', 'revision-prepare', 'runtimes']);
   assert.deepEqual(body, readSoulEnvironment(ID, f.options));
   assert.ok(!JSON.stringify(body).includes(SENTINEL));
   assert.equal((await fetch(`${base}/v0/soul/env`, { headers })).status, 400);

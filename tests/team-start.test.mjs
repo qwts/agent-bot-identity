@@ -135,6 +135,7 @@ test('a refusal says why: the missing CLI and how to install it, or the adapter 
   const env = { PATH: '/nonexistent' };
   assert.match(harnessLaunchProblem('opencode', { env }), /`opencode` command is not on this host's PATH \(\/nonexistent\); install OpenCode/);
   assert.equal(harnessLaunchProblem('codex', { env }), null, 'an adapter installs with the soul package');
+  assert.equal(harnessLaunchProblem('opencode', { env, declared: true }), null, 'a soul.json install pin provisions it at launch (#583 slice 3)');
   assert.equal(harnessLaunchProblem('muse', { registry: { muse: { enabled: false } } }), 'it is disabled in agent-bot');
   assert.equal(ACP_SPAWN_REGISTRY.codex.installHint.includes('codex login'), true);
   const t = team({ launchable: () => 'the `opencode` command is not on this host\'s PATH' });

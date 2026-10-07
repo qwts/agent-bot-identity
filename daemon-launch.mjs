@@ -55,7 +55,13 @@ const LAUNCHABLE = new Set(['package', 'installed']);
 
 // Failure codes a launch keeps in the journal and prefixes to its detail, so
 // a client that reads only the broker's detail still sees which one it was.
-const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other-account']);
+const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other-account',
+  'runtime-download-failed', 'runtime-checksum-mismatch', 'runtime-unsupported-platform', 'runtime-install-failed']);
+
+// `runtimes` (#583 slice 3): `pending({ agentId, harness })` names what the
+// soul declares and lacks; `install` provisions it into the soul folder.
+// The `runtimes` stage is reported only when there is something to install,
+// and a failure is the coded runtime error with the command that fixes it.
 
 // `sandboxFor` (#376) says what the soul gets, `sandboxed` or
 // `unrestricted`, and the account it runs as, from `launchSandbox` in
@@ -67,7 +73,7 @@ const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other
 // carries it beside the unchanged `launched`/`failed` fields.
 
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
-  isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, sandboxFor = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
+  isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, sandboxFor = null, runtimes = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -135,7 +141,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       // spawn mints a soul and joins it to the hub (#531, GeniusBar#196): a launch
       // that fails later rolls back, and a rollback that fails part way
       // leaves a dead companion in the roster.
-      const problem = harnessProblem ? await harnessProblem(harness) : null;
+      const problem = harnessProblem ? await harnessProblem(harness, { soul: soul ?? null, package: packagePath ?? null }) : null;
       if (problem) {
         throw new Error(`cannot launch on harness ${harness}: ${problem}`
           + (/no such harness/.test(problem) ? '; a harness agent-bot cannot start joins from its own session with `agent-bot join`' : ''));
@@ -179,6 +185,10 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         ?? await provisionHome({ agentId: identity.id, harness, packagePath });
       if (!binding?.worktree || !binding?.file) throw new Error('soul binding is unavailable');
       rollback.binding = binding;
+      if (runtimes) {
+        const pending = await runtimes.pending({ agentId: identity.id, harness });
+        if (pending.length) { await step('runtimes'); await runtimes.install({ agentId: identity.id, harness }); }
+      }
       if (joinSoul) {
         await step('joining');
         rollback.joined = true; // a join that fails after the broker records it still needs a leave

@@ -160,13 +160,17 @@ export function withReachRules(policy, { keyd = false } = {}) {
 export function acpExecutorFor({
   identities, policy, baseEnv, onHarnessSession = null, createExecutor = createAcpExecutor,
   identityFor = null,
-  commsFor = () => true, modeFor = () => 'safe', modelFor = () => null, onModels = null, reachEnv = {}, keydFor = () => null, harnessDirsFor = () => [], log = null,
+  commsFor = () => true, modeFor = () => 'safe', modelFor = () => null, onModels = null, reachEnv = {}, keydFor = () => null, harnessDirsFor = () => [], runtimeEnvFor = null, log = null,
 }) {
   return ({ agentId, harness, cwd, env }) => {
     const identity = identities(agentId);
     // A soul without the github-identity add-on runs with no App (#297).
     const app = identity?.github?.appSlug ?? null;
     const turnEnv = { ...baseEnv, ...env, QWTS_AGENT_ID: agentId, AGENT_BOT_ID: agentId };
+    // The soul's own runtimes and harness installs first on PATH, with
+    // their env (GOROOT, UV_*), never HOME (#583 slice 3). A soul with no
+    // folder yet runs with the host's PATH as before.
+    if (runtimeEnvFor) { try { Object.assign(turnEnv, runtimeEnvFor({ agentId, harness, env: turnEnv }) ?? {}); } catch { /* host PATH */ } }
     let comms = true;
     try { comms = commsFor(agentId) !== false; } catch { /* no recorded setting: the default */ }
     let keyd = null;
