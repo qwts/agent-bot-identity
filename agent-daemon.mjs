@@ -1872,6 +1872,8 @@ export async function runDaemon({
     // A principal launched this soul to talk to it, so later messages wake it.
     onLaunched: (agentId) => setColdWake(agentId, true, { env, home, now }),
     discard: (agentId, rollback) => discardFailedLaunch(agentId, rollback, { env, home, config, now }),
+    // Refused before a spawn mints: the registry row, enabled, and its command on the soul's PATH.
+    harnessProblem: (harness) => harnessLaunchProblem(harness, { env: harnessEnv }),
     joinSoul: async (soul) => {
       const address = await joinLaunchedSoul(soul, { env });
       // The census shows the launch name; every command shows it too (#429).

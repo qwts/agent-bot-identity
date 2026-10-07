@@ -38,6 +38,7 @@ export async function soulRemoveCommand(argv, {
   gate = (action, { principal }) => assertOwnerAction(action, { principal, env, cwd }),
   status = undefined,
   leave = (soul) => leaveLaunchedSoul(soul, { env }),
+  archive = (id, options) => archiveSoulDirs(id, options),
 } = {}) {
   const json = argv.includes('--json');
   const presented = argv.includes('--principal-stdin');
@@ -69,7 +70,13 @@ export async function soulRemoveCommand(argv, {
   if (soul.status !== 'retired') {
     retireIdentityWithPopulation(soul.id, { file, stateDir: stateDirectory({ env, home }), now });
   }
-  result.archived = archiveSoulDirs(soul.id, { env, home, now, file });
+  // The soul is retired by now, so a folder that will not move names the
+  // step and what to do: this error is what GeniusBar shows (#531, GeniusBar#196).
+  try { result.archived = archive(soul.id, { env, home, now, file }); }
+  catch (error) {
+    throw Object.assign(new Error(`${soul.id} is retired, but its folder could not be moved into the souls folder's .archive: ${error.message}; `
+      + 'close whatever holds the folder open (or move it there by hand), then run soul remove again'), { code: 'soul-archive-failed', cause: error });
+  }
   appendAuditReceipt({ event: 'soul-remove', agentId: soul.id, decision: result.comms === 'left' ? 'removed' : 'removed:comms-pending' }, { env, home, now });
   write(json ? `${JSON.stringify(result)}\n`
     : `${soul.id} removed: wake off, ${result.comms === 'left' ? 'left agent-comms' : `agent-comms ${result.comms}`}, retired, `

@@ -92,3 +92,22 @@ test('remove needs exactly one soul', async (t) => {
   await assert.rejects(soulRemoveCommand(['nobody'], f.options), /no population record/);
   assert.deepEqual(f.gates, []);
 });
+
+test('a folder that will not move after the owner gate names the step and what to do (#531)', async (t) => {
+  const f = fixture(t);
+  const archive = () => { throw Object.assign(new Error(`EPERM: operation not permitted, rename '${f.folder}' -> '${f.folder}.archived'`), { code: 'EPERM' }); };
+  await assert.rejects(soulRemoveCommand([id, '--json'], { ...f.options, archive }), (error) => {
+    assert.equal(error.code, 'soul-archive-failed');
+    assert.equal(error.message, `${id} is retired, but its folder could not be moved into the souls folder's .archive: `
+      + `EPERM: operation not permitted, rename '${f.folder}' -> '${f.folder}.archived'; `
+      + 'close whatever holds the folder open (or move it there by hand), then run soul remove again');
+    return true;
+  });
+  assert.equal(f.gates.length, 1);
+  assert.equal(showSoul(id, { file: f.file }).status, 'retired', 'the retirement stands');
+  assert.ok(existsSync(f.folder), 'the folder stays where it was');
+  // The rerun finishes the cleanup.
+  const result = await soulRemoveCommand([id, '--json'], f.options);
+  assert.equal(result.archived.length, 1);
+  assert.ok(!existsSync(f.folder));
+});
