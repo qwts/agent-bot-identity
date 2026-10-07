@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.34
+
+- A daemon launch now consults the soul's sandbox resolution (#376): an unrestricted soul launches as before; a sandboxed one whose persona account is missing or not set up fails at the `account` stage with the owner's next step and its command (`sandbox-not-ready`), before a package launch mints anything; and a ready one runs only on a daemon in that account, since the executor starts harnesses as its own user (`sandbox-other-account`). The launch journal and result carry `sandbox: { resolution, account }`.
+- `agent-bot soul build` renders a soul's own hooks (#378, slice 3). A soul declares each hook once as an executable `hooks/<event>/<name>`, with the agent-hooks contract and canonical events; the builder writes one marker-tagged entry per event into `.claude/settings.json` (Claude Code and Devin CLI), `.codex/hooks.json`, `.cursor/hooks.json` and `.github/hooks/agent-bot-soul.json`, each running the agent-hook runner over the soul's folder.
+  - Foreign entries and the identity lifecycle entries `sync-hooks` manages are kept in place; a rebuild is byte-identical, and a removed declaration removes only the builder's entries.
+  - Gemini CLI, OpenCode, Muse and Kiro list every hook under `unsupported.hooks` in `soul build --check --json`, and the plain summary now prints each harness's unsupported primitives.
+  - Copilot's hook file joins the format-2 ignore list; a soul carrying the previous list still validates.
+  - Unknown or git/daemon events, non-executable files, nested paths and bad names fail the build.
+
 ## 0.10.33
 
 - `agent-bot identity apps list --json` rows gain `key: {fingerprint, updatedAt} | null` (the managed App key's public SHA256 fingerprint and when connect/rotation stored it) so a companion's sheet can show which key it holds and when it was issued without reading the key.

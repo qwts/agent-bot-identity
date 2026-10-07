@@ -1,5 +1,0 @@
-- `agent-bot soul build` renders a soul's own hooks (#378, slice 3). A soul declares each hook once as an executable `hooks/<event>/<name>`, with the agent-hooks contract and canonical events; the builder writes one marker-tagged entry per event into `.claude/settings.json` (Claude Code and Devin CLI), `.codex/hooks.json`, `.cursor/hooks.json` and `.github/hooks/agent-bot-soul.json`, each running the agent-hook runner over the soul's folder.
-  - Foreign entries and the identity lifecycle entries `sync-hooks` manages are kept in place; a rebuild is byte-identical, and a removed declaration removes only the builder's entries.
-  - Gemini CLI, OpenCode, Muse and Kiro list every hook under `unsupported.hooks` in `soul build --check --json`, and the plain summary now prints each harness's unsupported primitives.
-  - Copilot's hook file joins the format-2 ignore list; a soul carrying the previous list still validates.
-  - Unknown or git/daemon events, non-executable files, nested paths and bad names fail the build.
