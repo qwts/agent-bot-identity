@@ -1,0 +1,402 @@
+#!/usr/bin/env node
+// `agent-bot soul env`: the soul's environment descriptor (#583, ADR-0583).
+// Strictly read-only. It resolves the soul the way `soul profile` does
+// (readOnly census lookup) and never provisions: no ensureSoulDirectory,
+// createSoulHomes, initAgentSpace or registerSoulDir. A fresh census row
+// with no folder yet reads as a descriptor whose components are absent.
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync, readlinkSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
+import { readAgentIdentity, stateDirectory } from './agent-identity.mjs';
+import { duplicateSoulDirs, locateSoulDir, populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
+import { inspectAgentSpace } from './agent-space.mjs';
+import { buildSoulDirectory } from './soul-build.mjs';
+import { ENV_CONTRACT_VERSION, GENERATED_HARNESS_MARKER, GENERATED_HARNESS_PATHS, RETENTION, SOUL_LAYOUT, classificationContract } from './soul-env-contract.mjs';
+import { soulsHome } from './souls-root.mjs';
+
+export const ENV_SCHEMA_VERSION = 1;
+// What this engine can do for a host, so a client gates each later slice
+// of #583 on the engine it talks to rather than on a version number.
+export const ENV_CAPABILITIES = Object.freeze(['env', 'revision-prepare']);
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
+const USAGE = 'usage: agent-bot soul env <agentId|name> [--json]';
+const MANIFEST_MAX_BYTES = 64 * 1024;
+const SMALL_MAX_BYTES = 4 * 1024;
+const STATE = '.soul-state';
+const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
+const text = (value) => typeof value === 'string' && value.trim() ? value : null;
+const cleanLine = (value) => String(value ?? '-').replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
+const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+function lstat(file) {
+  try { return lstatSync(file); }
+  catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null; throw error; }
+}
+
+// Small regular files only, never through a link: the root may hold
+// anything an agent wrote, and a linked manifest could name any file.
+function readSmall(file, limit) {
+  let fd;
+  try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+  catch { return null; }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > limit) return null;
+    return readFileSync(fd);
+  } catch { return null; } finally { closeSync(fd); }
+}
+
+function readJson(file, limit = MANIFEST_MAX_BYTES) {
+  const bytes = readSmall(file, limit);
+  if (bytes === null) return null;
+  try {
+    const parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    return object(parsed) ? parsed : null;
+  } catch { return null; }
+}
+
+function listDirectories(directory) {
+  try {
+    return readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name).sort();
+  } catch { return []; }
+}
+
+function resolveSoul(id, options) {
+  const file = populationFile(options);
+  try { return typeof id === 'string' && id.startsWith('agent_') ? showSoul(id, { file }) : showSoulByName(id, { file }); }
+  catch (error) {
+    if (/no population record|id must be a valid Agent ID/.test(error.message)) fail('soul-not-found', 'Soul not found.');
+    throw error;
+  }
+}
+
+function hostStateBase({ env, home }) {
+  return env.XDG_STATE_HOME ? path.resolve(env.XDG_STATE_HOME) : path.join(home, '.local', 'state');
+}
+
+// A tool the host provides, as the daemon's launch PATH would find it:
+// the host's AGENT_BOT_TOOL_PATH first, then this process's PATH.
+function hostTool(name, env) {
+  const dirs = [env.AGENT_BOT_TOOL_PATH, env.PATH].filter(Boolean).join(path.delimiter).split(path.delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    const candidate = path.join(dir, name);
+    try { if (statSync(candidate).isFile()) return candidate; } catch { /* next */ }
+  }
+  return null;
+}
+
+function workspaceEntry(directory, name) {
+  const file = path.join(directory, name);
+  const info = lstat(file);
+  const entry = { name, path: file, location: info?.isSymbolicLink() ? 'linked' : 'inside', target: null, repository: null, branch: null };
+  if (entry.location === 'linked') {
+    try { entry.target = path.resolve(directory, readlinkSync(file)); } catch { /* dangling or unreadable */ }
+  }
+  const checkout = entry.target ?? file;
+  let gitDir = null;
+  const git = lstat(path.join(checkout, '.git'));
+  if (git?.isDirectory()) { entry.repository = 'own'; gitDir = path.join(checkout, '.git'); }
+  else if (git?.isFile()) {
+    const pointer = readSmall(path.join(checkout, '.git'), SMALL_MAX_BYTES)?.toString('utf8').match(/^gitdir:\s*(.+?)\s*$/m);
+    if (pointer) { gitDir = path.resolve(checkout, pointer[1]); entry.repository = gitDir; }
+  }
+  if (gitDir) {
+    const head = readSmall(path.join(gitDir, 'HEAD'), SMALL_MAX_BYTES)?.toString('utf8').match(/^ref: refs\/heads\/(.+?)\s*$/m);
+    entry.branch = head ? head[1] : null;
+  }
+  return entry;
+}
+
+// `~/.claude`-style registry stores, expanded against the host home: the
+// place a harness keeps its sign-in and sessions today, shared by every soul.
+function hostStore(row, home) {
+  if (typeof row?.store !== 'string') return null;
+  return row.store.startsWith('~/') ? path.join(home, row.store.slice(2)) : row.store;
+}
+
+function adapterInstall(root, location, row) {
+  const pkg = row?.adapter?.package;
+  if (!pkg) return null;
+  const manifest = readJson(path.join(root, location, 'node_modules', pkg, 'package.json'));
+  if (!manifest) return null;
+  const bin = row.command ? path.join(root, location, 'node_modules', '.bin', row.command) : null;
+  return { kind: 'npm', package: pkg, version: text(manifest.version), location,
+    bin: bin && existsSync(bin) ? bin : null, status: 'ok' };
+}
+
+export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? homedir(), config, now = () => new Date(), ...rest } = {}) {
+  const options = { env, home, ...(config === undefined ? {} : { config }), ...rest };
+  const soul = resolveSoul(id, options);
+  const errors = [];
+  const stateDir = options.stateDir ?? stateDirectory(options);
+  const result = {
+    schemaVersion: ENV_SCHEMA_VERSION,
+    engine: { version: text(readJson(path.join(ROOT, 'package.json'))?.version), contractVersion: ENV_CONTRACT_VERSION, capabilities: [...ENV_CAPABILITIES] },
+    identity: { agentId: soul.id, name: soul.name ?? null, displayName: soul.displayName ?? null, status: soul.status ?? null,
+      harness: null, genesis: { revision: null, parentSoul: soul.parentId ?? null }, revision: null, parentRevision: null, template: null, formatVersion: null },
+    root: { soulDir: null, soulsRoot: null, source: null, registered: false, marker: null, copies: [], device: null },
+    components: [],
+    classification: classificationContract(),
+    harnesses: { selected: null, declared: [], installed: [], launchable: null },
+    runtimes: { declared: {}, installed: [], missing: [], unsupported: [] },
+    providers: {},
+    launch: { supported: null, lane: null, cwd: null, routing: { HOME: 'host', PATH: 'host', TMPDIR: 'host' }, limitations: [] },
+    readiness: { ready: false, problems: [] },
+    migration: { status: 'none', journal: `${STATE}/migration.json`, steps: [] },
+    retention: Object.fromEntries(RETENTION.map((kind) => [kind, []])),
+    errors,
+  };
+  const problem = (code, severity, component, message, action = null) => result.readiness.problems.push({ code, severity, component, message, action });
+
+  try {
+    const identity = readAgentIdentity(soul.id, { stateDir });
+    result.identity.harness = text(identity.harness);
+    result.identity.genesis.revision = text(identity.genesis?.revision);
+    if (identity.genesis?.parentSoul) result.identity.genesis.parentSoul = identity.genesis.parentSoul;
+  } catch { errors.push({ area: 'identity', message: 'Execution identity unavailable; harness may be unknown.' }); }
+
+  const { root: soulsRoot, source } = soulsHome(options);
+  result.root.soulsRoot = soulsRoot;
+  result.root.source = source;
+  // The registered folder is the root this descriptor describes, whatever
+  // its marker says: a bad marker is a readiness problem, not a reason to
+  // look elsewhere. Only an absent folder resolves the way `soul profile`
+  // does (a moved folder, or the default name), still without registering.
+  let root;
+  try {
+    const registered = typeof soul.soulDir === 'string' && lstat(soul.soulDir)?.isDirectory() ? soul.soulDir : null;
+    root = registered ?? soulDirectory(soul.id, { ...options, readOnly: true });
+  } catch (error) { errors.push({ area: 'root', message: `Soul directory unresolvable: ${error.message}` }); }
+  if (!root) {
+    result.retention = retentionIndex(result.components);
+    return result;
+  }
+  result.root.soulDir = root;
+  const located = locateSoulDir(root, options);
+  // `package` means no marker: a census row whose folder was never provisioned.
+  result.root.marker = located.status === 'invalid' ? 'invalid' : located.status === 'package' ? 'missing' : 'ok';
+  result.root.registered = located.status === 'installed';
+  try { result.root.copies = duplicateSoulDirs(options).find((entry) => entry.agentId === soul.id)?.copies ?? []; }
+  catch { errors.push({ area: 'root', message: 'Could not scan the souls root for copies.' }); }
+  const rootStat = lstat(root);
+  result.root.device = rootStat?.isDirectory() ? rootStat.dev : null;
+  if (located.status === 'invalid') problem('marker-invalid', 'error', 'manifest', located.message);
+  else if (located.status === 'unregistered') problem('root-unregistered', 'error', 'manifest', located.message);
+  else if (located.status === 'copy' || located.status === 'duplicate') problem('root-duplicate', 'warning', 'manifest', located.message);
+  if (result.root.copies.length && !result.readiness.problems.some((p) => p.code === 'root-duplicate')) {
+    problem('root-duplicate', 'warning', 'manifest', `${result.root.copies.length} other folder(s) carry this soul's marker: ${result.root.copies.join(', ')}`);
+  }
+
+  const manifest = rootStat?.isDirectory() ? readJson(path.join(root, 'soul.json')) : null;
+  if (manifest) {
+    result.identity.displayName ??= text(manifest.name);
+    result.identity.revision = text(manifest.revision);
+    result.identity.parentRevision = text(manifest.parentRevision);
+    result.identity.template = typeof manifest.template === 'boolean' ? manifest.template : null;
+    result.identity.formatVersion = Number.isInteger(manifest.formatVersion) ? manifest.formatVersion : null;
+    if (object(manifest.runtimes)) result.runtimes.declared = manifest.runtimes;
+  } else if (rootStat?.isDirectory()) errors.push({ area: 'manifest', message: 'Package manifest unavailable or invalid.' });
+
+  const present = (relative) => lstat(path.join(root, relative)) !== null;
+  const harnessNames = [...new Set([result.identity.harness, ...(Array.isArray(manifest?.preferredHarnesses) ? manifest.preferredHarnesses : [])]
+    .filter((name) => typeof name === 'string' && Object.hasOwn(ACP_SPAWN_REGISTRY, name)))];
+  for (const component of SOUL_LAYOUT) {
+    const entry = { id: component.id, path: component.path, classification: component.classification,
+      present: component.path ? present(component.path) : false, retention: component.retention };
+    switch (component.id) {
+      case 'skills': entry.entries = entry.present ? listDirectories(path.join(root, 'skills')) : []; break;
+      case 'workflows': {
+        let names = [];
+        try { names = readdirSync(path.join(root, 'workflows')).filter((name) => /^[A-Za-z0-9][A-Za-z0-9_-]*\.toml$/.test(name)).sort(); } catch { /* absent */ }
+        entry.entries = names;
+        break;
+      }
+      case 'generated': {
+        entry.paths = [...GENERATED_HARNESS_PATHS];
+        entry.marker = GENERATED_HARNESS_MARKER;
+        entry.present = GENERATED_HARNESS_PATHS.some((candidate) => present(candidate.endsWith('/') ? candidate.slice(0, -1) : candidate));
+        entry.drift = null;
+        if (manifest && present('AGENTS.md')) {
+          try {
+            entry.drift = buildSoulDirectory(root, { check: true }).drift;
+            if (entry.drift.length) problem('generated-drift', 'warning', 'generated', `${entry.drift.length} generated file(s) differ from the builder's output: ${entry.drift.join(', ')}`, `agent-bot soul build ${JSON.stringify(root)}`);
+          } catch (error) {
+            if (/generated path conflict/.test(error.message)) problem('generated-conflict', 'error', 'generated', error.message);
+            else errors.push({ area: 'generated', message: `Generated output could not be checked: ${error.message}` });
+          }
+        }
+        break;
+      }
+      case 'workspaces': {
+        entry.entries = [];
+        if (entry.present) {
+          let names = [];
+          try { names = readdirSync(path.join(root, 'worktrees')).sort(); } catch { errors.push({ area: 'workspaces', message: 'Worktrees directory unreadable.' }); }
+          for (const name of names) entry.entries.push(workspaceEntry(path.join(root, 'worktrees'), name));
+        }
+        break;
+      }
+      case 'home': {
+        const homeDir = path.join(root, STATE, 'home');
+        entry.git = present(`${STATE}/home/.git`);
+        entry.built = present(`${STATE}/home/AGENTS.md`);
+        let install = null;
+        try { install = JSON.parse(readSmall(path.join(root, STATE, 'home-harness'), SMALL_MAX_BYTES)?.toString('utf8') ?? 'null'); } catch { /* unreadable marker */ }
+        entry.harnessInstall = typeof install === 'string' ? install : null;
+        result.launch.cwd = homeDir;
+        if (!entry.present) problem('home-missing', 'warning', 'home', 'The soul has no private home yet; its first launch creates and binds one.');
+        break;
+      }
+      case 'tool-state':
+        entry.entries = harnessNames.filter((name) => hostStore(ACP_SPAWN_REGISTRY[name], home)).map((name) => ({
+          harness: name, path: `${STATE}/tools/${name}`, routing: [], containment: 'shared-host',
+          hostPath: hostStore(ACP_SPAWN_REGISTRY[name], home), signIn: 'unknown' }));
+        for (const row of entry.entries) {
+          result.launch.limitations.push({ harness: row.harness, message: `${row.harness}'s native state (${row.hostPath}) is shared on the host with every other soul until the launch environment contract routes it into the soul` });
+        }
+        break;
+      case 'credentials':
+        entry.exportable = false;
+        entry.declared = text(manifest?.credentials?.github?.app);
+        break;
+      case 'memory': {
+        const link = lstat(path.join(root, STATE, 'space'));
+        entry.location = link?.isSymbolicLink() ? 'linked' : link?.isDirectory() ? 'inside' : null;
+        entry.target = null;
+        if (entry.location === 'linked') {
+          try { entry.target = path.resolve(path.join(root, STATE), readlinkSync(path.join(root, STATE, 'space'))); } catch { /* unreadable link */ }
+        }
+        entry.contained = entry.location === 'inside';
+        entry.spacePath = soul.spacePath ?? null;
+        try { entry.status = inspectAgentSpace(soul.id, options).status; }
+        catch { entry.status = null; errors.push({ area: 'memory', message: 'Agent Space could not be inspected.' }); }
+        if (entry.location === 'linked') {
+          result.migration.steps.push({ id: 'space-into-soul', status: 'pending', from: entry.target ?? entry.spacePath, to: path.join(root, STATE, 'space') });
+        }
+        break;
+      }
+      case 'history': {
+        const base = hostStateBase(options);
+        entry.external = [
+          { what: 'revision journal', path: path.join(stateDir, 'soul-revisions', soul.id) },
+          { what: 'wake sessions', path: path.join(base, 'agent-bot', 'wake-sessions.json') },
+          { what: 'launch requests', path: path.join(base, 'agent-bot', 'launch-requests.json') },
+          { what: 'task turns', path: path.join(base, 'agent-bot', 'task-turns.jsonl') },
+        ].map((row) => ({ ...row, present: existsSync(row.path) }));
+        entry.confinementLog = present(`${STATE}/confinement.log`);
+        break;
+      }
+      case 'temp': {
+        entry.entries = [];
+        if (entry.present) {
+          let names = [];
+          try { names = readdirSync(path.join(root, STATE, 'tmp')).sort(); } catch { /* unreadable */ }
+          for (const name of names) {
+            const info = lstat(path.join(root, STATE, 'tmp', name));
+            entry.entries.push({ name, path: path.join(root, STATE, 'tmp', name), kind: /^revision-/.test(name) ? 'revision-staging' : 'other',
+              modifiedAt: info ? info.mtime.toISOString() : null });
+          }
+        }
+        break;
+      }
+      case 'host-tools':
+        entry.present = true;
+        entry.entries = [
+          { name: 'agent-bot', path: path.join(ROOT, 'agent-bot'), source: 'engine' },
+          ...['agent-comms', 'git'].map((name) => ({ name, path: hostTool(name, env), source: 'host' })),
+        ];
+        break;
+      default: break;
+    }
+    result.components.push(entry);
+  }
+
+  // Declared: the package's npm pins for registry adapters (ADR-0276).
+  // Installed: where this engine puts them today (the home for launched
+  // souls, `.soul-state/harnesses` for joined ones).
+  const pins = manifest ? readJson(path.join(root, 'package.json')) : null;
+  for (const [name, row] of Object.entries(ACP_SPAWN_REGISTRY)) {
+    const pkg = row?.adapter?.package;
+    if (!pkg) continue;
+    const pin = pins?.dependencies?.[pkg];
+    if (typeof pin === 'string') result.harnesses.declared.push({ name, kind: 'npm', package: pkg, version: pin, source: 'package.json' });
+    for (const location of [`${STATE}/home`, `${STATE}/harnesses`]) {
+      const installed = adapterInstall(root, location, row);
+      if (installed) result.harnesses.installed.push({ name, ...installed });
+    }
+  }
+  if (present(`${STATE}/harnesses`)) {
+    result.migration.steps.push({ id: 'harnesses-into-runtimes', status: 'pending', from: path.join(root, STATE, 'harnesses'), to: path.join(root, STATE, 'runtimes', 'harnesses') });
+  }
+  const selected = result.identity.harness ?? harnessNames[0] ?? null;
+  result.harnesses.selected = selected;
+  if (selected) {
+    const row = ACP_SPAWN_REGISTRY[selected];
+    const declared = result.harnesses.declared.some((entry) => entry.name === selected);
+    const installed = result.harnesses.installed.some((entry) => entry.name === selected);
+    // A harness without an npm adapter (opencode, kiro) runs from the host
+    // PATH today, which the descriptor reports as not contained, not as
+    // missing: the declaration says nothing about where it must come from.
+    result.harnesses.launchable = row?.adapter?.package ? installed : row ? true : false;
+    if (declared && !installed) problem('harness-missing', 'warning', 'home', `${selected} is pinned in package.json but not installed in the soul; the next launch installs it into the home.`);
+    result.launch.supported = Boolean(row?.enabled);
+    result.launch.lane = row?.enabled ? 'acp' : null;
+  }
+  // No runtime provisioner exists yet (slice 3), so every declared runtime
+  // is missing; saying so is the honest state of a soul that declares one.
+  for (const [name, declaration] of Object.entries(result.runtimes.declared)) {
+    result.runtimes.missing.push({ name, version: text(object(declaration) ? declaration.version : null), reason: 'not provisioned' });
+  }
+
+  result.migration.status = result.migration.steps.length ? 'pending' : 'none';
+  result.readiness.ready = !result.readiness.problems.some((entry) => entry.severity === 'error');
+  result.retention = retentionIndex(result.components);
+  return result;
+}
+
+function retentionIndex(components) {
+  const index = Object.fromEntries(RETENTION.map((kind) => [kind, []]));
+  for (const component of components) if (component.retention) index[component.retention].push(component.id);
+  return index;
+}
+
+export function formatSoulEnvironment(result) {
+  const lines = [`agentId: ${result.identity.agentId}`, `name: ${cleanLine(result.identity.displayName ?? result.identity.name)}`,
+    `harness: ${cleanLine(result.harnesses.selected)}`, `soulDir: ${cleanLine(result.root.soulDir)}`,
+    `marker: ${cleanLine(result.root.marker)} registered: ${result.root.registered}`, `ready: ${result.readiness.ready}`,
+    '', `components (${result.components.length})`,
+    ...result.components.map((component) => `${component.id}: ${component.present ? 'present' : 'absent'} (${component.classification}, ${component.retention ?? 'n/a'})${component.path ? ` ${cleanLine(component.path)}` : ''}`),
+    '', `harnesses declared: ${result.harnesses.declared.map((h) => `${h.name}@${h.version}`).join(', ') || '-'}`,
+    `harnesses installed: ${result.harnesses.installed.map((h) => `${h.name}@${h.version ?? '?'} (${h.location})`).join(', ') || '-'}`,
+    `runtimes declared: ${Object.keys(result.runtimes.declared).join(', ') || '-'}`,
+    `migration: ${result.migration.status}${result.migration.steps.length ? ` (${result.migration.steps.map((s) => s.id).join(', ')})` : ''}`];
+  if (result.readiness.problems.length) lines.push('', 'problems', ...result.readiness.problems.map((p) => `${p.severity} ${p.code}: ${cleanLine(p.message)}${p.action ? ` -> ${cleanLine(p.action)}` : ''}`));
+  if (result.errors.length) lines.push('', 'errors', ...result.errors.map((error) => `${error.area}: ${cleanLine(error.message)}`));
+  return `${lines.join('\n')}\n`;
+}
+
+export function soulEnvCommand(argv, { write = (value) => process.stdout.write(value), ...options } = {}) {
+  let id = null, json = false;
+  for (const arg of argv) {
+    if (arg === '--json' && !json) json = true;
+    else if (!arg.startsWith('-') && id === null) id = arg;
+    else throw new Error(USAGE);
+  }
+  if (!id) throw new Error(USAGE);
+  const result = readSoulEnvironment(id, options);
+  write(json ? `${JSON.stringify(result)}\n` : formatSoulEnvironment(result));
+  return result;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try { soulEnvCommand(process.argv.slice(2)); }
+  catch (error) {
+    const failure = { code: error.code ?? 'soul-env-failed', message: error.message };
+    if (process.argv.includes('--json')) process.stdout.write(`${JSON.stringify({ error: failure })}\n`);
+    else process.stderr.write(`agent-bot soul env: ${failure.code}: ${failure.message}\n`);
+    process.exitCode = 1;
+  }
+}

@@ -86,6 +86,7 @@ import { attachWakeEndpoint } from './agent-wake.mjs';
 import { soulMode } from './soul-mode.mjs';
 import { createIdentityAppJobs, identityAppOperation, identityAppFailure, listIdentityApps } from './identity-apps.mjs';
 import { readSoulProfile } from './soul-profile.mjs';
+import { readSoulEnvironment } from './soul-env.mjs';
 import { launchSandbox, readSandboxStatus, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount } from './sandbox.mjs';
 import { soulModel, setSoulModel, recordSoulModels } from './soul-model.mjs';
 import { ownerGate as soulSettingOwnerGate, readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
@@ -941,13 +942,17 @@ export function createDaemonServer({
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, ...result });
           return;
         }
-        case 'GET /v0/soul/profile': {
+        case 'GET /v0/soul/profile':
+        case 'GET /v0/soul/env': {
           const agentId = url.searchParams.get('agentId');
           if (!agentId) {
             sendJson(res, 400, { error: 'agentId is required' });
             return;
           }
-          try { sendJson(res, 200, readSoulProfile(agentId, { env, home })); }
+          // Both are read-only census-authenticated reads; env adds the
+          // environment descriptor (#583) beside the profile.
+          const read = url.pathname.endsWith('/env') ? readSoulEnvironment : readSoulProfile;
+          try { sendJson(res, 200, read(agentId, { env, home })); }
           catch (error) {
             if (error.code !== 'soul-not-found') throw error;
             sendJson(res, 404, { error: error.message, code: error.code });
@@ -1536,6 +1541,9 @@ export function daemonClient({
     },
     async soulProfile(agentId) {
       return request('GET', `/v0/soul/profile?agentId=${encodeURIComponent(agentId)}`);
+    },
+    async soulEnvironment(agentId) {
+      return request('GET', `/v0/soul/env?agentId=${encodeURIComponent(agentId)}`);
     },
     async sandboxStatus() {
       return request('GET', '/v0/sandbox');

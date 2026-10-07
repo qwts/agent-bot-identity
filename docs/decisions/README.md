@@ -31,3 +31,4 @@ supersede them instead.
 | [ADR-0276](ADR-0276-souls-carry-their-harnesses-as-pinned-npm-dependencies.md) | Souls carry their harnesses as pinned npm dependencies | Proposed |
 | [ADR-0322](ADR-0322-souls-carry-their-runtimes-and-non-npm-harnesses.md) | Souls carry their runtimes and non-npm harnesses, with user overrides | Proposed |
 | [ADR-0332](ADR-0332-souls-are-the-agents-territory.md) | Souls are the agent's territory | Proposed |
+| [ADR-0583](ADR-0583-the-soul-root-owns-the-environment.md) | The soul root owns the environment | Accepted |

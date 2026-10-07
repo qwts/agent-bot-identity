@@ -1,0 +1,141 @@
+# Soul environment, schema 1
+
+A soul root owns the agent's whole life ([ADR-0583](decisions/ADR-0583-the-soul-root-owns-the-environment.md)):
+the definition at the top level, the life under `.soul-state/`, workspaces
+under `worktrees/`. `agent-bot soul env` describes that root, and
+`soul-env-contract.mjs` is the pure contract behind it. Hosts such as
+GeniusBar read both instead of carrying their own path lists.
+
+## Commands
+
+```sh
+agent-bot soul env <agentId|name> [--json]
+agent-bot soul revision prepare <agentId|name> [--json] [--dest PATH]
+agent-bot soul revision prepare --discard STAGING
+```
+
+`soul env` is read-only. It never provisions a home, creates the Agent Space
+link, re-registers a moved folder, installs a harness, or rebuilds generated
+output: everything it finds wrong is a readiness problem with the command
+that fixes it. It resolves the soul like `soul profile` (Agent ID, name, or
+display name; unknown is `soul-not-found`, exit 1), but describes the
+registered folder even when its marker is bad, since that is the problem to
+report. The daemon serves the same object at `GET /v0/soul/env?agentId=…`
+beside `GET /v0/soul/profile`, with the same loopback and bearer
+authentication; `daemonClient(...).soulEnvironment(agentId)` calls it.
+
+## Classification contract
+
+`soul-env-contract.mjs` exports `ENV_CONTRACT_VERSION` (1), the closed enum
+`CLASSIFICATIONS`, the retention kinds `RETENTION`, the component table
+`SOUL_LAYOUT`, and `classifyPath(relative)`. It re-exports
+`GENERATED_HARNESS_PATHS` and `PACKAGE_IGNORE_LIST` from the harness
+contract, so there is one list of generated paths.
+
+| Classification | Retention | What |
+| --- | --- | --- |
+| `definition` | durable | Everything at the root that is not below: `soul.json`, `AGENTS.md`, `skills/`, `hooks/`, `bin/`, `workflows/`, `sop/`, `package.json`, policy, anything unknown |
+| `generated` | reconstructible | The builder's output, `GENERATED_HARNESS_PATHS` (`CLAUDE.md`, `.claude/`, `.codex/`, …) |
+| `workspace` | durable | `worktrees/` and what is under it |
+| `runtime` | reconstructible | `.soul-state/runtimes/` |
+| `private-home` | durable | Anything else under `.soul-state/`: `home`, `tools`, `credentials`, the marker |
+| `memory` | durable | `.soul-state/space` |
+| `history` | durable | `.soul-state/runs/` |
+| `cache` | reconstructible | `.soul-state/cache/` |
+| `temp` | disposable | `.soul-state/tmp/` |
+| `external` | none | Host tools outside the root |
+
+`classifyPath` applies ordered rules (the descriptor publishes them under
+`classification.rules`): the specific `.soul-state/` children, then
+`.soul-state/` as private home, then `worktrees/`, then the generated paths,
+then the default. A prefix rule matches the directory itself as well as what
+is under it. Only the named Copilot and Kiro files are generated;
+`.github/workflows/` or `.kiro/steering/` are definition. The enum and the
+rules are frozen; values are only ever appended.
+
+## Descriptor
+
+`soul env --json` prints one object, every key always present (unknown
+scalars `null`, collections `[]`), in this order:
+
+- `schemaVersion` 1; `engine` `{ version, contractVersion, capabilities }`.
+  `capabilities` is `["env", "revision-prepare"]` today; a client gates each
+  later slice on it.
+- `identity`: `agentId`, `name`, `displayName`, `status`, `harness`,
+  `genesis { revision, parentSoul }`, the manifest's `revision`,
+  `parentRevision`, `template`, `formatVersion`.
+- `root`: `soulDir`, `soulsRoot`, `source`, `registered`, `marker`
+  (`ok | missing | invalid`), `copies` (other folders carrying this
+  marker), `device`.
+- `components[]`: one row per `SOUL_LAYOUT` component with `id`, `path`,
+  `classification`, `present`, `retention`, plus what the component knows:
+  `skills.entries`, `workflows.entries`; `generated.paths`, `.marker`,
+  `.drift` (the builder's pending writes and removals from
+  `buildSoulDirectory(dir, { check: true })`, `null` when the check cannot
+  run); `workspaces.entries[]` `{ name, path, location: inside | linked,
+  target, repository, branch }`; `home` `{ git, built, harnessInstall }`;
+  `tool-state.entries[]` per selected harness `{ harness, path, routing,
+  containment: "shared-host", hostPath, signIn }`; `credentials`
+  `{ exportable: false, declared }` (names, never contents); `memory`
+  `{ location: inside | linked, target, contained, spacePath, status }`;
+  `history.external[]` (the daemon journals that still live under the state
+  directory) and `confinementLog`; `temp.entries[]` (revision stagings);
+  `host-tools.entries[]` `{ name, path, source: engine | host }`.
+- `classification`: the contract's `enum` and `rules`.
+- `harnesses`: `selected`, `declared[]` (the `package.json` pins),
+  `installed[]` (adapters found in `.soul-state/home/node_modules` or a
+  joined soul's `.soul-state/harnesses`, with `version`, `bin`, `status`),
+  `launchable`.
+- `runtimes`: `declared` from `soul.json` (`{}` when absent), `installed`
+  `[]`, `missing[]` (every declared runtime, reason `not provisioned`, until
+  slice 3 provisions them), `unsupported[]`.
+- `providers`: `{}` until slice 4.
+- `launch`: `supported`, `lane` (`acp` or `null`), `cwd` (the home),
+  `routing { HOME, PATH, TMPDIR }` (all `host` today), `limitations[]`: one
+  per harness whose native state is shared on the host.
+- `readiness`: `ready` (no error-severity problem) and `problems[]`
+  `{ code, severity, component, message, action }`.
+- `migration`: `status` (`pending | none`), `journal`, `steps[]`
+  `{ id, status, from, to }`. Inventory only: `space-into-soul` when
+  `.soul-state/space` is a link, `harnesses-into-runtimes` when
+  `.soul-state/harnesses` exists. Nothing runs until slice 5 and 6.
+- `retention`: component ids grouped as `durable`, `reconstructible`,
+  `disposable`.
+- `errors[]`: `{ area, message }` for what could not be read; the rest of
+  the descriptor is still complete.
+
+### Readiness codes
+
+| Code | Severity | Action |
+| --- | --- | --- |
+| `marker-invalid` | error | `.soul-state/agent-id` is not a regular file holding one Agent ID |
+| `root-unregistered` | error | The folder's marker names no active soul in this census |
+| `root-duplicate` | warning | Other folders carry the marker (`root.copies`) |
+| `home-missing` | warning | No `.soul-state/home`; the next launch provisions it |
+| `generated-drift` | warning | `agent-bot soul build "<soulDir>"` |
+| `generated-conflict` | error | A generated path was hand-edited (no marker); the builder refuses |
+| `harness-missing` | warning | The pinned adapter is not installed in the soul; the next launch installs it |
+
+Warnings leave `ready` true. Codes are appended, never renamed.
+
+## Preparing a revision edit
+
+`soul revision prepare <soul>` stages the current package definition into
+`<soulDir>/.soul-state/tmp/revision-<uuid>/` and prints
+`{ schemaVersion, agentId, soulDir, staging, revision, parentRevision,
+files[], excluded, expiresAt }`. Each file row is `{ path, classification,
+kind, editable, text, size, mode }`: `kind` as `soul profile` reports it,
+`editable` when the file is `definition` and not `soul.json` or under `bin/`,
+`text` when the bytes are UTF-8. `excluded.workingState` names the ignore
+list directories present (`.soul-state/`, `worktrees/`); `excluded.generated`
+the exact generated output left out. Modes are preserved. Staging is
+exclusive (`mkdir` without `recursive`), is removed again if preparing
+fails, and `expiresAt` is 24 hours later. `--dest PATH` stages elsewhere
+(a soul without `.soul-state` needs it: `soul-state-missing`). A host edits
+the staging, then runs `soul revision edit ID <staging> REASON --apply`,
+which records and publishes it as before; apply also removes the exact
+generated output the staging left out, which the builder regenerates on the
+next build or launch (it is reconstructible). `prepare --discard STAGING`
+removes one staging, and only a `revision-<uuid>` directly under a marked
+soul's `.soul-state/tmp/` (`staging-not-temp` otherwise). Preparing is not
+an owner action; applying still is.

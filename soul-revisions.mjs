@@ -5,15 +5,17 @@
 import { randomUUID } from 'node:crypto';
 import { cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
   readdirSync, renameSync, rmSync, rmdirSync, writeFileSync, chmodSync } from 'node:fs';
-import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
+import { basename, dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { canonicalJson, computePackageRevision, readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
 import { diffPackageSkills, skillsChanged, skillsCommand } from './skill-manifest.mjs';
 import { currentAgentId, readAgentIdentity, recordAgentPackageRevision, stateDirectory, validateAgentId, withLock } from './agent-identity.mjs';
 import { spacePath } from './agent-space.mjs';
 import { assertOwnerAction, consentOwner, ownerCredentialRequired, presenceOrConsent } from './owner-gate.mjs';
-import { soulDirectory } from './agent-population.mjs';
+import { populationFile, showSoulByName, soulDirectory } from './agent-population.mjs';
 import { appendAuditReceipt } from './agent-principals.mjs';
+import { GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST, classifyPath } from './soul-env-contract.mjs';
+import { kindOf } from './soul-profile.mjs';
 
 const ZERO = `sha256:${'0'.repeat(64)}`;
 const json = (file) => JSON.parse(readFileSync(file, 'utf8'));
@@ -381,6 +383,139 @@ export async function promoteSpaceContent(id, source, destination, { actor = 'so
   } finally { rmSync(temp, { recursive: true, force: true }); }
 }
 
+
+const PREPARE_SCHEMA_VERSION = 1;
+const STAGING_TTL_MS = 24 * 60 * 60 * 1000;
+const STAGING_NAME = /^revision-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
+// An Agent ID or a census name, as `soul profile` resolves one.
+function resolveSoulId(id, options) {
+  if (typeof id === 'string' && id.startsWith('agent_')) return validateAgentId(id);
+  const file = options.file ?? populationFile(options);
+  try { return showSoulByName(id, { file }).id; }
+  catch (error) {
+    if (/no population record/.test(error.message)) fail('soul-not-found', 'Soul not found.');
+    throw error;
+  }
+}
+// The paths a user edit may touch without a review step: everything in the
+// definition except the manifest and the soul's tools (ADR-0275 rule 4,
+// the always-reviewed set in docs/soul-revisions.md). Generated output is
+// the builder's, working state is never staged.
+function editable(path, classification) {
+  return classification === 'definition' && path !== 'soul.json' && path !== 'bin' && !path.startsWith('bin/');
+}
+function isText(bytes) {
+  if (bytes.includes(0)) return false;
+  try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); return true; } catch { return false; }
+}
+// Every file under a generated path in the root, without following links,
+// so `excluded.generated` can name the exact build output the package read
+// left out (an authored or merged file at a generated path stays staged).
+function generatedFiles(root) {
+  const files = [];
+  function walk(relative) {
+    let entries;
+    try { entries = readdirSync(join(root, relative), { withFileTypes: true }); } catch { return; }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      const child = `${relative}/${entry.name}`;
+      if (entry.isDirectory()) walk(child);
+      else if (entry.isFile()) files.push(child);
+    }
+  }
+  for (const candidate of GENERATED_HARNESS_PATHS) {
+    if (candidate.endsWith('/')) walk(candidate.slice(0, -1));
+    else {
+      let info = null;
+      try { info = lstatSync(join(root, candidate)); } catch { /* absent */ }
+      if (info?.isFile()) files.push(candidate);
+    }
+  }
+  return files;
+}
+
+/**
+ * Stages the soul's editable definition for a host (#583, GeniusBar #268):
+ * the package entries, as `readSoulPackageEntries` reads them (format-2
+ * working state and exact generated output excluded, modes kept), copied
+ * into `<soulDir>/.soul-state/tmp/revision-<uuid>/`, which the environment
+ * contract classifies as temp. Nothing in the soul changes. The host edits
+ * there and finishes with `soul revision edit ID <staging> REASON --apply`.
+ * A failure removes the staging directory; a leftover is harmless temp.
+ */
+export function prepareRevisionEdit(id, { dest = null, now = () => new Date(), ...options } = {}) {
+  const agentId = resolveSoulId(id, options);
+  const directory = resolve(soulDirectory(agentId, { ...options, readOnly: true }));
+  let info = null;
+  try { info = lstatSync(directory); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (!info?.isDirectory()) fail('soul-dir-missing', `soul directory is not a directory: ${directory}`);
+  let staging;
+  if (dest === null) {
+    // Only an installed soul (one with `.soul-state/`) gets a default
+    // staging place; creating `.soul-state/` here would make a marker-less
+    // folder look half-provisioned.
+    const state = join(directory, '.soul-state');
+    let stateInfo = null;
+    try { stateInfo = lstatSync(state); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (!stateInfo?.isDirectory()) fail('soul-state-missing', 'the soul has no .soul-state directory yet; launch it once, or pass --dest');
+    mkdirSync(join(state, 'tmp'), { recursive: true, mode: 0o700 });
+    staging = join(state, 'tmp', `revision-${randomUUID()}`);
+  } else {
+    staging = resolve(text(dest, '--dest'));
+    mkdirSync(dirname(staging), { recursive: true, mode: 0o700 });
+  }
+  // Exclusive: never stage into a directory something else owns.
+  mkdirSync(staging, { mode: 0o700 });
+  try {
+    const { manifest, entries } = readSoulPackageEntries(directory);
+    const files = [];
+    for (const { path, mode, bytes } of entries) {
+      const target = join(staging, path);
+      if (mode === '040000') { mkdirSync(target, { recursive: true }); continue; }
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, bytes, { flag: 'wx' });
+      chmodSync(target, mode === '100755' ? 0o755 : 0o644);
+      const classification = classifyPath(path);
+      files.push({ path, classification, kind: kindOf(path), editable: editable(path, classification),
+        text: isText(bytes), size: bytes.length, mode });
+    }
+    const staged = new Set(files.map((file) => file.path));
+    const ignoresState = manifest.formatVersion === 2;
+    const excluded = {
+      workingState: ignoresState ? PACKAGE_IGNORE_LIST.directories.map((dir) => dir.slice(0, -1))
+        .filter((dir) => { try { lstatSync(join(directory, dir)); return true; } catch { return false; } }) : [],
+      generated: ignoresState ? generatedFiles(directory).filter((path) => !staged.has(path)) : [],
+    };
+    return { schemaVersion: PREPARE_SCHEMA_VERSION, agentId, soulDir: directory, staging,
+      revision: typeof manifest.revision === 'string' ? manifest.revision : null,
+      parentRevision: typeof manifest.parentRevision === 'string' ? manifest.parentRevision : null,
+      files, excluded, expiresAt: new Date(now().getTime() + STAGING_TTL_MS).toISOString() };
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/**
+ * Removes one staging directory `prepareRevisionEdit` made. Only a
+ * `revision-<uuid>` directory directly under a soul's `.soul-state/tmp/`
+ * qualifies (the folder's marker proves it is a soul's), so this can never
+ * delete a package, a home, or a `--dest` elsewhere.
+ */
+export function discardRevisionStaging(stagingPath) {
+  const staging = resolve(text(stagingPath, 'staging path'));
+  const tmp = dirname(staging), state = dirname(tmp), soul = dirname(state);
+  let info = null;
+  try { info = lstatSync(staging); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (!info) fail('staging-missing', `no staging directory at ${staging}`);
+  if (!info.isDirectory() || !STAGING_NAME.test(basename(staging)) || basename(tmp) !== 'tmp'
+      || basename(state) !== '.soul-state' || soul === state || !existsSync(join(state, 'agent-id'))) {
+    fail('staging-not-temp', `refusing to remove ${staging}: only a revision-<uuid> directory under a soul's .soul-state/tmp/ is staging`);
+  }
+  rmSync(staging, { recursive: true, force: true });
+  return { discarded: staging };
+}
+
 export async function revisionCommand(args, { assertSoulTarget = (id) => {
   // The caller must be the bound soul itself; an unbound process is not one.
   if (currentAgentId() !== id) {
@@ -402,10 +537,28 @@ export async function revisionCommand(args, { assertSoulTarget = (id) => {
 principal = null, presence, ...options } = {}) {
   const apply = args.includes('--apply');
   const [command, id, ...rest] = args.filter((arg) => arg !== '--json' && arg !== '--apply');
+  const usage = 'usage: soul revision adopt|edit|propose ID PATH REASON; edit accepts --apply; approve|reject ID PROPOSAL REASON; list|history ID; skills ID [REVISION [SINCE]]; promote ID SOURCE DESTINATION REASON; prepare <agentId|name> [--dest PATH] | prepare --discard STAGING; all accept --json; adopt, edit, approve and reject take --principal-stdin';
+  // Staging is temp under the soul, so prepare is not an owner action; the
+  // apply that follows it is.
+  if (command === 'prepare') {
+    if (apply) throw new Error(usage);
+    const prepareArgs = [id, ...rest].filter((arg) => arg !== undefined);
+    if (prepareArgs[0] === '--discard') {
+      if (prepareArgs.length !== 2 || prepareArgs[1].startsWith('-')) throw new Error(usage);
+      return discardRevisionStaging(prepareArgs[1]);
+    }
+    let dest = null;
+    for (let i = 1; i < prepareArgs.length; i++) {
+      if (prepareArgs[i] === '--dest' && dest === null && prepareArgs[i + 1] && !prepareArgs[i + 1].startsWith('-')) dest = prepareArgs[++i];
+      else throw new Error(usage);
+    }
+    if (!prepareArgs[0] || prepareArgs[0].startsWith('-')) throw new Error(usage);
+    return prepareRevisionEdit(prepareArgs[0], { ...options, dest });
+  }
   validateAgentId(id);
   const arities = { adopt: 2, edit: 2, propose: 2, approve: 2, reject: 2, list: 0, history: 0, promote: 3, skills: [0, 1, 2] };
   if (!(command in arities) || !(Array.isArray(arities[command]) ? arities[command] : [arities[command]]).includes(rest.length) || (apply && command !== 'edit')) {
-    throw new Error('usage: soul revision adopt|edit|propose ID PATH REASON; edit accepts --apply; approve|reject ID PROPOSAL REASON; list|history ID; skills ID [REVISION [SINCE]]; promote ID SOURCE DESTINATION REASON; all accept --json; adopt, edit, approve and reject take --principal-stdin');
+    throw new Error(usage);
   }
   if (['adopt', 'edit', 'approve', 'reject'].includes(command)) {
     let authorization;

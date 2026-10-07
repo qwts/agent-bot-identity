@@ -36,8 +36,11 @@ provisioning finish binding and cleanup on restart. A new home with `.git`
 is never copied over or reinstalled. A live binding to the legacy home also
 passes through migration on its next launch.
 
-Agent Space does not move: `.soul-state/space` links to the census's recorded
-space path. An existing link, including a dangling one, is kept.
+Agent Space does not move until slice 5 of #583 migrates it into the soul
+([ADR-0583](decisions/ADR-0583-the-soul-root-owns-the-environment.md)):
+`.soul-state/space` links to the census's recorded space path. An existing
+link, including a dangling one, is kept. `agent-bot soul env` reports the
+link as `location: linked` with a pending `space-into-soul` step.
 
 `agent-bot soul dir AGENT_ID` prints `{ agentId, soulDir, home, soulsRoot,
 source, copies }`. `source` is `environment`, `setting`, or `default`. Hosts such as
