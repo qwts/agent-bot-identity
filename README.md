@@ -295,14 +295,21 @@ agent-bot signed-commit [--base <ref>] [--branch <name>] [--repo <owner/name>] [
 agent-bot secret get --provider <id> --collection <name> --item <title> --field <name> --reason <text>
 agent-bot skill path [--json]
 agent-bot skill <name> [--json]
+agent-bot skill agent-bot --for <subcommand> [--json]
 ```
 
 `agent-bot skill <name>` prints this release's exact `SKILL.md` text for
-`agent-bot`, `agent-space`, or `thread-orders`. With `--json`, it returns
-`{ name, path, commit, text }`; `path` names the skill file. Use
+`agent-bot`, `agent-space`, or `thread-orders`, with no network. Any other
+name is resolved through the fleet catalog (qwts/qwts-agent-sop
+`skills/README.md`) to exactly one entry and printed from its owning
+repository at the entry's pinned commit; an absent, ambiguous, or unpinned
+name is an error. With `--json`, it returns
+`{ name, repository, commit, path, text }`. Use
 `agent-bot skill agent-space` for check-in and soul worktree guidance.
-`agent-bot skill path` continues to report the `agent-bot` bundle directory
-and source commit (`{ path, commit }` with `--json`).
+`agent-bot skill agent-bot --for <subcommand>` prints the one reference file
+covering that subcommand. `agent-bot skill path` continues to report the
+`agent-bot` bundle directory and source commit (`{ path, commit }` with
+`--json`). See [docs/skills.md](docs/skills.md).
 
 ### Soul directories and homes
 

@@ -31,7 +31,8 @@ minted; never continue with an ambient human GitHub login.
 - Read [storage-surfaces.md](references/storage-surfaces.md) when deciding
   where a file belongs among worktree, scratchpad, and Agent Space.
 
-Load only the reference needed for the current request. Load all three when
+`agent-bot skill agent-bot --for <subcommand>` prints the one reference that
+covers a subcommand. Load only the reference needed for the current request. Load all three when
 diagnosing a cross-cutting mismatch among commit attribution, credentials,
 verified publishing, and transcript provenance.
 
@@ -116,7 +117,7 @@ for. `agent-bot skill path` prints the installed release's copy of this skill.
 
 | Class | Commands | Retry |
 |---|---|---|
-| read-only | `--help`, `doctor`, `sop`, `skill path`, `population list`, `space path`, `signed-commit --dry-run`, `secret get` | Safe to repeat. |
+| read-only | `--help`, `doctor`, `sop`, `skill`, `skill path`, `population list`, `space path`, `signed-commit --dry-run`, `secret get` | Safe to repeat. |
 | local-write | `bootstrap`, `setup-worktree`, `install`, `install-gh-shim`, `daemon install`, `daemon disable`, `ensure-private-key`, `space ensure` | Converge on rerun; confirm with `doctor`. |
 | read-only | `soul show`, `soul profile`, `soul locate`, `soul templates`, `soul asides`, `soul cold-wake ID show`, `soul model ID show`, `soul mode ID show`, `soul computer-use ID show`, `soul comms ID show`, `soul confinement-report`, `soul pack validate`, `soul build --check`, `approvals list`, `telegram status` | Safe to repeat. |
 | local-write | `soul dir` | May re-register a uniquely moved soul directory; see [soul-homes.md](../../docs/soul-homes.md). |
