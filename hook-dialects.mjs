@@ -320,6 +320,57 @@ export function vendorEvent(dialectKey, event) {
   return typeof spec === 'string' ? { event: spec, matcher: null } : { matcher: null, ...spec };
 }
 
+// The seconds a native entry asks its harness to wait, from the row's cap.
+// Shared by both writers of native entries: the lifecycle adapters
+// (sync-hooks.mjs) and the soul builder's soul-declared hooks.
+export function hookTimeoutSeconds(dialectKey, event) {
+  const row = dialect(dialectKey);
+  const cap = row.timeoutCapMs?.[event] ?? row.timeoutCapMs?.default;
+  return cap ? Math.ceil(cap / 1000) : 60;
+}
+
+// One native config entry that runs `run` (a shell command) on a canonical
+// event, in the row's own entry shape, or null when the row cannot express the
+// event. The caller owns the command, and with it the marker that says whose
+// entry this is: `agent-bot agent-hook` for the lifecycle adapters,
+// SOUL_HOOK_MARKER for hooks a soul declared.
+export function nativeHookEntry(dialectKey, event, run) {
+  const row = dialect(dialectKey);
+  const mapped = vendorEvent(dialectKey, event);
+  if (!mapped) return null;
+  if (row.format === 'claude') {
+    return {
+      vendorEvent: mapped.event,
+      entry: {
+        ...(mapped.matcher ? { matcher: mapped.matcher } : {}),
+        hooks: [{ type: 'command', command: run, timeout: hookTimeoutSeconds(dialectKey, event) }],
+      },
+    };
+  }
+  if (row.format === 'cursor') {
+    return { vendorEvent: mapped.event, entry: { command: run, ...(isBlocking(event) ? row.requiresFlag : {}) } };
+  }
+  if (row.format === 'copilot') {
+    return {
+      vendorEvent: mapped.event,
+      entry: {
+        type: 'command',
+        bash: run,
+        ...(mapped.matcher ? { matcher: mapped.matcher } : {}),
+        timeoutSec: hookTimeoutSeconds(dialectKey, event),
+      },
+    };
+  }
+  if (row.format === 'windsurf') return { vendorEvent: mapped.event, entry: { command: run, show_output: false } };
+  throw new Error(`unsupported hook format: ${row.format}`);
+}
+
+// The marker on every native entry the soul builder renders for a soul's own
+// hooks (#378). Deliberately disjoint from sync-hooks' MANAGED_MARKER and its
+// `agent-hook --dialect` recognizer, so neither owner ever strips the other's
+// entries out of a file they both write into.
+export const SOUL_HOOK_MARKER = 'agent-bot soul hook';
+
 // Can this dialect hand a hook's text to the model on this event? A false here
 // is a declared gap, and the caller must say so rather than drop the text
 // quietly — a hook that believes it armed a session and did not is worse than

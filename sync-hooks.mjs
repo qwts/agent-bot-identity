@@ -23,7 +23,7 @@ import { accountName, configuredAccountIdentity } from './detect-harness.mjs';
 import { loadConfig } from './config.mjs';
 import { pathToFileURL } from 'node:url';
 
-import { CANONICAL_EVENTS, CLAUDE_WORKTREE_CREATE_COMMAND, DIALECTS, isBlocking, vendorEvent } from './hook-dialects.mjs';
+import { CANONICAL_EVENTS, CLAUDE_WORKTREE_CREATE_COMMAND, DIALECTS, nativeHookEntry, SOUL_HOOK_MARKER, vendorEvent } from './hook-dialects.mjs';
 import { adapterFallback } from './uninstalled-identity-hook.mjs';
 
 export const MANAGED_MARKER = 'agent-bot agent-hook';
@@ -32,59 +32,16 @@ function command(dialectKey, event) {
   return `export AGENT_BOT_UNMANAGED_AUTHORS="\${AGENT_BOT_UNMANAGED_AUTHORS-ai9d}"; H="\${AGENT_BOT_HOOK_BIN:-\$HOME/.local/share/agent-bot/agent-hook}"; [ -x "$H" ] && exec "$H" --dialect ${dialectKey} --event ${event}; ${adapterFallback(dialectKey, event)} # ${MANAGED_MARKER}`;
 }
 
-function timeoutSeconds(dialectKey, event) {
-  const row = DIALECTS.find((candidate) => candidate.key === dialectKey);
-  const cap = row.timeoutCapMs?.[event] ?? row.timeoutCapMs?.default;
-  return cap ? Math.ceil(cap / 1000) : 60;
-}
-
 function hookEntry(row, event) {
-  const mapped = vendorEvent(row.key, event);
-  const run = command(row.key, event);
-  if (row.format === 'claude') {
-    return {
-      vendorEvent: mapped.event,
-      entry: {
-        ...(mapped.matcher ? { matcher: mapped.matcher } : {}),
-        hooks: [{
-          type: 'command',
-          command: run,
-          timeout: timeoutSeconds(row.key, event),
-        }],
-      },
-    };
-  }
-  if (row.format === 'cursor') {
-    return {
-      vendorEvent: mapped.event,
-      entry: {
-        command: run,
-        ...(isBlocking(event) ? row.requiresFlag : {}),
-      },
-    };
-  }
-  if (row.format === 'copilot') {
-    return {
-      vendorEvent: mapped.event,
-      entry: {
-        type: 'command',
-        bash: run,
-        ...(mapped.matcher ? { matcher: mapped.matcher } : {}),
-        timeoutSec: timeoutSeconds(row.key, event),
-      },
-    };
-  }
-  if (row.format === 'windsurf') {
-    return {
-      vendorEvent: mapped.event,
-      entry: { command: run, show_output: false },
-    };
-  }
-  throw new Error(`unsupported hook format: ${row.format}`);
+  return nativeHookEntry(row.key, event, command(row.key, event));
 }
 
+// A soul-declared hook (#378) also runs agent-hook, but it is the soul
+// builder's entry, rendered into a soul's own project files: never ours to
+// strip, even should one ever land in a file this module writes.
 function isManaged(value) {
   const encoded = JSON.stringify(value);
+  if (encoded.includes(SOUL_HOOK_MARKER)) return false;
   return encoded.includes(MANAGED_MARKER) || encoded.includes('agent-hook --dialect');
 }
 

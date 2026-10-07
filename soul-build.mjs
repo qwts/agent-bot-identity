@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { buildHarnessFiles, harnessReport, hasGeneratedJsonMarker, MCP_TARGETS, mergeableMcpServers, settingsTargets } from './soul-builder.mjs';
+import { buildHarnessFiles, declaredHooks, harnessReport, hasGeneratedJsonMarker, HOOK_TARGETS, MCP_TARGETS, mergeableMcpServers, settingsTargets } from './soul-builder.mjs';
 import { readSoulPackageEntries } from './soul-package.mjs';
 import { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, isGeneratedPath } from './soul-harness-contract.mjs';
 import { currentAgentId } from './agent-identity.mjs';
@@ -83,22 +83,26 @@ export function buildSoulDirectory(directory, { check = false } = {}) {
   // a second build over its own output reproduces it byte for byte and an
   // authored file is merged rather than refused. `merged` names the files whose
   // unmarked content the renderer adopted. With comms off nothing is rendered,
-  // so the soul's own file is left exactly as it is.
+  // so the soul's own file is left exactly as it is. Hook files are always
+  // handed over: the renderer merges declared hooks into them, cleans out its
+  // own entries once a declaration is gone, and leaves any other file alone.
   const comms = manifest.comms !== false;
   const authored = new Map(), merged = [];
   const targets = new Map((comms ? MCP_TARGETS : []).map((target) => [target.path, target]));
-  for (const target of settingsTargets(manifest)) {
+  for (const target of [...settingsTargets(manifest), ...HOOK_TARGETS]) {
     if (!targets.has(target.path)) targets.set(target.path, target);
   }
   for (const target of targets.values()) {
     const bytes = existing.get(target.path);
-    if (!bytes) continue;
-    authored.set(target.path, bytes);
-    if (!hasMarker(bytes)) {
-      merged.push({ path: target.path, harness: target.harness, kept: comms && MCP_TARGETS.some(({ path }) => path === target.path) ? mergeableMcpServers(target.path, bytes) : [] });
-    }
+    if (bytes) authored.set(target.path, bytes);
   }
   const expected = buildHarnessFiles(source, { authored });
+  // A merge is an unmarked file whose content the renderer adopted.
+  for (const target of targets.values()) {
+    const bytes = authored.get(target.path);
+    if (!bytes || hasMarker(bytes) || !expected.has(target.path)) continue;
+    merged.push({ path: target.path, harness: target.harness, kept: comms && MCP_TARGETS.some(({ path }) => path === target.path) ? mergeableMcpServers(target.path, bytes) : [] });
+  }
   const executable = new Set(source.filter((entry) => entry.mode === '100755').flatMap((entry) => [`.claude/${entry.path}`, `.gemini/${entry.path}`]));
   const writes = [], removals = [], conflicts = [];
   for (const [path, bytes] of expected) {
@@ -132,9 +136,13 @@ export function buildSoulDirectory(directory, { check = false } = {}) {
     for (const path of removals) {
       regularPath(root, path);
       rmSync(join(root, path));
-      // Empty generated containers must not leave revision-bearing entries.
+      // Empty generated containers must not leave revision-bearing entries,
+      // including the parents of a generated file that sits in an authored
+      // folder (Copilot's `.github/hooks/agent-bot-soul.json`): they are
+      // removed only while empty.
       let parent = dirname(path);
-      while (parent !== '.' && isGeneratedPath(`${parent}/`)) {
+      while (parent !== '.' && (isGeneratedPath(`${parent}/`)
+        || GENERATED_HARNESS_PATHS.some((candidate) => !candidate.endsWith('/') && candidate.startsWith(`${parent}/`)))) {
         try { rmdirSync(join(root, parent)); }
         catch (error) { if (['ENOTEMPTY', 'EEXIST'].includes(error.code)) break; throw error; }
         parent = dirname(parent);
@@ -143,7 +151,7 @@ export function buildSoulDirectory(directory, { check = false } = {}) {
   }
   return {
     drift, writes, removals, merged,
-    harnesses: harnessReport(expected, { comms, manifest }),
+    harnesses: harnessReport(expected, { comms, manifest, hooks: declaredHooks(source) }),
   };
 }
 
@@ -171,7 +179,9 @@ function format({ drift, writes, removals, merged, harnesses }) {
   const lines = [`agent-bot soul build: ${writes.length} written, ${removals.length} removed, ${merged.length} merged${drift.length ? `, ${drift.length} pending` : ''}`];
   if (merged.length) lines.push(...merged.map((entry) => `merged ${entry.path}: kept ${entry.kept.join(', ') || 'no servers of its own'}`));
   for (const [harness, { rendered, unsupported }] of Object.entries(harnesses)) {
-    lines.push(`${harness}: ${rendered.join(', ')}${unsupported.length ? ` (unsupported: ${unsupported.join(', ')})` : ''}`);
+    const missing = Object.entries(unsupported).filter(([, names]) => names.length)
+      .map(([kind, names]) => `${kind} ${names.join(', ')}`);
+    lines.push(`${harness}: ${rendered.join(', ')}${missing.length ? ` (unsupported: ${missing.join('; ')})` : ''}`);
   }
   if (drift.length) lines.push(`pending: ${drift.join(', ')}`);
   return `${lines.join('\n')}\n`;
