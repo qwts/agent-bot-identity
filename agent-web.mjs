@@ -595,8 +595,29 @@ export async function webOpen({
 
 const USAGE = 'usage: agent-bot web open [--principal <principal-id>] [--no-browser] [--json]\n';
 
+// Wording from README.md, browser access and remote access.
+const HELP = `${USAGE}
+Pair a browser with the daemon's private web client.
+
+web open asks the running daemon (authenticated with the bearer token from
+the 0600 state file) to mint a one-time pairing code and prints/opens
+http://127.0.0.1:<port>/ui/#<code>. The page exchanges the code — single
+use, ~2 minute expiry — for a short-lived (~12 h) HttpOnly /
+SameSite=Strict cookie session held daemon-side in memory.
+
+Run agent-bot web open --no-browser on the daemon machine and open the
+printed link from the remote device, substituting the proxy host for
+127.0.0.1. Authorization stays with the local principal model.
+
+See README.md, “Remote access (explicit operator choice)”.
+`;
+
 async function main() {
   const [command, ...tokens] = process.argv.slice(2);
+  if (command === '--help' || command === '-h') {
+    process.stdout.write(HELP);
+    return 0;
+  }
   if (command !== 'open') throw new Error(USAGE);
   let requestedPrincipal = null;
   let noBrowser = false;
