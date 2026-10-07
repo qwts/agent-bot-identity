@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.28
+
+- `acp-registry.mjs` gains a `kiro` row (`kiro-cli acp`, `kiro-cli login`) that ships disabled: the engine, `team start` and `harness auth` refuse with the reason until a signed-in Kiro verifies the wire shape and MCP tool naming (#523, GeniusBar#185). Kiro souls keep joining from a running session.
+- `kiro` is a known harness for `soul.json harnesses` and `soul build` (AGENTS.md and the shared skills, no generated files yet); `setup-worktree` without a session soul now says to check in with `agent-bot join` instead of naming a GeniusBar approval step that does not exist (GeniusBar#185, #523).
+- `agent-bot skill <name>` serves the bundled `agent-bot`, `agent-space`, and `thread-orders` skills as text or JSON, preserving `skill path`; the new `agent-space` skill guides check-in and repository work in the soul's work area, distinct from the durable Agent Space store (#515).
+
 ## 0.10.27
 
 - `agent-bot soul build` renders soul-declared subagents for Claude Code and OpenCode, and commands for Claude Code, Gemini and OpenCode, with per-harness received/rendered names and explicit unsupported lists so declarations are never silently dropped (#378, slice 2).
