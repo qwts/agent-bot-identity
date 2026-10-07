@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.40
+
+- `identity apps list` keeps each cached installation's grant (#213): `installations[].permissions` is the permission name → level map GitHub reported at connect or key rotation (`null` for a row cached before), the plain listing prints `installed:<account>(<selection>; <name>:<level>,…)`, and the docs say why that grant is not the bot user's collaborator role (which is what Dependabot commands check).
+
 ## 0.10.39
 
 - `bootstrap` tells apart "no App resolves for this account" from "the account resolves an App but this checkout is unbound" (#190): in a rostered agent account a run outside a repository reports `checkout-unbound`, naming the account and its App and saying to run from the checkout (or `--machine-only`); `bot-identity-unresolved` stays for an account with no App and says whether the run was outside a repository. Both carry `evidence.account`, `app_slug` and `outside_repository`.
