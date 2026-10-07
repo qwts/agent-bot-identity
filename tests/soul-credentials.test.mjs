@@ -132,6 +132,85 @@ test('file store round-trips under a 0700 directory with 0600 files and refuses 
   assert.throws(() => store.read({ soulDir: soul, slug: SLUG }), /readable by others/);
 });
 
+// Windows (GeniusBar ADR-0046 decision 3): a DPAPI stand-in in spawnSync's
+// shape. Protect reverses the bytes and Unprotect reverses them back, so a
+// round trip proves the seam carries the bytes faithfully with no real
+// cryptography; the script arrives on stdin, as the real one must. A
+// `protect` or `unprotect` answer replaces the stand-in's own.
+function fakePowershell(calls, { protect = null, unprotect = null } = {}) {
+  return (file, args, options) => {
+    calls.push({ file, args, input: options.input, stdio: options.stdio });
+    const protecting = /\$hex = '([0-9a-f]*)'/.exec(options.input);
+    if (protecting) return protect ?? { status: 0, stdout: Buffer.from(protecting[1], 'hex').reverse().toString('base64'), stderr: '' };
+    const unprotecting = /FromBase64String\('([A-Za-z0-9+/=]*)'\)/.exec(options.input);
+    if (unprotecting) return unprotect ?? { status: 0, stdout: Buffer.from(unprotecting[1], 'base64').reverse().toString('hex').toUpperCase(), stderr: '' };
+    return { status: 1, stdout: '', stderr: 'no such script' };
+  };
+}
+
+test('on win32 the file store keeps a DPAPI-protected .dpapi file and feeds PowerShell on stdin, never argv', (t) => {
+  const { soul, env } = fixture(t);
+  const calls = [];
+  const store = fileStore({ platform: 'win32', run: fakePowershell(calls) });
+  const target = { soulDir: soul, slug: SLUG };
+  assert.equal(store.read(target), null);
+  store.write(target, { appId: '12345', privateKeyPem: PEM });
+  const file = path.join(soul, '.soul-state', 'credentials', `github-app-${SLUG}.dpapi`);
+  assert.equal(existsSync(path.join(soul, '.soul-state', 'credentials', `github-app-${SLUG}.json`)), false);
+  const stored = readFileSync(file, 'utf8');
+  assert.match(stored, /^[A-Za-z0-9+/]+=*\n$/);
+  assertNoSecret(stored, 'the .dpapi file');
+  assert.deepEqual(store.read(target), { appId: '12345', privateKeyPem: PEM });
+  assert.equal(calls.length, 2);
+  const hex = Buffer.from(JSON.stringify({ appId: '12345', privateKeyPem: PEM })).toString('hex');
+  for (const call of calls) {
+    assert.equal(call.file, 'powershell.exe');
+    assert.deepEqual(call.args, ['-NoProfile', '-NonInteractive', '-Command', '-']);
+    assert.deepEqual(call.stdio, ['pipe', 'pipe', 'pipe']);
+    assertNoSecret(call.args.join(' '), 'powershell argv');
+    assert.match(call.input, /ProtectedData\]::(?:Protect|Unprotect)\([^\n]*'CurrentUser'\)/);
+    assert.ok(call.input.endsWith('\n\n'), 'the script ends in a blank line so its last statement runs');
+  }
+  assert.ok(calls[0].input.includes(`$hex = '${hex}'`), 'the credential travels as hex inside the script');
+  assert.ok(calls[1].input.includes(`FromBase64String('${stored.trim()}')`));
+  // The same store through credentialStores, so every reader of a `file`
+  // declaration gets it, and a webhook secret rides along.
+  const stores = credentialStores({ env, platform: 'win32', run: fakePowershell(calls) });
+  stores.file.write(target, { appId: '12345', privateKeyPem: PEM, webhookSecret: 'hook' });
+  assert.deepEqual(stores.file.read(target), { appId: '12345', privateKeyPem: PEM, webhookSecret: 'hook' });
+  assert.equal(store.delete(target), true);
+  assert.equal(existsSync(file), false);
+  assert.equal(store.delete(target), false);
+  assert.equal(store.read(target), null);
+});
+
+test('on win32 a refused or wrong-shaped DPAPI answer is a typed error that quotes no bytes', (t) => {
+  const { soul } = fixture(t);
+  const target = { soulDir: soul, slug: SLUG };
+  const credential = { appId: '12345', privateKeyPem: PEM };
+  const file = path.join(soul, '.soul-state', 'credentials', `github-app-${SLUG}.dpapi`);
+  const denied = fileStore({ platform: 'win32', run: fakePowershell([], { protect: { status: 1, stdout: '', stderr: 'Protect failed' } }) });
+  assert.throws(() => denied.write(target, credential), { code: 'dpapi-protect-failed' });
+  assert.equal(existsSync(file), false, 'nothing is written without a protected value');
+  const silent = fileStore({ platform: 'win32', run: fakePowershell([], { protect: { status: 0, stdout: '', stderr: '' } }) });
+  assert.throws(() => silent.write(target, credential), { code: 'dpapi-protect-failed' });
+  const good = fileStore({ platform: 'win32', run: fakePowershell([]) });
+  good.write(target, credential);
+  // Another account's file, or another machine's: Unprotect refuses, and the
+  // error says so without PowerShell's words.
+  const locked = fileStore({ platform: 'win32', run: fakePowershell([], { unprotect: { status: 1, stdout: '', stderr: 'Key not valid for use in specified state.' } }) });
+  assert.throws(() => locked.read(target), (error) => error.code === 'dpapi-unprotect-failed' && !error.message.includes('Key not valid'));
+  const garbled = fileStore({ platform: 'win32', run: fakePowershell([], { unprotect: { status: 0, stdout: 'not hex at all', stderr: '' } }) });
+  assert.throws(() => garbled.read(target), { code: 'dpapi-malformed' });
+  const foreign = fileStore({ platform: 'win32', run: fakePowershell([], { unprotect: { status: 0, stdout: Buffer.from('{"nope":1}').toString('hex'), stderr: '' } }) });
+  assert.throws(() => foreign.read(target), /stored credential is malformed/);
+  // A tampered file never reaches PowerShell.
+  const calls = [];
+  writeFileSync(file, "not base64 '; Remove-Item\n");
+  assert.throws(() => fileStore({ platform: 'win32', run: fakePowershell(calls) }).read(target), /stored credential is malformed/);
+  assert.deepEqual(calls, []);
+});
+
 test('mint resolution reads the soul store first, then legacy with a one-time notice', (t) => {
   const { env, home, stores, soul } = fixture(t);
   const notes = [];

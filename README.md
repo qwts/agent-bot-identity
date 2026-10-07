@@ -667,11 +667,13 @@ address is refused before the listener opens — and every request must present
 the per-start bearer token recorded in the `0600` state file at
 `$XDG_STATE_HOME/agent-bot/daemon.json`, which keeps other local accounts on a
 shared machine out. `install`, `update`, and `bootstrap` write and load a
-user-level supervisor (`launchd` on macOS, a systemd user unit on Linux) that
+user-level supervisor (`launchd` on macOS, a systemd user unit on Linux, a
+per-user scheduled task on Windows: see [Windows](docs/windows.md)) that
 execs `daemon run` at login and restarts it on failure. On macOS the unit
 files the daemon's stdout and stderr under
 `~/Library/Logs/agent-bot/daemon.log`; on Linux they are in the user journal
-(`journalctl --user -u agent-bot-daemon`). The daemon checks the macOS log at
+(`journalctl --user -u agent-bot-daemon`); on Windows the task appends them
+to `%LOCALAPPDATA%\<label>\Logs\daemon.log`. The daemon checks the macOS log at
 startup and every ten minutes. Above 5 MiB it copies the log to `daemon.log.1`
 (replacing the previous backup) and truncates the live file; both use mode
 0600. Set `AGENT_BOT_DAEMON_LOG_MAX_BYTES` to a positive integer byte count

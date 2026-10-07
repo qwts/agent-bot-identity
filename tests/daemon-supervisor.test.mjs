@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -14,12 +14,19 @@ import {
   hostServiceLabel,
   inspectSupervisor,
   isInactiveSupervisorError,
+  kickstartScheduledTask,
   renderLaunchdPlist,
+  renderScheduledTask,
   renderSupervisorUnit,
   renderSystemdUnit,
+  scheduledTaskBytes,
+  scheduledTaskRegistered,
+  scheduledTaskText,
+  scheduledTaskUserId,
   stableHomebrewPath,
   supervisorEnvironment,
   supervisorPaths,
+  WINDOWS_STATE_DIRECTORY,
 } from '../daemon-supervisor.mjs';
 
 test('launchd unit is secret-free, loopback-agnostic, and keep-alive', () => {
@@ -86,7 +93,8 @@ test('supervisor paths follow the user-level convention', () => {
     supervisorPaths('/u', 'linux').unitPath,
     '/u/.config/systemd/user/agent-bot-daemon.service',
   );
-  assert.equal(supervisorPaths('/u', 'win32').kind, null);
+  assert.equal(supervisorPaths('/u', 'win32', {}).kind, 'schtasks');
+  assert.equal(supervisorPaths('/u', 'freebsd', {}).kind, null);
 });
 
 test('supervised units retain the log cap override and normalize invalid values', () => {
@@ -192,9 +200,9 @@ test('ensure stops a detached daemon before the supervisor takes over', async ()
 test('unsupported platforms skip the supervisor', async () => {
   const result = await ensureDaemonSupervisor({
     home: '/u',
-    platform: 'win32',
+    platform: 'freebsd',
   });
-  assert.deepEqual(result, { applied: false, reason: 'unsupported-platform', platform: 'win32' });
+  assert.deepEqual(result, { applied: false, reason: 'unsupported-platform', platform: 'freebsd' });
 });
 
 test('inspect reports an unloaded unit as not loaded', () => {
@@ -478,4 +486,258 @@ test('a soul leaves agent-comms with its binding, or by ID without one', async (
   await assert.rejects(leaveLaunchedSoul({ agentId }, { env, run: run({ error: new Error('exit 1'),
     stdout: '{"ok":false,"error":{"code":"broker-unreachable","message":"no broker"}}' }) }),
   /leaving agent-comms failed: no broker/);
+});
+
+// Windows (GeniusBar ADR-0046 decision 4): a per-user scheduled task. Nothing
+// here runs schtasks.exe; the fake below stands in through the `exec` seam.
+
+const WIN_LABEL = 'app.geniusbar.agent-bot';
+const WIN_PROGRAM = ['C:\\App\\node.exe', 'C:\\App\\agent-bot.mjs', 'daemon', 'run'];
+
+// The exec seam's shape: a string back, or an error carrying stderr and the
+// status. /Create registers, /Delete drops, /Query answers a CSV row for a
+// registered task and fails for one it does not know, as the real one does;
+// `deny` makes one verb refuse the way a missing right would.
+function fakeSchtasks({ status = 'Ready', deny = null } = {}) {
+  const calls = [];
+  let registered = null; // the one task name schtasks knows
+  const refuse = (text) => {
+    throw Object.assign(new Error(`Command failed: schtasks.exe\n${text}`), { stderr: `${text}\n`, status: 1 });
+  };
+  const exec = (command, args) => {
+    calls.push([command, ...args]);
+    if (command !== 'schtasks.exe') throw new Error(`unexpected command ${command}`);
+    if (deny && args[0] === deny) refuse('ERROR: Access is denied.');
+    const name = args[args.indexOf('/TN') + 1];
+    if (args[0] === '/Create') registered = name;
+    if (args[0] === '/End' || args[0] === '/Delete') {
+      const was = registered === name;
+      if (args[0] === '/Delete') registered = null;
+      if (!was) refuse('ERROR: The system cannot find the file specified.');
+    }
+    if (args[0] === '/Query') {
+      if (registered !== name) refuse('ERROR: The system cannot find the file specified.');
+      return `"\\${registered}","N/A","${status}"\r\n`;
+    }
+    return '';
+  };
+  return { calls, exec, isRegistered: () => registered !== null };
+}
+
+// One element's text, unescaped: enough of an XML reader for a document this
+// module writes itself.
+function element(xml, name) {
+  const match = new RegExp(`<${name}>([^<]*)</${name}>`).exec(xml);
+  return match && match[1].replace(/&(lt|gt|amp|quot);/g, (_, entity) => ({ lt: '<', gt: '>', amp: '&', quot: '"' }[entity]));
+}
+
+function win32Home(prefix) {
+  const home = mkdtempSync(join(tmpdir(), prefix));
+  const env = { LOCALAPPDATA: join(home, 'AppData', 'Local'), USERDOMAIN: 'DESK', USERNAME: 'owner', AGENT_BOT_SERVICE_LABEL: WIN_LABEL };
+  return { home, env, unitPath: join(env.LOCALAPPDATA, WIN_LABEL, `${WIN_LABEL}.xml`), logPath: join(env.LOCALAPPDATA, WIN_LABEL, 'Logs', 'daemon.log') };
+}
+
+test('win32 supervisor paths live under LOCALAPPDATA, the unit a task XML named after the label', () => {
+  const env = { LOCALAPPDATA: '/u/AppData/Local', AGENT_BOT_SERVICE_LABEL: WIN_LABEL };
+  assert.deepEqual(supervisorPaths('/u', 'win32', env), {
+    platform: 'win32',
+    kind: 'schtasks',
+    label: WIN_LABEL,
+    unitPath: join('/u/AppData/Local', WIN_LABEL, `${WIN_LABEL}.xml`),
+    logPath: join('/u/AppData/Local', WIN_LABEL, 'Logs', 'daemon.log'),
+  });
+  // No host: the default task name in a plain agent-bot directory; no
+  // LOCALAPPDATA: the profile's own AppData\Local.
+  const bare = supervisorPaths('/u', 'win32', {});
+  assert.equal(bare.label, LAUNCHD_LABEL);
+  assert.equal(bare.unitPath, join('/u', 'AppData', 'Local', WINDOWS_STATE_DIRECTORY, `${LAUNCHD_LABEL}.xml`));
+  assert.equal(bare.logPath, join('/u', 'AppData', 'Local', WINDOWS_STATE_DIRECTORY, 'Logs', 'daemon.log'));
+  assert.throws(() => supervisorPaths('/u', 'win32', { AGENT_BOT_SERVICE_LABEL: '../x' }), { code: 'usage' });
+  // The same shape as the other platforms, so no caller branches.
+  assert.deepEqual(Object.keys(bare), Object.keys(supervisorPaths('/u', 'darwin', {})));
+});
+
+test('win32 task XML runs this node and entry at logon, hidden, restarted every minute, unbounded, one instance', () => {
+  const logPath = join('/u/AppData/Local', WIN_LABEL, 'Logs', 'daemon.log');
+  const xml = renderScheduledTask({
+    programArguments: WIN_PROGRAM,
+    environment: { AGENT_BOT_DAEMON_STATE_PATH: 'C:\\state\\daemon.json', AGENT_BOT_SERVICE_LABEL: WIN_LABEL, EMPTY: '' },
+    label: WIN_LABEL,
+    logPath,
+    userId: 'DESK\\owner',
+  });
+  assert.ok(xml.startsWith('<?xml version="1.0" encoding="UTF-16"?>\n<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">'));
+  assert.equal(element(xml, 'URI'), `\\${WIN_LABEL}`);
+  assert.match(xml, /<LogonTrigger>\s*<Enabled>true<\/Enabled>\s*<UserId>DESK\\owner<\/UserId>\s*<\/LogonTrigger>/);
+  assert.match(xml, /<Principal id="Author">\s*<UserId>DESK\\owner<\/UserId>\s*<LogonType>InteractiveToken<\/LogonType>\s*<RunLevel>LeastPrivilege<\/RunLevel>/);
+  assert.equal(element(xml, 'Hidden'), 'true');
+  assert.equal(element(xml, 'MultipleInstancesPolicy'), 'IgnoreNew');
+  assert.equal(element(xml, 'ExecutionTimeLimit'), 'PT0S');
+  assert.match(xml, /<RestartOnFailure>\s*<Interval>PT1M<\/Interval>\s*<Count>999<\/Count>\s*<\/RestartOnFailure>/);
+  assert.equal(element(xml, 'StopIfGoingOnBatteries'), 'false');
+  assert.equal(element(xml, 'DisallowStartIfOnBatteries'), 'false');
+  assert.equal(element(xml, 'StartWhenAvailable'), 'true');
+  // cmd.exe carries the environment and the log redirect; an empty value is
+  // not pinned, as in the plist.
+  assert.equal(element(xml, 'Command'), '%SystemRoot%\\System32\\cmd.exe');
+  assert.equal(element(xml, 'Arguments'),
+    `/S /C "set "AGENT_BOT_DAEMON_STATE_PATH=C:\\state\\daemon.json" && set "AGENT_BOT_SERVICE_LABEL=${WIN_LABEL}" && "C:\\App\\node.exe" "C:\\App\\agent-bot.mjs" "daemon" "run" >> "${logPath}" 2>&1"`);
+  assert.equal(element(xml, 'WorkingDirectory'), dirname(logPath));
+  assert.doesNotMatch(xml, /token|BEGIN |127\.0\.0\.1|AGENT_BOT_DAEMON_HOST|AGENT_BOT_DAEMON_PORT/);
+  // Markup in a label or path is text, never structure; a quote or a
+  // percent sign has no faithful form on a cmd.exe line.
+  const marked = renderScheduledTask({ programArguments: ['/x/a&b<c>.exe'], label: 'a&b', logPath: '/l/d.log', userId: 'u' });
+  assert.ok(marked.includes('<URI>\\a&amp;b</URI>'));
+  assert.ok(marked.includes('&quot;/x/a&amp;b&lt;c&gt;.exe&quot;'));
+  for (const bad of ['C:\\Program "Files"\\node.exe', '%TEMP%\\node.exe']) {
+    assert.throws(() => renderScheduledTask({ programArguments: [bad], logPath: '/l/d.log', userId: 'u' }), { code: 'usage' });
+  }
+  assert.throws(() => renderScheduledTask({ programArguments: [], logPath: '/l/d.log', userId: 'u' }), /non-empty/);
+  assert.throws(() => renderScheduledTask({ programArguments: ['/x/node'], logPath: null, userId: 'u' }), /log path/);
+  assert.equal(renderSupervisorUnit({ kind: 'schtasks', programArguments: ['/x/node'], logPath: '/l/d.log', userId: 'u' }),
+    renderScheduledTask({ programArguments: ['/x/node'], logPath: '/l/d.log', userId: 'u' }));
+  // The user is the one the environment names, in Task Scheduler's form.
+  assert.equal(scheduledTaskUserId({ USERDOMAIN: 'DESK', USERNAME: 'owner' }), 'DESK\\owner');
+  assert.equal(scheduledTaskUserId({ USERNAME: 'owner' }), 'owner');
+  // On disk the unit is UTF-16 with a byte-order mark, and reads back as text.
+  const bytes = scheduledTaskBytes(xml);
+  assert.deepEqual([...bytes.subarray(0, 2)], [0xff, 0xfe]);
+  assert.equal(scheduledTaskText(bytes), xml);
+  assert.equal(scheduledTaskText(Buffer.from('<Task/>')), '<Task/>');
+});
+
+test('win32 install writes the task under LOCALAPPDATA, registers it with schtasks and kickstarts it; a rerun is idempotent', async () => {
+  const { home, env, unitPath, logPath } = win32Home('agent-bot-supervisor-win32-');
+  const schtasks = fakeSchtasks();
+  const stops = [];
+  const options = {
+    home,
+    platform: 'win32',
+    env,
+    reloadUnchanged: false,
+    probe: async () => ({ running: true, pid: 9, port: 1, startedAt: '2026-10-08T00:00:00.000Z' }),
+    stopDetached: async () => { stops.push('stopped'); },
+    exec: schtasks.exec,
+  };
+  const first = await ensureDaemonSupervisor({ ...options, programArguments: WIN_PROGRAM });
+  assert.equal(first.applied, true);
+  assert.equal(first.loaded, true);
+  assert.equal(first.refreshed, true);
+  assert.equal(first.kind, 'schtasks');
+  assert.equal(first.label, WIN_LABEL);
+  assert.equal(first.unitPath, unitPath);
+  assert.equal(first.statePath, join(home, '.local', 'state', 'agent-bot', 'daemon.json'));
+  // The same sequence `agent-bot daemon install` runs: is it registered,
+  // then register from the XML, then stop and start the instance.
+  assert.deepEqual(schtasks.calls, [
+    ['schtasks.exe', '/Query', '/TN', WIN_LABEL, '/FO', 'CSV', '/NH'],
+    ['schtasks.exe', '/Create', '/XML', unitPath, '/TN', WIN_LABEL, '/F'],
+    ['schtasks.exe', '/End', '/TN', WIN_LABEL],
+    ['schtasks.exe', '/Run', '/TN', WIN_LABEL],
+  ]);
+  assert.deepEqual(stops, ['stopped'], 'a detached daemon is stopped before the task takes over');
+  // The unit on disk is the UTF-16 task, with this runtime, the pinned
+  // environment and the log inside; the log directory exists for cmd.exe.
+  const xml = scheduledTaskText(readFileSync(unitPath));
+  assert.equal(xml, renderScheduledTask({
+    programArguments: WIN_PROGRAM, environment: supervisorEnvironment({ env, home }), label: WIN_LABEL, logPath, userId: 'DESK\\owner',
+  }));
+  assert.ok(element(xml, 'Arguments').includes(`set "AGENT_BOT_SERVICE_LABEL=${WIN_LABEL}" && "C:\\App\\node.exe" "C:\\App\\agent-bot.mjs" "daemon" "run" >> "${logPath}" 2>&1`));
+  assert.equal(statSync(dirname(logPath)).isDirectory(), true);
+
+  schtasks.calls.length = 0;
+  const again = await ensureDaemonSupervisor({ ...options, programArguments: WIN_PROGRAM });
+  assert.equal(again.refreshed, false);
+  assert.equal(again.loaded, true);
+  assert.deepEqual(schtasks.calls, [['schtasks.exe', '/Query', '/TN', WIN_LABEL, '/FO', 'CSV', '/NH']], 'an unchanged, registered task is left alone');
+
+  schtasks.calls.length = 0;
+  const moved = await ensureDaemonSupervisor({ ...options, programArguments: ['C:\\New\\node.exe', 'C:\\New\\agent-bot.mjs', 'daemon', 'run'] });
+  assert.equal(moved.refreshed, true);
+  assert.ok(element(scheduledTaskText(readFileSync(unitPath)), 'Arguments').includes('"C:\\New\\agent-bot.mjs"'));
+  assert.deepEqual(schtasks.calls.slice(1).map((row) => row[1]), ['/Create', '/End', '/Run'], 'an update re-registers and kickstarts');
+  assert.deepEqual(stops, ['stopped'], 'a supervised daemon is restarted by the task, not stopped by hand');
+
+  const info = inspectSupervisor({ home, env, platform: 'win32', exec: schtasks.exec });
+  assert.deepEqual(info, { supported: true, applied: true, loaded: true, platform: 'win32', kind: 'schtasks', unitPath, label: WIN_LABEL });
+
+  schtasks.calls.length = 0;
+  const removed = [];
+  const disabled = await disableDaemonSupervisor({
+    home,
+    platform: 'win32',
+    env,
+    exec: schtasks.exec,
+    remove: (file) => { removed.push(file); rmSync(file, { force: true }); },
+    probe: async () => ({ running: true, pid: 3, port: 4 }),
+    stop: async () => { removed.push('stop'); },
+  });
+  assert.deepEqual(disabled, { unloaded: true, stopped: true, platform: 'win32', kind: 'schtasks', label: WIN_LABEL, unitPath });
+  assert.deepEqual(schtasks.calls, [
+    ['schtasks.exe', '/End', '/TN', WIN_LABEL],
+    ['schtasks.exe', '/Delete', '/TN', WIN_LABEL, '/F'],
+  ]);
+  assert.deepEqual(removed, [unitPath, 'stop']);
+  assert.equal(schtasks.isRegistered(), false);
+  // Disabling again, with no unit on disk, touches schtasks not at all.
+  schtasks.calls.length = 0;
+  const twice = await disableDaemonSupervisor({ home, platform: 'win32', env, exec: schtasks.exec, probe: async () => ({ running: false }), stop: async () => {} });
+  assert.deepEqual(twice, { unloaded: true, stopped: false, platform: 'win32', kind: 'schtasks', label: WIN_LABEL, unitPath });
+  assert.deepEqual(schtasks.calls, []);
+  assert.equal(inspectSupervisor({ home, env, platform: 'win32', exec: schtasks.exec }).applied, false);
+  // With the unit still on disk, status asks schtasks and takes its answer.
+  assert.equal(inspectSupervisor({ home, env, platform: 'win32', exists: () => true, exec: schtasks.exec }).loaded, false);
+  assert.deepEqual(schtasks.calls, [['schtasks.exe', '/Query', '/TN', WIN_LABEL, '/FO', 'CSV', '/NH']]);
+});
+
+test('win32 schtasks refusals are typed errors carrying its reason; a task never registered is not a failure to delete', async () => {
+  const { home, env, unitPath } = win32Home('agent-bot-supervisor-win32-fail-');
+  const ensure = (exec) => ensureDaemonSupervisor({
+    home, platform: 'win32', env, programArguments: WIN_PROGRAM, probe: async () => ({ running: false }), stopDetached: async () => {}, exec,
+  });
+  await assert.rejects(ensure(fakeSchtasks({ deny: '/Create' }).exec), {
+    code: 'supervisor-load-failed',
+    message: /^schtasks would not register app\.geniusbar\.agent-bot: .*ERROR: Access is denied\./s,
+  });
+  await assert.rejects(ensure(fakeSchtasks({ deny: '/Run' }).exec), {
+    code: 'supervisor-load-failed',
+    message: /^schtasks would not start app\.geniusbar\.agent-bot: .*Access is denied/s,
+  });
+  const stubborn = fakeSchtasks({ deny: '/Delete' });
+  stubborn.exec('schtasks.exe', ['/Create', '/XML', unitPath, '/TN', WIN_LABEL, '/F']);
+  await assert.rejects(disableDaemonSupervisor({
+    home,
+    platform: 'win32',
+    env,
+    exec: stubborn.exec,
+    exists: (file) => file === unitPath,
+    remove: () => { throw new Error('must not remove the unit after a failed unload'); },
+    probe: async () => ({ running: false }),
+    stop: async () => { throw new Error('must not stop after a failed unload'); },
+  }), { code: 'supervisor-unload-failed', message: /^schtasks would not delete app\.geniusbar\.agent-bot: .*Access is denied/s });
+  // A unit on disk whose task was deleted by hand: schtasks cannot find it,
+  // and that is the state uninstall wants.
+  const absent = fakeSchtasks();
+  const removed = [];
+  const result = await disableDaemonSupervisor({
+    home, platform: 'win32', env, exec: absent.exec, exists: (file) => file === unitPath, remove: (file) => removed.push(file),
+    probe: async () => ({ running: false }), stop: async () => {},
+  });
+  assert.equal(result.unloaded, true);
+  assert.deepEqual(absent.calls, [['schtasks.exe', '/End', '/TN', WIN_LABEL], ['schtasks.exe', '/Delete', '/TN', WIN_LABEL, '/F']]);
+  assert.deepEqual(removed, [unitPath]);
+  assert.equal(isInactiveSupervisorError({ stderr: 'ERROR: The system cannot find the file specified.\r\n' }), true);
+  // The kickstart after an update, on its own: end (whatever that says), run.
+  const kicked = fakeSchtasks();
+  kickstartScheduledTask({ label: WIN_LABEL }, { env, exec: kicked.exec });
+  assert.deepEqual(kicked.calls, [['schtasks.exe', '/End', '/TN', WIN_LABEL], ['schtasks.exe', '/Run', '/TN', WIN_LABEL]]);
+  assert.throws(() => kickstartScheduledTask({ label: WIN_LABEL }, { env, exec: fakeSchtasks({ deny: '/Run' }).exec }), { code: 'supervisor-load-failed' });
+  // The status row is the proof of registration, not the exit status.
+  assert.equal(scheduledTaskRegistered(`"\\${WIN_LABEL}","N/A","Ready"\r\n`, WIN_LABEL), true);
+  assert.equal(scheduledTaskRegistered(`"${WIN_LABEL}","N/A","Running"\n`, WIN_LABEL), true);
+  assert.equal(scheduledTaskRegistered('"\\other.task","N/A","Ready"\r\n', WIN_LABEL), false);
+  assert.equal(scheduledTaskRegistered('', WIN_LABEL), false);
+  const typo = fakeSchtasks();
+  typo.exec('schtasks.exe', ['/Create', '/XML', unitPath, '/TN', 'other.task', '/F']);
+  assert.equal(inspectSupervisor({ home, env, platform: 'win32', exists: () => true, exec: typo.exec }).loaded, false);
 });
