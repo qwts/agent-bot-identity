@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.39
+
+- `bootstrap` tells apart "no App resolves for this account" from "the account resolves an App but this checkout is unbound" (#190): in a rostered agent account a run outside a repository reports `checkout-unbound`, naming the account and its App and saying to run from the checkout (or `--machine-only`); `bot-identity-unresolved` stays for an account with no App and says whether the run was outside a repository. Both carry `evidence.account`, `app_slug` and `outside_repository`.
+- `mint-token` checks its command line before minting (#213): `--help`/`-h` print the usage and mint nothing, `--app` needs a slug and is accepted once, and any other option is `unknown option: …` with exit 1 and nothing on stdout, so a mistyped flag never releases a credential.
+
 ## 0.10.38
 
 - Per-skill manifests (#312, first slice): every skill in a soul package has a manifest of its files with a SHA-256 digest over each file's exact bytes, and `soul revision edit` and `propose` report the skills a revision added, removed or changed (added, modified and removed files per skill, where a one-byte edit, a line-ending change or an execute-bit flip counts). `agent-bot soul revision skills ID [REVISION [SINCE]]` prints a stored revision's manifests and what changed since its parent or any earlier revision. Manifests are a pure function of a stored revision, so prior captures stay addressable by revision; instruction-dependency capture and recheck are later slices.
