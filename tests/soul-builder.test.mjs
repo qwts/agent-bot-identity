@@ -5,7 +5,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildHarnessFiles } from '../soul-builder.mjs';
+import { buildHarnessFiles, harnessReport } from '../soul-builder.mjs';
 import { populationFile, upsertSoul, registerSoulDir } from '../agent-population.mjs';
 import { buildSoulDirectory } from '../soul-build.mjs';
 import { computePackageRevision, readSoulPackageEntries, GENERATED_HARNESS_MARKER as MARKER, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
@@ -114,6 +114,53 @@ test('skills retain front matter first, copy text/scripts, preserve executable m
   rmSync(join(root, 'skills/hello'), { recursive: true });
   buildSoulDirectory(root);
   assert.equal(existsSync(join(root, '.claude/skills/hello')), false);
+});
+
+test('a disabled skill renders nothing for any harness while its source directory and the other skills stay', (t) => {
+  const root = fixture(t);
+  put(root, 'skills/hello/SKILL.md', '---\nname: hello\ndescription: Say hello\n---\nHello\n');
+  put(root, 'skills/hello/references/help.md', 'Help\n');
+  put(root, 'skills/hello/scripts/run.sh', '#!/bin/sh\necho hello\n');
+  put(root, 'skills/other/SKILL.md', '---\nname: other\ndescription: Other\n---\nOther\n');
+  const manifest = JSON.parse(readFileSync(join(root, 'soul.json')));
+  const declare = (disabled) => writeFileSync(join(root, 'soul.json'), JSON.stringify({ ...manifest, skills: { disabled } }));
+  buildSoulDirectory(root);
+  assert.ok(existsSync(join(root, '.claude/skills/hello/SKILL.md')) && existsSync(join(root, '.gemini/skills/hello/SKILL.md')));
+  declare(['hello']);
+  const { entries } = readSoulPackageEntries(root);
+  const output = buildHarnessFiles(entries);
+  assert.deepEqual([...output.keys()].filter((path) => /skills\//.test(path)), ['.claude/skills/other/SKILL.md', '.gemini/skills/other/SKILL.md']);
+  assert.equal(harnessReport(output).claude.rendered.includes('skills'), true);
+  const sourcePaths = entries.map((entry) => entry.path);
+  for (const path of ['skills/hello/SKILL.md', 'skills/hello/references/help.md', 'skills/hello/scripts/run.sh']) assert.ok(sourcePaths.includes(path), path);
+  // A rebuild removes the stale copies and leaves `skills/hello/` alone.
+  buildSoulDirectory(root);
+  for (const path of ['.claude/skills/hello', '.gemini/skills/hello']) assert.equal(existsSync(join(root, path)), false, path);
+  assert.ok(existsSync(join(root, '.claude/skills/other/SKILL.md')) && existsSync(join(root, '.gemini/skills/other/SKILL.md')));
+  assert.equal(readFileSync(join(root, 'skills/hello/references/help.md'), 'utf8'), 'Help\n');
+  const revision = computePackageRevision(root);
+  // A name no directory matches is fine; the profile reports it.
+  declare(['hello', 'later']);
+  buildSoulDirectory(root);
+  assert.ok(existsSync(join(root, '.claude/skills/other/SKILL.md')));
+  // With every skill off there is no skills directory and no `skills` in the report.
+  declare(['hello', 'other']);
+  const report = buildSoulDirectory(root);
+  for (const path of ['.claude/skills', '.gemini/skills']) assert.equal(existsSync(join(root, path)), false, path);
+  for (const harness of Object.values(report.harnesses)) assert.equal(harness.rendered.includes('skills'), false);
+  assert.ok(report.harnesses.claude.rendered.includes('instructions'));
+  assert.ok(existsSync(join(root, 'skills/hello/SKILL.md')) && existsSync(join(root, 'skills/other/SKILL.md')));
+  // Switching back on restores the copies byte for byte.
+  declare([]);
+  buildSoulDirectory(root);
+  const skill = readFileSync(join(root, '.claude/skills/hello/SKILL.md'), 'utf8');
+  assert.ok(skill.startsWith(`---\nname: hello\ndescription: Say hello\n---\n${MARKER}\nHello\n`));
+  assert.equal(readFileSync(join(root, '.gemini/skills/hello/SKILL.md'), 'utf8'), skill);
+  assert.equal(readFileSync(join(root, '.claude/skills/hello/references/help.md'), 'utf8'), `${MARKER}\nHelp\n`);
+  // Off again lands on the same revision: the switch is only the declaration.
+  declare(['hello']);
+  buildSoulDirectory(root);
+  assert.equal(computePackageRevision(root), revision);
 });
 
 for (const target of ['CLAUDE.md', '.claude', '.claude/skills', '.claude/skills/hello']) {

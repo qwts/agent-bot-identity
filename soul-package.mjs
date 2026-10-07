@@ -87,6 +87,27 @@ function validateHarnessSettings(settings, path) {
   }
 }
 
+// Skill directory names: the Agent Skills name grammar, bounded at 64.
+export const SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export const SKILL_NAME_MAX = 64;
+const skillName = (value) => typeof value === 'string' && value.length <= SKILL_NAME_MAX && SKILL_NAME.test(value);
+
+// A soul switches a skill off without deleting it (GeniusBar#64): the
+// `skills/<name>/` directory stays in the package and only the rendering
+// stops. A name no directory matches is allowed, so the declaration can
+// precede the skill; `soul profile` reports it.
+export function validateSkillsDeclaration(skills) {
+  if (!object(skills)) throw new Error('soul.json skills must be an object');
+  for (const key of Object.keys(skills)) {
+    if (key !== 'disabled') throw new Error(`soul.json skills.${key} is an unknown skills setting`);
+  }
+  const disabled = skills.disabled;
+  if (!Array.isArray(disabled) || disabled.some((name) => !skillName(name)) || new Set(disabled).size !== disabled.length) {
+    throw new Error('soul.json skills.disabled must be an array of unique skill names');
+  }
+  return skills;
+}
+
 export function validateAppearanceDeclaration(appearance) {
   if (!object(appearance)) throw new Error('soul.json appearance must be an object');
   for (const key of Object.keys(appearance)) {
@@ -116,6 +137,7 @@ function validateManifest(manifest) {
   if (manifest.comms !== undefined && typeof manifest.comms !== 'boolean') throw new Error('soul.json comms must be a boolean');
   if (manifest.credentials !== undefined) validateCredentialsDeclaration(manifest.credentials);
   if (manifest.appearance !== undefined) validateAppearanceDeclaration(manifest.appearance);
+  if (manifest.skills !== undefined) validateSkillsDeclaration(manifest.skills);
   if (manifest.harness !== undefined) validateHarnessSettings(manifest.harness, 'soul.json harness');
   if (manifest.harnesses !== undefined) {
     if (!object(manifest.harnesses)) throw new Error('soul.json harnesses must be an object');
@@ -185,7 +207,7 @@ function validateSkill(bytes, directory) {
   const front = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1];
   if (!front) throw new Error(`${directory}/SKILL.md needs YAML front matter`);
   const name = skillField(front, 'name');
-  if (name.length > 64 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || name !== directory) {
+  if (!skillName(name) || name !== directory) {
     throw new Error(`skill name must match directory ${directory} and use lowercase letters, digits and single hyphens (1–64 characters)`);
   }
   if (skillField(front, 'description').length > 1024) throw new Error('skill description exceeds 1024 characters');

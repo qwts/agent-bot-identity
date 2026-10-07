@@ -19,7 +19,7 @@ collections are `[]`):
   "profile": {
     "name": null, "displayName": null, "description": null, "harness": null,
     "package": null, "revision": null, "template": null, "appearance": null,
-    "parentId": null, "status": null
+    "skillsDisabled": [], "parentId": null, "status": null
   },
   "files": [],
   "skills": [],
@@ -38,15 +38,21 @@ flag. Reading does not validate the entire package or recompute its revision.
 or `null` when absent or unavailable. The declaration is validated separately;
 an invalid declaration leaves `appearance` null and adds a profile error.
 With no declared appearance, GeniusBar derives the avatar colour from the Agent ID.
+`skillsDisabled` is the package's `skills.disabled` declaration as written
+(`[]` when absent), so a UI can round-trip it; an invalid declaration leaves it
+`[]` and adds a `skills` error.
 
 - Files are `{path, kind, size, modifiedAt, text}`. Paths are relative to the
   soul directory, sizes are bytes, and timestamps are ISO 8601. Kinds are
   `soul`, `generated`, `harness-settings`, `context`, or `skill`. `text` is a
   UTF-8/NUL check of an initial bounded sample; a contents request validates
   the entire file. At most 500 files are returned, with a truncation error.
-- Skills are `{name, source, path, commit}`. Package `skills/NAME/SKILL.md`
+- Skills are `{name, source, path, commit, enabled}`. Package `skills/NAME/SKILL.md`
   entries have source `soul` and commit `null` (the package uses a revision,
-  not a Git commit). Generated skill copies appear in files only. SOP skills,
+  not a Git commit); `enabled` is `false` when `skills.disabled` names the
+  skill, and a disabled name with no package skill adds a `skills` error
+  (`skills.disabled names a skill the package does not have: NAME`) without
+  failing the command. SOP skills are always `enabled: true`. Generated skill copies appear in files only. SOP skills,
   when resolvable offline, use source `sop` and their pinned Git commit.
   Skills in a local `sop/` override are available without an online selection;
   their paths start with `sop/` and their commit is `null`.

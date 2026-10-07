@@ -5,7 +5,7 @@ import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { canonicalJson, canonicalPackageBytes, computePackageRevision, expectedGeneratedFiles, readSoulPackageEntries, GENERATED_HARNESS_MARKER, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST, skillField, validateSoulPackage, PRIOR_PACKAGE_IGNORE_LISTS, isSupportedIgnoreList } from '../soul-package.mjs';
+import { canonicalJson, canonicalPackageBytes, computePackageRevision, expectedGeneratedFiles, readSoulPackageEntries, GENERATED_HARNESS_MARKER, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST, skillField, validateSkillsDeclaration, validateSoulPackage, PRIOR_PACKAGE_IGNORE_LISTS, isSupportedIgnoreList } from '../soul-package.mjs';
 
 const vectors = JSON.parse(readFileSync(new URL('./fixtures/soul-package/vectors.json', import.meta.url)));
 const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
@@ -118,6 +118,41 @@ test('appearance is optional, accepts boundary hues, and participates in the rev
   }
   manifest(root, (m) => { delete m.appearance; });
   assert.equal(seal(root), initial);
+});
+
+test('skills.disabled is optional, accepts unknown names, and participates in the revision', (t) => {
+  const root = fixture(t);
+  const initial = validateSoulPackage(root).revision;
+  const revisions = new Set([initial]);
+  // No fixture skill matches: the declaration may precede the skill.
+  for (const disabled of [[], ['review'], ['review', 'a-b-c']]) {
+    manifest(root, (m) => { m.skills = { disabled }; });
+    const revision = seal(root);
+    assert.equal(validateSoulPackage(root).revision, revision);
+    assert.ok(!revisions.has(revision));
+    revisions.add(revision);
+  }
+  manifest(root, (m) => { delete m.skills; });
+  assert.equal(seal(root), initial);
+});
+
+test('skills.disabled rejects invalid shapes, unknown keys, duplicates and bad names with their paths', (t) => {
+  const root = fixture(t);
+  const cases = [
+    ...[null, [], 'review', 10, true].map((skills) => [skills, 'soul.json skills must be an object']),
+    [{ disabled: ['review'], enabled: ['other'] }, 'soul.json skills.enabled is an unknown skills setting'],
+    ...[undefined, null, 'review', {}, ['review', 'review'], [''], ['Review'], ['re_view'], ['-review'], ['review-'], ['a--b'], [1], [null], ['a'.repeat(65)]]
+      .map((disabled) => [{ disabled }, 'soul.json skills.disabled must be an array of unique skill names']),
+  ];
+  for (const [skills, message] of cases) {
+    manifest(root, (m) => { m.skills = skills; });
+    const before = snapshot(root);
+    assert.throws(() => validateSoulPackage(root), { message });
+    assert.deepEqual(snapshot(root), before);
+  }
+  for (const disabled of [['a'], ['a'.repeat(64)], ['a-1', 'b2']]) {
+    assert.deepEqual(validateSkillsDeclaration({ disabled }), { disabled });
+  }
 });
 
 test('appearance rejects invalid shapes, unknown keys, and invalid hues with their paths', (t) => {

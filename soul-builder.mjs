@@ -312,6 +312,18 @@ export function soulCommsDeclared(source) {
   return manifest?.comms !== false;
 }
 
+// soul.json `skills.disabled` switches skills off without deleting them
+// (GeniusBar#64): their `skills/<name>/` stays in the package and no harness
+// gets a rendered copy. Read like the comms flag, straight from the bytes.
+export function soulSkillsDisabled(source) {
+  const bytes = source.get('soul.json');
+  if (!bytes) return new Set();
+  let manifest;
+  try { manifest = JSON.parse(text(bytes)); } catch { return new Set(); } // the package reader validates it
+  const disabled = manifest?.skills?.disabled;
+  return new Set(Array.isArray(disabled) ? disabled.filter((name) => typeof name === 'string') : []);
+}
+
 function targetFor(path) {
   const target = MCP_TARGETS.find((candidate) => candidate.path === path);
   if (!target) throw new Error(`not a rendered MCP path: ${path}`);
@@ -795,8 +807,12 @@ export function buildHarnessFiles(packageEntries, { authored = new Map() } = {})
     .map((name) => name.slice(0, name.indexOf('/'))))];
   output.set('CLAUDE.md', Buffer.from(`${MARKER}\n@AGENTS.md\n`));
   output.set('GEMINI.md', Buffer.from(`${MARKER}\n@AGENTS.md\n`));
+  const disabled = soulSkillsDisabled(source);
   for (const [path, bytes] of source) {
-    if (!/^skills\/[^/]+\/SKILL\.md$/.test(path)) continue;
+    const skill = /^skills\/([^/]+)\/SKILL\.md$/.exec(path);
+    // A disabled skill renders nothing, siblings included; the report then
+    // lists `skills` only when some other skill was rendered.
+    if (!skill || disabled.has(skill[1])) continue;
     const content = text(bytes);
     const front = content.match(/^---\n[\s\S]*?\n---(?:\n|$)/)?.[0];
     if (!front) throw new Error(`${path} needs YAML front matter`);

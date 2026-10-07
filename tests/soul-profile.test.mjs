@@ -80,9 +80,9 @@ test('profile has the complete JSON contract, package and generated files, skill
   const result = readSoulProfile(ID, f.options);
   assert.deepEqual(Object.keys(result), ['agentId', 'profile', 'files', 'skills', 'credentials', 'sop', 'errors']);
   assert.deepEqual(result.profile, { name: 'profile-fixture', displayName: 'Profile Fixture', description: f.manifest.description,
-    harness: 'codex', package: f.dir, revision: f.manifest.revision, template: false, appearance: null, parentId: null, status: 'active' });
+    harness: 'codex', package: f.dir, revision: f.manifest.revision, template: false, appearance: null, skillsDisabled: [], parentId: null, status: 'active' });
   assert.deepEqual(result.credentials, [{ name: 'fixture-app', provider: 'github', status: 'declared' }]);
-  assert.deepEqual(result.skills, [{ name: 'review', source: 'soul', path: 'skills/review/SKILL.md', commit: null }]);
+  assert.deepEqual(result.skills, [{ name: 'review', source: 'soul', path: 'skills/review/SKILL.md', commit: null, enabled: true }]);
   assert.deepEqual(result.sop, { resolved: null, override: null });
   assert.deepEqual(result.errors, []);
   const files = new Map(result.files.map((file) => [file.path, file]));
@@ -122,6 +122,52 @@ test('profile and CLI expose declared appearance or null without changing the pa
     const result = readSoulProfile(ID, f.options);
     assert.equal(result.profile.appearance, null);
     assert.ok(result.errors.some((error) => error.area === 'profile' && /appearance/.test(error.message)));
+  }
+});
+
+test('profile reports skills.disabled as written, flags each skill, and names unknown skills without failing', (t) => {
+  const f = fixture(t);
+  put(path.join(f.dir, 'skills', 'other', 'SKILL.md'), '---\nname: other\ndescription: Other\n---\nOther.\n');
+  put(path.join(f.dir, 'sop', 'skills', 'review', 'SKILL.md'), '# SOP skill\n');
+  const soul = (result) => result.skills.filter((skill) => skill.source === 'soul');
+  put(path.join(f.dir, 'soul.json'), JSON.stringify({ ...f.manifest, skills: { disabled: ['review', 'later'] } }));
+  const before = snapshot(f.home);
+  const result = readSoulProfile(ID, f.options);
+  assert.deepEqual(result.profile.skillsDisabled, ['review', 'later']);
+  assert.deepEqual(soul(result), [
+    { name: 'other', source: 'soul', path: 'skills/other/SKILL.md', commit: null, enabled: true },
+    { name: 'review', source: 'soul', path: 'skills/review/SKILL.md', commit: null, enabled: false },
+  ]);
+  // The SOP skill of the same name is not switched off by the declaration.
+  assert.deepEqual(result.skills.filter((skill) => skill.source === 'sop'),
+    [{ name: 'review', source: 'sop', path: 'sop/skills/review/SKILL.md', commit: null, enabled: true }]);
+  assert.deepEqual(result.errors.filter((error) => error.area === 'skills'),
+    [{ area: 'skills', message: 'skills.disabled names a skill the package does not have: later' }]);
+  const json = cli(f, ID, '--json');
+  assert.equal(json.status, 0, json.stderr);
+  assert.deepEqual(JSON.parse(json.stdout).profile.skillsDisabled, ['review', 'later']);
+  const plain = cli(f, ID);
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.match(plain.stdout, /^skillsDisabled: \["review","later"\]$/m);
+  assert.match(plain.stdout, /^review \(soul, disabled\) skills\/review\/SKILL\.md commit: -$/m);
+  assert.match(plain.stdout, /^other \(soul\) skills\/other\/SKILL\.md commit: -$/m);
+  assert.match(plain.stdout, /^skills: skills\.disabled names a skill the package does not have: later$/m);
+  assert.deepEqual(snapshot(f.home), before);
+  // Absent and empty declarations enable everything and report nothing.
+  for (const manifest of [f.manifest, { ...f.manifest, skills: { disabled: [] } }]) {
+    put(path.join(f.dir, 'soul.json'), JSON.stringify(manifest));
+    const enabled = readSoulProfile(ID, f.options);
+    assert.deepEqual(enabled.profile.skillsDisabled, []);
+    assert.ok(enabled.skills.every((skill) => skill.enabled === true));
+    assert.deepEqual(enabled.errors.filter((error) => error.area === 'skills'), []);
+  }
+  // An invalid declaration switches nothing off and is reported once.
+  for (const skills of [null, {}, { disabled: 'review' }, { disabled: ['review', 'review'] }, { disabled: ['Review'] }, { disabled: [], extra: true }]) {
+    put(path.join(f.dir, 'soul.json'), JSON.stringify({ ...f.manifest, skills }));
+    const invalid = readSoulProfile(ID, f.options);
+    assert.deepEqual(invalid.profile.skillsDisabled, []);
+    assert.ok(invalid.skills.every((skill) => skill.enabled === true));
+    assert.deepEqual(invalid.errors.filter((error) => error.area === 'skills'), [{ area: 'skills', message: 'Invalid skills declaration.' }]);
   }
 });
 
@@ -204,7 +250,7 @@ test('local SOP skills are available offline; cached SOP reads retain pinned com
   const before = snapshot(f.home);
   const result = readSoulProfile(ID, f.options);
   assert.deepEqual(result.skills.filter((skill) => skill.source === 'sop'), [
-    { name: 'review-sop', source: 'sop', path: 'sop/skills/review-sop/SKILL.md', commit: null },
+    { name: 'review-sop', source: 'sop', path: 'sop/skills/review-sop/SKILL.md', commit: null, enabled: true },
   ]);
   assert.deepEqual(result.sop, { resolved: null, override: { path: 'sop', workflows: [] } });
   assert.deepEqual(result.errors, []);
