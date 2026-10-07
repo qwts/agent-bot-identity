@@ -226,7 +226,7 @@ test('--check --json reports every harness and never leaves a primitive unreport
   assert.deepEqual(report.harnesses.gemini.files, ['.gemini/settings.json', 'GEMINI.md']);
   assert.deepEqual(report.harnesses.opencode.files, ['opencode.json']);
   // Every harness the toolkit knows is named, so nothing is dropped in silence.
-  assert.deepEqual(Object.keys(report.harnesses).sort(), ['claude', 'codex', 'copilot', 'cursor', 'devin', 'gemini', 'muse', 'opencode']);
+  assert.deepEqual(Object.keys(report.harnesses).sort(), ['claude', 'codex', 'copilot', 'cursor', 'devin', 'gemini', 'kiro', 'muse', 'opencode']);
   assert.ok(Object.values(report.harnesses).every((entry) => entry.rendered.includes('instructions')
     && Object.values(entry.unsupported).every((names) => names.length === 0)));
   // Harnesses without an MCP adapter in this slice say so by omission.

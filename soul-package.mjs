@@ -50,7 +50,7 @@ export function validateCredentialsDeclaration(credentials) {
 
 // Harness settings are a closed declaration; unrelated manifest extensions stay
 // opaque. Keep failures path-specific, including overrides that no adapter renders.
-const HARNESS_NAMES = ['claude', 'codex', 'gemini', 'opencode', 'cursor', 'copilot', 'devin', 'muse'];
+const HARNESS_NAMES = ['claude', 'codex', 'gemini', 'opencode', 'cursor', 'copilot', 'devin', 'muse', 'kiro'];
 function validateHarnessSettings(settings, path) {
   if (!object(settings)) throw new Error(`${path} must be an object`);
   for (const [key, value] of Object.entries(settings)) {

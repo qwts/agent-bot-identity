@@ -46,7 +46,7 @@ test('agents and commands map to native formats and retain Claude source bytes a
   for (const path of primitivePaths) assert.ok(isGeneratedPath(path), path);
 });
 
-for (const harness of ['claude', 'gemini', 'codex', 'opencode', 'cursor', 'copilot', 'devin', 'muse']) {
+for (const harness of ['claude', 'gemini', 'codex', 'opencode', 'cursor', 'copilot', 'devin', 'muse', 'kiro']) {
   test(`${harness} reports every received, rendered and unsupported primitive`, () => {
     const output = buildHarnessFiles(entries());
     const report = harnessReport(new Map(output))[harness];

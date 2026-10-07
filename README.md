@@ -1569,8 +1569,10 @@ work area. Check in with `agent-bot join`, then use
 a repository worktree under that soul, or run setup in an existing allowed
 checkout. An owner primary checkout outside the soul, arbitrary directories,
 and conflicting soul pins are refused before writes. Cross-device placement
-refuses with instructions, without a TMPDIR fallback. A harness without a soul
-needs GeniusBar approval (Kiro: GeniusBar#185), then check-in.
+refuses with instructions, without a TMPDIR fallback. A session without a soul
+checks in first with `agent-bot join`; any harness key can join, and what a
+harness gains beyond that is its agent-bot rows (wake lanes, generated files;
+Kiro: #523).
 
 The checkout hook does nothing silently without a session soul and cannot
 reuse a stale checkout pin as session identity. `agent-bot update` refreshes
