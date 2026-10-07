@@ -241,7 +241,8 @@ agent-bot doctor --json --require-schema-version 1  # a checkout with a bot iden
 ```
 
 `doctor` makes no network call to the gh-app-hook inbox: `inbox.configuration`
-reports only the URL, credential presence and harness wiring. Add
+reports only the URL, credential presence and harness wiring (deploying and
+provisioning the inbox: `docs/gh-app-hook.md`). Add
 `--probe-inbox` to also send one `HEAD /inbox` to the configured broker, with
 no `Authorization` header and without the URL's userinfo or query, bounded at
 5 seconds. The `inbox.reachability` check names the host and tells DNS, TLS,

@@ -2076,10 +2076,38 @@ test('the inbox section finds a project-scoped MCP registration', async () => {
   );
 });
 
+test('a soul package\'s reach-mcp server named agent-bot does not count as inbox wiring (#247)', async () => {
+  const home = tempRoot();
+  const project = tempRoot();
+  // What soul-builder renders: the same server name, the reach-back server.
+  writeFileSync(join(project, '.mcp.json'), JSON.stringify({
+    mcpServers: { 'agent-bot': { command: 'agent-bot', args: ['reach-mcp'] } },
+  }));
+  assert.deepEqual(harnessMcpWiring({ home, cwd: project }), []);
+  // The inbox server, in each documented shape.
+  for (const [label, relative, contents] of [
+    ['claude stdio', '.mcp.json', JSON.stringify({ mcpServers: { 'agent-bot': { command: 'agent-bot', args: ['mcp'] } } })],
+    ['opencode local', 'opencode.json', JSON.stringify({ mcp: { 'agent-bot': { type: 'local', command: ['agent-bot', 'mcp'] } } })],
+    ['codex toml', '.codex/config.toml', '[mcp_servers.agent-bot]\ncommand = "agent-bot"\nargs = ["mcp"]\n'],
+  ]) {
+    const root = tempRoot();
+    mkdirSync(join(root, '.codex'), { recursive: true });
+    writeFileSync(join(root, relative), contents);
+    const wired = harnessMcpWiring({ home, cwd: root });
+    assert.equal(wired.length, 1, `${label}: ${JSON.stringify(wired)}`);
+    assert.equal(wired[0].scope, 'project', label);
+  }
+  // Both servers in one file: the inbox one makes it wired.
+  writeFileSync(join(project, '.mcp.json'), JSON.stringify({
+    mcpServers: { 'agent-bot': { command: 'agent-bot', args: ['reach-mcp'] }, inbox: { command: 'agent-bot', args: ['mcp'] } },
+  }));
+  assert.equal(harnessMcpWiring({ home, cwd: project }).length, 1);
+});
+
 test('the inbox section still finds a user-scoped registration', async () => {
   const home = tempRoot();
   mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
-  writeFileSync(join(home, '.config', 'opencode', 'opencode.jsonc'), '{\n  "mcp": { "agent-bot": {} }\n}\n');
+  writeFileSync(join(home, '.config', 'opencode', 'opencode.jsonc'), '{\n  // the inbox server\n  "mcp": { "agent-bot": { "type": "local", "command": ["agent-bot", "mcp"] } }\n}\n');
   const harnessWires = harnessMcpWiring({ home, cwd: tempRoot() });
   assert.ok(
     harnessWires.some((entry) => entry.harness === 'opencode' && entry.scope === 'user'),

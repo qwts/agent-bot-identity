@@ -22,7 +22,7 @@ Commands:
   keyd               Supervise agent-bot-keyd, the signed key holder GeniusBar ships: install --bin PATH | uninstall | status [--json]
   approvals          Tool-permission requests souls are waiting on: list [--json] | approve PROPOSAL_ID [--scope once|session] [--json] [--principal-stdin] | deny PROPOSAL_ID [--json] [--principal-stdin]
   audit              Read audit receipts: list [--json] [--since ISO-8601|-P1D] [--agent ID] [--event KIND] [--limit N] | tail [--json] [--agent ID]
-  mcp                Serve the agent-bot MCP tools (bind, whoami, population)
+  mcp                Serve the agent-bot MCP tools (bind, whoami, population, space_path, credential, take_inbox)
   reach-mcp          Serve the daemon reach-back MCP tools (fetch_context, post_reply, fleet, send_message)
   wake               Hold this session's socket at the daemon's wake plane
   web                Pair a browser with the daemon's private web client
