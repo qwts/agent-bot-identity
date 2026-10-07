@@ -648,6 +648,49 @@ test('full bootstrap requires a resolvable bot identity while leaving machine re
   assert.equal(report.first_actionable_failure.code, 'bot-identity-unresolved');
 });
 
+test('bootstrap tells "no App for this account" from "the account resolves an App but this checkout is unbound" (#190)', async () => {
+  const accountCheck = { id: 'account.app', status: 'ready', code: null, action: null,
+    message: 'account org-qwen-agent resolves to App org-qwen-agent', evidence: { account: 'org-qwen-agent', harness: 'qwen', app_slug: 'org-qwen-agent' } };
+  const outside = { id: 'worktree.kind', status: 'warning', code: 'not-a-repository', action: null, message: 'not inside a Git repository — worktree checks skipped', evidence: {} };
+  const bootstrapWith = (machineChecks, worktreeChecks) => bootstrap(parseBootstrapArgs([]), {
+    home: '/home/test',
+    installConfig: () => ({ config: {}, path: '/config', updated: false }),
+    installRuntime: () => ({ executable: '/installed/agent-bot' }),
+    run: () => {},
+    collect: () => ({
+      ...readyReport('all'),
+      machine: { status: 'ready', checks: machineChecks, apps: [] },
+      worktree: { status: 'not_applicable', checks: worktreeChecks },
+    }),
+  });
+
+  // An agent account outside any repository: the identity is there, the directory is wrong.
+  const unbound = await bootstrapWith([accountCheck], [outside]);
+  assert.equal(unbound.machine.status, 'ready');
+  assert.equal(unbound.worktree.status, 'not_ready');
+  assert.equal(unbound.first_actionable_failure.code, 'checkout-unbound');
+  assert.match(unbound.first_actionable_failure.message, /account org-qwen-agent resolves to App org-qwen-agent, but bootstrap ran outside a repository/);
+  assert.match(unbound.first_actionable_failure.action, /run bootstrap from the checkout/);
+  assert.deepEqual(unbound.worktree.checks[0].evidence, { account: 'org-qwen-agent', app_slug: 'org-qwen-agent', outside_repository: true });
+  // The worktree probe's own line stays after it.
+  assert.equal(unbound.worktree.checks[1].code, 'not-a-repository');
+
+  // The owner's account outside a repository: no App resolves for the account, and no checkout to read a pin from.
+  const noAccount = { ...accountCheck, status: 'not_applicable', message: 'no configured App matches the OS account — no account-level bot identity',
+    evidence: { account: 'owner', harness: null, app_slug: null } };
+  const nothing = await bootstrapWith([noAccount], [outside]);
+  assert.equal(nothing.first_actionable_failure.code, 'bot-identity-unresolved');
+  assert.match(nothing.first_actionable_failure.message, /no App resolves for this account, and it ran outside a repository/);
+  assert.deepEqual(nothing.worktree.checks[0].evidence, { account: 'owner', app_slug: null, outside_repository: true });
+
+  // The owner's own primary checkout: no account App, and the checkout is the human's.
+  const human = { ...outside, code: 'primary-checkout', message: 'primary checkout with no bot identity — human persona (by design)' };
+  const own = await bootstrapWith([noAccount], [human]);
+  assert.equal(own.first_actionable_failure.code, 'bot-identity-unresolved');
+  assert.match(own.first_actionable_failure.message, /no App resolves for this account or this checkout/);
+  assert.equal(own.worktree.checks[0].evidence.outside_repository, false);
+});
+
 test('bootstrap JSON mode emits exactly one report object', async () => {
   let stdout = '';
   const previous = process.exitCode;

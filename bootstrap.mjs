@@ -58,6 +58,39 @@ Options:
 
 const SOURCE_ENTRYPOINT = fileURLToPath(new URL('./agent-bot', import.meta.url));
 
+// Why the bind phase had nothing to bind (#190): in a rostered agent account
+// the account itself resolves an App (the machine report says so), so a
+// bootstrap run outside a repository there is a wrong directory, not a
+// missing identity. Anywhere else no App resolves for this checkout.
+export function unboundCheckoutCheck(report) {
+  const account = report.machine?.checks?.find((check) => check.id === 'account.app') ?? null;
+  const slug = account?.evidence?.app_slug ?? null;
+  const kind = report.worktree?.checks?.find((check) => check.id === 'worktree.kind') ?? null;
+  const outside = kind?.code === 'not-a-repository';
+  if (slug) {
+    return readinessCheck({
+      id: 'bootstrap.worktree',
+      status: 'failed',
+      code: 'checkout-unbound',
+      message: `account ${account.evidence.account} resolves to App ${slug}, but ${outside ? 'bootstrap ran outside a repository' : 'this checkout is not bound to it'}`,
+      action: outside
+        ? `run bootstrap from the checkout to bind (or --machine-only for the machine alone); App ${slug} needs no --app`
+        : `run agent-bot setup-worktree in this checkout, or pass --app ${slug}, then retry bootstrap`,
+      evidence: { account: account.evidence.account, app_slug: slug, outside_repository: outside },
+    });
+  }
+  return readinessCheck({
+    id: 'bootstrap.worktree',
+    status: 'failed',
+    code: 'bot-identity-unresolved',
+    message: outside
+      ? 'bootstrap cannot bind bot identity here: no App resolves for this account, and it ran outside a repository'
+      : 'bootstrap cannot bind bot identity here: no App resolves for this account or this checkout',
+    action: 'pass --app, set GH_AGENT_APP, pin the checkout, or run from the harness account, then retry bootstrap',
+    evidence: { account: account?.evidence?.account ?? null, app_slug: null, outside_repository: outside },
+  });
+}
+
 export function parseBootstrapArgs(argv = process.argv.slice(2)) {
   const options = {
     apps: [],
@@ -532,13 +565,7 @@ export async function bootstrap(options, {
         || (reachedCredentialPhase && !operationFailure),
     });
     if (scope !== 'machine' && report.worktree.status === 'not_applicable') {
-      const check = readinessCheck({
-        id: 'bootstrap.worktree',
-        status: 'failed',
-        code: 'bot-identity-unresolved',
-        message: 'bootstrap cannot bind bot identity here: no App resolves for this checkout, or it is outside a repository',
-        action: 'pass --app, set GH_AGENT_APP, pin the checkout, or run from the harness account, then retry bootstrap',
-      });
+      const check = unboundCheckoutCheck(report);
       return buildReadinessReport({
         command: 'bootstrap',
         scope,
