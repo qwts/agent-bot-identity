@@ -1,1 +1,0 @@
-- `mint-token` checks its command line before minting (#213): `--help`/`-h` print the usage and mint nothing, `--app` needs a slug and is accepted once, and any other option is `unknown option: …` with exit 1 and nothing on stdout, so a mistyped flag never releases a credential.
