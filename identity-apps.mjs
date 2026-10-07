@@ -46,13 +46,28 @@ const installUrl = (app) => `https://github.com/apps/${slug(app)}/installations/
 function fingerprint(pem) {
   return `SHA256:${createHash('sha256').update(createPublicKey(pem).export({ type: 'spki', format: 'der' })).digest('base64')}`;
 }
+// An installation's grant as GitHub reports it: permission name → level.
+// It is the most a token minted on that installation can do, and it is not
+// the bot user's collaborator role on any repository (#213): GitHub checks
+// that role, not the grant, for things like Dependabot comment commands, and
+// an App's bot login has none unless it is added as a collaborator.
+const PERMISSION_LEVELS = ['read', 'write', 'admin'];
+function installationPermissions(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) fail('identity-app-github', 'GitHub returned invalid installation metadata.');
+  const entries = Object.entries(value).sort(([a], [b]) => a.localeCompare(b));
+  for (const [name, level] of entries) {
+    if (!/^[a-z][a-z0-9_]{0,63}$/.test(name) || !PERMISSION_LEVELS.includes(level)) fail('identity-app-github', 'GitHub returned invalid installation metadata.');
+  }
+  return Object.fromEntries(entries);
+}
 function installations(rows) {
   if (!Array.isArray(rows)) fail('identity-app-github', 'GitHub returned invalid installation metadata.');
   return rows.map((row) => {
     if (!Number.isSafeInteger(row.id) || row.id <= 0 || !validAppSlug(row.account?.login?.toLowerCase()) || !['all', 'selected'].includes(row.repository_selection)) {
       fail('identity-app-github', 'GitHub returned invalid installation metadata.');
     }
-    return { id: row.id, account: row.account.login, repositorySelection: row.repository_selection };
+    return { id: row.id, account: row.account.login, repositorySelection: row.repository_selection, permissions: installationPermissions(row.permissions) };
   });
 }
 async function github(method, route, credential, options) {
@@ -180,7 +195,8 @@ export function listIdentityApps(options = {}) {
     const key = typeof managed?.keyFingerprint === 'string' && managed.keyFingerprint
       ? { fingerprint: managed.keyFingerprint, updatedAt: typeof managed.keyUpdatedAt === 'string' ? managed.keyUpdatedAt : null } : null;
     return { slug: app, botLogin: `${app}[bot]`, issuerPresent, keyPresent, key,
-      installations: Array.isArray(cached) ? installations(cached.map((r) => ({ id: r.id, account: { login: r.account }, repository_selection: r.repositorySelection }))) : [],
+      // Rows cached before the grant was kept list `permissions: null`.
+      installations: Array.isArray(cached) ? installations(cached.map((r) => ({ id: r.id, account: { login: r.account }, repository_selection: r.repositorySelection, permissions: r.permissions ?? null }))) : [],
       harnesses: mapped.filter((r) => r.slug === app).map((r) => r.harness),
       souls: souls.filter((s) => s.appSlug === app).map((s) => s.id), liveMint };
   }) };
@@ -476,7 +492,8 @@ export async function identityAppsCommand(argv, { write = (value) => process.std
   }
   if (group === 'apps' && action === 'list' && !Object.keys(body).length && !principal) {
     const result = listIdentityApps(options);
-    write(`${json ? JSON.stringify(result) : result.apps.map((row) => `${row.slug} (${row.botLogin}) issuer:${row.issuerPresent} key:${row.keyPresent} mint:${row.liveMint.status}`).join('\n') || 'No configured Apps.'}\n`);
+    const grant = (row) => row.installations.map((i) => ` installed:${i.account}(${i.repositorySelection}${i.permissions ? `; ${Object.entries(i.permissions).map(([k, v]) => `${k}:${v}`).join(',') || 'no permissions'}` : ''})`).join('');
+    write(`${json ? JSON.stringify(result) : result.apps.map((row) => `${row.slug} (${row.botLogin}) issuer:${row.issuerPresent} key:${row.keyPresent} mint:${row.liveMint.status}${grant(row)}`).join('\n') || 'No configured Apps.'}\n`);
     return result;
   }
   if (group !== 'app' && group !== 'addon') fail('identity-app-invalid', USAGE, 400);

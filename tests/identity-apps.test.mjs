@@ -39,7 +39,7 @@ function fixture(t, { gate = true, platform = 'linux' } = {}) {
 async function github(t, f) {
   const calls = [];
   let rejectMint = false, rejectApp = false, conversions = 0;
-  const rows = [{ id: 7, account: { login: 'fixture-org' }, repository_selection: 'selected' }];
+  const rows = [{ id: 7, account: { login: 'fixture-org' }, repository_selection: 'selected', permissions: { pull_requests: 'write', contents: 'write', metadata: 'read' } }];
   const server = createServer((req, res) => {
     calls.push(`${req.method} ${req.url}`);
     res.setHeader('content-type', 'application/json');
@@ -89,7 +89,7 @@ for (const platform of ['linux', 'darwin']) test(`connect uses ${platform === 'd
   assert.match(keyFingerprint, /^SHA256:[A-Za-z0-9+/=]+$/); assert.match(keyUpdatedAt, /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);
   assert.deepEqual(listed.apps[0], { slug: 'fixture-app', botLogin: 'fixture-app[bot]', issuerPresent: true, keyPresent: true,
     key: { fingerprint: keyFingerprint, updatedAt: keyUpdatedAt },
-    installations: [{ id: 7, account: 'fixture-org', repositorySelection: 'selected' }], harnesses: [], souls: [], liveMint: { status: 'unknown' } });
+    installations: [{ id: 7, account: 'fixture-org', repositorySelection: 'selected', permissions: { contents: 'write', metadata: 'read', pull_requests: 'write' } }], harnesses: [], souls: [], liveMint: { status: 'unknown' } });
   assert.equal(api.calls.length, before);
   const resolved = resolveAppCredential('fixture-app', f.options);
   assert.equal(resolved.source, 'managed-app');
@@ -197,6 +197,24 @@ test('doctor checks managed stores and caches only live status; list never mints
   const row = listIdentityApps(f.options).apps[0]; assert.equal(row.liveMint.status, 'ready'); noSecrets(row);
   cacheAppDoctorRows({ machine: { apps: [{ slug: 'fixture-app', live_mint: { status: 'skipped' } }] } }, f.options);
   assert.equal(listIdentityApps(f.options).apps[0].liveMint.status, 'ready');
+});
+test('list keeps each installation grant, prints it, and tells a cache from before apart (#213)', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  let output = '';
+  await identityAppsCommand(['apps', 'list'], { ...f.options, write: (value) => { output += value; } }); noSecrets(output);
+  assert.equal(output, 'fixture-app (fixture-app[bot]) issuer:true key:true mint:unknown installed:fixture-org(selected; contents:write,metadata:read,pull_requests:write)\n');
+  // A cache row written before the grant was kept lists permissions: null and prints no grant.
+  const config = loadConfig(f.options);
+  config.identityApps['fixture-app'].installations = [{ id: 7, account: 'fixture-org', repositorySelection: 'selected' }];
+  writeFileSync(f.env.AGENT_BOT_CONFIG, JSON.stringify(config));
+  assert.deepEqual(listIdentityApps(f.options).apps[0].installations, [{ id: 7, account: 'fixture-org', repositorySelection: 'selected', permissions: null }]);
+  output = '';
+  await identityAppsCommand(['apps', 'list'], { ...f.options, write: (value) => { output += value; } });
+  assert.equal(output, 'fixture-app (fixture-app[bot]) issuer:true key:true mint:unknown installed:fixture-org(selected)\n');
+  // A grant GitHub spells wrongly is refused like any other invalid installation metadata.
+  config.identityApps['fixture-app'].installations = [{ id: 7, account: 'fixture-org', repositorySelection: 'selected', permissions: { contents: 'owner' } }];
+  writeFileSync(f.env.AGENT_BOT_CONFIG, JSON.stringify(config));
+  assert.throws(() => listIdentityApps(f.options), { code: 'identity-app-github' });
 });
 test('CLI routes list, validates arguments and emits safe JSON errors', async (t) => {
   const f = fixture(t, { gate: false });
