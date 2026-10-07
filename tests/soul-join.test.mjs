@@ -259,10 +259,10 @@ test('agent-bot join parses its flags; the CLI prints JSON; setup-worktree run b
   mkdirSync(repo);
   git(repo, 'init', '-q');
   const named = spawnSync(process.execPath, [CLI, 'setup-worktree'], { cwd: repo, env, encoding: 'utf8' });
-  assert.equal(named.status, 0);
-  assert.match(named.stderr, /agent-bot join --name NAME --harness HARNESS/);
+  assert.equal(named.status, 0, named.stderr);
+  assert.match(named.stderr, /no session soul.*agent-bot join --name NAME --harness HARNESS/);
   // A git hook runs the module directly and stays quiet.
-  const hook = spawnSync(process.execPath, [fileURLToPath(new URL('../setup-worktree.mjs', import.meta.url))], { cwd: repo, env, encoding: 'utf8' });
+  const hook = spawnSync(process.execPath, [fileURLToPath(new URL('../setup-worktree.mjs', import.meta.url)), '--from-hook'], { cwd: repo, env, encoding: 'utf8' });
   assert.equal(hook.status, 0);
   assert.equal(hook.stderr, '');
 });

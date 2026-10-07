@@ -1,3 +1,4 @@
+import { worktreeSoul } from './helpers/worktree-soul.mjs';
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
@@ -195,6 +196,11 @@ test('an existing Claude checkout stays in its harness location and is linked', 
   const { home, repo } = fixture('legacy-soul-link');
   const printed = runHook({ cwd: repo, name: 'topic', session_id: 'legacy-session' }, { home });
   const config = (...args) => execFileSync('git', args, { cwd: printed, encoding: 'utf8' }).trim();
+  // Seed the already-joined legacy session; setup no longer mints one here.
+  const sessionEnv = { HOME: home };
+  const { identity } = worktreeSoul(sessionEnv, printed, { harness: 'claude', transcript: { provider: 'claude', id: 'legacy-session' } });
+  config('config', 'extensions.worktreeConfig', 'true');
+  config('config', '--worktree', 'agentBot.agentId', identity.id);
   const id = config('config', '--worktree', '--get', 'agentBot.agentId');
   const soul = showSoul(id, { file: join(home, '.local', 'state', 'agent-bot', 'population.json') });
   const link = join(soul.soulDir, 'worktrees', 'topic');

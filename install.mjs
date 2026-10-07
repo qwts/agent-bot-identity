@@ -341,7 +341,11 @@ export function installHookWrappers({
   }
   for (const name of hooks) {
     ensureExecutableMode(join(sourceHooks, name), { stat: statFile, chmod });
-    write(join(hooksDir, name), hookWrapper(name), { mode: 0o755 });
+    // Refresh existing wrappers as well as first installs, just like shims.
+    // write's mode only applies on creation; repair old non-executable files.
+    const target = join(hooksDir, name);
+    write(target, hookWrapper(name), { mode: 0o755 });
+    ensureExecutableMode(target, { stat: statFile, chmod });
   }
   return hooksDir;
 }

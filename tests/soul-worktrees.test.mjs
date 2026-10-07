@@ -45,40 +45,21 @@ test('sanitizes separators, leading dots, empty names, and length', (t) => {
   assert.throws(() => soulWorktreePath('../escape', 'topic', options), /Agent ID/);
 });
 
-test('cross-device fallback selects TMPDIR and links the created checkout', (t) => {
+test('cross-device placement refuses without creating a TMPDIR fallback', (t) => {
   const options = fixture(t);
-  const repo = path.dirname(options.repoCommonDir);
-  const env = hermeticGitEnv({}, { PATH: process.env.PATH, HOME: options.home, TMPDIR: options.env.TMPDIR });
-  const git = (cwd, ...args) => execFileSync('git', args, { cwd, env, encoding: 'utf8' }).trim();
-  git(repo, 'init', '-q', '-b', 'main');
-  git(repo, 'config', 'user.name', 'Test');
-  git(repo, 'config', 'user.email', 'test@example.com');
-  git(repo, 'config', 'core.hooksPath', '/dev/null');
-  git(repo, 'commit', '--allow-empty', '-q', '-m', 'initial');
-  const calls = [];
-  const placed = placeWorktree(agentId, 'topic', { ...options, stat: (directory) => {
-    calls.push(directory);
-    return { dev: directory === options.repoCommonDir ? 2 : 1 };
-  } });
-  assert.deepEqual(calls, [path.dirname(path.dirname(soulWorktreePath(agentId, 'topic', options))), options.repoCommonDir]);
-  assert.deepEqual(placed, { path: path.join(options.env.TMPDIR, 'agent-bot', agentId, 'topic'), linked: true });
-  git(repo, 'worktree', 'add', '-q', '-b', 'topic', placed.path);
-  const link = linkWorktree(agentId, placed.path, { ...options, name: 'topic' });
-  assert.equal(link, soulWorktreePath(agentId, 'topic', options));
-  assert.ok(lstatSync(link).isSymbolicLink());
-  assert.equal(realpathSync(link), realpathSync(placed.path));
-  assert.equal(git(link, 'rev-parse', '--show-toplevel'), realpathSync(placed.path));
-  assert.equal(git(link, 'symbolic-ref', '--short', 'HEAD'), 'topic');
+  assert.throws(() => placeWorktree(agentId, 'topic', { ...options,
+    stat: (directory) => ({ dev: directory === options.repoCommonDir ? 2 : 1 }),
+  }), /different devices.*durable linked git worktree.*No TMPDIR fallback/);
+  assert.equal(existsSync(options.env.TMPDIR), false);
+  assert.equal(existsSync(path.dirname(soulWorktreePath(agentId, 'topic', options))), false);
 });
 
-test('long-path fallback selects TMPDIR on the same device', (t) => {
+test('long paths refuse instead of selecting TMPDIR', (t) => {
   const options = fixture(t);
   const length = soulWorktreePath(agentId, 'topic', options).length;
   assert.equal(placeWorktree(agentId, 'topic', { ...options, maxPathLength: length }).linked, false);
-  const placed = placeWorktree(agentId, 'topic', { ...options, maxPathLength: length - 1 });
-  assert.equal(placed.linked, true);
-  mkdirSync(placed.path);
-  assert.equal(realpathSync(linkWorktree(agentId, placed.path, options)), realpathSync(placed.path));
+  assert.throws(() => placeWorktree(agentId, 'topic', { ...options, maxPathLength: length - 1 }), /path is too long/);
+  assert.equal(existsSync(options.env.TMPDIR), false);
 });
 
 test('foreign checkout links are idempotent and clashes get numbered suffixes', (t) => {

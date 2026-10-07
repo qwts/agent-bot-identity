@@ -1,3 +1,5 @@
+import { worktreeSoul } from './helpers/worktree-soul.mjs';
+import { linkWorktree } from '../soul-worktrees.mjs';
 import { readManagedAppCredential, readAppMetadata } from '../identity-app-store.mjs';
 // Hermetic fresh-machine bootstrap coverage (ENG issue #67).
 //
@@ -131,7 +133,9 @@ test('cold machine bootstrap: delegate refusal, complete install, idempotent rer
   // From here the scenario runs as the agent account (AGENT_BOT_ACCOUNT names
   // it, the same seam the shell hooks and the gh shim honor): the account is
   // the identity a checkout resolves through when nothing pins it.
-  const AGENT_ACCOUNT = { AGENT_BOT_ACCOUNT: SLUG };
+  const sessionEnv = { ...fixture.env };
+  const { identity, options: soulOptions } = worktreeSoul(sessionEnv, worktree, { appSlug: SLUG });
+  const AGENT_ACCOUNT = { AGENT_BOT_ACCOUNT: SLUG, AGENT_BOT_ID: identity.id };
 
   await t.test('complete bootstrap restores credentials cold and binds the linked worktree', () => {
     const run = runLauncher(fixture, ['bootstrap', '--json', '--with-gh-shim', '--config', configSource], { cwd: worktree, env: AGENT_ACCOUNT });
@@ -222,6 +226,7 @@ test('cold machine bootstrap: delegate refusal, complete install, idempotent rer
 
   await t.test('worktree-only bootstrap binds a second linked worktree without machine mutation', () => {
     const second = addLinkedWorktree(fixture, repo, { session: 'second', branch: 'second-topic' });
+    linkWorktree(identity.id, second, soulOptions);
     const globalBefore = readFileSync(fixture.globalGitConfig, 'utf8');
 
     const run = runLauncher(fixture, ['bootstrap', '--worktree-only', '--json'], { cwd: second, env: AGENT_ACCOUNT });
@@ -239,17 +244,15 @@ test('cold machine bootstrap: delegate refusal, complete install, idempotent rer
     assertColdSandboxIntact(fixture);
   });
 
-  // ENG-0339 acceptance (c): in an agent account every checkout is bot work,
-  // the primary one included — no linked-worktree requirement remains.
-  await t.test('worktree-only bootstrap binds the primary checkout in an agent account', () => {
+  // App attribution still follows the account; setup separately enforces area.
+  await t.test('worktree-only bootstrap refuses the primary checkout in an agent account', () => {
     const run = runLauncher(fixture, ['bootstrap', '--worktree-only', '--json'], { cwd: repo, env: AGENT_ACCOUNT });
     const report = reportFrom(run);
-    assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
-    assert.equal(report.ready, true);
-    assert.equal(report.worktree.status, 'ready');
-    assert.equal(report.worktree.checks[0].message, 'primary checkout');
-    assert.equal(git(fixture, repo, 'config', '--worktree', '--get', 'agentBot.app'), SLUG);
-    assert.equal(git(fixture, repo, 'config', '--worktree', '--get', 'user.name'), `${SLUG}[bot]`);
+    assert.equal(run.status, 1);
+    assert.equal(report.ready, false);
+    assert.equal(report.first_actionable_failure.code, 'worktree-setup-failed');
+    assert.equal(optionalGit(fixture, repo, 'config', '--worktree', '--get', 'agentBot.app'), null);
+    assert.equal(git(fixture, repo, 'config', '--get', 'user.name'), 'Fixture Human');
     assertColdSandboxIntact(fixture);
   });
 });

@@ -283,12 +283,17 @@ async function main() {
         },
       });
     }
-    path = placeWorktree(agentId, name, { repoCommonDir: commonDir }).path;
   } catch (error) {
     // Without a soul the hook keeps Claude's own layout rather than failing.
     process.stderr.write(`worktree placed outside its soul: ${error.message}\n`);
     agentId = null;
     path = legacyPath;
+  }
+
+  // Placement failures must not fall back to a temporary or legacy work area.
+  if (agentId) {
+    path = placeWorktree(agentId, name, { repoCommonDir: commonDir }).path;
+    env.AGENT_BOT_ID = agentId;
   }
 
   withCreationLock(commonDir, name, () => {
@@ -318,7 +323,7 @@ async function main() {
     // and token minting resolve the account's App with or without a pin, and
     // pre-commit still refuses a bot-attributed commit that has no Agent ID —
     // so a loud warning plus a usable workspace beats leaving the agent with
-    // none. Nothing here relies on a directory guard; there is none.
+    // none. Setup still validates the session soul's work area before writes.
     try {
       execFileSync(process.execPath, [SETUP], {
         cwd: path,

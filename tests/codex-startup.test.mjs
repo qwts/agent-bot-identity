@@ -1,6 +1,7 @@
+import { worktreeSoul } from './helpers/worktree-soul.mjs';
 import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -81,6 +82,7 @@ function fixture() {
 
 test('Codex startup repairs identity through the installed stable CLI', () => {
   const { app, env, stateDir, worktree } = fixture();
+  worktreeSoul(env, worktree, { appSlug: app, transcript: { provider: 'codex', id: 'thread-test-1' } });
   execFileSync('bash', [STARTUP], {
     cwd: worktree,
     env: { ...env, CODEX_THREAD_ID: 'thread-test-1', GH_AGENT_APP: app },
@@ -113,9 +115,8 @@ test('Codex startup repairs identity through the installed stable CLI', () => {
 });
 
 // ENG-0339: the directory is not a signal, so nothing about `.codex/worktrees`
-// evicts the pin. What outranks a stale pin is a stated identity — here the
-// launcher's GH_AGENT_APP — and the pin is repaired to it.
-test('Codex startup repins a stale Claude pin to the launcher-stated Codex App', () => {
+// evicts the pin. Setup refuses to configure another soul's checkout.
+test('Codex startup refuses another soul pin despite the launcher-stated App', () => {
   const { app, claudeApp, env, stateDir, worktree } = fixture();
   const previous = ensureAgentIdentity({
     useGithub: true,
@@ -137,7 +138,8 @@ test('Codex startup repins a stale Claude pin to the launcher-stated Codex App',
   }).trim();
   assert.equal(tokenSlug, app, 'GH_AGENT_APP outranks the stale pin for token selection too');
 
-  const result = execFileSync('bash', [STARTUP], {
+  worktreeSoul(env, worktree, { appSlug: app });
+  const result = spawnSync('bash', [STARTUP], {
     cwd: worktree,
     env: { ...env, CLAUDECODE: '1', GH_AGENT_APP: app, CODEX_THREAD_ID: 'thread-repaired' },
     encoding: 'utf8',
@@ -146,28 +148,27 @@ test('Codex startup repins a stale Claude pin to the launcher-stated Codex App',
   const read = (key) => execFileSync('git', ['config', '--worktree', '--get', key], {
     cwd: worktree, env, encoding: 'utf8',
   }).trim();
-  const repairedId = read('agentBot.agentId');
-  assert.equal(read('agentBot.app'), app);
-  assert.equal(read('user.name'), `${app}[bot]`);
-  assert.notEqual(repairedId, previous.id);
-  assert.equal(readAgentIdentity(repairedId, { stateDir }).github.appSlug, app);
-  assert.equal(readAgentIdentity(repairedId, { stateDir }).harness, 'codex');
-  assert.equal(readAgentIdentity(previous.id, { stateDir }).github.appSlug, claudeApp);
-  assert.match(result, /agent identity: test-codex-agent\[bot\]/);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /another soul/);
+  assert.equal(read('agentBot.agentId'), previous.id);
+  assert.equal(read('agentBot.app'), claudeApp);
+  assert.equal(read('user.name'), `${claudeApp}[bot]`);
+
 });
 
 // ENG-0339 acceptance (a): in the owner's account, an unpinned checkout with
 // no GH_AGENT_APP is the human's delegate. Startup reports that and exits
 // cleanly instead of refusing a primary checkout.
-test('Codex startup leaves an unpinned checkout in the owner account to the human persona', () => {
+test('Codex startup without a session soul reports the human persona and leaves the owner checkout unchanged', () => {
   const { env, repo } = fixture();
-  const result = execFileSync('bash', [STARTUP], {
+  const result = spawnSync('bash', [STARTUP], {
     cwd: repo,
     env: { ...env, AGENT_BOT_ACCOUNT: 'user', CODEX_THREAD_ID: 'thread-delegate' },
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  assert.match(result, /agent identity: none — human persona/);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /human persona/);
   const read = (key) => execFileSync('git', ['config', '--get', key], {
     cwd: repo, env, encoding: 'utf8',
   }).trim();
@@ -175,25 +176,17 @@ test('Codex startup leaves an unpinned checkout in the owner account to the huma
   assert.throws(() => read('agentBot.app'));
 });
 
-// ENG-0339 acceptance (c): in the agent account the primary checkout, with no
-// pin, resolves to that account's App and is configured like any worktree.
-test('Codex startup binds a primary checkout in the Codex agent account', () => {
-  const { app, env, repo, stateDir } = fixture();
-  const result = execFileSync('bash', [STARTUP], {
-    cwd: repo,
-    env: { ...env, AGENT_BOT_ACCOUNT: app, CODEX_THREAD_ID: 'thread-account' },
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
+// Account-based App resolution does not exempt a checkout from the work area.
+test('Codex startup refuses a primary checkout even in an agent account', () => {
+  const { app, env, repo } = fixture();
+  worktreeSoul(env, null, { appSlug: app });
+  const result = spawnSync('bash', [STARTUP], {
+    cwd: repo, env: { ...env, AGENT_BOT_ACCOUNT: app }, encoding: 'utf8',
   });
-  const read = (key) => execFileSync('git', ['config', '--worktree', '--get', key], {
-    cwd: repo, env, encoding: 'utf8',
-  }).trim();
-  assert.equal(read('agentBot.app'), app);
-  assert.equal(read('user.name'), `${app}[bot]`);
-  assert.equal(readAgentIdentity(read('agentBot.agentId'), { stateDir }).github.appSlug, app);
-  assert.match(result, /agent identity: test-codex-agent\[bot\]/);
-  assert.equal(
-    execFileSync('node', [WORKTREE_TOKEN, '--slug'], { cwd: repo, env: { ...env, AGENT_BOT_ACCOUNT: app }, encoding: 'utf8' }).trim(),
-    app,
-  );
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /refusing primary checkout/);
+  assert.equal(execFileSync('git', ['config', '--get', 'user.name'], { cwd: repo, env, encoding: 'utf8' }).trim(), 'Test');
+  assert.equal(execFileSync('node', [WORKTREE_TOKEN, '--slug'], {
+    cwd: repo, env: { ...env, AGENT_BOT_ACCOUNT: app }, encoding: 'utf8',
+  }).trim(), app, 'the area check never changes App resolution');
 });

@@ -1,3 +1,4 @@
+import { worktreeSoul } from './helpers/worktree-soul.mjs';
 import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
@@ -508,7 +509,7 @@ test('current identity prefers the child process environment over worktree confi
   assert.equal(currentAgentId({ env: { AGENT_BOT_ID: id(2) }, cwd: root }), id(2));
 });
 
-test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation reuses the worktree', (t) => {
+test('setup-worktree reuses a joined CODEX_THREAD_ID soul and refuses another conversation', (t) => {
   const root = state();
   const home = path.join(root, 'home');
   const repo = path.join(root, 'repo');
@@ -557,6 +558,9 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
     '..',
     'setup-worktree.mjs',
   );
+  const sessionEnv = { ...cleanEnv, HOME: home, AGENT_BOT_STATE_HOME: stateDir,
+    AGENT_BOT_SPACES_HOME: spacesDir, AGENT_BOT_POPULATION_PATH: populationPath };
+  worktreeSoul(sessionEnv, worktree, { appSlug: app, transcript: { provider: 'codex', id: 'thread-1' }, parentId: id(42) });
   const runSetup = (thread) => execFileSync(process.execPath, [setup, app], {
     cwd: worktree,
     encoding: 'utf8',
@@ -567,7 +571,7 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
       AGENT_BOT_SPACES_HOME: spacesDir,
       AGENT_BOT_POPULATION_PATH: populationPath,
       AGENT_BOT_PARENT_ID: id(42),
-      ...(thread ? { CODEX_THREAD_ID: thread } : {}),
+      ...(thread ? { CODEX_THREAD_ID: thread } : { AGENT_BOT_ID: sessionEnv.AGENT_BOT_ID }),
     },
   });
   const worktreeTop = execFileSync('git', ['rev-parse', '--show-toplevel'], {
@@ -703,7 +707,9 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
   const savedSpaces = `${spacesDir}.saved`;
   renameSync(spacesDir, savedSpaces);
   writeFileSync(spacesDir, 'not a directory\n');
-  assert.throws(() => runSetup('thread-with-broken-space-root'));
+  // The session soul resolves (no transcript in view, so AGENT_BOT_ID), and
+  // its broken space root fails setup closed.
+  assert.throws(() => runSetup(null));
   assert.equal(
     execFileSync('git', ['config', '--worktree', '--get', 'agentBot.agentId'], {
       cwd: worktree,
@@ -732,29 +738,14 @@ test('setup-worktree binds CODEX_THREAD_ID and rotates when a new conversation r
   rmSync(populationPath, { force: true });
   renameSync(savedPopulation, populationPath);
 
+  // Another conversation in the same checkout is not this soul's session:
+  // setup does nothing, quietly, and never rotates the pin to a new soul.
   runSetup('thread-2');
-  const secondId = execFileSync('git', ['config', '--get', 'agentBot.agentId'], {
-    cwd: worktree,
-    env: cleanEnv,
-    encoding: 'utf8',
-  }).trim();
-  assert.notEqual(secondId, firstId);
-  assert.equal(readAgentIdentity(secondId, { stateDir }).transcript.id, 'thread-2');
-  assert.equal(
-    JSON.parse(readFileSync(path.join(spacesDir, secondId, 'space.json'), 'utf8')).agentId,
-    secondId,
-  );
-  assert.equal(
-    JSON.parse(readFileSync(path.join(spacesDir, firstId, 'space.json'), 'utf8')).agentId,
-    firstId,
-    'rotating the worktree identity does not retire the prior soul space',
-  );
-  const rotatedPopulation = JSON.parse(readFileSync(populationPath, 'utf8'));
-  assert.deepEqual(Object.keys(rotatedPopulation.souls).sort(), [firstId, secondId].sort());
-  assert.deepEqual(rotatedPopulation.souls[secondId].transcriptLocator, {
-    provider: 'codex',
-    id: 'thread-2',
-  });
+  assert.equal(execFileSync('git', ['config', '--worktree', '--get', 'agentBot.agentId'], {
+    cwd: worktree, env: cleanEnv, encoding: 'utf8',
+  }).trim(), firstId);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(populationPath, 'utf8')).souls), [firstId]);
+
 });
 
 // --- lock safety (issue #15) -------------------------------------------------
