@@ -17,6 +17,9 @@
 //   GH_APP_INSTALLATION_ID picks one.
 // Flag: --json — print the documented secret-bearing stdout object:
 //   { schema_version: 1, token, expires_at, installation_id }
+// Arguments are checked before anything is minted (#213): --help prints the
+// usage and mints nothing, and an option this command does not know is an
+// error, so a mistyped flag never releases a credential by accident.
 
 import { createSign, createPrivateKey } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -43,6 +46,42 @@ export function buildAppJwt(appId, privateKeyPem, nowSeconds) {
   signer.update(signingInput);
   const signature = signer.sign(createPrivateKey(privateKeyPem));
   return `${signingInput}.${b64url(signature)}`;
+}
+
+export const MINT_USAGE = `usage: agent-bot mint-token [--app <slug>] [--json]
+
+Mints a short-lived GitHub App installation token and prints it to stdout.
+
+Options:
+  --app <slug>    Mint for this App (else GH_AGENT_APP, the checkout's pin,
+                  the agent account, or the detected harness)
+  --json          Print { schema_version, token, expires_at, installation_id }
+  -h, --help      Show this help and mint nothing
+`;
+
+/**
+ * The command line, checked before a mint: `{ app, json, help }`. Any other
+ * option is an error, and `--app` needs a slug.
+ */
+export function parseMintArgs(argv = process.argv.slice(2)) {
+  const options = { app: null, json: false, help: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--json') {
+      options.json = true;
+    } else if (arg === '--help' || arg === '-h') {
+      options.help = true;
+    } else if (arg === '--app') {
+      const value = argv[index + 1];
+      if (!value || value.startsWith('-')) throw new Error('--app requires a slug, e.g. --app yourname-claude-agent');
+      if (options.app !== null) throw new Error('--app may be passed only once');
+      options.app = value;
+      index += 1;
+    } else {
+      throw new Error(`unknown option: ${arg}`);
+    }
+  }
+  return options;
 }
 
 export function appConfig({
@@ -174,6 +213,11 @@ export async function mint({ slug, env = process.env, agentId = null, viaKeyd = 
 }
 
 async function main() {
+  const options = parseMintArgs(process.argv.slice(2));
+  if (options.help) {
+    process.stdout.write(MINT_USAGE);
+    return;
+  }
   // An unmarked explicit mint in the owner's account is a credential release
   // with no stated identity — it carries the owner-approval ceremony. Stated
   // identities (pin, GH_AGENT_APP, harness markers, agent account) mint as
@@ -185,7 +229,7 @@ async function main() {
     });
   }
   const grant = await mint();
-  process.stdout.write(formatMintGrant(grant, { json: process.argv.includes('--json') }));
+  process.stdout.write(formatMintGrant(grant, { json: options.json }));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -263,7 +263,7 @@ agent-bot bootstrap [--profile <path|->] [--config <path>] [--app <slug>] [--sco
 agent-bot --version
 agent-bot setup-worktree [app-slug] [--name NAME [--branch BRANCH]]
 agent-bot join --name NAME --harness H [--template PATH] [--soul AGENT_ID] [--wake resume:read-only|resume:workspace|acp] [--principal-stdin] [--json]
-agent-bot mint-token --app <slug> [--json]
+agent-bot mint-token [--app <slug>] [--json] [--help]
 agent-bot doctor [--machine-only] [--app <slug>] [--probe-inbox] [--json]
 agent-bot identity <ensure|spawn|bind|record|finalize|show|current>
 agent-bot space <init|ensure|path|show> [agent-id]
@@ -518,6 +518,11 @@ versioned organization roster contract.
 
 Treat that stdout as a credential. Errors, diagnostics, identity records, and
 logs never contain tokens, JWTs, or private keys.
+
+The command line is checked before anything is minted: `mint-token --help`
+prints the usage and mints nothing, and an option the command does not know
+(`unknown option: --x`) is an error with no token on stdout, so a mistyped
+flag never releases a credential.
 
 `doctor --json` and `bootstrap --json` emit the same secret-free readiness
 contract. Unlike mint output, this object is safe to retain in automation:
