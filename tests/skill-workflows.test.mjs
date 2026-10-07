@@ -71,12 +71,23 @@ test('an unknown command fails on stderr with a non-zero exit and no stdout', ()
   assert.equal(r.stderr, 'agent-bot: unknown command: no-such-command\n');
 });
 
-test('an unknown named skill reports the bundled choices', () => {
+test('an invalid skill name fails before any catalog lookup', () => {
   assert.ok(existsSync(SOURCE_SKILL));
-  const r = run('skill', 'list');
+  const r = run('skill', 'List');
   assert.equal(r.status, 2);
   assert.equal(r.stdout, '');
-  assert.equal(r.stderr, 'agent-bot skill: no bundled skill named list; bundled: agent-bot, agent-space, thread-orders\n');
+  assert.equal(r.stderr, 'agent-bot skill: invalid skill name List\n');
+});
+
+test('skill agent-bot --for discloses one bundled reference offline (#226)', () => {
+  const r = run('skill', 'agent-bot', '--for', 'signed-commit');
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr, '');
+  assert.match(r.stdout, /^# Verified publishing\n/u);
+  const unknown = run('skill', 'agent-bot', '--for', 'mint');
+  assert.equal(unknown.status, 2);
+  assert.equal(unknown.stdout, '');
+  assert.match(unknown.stderr, /unknown subcommand mint; --for knows: .*mint-token/u);
 });
 
 

@@ -33,7 +33,7 @@ Commands:
   ensure-private-key Restore an App key into its managed store and ID into config with pass-cli
   signed-commit      Replay local commits with GitHub-verified signatures
   secret             Read a password or API key from a secure-store provider
-  skill              Print this release's agent skill bundle and source commit
+  skill              Print one skill's SKILL.md (bundled, or from the fleet catalog at its pinned commit); agent-bot --for <subcommand> prints one reference; path prints the bundle and source commit
   sop                Resolve the configured SOP and report its pinned commits
   metrics            Collect or show optional read-only runtime metrics
 

@@ -26,18 +26,20 @@ for (const name of ['agent-bot', 'agent-space', 'thread-orders']) {
     const json = runSkill(name, '--json');
     assert.equal(json.status, 0, json.stderr);
     assert.equal(json.stderr, '');
-    assert.deepEqual(JSON.parse(json.stdout), { name, path, commit: sourceCommit(), text });
+    assert.deepEqual(JSON.parse(json.stdout), { name, repository: 'qwts/agent-bot-identity', commit: sourceCommit(), path, text });
   });
 }
 
-test('unknown and invalid skill names cannot resolve outside the bundled skills', () => {
-  for (const name of ['missing', '../agent-bot', 'agent-bot/../agent-space', '..',
+test('invalid skill names are refused before any catalog lookup', () => {
+  // Unknown but well-formed names go to the fleet catalog; tests/skill-catalog.test.mjs
+  // covers them with an injected fetcher.
+  for (const name of ['../agent-bot', 'agent-bot/../agent-space', '..',
     'agent..bot', '/agent-bot', 'Agent-bot', '1agent', 'a'.repeat(65)]) {
     for (const flags of [[], ['--json']]) {
       const result = runSkill(name, ...flags);
       assert.equal(result.status, 2, name);
       assert.equal(result.stdout, '');
-      assert.equal(result.stderr, `agent-bot skill: no bundled skill named ${name}; bundled: agent-bot, agent-space, thread-orders\n`);
+      assert.equal(result.stderr, `agent-bot skill: invalid skill name ${name}\n`);
     }
   }
 });
@@ -60,6 +62,7 @@ test('skill help and usage list both forms and reject extra arguments', () => {
   assert.equal(help.stderr, '');
   assert.match(help.stdout, /agent-bot skill path \[--json\]/u);
   assert.match(help.stdout, /agent-bot skill <name> \[--json\]/u);
+  assert.match(help.stdout, /agent-bot skill agent-bot --for <subcommand> \[--json\]/u);
   assert.equal(runSkill('-h').stdout, help.stdout);
   for (const args of [[], ['path', '--bogus'], ['agent-space', '--bogus'], ['agent-space', '--json', 'extra']]) {
     const result = runSkill(...args);
