@@ -22,6 +22,7 @@ agent-bot soul revision approve ID PROPOSAL_ID 'Reviewed the proposed changes'
 agent-bot soul revision approve --principal-stdin ID PROPOSAL_ID 'Reviewed' < principal.json
 agent-bot soul revision reject ID PROPOSAL_ID 'Keep the current behavior'
 agent-bot soul revision history ID
+agent-bot soul revision skills ID [REVISION [SINCE]]
 agent-bot soul revision promote ID notes/lesson.md knowledge/lesson.md 'Keep lesson'
 ```
 
@@ -204,3 +205,21 @@ user revision; the default is `soul`. `resolveSpace` is the injectable seam for
 space resolution and defaults to the existing `spacePath` runtime API. Promotion
 rejects a changed base rather than overwriting concurrent edits. Directory-wide
 promotion is deliberately not implicit: select files explicitly.
+
+## Skill manifests
+
+Every skill in a stored revision has a manifest (#312): the package-relative
+paths of its files under `skills/<name>/`, each with its mode and a SHA-256
+digest over its exact bytes, and a digest of the manifest itself. A manifest
+is a pure function of the stored package, so each revision in the history has
+one, addressable by its revision; nothing is written for it.
+
+`soul revision skills ID` prints the head's manifests and `changes`: the
+skills `added`, `removed`, `changed` (with the `added`, `modified` and
+`removed` files of each) and `unchanged` since its parent. `REVISION` picks
+another stored revision; `SINCE` compares against any earlier one instead of
+the parent. A one-byte edit, a line-ending change or an execute-bit flip is a
+modification. The results of `edit` and `propose` carry the same `skills`
+report when the revision changed a skill (a proposal records it with its
+journal entry), so a host can show what a change does to a soul's skills
+before anyone adopts it. Digests establish byte identity, not trust.

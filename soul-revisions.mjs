@@ -8,6 +8,7 @@ import { cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFi
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { canonicalJson, computePackageRevision, readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
+import { diffPackageSkills, skillsChanged, skillsCommand } from './skill-manifest.mjs';
 import { currentAgentId, readAgentIdentity, recordAgentPackageRevision, stateDirectory, validateAgentId, withLock } from './agent-identity.mjs';
 import { spacePath } from './agent-space.mjs';
 import { assertOwnerAction, consentOwner, ownerCredentialRequired, presenceOrConsent } from './owner-gate.mjs';
@@ -106,6 +107,13 @@ function assertParent(root, parentRevision) {
   if (requireHead(root).revision !== parentRevision) throw new Error('stale proposal or edit: create a new revision from the current head');
 }
 
+// The skills a revision added, removed or changed against its parent (#312),
+// reported with the edit or proposal that made it; absent when none did.
+function skillReport(root, parentRevision, packagePath) {
+  const diff = diffPackageSkills(objectPath(root, parentRevision), packagePath);
+  return skillsChanged(diff) ? { skills: diff } : {};
+}
+
 export function revisionHistory(id, options = {}) {
   return events(rootFor(id, options)).filter((event) => event.kind === 'revision');
 }
@@ -153,7 +161,7 @@ export async function editSoulRevision(id, packagePath, { reason, expectedParent
       parentRevision: stored.parentRevision, author: 'user', reason, ...authorized(options) }, options);
     // withLock is synchronous: recording and applying must not cross an await.
     if (requireHead(root).revision !== stored.revision) throw new Error('stale apply: recorded head moved');
-    return { ...record, applied: true, changed: publish() };
+    return { ...record, applied: true, changed: publish(), ...skillReport(root, stored.parentRevision, stored.packagePath) };
   });
   const stored = locked(id, options, (root) => {
     if (expectedParent !== undefined) assertParent(root, expectedParent);
@@ -161,7 +169,8 @@ export async function editSoulRevision(id, packagePath, { reason, expectedParent
   });
   await recordAgentPackageRevision(id, stored.packagePath, { ...options,
     appendRevision: createRevisionAppender(stored.packagePath, { ...options, reason }) });
-  return revisionHistory(id, options).find((record) => record.revision === stored.revision);
+  return { ...revisionHistory(id, options).find((record) => record.revision === stored.revision),
+    ...skillReport(rootFor(id, options), stored.parentRevision, stored.packagePath) };
 }
 
 function assertApplyPath(file) {
@@ -310,7 +319,7 @@ export function proposeSoulRevision(id, packagePath, { reason, expectedParent, .
     const diff = diffSoulPackages(before, stored.packagePath);
     const requiresUser = needsUser(diff);
     const proposal = append(root, { kind: 'proposal', proposalId: randomUUID(), revision: stored.revision,
-      parentRevision: current.revision, author: 'soul', reason, diff, requiresUser,
+      parentRevision: current.revision, author: 'soul', reason, diff, requiresUser, ...skillReport(root, current.revision, stored.packagePath),
       status: policy.mode === 'never' ? 'rejected' : 'pending' }, options);
     if (policy.mode === 'auto' && !requiresUser && diff.every(({ path }) => policy.paths.some((pattern) => glob(pattern).test(path)))) {
       append(root, { kind: 'revision', revision: stored.revision, parentRevision: current.revision,
@@ -394,9 +403,9 @@ principal = null, presence, ...options } = {}) {
   const apply = args.includes('--apply');
   const [command, id, ...rest] = args.filter((arg) => arg !== '--json' && arg !== '--apply');
   validateAgentId(id);
-  const arities = { adopt: 2, edit: 2, propose: 2, approve: 2, reject: 2, list: 0, history: 0, promote: 3 };
-  if (!(command in arities) || rest.length !== arities[command] || (apply && command !== 'edit')) {
-    throw new Error('usage: soul revision adopt|edit|propose ID PATH REASON; edit accepts --apply; approve|reject ID PROPOSAL REASON; list|history ID; promote ID SOURCE DESTINATION REASON; all accept --json; adopt, edit, approve and reject take --principal-stdin');
+  const arities = { adopt: 2, edit: 2, propose: 2, approve: 2, reject: 2, list: 0, history: 0, promote: 3, skills: [0, 1, 2] };
+  if (!(command in arities) || !(Array.isArray(arities[command]) ? arities[command] : [arities[command]]).includes(rest.length) || (apply && command !== 'edit')) {
+    throw new Error('usage: soul revision adopt|edit|propose ID PATH REASON; edit accepts --apply; approve|reject ID PROPOSAL REASON; list|history ID; skills ID [REVISION [SINCE]]; promote ID SOURCE DESTINATION REASON; all accept --json; adopt, edit, approve and reject take --principal-stdin');
   }
   if (['adopt', 'edit', 'approve', 'reject'].includes(command)) {
     let authorization;
@@ -415,6 +424,7 @@ principal = null, presence, ...options } = {}) {
   if (command === 'approve' || command === 'reject') return decideSoulProposal(id, rest[0], command, { ...options, reason: rest[1] });
   if (command === 'list') return listSoulProposals(id, options);
   if (command === 'history') return revisionHistory(id, options);
+  if (command === 'skills') return skillsCommand([id, ...rest], options);
   return promoteSpaceContent(id, rest[0], rest[1], { ...options, reason: rest[2] });
 }
 // `--principal-stdin` reads the owner's principal credential as JSON from
