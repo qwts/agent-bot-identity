@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.41
+
+- `mint-token --permissions <name>=<level>[,...]` mints a least-privilege token (#213): each requested permission must be at or below the installation's grant, a request the grant does not cover is refused before the token request (naming what was wanted and what is granted), and without the option the token carries the whole grant as before. A keyd-held key refuses the option instead of ignoring it.
+
 ## 0.10.40
 
 - `identity apps list` keeps each cached installation's grant (#213): `installations[].permissions` is the permission name → level map GitHub reported at connect or key rotation (`null` for a row cached before), the plain listing prints `installed:<account>(<selection>; <name>:<level>,…)`, and the docs say why that grant is not the bot user's collaborator role (which is what Dependabot commands check).
