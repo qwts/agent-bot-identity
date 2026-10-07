@@ -1,3 +1,4 @@
+import { worktreeSoul } from './helpers/worktree-soul.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -185,6 +186,7 @@ test('setup-worktree with the gate off binds a soul and leaves git identity to t
   const root = scratch(t);
   const env = isolatedEnv(root);
   const repo = initRepo(root, env);
+  worktreeSoul(env, repo);
   const setup = runNode(SETUP_CLI, [], { cwd: repo, env });
   assert.equal(setup.status, 0, setup.stderr);
   assert.match(setup.stdout, /worktree configured as agent_/);
@@ -213,6 +215,7 @@ test('gate-off setup removes only stale GitHub worktree settings and preserves u
   execFileSync('git', ['config', '--worktree', '--add', 'credential.helper', ''], { cwd: repo, env });
   execFileSync('git', ['config', '--worktree', '--add', 'credential.helper', '!node /opt/agent-bot/git-credential-bot.mjs you-codex-agent'], { cwd: repo, env });
   execFileSync('git', ['config', '--worktree', '--add', 'credential.helper', 'manager-core'], { cwd: repo, env });
+  worktreeSoul(env, repo);
   const setup = runNode(SETUP_CLI, [], { cwd: repo, env });
   assert.equal(setup.status, 0, setup.stderr);
   assert.equal(git(repo, env, ['config', '--worktree', '--get', 'agentBot.app']).status, 1);
@@ -229,6 +232,7 @@ test('worktree readiness accepts a linked no-App checkout and still verifies its
   execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'init'], { cwd: repo, env });
   const linked = path.join(root, 'linked');
   execFileSync('git', ['worktree', 'add', '-b', 'linked', linked], { cwd: repo, env });
+  worktreeSoul(env, linked);
   const setup = runNode(SETUP_CLI, [], { cwd: linked, env });
   assert.equal(setup.status, 0, setup.stderr);
   const report = collectReadiness({ scope: 'worktree', cwd: linked, home: env.HOME, env });
@@ -245,6 +249,8 @@ test('setup-worktree with the gate on and no App still leaves the checkout alone
   const env = isolatedEnv(root, { features: { 'github-identity': true } });
   const repo = initRepo(root, env);
   const setup = runNode(SETUP_CLI, [], { cwd: repo, env });
+  // No session soul: a quiet success that writes nothing (the module run
+  // directly prints no hint; the CLI does).
   assert.equal(setup.status, 0, setup.stderr);
   assert.equal(git(repo, env, ['config', '--worktree', '--get', 'agentBot.agentId']).status, 1);
 });
@@ -420,6 +426,7 @@ test('with github-identity off, bind, spawn, comms join, vouch, and wake need no
   const root = scratch(t);
   const env = isolatedEnv(root);
   const repo = initRepo(root, env);
+  worktreeSoul(env, repo);
   const setup = runNode(SETUP_CLI, [], { cwd: repo, env });
   assert.equal(setup.status, 0, setup.stderr);
   const agentId = git(repo, env, ['config', '--worktree', '--get', 'agentBot.agentId']).stdout.trim();

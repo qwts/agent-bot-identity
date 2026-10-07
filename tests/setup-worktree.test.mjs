@@ -1,3 +1,4 @@
+import { worktreeSoul } from './helpers/worktree-soul.mjs';
 import { readAppMetadata } from '../identity-app-store.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -22,7 +23,7 @@ import { showSoul } from '../agent-population.mjs';
 
 const SETUP = fileURLToPath(new URL('../setup-worktree.mjs', import.meta.url));
 
-test('setup links a Devin checkout into its soul without moving it', (t) => {
+test('setup reuses a Devin checkout already linked from its session soul', (t) => {
   const home = mkdtempSync(join(tmpdir(), 'setup-devin-worktree-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const repo = join(home, 'repo');
@@ -46,6 +47,7 @@ test('setup links a Devin checkout into its soul without moving it', (t) => {
   mkdirSync(dirname(worktree), { recursive: true });
   git(repo, 'worktree', 'add', '-q', '-b', 'topic', worktree);
   writeFileSync(join(worktree, 'local-work'), 'preserved');
+  worktreeSoul(env, worktree, { harness: 'devin' });
   const before = realpathSync(worktree);
   for (let attempt = 0; attempt < 2; attempt++) {
     const result = spawnSync(process.execPath, [SETUP], { cwd: worktree, env, encoding: 'utf8' });
@@ -161,6 +163,7 @@ test('credential failure leaves the linked worktree and SSH remote untouched', (
   mkdirSync(dirname(worktree), { recursive: true });
   execFileSync('git', ['worktree', 'add', '--quiet', '-b', 'failure', worktree], { cwd: repo, env });
 
+  worktreeSoul(env, worktree, { appSlug: slug });
   const result = spawnSync(process.execPath, [SETUP, slug], {
     cwd: worktree,
     env,

@@ -7,7 +7,7 @@ Usage:
 
 Commands:
   bootstrap          Bootstrap from source or repair installed machine setup
-  setup-worktree     Configure this checkout's bot identity
+  setup-worktree     Create or configure a soul worktree
   join               Join agent-comms as a soul from here, with or without a GitHub App: --name N --harness H [--template PATH] [--soul ID] [--json]
   mint-token         Mint a GitHub App installation token
   doctor             Diagnose installation and identity state

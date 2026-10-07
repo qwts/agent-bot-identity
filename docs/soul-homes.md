@@ -136,30 +136,58 @@ rollback existed. Finalized souls keep their folders and are not listed.
 
 ## Repository worktrees
 
-ADR-0332 decision 6 makes repository checkouts discoverable from
-`<soulDir>/worktrees/` (0700). Claude's `WorktreeCreate` hook resolves the
-session's soul before creating a checkout and puts new worktrees at
-`<soulDir>/worktrees/<name>`. Without a resolved soul, it keeps Claude's
-configured worktree layout. Names used in the soul directory have separators
-and unsafe characters replaced, no leading dot, and at most 100 characters.
+ADR-0332 decision 6 and the work-area rule (#516) require agents to check in
+with `agent-bot join` and do repository work in their soul's
+`<soulDir>/worktrees/<name>` (0700), or in an existing checkout linked from
+that directory. This applies to every harness. A path validates the work
+area; it never supplies an identity (ENG-0339).
 
-`placeWorktree` in `soul-worktrees.mjs` compares the soul directory's device
-with the repository's common git directory. On different devices, or when
-the soul checkout path exceeds 900 characters, it selects
-`$TMPDIR/agent-bot/<agentId>/<name>` (the OS temporary directory when TMPDIR
-is unset). The creator adds the git worktree there, then `linkWorktree`
-links it from the soul. The shared provisioning logic writes the private
-`.soul-state/agent-id` marker and registers the soul directory without
-creating a home.
+```sh
+agent-bot setup-worktree [app-slug]
+agent-bot setup-worktree [app-slug] --name NAME [--branch BRANCH]
+```
 
-`setup-worktree` configures an existing checkout and records its actual path
-in the census's `worktree` and `worktrees` fields. It also links checkouts
-outside the soul's `worktrees/`, including Devin, Codex, and older Claude
-checkouts. Nothing moves: existing checkouts keep their paths. Repeated
-setup reuses a matching link; a name already occupied by another checkout,
-directory, or dangling link gets a `-2`, `-3`, … suffix. A checkout already
-inside the soul's `worktrees/` needs no extra link. Claude also finds existing
-checkouts through git's worktree list and reuses only the same bound session.
+With `--name`, setup uses `placeWorktree` to create a linked Git worktree
+there if it does not exist, then configures it. The branch defaults to NAME;
+an existing branch is checked out, otherwise a branch is created from HEAD.
+An existing named checkout must belong to the same repository and, when
+specified, the requested branch. Without `--name`, setup validates and
+configures the current checkout. `--help` describes both forms and refusals.
+Names must start with a letter or number, contain only letters, numbers,
+dots, underscores or hyphens, contain no `..`, and be at most 100 characters.
+
+The session must already have a soul: `AGENT_BOT_ID` (legacy `QWTS_AGENT_ID`),
+an explicitly supplied `AGENT_BOT_BINDING`, or an existing registered soul
+matching the session transcript. Setup does not resolve a soul from a Git pin
+or from the checkout path, and never mints a replacement soul. Harnesses
+without a soul must obtain GeniusBar approval and then join; Kiro's approval
+is tracked in GeniusBar#185. No ambient identity substitutes for that step.
+
+Before credentials, census updates, or Git configuration writes, setup refuses
+an owner's primary checkout outside the soul work area, an arbitrary checkout,
+or a checkout pinned or bound to another soul. Refused locations keep their
+configuration unchanged, even when GitHub identity is disabled. Existing
+checkouts must already be linked from this session's soul; setup no longer
+creates a link as a side effect to make an arbitrary location valid.
+
+`placeWorktree` compares the soul directory's device with the repository's
+common Git directory. Cross-device placement and paths over 900 characters
+are refused; there is no TMPDIR fallback. Move the repository to the soul's
+device, or create a durable linked Git worktree on the repository device and
+link it into `<soulDir>/worktrees/` using the existing `linkWorktree` mechanism
+(or an explicit directory symlink). For long paths use a shorter name or
+registered soul location. Existing links remain supported, including older
+harness-created worktrees; repeated setup keeps their paths.
+
+Claude's `WorktreeCreate` adapter uses the same placement helper and propagates
+placement refusals for a resolved soul. Git's `post-checkout` hook only runs
+setup for the current session soul; without a soul it is silent. It cannot
+reapply a previous session's pin. `agent-bot install` / `agent-bot update`
+refresh already-installed hook wrappers through the existing installer; those
+wrappers dispatch to the current runtime's hook template.
+
+Successful setup records the checkout's actual path in the census's
+`worktree` and `worktrees` fields.
 
 Launch does not create repository worktrees. It runs in an existing binding
 or provisions the git home at `.soul-state/home` as described above.

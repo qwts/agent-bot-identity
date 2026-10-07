@@ -252,7 +252,7 @@ Installation provides one executable at `~/.local/bin/agent-bot`:
 ```bash
 agent-bot bootstrap [--profile <path|->] [--config <path>] [--app <slug>] [--scope-app <slug>] [--with-gh-shim] [--json]
 agent-bot --version
-agent-bot setup-worktree [app-slug]
+agent-bot setup-worktree [app-slug] [--name NAME [--branch BRANCH]]
 agent-bot join --name NAME --harness H [--template PATH] [--soul AGENT_ID] [--wake resume:read-only|resume:workspace|acp] [--principal-stdin] [--json]
 agent-bot mint-token --app <slug> [--json]
 agent-bot doctor [--machine-only] [--app <slug>] [--json]
@@ -1081,14 +1081,14 @@ GitHub thread are `skills/thread-orders`.
 ```
 git worktree add …            (run by ANY tool: Codex, Cursor, VS Code, Claude Code)
  └─ post-checkout hook        (git-native; installed once via core.hooksPath)
-     └─ setup-worktree.mjs    detects the harness from its env markers,
-                              maps it to your bot via ~/.config/agent-bot/config.json,
+     └─ setup-worktree.mjs    resolves the current session's joined soul,
+                              validates its work area before any writes,
                               then — scoped to that worktree only —
                               sets bot author/committer, disables signing,
                               forces HTTPS remote, wires an on-demand
                               credential helper, pins core.hooksPath here
                               (chaining any previous hooks), and mints a
-                              transcript-bound Agent ID
+                              bind token for the existing Agent ID
          └─ git push          asks the helper → mints a fresh 1-hour
                               installation token → authenticates as the bot
          └─ gh …              (with the shim) mints the same way automatically
@@ -1100,7 +1100,8 @@ git worktree add …            (run by ANY tool: Codex, Cursor, VS Code, Claude
 or linked — is that harness's App. In your own account an unpinned checkout is
 your delegate: commits, pushes, and `gh` run as you, and nothing is refused.
 A `.<tool>/worktrees/**` path is layout, never a signal. Bare human shells are
-never touched. No config file → the whole thing is inert.
+never touched. The separate `setup-worktree` work-area check constrains where
+configuration may be written; it does not change these identity resolution rules.
 
 **Identity resolution** (same order for commits and tokens):
 
@@ -1501,16 +1502,17 @@ mark upstream dialect evidence as freshly verified.
 ## Codex / harness startup
 
 Sandboxed harnesses can miss identity at worktree creation. Run the stable
-setup command from the harness startup hook:
+setup command from the harness startup hook after joining a soul and entering
+its work area (or add `--name NAME` to create one):
 
 ```bash
 agent-bot setup-worktree
 ```
 
 The checked-in `scripts/ensure-identity.sh` adds verification of the pin,
-author, credential helper, and execution-identity hooks; where no bot identity
-resolves it reports the human persona and exits cleanly. `AGENT_BOT_HOME` is
-only a fallback for harnesses whose startup environment cannot find the
+author, credential helper, and execution-identity hooks; with no session soul
+setup leaves the checkout human and the script reports the delegate persona,
+and outside the soul's work area setup refuses. `AGENT_BOT_HOME` is only a fallback for harnesses whose startup environment cannot find the
 installed executable.
 
 All harness lifecycle adapters are generated from `hook-dialects.mjs` into the
@@ -1556,13 +1558,22 @@ agent-bot identity ensure
 Manage GitHub Apps with `identity apps list` and `identity app create`,
 `connect`, `rotate-key`, or `assign`; see [commands and daemon API](docs/identity-apps.md).
 
-`setup-worktree` and `identity ensure` are idempotent on a pinned checkout.
-With no transcript in view — the harness startup hook and git's
-`post-checkout` hook run setup this way every session — the pinned soul
-stands, bound or still pending. A new Agent ID is minted only on evidence of
-a new identity: a transcript that differs from the bound one, an App change
-(`--app`, `GH_AGENT_APP`, a repin), or a pin that is absent, unreadable, or
-retired (retired fails closed). Each census row retains all known checkouts
+`setup-worktree` is idempotent for the session's existing soul in its allowed
+work area. Check in with `agent-bot join`, then use
+`agent-bot setup-worktree --name NAME [--branch BRANCH]` to create and configure
+a repository worktree under that soul, or run setup in an existing allowed
+checkout. An owner primary checkout outside the soul, arbitrary directories,
+and conflicting soul pins are refused before writes. Cross-device placement
+refuses with instructions, without a TMPDIR fallback. A harness without a soul
+needs GeniusBar approval (Kiro: GeniusBar#185), then check-in.
+
+The checkout hook does nothing silently without a session soul and cannot
+reuse a stale checkout pin as session identity. `agent-bot update` refreshes
+installed wrappers. See [soul work areas](docs/soul-homes.md#repository-worktrees)
+for identity inputs, existing links, and refusal cases. `identity ensure`
+retains its separate identity creation and transcript binding contract.
+
+Each census row retains all known checkouts
 that pinned its soul (`worktrees`), plus the latest checkout (`worktree`) for
 compatibility. `doctor` checks worktree-scoped pins across those references
 and warns (`souls-unreferenced`) when none still holds the active soul.

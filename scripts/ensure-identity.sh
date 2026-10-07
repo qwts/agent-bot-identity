@@ -22,11 +22,9 @@ repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" ||
 git rev-parse --absolute-git-dir >/dev/null 2>&1 ||
   fail "could not resolve the checkout's Git directory"
 
-# Under ENG-0339 the account, not the directory, is bot territory: a primary
-# checkout in an agent account is configured like a linked worktree, and in
-# the owner's account setup binds only a stated identity (GH_AGENT_APP, a
-# pin) — otherwise it leaves the checkout human and this script reports the
-# delegate persona instead of failing.
+# Identity still resolves independently of location (ENG-0339). Setup requires
+# an already-joined session soul and its work area, and refuses primary or
+# arbitrary checkouts before writing anything (#516).
 
 # The installed location is checked as well as PATH because harness startup runs
 # in a non-login, non-interactive shell, which reads .zshenv and nothing else. A

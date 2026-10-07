@@ -1,60 +1,77 @@
 #!/usr/bin/env node
-// One-shot bot-identity setup for the current git worktree.
-// Harness-agnostic: git's post-checkout hook invokes it regardless of which
-// tool created the worktree. Provider transcript adapters are inputs to the
-// vendor-neutral execution-identity contract. Exits 0 quietly whenever it has
-// nothing to do, and configures nothing outside the worktree it runs in.
-//
-//   agent-bot setup-worktree [app-slug]
-//
-// Slug resolution, first hit wins: explicit arg, then $GH_AGENT_APP, then the
-// git config value `agentBot.app`. The resolved App is persisted as the
-// worktree pin, so later token minters and the gh shim cannot fall back to a
-// different harness identity. Resolution itself lives in resolve-agent.mjs,
-// shared with the token minters so a pinned worktree commits and pushes as
-// the same agent.
-//
-// What it does, all scoped via extensions.worktreeConfig:
-//   - author/committer identity = <slug>[bot] with the bot's noreply email
-//   - commit signing off (the human's key would show Unverified on bot commits)
-//   - credential helper = git-credential-bot.mjs, so pushes mint on demand
-//   - rewrites an SSH origin URL to HTTPS (SSH would push as the human)
-//   - pins core.hooksPath here while chaining any previous hooks path
-//   - mints/binds a transcript-bound Agent ID (ENG-0081)
-//   - initializes that soul's durable Agent Space
-//   - registers the soul in this account's population census
-//     (through the loopback daemon when settings.daemonPreference selects it;
-//      see bindSoul for the prefer/required fallback policy)
-//
-// Guard: it acts only when a bot identity is STATED — an explicit App,
-// GH_AGENT_APP, an existing pin — or the account is an agent account
-// (ENG-0339), never on harness detection alone. A primary checkout is
-// configured like any other when that holds (every checkout in an agent
-// account is bot work); in the owner's account an unpinned clone resolves to
-// nothing and is left alone, so a human's own checkout never silently becomes
-// bot-authored. The `.<tool>/worktrees` directory is layout, not a signal.
-
+// Configure only the session soul's repository work area. Identity is resolved
+// before location is checked: a path is never an identity signal (ENG-0339).
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { resolveAgentSlug, pinnedSlug, territoryHarness, AGENT_ID_KEYS } from './resolve-agent.mjs';
+import { resolveAgentSlug, pinnedSlug, AGENT_ID_KEYS } from './resolve-agent.mjs';
 import { mintBindToken, readBinding } from './agent-binding.mjs';
-import { loadConfig, isGateEnabled, apiBase, daemonPreference, githubHost, harnessForSlug } from './config.mjs';
+import { loadConfig, isGateEnabled, apiBase, daemonPreference, githubHost } from './config.mjs';
 import { daemonClient } from './agent-daemon.mjs';
 import { reconcileAppCredentials } from './credential-reconciler.mjs';
 import {
   discoverTranscript,
-  ensureAgentIdentity,
   readAgentIdentity,
-  identityFieldsFromEnv,
-  stateDirectory,
 } from './agent-identity.mjs';
 import { initAgentSpace } from './agent-space.mjs';
-import { upsertIdentitySoul } from './agent-population.mjs';
+import { listSouls, showSoul, upsertIdentitySoul } from './agent-population.mjs';
 import { readAppMetadata, writeAppMetadata } from './identity-app-store.mjs';
-import { linkWorktree } from './soul-worktrees.mjs';
+import { assertWorktreeArea, placeWorktree, soulWorktreePath } from './soul-worktrees.mjs';
+
+const USAGE = `usage: agent-bot setup-worktree [app-slug] [--name NAME [--branch BRANCH]]
+
+Check in first with agent-bot join --name NAME --harness HARNESS.
+Configure an existing checkout in the session soul's worktrees/<name>, or a
+checkout already linked from that soul. --name creates a linked git worktree
+there if absent (branch defaults to NAME), then configures it.
+Refuses primary checkouts outside the soul, arbitrary directories, conflicting
+pins, and cross-device placement. No TMPDIR fallback. With no session soul it
+leaves the checkout human and writes nothing (an error only with --name);
+harnesses without a soul need GeniusBar approval (Kiro: GeniusBar#185).
+`;
+
+function parseArgs(argv) {
+  const options = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--from-hook') options.hook = true;
+    else if (arg === '--name' || arg === '--branch') {
+      const value = argv[++i];
+      if (!value || value.startsWith('-') || options[arg.slice(2)]) throw new Error(USAGE);
+      options[arg.slice(2)] = value;
+    } else if (!arg.startsWith('-') && !options.slug) options.slug = validateAppSlug(arg);
+    else throw new Error(USAGE);
+  }
+  if (options.branch && !options.name) throw new Error('--branch requires --name');
+  if (options.name && (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(options.name) || options.name.includes('..'))) {
+    throw new Error('invalid worktree name: use 1–100 letters, numbers, dots, underscores or hyphens, starting with a letter or number');
+  }
+  return options;
+}
+
+// Never consult a checkout pin or directory to discover the session's soul.
+function sessionIdentity() {
+  const fromEnv = process.env.AGENT_BOT_ID || process.env.QWTS_AGENT_ID;
+  const binding = process.env.AGENT_BOT_BINDING ? readBinding() : null;
+  if (process.env.AGENT_BOT_BINDING && !binding) throw new Error('session binding is missing; check in again with agent-bot join');
+  if (fromEnv && binding && fromEnv !== binding.agentId) throw new Error('session soul and binding disagree');
+  const id = fromEnv ?? binding?.agentId;
+  let identity = id ? readAgentIdentity(id) : null;
+  if (!identity) {
+    const transcript = discoverTranscript();
+    if (!transcript) return null;
+    const matches = listSouls().filter((soul) => soul.status !== 'retired').map((soul) => readAgentIdentity(soul.id))
+      .filter((record) => record.transcript?.provider === transcript.provider && record.transcript.id === transcript.id);
+    if (matches.length > 1) throw new Error('multiple souls match this session; supply AGENT_BOT_ID from agent-bot join');
+    identity = matches[0];
+  }
+  if (!identity) return null;
+  if (identity.status === 'retired' || showSoul(identity.id).status === 'retired') throw new Error('session soul is retired');
+  return identity;
+}
 
 export function prepareWorktreeBinding(options) {
   if (readBinding({ env: {}, gitDir: options.gitDir })) return 'binding reused';
@@ -188,41 +205,8 @@ export async function bindSoul({ agentId, policy, client, ensureLocal, worktree 
   return { ...ensureLocal(), via: 'in-process' };
 }
 
-// Identity, census, space, and the rotation warning. GitHub attribution
-// (author, credential helper, hooks, app pin) stays with the caller so the
-// add-on-off path can bind a soul without writing bot git config.
-async function bindExecutionIdentity({
-  gitDir,
-  slug = null,
-  botUidValue = null,
-  harness = null,
-  config,
-  daemon,
-  useGithub,
-  gate: isEnabled,
-}) {
-  git('config', 'extensions.worktreeConfig', 'true');
-  let currentAgentId = null;
-  for (const key of AGENT_ID_KEYS) {
-    try {
-      currentAgentId = git('config', '--worktree', '--get', key) || null;
-      if (currentAgentId) break;
-    } catch {
-      /* try next key */
-    }
-  }
-  const sharedBinding = readBinding({ env: {}, gitDir });
-  const executionIdentity = sharedBinding ? readAgentIdentity(sharedBinding.agentId, { stateDir: stateDirectory() }) : ensureAgentIdentity({
-    currentId: currentAgentId,
-    appSlug: slug,
-    botUid: botUidValue,
-    harness: harness ?? (slug ? harnessForSlug(slug, config) : null),
-    transcript: discoverTranscript(),
-    fields: identityFieldsFromEnv(),
-    stateDir: stateDirectory(),
-    useGithub,
-    gate: isEnabled,
-  });
+// Register the already-resolved soul; setup must never mint or rotate identity.
+async function bindExecutionIdentity({ config, daemon, executionIdentity }) {
   // The census row records the checkout it is pinned to, so doctor can name
   // an active soul no checkout references (#192). Null in a bare repository.
   let worktree = null;
@@ -242,16 +226,7 @@ async function bindExecutionIdentity({
       return local;
     },
   });
-  // Linking is a convenience (ADR-0332 decision 6); it never fails setup.
-  if (worktree) {
-    try { linkWorktree(executionIdentity.id, worktree); }
-    catch (error) { process.stderr.write(`setup-worktree: checkout not linked into its soul: ${error.message}\n`); }
-  }
-  if (currentAgentId && currentAgentId !== executionIdentity.id) {
-    process.stderr.write(
-      `setup-worktree: ${currentAgentId} is no longer pinned here; run doctor to check its other recorded checkouts\n`,
-    );
-  }
+  git('config', 'extensions.worktreeConfig', 'true');
   return { executionIdentity, space, worktree };
 }
 
@@ -267,13 +242,11 @@ function bindTokenState({ gitDir, worktree, agentId }) {
   }
 }
 
-async function configureSoulWithoutApp({ gitDir, config, daemon, gate: isEnabled }) {
+async function configureSoulWithoutApp({ gitDir, config, daemon, identity }) {
   const { executionIdentity, space, worktree } = await bindExecutionIdentity({
-    gitDir,
     config,
     daemon,
-    useGithub: false,
-    gate: isEnabled,
+    executionIdentity: identity,
   });
   // Remove only GitHub-specific worktree state installed by this command.
   // Preserve unrelated credential helpers and restore an earlier hooks path.
@@ -315,41 +288,31 @@ async function configureSoulWithoutApp({ gitDir, config, daemon, gate: isEnabled
   );
 }
 
-export async function main({
+async function configure({ identity, options, config,
   reconcileCredentials = reconcileAppCredentials,
   rewriteOrigins = rewriteOriginUrls,
   resolveBotUid = botUid,
   daemon = null,
   gate: isEnabled = isGateEnabled,
 } = {}) {
-  const config = loadConfig();
-  let gitDir;
-  try {
-    gitDir = git('rev-parse', '--absolute-git-dir');
-  } catch {
-    return; // not inside a git repository — nothing to do
+  const gitDir = git('rev-parse', '--absolute-git-dir');
+  assertWorktreeArea(identity.id, git('rev-parse', '--show-toplevel'));
+  for (const key of AGENT_ID_KEYS) {
+    let pin;
+    try { pin = git('config', '--worktree', '--get', key); } catch { continue; }
+    if (pin && pin !== identity.id) throw new Error('checkout belongs to another soul; use a new worktree');
   }
+  const binding = readBinding({ env: {}, gitDir });
+  if (binding && binding.agentId !== identity.id) throw new Error('checkout binding belongs to another soul');
   if (!isEnabled('github-identity', { env: process.env, home: homedir(), config })) {
-    await configureSoulWithoutApp({ gitDir, config, daemon, gate: isEnabled });
+    await configureSoulWithoutApp({ gitDir, config, daemon, identity });
     return;
   }
-  const previousSlug = pinnedSlug();
-  const resolvedSlug = resolveAgentSlug({ explicit: process.argv[2], config, detect: false });
-  if (!resolvedSlug) {
-    // No bot identity stated for this checkout — human persona, nothing to
-    // do. Run by name (not from a git hook), say so: an agent without a
-    // GitHub App joins with `agent-bot join` instead (#382).
-    if (process.env.AGENT_BOT_SETUP_HINT === '1') {
-      process.stderr.write('setup-worktree: no GitHub App is stated for this checkout, so nothing was configured. An agent without an App joins with: agent-bot join --name NAME --harness HARNESS\n');
-    }
-    return;
-  }
+  const resolvedSlug = resolveAgentSlug({ explicit: options.slug ?? identity.github?.appSlug, config, detect: false });
+  if (!resolvedSlug) throw new Error('session soul has no GitHub App; disable github-identity or join a soul with an App');
   const slug = validateAppSlug(resolvedSlug);
-  if (previousSlug && previousSlug !== slug) {
-    const layout = territoryHarness();
-    process.stderr.write(
-      `setup-worktree: repinning ${previousSlug} to ${slug}${layout ? ` (${layout} worktree layout)` : ''}\n`,
-    );
+  if (slug !== identity.github?.appSlug || (pinnedSlug() && pinnedSlug() !== slug)) {
+    throw new Error('GitHub App does not match the session soul; use a new worktree');
   }
   let verifiedToken = null;
   const [credential] = await reconcileCredentials({
@@ -382,14 +345,9 @@ export async function main({
   // corrupt, or mismatched space or census fails closed without leaving the
   // worktree partially bound.
   const { executionIdentity, space, worktree } = await bindExecutionIdentity({
-    gitDir,
-    slug,
-    botUidValue: uid,
-    harness: harnessForSlug(slug, config),
+    executionIdentity: identity,
     config,
     daemon,
-    useGithub: true,
-    gate: isEnabled,
   });
   git('config', '--worktree', 'agentBot.app', slug);
   git('config', '--worktree', 'agentBot.agentId', executionIdentity.id);
@@ -426,6 +384,48 @@ export async function main({
   process.stdout.write(
     `worktree configured for ${slug}[bot] as ${executionIdentity.id} (${transcriptState}, ${spaceState}, ${bindState})\n`,
   );
+}
+
+export async function main(dependencies = {}) {
+  const argv = process.argv.slice(2);
+  if (argv.includes('--help') || argv.includes('-h')) {
+    process.stdout.write(USAGE);
+    return;
+  }
+  const options = parseArgs(argv);
+  const identity = sessionIdentity();
+  if (!identity) {
+    // No session soul: a human's own session, or a harness nobody approved.
+    // The harness startup script and git's post-checkout hook run setup
+    // every session, so this stays a quiet no-op (the checkout is left
+    // human); only an explicit request to create a worktree is an error.
+    const hint = 'no session soul: this checkout stays human. An agent needs GeniusBar harness approval (Kiro: GeniusBar#185), then checks in with agent-bot join --name NAME --harness HARNESS and uses its AGENT_BOT_ID';
+    if (options.name) throw new Error(hint);
+    if (!options.hook && process.env.AGENT_BOT_SETUP_HINT === '1') process.stderr.write(`setup-worktree: ${hint}\n`);
+    return;
+  }
+  const original = process.cwd();
+  try {
+    if (options.name) {
+      const commonDir = realpathSync(git('rev-parse', '--path-format=absolute', '--git-common-dir'));
+      const destination = soulWorktreePath(identity.id, options.name, { readOnly: true });
+      if (!existsSync(destination)) {
+        const branch = options.branch ?? options.name;
+        git('check-ref-format', '--branch', branch);
+        const placed = placeWorktree(identity.id, options.name, { repoCommonDir: commonDir });
+        let branchExists = false;
+        try { git('show-ref', '--verify', `refs/heads/${branch}`); branchExists = true; } catch { /* new branch */ }
+        git('-c', 'core.hooksPath=/dev/null', 'worktree', 'add', ...(branchExists ? [] : ['-b', branch]), placed.path, ...(branchExists ? [branch] : []));
+      }
+      process.chdir(destination);
+      if (realpathSync(git('rev-parse', '--show-toplevel')) !== realpathSync(destination)
+          || realpathSync(git('rev-parse', '--path-format=absolute', '--git-common-dir')) !== commonDir) {
+        throw new Error('named worktree is not a checkout of this repository');
+      }
+      if (options.branch && git('symbolic-ref', '--short', 'HEAD') !== options.branch) throw new Error('named worktree uses a different branch');
+    }
+    await configure({ ...dependencies, identity, options, config: loadConfig() });
+  } finally { process.chdir(original); }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
