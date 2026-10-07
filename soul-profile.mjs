@@ -7,7 +7,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
 import { readAgentIdentity, stateDirectory } from './agent-identity.mjs';
-import { validateAppearanceDeclaration, validateCredentialsDeclaration } from './soul-package.mjs';
+import { validateAppearanceDeclaration, validateCredentialsDeclaration, validateSkillsDeclaration } from './soul-package.mjs';
 import { listSopDocuments, resolveSop } from './sop.mjs';
 
 const MAX_BYTES = 256 * 1024;
@@ -158,7 +158,7 @@ function readProfile(id, { env = process.env, home = env.HOME ?? homedir() } = {
   const soul = resolveSoul(id, options);
   const errors = [];
   const profile = { name: soul.name ?? null, displayName: soul.displayName ?? null, description: null,
-    harness: null, package: null, revision: null, template: null, appearance: null, parentId: soul.parentId ?? null, status: soul.status ?? null };
+    harness: null, package: null, revision: null, template: null, appearance: null, skillsDisabled: [], parentId: soul.parentId ?? null, status: soul.status ?? null };
   const result = { agentId: soul.id, profile, files: [], skills: [], credentials: [], sop: { resolved: null, override: null }, errors };
   try { profile.harness = text(readAgentIdentity(soul.id, { stateDir: stateDirectory(options) }).harness); }
   catch { errors.push({ area: 'profile', message: 'Execution identity unavailable; harness may be unknown.' }); }
@@ -194,8 +194,18 @@ function readProfile(id, { env = process.env, home = env.HOME ?? homedir() } = {
       if (declaration) result.credentials.push({ name: declaration.app, provider: 'github', status: 'declared' });
     } catch { errors.push({ area: 'credentials', message: 'Invalid credential declaration.' }); }
   }
+  // The declaration as written, so a UI can round-trip it; an invalid one is
+  // reported and switches nothing off. SOP skills are never subject to it.
+  if (manifest?.skills !== undefined) {
+    try { profile.skillsDisabled = [...validateSkillsDeclaration(manifest.skills).disabled]; }
+    catch { errors.push({ area: 'skills', message: 'Invalid skills declaration.' }); }
+  }
+  const disabled = new Set(profile.skillsDisabled);
   result.skills = result.files.filter((file) => /^skills\/[^/]+\/SKILL\.md$/.test(file.path))
-    .map((file) => ({ name: file.path.split('/')[1], source: 'soul', path: file.path, commit: null }));
+    .map((file) => ({ name: file.path.split('/')[1], source: 'soul', path: file.path, commit: null, enabled: !disabled.has(file.path.split('/')[1]) }));
+  for (const name of profile.skillsDisabled) {
+    if (!result.skills.some((skill) => skill.name === name)) errors.push({ area: 'skills', message: `skills.disabled names a skill the package does not have: ${name}` });
+  }
 
   // Discover the override independently of remote resolution. Workflows are
   // their relative TOML paths; this does not read or execute their contents.
@@ -231,7 +241,7 @@ function readProfile(id, { env = process.env, home = env.HOME ?? homedir() } = {
       if (!match || doc.path.split('/').some(privatePart)) continue;
       const relative = doc.source === 'soul' ? `sop/${doc.path}` : doc.path;
       if (doc.source === 'soul' && !safeExists(root, relative)) continue;
-      result.skills.push({ name: match[1], source: 'sop', path: relative, commit: doc.commit ?? null });
+      result.skills.push({ name: match[1], source: 'sop', path: relative, commit: doc.commit ?? null, enabled: true });
     }
   } catch { errors.push({ area: 'sop', message: 'SOP selection and skills unavailable offline (configuration or organization pins could not be resolved).' }); }
   return { result, root };
@@ -263,7 +273,7 @@ export function readSoulProfileFile(id, relativePath, { maxBytes = MAX_BYTES, ..
 export function formatSoulProfile(result) {
   const lines = [`agentId: ${result.agentId}`, ...Object.entries(result.profile).map(([key, value]) => `${key}: ${cleanLine(value && typeof value === 'object' ? JSON.stringify(value) : value)}`),
     '', `files (${result.files.length})`, ...result.files.map((file) => `${cleanLine(file.path)} (${file.kind}, ${file.size} bytes)`),
-    '', `skills (${result.skills.length})`, ...result.skills.map((skill) => `${cleanLine(skill.name)} (${skill.source}) ${cleanLine(skill.path)} commit: ${cleanLine(skill.commit)}`),
+    '', `skills (${result.skills.length})`, ...result.skills.map((skill) => `${cleanLine(skill.name)} (${skill.source}${skill.enabled ? '' : ', disabled'}) ${cleanLine(skill.path)} commit: ${cleanLine(skill.commit)}`),
     '', `credentials (${result.credentials.length})`, ...result.credentials.map((credential) => `${cleanLine(credential.name)} (${credential.provider}): ${credential.status}`),
     '', 'sop', `resolved: ${result.sop.resolved ? cleanLine(`${result.sop.resolved.source}@${result.sop.resolved.commit}`) : '-'}`,
     `override: ${cleanLine(result.sop.override?.path)}`, ...(result.sop.override?.workflows ?? []).map(cleanLine)];

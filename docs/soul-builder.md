@@ -123,6 +123,11 @@ YAML siblings receive a syntax-appropriate comment; interpreter lines remain
 first. Source executable bits are retained on disk. Subdirectories are copied
 recursively through the entry inventory.
 
+A skill named in soul.json `skills.disabled` renders nothing at all (no
+`SKILL.md`, no siblings, no Gemini copy) while its `skills/<name>/` directory
+stays in the package; `rendered` lists `skills` only when some skill rendered.
+See [soul-package.md](soul-package.md#manifest-schema).
+
 JSON, binary and unknown sibling formats remain intact in `skills/`: generated
 SKILL.md lists relative pointers to those source files. They are not prefixed
 or silently converted into invalid native files. Skills using these assets
