@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.35
+
+- `agent-bot identity app remove SLUG` forgets a managed App's local key, config record and doctor cache row, refusing while a harness or soul still uses it; `agent-bot identity addon github-identity on|off` switches the add-on; and `identity apps list --json` reports it as `addons`. Both are owner-gated and have daemon routes, so GeniusBar's add-on switch and Remove button can work (GeniusBar#67).
+
 ## 0.10.34
 
 - A daemon launch now consults the soul's sandbox resolution (#376): an unrestricted soul launches as before; a sandboxed one whose persona account is missing or not set up fails at the `account` stage with the owner's next step and its command (`sandbox-not-ready`), before a package launch mints anything; and a ready one runs only on a daemon in that account, since the executor starts harnesses as its own user (`sandbox-other-account`). The launch journal and result carry `sandbox: { resolution, account }`.
