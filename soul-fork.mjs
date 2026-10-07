@@ -39,7 +39,7 @@ import { computePackageRevision, PACKAGE_IGNORE_LIST, readSoulPackageEntries, va
 import { adoptSoulPackage, editSoulRevision, revisionPackagePath } from './soul-revisions.mjs';
 import { soulsHome } from './souls-root.mjs';
 
-const USAGE = 'usage: agent-bot soul fork <copy-path> --name NAME [--harness H] [--json] [--principal-stdin]';
+const USAGE = 'usage: agent-bot soul fork <copy-path> --name NAME [--harness H] [--role ROLE] [--json] [--principal-stdin]';
 const NAME_MAX = 128;
 
 export function parseForkArgs(argv) {
@@ -49,7 +49,7 @@ export function parseForkArgs(argv) {
     const arg = argv[i];
     if (arg === '--json') options.json = true;
     else if (arg === '--principal-stdin') options.principalStdin = true;
-    else if (arg === '--name' || arg === '--harness') {
+    else if (arg === '--name' || arg === '--harness' || arg === '--role') {
       const key = arg.slice(2);
       const value = argv[i + 1];
       if (options[key] !== undefined || value === undefined || value.startsWith('--')) throw new Error(USAGE);
@@ -111,7 +111,7 @@ function archiveFolder(folder, archive, now) {
 }
 
 export async function forkSoul({
-  copy, name, harness = undefined, principal = null, parentId = null,
+  copy, name, role = null, harness = undefined, principal = null, parentId = null,
   env = process.env, home = homedir(), cwd = process.cwd(), config, now = () => new Date(),
   gate = (action, { principal: presented }) => assertOwnerAction(action, { principal: presented, env, cwd }),
   join = joinSoul,
@@ -119,6 +119,10 @@ export async function forkSoul({
   leave = (soul) => leaveLaunchedSoul(soul, { env }),
 } = {}) {
   validName(name);
+  // The fork's role (#535): soul.json `role`, as `population list` reads it (60 chars).
+  if (role !== null && (typeof role !== 'string' || !role.trim() || role.trim().length > 60 || /[\u0000-\u001f\u007f]/.test(role))) {
+    throw new Error('--role must be 1 to 60 printable characters');
+  }
   if (harness !== undefined && (typeof harness !== 'string' || !HARNESS_KEY_PATTERN.test(harness))) throw new Error('--harness must be a harness key');
   if (parentId !== null) validateAgentId(parentId);
   const loaded = config === undefined ? loadConfig({ env, home }) : config;
@@ -161,7 +165,7 @@ export async function forkSoul({
     result.state = archiveWorkingState(folder, archive, now);
     const { credentials: _original, displaySeed, ...kept } = manifest;
     const next = { ...kept, formatVersion: 2, ignore: PACKAGE_IGNORE_LIST, displaySeed,
-      name: `${name} - ${templateName(manifest.name)}`, template: false,
+      name: `${name} - ${templateName(manifest.name)}`, ...(role === null ? {} : { role: role.trim() }), template: false,
       templateRevision: manifest.templateRevision ?? manifest.revision, parentRevision: null };
     const manifestPath = path.join(folder, 'soul.json');
     const save = () => writeFileSync(manifestPath, JSON.stringify(next, null, 2) + '\n');

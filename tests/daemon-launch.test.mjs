@@ -142,6 +142,28 @@ test('a package launch spawns a soul, homes it with the package, and starts it',
   assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId: spawnedId });
 });
 
+test('a package launch carries a trimmed role to the spawn; a bad role or a role on a relaunch never starts (#535)', async (t) => {
+  const seen = [];
+  const f = fixture(t, { spawnPackage: (input) => { seen.push(input.role); return { id: spawnedId }; },
+    lookupBinding: () => null, provisionHome: () => ({ worktree: '/home/new', file: '/home/new/.git/agent-binding.json' }) });
+  await f.handler({ ...packageEvent, role: '  Researcher  ' }, f.ports);
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId: spawnedId });
+  assert.deepEqual(seen, ['Researcher']);
+  await f.handler({ ...packageEvent, requestId: 'r2' }, f.ports);
+  assert.equal(Object.hasOwn(f.calls.at(-1) ?? {}, 'role'), false);
+  assert.deepEqual(seen, ['Researcher', undefined]);
+
+  const g = fixture(t, { spawnPackage: () => { throw new Error('unexpected spawn'); } });
+  for (const [requestId, role] of [['r3', 'x'.repeat(61)], ['r4', '  '], ['r5', 'a\nb'], ['r6', 7]]) {
+    await g.handler({ ...packageEvent, requestId, role }, g.ports);
+    assert.deepEqual(g.reports.at(-1), { requestId, status: 'failed', agentId: null, detail: 'invalid launch role' });
+  }
+  await g.handler({ ...event, requestId: 'r7', role: 'Researcher' }, g.ports);
+  assert.equal(g.reports.at(-1).status, 'failed');
+  assert.match(g.reports.at(-1).detail, /a launch role names a new soul/);
+  assert.equal(g.calls.length, 0);
+});
+
 test('a package launch of an installed soul\'s own folder relaunches that soul, never spawns (#80)', async (t) => {
   const f = fixture(t, { locatePackage: (pkg) => ({ path: pkg, status: 'installed', agentId, soulDir: pkg, copies: [] }),
     provisionHome: () => { throw new Error('unexpected provision'); } });

@@ -17,6 +17,8 @@ export function launchCommsSetting({ soulDir = null, packagePath = null } = {}) 
 
 /** Longest display name the broker accepts on a launch request. */
 export const LAUNCH_NAME_MAX = 128;
+// Same bound as agent-population's ROLE_MAX, which `population list` applies on read.
+export const LAUNCH_ROLE_MAX = 60;
 
 // `provisionHome` binds a soul that has no live binding (#297); `discard`
 // rolls back a soul this request spawned when its first start fails, so a
@@ -126,6 +128,13 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       }
       // Same bound as agent-comms' broker launch contract (lib/broker/launch.mjs).
       if (event.name !== undefined && (typeof event.name !== 'string' || !event.name.trim() || event.name.length > LAUNCH_NAME_MAX || /[\u0000-\u001f\u007f]/.test(event.name))) throw new Error('invalid launch name');
+      // A short role for a new soul (#535), written into its manifest where
+      // `population list` reads it; an existing soul keeps the role its
+      // soul.json carries, so a relaunch cannot carry one.
+      if (event.role !== undefined) {
+        if (typeof event.role !== 'string' || !event.role.trim() || event.role.trim().length > LAUNCH_ROLE_MAX || /[\u0000-\u001f\u007f]/.test(event.role)) throw new Error('invalid launch role');
+        if (soul) throw new Error(`a launch role names a new soul; ${soul} keeps the role in its soul.json`);
+      }
       // Optional, chosen before start (#381): the soul's comms setting for
       // this and later launches. Absent keeps what its soul.json says.
       const brief = event.brief === undefined ? undefined : normalizeLaunchBrief(event.brief);
@@ -137,7 +146,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       // Every check that can fail without starting runs before a package spawn mints.
       if (!executorFor) throw new Error('daemon ACP executor is disabled');
       if (parent !== null && soul) throw new Error('a team member is a new soul, not an existing one');
-      const request = { ...withoutParent(event), harness, ...(parent ? { parent } : {}) };
+      const request = { ...withoutParent(event), harness, ...(event.role === undefined ? {} : { role: event.role.trim() }), ...(parent ? { parent } : {}) };
       const identity = soul ? await identities(soul) : copied ? await forkCopy(request) : await spawnPackage(request);
       if (!soul) spawned = identity?.id ?? null;
       await step('account');
