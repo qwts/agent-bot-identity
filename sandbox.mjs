@@ -7,6 +7,13 @@
 // soul's override. It never creates an account itself: that needs admin
 // rights, so every step is one the owner runs, and nothing here runs `sudo`.
 //
+// Which souls get an account, and what it is called, is the SOP pack's
+// persona mapping (ADR-0274 decision 3): persona.toml in the SOP repository,
+// recorded offline by `agent-bot sop persona`. A pack decision wins over the
+// user's override and switch; the switch and overrides are the user's choice
+// only for a soul no SOP decides. The pack never turns the add-on on: with
+// `features.persona-accounts` off its decision is reported, not applied.
+//
 //   agent-bot sandbox status [--json]
 //   agent-bot sandbox plan [--json]
 //   agent-bot sandbox on|off [--json] [--principal-stdin]
@@ -25,10 +32,14 @@ import { loadConfig } from './config.mjs';
 import { validateAgentId } from './agent-identity.mjs';
 import { SANDBOX_OVERRIDES, listSouls, populationFile, setSoulSandbox, showSoul, showSoulByName, soulShownName } from './agent-population.mjs';
 import { assertOwnerAction } from './owner-gate.mjs';
+import { PERSONA_FILE, parseTomlSubset, readSopPersonaRecord } from './sop.mjs';
 
 export const SANDBOX_PROVIDER = 'standard_macos_account';
 export const DEFAULT_SANDBOX_ACCOUNT = 'geniusbar-agent';
 export const SANDBOX_STATUSES = Object.freeze(['unsupported', 'missing', 'creating', 'ready']);
+export const PERSONA_SANDBOX = Object.freeze(['sandboxed', 'unrestricted']);
+export const PERSONA_MATCHERS = Object.freeze(['soul', 'role']);
+export const PERSONA_STATES = Object.freeze(['none', 'unrecorded', 'stale', 'absent', 'error', 'invalid', 'ok']);
 const GATE = 'persona-accounts';
 const USAGE = 'usage: agent-bot sandbox status [--json] | sandbox plan [--json] | sandbox on|off [--json] [--principal-stdin] | sandbox account NAME [--json] [--principal-stdin] | sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin] | sandbox resolve <agentId|name> [--json]';
 // What sysadminctl and dscl accept as a short name; it lands in argv, never a shell.
@@ -177,18 +188,146 @@ export function sandboxPlan({ account, owner = userInfo().username, checks }) {
   ];
 }
 
+// --- the pack's persona mapping ---------------------------------------------
+// persona.toml at the SOP repository's root, in the TOML subset agent-sop.toml
+// uses (comments, [table] and [table.sub] headers, quoted strings, integers):
+//
+//   schema_version = 1
+//   [persona]                    # optional: souls no rule matches
+//   sandbox = "unrestricted"     #   sandboxed | unrestricted; absent: the user setting
+//   account = "geniusbar-agent"  #   the account for sandboxed souls whose rule names none
+//   [soul.reviewer]              # by the soul's name (as GeniusBar shows it, or its handle)
+//   sandbox = "sandboxed"
+//   account = "gb-reviewer"      # optional
+//   [role.auditor]               # by the role in the soul's soul.json
+//   sandbox = "sandboxed"
+//
+// A name rule wins over a role rule, which wins over the default. Names and
+// roles compare lowercased with spaces as hyphens, so `[soul.release-bot]`
+// matches a soul named "Release Bot". Souls are not matched by template: the
+// census keeps no template name, only a revision.
+
+export function parsePersonaMapping(text) {
+  const problem = (message) => fail('persona-invalid', `${PERSONA_FILE}: ${message}`);
+  let parsed;
+  try { parsed = parseTomlSubset(text); }
+  catch (error) { throw problem(error.message); }
+  const { root, tables } = parsed;
+  for (const key of Object.keys(root)) if (key !== 'schema_version') throw problem(`unsupported key ${key}; this file allows schema_version, [persona], [soul.NAME] and [role.ROLE]`);
+  if (root.schema_version !== 1) throw problem(`schema_version must be the integer 1 (got ${JSON.stringify(root.schema_version)})`);
+  const entry = (table, fields, { required }) => {
+    for (const key of Object.keys(fields)) if (key !== 'sandbox' && key !== 'account') throw problem(`[${table}] has unsupported key ${key}; expected sandbox and account`);
+    if (fields.sandbox !== undefined && !PERSONA_SANDBOX.includes(fields.sandbox)) throw problem(`[${table}] sandbox must be sandboxed or unrestricted`);
+    if (required && fields.sandbox === undefined) throw problem(`[${table}] needs sandbox = "sandboxed" or "unrestricted"`);
+    let account = null;
+    if (fields.account !== undefined) {
+      try { account = validateSandboxAccount(fields.account); }
+      catch (error) { throw problem(`[${table}] ${error.message}`); }
+    }
+    return { sandbox: fields.sandbox ?? null, account };
+  };
+  const mapping = { schemaVersion: 1, default: { sandbox: null, account: null }, rules: [] };
+  for (const [table, fields] of Object.entries(tables)) {
+    if (table === 'persona') { mapping.default = entry(table, fields, { required: false }); continue; }
+    const dot = table.indexOf('.');
+    const match = dot > 0 ? table.slice(0, dot) : null;
+    const value = dot > 0 ? table.slice(dot + 1) : '';
+    if (!PERSONA_MATCHERS.includes(match) || !value || value.includes('.')) {
+      throw problem(`unsupported table [${table}]; expected [persona], [soul.NAME] or [role.ROLE]`);
+    }
+    mapping.rules.push({ match, value: personaKey(value), ...entry(table, fields, { required: true }) });
+  }
+  return mapping;
+}
+
+function personaKey(text) {
+  return String(text).trim().toLowerCase().replace(/\s+/g, '-');
+}
+
+// The role a soul's soul.json declares (#535), from the folder the census records.
+function soulRole(soul) {
+  if (!soul?.soulDir) return null;
+  try {
+    const role = JSON.parse(readFileSync(join(soul.soulDir, 'soul.json'), 'utf8'))?.role;
+    return typeof role === 'string' && role.trim() ? role : null;
+  } catch { return null; }
+}
+
+export function matchPersona(mapping, { names = [], role = null } = {}) {
+  const hit = (match, value) => mapping.rules.find((rule) => rule.match === match && rule.value === value) ?? null;
+  for (const name of names) {
+    if (typeof name !== 'string' || !name.trim()) continue;
+    const rule = hit('soul', personaKey(name));
+    if (rule) return { rule: `soul:${rule.value}`, sandbox: rule.sandbox, account: rule.account };
+  }
+  if (typeof role === 'string' && role.trim()) {
+    const rule = hit('role', personaKey(role));
+    if (rule) return { rule: `role:${rule.value}`, sandbox: rule.sandbox, account: rule.account };
+  }
+  if (mapping.default.sandbox) return { rule: 'default', sandbox: mapping.default.sandbox, account: null };
+  return null;
+}
+
+// The recorded pack decision, read offline (never git, never the network):
+// `agent-bot sop persona` records the user's SOP's persona.toml, pinned to
+// its commit. `state` is one of PERSONA_STATES; only `ok` decides anything,
+// and every other state says why the user setting applies instead.
+export function loadPersona({ env = process.env, home = homedir() } = {}) {
+  const record = readSopPersonaRecord({ env, home });
+  const base = { state: record.state, decides: false, repository: record.repository ?? null, commit: record.commit ?? null,
+    recordedAt: record.recordedAt ?? null, message: record.message ?? null, mapping: null };
+  if (record.state !== 'recorded') return base;
+  try { return { ...base, state: 'ok', decides: true, mapping: parsePersonaMapping(record.text) }; }
+  catch (error) { return { ...base, state: 'invalid', message: `${error.message}; the user setting applies until the pack is fixed` }; }
+}
+
+// Resolution order: the pack's decision for this soul (source `sop`), else
+// the soul's override, else the global switch. Without `persona` (an older
+// caller) the pack is not consulted and the result has no `sop` field.
+function decideSandbox(soul, settings, { owner, persona = null, role = null, names = [] }) {
+  const override = soul.sandbox ?? 'inherit';
+  const decision = persona?.decides
+    ? matchPersona(persona.mapping, { names: [soulShownName(soul, soul.soulDir ?? null), soul.displayName, soul.name, ...names], role: role ?? soulRole(soul) })
+    : null;
+  const account = decision ? (decision.account ?? persona.mapping.default.account ?? settings.account) : settings.account;
+  let sandboxed;
+  let source;
+  let reason = null;
+  if (decision) {
+    source = 'sop';
+    const wants = decision.sandbox === 'sandboxed';
+    sandboxed = wants && settings.enabled;
+    if (wants && !settings.enabled) reason = `the SOP decides sandboxed as ${account}, but features.persona-accounts is off (agent-bot sandbox on turns it on); runs unrestricted`;
+  } else if (override !== 'inherit') {
+    source = 'override';
+    sandboxed = override === 'sandboxed';
+  } else {
+    source = 'global';
+    sandboxed = settings.enabled;
+  }
+  const sop = persona ? {
+    decides: Boolean(decision),
+    state: persona.state,
+    ...(persona.repository ? { repository: persona.repository, commit: persona.commit } : {}),
+    ...(decision ? { rule: decision.rule, sandbox: decision.sandbox, account: decision.sandbox === 'sandboxed' ? account : owner } : {}),
+    ...(persona.message ? { message: persona.message } : {}),
+  } : null;
+  return { override, sandboxed, source, account, runsAs: sandboxed ? account : owner, sop, reason };
+}
+
 // --- per-soul resolution ----------------------------------------------------
 
-export function resolveSandbox(soul, settings, { owner = userInfo().username } = {}) {
-  const override = soul.sandbox ?? 'inherit';
-  const sandboxed = override === 'sandboxed' ? true : override === 'unrestricted' ? false : settings.enabled;
+export function resolveSandbox(soul, settings, { owner = userInfo().username, persona = null, role = null, names = [] } = {}) {
+  const decided = decideSandbox(soul, settings, { owner, persona, role, names });
   return {
     agentId: soul.id,
     name: soulShownName(soul),
-    override,
-    sandboxed,
-    runsAs: sandboxed ? settings.account : owner,
-    source: override === 'inherit' ? 'global' : 'override',
+    override: decided.override,
+    sandboxed: decided.sandboxed,
+    runsAs: decided.runsAs,
+    source: decided.source,
+    ...(decided.sop ? { sop: decided.sop } : {}),
+    ...(decided.reason ? { reason: decided.reason } : {}),
   };
 }
 
@@ -202,13 +341,17 @@ function resolveSoul(target, file) {
 
 // --- at launch ----------------------------------------------------------------
 // The daemon's launch handler asks this what a soul gets before it starts it
-// (#376). A soul not in the census yet (a package or team launch makes a new
-// one) has no override, so it follows the global switch. Only a sandboxed
-// launch probes the account: an unrestricted one runs nothing.
+// (#376). The pack decides first, from the recorded mapping (no network: a
+// missing or unreadable record falls back to the user setting and says so).
+// A soul not in the census yet (a package or team launch makes a new one)
+// is matched by the launch's `name` and `role`, and has no override, so
+// otherwise it follows the global switch. Only a sandboxed launch probes the
+// account: an unrestricted one runs nothing.
 
-export function launchSandbox(agentId, { env = process.env, home = homedir(), platform = process.platform, exec = defaultExec, fileExists = existsSync, owner = userInfo().username } = {}) {
-  // Read now, not at daemon start: the switch and overrides change under it.
+export function launchSandbox(agentId, { env = process.env, home = homedir(), platform = process.platform, exec = defaultExec, fileExists = existsSync, owner = userInfo().username, name = null, role = null } = {}) {
+  // Read now, not at daemon start: the switch, overrides and record change under it.
   const settings = sandboxSettings(loadConfig({ env, home }));
+  const persona = loadPersona({ env, home });
   let soul = { id: agentId, sandbox: 'inherit' };
   if (agentId) {
     try { soul = showSoul(validateAgentId(agentId), { file: populationFile({ env, home }) }); }
@@ -218,13 +361,12 @@ export function launchSandbox(agentId, { env = process.env, home = homedir(), pl
       if (!/^no population record/.test(error.message)) throw error;
     }
   }
-  const override = soul.sandbox ?? 'inherit';
-  const sandboxed = override === 'sandboxed' ? true : override === 'unrestricted' ? false : settings.enabled;
-  const resolved = { resolution: sandboxed ? 'sandboxed' : 'unrestricted', override, source: override === 'inherit' ? 'global' : 'override',
-    account: sandboxed ? settings.account : owner, self: owner };
-  if (!sandboxed) return resolved;
-  const checks = probeSandboxAccount(settings.account, { platform, exec, fileExists });
-  return { ...resolved, status: sandboxAccountStatus(checks), steps: sandboxPlan({ account: settings.account, owner, checks }) };
+  const decided = decideSandbox(soul, settings, { owner, persona, role, names: [name] });
+  const resolved = { resolution: decided.sandboxed ? 'sandboxed' : 'unrestricted', override: decided.override, source: decided.source,
+    account: decided.runsAs, self: owner, sop: decided.sop, ...(decided.reason ? { reason: decided.reason } : {}) };
+  if (!decided.sandboxed) return resolved;
+  const checks = probeSandboxAccount(decided.account, { platform, exec, fileExists });
+  return { ...resolved, status: sandboxAccountStatus(checks), steps: sandboxPlan({ account: decided.account, owner, checks }) };
 }
 
 // Why a launch cannot start as `launchSandbox` resolved it, or null when it
@@ -259,6 +401,7 @@ export function sandboxLaunchProblem(sandbox) {
 export function readSandboxStatus({ env = process.env, home = homedir(), platform = process.platform, exec = defaultExec, fileExists = existsSync, owner = userInfo().username, config } = {}) {
   const loaded = config ?? loadConfig({ env, home });
   const settings = sandboxSettings(loaded);
+  const persona = loadPersona({ env, home });
   const checks = probeSandboxAccount(settings.account, { platform, exec, fileExists });
   const file = populationFile({ env, home });
   let souls = [];
@@ -269,8 +412,27 @@ export function readSandboxStatus({ env = process.env, home = homedir(), platfor
     owner,
     checks,
     steps: sandboxPlan({ account: settings.account, owner, checks }),
-    souls: souls.map((soul) => resolveSandbox(soul, settings, { owner })),
+    sop: {
+      state: persona.state,
+      decides: persona.decides,
+      repository: persona.repository,
+      commit: persona.commit,
+      recordedAt: persona.recordedAt,
+      message: persona.message,
+      rules: persona.mapping ? persona.mapping.rules.map((rule) => ({ match: rule.match, value: rule.value, sandbox: rule.sandbox, account: rule.account })) : [],
+      default: persona.mapping ? persona.mapping.default : null,
+    },
+    souls: souls.map((soul) => resolveSandbox(soul, settings, { owner, persona })),
   };
+}
+
+function formatPersonaLine(sop) {
+  if (!sop) return null;
+  if (sop.state === 'ok') {
+    const fallback = sop.default?.sandbox ? `default ${sop.default.sandbox}` : 'no default';
+    return `sop: persona mapping from ${sop.repository}@${sop.commit}: ${sop.rules.length} ${sop.rules.length === 1 ? 'rule' : 'rules'}, ${fallback}`;
+  }
+  return `sop: ${sop.state}${sop.message ? ` (${sop.message})` : ''}`;
 }
 
 export function formatSandboxStatus(result) {
@@ -279,11 +441,15 @@ export function formatSandboxStatus(result) {
     `sandbox ${result.enabled ? 'on' : 'off'} (${result.provider})`,
     `account: ${result.account} ${result.status}`,
     `  exists ${mark(result.checks.exists)}  standard ${mark(result.checks.standard)}  home ${mark(result.checks.home?.exists ?? null)}  dev tools ${mark(result.checks.devTools)}  paired ${mark(result.checks.paired)}  joined ${mark(result.checks.fleet)}`,
+    ...(formatPersonaLine(result.sop) ? [formatPersonaLine(result.sop)] : []),
     '', 'steps',
     ...result.steps.map((step) => `  [${step.done === true ? 'x' : step.done === false ? ' ' : '?'}] ${step.id}: ${step.title}`),
   ];
   if (result.souls.length) {
-    lines.push('', 'souls', ...result.souls.map((soul) => `  ${soul.agentId} ${soul.name}: ${soul.override}, runs as ${soul.runsAs}`));
+    lines.push('', 'souls', ...result.souls.flatMap((soul) => [
+      `  ${soul.agentId} ${soul.name}: ${soul.override}, runs as ${soul.runsAs} (${soul.source}${soul.sop?.rule ? ` ${soul.sop.rule}` : ''})`,
+      ...(soul.reason ? [`    ${soul.reason}`] : []),
+    ]));
   }
   return `${lines.join('\n')}\n`;
 }
@@ -311,12 +477,25 @@ export function setSandboxAccount(account, { env = process.env, home = homedir()
   return sandboxSettings(next);
 }
 
+// A soul the pack decides takes no override: the pack's persona.toml is where
+// that decision changes (ADR-0274 decision 3). `inherit` is always accepted,
+// so an override left from before the pack decided can be cleared.
+export function sandboxOverrideProblem(resolved, override) {
+  if (override === 'inherit' || resolved.source !== 'sop') return null;
+  const { repository, commit, rule, sandbox } = resolved.sop;
+  return fail('usage', `${resolved.name} runs ${sandbox} by the SOP pack ${repository}@${commit} (${rule}); change ${PERSONA_FILE} in the pack rather than an override here, or set the override to inherit`);
+}
+
 export function setSandboxOverride(target, override, { env = process.env, home = homedir() } = {}) {
   if (!SANDBOX_OVERRIDES.includes(override)) throw fail('usage', `override must be one of ${SANDBOX_OVERRIDES.join(', ')}`);
   const file = populationFile({ env, home });
   const soul = resolveSoul(target, file);
+  const settings = sandboxSettings(loadConfig({ env, home }));
+  const persona = loadPersona({ env, home });
+  const refused = sandboxOverrideProblem(resolveSandbox(soul, settings, { persona }), override);
+  if (refused) throw refused;
   const row = soul.sandbox === override ? soul : setSoulSandbox(soul.id, override, { file });
-  return resolveSandbox(row, sandboxSettings(loadConfig({ env, home })), {});
+  return resolveSandbox(row, settings, { persona });
 }
 
 // --- CLI --------------------------------------------------------------------
@@ -371,20 +550,25 @@ export async function sandboxCommand(argv, {
     if (action === 'show') {
       if (presented) throw new Error(USAGE);
       const soul = resolveSoul(target, populationFile({ env, home }));
-      const result = resolveSandbox(soul, sandboxSettings(loadConfig({ env, home })), { owner });
-      return out(result, `${result.agentId} sandbox ${result.override}, runs as ${result.runsAs}\n`);
+      const result = resolveSandbox(soul, sandboxSettings(loadConfig({ env, home })), { owner, persona: loadPersona({ env, home }) });
+      return out(result, `${result.agentId} sandbox ${result.override}, runs as ${result.runsAs} (${result.source})\n`);
     }
     if (!SANDBOX_OVERRIDES.includes(action)) throw new Error(USAGE);
     const soul = resolveSoul(target, populationFile({ env, home }));
+    // Refused before the owner gate: a pack-decided soul takes no override.
+    const refused = sandboxOverrideProblem(resolveSandbox(soul, sandboxSettings(loadConfig({ env, home })), { owner, persona: loadPersona({ env, home }) }), action);
+    if (refused) throw refused;
     await principalFor(`sandbox override ${soul.id} ${action}`);
     const result = setSandboxOverride(soul.id, action, { env, home });
-    return out({ ...result, runsAs: result.sandboxed ? result.runsAs : owner }, `${result.agentId} sandbox ${result.override}, runs as ${result.sandboxed ? result.runsAs : owner}\n`);
+    const runsAs = result.sandboxed ? result.runsAs : owner;
+    return out({ ...result, runsAs }, `${result.agentId} sandbox ${result.override}, runs as ${runsAs} (${result.source})\n`);
   }
   if (verb === 'resolve' && rest.length === 1) {
     if (presented) throw new Error(USAGE);
     const soul = resolveSoul(rest[0], populationFile({ env, home }));
-    const result = resolveSandbox(soul, sandboxSettings(loadConfig({ env, home })), { owner });
-    return out(result, `${result.agentId} runs as ${result.runsAs} (${result.sandboxed ? 'sandboxed' : 'unrestricted'}, ${result.source})\n`);
+    const result = resolveSandbox(soul, sandboxSettings(loadConfig({ env, home })), { owner, persona: loadPersona({ env, home }) });
+    const why = result.sop?.rule ? ` ${result.sop.rule}` : '';
+    return out(result, `${result.agentId} runs as ${result.runsAs} (${result.sandboxed ? 'sandboxed' : 'unrestricted'}, ${result.source}${why})\n${result.reason ? `  ${result.reason}\n` : ''}`);
   }
   throw new Error(USAGE);
 }

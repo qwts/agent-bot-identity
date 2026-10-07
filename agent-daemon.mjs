@@ -1876,7 +1876,7 @@ export async function runDaemon({
     harnessProblem: (harness) => harnessLaunchProblem(harness, { env: harnessEnv }),
     // What the soul gets (#376): its override over the global switch, and
     // for a sandboxed one the account's readiness and the owner's steps.
-    sandboxFor: ({ agentId }) => launchSandbox(agentId, { env, home }),
+    sandboxFor: ({ agentId, name = null, role = null }) => launchSandbox(agentId, { env, home, name, role }),
     joinSoul: async (soul) => {
       const address = await joinLaunchedSoul(soul, { env });
       // The census shows the launch name; every command shows it too (#429).

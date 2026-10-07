@@ -709,7 +709,7 @@ test('an unrestricted soul launches as before and the journal says it runs as th
   const asked = [];
   const f = fixture(t, { sandboxFor: (query) => { asked.push(query); return { resolution: 'unrestricted', override: 'inherit', source: 'global', account: 'owner', self: 'owner' }; } });
   await f.handler(event, f.ports);
-  assert.deepEqual(asked, [{ agentId }]);
+  assert.deepEqual(asked, [{ agentId, name: 'Helper' }], 'the launch name reaches the resolver for the pack\'s name rules');
   assert.equal(f.calls.length, 1);
   assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId, sandbox: { resolution: 'unrestricted', account: 'owner' } });
   assert.deepEqual(journal(f).sandbox, { resolution: 'unrestricted', account: 'owner' });

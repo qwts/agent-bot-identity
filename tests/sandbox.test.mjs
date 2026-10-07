@@ -8,15 +8,18 @@ import { fileURLToPath } from 'node:url';
 import { upsertSoul, showSoul } from '../agent-population.mjs';
 import { createDaemonServer, daemonClient } from '../agent-daemon.mjs';
 import { auditFile } from '../agent-principals.mjs';
+import { stateDirectory } from '../agent-identity.mjs';
 import {
-  DEFAULT_SANDBOX_ACCOUNT, launchSandbox, probeSandboxAccount, readSandboxStatus, resolveSandbox, sandboxAccountStatus, sandboxCommand,
-  sandboxLaunchProblem, sandboxPlan, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount,
+  DEFAULT_SANDBOX_ACCOUNT, formatSandboxStatus, launchSandbox, loadPersona, parsePersonaMapping, probeSandboxAccount, readSandboxStatus, resolveSandbox,
+  sandboxAccountStatus, sandboxCommand, sandboxLaunchProblem, sandboxPlan, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount,
 } from '../sandbox.mjs';
 
 const ID = 'agent_12345678-1234-4234-8234-123456789abc';
 const OTHER = 'agent_12345678-1234-4234-8234-123456789def';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SENTINEL = 'NEVER-RETURN-THIS-SECRET';
+// What every resolution carries with no SOP config at all.
+const NO_SOP = { decides: false, state: 'none', message: 'No SOP is in effect.' };
 
 function fixture(t, { config = null } = {}) {
   const home = mkdtempSync(path.join(tmpdir(), 'sandbox-'));
@@ -148,7 +151,7 @@ test('status, plan and resolve print secret-free JSON; writes go through the own
   assert.ok(!out.includes(SENTINEL));
   await run(['override', 'Fixture', 'unrestricted', '--json']);
   assert.equal(gated[2][0], `sandbox override ${ID} unrestricted`);
-  assert.deepEqual(JSON.parse(out), { agentId: ID, name: 'Fixture', override: 'unrestricted', sandboxed: false, runsAs: 'owner', source: 'override' });
+  assert.deepEqual(JSON.parse(out), { agentId: ID, name: 'Fixture', override: 'unrestricted', sandboxed: false, runsAs: 'owner', source: 'override', sop: NO_SOP });
   const resolved = await run(['resolve', ID, '--json']);
   assert.equal(resolved.runsAs, 'owner');
   await run(['override', ID, '--json']);
@@ -205,7 +208,7 @@ test('daemon routes read status, set the switch and account through the setting 
 
   const override = await fetch(`${base}/v0/sandbox/override`, { method: 'POST', headers, body: JSON.stringify({ agentId: ID, override: 'unrestricted' }) });
   assert.equal(override.status, 200);
-  assert.deepEqual(await override.json(), { schemaVersion: 1, agentId: ID, name: 'Fixture', override: 'unrestricted', sandboxed: false, runsAs: userInfo().username, source: 'override' });
+  assert.deepEqual(await override.json(), { schemaVersion: 1, agentId: ID, name: 'Fixture', override: 'unrestricted', sandboxed: false, runsAs: userInfo().username, source: 'override', sop: NO_SOP });
   assert.equal(gated[1][0], `sandbox override ${ID} unrestricted`);
   assert.equal((await fetch(`${base}/v0/sandbox/override`, { method: 'POST', headers, body: JSON.stringify({ agentId: OTHER, override: 'sandboxed' }) })).status, 404);
   assert.equal((await fetch(`${base}/v0/sandbox/override`, { method: 'POST', headers, body: JSON.stringify({ agentId: ID, override: 'always' }) })).status, 400);
@@ -225,7 +228,7 @@ test('launchSandbox resolves a soul for the daemon and probes only a sandboxed o
   const f = fixture(t);
   const m = machine({ exists: false });
   const options = { ...f.options, platform: 'darwin', exec: m.exec, fileExists: m.fileExists, owner: 'owner' };
-  assert.deepEqual(launchSandbox(ID, options), { resolution: 'unrestricted', override: 'inherit', source: 'global', account: 'owner', self: 'owner' });
+  assert.deepEqual(launchSandbox(ID, options), { resolution: 'unrestricted', override: 'inherit', source: 'global', account: 'owner', self: 'owner', sop: NO_SOP });
   assert.deepEqual(m.calls, [], 'an unrestricted launch runs no probe');
   // A soul this launch will make has no census row: the global switch decides.
   setSandboxEnabled(true, f.options);
@@ -267,4 +270,209 @@ test('sandboxLaunchProblem lets a ready account run in its own daemon and fits t
   assert.equal(error.code, 'sandbox-not-ready');
   assert.ok(`sandbox-not-ready: ${error.message}`.length <= 512, 'the longest account name still fits the broker detail');
   assert.match(error.message, /Then: standard-account, dev-tools, broker-group, pair, harness-sign-in\./);
+});
+
+// --- the SOP pack's persona mapping (GeniusBar#66, ADR-0274 decision 3) ----
+// The record `agent-bot sop persona` writes is placed directly: these tests
+// never run git. The user's SOP config names the repositories the record is for.
+const COMMIT = 'a'.repeat(40);
+function pack(f, persona, { org = 'local/org', sop = 'local/sop', record = true } = {}) {
+  const config = path.join(f.home, '.config', 'agent-sop', 'config.toml');
+  mkdirSync(path.dirname(config), { recursive: true });
+  writeFileSync(config, `schema_version = 1\n[repos]\norg = "${org}@main"\nsop = "${sop}@main"\n`);
+  const file = path.join(stateDirectory(f.options), 'sop-persona.json');
+  mkdirSync(path.dirname(file), { recursive: true });
+  if (record === false) return file;
+  const body = record === true ? { schemaVersion: 1, recordedAt: '2026-10-07T00:00:00.000Z', configPath: config,
+    org: { repository: 'local/org', commit: COMMIT }, sop: { repository: 'local/sop', commit: COMMIT }, persona } : record;
+  writeFileSync(file, typeof body === 'string' ? body : JSON.stringify(body));
+  return file;
+}
+const MAPPING = `schema_version = 1
+[persona]
+sandbox = "unrestricted"
+account = "pack-agent"
+[soul.fixture]
+sandbox = "sandboxed"
+account = "gb-fixture"
+[role.auditor]
+sandbox = "sandboxed"
+`;
+
+test('persona.toml parses the documented subset and refuses anything else', () => {
+  const mapping = parsePersonaMapping(MAPPING);
+  assert.deepEqual(mapping, { schemaVersion: 1, default: { sandbox: 'unrestricted', account: 'pack-agent' }, rules: [
+    { match: 'soul', value: 'fixture', sandbox: 'sandboxed', account: 'gb-fixture' },
+    { match: 'role', value: 'auditor', sandbox: 'sandboxed', account: null },
+  ] });
+  assert.deepEqual(parsePersonaMapping('schema_version = 1\n'), { schemaVersion: 1, default: { sandbox: null, account: null }, rules: [] });
+  const invalid = (text, pattern) => assert.throws(() => parsePersonaMapping(text), (error) => error.code === 'persona-invalid' && pattern.test(error.message));
+  invalid('schema_version = 2\n', /schema_version must be the integer 1/);
+  invalid('schema_version = 1\n[team.x]\nsandbox = "sandboxed"\n', /unsupported table \[team\.x\]/);
+  invalid('schema_version = 1\n[soul.x]\n', /needs sandbox/);
+  invalid('schema_version = 1\n[soul.x]\nsandbox = "maybe"\n', /sandboxed or unrestricted/);
+  invalid('schema_version = 1\n[soul.x]\nsandbox = "sandboxed"\naccount = "Bad Name"\n', /persona\.toml: \[soul\.x\] sandbox account must be a short macOS account name/);
+  invalid('schema_version = 1\n[soul.x]\nsandbox = "sandboxed"\nshell = "zsh"\n', /unsupported key shell/);
+  invalid('schema_version = 1\n[soul.x]\nsandbox = true\n', /booleans are not supported/);
+  invalid('schema_version = 1\n[soul.a.b]\nsandbox = "sandboxed"\n', /unsupported table/);
+});
+
+test('a pack decision wins over the user override and the global switch, and an override on that soul is refused', async (t) => {
+  const f = fixture(t, { config: { features: { 'persona-accounts': true }, sandbox: { account: 'bots' } } });
+  pack(f, MAPPING);
+  // The switch is on and the override says unrestricted: the pack still sandboxes Fixture, as gb-fixture.
+  writeFileSync(f.file, JSON.stringify({ ...JSON.parse(readFileSync(f.file, 'utf8')), souls: { [ID]: { ...JSON.parse(readFileSync(f.file, 'utf8')).souls[ID], sandbox: 'unrestricted' } } }));
+  const persona = loadPersona(f.options);
+  assert.equal(persona.state, 'ok');
+  const fixtureSoul = resolveSandbox(showSoul(ID, { file: f.file }), { enabled: true, provider: 'standard_macos_account', account: 'bots' }, { owner: 'owner', persona });
+  assert.deepEqual(fixtureSoul, { agentId: ID, name: 'Fixture', override: 'unrestricted', sandboxed: true, runsAs: 'gb-fixture', source: 'sop',
+    sop: { decides: true, state: 'ok', repository: 'local/sop', commit: COMMIT, rule: 'soul:fixture', sandbox: 'sandboxed', account: 'gb-fixture' } });
+  // The pack's default (unrestricted) beats the global switch for an unmatched soul; a sandboxed default would use the pack's account.
+  upsertSoul({ id: OTHER, name: 'other-oak-22', displayName: 'Other', spacePath: path.join(f.home, 'space2'), status: 'active', parentId: null, appSlug: null, sandbox: 'sandboxed' }, { file: f.file });
+  const other = resolveSandbox(showSoul(OTHER, { file: f.file }), { enabled: true, provider: 'standard_macos_account', account: 'bots' }, { owner: 'owner', persona });
+  assert.equal(other.sandboxed, false);
+  assert.equal(other.source, 'sop');
+  assert.equal(other.sop.rule, 'default');
+  // Overrides: refused for a pack-decided soul, naming the pack; inherit always clears.
+  assert.throws(() => setSandboxOverride(ID, 'sandboxed', f.options), (error) => error.code === 'usage' && /local\/sop@a{40} \(soul:fixture\); change persona\.toml/.test(error.message));
+  assert.equal(setSandboxOverride(ID, 'inherit', f.options).override, 'inherit');
+  assert.equal(showSoul(ID, { file: f.file }).sandbox, undefined);
+  // launchSandbox resolves the same way and probes the pack's account.
+  const m = machine({ exists: false });
+  const launched = launchSandbox(ID, { ...f.options, platform: 'darwin', exec: m.exec, fileExists: m.fileExists, owner: 'owner' });
+  assert.equal(launched.resolution, 'sandboxed');
+  assert.equal(launched.source, 'sop');
+  assert.equal(launched.account, 'gb-fixture');
+  assert.equal(launched.sop.rule, 'soul:fixture');
+  assert.match(sandboxLaunchProblem(launched).message, /sandboxed as gb-fixture, which is missing/);
+  assert.ok(m.calls.some(([file, , account]) => file === '/usr/bin/id' && account === 'gb-fixture'));
+  // CLI: resolve names the source and rule; the override write is refused before the gate.
+  const gated = [];
+  let out = '';
+  const run = (argv) => { out = ''; return sandboxCommand(argv, { ...f.options, platform: 'darwin', exec: m.exec, owner: 'owner', gate: async (action) => { gated.push(action); }, write: (text) => { out += text; } }); };
+  await run(['resolve', 'Fixture']);
+  assert.equal(out, `${ID} runs as gb-fixture (sandboxed, sop soul:fixture)\n`);
+  await assert.rejects(run(['override', 'Fixture', 'unrestricted']), { code: 'usage' });
+  assert.deepEqual(gated, []);
+  await run(['override', 'Other', 'inherit', '--json']);
+  assert.deepEqual(gated, [`sandbox override ${OTHER} inherit`]);
+  assert.equal(JSON.parse(out).source, 'sop');
+});
+
+test('with the add-on gate off a pack decision is reported but the soul runs unrestricted, with the reason', async (t) => {
+  const f = fixture(t, { config: { features: { 'persona-accounts': false } } });
+  pack(f, MAPPING);
+  const status = readSandboxStatus({ ...f.options, platform: 'darwin', ...machine(), owner: 'owner' });
+  assert.equal(status.sop.state, 'ok');
+  assert.equal(status.sop.decides, true);
+  assert.deepEqual(status.sop.rules.map((rule) => `${rule.match}:${rule.value}`), ['soul:fixture', 'role:auditor']);
+  assert.deepEqual(status.sop.default, { sandbox: 'unrestricted', account: 'pack-agent' });
+  const [soul] = status.souls;
+  assert.equal(soul.sandboxed, false);
+  assert.equal(soul.runsAs, 'owner');
+  assert.equal(soul.source, 'sop');
+  assert.deepEqual(soul.sop, { decides: true, state: 'ok', repository: 'local/sop', commit: COMMIT, rule: 'soul:fixture', sandbox: 'sandboxed', account: 'gb-fixture' });
+  assert.match(soul.reason, /features\.persona-accounts is off/);
+  const text = formatSandboxStatus(status);
+  assert.match(text, /^sandbox off \(standard_macos_account\)\naccount: geniusbar-agent ready\n  exists yes.*\nsop: persona mapping from local\/sop@a{40}: 2 rules, default unrestricted\n/);
+  assert.match(text, new RegExp(`  ${ID} Fixture: inherit, runs as owner \\(sop soul:fixture\\)\n    the SOP decides sandboxed as gb-fixture`));
+  const launched = launchSandbox(ID, { ...f.options, platform: 'darwin', exec: () => { throw new Error('no probe'); }, owner: 'owner' });
+  assert.equal(launched.resolution, 'unrestricted');
+  assert.match(launched.reason, /persona-accounts is off/);
+});
+
+test('an unreadable, stale, missing or invalid pack falls back to the user setting and says so; the launch never fails', (t) => {
+  const f = fixture(t, { config: { features: { 'persona-accounts': true } } });
+  const options = { ...f.options, platform: 'darwin', ...machine(), owner: 'owner' };
+  const expect = (state, pattern) => {
+    const status = readSandboxStatus(options);
+    assert.equal(status.sop.state, state);
+    assert.equal(status.sop.decides, false);
+    assert.match(status.sop.message, pattern);
+    assert.deepEqual(status.sop.rules, []);
+    const [soul] = status.souls;
+    assert.equal(soul.source, 'global');
+    assert.equal(soul.sandboxed, true, 'the user setting applies');
+    assert.equal(soul.sop.state, state);
+    const launched = launchSandbox(ID, options);
+    assert.equal(launched.resolution, 'sandboxed');
+    assert.equal(launched.source, 'global');
+    assert.equal(launched.sop.state, state);
+  };
+  pack(f, null, { record: false });
+  expect('unrecorded', /run `agent-bot sop persona`/);
+  pack(f, MAPPING, { org: 'elsewhere/org' });
+  expect('stale', /not the SOP the config selects/);
+  pack(f, null);
+  expect('absent', /has no persona\.toml/);
+  pack(f, null, { record: '{not json' });
+  expect('error', /JSON/);
+  pack(f, null, { record: { schemaVersion: 1, extra: true } });
+  expect('error', /invalid SOP persona record/);
+  pack(f, 'schema_version = 1\n[soul.fixture]\nsandbox = "sandboxed"\naccount = "Not Valid!"\n');
+  expect('invalid', /persona\.toml: \[soul\.fixture\] sandbox account must be a short macOS account name.*user setting applies/);
+  writeFileSync(path.join(f.home, '.config', 'agent-sop', 'config.toml'), 'schema_version = true\n');
+  expect('error', /booleans are not supported/);
+});
+
+test('rules match by name before role, role from the soul\'s soul.json, and a new soul by its launch name and role', (t) => {
+  const f = fixture(t, { config: { features: { 'persona-accounts': true } } });
+  const soulDir = path.join(f.home, 'souls', 'auditor.soul');
+  mkdirSync(soulDir, { recursive: true });
+  writeFileSync(path.join(soulDir, 'soul.json'), JSON.stringify({ name: 'Audit Owl', role: 'Auditor' }));
+  // No launch name: the soul.json name (Audit Owl) is what the name rule sees, before the census handle.
+  upsertSoul({ id: OTHER, name: 'audit-owl-07', spacePath: path.join(f.home, 'space2'), status: 'active', parentId: null, appSlug: null, soulDir }, { file: f.file });
+  pack(f, `schema_version = 1\n[persona]\naccount = "pack-agent"\n[soul.audit-owl]\nsandbox = "unrestricted"\n[role.auditor]\nsandbox = "sandboxed"\n[soul.fixture]\nsandbox = "sandboxed"\n`);
+  const status = readSandboxStatus({ ...f.options, platform: 'darwin', ...machine(), owner: 'owner' });
+  const by = Object.fromEntries(status.souls.map((soul) => [soul.agentId, soul]));
+  assert.equal(by[OTHER].sop.rule, 'soul:audit-owl', 'the name rule wins over the role rule');
+  assert.equal(by[OTHER].sandboxed, false);
+  assert.equal(by[ID].sop.rule, 'soul:fixture');
+  assert.equal(by[ID].runsAs, 'pack-agent', 'a rule without an account uses the pack default');
+  // Drop the name rule: the role decides.
+  pack(f, `schema_version = 1\n[role.auditor]\nsandbox = "sandboxed"\naccount = "gb-audit"\n`);
+  const roled = resolveSandbox(showSoul(OTHER, { file: f.file }), { enabled: true, provider: 'standard_macos_account', account: 'bots' }, { owner: 'owner', persona: loadPersona(f.options) });
+  assert.deepEqual([roled.source, roled.sop.rule, roled.runsAs], ['sop', 'role:auditor', 'gb-audit']);
+  // A soul the launch makes has no census row: the launch's name and role match.
+  const exec = () => { throw new Error('no probe for an unrestricted launch'); };
+  const m = machine();
+  const fresh = launchSandbox(null, { ...f.options, platform: 'darwin', exec: m.exec, fileExists: m.fileExists, owner: 'owner', name: 'New Helper', role: 'Auditor' });
+  assert.deepEqual([fresh.resolution, fresh.source, fresh.sop.rule, fresh.account], ['sandboxed', 'sop', 'role:auditor', 'gb-audit']);
+  const unmatched = launchSandbox(null, { ...f.options, platform: 'darwin', exec, owner: 'owner', name: 'New Helper' });
+  assert.deepEqual([unmatched.resolution, unmatched.source, unmatched.sop.decides], ['sandboxed', 'global', false]);
+  setSandboxEnabled(false, f.options);
+  assert.equal(launchSandbox(null, { ...f.options, platform: 'darwin', exec, owner: 'owner', name: 'New Helper' }).resolution, 'unrestricted');
+});
+
+test('status --json and the daemon routes carry the pack decision, and the override route refuses a pack-decided soul', async (t) => {
+  const f = fixture(t, { config: { features: { 'persona-accounts': true } } });
+  pack(f, MAPPING);
+  let out = '';
+  const status = await sandboxCommand(['status', '--json'], { ...f.options, platform: 'darwin', ...machine(), owner: 'owner', write: (text) => { out += text; } });
+  const printed = JSON.parse(out);
+  assert.equal(printed.sop.state, 'ok');
+  assert.equal(printed.sop.commit, COMMIT);
+  assert.equal(printed.sop.recordedAt, '2026-10-07T00:00:00.000Z');
+  assert.equal(printed.souls[0].source, 'sop');
+  assert.equal(printed.souls[0].runsAs, 'gb-fixture');
+  assert.equal(status.souls[0].sop.rule, 'soul:fixture');
+  assert.ok(!out.includes(SENTINEL));
+
+  const server = createDaemonServer({ ...f.options, config: {}, token: 'sandbox-test-token-at-least-32-characters',
+    settingGate: async () => ({ method: 'principal', principal: 'principal_1' }) });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const headers = { authorization: 'Bearer sandbox-test-token-at-least-32-characters', 'content-type': 'application/json' };
+  const body = await (await fetch(`${base}/v0/sandbox`, { headers })).json();
+  assert.equal(body.schemaVersion, 1);
+  assert.deepEqual({ state: body.sop.state, decides: body.sop.decides, repository: body.sop.repository, rules: body.sop.rules.length }, { state: 'ok', decides: true, repository: 'local/sop', rules: 2 });
+  assert.deepEqual(body.souls[0].sop, { decides: true, state: 'ok', repository: 'local/sop', commit: COMMIT, rule: 'soul:fixture', sandbox: 'sandboxed', account: 'gb-fixture' });
+  const refused = await fetch(`${base}/v0/sandbox/override`, { method: 'POST', headers, body: JSON.stringify({ agentId: ID, override: 'unrestricted' }) });
+  assert.equal(refused.status, 409);
+  assert.match((await refused.json()).error, /local\/sop@/);
+  assert.equal(showSoul(ID, { file: f.file }).sandbox, undefined);
+  const cleared = await fetch(`${base}/v0/sandbox/override`, { method: 'POST', headers, body: JSON.stringify({ agentId: ID, override: 'inherit' }) });
+  assert.equal(cleared.status, 200);
+  assert.equal((await cleared.json()).source, 'sop');
 });

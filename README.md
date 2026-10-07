@@ -93,6 +93,14 @@ own documents remain available while repository trust is pending. Printed
 text carries an ADR-0274 reference header: SOP documentation does not
 override harness or user instructions.
 
+`agent-bot sop persona [--json]` records the pack's persona mapping, the
+`persona.toml` at the root of the user's SOP repository that says which souls
+run in their own macOS account (ADR-0274 decision 3). It reads the file at
+the resolved commit through the same pinned git boundary as `org.json` and
+writes `<state>/sop-persona.json` (0600); `agent-bot sandbox` and the
+daemon's launch path read that record offline. A soul's own selection never
+decides personas. See [docs/sandbox.md](docs/sandbox.md#the-sop-packs-persona-mapping).
+
 ## Machine install (headless Linux)
 
 This repository publishes a CLI bundle for headless Linux — a cloud agent's
