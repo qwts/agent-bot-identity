@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.43
+
+- soul.json `skills: { "disabled": ["name", …] }` switches a soul's skills off without deleting them (GeniusBar#64): `soul build` renders nothing for a disabled skill on any harness while its `skills/<name>/` directory stays in the package, `soul profile` reports `enabled` on every skill row and the declaration as `profile.skillsDisabled`, and a disabled name the package has no skill for is a profile error, not a validation failure. SOP skills are unaffected.
+
 ## 0.10.42
 
 - `docs/gh-app-hook.md` is the gh-app-hook deployment and provisioning procedure `doctor` pointed at but which did not exist (#230): `wrangler deploy`, the three Worker secrets (`INBOX_TOKEN`, `WEBHOOK_SECRETS`, `SUBSCRIBERS`), the per-App webhook URL and secret, harness wiring and verification.
