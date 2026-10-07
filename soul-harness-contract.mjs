@@ -17,6 +17,22 @@ export const PACKAGE_IGNORE_LIST = Object.freeze({
   generatedMarker: GENERATED_HARNESS_MARKER,
 });
 
+// Ignore lists earlier releases wrote into format-2 souls (#378 slice 1
+// inserted `.mcp.json` and `opencode.json`, 0.10.25). A newer agent-bot
+// still reads a soul carrying one of these: the generated paths it adds are
+// its own renderer's, so the package hashes the same. An unknown list stays
+// refused, so an older agent-bot never guesses at a newer soul.
+export const PRIOR_PACKAGE_IGNORE_LISTS = Object.freeze([
+  Object.freeze({
+    directories: PACKAGE_IGNORE_LIST.directories,
+    generatedPaths: Object.freeze([
+      '.claude/', '.codex/', '.cursor/', '.opencode/', '.devin/', '.gemini/',
+      '.github/copilot-instructions.md', 'CLAUDE.md', 'GEMINI.md',
+    ]),
+    generatedMarker: GENERATED_HARNESS_MARKER,
+  }),
+]);
+
 export function isGeneratedPath(path) {
   return GENERATED_HARNESS_PATHS.some((candidate) => candidate.endsWith('/')
     ? path.startsWith(candidate) : path === candidate);

@@ -199,7 +199,8 @@ export async function installHarnesses(worktree, { env = process.env, node = pro
  * home when absent, binds it, and returns { worktree, file } like
  * `bindings.findAgent`.
  */
-export function createSoulHomes({ stateDir, bindings, install = installHarnesses, rename = renameSync, ...options }) {
+export function createSoulHomes({ stateDir, bindings, install = installHarnesses, rename = renameSync,
+  warn = (message) => process.stderr.write(`${message}\n`), ...options }) {
   // One creation per home at a time: a second launch of the same new soul
   // waits for the first instead of racing it through copy and install.
   const creating = new Map();
@@ -222,6 +223,18 @@ export function createSoulHomes({ stateDir, bindings, install = installHarnesses
       rmSync(path.join(worktree, 'node_modules'), { recursive: true, force: true });
     }
     writeFileSync(marker, selected, { mode: 0o600 });
+  }
+  // An existing home is rebuilt before each launch, so a soul made by an
+  // earlier release gains what the builder renders now (the agent-bot MCP
+  // entry, #378). The build is deterministic and only touches its own marked
+  // files; a conflict (a hand-edited generated file) is reported, never a
+  // reason to refuse the launch.
+  async function refresh(worktree, source, harness) {
+    if (existsSync(path.join(worktree, 'AGENTS.md'))) {
+      try { buildSoulDirectory(worktree); }
+      catch (error) { warn(`soul home ${worktree} was not rebuilt: ${error.message}`); }
+    }
+    await provisionHarness(worktree, source, harness);
   }
   async function create(worktree, packagePath, harness) {
     mkdirSync(worktree, { recursive: true, mode: 0o700 });
@@ -266,7 +279,7 @@ export function createSoulHomes({ stateDir, bindings, install = installHarnesses
       }
     }
     const made = existsSync(path.join(worktree, '.git'))
-      ? provisionHarness(worktree, directory, harness) : create(worktree, directory, harness);
+      ? refresh(worktree, directory, harness) : create(worktree, directory, harness);
     creating.set(worktree, made);
     try { await made; } finally { creating.delete(worktree); }
     const gitDir = realpathSync(path.join(worktree, '.git'));

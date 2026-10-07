@@ -289,6 +289,11 @@ prints `{drift, writes, removals, merged, harnesses}`, where `harnesses` maps
 each known harness to `{rendered, files, subagents, commands, settings, unsupported}`
 as described above. New package homes build after copying, before dependency
 installation and git initialization; a failed build removes the half-created home.
+An existing home is rebuilt before each launch, so a soul made by an earlier
+release gains what the builder renders now; a conflict there is reported on the
+daemon's stderr and the launch proceeds. A format-2 soul carrying the ignore list
+an earlier release wrote (before `.mcp.json` and `opencode.json`, 0.10.25) still
+validates; only an unknown list is refused.
 
 Format 2 ignores only exact expected bytes. Editing a marked generated file
 changes the revision until rebuilt; the marker cannot hide arbitrary authored

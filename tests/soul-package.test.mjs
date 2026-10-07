@@ -5,7 +5,7 @@ import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { canonicalJson, canonicalPackageBytes, computePackageRevision, expectedGeneratedFiles, readSoulPackageEntries, GENERATED_HARNESS_MARKER, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST, skillField, validateSoulPackage } from '../soul-package.mjs';
+import { canonicalJson, canonicalPackageBytes, computePackageRevision, expectedGeneratedFiles, readSoulPackageEntries, GENERATED_HARNESS_MARKER, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST, skillField, validateSoulPackage, PRIOR_PACKAGE_IGNORE_LISTS, isSupportedIgnoreList } from '../soul-package.mjs';
 
 const vectors = JSON.parse(readFileSync(new URL('./fixtures/soul-package/vectors.json', import.meta.url)));
 const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
@@ -243,6 +243,21 @@ test('format 2 records the fixed ignore contract and uses a new hash domain', (t
     manifest(root, (m) => { m.ignore = ignore; });
     assert.throws(() => computePackageRevision(root), /ignore list/);
   }
+});
+
+test('a format 2 soul written by an earlier release still validates, an unknown list does not', (t) => {
+  const root = version2(t), current = computePackageRevision(root);
+  for (const prior of PRIOR_PACKAGE_IGNORE_LISTS) {
+    manifest(root, (m) => { m.ignore = prior; });
+    assert.ok(isSupportedIgnoreList(prior));
+    const sealed = seal(root);
+    assert.notEqual(sealed, current, 'the manifest bytes are still revision content');
+    assert.equal(validateSoulPackage(root).formatVersion, 2);
+    assert.equal(validateSoulPackage(root).revision, sealed);
+  }
+  assert.ok(!isSupportedIgnoreList({ ...PACKAGE_IGNORE_LIST, generatedPaths: [...PACKAGE_IGNORE_LIST.generatedPaths, 'NEWER.md'] }));
+  manifest(root, (m) => { m.ignore = { ...PACKAGE_IGNORE_LIST, generatedPaths: [...PACKAGE_IGNORE_LIST.generatedPaths, 'NEWER.md'] }; });
+  assert.throws(() => computePackageRevision(root), /ignore list/);
 });
 
 test('only root working state is ignored before symlink and special-file validation', (t) => {
