@@ -18,6 +18,8 @@ function runShim({
   agentEnv = {},
   token = '',
   cachedToken = '',
+  tokenError = '',
+  tokenExit = 0,
   mintedToken = '',
   tokenLogin = 'explicit-token-owner',
   args = ['whoami'],
@@ -46,7 +48,11 @@ function runShim({
     writeFileSync(
       tokenTool,
       `import { readFileSync } from 'node:fs';
-if (process.argv.length === 2) process.stdout.write(${JSON.stringify(cachedToken)});
+if (process.argv.length === 2) {
+  process.stdout.write(${JSON.stringify(cachedToken)});
+  process.stderr.write(${JSON.stringify(tokenError)});
+  process.exit(${JSON.stringify(tokenExit)});
+}
 if (process.argv.includes('--slug')) process.stdout.write(${JSON.stringify(slug)});
 if (process.argv.includes('--agent-slug')) process.stdout.write(${JSON.stringify(agentSlug)});
 if (process.argv.includes('--mint-app')) process.stdout.write(${JSON.stringify(mintedToken)});
@@ -136,6 +142,29 @@ function runWhoami(options = {}) {
   const result = runShim(options);
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
+}
+
+for (const tokenError of [
+  'worktree-token: a soul-bound caller needs a live daemon binding to obtain GitHub credentials\n',
+  'worktree-token: cannot request a credential from the daemon: soul binding is unreadable\n',
+  'worktree-token: network unavailable\n',
+]) {
+  test(`mint failure diagnostic: ${tokenError.trim()}`, () => {
+    const result = runShim({
+      slug: 'you-grok-agent',
+      args: ['pr', 'list'],
+      tokenError,
+      tokenExit: 1,
+    });
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, '');
+    const bindingFailure = !tokenError.includes('network unavailable');
+    assert.equal(result.stderr, tokenError
+      + 'agent-bot: token mint failed for you-grok-agent[bot] — refusing to run gh as the human\n'
+      + (bindingFailure
+        ? "agent-bot: no usable binding for you-grok-agent in this session — run 'agent-bot doctor' for the fix (join as that soul, or re-bind with agent-bot setup-worktree)\n"
+        : ''));
+  });
 }
 
 test('generated shim contains valid shell parameter expansions', () => {

@@ -348,10 +348,27 @@ fi
 # A bot identity mints; a failed mint aborts rather than running gh as the
 # human. No identity is the delegate: stock gh, untouched.
 if [ -z "$GH_TOKEN" ] && [ -n "$SLUG$SOUL_BOUND" ]; then
-  TOKEN=$(token_tool) || {
+  # Capture only stderr; credential stdout must stay in memory, never on disk.
+  TOKEN_STDERR=$(mktemp) || {
     echo "agent-bot: token mint failed for \${SLUG}[bot] — refusing to run gh as the human" >&2
     exit 1
   }
+  trap 'rm -f "$TOKEN_STDERR"' 0
+  trap 'exit 1' 1 2 3 15
+  TOKEN=$(token_tool 2>"$TOKEN_STDERR")
+  TOKEN_STATUS=$?
+  cat "$TOKEN_STDERR" >&2
+  if [ "$TOKEN_STATUS" -ne 0 ]; then
+    echo "agent-bot: token mint failed for \${SLUG}[bot] — refusing to run gh as the human" >&2
+    case "$(cat "$TOKEN_STDERR")" in
+      *"needs a live daemon binding"*|*"soul binding is unreadable"*)
+        echo "agent-bot: no usable binding for \${SLUG} in this session — run 'agent-bot doctor' for the fix (join as that soul, or re-bind with agent-bot setup-worktree)" >&2
+        ;;
+    esac
+    exit 1
+  fi
+  rm -f "$TOKEN_STDERR"
+  trap - 0 1 2 3 15
   [ -n "$TOKEN" ] || {
     echo "agent-bot: token mint returned empty for \${SLUG}[bot] — refusing to run gh as the human" >&2
     exit 1

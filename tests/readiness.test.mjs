@@ -1736,6 +1736,7 @@ test('the current worktree binding fails only for a non-rostered App', async () 
   const unbound = await collectReadiness({
     command: 'doctor', scope: 'worktree', cwd: repo, home: repo, env, git,
     load: () => ({ apps: { claude: 'org-claude-agent' } }),
+    isSoulBoundImpl: () => false,
   });
   const absent = unbound.worktree.checks.find((check) => check.id === 'worktree.binding');
   assert.equal(absent.status, 'warning');
@@ -1746,6 +1747,7 @@ test('the current worktree binding fails only for a non-rostered App', async () 
   const foreign = await collectReadiness({
     command: 'doctor', scope: 'worktree', cwd: repo, home: repo, env, git,
     load: () => ({ apps: { claude: 'org-claude-agent' } }),
+    isSoulBoundImpl: () => false,
   });
   const foreignCheck = foreign.worktree.checks.find((check) => check.id === 'worktree.binding');
   assert.equal(foreignCheck.status, 'failed');
@@ -1756,6 +1758,7 @@ test('the current worktree binding fails only for a non-rostered App', async () 
   const bound = await collectReadiness({
     command: 'doctor', scope: 'worktree', cwd: repo, home: repo, env, git,
     load: () => ({ apps: { claude: 'org-claude-agent' } }),
+    isSoulBoundImpl: () => false,
   });
   assert.equal(
     bound.worktree.checks.find((check) => check.id === 'worktree.binding').status,
@@ -1941,6 +1944,7 @@ test('the binding check ignores GIT_CONFIG_* injection in the default env path',
     const report = await collectReadiness({
       command: 'doctor', scope: 'worktree', cwd: repo, home: repo, env: process.env, git,
       load: () => ({ apps: { claude: 'org-claude-agent' } }),
+      isSoulBoundImpl: () => false,
     });
     const check = report.worktree.checks.find((entry) => entry.id === 'worktree.binding');
     assert.equal(check.status, 'ready');
@@ -2120,3 +2124,48 @@ test('doctor on a GeniusBar Mac never sends its user to agent-bot install or the
   assert.doesNotMatch(actions, /agent-bot install|bootstrap|restore the checkout/);
   assert.doesNotMatch(renderReadinessReport(report), /agent-bot install|source checkout bootstrap|restore the checkout/);
 });
+
+for (const state of ['missing', 'unreadable', 'live', 'human', 'missing-without-session-id']) {
+  test(`current worktree binding distinguishes a rostered pin from a usable binding: ${state}`, async () => {
+    const cwd = tempRoot();
+    const sessionId = 'agent_11111111-1111-4111-8111-111111111111';
+    const env = { HOME: cwd, ...(state === 'missing-without-session-id' ? {} : { AGENT_BOT_ID: sessionId }) };
+    let bindingReads = 0;
+    const report = await collectReadiness({
+      command: 'doctor', scope: 'worktree', cwd, home: cwd, env,
+      load: () => ({ apps: { grok: 'qwts-grok-agent' } }),
+      git: (args) => {
+        if (args.join(' ') === 'config --worktree --get agentBot.app') return 'qwts-grok-agent';
+        throw Object.assign(new Error('unset'), { status: 1 });
+      },
+      isSoulBoundImpl: (options) => {
+        assert.deepEqual(options, { env, cwd });
+        return state !== 'human';
+      },
+      readBindingImpl: (options) => {
+        assert.deepEqual(options, { env, cwd });
+        bindingReads++;
+        if (state === 'unreadable') throw new Error('private binding details must not be reported');
+        return state === 'live' ? { agentId: sessionId } : null;
+      },
+    });
+    const check = report.worktree.checks.find(({ id }) => id === 'worktree.binding');
+    assert.equal(bindingReads, state === 'human' ? 0 : 1);
+    if (state === 'live' || state === 'human') {
+      assert.equal(check.status, 'ready');
+      assert.equal(check.code, null);
+      assert.equal(check.action, null);
+      assert.equal(check.message, 'the current worktree is bound to qwts-grok-agent');
+    } else {
+      assert.equal(check.status, 'warning');
+      assert.equal(check.code, 'worktree-binding-unusable');
+      assert.equal(check.message, 'the current worktree is bound to qwts-grok-agent, but this session has no live daemon binding for it, so gh will refuse to run');
+      assert.equal(check.action, 'check in as that soul (agent-bot join --name NAME --harness HARNESS) or re-bind this checkout to the session soul with: agent-bot setup-worktree');
+      assert.deepEqual(check.evidence, {
+        worktree: cwd, app_slug: 'qwts-grok-agent', roster: ['qwts-grok-agent'],
+        session_soul: state === 'missing-without-session-id' ? null : sessionId,
+      });
+      assert.doesNotMatch(JSON.stringify(report), /private binding details/);
+    }
+  });
+}

@@ -23,6 +23,8 @@ import { inspectClaudeWorktreeAdapter } from './sync-hooks.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
 import { daemonStatus } from './agent-daemon.mjs';
+import { readBinding } from './agent-binding.mjs';
+import { isSoulBound } from './git-credential-bot.mjs';
 import { inspectSupervisor, supervisorSkipLoad } from './daemon-supervisor.mjs';
 import { embeddingAppBundle, homebrewRuntimeRoot, inspectExecutableLink, installationPaths, isManagedExecutable } from './install.mjs';
 import { inspectConfiguredCodexDesktopGh, inspectShellGhShim } from './install-gh-shim.mjs';
@@ -524,7 +526,7 @@ function readinessGitEnv(env) {
 // roster is a real misconfiguration of the worktree being diagnosed, not a
 // machine-wide observation, and a diagnostic that quietly tolerated it would
 // misreport what this session can actually act as.
-function currentWorktreeBindingCheck({ cwd, env, git, roster }) {
+function currentWorktreeBindingCheck({ cwd, env, git, roster, isSoulBoundImpl, readBindingImpl }) {
   // Read the pin through the injected git, exactly as the other worktree probes
   // do. `pinnedSlug` cannot be used here: it forwards no env to its subprocess.
   const probeEnv = readinessGitEnv(env);
@@ -580,6 +582,20 @@ function currentWorktreeBindingCheck({ cwd, env, git, roster }) {
     });
   }
   const inRoster = known.includes(slug);
+  if (inRoster && isSoulBoundImpl({ env, cwd })) {
+    let usable = false;
+    try { usable = Boolean(readBindingImpl({ env, cwd })); } catch { /* unreadable is unusable */ }
+    if (!usable) {
+      return readinessCheck({
+        id: 'worktree.binding',
+        status: 'warning',
+        code: 'worktree-binding-unusable',
+        message: `the current worktree is bound to ${slug}, but this session has no live daemon binding for it, so gh will refuse to run`,
+        action: 'check in as that soul (agent-bot join --name NAME --harness HARNESS) or re-bind this checkout to the session soul with: agent-bot setup-worktree',
+        evidence: { worktree: cwd, app_slug: slug, roster: known, session_soul: env.AGENT_BOT_ID || env.QWTS_AGENT_ID || null },
+      });
+    }
+  }
   return readinessCheck({
     id: 'worktree.binding',
     status: inRoster ? 'ready' : 'failed',
@@ -1988,6 +2004,8 @@ export async function collectReadiness({
   inspectShellGh = inspectShellGhShim,
   inspectCodexDesktopGh = inspectConfiguredCodexDesktopGh,
   probeDaemon = daemonStatus,
+  isSoulBoundImpl = isSoulBound,
+  readBindingImpl = readBinding,
   probeSecretStore = defaultProbeSecretStore,
   readPackageVersion = readManifestVersion,
   installedCliVersion: resolveInstalledVersion = installedCliVersion,
@@ -2197,6 +2215,7 @@ export async function collectReadiness({
     // leave report.ready true and doctor exiting 0 on an identity failure.
     const bindingCheck = currentWorktreeBindingCheck({
       cwd, env, git, roster: configValid ? roster : [],
+      isSoulBoundImpl, readBindingImpl,
     });
     const bindingChecks = [...worktree.checks, bindingCheck];
     worktree = {
