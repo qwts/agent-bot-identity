@@ -1,0 +1,1 @@
+- `agent-bot doctor --probe-inbox` adds an opt-in `inbox.reachability` check that sends one bounded (5s), bearer-free request to the gh-app-hook inbox and reports DNS, TLS, refused, timeout or HTTP status with the host only, so a dead DNS name or down broker no longer reads as ready; the default doctor run still makes no network call (#318).

@@ -13,6 +13,7 @@ import {
 } from './readiness.mjs';
 
 import { cacheAppDoctorRows, legacyAppFolderStatus } from './identity-app-store.mjs';
+import { probeInboxReachability } from './inbox-probe.mjs';
 
 export { hookCoverage };
 
@@ -22,6 +23,7 @@ Options:
   --app <slug>                    Verify one additional App (repeatable)
   --machine-only                  Skip current-worktree readiness
   --json                          Emit readiness schema JSON only
+  --probe-inbox                   Also check the gh-app-hook inbox answers (network, bounded, no bearer sent)
   --require-schema-version <n>    Require at least readiness schema version n
   -h, --help                      Show this help
 `;
@@ -32,6 +34,7 @@ export function parseDoctorArgs(argv = process.argv.slice(2)) {
     help: false,
     json: false,
     machineOnly: false,
+    probeInbox: false,
     requireSchemaVersion: null,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -40,6 +43,8 @@ export function parseDoctorArgs(argv = process.argv.slice(2)) {
       options.machineOnly = true;
     } else if (arg === '--json') {
       options.json = true;
+    } else if (arg === '--probe-inbox') {
+      options.probeInbox = true;
     } else if (arg === '--help' || arg === '-h') {
       options.help = true;
     } else if (arg === '--app' || arg === '--require-schema-version') {
@@ -100,6 +105,7 @@ export async function main(
       command: 'doctor',
       scope,
       explicitApps: options.apps,
+      ...(options.probeInbox ? { probeInbox: probeInboxReachability } : {}),
     });
   }
   for (const row of report.machine?.apps ?? []) {

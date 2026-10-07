@@ -731,6 +731,71 @@ function inboxConfigurationCheck({ env, harnesses }) {
   });
 }
 
+// The opt-in network half of the inbox section (#318), run only for
+// `doctor --probe-inbox`. Advisory like the configuration check: an
+// unreachable broker is a warning, so the probe never turns a ready machine
+// into a failed one. Any HTTP answer below 500 proves the broker is there;
+// a 401/403 is the expected answer to a request that carries no bearer.
+const INBOX_PROBE_FIX = 'check GH_APP_HOOK_INBOX_URL, DNS, TLS and the broker status, then rerun doctor --probe-inbox';
+
+async function inboxReachabilityCheck({ env, probe }) {
+  const url = typeof env.GH_APP_HOOK_INBOX_URL === 'string' && env.GH_APP_HOOK_INBOX_URL !== ''
+    ? env.GH_APP_HOOK_INBOX_URL
+    : null;
+  if (!url || inboxHostForDoctor(url) === null) {
+    return readinessCheck({
+      id: 'inbox.reachability',
+      status: 'not_applicable',
+      code: 'inbox-probe-skipped',
+      message: url
+        ? 'inbox probe skipped: the inbox URL is not a valid http(s) URL'
+        : 'inbox probe skipped: no gh-app-hook inbox URL is configured',
+      evidence: { probed: false },
+    });
+  }
+  let result;
+  try {
+    result = await probe(url);
+  } catch {
+    result = { outcome: 'network', host: inboxHostForDoctor(url), error_code: null };
+  }
+  const host = result.host ?? inboxHostForDoctor(url);
+  const evidence = {
+    probed: true,
+    host,
+    outcome: result.outcome,
+    http_status: result.http_status ?? null,
+    error_code: result.error_code ?? null,
+  };
+  if (result.outcome === 'http' && evidence.http_status < 500) {
+    const expected = evidence.http_status === 401 || evidence.http_status === 403
+      ? ', expected without a bearer'
+      : '';
+    return readinessCheck({
+      id: 'inbox.reachability',
+      status: 'ready',
+      message: `inbox broker ${host} is reachable (HTTP ${evidence.http_status}${expected})`,
+      evidence,
+    });
+  }
+  const failures = {
+    http: `inbox broker ${host} is reachable but failing (HTTP ${evidence.http_status})`,
+    dns: `inbox broker ${host} did not resolve (DNS ${evidence.error_code})`,
+    tls: `inbox broker ${host} failed the TLS handshake (${evidence.error_code})`,
+    refused: `inbox broker ${host} refused the connection`,
+    timeout: `inbox broker ${host} did not answer in time`,
+  };
+  return readinessCheck({
+    id: 'inbox.reachability',
+    status: 'warning',
+    code: `inbox-probe-${result.outcome === 'http' ? 'http-error' : result.outcome}`,
+    message: failures[result.outcome]
+      ?? `inbox broker ${host} is unreachable (${evidence.error_code ?? 'network error'})`,
+    action: INBOX_PROBE_FIX,
+    evidence,
+  });
+}
+
 // Installed CLI version beside a source checkout's, when doctor runs from one.
 // Skew is normal mid-release, so this is never a failure. The two version
 // lookups are injected separately: resolving where the installed runtime lives
@@ -2011,6 +2076,9 @@ export async function collectReadiness({
   installedCliVersion: resolveInstalledVersion = installedCliVersion,
   listHarnessMcpServers = defaultListHarnessMcpServers,
   probeSessionContext = defaultProbeSessionContext,
+  // Off unless doctor --probe-inbox passes a probe: the default run makes no
+  // network call to the inbox.
+  probeInbox = null,
   embeddingApp = embeddingAppBundle(ROOT),
 } = {}) {
   const machineChecks = [];
@@ -2132,6 +2200,7 @@ export async function collectReadiness({
       env,
       harnesses: listHarnessMcpServers({ home, cwd }),
     }));
+    if (probeInbox) machineChecks.push(await inboxReachabilityCheck({ env, probe: probeInbox }));
     machineChecks.push(versionSkewCheck({
       home,
       cwd,

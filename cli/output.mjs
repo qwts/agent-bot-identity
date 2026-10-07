@@ -10,7 +10,7 @@ Commands:
   setup-worktree     Create or configure a soul worktree
   join               Join agent-comms as a soul from here, with or without a GitHub App: --name N --harness H [--template PATH] [--soul ID] [--json]
   mint-token         Mint a GitHub App installation token
-  doctor             Diagnose installation and identity state
+  doctor             Diagnose installation and identity state; --probe-inbox also checks the gh-app-hook inbox answers (network, bounded, no bearer sent)
   identity           Manage execution identities and Apps (apps list; app create/connect/rotate-key/assign); migrate-credentials [--soul ID|--all] [--dry-run] [--json] moves App keys into each soul's key store and public metadata into config; reports removable legacy folders (owner only)
   space              Manage durable per-soul Agent Spaces
   population         List this account's census of souls
