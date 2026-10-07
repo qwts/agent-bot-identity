@@ -1,1 +1,0 @@
-- Souls can declare an avatar colour as `appearance.hue` (integer 0–359) in `soul.json`, exposed by population list/show and soul profiles so GeniusBar's Customize dialog can use the existing revision edit path; template instances inherit it, invalid declarations are refused on save, and undeclared colours retain the Agent ID default (qwts/GeniusBar#64).

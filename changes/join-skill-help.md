@@ -1,1 +1,0 @@
-- The agent-bot skill explains how to join the agent-comms hub without a GitHub App, including checkout soul reuse and command side effects; `join`, `soul`, `approvals`, `web`, and `telegram` now provide descriptive help with a successful exit status (#513).

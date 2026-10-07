@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.27
+
+- `agent-bot soul build` renders soul-declared subagents for Claude Code and OpenCode, and commands for Claude Code, Gemini and OpenCode, with per-harness received/rendered names and explicit unsupported lists so declarations are never silently dropped (#378, slice 2).
+- `agent-bot soul build` renders shared and per-harness model, reasoning effort, and permission-mode declarations from `soul.json`, preserving unrelated authored settings and reporting unsupported settings in `--check --json`; launch-time model choices retain precedence (#379).
+- `agent-bot doctor` warns when a rostered worktree pin has no usable daemon binding for the calling soul; binding-related gh shim refusals now point to doctor and explain how to join as that soul or re-bind with `agent-bot setup-worktree` (#512).
+- The agent-bot skill explains how to join the agent-comms hub without a GitHub App, including checkout soul reuse and command side effects; `join`, `soul`, `approvals`, `web`, and `telegram` now provide descriptive help with a successful exit status (#513).
+- `setup-worktree` now creates named soul worktrees or validates existing soul work areas before writing identity, refuses primary/arbitrary checkouts (a session with no soul leaves the checkout human, as before), and provides `--help`. Checkout hooks cannot reuse another session's pin; installed wrappers refresh through the existing installer, and cross-device placement refuses without a TMPDIR fallback (#516, #512).
+- Souls can declare an avatar colour as `appearance.hue` (integer 0–359) in `soul.json`, exposed by population list/show and soul profiles so GeniusBar's Customize dialog can use the existing revision edit path; template instances inherit it, invalid declarations are refused on save, and undeclared colours retain the Agent ID default (qwts/GeniusBar#64).
+
 ## 0.10.26
 
 - Bound live sessions can report agent-comms inbox reads and hook injections through `POST /v0/asides/delivered`, recording verified incoming asides once per retained message so conversations include live-session deliveries (qwts/agent-comms#100).
