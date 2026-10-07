@@ -534,6 +534,23 @@ export async function reportCommsLaunch(
     requestId, status, agentId, ...(detail === undefined ? {} : { detail }) }, { paths });
 }
 
+// Progress on a pending launch (`launch-progress`, agent-comms 0.3.12,
+// qwts/agent-bot-identity#536): the stage the launch handler is passing, in
+// the order it passes them. The broker keeps the latest and shows it in
+// `launch-status`; a broker without the op refuses, and callers treat that
+// as best effort.
+export const LAUNCH_STAGES = Object.freeze(['checking', 'account', 'joining', 'harness', 'session']);
+export async function reportCommsLaunchProgress(
+  { requestId, stage },
+  { credential = null, env = process.env, home = homedir(), paths = commsPaths({ env }),
+    clientFactory = (options) => new CommsClient(options) } = {},
+) {
+  if (typeof requestId !== 'string' || !requestId || !LAUNCH_STAGES.includes(stage)) fail('usage', 'invalid launch progress');
+  const pair = resolvePairCredential(credential, { env, home });
+  const client = clientFactory({ socketPath: paths.socket, brokerUid: pair.brokerUid, mode: pair.mode ?? 'group' });
+  return client.request({ op: 'launch-progress', auth: { daemon: pair.account, secret: pair.secret }, requestId, stage }, { paths });
+}
+
 function checkWakeEvent(event) {
   if (!event || typeof event !== 'object'
     || typeof event.agentId !== 'string' || event.agentId === ''
@@ -574,7 +591,8 @@ export function createCommsSupervisor({
   const reportFor = (pair) => (fields) => reportCommsWake(fields, { credential: pair, env, home, paths, clientFactory });
 
   const launchPorts = (pair) => ({ account: pair.account,
-    report: (fields) => reportCommsLaunch(fields, { credential: pair, env, home, paths, clientFactory }) });
+    report: (fields) => reportCommsLaunch(fields, { credential: pair, env, home, paths, clientFactory }),
+    progress: (fields) => reportCommsLaunchProgress(fields, { credential: pair, env, home, paths, clientFactory }) });
 
   const handleWake = onWake ?? (async (wake, { report }) => {
     await report({ agentId: wake.agentId, messageIds: wake.messageIds, outcome: 'waiting', detail: 'cold wake is not enabled' });
