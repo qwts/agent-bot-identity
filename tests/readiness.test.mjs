@@ -1,6 +1,7 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -1611,6 +1612,108 @@ test('the inbox section warns when a harness wires it but nothing is configured'
   assert.equal(check.status, 'warning');
   assert.equal(check.code, 'inbox-incompletely-configured');
   assert.match(check.action, /gh-app-hook deployment procedure/);
+});
+
+// #318: the reachability probe is opt-in. Without a probe the check is absent
+// and nothing is sent; with one, every outcome stays advisory.
+test('the inbox probe is absent from a default run and makes no call', async () => {
+  const report = await collectReadiness(machineScopeOptions({
+    env: { HOME: tempRoot(), GH_APP_HOOK_INBOX_URL: 'https://example.invalid' },
+  }));
+  assert.equal(report.machine.checks.some((entry) => entry.id === 'inbox.reachability'), false);
+});
+
+test('the inbox probe reports skipped, not an error, when no inbox URL is configured', async () => {
+  const report = await collectReadiness(machineScopeOptions({
+    probeInbox: () => assert.fail('probed with no inbox URL'),
+  }));
+  const check = report.machine.checks.find((entry) => entry.id === 'inbox.reachability');
+  assert.equal(check.status, 'not_applicable');
+  assert.equal(check.code, 'inbox-probe-skipped');
+  assert.equal(report.ready, true);
+});
+
+test('inbox probe outcomes map to distinct advisory checks naming only the host', async () => {
+  for (const [result, status, code, pattern] of [
+    [{ outcome: 'http', http_status: 404 }, 'ready', null, /reachable \(HTTP 404\)/],
+    [{ outcome: 'http', http_status: 401 }, 'ready', null, /HTTP 401, expected without a bearer/],
+    [{ outcome: 'http', http_status: 503 }, 'warning', 'inbox-probe-http-error', /reachable but failing \(HTTP 503\)/],
+    [{ outcome: 'dns', error_code: 'ENOTFOUND' }, 'warning', 'inbox-probe-dns', /did not resolve/],
+    [{ outcome: 'tls', error_code: 'CERT_HAS_EXPIRED' }, 'warning', 'inbox-probe-tls', /TLS handshake/],
+    [{ outcome: 'refused', error_code: 'ECONNREFUSED' }, 'warning', 'inbox-probe-refused', /refused the connection/],
+    [{ outcome: 'timeout', error_code: 'PROBE_TIMEOUT' }, 'warning', 'inbox-probe-timeout', /did not answer in time/],
+  ]) {
+    let probed = null;
+    const report = await collectReadiness(machineScopeOptions({
+      env: {
+        HOME: tempRoot(),
+        GH_APP_HOOK_INBOX_URL: 'https://inbox.example.invalid/base?key=query-secret',
+        GH_APP_HOOK_INBOX_TOKEN: 'super-secret-bearer-value',
+      },
+      probeInbox: async (url) => { probed = url; return { host: 'inbox.example.invalid', ...result }; },
+    }));
+    const check = report.machine.checks.find((entry) => entry.id === 'inbox.reachability');
+    assert.equal(check.status, status, result.outcome);
+    assert.equal(check.code, code, result.outcome);
+    assert.match(check.message, pattern);
+    assert.match(check.message, /inbox\.example\.invalid/);
+    assert.equal(probed, 'https://inbox.example.invalid/base?key=query-secret');
+    assert.equal(report.ready, true, 'the probe is advisory');
+    const rendered = JSON.stringify(report) + renderReadinessReport(report);
+    assert.doesNotMatch(rendered, /super-secret-bearer-value|query-secret|token|Bearer /);
+  }
+});
+
+test('doctor --probe-inbox sends no bearer and never prints it, in JSON or text', async () => {
+  const seen = [];
+  const server = createServer((req, res) => {
+    seen.push({ method: req.method, url: req.url, headers: req.headers });
+    res.writeHead(401).end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const env = {
+    HOME: tempRoot(),
+    GH_APP_HOOK_INBOX_URL: `http://user:url-secret@127.0.0.1:${port}/x?key=query-secret`,
+    GH_APP_HOOK_INBOX_TOKEN: 'super-secret-bearer-value',
+  };
+  const previous = process.exitCode;
+  try {
+    for (const argv of [['--machine-only', '--probe-inbox', '--json'], ['--machine-only', '--probe-inbox']]) {
+      let stdout = '';
+      const report = await doctorMain(argv, {
+        collect: (options) => collectReadiness(machineScopeOptions({ ...options, env })),
+        cache: () => {},
+        output: { write: (value) => { stdout += value; } },
+      });
+      const check = report.machine.checks.find((entry) => entry.id === 'inbox.reachability');
+      assert.equal(check.status, 'ready');
+      assert.equal(check.evidence.http_status, 401);
+      assert.equal(check.evidence.host, `127.0.0.1:${port}`);
+      assert.match(stdout, /inbox broker 127\.0\.0\.1:\d+ is reachable/);
+      assert.doesNotMatch(stdout, /super-secret-bearer-value|url-secret|query-secret|token|Bearer /);
+    }
+    assert.equal(seen.length, 2);
+    for (const request of seen) {
+      assert.equal(request.method, 'HEAD');
+      assert.equal(request.url, '/inbox');
+      assert.equal(request.headers.authorization, undefined);
+      assert.doesNotMatch(JSON.stringify(request.headers), /secret/);
+    }
+    // Without the flag doctor passes no probe, so the listener is never hit.
+    await doctorMain(['--machine-only', '--json'], {
+      collect: (options) => {
+        assert.equal(options.probeInbox, undefined);
+        return collectReadiness(machineScopeOptions({ ...options, env }));
+      },
+      cache: () => {},
+      output: { write: () => {} },
+    });
+    assert.equal(seen.length, 2);
+  } finally {
+    process.exitCode = previous;
+    server.close();
+  }
 });
 
 test('version skew is reported as a warning and explains the refusal', async () => {

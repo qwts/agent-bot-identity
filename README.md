@@ -240,6 +240,15 @@ agent-bot doctor --machine-only --json --require-schema-version 1
 agent-bot doctor --json --require-schema-version 1  # a checkout with a bot identity
 ```
 
+`doctor` makes no network call to the gh-app-hook inbox: `inbox.configuration`
+reports only the URL, credential presence and harness wiring. Add
+`--probe-inbox` to also send one `HEAD /inbox` to the configured broker, with
+no `Authorization` header and without the URL's userinfo or query, bounded at
+5 seconds. The `inbox.reachability` check names the host and tells DNS, TLS,
+refused, timeout and HTTP status apart; any answer below 500 (a 401/403 is
+expected without a bearer) is reachable. It is advisory: a failed probe is a
+warning and never makes a ready machine not ready.
+
 Do not report the organization install complete until every expected App row
 and requested harness tool is ready. A missing organization input or tool is a
 blocking dependency, not permission to fall back to a human GitHub login or a
@@ -255,7 +264,7 @@ agent-bot --version
 agent-bot setup-worktree [app-slug] [--name NAME [--branch BRANCH]]
 agent-bot join --name NAME --harness H [--template PATH] [--soul AGENT_ID] [--wake resume:read-only|resume:workspace|acp] [--principal-stdin] [--json]
 agent-bot mint-token --app <slug> [--json]
-agent-bot doctor [--machine-only] [--app <slug>] [--json]
+agent-bot doctor [--machine-only] [--app <slug>] [--probe-inbox] [--json]
 agent-bot identity <ensure|spawn|bind|record|finalize|show|current>
 agent-bot space <init|ensure|path|show> [agent-id]
 agent-bot space export [agent-id] [--out <path>] [--gist]
