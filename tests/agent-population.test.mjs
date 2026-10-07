@@ -237,6 +237,52 @@ test('population show exposes managed and comms as JSON', () => {
   assert.equal(row.comms, false);
 });
 
+test('population list and show JSON expose installed appearance only when declared', (t) => {
+  const home = scratch();
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const file = path.join(home, 'population.json');
+  const env = { HOME: home, PATH: process.env.PATH, AGENT_BOT_POPULATION_PATH: file,
+    AGENT_BOT_SOULS_HOME: path.join(home, 'souls') };
+  const options = { file, env, home };
+  const souls = [FIRST_ID, SECOND_ID].map((id) => upsertSoul(fixture({ id }), { file }));
+  const dirs = souls.map((soul) => {
+    const dir = path.join(env.AGENT_BOT_SOULS_HOME, `${soul.name}.soul`);
+    mkdirSync(path.join(dir, '.soul-state'), { recursive: true });
+    writeFileSync(path.join(dir, '.soul-state', 'agent-id'), soul.id);
+    writeFileSync(path.join(dir, 'soul.json'), '{}');
+    return dir;
+  });
+  const before = readFileSync(file, 'utf8');
+  const cli = (...args) => {
+    const result = spawnSync(process.execPath, [CLI, 'population', ...args], { env, cwd: home, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  for (const hue of [0, 359]) {
+    writeFileSync(path.join(dirs[0], 'soul.json'), JSON.stringify({ appearance: { hue } }));
+    const rows = cli('list', '--json');
+    assert.deepEqual(rows, withRoles(listSouls({ file }), options));
+    assert.deepEqual(rows.find((row) => row.id === FIRST_ID).appearance, { hue });
+    assert.equal(Object.hasOwn(rows.find((row) => row.id === SECOND_ID), 'appearance'), false);
+    assert.deepEqual(cli('show', FIRST_ID, '--json').appearance, { hue });
+    assert.equal(Object.hasOwn(cli('show', SECOND_ID), 'appearance'), false);
+    for (const row of rows) {
+      assert.equal(row.comms, true);
+      assert.equal(row.managed, false);
+      assert.equal(row.paused, false);
+      assert.equal(row.computerUse, true);
+      assert.equal(row.status, 'active');
+    }
+  }
+  for (const appearance of [null, {}, { hue: -1 }, { hue: 360 }, { hue: 1.5 }, { hue: '120' }, { hue: 120, extra: true }]) {
+    writeFileSync(path.join(dirs[0], 'soul.json'), JSON.stringify({ appearance }));
+    assert.ok(withRoles(listSouls({ file }), options).every((row) => !Object.hasOwn(row, 'appearance')));
+  }
+  rmSync(path.join(dirs[0], 'soul.json'));
+  assert.equal(Object.hasOwn(cli('show', FIRST_ID), 'appearance'), false);
+  assert.equal(readFileSync(file, 'utf8'), before, 'appearance is derived, never persisted in the census');
+});
+
 test('display names are deterministic, human-readable, and derived from the ID alone (#92)', () => {
   assert.equal(displayName(FIRST_ID), displayName(FIRST_ID));
   assert.match(displayName(FIRST_ID), /^[a-z]+-[a-z]+-[0-9a-f]{2}$/);
@@ -651,7 +697,7 @@ test('the role line reads a moved soul folder without rewriting the census', () 
   const original = path.join(souls, 'Scout.soul');
   mkdirSync(path.join(original, '.soul-state'), { recursive: true });
   writeFileSync(path.join(original, '.soul-state', 'agent-id'), soul.id);
-  writeFileSync(path.join(original, 'soul.json'), JSON.stringify({ name: 'Scout', role: 'Research' }));
+  writeFileSync(path.join(original, 'soul.json'), JSON.stringify({ name: 'Scout', role: 'Research', appearance: { hue: 215 } }));
   registerSoulDir(soul.id, original, { file });
   const moved = path.join(souls, 'Scout renamed.soul');
   renameSync(original, moved);
@@ -660,6 +706,7 @@ test('the role line reads a moved soul folder without rewriting the census', () 
   const [row] = withRoles(listSouls({ file }), { file, env, home: root });
   // The moved folder's soul.json is found...
   assert.equal(row.roleLine, 'Research');
+  assert.deepEqual(row.appearance, { hue: 215 });
   // ...but the census, its soulDir included, is left exactly as it was.
   assert.equal(readFileSync(file, 'utf8'), before);
   assert.equal(showSoul(soul.id, { file }).soulDir, original);

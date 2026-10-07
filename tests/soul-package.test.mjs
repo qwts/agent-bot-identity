@@ -105,6 +105,37 @@ for (const [field, values] of Object.entries({
   }
 });
 
+test('appearance is optional, accepts boundary hues, and participates in the revision', (t) => {
+  const root = fixture(t);
+  const initial = validateSoulPackage(root).revision;
+  const revisions = new Set([initial]);
+  for (const hue of [0, 180, 359]) {
+    manifest(root, (m) => { m.appearance = { hue }; });
+    const revision = seal(root);
+    assert.equal(validateSoulPackage(root).revision, revision);
+    assert.ok(!revisions.has(revision));
+    revisions.add(revision);
+  }
+  manifest(root, (m) => { delete m.appearance; });
+  assert.equal(seal(root), initial);
+});
+
+test('appearance rejects invalid shapes, unknown keys, and invalid hues with their paths', (t) => {
+  const root = fixture(t);
+  const cases = [
+    ...[null, [], 'blue', 10, true].map((appearance) => [appearance, 'soul.json appearance must be an object']),
+    [{ hue: 120, saturation: 50 }, 'soul.json appearance.saturation is an unknown appearance setting'],
+    ...[undefined, null, '120', true, [], {}, -1, 360, 1.5, 1e100].map((hue) =>
+      [{ hue }, 'soul.json appearance.hue must be an integer from 0 to 359']),
+  ];
+  for (const [appearance, message] of cases) {
+    manifest(root, (m) => { m.appearance = appearance; });
+    const before = snapshot(root);
+    assert.throws(() => validateSoulPackage(root), { message });
+    assert.deepEqual(snapshot(root), before);
+  }
+});
+
 test('invalid JSON, manifest shape, UTF-8, nonfinite numbers and required files fail', (t) => {
   for (const text of ['{', '[]', 'null', '{"formatVersion":1}']) {
     const root = fixture(t); writeFileSync(join(root, 'soul.json'), text);

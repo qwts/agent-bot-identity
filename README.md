@@ -590,6 +590,13 @@ GeniusBar shows under a soul's name:
 - `children`: how many live souls name it as their parent.
 - `roleLine`: for example `Lead · 7 subagents`, `Research`, or `Research · 2 subagents`. A soul with a team but no role reads `Lead`. `roleLine` is null when there is no role and no team, and the host shows the harness instead.
 
+Population list JSON rows and show records also include `appearance: { hue }`
+when the installed package declares a valid integer hue from 0 to 359 in
+`soul.json`. The key is absent when undeclared, invalid, or unavailable, so
+GeniusBar derives the avatar colour from the Agent ID. This field is read from
+the package on each request, never stored in the census. The owner changes it
+through `soul revision edit … --apply`; template instances copy it.
+
 Rows that predate binding carry `transcriptLocator: null` and show `?` in the
 PARENT column; `population list` counts them on every listing so the gap can
 never persist silently. `population backfill` repairs what this account's

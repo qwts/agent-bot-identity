@@ -18,7 +18,7 @@ collections are `[]`):
   "agentId": "agent_…",
   "profile": {
     "name": null, "displayName": null, "description": null, "harness": null,
-    "package": null, "revision": null, "template": null,
+    "package": null, "revision": null, "template": null, "appearance": null,
     "parentId": null, "status": null
   },
   "files": [],
@@ -34,6 +34,10 @@ then the package name. `harness` comes from the execution identity, not the
 package's preference list. `package` is the absolute installed package path,
 `revision` is its declared revision, and `template` is its boolean template
 flag. Reading does not validate the entire package or recompute its revision.
+`appearance` is `{ "hue": <integer 0..359> }` from the installed package,
+or `null` when absent or unavailable. The declaration is validated separately;
+an invalid declaration leaves `appearance` null and adds a profile error.
+With no declared appearance, GeniusBar derives the avatar colour from the Agent ID.
 
 - Files are `{path, kind, size, modifiedAt, text}`. Paths are relative to the
   soul directory, sizes are bytes, and timestamps are ISO 8601. Kinds are

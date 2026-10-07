@@ -80,7 +80,7 @@ test('profile has the complete JSON contract, package and generated files, skill
   const result = readSoulProfile(ID, f.options);
   assert.deepEqual(Object.keys(result), ['agentId', 'profile', 'files', 'skills', 'credentials', 'sop', 'errors']);
   assert.deepEqual(result.profile, { name: 'profile-fixture', displayName: 'Profile Fixture', description: f.manifest.description,
-    harness: 'codex', package: f.dir, revision: f.manifest.revision, template: false, parentId: null, status: 'active' });
+    harness: 'codex', package: f.dir, revision: f.manifest.revision, template: false, appearance: null, parentId: null, status: 'active' });
   assert.deepEqual(result.credentials, [{ name: 'fixture-app', provider: 'github', status: 'declared' }]);
   assert.deepEqual(result.skills, [{ name: 'review', source: 'soul', path: 'skills/review/SKILL.md', commit: null }]);
   assert.deepEqual(result.sop, { resolved: null, override: null });
@@ -102,6 +102,27 @@ test('profile has the complete JSON contract, package and generated files, skill
   assert.ok(!result.files.some((file) => /credentials|auth\.json|private-key|\.env|node_modules|\.git\//.test(file.path)));
   assert.ok(!JSON.stringify(result).includes(SENTINEL));
   assert.deepEqual(snapshot(f.home), before);
+});
+
+test('profile and CLI expose declared appearance or null without changing the package', (t) => {
+  const f = fixture(t);
+  assert.equal(JSON.parse(cli(f, ID, '--json').stdout).profile.appearance, null);
+  for (const hue of [0, 359]) {
+    put(path.join(f.dir, 'soul.json'), JSON.stringify({ ...f.manifest, appearance: { hue } }));
+    const before = snapshot(f.home);
+    assert.deepEqual(readSoulProfile(ID, f.options).profile.appearance, { hue });
+    const result = cli(f, ID, '--json');
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout).profile.appearance, { hue });
+    assert.match(cli(f, ID).stdout, new RegExp(`appearance: \\{"hue":${hue}\\}`));
+    assert.deepEqual(snapshot(f.home), before);
+  }
+  for (const appearance of [null, {}, { hue: 360 }, { hue: 1.5 }, { hue: '120' }, { hue: 120, extra: true }]) {
+    put(path.join(f.dir, 'soul.json'), JSON.stringify({ ...f.manifest, appearance }));
+    const result = readSoulProfile(ID, f.options);
+    assert.equal(result.profile.appearance, null);
+    assert.ok(result.errors.some((error) => error.area === 'profile' && /appearance/.test(error.message)));
+  }
 });
 
 test('handle and display-name resolution match show; unknown and ambiguous souls fail', (t) => {
@@ -211,6 +232,7 @@ test('partial profiles retain nulls and arrays; inventory is capped at 500', (t)
   assert.equal(partial.profile.package, null);
   assert.equal(partial.profile.revision, null);
   assert.equal(partial.profile.template, null);
+  assert.equal(partial.profile.appearance, null);
   assert.deepEqual(partial.files, []);
   assert.deepEqual(partial.skills, []);
   assert.deepEqual(partial.credentials, []);

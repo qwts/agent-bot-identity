@@ -96,6 +96,37 @@ test('--apply writes the recorded copy, removes missing paths, keeps execute bit
   assert.equal(readFileSync(join(stored, 'AGENTS.md'), 'utf8'), 'Customized\n');
 });
 
+test('--apply saves appearance and recomputes the package revision', async (t) => {
+  const f = fixture(t);
+  const manifest = JSON.parse(readFileSync(join(f.copy, 'soul.json')));
+  writeFileSync(join(f.copy, 'soul.json'), JSON.stringify({ ...manifest, appearance: { hue: 359 } }));
+  const record = await revisionCommand(editArgs(f), editOptions(f));
+  assert.equal(record.applied, true);
+  assert.notEqual(record.revision, f.initial);
+  assert.equal(record.parentRevision, f.initial);
+  assert.deepEqual(record.changed, ['soul.json']);
+  for (const directory of [f.directory, revisionPackagePath(f.id, record.revision, f.options)]) {
+    assert.deepEqual(JSON.parse(readFileSync(join(directory, 'soul.json'))).appearance, { hue: 359 });
+    assert.equal(validateSoulPackage(directory).revision, record.revision);
+  }
+});
+
+test('--apply refuses invalid appearance before publishing a snapshot, history, or files', async (t) => {
+  const f = fixture(t);
+  const manifest = JSON.parse(readFileSync(join(f.copy, 'soul.json')));
+  const before = tree(f.directory);
+  const history = revisionHistory(f.id, f.options);
+  const root = join(f.options.stateDir, 'soul-revisions', f.id);
+  const stored = tree(root);
+  for (const appearance of [null, {}, { hue: -1 }, { hue: 360 }, { hue: 1.5 }, { hue: '120' }, { hue: 120, extra: true }]) {
+    writeFileSync(join(f.copy, 'soul.json'), JSON.stringify({ ...manifest, appearance }));
+    await assert.rejects(revisionCommand(editArgs(f), editOptions(f)), /soul\.json appearance/);
+    assert.deepEqual(tree(f.directory), before);
+    assert.deepEqual(revisionHistory(f.id, f.options), history);
+    assert.deepEqual(tree(root), stored);
+  }
+});
+
 test('--apply with the soul directory as input only replaces soul.json revision fields', async (t) => {
   const f = fixture(t);
   writeFileSync(join(f.directory, 'AGENTS.md'), 'Already edited\n');

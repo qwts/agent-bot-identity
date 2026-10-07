@@ -65,6 +65,17 @@ function validateHarnessSettings(settings, path) {
   }
 }
 
+export function validateAppearanceDeclaration(appearance) {
+  if (!object(appearance)) throw new Error('soul.json appearance must be an object');
+  for (const key of Object.keys(appearance)) {
+    if (key !== 'hue') throw new Error(`soul.json appearance.${key} is an unknown appearance setting`);
+  }
+  if (!Number.isInteger(appearance.hue) || appearance.hue < 0 || appearance.hue > 359) {
+    throw new Error('soul.json appearance.hue must be an integer from 0 to 359');
+  }
+  return appearance;
+}
+
 function validateManifest(manifest) {
   if (!object(manifest)) throw new Error('soul.json must be an object');
   if (![1, 2].includes(manifest.formatVersion)) throw new Error('unsupported soul.json formatVersion (expected 1 or 2)');
@@ -82,6 +93,7 @@ function validateManifest(manifest) {
   // launches out of the teammate tools. Absent means on.
   if (manifest.comms !== undefined && typeof manifest.comms !== 'boolean') throw new Error('soul.json comms must be a boolean');
   if (manifest.credentials !== undefined) validateCredentialsDeclaration(manifest.credentials);
+  if (manifest.appearance !== undefined) validateAppearanceDeclaration(manifest.appearance);
   if (manifest.harness !== undefined) validateHarnessSettings(manifest.harness, 'soul.json harness');
   if (manifest.harnesses !== undefined) {
     if (!object(manifest.harnesses)) throw new Error('soul.json harnesses must be an object');
