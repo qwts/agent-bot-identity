@@ -71,11 +71,12 @@ test('an unknown command fails on stderr with a non-zero exit and no stdout', ()
   assert.equal(r.stderr, 'agent-bot: unknown command: no-such-command\n');
 });
 
-test('a missing bundle is reported, not invented', () => {
+test('an unknown named skill reports the bundled choices', () => {
   assert.ok(existsSync(SOURCE_SKILL));
   const r = run('skill', 'list');
   assert.equal(r.status, 2);
   assert.equal(r.stdout, '');
+  assert.equal(r.stderr, 'agent-bot skill: no bundled skill named list; bundled: agent-bot, agent-space, thread-orders\n');
 });
 
 

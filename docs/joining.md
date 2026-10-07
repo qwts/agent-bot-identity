@@ -90,9 +90,10 @@ unavailable` or `webhook at HOST answered 401`. URLs are replaced with
 
 ## setup-worktree
 
-`setup-worktree` still does nothing in a checkout that states no App. Run by
-name, as `agent-bot setup-worktree`, it now says so and points at
-`agent-bot join`. Run from a git hook, it stays quiet.
+`setup-worktree` needs a session soul, with or without a GitHub App. Without
+one, plain setup is a quiet no-op (`AGENT_BOT_SETUP_HINT=1` enables a hint);
+`--name` fails. Check in and set `AGENT_BOT_ID` from join's `--json` result
+before setup. Follow `agent-bot skill agent-space` for the work-area procedure.
 
 ## Environment names
 

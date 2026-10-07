@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// agent-bot skill path — report where this installed release's agent skill
-// bundle lives and the source commit it was built from (ENG-0055 decision 2).
+// agent-bot skill — serve this release's bundled skills, or report the agent
+// skill bundle path and source commit (ENG-0055 decision 2).
 //
 // Read-only: it touches no network, credential, or Git state beyond reading
 // this runtime's own tree. The commit comes from `git rev-parse` in a source
@@ -14,9 +14,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
+const BUNDLED_SKILLS = ['agent-bot', 'agent-space', 'thread-orders'];
 const USAGE = `usage: agent-bot skill path [--json]
+       agent-bot skill <name> [--json]
 
-Print this release's agent skill bundle directory and its source commit.
+path: Print this release's agent skill bundle directory and its source commit.
+<name>: Print the bundled SKILL.md text; --json adds name, path, and commit.
+Bundled: ${BUNDLED_SKILLS.join(', ')}
 `;
 
 export function skillBundle(root = ROOT) {
@@ -45,9 +49,19 @@ export function main(argv = process.argv.slice(2)) {
   }
   const [sub, ...rest] = argv;
   const json = rest.length === 1 && rest[0] === '--json';
-  if (sub !== 'path' || (rest.length && !json)) {
-    process.stderr.write(`agent-bot skill: ${sub === 'path' ? 'unexpected arguments' : 'expected the path subcommand'}\n${USAGE}`);
+  if (!sub || (rest.length && !json)) {
+    process.stderr.write(`agent-bot skill: ${sub ? 'unexpected arguments' : 'expected the path subcommand'}\n${USAGE}`);
     return 2;
+  }
+  if (sub !== 'path') {
+    if (!/^[a-z][a-z0-9-]{0,63}$/.test(sub) || !BUNDLED_SKILLS.includes(sub)) {
+      process.stderr.write(`agent-bot skill: no bundled skill named ${sub}; bundled: ${BUNDLED_SKILLS.join(', ')}\n`);
+      return 2;
+    }
+    const path = join(ROOT, 'skills', sub, 'SKILL.md');
+    const text = readFileSync(path, 'utf8');
+    process.stdout.write(json ? `${JSON.stringify({ name: sub, path, commit: sourceCommit(), text })}\n` : text);
+    return 0;
   }
   const bundle = skillBundle();
   if (!existsSync(join(bundle, 'SKILL.md'))) {

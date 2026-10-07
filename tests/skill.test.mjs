@@ -1,14 +1,95 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BOOTSTRAP_USAGE } from '../bootstrap.mjs';
 import { helpText } from '../cli/output.mjs';
+import { sourceCommit } from '../skill.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SKILL = join(ROOT, 'skills', 'agent-bot');
 const PLAYBOOK_OPERATIONS = 'https://github.com/qwts/agent-sop/blob/main/docs/reference/agent-bot-operations.md';
+const runSkill = (...args) => spawnSync(join(ROOT, 'agent-bot'), ['skill', ...args], {
+  encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'],
+});
+
+for (const name of ['agent-bot', 'agent-space', 'thread-orders']) {
+  test(`skill ${name} prints the exact bundled text and JSON metadata`, () => {
+    const path = join(ROOT, 'skills', name, 'SKILL.md');
+    const text = readFileSync(path, 'utf8');
+    const plain = runSkill(name);
+    assert.equal(plain.status, 0, plain.stderr);
+    assert.equal(plain.stderr, '');
+    assert.equal(plain.stdout, text);
+    const json = runSkill(name, '--json');
+    assert.equal(json.status, 0, json.stderr);
+    assert.equal(json.stderr, '');
+    assert.deepEqual(JSON.parse(json.stdout), { name, path, commit: sourceCommit(), text });
+  });
+}
+
+test('unknown and invalid skill names cannot resolve outside the bundled skills', () => {
+  for (const name of ['missing', '../agent-bot', 'agent-bot/../agent-space', '..',
+    'agent..bot', '/agent-bot', 'Agent-bot', '1agent', 'a'.repeat(65)]) {
+    for (const flags of [[], ['--json']]) {
+      const result = runSkill(name, ...flags);
+      assert.equal(result.status, 2, name);
+      assert.equal(result.stdout, '');
+      assert.equal(result.stderr, `agent-bot skill: no bundled skill named ${name}; bundled: agent-bot, agent-space, thread-orders\n`);
+    }
+  }
+});
+
+test('skill path retains its directory and commit output in both formats', () => {
+  const commit = sourceCommit();
+  const plain = runSkill('path');
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.equal(plain.stderr, '');
+  assert.equal(plain.stdout, `${SKILL}\ncommit ${commit}\n`);
+  const json = runSkill('path', '--json');
+  assert.equal(json.status, 0, json.stderr);
+  assert.equal(json.stderr, '');
+  assert.equal(json.stdout, `${JSON.stringify({ path: SKILL, commit })}\n`);
+});
+
+test('skill help and usage list both forms and reject extra arguments', () => {
+  const help = runSkill('--help');
+  assert.equal(help.status, 0, help.stderr);
+  assert.equal(help.stderr, '');
+  assert.match(help.stdout, /agent-bot skill path \[--json\]/u);
+  assert.match(help.stdout, /agent-bot skill <name> \[--json\]/u);
+  assert.equal(runSkill('-h').stdout, help.stdout);
+  for (const args of [[], ['path', '--bogus'], ['agent-space', '--bogus'], ['agent-space', '--json', 'extra']]) {
+    const result = runSkill(...args);
+    assert.equal(result.status, 2);
+    assert.equal(result.stdout, '');
+    assert.ok(result.stderr.endsWith(help.stdout));
+  }
+});
+
+test('agent-space front matter parses and its opening distinguishes the store from worktrees', () => {
+  const skill = readFileSync(join(ROOT, 'skills', 'agent-space', 'SKILL.md'), 'utf8');
+  const header = skill.match(/^---\n([\s\S]*?)\n---\n/u);
+  assert.ok(header, 'YAML front matter is delimited');
+  // This skill uses only single-line plain YAML scalars; keep the test dependency-free.
+  const fields = Object.fromEntries(header[1].split('\n').map((line) => {
+    const pair = line.match(/^([a-z]+): ([^\n]+)$/u);
+    assert.ok(pair, `plain scalar field: ${line}`);
+    assert.doesNotMatch(pair[2], /: |\s#|^[!&*[{>|'"%@`]/u);
+    return [pair[1], pair[2]];
+  }));
+  assert.deepEqual(Object.keys(fields), ['name', 'description']);
+  assert.equal(fields.name, 'agent-space');
+  assert.ok(fields.description.length > 0);
+  const paragraph = skill.slice(header[0].length).split(/\n\s*\n/u)
+    .find((block) => block.trim() && !block.trim().startsWith('#'));
+  assert.match(paragraph, /~\/\.agent-space\/<agentId>/u);
+  assert.match(paragraph, /different surface/u);
+  assert.match(paragraph, /<soulDir>\/worktrees\/<name>/u);
+  assert.match(paragraph, /ENG-0172-agent-space-is-durable-per-soul-storage\.md/u);
+});
 
 test('official skill is a progressive router over focused references', () => {
   const main = readFileSync(join(SKILL, 'SKILL.md'), 'utf8');
