@@ -39,8 +39,17 @@ access:
   only by a turn running there (#84 records failures).
 - `steps`: the plan below with `done` per step (`null` when agent-bot cannot
   tell).
+- `sop`: the SOP pack's persona mapping as recorded (see [The SOP pack's
+  persona mapping](#the-sop-packs-persona-mapping)): its `state`, whether it
+  `decides` anything, the `repository`, `commit` and `recordedAt` of the
+  record, a `message` for every state but `ok`, the parsed `rules` and
+  `default`.
 - `souls`: every census row with its `override`, whether it is `sandboxed`,
-  the account it `runsAs` and the `source` (`global` or `override`).
+  the account it `runsAs` and the `source`: `sop` when the pack decided,
+  else `override`, else `global`. Each row carries `sop` (`decides`, `state`,
+  and for a decided soul the `rule` that matched, the pack's `sandbox` and
+  `account`) and, when the pack decides sandboxed but the add-on gate is off,
+  a `reason`.
 
 ## Plan
 
@@ -67,18 +76,27 @@ actions: they take the owner's principal on stdin (`--principal-stdin`) or
 the owner's presence, and a caller carrying a soul's markers is refused.
 
 `sandbox override <soul> sandboxed|unrestricted|inherit` records a per-soul
-override in the census; `inherit` removes it. `resolve <soul>` says what the
-soul gets: the override when one is set, else the global switch, and the
-account it runs as. The daemon's launch path consults the same resolution
-when it starts a soul (see [At launch](#at-launch)).
+override in the census; `inherit` removes it. A soul the SOP pack decides
+takes no override: `sandboxed` or `unrestricted` is refused (code `usage`)
+naming the pack, its commit and the rule, because the pack's `persona.toml`
+is where that decision changes; `inherit` is always accepted, so an override
+left from before the pack decided can be cleared. `resolve <soul>` says what
+the soul gets: the pack's decision when it has one, else the override when
+one is set, else the global switch, and the account it runs as. The daemon's
+launch path consults the same resolution when it starts a soul (see [At
+launch](#at-launch)).
 
 ## At launch
 
 After its `checking` stage, before a package launch mints a soul, the
-daemon's launch handler resolves what the soul gets: an existing soul's
-override, else the global switch, which is all a soul the launch makes can
-have. The config and census are read at each launch, so a switch flipped in
-GeniusBar applies to the next one.
+daemon's launch handler resolves what the soul gets: the SOP pack's decision
+(an existing soul by its census name or its soul.json role, a soul the
+launch makes by the launch's `name` and `role`), else an existing soul's
+override, else the global switch. The config, census and recorded mapping
+are read at each launch, so a switch flipped in GeniusBar applies to the
+next one, and nothing is fetched: a pack that is not recorded, stale or
+unreadable leaves the user setting in charge and says so in `sop`, never
+failing the launch.
 
 - `unrestricted`: the launch is unchanged and runs as the daemon's account.
 - `sandboxed`, and the account is `missing` or a step agent-bot can see is
@@ -114,17 +132,113 @@ unchanged `requestId`, `status`, `agentId` and `detail`; a broker that does
 not know the field ignores it. Showing "Runs as …" from `launchStatus` needs
 agent-comms to keep and return that field.
 
+The launch result's `sandbox` object is unchanged (`resolution`, `account`);
+the resolver's full answer, with `source` and `sop`, is what `sandbox resolve`
+prints.
+
+## The SOP pack's persona mapping
+
 Which souls get an account, and what it is called, is the SOP pack's persona
-mapping (ADR-0274 decision 3). The setting here is the user's choice only when
-no SOP decides it.
+mapping (ADR-0274 decision 3): a pack is data in the SOP repository, and the
+product carries its decision out. The setting here is the user's choice only
+when no SOP decides it.
+
+### `persona.toml`
+
+The mapping is `persona.toml` at the root of the SOP repository, in the same
+TOML subset as `agent-sop.toml` (comments, `[table]` and `[table.sub]`
+headers, quoted strings and integers; no arrays, inline tables or booleans):
+
+```toml
+schema_version = 1
+
+[persona]                     # optional: what a soul no rule matches gets
+sandbox = "unrestricted"      #   sandboxed | unrestricted; absent: the user setting decides
+account = "geniusbar-agent"   #   optional: the account for sandboxed souls whose rule names none
+
+[soul.reviewer]               # by the soul's name
+sandbox = "sandboxed"         #   required in every rule
+account = "gb-reviewer"       #   optional; else [persona] account, else the user's sandbox.account
+
+[role.auditor]                # by the role in the soul's soul.json (#535)
+sandbox = "sandboxed"
+```
+
+Two matchers, in order of precedence: `[soul.NAME]`, the soul's name as
+GeniusBar shows it (the launch or join name, else its soul.json name, else its
+census handle), then `[role.ROLE]`, the `role` in its soul.json; then the
+`[persona]` default. Names and roles are compared lowercased with runs of
+whitespace as hyphens, so `[soul.release-bot]` matches a soul named "Release
+Bot". There is no template matcher: the census records a template revision,
+not a template name. Every account name must be a short macOS account name
+(`validateSandboxAccount`); anything else, an unknown table or key, or a
+rule without `sandbox`, makes the whole file invalid, and an invalid file is
+reported as a pack error while the user setting applies.
+
+### Recording the mapping
+
+The sandbox and the daemon's launch path never fetch anything, so the
+mapping is read once, online, and recorded:
+
+```sh
+agent-bot sop persona [--json]
+```
+
+resolves the **user's** SOP (`~/.config/agent-sop/config.toml`, ENG-0355),
+reads `persona.toml` at the SOP commit through the same pinned, read-only git
+boundary as `org.json` (nothing is cloned or executed) and writes
+`<state>/sop-persona.json` (0600) with the org and SOP repositories, the
+commit, the time and the file's text. It prints the parsed rules, or that the
+commit has no `persona.toml`, or the pack error (exit 1; the file is still
+recorded so `sandbox status` reports the same error). A soul's own
+`agent-sop.toml` never decides personas: a soul must not choose the account
+it runs as, so `--soul` is refused. Run it again after the pack moves or the
+config selects another SOP. With no config file it records nothing and
+removes a previous record.
+
+Offline, `sandbox status`, `resolve` and the launch read the record and
+report its `state`:
+
+| `state` | Meaning | What applies |
+| --- | --- | --- |
+| `ok` | the record is for the SOP the config selects and parses | the pack decides matched souls |
+| `none` | no `~/.config/agent-sop/config.toml` | the user setting |
+| `unrecorded` | a config, but `sop persona` has not run | the user setting |
+| `stale` | the record names another org or SOP repository than the config | the user setting |
+| `absent` | the SOP commit has no `persona.toml` | the user setting |
+| `invalid` | `persona.toml` does not parse (the message says why) | the user setting |
+| `error` | the config or the record could not be read | the user setting |
+
+A record cannot tell that the SOP's branch has moved to a new commit; it says
+which commit it is for.
+
+### Resolution order and the gate
+
+For each soul, in order:
+
+1. **The pack.** A matched rule or the `[persona]` default decides;
+   `source` is `sop` and the account is the rule's, else `[persona]`'s, else
+   the user's `sandbox.account`. The user's override and switch do not apply.
+2. **The override.** No pack decision: the census override, `source`
+   `override`.
+3. **The switch.** `features.persona-accounts`, `source` `global`.
+
+The pack never turns the add-on on. With `features.persona-accounts` off, a
+pack decision is reported (`sop.rule`, `sop.sandbox`, `sop.account`) but the
+soul runs `unrestricted`, with a `reason` saying the gate is off; `agent-bot
+sandbox on` is still the owner's consent to persona accounts, and creating
+the account stays the owner's steps above.
 
 ## Daemon routes
 
 With the daemon's per-start bearer:
 
-- `GET /v0/sandbox` returns what `status --json` returns, plus `schemaVersion`.
+- `GET /v0/sandbox` returns what `status --json` returns, plus `schemaVersion`:
+  the `sop` record and each soul's `source`, `sop` and `reason`.
 - `POST /v0/sandbox` with `enabled` and/or `account`, and `principal`, sets
   the switch and the account through the same owner gate as other settings,
   appends a `sandbox` audit receipt, and returns the new status.
 - `POST /v0/sandbox/override` with `agentId`, `override` and `principal`
-  records a soul's override and returns its resolution; an unknown soul is 404.
+  records a soul's override and returns its resolution; an unknown soul is
+  404, and `sandboxed` or `unrestricted` for a soul the pack decides is 409
+  with the message naming the pack (`inherit` is accepted).

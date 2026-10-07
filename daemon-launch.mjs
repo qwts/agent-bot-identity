@@ -160,9 +160,12 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       // Every check that can fail without starting runs before a package spawn mints.
       if (!executorFor) throw new Error('daemon ACP executor is disabled');
       if (parent !== null && soul) throw new Error('a team member is a new soul, not an existing one');
-      // The soul's sandbox resolution: an existing soul's override, else
-      // the global switch, which is all a soul this launch makes can have.
-      const sandbox = sandboxFor ? await sandboxFor({ agentId: soul ?? null }) : null;
+      // The soul's sandbox resolution: the SOP pack's persona mapping (by
+      // the soul's name or role, so a soul this launch makes is matched by
+      // the launch's), else an existing soul's override, else the switch.
+      const sandbox = sandboxFor
+        ? await sandboxFor({ agentId: soul ?? null, ...(event.name === undefined ? {} : { name: event.name }), ...(event.role === undefined ? {} : { role: event.role.trim() }) })
+        : null;
       if (sandbox) {
         row.sandbox = { resolution: sandbox.resolution, account: sandbox.account };
         const refused = sandboxLaunchProblem(sandbox);

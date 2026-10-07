@@ -35,6 +35,11 @@ const REPO_KEYS = ['org', 'sop', 'comms'];
 const PIN_FIELDS = ['repo', 'ref', 'entry', 'summary'];
 const ORG_FIELDS = ['schema_version', 'organization', 'sources', 'capabilities'];
 const ORGANIZATION_FIELDS = ['id', 'account', 'profile'];
+// The SOP pack's persona mapping (ADR-0274 decision 3), at the SOP
+// repository's root. agent-bot sandbox parses it; this file reads, records
+// and reports it.
+export const PERSONA_FILE = 'persona.toml';
+const PERSONA_RECORD_FIELDS = ['schemaVersion', 'recordedAt', 'configPath', 'org', 'sop', 'persona'];
 
 // git show would run a configured textconv. cat-file prints the raw blob.
 export const SOP_GIT_COMMANDS = Object.freeze(['ls-remote', 'init', 'remote', 'config', 'fetch', 'cat-file']);
@@ -51,6 +56,7 @@ export const USAGE = `usage: agent-bot sop [--json] [--config <path>] [--soul ID
        agent-bot sop list [--soul ID] [--workflow NAME] [--json]
        agent-bot sop show PATH [--soul ID] [--workflow NAME]
        agent-bot sop trust REPO [--soul ID]
+       agent-bot sop persona [--json]
 
 Resolve the soul's agent-sop.toml, then ~/.config/agent-sop/config.toml
 (ENG-0355), then no SOP. The soul's sop/ documents override repository
@@ -59,6 +65,9 @@ Foreign soul selections require explicit trust of the resolved repo + commit.
 Fetched documents are cached read-only and never executed or applied;
 reference documentation does not override harness or user instructions.
 With no config file, report that no SOP is in effect and exit 0.
+persona resolves the user's SOP, reads persona.toml at its commit (the
+pack's persona mapping: which souls run in their own macOS account) and
+records it for offline use by agent-bot sandbox and the daemon's launch.
 `;
 
 export class SopError extends Error {
@@ -174,7 +183,8 @@ export function parseTomlSubset(text) {
     const trimmed = stripComment(lines[index]).trim();
     if (trimmed === '') continue;
     if (trimmed.startsWith('[')) {
-      if (!/^\[[A-Za-z0-9_-]+\]$/.test(trimmed)) {
+      // [table] and [table.sub] headers, kept flat as "table.sub".
+      if (!/^\[[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\]$/.test(trimmed)) {
         fail('config-unsupported', `line ${lineNo}: only [table] headers are supported`);
       }
       table = trimmed.slice(1, -1);
@@ -286,10 +296,10 @@ export function assertSopGitCommand(args) {
     const mode = args[args.indexOf('cat-file') + 1];
     const pinned = /^([0-9a-f]{40})(?::(.*))?$/.exec(spec ?? '');
     const doc = pinned?.[2];
-    const permitted = (mode === 'blob' && spec === 'FETCH_HEAD:org.json')
+    const permitted = (mode === 'blob' && (spec === 'FETCH_HEAD:org.json' || spec === `FETCH_HEAD:${PERSONA_FILE}`))
       || (mode === '-p' && pinned && !doc)
       || (mode === 'blob' && pinned && doc && isRelativePath(doc) && !/[\u0000-\u001f\u007f]/.test(doc) && doc.endsWith('.md'));
-    if (!permitted) fail('git-refused', 'refusing to read any file other than org.json or pinned SOP Markdown/trees');
+    if (!permitted) fail('git-refused', 'refusing to read any file other than org.json, persona.toml or pinned SOP Markdown/trees');
   }
 }
 
@@ -535,8 +545,10 @@ export function parseOrgPins(text) {
   };
 }
 
-function readOrgJson(repo, commit, { runGit, remoteUrl, makeTemp }) {
-  if (!COMMIT_SHA.test(commit)) fail('org-json-unreadable', 'org.json is read at a resolved commit');
+// One file at a pinned commit, through a temporary blobless read: org.json
+// (which must exist) or persona.toml (null when the commit has none).
+function readRepoFile(repo, commit, file, { runGit, remoteUrl, makeTemp, required = true }) {
+  if (!COMMIT_SHA.test(commit)) fail('org-json-unreadable', `${file} is read at a resolved commit`);
   const dir = (makeTemp ?? (() => mkdtempSync(join(tmpdir(), 'agent-bot-sop-'))))();
   const url = remoteUrl(repo);
   try {
@@ -556,15 +568,22 @@ function readOrgJson(repo, commit, { runGit, remoteUrl, makeTemp }) {
     if (fetched.status !== 0) {
       fail('org-json-unreadable', `could not fetch ${repo}@${commit}: ${brief(fetched.stderr) || 'git fetch failed'}`);
     }
-    const blob = callGit(runGit, [...GIT_SAFETY, '-C', dir, 'cat-file', 'blob', 'FETCH_HEAD:org.json']);
+    const blob = callGit(runGit, [...GIT_SAFETY, '-C', dir, 'cat-file', 'blob', `FETCH_HEAD:${file}`]);
     if (blob.error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
-      fail('org-json-unreadable', 'org.json exceeds 1 MiB; this command only reads that file');
+      fail('org-json-unreadable', `${file} exceeds 1 MiB; this command only reads that file`);
     }
-    if (blob.status !== 0) fail('org-json-unreadable', `org.json is not in ${repo}@${commit}`);
+    if (blob.status !== 0) {
+      if (!required) return null;
+      fail('org-json-unreadable', `${file} is not in ${repo}@${commit}`);
+    }
     return blob.stdout;
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+function readOrgJson(repo, commit, options) {
+  return readRepoFile(repo, commit, 'org.json', options);
 }
 
 function readConfigText(path, readFile) {
@@ -668,6 +687,109 @@ export function acceptSopTrust(report, repo, options = {}) {
       renameSync(pending, file);
     } finally { rmSync(temp, { recursive: true, force: true }); }
   });
+}
+
+// --- persona mapping record ---------------------------------------------------
+// The pack decides which souls run in their own macOS account (ADR-0274
+// decision 3; GeniusBar#66). The sandbox and the daemon's launch path read
+// that decision offline, so `agent-bot sop persona` resolves the user's SOP
+// online once, reads persona.toml at its commit and records the text here,
+// pinned to the commit. The user's selection decides, never a soul's own
+// agent-sop.toml: a soul must not choose the account it runs as.
+
+export function personaRecordFile(options = {}) { return join(sopState(options), 'sop-persona.json'); }
+
+function writePrivateJson(file, value, options) {
+  const dir = sopState(options);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const temp = mkdtempSync(join(dir, '.sop-persona-'));
+  try {
+    const pending = join(temp, 'record');
+    writeFileSync(pending, `${JSON.stringify(value)}\n`, { mode: 0o600, flag: 'wx' });
+    chmodSync(pending, 0o600);
+    renameSync(pending, file);
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+}
+
+// Online: resolve the user's SOP (only that selection), read persona.toml at
+// the SOP commit and record it. Returns the record. `readPersonaText(repo,
+// commit)` is injectable for tests; it answers null for a commit without the file.
+export function recordSopPersona(options = {}) {
+  const home = options.home ?? homedir();
+  const configPath = options.configPath ?? configPathFor(home);
+  const readFile = options.readFile ?? ((path) => readFileSync(path, 'utf8'));
+  const userText = Object.hasOwn(options, 'configText') ? options.configText : readConfigText(configPath, readFile);
+  const report = resolveSelection({ ...options, configText: userText, configPath, missingConfig: 'absent' });
+  if (!report.inEffect) {
+    try { rmSync(personaRecordFile(options), { force: true }); } catch { /* nothing recorded */ }
+    return { inEffect: false, message: report.message, configPath };
+  }
+  const { repository, commit } = report.repositories.sop;
+  const runGit = options.runGit ?? defaultRunGit;
+  const remoteUrl = options.remoteUrl ?? githubRemote;
+  const persona = options.readPersonaText
+    ? options.readPersonaText(repository, commit)
+    : readRepoFile(repository, commit, PERSONA_FILE, { runGit, remoteUrl, makeTemp: options.makeTemp, required: false });
+  if (persona !== null && (typeof persona !== 'string' || persona.includes('\0') || Buffer.byteLength(persona) > ORG_JSON_LIMIT)) {
+    fail('persona-unreadable', `${PERSONA_FILE} in ${repository}@${commit} must be text of at most 1 MiB`);
+  }
+  const record = {
+    schemaVersion: SCHEMA_VERSION,
+    recordedAt: (options.now ?? (() => new Date()))().toISOString(),
+    configPath,
+    org: { repository: report.repositories.org.repository, commit: report.repositories.org.commit },
+    sop: { repository, commit },
+    persona,
+  };
+  writePrivateJson(personaRecordFile(options), record, options);
+  return { inEffect: true, ...record };
+}
+
+// Offline: what the record says about the SOP the user's config selects now.
+// Never throws and never runs git: a sandbox status or a launch must not
+// wait on the network or fail for a missing pack. `state` is one of
+//   none        no user SOP config, so no pack decides anything
+//   unrecorded  a config, but `agent-bot sop persona` has not run
+//   stale       the record is for another org or SOP repository than the config names
+//   absent      the SOP commit has no persona.toml
+//   error       the config or the record could not be read
+//   recorded    `text` is the pack's persona.toml at `commit`
+export function readSopPersonaRecord(options = {}) {
+  const home = options.home ?? homedir();
+  const configPath = options.configPath ?? configPathFor(home);
+  const readFile = options.readFile ?? ((path) => readFileSync(path, 'utf8'));
+  const file = personaRecordFile(options);
+  const refresh = 'run `agent-bot sop persona` to record it';
+  try {
+    const userText = readConfigText(configPath, readFile);
+    if (userText === null) return { state: 'none', message: 'No SOP is in effect.' };
+    const config = loadSopConfig(userText);
+    let record;
+    try {
+      if (lstatSync(file).isSymbolicLink()) fail('persona-invalid', 'SOP persona record must not be a symlink');
+      record = JSON.parse(readFileSync(file, 'utf8'));
+    } catch (error) {
+      if (error.code === 'ENOENT') return { state: 'unrecorded', message: `the SOP's persona mapping is not recorded; ${refresh}` };
+      throw error;
+    }
+    const sane = isObject(record) && record.schemaVersion === SCHEMA_VERSION
+      && Object.keys(record).every((key) => PERSONA_RECORD_FIELDS.includes(key))
+      && isObject(record.org) && isObject(record.sop)
+      && OWNER_NAME.test(record.org.repository ?? '') && COMMIT_SHA.test(record.org.commit ?? '')
+      && OWNER_NAME.test(record.sop.repository ?? '') && COMMIT_SHA.test(record.sop.commit ?? '')
+      && typeof record.recordedAt === 'string'
+      && (record.persona === null || typeof record.persona === 'string');
+    if (!sane) fail('persona-invalid', `invalid SOP persona record at ${file}; ${refresh}`);
+    const same = (a, b) => a.toLowerCase() === b.toLowerCase();
+    const stale = !same(record.org.repository, config.repos.org.repo)
+      || (config.repos.sop && !same(record.sop.repository, config.repos.sop.repo));
+    const pinned = { repository: record.sop.repository, commit: record.sop.commit, recordedAt: record.recordedAt };
+    if (stale) return { state: 'stale', ...pinned, message: `the recorded persona mapping is for ${record.sop.repository}, not the SOP the config selects; ${refresh}` };
+    if (record.persona === null) return { state: 'absent', ...pinned, message: `${record.sop.repository}@${record.sop.commit} has no ${PERSONA_FILE}` };
+    return { state: 'recorded', ...pinned, text: record.persona };
+  } catch (error) {
+    return { state: 'error', message: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 function trustNotice(report) {
@@ -928,11 +1050,27 @@ export function formatSopReport(report) {
   return `${lines.join('\n')}\n${trustNotice(report)}`;
 }
 
+export function formatPersonaRecord(result) {
+  if (!result.inEffect) return `${result.message ?? 'No SOP is in effect.'} Nothing recorded.\n`;
+  const lines = [`SOP ${result.sop.repository}@${result.sop.commit}`];
+  if (result.mapping) {
+    const { rules, default: fallback } = result.mapping;
+    lines.push(`persona mapping recorded: ${rules.length} ${rules.length === 1 ? 'rule' : 'rules'}, default ${fallback.sandbox ?? 'user setting'}${fallback.account ? ` (account ${fallback.account})` : ''}`);
+    for (const rule of rules) lines.push(`  ${rule.match}:${rule.value}: ${rule.sandbox}${rule.account ? ` as ${rule.account}` : ''}`);
+    lines.push('agent-bot sandbox status shows what each soul gets.');
+  } else if (result.error) {
+    lines.push(`persona mapping recorded, but invalid: ${oneLine(result.error.message)}`, 'The user setting applies until the pack is fixed.');
+  } else {
+    lines.push(`no ${PERSONA_FILE} at this commit: the user's sandbox setting applies.`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 export function parseSopArgs(argv) {
   const parsed = { help: false, json: false, configPath: null, soul: null, workflow: null, command: 'report', target: null };
   if (argv.length === 1 && ['--help', '-h'].includes(argv[0])) return { ...parsed, help: true };
   let i = 0;
-  if (['list', 'show', 'trust'].includes(argv[0])) {
+  if (['list', 'show', 'trust', 'persona'].includes(argv[0])) {
     parsed.command = argv[i++];
     if (['show', 'trust'].includes(parsed.command)) {
       parsed.target = argv[i++];
@@ -950,7 +1088,8 @@ export function parseSopArgs(argv) {
     fail('usage', `unexpected arguments: ${arg}`);
   }
   if (parsed.workflow && !['list', 'show'].includes(parsed.command)) fail('usage', '--workflow requires list or show');
-  if (parsed.json && ['show', 'trust'].includes(parsed.command)) fail('usage', '--json requires report or list');
+  if (parsed.json && ['show', 'trust'].includes(parsed.command)) fail('usage', '--json requires report, list or persona');
+  if (parsed.command === 'persona' && (parsed.soul || parsed.configPath)) fail('usage', 'persona reads the user\'s SOP selection only');
   return parsed;
 }
 
@@ -967,6 +1106,25 @@ export function main(argv = process.argv.slice(2), deps = {}) {
   if (parsed.help) {
     writeOut(USAGE);
     return 0;
+  }
+  if (parsed.command === 'persona') {
+    // The pack's persona mapping, read online and recorded for the sandbox
+    // (ADR-0274 decision 3). The parser lives beside the sandbox, which
+    // owns account names; it is imported here on demand to keep sop.mjs
+    // free of that dependency.
+    return import('./sandbox.mjs').then(({ parsePersonaMapping }) => {
+      const record = recordSopPersona(deps);
+      const result = { ...record, persona: undefined, mapping: null, error: null };
+      if (record.inEffect && record.persona !== null) {
+        try { result.mapping = parsePersonaMapping(record.persona); }
+        catch (error) { result.error = { code: error.code ?? 'persona-invalid', message: error.message }; }
+      }
+      writeOut(parsed.json ? `${JSON.stringify(result)}\n` : formatPersonaRecord(result));
+      return result.error ? 1 : 0;
+    }, (error) => {
+      writeErr(`agent-bot sop: ${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    });
   }
   try {
     const options = {

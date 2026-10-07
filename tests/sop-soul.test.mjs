@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { acceptSopTrust, assertSopGitCommand, createRunGit, formatSopReport, gitSubcommand, listSopDocuments, main, parseSopArgs, resolveSop, showSopDocument } from '../sop.mjs';
+import { acceptSopTrust, assertSopGitCommand, createRunGit, formatSopReport, gitSubcommand, listSopDocuments, main, parseSopArgs, personaRecordFile, readSopPersonaRecord, recordSopPersona, resolveSop, showSopDocument } from '../sop.mjs';
 import { upsertSoul } from '../agent-population.mjs';
 
 const ID = 'agent_12345678-1234-4234-8234-123456789abc';
@@ -38,10 +38,11 @@ function fixture(t) {
   const put = (path, text) => { mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, text); };
   return { home, soulDir, stateDir, userPath, calls, options, put };
 }
-function repository(f) {
+function repository(f, { persona = null } = {}) {
   const src = join(f.home, 'src');
   mkdirSync(src);
   git(src, 'init', '-q', '-b', 'main');
+  if (persona !== null) f.put(join(src, 'persona.toml'), persona);
   f.put(join(src, 'guide.md'), 'Repository guide\n');
   f.put(join(src, 'nested', 'review.md'), 'Review reference\n');
   f.put(join(src, 'notes.txt'), 'not documentation');
@@ -240,7 +241,81 @@ test('argument forms and pinned Git read boundary fail closed', () => {
   const sha = 'a'.repeat(40);
   assert.doesNotThrow(() => assertSopGitCommand(['-C', '/tmp/read', 'cat-file', 'blob', `${sha}:guide.md`]));
   assert.doesNotThrow(() => assertSopGitCommand(['-C', '/tmp/read', 'cat-file', '-p', sha]));
-  for (const spec of [`${sha}:../secret.md`, `${sha}:/secret.md`, `${sha}:evil.sh`, 'main:guide.md']) {
+  assert.doesNotThrow(() => assertSopGitCommand(['-C', '/tmp/read', 'cat-file', 'blob', 'FETCH_HEAD:persona.toml']));
+  for (const spec of [`${sha}:../secret.md`, `${sha}:/secret.md`, `${sha}:evil.sh`, 'main:guide.md', `${sha}:persona.toml`, 'FETCH_HEAD:other.toml']) {
     assert.throws(() => assertSopGitCommand(['-C', '/tmp/read', 'cat-file', 'blob', spec]), /refusing/);
   }
+});
+
+// --- persona mapping record (GeniusBar#66, ADR-0274 decision 3) --------------
+const PERSONA = 'schema_version = 1\n[persona]\nsandbox = "unrestricted"\n[soul.reviewer]\nsandbox = "sandboxed"\naccount = "gb-reviewer"\n';
+
+test('sop persona records the user SOP\'s persona.toml at its commit, through the pinned git boundary only', async (t) => {
+  const f = fixture(t), repo = repository(f, { persona: PERSONA });
+  f.put(f.userPath, repo.config());
+  // A soul's own selection never decides personas: the verb reads the user's config only.
+  f.put(join(f.soulDir, 'agent-sop.toml'), repo.config('foreign/org', 'foreign/sop'));
+  const now = () => new Date('2026-10-07T12:00:00.000Z');
+  const recorded = await cli(['persona'], { ...f.options, now });
+  assert.equal(recorded.code, 0, recorded.err);
+  assert.match(recorded.out, new RegExp(`^SOP local/sop@${repo.commit}\npersona mapping recorded: 1 rule, default unrestricted\n  soul:reviewer: sandboxed as gb-reviewer\n`));
+  const file = personaRecordFile(f.options);
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { schemaVersion: 1, recordedAt: '2026-10-07T12:00:00.000Z', configPath: f.userPath,
+    org: { repository: 'local/org', commit: repo.commit }, sop: { repository: 'local/sop', commit: repo.commit }, persona: PERSONA });
+  for (const args of f.calls) assertSopGitCommand(args);
+  assert.ok(f.calls.some((args) => args.at(-1) === 'FETCH_HEAD:persona.toml'));
+  assert.equal(existsSync(join(f.stateDir, 'sop-cache')), false, 'no document cache is built for the record');
+  // Offline read: the record is for the SOP the config selects.
+  const read = readSopPersonaRecord(f.options);
+  assert.deepEqual(read, { state: 'recorded', repository: 'local/sop', commit: repo.commit, recordedAt: '2026-10-07T12:00:00.000Z', text: PERSONA });
+  const asJson = await cli(['persona', '--json'], { ...f.options, now });
+  assert.equal(asJson.code, 0);
+  const parsed = JSON.parse(asJson.out);
+  assert.equal(parsed.mapping.rules[0].account, 'gb-reviewer');
+  assert.equal(parsed.error, null);
+  assert.equal('persona' in parsed, false, 'the JSON carries the parsed mapping, not the raw text');
+  // The config now names another organization: the record is stale until refreshed.
+  f.put(f.userPath, repo.config('other/org'));
+  assert.equal(readSopPersonaRecord(f.options).state, 'stale');
+  // A symlinked record is refused, not followed.
+  rmSync(file);
+  symlinkSync(join(f.home, 'elsewhere.json'), file);
+  f.put(f.userPath, repo.config());
+  assert.equal(readSopPersonaRecord(f.options).state, 'error');
+  for (const argv of [['persona', '--soul', ID], ['persona', '--config', f.userPath], ['persona', 'extra']]) {
+    assert.throws(() => parseSopArgs(argv), { code: 'usage' });
+  }
+});
+
+test('sop persona without the file, with an invalid file, or with no SOP, leaves the user setting in charge', async (t) => {
+  const f = fixture(t), repo = repository(f);
+  f.put(f.userPath, repo.config());
+  const none = await cli(['persona'], f.options);
+  assert.equal(none.code, 0, none.err);
+  assert.match(none.out, /no persona\.toml at this commit: the user's sandbox setting applies/);
+  assert.equal(JSON.parse(readFileSync(personaRecordFile(f.options), 'utf8')).persona, null);
+  assert.equal(readSopPersonaRecord(f.options).state, 'absent');
+  // Invalid: recorded (so status can report the pack error) and exit 1.
+  const bad = 'schema_version = 1\n[soul.reviewer]\nsandbox = "sandboxed"\naccount = "Bad Name"\n';
+  const invalid = await cli(['persona', '--json'], { ...f.options, readPersonaText: () => bad });
+  assert.equal(invalid.code, 1);
+  assert.match(JSON.parse(invalid.out).error.message, /persona\.toml: \[soul\.reviewer\] sandbox account/);
+  assert.equal(readSopPersonaRecord(f.options).text, bad);
+  const plain = await cli(['persona'], { ...f.options, readPersonaText: () => bad });
+  assert.equal(plain.code, 1);
+  assert.match(plain.out, /recorded, but invalid: persona\.toml/);
+  // No SOP config: nothing decides, and a stale record is removed.
+  rmSync(f.userPath);
+  const absent = await cli(['persona'], f.options);
+  assert.equal(absent.code, 0);
+  assert.equal(absent.out, 'No SOP is in effect. Nothing recorded.\n');
+  assert.equal(existsSync(personaRecordFile(f.options)), false);
+  assert.deepEqual(readSopPersonaRecord(f.options), { state: 'none', message: 'No SOP is in effect.' });
+  assert.deepEqual(recordSopPersona(f.options), { inEffect: false, message: 'No SOP is in effect.', configPath: f.userPath });
+  // The record is read offline: no git, and an unreadable config is an error state, never a throw.
+  f.put(f.userPath, repo.config());
+  assert.equal(readSopPersonaRecord({ ...f.options, runGit: () => assert.fail('offline') }).state, 'unrecorded');
+  f.put(f.userPath, 'schema_version = true\n');
+  assert.match(readSopPersonaRecord(f.options).message, /booleans/);
 });

@@ -192,7 +192,7 @@ credential names, and offline SOP availability. File contents require an
 inventoried UTF-8 path and are capped at 256 KiB. It never reads credential
 stores or fetches SOPs. See [soul-profile.md](../../docs/soul-profile.md).
 
-`agent-bot sandbox status|plan|on|off|account NAME|override <agentId|name> [inherit|sandboxed|unrestricted]|resolve <agentId|name> [--json]` reports the persona account for sandboxed souls (`missing | creating | ready`), lists the owner's steps to create and onboard it (agent-bot never runs them), and keeps the global switch and per-soul overrides (#376). Writes are owner actions.
+`agent-bot sandbox status|plan|on|off|account NAME|override <agentId|name> [inherit|sandboxed|unrestricted]|resolve <agentId|name> [--json]` reports the persona account for sandboxed souls (`missing | creating | ready`), lists the owner's steps to create and onboard it (agent-bot never runs them), and keeps the global switch and per-soul overrides (#376). Writes are owner actions. The SOP pack's `persona.toml` decides first (`source: sop`; an override on such a soul is refused), then the override, then the switch; `agent-bot sop persona [--json]` records that mapping online (`<state>/sop-persona.json`) so status and launches read it offline, and the switch off keeps a pack decision reported but unapplied (GeniusBar#66, ADR-0274).
 
 ## Verify the outcome
 
