@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { buildAppJwt, appConfig, mint, pickInstallation } from '../mint-token.mjs';
+import { buildAppJwt, appConfig, mint, pickInstallation, parseMintArgs, MINT_USAGE } from '../mint-token.mjs';
 
 const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const pem = privateKey.export({ type: 'pkcs8', format: 'pem' });
@@ -342,4 +342,33 @@ test('mint follows "owner" when the App is installed on several accounts', async
   } finally {
     await github.close();
   }
+});
+
+test('arguments are checked before a mint: help mints nothing, unknown options are refused (#213)', () => {
+  assert.deepEqual(parseMintArgs([]), { app: null, json: false, help: false });
+  assert.deepEqual(parseMintArgs(['--app', 'you-claude-agent', '--json']), { app: 'you-claude-agent', json: true, help: false });
+  assert.deepEqual(parseMintArgs(['-h']).help, true);
+  assert.deepEqual(parseMintArgs(['--help', '--app', 'you-claude-agent']).help, true);
+  assert.throws(() => parseMintArgs(['--permissions', 'contents=read']), /unknown option: --permissions/);
+  assert.throws(() => parseMintArgs(['--app']), /--app requires a slug/);
+  assert.throws(() => parseMintArgs(['--app', '--json']), /--app requires a slug/);
+  assert.throws(() => parseMintArgs(['--app', 'a', '--app', 'b']), /only once/);
+  assert.match(MINT_USAGE, /--help\s+Show this help and mint nothing/);
+});
+
+test('mint-token --help prints the usage and never reaches GitHub; a bad flag fails before minting', () => {
+  // A GH_API_BASE that nothing listens on: any mint attempt fails loudly, so
+  // the exit code and output below prove no request was ever made.
+  const env = { ...process.env, GH_AGENT_APP: undefined, GH_APP_ID: '1', GH_APP_PRIVATE_KEY: pem, GITHUB_API_URL: 'http://127.0.0.1:9', HOME: mkdtempSync(join(tmpdir(), 'mint-help-')) };
+  const help = execFileSync(process.execPath, [join(import.meta.dirname, '..', 'mint-token.mjs'), '--help'], { env, encoding: 'utf8' });
+  assert.equal(help, MINT_USAGE);
+  assert.doesNotMatch(help, /ghs_|token"/);
+  let failure = null;
+  try {
+    execFileSync(process.execPath, [join(import.meta.dirname, '..', 'mint-token.mjs'), '--permisions', 'contents=read'], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (error) { failure = error; }
+  assert.ok(failure, 'a mistyped option must fail');
+  assert.equal(failure.status, 1);
+  assert.match(failure.stderr, /mint-token: unknown option: --permisions/);
+  assert.equal(failure.stdout, '');
 });
