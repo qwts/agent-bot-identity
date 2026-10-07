@@ -85,7 +85,10 @@ for (const platform of ['linux', 'darwin']) test(`connect uses ${platform === 'd
   assert.equal(loadConfig(f.options).identityApps['fixture-app'].botAvatarUrl, 'https://avatars.githubusercontent.com/u/456?v=4');
   const before = api.calls.length;
   const listed = listIdentityApps(f.options); noSecrets(listed);
+  const { keyFingerprint, keyUpdatedAt } = loadConfig(f.options).identityApps['fixture-app'];
+  assert.match(keyFingerprint, /^SHA256:[A-Za-z0-9+/=]+$/); assert.match(keyUpdatedAt, /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);
   assert.deepEqual(listed.apps[0], { slug: 'fixture-app', botLogin: 'fixture-app[bot]', issuerPresent: true, keyPresent: true,
+    key: { fingerprint: keyFingerprint, updatedAt: keyUpdatedAt },
     installations: [{ id: 7, account: 'fixture-org', repositorySelection: 'selected' }], harnesses: [], souls: [], liveMint: { status: 'unknown' } });
   assert.equal(api.calls.length, before);
   const resolved = resolveAppCredential('fixture-app', f.options);
@@ -150,6 +153,9 @@ test('rotation verifies a live mint before swapping and reports only retired fin
   await assert.rejects(identityAppOperation('rotate-key', { slug: 'fixture-app', keyFile: f.keyFile }, f.options), { code: 'identity-app-key-unchanged' });
   const result = await identityAppOperation('rotate-key', { slug: 'fixture-app', keyFile: f.newKeyFile }, f.options);
   noSecrets(result); assert.equal(result.retired, oldFingerprint);
+  const row = listIdentityApps(f.options).apps[0]; noSecrets(row);
+  assert.notEqual(row.key.fingerprint, oldFingerprint, 'the list reports the replacement key');
+  assert.equal(row.key.fingerprint, loadConfig(f.options).identityApps['fixture-app'].keyFingerprint);
   assert.ok(api.calls.includes('POST /app/installations/7/access_tokens'));
   assert.ok(readManagedAppCredential('fixture-app', f.options).privateKeyPem === NEW_KEY, 'replacement key was stored');
 });
