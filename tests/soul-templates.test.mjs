@@ -276,6 +276,19 @@ test('a spawned instance keeps its template\'s comms setting', async (t) => {
   assert.throws(() => validateSoulPackage(f.template), /comms must be a boolean/);
 });
 
+for (const formatVersion of [1, 2]) test(`format ${formatVersion}: template instances copy appearance without changing the template`, async (t) => {
+  const f = fixture(t, formatVersion);
+  const manifest = { ...f.manifest, appearance: { hue: 0 } };
+  writeFileSync(join(f.template, 'soul.json'), JSON.stringify(manifest));
+  manifest.revision = computePackageRevision(f.template);
+  writeFileSync(join(f.template, 'soul.json'), JSON.stringify(manifest));
+  const before = readFileSync(join(f.template, 'soul.json'));
+  const instance = await spawnSoulTemplate(f.template, { ...f.options, name: 'Colour' });
+  assert.deepEqual(json(join(instance.soulDir, 'soul.json')).appearance, { hue: 0 });
+  assert.equal(validateSoulPackage(instance.soulDir).revision, instance.revision);
+  assert.deepEqual(readFileSync(join(f.template, 'soul.json')), before);
+});
+
 // #419: a team member whose first start failed used to keep its folder, so
 // every retry with that name was refused. Rollback leaves agent-comms,
 // retires the soul and archives its folder; the same name then spawns again.

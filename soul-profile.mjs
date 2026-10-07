@@ -7,7 +7,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
 import { readAgentIdentity, stateDirectory } from './agent-identity.mjs';
-import { validateCredentialsDeclaration } from './soul-package.mjs';
+import { validateAppearanceDeclaration, validateCredentialsDeclaration } from './soul-package.mjs';
 import { listSopDocuments, resolveSop } from './sop.mjs';
 
 const MAX_BYTES = 256 * 1024;
@@ -158,7 +158,7 @@ function readProfile(id, { env = process.env, home = env.HOME ?? homedir() } = {
   const soul = resolveSoul(id, options);
   const errors = [];
   const profile = { name: soul.name ?? null, displayName: soul.displayName ?? null, description: null,
-    harness: null, package: null, revision: null, template: null, parentId: soul.parentId ?? null, status: soul.status ?? null };
+    harness: null, package: null, revision: null, template: null, appearance: null, parentId: soul.parentId ?? null, status: soul.status ?? null };
   const result = { agentId: soul.id, profile, files: [], skills: [], credentials: [], sop: { resolved: null, override: null }, errors };
   try { profile.harness = text(readAgentIdentity(soul.id, { stateDir: stateDirectory(options) }).harness); }
   catch { errors.push({ area: 'profile', message: 'Execution identity unavailable; harness may be unknown.' }); }
@@ -184,6 +184,10 @@ function readProfile(id, { env = process.env, home = env.HOME ?? homedir() } = {
     profile.template = typeof manifest.template === 'boolean' ? manifest.template : null;
     // A preferred harness is not proof of the harness actually running.
   } catch { errors.push({ area: 'profile', message: 'Package manifest unavailable or invalid.' }); }
+  if (manifest?.appearance !== undefined) {
+    try { profile.appearance = { hue: validateAppearanceDeclaration(manifest.appearance).hue }; }
+    catch { errors.push({ area: 'profile', message: 'Invalid appearance declaration.' }); }
+  }
   if (manifest?.credentials !== undefined) {
     try {
       const declaration = validateCredentialsDeclaration(manifest.credentials).github;
@@ -257,7 +261,7 @@ export function readSoulProfileFile(id, relativePath, { maxBytes = MAX_BYTES, ..
 }
 
 export function formatSoulProfile(result) {
-  const lines = [`agentId: ${result.agentId}`, ...Object.entries(result.profile).map(([key, value]) => `${key}: ${cleanLine(value)}`),
+  const lines = [`agentId: ${result.agentId}`, ...Object.entries(result.profile).map(([key, value]) => `${key}: ${cleanLine(value && typeof value === 'object' ? JSON.stringify(value) : value)}`),
     '', `files (${result.files.length})`, ...result.files.map((file) => `${cleanLine(file.path)} (${file.kind}, ${file.size} bytes)`),
     '', `skills (${result.skills.length})`, ...result.skills.map((skill) => `${cleanLine(skill.name)} (${skill.source}) ${cleanLine(skill.path)} commit: ${cleanLine(skill.commit)}`),
     '', `credentials (${result.credentials.length})`, ...result.credentials.map((credential) => `${cleanLine(credential.name)} (${credential.provider}): ${credential.status}`),

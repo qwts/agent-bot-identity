@@ -41,6 +41,7 @@ import {
 import { readSoulModes } from './soul-mode.mjs';
 import { readSoulModels } from './soul-model.mjs';
 import { soulsHome } from './souls-root.mjs';
+import { validateAppearanceDeclaration } from './soul-package.mjs';
 
 const SCHEMA_VERSION = 1;
 const APP_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
@@ -1160,11 +1161,17 @@ export function withRoles(records, { file = populationFile(), env = process.env,
   const scan = () => (dirs ??= soulRootDirs(root));
   return records.map((record) => {
     const manifest = soulManifest(record, root, scan);
+    let appearance;
+    if (manifest?.appearance !== undefined) {
+      try { appearance = validateAppearanceDeclaration(manifest.appearance); }
+      catch { /* Invalid declarations are omitted from read-only population output. */ }
+    }
     const role = shortText(manifest?.role, ROLE_MAX);
     const count = children.get(record.id) ?? 0;
     const parts = [role ?? (count > 0 ? 'Lead' : null), count > 0 ? `${count} ${count === 1 ? 'subagent' : 'subagents'}` : null].filter(Boolean);
     return {
       ...record,
+      ...(appearance === undefined ? {} : { appearance: { hue: appearance.hue } }),
       mode: modes[record.id] ?? 'safe',
       model: models[record.id]?.model ?? null,
       role,
