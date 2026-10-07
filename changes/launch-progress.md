@@ -1,0 +1,1 @@
+- The daemon reports each stage of a launch (`checking`, `account`, `joining`, `harness`) to agent-comms through its `launch-progress` op (agent-comms 0.3.12) so a launcher can show the steps, best effort on an older broker, and keeps the stage in the launch journal so a failed launch says where it stopped (#536).\n

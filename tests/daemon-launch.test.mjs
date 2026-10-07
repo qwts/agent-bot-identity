@@ -644,3 +644,25 @@ test('a rollback that fails part way is named beside the launch failure (#531)',
     detail: 'no ACP drive entry for harness \'kiro\' (rollback failed: ENOTEMPTY: directory not empty, rename \'/souls/Kiro.soul\' -> \'/souls/.archive/Kiro.soul\')' });
   assert.equal(JSON.parse(readFileSync(f.options.file))[0].detail, f.reports[0].detail, 'the journal keeps it too');
 });
+
+test('launch progress is reported stage by stage, best effort, and kept in the journal (#536)', async (t) => {
+  const stages = [];
+  const f = fixture(t, { joinSoul: async () => 'addr' });
+  await f.handler(event, { ...f.ports, progress: async ({ requestId, stage }) => { stages.push(`${requestId}:${stage}`); } });
+  assert.deepEqual(stages, ['r1:checking', 'r1:account', 'r1:joining', 'r1:harness']);
+  assert.equal(f.reports[0].status, 'launched');
+  assert.equal(JSON.parse(readFileSync(f.options.file))[0].stage, 'harness');
+  // A refused launch stops at its checks, and the journal says so.
+  const refusing = createLaunchHandler({ ...f.options, harnessProblem: () => 'agent-bot has no such harness' });
+  const seen = [];
+  await refusing({ ...event, requestId: 'r3', harness: 'kiro' }, { ...f.ports, progress: async ({ stage }) => { seen.push(stage); } });
+  assert.deepEqual(seen, ['checking']);
+  assert.equal(JSON.parse(readFileSync(f.options.file)).find((r) => r.requestId === 'r3').stage, 'checking');
+  // A broker without the op, or none at all, never fails a launch.
+  const g = fixture(t);
+  await g.handler(event, { ...g.ports, progress: async () => { throw new Error('unknown op'); } });
+  assert.equal(g.reports[0].status, 'launched');
+  const h = fixture(t);
+  await h.handler(event, h.ports);
+  assert.equal(h.reports[0].status, 'launched');
+});

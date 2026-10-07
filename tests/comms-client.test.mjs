@@ -567,3 +567,15 @@ test('launch-result rejects invalid correlation, status, and identity fields bef
     clientFactory: () => { throw new Error('must not connect'); },
   }), /invalid launch result/);
 });
+
+test('launch-progress rejects a bad correlation or an unknown stage before connecting (#536)', async () => {
+  const { reportCommsLaunchProgress, LAUNCH_STAGES } = await import('../comms-client.mjs');
+  assert.deepEqual([...LAUNCH_STAGES], ['checking', 'account', 'joining', 'harness', 'session']);
+  for (const fields of [
+    { requestId: '', stage: 'account' },
+    { requestId: 'r', stage: 'done' },
+    { requestId: 'r' },
+  ]) await assert.rejects(reportCommsLaunchProgress(fields, {
+    clientFactory: () => { throw new Error('must not connect'); },
+  }), /invalid launch progress/);
+});

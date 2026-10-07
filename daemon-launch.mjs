@@ -75,7 +75,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
     row.reported = true;
     save();
   };
-  const handle = async (event, { report, account, parent = null }) => {
+  const handle = async (event, { report, progress = null, account, parent = null }) => {
     const { requestId } = event;
     if (typeof requestId !== 'string' || !requestId || requestId.length > 256) throw new Error('invalid launch requestId');
     const prior = requests.get(requestId);
@@ -86,9 +86,18 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
     const row = { requestId, status: 'pending', agentId: null, reported: false };
     requests.set(requestId, row);
     save(); // Accept durably before minting an identity or starting a process.
+    // Progress is best effort (#536): a broker without `launch-progress`, or
+    // one that is away, never fails a launch. The journal keeps the stage so
+    // a failure shows where it stopped.
+    const step = async (stage) => {
+      row.stage = stage;
+      if (!progress) return;
+      try { await progress({ requestId, stage }); } catch { /* best effort */ }
+    };
     let spawned = null;
     const rollback = { binding: null, joined: false };
     try {
+      await step('checking');
       if (event.account !== account) throw new Error('launch account does not match paired daemon');
       const targets = [event.soul, event.package].filter((value) => value !== undefined);
       if (targets.length !== 1 || typeof targets[0] !== 'string' || !targets[0]) {
@@ -131,11 +140,13 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       const request = { ...withoutParent(event), harness, ...(parent ? { parent } : {}) };
       const identity = soul ? await identities(soul) : copied ? await forkCopy(request) : await spawnPackage(request);
       if (!soul) spawned = identity?.id ?? null;
+      await step('account');
       const binding = await lookupBinding(identity.id, { harness })
         ?? await provisionHome({ agentId: identity.id, harness, packagePath });
       if (!binding?.worktree || !binding?.file) throw new Error('soul binding is unavailable');
       rollback.binding = binding;
       if (joinSoul) {
+        await step('joining');
         rollback.joined = true; // a join that fails after the broker records it still needs a leave
         // An installed soul relaunched from its folder keeps its name (#432).
         const name = located?.status === 'installed' ? null : event.name ?? null;
@@ -157,6 +168,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
           ? `Your parent is ${parentIdentity?.name || ownIdentity?.parent?.name || displayName(parentId)} (agent id ${parentId}). `
           : 'You have no parent agent. ');
       assertSoulUnpaused(isPaused(identity.id));
+      await step('harness');
       const executor = executorFor({ agentId: identity.id, harness, cwd: binding.worktree,
         env: { AGENT_BOT_BINDING: binding.file, AGENT_BOT_ID: identity.id, QWTS_AGENT_ID: identity.id } });
       // An ACP session binding is the readiness boundary. A returned promise
