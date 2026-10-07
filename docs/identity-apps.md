@@ -15,8 +15,11 @@ agent-bot identity app assign SLUG (--harness H | --soul AGENT_ID) [--json]
 ```
 
 `list` is offline: no mint, provider restore, or installation fetch. Each row
-has `slug`, `botLogin`, `issuerPresent`, `keyPresent`, `installations`,
-`harnesses`, `souls`, and `liveMint`. Installations cached by connect/rotation
+has `slug`, `botLogin`, `issuerPresent`, `keyPresent`, `key`, `installations`,
+`harnesses`, `souls`, and `liveMint`. `key` is `{fingerprint, updatedAt}` for a
+managed App (the stored private key's public SHA256 fingerprint and the ISO
+time connect/rotation stored it; `updatedAt` is `null` for keys stored before
+this field), otherwise `null`. Installations cached by connect/rotation
 are `{id, account, repositorySelection}` (`all` or `selected`); otherwise `[]`.
 Doctor caches only actual live results, never skipped checks. `liveMint` is
 `{status:"unknown"}` until then, or `{status:"ready"|"failed", code, checkedAt}`.

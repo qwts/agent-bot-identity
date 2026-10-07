@@ -134,7 +134,8 @@ function persist(app, credential, cachedInstallations, options, { replace = fals
     }
     options.stores[kind].write(appStoreTarget(app, options), credential);
     config.identityApps ??= {};
-    config.identityApps[app] = { ...previous, ...metadata, id: String(credential.appId), store: kind, keyFingerprint, installations: cachedInstallations };
+    const keyUpdatedAt = (options.now ?? (() => new Date()))().toISOString();
+    config.identityApps[app] = { ...previous, ...metadata, id: String(credential.appId), store: kind, keyFingerprint, keyUpdatedAt, installations: cachedInstallations };
     return { id: String(credential.appId), slug: app, installUrl: installUrl(app) };
   }, { ...options, rollback: () => rollback?.() });
 }
@@ -163,8 +164,12 @@ export function listIdentityApps(options = {}) {
     const last = cache[app];
     const liveMint = last && ['ready', 'failed'].includes(last.status) && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(last.checkedAt)
       ? { status: last.status, code: MINT_CODES.includes(last.code) ? last.code : null, checkedAt: last.checkedAt } : { status: 'unknown' };
-    const cached = config.identityApps?.[app]?.installations;
-    return { slug: app, botLogin: `${app}[bot]`, issuerPresent, keyPresent,
+    const managed = config.identityApps?.[app], cached = managed?.installations;
+    // The stored key's public fingerprint and when it was stored: owner
+    // facing (GeniusBar's companion sheet), never the key itself.
+    const key = typeof managed?.keyFingerprint === 'string' && managed.keyFingerprint
+      ? { fingerprint: managed.keyFingerprint, updatedAt: typeof managed.keyUpdatedAt === 'string' ? managed.keyUpdatedAt : null } : null;
+    return { slug: app, botLogin: `${app}[bot]`, issuerPresent, keyPresent, key,
       installations: Array.isArray(cached) ? installations(cached.map((r) => ({ id: r.id, account: { login: r.account }, repository_selection: r.repositorySelection }))) : [],
       harnesses: mapped.filter((r) => r.slug === app).map((r) => r.harness),
       souls: souls.filter((s) => s.appSlug === app).map((s) => s.id), liveMint };
