@@ -1,6 +1,7 @@
 // Pure package-to-harness rendering. No filesystem, environment or registry
 // imports: ACP spawn data includes machine-specific paths and is not build input.
 import { GENERATED_HARNESS_MARKER as MARKER, isGeneratedPath } from './soul-harness-contract.mjs';
+import { CANONICAL_EVENTS, isBlocking, nativeHookEntry, SOUL_HOOK_MARKER, vendorEvent } from './hook-dialects.mjs';
 
 const compare = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b));
 const text = (bytes) => new TextDecoder('utf-8', { fatal: true }).decode(bytes).replace(/\r\n?/g, '\n');
@@ -267,10 +268,157 @@ function tomlMerge(target, authored) {
   return `# ${MARKER}\n${body ? `${body}\n\n` : ''}${table}\n`;
 }
 
+// Soul-declared hooks (#378, slice 3). A soul declares a hook once, as an
+// executable at `hooks/<event>/<name>` — the folder contract agent-hooks/
+// already uses, with the same canonical events and the same verdict protocol.
+// The builder renders one native entry per declared event into each harness
+// whose hook dialect can express it; the entry runs the vendor-neutral
+// agent-hook runner over the soul's own `hooks/` directory, so every harness
+// hands the script the same normalized envelope and reads the same verdict.
+//
+// Ownership: these entries carry SOUL_HOOK_MARKER and are the builder's alone.
+// The identity lifecycle entries (MANAGED_MARKER) stay with sync-hooks.mjs in
+// the harness's user directory; neither recognizer matches the other's
+// entries, and any other entry in a shared file is the soul's and kept.
+//
+// `spawn` is the daemon's own event and `pre-commit`/`pre-push` are served by
+// the git layer, not a harness, so a soul hook on one of them could never fire:
+// refused rather than accepted and silently dropped.
+export const SOUL_HOOK_EVENTS = Object.freeze(CANONICAL_EVENTS.filter((event) => !['spawn', 'pre-commit', 'pre-push'].includes(event)));
+
+// Each harness's native project hook file and the hook-dialects row that
+// spells it. Devin CLI reads Claude's settings natively (the claude row's
+// `alsoServes`), so it is served by the same entry and gets no file of its own.
+// Copilot reads every `.github/hooks/*.json`; the builder owns one dedicated
+// file there and never touches the others.
+export const HOOK_TARGETS = Object.freeze([
+  Object.freeze({ harness: 'claude', dialect: 'claude', path: '.claude/settings.json' }),
+  Object.freeze({ harness: 'codex', dialect: 'codex', path: '.codex/hooks.json' }),
+  Object.freeze({ harness: 'cursor', dialect: 'cursor', path: '.cursor/hooks.json' }),
+  Object.freeze({ harness: 'copilot', dialect: 'copilot', path: '.github/hooks/agent-bot-soul.json' }),
+]);
+const HOOK_DIALECT_FOR = Object.freeze({ claude: 'claude', devin: 'claude', codex: 'codex', cursor: 'cursor', copilot: 'copilot' });
+const hookTargetFor = (harness) => HOOK_TARGETS.find((target) => target.dialect === HOOK_DIALECT_FOR[harness]);
+
+// The same name grammar as other primitives, plus an optional extension so a
+// script may keep `.sh` or `.py`; a numeric prefix orders the runner (`10-`).
+const HOOK_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+)?$/;
+
+// The declared hooks, `<event>/<name>`, byte-sorted. Throws on anything under
+// hooks/ that would not run: an unknown or non-harness event, a nested path, a
+// bad name, or a file without its executable bit (the runner skips those, so
+// accepting one would be a hook that silently never fires). `hooks/README.md`
+// may document the folder.
+export function declaredHooks(packageEntries) {
+  const hooks = [];
+  for (const { path, mode } of packageEntries) {
+    if (path === 'hooks') {
+      if (mode !== '040000') throw new Error('hooks must be a directory');
+      continue;
+    }
+    if (!path.startsWith('hooks/') || path === 'hooks/README.md') continue;
+    const [, event, name, ...rest] = path.split('/');
+    if (!SOUL_HOOK_EVENTS.includes(event)) {
+      throw new Error(CANONICAL_EVENTS.includes(event)
+        ? `hooks/${event}: ${event} is not a harness hook event (${event === 'spawn' ? 'the daemon runs spawn hooks' : 'the git hook layer serves it'})`
+        : `hooks/${event}: unknown hook event (use one of ${SOUL_HOOK_EVENTS.join(', ')})`);
+    }
+    if (name === undefined) {
+      if (mode !== '040000') throw new Error(`hooks/${event} must be a directory of executables`);
+      continue;
+    }
+    if (rest.length || mode === '040000') throw new Error(`${path}: hooks are files directly in hooks/<event>/, not nested directories`);
+    if (name.length > 64 || !HOOK_NAME.test(name)) {
+      throw new Error(`${path}: name must use lowercase letters, digits and single hyphens, with an optional extension (1–64 characters)`);
+    }
+    if (mode !== '100755') throw new Error(`${path} must be executable (chmod +x); the hook runner skips other files`);
+    hooks.push(`${event}/${name}`);
+  }
+  return hooks.sort(compare);
+}
+
+// The command each rendered entry runs. Nothing machine-specific: `agent-bot`
+// from PATH (as the MCP entry), and the soul's `hooks/` found from the project
+// root — Claude's CLAUDE_PROJECT_DIR, which only the claude row may trust (a
+// Codex launched from a Claude shell inherits it), else the git top level the
+// home is. A missing agent-bot fails closed on a blocking event, never open.
+// The executable goes through `$B` and `--event` comes first so the command
+// never contains `agent-bot agent-hook` (MANAGED_MARKER) or
+// `agent-hook --dialect`: any sync-hooks, including an older install's, reads
+// those as its own lifecycle entries and would strip this one.
+export function soulHookCommand(dialectKey, event) {
+  const root = dialectKey === 'claude'
+    ? '${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}'
+    : '$(git rev-parse --show-toplevel 2>/dev/null || pwd)';
+  return `D="${root}"; B=agent-bot; command -v "$B" >/dev/null 2>&1 || { echo "agent-bot is not on PATH; soul ${event} hooks did not run" >&2; exit ${isBlocking(event) ? 2 : 0}; }; AGENT_BOT_HOOKS_DIR="$D/hooks" exec "$B" agent-hook --event ${event} --dialect ${dialectKey} # ${SOUL_HOOK_MARKER}`;
+}
+
+const isSoulHookEntry = (entry) => JSON.stringify(entry).includes(SOUL_HOOK_MARKER);
+
+function hookConfig(path, bytes) {
+  let content, value;
+  try { content = text(bytes); } catch { throw new Error(`${path} must be UTF-8 text to merge soul hooks into it`); }
+  try { value = JSON.parse(content); }
+  catch (error) { throw new Error(`${path} is not valid JSON, so soul hooks cannot be merged into it (${error.message})`); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${path} must be a JSON object to merge soul hooks into it`);
+  if (value.hooks !== undefined && (!value.hooks || typeof value.hooks !== 'object' || Array.isArray(value.hooks))) {
+    throw new Error(`${path} hooks must be a JSON object to merge soul hooks into it`);
+  }
+  for (const [event, entries] of Object.entries(value.hooks ?? {})) {
+    if (!Array.isArray(entries)) throw new Error(`${path} hooks.${event} must be an array to merge soul hooks into it`);
+  }
+  return value;
+}
+
+// Merge the declared events into one target's file. Only entries carrying
+// SOUL_HOOK_MARKER are replaced; every other entry (the soul's own, or a
+// lifecycle entry) keeps its place, and event keys keep their order so a
+// rebuild over this output is byte-identical. With nothing declared, a file
+// that still holds our entries is cleaned; one that held only ours is dropped.
+function renderHookTarget(target, base, events, { fromOutput }) {
+  const { _comment, ...rest } = base ? hookConfig(target.path, base) : {};
+  const hooks = {};
+  let stripped = false;
+  const emptied = new Set();
+  for (const [event, entries] of Object.entries(rest.hooks ?? {})) {
+    hooks[event] = entries.filter((entry) => !isSoulHookEntry(entry));
+    if (hooks[event].length < entries.length) {
+      stripped = true;
+      if (!hooks[event].length) emptied.add(event);
+    }
+  }
+  if (!events.length && !stripped) return null;
+  for (const event of SOUL_HOOK_EVENTS.filter((candidate) => events.includes(candidate))) {
+    const native = nativeHookEntry(target.dialect, event, soulHookCommand(target.dialect, event));
+    if (!native) continue;
+    (hooks[native.vendorEvent] ??= []).push(native.entry);
+  }
+  for (const event of emptied) if (!hooks[event].length) delete hooks[event];
+  const versioned = ['cursor', 'copilot'].includes(target.dialect);
+  const value = { _comment: MARKER, ...(versioned && events.length && rest.version === undefined ? { version: 1 } : {}), ...rest, hooks };
+  if (!Object.keys(hooks).length && (rest.hooks === undefined || stripped)) delete value.hooks;
+  // A file that only ever held our entries goes away with them.
+  const left = Object.keys(value).filter((key) => key !== '_comment' && !(versioned && key === 'version'));
+  if (!events.length && !fromOutput && !left.length) return null;
+  return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function renderHooks(events, output, authored) {
+  for (const target of HOOK_TARGETS) {
+    const fromOutput = output.has(target.path);
+    const base = output.get(target.path) ?? authored.get(target.path);
+    if (!base && !events.length) continue;
+    const rendered = renderHookTarget(target, base, events, { fromOutput });
+    if (rendered) output.set(target.path, rendered);
+  }
+}
+
 // Claude renders every declared agent/command, so its output inventories the
 // received names even for harnesses without adapters. No hidden Map metadata
 // or source/disk access is needed by the report.
-export function harnessReport(output, { comms = true, manifest = {} } = {}) {
+// `hooks` is declaredHooks(entries): rendered hooks share one runner entry per
+// event, so the names come from the package, not the output.
+export function harnessReport(output, { comms = true, manifest = {}, hooks = [] } = {}) {
   const skills = [...output.keys()].some((path) => Object.values(HARNESS_FILES).some((files) => files.skills && path.startsWith(files.skills)));
   const names = (prefix) => prefix ? [...output.keys()].filter((path) => path.startsWith(prefix))
     .map((path) => path.slice(prefix.length).replace(/\.(md|toml)$/, '')).sort(compare) : [];
@@ -278,9 +426,13 @@ export function harnessReport(output, { comms = true, manifest = {} } = {}) {
   const report = {};
   for (const [harness, files] of Object.entries(HARNESS_FILES)) {
     const settingsTarget = SETTINGS_TARGETS.find((target) => target.harness === harness);
+    const hookTarget = hookTargetFor(harness);
+    const deliveredHooks = hookTarget && output.has(hookTarget.path)
+      ? hooks.filter((name) => vendorEvent(hookTarget.dialect, name.slice(0, name.indexOf('/')))) : [];
     const paths = [...output.keys()].filter((path) => path === files.instructions
       || (files.skills && path.startsWith(files.skills)) || path === files.mcp || path === settingsTarget?.path
-      || (files.subagents && path.startsWith(files.subagents)) || (files.commands && path.startsWith(files.commands)));
+      || (files.subagents && path.startsWith(files.subagents)) || (files.commands && path.startsWith(files.commands))
+      || (deliveredHooks.length > 0 && path === hookTarget.path));
     // An empty build rendered nothing at all: there is no AGENTS.md to point a
     // harness at, so it gets no instructions either.
     const rendered = [];
@@ -300,8 +452,11 @@ export function harnessReport(output, { comms = true, manifest = {} } = {}) {
     const deliveredSettings = settingKeys.filter((key) => settingsTarget?.keys.includes(key) && output.has(settingsTarget.path));
     unsupported.settings = settingKeys.filter((key) => !deliveredSettings.includes(key));
     if (deliveredSettings.length) rendered.push('settings');
+    unsupported.hooks = hooks.filter((name) => !deliveredHooks.includes(name));
+    if (deliveredHooks.length) rendered.push('hooks');
     report[harness] = { rendered, files: paths, ...primitives,
-      settings: { received: settingKeys, rendered: deliveredSettings }, unsupported };
+      settings: { received: settingKeys, rendered: deliveredSettings },
+      hooks: { received: [...hooks], rendered: deliveredHooks }, unsupported };
   }
   return report;
 }
@@ -453,6 +608,8 @@ export function buildHarnessFiles(packageEntries, { authored = new Map() } = {})
   }
   const output = new Map();
   if (!source.has('AGENTS.md')) return output;
+  const hookEvents = [...new Set(declaredHooks(packageEntries.filter((entry) => !isGeneratedPath(entry.path)))
+    .map((name) => name.slice(0, name.indexOf('/'))))];
   output.set('CLAUDE.md', Buffer.from(`${MARKER}\n@AGENTS.md\n`));
   output.set('GEMINI.md', Buffer.from(`${MARKER}\n@AGENTS.md\n`));
   for (const [path, bytes] of source) {
@@ -488,5 +645,7 @@ export function buildHarnessFiles(packageEntries, { authored = new Map() } = {})
   for (const target of settingsTargets(manifest)) {
     output.set(target.path, renderSettings(target, output.get(target.path) ?? authored.get(target.path), harnessSettings(manifest, target.harness)));
   }
+  // After settings, so Claude's settings and its hooks share one file.
+  renderHooks(hookEvents, output, authored);
   return new Map([...output].sort(([a], [b]) => compare(a, b)));
 }

@@ -65,6 +65,15 @@ Generated entries are marker-scoped. Regeneration replaces entries containing
 `agent-bot agent-hook` and preserves foreign entries such as Claude's
 `WorktreeCreate` hook.
 
+### Soul hooks
+
+A soul declares its own hooks with the same contract in its package's
+`hooks/<event>/`, and `agent-bot soul build` renders entries for them into the
+soul's *project* hook files, marked `agent-bot soul hook` and run over that
+folder. Those are the builder's; the lifecycle adapters above stay with
+`sync-hooks.mjs`, and neither strips the other's entries. See
+[soul-builder](../docs/soul-builder.md#hooks-378-slice-3).
+
 ## The contract
 
 Your script gets these, so a five-line `sh` hook never parses JSON:

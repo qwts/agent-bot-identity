@@ -1,7 +1,7 @@
 # Soul builder
 
 `agent-bot soul build [PATH] [--check] [--json]` derives harness files from a
-soul package (ADR-0332 decisions 4 and 8; #378 adds MCP, subagents and commands).
+soul package (ADR-0332 decisions 4 and 8; #378 adds MCP, subagents, commands and hooks).
 With no PATH, the current Agent ID (environment or worktree pin) resolves through
 `soulDirInfo` / `soulDirectory`, including a registered, moved soul. It does not
 guess from the current harness or use the current checkout as the soul
@@ -17,8 +17,8 @@ reads the registry, environment, clock, credentials, filesystem or absolute host
 paths. Generated input is ignored, and paths with traversal/control characters
 are refused. The builder does not modify its inputs.
 
-`authored` is the optional merge base for MCP and settings files: the bytes already at
-each rendered MCP or settings path, supplied by the disk layer, so a soul that ships its own
+`authored` is the optional merge base for MCP, settings and hook files: the bytes already at
+each rendered MCP, settings or hook path, supplied by the disk layer, so a soul that ships its own
 MCP config keeps its servers and a rebuild over the builder's own output
 reproduces it byte for byte. Other output is a function of the package
 entries alone.
@@ -36,16 +36,17 @@ Outputs are built for all supported consumers, independently of
 `preferredHarnesses` (which is launch preference, not a build allowlist).
 A native consumer receives no duplicate configuration folder.
 
-| Harness | Instructions | Skills / generated folder | MCP (#378) | Subagents | Commands |
-| --- | --- | --- | --- | --- | --- |
-| Claude Code | Marked `CLAUDE.md` with `@AGENTS.md` | `.claude/skills/<name>/` | `.mcp.json` | `.claude/agents/<name>.md` | `.claude/commands/<name>.md` |
-| Gemini CLI | Marked `GEMINI.md` with `@AGENTS.md` | `.gemini/skills/<name>/` | `.gemini/settings.json` | Unsupported | `.gemini/commands/<name>.toml` |
-| Codex | Native `AGENTS.md` | Native skills; no duplicate output | `.codex/config.toml` | Unsupported | Unsupported |
-| OpenCode | Native `AGENTS.md` | Uses shared `.claude/skills/` | `opencode.json` | `.opencode/agent/<name>.md` | `.opencode/command/<name>.md` |
-| Cursor | Native `AGENTS.md` | Uses shared `.claude/skills/`; no `.cursor/` output | None yet | Unsupported | Unsupported |
-| Copilot CLI | Native instruction support | Uses shared `.claude/skills/`; no `.github/` output | None yet | Unsupported | Unsupported |
-| Devin CLI | Claude-compatible consumer | Shared Claude skills; no `.devin/` output | None yet | Unsupported | Unsupported |
-| Muse | No verified definition adapter in this repo | No dedicated output; follow-up | None yet | Unsupported | Unsupported |
+| Harness | Instructions | Skills / generated folder | MCP (#378) | Subagents | Commands | Hooks |
+| --- | --- | --- | --- | --- | --- | --- |
+| Claude Code | Marked `CLAUDE.md` with `@AGENTS.md` | `.claude/skills/<name>/` | `.mcp.json` | `.claude/agents/<name>.md` | `.claude/commands/<name>.md` | `.claude/settings.json` `hooks` |
+| Gemini CLI | Marked `GEMINI.md` with `@AGENTS.md` | `.gemini/skills/<name>/` | `.gemini/settings.json` | Unsupported | `.gemini/commands/<name>.toml` | Unsupported |
+| Codex | Native `AGENTS.md` | Native skills; no duplicate output | `.codex/config.toml` | Unsupported | Unsupported | `.codex/hooks.json` |
+| OpenCode | Native `AGENTS.md` | Uses shared `.claude/skills/` | `opencode.json` | `.opencode/agent/<name>.md` | `.opencode/command/<name>.md` | Unsupported |
+| Cursor | Native `AGENTS.md` | Uses shared `.claude/skills/`; `.cursor/` only for hooks | None yet | Unsupported | Unsupported | `.cursor/hooks.json` |
+| Copilot CLI | Native instruction support | Uses shared `.claude/skills/`; `.github/` only for hooks | None yet | Unsupported | Unsupported | `.github/hooks/agent-bot-soul.json` |
+| Devin CLI | Claude-compatible consumer | Shared Claude skills; no `.devin/` output | None yet | Unsupported | Unsupported | Shared `.claude/settings.json` |
+| Muse | No verified definition adapter in this repo | No dedicated output; follow-up | None yet | Unsupported | Unsupported | Unsupported |
+| Kiro | Native `AGENTS.md` | Uses shared `.claude/skills/` | None yet | Unsupported | Unsupported | Unsupported |
 
 "None yet" and "Unsupported" describe adapters in this slice, not a claim
 that a harness lacks the capability. Subagents and commands without adapters
@@ -55,8 +56,9 @@ whose shared Claude skills do not imply a verified subagent/command adapter.
 The ACP registry contains Claude, OpenCode, Muse and disabled Codex launch
 rows; it deliberately omits Cursor/Copilot. Launch enablement does not control
 rendering. `hook-dialects.mjs` already documents Devin's shared Claude settings;
-`sync-hooks.mjs` owns lifecycle hook configuration and remains separate from
-soul definition rendering.
+`sync-hooks.mjs` owns lifecycle hook configuration in each harness's user
+directory, and the builder owns soul-declared hooks in the soul's own project
+files (see [Hooks](#hooks-378-slice-3)).
 
 Format evidence: [Claude imports](https://code.claude.com/docs/en/memory),
 [Gemini imports](https://geminicli.com/docs/cli/gemini-md/) and
@@ -213,8 +215,8 @@ overrides. `soul build --check --json` includes these fields; `rendered` gains
 The `.claude/`, `.codex/`, `.gemini/` prefixes and `opencode.json` already cover
 these files; the fixed generated-path list and its order are unchanged.
 
-Hooks, environment variables, additional sandbox controls, allow/deny rules,
-and other native settings are later slices. Existing authored values for those
+Environment variables, additional sandbox controls, allow/deny rules,
+and other native settings are later slices; hooks are declared as files, below. Existing authored values for those
 keys are preserved during a merge.
 
 ## The soul's MCP entry (#378)
@@ -268,6 +270,111 @@ any other generated path is still a conflict.
 the servers the soul's own file declared.
 
 
+## Hooks (#378, slice 3)
+
+Declare a hook as an executable file in `hooks/<event>/<name>`, the same
+folder contract as the toolkit's [agent-hooks](../agent-hooks/README.md): one
+script per file, run in lexicographic order (`10-` before `50-`), reading the
+normalized envelope on stdin or the `AGENT_HOOK_*` environment mirror, and
+answering with its exit status (0 allow, 2 deny with stderr as the reason) or an
+`agent-hook: {"decision": …}` line. Fail mode belongs to the event, not the
+hook, exactly as there.
+
+```text
+hooks/
+  README.md                         optional; documents the folder
+  pre-command/50-no-force-push      chmod +x
+  session-start/10-greet.sh         chmod +x
+```
+
+The events are the harness events of `CANONICAL_EVENTS`: `session-start`,
+`session-end`, `prompt-submit`, `pre-tool-use`, `pre-command`,
+`pre-file-write`, `post-tool-use` and `agent-stop`. `spawn` (the daemon's
+own), `pre-commit` and `pre-push` (served by the git layer, not a harness) are
+refused, because a soul hook on them would never fire. Names follow the
+primitive grammar (lowercase letters, digits, single hyphens) with one optional
+extension such as `.sh`, at most 64 characters. A file without its executable
+bit, a nested directory, an unknown event or a malformed name fails the build:
+the runner skips non-executables, so accepting one would be a hook that
+silently never runs.
+
+Why files rather than a `hooks` block in `soul.json`: a hook is code, and the
+package already carries code as files (skills, agents, commands) with its
+executable bit preserved through revisions, forks and home copies. A block in
+`soul.json` would put command strings (and the temptation of inline tokens) in
+the manifest every revision hashes and every export ships. **Keep secrets out
+of hook scripts:** they are package content like any other file. A hook that
+needs a credential reads it at run time from the soul's credential store or the
+environment, never from bytes in the package.
+
+### What is rendered
+
+One native entry per declared event, in each harness whose
+[hook dialect](../hook-dialects.mjs) can express it. Every entry runs the
+vendor-neutral runner over the soul's own folder, so each harness hands the
+script the same envelope and reads the same verdict:
+
+```sh
+D="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; B=agent-bot; command -v "$B" >/dev/null 2>&1 || { echo "agent-bot is not on PATH; soul pre-command hooks did not run" >&2; exit 2; }; AGENT_BOT_HOOKS_DIR="$D/hooks" exec "$B" agent-hook --event pre-command --dialect claude # agent-bot soul hook
+```
+
+Only the Claude row reads `CLAUDE_PROJECT_DIR` (another harness started from a
+Claude shell inherits it); the others use the git top level, which in a soul's
+home is the package root. `agent-bot` comes from PATH like the MCP entry, so the
+bytes are the same on every host. Without it, a blocking event exits 2 (deny)
+and a non-blocking one exits 0, so a missing runner never fails open. Entry
+shapes, matchers, timeouts and Cursor's `failClosed` flag come from
+`nativeHookEntry` in `hook-dialects.mjs`, the same function `sync-hooks.mjs`
+uses for the lifecycle adapters.
+
+| Harness | File | Notes |
+| --- | --- | --- |
+| Claude Code, Devin CLI | `.claude/settings.json` `hooks` | Shares the file with rendered settings; Devin CLI reads it natively |
+| Codex | `.codex/hooks.json` | Hooks need `[features] hooks = true`, which the user-level policy `sync-hooks` writes |
+| Cursor | `.cursor/hooks.json` | `version: 1`; blocking events carry `failClosed: true` |
+| Copilot CLI | `.github/hooks/agent-bot-soul.json` | A dedicated file; other `.github/hooks/*.json` files stay the soul's |
+| Gemini CLI, OpenCode, Muse, Kiro | None | No dialect row yet (OpenCode hooks are JS plugins); every hook is listed under `unsupported.hooks` |
+
+Cursor's and Copilot's project hook files, like their `hook-dialects.mjs` rows,
+assume the harness tolerates the leading `_comment` marker key; Cursor's row is
+marked unverified there.
+
+### Who owns what
+
+- **Soul-declared hooks** are the builder's: entries whose command ends in
+  `# agent-bot soul hook` (`SOUL_HOOK_MARKER`), in the soul's project files above.
+- **Identity lifecycle hooks** stay with `sync-hooks.mjs`: entries marked
+  `agent-bot agent-hook` (`MANAGED_MARKER`) in each harness's *user* directory,
+  running the toolkit's own `agent-hooks/`. The soul builder never writes them.
+- Neither recognizer matches the other's entries (the soul command spells the
+  runner as `"$B" agent-hook --event …` so it never contains `MANAGED_MARKER` or
+  `agent-hook --dialect`), and `sync-hooks` explicitly skips soul entries.
+- **Every other entry** in a shared file is the soul's: kept verbatim, in place,
+  with event keys in their original order. Only the builder's own entries are
+  replaced, so a rebuild over its output is byte-identical. An authored hook file
+  is merged the way an authored MCP file is (named in `merged`); invalid JSON, a
+  non-object `hooks`, or a non-array event is refused and never overwritten.
+- When a declaration goes away, its entries go with it. A file that held only
+  builder entries is removed (with any empty parents, such as `.github/hooks/`);
+  a merged file keeps the soul's own entries.
+
+Both runners check confinement, so a soul with hooks reports a confined write
+from each of the two entries on the same event.
+
+### Report
+
+Each harness adds `hooks: {received, rendered}` and `unsupported.hooks`, with
+hook names spelled `<event>/<name>` and byte-sorted; `rendered` gains `hooks`
+and `files` includes the hook file when at least one hook rendered. A harness
+whose dialect cannot express an event lists that event's hooks under
+`unsupported.hooks` rather than dropping them. The plain summary prints the
+same: `gemini: instructions, mcp (unsupported: hooks pre-command/50-no-force-push)`.
+
+`.claude/`, `.codex/` and `.cursor/` already cover their hook files. Copilot's
+`.github/hooks/agent-bot-soul.json` is appended to the format-2 ignore list
+(exactly that file, not `.github/hooks/`). A soul carrying the list from before
+this slice still validates; see [soul-package](soul-package.md).
+
 ## Writing and checking
 
 `soul-build.mjs` inventories eligible paths without following symlinks and
@@ -286,14 +393,14 @@ package validation. `--check` never writes and exits 1 for drift/conflicts;
 clean checks exit 0. Without `--json` the command prints a short human summary
 (counts, each merge, and the primitives every harness received); `--json`
 prints `{drift, writes, removals, merged, harnesses}`, where `harnesses` maps
-each known harness to `{rendered, files, subagents, commands, settings, unsupported}`
+each known harness to `{rendered, files, subagents, commands, settings, hooks, unsupported}`
 as described above. New package homes build after copying, before dependency
 installation and git initialization; a failed build removes the half-created home.
 An existing home is rebuilt before each launch, so a soul made by an earlier
 release gains what the builder renders now; a conflict there is reported on the
-daemon's stderr and the launch proceeds. A format-2 soul carrying the ignore list
-an earlier release wrote (before `.mcp.json` and `opencode.json`, 0.10.25) still
-validates; only an unknown list is refused.
+daemon's stderr and the launch proceeds. A format-2 soul carrying an ignore list
+an earlier release wrote (before `.mcp.json` and `opencode.json`, 0.10.25, or
+before Copilot's soul hook file) still validates; only an unknown list is refused.
 
 Format 2 ignores only exact expected bytes. Editing a marked generated file
 changes the revision until rebuilt; the marker cannot hide arbitrary authored
@@ -309,9 +416,9 @@ close that gap.
 
 ## Follow-ups
 
-Hooks remain a later slice of #378, owned separately by `sync-hooks.mjs`.
-MCP adapters for Cursor, Copilot, Devin and Muse, and additional native
-subagent/command adapters, are not in this slice.
+MCP adapters for Cursor, Copilot, Devin and Muse, additional native
+subagent/command adapters, and hook adapters for Gemini CLI, OpenCode (plugins),
+Muse and Kiro are not in this slice.
 
 The rendered entry is named `agent-bot`; the daemon's injected entry and
 `reachPolicyRules()` name the same server `agent-reach`, so a

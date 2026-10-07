@@ -23,6 +23,7 @@ example.soul/
       scripts/              optional supporting files
       references/           optional supporting files
       assets/               optional supporting files
+  hooks/<event>/<name>      optional executable hooks, rendered by soul build (soul-builder.md)
   tools.json                optional tool configuration request
   mcp.json                  optional MCP server configuration request
   policy.json               optional self-change policy
@@ -126,7 +127,7 @@ revision (or submit the format change as an owner-reviewed revision):
   "generatedPaths": [
     ".claude/", ".codex/", ".cursor/", ".opencode/", ".devin/", ".gemini/",
     ".github/copilot-instructions.md", ".mcp.json", "CLAUDE.md", "GEMINI.md",
-    "opencode.json"
+    "opencode.json", ".github/hooks/agent-bot-soul.json"
   ],
   "generatedMarker": "<!-- agent-bot soul-builder: generated -->"
 }
@@ -139,9 +140,12 @@ such as soul-builder use `GENERATED_HARNESS_PATHS` and
 `GENERATED_HARNESS_MARKER` from the same module. The marker is informational;
 it never authorizes ignoring a file. `.mcp.json` and `opencode.json` joined the
 list with the soul builder's MCP entry (#378); `.codex/config.toml` and
-`.gemini/settings.json` were already covered by their directory prefixes. A
-package carrying an older list must refresh it to the current contract and
-recompute its revision — the list is exact, so an out-of-date one is refused.
+`.gemini/settings.json` were already covered by their directory prefixes.
+`.github/hooks/agent-bot-soul.json`, Copilot's soul hook file, was appended with
+soul-declared hooks (#378); `.claude/settings.json`, `.codex/hooks.json` and
+`.cursor/hooks.json` were already covered. The list is exact, but a list an
+earlier release wrote (`PRIOR_PACKAGE_IGNORE_LISTS`) is still accepted, so an
+older soul validates without a refresh; any other list is refused.
 
 Only root-relative `worktrees` and `.soul-state` entries are skipped, before
 stat, symlink, special-file, or descendant validation. Nested entries with

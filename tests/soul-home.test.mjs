@@ -69,7 +69,7 @@ test('an existing home is rebuilt before a launch; a conflict is reported and th
   mkdirSync(pkg, { recursive: true });
   writeFileSync(path.join(pkg, 'AGENTS.md'), 'be kind\n');
   // The ignore list a release before 0.10.25 wrote: such a soul must still build.
-  writeFileSync(path.join(pkg, 'soul.json'), JSON.stringify({ formatVersion: 2, name: 'test', description: 'test', displaySeed: 'test', preferredHarnesses: [], parentRevision: null, revision: `sha256:${'0'.repeat(64)}`, ignore: PRIOR_PACKAGE_IGNORE_LISTS[0] }));
+  writeFileSync(path.join(pkg, 'soul.json'), JSON.stringify({ formatVersion: 2, name: 'test', description: 'test', displaySeed: 'test', preferredHarnesses: [], parentRevision: null, revision: `sha256:${'0'.repeat(64)}`, ignore: PRIOR_PACKAGE_IGNORE_LISTS.at(-1) }));
   pinnedPackage(pkg);
   const warnings = [];
   const options = census(root);
