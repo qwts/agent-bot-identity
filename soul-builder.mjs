@@ -47,10 +47,10 @@ export const MCP_TARGETS = Object.freeze([
 // adapter in this slice; a later slice adds one rather than leaving a declared
 // primitive silently dropped.
 const HARNESS_FILES = Object.freeze({
-  claude: Object.freeze({ instructions: 'CLAUDE.md', skills: '.claude/skills/', mcp: '.mcp.json' }),
-  gemini: Object.freeze({ instructions: 'GEMINI.md', skills: '.gemini/skills/', mcp: '.gemini/settings.json' }),
+  claude: Object.freeze({ instructions: 'CLAUDE.md', skills: '.claude/skills/', mcp: '.mcp.json', subagents: '.claude/agents/', commands: '.claude/commands/' }),
+  gemini: Object.freeze({ instructions: 'GEMINI.md', skills: '.gemini/skills/', mcp: '.gemini/settings.json', commands: '.gemini/commands/' }),
   codex: Object.freeze({ instructions: null, skills: null, mcp: '.codex/config.toml' }),
-  opencode: Object.freeze({ instructions: null, skills: null, mcp: 'opencode.json' }),
+  opencode: Object.freeze({ instructions: null, skills: null, mcp: 'opencode.json', subagents: '.opencode/agent/', commands: '.opencode/command/' }),
   cursor: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: null }),
   copilot: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: null }),
   devin: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: null }),
@@ -166,16 +166,19 @@ function tomlMerge(target, authored) {
   return `# ${MARKER}\n${body ? `${body}\n\n` : ''}${table}\n`;
 }
 
-// What one build rendered, per harness, read from its output alone: the
-// primitives a harness received, the files it received them in, and the ones it
-// could not have (`unsupported`, empty in this slice — no declared primitive is
-// left unrendered; a later slice fills it in for subagents, commands and hooks).
+// Claude renders every declared agent/command, so its output inventories the
+// received names even for harnesses without adapters. No hidden Map metadata
+// or source/disk access is needed by the report.
 export function harnessReport(output, { comms = true } = {}) {
   const skills = [...output.keys()].some((path) => Object.values(HARNESS_FILES).some((files) => files.skills && path.startsWith(files.skills)));
+  const names = (prefix) => prefix ? [...output.keys()].filter((path) => path.startsWith(prefix))
+    .map((path) => path.slice(prefix.length).replace(/\.(md|toml)$/, '')).sort(compare) : [];
+  const received = { subagents: names(HARNESS_FILES.claude.subagents), commands: names(HARNESS_FILES.claude.commands) };
   const report = {};
   for (const [harness, files] of Object.entries(HARNESS_FILES)) {
     const paths = [...output.keys()].filter((path) => path === files.instructions
-      || (files.skills && path.startsWith(files.skills)) || path === files.mcp);
+      || (files.skills && path.startsWith(files.skills)) || path === files.mcp
+      || (files.subagents && path.startsWith(files.subagents)) || (files.commands && path.startsWith(files.commands)));
     // An empty build rendered nothing at all: there is no AGENTS.md to point a
     // harness at, so it gets no instructions either.
     const rendered = [];
@@ -184,9 +187,152 @@ export function harnessReport(output, { comms = true } = {}) {
       if (skills) rendered.push('skills');
       if (comms && files.mcp) rendered.push('mcp');
     }
-    report[harness] = { rendered, files: paths, unsupported: [] };
+    const primitives = {}, unsupported = {};
+    for (const kind of ['subagents', 'commands']) {
+      const delivered = names(files[kind]);
+      primitives[kind] = { received: [...received[kind]], rendered: delivered };
+      unsupported[kind] = files[kind] ? [] : [...received[kind]];
+      if (delivered.length) rendered.push(kind);
+    }
+    report[harness] = { rendered, files: paths, ...primitives, unsupported };
   }
   return report;
+}
+
+function primitiveName(name, path) {
+  // The same name grammar as package skills, including its length bound.
+  if (name.length > 64 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
+    throw new Error(`${path}: name must use lowercase letters, digits and single hyphens (1–64 characters)`);
+  }
+  return name;
+}
+
+// Only the declaration fields below are translated, not arbitrary YAML. Keep
+// the original header for Claude and fail closed on ambiguous translated fields.
+// Like skillField in soul-package, scalars support plain/quoted strings and
+// literal/folded blocks. This module cannot import the package reader (a cycle).
+function declaration(path, bytes, required) {
+  let content;
+  try { content = text(bytes); } catch { throw new Error(`${path} must be UTF-8 text`); }
+  if (content.includes('\0')) throw new Error(`${path} must be text without NUL bytes`);
+  const match = content.match(/^---\n([\s\S]*?)^---(?:\n|$)/m);
+  const front = match?.index === 0 ? match[0] : '';
+  if (!front && (required || content.startsWith('---\n'))) throw new Error(`${path} needs YAML front matter`);
+  const fields = new Map();
+  const header = front ? match[1] : '';
+  const fieldPattern = /^([\w-]+):[ \t]*([^\n]*)(\n(?:(?:[ \t]+[^\n]*|)\n)*)?/gm;
+  for (const field of header.matchAll(fieldPattern)) {
+    if (fields.has(field[1])) throw new Error(`${path}: duplicate ${field[1]} field`);
+    fields.set(field[1], { raw: field[2].trim(), tail: field[3]?.slice(1) ?? '' });
+  }
+  if (header.replace(fieldPattern, '').split('\n').some((line) => line.trim() && !line.trim().startsWith('#'))) {
+    throw new Error(`${path}: unsupported YAML front matter`);
+  }
+  return { front, body: content.slice(front.length), fields };
+}
+
+function scalar(raw, label) {
+  let value, quoted;
+  if ((quoted = raw.match(/^("(?:[^"\\]|\\.)*")(?:[ \t]+#.*)?$/))) {
+    try { value = JSON.parse(quoted[1]); } catch { throw new Error(`${label}: invalid quoted string`); }
+  } else if ((quoted = raw.match(/^'((?:[^']|'')*)'(?:[ \t]+#.*)?$/))) {
+    value = quoted[1].replaceAll("''", "'");
+  } else {
+    value = raw.replace(/\s+#.*$/, '').trim();
+    if (/^["'\[\]{}&*!>|#]/.test(value) || /^(?:null|true|false|~|[\d.+-]+)$/i.test(value) || /:\s/.test(value)) {
+      throw new Error(`${label} must be a string (quote YAML punctuation)`);
+    }
+  }
+  if (!value || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw new Error(`${label} must be a nonempty text string`);
+  return value;
+}
+
+function declarationField(fields, key, path, required = false) {
+  const field = fields.get(key), label = `${path} ${key}`;
+  if (!field) {
+    if (required) throw new Error(`${label} is required`);
+    return undefined;
+  }
+  const block = field.raw.match(/^([>|])([-+]?)(?:\s+#.*)?$/);
+  if (!block) {
+    if (field.tail.trim()) throw new Error(`${label}: use a literal or folded block for multiline strings`);
+    return scalar(field.raw, label);
+  }
+  const lines = field.tail.replace(/\n$/, '').split('\n');
+  const indent = lines.find((line) => line.trim())?.match(/^ */)[0].length ?? 0;
+  if (!indent || lines.some((line) => line.trim() && !line.startsWith(' '.repeat(indent)))) {
+    throw new Error(`${label}: invalid block indentation`);
+  }
+  const body = lines.map((line) => line.slice(indent));
+  let value = body.reduce((out, line, i) => {
+    if (!i) return line;
+    if (block[1] === '|' || !line || /^[ \t]/.test(line) || /^[ \t]/.test(body[i - 1])) return `${out}\n${line}`;
+    return `${out}${body[i - 1] ? ' ' : ''}${line}`;
+  }, '');
+  value = block[2] === '+' ? `${value}\n` : value.replace(/\n*$/, '') + (block[2] === '-' ? '' : '\n');
+  if (!value.trim()) throw new Error(`${label} must be a nonempty string`);
+  return value;
+}
+
+function agentTools(fields, path) {
+  const field = fields.get('tools');
+  if (!field) return undefined;
+  const label = `${path} tools`;
+  let values;
+  if (!field.raw || field.raw.startsWith('#')) {
+    values = field.tail.split('\n').filter((line) => line.trim() && !line.trim().startsWith('#')).map((line) => {
+      const item = line.match(/^ +-[ \t]+(.+)$/);
+      if (!item) throw new Error(`${label} must be a list of tool names`);
+      return scalar(item[1].trim(), label);
+    });
+    if (!values.length) throw new Error(`${label} must be a list of tool names`);
+  } else if (field.raw.startsWith('[')) {
+    const list = field.raw.match(/^\[(.*)\](?:\s+#.*)?$/);
+    if (!list || field.tail.trim()) throw new Error(`${label} must be a list of tool names`);
+    values = list[1].trim() ? list[1].split(',').map((item) => scalar(item.trim(), label)) : [];
+  } else {
+    values = declarationField(fields, 'tools', path).split(',').map((item) => item.trim());
+  }
+  if (values.some((name) => !/^[A-Za-z][A-Za-z0-9_-]*$/.test(name))) throw new Error(`${label} must contain tool names, not permission expressions`);
+  // Claude's tools field is an allowlist; disable unlisted OpenCode tools too.
+  // MultiEdit uses OpenCode's edit tool; other native names use lowercase.
+  return [...new Set(values.map((name) => name === 'MultiEdit' ? 'edit' : name.toLowerCase()))].sort(compare);
+}
+
+// Omit an empty command header: the disk layer's existing marker recognizer
+// expects at least one line inside front matter. The prompt is still verbatim.
+const markedDeclaration = ({ front, body }) => `${front && !/^---\n---(?:\n|$)$/.test(front) ? front.replace(/\n?$/, '\n') : ''}${MARKER}\n${body}`;
+const mappedDeclaration = (header, body) => `---\n${header.join('\n')}\n---\n${MARKER}\n${body}`;
+// JSON strings are also YAML strings and TOML basic strings; DEL needs an
+// explicit escape for TOML. Escaping newlines avoids triple-quote collisions.
+const quotedString = (value) => JSON.stringify(value).replace(/\x7f/g, '\\u007f');
+
+function renderPrimitives(source, output) {
+  for (const [path, bytes] of source) {
+    if (!/^(agents|commands)\/.*\.md$/.test(path)) continue;
+    const [directory, ...parts] = path.split('/');
+    const name = primitiveName(parts.join('/').slice(0, -3), path);
+    const agent = directory === 'agents';
+    const parsed = declaration(path, bytes, agent);
+    const description = declarationField(parsed.fields, 'description', path, agent);
+    const header = description === undefined ? [] : [`description: ${quotedString(description)}`];
+    if (agent) {
+      const declaredName = primitiveName(declarationField(parsed.fields, 'name', path, true), path);
+      if (declaredName !== name) throw new Error(`${path}: agent name must match filename ${name}`);
+      header.push('mode: subagent');
+      const model = declarationField(parsed.fields, 'model', path);
+      if (model !== undefined) header.push(`model: ${quotedString(model)}`);
+      const tools = agentTools(parsed.fields, path);
+      if (tools) header.push('tools:', '  "*": false', ...tools.map((tool) => `  ${quotedString(tool)}: true`));
+      output.set(`.opencode/agent/${name}.md`, Buffer.from(mappedDeclaration(header, parsed.body)));
+    } else {
+      output.set(`.opencode/command/${name}.md`, Buffer.from(header.length ? mappedDeclaration(header, parsed.body) : `${MARKER}\n${parsed.body}`));
+      const toml = [`# ${MARKER}`, ...(description === undefined ? [] : [`description = ${quotedString(description)}`]),
+        `prompt = ${quotedString(parsed.body.replaceAll('$ARGUMENTS', '{{args}}'))}`];
+      output.set(`.gemini/commands/${name}.toml`, Buffer.from(`${toml.join('\n')}\n`));
+    }
+    output.set(`.claude/${directory}/${name}.md`, Buffer.from(markedDeclaration(parsed)));
+  }
 }
 
 export function buildHarnessFiles(packageEntries, { authored = new Map() } = {}) {
@@ -223,6 +369,7 @@ export function buildHarnessFiles(packageEntries, { authored = new Map() } = {})
   for (const [path, bytes] of [...output]) {
     if (path.startsWith('.claude/skills/')) output.set(path.replace(/^\.claude\//, '.gemini/'), Buffer.from(bytes));
   }
+  renderPrimitives(source, output);
   // The soul's MCP entry (#378), unless its soul.json turned comms off. A soul
   // that already ships one of these files keeps its own servers: the disk
   // layer hands those bytes over as an explicit input, so rendering stays pure
