@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.44
+
+- `agent-bot` puts a host's `AGENT_BOT_TOOL_PATH` first on its own PATH, so the daemon's and the CLI's git calls use GeniusBar's bundled git on a Mac without the Command Line Tools, as the souls' harnesses already did (GeniusBar#102).
+
 ## 0.10.43
 
 - soul.json `skills: { "disabled": ["name", …] }` switches a soul's skills off without deleting them (GeniusBar#64): `soul build` renders nothing for a disabled skill on any harness while its `skills/<name>/` directory stays in the package, `soul profile` reports `enabled` on every skill row and the declaration as `profile.skillsDisabled`, and a disabled name the package has no skill for is a profile error, not a validation failure. SOP skills are unaffected.
