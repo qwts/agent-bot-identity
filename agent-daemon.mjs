@@ -86,7 +86,7 @@ import { attachWakeEndpoint } from './agent-wake.mjs';
 import { soulMode } from './soul-mode.mjs';
 import { createIdentityAppJobs, identityAppOperation, identityAppFailure, listIdentityApps } from './identity-apps.mjs';
 import { readSoulProfile } from './soul-profile.mjs';
-import { readSandboxStatus, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount } from './sandbox.mjs';
+import { launchSandbox, readSandboxStatus, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount } from './sandbox.mjs';
 import { soulModel, setSoulModel, recordSoulModels } from './soul-model.mjs';
 import { ownerGate as soulSettingOwnerGate, readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
@@ -1874,6 +1874,9 @@ export async function runDaemon({
     discard: (agentId, rollback) => discardFailedLaunch(agentId, rollback, { env, home, config, now }),
     // Refused before a spawn mints: the registry row, enabled, and its command on the soul's PATH.
     harnessProblem: (harness) => harnessLaunchProblem(harness, { env: harnessEnv }),
+    // What the soul gets (#376): its override over the global switch, and
+    // for a sandboxed one the account's readiness and the owner's steps.
+    sandboxFor: ({ agentId }) => launchSandbox(agentId, { env, home }),
     joinSoul: async (soul) => {
       const address = await joinLaunchedSoul(soul, { env });
       // The census shows the launch name; every command shows it too (#429).

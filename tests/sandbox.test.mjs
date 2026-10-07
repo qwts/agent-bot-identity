@@ -9,8 +9,8 @@ import { upsertSoul, showSoul } from '../agent-population.mjs';
 import { createDaemonServer, daemonClient } from '../agent-daemon.mjs';
 import { auditFile } from '../agent-principals.mjs';
 import {
-  DEFAULT_SANDBOX_ACCOUNT, probeSandboxAccount, readSandboxStatus, resolveSandbox, sandboxAccountStatus, sandboxCommand,
-  sandboxPlan, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount,
+  DEFAULT_SANDBOX_ACCOUNT, launchSandbox, probeSandboxAccount, readSandboxStatus, resolveSandbox, sandboxAccountStatus, sandboxCommand,
+  sandboxLaunchProblem, sandboxPlan, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount,
 } from '../sandbox.mjs';
 
 const ID = 'agent_12345678-1234-4234-8234-123456789abc';
@@ -219,4 +219,52 @@ test('daemon routes read status, set the switch and account through the setting 
   const audit = readFileSync(auditFile(f.options), 'utf8');
   assert.match(audit, /"event":"sandbox"/);
   assert.ok(!audit.includes(SENTINEL));
+});
+
+test('launchSandbox resolves a soul for the daemon and probes only a sandboxed one (#376)', (t) => {
+  const f = fixture(t);
+  const m = machine({ exists: false });
+  const options = { ...f.options, platform: 'darwin', exec: m.exec, fileExists: m.fileExists, owner: 'owner' };
+  assert.deepEqual(launchSandbox(ID, options), { resolution: 'unrestricted', override: 'inherit', source: 'global', account: 'owner', self: 'owner' });
+  assert.deepEqual(m.calls, [], 'an unrestricted launch runs no probe');
+  // A soul this launch will make has no census row: the global switch decides.
+  setSandboxEnabled(true, f.options);
+  const fresh = launchSandbox(null, options);
+  assert.equal(fresh.resolution, 'sandboxed');
+  assert.equal(fresh.source, 'global');
+  assert.equal(fresh.account, DEFAULT_SANDBOX_ACCOUNT);
+  assert.equal(fresh.status, 'missing');
+  assert.equal(fresh.steps[0].id, 'create-account');
+  assert.equal(launchSandbox(OTHER, options).resolution, 'sandboxed', 'a soul missing from the census follows the switch');
+  // An override wins over the switch either way.
+  setSandboxOverride(ID, 'unrestricted', f.options);
+  assert.equal(launchSandbox(ID, options).resolution, 'unrestricted');
+  setSandboxEnabled(false, f.options);
+  setSandboxOverride(ID, 'sandboxed', f.options);
+  const forced = launchSandbox(ID, options);
+  assert.deepEqual({ resolution: forced.resolution, source: forced.source, account: forced.account }, { resolution: 'sandboxed', source: 'override', account: DEFAULT_SANDBOX_ACCOUNT });
+  assert.equal(sandboxLaunchProblem(forced).code, 'sandbox-not-ready');
+  assert.doesNotMatch(JSON.stringify(forced), new RegExp(SENTINEL));
+});
+
+test('launchSandbox fails closed on an unreadable census rather than launching unrestricted (#376)', (t) => {
+  const f = fixture(t, { config: { features: { 'persona-accounts': false } } });
+  writeFileSync(f.file, '{not json');
+  assert.throws(() => launchSandbox(ID, { ...f.options, platform: 'darwin', ...machine() }), /population store/);
+});
+
+test('sandboxLaunchProblem lets a ready account run in its own daemon and fits the broker detail (#376)', () => {
+  const long = 'a'.repeat(31);
+  const plan = (checks) => sandboxPlan({ account: long, owner: 'owner', checks });
+  const base = { resolution: 'sandboxed', account: long, self: long };
+  const ready = { supported: true, exists: true, standard: true, home: { path: `/Users/${long}`, exists: true }, devTools: true, paired: true, fleet: true, harnessSignIn: 'unknown' };
+  assert.equal(sandboxLaunchProblem(null), null);
+  assert.equal(sandboxLaunchProblem({ resolution: 'unrestricted', account: 'owner', self: 'owner' }), null);
+  assert.equal(sandboxLaunchProblem({ ...base, status: 'ready', steps: plan(ready) }), null);
+  assert.equal(sandboxLaunchProblem({ ...base, self: 'owner', status: 'ready', steps: plan(ready) }).code, 'sandbox-other-account');
+  const missing = { supported: true, exists: false, standard: null, home: null, devTools: false, paired: false, fleet: false, harnessSignIn: 'unknown' };
+  const error = sandboxLaunchProblem({ ...base, status: 'missing', steps: plan(missing) });
+  assert.equal(error.code, 'sandbox-not-ready');
+  assert.ok(`sandbox-not-ready: ${error.message}`.length <= 512, 'the longest account name still fits the broker detail');
+  assert.match(error.message, /Then: standard-account, dev-tools, broker-group, pair, harness-sign-in\./);
 });

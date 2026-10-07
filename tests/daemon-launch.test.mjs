@@ -8,6 +8,7 @@ import { HARNESS_SESSION_EVENT } from '../executor-contract.mjs';
 import { mintAgentIdentity, readAgentIdentity } from '../agent-identity.mjs';
 import { displayName, upsertSoul } from '../agent-population.mjs';
 import { soulPromptIdentity } from '../agent-daemon.mjs';
+import { sandboxPlan } from '../sandbox.mjs';
 
 const agentId = 'agent_11111111-1111-4111-8111-111111111111';
 const event = { event: 'launch', requestId: 'r1', principal: 'p1', account: 'worker', soul: agentId, harness: 'claude', name: 'Helper' };
@@ -687,4 +688,95 @@ test('launch progress is reported stage by stage, best effort, and kept in the j
   const h = fixture(t);
   await h.handler(event, h.ports);
   assert.equal(h.reports[0].status, 'launched');
+});
+
+// Sandbox resolution at launch (#376). `sandboxFor` stands in for
+// sandbox.mjs's launchSandbox; the steps are the real plan for the checks.
+const READY = { supported: true, exists: true, standard: true, home: { path: '/Users/geniusbar-agent', exists: true }, devTools: true, paired: true, fleet: true, harnessSignIn: 'unknown' };
+const MISSING = { supported: true, exists: false, standard: null, home: null, devTools: true, paired: false, fleet: false, harnessSignIn: 'unknown' };
+const sandboxed = ({ status, checks, self = 'geniusbar-agent' }) => ({ resolution: 'sandboxed', override: 'sandboxed', source: 'override', account: 'geniusbar-agent', self,
+  status, steps: sandboxPlan({ account: 'geniusbar-agent', owner: 'owner', checks }) });
+const journal = (f, requestId = 'r1') => JSON.parse(readFileSync(f.options.file)).find((row) => row.requestId === requestId);
+
+test('without a sandbox resolver a launch is unchanged and its journal has no sandbox (#376)', async (t) => {
+  const f = fixture(t);
+  await f.handler(event, f.ports);
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId });
+  assert.equal('sandbox' in journal(f), false);
+});
+
+test('an unrestricted soul launches as before and the journal says it runs as the owner (#376)', async (t) => {
+  const asked = [];
+  const f = fixture(t, { sandboxFor: (query) => { asked.push(query); return { resolution: 'unrestricted', override: 'inherit', source: 'global', account: 'owner', self: 'owner' }; } });
+  await f.handler(event, f.ports);
+  assert.deepEqual(asked, [{ agentId }]);
+  assert.equal(f.calls.length, 1);
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId, sandbox: { resolution: 'unrestricted', account: 'owner' } });
+  assert.deepEqual(journal(f).sandbox, { resolution: 'unrestricted', account: 'owner' });
+});
+
+test('a sandboxed soul with a ready account launches from the daemon running in that account (#376)', async (t) => {
+  const stages = [];
+  const f = fixture(t, { sandboxFor: () => sandboxed({ status: 'ready', checks: READY }) });
+  await f.handler(event, { ...f.ports, progress: async ({ stage }) => { stages.push(stage); } });
+  assert.deepEqual(stages, ['checking', 'account', 'harness']);
+  assert.equal(f.reports[0].status, 'launched');
+  assert.deepEqual(journal(f).sandbox, { resolution: 'sandboxed', account: 'geniusbar-agent' });
+});
+
+test('a sandbox account whose only step left is the join takes the launch that joins it (#376)', async (t) => {
+  const f = fixture(t, { sandboxFor: () => sandboxed({ status: 'creating', checks: { ...READY, fleet: false } }) });
+  await f.handler(event, f.ports);
+  assert.equal(f.reports[0].status, 'launched');
+});
+
+test('a sandboxed soul the owner\'s daemon cannot run as another account fails at account, saying so (#376)', async (t) => {
+  const stages = [];
+  const f = fixture(t, { sandboxFor: () => sandboxed({ status: 'ready', checks: READY, self: 'owner' }) });
+  await f.handler(event, { ...f.ports, progress: async ({ stage }) => { stages.push(stage); } });
+  assert.deepEqual(stages, ['checking', 'account']);
+  assert.equal(f.calls.length, 0, 'no harness starts as the owner instead');
+  assert.equal(f.reports[0].status, 'failed');
+  assert.equal(f.reports[0].code, 'sandbox-other-account');
+  assert.match(f.reports[0].detail, /^sandbox-other-account: this soul runs sandboxed as geniusbar-agent, and this daemon runs as owner/);
+  assert.deepEqual(f.reports[0].sandbox, { resolution: 'sandboxed', account: 'geniusbar-agent' });
+  assert.equal(journal(f).stage, 'account');
+});
+
+test('a sandboxed launch whose account is missing fails at account with the owner\'s steps, minting nothing (#376)', async (t) => {
+  const stages = [];
+  let spawned = 0;
+  const f = fixture(t, { sandboxFor: ({ agentId: id }) => { assert.equal(id, null, 'a new soul has no override yet'); return sandboxed({ status: 'missing', checks: MISSING }); },
+    spawnPackage: () => { spawned += 1; return { id: spawnedId }; }, discard: () => { throw new Error('nothing to discard'); } });
+  await f.handler(packageEvent, { ...f.ports, progress: async ({ stage }) => { stages.push(stage); } });
+  assert.deepEqual(stages, ['checking', 'account']);
+  assert.equal(spawned, 0);
+  assert.equal(f.calls.length, 0);
+  const [report] = f.reports;
+  assert.equal(report.status, 'failed');
+  assert.equal(report.agentId, null);
+  assert.equal(report.code, 'sandbox-not-ready');
+  assert.equal(report.detail, 'sandbox-not-ready: this soul runs sandboxed as geniusbar-agent, which is missing. '
+    + 'Next: Create the standard account geniusbar-agent (owner-admin): sudo sysadminctl -addUser geniusbar-agent -fullName "GeniusBar Agent" -password -. '
+    + 'Then: standard-account, broker-group, pair, harness-sign-in. `agent-bot sandbox plan` prints every step\'s commands.');
+  assert.ok(report.detail.length <= 512, 'fits the broker\'s launch detail');
+  const row = journal(f);
+  assert.equal(row.stage, 'account');
+  assert.equal(row.code, 'sandbox-not-ready');
+  assert.deepEqual(row.sandbox, { resolution: 'sandboxed', account: 'geniusbar-agent' });
+});
+
+test('a sandboxed launch with an account still being set up names the step that is not done (#376)', async (t) => {
+  const f = fixture(t, { sandboxFor: () => sandboxed({ status: 'creating', checks: { ...READY, standard: false, paired: false, fleet: false } }) });
+  await f.handler(event, f.ports);
+  assert.equal(f.reports[0].code, 'sandbox-not-ready');
+  assert.match(f.reports[0].detail, /which is creating\. Next: geniusbar-agent has no admin rights \(owner-admin\): sudo dseditgroup -o edit -d geniusbar-agent -t user admin\. Then: broker-group, pair, harness-sign-in\./);
+});
+
+test('a sandboxed launch off macOS fails at account rather than running unsandboxed (#376)', async (t) => {
+  const f = fixture(t, { sandboxFor: () => ({ ...sandboxed({ status: 'unsupported', checks: { supported: false } }), steps: [] }) });
+  await f.handler(event, f.ports);
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.reports[0].code, 'sandbox-not-ready');
+  assert.match(f.reports[0].detail, /persona accounts need macOS/);
 });

@@ -69,9 +69,50 @@ the owner's presence, and a caller carrying a soul's markers is refused.
 `sandbox override <soul> sandboxed|unrestricted|inherit` records a per-soul
 override in the census; `inherit` removes it. `resolve <soul>` says what the
 soul gets: the override when one is set, else the global switch, and the
-account it runs as. The daemon's launch path is expected to consult this
-resolution when it starts a soul; recording and reporting it is this
-command's job.
+account it runs as. The daemon's launch path consults the same resolution
+when it starts a soul (see [At launch](#at-launch)).
+
+## At launch
+
+After its `checking` stage, before a package launch mints a soul, the
+daemon's launch handler resolves what the soul gets: an existing soul's
+override, else the global switch, which is all a soul the launch makes can
+have. The config and census are read at each launch, so a switch flipped in
+GeniusBar applies to the next one.
+
+- `unrestricted`: the launch is unchanged and runs as the daemon's account.
+- `sandboxed`, and the account is `missing` or a step agent-bot can see is
+  not done: the launch fails at the `account` stage, so GeniusBar's progress
+  list shows where it stopped. Its detail (code `sandbox-not-ready`) is the
+  next owner step with its command and the ids of the steps after it:
+
+  ```text
+  sandbox-not-ready: this soul runs sandboxed as geniusbar-agent, which is
+  missing. Next: Create the standard account geniusbar-agent (owner-admin):
+  sudo sysadminctl -addUser geniusbar-agent -fullName "GeniusBar Agent"
+  -password -. Then: standard-account, broker-group, pair, harness-sign-in.
+  `agent-bot sandbox plan` prints every step's commands.
+  ```
+
+  It is one line on the wire and fits the broker's
+  512-character launch detail. A step agent-bot cannot see (`broker-group`,
+  `harness-sign-in`) never blocks, and neither does `join`: the launch is
+  what completes it. Off macOS a sandboxed launch fails the same way rather
+  than running unsandboxed.
+- `sandboxed`, and the account is ready: the launch runs only on a daemon
+  running in that account. The executor starts a harness as the daemon's
+  own macOS user: its contract carries a harness, a working directory and
+  an environment, but no account or uid, and the owner's daemon has no
+  privilege to switch users (nor should it: no silent privileged helper).
+  So the owner's daemon fails such a launch at `account` with code
+  `sandbox-other-account`, naming the account; a daemon running as
+  `geniusbar-agent`, and paired with the broker from it, launches it.
+
+The launch journal row keeps `sandbox: { resolution, account }`, and the
+launch result reported to the broker carries the same object beside the
+unchanged `requestId`, `status`, `agentId` and `detail`; a broker that does
+not know the field ignores it. Showing "Runs as …" from `launchStatus` needs
+agent-comms to keep and return that field.
 
 Which souls get an account, and what it is called, is the SOP pack's persona
 mapping (ADR-0274 decision 3). The setting here is the user's choice only when

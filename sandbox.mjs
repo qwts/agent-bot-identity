@@ -200,6 +200,60 @@ function resolveSoul(target, file) {
   }
 }
 
+// --- at launch ----------------------------------------------------------------
+// The daemon's launch handler asks this what a soul gets before it starts it
+// (#376). A soul not in the census yet (a package or team launch makes a new
+// one) has no override, so it follows the global switch. Only a sandboxed
+// launch probes the account: an unrestricted one runs nothing.
+
+export function launchSandbox(agentId, { env = process.env, home = homedir(), platform = process.platform, exec = defaultExec, fileExists = existsSync, owner = userInfo().username } = {}) {
+  // Read now, not at daemon start: the switch and overrides change under it.
+  const settings = sandboxSettings(loadConfig({ env, home }));
+  let soul = { id: agentId, sandbox: 'inherit' };
+  if (agentId) {
+    try { soul = showSoul(validateAgentId(agentId), { file: populationFile({ env, home }) }); }
+    catch (error) {
+      // Only an absent row means "no override"; an unreadable census fails
+      // the launch rather than starting a sandboxed soul unrestricted.
+      if (!/^no population record/.test(error.message)) throw error;
+    }
+  }
+  const override = soul.sandbox ?? 'inherit';
+  const sandboxed = override === 'sandboxed' ? true : override === 'unrestricted' ? false : settings.enabled;
+  const resolved = { resolution: sandboxed ? 'sandboxed' : 'unrestricted', override, source: override === 'inherit' ? 'global' : 'override',
+    account: sandboxed ? settings.account : owner, self: owner };
+  if (!sandboxed) return resolved;
+  const checks = probeSandboxAccount(settings.account, { platform, exec, fileExists });
+  return { ...resolved, status: sandboxAccountStatus(checks), steps: sandboxPlan({ account: settings.account, owner, checks }) };
+}
+
+// Why a launch cannot start as `launchSandbox` resolved it, or null when it
+// can. The `join` step is the one this launch performs, so a sandbox left
+// only that step to do takes the launch; a step agent-bot cannot see (`done`
+// null) never blocks. Every error is secret-free and fits the broker's
+// 512-character launch detail: the next step with its command, then the ids
+// of the rest, which `agent-bot sandbox plan` prints in full.
+export function sandboxLaunchProblem(sandbox) {
+  if (!sandbox || sandbox.resolution !== 'sandboxed') return null;
+  const { account, status, steps = [] } = sandbox;
+  if (status === 'unsupported') {
+    return fail('sandbox-not-ready', `this soul runs sandboxed as ${account}, but persona accounts need macOS; set it unrestricted with \`agent-bot sandbox override <soul> unrestricted\` or turn the sandbox off`);
+  }
+  const owed = steps.filter((step) => step.id !== 'join' && step.done !== true);
+  if (status === 'missing' || owed.some((step) => step.done === false)) {
+    const [next, ...rest] = owed;
+    const then = rest.length ? ` Then: ${rest.map((step) => step.id).join(', ')}.` : '';
+    return fail('sandbox-not-ready', `this soul runs sandboxed as ${account}, which is ${status}. Next: ${next.title} (${next.run}): ${next.commands[0]}.${then} \`agent-bot sandbox plan\` prints every step's commands.`);
+  }
+  if (account !== sandbox.self) {
+    // The executor spawns a harness as the daemon's own macOS user; it has
+    // no account or uid to start one as, and the owner's daemon holds no
+    // privilege to switch. A daemon running in the account itself can.
+    return fail('sandbox-other-account', `this soul runs sandboxed as ${account}, and this daemon runs as ${sandbox.self}: agent-bot starts a harness only as its own daemon's account, so start it from a daemon running in ${account}`);
+  }
+  return null;
+}
+
 // --- reads ------------------------------------------------------------------
 
 export function readSandboxStatus({ env = process.env, home = homedir(), platform = process.platform, exec = defaultExec, fileExists = existsSync, owner = userInfo().username, config } = {}) {
