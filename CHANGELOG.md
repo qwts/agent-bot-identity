@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.38
+
+- Per-skill manifests (#312, first slice): every skill in a soul package has a manifest of its files with a SHA-256 digest over each file's exact bytes, and `soul revision edit` and `propose` report the skills a revision added, removed or changed (added, modified and removed files per skill, where a one-byte edit, a line-ending change or an execute-bit flip counts). `agent-bot soul revision skills ID [REVISION [SINCE]]` prints a stored revision's manifests and what changed since its parent or any earlier revision. Manifests are a pure function of a stored revision, so prior captures stay addressable by revision; instruction-dependency capture and recheck are later slices.
+
 ## 0.10.37
 
 - `agent-bot soul build` reaches more harnesses with a soul's MCP server and subagents (#378). Cursor gets `.cursor/mcp.json` and Kiro `.kiro/settings/mcp.json`, merged into any servers the soul already ships; Copilot CLI and Devin CLI are reported on the shared `.mcp.json` and `.claude/commands/` they read natively. Declared subagents also render as `.cursor/agents/<name>.md`, `.github/agents/<name>.agent.md`, `.kiro/agents/<name>.md` and `.devin/agents/<name>.md`, each in its documented front matter.
