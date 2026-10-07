@@ -8,6 +8,7 @@ import { validateModelId } from './soul-model.mjs';
 import { soulCommsSetting } from './soul-package.mjs';
 import { assertSoulUnpaused, displayName, normalizeLaunchBrief } from './agent-population.mjs';
 import { createTurnRegistry } from './wake-plane.mjs';
+import { sandboxLaunchProblem } from './sandbox.mjs';
 
 // A launch's comms setting: the soul's own soul.json (a spawned instance
 // carries its template's), else the launched package's, else on.
@@ -52,8 +53,21 @@ const withoutParent = ({ parent: _ignored, ...fields }) => fields;
 // marker naming no active soul here always is.
 const LAUNCHABLE = new Set(['package', 'installed']);
 
+// Failure codes a launch keeps in the journal and prefixes to its detail, so
+// a client that reads only the broker's detail still sees which one it was.
+const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other-account']);
+
+// `sandboxFor` (#376) says what the soul gets, `sandboxed` or
+// `unrestricted`, and the account it runs as, from `launchSandbox` in
+// sandbox.mjs. Without it a launch is what it always was. A sandboxed soul
+// whose account is not ready fails at the `account` stage with the owner's
+// next step, before a package spawn mints anything; one this daemon's own
+// account cannot run fails there too (see `sandboxLaunchProblem`). The
+// journal row keeps `sandbox: { resolution, account }`, and the report
+// carries it beside the unchanged `launched`/`failed` fields.
+
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
-  isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
+  isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, sandboxFor = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -72,8 +86,8 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
   }
   if (rows.length) save();
   const reportRow = async (row, report) => {
-    const { requestId, status, agentId, detail, code } = row;
-    await report({ requestId, status, agentId, ...(detail ? { detail } : {}), ...(code ? { code } : {}) });
+    const { requestId, status, agentId, detail, code, sandbox } = row;
+    await report({ requestId, status, agentId, ...(detail ? { detail } : {}), ...(code ? { code } : {}), ...(sandbox ? { sandbox } : {}) });
     row.reported = true;
     save();
   };
@@ -146,6 +160,14 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       // Every check that can fail without starting runs before a package spawn mints.
       if (!executorFor) throw new Error('daemon ACP executor is disabled');
       if (parent !== null && soul) throw new Error('a team member is a new soul, not an existing one');
+      // The soul's sandbox resolution: an existing soul's override, else
+      // the global switch, which is all a soul this launch makes can have.
+      const sandbox = sandboxFor ? await sandboxFor({ agentId: soul ?? null }) : null;
+      if (sandbox) {
+        row.sandbox = { resolution: sandbox.resolution, account: sandbox.account };
+        const refused = sandboxLaunchProblem(sandbox);
+        if (refused) { await step('account'); throw refused; }
+      }
       const request = { ...withoutParent(event), harness, ...(event.role === undefined ? {} : { role: event.role.trim() }), ...(parent ? { parent } : {}) };
       const identity = soul ? await identities(soul) : copied ? await forkCopy(request) : await spawnPackage(request);
       if (!soul) spawned = identity?.id ?? null;
@@ -203,8 +225,9 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
     } catch (error) {
       // The broker's launch-result wire carries detail, so retain the code
       // there too; local callers and the journal also get a structured code.
-      Object.assign(row, { status: 'failed', agentId: null, detail: error.code === 'soul-paused' ? `soul-paused: ${error.message}` : error.message,
-        ...(error.code === 'soul-paused' ? { code: error.code } : {}) });
+      const coded = LAUNCH_CODES.has(error.code);
+      Object.assign(row, { status: 'failed', agentId: null, detail: coded ? `${error.code}: ${error.message}` : error.message,
+        ...(coded ? { code: error.code } : {}) });
       // The launch failure is what the principal sees; a rollback that fails
       // part way is named beside it, so a companion that stays has a reason.
       if (spawned) { try { await discard(spawned, rollback); } catch (rollbackError) { row.detail = `${row.detail} (rollback failed: ${rollbackError.message})`; } }
