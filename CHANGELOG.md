@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.37
+
+- `agent-bot soul build` reaches more harnesses with a soul's MCP server and subagents (#378). Cursor gets `.cursor/mcp.json` and Kiro `.kiro/settings/mcp.json`, merged into any servers the soul already ships; Copilot CLI and Devin CLI are reported on the shared `.mcp.json` and `.claude/commands/` they read natively. Declared subagents also render as `.cursor/agents/<name>.md`, `.github/agents/<name>.agent.md`, `.kiro/agents/<name>.md` and `.devin/agents/<name>.md`, each in its documented front matter.
+  - Tool allowlists are translated per harness; a subagent with a tool Kiro or Devin has no name for is listed under that harness's `unsupported.subagents` instead of being widened.
+  - Cursor and Kiro commands, Gemini CLI subagents and Muse stay unsupported and are reported, with the reason and doc links in `docs/soul-builder.md`.
+  - `.github/agents/`, `.kiro/agents/` and `.kiro/settings/mcp.json` are appended to the format-2 ignore list; souls carrying an earlier list still validate and build.
+
 ## 0.10.36
 
 - `agent-bot skill <name>` now discloses any skill in the fleet catalog (qwts/qwts-agent-sop `skills/README.md`): the name must match exactly one entry, and its `SKILL.md` is fetched read-only from the owning repository at the entry's pinned commit. Absent, ambiguous, and unpinned names fail; a branch or tag is never followed, nothing is installed, and the bundled skills stay local and win. `agent-bot skill agent-bot --for <subcommand>` prints the one reference file for that subcommand from a static table, and `--json` now includes `repository` (#226).
