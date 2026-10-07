@@ -549,7 +549,7 @@ export function createDaemonServer({
             sendJson(res, 200, listIdentityApps(appOptions));
           } else if (req.method === 'GET' && /^\/v0\/identity\/apps\/jobs\/[a-f0-9-]+$/.test(url.pathname)) {
             sendJson(res, 200, appJobs.get(url.pathname.split('/').at(-1)));
-          } else if (req.method === 'POST' && /^\/v0\/identity\/apps\/(create|connect|rotate-key|assign)$/.test(url.pathname)) {
+          } else if (req.method === 'POST' && /^\/v0\/identity\/apps\/(create|connect|rotate-key|assign|remove|addon)$/.test(url.pathname)) {
             let body;
             try { body = parseJsonBody(await readBody(req)); }
             catch { sendJson(res, 400, { error: 'Invalid App request JSON.', code: 'identity-app-invalid' }); return; }

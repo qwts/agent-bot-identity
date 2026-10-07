@@ -149,6 +149,18 @@ export function keychainStore({ env = process.env, run = spawnSync } = {}) {
       const result = call(['-i'], line);
       if (result.error || result.status !== 0) throw new Error(`the keychain item could not be written (security exited ${result.status ?? 'without starting'})`);
     },
+    // Removes the item; an absent item is already removed. Returns whether
+    // one existed. Only service and account names are on argv.
+    delete({ agentId, slug, appScoped = false }) {
+      const { service, account } = appScoped
+        ? { service: `agent-bot.app.${slugOrThrow(slug)}`, account: `github-app/${slug}` }
+        : keychainItem(agentId, slug);
+      const result = call(['delete-generic-password', '-s', service, '-a', account]);
+      if (result.error) throw new Error('the keychain item could not be removed (security did not start)');
+      if (result.status === KEYCHAIN_NOT_FOUND) return false;
+      if (result.status !== 0) throw new Error(`the keychain item could not be removed (security exited ${result.status})`);
+      return true;
+    },
   };
 }
 
@@ -196,6 +208,14 @@ export function fileStore({ uid = process.getuid() } = {}) {
         writeFileSync(temporary, encode(credential), { flag: 'wx', mode: 0o600 });
         renameSync(temporary, target);
       } finally { rmSync(temporary, { force: true }); }
+    },
+    // Unlinks the credential file (never following a link); returns whether
+    // one existed.
+    delete({ soulDir, slug }) {
+      const target = fileFor(soulDir, slug);
+      try { lstatSync(target); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+      rmSync(target, { force: true });
+      return true;
     },
   };
 }

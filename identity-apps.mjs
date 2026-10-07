@@ -4,7 +4,7 @@
 import { createHash, createPrivateKey, createPublicKey, randomBytes, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmdirSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -17,7 +17,7 @@ import { soulCredentialsDeclaration } from './soul-package.mjs';
 import { credentialStores, defaultCredentialStore, resolveAppCredential } from './soul-credentials.mjs';
 import { createProtonPassCredentialProvider, validateIssuer, validatePrivateKey } from './ensure-private-key.mjs';
 import { buildAppJwt, pickInstallation } from './mint-token.mjs';
-import { MINT_CODES, appStoreTarget, readAppDoctorCache, readAppMetadata, updateAppConfig, validAppSlug } from './identity-app-store.mjs';
+import { MINT_CODES, appStoreTarget, forgetAppDoctorRow, readAppDoctorCache, readAppMetadata, updateAppConfig, validAppSlug } from './identity-app-store.mjs';
 
 export class IdentityAppError extends Error {
   constructor(code, message, statusCode = 409) { super(message); Object.assign(this, { code, statusCode }); }
@@ -139,15 +139,25 @@ function persist(app, credential, cachedInstallations, options, { replace = fals
     return { id: String(credential.appId), slug: app, installUrl: installUrl(app) };
   }, { ...options, rollback: () => rollback?.() });
 }
+// Harness → App mappings as list reports them: explicit `apps` overrides and
+// the `prefix` pattern alike.
+function harnessMappings(config) {
+  const harnesses = [...new Set([...PROFILE_HARNESSES, ...Object.keys(config.apps ?? {})])];
+  return harnesses.map((harness) => ({ harness, slug: slugForHarness(harness, config) }));
+}
+// Add-ons this module reports and toggles. persona-accounts has its own
+// command (`agent-bot sandbox on|off`).
+const ADDONS = ['github-identity'];
+const addonStatus = (config) => Object.fromEntries(ADDONS.map((name) => [name, isGateEnabled(name, { config })]));
 export function listIdentityApps(options = {}) {
   const opts = settings(options), { config, env, home } = opts;
-  if (!isGateEnabled('github-identity', { config })) return { schemaVersion: 1, apps: [] };
+  const addons = addonStatus(config);
+  if (!addons['github-identity']) return { schemaVersion: 1, addons, apps: [] };
   const souls = listSouls({ file: populationFile({ env, home }) });
-  const harnesses = [...new Set([...PROFILE_HARNESSES, ...Object.keys(config.apps ?? {})])];
-  const mapped = harnesses.map((harness) => ({ harness, slug: slugForHarness(harness, config) }));
+  const mapped = harnessMappings(config);
   const apps = new Set([...Object.keys(config.identityApps ?? {}), ...profileAppSlugs(config), ...mapped.map((r) => r.slug), ...souls.map((s) => s.appSlug)].filter(Boolean));
   const cache = readAppDoctorCache(opts);
-  return { schemaVersion: 1, apps: [...apps].sort().map((app) => {
+  return { schemaVersion: 1, addons, apps: [...apps].sort().map((app) => {
     slug(app);
     let issuerPresent = false, keyPresent = false;
     try {
@@ -237,6 +247,83 @@ function assign(body, options) {
   assignAgentApp(id, app, { stateDir, afterWrite: () => setSoulApp(id, app, { file }) });
   return { slug: app, soul: id };
 }
+// Forget a managed App on this machine: its App-scoped store item, its
+// `identityApps` record (public metadata, fingerprint, installations) and its
+// doctor cache row. Refuses while a harness or live soul still points at it,
+// so no identity silently loses its key. GitHub is not contacted: the App
+// itself and its keys on github.com are untouched, as is any legacy
+// ~/.config/<slug> folder (agent-bot never deletes those). The result names
+// what was removed, never what it held.
+function storeItemName(app, kind, options) {
+  const target = appStoreTarget(app, options);
+  return kind === 'keychain' ? `agent-bot.app.${app}/github-app/${app}`
+    : path.join(target.soulDir, '.soul-state', 'credentials', `github-app-${app}.json`);
+}
+// `remove` takes a slug or a numeric App ID; a slug record wins, since an
+// all-digit slug is valid.
+function managedSlug(value, config) {
+  const records = config.identityApps ?? {};
+  if (Object.hasOwn(records, slug(value))) return value;
+  const byId = Object.keys(records).filter((app) => records[app]?.id === value);
+  return byId.length === 1 ? byId[0] : value;
+}
+function remove(body, options) {
+  const app = managedSlug(body.slug, options.config);
+  const blockers = (config) => {
+    const harnesses = harnessMappings(config).filter((row) => row.slug === app).map((row) => row.harness);
+    const souls = listSouls({ file: populationFile(options) }).filter((soul) => soul.appSlug === app && soul.status !== 'retired').map((soul) => soul.id);
+    if (harnesses.length || souls.length) {
+      const named = [...harnesses.map((h) => `harness ${h}`), ...souls.map((id) => `soul ${id}`)].join(', ');
+      fail('identity-app-assigned', `App ${app} is still assigned to ${named}; assign them another App first.`);
+    }
+  };
+  if (!options.config.identityApps?.[app]) fail('identity-app-not-found', `App ${app} is not managed on this machine.`, 404);
+  blockers(options.config);
+  let rollback = null;
+  return updateAppConfig((config) => {
+    const record = config.identityApps?.[app];
+    if (!record) fail('identity-app-not-found', `App ${app} is not managed on this machine.`, 404);
+    blockers(config);
+    const kind = record.store ?? null;
+    let item = null;
+    if (kind) {
+      if (!['file', 'keychain'].includes(kind)) fail('identity-app-store', 'This App uses an unsupported store; nothing was removed.');
+      const target = appStoreTarget(app, options);
+      let before;
+      try { before = options.stores[kind].read(target); }
+      catch { fail('identity-app-store', `Could not read App ${app}'s store; unlock it and retry. Nothing was removed.`); }
+      try { options.stores[kind].delete(target); }
+      catch { fail('identity-app-store', `Could not remove App ${app}'s stored key; nothing was removed.`); }
+      if (before) rollback = () => options.stores[kind].write(target, before);
+      item = { store: kind, name: storeItemName(app, kind, options), existed: Boolean(before) };
+    }
+    delete config.identityApps[app];
+    if (!Object.keys(config.identityApps).length) delete config.identityApps;
+    return { slug: app, id: typeof record.id === 'string' ? record.id : null, removed: { storeItem: item, configRecord: true } };
+  }, { ...options, rollback: () => rollback?.() });
+}
+function finishRemove(result, options) {
+  // Housekeeping after the record is gone; neither step holds a secret.
+  // Empty App-scoped file-store directories go (rmdir refuses non-empty ones).
+  const dir = appStoreTarget(result.slug, options).soulDir;
+  for (const leaf of [path.join(dir, '.soul-state', 'credentials'), path.join(dir, '.soul-state'), dir]) {
+    try { rmdirSync(leaf); } catch { break; }
+  }
+  // The doctor cache is a convenience; a failure leaves only a stale status row.
+  try { forgetAppDoctorRow(result.slug, options); } catch { /* list ignores rows for unknown Apps */ }
+  return result;
+}
+// Turn an add-on on or off in config `features`. Only an owner may: turning
+// github-identity on lets souls mint App tokens; off stops every App mint.
+function setAddon(body, options) {
+  if (!ADDONS.includes(body.name)) fail('identity-app-invalid', `Unknown add-on; expected ${ADDONS.join(' or ')}.`, 400);
+  if (typeof body.enabled !== 'boolean') fail('identity-app-invalid', 'enabled must be true or false.', 400);
+  return updateAppConfig((config) => {
+    const previous = config.features?.[body.name] === true;
+    config.features = { ...(config.features ?? {}), [body.name]: body.enabled };
+    return { addon: body.name, enabled: body.enabled, changed: previous !== body.enabled };
+  }, options);
+}
 const htmlEscape = (value) => value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export async function startAppManifest(body, options) {
   const state = randomBytes(32).toString('hex');
@@ -306,18 +393,24 @@ export async function startAppManifest(body, options) {
 export async function identityAppOperation(action, body = {}, options = {}) {
   try {
     const opts = settings(options);
-    enabled(opts.config);
-    const allowed = { create: ['manifest', 'name', 'org'], connect: ['id', 'keyFile', 'passCli'], 'rotate-key': ['slug', 'keyFile', 'passCli'], assign: ['slug', 'harness', 'soul'] };
+    // The add-on switch is the one operation that works while it is off.
+    if (action !== 'addon') enabled(opts.config);
+    const allowed = { create: ['manifest', 'name', 'org'], connect: ['id', 'keyFile', 'passCli'], 'rotate-key': ['slug', 'keyFile', 'passCli'], assign: ['slug', 'harness', 'soul'], remove: ['slug'], addon: ['name', 'enabled'] };
     if (!allowed[action] || !body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => ![...allowed[action], 'principal'].includes(key))) fail('identity-app-invalid', 'Invalid App operation or fields.', 400);
     if (action === 'create') {
       if (body.manifest !== true || (body.name !== undefined && (typeof body.name !== 'string' || !/^[\p{L}\p{N} ._-]{1,100}$/u.test(body.name))) || (body.org !== undefined && !validAppSlug(body.org))) fail('identity-app-invalid', 'create requires manifest: true and an optional valid name/org.', 400);
     }
-    const label = `identity app ${action}${validAppSlug(body.slug) ? ` ${body.slug}` : ''}${body.harness && PROFILE_HARNESSES.includes(body.harness) ? ` --harness ${body.harness}` : ''}${body.name && action === 'create' ? ` ${body.name}` : ''}`;
+    if (action === 'addon' && (!ADDONS.includes(body.name) || typeof body.enabled !== 'boolean')) fail('identity-app-invalid', `addon requires name (${ADDONS.join(', ')}) and enabled true or false.`, 400);
+    if (action === 'remove') slug(body.slug);
+    const label = action === 'addon' ? `identity addon ${body.name} ${body.enabled ? 'on' : 'off'}`
+      : `identity app ${action}${validAppSlug(body.slug) ? ` ${body.slug}` : ''}${body.harness && PROFILE_HARNESSES.includes(body.harness) ? ` --harness ${body.harness}` : ''}${body.name && action === 'create' ? ` ${body.name}` : ''}`;
     try { await (opts.gate ?? ((label, { principal }) => assertOwnerAction(label, { env: opts.env, cwd: opts.cwd ?? opts.home, principal })))(label, { principal: body.principal ?? null }); }
     catch { fail('identity-app-owner-required', 'The owner must approve this App operation.', 403); }
     if (action === 'create') return await startAppManifest(body, opts);
     if (action === 'connect') return await connect(body, opts);
     if (action === 'rotate-key') return await rotate(body, opts);
+    if (action === 'remove') return finishRemove(remove(body, opts), opts);
+    if (action === 'addon') return setAddon(body, opts);
     return assign(body, opts);
   } catch (error) {
     if (error instanceof IdentityAppError) throw error;
@@ -356,7 +449,7 @@ export function createIdentityAppJobs(options = {}) {
   };
 }
 
-const USAGE = 'identity apps list [--json] | identity app create --manifest [--name NAME] [--org ORG] [--open] | connect --id ID (--key-file PATH|--pass-cli ITEM) | rotate-key SLUG (--key-file PATH|--pass-cli ITEM) | assign SLUG (--harness H|--soul AGENT_ID) [--json] [--principal-stdin]';
+const USAGE = 'identity apps list [--json] | identity app create --manifest [--name NAME] [--org ORG] [--open] | connect --id ID (--key-file PATH|--pass-cli ITEM) | rotate-key SLUG (--key-file PATH|--pass-cli ITEM) | assign SLUG (--harness H|--soul AGENT_ID) | remove SLUG|APP_ID | identity addon github-identity on|off [--json] [--principal-stdin]';
 export async function identityAppsCommand(argv, { write = (value) => process.stdout.write(value), ...options } = {}) {
   const [group, action, ...args] = argv;
   let json = false, open = false, principal = false;
@@ -372,20 +465,26 @@ export async function identityAppsCommand(argv, { write = (value) => process.std
       if (body[key] !== undefined) fail('identity-app-invalid', USAGE, 400);
       body[key] = args[++i];
       if (key === 'keyFile') body[key] = path.resolve(body[key]);
-    } else if (!arg.startsWith('-') && ['rotate-key', 'assign'].includes(action) && !body.slug) body.slug = arg;
+    } else if (!arg.startsWith('-') && group === 'app' && ['rotate-key', 'assign', 'remove'].includes(action) && !body.slug) body.slug = arg;
+    else if (group === 'addon' && ['on', 'off'].includes(arg) && body.enabled === undefined) body.enabled = arg === 'on';
     else fail('identity-app-invalid', USAGE, 400);
+  }
+  if (group === 'addon') {
+    // `identity addon NAME on|off`: NAME sits where an App action would.
+    if (body.enabled === undefined || Object.keys(body).length !== 1) fail('identity-app-invalid', USAGE, 400);
+    body.name = action;
   }
   if (group === 'apps' && action === 'list' && !Object.keys(body).length && !principal) {
     const result = listIdentityApps(options);
     write(`${json ? JSON.stringify(result) : result.apps.map((row) => `${row.slug} (${row.botLogin}) issuer:${row.issuerPresent} key:${row.keyPresent} mint:${row.liveMint.status}`).join('\n') || 'No configured Apps.'}\n`);
     return result;
   }
-  if (group !== 'app') fail('identity-app-invalid', USAGE, 400);
+  if (group !== 'app' && group !== 'addon') fail('identity-app-invalid', USAGE, 400);
   if (principal) {
     try { body.principal = JSON.parse((options.readStdin ?? (() => readFileSync(0, 'utf8')))()); }
     catch { fail('identity-app-invalid', 'Present the principal credential as JSON on stdin.', 400); }
   }
-  let result = await identityAppOperation(action, body, options);
+  let result = await identityAppOperation(group === 'addon' ? 'addon' : action, body, options);
   if (action === 'create') {
     const flow = result;
     write(json ? `${JSON.stringify({ status: 'pending', localUrl: flow.localUrl })}\n` : `Open ${flow.localUrl}\nUse --open to launch the browser automatically.\n`);

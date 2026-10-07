@@ -33,6 +33,12 @@ function run(args) {
     writeFileSync(store, JSON.stringify(items));
     return 0;
   }
+  if (command === 'delete-generic-password') {
+    if (!(key in items)) return 44;
+    delete items[key];
+    writeFileSync(store, JSON.stringify(items));
+    return 0;
+  }
   process.stderr.write(`fake security: unsupported ${command}\n`);
   return 1;
 }

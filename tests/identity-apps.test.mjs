@@ -74,7 +74,7 @@ async function callback(manifest, state) {
 
 test('gate off lists nothing without touching store or network; mutations fail closed', async (t) => {
   const f = fixture(t, { gate: false });
-  assert.deepEqual(listIdentityApps(f.options), { schemaVersion: 1, apps: [] });
+  assert.deepEqual(listIdentityApps(f.options), { schemaVersion: 1, addons: { 'github-identity': false }, apps: [] });
   await assert.rejects(connect(f), { code: 'identity-app-disabled' });
 });
 for (const platform of ['linux', 'darwin']) test(`connect uses ${platform === 'darwin' ? 'fake Keychain' : 'private file'} store and list is offline`, async (t) => {
@@ -356,4 +356,146 @@ test('manifest retains the one-time key when the public bot profile is temporari
   assert.equal(result.metadataPending, true); noSecrets(result);
   assert.ok(readManagedAppCredential('fixture-app', f.options).privateKeyPem === KEY);
   assert.equal(loadConfig(f.options).identityApps['fixture-app'].id, '123');
+});
+
+// --- remove and the add-on switch (GeniusBar#67) -----------------------------
+
+const keychainItems = (f) => { try { return Object.keys(JSON.parse(readFileSync(f.env.FAKE_KEYCHAIN, 'utf8'))); } catch { return []; } };
+for (const platform of ['linux', 'darwin']) test(`remove forgets a ${platform === 'darwin' ? 'Keychain' : 'file'}-stored App and names only what it removed`, async (t) => {
+  const f = fixture(t, { platform }); await github(t, f); await connect(f);
+  cacheAppDoctorRows({ machine: { apps: [{ slug: 'fixture-app', live_mint: { status: 'ready' } }] } }, f.options);
+  const log = path.join(f.home, 'security.log'); f.env.FAKE_KEYCHAIN_LOG = log;
+  const result = await identityAppOperation('remove', { slug: 'fixture-app' }, f.options);
+  noSecrets(result);
+  const name = platform === 'darwin' ? 'agent-bot.app.fixture-app/github-app/fixture-app'
+    : path.join(appStoreTarget('fixture-app', f.options).soulDir, '.soul-state/credentials/github-app-fixture-app.json');
+  assert.deepEqual(result, { slug: 'fixture-app', id: '123', removed: { storeItem: { store: platform === 'darwin' ? 'keychain' : 'file', name, existed: true }, configRecord: true } });
+  assert.equal(loadConfig(f.options).identityApps, undefined);
+  assert.equal(loadConfig(f.options).features['github-identity'], true, 'other config is kept');
+  assert.equal(readManagedAppCredential('fixture-app', f.options), null);
+  assert.equal(existsSync(appStoreTarget('fixture-app', f.options).soulDir), false, 'empty App store directories are removed');
+  assert.deepEqual(keychainItems(f), []);
+  const doctor = JSON.parse(readFileSync(path.join(stateDirectory(f.options), 'identity-apps', 'doctor.json'), 'utf8'));
+  assert.equal(doctor['fixture-app'], undefined);
+  assert.deepEqual(listIdentityApps(f.options).apps, []);
+  if (platform === 'darwin') assert.ok(!/-----BEGIN|privateKeyPem/.test(readFileSync(log, 'utf8')), 'no key material on security argv');
+  await assert.rejects(identityAppOperation('remove', { slug: 'fixture-app' }, f.options), { code: 'identity-app-not-found', statusCode: 404 });
+});
+test('remove refuses while a harness or live soul points at the App, naming them; retired souls do not block', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  await identityAppOperation('assign', { slug: 'fixture-app', harness: 'codex' }, f.options);
+  mintAgentIdentity({ ...f.options, stateDir: stateDirectory(f.options), idFactory: () => ID, harness: 'codex', useGithub: false });
+  upsertSoul({ id: ID, name: 'fixture-soul', status: 'active', appSlug: null, spacePath: path.join(f.home, 'space') }, { file: populationFile(f.options) });
+  await identityAppOperation('assign', { slug: 'fixture-app', soul: ID }, f.options);
+  await assert.rejects(identityAppOperation('remove', { slug: 'fixture-app' }, f.options), (error) => {
+    assert.equal(error.code, 'identity-app-assigned');
+    assert.match(error.message, /harness codex/); assert.match(error.message, new RegExp(`soul ${ID}`));
+    return true;
+  });
+  assert.ok(readManagedAppCredential('fixture-app', f.options).privateKeyPem === KEY, 'refusal leaves the key');
+  // Point the harness elsewhere: the soul still blocks.
+  const config = loadConfig(f.options); config.apps.codex = 'other-app'; writeFileSync(f.env.AGENT_BOT_CONFIG, JSON.stringify(config));
+  await assert.rejects(identityAppOperation('remove', { slug: 'fixture-app' }, f.options), (error) => !/harness/.test(error.message) && error.code === 'identity-app-assigned');
+  // A prefix-pattern mapping counts like an explicit override.
+  upsertSoul({ id: ID, name: 'fixture-soul', status: 'retired', appSlug: 'fixture-app', spacePath: path.join(f.home, 'space') }, { file: populationFile(f.options) });
+  const prefixed = loadConfig(f.options); prefixed.prefix = 'fixture'; prefixed.apps = { claude: 'fixture-app' }; writeFileSync(f.env.AGENT_BOT_CONFIG, JSON.stringify(prefixed));
+  await assert.rejects(identityAppOperation('remove', { slug: 'fixture-app' }, f.options), (error) => /harness claude/.test(error.message) && !/soul/.test(error.message));
+  delete prefixed.apps; writeFileSync(f.env.AGENT_BOT_CONFIG, JSON.stringify(prefixed));
+  noSecrets(await identityAppOperation('remove', { slug: 'fixture-app' }, f.options));
+});
+test('remove keeps the key when the config write fails and removes metadata-only records', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  const failing = { ...f.options, stores: { ...f.options.stores, file: { ...f.options.stores.file, delete: () => { throw new Error('ghs_fake_only'); } } } };
+  await assert.rejects(identityAppOperation('remove', { slug: 'fixture-app' }, failing), (error) => { noSecrets(error.message); return error.code === 'identity-app-store'; });
+  assert.ok(loadConfig(f.options).identityApps['fixture-app'], 'record kept when the store refuses');
+  // A config that cannot be written restores the deleted item: the stub
+  // deletes for real, then turns the config path into a directory so the
+  // atomic rename fails.
+  const saved = readFileSync(f.env.AGENT_BOT_CONFIG, 'utf8');
+  const blocked = { ...f.options, stores: { ...f.options.stores, file: { ...f.options.stores.file, delete: (target) => {
+    f.options.stores.file.delete(target); rmSync(f.env.AGENT_BOT_CONFIG); mkdirSync(f.env.AGENT_BOT_CONFIG);
+  } } } };
+  await assert.rejects(identityAppOperation('remove', { slug: 'fixture-app' }, blocked));
+  rmSync(f.env.AGENT_BOT_CONFIG, { recursive: true }); writeFileSync(f.env.AGENT_BOT_CONFIG, saved);
+  assert.ok(readManagedAppCredential('fixture-app', f.options).privateKeyPem === KEY, 'rollback restored the key');
+  const config = loadConfig(f.options);
+  config.identityApps['meta-only'] = { id: '999', botUid: '5' }; writeFileSync(f.env.AGENT_BOT_CONFIG, JSON.stringify(config));
+  assert.deepEqual(await identityAppOperation('remove', { slug: '999' }, f.options), { slug: 'meta-only', id: '999', removed: { storeItem: null, configRecord: true } }, 'an App ID names its record');
+  assert.ok(loadConfig(f.options).identityApps['fixture-app'], 'other Apps are untouched');
+});
+test('remove and addon are owner gated, refused from a soul, and validated before the gate', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  const labels = [];
+  const gated = { ...f.options, gate: async (label) => { labels.push(label); throw new Error('ghs_fake_only'); } };
+  await assert.rejects(identityAppOperation('remove', { slug: 'fixture-app' }, gated), { code: 'identity-app-owner-required' });
+  await assert.rejects(identityAppOperation('addon', { name: 'github-identity', enabled: false }, gated), { code: 'identity-app-owner-required' });
+  assert.deepEqual(labels, ['identity app remove fixture-app', 'identity addon github-identity off']);
+  await assert.rejects(identityAppOperation('remove', { slug: 'Bad Slug' }, gated), { code: 'identity-app-invalid' });
+  await assert.rejects(identityAppOperation('addon', { name: 'persona-accounts', enabled: true }, gated), { code: 'identity-app-invalid' });
+  await assert.rejects(identityAppOperation('addon', { name: 'github-identity', enabled: 'yes' }, gated), { code: 'identity-app-invalid' });
+  await assert.rejects(identityAppOperation('remove', { slug: 'fixture-app', force: true }, gated), { code: 'identity-app-invalid' });
+  assert.equal(labels.length, 2, 'invalid requests never reach the owner');
+  // The real gate: a soul's Agent ID refuses before any prompt.
+  const soul = { ...f.options, gate: undefined, env: { ...f.env, AGENT_BOT_ID: ID } };
+  await assert.rejects(identityAppOperation('remove', { slug: 'fixture-app' }, soul), { code: 'identity-app-owner-required' });
+  await assert.rejects(identityAppOperation('addon', { name: 'github-identity', enabled: false }, soul), { code: 'identity-app-owner-required' });
+  assert.ok(loadConfig(f.options).identityApps['fixture-app']); assert.equal(loadConfig(f.options).features['github-identity'], true);
+});
+test('addon switches github-identity on and off, even while off, and list reports it', async (t) => {
+  const f = fixture(t, { gate: false });
+  assert.deepEqual(await identityAppOperation('addon', { name: 'github-identity', enabled: true }, f.options), { addon: 'github-identity', enabled: true, changed: true });
+  assert.equal(loadConfig(f.options).features['github-identity'], true);
+  assert.deepEqual(listIdentityApps(f.options).addons, { 'github-identity': true });
+  assert.deepEqual(await identityAppOperation('addon', { name: 'github-identity', enabled: true }, f.options), { addon: 'github-identity', enabled: true, changed: false });
+  let output = '';
+  const result = await identityAppsCommand(['addon', 'github-identity', 'off', '--json'], { ...f.options, write: (value) => { output += value; } });
+  assert.deepEqual(result, { addon: 'github-identity', enabled: false, changed: true });
+  assert.deepEqual(JSON.parse(output), result);
+  assert.equal(loadConfig(f.options).features['github-identity'], false);
+  assert.deepEqual(listIdentityApps(f.options), { schemaVersion: 1, addons: { 'github-identity': false }, apps: [] });
+  for (const argv of [['addon', 'github-identity'], ['addon', 'github-identity', 'maybe'], ['addon', 'github-identity', 'on', 'off'], ['addon', 'persona-accounts', 'on'], ['addon', 'github-identity', 'on', '--id', '1']]) {
+    await assert.rejects(identityAppsCommand(argv, f.options), { code: 'identity-app-invalid' });
+  }
+  await assert.rejects(identityAppOperation('remove', { slug: 'fixture-app' }, f.options), { code: 'identity-app-disabled' });
+});
+test('CLI remove and addon route through agent-bot and print safe JSON', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  let output = '';
+  await identityAppsCommand(['app', 'remove', 'fixture-app', '--json'], { ...f.options, write: (value) => { output += value; } });
+  noSecrets(output); assert.equal(JSON.parse(output).slug, 'fixture-app');
+  await assert.rejects(identityAppsCommand(['app', 'remove', '--json'], f.options), { code: 'identity-app-invalid' });
+  await assert.rejects(identityAppsCommand(['app', 'remove', 'a', 'b'], f.options), { code: 'identity-app-invalid' });
+  // Through the real entry point a soul caller is refused with a JSON error.
+  const child = spawnSync(process.execPath, [path.join(ROOT, 'agent-bot.mjs'), 'identity', 'addon', 'github-identity', 'off', '--json'], { env: { ...f.env, AGENT_BOT_ID: ID }, cwd: f.home, encoding: 'utf8' });
+  assert.equal(child.status, 1);
+  assert.equal(JSON.parse(child.stdout).error.code, 'identity-app-owner-required');
+  assert.equal(loadConfig(f.options).features['github-identity'], true);
+});
+test('daemon remove and addon routes need the bearer and the owner, and return public results', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  let allow = false, approvals = 0;
+  const server = createDaemonServer({ env: f.env, home: f.home, token: 'fixture-daemon-auth', settingGate: async () => { approvals++; if (!allow) throw new Error('ghs_fake_only'); return { method: 'test' }; } });
+  await new Promise((yes) => server.listen(0, '127.0.0.1', yes));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const base = `http://127.0.0.1:${server.address().port}/v0/identity/apps`;
+  const headers = { authorization: 'Bearer fixture-daemon-auth', 'content-type': 'application/json' };
+  const post = async (action, body, h = headers) => {
+    const res = await fetch(`${base}/${action}`, { method: 'POST', headers: h, body: JSON.stringify(body) });
+    const result = await res.json(); noSecrets(result); return { status: res.status, result };
+  };
+  for (const route of ['remove', 'addon']) assert.equal((await post(route, {}, { 'content-type': 'application/json' })).status, 401);
+  assert.equal((await post('remove', { slug: 'fixture-app' })).status, 403);
+  assert.equal((await post('addon', { name: 'github-identity', enabled: false })).status, 403);
+  assert.equal(approvals, 2);
+  allow = true;
+  const listed = await (await fetch(base, { headers })).json();
+  assert.deepEqual(listed.addons, { 'github-identity': true });
+  const removed = await post('remove', { slug: 'fixture-app' });
+  assert.equal(removed.status, 200); assert.equal(removed.result.slug, 'fixture-app'); assert.equal(removed.result.removed.configRecord, true);
+  assert.equal((await post('remove', { slug: 'fixture-app' })).status, 404);
+  const off = await post('addon', { name: 'github-identity', enabled: false });
+  assert.equal(off.status, 200); assert.deepEqual(off.result, { addon: 'github-identity', enabled: false, changed: true });
+  const on = await post('addon', { name: 'github-identity', enabled: true });
+  assert.deepEqual(on.result, { addon: 'github-identity', enabled: true, changed: true });
+  assert.equal((await post('addon', { name: 'github-identity' })).status, 400);
 });

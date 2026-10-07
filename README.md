@@ -1194,7 +1194,8 @@ GitHub → Settings → Developer settings → GitHub Apps → **New GitHub App*
 
 ### 2. Store each App's credentials
 
-Enable the `github-identity` add-on in your runtime config, then connect the
+Enable the `github-identity` add-on (`agent-bot identity addon github-identity on`,
+or `features` in your runtime config), then connect the
 App using the downloaded key (the owner gate requires approval):
 
 ```bash
@@ -1282,6 +1283,8 @@ use the `apps` map with the exact slugs instead. `doctor` prints the resolved
   current behavior by setting both to `true` in this same config. A config
   from before the gates (no `features` object) whose souls already carry a
   GitHub App gets both set to `true` once when the daemon starts (#361).
+  `agent-bot identity addon github-identity on|off` and
+  `agent-bot sandbox on|off` set them with owner approval.
 
 Settings precedence is environment override, then user setting, then default.
 `AGENT_BOT_SPACES_HOME` overrides `settings.spacesRoot`; without either, the
@@ -1578,7 +1581,8 @@ agent-bot identity ensure
 ```
 
 Manage GitHub Apps with `identity apps list` and `identity app create`,
-`connect`, `rotate-key`, or `assign`; see [commands and daemon API](docs/identity-apps.md).
+`connect`, `rotate-key`, `assign`, or `remove`, and switch the add-on with
+`identity addon github-identity on|off`; see [commands and daemon API](docs/identity-apps.md).
 
 `setup-worktree` is idempotent for the session's existing soul in its allowed
 work area. Check in with `agent-bot join`, then use
