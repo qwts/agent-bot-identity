@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.30
+
+- The daemon reports each stage of a launch (`checking`, `account`, `joining`, `harness`) to agent-comms through its `launch-progress` op (agent-comms 0.3.12) so a launcher can show the steps, best effort on an older broker, and keeps the stage in the launch journal so a failed launch says where it stopped (#536).\n
+
 ## 0.10.29
 
 - The daemon refuses a launch whose harness it cannot start (no registry row, disabled, or its command missing from the soul's PATH) before anything mints or joins the hub, so a mistyped or unsupported "Other…" harness no longer leaves dead same-name companions behind; the refusal points a self-running harness like Kiro to `agent-bot join`. A rollback that fails part way is named in the launch journal detail, and `soul remove` says which step failed and what to do when a soul's folder will not move into `.archive` (#531, GeniusBar#196).
