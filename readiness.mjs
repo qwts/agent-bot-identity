@@ -726,7 +726,7 @@ function inboxConfigurationCheck({ env, harnesses }) {
     message: !url
       ? 'a harness wires the inbox MCP server but no inbox URL is configured'
       : 'the inbox is configured but no harness wires its MCP server, or the bearer is absent',
-    action: 'see the gh-app-hook deployment procedure for provisioning and harness wiring',
+    action: 'see docs/gh-app-hook.md (the gh-app-hook deployment procedure) for provisioning and harness wiring',
     evidence,
   });
 }
@@ -874,9 +874,9 @@ function defaultProbeSecretStore() {
   return probeSecretStore({ registry: createSecretProviderRegistry(BUILTIN_SECRET_PROVIDERS) });
 }
 
-// The MCP launcher's dedicated proton-pass session, probed where it lives. The
-// launcher that harness MCP configs point at (~/.config/opencode/bin/
-// agent-bot-inbox-mcp) keeps a dedicated pass-cli session directory under the
+// The MCP server's dedicated proton-pass session, probed where it lives. The
+// server harness MCP configs point at (`agent-bot mcp`, #247) keeps a
+// dedicated pass-cli session directory under the
 // agent-bot state root so an interactive logout cannot tear the server's
 // session down — which also means the interactive session says nothing about
 // the launcher's. Probing only the ambient session reports ready while the
@@ -1072,6 +1072,13 @@ const PROJECT_MCP_CONFIG_LOCATIONS = [
   { harness: 'qwen', key: /"mcpServers"\s*:/, agent: /agent-bot/, paths: ['.qwen/settings.json'] },
 ];
 
+// The inbox server is `agent-bot mcp`. A soul package also renders a server
+// named agent-bot, but it runs `reach-mcp` (soul-builder.mjs), which has no
+// take_inbox: a file with only that entry has not wired the inbox (#247). The
+// shapes harnesses document: `"args": ["mcp"]`, opencode's
+// `"command": ["agent-bot", "mcp"]`, and codex's `args = ["mcp"]`.
+const INBOX_SERVER = /\[\s*"mcp"\s*\]|"agent-bot"\s*,\s*"mcp"\s*\]/;
+
 function harnessWiresAgentBot({ home, cwd, locations }) {
   const found = [];
   const seen = new Set();
@@ -1087,7 +1094,7 @@ function harnessWiresAgentBot({ home, cwd, locations }) {
         } catch {
           continue;
         }
-        if (!key.test(contents) || !agent.test(contents)) continue;
+        if (!key.test(contents) || !agent.test(contents) || !INBOX_SERVER.test(contents)) continue;
         found.push({ harness, mcp: 'agent-bot', scope: base === home ? 'user' : 'project' });
         seen.add(harness);
         break;

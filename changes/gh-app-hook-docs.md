@@ -1,0 +1,1 @@
+- `docs/gh-app-hook.md` is the gh-app-hook deployment and provisioning procedure `doctor` pointed at but which did not exist (#230): `wrangler deploy`, the three Worker secrets (`INBOX_TOKEN`, `WEBHOOK_SECRETS`, `SUBSCRIBERS`), the per-App webhook URL and secret, harness wiring and verification.

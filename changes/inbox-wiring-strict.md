@@ -1,0 +1,1 @@
+- `doctor`'s `inbox.configuration` counts a harness as wiring the inbox only when its MCP config runs the inbox server, `agent-bot mcp` (#247): a soul package's reach-back server, which is also named `agent-bot` but runs `reach-mcp` and has no `take_inbox`, no longer reads as inbox wiring. The stale launcher comment and the `agent-bot mcp` help line are corrected.
