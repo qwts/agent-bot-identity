@@ -1,0 +1,165 @@
+# Soul runtimes and harness installs
+
+A soul declares the runtimes and non-npm harnesses it needs, and the engine
+provisions them inside the soul folder ([ADR-0583](decisions/ADR-0583-the-soul-root-owns-the-environment.md)
+decision 6, [ADR-0322](decisions/ADR-0322-agents-bring-their-own-runtime-and-harness.md)).
+A new Mac with GeniusBar installs no Homebrew, node, Python or Go for an
+agent: the soul carries what it runs on, and a copy of the soul on another
+machine provisions the same versions from the same pinned downloads.
+
+## Declaring
+
+```json
+{
+  "runtimes": { "node": "24", "python": "3.12", "go": "1.x" },
+  "harnesses": {
+    "opencode": { "install": { "kind": "archive", "version": "1.2.3",
+      "url": "https://github.com/sst/opencode/releases/download/v{version}/opencode-{platform}.zip",
+      "sha256": { "darwin-arm64": "…64 hex…", "linux-x64": "…64 hex…" } } },
+    "goose": { "install": { "kind": "uv-tool", "package": "goose-ai", "version": "1.9.0", "bin": "goose" } }
+  }
+}
+```
+
+- `runtimes.<name>` is `node`, `python` or `go`, as a version or range:
+  a major (`24`), a prefix (`24.21`, `24.x`, `3.12`) or an exact version.
+  The object form `{ version, via, sources }` lets a soul pin its own
+  downloads: `sources` maps platforms (`darwin-arm64`, `darwin-x64`,
+  `linux-x64`, `linux-arm64`, `win32-x64`) to `{ url, sha256, bin }`, needs an
+  exact `version`, and wins over the catalog. Python is always provided by
+  uv (`via: "uv"`, the only value), so it takes no `sources`.
+- `harnesses.<name>.install` pins a harness the soul cannot get from npm.
+  `archive` takes a `version`, an https `url` (one template with
+  `{version}` and `{platform}`, or a per-platform map), `sha256` per
+  platform, and `bin` (the executable inside the archive; defaults to the
+  harness command). `uv-tool` takes a PyPI `package`, exact `version` and
+  the `bin` it installs, and needs `runtimes.python`. The adapter harnesses
+  (`claude`, `codex`) are pinned in `package.json` and refuse `install`.
+- Validation is strict: unknown keys, bad digests, non-https URLs and
+  unknown platforms are refused by every package reader, and a declaration
+  is definition, so adding or changing one (including a digest) changes the
+  revision like any other `soul.json` edit.
+
+## Catalog
+
+`runtime-catalog.mjs` is pure data: per runtime and platform, the download
+URL and SHA-256 the engine trusts. Every digest was verified by downloading
+the archive once and checking it against the publisher's checksum file.
+
+| Runtime | Pins | Source |
+| --- | --- | --- |
+| node | 22.23.3, 24.21.0 | nodejs.org tarballs (zip on Windows); npm comes with it |
+| python | 3.12.15, 3.13.16 | `uv python install` (python-build-standalone), via uv |
+| go | 1.27.1 | go.dev tarballs (zip on Windows) |
+| uv | 0.12.23 | github.com/astral-sh/uv release archives |
+
+A range resolves to the newest pin it matches (`24` → 24.21.0). An exact
+version the catalog does not pin is unsupported unless the soul declares its
+own `sources`. The catalog version is `RUNTIME_CATALOG_VERSION` 1; new pins
+are appended by a release, and a soul installed against an older pin keeps
+it until the owner installs again.
+
+## Commands
+
+```sh
+agent-bot soul runtimes <agentId|name> [--json]
+agent-bot soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin]
+```
+
+`soul runtimes` is read-only and prints what is declared, resolved and
+installed. `soul runtimes install` is an owner action behind the owner gate
+(`--principal-stdin` carries the principal JSON like `soul revision edit`);
+it installs every declared runtime and harness that is missing, or one with
+`--runtime` (`node`, `python`, `go`, `uv`, or a harness name), and leaves an
+audit receipt (`soul-runtimes`, no secrets). The daemon runs the same
+install at launch when a declared runtime is missing, as the `runtimes`
+launch stage, and a launch whose install fails reports the coded error
+instead of starting the harness.
+
+`--json` prints one object with every key present:
+
+- `schemaVersion` 1, `agentId`, `soulDir`, `platform` (`null` when the host
+  is not one the catalog knows), `root` (`.soul-state/runtimes`), `cache`
+  (the shared download cache), `ready`.
+- `runtimes[]`: `{ name, declared, requiredBy, version, source
+  ("catalog" | "package"), status ("installed" | "missing" |
+  "unsupported"), reason, path, bin, lastError, via }`. `uv` appears as a
+  row when python or a uv tool needs it, with `requiredBy` naming them.
+  `lastError` is `{ code, message, at }` from the last failed install of
+  that version, `null` otherwise.
+- `harnesses[]`: `{ name, kind, package, version, executable, status,
+  reason, path, bin, lastError }` for each `harnesses.<name>.install`.
+- `invalid[]`: `{ path, message }` for declarations the package refuses.
+- `install` adds `installed[]`, `skipped[]` (already there).
+
+## Layout
+
+```
+<soul>/.soul-state/runtimes/
+  node/24.21.0/            the tarball's tree; bin/node, bin/npm
+  node/npm-cache/
+  node/last-install.json   { version, status: ok | failed, code, message, at }
+  uv/0.12.23/uv            the uv binary; uv/cache, uv/tools
+  python/3.12.15/cpython-3.12.15-<platform>/bin/python3
+  go/1.27.1/               GOROOT; go/gopath (GOPATH, GOMODCACHE under it), go/cache
+  harnesses/opencode/1.2.3/opencode
+  harnesses/goose/1.9.0/   bin/goose and tools/ (UV_TOOL_BIN_DIR, UV_TOOL_DIR)
+```
+
+Every install directory carries `.agent-bot-install.json`: the name, kind,
+version, platform, URL, verified `sha256`, `bin` and `installedAt`. That
+stamp is what `soul runtimes` and `soul env` read; a directory without one
+is not an install.
+
+Installs are atomic. An archive is downloaded into the shared cache
+`~/.cache/agent-bot/downloads/<sha256>` (`AGENT_BOT_CACHE_HOME`, then
+`XDG_CACHE_HOME/agent-bot`), written as a partial file and renamed only
+after its digest matches; a cached file that no longer hashes is dropped and
+fetched again. The archive is extracted into
+`.soul-state/runtimes/<runtime>/.installing-<uuid>/`, checked for its
+executable, stamped, and renamed to its version directory. A failed install
+removes its staging directory and never touches a previous version, so a
+soul that ran on node 24.21.0 keeps running on it when a newer pin fails to
+download. Python installs the same way through `uv python install` with
+`UV_PYTHON_INSTALL_DIR` in the staging directory; a uv tool installs in
+place (its virtualenv holds absolute paths) with an `.installing` marker
+beside it, and is reinstalled when the marker is left behind. Nothing writes
+to `~/.local`, `~/.cache/uv`, `~/go` or the login shell's PATH.
+
+## Launch routing
+
+Each turn's environment routes the soul's installs first, in this order per
+runtime ([ADR-0322](decisions/ADR-0322-agents-bring-their-own-runtime-and-harness.md)
+decision 4): a per-agent override, the soul's install, the node bundled with
+the host (GeniusBar's, for an undeclared node only), then the host PATH.
+The harness installs come before the runtimes on PATH, and a declared
+runtime that is not installed is installed at launch or fails the launch; it
+never falls through to a host copy. Beside PATH the turn gets
+`npm_config_cache`; `GOROOT`, `GOPATH`, `GOMODCACHE`, `GOCACHE`;
+`UV_PYTHON_INSTALL_DIR`, `UV_PYTHON_PREFERENCE=only-managed`,
+`UV_CACHE_DIR`, `UV_TOOL_DIR`, `UV_TOOL_BIN_DIR`, all inside the soul.
+`HOME` is never changed by this routing (see
+[soul-environment.md](soul-environment.md) for the tool-home contract).
+`soul env --json` shows the result as `launch.routing.runtimes` (`node`,
+`python`, `go` and `harness:<name>`, each `{ source, version, bin }` with
+`source` one of `override`, `soul`, `host-bundled`, `host`, `missing`,
+`unsupported`), `launch.routing.env` (the variable names set) and
+`launch.routing.PATH` (`soul-runtimes`, `host-bundled` or `host`).
+
+## Errors
+
+Every failure is coded, names the runtime, and carries the command that
+fixes it (`action`); the CLI prints `{ error: { code, message, runtime,
+action } }` with `--json` and exits 1. `soul env` reports the last failure
+of each runtime as a readiness problem with the same code.
+
+| Code | Meaning |
+| --- | --- |
+| `runtime-download-failed` | The archive could not be fetched (offline, DNS, a non-200 answer); retry with the network up |
+| `runtime-checksum-mismatch` | The download did not hash to the pinned digest; it was discarded and never cached |
+| `runtime-unsupported-platform` | Neither the catalog nor the package has a download for this host; declare `sources` (or `install.sha256`) for it in a revision |
+| `runtime-install-failed` | The archive did not extract, lacked its executable, uv could not install, or the declaration is invalid |
+
+The legacy npm harness location `.soul-state/harnesses` keeps working;
+`soul env` lists the `harnesses-into-runtimes` migration step as pending
+and nothing moves it yet (slice 6).

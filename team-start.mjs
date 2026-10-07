@@ -54,11 +54,13 @@ export function teamLimits(config = {}) {
  * bundled Node. A refusal names the missing command and how to install it
  * (#418).
  */
-export function harnessLaunchProblem(harness, { registry = ACP_SPAWN_REGISTRY, env = process.env } = {}) {
+export function harnessLaunchProblem(harness, { registry = ACP_SPAWN_REGISTRY, env = process.env, declared = false } = {}) {
   const row = registry[harness];
   if (!row) return 'agent-bot has no such harness';
   if (row.enabled !== true) return 'it is disabled in agent-bot';
-  if (row.soulBin || onPath(row.command, env) || path.isAbsolute(row.command)) return null;
+  // `declared`: the soul's soul.json pins a download for this harness (#583
+  // slice 3), which the launch installs into the soul before it starts.
+  if (row.soulBin || declared || onPath(row.command, env) || path.isAbsolute(row.command)) return null;
   return `the \`${row.command}\` command is not on this host's PATH (${(env.PATH ?? '').split(path.delimiter).filter(Boolean).join(', ') || 'empty'})`
     + (row.installHint ? `; ${row.installHint}` : '');
 }

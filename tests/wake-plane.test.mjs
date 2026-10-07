@@ -238,6 +238,21 @@ test('acpExecutorFor hands the engine the soul\'s own harness directory, and a f
   assert.deepEqual(seen, [[`/souls/${agentId}/.soul-state/harnesses`], []]);
 });
 
+test('acpExecutorFor routes the soul\'s installed runtimes into the turn env, and a failing lookup leaves the host PATH (#583 slice 3)', () => {
+  const agentId = 'agent_11111111-1111-4111-8111-111111111111';
+  const seen = [];
+  const createExecutor = (options) => { seen.push(options.env); return async () => ({ stopReason: 'end_turn' }); };
+  const asked = [];
+  const runtimeEnvFor = ({ agentId: id, harness, env }) => { asked.push([id, harness, env.PATH]); return { PATH: `/souls/${id}/.soul-state/runtimes/node/24.21.0/bin:${env.PATH}`, GOROOT: `/souls/${id}/.soul-state/runtimes/go/1.27.1` }; };
+  acpExecutorFor({ identities: () => ({}), policy: {}, baseEnv: { PATH: '/usr/bin', HOME: '/Users/host' }, createExecutor, runtimeEnvFor })({ agentId, harness: 'opencode', cwd: '/repo', env: {} });
+  acpExecutorFor({ identities: () => ({}), policy: {}, baseEnv: { PATH: '/usr/bin' }, createExecutor, runtimeEnvFor: () => { throw new Error('no soul folder'); } })({ agentId, harness: 'opencode', cwd: '/repo', env: {} });
+  assert.deepEqual(asked, [[agentId, 'opencode', '/usr/bin']]);
+  assert.equal(seen[0].PATH, `/souls/${agentId}/.soul-state/runtimes/node/24.21.0/bin:/usr/bin`);
+  assert.equal(seen[0].GOROOT, `/souls/${agentId}/.soul-state/runtimes/go/1.27.1`);
+  assert.equal(seen[0].HOME, '/Users/host', 'HOME is left to the soul-home routing');
+  assert.equal(seen[1].PATH, '/usr/bin');
+});
+
 test('acpExecutorFor hands the daemon\'s log to the engine, and leaves the engine\'s default without one', () => {
   const agentId = 'agent_11111111-1111-4111-8111-111111111111';
   const seen = [];
