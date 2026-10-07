@@ -48,23 +48,55 @@ export function buildAppJwt(appId, privateKeyPem, nowSeconds) {
   return `${signingInput}.${b64url(signature)}`;
 }
 
-export const MINT_USAGE = `usage: agent-bot mint-token [--app <slug>] [--json]
+export const MINT_USAGE = `usage: agent-bot mint-token [--app <slug>] [--permissions <name>=<level>[,...]] [--json]
 
 Mints a short-lived GitHub App installation token and prints it to stdout.
 
 Options:
   --app <slug>    Mint for this App (else GH_AGENT_APP, the checkout's pin,
                   the agent account, or the detected harness)
+  --permissions <name>=<level>[,<name>=<level>...]
+                  Ask for only these permissions (level read, write or admin),
+                  each at or below what the installation grants; the mint is
+                  refused before any request when one is not granted
   --json          Print { schema_version, token, expires_at, installation_id }
   -h, --help      Show this help and mint nothing
 `;
 
+// GitHub's permission levels, lowest first; a request may not exceed the grant.
+const LEVELS = ['read', 'write', 'admin'];
+const PERMISSION_NAME = /^[a-z][a-z0-9_]{0,63}$/;
+
+/** `--permissions` as a name → level map, or an error naming the bad entry. */
+export function parsePermissions(spec) {
+  const permissions = {};
+  for (const entry of String(spec).split(',')) {
+    const [name, level, ...rest] = entry.split('=');
+    if (!name || !level || rest.length > 0 || !PERMISSION_NAME.test(name) || !LEVELS.includes(level)) {
+      throw new Error(`--permissions entries are <name>=<read|write|admin>, got "${entry}"`);
+    }
+    if (name in permissions) throw new Error(`--permissions names ${name} twice`);
+    permissions[name] = level;
+  }
+  return permissions;
+}
+
 /**
- * The command line, checked before a mint: `{ app, json, help }`. Any other
- * option is an error, and `--app` needs a slug.
+ * The permissions the installation grant does not cover, as
+ * `name: wanted (granted: level|none)` lines; empty when the request fits.
+ */
+export function ungrantedPermissions(requested, granted = {}) {
+  return Object.entries(requested)
+    .filter(([name, level]) => !(name in granted) || LEVELS.indexOf(granted[name]) < LEVELS.indexOf(level))
+    .map(([name, level]) => `${name}: ${level} (granted: ${granted[name] ?? 'none'})`);
+}
+
+/**
+ * The command line, checked before a mint: `{ app, json, help, permissions }`.
+ * Any other option is an error, and `--app` needs a slug.
  */
 export function parseMintArgs(argv = process.argv.slice(2)) {
-  const options = { app: null, json: false, help: false };
+  const options = { app: null, json: false, help: false, permissions: null };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--json') {
@@ -76,6 +108,12 @@ export function parseMintArgs(argv = process.argv.slice(2)) {
       if (!value || value.startsWith('-')) throw new Error('--app requires a slug, e.g. --app yourname-claude-agent');
       if (options.app !== null) throw new Error('--app may be passed only once');
       options.app = value;
+      index += 1;
+    } else if (arg === '--permissions') {
+      const value = argv[index + 1];
+      if (!value || value.startsWith('-')) throw new Error('--permissions requires <name>=<level>[,...], e.g. --permissions contents=read,pull_requests=write');
+      if (options.permissions !== null) throw new Error('--permissions may be passed only once');
+      options.permissions = parsePermissions(value);
       index += 1;
     } else {
       throw new Error(`unknown option: ${arg}`);
@@ -133,7 +171,7 @@ export function appConfig({
   );
 }
 
-async function gh(base, method, path, jwt) {
+async function gh(base, method, path, jwt, payload = null) {
   const res = await fetch(`${base}${path}`, {
     method,
     headers: {
@@ -141,7 +179,9 @@ async function gh(base, method, path, jwt) {
       accept: 'application/vnd.github+json',
       'x-github-api-version': '2022-11-28',
       'user-agent': 'agent-bot-identity',
+      ...(payload ? { 'content-type': 'application/json' } : {}),
     },
+    ...(payload ? { body: JSON.stringify(payload) } : {}),
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -189,11 +229,19 @@ export function pickInstallation(installations, owner) {
 // A soul whose key agent-bot-keyd holds mints through keyd: `viaKeyd` is
 // the daemon's in-process grant (keyd-client.mjs mintViaKeyd); anywhere
 // else the caller asks the daemon on its own binding.
-export async function mint({ slug, env = process.env, agentId = null, viaKeyd = null } = {}) {
+//
+// `permissions` (#213) asks GitHub for a token with only those permissions,
+// each at or below the installation's grant; a request the grant does not
+// cover is refused before the token request, naming what was wanted and what
+// is granted. Without it the token carries the whole grant, as before. A key
+// held by keyd mints through the daemon, which issues the soul's full grant,
+// so `permissions` is refused there rather than silently ignored.
+export async function mint({ slug, env = process.env, agentId = null, viaKeyd = null, permissions = null } = {}) {
   const config = loadConfig({ env });
   const argv = slug ? ['node', 'mint-token.mjs', '--app', slug] : process.argv;
   const resolved = appConfig({ argv, env, config, agentId });
   if (resolved.keyd) {
+    if (permissions) throw new Error(`the ${resolved.slug} key is held by agent-bot-keyd, which mints the soul's full grant through the daemon; --permissions is not available for it`);
     if (viaKeyd) return viaKeyd({ agentId: resolved.keyd.agentId, app: resolved.slug, config });
     const { mintThroughDaemon } = await import('./keyd-client.mjs');
     return mintThroughDaemon({ slug: resolved.slug, env });
@@ -203,12 +251,23 @@ export async function mint({ slug, env = process.env, agentId = null, viaKeyd = 
   const jwt = buildAppJwt(appId, privateKeyPem, Math.floor(Date.now() / 1000));
 
   let installationId = env.GH_APP_INSTALLATION_ID;
+  let installation = null;
   if (!installationId) {
     const installations = await gh(base, 'GET', '/app/installations', jwt);
-    installationId = pickInstallation(installations, config.owner).id;
+    installation = pickInstallation(installations, config.owner);
+    installationId = installation.id;
+  }
+  if (permissions) {
+    // The grant comes with the listing; a pinned installation id is read on its own.
+    if (!installation) installation = await gh(base, 'GET', `/app/installations/${installationId}`, jwt);
+    const granted = installation.permissions && typeof installation.permissions === 'object' ? installation.permissions : {};
+    const missing = ungrantedPermissions(permissions, granted);
+    if (missing.length > 0) {
+      throw new Error(`the installation on ${installation.account?.login ?? installationId} does not grant ${missing.join('; ')} — ask for less, or widen the App's installation on github.com`);
+    }
   }
 
-  const grant = await gh(base, 'POST', `/app/installations/${installationId}/access_tokens`, jwt);
+  const grant = await gh(base, 'POST', `/app/installations/${installationId}/access_tokens`, jwt, permissions ? { permissions } : null);
   return { token: grant.token, expires_at: grant.expires_at, installation_id: Number(installationId) };
 }
 
@@ -228,7 +287,7 @@ async function main() {
       prompt: `Approve a GitHub App installation token for ${slug}[bot] — mint-token was run in the owner's account with no stated agent identity.`,
     });
   }
-  const grant = await mint();
+  const grant = await mint({ permissions: options.permissions });
   process.stdout.write(formatMintGrant(grant, { json: options.json }));
 }
 

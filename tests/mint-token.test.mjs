@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { buildAppJwt, appConfig, mint, pickInstallation, parseMintArgs, MINT_USAGE } from '../mint-token.mjs';
+import { buildAppJwt, appConfig, mint, pickInstallation, parseMintArgs, parsePermissions, ungrantedPermissions, MINT_USAGE } from '../mint-token.mjs';
 
 const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const pem = privateKey.export({ type: 'pkcs8', format: 'pem' });
@@ -244,8 +244,8 @@ test('no selection at all names every option in the error', () => {
 // Installation selection (#194). `owner` is the account an App is installed
 // on, not the roster's governance owner; an App with one installation has one
 // place it can mint, so `owner` is only consulted when there are several.
-const ORG = { id: 42, account: { login: 'org-that-hosts-the-app' } };
-const PERSON = { id: 43, account: { login: 'governance-owner' } };
+const ORG = { id: 42, account: { login: 'org-that-hosts-the-app' }, permissions: { contents: 'write', pull_requests: 'write', metadata: 'read' } };
+const PERSON = { id: 43, account: { login: 'governance-owner' }, permissions: { contents: 'read' } };
 
 test('one installation mints there even when "owner" names another account', () => {
   assert.equal(pickInstallation([ORG], 'governance-owner'), ORG);
@@ -280,32 +280,46 @@ test('no installation at all still points at Install App', () => {
 // a governance owner the App is not installed on, and the App has exactly one
 // installation — this used to fail with 'installed on 1 accounts'.
 function installationServer(installations) {
+  // What each request carried, so a test can prove what was (not) asked for.
+  const requests = [];
   const server = createServer((request, response) => {
-    response.setHeader('content-type', 'application/json');
-    if (!/^Bearer \S+$/.test(request.headers.authorization ?? '')) {
-      response.statusCode = 401;
-      response.end(JSON.stringify({ message: 'Bad credentials' }));
-      return;
-    }
-    if (request.method === 'GET' && request.url === '/app/installations') {
-      response.end(JSON.stringify(installations));
-      return;
-    }
-    const grant = request.url.match(/^\/app\/installations\/(\d+)\/access_tokens$/);
-    if (request.method === 'POST' && grant && installations.some((i) => String(i.id) === grant[1])) {
-      response.end(JSON.stringify({
-        token: `fixture-token-never-logged-${grant[1]}`,
-        expires_at: '2099-01-01T00:00:00Z',
-      }));
-      return;
-    }
-    response.statusCode = 404;
-    response.end(JSON.stringify({ message: 'not found' }));
+    let raw = '';
+    request.on('data', (chunk) => { raw += chunk; });
+    request.on('end', () => {
+      requests.push({ method: request.method, url: request.url, body: raw ? JSON.parse(raw) : null });
+      response.setHeader('content-type', 'application/json');
+      if (!/^Bearer \S+$/.test(request.headers.authorization ?? '')) {
+        response.statusCode = 401;
+        response.end(JSON.stringify({ message: 'Bad credentials' }));
+        return;
+      }
+      if (request.method === 'GET' && request.url === '/app/installations') {
+        response.end(JSON.stringify(installations));
+        return;
+      }
+      const one = request.url.match(/^\/app\/installations\/(\d+)$/);
+      const pinned = one && installations.find((i) => String(i.id) === one[1]);
+      if (request.method === 'GET' && pinned) {
+        response.end(JSON.stringify(pinned));
+        return;
+      }
+      const grant = request.url.match(/^\/app\/installations\/(\d+)\/access_tokens$/);
+      if (request.method === 'POST' && grant && installations.some((i) => String(i.id) === grant[1])) {
+        response.end(JSON.stringify({
+          token: `fixture-token-never-logged-${grant[1]}`,
+          expires_at: '2099-01-01T00:00:00Z',
+        }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ message: 'not found' }));
+    });
   });
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
       resolve({
         apiBase: `http://127.0.0.1:${server.address().port}`,
+        requests,
         close: () => new Promise((done) => server.close(done)),
       });
     });
@@ -345,11 +359,11 @@ test('mint follows "owner" when the App is installed on several accounts', async
 });
 
 test('arguments are checked before a mint: help mints nothing, unknown options are refused (#213)', () => {
-  assert.deepEqual(parseMintArgs([]), { app: null, json: false, help: false });
-  assert.deepEqual(parseMintArgs(['--app', 'you-claude-agent', '--json']), { app: 'you-claude-agent', json: true, help: false });
+  assert.deepEqual(parseMintArgs([]), { app: null, json: false, help: false, permissions: null });
+  assert.deepEqual(parseMintArgs(['--app', 'you-claude-agent', '--json']), { app: 'you-claude-agent', json: true, help: false, permissions: null });
   assert.deepEqual(parseMintArgs(['-h']).help, true);
   assert.deepEqual(parseMintArgs(['--help', '--app', 'you-claude-agent']).help, true);
-  assert.throws(() => parseMintArgs(['--permissions', 'contents=read']), /unknown option: --permissions/);
+  assert.throws(() => parseMintArgs(['--scope', 'contents=read']), /unknown option: --scope/);
   assert.throws(() => parseMintArgs(['--app']), /--app requires a slug/);
   assert.throws(() => parseMintArgs(['--app', '--json']), /--app requires a slug/);
   assert.throws(() => parseMintArgs(['--app', 'a', '--app', 'b']), /only once/);
@@ -371,4 +385,57 @@ test('mint-token --help prints the usage and never reaches GitHub; a bad flag fa
   assert.equal(failure.status, 1);
   assert.match(failure.stderr, /mint-token: unknown option: --permisions/);
   assert.equal(failure.stdout, '');
+});
+
+test('--permissions is parsed strictly and compared with the grant level by level (#213)', () => {
+  assert.deepEqual(parsePermissions('contents=read,pull_requests=write'), { contents: 'read', pull_requests: 'write' });
+  assert.throws(() => parsePermissions('contents'), /<name>=<read\|write\|admin>, got "contents"/);
+  assert.throws(() => parsePermissions('contents=owner'), /got "contents=owner"/);
+  assert.throws(() => parsePermissions('Contents=read'), /got "Contents=read"/);
+  assert.throws(() => parsePermissions('contents=read,contents=write'), /names contents twice/);
+  assert.deepEqual(parseMintArgs(['--permissions', 'contents=read']).permissions, { contents: 'read' });
+  assert.throws(() => parseMintArgs(['--permissions']), /--permissions requires/);
+  assert.throws(() => parseMintArgs(['--permissions', 'a=read', '--permissions', 'b=read']), /only once/);
+  assert.deepEqual(ungrantedPermissions({ contents: 'read' }, { contents: 'write' }), []);
+  assert.deepEqual(ungrantedPermissions({ contents: 'admin', issues: 'read' }, { contents: 'write' }),
+    ['contents: admin (granted: write)', 'issues: read (granted: none)']);
+  assert.deepEqual(ungrantedPermissions({ contents: 'read' }, undefined), ['contents: read (granted: none)']);
+});
+
+test('a least-privilege mint sends only the requested permissions, and one the grant does not cover never reaches the token request', async () => {
+  const github = await installationServer([ORG]);
+  try {
+    const env = mintEnv(github.apiBase, 'governance-owner');
+    const grant = await mint({ env, permissions: { contents: 'read', pull_requests: 'write' } });
+    assert.equal(grant.token, 'fixture-token-never-logged-42');
+    const minted = github.requests.filter((r) => r.method === 'POST');
+    assert.deepEqual(minted.map((r) => r.body), [{ permissions: { contents: 'read', pull_requests: 'write' } }]);
+
+    github.requests.length = 0;
+    await assert.rejects(
+      mint({ env, permissions: { contents: 'admin', issues: 'read' } }),
+      /the installation on org-that-hosts-the-app does not grant contents: admin \(granted: write\); issues: read \(granted: none\)/,
+    );
+    assert.deepEqual(github.requests.map((r) => r.method), ['GET'], 'no token request after a refused grant');
+
+    // A plain mint still asks for the whole grant: no body at all.
+    github.requests.length = 0;
+    await mint({ env });
+    assert.deepEqual(github.requests.filter((r) => r.method === 'POST').map((r) => r.body), [null]);
+  } finally {
+    await github.close();
+  }
+});
+
+test('a pinned GH_APP_INSTALLATION_ID reads that installation\'s grant before a least-privilege mint', async () => {
+  const github = await installationServer([ORG, PERSON]);
+  try {
+    const env = { ...mintEnv(github.apiBase, undefined), GH_APP_INSTALLATION_ID: '43' };
+    const grant = await mint({ env, permissions: { contents: 'read' } });
+    assert.equal(grant.installation_id, 43);
+    assert.deepEqual(github.requests.map((r) => `${r.method} ${r.url}`), ['GET /app/installations/43', 'POST /app/installations/43/access_tokens']);
+    await assert.rejects(mint({ env, permissions: { contents: 'write' } }), /does not grant contents: write \(granted: read\)/);
+  } finally {
+    await github.close();
+  }
 });
