@@ -29,6 +29,13 @@
 //                the daemon checkout lives. The row strips MUSE_AGENT for the
 //                same reason claude strips CLAUDECODE: the daemon is the
 //                parent, not a Muse session.
+//   - kiro     — native `kiro-cli acp` (#523, GeniusBar#185); `kiro-cli login`
+//                (Builder ID, Google, GitHub or Identity Center). The row ships
+//                disabled: on a Mac without a Kiro sign-in, `initialize` on
+//                stdin got no answer within 10 s and `kiro-cli whoami` hung,
+//                so the wire shape, the MCP tool naming and the status reader
+//                are verified with a signed-in Kiro before it is enabled. Until
+//                then Kiro souls join from a running session (agent-bot join).
 //   - cursor / copilot — deliberately no row. Their CLIs keep isolated session
 //                stores, so driving them here would never surface in the
 //                desktop apps this plane exists to reach (#141 census).
@@ -186,6 +193,24 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
     sessionMode: 'workspace-write',
     auth: 'existing `codex` login (shared credential store)',
     notes: 'third-party ACP adapter lane, pinned to @agentclientprotocol/codex-acp 2.1.1 (the @zed-industries package is deprecated): spawn, injected agent-reach MCP and default-deny reach rules verified live (#384); first-party app-server attach stays #148',
+  }),
+  kiro: Object.freeze({
+    harness: 'kiro',
+    enabled: false,
+    command: 'kiro-cli',
+    args: Object.freeze(['acp']),
+    cli: 'kiro-cli',
+    installHint: 'install Kiro CLI (https://kiro.dev) and run `kiro-cli login`',
+    stripEnv: Object.freeze([]),
+    // Sessions, settings, skills and steering; the sign-in lives in
+    // ~/Library/Application Support/kiro-cli on macOS.
+    store: '~/.kiro',
+    // No signIn row yet: `kiro-cli whoami --format json` is the status
+    // command, but its JSON shape and signed-out behaviour (it hung without a
+    // sign-in) are unverified, and a reader that guesses would report a
+    // signed-in Kiro as signed out.
+    auth: '`kiro-cli login` (Builder ID, Google, GitHub or Identity Center)',
+    notes: 'native `kiro-cli acp` is unverified: initialize got no answer within 10 s on a Mac without a Kiro sign-in (#523); enable after a signed-in spike confirms the wire shape and MCP tool naming',
   }),
 });
 

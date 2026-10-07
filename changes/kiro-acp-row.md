@@ -1,0 +1,1 @@
+- `acp-registry.mjs` gains a `kiro` row (`kiro-cli acp`, `kiro-cli login`) that ships disabled: the engine, `team start` and `harness auth` refuse with the reason until a signed-in Kiro verifies the wire shape and MCP tool naming (#523, GeniusBar#185). Kiro souls keep joining from a running session.

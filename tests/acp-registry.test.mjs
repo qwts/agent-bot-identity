@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { ACP_SPAWN_REGISTRY, defaultHarnessFor, onPath, spawnCommand, validateSpawnRow } from '../acp-registry.mjs';
+import { ACP_SPAWN_REGISTRY, defaultHarnessFor, onPath, resolveSpawn, spawnCommand, validateSpawnRow } from '../acp-registry.mjs';
+import { harnessLaunchProblem } from '../team-start.mjs';
 
 test('every sign-in row declares complete commands and a status reader', () => {
   const rows = Object.values(ACP_SPAWN_REGISTRY).filter((row) => row.signIn);
@@ -81,4 +82,17 @@ test('the codex row opens the workspace-write sandbox to the network so the soul
   assert.equal(row.sessionMode, 'workspace-write');
   assert.deepEqual(JSON.parse(row.setEnv.CODEX_CONFIG), { sandbox_workspace_write: { network_access: true } });
   assert.doesNotThrow(() => validateSpawnRow(row));
+});
+
+test('the kiro row is registered but disabled until a signed-in Kiro verifies its ACP (#523)', () => {
+  const row = ACP_SPAWN_REGISTRY.kiro;
+  assert.doesNotThrow(() => validateSpawnRow(row));
+  assert.equal(row.enabled, false);
+  assert.deepEqual([row.command, ...row.args], ['kiro-cli', 'acp']);
+  assert.equal(row.signIn, undefined, 'no status reader until its JSON shape is verified');
+  // The engine, the daemon's team start and harness auth all refuse with the reason, never a half-configured child.
+  assert.throws(() => resolveSpawn(ACP_SPAWN_REGISTRY, 'kiro'), /registered but not enabled: native `kiro-cli acp` is unverified/);
+  assert.equal(harnessLaunchProblem('kiro', { env: { PATH: '/bin' } }), 'it is disabled in agent-bot');
+  assert.equal(defaultHarnessFor(['kiro'], { available: () => false }), null, 'a disabled preference is never the default');
+  assert.deepEqual(spawnCommand(row, '/nowhere'), { command: 'kiro-cli', args: ['acp'] });
 });
