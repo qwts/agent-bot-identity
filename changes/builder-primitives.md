@@ -1,0 +1,1 @@
+- `agent-bot soul build` renders soul-declared subagents for Claude Code and OpenCode, and commands for Claude Code, Gemini and OpenCode, with per-harness received/rendered names and explicit unsupported lists so declarations are never silently dropped (#378, slice 2).

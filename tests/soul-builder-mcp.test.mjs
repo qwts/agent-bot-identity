@@ -217,14 +217,17 @@ test('--check --json reports every harness and never leaves a primitive unreport
   assert.deepEqual(report.drift.sort(), ['.codex/config.toml', '.gemini/settings.json', '.mcp.json', 'CLAUDE.md', 'GEMINI.md', 'opencode.json']);
   assert.deepEqual(report.merged, []);
   assert.deepEqual(report.harnesses.claude, {
-    rendered: ['instructions', 'mcp'], files: ['.mcp.json', 'CLAUDE.md'], unsupported: [],
+    rendered: ['instructions', 'mcp'], files: ['.mcp.json', 'CLAUDE.md'],
+    subagents: { received: [], rendered: [] }, commands: { received: [], rendered: [] },
+    unsupported: { subagents: [], commands: [] },
   });
   assert.deepEqual(report.harnesses.codex.rendered, ['instructions', 'mcp']);
   assert.deepEqual(report.harnesses.gemini.files, ['.gemini/settings.json', 'GEMINI.md']);
   assert.deepEqual(report.harnesses.opencode.files, ['opencode.json']);
   // Every harness the toolkit knows is named, so nothing is dropped in silence.
   assert.deepEqual(Object.keys(report.harnesses).sort(), ['claude', 'codex', 'copilot', 'cursor', 'devin', 'gemini', 'muse', 'opencode']);
-  assert.ok(Object.values(report.harnesses).every((entry) => entry.rendered.includes('instructions') && entry.unsupported.length === 0));
+  assert.ok(Object.values(report.harnesses).every((entry) => entry.rendered.includes('instructions')
+    && Object.values(entry.unsupported).every((names) => names.length === 0)));
   // Harnesses without an MCP adapter in this slice say so by omission.
   assert.deepEqual(report.harnesses.muse.rendered, ['instructions']);
   assert.equal(report.harnesses.cursor.mcp, undefined);

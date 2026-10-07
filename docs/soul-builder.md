@@ -1,8 +1,8 @@
 # Soul builder
 
 `agent-bot soul build [PATH] [--check] [--json]` derives harness files from a
-soul package (ADR-0332 decisions 4 and 8; #378 adds the MCP entry). With no
-PATH, the current Agent ID (environment or worktree pin) resolves through
+soul package (ADR-0332 decisions 4 and 8; #378 adds MCP, subagents and commands).
+With no PATH, the current Agent ID (environment or worktree pin) resolves through
 `soulDirInfo` / `soulDirectory`, including a registered, moved soul. It does not
 guess from the current harness or use the current checkout as the soul
 directory. An explicit PATH needs no identity or credentials.
@@ -36,21 +36,21 @@ Outputs are built for all supported consumers, independently of
 `preferredHarnesses` (which is launch preference, not a build allowlist).
 A native consumer receives no duplicate configuration folder.
 
-| Harness | Instructions | Skills / generated folder | MCP (#378) |
-| --- | --- | --- | --- |
-| Claude Code | Marked `CLAUDE.md` with `@AGENTS.md` | `.claude/skills/<name>/` | `.mcp.json` |
-| Gemini CLI | Marked `GEMINI.md` with `@AGENTS.md` | `.gemini/skills/<name>/` | `.gemini/settings.json` |
-| Codex | Native `AGENTS.md` | No `.codex/skills/` output; native skills need no harness translation | `.codex/config.toml` |
-| OpenCode | Native `AGENTS.md` | Uses shared `.claude/skills/`; no `.opencode/` output | `opencode.json` |
-| Cursor | Native `AGENTS.md` | Uses shared `.claude/skills/`; no `.cursor/` output | None yet |
-| Copilot CLI | Native instruction support | Uses shared `.claude/skills/`; no `.github/` output | None yet |
-| Devin CLI | Claude-compatible consumer | Shared Claude output; no `.devin/` output | None yet |
-| Muse | No verified definition adapter in this repo | No dedicated output; follow-up | None yet |
+| Harness | Instructions | Skills / generated folder | MCP (#378) | Subagents | Commands |
+| --- | --- | --- | --- | --- | --- |
+| Claude Code | Marked `CLAUDE.md` with `@AGENTS.md` | `.claude/skills/<name>/` | `.mcp.json` | `.claude/agents/<name>.md` | `.claude/commands/<name>.md` |
+| Gemini CLI | Marked `GEMINI.md` with `@AGENTS.md` | `.gemini/skills/<name>/` | `.gemini/settings.json` | Unsupported | `.gemini/commands/<name>.toml` |
+| Codex | Native `AGENTS.md` | Native skills; no duplicate output | `.codex/config.toml` | Unsupported | Unsupported |
+| OpenCode | Native `AGENTS.md` | Uses shared `.claude/skills/` | `opencode.json` | `.opencode/agent/<name>.md` | `.opencode/command/<name>.md` |
+| Cursor | Native `AGENTS.md` | Uses shared `.claude/skills/`; no `.cursor/` output | None yet | Unsupported | Unsupported |
+| Copilot CLI | Native instruction support | Uses shared `.claude/skills/`; no `.github/` output | None yet | Unsupported | Unsupported |
+| Devin CLI | Claude-compatible consumer | Shared Claude skills; no `.devin/` output | None yet | Unsupported | Unsupported |
+| Muse | No verified definition adapter in this repo | No dedicated output; follow-up | None yet | Unsupported | Unsupported |
 
-"None yet" means no adapter in this slice, not that the harness lacks the
-capability: `soul build --json` names every harness and lists the primitives it
-received, so a missing adapter is visible in the report. A later slice adds the
-adapter (and fills in `unsupported` for what a harness cannot honor at all).
+"None yet" and "Unsupported" describe adapters in this slice, not a claim
+that a harness lacks the capability. Subagents and commands without adapters
+are explicitly listed under `unsupported` in the build report, including Devin
+whose shared Claude skills do not imply a verified subagent/command adapter.
 
 The ACP registry contains Claude, OpenCode, Muse and disabled Codex launch
 rows; it deliberately omits Cursor/Copilot. Launch enablement does not control
@@ -78,6 +78,72 @@ or silently converted into invalid native files. Skills using these assets
 should resolve the listed source location rather than assume every asset was
 copied into the native folder. Broader lossless sibling replication needs an
 ownership contract for files that cannot carry a marker.
+
+## Declaring subagents and commands (#378, slice 2)
+
+Declare a subagent in `agents/<name>.md`, using Claude Code agent front matter:
+
+```markdown
+---
+name: review
+description: Review code for correctness
+tools: Read, Grep, Bash
+model: provider/model
+---
+Review the proposed change and explain any concrete defects.
+```
+
+`name` and `description` are required. `name` must match the filename stem;
+like skill names, stems use lowercase letters, digits and single hyphens,
+with a maximum of 64 characters. Nested declarations, traversal and control
+characters are refused. Agents and commands may share a name because their
+rendered paths differ. `tools` and `model` are optional. Omitting them leaves
+the target harness defaults in effect; a declared model is copied verbatim,
+so authors must choose a model identifier usable by their target harnesses.
+
+Claude receives the original front matter and prompt, with LF normalization
+and the generated marker immediately after the closing delimiter. OpenCode
+receives `description`, `mode: subagent`, and `model` when declared. Its `tools`
+map disables unlisted tools (`"*": false`) and enables the declared names in
+lowercase (`Read` → `read`, `Bash` → `bash`, `MultiEdit` → `edit`). Tool names
+may be a comma-separated string, an inline YAML list, or an indented YAML list;
+an empty inline list disables all tools. Permission expressions such as
+`Bash(git:*)` are refused rather than widened into unrestricted tools.
+
+Declare a command in `commands/<name>.md`:
+
+```markdown
+---
+description: Review a change
+argument-hint: "[path]"
+---
+Review $ARGUMENTS and summarize the findings.
+```
+
+The front matter and both fields are optional. Claude retains the declaration,
+including its opaque `argument-hint`; an empty front-matter block is omitted.
+OpenCode receives only `description` when present and the prompt with `$ARGUMENTS` unchanged. Gemini receives TOML `description`
+when present and `prompt`, replacing every `$ARGUMENTS` with `{{args}}`.
+Strings are escaped as TOML basic strings, preserving multiline prompts,
+quotes and backslashes. `argument-hint` has no translation in these adapters.
+
+Translated scalar fields support plain strings, single/double quotes, and
+literal (`|`) or folded (`>`) blocks with optional `-`/`+` chomping. Quote YAML
+punctuation in scalar values. Duplicate fields, invalid strings, unsupported
+translated YAML constructs, and malformed front matter fail the build. Other
+Claude-specific fields remain in Claude's copy; they are not translated.
+These adapters remain dependency-free and do not implement general YAML.
+
+Each harness report adds `subagents` and `commands`, each containing
+`{received: [names], rendered: [names]}`. The existing `rendered` primitive
+list gains these kinds only when files were generated for that harness;
+`files` includes their paths. `unsupported` is
+`{subagents: [names], commands: [names]}`, with empty lists for supported or
+undeclared kinds. All name lists are byte-sorted. For example, Gemini reports
+`subagents: {received: ["review"], rendered: []}` and
+`unsupported: {subagents: ["review"], commands: []}` for the examples above.
+The `.claude/`, `.gemini/` and `.opencode/` prefixes already cover all new files;
+the fixed generated-path list and its order are unchanged.
 
 ## The soul's MCP entry (#378)
 
@@ -148,10 +214,9 @@ package validation. `--check` never writes and exits 1 for drift/conflicts;
 clean checks exit 0. Without `--json` the command prints a short human summary
 (counts, each merge, and the primitives every harness received); `--json`
 prints `{drift, writes, removals, merged, harnesses}`, where `harnesses` maps
-each known harness to `{rendered, files, unsupported}` — `unsupported` is empty
-in this slice and is where a later slice reports a primitive a harness cannot
-honor. New package homes build after copying, before dependency installation
-and git initialization; a failed build removes the half-created home.
+each known harness to `{rendered, files, subagents, commands, unsupported}`
+as described above. New package homes build after copying, before dependency
+installation and git initialization; a failed build removes the half-created home.
 
 Format 2 ignores only exact expected bytes. Editing a marked generated file
 changes the revision until rebuilt; the marker cannot hide arbitrary authored
@@ -167,10 +232,9 @@ close that gap.
 
 ## Follow-ups
 
-Subagents, commands and hooks (#378's later slices) declare one way in the soul
-and are rendered the same way; `unsupported` is where they report a harness
-that cannot take them. MCP adapters for Cursor, Copilot, Devin and Muse are not
-in this slice.
+Hooks remain a later slice of #378, owned separately by `sync-hooks.mjs`.
+MCP adapters for Cursor, Copilot, Devin and Muse, and additional native
+subagent/command adapters, are not in this slice.
 
 The rendered entry is named `agent-bot`; the daemon's injected entry and
 `reachPolicyRules()` name the same server `agent-reach`, so a
