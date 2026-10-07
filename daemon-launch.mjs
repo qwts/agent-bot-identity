@@ -51,7 +51,7 @@ const withoutParent = ({ parent: _ignored, ...fields }) => fields;
 const LAUNCHABLE = new Set(['package', 'installed']);
 
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
-  isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
+  isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -105,6 +105,15 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       const harness = event.harness ?? await defaultHarness(soul ? { soul } : { package: packagePath });
       if (typeof harness !== 'string' || !HARNESS_KEY_PATTERN.test(harness)) {
         throw new Error(event.harness === undefined ? 'no harness for this launch: name one, or install a harness' : 'invalid launch harness');
+      }
+      // A harness the daemon cannot start is refused here, before a package
+      // spawn mints a soul and joins it to the hub (#531, GeniusBar#196): a launch
+      // that fails later rolls back, and a rollback that fails part way
+      // leaves a dead companion in the roster.
+      const problem = harnessProblem ? await harnessProblem(harness) : null;
+      if (problem) {
+        throw new Error(`cannot launch on harness ${harness}: ${problem}`
+          + (/no such harness/.test(problem) ? '; a harness agent-bot cannot start joins from its own session with `agent-bot join`' : ''));
       }
       // Same bound as agent-comms' broker launch contract (lib/broker/launch.mjs).
       if (event.name !== undefined && (typeof event.name !== 'string' || !event.name.trim() || event.name.length > LAUNCH_NAME_MAX || /[\u0000-\u001f\u007f]/.test(event.name))) throw new Error('invalid launch name');
@@ -175,7 +184,9 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       // there too; local callers and the journal also get a structured code.
       Object.assign(row, { status: 'failed', agentId: null, detail: error.code === 'soul-paused' ? `soul-paused: ${error.message}` : error.message,
         ...(error.code === 'soul-paused' ? { code: error.code } : {}) });
-      if (spawned) { try { await discard(spawned, rollback); } catch { /* the failure is already reported */ } }
+      // The launch failure is what the principal sees; a rollback that fails
+      // part way is named beside it, so a companion that stays has a reason.
+      if (spawned) { try { await discard(spawned, rollback); } catch (rollbackError) { row.detail = `${row.detail} (rollback failed: ${rollbackError.message})`; } }
     }
     save(); // Persist outcome before network I/O; retry only the report.
     await reportRow(row, report);

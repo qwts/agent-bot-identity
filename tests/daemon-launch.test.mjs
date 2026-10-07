@@ -614,3 +614,33 @@ test('brief accepts both length boundaries and trims before recording', async (t
     assert.equal(f.reports[0].status, 'launched');
   }
 });
+
+test('a harness the daemon cannot start is refused before a package spawn mints (#531)', async (t) => {
+  const spawns = [];
+  const f = fixture(t, {
+    spawnPackage: (request) => { spawns.push(request); return { id: agentId }; },
+    harnessProblem: (harness) => (harness === 'kiro' ? 'agent-bot has no such harness' : harness === 'muse' ? 'it is disabled in agent-bot' : null),
+  });
+  await f.handler(event, f.ports);
+  assert.equal(f.reports[0].status, 'launched', 'a harness without a problem launches as before');
+  await f.handler({ ...event, requestId: 'r-kiro', soul: undefined, package: '/pkg', harness: 'kiro' }, f.ports);
+  assert.deepEqual(f.reports[1], { requestId: 'r-kiro', status: 'failed', agentId: null,
+    detail: 'cannot launch on harness kiro: agent-bot has no such harness; a harness agent-bot cannot start joins from its own session with `agent-bot join`' });
+  await f.handler({ ...event, requestId: 'r-muse', harness: 'muse' }, f.ports);
+  assert.deepEqual(f.reports[2], { requestId: 'r-muse', status: 'failed', agentId: null, detail: 'cannot launch on harness muse: it is disabled in agent-bot' });
+  assert.deepEqual(spawns, [], 'nothing minted');
+  assert.equal(f.calls.length, 1, 'no executor for a refused launch');
+});
+
+test('a rollback that fails part way is named beside the launch failure (#531)', async (t) => {
+  const spawnedId = 'agent_22222222-2222-4222-8222-222222222222';
+  const f = fixture(t, {
+    spawnPackage: () => ({ id: spawnedId }),
+    executorFor: () => async () => { throw new Error('no ACP drive entry for harness \'kiro\''); },
+    discard: async () => { throw new Error('ENOTEMPTY: directory not empty, rename \'/souls/Kiro.soul\' -> \'/souls/.archive/Kiro.soul\''); },
+  });
+  await f.handler({ ...event, requestId: 'r-roll', soul: undefined, package: '/pkg' }, f.ports);
+  assert.deepEqual(f.reports[0], { requestId: 'r-roll', status: 'failed', agentId: null,
+    detail: 'no ACP drive entry for harness \'kiro\' (rollback failed: ENOTEMPTY: directory not empty, rename \'/souls/Kiro.soul\' -> \'/souls/.archive/Kiro.soul\')' });
+  assert.equal(JSON.parse(readFileSync(f.options.file))[0].detail, f.reports[0].detail, 'the journal keeps it too');
+});
