@@ -1,0 +1,1 @@
+- `agent-bot doctor` warns when a rostered worktree pin has no usable daemon binding for the calling soul; binding-related gh shim refusals now point to doctor and explain how to join as that soul or re-bind with `agent-bot setup-worktree` (#512).

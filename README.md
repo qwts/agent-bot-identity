@@ -1322,6 +1322,11 @@ implicitly — identity finalize and worktree teardown do not call it — and
 
 ### 4. Install the hooks (and optionally the gh shim)
 
+When the gh shim refuses a mint because the session's soul binding is missing or
+unreadable, it points to `agent-bot doctor` and the fix: join as that soul with
+`agent-bot join --name NAME --harness HARNESS`, or re-bind with
+`agent-bot setup-worktree`.
+
 ```bash
 node install.mjs
 # or, hooks + automatic GH_TOKEN for gh:
@@ -1673,6 +1678,10 @@ are separate; a checkout with no bot identity (your own account, no pin) is
 agent account is verified like any worktree. Human output prints one action for
 the earliest failure, while
 JSON retains secret-free status for every check and App.
+A rostered worktree pin without a usable binding in a soul-bound session produces
+`worktree-binding-unusable`: check in as that soul with
+`agent-bot join --name NAME --harness HARNESS`, or re-bind the checkout to the
+session soul with `agent-bot setup-worktree`.
 
 ## Failure modes
 
