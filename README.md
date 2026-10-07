@@ -1180,7 +1180,10 @@ operations, stops after the first failed mutation phase, and reports later live
 verification as skipped. A full bootstrap requires a checkout that resolves a
 bot identity (an agent account, `GH_AGENT_APP`, or a pin); in your own account
 use `--machine-only` deliberately, or the bind phase reports
-`bot-identity-unresolved`.
+`bot-identity-unresolved`. In a rostered agent account the account itself
+resolves an App, so a bootstrap run outside a repository there reports
+`checkout-unbound` instead (the identity is there; run it from the checkout,
+or `--machine-only`), and the `account.app` machine check names the App.
 
 The numbered sections below document standalone operator provisioning and the
 runtime's underlying components. They are not a substitute for an
