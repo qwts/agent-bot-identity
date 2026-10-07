@@ -1,1 +1,0 @@
-- A launch can name a short `role` for a new soul (agent-comms `launch` `role`, `soul spawn --role`, `soul fork --role`): 1 to 60 printable characters, trimmed and written into the spawned soul's `soul.json` where `population list` reads it; an invalid role, or one on an existing soul's relaunch, is refused before anything spawns (#535).

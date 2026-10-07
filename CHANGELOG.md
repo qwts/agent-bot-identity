@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.31
+
+- A launch can name a short `role` for a new soul (agent-comms `launch` `role`, `soul spawn --role`, `soul fork --role`): 1 to 60 printable characters, trimmed and written into the spawned soul's `soul.json` where `population list` reads it; an invalid role, or one on an existing soul's relaunch, is refused before anything spawns (#535).
+
 ## 0.10.30
 
 - The daemon reports each stage of a launch (`checking`, `account`, `joining`, `harness`) to agent-comms through its `launch-progress` op (agent-comms 0.3.12) so a launcher can show the steps, best effort on an older broker, and keeps the stage in the launch journal so a failed launch says where it stopped (#536).\n
