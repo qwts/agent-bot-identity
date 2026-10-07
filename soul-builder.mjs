@@ -57,6 +57,105 @@ const HARNESS_FILES = Object.freeze({
   muse: Object.freeze({ instructions: null, skills: null, mcp: null }),
 });
 
+// Settings are defaults for native harness launches; owner-selected launch
+// models remain outside the package and take precedence at launch.
+export const SETTINGS_TARGETS = Object.freeze([
+  Object.freeze({ harness: 'claude', path: '.claude/settings.json', keys: Object.freeze(['model', 'permissionMode', 'reasoningEffort']) }),
+  Object.freeze({ harness: 'codex', path: '.codex/config.toml', keys: Object.freeze(['model', 'permissionMode', 'reasoningEffort']) }),
+  Object.freeze({ harness: 'gemini', path: '.gemini/settings.json', keys: Object.freeze(['model']) }),
+  Object.freeze({ harness: 'opencode', path: 'opencode.json', keys: Object.freeze(['model', 'permissionMode']) }),
+]);
+
+export function harnessSettings(manifest, name) {
+  return { ...manifest.harness, ...manifest.harnesses?.[name] };
+}
+
+export function settingsTargets(manifest) {
+  return SETTINGS_TARGETS.filter(({ harness, keys }) => keys.some((key) => Object.hasOwn(harnessSettings(manifest, harness), key)));
+}
+
+function settingsObject(path, bytes) {
+  if (!bytes) return {};
+  let value;
+  try { value = JSON.parse(authoredText(path, bytes)); }
+  catch (error) { throw new Error(`${path}: cannot merge settings (${error.message})`); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${path} must be a JSON object to merge settings`);
+  return value;
+}
+
+function nestedSettings(value, key, path) {
+  if (value[key] === undefined) return {};
+  if (!value[key] || typeof value[key] !== 'object' || Array.isArray(value[key])) {
+    throw new Error(`${path} ${key} must be a JSON object to merge settings`);
+  }
+  return value[key];
+}
+
+// Separate TOML statements without treating apparent keys/headers inside
+// multiline strings, arrays or inline tables as configuration. This is a
+// lexical merge, not a general TOML parser; unrelated bytes stay in order.
+function tomlStatements(content) {
+  const statements = [];
+  let start = 0, quote = '', depth = 0, comment = false;
+  for (let i = 0; i < content.length; i++) {
+    const char = content[i];
+    if (comment) { if (char !== '\n') continue; comment = false; }
+    else if (quote) {
+      if (quote[0] === '"' && char === '\\') { i++; continue; }
+      if (content.startsWith(quote, i)) { i += quote.length - 1; quote = ''; }
+      continue;
+    } else if (char === '#') { comment = true; continue; }
+    else if (char === '"' || char === "'") {
+      quote = content.startsWith(char.repeat(3), i) ? char.repeat(3) : char;
+      i += quote.length - 1;
+      continue;
+    } else if (char === '[' || char === '{') depth++;
+    else if (char === ']' || char === '}') depth--;
+    if (char === '\n' && depth === 0) { statements.push(content.slice(start, i + 1)); start = i + 1; }
+  }
+  if (quote || depth !== 0) throw new Error('.codex/config.toml has an unterminated TOML value');
+  if (start < content.length) statements.push(content.slice(start));
+  return statements;
+}
+
+function renderCodexSettings(path, bytes, settings) {
+  const values = {};
+  if (settings.model !== undefined) values.model = settings.model;
+  if (settings.reasoningEffort !== undefined) values.model_reasoning_effort = settings.reasoningEffort;
+  if (settings.permissionMode !== undefined) {
+    values.approval_policy = settings.permissionMode === 'safe' ? 'on-request' : 'never';
+    values.sandbox_mode = settings.permissionMode === 'safe' ? 'workspace-write' : 'danger-full-access';
+  }
+  let root = true;
+  const kept = tomlStatements(authoredText(path, bytes ?? Buffer.alloc(0))).filter((statement) => {
+    if (statement.trim() === `# ${MARKER}`) return false;
+    if (/^\s*\[/.test(statement)) root = false;
+    const key = statement.match(/^\s*(?:([\w-]+)|"([\w-]+)"|'([\w-]+)')\s*=/);
+    return !root || !key || !Object.hasOwn(values, key[1] ?? key[2] ?? key[3]);
+  }).join('').replace(/^\n+|\n+$/g, '');
+  const lines = Object.entries(values).map(([key, value]) => `${key} = ${quotedString(value)}`).join('\n');
+  return Buffer.from(`# ${MARKER}\n${lines}\n${kept ? `\n${kept}\n` : ''}`);
+}
+
+function renderSettings(target, bytes, settings) {
+  if (target.harness === 'codex') return renderCodexSettings(target.path, bytes, settings);
+  const { _comment, ...value } = settingsObject(target.path, bytes);
+  if (settings.model !== undefined) value.model = settings.model;
+  if (target.harness === 'claude') {
+    if (settings.reasoningEffort !== undefined) value.effortLevel = settings.reasoningEffort;
+    if (settings.permissionMode !== undefined) value.permissions = {
+      ...nestedSettings(value, 'permissions', target.path),
+      defaultMode: settings.permissionMode === 'safe' ? 'default' : 'bypassPermissions',
+    };
+  }
+  if (target.harness === 'opencode' && settings.permissionMode !== undefined) value.permission = {
+    ...nestedSettings(value, 'permission', target.path),
+    edit: settings.permissionMode === 'safe' ? 'ask' : 'allow',
+    bash: settings.permissionMode === 'safe' ? 'ask' : 'allow',
+  };
+  return Buffer.from(`${JSON.stringify({ _comment: MARKER, ...value }, null, 2)}\n`);
+}
+
 // JSON has no comment syntax, so a generated JSON file carries the marker as
 // its first `_comment` string: the same header position as every other marked
 // file, in a key each harness ignores rather than a syntax error it refuses.
@@ -154,14 +253,14 @@ function renderMcp(target, authored) {
 function tomlMerge(target, authored) {
   const kept = [];
   let skipping = false;
-  for (const line of authoredText(target.path, authored).split('\n')) {
-    const header = line.match(/^\s*\[\[?([^\]\s]+)\]\]?[ \t]*(#.*)?$/);
+  for (const line of tomlStatements(authoredText(target.path, authored))) {
+    const header = line.trim().match(/^\[\[?([^\]\s]+)\]\]?[ \t]*(#.*)?$/);
     if (header) skipping = header[1] === target.table || header[1].startsWith(`${target.table}.`);
     if (skipping) continue;
     if (line.trim() === MARKER || line.trim() === `# ${MARKER}`) continue;
     kept.push(line);
   }
-  const body = kept.join('\n').replace(/^\n+|\n+$/g, '');
+  const body = kept.join('').replace(/^\n+|\n+$/g, '');
   const table = [`[${target.table}]`, `command = "${MCP_COMMAND}"`, `args = ["${MCP_SUBCOMMAND}"]`].join('\n');
   return `# ${MARKER}\n${body ? `${body}\n\n` : ''}${table}\n`;
 }
@@ -169,15 +268,16 @@ function tomlMerge(target, authored) {
 // Claude renders every declared agent/command, so its output inventories the
 // received names even for harnesses without adapters. No hidden Map metadata
 // or source/disk access is needed by the report.
-export function harnessReport(output, { comms = true } = {}) {
+export function harnessReport(output, { comms = true, manifest = {} } = {}) {
   const skills = [...output.keys()].some((path) => Object.values(HARNESS_FILES).some((files) => files.skills && path.startsWith(files.skills)));
   const names = (prefix) => prefix ? [...output.keys()].filter((path) => path.startsWith(prefix))
     .map((path) => path.slice(prefix.length).replace(/\.(md|toml)$/, '')).sort(compare) : [];
   const received = { subagents: names(HARNESS_FILES.claude.subagents), commands: names(HARNESS_FILES.claude.commands) };
   const report = {};
   for (const [harness, files] of Object.entries(HARNESS_FILES)) {
+    const settingsTarget = SETTINGS_TARGETS.find((target) => target.harness === harness);
     const paths = [...output.keys()].filter((path) => path === files.instructions
-      || (files.skills && path.startsWith(files.skills)) || path === files.mcp
+      || (files.skills && path.startsWith(files.skills)) || path === files.mcp || path === settingsTarget?.path
       || (files.subagents && path.startsWith(files.subagents)) || (files.commands && path.startsWith(files.commands)));
     // An empty build rendered nothing at all: there is no AGENTS.md to point a
     // harness at, so it gets no instructions either.
@@ -194,7 +294,12 @@ export function harnessReport(output, { comms = true } = {}) {
       unsupported[kind] = files[kind] ? [] : [...received[kind]];
       if (delivered.length) rendered.push(kind);
     }
-    report[harness] = { rendered, files: paths, ...primitives, unsupported };
+    const settingKeys = Object.keys(harnessSettings(manifest, harness)).sort(compare);
+    const deliveredSettings = settingKeys.filter((key) => settingsTarget?.keys.includes(key) && output.has(settingsTarget.path));
+    unsupported.settings = settingKeys.filter((key) => !deliveredSettings.includes(key));
+    if (deliveredSettings.length) rendered.push('settings');
+    report[harness] = { rendered, files: paths, ...primitives,
+      settings: { received: settingKeys, rendered: deliveredSettings }, unsupported };
   }
   return report;
 }
@@ -376,6 +481,10 @@ export function buildHarnessFiles(packageEntries, { authored = new Map() } = {})
   // and repeatable from the same package plus the same file.
   if (soulCommsDeclared(source)) {
     for (const target of MCP_TARGETS) output.set(target.path, renderMcp(target, authored.get(target.path)));
+  }
+  const manifest = source.has('soul.json') ? JSON.parse(text(source.get('soul.json'))) : {};
+  for (const target of settingsTargets(manifest)) {
+    output.set(target.path, renderSettings(target, output.get(target.path) ?? authored.get(target.path), harnessSettings(manifest, target.harness)));
   }
   return new Map([...output].sort(([a], [b]) => compare(a, b)));
 }

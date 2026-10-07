@@ -1,0 +1,1 @@
+- `agent-bot soul build` renders shared and per-harness model, reasoning effort, and permission-mode declarations from `soul.json`, preserving unrelated authored settings and reporting unsupported settings in `--check --json`; launch-time model choices retain precedence (#379).
