@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.47
+
+- `agent-bot soul runtimes <id>` and `soul runtimes install <id>` provision the runtimes (`node`, `python` via uv, `go`) and non-npm harnesses a soul declares in `soul.json` into `.soul-state/runtimes/`, from a pinned, checksum-verified catalog, atomically and never on the host; launches route them first and install what is missing as a `runtimes` stage, with coded errors (#583 slice 3, #322).
+
 ## 0.10.46
 
 - `agent-bot soul env <soul> [--json]` describes a soul's whole environment (schema 1: components with classification and retention, declared against installed harnesses and runtimes, launch routing, readiness problems, pending migration steps), served by the daemon at `GET /v0/soul/env`; `soul revision prepare <soul>` stages the editable definition under `.soul-state/tmp/` for `soul revision edit --apply`. The classification contract lives in `soul-env-contract.mjs`; ADR-0583 records the decisions (#583).
