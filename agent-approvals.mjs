@@ -22,6 +22,27 @@ import { soulMarkers } from './owner-gate.mjs';
 
 const USAGE = 'usage: agent-bot approvals list [--json] | approvals approve <proposalId> [--scope once|session] [--json] [--principal-stdin] | approvals deny <proposalId> [--json] [--principal-stdin]';
 
+// Wording from README.md, “Approving a soul's tool call”.
+const HELP = `${USAGE}
+
+Tool-permission requests souls are waiting on.
+
+approve and deny echo the proposal's operation digest, so a decision lands
+only on the operation it names, and refuse a caller with a soul marker.
+Before any decision lands, the daemon asks for the owner's presence:
+keyd's Touch ID or login-password prompt naming the soul and tool, or the
+administrator dialog when keyd cannot ask. The daemon token alone never
+decides, and a --principal-stdin credential is checked as well, not instead.
+
+Approval scope defaults to once, which also allows the same tool for the
+rest of the current turn. --scope session allows the exact tool for that
+soul across turns in the same harness session. Grants live only in daemon
+memory and clear on a session change, soul stop, soul pause, or daemon
+restart. Policy deny and computer-use off still win.
+
+See README.md, “Approving a soul's tool call”.
+`;
+
 function refuseSoul({ env, cwd }) {
   const markers = soulMarkers({ env, cwd });
   if (markers.length) {
@@ -38,6 +59,10 @@ export async function approvalsCommand(argv, {
   write = (text) => process.stdout.write(text),
   client = daemonClient({ env, home, cwd }),
 } = {}) {
+  if (argv[0] === '--help' || argv[0] === '-h') {
+    write(HELP);
+    return 0;
+  }
   const json = argv.includes('--json');
   const presented = argv.includes('--principal-stdin');
   const args = argv.filter((arg) => arg !== '--json' && arg !== '--principal-stdin');

@@ -45,6 +45,46 @@ import { linkWorktree, soulWorktreePath } from './soul-worktrees.mjs';
 import { resumeHarnessSupported } from './wake-resume.mjs';
 
 const USAGE = 'usage: agent-bot join --name NAME --harness H [--template PATH] [--soul AGENT_ID] [--wake resume:read-only|resume:workspace|acp] [--principal-stdin] [--json]';
+// Wording from docs/joining.md and docs/soul-homes.md.
+const HELP = `${USAGE}
+
+Become a soul and join agent-comms. It needs no GitHub App.
+
+It reuses the soul already pinned in this checkout, or the soul whose binding
+the checkout holds. Otherwise it uses --soul, which must be an active soul.
+Otherwise it spawns a new instance of --template, with the same mechanism as
+agent-bot soul spawn. With no --template, it uses the Starter template the
+install ships, if any. Homebrew and source installs ship none, so they create
+a soul with no package.
+
+Running it again from the same checkout reuses the soul. A checkout already
+pinned to another soul is refused.
+
+Writes:
+  Soul directory: <soulsRoot>/<census-name>.soul. Named template instances
+  use their manifest display name instead. The root resolves from
+  AGENT_BOT_SOULS_HOME, then the absolute user setting settings.soulsRoot,
+  then ~/.agent-bot/souls.
+  Pin: agentBot.agentId in the checkout's worktree config.
+  The census row records the checkout, so a resume or webhook cold wake runs
+  there. The checkout is linked into the soul. A single-use bind token is
+  minted, so the MCP bind tool works in that checkout.
+  Outside a git checkout, the soul's own worktrees/workspace is created and
+  git init'ed on first join. No GitHub attribution (author, credential
+  helper, hooks) is written.
+  It runs agent-comms join --name NAME --harness H as the soul.
+
+--wake: with --wake only, new messages then wake the soul.
+  resume:read-only or resume:workspace resumes its own harness session for
+  one turn. acp runs an ACP turn through the soul's daemon binding.
+  Cold wake is owner only, so the owner gate runs before anything is created,
+  and a refusal changes nothing. The owner approves with --principal-stdin
+  (the agent-comms principal on stdin, accepted only from a broker in another
+  account) or the macOS approval dialog.
+--json prints { agentId, soulDir, worktree, address, created, bind, wake }.
+
+See docs/joining.md and docs/soul-homes.md.
+`;
 /** `--wake` values: a resume policy (#323) or an ACP turn (#259). A webhook needs its URL and key; use `soul cold-wake`. */
 export const JOIN_WAKES = { 'resume:read-only': { lane: 'resume', policy: 'read-only' }, 'resume:workspace': { lane: 'resume', policy: 'workspace' }, acp: true };
 export const WORKSPACE_NAME = 'workspace';
@@ -325,7 +365,9 @@ export function parseJoinArgs(argv) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  try {
+  if (process.argv[2] === '--help' || process.argv[2] === '-h') {
+    process.stdout.write(HELP);
+  } else try {
     const { json, principalStdin, name, harness, template, soul, wake } = parseJoinArgs(process.argv.slice(2));
     let principal = null;
     if (principalStdin) {

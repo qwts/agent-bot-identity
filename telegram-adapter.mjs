@@ -732,7 +732,31 @@ function parseCli(argv) {
 
 const USAGE = 'usage: agent-bot telegram <run|status> [--json]';
 
+// Wording from README.md, “Telegram adapter (remote messaging)”.
+const HELP = `${USAGE}
+
+Long-poll Telegram as a thin transport over the daemon.
+
+agent-bot telegram run long-polls the Telegram Bot API and projects the
+daemon's /v1 interaction contract into a chat: it is a thin transport, not
+an agent runtime. The local daemon must be running (agent-bot daemon start);
+there is no in-process fallback.
+
+The adapter keeps only a small restart-safe projection file
+($XDG_STATE_HOME/agent-bot/telegram/state.json, override
+AGENT_BOT_TELEGRAM_STATE_PATH) holding the update offset, per-chat soul
+selections, and session/invocation references — chat IDs map to daemon
+sessions, never the other way round.
+
+See README.md, “Telegram adapter (remote messaging)”, for enrollment,
+token provisioning, policy defaults, and trust and privacy limits.
+`;
+
 async function main() {
+  if (process.argv[2] === '--help' || process.argv[2] === '-h') {
+    process.stdout.write(HELP);
+    return 0;
+  }
   const { command, json } = parseCli(process.argv);
   switch (command) {
     case 'run': {

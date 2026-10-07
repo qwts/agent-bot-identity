@@ -77,3 +77,26 @@ test('a missing bundle is reported, not invented', () => {
   assert.equal(r.status, 2);
   assert.equal(r.stdout, '');
 });
+
+
+for (const command of ['join', 'soul', 'approvals', 'web', 'telegram']) {
+  for (const flag of ['--help', '-h']) {
+    test(`${command} ${flag} explains effects without running the command (#513)`, () => {
+      const r = run(command, flag);
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(r.stderr, '');
+      assert.match(r.stdout, new RegExp(`usage: agent-bot ${command} `));
+      assert.ok(r.stdout.trim().split('\n').length > 3, 'help includes a description');
+      if (command === 'join') {
+        assert.match(r.stdout, /docs\/joining\.md/);
+        assert.match(r.stdout, /reuses the soul already pinned in this checkout/);
+        assert.match(r.stdout, /needs no GitHub App/);
+        assert.match(r.stdout, /--soul, which must be an active soul/);
+        assert.match(r.stdout, /new instance of --template/);
+        assert.match(r.stdout, /pinned to another soul is refused/);
+        assert.match(r.stdout, /agentBot\.agentId/);
+        assert.match(r.stdout, /census row/);
+      }
+    });
+  }
+}

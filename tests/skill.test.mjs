@@ -116,3 +116,27 @@ test('CLI help documents source and installed bootstrap entrypoints', () => {
   assert.match(helpText(), /\.\/agent-bot bootstrap --profile <path\|-> \[options\]/u);
   assert.match(BOOTSTRAP_USAGE, /never discovers organization policy/u);
 });
+
+
+test('skill teaches joining the hub and classifies the command effects (#513)', () => {
+  const main = readFileSync(join(SKILL, 'SKILL.md'), 'utf8');
+  const section = main.match(/## Joining the hub \(agent-comms\)\n([\s\S]*?)(?=\n## )/u)?.[1] ?? '';
+  assert.match(section, /The hub is agent-comms/u);
+  assert.match(section, /agent-bot join --name NAME --harness H/u);
+  assert.match(section, /needs no\s+GitHub App/u);
+  assert.match(section, /reuses the soul already pinned in this checkout/u);
+  assert.match(section, /--soul AGENT_ID/u);
+  assert.match(section, /--template PATH/u);
+  assert.match(section, /soul directory under the souls root/u);
+  assert.match(section, /census row/u);
+  assert.match(section, /agentBot\.agentId/u);
+  assert.match(section, /checkout already pinned to another soul is refused/u);
+  assert.match(section, /\[joining\.md\]\(\.\.\/\.\.\/docs\/joining\.md\)/u);
+  const rows = main.split('\n').filter((line) => /^\| (read-only|local-write|remote-write|destructive) \|/u.test(line));
+  for (const [kind, command] of [
+    ['remote-write', 'join'], ['local-write', 'soul spawn'],
+    ['read-only', 'approvals list'], ['local-write', 'approvals approve'],
+    ['local-write', 'web open'], ['read-only', 'telegram status'],
+    ['remote-write', 'telegram run'], ['destructive', 'soul remove'],
+  ]) assert.ok(rows.some((row) => row.startsWith(`| ${kind} |`) && row.split('|')[2].includes(`\`${command}\``)), `${command}: ${kind}`);
+});
