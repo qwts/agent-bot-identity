@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.46
+
+- `agent-bot soul env <soul> [--json]` describes a soul's whole environment (schema 1: components with classification and retention, declared against installed harnesses and runtimes, launch routing, readiness problems, pending migration steps), served by the daemon at `GET /v0/soul/env`; `soul revision prepare <soul>` stages the editable definition under `.soul-state/tmp/` for `soul revision edit --apply`. The classification contract lives in `soul-env-contract.mjs`; ADR-0583 records the decisions (#583).
+- On Windows, `agent-bot daemon install|disable` registers the identity daemon as a per-user scheduled task from an XML definition under `%LOCALAPPDATA%\<label>` (at logon, hidden, restarted every minute, kickstarted with `schtasks /End` then `/Run`), and the `file` credential store keeps souls' and managed Apps' keys as DPAPI-protected `.dpapi` files that only that account on that machine decrypts. Both go through injected runners, so the suite fakes `schtasks.exe` and `powershell.exe` on every platform. GeniusBar ADR-0046 decisions 3 and 4 (qwts/GeniusBar#46); see `docs/windows.md`.
+
 ## 0.10.45
 
 - The SOP pack's persona mapping decides which souls run in their own macOS account (GeniusBar#66, ADR-0274 decision 3): `persona.toml` at the SOP repository's root maps souls by name (`[soul.NAME]`) or soul.json role (`[role.ROLE]`), with a `[persona]` default, to `sandbox = "sandboxed" | "unrestricted"` and an account. `agent-bot sop persona [--json]` records it online in `<state>/sop-persona.json`; `agent-bot sandbox status|resolve`, the override commands, `GET /v0/sandbox` and the daemon's launch path read the record offline and resolve the pack first (`source: sop`), then the soul's override, then the global switch. A pack decision never turns `features.persona-accounts` on: with the gate off it is reported with a `reason` while the soul runs unrestricted. An override on a pack-decided soul is refused naming the pack (`inherit` still clears one), and an unrecorded, stale, absent or invalid mapping leaves the user setting in charge and says so.
