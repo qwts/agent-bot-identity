@@ -14,7 +14,9 @@
 //   `agent-bot.soul.<agentId>/github-app/<slug>`, created via stdin.
 // - file (elsewhere, or by choice): `<soul>/.soul-state/credentials/`,
 //   directory 0700, one file per App, 0600. `.soul-state/` is never packaged,
-//   exported or hashed into a revision.
+//   exported or hashed into a revision. On Windows the same store keeps a
+//   `.dpapi` file instead, protected by DPAPI for this account on this
+//   machine (docs/windows.md).
 //
 // Only the daemon and the mint path read a store. Nothing here prints, logs
 // or returns key material to a caller: results name the store and App only.
@@ -172,7 +174,9 @@ function assertPrivate(stat, kind, uid) {
   if (stat.mode & 0o077) throw new Error(`soul credential ${kind} is readable by others; expected ${kind === 'directory' ? '0700' : '0600'}`);
 }
 
-export function fileStore({ uid = process.getuid() } = {}) {
+export function fileStore({ platform = process.platform, uid, run = spawnSync } = {}) {
+  if (platform === 'win32') return dpapiFileStore({ run });
+  uid ??= process.getuid();
   const fileFor = (soulDir, slug) => path.join(credentialsDirectory(soulDir), `github-app-${slugOrThrow(slug)}.json`);
   return {
     kind: 'file',
@@ -211,6 +215,81 @@ export function fileStore({ uid = process.getuid() } = {}) {
     },
     // Unlinks the credential file (never following a link); returns whether
     // one existed.
+    delete({ soulDir, slug }) {
+      const target = fileFor(soulDir, slug);
+      try { lstatSync(target); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+      rmSync(target, { force: true });
+      return true;
+    },
+  };
+}
+
+// Windows (GeniusBar ADR-0046 decision 3, docs/windows.md): the file store
+// keeps `github-app-<slug>.dpapi`, the credential DPAPI-protected in the
+// CurrentUser scope, so only this Windows account on this machine decrypts
+// it. That, with the profile's own access list, is what 0700, 0600 and the
+// owner check are on Unix: a file another account planted does not
+// unprotect, and there is no mode to loosen. The script goes to PowerShell
+// on stdin with the secret hex-encoded inside it, never on argv, which every
+// local process can read; hex also keeps the bytes clear of the console
+// code page both ways. Nothing here quotes PowerShell's output in an error,
+// since that output is the credential when the call succeeds.
+const POWERSHELL = 'powershell.exe';
+const POWERSHELL_ARGS = ['-NoProfile', '-NonInteractive', '-Command', '-'];
+const BASE64 = /^[A-Za-z0-9+/]+=*$/;
+const HEX = /^(?:[0-9a-fA-F]{2})+$/;
+
+function dpapiFileStore({ run }) {
+  const fileFor = (soulDir, slug) => path.join(credentialsDirectory(soulDir), `github-app-${slugOrThrow(slug)}.dpapi`);
+  // One statement per line and a blank line at the end: `-Command -` reads
+  // stdin as typed input, so a statement split over lines would not parse
+  // and a last line without a newline after it would not run.
+  const script = (lines) => ['$ErrorActionPreference = \'Stop\'', 'Add-Type -AssemblyName System.Security', ...lines, '', ''].join('\n');
+  const protect = (hex) => script([
+    `$hex = '${hex}'`,
+    '$bytes = [byte[]]::new($hex.Length / 2)',
+    'for ($i = 0; $i -lt $bytes.Length; $i++) { $bytes[$i] = [Convert]::ToByte($hex.Substring($i * 2, 2), 16) }',
+    '$protected = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, \'CurrentUser\')',
+    '[Console]::Out.Write([Convert]::ToBase64String($protected))',
+  ]);
+  const unprotect = (base64) => script([
+    `$protected = [Convert]::FromBase64String('${base64}')`,
+    '$bytes = [System.Security.Cryptography.ProtectedData]::Unprotect($protected, $null, \'CurrentUser\')',
+    '[Console]::Out.Write([BitConverter]::ToString($bytes).Replace(\'-\', \'\'))',
+  ]);
+  const powershell = (text) => run(POWERSHELL, POWERSHELL_ARGS, { input: text, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+  const refuse = (code, message) => { throw Object.assign(new Error(message), { code }); };
+  return {
+    kind: 'file',
+    read({ soulDir, slug }) {
+      let stored;
+      try { stored = readFileSync(fileFor(soulDir, slug), 'utf8').trim(); }
+      catch (error) { if (error.code === 'ENOENT') return null; throw new Error('soul credential file could not be opened'); }
+      // The file's bytes go inside a quoted string in the script, so anything
+      // but base64 is refused before it reaches PowerShell.
+      if (!BASE64.test(stored)) throw new Error('stored credential is malformed');
+      const result = powershell(unprotect(stored));
+      if (result?.status !== 0) refuse('dpapi-unprotect-failed', 'soul credential could not be unprotected by this Windows account on this machine');
+      const hex = String(result.stdout ?? '').trim();
+      if (!HEX.test(hex)) refuse('dpapi-malformed', 'DPAPI answered something other than the credential bytes');
+      return decode(Buffer.from(hex, 'hex').toString('base64'));
+    },
+    write({ soulDir, slug }, credential) {
+      const hex = Buffer.from(encode(credential), 'base64').toString('hex');
+      const result = powershell(protect(hex));
+      // A stopped script exits non-zero; an empty answer is a file holding
+      // nothing, which would read as a bad credential later rather than now.
+      const base64 = result?.status === 0 ? String(result.stdout ?? '').trim() : '';
+      if (!BASE64.test(base64)) refuse('dpapi-protect-failed', 'soul credential could not be protected with DPAPI');
+      const directory = credentialsDirectory(soulDir);
+      mkdirSync(directory, { recursive: true });
+      const target = fileFor(soulDir, slug);
+      const temporary = path.join(directory, `.${process.pid}.${randomUUID()}.tmp`);
+      try {
+        writeFileSync(temporary, `${base64}\n`, { flag: 'wx' });
+        renameSync(temporary, target);
+      } finally { rmSync(temporary, { force: true }); }
+    },
     delete({ soulDir, slug }) {
       const target = fileFor(soulDir, slug);
       try { lstatSync(target); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }

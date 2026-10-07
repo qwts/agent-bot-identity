@@ -34,7 +34,9 @@ into every instance. The key is not copied.
 - **file**: `<soul>/.soul-state/credentials/github-app-<slug>.json`. The
   directory is 0700 and the file 0600, both owned by this user. A read refuses
   a link, a loosened mode or another owner. `.soul-state/` is never packaged,
-  exported or hashed into a revision.
+  exported or hashed into a revision. On Windows the same store keeps
+  `github-app-<slug>.dpapi` instead, encrypted with DPAPI for this account on
+  this machine through PowerShell on stdin; see [Windows](windows.md).
 
 - **pass-cli**: one note item per soul/App credential in the existing
   **Agent Identities** vault. Its exact title is

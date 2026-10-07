@@ -1,7 +1,8 @@
 // User-level supervisor for the identity daemon (#106).
 //
-// install/update/bootstrap write and load a launchd agent (macOS) or systemd
-// user unit (Linux) that execs the installed `agent-bot daemon run` entrypoint.
+// install/update/bootstrap write and load a launchd agent (macOS), a systemd
+// user unit (Linux) or a per-user scheduled task (Windows, docs/windows.md)
+// that execs the installed `agent-bot daemon run` entrypoint.
 // The OS restarts it at login and on failure. MCP stays per-conversation stdio
 // and is never supervised. The unit file is secret-free and loopback policy
 // stays in the daemon itself — this module does not pass a bind address.
@@ -22,7 +23,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import process from 'node:process';
 
@@ -75,6 +76,19 @@ export function supervisorPaths(home = homedir(), platform = process.platform, e
       unitPath: join(home, '.config', 'systemd', 'user', label),
       // systemd's journal captures the unit's stdio.
       logPath: null,
+    };
+  }
+  if (platform === 'win32') {
+    const label = hostLabel ?? LAUNCHD_LABEL;
+    const directory = join(localAppData(home, env), hostLabel ?? WINDOWS_STATE_DIRECTORY);
+    return {
+      platform,
+      kind: 'schtasks',
+      label,
+      unitPath: join(directory, `${label}.xml`),
+      // Task Scheduler has no stdio paths; the task's cmd.exe line appends
+      // both streams here, and the macOS log cap applies unchanged.
+      logPath: join(directory, 'Logs', 'daemon.log'),
     };
   }
   return {
@@ -206,9 +220,144 @@ WantedBy=default.target
 `;
 }
 
-export function renderSupervisorUnit({ kind, executable, programArguments, environment = {}, label, logPath = null }) {
+// Windows (GeniusBar ADR-0046 decision 4, docs/windows.md): the daemon is a
+// per-user scheduled task named after the service label, registered from an
+// XML definition through `schtasks /Create /XML`, because the `/SC ONLOGON`
+// shorthand cannot express restart on failure. Registering a task for the
+// current user needs no administrator. The unit is the task's XML under
+// `%LOCALAPPDATA%\<label>` beside a `Logs` directory, so custody is the
+// profile's own access list. Every schtasks call goes through the same `exec`
+// seam as launchctl and systemctl, so a test stands in for schtasks.exe.
+const TASK_NAMESPACE = 'http://schemas.microsoft.com/windows/2004/02/mit/task';
+const UTF16_BOM = Buffer.from([0xff, 0xfe]);
+// A terminal install with no host label keeps its task directory out of the
+// label's dotted name, the way `~/Library/Logs/agent-bot` does on macOS.
+export const WINDOWS_STATE_DIRECTORY = 'agent-bot';
+
+function fail(code, message) {
+  throw Object.assign(new Error(message), { code });
+}
+
+function localAppData(home, env) {
+  return env.LOCALAPPDATA || join(home, 'AppData', 'Local');
+}
+
+/**
+ * The account the task runs as and whose logon starts it, in Task Scheduler's
+ * `DOMAIN\name` form. The SID would also do, but the name is what the
+ * environment already carries, and the task is registered from that account.
+ */
+export function scheduledTaskUserId(env = process.env) {
+  const name = env.USERNAME || userInfo().username;
+  return env.USERDOMAIN ? `${env.USERDOMAIN}\\${name}` : name;
+}
+
+// A quote has no escape on a cmd.exe line and a percent sign expands, so a
+// value carrying either cannot be put on one faithfully; refusing is the
+// honest answer. Everything else is literal inside the quotes.
+function cmdWord(value, what) {
+  const text = String(value);
+  if (/["%\r\n\0]/.test(text)) fail('usage', `${what} cannot be put on a cmd.exe command line: ${text}`);
+  return `"${text}"`;
+}
+
+// Task Scheduler has neither stdio paths nor an environment block, so the
+// task runs cmd.exe, which pins the daemon's environment and appends both
+// streams to the log on one line. `/S` with the whole line quoted makes cmd
+// strip exactly the outer pair and keep every inner quote.
+function scheduledTaskArguments({ program, environment, logPath }) {
+  const pins = environmentEntries(environment)
+    .map(([key, value]) => `set ${cmdWord(`${key}=${value}`, `environment variable ${key}`)} && `).join('');
+  const command = program.map((arg) => cmdWord(arg, 'a program argument')).join(' ');
+  return `/S /C "${pins}${command} >> ${cmdWord(logPath, 'the log path')} 2>&1"`;
+}
+
+/**
+ * The task definition: at this user's logon, hidden, restarted every minute
+ * on failure (999 is the schema's ceiling, not a policy; the count resets at
+ * the next logon), no time limit, a second start ignored. Every interpolated
+ * value is XML-escaped, as in the plist, so a label or path carrying markup
+ * never becomes structure.
+ */
+export function renderScheduledTask({ executable, programArguments, environment = {}, label = LAUNCHD_LABEL, logPath, userId = scheduledTaskUserId() }) {
+  const program = checkProgram({ executable, programArguments });
+  if (typeof logPath !== 'string' || logPath.length === 0) throw new Error('a scheduled task needs a log path');
+  const element = (name, value) => `<${name}>${xmlEscape(value)}</${name}>`;
+  return `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="${TASK_NAMESPACE}">
+  <RegistrationInfo>
+    ${element('URI', `\\${label}`)}
+    ${element('Description', `agent-bot identity daemon (${label})`)}
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      ${element('UserId', userId)}
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      ${element('UserId', userId)}
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>true</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>999</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>%SystemRoot%\\System32\\cmd.exe</Command>
+      ${element('Arguments', scheduledTaskArguments({ program, environment, logPath }))}
+      ${element('WorkingDirectory', dirname(logPath))}
+    </Exec>
+  </Actions>
+</Task>
+`;
+}
+
+// Task Scheduler's own export is UTF-16 with a byte-order mark, the one
+// encoding `schtasks /Create /XML` is known to read back; the unit is
+// compared and rendered as text, so both directions live here.
+export function scheduledTaskBytes(xml) {
+  return Buffer.concat([UTF16_BOM, Buffer.from(xml, 'utf16le')]);
+}
+
+export function scheduledTaskText(bytes) {
+  const buffer = Buffer.from(bytes);
+  return buffer.subarray(0, 2).equals(UTF16_BOM) ? buffer.subarray(2).toString('utf16le') : buffer.toString('utf8');
+}
+
+/**
+ * `schtasks /Query /TN <label> /FO CSV /NH` prints one row per task, the name
+ * first as `\<label>`. The row is the proof: the exit status alone is not,
+ * since schtasks also exits 0 after printing usage for an argument it did
+ * not take.
+ */
+export function scheduledTaskRegistered(raw, label) {
+  return String(raw ?? '').split(/\r?\n/)
+    .some((line) => line.startsWith(`"\\${label}",`) || line.startsWith(`"${label}",`));
+}
+
+export function renderSupervisorUnit({ kind, executable, programArguments, environment = {}, label, logPath = null, userId }) {
   if (kind === 'launchd') return renderLaunchdPlist({ executable, programArguments, environment, label, logPath });
   if (kind === 'systemd') return renderSystemdUnit({ executable, programArguments, environment });
+  if (kind === 'schtasks') return renderScheduledTask({ executable, programArguments, environment, label, logPath, userId });
   throw new Error(`unsupported supervisor kind: ${kind}`);
 }
 
@@ -252,6 +401,8 @@ export function inspectSupervisor({
       if (paths.kind === 'launchd') {
         exec('launchctl', ['list', paths.label], { env });
         loaded = true;
+      } else if (paths.kind === 'schtasks') {
+        loaded = scheduledTaskRegistered(exec('schtasks.exe', ['/Query', '/TN', paths.label, '/FO', 'CSV', '/NH'], { env }), paths.label);
       } else {
         const state = exec('systemctl', ['--user', 'is-enabled', paths.label], { env }).trim();
         loaded = state === 'enabled' || state === 'static' || state === 'linked';
@@ -276,8 +427,35 @@ function commandErrorText(error) {
 }
 
 export function isInactiveSupervisorError(error) {
-  return /not (?:found|loaded|enabled|installed|been started)|could not find|no such process|inactive|does not exist/i
+  // "cannot find the file specified" is schtasks's answer for a task that is
+  // not registered.
+  return /not (?:found|loaded|enabled|installed|been started)|could not find|cannot find the file|no such process|inactive|does not exist/i
     .test(commandErrorText(error));
+}
+
+// schtasks says why it refused on stderr ("ERROR: Access is denied."); the
+// typed error carries that reason and nothing else.
+function schtasks(args, { env, exec }, code, what) {
+  try {
+    return exec('schtasks.exe', args, { env });
+  } catch (error) {
+    return fail(code, `${what}: ${commandErrorText(error).trim()}`);
+  }
+}
+
+/**
+ * The restart after an update, Task Scheduler's `launchctl kickstart -k`:
+ * `/End` stops the running instance (and fails for a task with none, which
+ * is not an answer that matters), then `/Run` starts it now rather than at
+ * the next logon.
+ */
+export function kickstartScheduledTask(paths, { env = process.env, exec = runCommand } = {}) {
+  try {
+    exec('schtasks.exe', ['/End', '/TN', paths.label], { env });
+  } catch {
+    /* nothing was running */
+  }
+  schtasks(['/Run', '/TN', paths.label], { env, exec }, 'supervisor-load-failed', `schtasks would not start ${paths.label}`);
 }
 
 function loadSupervisor(paths, { env, exec, skipLoad }) {
@@ -299,6 +477,13 @@ function loadSupervisor(paths, { env, exec, skipLoad }) {
     }
     return { loaded: true, skipped: false };
   }
+  if (paths.kind === 'schtasks') {
+    // /Create /F replaces a registered task, but a running instance keeps the
+    // arguments it was started with, so the kickstart follows every time.
+    schtasks(['/Create', '/XML', paths.unitPath, '/TN', paths.label, '/F'], { env, exec }, 'supervisor-load-failed', `schtasks would not register ${paths.label}`);
+    kickstartScheduledTask(paths, { env, exec });
+    return { loaded: true, skipped: false };
+  }
   exec('systemctl', ['--user', 'daemon-reload'], { env });
   exec('systemctl', ['--user', 'enable', '--now', paths.label], { env });
   // enable --now will not restart an already-active unit; update must.
@@ -318,6 +503,19 @@ function unloadSupervisor(paths, { env, exec, skipLoad }) {
       } catch (unloadError) {
         if (!isInactiveSupervisorError(unloadError)) throw unloadError;
       }
+    }
+    return { unloaded: true, skipped: false };
+  }
+  if (paths.kind === 'schtasks') {
+    try {
+      exec('schtasks.exe', ['/End', '/TN', paths.label], { env });
+    } catch {
+      /* nothing was running */
+    }
+    try {
+      exec('schtasks.exe', ['/Delete', '/TN', paths.label, '/F'], { env });
+    } catch (error) {
+      if (!isInactiveSupervisorError(error)) fail('supervisor-unload-failed', `schtasks would not delete ${paths.label}: ${commandErrorText(error).trim()}`);
     }
     return { unloaded: true, skipped: false };
   }
@@ -384,8 +582,10 @@ export async function ensureDaemonSupervisor({
   // `changed: true` and repairs it on the next run.
   const stableExecutable = stableHomebrewPath(executable);
   const stableArguments = stableDaemonProgramArguments(programArguments);
+  const task = paths.kind === 'schtasks';
   const body = renderSupervisorUnit({
     kind: paths.kind, executable: stableExecutable, programArguments: stableArguments, environment, label: paths.label, logPath: paths.logPath,
+    ...(task ? { userId: scheduledTaskUserId(env) } : {}),
   });
   mkdir(dirname(paths.unitPath), { recursive: true });
   // launchd opens the log file itself, but only inside a directory that
@@ -394,7 +594,7 @@ export async function ensureDaemonSupervisor({
   if (paths.logPath) mkdir(dirname(paths.logPath), { recursive: true, mode: 0o700 });
   let previous = null;
   try {
-    previous = read(paths.unitPath, 'utf8');
+    previous = task ? scheduledTaskText(read(paths.unitPath)) : read(paths.unitPath, 'utf8');
   } catch {
     previous = null;
   }
@@ -414,7 +614,7 @@ export async function ensureDaemonSupervisor({
       };
     }
   }
-  write(paths.unitPath, body, { mode: 0o644 });
+  write(paths.unitPath, task ? scheduledTaskBytes(body) : body, { mode: 0o644 });
   const inspection = inspectSupervisor({ home, env, platform, exists, exec });
   const current = await probe({ env: supervisorEnv, home });
   if (current.running && !inspection.loaded && !skipLoad) {
