@@ -159,9 +159,10 @@ dots, underscores or hyphens, contain no `..`, and be at most 100 characters.
 The session must already have a soul: `AGENT_BOT_ID` (legacy `QWTS_AGENT_ID`),
 an explicitly supplied `AGENT_BOT_BINDING`, or an existing registered soul
 matching the session transcript. Setup does not resolve a soul from a Git pin
-or from the checkout path, and never mints a replacement soul. Harnesses
-without a soul must obtain GeniusBar approval and then join; Kiro's approval
-is tracked in GeniusBar#185. No ambient identity substitutes for that step.
+or from the checkout path, and never mints a replacement soul. A session
+without a soul joins first (`agent-bot join --name NAME --harness H`); any
+harness key can join, and a harness's wake lanes and generated files are its
+agent-bot rows (Kiro: #523). No ambient identity substitutes for that step.
 
 Before credentials, census updates, or Git configuration writes, setup refuses
 an owner's primary checkout outside the soul work area, an arbitrary checkout,

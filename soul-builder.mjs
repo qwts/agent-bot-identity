@@ -55,6 +55,8 @@ const HARNESS_FILES = Object.freeze({
   copilot: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: null }),
   devin: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: null }),
   muse: Object.freeze({ instructions: null, skills: null, mcp: null }),
+  // Kiro reads AGENTS.md and the shared skills; its wake lanes are #523.
+  kiro: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: null }),
 });
 
 // Settings are defaults for native harness launches; owner-selected launch

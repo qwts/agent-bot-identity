@@ -29,8 +29,8 @@ checkout already linked from that soul. --name creates a linked git worktree
 there if absent (branch defaults to NAME), then configures it.
 Refuses primary checkouts outside the soul, arbitrary directories, conflicting
 pins, and cross-device placement. No TMPDIR fallback. With no session soul it
-leaves the checkout human and writes nothing (an error only with --name);
-harnesses without a soul need GeniusBar approval (Kiro: GeniusBar#185).
+leaves the checkout human and writes nothing (an error only with --name):
+an agent checks in with agent-bot join first, whatever its harness.
 `;
 
 function parseArgs(argv) {
@@ -399,7 +399,7 @@ export async function main(dependencies = {}) {
     // The harness startup script and git's post-checkout hook run setup
     // every session, so this stays a quiet no-op (the checkout is left
     // human); only an explicit request to create a worktree is an error.
-    const hint = 'no session soul: this checkout stays human. An agent needs GeniusBar harness approval (Kiro: GeniusBar#185), then checks in with agent-bot join --name NAME --harness HARNESS and uses its AGENT_BOT_ID';
+    const hint = 'no session soul: this checkout stays human. An agent checks in with agent-bot join --name NAME --harness HARNESS and uses its AGENT_BOT_ID';
     if (options.name) throw new Error(hint);
     if (!options.hook && process.env.AGENT_BOT_SETUP_HINT === '1') process.stderr.write(`setup-worktree: ${hint}\n`);
     return;

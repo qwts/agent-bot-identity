@@ -98,13 +98,14 @@ test('name creates and configures once; branch selection is honored; primary sta
   assert.deepEqual(readFileSync(join(f.repo, '.git', 'config.worktree')), before);
 });
 
-test('unapproved harness without a soul names GeniusBar approval, leaves the checkout human and never uses a stale pin', (t) => {
+test('a session without a soul is told to join, keeps the checkout human and never uses a stale pin', (t) => {
   const f = fixture(t);
   // Run by name (the CLI sets the hint): a quiet success that names the way in,
   // so the harness startup script and a human's own session keep working.
   const result = unchanged(f, f.repo, () => f.run(f.repo, ['test-kiro-agent'], { AGENT_BOT_ID: '', AI_AGENT: 'kiro', AGENT_BOT_SETUP_HINT: '1' }));
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stderr, /no session soul.*GeniusBar.*approval.*GeniusBar#185.*agent-bot join/);
+  assert.match(result.stderr, /no session soul.*checks in with agent-bot join --name NAME --harness HARNESS/);
+  assert.doesNotMatch(result.stderr, /approval/);
   // Asked to create a worktree, it is an error: there is no soul to put it under.
   const named = unchanged(f, f.repo, () => f.run(f.repo, ['--name', 'feature'], { AGENT_BOT_ID: '', AI_AGENT: 'kiro' }));
   assert.notEqual(named.status, 0);

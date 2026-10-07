@@ -12,7 +12,7 @@ import { GENERATED_HARNESS_MARKER as MARKER, isGeneratedPath } from '../soul-har
 
 const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
 const defaults = { model: 'shared-model', reasoningEffort: 'medium', permissionMode: 'safe' };
-const names = ['claude', 'codex', 'gemini', 'opencode', 'cursor', 'copilot', 'devin', 'muse'];
+const names = ['claude', 'codex', 'gemini', 'opencode', 'cursor', 'copilot', 'devin', 'muse', 'kiro'];
 const supported = { claude: ['model', 'permissionMode', 'reasoningEffort'], codex: ['model', 'permissionMode', 'reasoningEffort'],
   gemini: ['model'], opencode: ['model', 'permissionMode'] };
 const entry = (path, content) => ({ path, mode: '100644', bytes: Buffer.from(content) });
