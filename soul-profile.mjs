@@ -33,7 +33,11 @@ function privatePart(part) {
     || /^id_(?:rsa|dsa|ecdsa|ed25519)(?:\.|$)/i.test(part);
 }
 
-function kindOf(relative) {
+// The kind of a package or home file, or null for one the profile never
+// lists. Shared with `soul revision prepare` (#583), so a host sees one
+// vocabulary: the Copilot and Kiro agent folders and Kiro's MCP file are
+// soul-builder output like the other harness folders.
+export function kindOf(relative) {
   const local = relative.startsWith(HOME_PREFIX) ? relative.slice(HOME_PREFIX.length) : relative;
   if (!safeRelative(local) || local.split('/').some(privatePart)) return null;
   if (['soul.json', 'soul.md', 'SOUL.md'].includes(local)) return 'soul';
@@ -41,8 +45,10 @@ function kindOf(relative) {
   if (['CLAUDE.md', 'GEMINI.md', '.github/copilot-instructions.md'].includes(local)) return 'generated';
   if (local.startsWith('skills/')) return 'skill';
   if (/^\.(?:claude|codex|cursor|opencode|devin|gemini)\/skills\//.test(local)) return 'generated';
+  if (/^(?:\.github|\.kiro)\/agents\//.test(local)) return 'generated';
   if (/^\.claude\/settings(?:\.[a-zA-Z0-9_-]+)*\.json$/.test(local)
-    || /^\.(?:codex|cursor|opencode|devin|gemini)\/[^/]+\.(?:json|toml|yaml|yml)$/.test(local)) return 'harness-settings';
+    || /^\.(?:codex|cursor|opencode|devin|gemini)\/[^/]+\.(?:json|toml|yaml|yml)$/.test(local)
+    || local === '.kiro/settings/mcp.json' || local === '.github/hooks/agent-bot-soul.json') return 'harness-settings';
   if (/^\.codex\/[^/]+\.md$/.test(local)) return 'context';
   return null;
 }

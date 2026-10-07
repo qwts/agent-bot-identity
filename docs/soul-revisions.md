@@ -16,6 +16,8 @@ agent-bot soul revision adopt ID PACKAGE 'Starting package'
 agent-bot soul revision edit ID PACKAGE 'Customize instructions'
 agent-bot soul revision edit ID COPY 'Customize instructions' --apply --json
 agent-bot soul revision edit ID COPY 'Customize instructions' --apply --principal-stdin < principal.json
+agent-bot soul revision prepare <agentId|name> [--json] [--dest PATH]
+agent-bot soul revision prepare --discard STAGING
 agent-bot soul revision propose ID PACKAGE 'Learned a better procedure'
 agent-bot soul revision list ID
 agent-bot soul revision approve ID PROPOSAL_ID 'Reviewed the proposed changes'
@@ -59,6 +61,13 @@ list of relative paths (including changed directories and `soul.json`). These
 publication fields are returned only, not added to the append-only history record.
 Without `--apply`, the response and record-only behavior are unchanged. All
 revision commands already print JSON; `--json` is an explicit optional spelling.
+
+`prepare <agentId|name>` (#583) stages the current definition into
+`<soulDir>/.soul-state/tmp/revision-<uuid>/` and prints the staged file list
+with each file's classification and whether a host may edit it, so a host
+edits the staging and finishes with `edit ID <staging> REASON --apply`.
+`prepare --discard STAGING` removes a staging again. Preparing is not an owner
+action. See [soul-environment.md](soul-environment.md#preparing-a-revision-edit).
 
 Proposals snapshot the candidate package content immediately and include a computed
 path diff (`added`, `modified`, `removed`), reason, author, timestamp, and base

@@ -85,4 +85,5 @@ JSON is `{agentId, path, size, contents}`.
 same loopback and bearer authentication as population reads. Missing `agentId`
 is HTTP 400 and an unknown soul is HTTP 404 with code `soul-not-found`.
 `daemonClient(...).soulProfile(agentId)` calls it. There is no daemon file
-contents route.
+contents route. `GET /v0/soul/env?agentId=…` sits beside it with the same
+rules and returns the [environment descriptor](soul-environment.md).

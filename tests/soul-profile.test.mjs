@@ -10,6 +10,7 @@ import { mintAgentIdentity, stateDirectory } from '../agent-identity.mjs';
 import { computePackageRevision } from '../soul-package.mjs';
 import { buildSoulDirectory } from '../soul-build.mjs';
 import { readSoulProfile, readSoulProfileFile, soulProfileCommand } from '../soul-profile.mjs';
+import { readSoulEnvironment } from '../soul-env.mjs';
 import { createDaemonServer, daemonClient } from '../agent-daemon.mjs';
 import { listSopDocuments } from '../sop.mjs';
 
@@ -307,4 +308,31 @@ test('daemon profile uses population authentication and matches the direct reade
     token: 'profile-test-token-at-least-32-characters', pid: process.pid, startedAt: new Date().toISOString() }));
   const client = daemonClient(f.options);
   assert.deepEqual(await client.soulProfile('Profile Fixture'), readSoulProfile(ID, f.options));
+});
+
+test('daemon env route sits beside profile: same authentication, the direct descriptor, and a client helper (#583)', async (t) => {
+  const f = fixture(t);
+  const server = createDaemonServer({ ...f.options, config: {}, token: 'profile-test-token-at-least-32-characters' });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const port = server.address().port;
+  const base = `http://127.0.0.1:${port}`;
+  const route = `/v0/soul/env?agentId=${ID}`;
+  assert.equal((await fetch(base + route)).status, 401);
+  const headers = { authorization: 'Bearer profile-test-token-at-least-32-characters' };
+  const response = await fetch(base + route, { headers });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.schemaVersion, 1);
+  assert.deepEqual(body.engine.capabilities, ['env', 'revision-prepare']);
+  assert.deepEqual(body, readSoulEnvironment(ID, f.options));
+  assert.ok(!JSON.stringify(body).includes(SENTINEL));
+  assert.equal((await fetch(`${base}/v0/soul/env`, { headers })).status, 400);
+  const missing = await fetch(`${base}/v0/soul/env?agentId=${OTHER}`, { headers });
+  assert.equal(missing.status, 404);
+  assert.equal((await missing.json()).code, 'soul-not-found');
+  put(f.env.AGENT_BOT_DAEMON_STATE_PATH, JSON.stringify({ schemaVersion: 1, host: '127.0.0.1', port,
+    token: 'profile-test-token-at-least-32-characters', pid: process.pid, startedAt: new Date().toISOString() }));
+  const client = daemonClient(f.options);
+  assert.deepEqual(await client.soulEnvironment('Profile Fixture'), readSoulEnvironment(ID, f.options));
 });

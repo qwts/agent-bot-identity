@@ -119,7 +119,7 @@ for. `agent-bot skill path` prints the installed release's copy of this skill.
 |---|---|---|
 | read-only | `--help`, `doctor`, `sop`, `skill`, `skill path`, `population list`, `space path`, `signed-commit --dry-run`, `secret get` | Safe to repeat. |
 | local-write | `bootstrap`, `setup-worktree`, `install`, `install-gh-shim`, `daemon install`, `daemon disable`, `ensure-private-key`, `space ensure` | Converge on rerun; confirm with `doctor`. |
-| read-only | `soul show`, `soul profile`, `soul locate`, `soul templates`, `soul asides`, `soul cold-wake ID show`, `soul model ID show`, `soul mode ID show`, `soul computer-use ID show`, `soul comms ID show`, `soul confinement-report`, `soul pack validate`, `soul build --check`, `approvals list`, `telegram status` | Safe to repeat. |
+| read-only | `soul show`, `soul profile`, `soul env`, `soul locate`, `soul templates`, `soul asides`, `soul cold-wake ID show`, `soul model ID show`, `soul mode ID show`, `soul computer-use ID show`, `soul comms ID show`, `soul confinement-report`, `soul pack validate`, `soul build --check`, `approvals list`, `telegram status` | Safe to repeat. |
 | local-write | `soul dir` | May re-register a uniquely moved soul directory; see [soul-homes.md](../../docs/soul-homes.md). |
 | local-write | `soul spawn`, `soul build`, `soul revision`, `soul cold-wake`, `soul model`, `soul mode`, `soul computer-use`, `soul confinement`, `soul stop`, `soul pause`, `soul resume` | Inspect the subcommand and current state before retrying; spawning creates a new identity, and owner actions require the owner gate. |
 | local-write | `approvals approve`, `approvals deny`, `web open` | Decisions require the daemon's owner gate; inspect waiting proposals before retrying. Each web open mints a single-use pairing code and prints/opens its link. |
@@ -191,6 +191,16 @@ the soul’s profile, allowed package and generated files, skills, declared
 credential names, and offline SOP availability. File contents require an
 inventoried UTF-8 path and are capped at 256 KiB. It never reads credential
 stores or fetches SOPs. See [soul-profile.md](../../docs/soul-profile.md).
+
+`agent-bot soul env <agentId|name> [--json]` describes the soul's whole
+environment (schema 1): each component with its classification and
+retention, declared against installed harnesses and runtimes, launch routing,
+readiness problems with the command that fixes each, and pending migration
+steps. It is read-only: it never provisions, links, registers or rebuilds.
+`agent-bot soul revision prepare <agentId|name> [--json] [--dest PATH]` stages
+the editable definition under `.soul-state/tmp/`; `soul revision edit ... --apply`
+finishes it and `prepare --discard STAGING` drops it. See
+[soul-environment.md](../../docs/soul-environment.md).
 
 `agent-bot sandbox status|plan|on|off|account NAME|override <agentId|name> [inherit|sandboxed|unrestricted]|resolve <agentId|name> [--json]` reports the persona account for sandboxed souls (`missing | creating | ready`), lists the owner's steps to create and onboard it (agent-bot never runs them), and keeps the global switch and per-soul overrides (#376). Writes are owner actions. The SOP pack's `persona.toml` decides first (`source: sop`; an override on such a soul is refused), then the override, then the switch; `agent-bot sop persona [--json]` records that mapping online (`<state>/sop-persona.json`) so status and launches read it offline, and the switch off keeps a pack decision reported but unapplied (GeniusBar#66, ADR-0274).
 

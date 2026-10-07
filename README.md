@@ -289,6 +289,7 @@ agent-bot soul pause <agentId|name> [--json]
 agent-bot soul resume <agentId|name> [--json]
 agent-bot soul show <agentId|name> [--json]
 agent-bot soul profile <agentId|name> [--json] [--file RELATIVE_PATH]
+agent-bot soul env <agentId|name> [--json]
 agent-bot sandbox status|plan [--json]
 agent-bot sandbox on|off|account NAME [--json] [--principal-stdin]
 agent-bot sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin]
@@ -364,7 +365,7 @@ the MCP `bind` tool, and runs `agent-comms join`. A soul with no recorded
 checkout is woken in its soul directory. See [joining](docs/joining.md).
 
 `.soul-state/space` links to the existing Agent Space; the space stays at its
-ENG-0172 location. Moving a registered directory within the souls root is
+ENG-0172 location until slice 5 of #583 moves it into the soul. Moving a registered directory within the souls root is
 rediscovered by its Agent ID marker on the next directory lookup. For moves
 outside that root, tooling must explicitly call `registerSoulDir(agentId, dir)`
 in `agent-population.mjs`.
@@ -378,6 +379,8 @@ agent-bot soul locate PATH [--json]
 # JSON: { path, status: package|installed|copy|duplicate|unregistered|invalid, ... }
 agent-bot soul fork COPY_PATH --name NAME [--json]
 # a Finder copy (status copy) becomes a new soul in place; see docs/soul-homes.md
+agent-bot soul env AGENT_ID --json
+# the whole environment: components with classification, harnesses, readiness; see docs/soul-environment.md
 ```
 
 `soul locate` emits JSON with or without `--json`. For `package`, `installed`
