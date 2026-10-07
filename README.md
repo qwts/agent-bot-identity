@@ -263,7 +263,7 @@ agent-bot bootstrap [--profile <path|->] [--config <path>] [--app <slug>] [--sco
 agent-bot --version
 agent-bot setup-worktree [app-slug] [--name NAME [--branch BRANCH]]
 agent-bot join --name NAME --harness H [--template PATH] [--soul AGENT_ID] [--wake resume:read-only|resume:workspace|acp] [--principal-stdin] [--json]
-agent-bot mint-token [--app <slug>] [--json] [--help]
+agent-bot mint-token [--app <slug>] [--permissions <name>=<level>[,...]] [--json] [--help]
 agent-bot doctor [--machine-only] [--app <slug>] [--probe-inbox] [--json]
 agent-bot identity <ensure|spawn|bind|record|finalize|show|current>
 agent-bot space <init|ensure|path|show> [agent-id]
@@ -523,6 +523,15 @@ The command line is checked before anything is minted: `mint-token --help`
 prints the usage and mints nothing, and an option the command does not know
 (`unknown option: --x`) is an error with no token on stdout, so a mistyped
 flag never releases a credential.
+
+`--permissions contents=read,pull_requests=write` asks GitHub for a token with
+only those permissions (`read`, `write` or `admin`), each at or below what the
+installation grants; a request the grant does not cover is refused before the
+token request, naming what was wanted and what is granted. Without it the
+token carries the installation's whole grant, as before. This never widens the
+grant: `agent-bot identity apps list` shows it, and widening it is done on the
+App's installation page on github.com. A key held by agent-bot-keyd mints the
+soul's full grant through the daemon, so `--permissions` is refused for it.
 
 `doctor --json` and `bootstrap --json` emit the same secret-free readiness
 contract. Unlike mint output, this object is safe to retain in automation:
