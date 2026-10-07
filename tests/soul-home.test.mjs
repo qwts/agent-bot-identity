@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createSoulHomes, installHarnesses, installSoulHarnesses, soulHarnessesPath, npmCommand, soulHomePath, legacyHomePath, soulBindingForLaunch } from '../soul-home.mjs';
 
-import { GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
+import { GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS } from '../soul-package.mjs';
 import { createBindingRegistry } from '../agent-binding.mjs';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { displayName, populationFile, upsertSoul, showSoul } from '../agent-population.mjs';
@@ -60,6 +60,35 @@ test('provisions a git home from the package once, then rebinds it', async (t) =
   assert.deepEqual(installs, [home], 'harnesses install once, when the home is made');
   assert.equal(readFileSync(path.join(home, 'AGENTS.md'), 'utf8'), 'grown\n', 'an existing home is never overwritten');
   assert.equal(bindings.bound.length, 2);
+});
+
+test('an existing home is rebuilt before a launch; a conflict is reported and the launch proceeds', async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'soul-home-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const pkg = path.join(root, 'pkg');
+  mkdirSync(pkg, { recursive: true });
+  writeFileSync(path.join(pkg, 'AGENTS.md'), 'be kind\n');
+  // The ignore list a release before 0.10.25 wrote: such a soul must still build.
+  writeFileSync(path.join(pkg, 'soul.json'), JSON.stringify({ formatVersion: 2, name: 'test', description: 'test', displaySeed: 'test', preferredHarnesses: [], parentRevision: null, revision: `sha256:${'0'.repeat(64)}`, ignore: PRIOR_PACKAGE_IGNORE_LISTS[0] }));
+  pinnedPackage(pkg);
+  const warnings = [];
+  const options = census(root);
+  const provision = createSoulHomes({ ...options, stateDir: path.join(root, 'state'), bindings: fakeBindings(), install: async () => {}, warn: (m) => warnings.push(m) });
+  const home = soulHomePath(agentId, options);
+  await provision({ agentId, harness: 'claude', packagePath: pkg });
+  assert.ok(existsSync(path.join(home, '.mcp.json')), 'a new home carries the MCP entry');
+  // An older home: made before the builder rendered the MCP entry.
+  rmSync(path.join(home, '.mcp.json'));
+  await provision({ agentId, harness: 'claude', packagePath: pkg });
+  assert.ok(existsSync(path.join(home, '.mcp.json')), 'the next launch renders what the builder adds now');
+  assert.deepEqual(warnings, []);
+  // A hand-edited generated file is a conflict: reported, and the launch still binds.
+  writeFileSync(path.join(home, 'CLAUDE.md'), 'mine\n');
+  const bound = await provision({ agentId, harness: 'claude', packagePath: pkg });
+  assert.equal(bound.worktree, home);
+  assert.equal(readFileSync(path.join(home, 'CLAUDE.md'), 'utf8'), 'mine\n', 'the conflict is left alone');
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /was not rebuilt: .*CLAUDE\.md/);
 });
 
 test('rejects an invalid agent ID before touching the disk', () => {

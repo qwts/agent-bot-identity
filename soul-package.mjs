@@ -6,8 +6,14 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { buildHarnessFiles } from './soul-builder.mjs';
-import { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, isGeneratedPath } from './soul-harness-contract.mjs';
-export { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST };
+import { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS, isGeneratedPath } from './soul-harness-contract.mjs';
+export { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS };
+
+/** The current format-2 ignore list, or one an earlier release wrote (read, never guessed at). */
+export function isSupportedIgnoreList(ignore) {
+  const given = canonicalJson(ignore);
+  return [PACKAGE_IGNORE_LIST, ...PRIOR_PACKAGE_IGNORE_LISTS].some((known) => canonicalJson(known) === given);
+}
 
 export function expectedGeneratedFiles(packageEntries) {
   return buildHarnessFiles(packageEntries);
@@ -79,7 +85,7 @@ export function validateAppearanceDeclaration(appearance) {
 function validateManifest(manifest) {
   if (!object(manifest)) throw new Error('soul.json must be an object');
   if (![1, 2].includes(manifest.formatVersion)) throw new Error('unsupported soul.json formatVersion (expected 1 or 2)');
-  if (manifest.formatVersion === 2 && canonicalJson(manifest.ignore) !== canonicalJson(PACKAGE_IGNORE_LIST)) {
+  if (manifest.formatVersion === 2 && !isSupportedIgnoreList(manifest.ignore)) {
     throw new Error('soul.json formatVersion 2 requires the exact supported ignore list');
   }
   for (const key of ['name', 'description', 'displaySeed']) {
