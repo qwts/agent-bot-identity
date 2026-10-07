@@ -136,6 +136,8 @@ rollback existed. Finalized souls keep their folders and are not listed.
 
 ## Repository worktrees
 
+Read `agent-bot skill agent-space` for the check-in, checkout, and cleanup procedure.
+
 ADR-0332 decision 6 and the work-area rule (#516) require agents to check in
 with `agent-bot join` and do repository work in their soul's
 `<soulDir>/worktrees/<name>` (0700), or in an existing checkout linked from

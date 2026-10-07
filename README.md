@@ -285,7 +285,15 @@ agent-bot ensure-private-key --app <slug> [--force]
 agent-bot signed-commit [--base <ref>] [--branch <name>] [--repo <owner/name>] [--dry-run]
 agent-bot secret get --provider <id> --collection <name> --item <title> --field <name> --reason <text>
 agent-bot skill path [--json]
+agent-bot skill <name> [--json]
 ```
+
+`agent-bot skill <name>` prints this release's exact `SKILL.md` text for
+`agent-bot`, `agent-space`, or `thread-orders`. With `--json`, it returns
+`{ name, path, commit, text }`; `path` names the skill file. Use
+`agent-bot skill agent-space` for check-in and soul worktree guidance.
+`agent-bot skill path` continues to report the `agent-bot` bundle directory
+and source commit (`{ path, commit }` with `--json`).
 
 ### Soul directories and homes
 
