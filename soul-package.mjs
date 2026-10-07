@@ -5,7 +5,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { buildHarnessFiles } from './soul-builder.mjs';
+import { buildHarnessFiles, envProblem, PERMISSION_RULE } from './soul-builder.mjs';
 import { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS, isGeneratedPath } from './soul-harness-contract.mjs';
 export { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS };
 
@@ -67,6 +67,22 @@ function validateHarnessSettings(settings, path) {
       if (!['low', 'medium', 'high'].includes(value)) throw new Error(`${field} must be low, medium or high`);
     } else if (key === 'permissionMode') {
       if (!['safe', 'autopilot'].includes(value)) throw new Error(`${field} must be safe or autopilot`);
+    } else if (key === 'env') {
+      if (!object(value)) throw new Error(`${field} must be an object of NAME: "value" strings`);
+      for (const [name, entry] of Object.entries(value)) {
+        const problem = envProblem(name, entry);
+        if (problem) throw new Error(`${field}.${name} ${problem}`);
+      }
+    } else if (key === 'permissions') {
+      if (!object(value)) throw new Error(`${field} must be an object with allow and/or deny rule lists`);
+      for (const [effect, rules] of Object.entries(value)) {
+        if (!['allow', 'deny'].includes(effect)) throw new Error(`${field}.${effect} is an unknown permissions list (use allow or deny)`);
+        if (!Array.isArray(rules)) throw new Error(`${field}.${effect} must be an array of rules`);
+        rules.forEach((rule, index) => {
+          if (!nonempty(rule) || !PERMISSION_RULE.test(rule)) throw new Error(`${field}.${effect}[${index}] must be a Tool or Tool(pattern) rule`);
+          if (rules.indexOf(rule) !== index) throw new Error(`${field}.${effect}[${index}] duplicates ${JSON.stringify(rule)}`);
+        });
+      }
     } else throw new Error(`${field} is an unknown harness setting`);
   }
 }
