@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildHarnessFiles, harnessReport, SETTINGS_TARGETS } from '../soul-builder.mjs';
+import { buildHarnessFiles, harnessReport, MCP_TARGETS, SETTINGS_TARGETS } from '../soul-builder.mjs';
 import { buildSoulDirectory } from '../soul-build.mjs';
 import { computePackageRevision, expectedGeneratedFiles, readSoulPackageEntries, validateSoulPackage, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
 import { GENERATED_HARNESS_MARKER as MARKER, isGeneratedPath } from '../soul-harness-contract.mjs';
@@ -57,7 +57,12 @@ for (const harness of names) {
         const value = json(output, 'opencode.json');
         assert.equal(value.model, settings.model);
         assert.deepEqual(value.permission, { edit: override ? 'allow' : 'ask', bash: override ? 'allow' : 'ask' });
-      } else assert.ok(![...output.keys()].some((path) => path.startsWith(`.${harness}/`)));
+      } else {
+        // Only the MCP file is theirs (Cursor, Kiro); it carries no settings.
+        const mcp = MCP_TARGETS.find((target) => target.harness === harness)?.path;
+        assert.ok(![...output.keys()].some((path) => path.startsWith(`.${harness}/`) && path !== mcp));
+        if (mcp) assert.deepEqual(Object.keys(json(output, mcp)), ['_comment', 'mcpServers']);
+      }
       if (override && harness !== 'claude') assert.equal(json(output, '.claude/settings.json').model, defaults.model);
     });
   }

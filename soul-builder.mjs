@@ -40,24 +40,29 @@ export const MCP_TARGETS = Object.freeze([
   Object.freeze({ harness: 'gemini', path: '.gemini/settings.json', format: 'json', key: 'mcpServers', style: 'stdio' }),
   Object.freeze({ harness: 'codex', path: '.codex/config.toml', format: 'toml', table: `mcp_servers.${MCP_SERVER_NAME}` }),
   Object.freeze({ harness: 'opencode', path: 'opencode.json', format: 'json', key: 'mcp', style: 'local' }),
+  // Project-level files each harness documents (see docs/soul-builder.md,
+  // "Format evidence"). Copilot CLI and Devin CLI read the shared `.mcp.json`.
+  Object.freeze({ harness: 'cursor', path: '.cursor/mcp.json', format: 'json', key: 'mcpServers', style: 'stdio' }),
+  Object.freeze({ harness: 'kiro', path: '.kiro/settings/mcp.json', format: 'json', key: 'mcpServers', style: 'stdio' }),
 ]);
 
 // The harnesses the toolkit knows, with what this builder renders for each: a
 // native consumer reads AGENTS.md and the shared `.claude/skills/` directly, so
 // its instructions need no generated file. `mcp: null` marks a harness with no
 // adapter in this slice; a later slice adds one rather than leaving a declared
-// primitive silently dropped.
+// primitive silently dropped. A path another harness owns (`.mcp.json`,
+// `.claude/commands/`) is one this harness documents reading natively.
 const HARNESS_FILES = Object.freeze({
   claude: Object.freeze({ instructions: 'CLAUDE.md', skills: '.claude/skills/', mcp: '.mcp.json', subagents: '.claude/agents/', commands: '.claude/commands/' }),
   gemini: Object.freeze({ instructions: 'GEMINI.md', skills: '.gemini/skills/', mcp: '.gemini/settings.json', commands: '.gemini/commands/' }),
   codex: Object.freeze({ instructions: null, skills: null, mcp: '.codex/config.toml' }),
   opencode: Object.freeze({ instructions: null, skills: null, mcp: 'opencode.json', subagents: '.opencode/agent/', commands: '.opencode/command/' }),
-  cursor: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: null }),
-  copilot: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: null }),
-  devin: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: null }),
+  cursor: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: '.cursor/mcp.json', subagents: '.cursor/agents/' }),
+  copilot: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: '.mcp.json', subagents: '.github/agents/', commands: '.claude/commands/' }),
+  devin: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: '.mcp.json', subagents: '.devin/agents/', commands: '.claude/commands/' }),
   muse: Object.freeze({ instructions: null, skills: null, mcp: null }),
   // Kiro reads AGENTS.md and the shared skills; its wake lanes are #523.
-  kiro: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: null }),
+  kiro: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: '.kiro/settings/mcp.json', subagents: '.kiro/agents/' }),
 });
 
 // Settings are defaults for native harness launches; owner-selected launch
@@ -543,7 +548,7 @@ function renderHooks(events, output, authored) {
 export function harnessReport(output, { comms = true, manifest = {}, hooks = [] } = {}) {
   const skills = [...output.keys()].some((path) => Object.values(HARNESS_FILES).some((files) => files.skills && path.startsWith(files.skills)));
   const names = (prefix) => prefix ? [...output.keys()].filter((path) => path.startsWith(prefix))
-    .map((path) => path.slice(prefix.length).replace(/\.(md|toml)$/, '')).sort(compare) : [];
+    .map((path) => path.slice(prefix.length).replace(/(?:\.agent)?\.(md|toml)$/, '')).sort(compare) : [];
   const received = { subagents: names(HARNESS_FILES.claude.subagents), commands: names(HARNESS_FILES.claude.commands) };
   const report = {};
   for (const [harness, files] of Object.entries(HARNESS_FILES)) {
@@ -567,7 +572,9 @@ export function harnessReport(output, { comms = true, manifest = {}, hooks = [] 
     for (const kind of ['subagents', 'commands']) {
       const delivered = names(files[kind]);
       primitives[kind] = { received: [...received[kind]], rendered: delivered };
-      unsupported[kind] = files[kind] ? [] : [...received[kind]];
+      // A harness whose adapter cannot spell a declaration (a tool it has no
+      // name for) lists it here too, not only a harness with no adapter.
+      unsupported[kind] = received[kind].filter((name) => !delivered.includes(name));
       if (delivered.length) rendered.push(kind);
     }
     const settings = harnessSettings(manifest, harness);
@@ -664,7 +671,9 @@ function declarationField(fields, key, path, required = false) {
   return value;
 }
 
-function agentTools(fields, path) {
+// The declared Claude tool names, validated and deduplicated in declared order;
+// undefined when the declaration has no `tools` field (inherit every tool).
+function agentToolNames(fields, path) {
   const field = fields.get('tools');
   if (!field) return undefined;
   const label = `${path} tools`;
@@ -684,9 +693,52 @@ function agentTools(fields, path) {
     values = declarationField(fields, 'tools', path).split(',').map((item) => item.trim());
   }
   if (values.some((name) => !/^[A-Za-z][A-Za-z0-9_-]*$/.test(name))) throw new Error(`${label} must contain tool names, not permission expressions`);
-  // Claude's tools field is an allowlist; disable unlisted OpenCode tools too.
-  // MultiEdit uses OpenCode's edit tool; other native names use lowercase.
-  return [...new Set(values.map((name) => name === 'MultiEdit' ? 'edit' : name.toLowerCase()))].sort(compare);
+  return [...new Set(values)];
+}
+
+// Claude's tools field is an allowlist; disable unlisted OpenCode tools too.
+// MultiEdit uses OpenCode's edit tool; other native names use lowercase.
+const opencodeTools = (names) => [...new Set(names.map((name) => name === 'MultiEdit' ? 'edit' : name.toLowerCase()))].sort(compare);
+
+// Native tool names for Claude's, where the harness documents one. Kiro's are
+// category tags (`read` is reading, listing and searching); Devin's are its
+// tool names. A declared tool missing here cannot be spelled for that harness,
+// so the subagent is reported unsupported there rather than widened or cut.
+const KIRO_TOOLS = Object.freeze({ Read: 'read', NotebookRead: 'read', Grep: 'read', Glob: 'read', LS: 'read',
+  Edit: 'write', MultiEdit: 'write', Write: 'write', NotebookEdit: 'write', Bash: 'shell',
+  WebFetch: 'web', WebSearch: 'web', Task: 'subagent', TodoWrite: 'todo_list' });
+const DEVIN_TOOLS = Object.freeze({ Read: 'read', Edit: 'edit', MultiEdit: 'edit', Write: 'write', Grep: 'grep', Glob: 'glob', Bash: 'exec' });
+// Cursor has no per-tool allowlist, only `readonly`; it is set when every
+// declared tool is one of these, so a read-only agent stays read-only.
+const READ_ONLY_TOOLS = Object.freeze(['Glob', 'Grep', 'LS', 'NotebookRead', 'Read', 'TodoWrite', 'WebFetch', 'WebSearch']);
+
+function nativeTools(map, names) {
+  if (names.some((name) => !Object.hasOwn(map, name))) return null;
+  return [...new Set(names.map((name) => map[name]))].sort(compare);
+}
+const yamlList = (values) => `[${values.map(quotedString).join(', ')}]`;
+
+// One subagent declaration in each adapter's own front matter. Returns the
+// `[path, header]` pairs it can spell; a harness missing from the result is
+// reported under `unsupported.subagents`.
+function translatedAgents(name, { description, model, tools }) {
+  const common = [`name: ${quotedString(name)}`, `description: ${quotedString(description)}`,
+    ...(model === undefined ? [] : [`model: ${quotedString(model)}`])];
+  const agents = [];
+  // Cursor: `.cursor/agents/` wins over its Claude-compatible `.claude/agents/`.
+  agents.push([`.cursor/agents/${name}.md`, [...common,
+    ...(tools && tools.every((tool) => READ_ONLY_TOOLS.includes(tool)) ? ['readonly: true'] : [])]]);
+  // Copilot CLI accepts Claude's tool names as case-insensitive aliases and
+  // ignores names it does not recognize, which narrows rather than widens.
+  agents.push([`.github/agents/${name}.agent.md`, [...common, ...(tools ? [`tools: ${yamlList(tools)}`] : [])]]);
+  // Kiro (CLI 3.0 / IDE 1.0 Markdown agents): its default for an absent
+  // `tools` is not documented, so inheriting every tool is spelled `*`.
+  const kiro = tools ? nativeTools(KIRO_TOOLS, tools) : ['*'];
+  if (kiro) agents.push([`.kiro/agents/${name}.md`, [...common, `tools: ${yamlList(kiro)}`]]);
+  // Devin: an absent `allowed-tools` is every tool, as in Claude.
+  const devin = tools ? nativeTools(DEVIN_TOOLS, tools) : [];
+  if (devin) agents.push([`.devin/agents/${name}.md`, [...common, ...(tools ? [`allowed-tools: ${yamlList(devin)}`] : [])]]);
+  return agents;
 }
 
 // Omit an empty command header: the disk layer's existing marker recognizer
@@ -712,9 +764,12 @@ function renderPrimitives(source, output) {
       header.push('mode: subagent');
       const model = declarationField(parsed.fields, 'model', path);
       if (model !== undefined) header.push(`model: ${quotedString(model)}`);
-      const tools = agentTools(parsed.fields, path);
-      if (tools) header.push('tools:', '  "*": false', ...tools.map((tool) => `  ${quotedString(tool)}: true`));
+      const tools = agentToolNames(parsed.fields, path);
+      if (tools) header.push('tools:', '  "*": false', ...opencodeTools(tools).map((tool) => `  ${quotedString(tool)}: true`));
       output.set(`.opencode/agent/${name}.md`, Buffer.from(mappedDeclaration(header, parsed.body)));
+      for (const [target, native] of translatedAgents(name, { description, model, tools })) {
+        output.set(target, Buffer.from(mappedDeclaration(native, parsed.body)));
+      }
     } else {
       output.set(`.opencode/command/${name}.md`, Buffer.from(header.length ? mappedDeclaration(header, parsed.body) : `${MARKER}\n${parsed.body}`));
       const toml = [`# ${MARKER}`, ...(description === undefined ? [] : [`description = ${quotedString(description)}`]),

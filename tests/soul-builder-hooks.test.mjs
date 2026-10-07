@@ -268,8 +268,12 @@ test('a hooked soul\'s revision ignores exact build output, including Copilot\'s
 });
 
 test('the ignore list only grows by the Copilot hook file; the list before it still validates', () => {
-  assert.deepEqual(PACKAGE_IGNORE_LIST.generatedPaths.slice(0, -1), PRIOR_PACKAGE_IGNORE_LISTS[0].generatedPaths);
-  assert.equal(PACKAGE_IGNORE_LIST.generatedPaths.at(-1), '.github/hooks/agent-bot-soul.json');
+  // The adapters slice appended to the list after this one (see
+  // soul-builder-adapters.test.mjs); the slice-3 list is the one before it.
+  const slice3 = PRIOR_PACKAGE_IGNORE_LISTS[0].generatedPaths;
+  assert.deepEqual(PACKAGE_IGNORE_LIST.generatedPaths.slice(0, slice3.length), slice3);
+  assert.deepEqual(slice3.slice(0, -1), PRIOR_PACKAGE_IGNORE_LISTS[1].generatedPaths);
+  assert.equal(slice3.at(-1), '.github/hooks/agent-bot-soul.json');
   assert.equal(isGeneratedPath('.github/hooks/other.json'), false, 'other Copilot hook files stay the soul\'s');
 });
 

@@ -14,8 +14,15 @@ const agent = '---\nname: review\ndescription: Review code\ntools: Read, Grep, B
 const command = '---\ndescription: "Review: code"\nargument-hint: "[path]"\n---\nReview $ARGUMENTS.\nThen summarize $ARGUMENTS.\n';
 const entry = (path, content) => ({ path, mode: '100644', bytes: Buffer.from(content) });
 const entries = () => [entry('AGENTS.md', '# Soul\n'), entry('agents/review.md', agent), entry('commands/review.md', command)];
-const primitivePaths = ['.claude/agents/review.md', '.claude/commands/review.md', '.gemini/commands/review.toml',
+const primitivePaths = ['.claude/agents/review.md', '.claude/commands/review.md', '.cursor/agents/review.md',
+  '.devin/agents/review.md', '.gemini/commands/review.toml', '.github/agents/review.agent.md', '.kiro/agents/review.md',
   '.opencode/agent/review.md', '.opencode/command/review.md'];
+// The primitive files each harness reads; Copilot CLI and Devin CLI read
+// Claude's commands natively.
+const harnessPrimitives = { claude: ['.claude/agents/review.md', '.claude/commands/review.md'], gemini: ['.gemini/commands/review.toml'],
+  codex: [], opencode: ['.opencode/agent/review.md', '.opencode/command/review.md'], cursor: ['.cursor/agents/review.md'],
+  copilot: ['.claude/commands/review.md', '.github/agents/review.agent.md'], devin: ['.claude/commands/review.md', '.devin/agents/review.md'],
+  muse: [], kiro: ['.kiro/agents/review.md'] };
 function put(root, path, content) {
   mkdirSync(dirname(join(root, path)), { recursive: true });
   writeFileSync(join(root, path), content);
@@ -50,14 +57,14 @@ for (const harness of ['claude', 'gemini', 'codex', 'opencode', 'cursor', 'copil
   test(`${harness} reports every received, rendered and unsupported primitive`, () => {
     const output = buildHarnessFiles(entries());
     const report = harnessReport(new Map(output))[harness];
-    for (const [kind, supported] of [['subagents', ['claude', 'opencode']], ['commands', ['claude', 'gemini', 'opencode']]]) {
+    for (const [kind, supported] of [['subagents', ['claude', 'opencode', 'cursor', 'copilot', 'devin', 'kiro']],
+      ['commands', ['claude', 'gemini', 'opencode', 'copilot', 'devin']]]) {
       const renders = supported.includes(harness);
       assert.deepEqual(report[kind], { received: ['review'], rendered: renders ? ['review'] : [] });
       assert.deepEqual(report.unsupported[kind], renders ? [] : ['review']);
       assert.equal(report.rendered.includes(kind), renders);
     }
-    const prefix = harness === 'opencode' ? '.opencode/' : `.${harness}/`;
-    assert.deepEqual(report.files.filter((path) => primitivePaths.includes(path)), primitivePaths.filter((path) => path.startsWith(prefix)));
+    assert.deepEqual(report.files.filter((path) => primitivePaths.includes(path)), harnessPrimitives[harness]);
   });
 }
 

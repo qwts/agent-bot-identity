@@ -28,7 +28,9 @@ in `soul-harness-contract.mjs`, re-exported by `soul-package.mjs` for existing
 consumers. `expectedGeneratedFiles` delegates to the pure builder, without
 importing the disk/CLI layer. `.mcp.json` and `opencode.json` joined the list in
 #378; `.codex/config.toml` and `.gemini/settings.json` were already covered by
-the `.codex/` and `.gemini/` prefixes.
+the `.codex/` and `.gemini/` prefixes. The harness adapters slice appended
+`.github/agents/`, `.kiro/agents/` and `.kiro/settings/mcp.json` (Cursor's and
+Devin's files sit under the existing `.cursor/` and `.devin/` prefixes).
 
 ## Harness output
 
@@ -42,16 +44,18 @@ A native consumer receives no duplicate configuration folder.
 | Gemini CLI | Marked `GEMINI.md` with `@AGENTS.md` | `.gemini/skills/<name>/` | `.gemini/settings.json` | Unsupported | `.gemini/commands/<name>.toml` | Unsupported |
 | Codex | Native `AGENTS.md` | Native skills; no duplicate output | `.codex/config.toml` | Unsupported | Unsupported | `.codex/hooks.json` |
 | OpenCode | Native `AGENTS.md` | Uses shared `.claude/skills/` | `opencode.json` | `.opencode/agent/<name>.md` | `.opencode/command/<name>.md` | Unsupported |
-| Cursor | Native `AGENTS.md` | Uses shared `.claude/skills/`; `.cursor/` only for hooks | None yet | Unsupported | Unsupported | `.cursor/hooks.json` |
-| Copilot CLI | Native instruction support | Uses shared `.claude/skills/`; `.github/` only for hooks | None yet | Unsupported | Unsupported | `.github/hooks/agent-bot-soul.json` |
-| Devin CLI | Claude-compatible consumer | Shared Claude skills; no `.devin/` output | None yet | Unsupported | Unsupported | Shared `.claude/settings.json` |
+| Cursor | Native `AGENTS.md` | Uses shared `.claude/skills/`; no duplicate skills | `.cursor/mcp.json` | `.cursor/agents/<name>.md` | Unsupported (replaced by skills) | `.cursor/hooks.json` |
+| Copilot CLI | Native instruction support | Uses shared `.claude/skills/`; `.github/` only for hooks and agents | Shared `.mcp.json` | `.github/agents/<name>.agent.md` | Shared `.claude/commands/<name>.md` | `.github/hooks/agent-bot-soul.json` |
+| Devin CLI | Claude-compatible consumer | Shared Claude skills; `.devin/` only for agents | Shared `.mcp.json` | `.devin/agents/<name>.md` | Shared `.claude/commands/<name>.md` (imported as skills) | Shared `.claude/settings.json` |
 | Muse | No verified definition adapter in this repo | No dedicated output; follow-up | None yet | Unsupported | Unsupported | Unsupported |
-| Kiro | Native `AGENTS.md` | Uses shared `.claude/skills/` | None yet | Unsupported | Unsupported | Unsupported |
+| Kiro | Native `AGENTS.md` | Uses shared `.claude/skills/` | `.kiro/settings/mcp.json` | `.kiro/agents/<name>.md` | Unsupported (format undocumented) | Unsupported |
 
 "None yet" and "Unsupported" describe adapters in this slice, not a claim
 that a harness lacks the capability. Subagents and commands without adapters
-are explicitly listed under `unsupported` in the build report, including Devin
-whose shared Claude skills do not imply a verified subagent/command adapter.
+are explicitly listed under `unsupported` in the build report. A "Shared" cell
+is a file another harness's adapter writes that this harness's docs say it reads
+natively; it is filled only on that evidence (below), never inferred from shared
+skills.
 
 The ACP registry contains Claude, OpenCode, Muse and disabled Codex launch
 rows; it deliberately omits Cursor/Copilot. Launch enablement does not control
@@ -66,6 +70,51 @@ Format evidence: [Claude imports](https://code.claude.com/docs/en/memory),
 [OpenCode skill discovery](https://opencode.ai/docs/skills/),
 [Cursor skill compatibility](https://cursor.com/docs/skills), and
 [Copilot skill compatibility](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills).
+
+Adapter evidence (official docs read 2026-10-07):
+
+- Cursor: [MCP](https://cursor.com/docs/mcp) — project `.cursor/mcp.json`,
+  `mcpServers` with `command`/`args`; [subagents](https://cursor.com/docs/subagents) —
+  project `.cursor/agents/<name>.md` with `name`, `description`, `model`,
+  `readonly`, taking precedence over the Claude-compatible `.claude/agents/`
+  it also reads. Commands: the old commands page now redirects to
+  [migrating commands to skills](https://cursor.com/help/customization/skills#how-do-i-migrate-commands-to-skills),
+  so no current command format is documented.
+- Copilot CLI: [MCP](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers) —
+  project `.mcp.json` (or `.github/mcp.json`), loaded once the folder is trusted;
+  [CLI reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference) —
+  commands as `.md` files in `.claude/commands/`, and custom agents from
+  `.github/agents/` before `.claude/agents/`;
+  [create custom agents](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/create-custom-agents-for-cli)
+  (`.agent.md`); [tool aliases](https://docs.github.com/en/copilot/reference/custom-agents-configuration)
+  accept Claude's tool names case-insensitively and ignore unknown names.
+  Checked with Copilot CLI 1.0.90 in a trusted scratch folder: `copilot mcp list --json`
+  showed the rendered, marked `.mcp.json` as one `agent-bot` workspace server, and
+  `copilot skill list --json` listed a rendered `.claude/commands/` file.
+- Kiro: [MCP configuration](https://kiro.dev/docs/mcp/configuration/) — workspace
+  `.kiro/settings/mcp.json` with `mcpServers` (IDE and CLI);
+  [custom agents](https://kiro.dev/docs/custom-agents/) and the
+  [configuration reference](https://kiro.dev/docs/custom-agents/configuration-reference/) —
+  workspace `.kiro/agents/<name>.md` (Markdown and the `read`/`write`/`shell`/`web`
+  tool tags are new in Kiro CLI 3.0 / IDE 1.0; workspace agents load only in a
+  trusted workspace). [Prompts](https://kiro.dev/docs/cli/chat/manage-prompts/)
+  live in `.kiro/prompts/`, but their file name and metadata format is not
+  documented, so commands stay unsupported.
+- Devin CLI: [configuration import](https://docs.devin.ai/cli/reference/configuration/read-config-from) —
+  imports Claude's `.mcp.json` MCP servers and `.claude/commands/**/*.md` as skills
+  (it also imports `.cursor/mcp.json` and `opencode.json`, which carry the same
+  `agent-bot` entry); [subagents](https://docs.devin.ai/cli/subagents) — project
+  `.devin/agents/<name>.md` with `name`, `description`, `model`, `allowed-tools`;
+  tool names from [permissions](https://docs.devin.ai/cli/reference/permissions).
+- Gemini CLI: [subagents](https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md)
+  are documented in `.gemini/agents/*.md`, but their only switch is
+  `experimental.enableAgents`, so they are not documented as stable and stay
+  unsupported here.
+
+**Unverified:** Cursor and Kiro were not run (both CLIs need a sign-in), so
+whether they tolerate the leading `_comment` marker key in `.cursor/mcp.json` and
+`.kiro/settings/mcp.json` is unverified, as for Cursor's hook file. Copilot CLI's
+tolerance was checked (above).
 
 SKILL.md retains YAML front matter at the start; its marker is the first line
 following the closing delimiter. Markdown/text siblings are copied with a
@@ -136,16 +185,38 @@ translated YAML constructs, and malformed front matter fail the build. Other
 Claude-specific fields remain in Claude's copy; they are not translated.
 These adapters remain dependency-free and do not implement general YAML.
 
+### Native subagent files for Cursor, Copilot CLI, Kiro and Devin CLI
+
+Each receives `name`, `description` and, when declared, `model` (verbatim) as
+JSON-quoted YAML strings, then the marker and the prompt. Only `tools` differs:
+
+| Harness | Declared `tools` | No `tools` |
+| --- | --- | --- |
+| Cursor | No per-tool allowlist: `readonly: true` when every tool is read-only (`Read`, `Grep`, `Glob`, `LS`, `NotebookRead`, `WebFetch`, `WebSearch`, `TodoWrite`) or the list is empty; otherwise Cursor's defaults apply | Omitted |
+| Copilot CLI | `tools:` the Claude names verbatim (documented aliases; unknown names are ignored, which narrows) | Omitted (all tools) |
+| Kiro | `tools:` category tags: `Read`/`Grep`/`Glob`/`LS`/`NotebookRead` → `read`, `Edit`/`MultiEdit`/`Write`/`NotebookEdit` → `write`, `Bash` → `shell`, `WebFetch`/`WebSearch` → `web`, `Task` → `subagent`, `TodoWrite` → `todo_list` | `tools: ["*"]` (the default is undocumented) |
+| Devin CLI | `allowed-tools:` `Read` → `read`, `Edit`/`MultiEdit` → `edit`, `Write` → `write`, `Grep` → `grep`, `Glob` → `glob`, `Bash` → `exec` | Omitted (all tools) |
+
+A declared tool Kiro or Devin has no name for (for example an MCP tool, or
+`WebFetch` for Devin) means that subagent is not rendered for that harness and
+is listed under its `unsupported.subagents`, never widened or cut down. Kiro's
+tags are categories, so `Read` grants Kiro's whole read category (reading,
+listing, searching). Devin's subagents default to its subagent model rather
+than the parent's when `model` is omitted. Cursor and Copilot CLI also read the
+Claude copy in `.claude/agents/`; the native file has the same name and wins.
+
 Each harness report adds `subagents` and `commands`, each containing
 `{received: [names], rendered: [names]}`. The existing `rendered` primitive
 list gains these kinds only when files were generated for that harness;
 `files` includes their paths. `unsupported` is
-`{subagents: [names], commands: [names]}`, with empty lists for supported or
-undeclared kinds. All name lists are byte-sorted. For example, Gemini reports
+`{subagents: [names], commands: [names]}`: every received name the harness did
+not render, so an empty list for a fully supported or undeclared kind. All name
+lists are byte-sorted; Copilot's `.agent.md` suffix is not part of the name. For example, Gemini reports
 `subagents: {received: ["review"], rendered: []}` and
 `unsupported: {subagents: ["review"], commands: []}` for the examples above.
-The `.claude/`, `.gemini/` and `.opencode/` prefixes already cover all new files;
-the fixed generated-path list and its order are unchanged.
+The `.claude/`, `.gemini/` and `.opencode/` prefixes cover the files of that
+slice, and `.cursor/` and `.devin/` Cursor's and Devin's agents. Copilot's and
+Kiro's agent folders were appended to the generated-path list (below).
 
 ## Settings (#379)
 
@@ -295,6 +366,11 @@ the same bytes on every host.
 | `.gemini/settings.json` | `"mcpServers": { "agent-bot": { "command": "agent-bot", "args": ["reach-mcp"] } }` |
 | `.codex/config.toml` | `[mcp_servers.agent-bot]` with `command` and `args` |
 | `opencode.json` | `"mcp": { "agent-bot": { "type": "local", "command": ["agent-bot", "reach-mcp"] } }` |
+| `.cursor/mcp.json` | `"mcpServers": { "agent-bot": { "command": "agent-bot", "args": ["reach-mcp"] } }` |
+| `.kiro/settings/mcp.json` | `"mcpServers": { "agent-bot": { "command": "agent-bot", "args": ["reach-mcp"] } }` |
+
+Copilot CLI and Devin CLI read the shared `.mcp.json` natively, so they get no
+file of their own; their report lists `mcp` with `.mcp.json`.
 
 **Identity is the working directory's, not the file's.** The registered
 placement takes the soul from `git config agentBot.agentId` (or `qwts.agentId`)
@@ -461,8 +537,13 @@ installation and git initialization; a failed build removes the half-created hom
 An existing home is rebuilt before each launch, so a soul made by an earlier
 release gains what the builder renders now; a conflict there is reported on the
 daemon's stderr and the launch proceeds. A format-2 soul carrying an ignore list
-an earlier release wrote (before `.mcp.json` and `opencode.json`, 0.10.25, or
-before Copilot's soul hook file) still validates; only an unknown list is refused.
+an earlier release wrote (before `.mcp.json` and `opencode.json`, 0.10.25,
+before Copilot's soul hook file, or before the adapters slice's
+`.github/agents/`, `.kiro/agents/` and `.kiro/settings/mcp.json`) still
+validates; only an unknown list is refused. The list names only those folders,
+so a soul's other files in `.github/` or `.kiro/` (workflows, steering) stay
+its own; files it authors in `.github/agents/` or `.kiro/agents/` are kept on
+build, but, like `.claude/`, are not copied out of a template.
 
 Format 2 ignores only exact expected bytes. Editing a marked generated file
 changes the revision until rebuilt; the marker cannot hide arbitrary authored
@@ -478,9 +559,12 @@ close that gap.
 
 ## Follow-ups
 
-MCP adapters for Cursor, Copilot, Devin and Muse, additional native
-subagent/command adapters, and hook adapters for Gemini CLI, OpenCode (plugins),
-Muse and Kiro are not in this slice.
+Not yet covered: Muse (MCP, subagents, commands, hooks); subagents for Codex
+and for Gemini CLI (until `.gemini/agents/` is documented as stable); commands
+for Codex, Cursor (replaced by skills) and Kiro (`.kiro/prompts/` file format
+undocumented); hooks for Gemini CLI, OpenCode (plugins), Muse and Kiro; a
+signed-in check that Cursor and Kiro accept the `_comment` marker key; and
+mapping MCP tool names into Kiro's and Devin's subagent tool lists.
 
 The rendered entry is named `agent-bot`; the daemon's injected entry and
 `reachPolicyRules()` name the same server `agent-reach`, so a
