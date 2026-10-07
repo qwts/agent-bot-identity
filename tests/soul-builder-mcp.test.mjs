@@ -220,7 +220,7 @@ test('--check --json reports every harness and never leaves a primitive unreport
     rendered: ['instructions', 'mcp'], files: ['.mcp.json', 'CLAUDE.md'],
     subagents: { received: [], rendered: [] }, commands: { received: [], rendered: [] },
     settings: { received: [], rendered: [] }, hooks: { received: [], rendered: [] },
-    unsupported: { subagents: [], commands: [], settings: [], hooks: [] },
+    unsupported: { subagents: [], commands: [], settings: [], permissions: [], hooks: [] },
   });
   assert.deepEqual(report.harnesses.codex.rendered, ['instructions', 'mcp']);
   assert.deepEqual(report.harnesses.gemini.files, ['.gemini/settings.json', 'GEMINI.md']);

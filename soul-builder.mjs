@@ -63,18 +63,92 @@ const HARNESS_FILES = Object.freeze({
 // Settings are defaults for native harness launches; owner-selected launch
 // models remain outside the package and take precedence at launch.
 export const SETTINGS_TARGETS = Object.freeze([
-  Object.freeze({ harness: 'claude', path: '.claude/settings.json', keys: Object.freeze(['model', 'permissionMode', 'reasoningEffort']) }),
-  Object.freeze({ harness: 'codex', path: '.codex/config.toml', keys: Object.freeze(['model', 'permissionMode', 'reasoningEffort']) }),
+  Object.freeze({ harness: 'claude', path: '.claude/settings.json', keys: Object.freeze(['env', 'model', 'permissionMode', 'permissions', 'reasoningEffort']) }),
+  Object.freeze({ harness: 'codex', path: '.codex/config.toml', keys: Object.freeze(['env', 'model', 'permissionMode', 'reasoningEffort']) }),
   Object.freeze({ harness: 'gemini', path: '.gemini/settings.json', keys: Object.freeze(['model']) }),
-  Object.freeze({ harness: 'opencode', path: 'opencode.json', keys: Object.freeze(['model', 'permissionMode']) }),
+  Object.freeze({ harness: 'opencode', path: 'opencode.json', keys: Object.freeze(['model', 'permissionMode', 'permissions']) }),
 ]);
 
+const plainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+// An override replaces the fields it declares, except that `env` merges per
+// variable over the shared `env`, and `permissions` keeps a shared list the
+// override does not declare (a declared list replaces the shared one whole).
 export function harnessSettings(manifest, name) {
-  return { ...manifest.harness, ...manifest.harnesses?.[name] };
+  const shared = plainObject(manifest.harness) ? manifest.harness : {};
+  const override = plainObject(manifest.harnesses?.[name]) ? manifest.harnesses[name] : {};
+  const settings = { ...shared, ...override };
+  for (const key of ['env', 'permissions']) {
+    if (plainObject(shared[key]) && plainObject(override[key])) settings[key] = { ...shared[key], ...override[key] };
+  }
+  return settings;
+}
+
+// Environment variables (#379, slice 2). A soul is shared, copied and forked,
+// so it never carries a credential: secret-looking names and values are
+// refused. Credentials are referenced by name (soul.json `credentials`) and
+// resolved at launch, never written into a package or a generated file.
+export const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
+// Whole words between underscores, so TOKENIZER or SECRETARY_MODE pass.
+const SECRET_NAME = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE_KEY|API_KEY|APIKEY|CREDENTIALS?|AUTH)(?:_|$)/i;
+const SECRET_PREFIX = /(?:^|[^A-Za-z0-9])(?:gh[pousr]_|github_pat_|sk-|sk_live_|xox[abprs]-|glpat-|AKIA|AIza)[A-Za-z0-9_-]{8,}/;
+function credentialLike(value) {
+  if (value.includes('-----BEGIN') || SECRET_PREFIX.test(value) || /[0-9a-fA-F]{32,}/.test(value)) return true;
+  // A long base64 run mixing digits and both cases; plain words and paths do not.
+  return (value.match(/[A-Za-z0-9+/_-]{32,}={0,2}/g) ?? []).some((run) => /\d/.test(run) && /[a-z]/.test(run) && /[A-Z]/.test(run));
+}
+
+// Why `NAME: value` cannot be declared, or null. The message never repeats a
+// value, so a refused credential is not echoed into logs.
+export function envProblem(name, value) {
+  if (!ENV_NAME.test(name)) return 'must be an environment variable name matching ^[A-Z_][A-Z0-9_]*$';
+  if (SECRET_NAME.test(name)) return 'names a secret; a soul never carries credentials (reference them by name and resolve them at launch)';
+  if (typeof value !== 'string') return 'must be a string';
+  if (value.includes('\0')) return 'must not contain NUL';
+  if (credentialLike(value)) return 'looks like a credential; a soul never carries credentials (reference them by name and resolve them at launch)';
+  return null;
+}
+
+// Permission rules use Claude Code's `Tool` / `Tool(pattern)` syntax as the
+// portable form.
+export const PERMISSION_RULE = /^[A-Za-z][A-Za-z0-9_-]*(?:\([^\x00-\x1f\x7f]+\))?$/;
+
+function declaredEnv(settings) {
+  const env = plainObject(settings.env) ? settings.env : {};
+  for (const [name, value] of Object.entries(env)) {
+    const problem = envProblem(name, value);
+    if (problem) throw new Error(`harness env ${name} ${problem}`);
+  }
+  return env;
+}
+
+// Declared rules in order, allow before deny: `{ effect, rule }`.
+function permissionRules(settings) {
+  const permissions = plainObject(settings.permissions) ? settings.permissions : {};
+  return ['allow', 'deny'].flatMap((effect) => (Array.isArray(permissions[effect]) ? permissions[effect] : [])
+    .map((rule) => ({ effect, rule })));
+}
+
+// OpenCode spells only shell and edit rules natively: `Bash` / `Bash(pattern)`
+// in permission.bash, bare Edit/Write/MultiEdit in permission.edit. Claude's
+// legacy `prefix:*` becomes both `prefix` and `prefix *`, OpenCode globs.
+function opencodeRule(rule) {
+  if (rule === 'Bash') return { tool: 'bash', patterns: ['*'] };
+  const bash = rule.match(/^Bash\((.+)\)$/s);
+  if (bash) return { tool: 'bash', patterns: bash[1].endsWith(':*') ? [bash[1].slice(0, -2), `${bash[1].slice(0, -2)} *`] : [bash[1]] };
+  if (['Edit', 'Write', 'MultiEdit'].includes(rule)) return { tool: 'edit' };
+  return null;
+}
+
+// The declared keys this target actually renders: OpenCode renders
+// `permissions` only when at least one rule maps; the rest are reported.
+function renderedKeys(target, settings) {
+  return target.keys.filter((key) => Object.hasOwn(settings, key)
+    && (key !== 'permissions' || target.harness !== 'opencode' || permissionRules(settings).some(({ rule }) => opencodeRule(rule))));
 }
 
 export function settingsTargets(manifest) {
-  return SETTINGS_TARGETS.filter(({ harness, keys }) => keys.some((key) => Object.hasOwn(harnessSettings(manifest, harness), key)));
+  return SETTINGS_TARGETS.filter((target) => renderedKeys(target, harnessSettings(manifest, target.harness)).length);
 }
 
 function settingsObject(path, bytes) {
@@ -129,33 +203,81 @@ function renderCodexSettings(path, bytes, settings) {
     values.approval_policy = settings.permissionMode === 'safe' ? 'on-request' : 'never';
     values.sandbox_mode = settings.permissionMode === 'safe' ? 'workspace-write' : 'danger-full-access';
   }
-  let root = true;
+  // Env goes to `[shell_environment_policy.set]`, the map Codex 0.160 applies
+  // to the commands it runs. That table is rebuilt at the end of the file:
+  // undeclared authored variables are kept verbatim, declared ones replaced.
+  const env = settings.env === undefined ? null : declaredEnv(settings);
+  const POLICY = 'shell_environment_policy', SET = `${POLICY}.set`;
+  const setKept = [];
+  let table = null;
+  const keyOf = (statement) => {
+    const key = statement.match(/^\s*(?:([\w-]+)|"([^"]*)"|'([^']*)')\s*[.=]/);
+    return key && (key[1] ?? key[2] ?? key[3]);
+  };
   const kept = tomlStatements(authoredText(path, bytes ?? Buffer.alloc(0))).filter((statement) => {
     if (statement.trim() === `# ${MARKER}`) return false;
-    if (/^\s*\[/.test(statement)) root = false;
-    const key = statement.match(/^\s*(?:([\w-]+)|"([\w-]+)"|'([\w-]+)')\s*=/);
-    return !root || !key || !Object.hasOwn(values, key[1] ?? key[2] ?? key[3]);
+    const header = statement.trim().match(/^\[\[?\s*([^\]]+?)\s*\]\]?[ \t]*(#.*)?$/);
+    if (/^\s*\[/.test(statement)) table = header ? header[1].replace(/\s*\.\s*/g, '.').replace(/"([\w-]+)"/g, '$1') : '';
+    const key = keyOf(statement);
+    if (env) {
+      const conflict = (table === null && key === POLICY) || (table === POLICY && key === 'set') || table?.startsWith(`${SET}.`);
+      if (conflict) throw new Error(`${path}: ${POLICY}.set must be a [${SET}] table to merge the soul's env`);
+      if (table === SET) {
+        if (!header && statement.trim() && !(key && Object.hasOwn(env, key))) setKept.push(statement.replace(/\n?$/, '\n'));
+        return false;
+      }
+    }
+    return table !== null || !key || !Object.hasOwn(values, key);
   }).join('').replace(/^\n+|\n+$/g, '');
-  const lines = Object.entries(values).map(([key, value]) => `${key} = ${quotedString(value)}`).join('\n');
-  return Buffer.from(`# ${MARKER}\n${lines}\n${kept ? `\n${kept}\n` : ''}`);
+  const lines = Object.entries(values).map(([key, value]) => `${key} = ${quotedString(value)}`);
+  const envTable = env && (Object.keys(env).length || setKept.length)
+    ? `\n[${SET}]\n${Object.keys(env).sort(compare).map((name) => `${name} = ${quotedString(env[name])}\n`).join('')}${setKept.join('')}` : '';
+  const head = `# ${MARKER}\n${lines.length ? `${lines.join('\n')}\n` : ''}`;
+  return Buffer.from(`${head}${kept ? `${lines.length ? '\n' : ''}${kept}\n` : ''}${envTable && (lines.length || kept) ? envTable : envTable.slice(1)}`);
 }
 
 function renderSettings(target, bytes, settings) {
   if (target.harness === 'codex') return renderCodexSettings(target.path, bytes, settings);
   const { _comment, ...value } = settingsObject(target.path, bytes);
-  if (settings.model !== undefined) value.model = settings.model;
+  const keys = renderedKeys(target, settings);
+  if (keys.includes('model')) value.model = settings.model;
   if (target.harness === 'claude') {
-    if (settings.reasoningEffort !== undefined) value.effortLevel = settings.reasoningEffort;
-    if (settings.permissionMode !== undefined) value.permissions = {
-      ...nestedSettings(value, 'permissions', target.path),
-      defaultMode: settings.permissionMode === 'safe' ? 'default' : 'bypassPermissions',
-    };
+    if (keys.includes('reasoningEffort')) value.effortLevel = settings.reasoningEffort;
+    // Declared variables replace their own names; other authored ones stay.
+    if (keys.includes('env')) value.env = { ...nestedSettings(value, 'env', target.path), ...declaredEnv(settings) };
+    if (keys.includes('permissionMode') || keys.includes('permissions')) {
+      const permissions = { ...nestedSettings(value, 'permissions', target.path) };
+      if (keys.includes('permissionMode')) permissions.defaultMode = settings.permissionMode === 'safe' ? 'default' : 'bypassPermissions';
+      // A declared list replaces the native list; Claude itself lets deny win.
+      for (const effect of ['allow', 'deny']) {
+        if (keys.includes('permissions') && Array.isArray(settings.permissions[effect])) permissions[effect] = [...settings.permissions[effect]];
+      }
+      value.permissions = permissions;
+    }
   }
-  if (target.harness === 'opencode' && settings.permissionMode !== undefined) value.permission = {
-    ...nestedSettings(value, 'permission', target.path),
-    edit: settings.permissionMode === 'safe' ? 'ask' : 'allow',
-    bash: settings.permissionMode === 'safe' ? 'ask' : 'allow',
-  };
+  if (target.harness === 'opencode' && (keys.includes('permissionMode') || keys.includes('permissions'))) {
+    const permission = { ...nestedSettings(value, 'permission', target.path) };
+    const mode = keys.includes('permissionMode') ? (settings.permissionMode === 'safe' ? 'ask' : 'allow') : undefined;
+    if (mode) { permission.edit = mode; permission.bash = mode; }
+    const rules = keys.includes('permissions') ? permissionRules(settings).map((entry) => ({ ...entry, native: opencodeRule(entry.rule) })).filter(({ native }) => native) : [];
+    const edits = rules.filter(({ native }) => native.tool === 'edit');
+    if (edits.length) permission.edit = edits.some(({ effect }) => effect === 'deny') ? 'deny' : 'allow';
+    const shells = rules.filter(({ native }) => native.tool === 'bash');
+    if (shells.length) {
+      // OpenCode applies the LAST matching pattern: the mode's `*` goes first
+      // and every deny is (re)inserted last, so deny wins as it does in Claude.
+      const bash = mode ? { '*': mode } : {};
+      for (const { effect, native } of shells) {
+        for (const pattern of native.patterns) {
+          if (effect === 'deny') delete bash[pattern];
+          bash[pattern] = effect;
+        }
+      }
+      const patterns = Object.keys(bash);
+      permission.bash = patterns.length === 1 && patterns[0] === '*' ? bash['*'] : bash;
+    }
+    value.permission = permission;
+  }
   return Buffer.from(`${JSON.stringify({ _comment: MARKER, ...value }, null, 2)}\n`);
 }
 
@@ -448,10 +570,16 @@ export function harnessReport(output, { comms = true, manifest = {}, hooks = [] 
       unsupported[kind] = files[kind] ? [] : [...received[kind]];
       if (delivered.length) rendered.push(kind);
     }
-    const settingKeys = Object.keys(harnessSettings(manifest, harness)).sort(compare);
-    const deliveredSettings = settingKeys.filter((key) => settingsTarget?.keys.includes(key) && output.has(settingsTarget.path));
+    const settings = harnessSettings(manifest, harness);
+    const settingKeys = Object.keys(settings).sort(compare);
+    const deliveredSettings = settingsTarget && output.has(settingsTarget.path)
+      ? renderedKeys(settingsTarget, settings).sort(compare) : [];
     unsupported.settings = settingKeys.filter((key) => !deliveredSettings.includes(key));
     if (deliveredSettings.length) rendered.push('settings');
+    // Per rule, so a partly expressible rule set never loses one in silence.
+    const rulesRendered = deliveredSettings.includes('permissions');
+    unsupported.permissions = permissionRules(settings)
+      .filter(({ rule }) => !rulesRendered || (harness === 'opencode' && !opencodeRule(rule)));
     unsupported.hooks = hooks.filter((name) => !deliveredHooks.includes(name));
     if (deliveredHooks.length) rendered.push('hooks');
     report[harness] = { rendered, files: paths, ...primitives,

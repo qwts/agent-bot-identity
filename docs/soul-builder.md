@@ -147,7 +147,7 @@ undeclared kinds. All name lists are byte-sorted. For example, Gemini reports
 The `.claude/`, `.gemini/` and `.opencode/` prefixes already cover all new files;
 the fixed generated-path list and its order are unchanged.
 
-## Settings (#379, slice 1)
+## Settings (#379)
 
 Declare shared defaults in `soul.json` under `harness`, with field-by-field
 per-harness overrides in the top-level `harnesses` object:
@@ -168,22 +168,23 @@ per-harness overrides in the top-level `harnesses` object:
 ```
 
 Both objects are optional. Each settings object accepts only `model` (a
-nonempty string), `reasoningEffort` (`low`, `medium`, `high`), and
-`permissionMode` (`safe`, `autopilot`, the same mode names as `soul mode`).
-Overrides replace only declared fields; omitted fields inherit shared defaults.
+nonempty string), `reasoningEffort` (`low`, `medium`, `high`),
+`permissionMode` (`safe`, `autopilot`, the same mode names as `soul mode`),
+`env`, and `permissions` (both below). Overrides replace only declared fields;
+omitted fields inherit shared defaults.
 Model IDs are copied verbatim, so use overrides for harness-specific IDs.
 The supported override names are `claude`, `codex`, `gemini`, `opencode`,
 `cursor`, `copilot`, `devin`, and `muse`. Unknown names, unknown settings keys,
 and invalid values fail package validation with their full declaration path.
 Other top-level manifest extensions retain their existing opaque behavior.
 
-| Harness / file | Model | Reasoning effort | Permission mode: safe / autopilot |
-| --- | --- | --- | --- |
-| Claude Code / `.claude/settings.json` | `model` | `effortLevel` | `permissions.defaultMode`: `default` / `bypassPermissions` |
-| Codex / `.codex/config.toml` | `model` | `model_reasoning_effort` | `approval_policy`: `on-request` / `never`; `sandbox_mode`: `workspace-write` / `danger-full-access` |
-| Gemini / `.gemini/settings.json` | `model` | Unsupported | Unsupported |
-| OpenCode / `opencode.json` | `model` | Unsupported | `permission.edit` and `permission.bash`: `ask` / `allow` |
-| Cursor, Copilot, Devin, Muse | Unsupported | Unsupported | Unsupported |
+| Harness / file | Model | Reasoning effort | Permission mode: safe / autopilot | Env | Allow / deny rules |
+| --- | --- | --- | --- | --- | --- |
+| Claude Code / `.claude/settings.json` | `model` | `effortLevel` | `permissions.defaultMode`: `default` / `bypassPermissions` | `env` | `permissions.allow` / `permissions.deny` |
+| Codex / `.codex/config.toml` | `model` | `model_reasoning_effort` | `approval_policy`: `on-request` / `never`; `sandbox_mode`: `workspace-write` / `danger-full-access` | `[shell_environment_policy.set]` | Unsupported |
+| Gemini / `.gemini/settings.json` | `model` | Unsupported | Unsupported | Unsupported | Unsupported |
+| OpenCode / `opencode.json` | `model` | Unsupported | `permission.edit` and `permission.bash`: `ask` / `allow` | Unsupported | `Bash`, `Bash(…)` → `permission.bash`; `Edit` / `Write` / `MultiEdit` → `permission.edit` |
+| Cursor, Copilot, Devin, Muse, Kiro | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
 
 Claude's installed 2.1.290 settings schema describes `effortLevel` as
 “Persisted effort level for supported models.” The builder uses that native
@@ -215,9 +216,70 @@ overrides. `soul build --check --json` includes these fields; `rendered` gains
 The `.claude/`, `.codex/`, `.gemini/` prefixes and `opencode.json` already cover
 these files; the fixed generated-path list and its order are unchanged.
 
-Environment variables, additional sandbox controls, allow/deny rules,
-and other native settings are later slices; hooks are declared as files, below. Existing authored values for those
-keys are preserved during a merge.
+### Environment and permission rules (slice 2)
+
+```json
+{
+  "harness": {
+    "env": { "LOG_LEVEL": "debug" },
+    "permissions": { "allow": ["Bash(git:*)", "Edit"], "deny": ["Bash(rm *)", "Read(./.env)"] }
+  },
+  "harnesses": { "codex": { "env": { "LOG_LEVEL": "info" } } }
+}
+```
+
+`env` maps names matching `^[A-Z_][A-Z0-9_]*$` to string values. An override's
+`env` merges per variable over the shared `env`: a variable it names takes the
+override's value, every other shared variable is kept, and none can be removed.
+**Secrets never go in a soul.** Validation refuses any name with the word
+`TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `PRIVATE_KEY`, `API_KEY`, `APIKEY`,
+`CREDENTIAL(S)` or `AUTH` between underscores or at either end (any case;
+`TOKENIZER_MODE` and `AUTHOR_NAME` pass), and any value that looks like a credential: a `ghp_`/`github_pat_`,
+`sk-`, `xox?-`, `glpat-`, `AKIA` or `AIza` token, a `-----BEGIN` key, a hex run
+of 32 or more characters, or a 32-character base64 run mixing digits and both
+cases. Errors name the path, never the value. Credentials are referenced by
+name (soul.json `credentials`, see [soul-package.md](soul-package.md)) and
+resolved at launch.
+
+`permissions` holds `allow` and/or `deny` lists of rules in Claude Code's
+`Tool` / `Tool(pattern)` syntax, the portable form: nonempty, no duplicates
+within a list, and deny wins when a rule is in both. An override replaces each
+list it declares (`[]` clears it) and inherits the other.
+
+Claude Code takes both verbatim. Codex applies `shell_environment_policy.set` to
+the commands it runs. OpenCode gets the rules its config can spell: bare `Bash`
+is the `*` pattern, a legacy `prefix:*` becomes both `prefix` and `prefix *`,
+and since OpenCode applies the last matching pattern, a `permissionMode` `*`
+comes first and every deny last. Bare `Edit`, `Write` and `MultiEdit` set
+`permission.edit`, `deny` if any is denied. Every other rule, everywhere, is
+listed in the report rather than dropped. No harness gets a `.env` file.
+
+On merge, declared variables replace their own names in Claude's `env` and in
+a Codex `[shell_environment_policy.set]` table (rebuilt at the end of the
+file); other authored variables stay. A declared rule list replaces Claude's
+native list; `ask`, `defaultMode` and other permission keys stay. OpenCode's
+`permission.bash` / `permission.edit` are replaced when a rule renders there.
+A non-object `env`, a root or inline `shell_environment_policy.set`, or a
+nested `[shell_environment_policy.set.*]` table is refused.
+
+Verified against: the settings schema in the installed Claude Code 2.1.290
+binary (“Environment variables to set for Claude Code sessions”; “List of
+permission rules for allowed/denied operations”); Codex 0.160.0, whose
+`ShellEnvironmentPolicyToml` has `set` (a map) and whose `codex sandbox` showed a
+rendered `set` variable in the child environment; and OpenCode 1.18.34, whose
+bundled config reference documents per-pattern `bash`/`edit` objects with
+last-match-wins and whose `opencode debug config` accepted the rendered file.
+Gemini CLI is not installed and no settings key for env is documented here, so
+env is unsupported for it.
+
+The report adds `env` / `permissions` to `settings.received` and
+`settings.rendered` (OpenCode renders `permissions` only when at least one rule
+maps), and `unsupported.permissions`: `[{effect, rule}]` for each rule a harness
+did not render, allow before deny in declared order.
+
+Additional sandbox controls and other native settings are later slices; hooks
+are declared as files, below. Existing authored values for those keys are
+preserved during a merge.
 
 ## The soul's MCP entry (#378)
 
