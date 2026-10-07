@@ -31,7 +31,17 @@ has `slug`, `botLogin`, `issuerPresent`, `keyPresent`, `key`, `installations`,
 managed App (the stored private key's public SHA256 fingerprint and the ISO
 time connect/rotation stored it; `updatedAt` is `null` for keys stored before
 this field), otherwise `null`. Installations cached by connect/rotation
-are `{id, account, repositorySelection}` (`all` or `selected`); otherwise `[]`.
+are `{id, account, repositorySelection, permissions}` (`all` or `selected`,
+and the installation grant as GitHub reports it, permission name → `read`,
+`write` or `admin`; `null` for a row cached before the grant was kept);
+otherwise `[]`. The plain listing prints each one as
+`installed:<account>(<selection>; <name>:<level>,…)`.
+
+The grant is the most a token minted on that installation can do. It is not
+the bot user's collaborator role on a repository: GitHub checks that role, not
+the grant, for things like `@dependabot rebase` ("only users with push access"),
+and `<slug>[bot]` has permission `none` unless it is added as a collaborator,
+however wide the grant. A wider token does not change that.
 Doctor caches only actual live results, never skipped checks. `liveMint` is
 `{status:"unknown"}` until then, or `{status:"ready"|"failed", code, checkedAt}`.
 A locked/unreadable or keyd-only store reports false presence; this does not
