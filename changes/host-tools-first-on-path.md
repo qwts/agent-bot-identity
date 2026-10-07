@@ -1,1 +1,0 @@
-- `agent-bot` puts a host's `AGENT_BOT_TOOL_PATH` first on its own PATH, so the daemon's and the CLI's git calls use GeniusBar's bundled git on a Mac without the Command Line Tools, as the souls' harnesses already did (GeniusBar#102).
