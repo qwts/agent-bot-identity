@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.36
+
+- `agent-bot skill <name>` now discloses any skill in the fleet catalog (qwts/qwts-agent-sop `skills/README.md`): the name must match exactly one entry, and its `SKILL.md` is fetched read-only from the owning repository at the entry's pinned commit. Absent, ambiguous, and unpinned names fail; a branch or tag is never followed, nothing is installed, and the bundled skills stay local and win. `agent-bot skill agent-bot --for <subcommand>` prints the one reference file for that subcommand from a static table, and `--json` now includes `repository` (#226).
+- `soul build` renders a soul's harness `env` and permission `allow`/`deny` rules (#379, slice 2): Claude Code gets `env` and `permissions.allow`/`deny`, Codex gets `[shell_environment_policy.set]`, OpenCode gets its `Bash`/`Edit` rules in `permission.bash`/`edit`, and every rule a harness cannot express is listed per rule in `soul build --check --json` (`unsupported.permissions`). Secret-looking env names and values fail package validation, so a soul never carries credentials.
+
 ## 0.10.35
 
 - `agent-bot identity app remove SLUG` forgets a managed App's local key, config record and doctor cache row, refusing while a harness or soul still uses it; `agent-bot identity addon github-identity on|off` switches the add-on; and `identity apps list --json` reports it as `addons`. Both are owner-gated and have daemon routes, so GeniusBar's add-on switch and Remove button can work (GeniusBar#67).
