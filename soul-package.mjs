@@ -48,6 +48,23 @@ export function validateCredentialsDeclaration(credentials) {
   return credentials;
 }
 
+// Harness settings are a closed declaration; unrelated manifest extensions stay
+// opaque. Keep failures path-specific, including overrides that no adapter renders.
+const HARNESS_NAMES = ['claude', 'codex', 'gemini', 'opencode', 'cursor', 'copilot', 'devin', 'muse'];
+function validateHarnessSettings(settings, path) {
+  if (!object(settings)) throw new Error(`${path} must be an object`);
+  for (const [key, value] of Object.entries(settings)) {
+    const field = `${path}.${key}`;
+    if (key === 'model') {
+      if (!nonempty(value)) throw new Error(`${field} must be a nonempty string`);
+    } else if (key === 'reasoningEffort') {
+      if (!['low', 'medium', 'high'].includes(value)) throw new Error(`${field} must be low, medium or high`);
+    } else if (key === 'permissionMode') {
+      if (!['safe', 'autopilot'].includes(value)) throw new Error(`${field} must be safe or autopilot`);
+    } else throw new Error(`${field} is an unknown harness setting`);
+  }
+}
+
 function validateManifest(manifest) {
   if (!object(manifest)) throw new Error('soul.json must be an object');
   if (![1, 2].includes(manifest.formatVersion)) throw new Error('unsupported soul.json formatVersion (expected 1 or 2)');
@@ -65,6 +82,14 @@ function validateManifest(manifest) {
   // launches out of the teammate tools. Absent means on.
   if (manifest.comms !== undefined && typeof manifest.comms !== 'boolean') throw new Error('soul.json comms must be a boolean');
   if (manifest.credentials !== undefined) validateCredentialsDeclaration(manifest.credentials);
+  if (manifest.harness !== undefined) validateHarnessSettings(manifest.harness, 'soul.json harness');
+  if (manifest.harnesses !== undefined) {
+    if (!object(manifest.harnesses)) throw new Error('soul.json harnesses must be an object');
+    for (const [name, settings] of Object.entries(manifest.harnesses)) {
+      if (!HARNESS_NAMES.includes(name)) throw new Error(`soul.json harnesses.${name} is an unknown harness`);
+      validateHarnessSettings(settings, `soul.json harnesses.${name}`);
+    }
+  }
   if (typeof manifest.revision !== 'string' || !REVISION.test(manifest.revision)) throw new Error('soul.json revision must be sha256:<64 lowercase hex digits>');
   if (manifest.parentRevision !== null && (typeof manifest.parentRevision !== 'string' || !REVISION.test(manifest.parentRevision))) {
     throw new Error('soul.json parentRevision must be null or sha256:<64 lowercase hex digits>');

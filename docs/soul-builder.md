@@ -17,10 +17,10 @@ reads the registry, environment, clock, credentials, filesystem or absolute host
 paths. Generated input is ignored, and paths with traversal/control characters
 are refused. The builder does not modify its inputs.
 
-`authored` is the optional merge base for the MCP files: the bytes already at
-each rendered MCP path, supplied by the disk layer, so a soul that ships its own
+`authored` is the optional merge base for MCP and settings files: the bytes already at
+each rendered MCP or settings path, supplied by the disk layer, so a soul that ships its own
 MCP config keeps its servers and a rebuild over the builder's own output
-reproduces it byte for byte. Every other output is a function of the package
+reproduces it byte for byte. Other output is a function of the package
 entries alone.
 
 The fixed format-2 `GENERATED_HARNESS_PATHS`, marker and ignore list now live
@@ -145,6 +145,78 @@ undeclared kinds. All name lists are byte-sorted. For example, Gemini reports
 The `.claude/`, `.gemini/` and `.opencode/` prefixes already cover all new files;
 the fixed generated-path list and its order are unchanged.
 
+## Settings (#379, slice 1)
+
+Declare shared defaults in `soul.json` under `harness`, with field-by-field
+per-harness overrides in the top-level `harnesses` object:
+
+```json
+{
+  "harness": {
+    "model": "shared-model-id",
+    "reasoningEffort": "medium",
+    "permissionMode": "safe"
+  },
+  "harnesses": {
+    "claude": { "model": "sonnet" },
+    "codex": { "model": "gpt-5", "reasoningEffort": "high" },
+    "opencode": { "model": "provider/model", "permissionMode": "autopilot" }
+  }
+}
+```
+
+Both objects are optional. Each settings object accepts only `model` (a
+nonempty string), `reasoningEffort` (`low`, `medium`, `high`), and
+`permissionMode` (`safe`, `autopilot`, the same mode names as `soul mode`).
+Overrides replace only declared fields; omitted fields inherit shared defaults.
+Model IDs are copied verbatim, so use overrides for harness-specific IDs.
+The supported override names are `claude`, `codex`, `gemini`, `opencode`,
+`cursor`, `copilot`, `devin`, and `muse`. Unknown names, unknown settings keys,
+and invalid values fail package validation with their full declaration path.
+Other top-level manifest extensions retain their existing opaque behavior.
+
+| Harness / file | Model | Reasoning effort | Permission mode: safe / autopilot |
+| --- | --- | --- | --- |
+| Claude Code / `.claude/settings.json` | `model` | `effortLevel` | `permissions.defaultMode`: `default` / `bypassPermissions` |
+| Codex / `.codex/config.toml` | `model` | `model_reasoning_effort` | `approval_policy`: `on-request` / `never`; `sandbox_mode`: `workspace-write` / `danger-full-access` |
+| Gemini / `.gemini/settings.json` | `model` | Unsupported | Unsupported |
+| OpenCode / `opencode.json` | `model` | Unsupported | `permission.edit` and `permission.bash`: `ask` / `allow` |
+| Cursor, Copilot, Devin, Muse | Unsupported | Unsupported | Unsupported |
+
+Claude's installed 2.1.290 settings schema describes `effortLevel` as
+“Persisted effort level for supported models.” The builder uses that native
+key; it does not create a `reasoningEffort` key in Claude settings. Support is
+an adapter capability, independent of whether a particular model honors effort.
+
+**Launch-time model selection wins.** The per-soul model selected with
+`agent-bot soul model` or GeniusBar's model picker (GeniusBar #128) overrides
+the package's model at launch. This builder writes portable defaults only;
+it does not change `soul-model.mjs`, the daemon, or launch-time model state.
+
+Settings render independently of `comms`; turning comms off does not disable
+settings. Only declared, supported keys are written. Authored settings supplied
+through `authored` retain unrelated keys, nested permission entries, and MCP
+servers. The declaration replaces its corresponding native keys. JSON carries
+the usual first `_comment` marker; TOML carries a leading comment marker and
+keeps unrelated statements, comments and tables in order. Codex settings are
+root keys, so similarly named keys in profiles remain untouched. Rebuilding
+with the same declaration over the builder's own output is byte-identical;
+text is normalized to LF. Invalid JSON or incompatible nested permission
+objects are refused rather than discarded.
+
+`harnessReport(output, { manifest, comms })` takes the source manifest explicitly
+so even declarations unsupported everywhere can be reported without hidden
+Map metadata. Each harness adds `settings: {received: [keys], rendered: [keys]}`
+and `unsupported.settings: [keys]`, with byte-sorted keys after applying its
+overrides. `soul build --check --json` includes these fields; `rendered` gains
+`settings` when at least one setting was rendered and `files` includes its path.
+The `.claude/`, `.codex/`, `.gemini/` prefixes and `opencode.json` already cover
+these files; the fixed generated-path list and its order are unchanged.
+
+Hooks, environment variables, additional sandbox controls, allow/deny rules,
+and other native settings are later slices. Existing authored values for those
+keys are preserved during a merge.
+
 ## The soul's MCP entry (#378)
 
 One server, in the registered placement the daemon already documents: the reach
@@ -214,7 +286,7 @@ package validation. `--check` never writes and exits 1 for drift/conflicts;
 clean checks exit 0. Without `--json` the command prints a short human summary
 (counts, each merge, and the primitives every harness received); `--json`
 prints `{drift, writes, removals, merged, harnesses}`, where `harnesses` maps
-each known harness to `{rendered, files, subagents, commands, unsupported}`
+each known harness to `{rendered, files, subagents, commands, settings, unsupported}`
 as described above. New package homes build after copying, before dependency
 installation and git initialization; a failed build removes the half-created home.
 
@@ -223,7 +295,7 @@ changes the revision until rebuilt; the marker cannot hide arbitrary authored
 content. Build/rebuild leave the v2 revision unchanged. Format 1 still covers
 all files, including generated output; there is no implicit format upgrade.
 
-One exception is worth knowing: for a soul that ships its **own** MCP config,
+One exception is worth knowing: for a soul that ships its **own** MCP or settings config,
 the merged file holds more than the pure builder can derive from package entries
 alone, so it is not exact expected bytes and therefore participates in the
 revision (stably — a rebuild reproduces it byte for byte). Letting

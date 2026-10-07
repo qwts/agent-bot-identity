@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { buildHarnessFiles, harnessReport, hasGeneratedJsonMarker, MCP_TARGETS, mergeableMcpServers } from './soul-builder.mjs';
+import { buildHarnessFiles, harnessReport, hasGeneratedJsonMarker, MCP_TARGETS, mergeableMcpServers, settingsTargets } from './soul-builder.mjs';
 import { readSoulPackageEntries } from './soul-package.mjs';
 import { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, isGeneratedPath } from './soul-harness-contract.mjs';
 import { currentAgentId } from './agent-identity.mjs';
@@ -86,12 +86,16 @@ export function buildSoulDirectory(directory, { check = false } = {}) {
   // so the soul's own file is left exactly as it is.
   const comms = manifest.comms !== false;
   const authored = new Map(), merged = [];
-  for (const target of comms ? MCP_TARGETS : []) {
+  const targets = new Map((comms ? MCP_TARGETS : []).map((target) => [target.path, target]));
+  for (const target of settingsTargets(manifest)) {
+    if (!targets.has(target.path)) targets.set(target.path, target);
+  }
+  for (const target of targets.values()) {
     const bytes = existing.get(target.path);
     if (!bytes) continue;
     authored.set(target.path, bytes);
     if (!hasMarker(bytes)) {
-      merged.push({ path: target.path, harness: target.harness, kept: mergeableMcpServers(target.path, bytes) });
+      merged.push({ path: target.path, harness: target.harness, kept: comms && MCP_TARGETS.some(({ path }) => path === target.path) ? mergeableMcpServers(target.path, bytes) : [] });
     }
   }
   const expected = buildHarnessFiles(source, { authored });
@@ -139,7 +143,7 @@ export function buildSoulDirectory(directory, { check = false } = {}) {
   }
   return {
     drift, writes, removals, merged,
-    harnesses: harnessReport(expected, { comms }),
+    harnesses: harnessReport(expected, { comms, manifest }),
   };
 }
 
