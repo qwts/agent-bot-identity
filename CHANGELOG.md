@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.29
+
+- The daemon refuses a launch whose harness it cannot start (no registry row, disabled, or its command missing from the soul's PATH) before anything mints or joins the hub, so a mistyped or unsupported "Other…" harness no longer leaves dead same-name companions behind; the refusal points a self-running harness like Kiro to `agent-bot join`. A rollback that fails part way is named in the launch journal detail, and `soul remove` says which step failed and what to do when a soul's folder will not move into `.archive` (#531, GeniusBar#196).
+
 ## 0.10.28
 
 - `acp-registry.mjs` gains a `kiro` row (`kiro-cli acp`, `kiro-cli login`) that ships disabled: the engine, `team start` and `harness auth` refuse with the reason until a signed-in Kiro verifies the wire shape and MCP tool naming (#523, GeniusBar#185). Kiro souls keep joining from a running session.
