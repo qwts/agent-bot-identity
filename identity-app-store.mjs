@@ -55,6 +55,15 @@ export function cacheAppDoctorRows(report, options = {}) {
   }
   if (Object.keys(cache).length) atomicJson(cacheFile(options), cache);
 }
+// Drop one App's cached doctor status (identity app remove).
+export function forgetAppDoctorRow(slug, options = {}) {
+  if (!validAppSlug(slug)) throw new Error('invalid App slug');
+  const cache = readAppDoctorCache(options);
+  if (!Object.hasOwn(cache, slug)) return false;
+  delete cache[slug];
+  atomicJson(cacheFile(options), cache);
+  return true;
+}
 
 // Public metadata is App-scoped, even when several souls hold its key.
 export const APP_METADATA_FILES = Object.freeze({

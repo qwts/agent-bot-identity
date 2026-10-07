@@ -1,7 +1,8 @@
 # Managed GitHub Apps
 
 The `github-identity` add-on must be enabled. With it off, list returns an
-empty array; mutations return `identity-app-disabled`. No SOP is required.
+empty array; mutations other than `addon` return `identity-app-disabled`. No
+SOP is required.
 Naming and persona policy come from the caller. Mutations use the owner gate:
 a soul cannot authorize them, and the owner must present a principal with
 `--principal-stdin` or approve the native consent prompt.
@@ -12,7 +13,17 @@ agent-bot identity app create --manifest [--name NAME] [--org ORG] [--open] [--j
 agent-bot identity app connect --id ID (--key-file PATH | --pass-cli ITEM) [--json]
 agent-bot identity app rotate-key SLUG (--key-file PATH | --pass-cli ITEM) [--json]
 agent-bot identity app assign SLUG (--harness H | --soul AGENT_ID) [--json]
+agent-bot identity app remove (SLUG | APP_ID) [--json]
+agent-bot identity addon github-identity on|off [--json]
 ```
+
+`addon` is the owner switch for the add-on itself: it writes
+`features.github-identity` in the runtime config (the same key a hand edit
+sets) and returns `{addon:"github-identity", enabled, changed}`. It works
+while the add-on is off and is owner-gated like every App mutation: a soul
+cannot run it, and it needs the owner's principal or consent. Turning it off
+stops every App token mint on the machine (see the README's `features`).
+The other add-on, `persona-accounts`, has its own switch: `agent-bot sandbox on|off`.
 
 `list` is offline: no mint, provider restore, or installation fetch. Each row
 has `slug`, `botLogin`, `issuerPresent`, `keyPresent`, `key`, `installations`,
@@ -26,7 +37,9 @@ Doctor caches only actual live results, never skipped checks. `liveMint` is
 A locked/unreadable or keyd-only store reports false presence; this does not
 prove deletion (a keyd declaration alone does not prove a key exists).
 No key, issuer value, webhook secret, JWT, or installation token appears in a
-list row. The envelope is `{schemaVersion:1, apps:[...]}`.
+list row. The envelope is `{schemaVersion:1, addons:{"github-identity":true|false}, apps:[...]}`;
+`addons` reports whether each add-on this command manages is on, and is present
+whether or not it is (with it off, `apps` is `[]`).
 
 `create` starts a ten-minute, one-callback listener on `127.0.0.1` and a random
 port. Open its printed `localUrl` (or use `--open`), then submit the local form
@@ -79,6 +92,30 @@ legacy readable stores. A soul's existing `keyd` declaration remains
 helper-owned: connecting/rotating over it or assigning that soul through this
 API refuses with `identity-app-keyd-held`. Use the keyd owner workflow.
 
+`remove` forgets a managed App on this machine (named by slug, or by its
+numeric App ID when no record has that slug): it deletes the App-scoped
+store item (Keychain `agent-bot.app.SLUG` / `github-app/SLUG`, or the private
+file below identity state), the config `identityApps[SLUG]` record (public
+ID, bot UID/avatar, fingerprint, cached installations) and its doctor cache
+row. The App is any slug with an `identityApps` record, including a
+metadata-only one with no stored key, and retired or out-of-scope Apps. It
+refuses with `identity-app-assigned`, naming each one, while a harness (an
+`apps` override or the `prefix` pattern, as list's `harnesses` reports) or a
+non-retired soul (list's `souls`) still points at the App: assign them another
+App first. There is no `--force`. Nothing on github.com changes (delete the
+App or its keys there yourself) and a legacy `~/.config/SLUG` folder is left
+alone. If the config write fails, the store item is restored. A locked or
+unreadable store refuses with `identity-app-store` and removes nothing.
+Success returns names, never contents:
+
+```json
+{"slug":"you-claude-agent","id":"123","removed":{"storeItem":{"store":"keychain","name":"agent-bot.app.you-claude-agent/github-app/you-claude-agent","existed":true},"configRecord":true}}
+```
+
+`storeItem` is `null` for a metadata-only record; `name` is the file path for
+the file store; `existed:false` means the record named a store item that was
+already gone.
+
 ## Daemon contract
 
 All routes use the same loopback-peer and bearer authentication as population
@@ -93,6 +130,8 @@ presented owner credential and is never echoed. Request field names:
 | `POST /v0/identity/apps/connect` | `{id:"123", keyFile:"/absolute/path"}` or `passCli` instead of `keyFile` |
 | `POST /v0/identity/apps/rotate-key` | `{slug, keyFile}` or `{slug, passCli}` |
 | `POST /v0/identity/apps/assign` | `{slug, harness}` or `{slug, soul}` |
+| `POST /v0/identity/apps/remove` | `{slug}` (a slug or App ID) → the remove result above |
+| `POST /v0/identity/apps/addon` | `{name:"github-identity", enabled:true\|false}` → `{addon,enabled,changed}` |
 
 Job status is `pending`, `complete` or `failed`. `result` is the create result;
 job `error` is `{code,message}`. Jobs are in memory, expire after one hour,
@@ -103,7 +142,7 @@ CLI failures are `{error:{code,message}}` with exit 1. Daemon failures are
 `{error:message,code}`: 400 invalid input, 403 owner approval required,
 404 unknown App/job, 429 full job queue, otherwise 409. Codes start with
 `identity-app-`; common suffixes are `disabled`, `invalid`, `owner-required`,
-`exists`, `not-found`, `key-unavailable`, `key-invalid`, `key-unchanged`,
+`exists`, `not-found`, `assigned`, `store`, `key-unavailable`, `key-invalid`, `key-unchanged`,
 `keyd-held`, `github`, `installation`, `conflict`, `timeout`, and `cancelled`.
 Upstream error bodies and provider output are never reflected.
 
@@ -114,5 +153,5 @@ References: [GitHub manifest flow](https://docs.github.com/en/apps/sharing-githu
 Legacy `~/.config/<slug>` metadata is a read fallback only. Run
 `agent-bot identity migrate-credentials --all` to copy it into App records;
 the per-App report and doctor name remaining files and provide an owner
-removal command once the folder is fully redundant. Nothing is deleted by
-agent-bot. See [migration report fields](soul-credentials.md#migrating).
+removal command once the folder is fully redundant. Nothing in it is deleted by
+agent-bot, `identity app remove` included. See [migration report fields](soul-credentials.md#migrating).
