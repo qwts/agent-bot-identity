@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.32
+
+- A soul made before 0.10.25 works again with `soul build`, forks, revisions and Customize: its earlier format-2 ignore list is accepted (an unknown list is still refused), and an existing soul home is rebuilt before each launch so it gains the agent-bot MCP entry a harness opened inside it needs to reach the fleet; a conflicting hand-edited generated file is reported on the daemon's stderr and the launch proceeds (#378, GeniusBar#73).
+
 ## 0.10.31
 
 - A launch can name a short `role` for a new soul (agent-comms `launch` `role`, `soul spawn --role`, `soul fork --role`): 1 to 60 printable characters, trimmed and written into the spawned soul's `soul.json` where `population list` reads it; an invalid role, or one on an existing soul's relaunch, is refused before anything spawns (#535).
