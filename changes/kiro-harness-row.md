@@ -1,1 +1,0 @@
-- `kiro` is a known harness for `soul.json harnesses` and `soul build` (AGENTS.md and the shared skills, no generated files yet); `setup-worktree` without a session soul now says to check in with `agent-bot join` instead of naming a GeniusBar approval step that does not exist (GeniusBar#185, #523).

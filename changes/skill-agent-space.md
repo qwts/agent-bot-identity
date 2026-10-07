@@ -1,1 +1,0 @@
-- `agent-bot skill <name>` serves the bundled `agent-bot`, `agent-space`, and `thread-orders` skills as text or JSON, preserving `skill path`; the new `agent-space` skill guides check-in and repository work in the soul's work area, distinct from the durable Agent Space store (#515).
