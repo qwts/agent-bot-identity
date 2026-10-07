@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.42
+
+- `docs/gh-app-hook.md` is the gh-app-hook deployment and provisioning procedure `doctor` pointed at but which did not exist (#230): `wrangler deploy`, the three Worker secrets (`INBOX_TOKEN`, `WEBHOOK_SECRETS`, `SUBSCRIBERS`), the per-App webhook URL and secret, harness wiring and verification.
+- `doctor`'s `inbox.configuration` counts a harness as wiring the inbox only when its MCP config runs the inbox server, `agent-bot mcp` (#247): a soul package's reach-back server, which is also named `agent-bot` but runs `reach-mcp` and has no `take_inbox`, no longer reads as inbox wiring. The stale launcher comment and the `agent-bot mcp` help line are corrected.
+
 ## 0.10.41
 
 - `mint-token --permissions <name>=<level>[,...]` mints a least-privilege token (#213): each requested permission must be at or below the installation's grant, a request the grant does not cover is refused before the token request (naming what was wanted and what is granted), and without the option the token carries the whole grant as before. A keyd-held key refuses the option instead of ignoring it.
