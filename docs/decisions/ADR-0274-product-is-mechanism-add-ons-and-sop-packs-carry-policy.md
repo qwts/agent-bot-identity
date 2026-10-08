@@ -1,10 +1,13 @@
 # ADR-0274: The product is mechanism; add-ons and SOP packs carry policy
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-10-01
 **Issue:** qwts/agent-bot-identity#274
 **Review:** [#609](https://github.com/qwts/agent-bot-identity/issues/609)
-— product-policy reconciliation, 2026-10-08; refreshed text pending owner acceptance.
+— product-policy reconciliation, 2026-10-08.
+**Accepted:** 2026-10-08, [owner approval of the fail-closed revision](https://github.com/qwts/agent-bot-identity/pull/612#pullrequestreview-5450464506)
+at commit `3a7a3073dc2663382d878bdb311a00bf3629199a`. PR #612 was still
+unmerged when acceptance was recorded; implementation remains tracked separately.
 
 ## Context
 
@@ -161,10 +164,8 @@ enforce the new decision together; this ADR edit changes no runtime behavior.
 decision 6 conformance inventory and missing journey evidence, separately from
 this documentation review. Passing the individual tests above is not proof
 that every zero-SOP journey or every qwts rule is covered.
-The original issue and PR closures, shipped mechanisms, and this reconciliation
-do not by themselves accept the refreshed decision. Record explicit owner
-acceptance separately; keep runtime issues open until their own remaining
-criteria are met.
+The acceptance recorded above approves the decision, not implementation
+completeness. Keep runtime issues open until their own remaining criteria are met.
 
 ## Consequences
 
