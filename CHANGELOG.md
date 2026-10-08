@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.53
+
+- A principal launch may name the new soul's `parent` (GeniusBar #261): `null` or absent starts an independent soul as before, an agent id must be an active soul in this account's census and not the launched soul itself, and the child is bound, censused and joined with that parent as a teammate a soul starts is, with a `team-start` receipt (`operation: launch`) on the parent. A relaunch keeps the parent its census row records; a different one is refused as a `failed` launch result, never written quietly. `soul env --json` lists `launch-parent` in `engine.capabilities` so a host can gate the form on it.
+- Template provenance and maintained files (GeniusBar#287): `soul spawn` records `templateName` and `nameSource` (`template` when the owner kept the template's name, `user` when they chose one); a template may declare `previousNames` and `maintained` path prefixes. `agent-bot soul env migrate <soul> --template-name [--plan]` renames an instance that kept its template's name to the renamed bundled template's name in one package revision (and the census display name), never a chosen name, idempotent and journaled like the other migrations. `agent-bot soul template refresh <soul> [--from PATH] [--plan]` replaces exactly the template's maintained paths in the instance in one revision and updates `templateRevision`, leaving the owner's AGENTS.md, memory and history untouched. `soul env` capabilities gain `template-name` and `template-refresh`.
+
 ## 0.10.52
 
 - `agent-bot soul remove <soul> --plan [--scope soul|team] --json` previews exactly which souls a remove would archive, make independent or leave unchanged, to any depth and whether or not they are awake, with capability flags (`restore` and `delete` are false) so a host never infers more than the engine does; the remove itself runs that same plan and reports it with its effects. `--scope soul` (the default) now clears the census `parentId` of the souls the removed soul led directly (audited as `soul-reparent`); `--scope team` removes every active descendant too, deepest first, refused before anything changes while any of them runs (GeniusBar #283).
