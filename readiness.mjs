@@ -14,6 +14,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveSpacesHome } from './agent-space.mjs';
 import { inspectSoulSpace } from './soul-memory.mjs';
+import { readSoulEnvironment } from './soul-env.mjs';
 import { duplicateSoulDirs, listSouls, orphanSoulDirs, populationFile } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
 import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness } from './config.mjs';
@@ -1180,6 +1181,47 @@ function duplicateSoulDirsCheck({ home, env, config }) {
   });
 }
 
+// Each active soul's environment (#583 slice 6): the readiness problems
+// `soul env` reports, through the same descriptor, as one finding per soul
+// naming the problem codes. An error-severity problem fails the check, a
+// warning warns, and the action is the first problem's own fix. Doctor
+// never provisions or rebuilds anything here; the descriptor is read-only.
+function soulEnvironmentChecks({ home, env, config }) {
+  let souls;
+  try { souls = listSouls({ file: populationFile({ home, env }) }).filter((soul) => soul.status === 'active' && typeof soul.soulDir === 'string'); }
+  catch { return []; } // spaces.home already reports an unreadable census
+  return souls.map((soul) => {
+    const label = `${soul.displayName ?? soul.name ?? soul.id} (${soul.id})`;
+    let described;
+    try { described = readSoulEnvironment(soul.id, { home, env, config }); }
+    catch (error) {
+      return readinessCheck({
+        id: 'souls.environment',
+        status: 'warning',
+        code: 'soul-env-unreadable',
+        message: `soul ${label}: its environment could not be described (${error.code ?? 'error'})`,
+        action: `inspect it with: agent-bot soul env ${soul.id}`,
+        evidence: { agentId: soul.id, soulDir: soul.soulDir, ready: null, problems: [], errors: [] },
+      });
+    }
+    const problems = described.readiness.problems;
+    const errors = problems.filter((problem) => problem.severity === 'error');
+    // The fix to name first: an error's own command, then a warning's.
+    const first = errors.find((problem) => problem.action) ?? errors[0] ?? problems.find((problem) => problem.action) ?? problems[0] ?? null;
+    return readinessCheck({
+      id: 'souls.environment',
+      status: errors.length > 0 ? 'failed' : problems.length > 0 ? 'warning' : 'ready',
+      code: errors.length > 0 ? 'soul-env-not-ready' : problems.length > 0 ? 'soul-env-warnings' : null,
+      message: problems.length === 0
+        ? `soul ${label}: environment ready`
+        : `soul ${label}: ${errors.length > 0 ? `${errors.length} environment problem(s), ${problems.length - errors.length} warning(s)` : `${problems.length} environment warning(s)`}: ${problems.map((problem) => problem.code).join(', ')}`,
+      action: first ? (first.action ?? `see: agent-bot soul env ${soul.id}`) : null,
+      evidence: { agentId: soul.id, soulDir: described.root.soulDir, ready: described.readiness.ready,
+        problems: problems.map((problem) => problem.code), errors: errors.map((problem) => problem.code) },
+    });
+  });
+}
+
 // A soul folder whose soul is retired or unknown here (#419): left by a
 // launch that failed before rollback existed, or by a retirement that kept
 // the folder. Reported only when there is something to report.
@@ -2200,6 +2242,7 @@ export async function collectReadiness({
     if (soulFolders) machineChecks.push(soulFolders);
     const orphanFolders = orphanSoulDirsCheck({ home, env, config });
     if (orphanFolders) machineChecks.push(orphanFolders);
+    machineChecks.push(...soulEnvironmentChecks({ home, env, config }));
     const bindingSummary = worktreeBindingSummaryCheck({ home, env, roster });
     if (bindingSummary) machineChecks.push(bindingSummary);
     machineChecks.push(secureStoreCheck({ probe: probeSecretStore }));

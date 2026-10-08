@@ -2,11 +2,14 @@ import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { initAgentSpace } from '../agent-space.mjs';
 import { installationPaths } from '../install.mjs';
+import { buildSoulDirectory } from '../soul-build.mjs';
+import { PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
 import { main as doctorMain } from '../doctor.mjs';
 import { organizationProfileToConfig } from '../organization-profile.mjs';
 import { displayName } from '../agent-population.mjs';
@@ -1277,6 +1280,55 @@ test('doctor warns about soul folders that belong to no active soul', async () =
     { agentId: ids.retired, path: dirs.retired, status: 'retired' },
     { agentId: ids.unknown, path: dirs.unknown, status: 'unknown' },
   ] });
+});
+
+// Doctor describes each active soul's environment through the same
+// descriptor `soul env` prints (#583 slice 6): one finding per soul with the
+// problem codes, the first problem's fix as the action, and nothing
+// provisioned or rebuilt.
+test('doctor lists each active soul\'s environment problems from the descriptor', async () => {
+  const home = tempRoot();
+  const env = { HOME: home };
+  const census = join(home, '.local', 'state', 'agent-bot', 'population.json');
+  const id = 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const bare = 'agent_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const soulDir = join(home, '.agent-bot', 'souls', 'Billy.soul');
+  // A soul from before slice 5: its Agent Space outside the folder, linked.
+  const space = initAgentSpace(id, { env, home }).path;
+  mkdirSync(dirname(census), { recursive: true });
+  writeFileSync(census, `${JSON.stringify({ schemaVersion: 1, souls: {
+    [id]: { id, name: 'billy', displayName: 'Billy', soulDir, appSlug: null, parentId: null, status: 'active', spacePath: space, worktree: null, worktrees: [], transcriptLocator: null, lastSeen: '2026-10-07T00:00:00.000Z' },
+    [bare]: { id: bare, name: 'bare', displayName: 'Bare', appSlug: null, parentId: null, status: 'active', spacePath: join(home, '.agent-space', bare), worktree: null, worktrees: [], transcriptLocator: null, lastSeen: '2026-10-07T00:00:00.000Z' },
+  } }, null, 2)}\n`);
+  mkdirSync(join(soulDir, '.soul-state'), { recursive: true });
+  writeFileSync(join(soulDir, '.soul-state', 'agent-id'), `${id}\n`);
+  writeFileSync(join(soulDir, 'soul.json'), JSON.stringify({ formatVersion: 2, ignore: PACKAGE_IGNORE_LIST, name: 'Billy', description: 'Doctor test', displaySeed: 'billy', preferredHarnesses: ['codex'], revision: `sha256:${'0'.repeat(64)}`, parentRevision: null }));
+  writeFileSync(join(soulDir, 'AGENTS.md'), '# Billy\n');
+  buildSoulDirectory(soulDir);
+  symlinkSync(space, join(soulDir, '.soul-state', 'space'), 'dir');
+  const dependencies = { ...machineDependencies(home), env };
+  const report = await collectReadiness({ command: 'doctor', scope: 'machine', ...dependencies });
+  const checks = report.machine.checks.filter(({ id: check }) => check === 'souls.environment');
+  assert.equal(checks.length, 1, 'one finding per active soul with a folder; a soul without one has no environment to describe');
+  const [check] = checks;
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'soul-env-warnings');
+  assert.ok(check.evidence.problems.includes('memory-not-contained'), check.evidence.problems.join(', '));
+  assert.deepEqual([check.evidence.agentId, check.evidence.soulDir, check.evidence.ready, check.evidence.errors], [id, soulDir, true, []]);
+  assert.match(check.message, new RegExp(`^soul Billy \\(${id}\\): \\d+ environment warning\\(s\\): .*memory-not-contained`));
+  assert.equal(check.action, `agent-bot soul env migrate ${id} --space-into-soul`);
+  assert.equal(existsSync(join(soulDir, '.soul-state', 'home')), false, 'doctor provisions nothing');
+  assert.equal(statSync(join(soulDir, '.soul-state', 'space')).isDirectory(), true);
+  assert.match(renderReadinessReport(report), new RegExp(`warn  soul Billy \\(${id}\\): `));
+  const json = JSON.parse(renderReadinessJson(report));
+  assert.deepEqual(json.machine.checks.find(({ id: check }) => check === 'souls.environment').evidence.problems, check.evidence.problems);
+  // A hand-edited generated file is an error in the descriptor, so the soul fails doctor.
+  writeFileSync(join(soulDir, 'CLAUDE.md'), 'hand edited\n');
+  const broken = await collectReadiness({ command: 'doctor', scope: 'machine', ...dependencies });
+  const failed = broken.machine.checks.find(({ id: check }) => check === 'souls.environment');
+  assert.deepEqual([failed.status, failed.code, failed.evidence.ready, failed.evidence.errors], ['failed', 'soul-env-not-ready', false, ['generated-conflict']]);
+  assert.match(failed.message, /1 environment problem\(s\), \d+ warning\(s\): /);
+  assert.equal(broken.ready, false);
 });
 
 test('soul reference checks ignore global pins and honor legacy worktree pins', async () => {

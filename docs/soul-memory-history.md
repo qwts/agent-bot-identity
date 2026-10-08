@@ -11,6 +11,7 @@ up, copied or exported takes the soul's life with it.
 ```sh
 agent-bot soul env <agentId|name> [--json]                                  # reports memory and history
 agent-bot soul env migrate <agentId|name> --space-into-soul [--json] [--principal-stdin]
+agent-bot soul env migrate <agentId|name> --complete [--plan] [--json] [--principal-stdin]   # resumes an interrupted move
 agent-bot agent-space path <agentId>                                        # the census path, wherever it is
 ```
 
@@ -80,7 +81,9 @@ re-creates the source while it moves. Phases, each recorded in
    `source`, `staging` (null when done), `aside` (null), `retired`, `copied
    { files, bytes, links[], skipped[] }` and a `note` with the counts.
 
-Resumable: a run that stops in any phase continues from the journal. A
+Resumable: a run that stops in any phase continues from the journal, by
+the same verb or by `soul env migrate --complete` (which finishes every
+pending step at once; see [soul-environment.md](soul-environment.md)). A
 partial staging is thrown away and copied again; a complete one is verified
 and used; a link already moved aside or a directory already in place is
 finished (census, retirement). A rerun of a contained soul is `skipped`
@@ -147,3 +150,7 @@ migrate command as its action. The migration inventory lists
   the room.
 - `soul env migrate --space-into-soul` moves the space; it does not export
   it. Export and import are slice 7.
+- The retired source (`<source>.retired-<date>`) is memory outside the
+  root: `soul env clean` never removes it (it removes only reconstructible
+  and disposable paths inside the root). Remove it yourself once the soul
+  has run from its folder.
