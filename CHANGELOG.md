@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.56
+
+- A soul's npm ACP adapter now installs under `.soul-state/runtimes/harnesses/<harness>/<version>/` with an install stamp, and `agent-bot soul env migrate <soul> --harnesses-into-runtimes` (also run by `--complete`) moves a legacy `.soul-state/harnesses` install there; the legacy location still launches until moved (#583 slice 8).
+
 ## 0.10.55
 
 - `agent-bot soul env export <soul> --to FILE [--plan]` writes the soul's life as one archive (definition, home, tool state minus every sign-in file the tool-home registry names, memory, history, settings, revision journal, soul-owned workspaces whole, linked ones as a pointer with the patch and untracked files; never credentials, secrets, sign-ins, runtimes, caches or generated output), each path classified by the environment contract and hashed in the archive's `manifest.json`; `soul env import FILE [--fork] [--replace] [--plan]` restores it keeping the Agent ID, mints a new one with `--fork`, refuses an active local ID unless `--replace` (the existing root is moved aside, never deleted), verifies every entry before anything reaches the souls root and restores linked workspaces as pointers under `.soul-state/imports/` (readiness `workspace-unlinked`); capabilities `env-export` and `env-import` (#583 slice 7, ADR-0583 decision 10).
