@@ -152,6 +152,45 @@ export function validateAppearanceDeclaration(appearance) {
   return appearance;
 }
 
+// Template provenance (GeniusBar#287). A template may declare the names it
+// went by (`previousNames`) so an instance spawned under an earlier name
+// still finds it, and the paths it maintains (`maintained`): prefixes that
+// `soul template refresh` replaces from the template and nothing else
+// touches. An instance records `templateName` (the template's name at
+// spawn) and `nameSource` (`template` when the owner kept the template's
+// name, `user` when they chose one), so a later template rename can tell a
+// default name from a chosen one. All optional; older manifests stay valid.
+export const NAME_SOURCES = Object.freeze(['template', 'user']);
+const uniqueNames = (value, label) => {
+  if (!Array.isArray(value) || value.some((name) => !nonempty(name)) || new Set(value).size !== value.length) {
+    throw new Error(`soul.json ${label} must be an array of unique nonempty strings`);
+  }
+  return value;
+};
+export function validateMaintainedDeclaration(maintained) {
+  uniqueNames(maintained, 'maintained');
+  for (const prefix of maintained) {
+    const parts = prefix.replace(/\/$/, '').split('/');
+    if (prefix.startsWith('/') || /^[A-Za-z]:/.test(prefix) || /[\\\x00-\x1f\x7f]/.test(prefix)
+      || parts.some((part) => !part || part === '.' || part === '..')) {
+      throw new Error(`soul.json maintained entry ${JSON.stringify(prefix)} must be a relative path without traversal (a trailing slash names a directory)`);
+    }
+    if (parts[0] === 'soul.json' || PACKAGE_IGNORE_LIST.directories.includes(`${parts[0]}/`)) {
+      throw new Error(`soul.json maintained entry ${JSON.stringify(prefix)} may not name the manifest or working state`);
+    }
+  }
+  return maintained;
+}
+export function validateTemplateProvenance(manifest) {
+  if (manifest.templateName !== undefined && !nonempty(manifest.templateName)) throw new Error('soul.json templateName must be a nonempty string');
+  if (manifest.nameSource !== undefined && !NAME_SOURCES.includes(manifest.nameSource)) {
+    throw new Error(`soul.json nameSource must be one of ${NAME_SOURCES.join(', ')}`);
+  }
+  if (manifest.previousNames !== undefined) uniqueNames(manifest.previousNames, 'previousNames');
+  if (manifest.maintained !== undefined) validateMaintainedDeclaration(manifest.maintained);
+  return manifest;
+}
+
 function validateManifest(manifest) {
   if (!object(manifest)) throw new Error('soul.json must be an object');
   if (![1, 2].includes(manifest.formatVersion)) throw new Error('unsupported soul.json formatVersion (expected 1 or 2)');
@@ -172,6 +211,7 @@ function validateManifest(manifest) {
   if (manifest.appearance !== undefined) validateAppearanceDeclaration(manifest.appearance);
   if (manifest.skills !== undefined) validateSkillsDeclaration(manifest.skills);
   if (manifest.runtimes !== undefined) validateRuntimesDeclaration(manifest.runtimes);
+  validateTemplateProvenance(manifest);
   if (manifest.harness !== undefined) validateHarnessSettings(manifest.harness, 'soul.json harness');
   if (manifest.harnesses !== undefined) {
     if (!object(manifest.harnesses)) throw new Error('soul.json harnesses must be an object');

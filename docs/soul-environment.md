@@ -12,6 +12,8 @@ GeniusBar read both instead of carrying their own path lists.
 agent-bot soul env <agentId|name> [--json]
 agent-bot soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] [--json] [--principal-stdin]
 agent-bot soul env migrate <agentId|name> --space-into-soul [--json] [--principal-stdin]
+agent-bot soul env migrate <agentId|name> --template-name [--plan] [--json] [--principal-stdin]
+agent-bot soul template refresh <agentId|name> [--from TEMPLATE_PATH] [--plan] [--json] [--principal-stdin]
 agent-bot soul revision prepare <agentId|name> [--json] [--dest PATH]
 agent-bot soul revision prepare --discard STAGING
 agent-bot soul runtimes <agentId|name> [--json]
@@ -66,8 +68,11 @@ scalars `null`, collections `[]`), in this order:
 
 - `schemaVersion` 1; `engine` `{ version, contractVersion, capabilities }`.
   `capabilities` is `["env", "revision-prepare", "runtimes", "providers",
-  "tool-homes", "memory", "history"]` today; a client gates each later
-  slice on it.
+  "tool-homes", "memory", "history", "template-name", "template-refresh"]`
+  today; a client gates each later slice on it (`template-name` is the
+  `soul env migrate --template-name` rename and the `templateName` /
+  `nameSource` provenance, `template-refresh` the `soul template refresh`
+  command; see [soul-templates.md](soul-templates.md)).
 - `identity`: `agentId`, `name`, `displayName`, `status`, `harness`,
   `genesis { revision, parentSoul }`, the manifest's `revision`,
   `parentRevision`, `template`, `formatVersion`.
