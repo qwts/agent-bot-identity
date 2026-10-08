@@ -14,13 +14,16 @@ import { duplicateSoulDirs, locateSoulDir, populationFile, showSoul, showSoulByN
 import { inspectAgentSpace } from './agent-space.mjs';
 import { buildSoulDirectory } from './soul-build.mjs';
 import { ENV_CONTRACT_VERSION, GENERATED_HARNESS_MARKER, GENERATED_HARNESS_PATHS, RETENTION, SOUL_LAYOUT, classificationContract } from './soul-env-contract.mjs';
+import { credentialStores } from './soul-credentials.mjs';
+import { secretSetCommand } from './soul-providers.mjs';
 import { inspectSoulRuntimes, runtimeLaunchEnv } from './soul-runtimes.mjs';
+import { inspectSoulSecrets } from './soul-secrets.mjs';
 import { soulsHome } from './souls-root.mjs';
 
 export const ENV_SCHEMA_VERSION = 1;
 // What this engine can do for a host, so a client gates each later slice
 // of #583 on the engine it talks to rather than on a version number.
-export const ENV_CAPABILITIES = Object.freeze(['env', 'revision-prepare', 'runtimes']);
+export const ENV_CAPABILITIES = Object.freeze(['env', 'revision-prepare', 'runtimes', 'providers']);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const USAGE = 'usage: agent-bot soul env <agentId|name> [--json]';
 const MANIFEST_MAX_BYTES = 64 * 1024;
@@ -143,7 +146,7 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
     classification: classificationContract(),
     harnesses: { selected: null, declared: [], installed: [], launchable: null },
     runtimes: { declared: {}, installed: [], missing: [], unsupported: [] },
-    providers: {},
+    providers: { declared: [], secrets: [], invalid: [] },
     launch: { supported: null, lane: null, cwd: null, routing: { HOME: 'host', PATH: 'host', TMPDIR: 'host', runtimes: {}, env: [] }, limitations: [] },
     readiness: { ready: false, problems: [] },
     migration: { status: 'none', journal: `${STATE}/migration.json`, steps: [] },
@@ -262,6 +265,7 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
       case 'credentials':
         entry.exportable = false;
         entry.declared = text(manifest?.credentials?.github?.app);
+        entry.secrets = object(manifest?.credentials?.secrets) ? Object.keys(manifest.credentials.secrets).sort() : [];
         break;
       case 'memory': {
         const link = lstat(path.join(root, STATE, 'space'));
@@ -388,6 +392,28 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
     result.launch.routing.PATH = Object.values(routed.routing).some((entry) => entry.source === 'soul' || entry.source === 'override') ? 'soul-runtimes'
       : routed.env.PATH ? 'host-bundled' : 'host';
   }
+  // Providers per harness and the secrets they name (#583 slice 4): the
+  // store is probed for presence only; no value and no length is reported.
+  if (manifest) {
+    let secrets = null;
+    try { secrets = inspectSoulSecrets(root, { agentId: soul.id, manifest, stores: options.stores ?? credentialStores({ env }), platform: options.platform ?? process.platform }); }
+    catch (error) { errors.push({ area: 'providers', message: `Providers could not be inspected: ${error.message}` }); }
+    if (secrets) {
+      result.providers.declared = secrets.providers.map(({ reason: _reason, ...row }) => row);
+      result.providers.secrets = secrets.secrets.map(({ reason: _reason, ...row }) => row);
+      result.providers.invalid = secrets.invalid;
+      for (const entry of secrets.invalid) problem('provider-declaration-invalid', 'error', 'manifest', `${entry.path}: ${entry.message}`);
+      for (const row of secrets.providers) {
+        if (row.status === 'secret-missing') {
+          problem('provider-secret-missing', row.harness === selected ? 'error' : 'warning', 'credentials',
+            `${row.harness}'s provider ${row.id} needs the secret "${row.credential}" (${row.envKey}), which is not stored for this soul`, secretSetCommand(soul.id, row.credential));
+        } else if (row.status === 'unsupported') {
+          problem('provider-secret-unreadable', row.harness === selected ? 'error' : 'warning', 'credentials', `${row.harness}'s provider secret "${row.credential}" cannot be used: ${row.reason}`, secretSetCommand(soul.id, row.credential));
+        }
+        if (row.harness === selected && row.credential) result.launch.routing.env = [...new Set([...result.launch.routing.env, row.envKey])].sort();
+      }
+    }
+  }
 
   result.migration.status = result.migration.steps.length ? 'pending' : 'none';
   result.readiness.ready = !result.readiness.problems.some((entry) => entry.severity === 'error');
@@ -411,6 +437,8 @@ export function formatSoulEnvironment(result) {
     `harnesses installed: ${result.harnesses.installed.map((h) => `${h.name}@${h.version ?? '?'} (${h.location})`).join(', ') || '-'}`,
     `runtimes declared: ${Object.keys(result.runtimes.declared).join(', ') || '-'}`,
     `runtimes installed: ${result.runtimes.installed.map((r) => `${r.name}@${r.version}`).join(', ') || '-'}`,
+    `providers: ${result.providers.declared.map((p) => `${p.harness}=${p.id} (${p.status})`).join(', ') || '-'}`,
+    `secrets: ${result.providers.secrets.map((s) => `${s.name} ${s.status} (${s.store})`).join(', ') || '-'}`,
     `migration: ${result.migration.status}${result.migration.steps.length ? ` (${result.migration.steps.map((s) => s.id).join(', ')})` : ''}`];
   if (result.readiness.problems.length) lines.push('', 'problems', ...result.readiness.problems.map((p) => `${p.severity} ${p.code}: ${cleanLine(p.message)}${p.action ? ` -> ${cleanLine(p.action)}` : ''}`));
   if (result.errors.length) lines.push('', 'errors', ...result.errors.map((error) => `${error.area}: ${cleanLine(error.message)}`));

@@ -56,12 +56,20 @@ const LAUNCHABLE = new Set(['package', 'installed']);
 // Failure codes a launch keeps in the journal and prefixes to its detail, so
 // a client that reads only the broker's detail still sees which one it was.
 const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other-account',
-  'runtime-download-failed', 'runtime-checksum-mismatch', 'runtime-unsupported-platform', 'runtime-install-failed']);
+  'runtime-download-failed', 'runtime-checksum-mismatch', 'runtime-unsupported-platform', 'runtime-install-failed',
+  'provider-secret-missing', 'provider-secret-unreadable', 'provider-declaration-invalid']);
 
 // `runtimes` (#583 slice 3): `pending({ agentId, harness })` names what the
 // soul declares and lacks; `install` provisions it into the soul folder.
 // The `runtimes` stage is reported only when there is something to install,
 // and a failure is the coded runtime error with the command that fixes it.
+//
+// `providers` (#583 slice 4): `pending({ agentId, harness })` names the
+// provider the launched harness declares with a secret; `check` reads that
+// secret back from the soul's store and fails with `provider-secret-
+// missing` (naming `agent-bot soul secret <id> set <name>`) before the
+// soul joins. The `provider` stage is reported only when there is one to
+// check. The value itself never reaches this handler or its journal.
 
 // `sandboxFor` (#376) says what the soul gets, `sandboxed` or
 // `unrestricted`, and the account it runs as, from `launchSandbox` in
@@ -73,7 +81,7 @@ const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other
 // carries it beside the unchanged `launched`/`failed` fields.
 
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
-  isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, sandboxFor = null, runtimes = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
+  isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, sandboxFor = null, runtimes = null, providers = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -188,6 +196,10 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       if (runtimes) {
         const pending = await runtimes.pending({ agentId: identity.id, harness });
         if (pending.length) { await step('runtimes'); await runtimes.install({ agentId: identity.id, harness }); }
+      }
+      if (providers) {
+        const pending = await providers.pending({ agentId: identity.id, harness });
+        if (pending.length) { await step('provider'); await providers.check({ agentId: identity.id, harness }); }
       }
       if (joinSoul) {
         await step('joining');

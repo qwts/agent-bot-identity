@@ -254,13 +254,17 @@ The supported override names are `claude`, `codex`, `gemini`, `opencode`,
 and invalid values fail package validation with their full declaration path.
 Other top-level manifest extensions retain their existing opaque behavior.
 
-| Harness / file | Model | Reasoning effort | Permission mode: safe / autopilot | Env | Allow / deny rules |
-| --- | --- | --- | --- | --- | --- |
-| Claude Code / `.claude/settings.json` | `model` | `effortLevel` | `permissions.defaultMode`: `default` / `bypassPermissions` | `env` | `permissions.allow` / `permissions.deny` |
-| Codex / `.codex/config.toml` | `model` | `model_reasoning_effort` | `approval_policy`: `on-request` / `never`; `sandbox_mode`: `workspace-write` / `danger-full-access` | `[shell_environment_policy.set]` | Unsupported |
-| Gemini / `.gemini/settings.json` | `model` | Unsupported | Unsupported | Unsupported | Unsupported |
-| OpenCode / `opencode.json` | `model` | Unsupported | `permission.edit` and `permission.bash`: `ask` / `allow` | Unsupported | `Bash`, `Bash(…)` → `permission.bash`; `Edit` / `Write` / `MultiEdit` → `permission.edit` |
-| Cursor, Copilot, Devin, Muse, Kiro | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
+| Harness / file | Model | Reasoning effort | Permission mode: safe / autopilot | Env | Allow / deny rules | Provider |
+| --- | --- | --- | --- | --- | --- | --- |
+| Claude Code / `.claude/settings.json` | `model` | `effortLevel` | `permissions.defaultMode`: `default` / `bypassPermissions` | `env` | `permissions.allow` / `permissions.deny` | `env.ANTHROPIC_BASE_URL` (endpoint only) |
+| Codex / `.codex/config.toml` | `model` | `model_reasoning_effort` | `approval_policy`: `on-request` / `never`; `sandbox_mode`: `workspace-write` / `danger-full-access` | `[shell_environment_policy.set]` | Unsupported | `model_provider` + `[model_providers.<id>]` |
+| Gemini / `.gemini/settings.json` | `model` | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
+| OpenCode / `opencode.json` | `model` | Unsupported | `permission.edit` and `permission.bash`: `ask` / `allow` | Unsupported | `Bash`, `Bash(…)` → `permission.bash`; `Edit` / `Write` / `MultiEdit` → `permission.edit` | `provider.<id>` with `{env:KEY}` |
+| Cursor, Copilot, Devin, Muse, Kiro | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
+
+`provider` (`harnesses.<h>.provider`, [soul-providers.md](soul-providers.md))
+renders the non-secret half only; the secret itself is stored with
+`agent-bot soul secret` and injected at launch, never written by the builder.
 
 Claude's installed 2.1.290 settings schema describes `effortLevel` as
 “Persisted effort level for supported models.” The builder uses that native

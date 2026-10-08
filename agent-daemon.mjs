@@ -99,6 +99,7 @@ import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
 import { harnessInstallDeclared, pendingSoulRuntimes, provisionSoulRuntimes, soulRuntimeEnv } from './soul-runtimes.mjs';
+import { checkSoulProvider, pendingSoulProvider, soulProviderEnv } from './soul-secrets.mjs';
 import { editSoulRevision, listSoulProposals, revisionCommand, revisionHistory } from './soul-revisions.mjs';
 import { acpExecutorFor, createWakePlane, createTurnRegistry } from './wake-plane.mjs';
 import { recordSoulSession } from './metrics.mjs';
@@ -1791,6 +1792,10 @@ export async function runDaemon({
       // The soul's provisioned runtimes and harness installs first on its
       // PATH, with their env (#583 slice 3); read per turn from its stamps.
       runtimeEnvFor: ({ agentId, harness, env: turnEnv }) => soulRuntimeEnv(agentId, { env: turnEnv, home, config, file: populationFile({ env, home }), harness }),
+      // The provider secret for the launched harness, read from the soul's
+      // store per turn (#583 slice 4); the executor keeps it out of the
+      // reach server and keyd's relay.
+      providerEnvFor: ({ agentId, harness }) => soulProviderEnv(agentId, { env, home, config, file: populationFile({ env, home }), harness }),
       // Engine diagnostics (a spawn that failed, a nameless permission) go
       // to the daemon's stderr, which the supervisor unit files as a log.
       log: (line) => process.stderr.write(`${line}\n`),
@@ -1901,6 +1906,13 @@ export async function runDaemon({
       pending: ({ agentId }) => pendingSoulRuntimes(agentId, { env, home, config, file: populationFile({ env, home }) }),
       install: ({ agentId, harness }) => provisionSoulRuntimes(agentId, { env, home, config, file: populationFile({ env, home }), harness,
         log: (line) => process.stderr.write(`soul runtimes: ${line}\n`) }),
+    },
+    // The launched harness's provider secret is checked before the soul
+    // joins (#583 slice 4): a missing one fails the launch with the
+    // `soul secret set` command, not a harness that cannot authenticate.
+    providers: {
+      pending: ({ agentId, harness }) => pendingSoulProvider(agentId, { env, home, config, file: populationFile({ env, home }), harness }),
+      check: ({ agentId, harness }) => checkSoulProvider(agentId, { env, home, config, file: populationFile({ env, home }), harness }),
     },
     // What the soul gets (#376): its override over the global switch, and
     // for a sandboxed one the account's readiness and the owner's steps.

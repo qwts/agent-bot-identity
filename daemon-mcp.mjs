@@ -75,6 +75,10 @@ const MAX_CORRELATION_LENGTH = 128;
 // The daemon's id for the relayed turn this server serves (#404), so a send's
 // aside joins the turn's other asides. Opaque to the agent.
 export const REACH_TURN_ENV = 'AGENT_BOT_REACH_TURN';
+// Comma-separated variable names this server drops from its own environment
+// at startup (#583 slice 4): the launched harness's provider secret.
+export const REACH_STRIP_ENV = 'AGENT_BOT_REACH_STRIP_ENV';
+const STRIP_NAME = /^[A-Z][A-Z0-9_]*$/;
 const TURN_ID = /^turn_[0-9a-f-]{36}$/;
 export const BINDING_ENV = 'AGENT_BOT_BINDING';
 
@@ -282,7 +286,16 @@ export function createReachState({
   run = undefined,
   fetch: fetchImpl = undefined,
 } = {}) {
-  return { env, home, cwd, now, run, fetch: fetchImpl };
+  return { env: stripReachEnv(env), home, cwd, now, run, fetch: fetchImpl };
+}
+
+// Removes the variables `AGENT_BOT_REACH_STRIP_ENV` names (the launched
+// harness's provider secret) from this server's environment, in place when
+// it is the process's own, so no child of this server inherits them either.
+export function stripReachEnv(env) {
+  const names = typeof env?.[REACH_STRIP_ENV] === 'string' ? env[REACH_STRIP_ENV].split(',').filter((name) => STRIP_NAME.test(name)) : [];
+  for (const name of names) delete env[name];
+  return env;
 }
 
 // The soul agent-comms runs as: the identity this server speaks for, in the
@@ -678,9 +691,14 @@ async function startSoul(state, soul, request) {
 // so `invocationId` is optional; the soul's worktree and binding make the
 // teammate tools speak as it, and `comms: false` withholds them.
 export function reachMcpServerEntry({
-  invocationId = null, agentId, env = process.env, worktree = null, binding = null, comms = true, correlation = null, turnId = null,
+  invocationId = null, agentId, env = process.env, worktree = null, binding = null, comms = true, correlation = null, turnId = null, strip = [],
 } = {}) {
   const vars = [{ name: REACH_AGENT_ID_ENV, value: validateAgentId(agentId) }];
+  // Names the server removes from its own environment at startup (#583
+  // slice 4): a harness that merges its environment into every MCP child
+  // would otherwise hand the provider secret to this server too.
+  const stripNames = [...new Set(strip)].filter((name) => STRIP_NAME.test(name));
+  if (stripNames.length) vars.push({ name: REACH_STRIP_ENV, value: stripNames.join(',') });
   if (invocationId !== null && invocationId !== undefined) {
     vars.unshift({ name: REACH_INVOCATION_ENV, value: validateInvocationId(invocationId) });
   }

@@ -51,6 +51,7 @@ import { listSouls, populationFile, showSoul, showSoulByName, soulDirectory } fr
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { assertOwnerAction, soulMarkers } from './owner-gate.mjs';
 import { CREDENTIAL_STORES, soulCredentialsDeclaration, writeSoulCredentialsDeclaration } from './soul-package.mjs';
+import { secretNameOrThrow } from './soul-providers.mjs';
 import { readManagedAppCredential, readAppMetadata, migrateAppMetadata, legacyAppFolderStatus } from './identity-app-store.mjs';
 import { profileAppSlugs } from './organization-profile.mjs';
 import { loadConfig } from './config.mjs';
@@ -75,25 +76,58 @@ export function keychainItem(agentId, slug) {
   return { service: `agent-bot.soul.${validateAgentId(agentId)}`, account: `github-app/${slugOrThrow(slug)}` };
 }
 
+// A provider secret (#583 slice 4) sits in the same service, under
+// `secret/<name>`: one namespace per soul, one item per declared secret.
+export function secretItem(agentId, name) {
+  return { service: `agent-bot.soul.${validateAgentId(agentId)}`, account: `secret/${secretNameOrThrow(name)}` };
+}
+
 // Same service/account namespace as Keychain, joined into one item title.
 export function passCliItem(agentId, slug) {
   const { service, account } = keychainItem(agentId, slug);
   return `${service}/${account}`;
 }
 
+export function passCliSecretItem(agentId, name) {
+  const { service, account } = secretItem(agentId, name);
+  return `${service}/${account}`;
+}
+
+// A secret is one opaque string; base64 keeps it single-line on `security
+// -i` and in a note, as the App credential is.
+const encodeSecret = (value) => Buffer.from(String(value), 'utf8').toString('base64');
+function decodeSecret(text) {
+  const stored = String(text ?? '').trim();
+  if (!BASE64.test(stored)) throw new Error('stored secret is malformed');
+  return Buffer.from(stored, 'base64').toString('utf8');
+}
+
 export function passCliStore({ env = process.env, cwd = process.cwd(), passRun } = {}) {
   const provider = createPassCredentialStore({ env, run: passRun });
-  const item = ({ agentId, slug }) => {
+  const ownerOnly = () => {
     if (soulMarkers({ env, cwd }).length) {
       throw Object.assign(new Error('soul credential stores are unavailable to a soul caller'), { code: 'owner-only' });
     }
-    return passCliItem(agentId, slug);
   };
+  const item = ({ agentId, slug }) => { ownerOnly(); return passCliItem(agentId, slug); };
+  const secret = ({ agentId, name }) => { ownerOnly(); return passCliSecretItem(agentId, name); };
+  // A missing note is an absent secret, not a failure; every other
+  // provider failure stays what it was (redacted).
+  const absent = (error) => { if (error?.code === 'missing-item') return null; throw error; };
   return {
     kind: 'pass-cli',
     read(target) { return decode(provider.read(item(target))); },
     write(target, credential) { provider.write(item(target), encode(credential)); },
     delete(target) { provider.delete(item(target)); },
+    readSecret(target) { try { return decodeSecret(provider.read(secret(target))); } catch (error) { return absent(error); } },
+    writeSecret(target, value) {
+      const title = secret(target);
+      // The note store refuses to replace a different value; a cleared
+      // item takes the new one.
+      try { provider.delete(title); } catch (error) { absent(error); }
+      provider.write(title, encodeSecret(value));
+    },
+    deleteSecret(target) { try { provider.delete(secret(target)); return true; } catch (error) { absent(error); return false; } },
   };
 }
 
@@ -130,39 +164,46 @@ function securityBinary(env) {
 export function keychainStore({ env = process.env, run = spawnSync } = {}) {
   const bin = securityBinary(env);
   const call = (args, input) => run(bin, args, { input, encoding: 'utf8', env, stdio: ['pipe', 'pipe', 'pipe'], timeout: 15_000 });
+  // The three `security` calls over one item: the stored text, or null.
+  const find = ({ service, account }) => {
+    const result = call(['find-generic-password', '-s', service, '-a', account, '-w']);
+    if (result.error) throw new Error('the keychain could not be read (security did not start)');
+    if (result.status === KEYCHAIN_NOT_FOUND) return null;
+    if (result.status !== 0) throw new Error(`the keychain could not be read (security exited ${result.status})`);
+    return result.stdout;
+  };
+  const add = ({ service, account }, text) => {
+    // -U updates an existing item in place. Nothing secret is on argv.
+    const line = `add-generic-password -U -s "${service}" -a "${account}" -l "agent-bot ${account}" -D "agent-bot soul credential" -w "${text}"\n`;
+    const result = call(['-i'], line);
+    if (result.error || result.status !== 0) throw new Error(`the keychain item could not be written (security exited ${result.status ?? 'without starting'})`);
+  };
+  // Removes the item; an absent item is already removed. Returns whether
+  // one existed. Only service and account names are on argv.
+  const remove = ({ service, account }) => {
+    const result = call(['delete-generic-password', '-s', service, '-a', account]);
+    if (result.error) throw new Error('the keychain item could not be removed (security did not start)');
+    if (result.status === KEYCHAIN_NOT_FOUND) return false;
+    if (result.status !== 0) throw new Error(`the keychain item could not be removed (security exited ${result.status})`);
+    return true;
+  };
+  const appItem = ({ agentId, slug, appScoped = false }) => (appScoped
+    ? { service: `agent-bot.app.${slugOrThrow(slug)}`, account: `github-app/${slug}` }
+    : keychainItem(agentId, slug));
   return {
     kind: 'keychain',
-    read({ agentId, slug, appScoped = false }) {
-      const { service, account } = appScoped
-        ? { service: `agent-bot.app.${slugOrThrow(slug)}`, account: `github-app/${slug}` }
-        : keychainItem(agentId, slug);
-      const result = call(['find-generic-password', '-s', service, '-a', account, '-w']);
-      if (result.error) throw new Error('the keychain could not be read (security did not start)');
-      if (result.status === KEYCHAIN_NOT_FOUND) return null;
-      if (result.status !== 0) throw new Error(`the keychain could not be read (security exited ${result.status})`);
-      return decode(result.stdout);
+    read(target) {
+      const stored = find(appItem(target));
+      return stored === null ? null : decode(stored);
     },
-    write({ agentId, slug, appScoped = false }, credential) {
-      const { service, account } = appScoped
-        ? { service: `agent-bot.app.${slugOrThrow(slug)}`, account: `github-app/${slug}` }
-        : keychainItem(agentId, slug);
-      // -U updates an existing item in place. Nothing secret is on argv.
-      const line = `add-generic-password -U -s "${service}" -a "${account}" -l "agent-bot ${account}" -D "agent-bot soul credential" -w "${encode(credential)}"\n`;
-      const result = call(['-i'], line);
-      if (result.error || result.status !== 0) throw new Error(`the keychain item could not be written (security exited ${result.status ?? 'without starting'})`);
+    write(target, credential) { add(appItem(target), encode(credential)); },
+    delete(target) { return remove(appItem(target)); },
+    readSecret({ agentId, name }) {
+      const stored = find(secretItem(agentId, name));
+      return stored === null ? null : decodeSecret(stored);
     },
-    // Removes the item; an absent item is already removed. Returns whether
-    // one existed. Only service and account names are on argv.
-    delete({ agentId, slug, appScoped = false }) {
-      const { service, account } = appScoped
-        ? { service: `agent-bot.app.${slugOrThrow(slug)}`, account: `github-app/${slug}` }
-        : keychainItem(agentId, slug);
-      const result = call(['delete-generic-password', '-s', service, '-a', account]);
-      if (result.error) throw new Error('the keychain item could not be removed (security did not start)');
-      if (result.status === KEYCHAIN_NOT_FOUND) return false;
-      if (result.status !== 0) throw new Error(`the keychain item could not be removed (security exited ${result.status})`);
-      return true;
-    },
+    writeSecret({ agentId, name }, value) { add(secretItem(agentId, name), encodeSecret(value)); },
+    deleteSecret({ agentId, name }) { return remove(secretItem(agentId, name)); },
   };
 }
 
@@ -178,49 +219,59 @@ export function fileStore({ platform = process.platform, uid, run = spawnSync } 
   if (platform === 'win32') return dpapiFileStore({ run });
   uid ??= process.getuid();
   const fileFor = (soulDir, slug) => path.join(credentialsDirectory(soulDir), `github-app-${slugOrThrow(slug)}.json`);
+  const secretFor = (soulDir, name) => path.join(credentialsDirectory(soulDir), `secret-${secretNameOrThrow(name)}.json`);
+  const readPrivate = (soulDir, target) => {
+    const directory = credentialsDirectory(soulDir);
+    let stat;
+    try { stat = lstatSync(directory); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    if (!stat.isDirectory()) throw new Error('soul credential directory is not a directory');
+    assertPrivate(stat, 'directory', uid);
+    let fd;
+    try { fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw new Error('soul credential file could not be opened'); }
+    try {
+      const fileStat = fstatSync(fd);
+      if (!fileStat.isFile()) throw new Error('soul credential file is not a regular file');
+      assertPrivate(fileStat, 'file', uid);
+      return readFileSync(fd, 'utf8');
+    } finally { closeSync(fd); }
+  };
+  const writePrivate = (soulDir, target, text) => {
+    const state = path.join(soulDir, '.soul-state');
+    mkdirSync(state, { recursive: true, mode: 0o700 });
+    const directory = credentialsDirectory(soulDir);
+    try { mkdirSync(directory, { mode: 0o700 }); }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
+    const stat = lstatSync(directory);
+    if (!stat.isDirectory() || stat.uid !== uid) throw new Error('soul credential directory is not a private directory');
+    chmodSync(directory, 0o700);
+    const temporary = path.join(directory, `.${process.pid}.${randomUUID()}.tmp`);
+    try {
+      writeFileSync(temporary, text, { flag: 'wx', mode: 0o600 });
+      renameSync(temporary, target);
+    } finally { rmSync(temporary, { force: true }); }
+  };
+  // Unlinks the file (never following a link); returns whether one existed.
+  const unlink = (target) => {
+    try { lstatSync(target); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    rmSync(target, { force: true });
+    return true;
+  };
   return {
     kind: 'file',
     read({ soulDir, slug }) {
-      const directory = credentialsDirectory(soulDir);
-      let stat;
-      try { stat = lstatSync(directory); }
-      catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-      if (!stat.isDirectory()) throw new Error('soul credential directory is not a directory');
-      assertPrivate(stat, 'directory', uid);
-      let fd;
-      try { fd = openSync(fileFor(soulDir, slug), constants.O_RDONLY | constants.O_NOFOLLOW); }
-      catch (error) { if (error.code === 'ENOENT') return null; throw new Error('soul credential file could not be opened'); }
-      try {
-        const fileStat = fstatSync(fd);
-        if (!fileStat.isFile()) throw new Error('soul credential file is not a regular file');
-        assertPrivate(fileStat, 'file', uid);
-        return decode(readFileSync(fd, 'utf8'));
-      } finally { closeSync(fd); }
+      const text = readPrivate(soulDir, fileFor(soulDir, slug));
+      return text === null ? null : decode(text);
     },
-    write({ soulDir, slug }, credential) {
-      const state = path.join(soulDir, '.soul-state');
-      mkdirSync(state, { recursive: true, mode: 0o700 });
-      const directory = credentialsDirectory(soulDir);
-      try { mkdirSync(directory, { mode: 0o700 }); }
-      catch (error) { if (error.code !== 'EEXIST') throw error; }
-      const stat = lstatSync(directory);
-      if (!stat.isDirectory() || stat.uid !== uid) throw new Error('soul credential directory is not a private directory');
-      chmodSync(directory, 0o700);
-      const target = fileFor(soulDir, slug);
-      const temporary = path.join(directory, `.${process.pid}.${randomUUID()}.tmp`);
-      try {
-        writeFileSync(temporary, encode(credential), { flag: 'wx', mode: 0o600 });
-        renameSync(temporary, target);
-      } finally { rmSync(temporary, { force: true }); }
+    write({ soulDir, slug }, credential) { writePrivate(soulDir, fileFor(soulDir, slug), encode(credential)); },
+    delete({ soulDir, slug }) { return unlink(fileFor(soulDir, slug)); },
+    readSecret({ soulDir, name }) {
+      const text = readPrivate(soulDir, secretFor(soulDir, name));
+      return text === null ? null : decodeSecret(text);
     },
-    // Unlinks the credential file (never following a link); returns whether
-    // one existed.
-    delete({ soulDir, slug }) {
-      const target = fileFor(soulDir, slug);
-      try { lstatSync(target); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
-      rmSync(target, { force: true });
-      return true;
-    },
+    writeSecret({ soulDir, name }, value) { writePrivate(soulDir, secretFor(soulDir, name), `${encodeSecret(value)}\n`); },
+    deleteSecret({ soulDir, name }) { return unlink(secretFor(soulDir, name)); },
   };
 }
 
@@ -259,51 +310,87 @@ function dpapiFileStore({ run }) {
   ]);
   const powershell = (text) => run(POWERSHELL, POWERSHELL_ARGS, { input: text, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
   const refuse = (code, message) => { throw Object.assign(new Error(message), { code }); };
+  const secretFor = (soulDir, name) => path.join(credentialsDirectory(soulDir), `secret-${secretNameOrThrow(name)}.dpapi`);
+  // Reads a protected file back to the base64 it was written from, or null.
+  const readProtected = (target) => {
+    let stored;
+    try { stored = readFileSync(target, 'utf8').trim(); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw new Error('soul credential file could not be opened'); }
+    // The file's bytes go inside a quoted string in the script, so anything
+    // but base64 is refused before it reaches PowerShell.
+    if (!BASE64.test(stored)) throw new Error('stored credential is malformed');
+    const result = powershell(unprotect(stored));
+    if (result?.status !== 0) refuse('dpapi-unprotect-failed', 'soul credential could not be unprotected by this Windows account on this machine');
+    const hex = String(result.stdout ?? '').trim();
+    if (!HEX.test(hex)) refuse('dpapi-malformed', 'DPAPI answered something other than the credential bytes');
+    return Buffer.from(hex, 'hex').toString('base64');
+  };
+  const writeProtected = (soulDir, target, base64Text) => {
+    const hex = Buffer.from(base64Text, 'base64').toString('hex');
+    const result = powershell(protect(hex));
+    // A stopped script exits non-zero; an empty answer is a file holding
+    // nothing, which would read as a bad credential later rather than now.
+    const base64 = result?.status === 0 ? String(result.stdout ?? '').trim() : '';
+    if (!BASE64.test(base64)) refuse('dpapi-protect-failed', 'soul credential could not be protected with DPAPI');
+    const directory = credentialsDirectory(soulDir);
+    mkdirSync(directory, { recursive: true });
+    const temporary = path.join(directory, `.${process.pid}.${randomUUID()}.tmp`);
+    try {
+      writeFileSync(temporary, `${base64}\n`, { flag: 'wx' });
+      renameSync(temporary, target);
+    } finally { rmSync(temporary, { force: true }); }
+  };
+  const unlink = (target) => {
+    try { lstatSync(target); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    rmSync(target, { force: true });
+    return true;
+  };
   return {
     kind: 'file',
     read({ soulDir, slug }) {
-      let stored;
-      try { stored = readFileSync(fileFor(soulDir, slug), 'utf8').trim(); }
-      catch (error) { if (error.code === 'ENOENT') return null; throw new Error('soul credential file could not be opened'); }
-      // The file's bytes go inside a quoted string in the script, so anything
-      // but base64 is refused before it reaches PowerShell.
-      if (!BASE64.test(stored)) throw new Error('stored credential is malformed');
-      const result = powershell(unprotect(stored));
-      if (result?.status !== 0) refuse('dpapi-unprotect-failed', 'soul credential could not be unprotected by this Windows account on this machine');
-      const hex = String(result.stdout ?? '').trim();
-      if (!HEX.test(hex)) refuse('dpapi-malformed', 'DPAPI answered something other than the credential bytes');
-      return decode(Buffer.from(hex, 'hex').toString('base64'));
+      const base64 = readProtected(fileFor(soulDir, slug));
+      return base64 === null ? null : decode(base64);
     },
-    write({ soulDir, slug }, credential) {
-      const hex = Buffer.from(encode(credential), 'base64').toString('hex');
-      const result = powershell(protect(hex));
-      // A stopped script exits non-zero; an empty answer is a file holding
-      // nothing, which would read as a bad credential later rather than now.
-      const base64 = result?.status === 0 ? String(result.stdout ?? '').trim() : '';
-      if (!BASE64.test(base64)) refuse('dpapi-protect-failed', 'soul credential could not be protected with DPAPI');
-      const directory = credentialsDirectory(soulDir);
-      mkdirSync(directory, { recursive: true });
-      const target = fileFor(soulDir, slug);
-      const temporary = path.join(directory, `.${process.pid}.${randomUUID()}.tmp`);
-      try {
-        writeFileSync(temporary, `${base64}\n`, { flag: 'wx' });
-        renameSync(temporary, target);
-      } finally { rmSync(temporary, { force: true }); }
+    write({ soulDir, slug }, credential) { writeProtected(soulDir, fileFor(soulDir, slug), encode(credential)); },
+    delete({ soulDir, slug }) { return unlink(fileFor(soulDir, slug)); },
+    readSecret({ soulDir, name }) {
+      const base64 = readProtected(secretFor(soulDir, name));
+      return base64 === null ? null : decodeSecret(base64);
     },
-    delete({ soulDir, slug }) {
-      const target = fileFor(soulDir, slug);
-      try { lstatSync(target); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
-      rmSync(target, { force: true });
-      return true;
-    },
+    writeSecret({ soulDir, name }, value) { writeProtected(soulDir, secretFor(soulDir, name), encodeSecret(value)); },
+    deleteSecret({ soulDir, name }) { return unlink(secretFor(soulDir, name)); },
   };
 }
 
 // keyd's store has no read or write here: the key only enters keyd through
-// its owner channel and never comes back out.
+// its owner channel and never comes back out. Provider secrets (#583 slice
+// 4) are not keyd items at all: the harness needs the value in its
+// environment, and keyd never hands a value out.
 export function keydStore() {
   const held = () => { throw Object.assign(new Error('this key is held by agent-bot-keyd, which never returns it'), { code: 'keyd-held' }); };
-  return { kind: 'keyd', read: held, write: held };
+  return { kind: 'keyd', read: held, write: held, readSecret: held, writeSecret: held, deleteSecret: held };
+}
+
+function secretStoreFor(declaration, stores, platform) {
+  const kind = declaration?.store ?? defaultCredentialStore(platform);
+  const store = stores[kind];
+  if (!store?.readSecret) throw Object.assign(new Error(`secret store "${kind}" cannot hold a provider secret`), { code: 'secret-store-unsupported' });
+  return store;
+}
+
+// The three operations over one declared secret (`credentials.secrets.
+// <name>`): the value, or null when nothing is stored; the store kind is
+// the declaration's or the platform default. Nothing here logs a value.
+export function readSoulSecret({ agentId, soulDir, name, declaration }, { stores = credentialStores(), platform = process.platform } = {}) {
+  return secretStoreFor(declaration, stores, platform).readSecret({ agentId, soulDir, name });
+}
+
+export function writeSoulSecret({ agentId, soulDir, name, declaration }, value, { stores = credentialStores(), platform = process.platform } = {}) {
+  secretStoreFor(declaration, stores, platform).writeSecret({ agentId, soulDir, name }, value);
+}
+
+export function deleteSoulSecret({ agentId, soulDir, name, declaration }, { stores = credentialStores(), platform = process.platform } = {}) {
+  return secretStoreFor(declaration, stores, platform).deleteSecret({ agentId, soulDir, name });
 }
 
 export function credentialStores(options = {}) {

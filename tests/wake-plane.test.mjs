@@ -337,3 +337,29 @@ test('ACP model selection is captured per turn and discovery is cached for the c
   assert.equal(soulModel(ID, { env, home }).model, 'second');
   assert.deepEqual(soulModel(other, { env, home }).available, models.availableModels);
 });
+
+test('acpExecutorFor puts the provider secret in the launched harness env only: the reach server and keyd relay get the turn env without it, and a missing secret fails the turn (#583 slice 4)', () => {
+  const agentId = 'agent_11111111-1111-4111-8111-111111111111';
+  let options = null;
+  const createExecutor = (opts) => { options = opts; return async () => ({ stopReason: 'end_turn' }); };
+  const asked = [];
+  const providerEnvFor = ({ agentId: id, harness }) => { asked.push([id, harness]); return { env: { GITHUB_TOKEN: 'ghp_never_printed' }, envKey: 'GITHUB_TOKEN' }; };
+  acpExecutorFor({ identities: () => ({ github: { appSlug: 'app' } }), policy: {}, baseEnv: { PATH: '/usr/bin', HOME: '/Users/host', GITHUB_TOKEN: 'from-the-host' }, createExecutor, providerEnvFor,
+    keydFor: () => '/opt/keyd', reachEnv: { PATH: '/opt/bin' } })({ agentId, harness: 'codex', cwd: '/repo', env: { AGENT_BOT_BINDING: '/souls/bill/binding.json' } });
+  assert.deepEqual(asked, [[agentId, 'codex']]);
+  assert.equal(options.env.GITHUB_TOKEN, 'ghp_never_printed', 'the harness gets the soul\'s secret, over any host value');
+  assert.equal(options.env.PATH, '/usr/bin');
+  const [reach, keyd] = options.mcpServers({ invocation: {} });
+  const reachVars = Object.fromEntries(reach.env.map((pair) => [pair.name, pair.value]));
+  assert.equal('GITHUB_TOKEN' in reachVars, false, 'the reach server entry never carries the secret');
+  assert.equal(reachVars.AGENT_BOT_REACH_STRIP_ENV, 'GITHUB_TOKEN', 'and strips it from its own environment if the harness merges env');
+  assert.equal(reachVars.PATH, '/opt/bin');
+  assert.ok(!JSON.stringify(keyd).includes('ghp_never_printed') && !JSON.stringify(keyd).includes('from-the-host'), 'keyd\'s relay never sees it either');
+  // No provider: nothing injected, nothing stripped, no strip variable.
+  acpExecutorFor({ identities: () => ({}), policy: {}, baseEnv: { PATH: '/usr/bin' }, createExecutor, providerEnvFor: () => ({ env: {}, envKey: null }) })({ agentId, harness: 'claude', cwd: '/repo', env: {} });
+  assert.equal('GITHUB_TOKEN' in options.env, false);
+  assert.equal(options.mcpServers({ invocation: {} })[0].env.some((pair) => pair.name === 'AGENT_BOT_REACH_STRIP_ENV'), false);
+  // A secret the store cannot give is a coded failure of the turn, never a harness that silently cannot authenticate.
+  const missing = Object.assign(new Error('codex needs the secret "github-models"'), { code: 'provider-secret-missing', action: `agent-bot soul secret ${agentId} set github-models` });
+  assert.throws(() => acpExecutorFor({ identities: () => ({}), policy: {}, baseEnv: {}, createExecutor, providerEnvFor: () => { throw missing; } })({ agentId, harness: 'codex', cwd: '/repo', env: {} }), (error) => error.code === 'provider-secret-missing');
+});

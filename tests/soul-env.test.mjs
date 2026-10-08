@@ -93,7 +93,7 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
     'runtimes', 'providers', 'launch', 'readiness', 'migration', 'retention', 'errors']);
   assert.equal(result.schemaVersion, 1);
   assert.deepEqual(result.engine, { version: JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version, contractVersion: 1, capabilities: [...ENV_CAPABILITIES] });
-  assert.deepEqual(result.engine.capabilities, ['env', 'revision-prepare', 'runtimes']);
+  assert.deepEqual(result.engine.capabilities, ['env', 'revision-prepare', 'runtimes', 'providers']);
   assert.deepEqual(result.identity, { agentId: ID, name: 'billy', displayName: 'Billy - Starter', status: 'active', harness: 'codex',
     genesis: { revision: null, parentSoul: null }, revision: f.manifest.revision, parentRevision: null, template: false, formatVersion: 2 });
   assert.deepEqual(result.root, { soulDir: f.dir, soulsRoot: f.env.AGENT_BOT_SOULS_HOME, source: 'environment', registered: true, marker: 'ok',
@@ -146,7 +146,7 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
       bin: path.join(f.dir, '.soul-state', 'home', 'node_modules', '.bin', 'codex-acp'), status: 'ok' }] });
   assert.deepEqual(result.runtimes, { declared: { node: '24' }, installed: [],
     missing: [{ name: 'node', version: NODE_PIN, declared: '24', requiredBy: [], reason: 'not provisioned' }], unsupported: [] });
-  assert.deepEqual(result.providers, {});
+  assert.deepEqual(result.providers, { declared: [], secrets: [], invalid: [] });
   assert.equal(result.launch.supported, true);
   assert.equal(result.launch.lane, 'acp');
   assert.equal(result.launch.cwd, path.join(f.dir, '.soul-state', 'home'));

@@ -14,6 +14,8 @@ agent-bot soul revision prepare <agentId|name> [--json] [--dest PATH]
 agent-bot soul revision prepare --discard STAGING
 agent-bot soul runtimes <agentId|name> [--json]
 agent-bot soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin]
+agent-bot soul secret <agentId|name> set|clear <name> [--json] [--principal-stdin]
+agent-bot soul secret <agentId|name> status [--json]
 ```
 
 `soul env` is read-only. It never provisions a home, creates the Agent Space
@@ -61,8 +63,8 @@ rules are frozen; values are only ever appended.
 scalars `null`, collections `[]`), in this order:
 
 - `schemaVersion` 1; `engine` `{ version, contractVersion, capabilities }`.
-  `capabilities` is `["env", "revision-prepare", "runtimes"]` today; a
-  client gates each later slice on it.
+  `capabilities` is `["env", "revision-prepare", "runtimes", "providers"]`
+  today; a client gates each later slice on it.
 - `identity`: `agentId`, `name`, `displayName`, `status`, `harness`,
   `genesis { revision, parentSoul }`, the manifest's `revision`,
   `parentRevision`, `template`, `formatVersion`.
@@ -96,7 +98,14 @@ scalars `null`, collections `[]`), in this order:
   each install's stamp, `missing[]` (reason `not provisioned` or `last
   install failed: <code>`), `unsupported[]` (no download for this host).
   See [soul-runtimes.md](soul-runtimes.md).
-- `providers`: `{}` until slice 4.
+- `providers`: `declared[]` one row per harness with a provider
+  `{ harness, id, name, baseUrl, envKey, wireApi, credential, store,
+  status }` (`ready | secret-missing | unsupported`), `secrets[]` one row
+  per `credentials.secrets` entry `{ name, store, status, usedBy }`
+  (`present | missing | unreadable`; never a value or a length), and
+  `invalid[]` refused declarations `{ path, message }`. The selected
+  harness's `envKey` is listed under `launch.routing.env`. See
+  [soul-providers.md](soul-providers.md).
 - `launch`: `supported`, `lane` (`acp` or `null`), `cwd` (the home),
   `routing { HOME, PATH, TMPDIR, runtimes, env }` (`HOME` and `TMPDIR` are
   `host` today; `PATH` is `soul-runtimes`, `host-bundled` or `host`;
@@ -129,6 +138,9 @@ scalars `null`, collections `[]`), in this order:
 | `runtime-unsupported-platform` | error | No download for this host; declare `sources` for it in a revision |
 | `runtime-download-failed`, `runtime-checksum-mismatch`, `runtime-install-failed` | error | The last install of that version failed; the message says why and the action is the install command |
 | `runtime-declaration-invalid` | error | `soul.json` `runtimes` or `harnesses.<name>.install` is refused; fix it in a revision |
+| `provider-secret-missing` | error (selected harness) / warning (another harness) | The provider's secret is not stored; `agent-bot soul secret <id> set <name>` |
+| `provider-secret-unreadable` | error / warning | The declared store cannot give the secret (a loosened file mode, a store failure); store it again |
+| `provider-declaration-invalid` | error | `harnesses.<name>.provider` or `credentials.secrets` is refused; fix it in a revision |
 
 Warnings leave `ready` true. Codes are appended, never renamed.
 

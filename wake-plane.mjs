@@ -160,7 +160,7 @@ export function withReachRules(policy, { keyd = false } = {}) {
 export function acpExecutorFor({
   identities, policy, baseEnv, onHarnessSession = null, createExecutor = createAcpExecutor,
   identityFor = null,
-  commsFor = () => true, modeFor = () => 'safe', modelFor = () => null, onModels = null, reachEnv = {}, keydFor = () => null, harnessDirsFor = () => [], runtimeEnvFor = null, log = null,
+  commsFor = () => true, modeFor = () => 'safe', modelFor = () => null, onModels = null, reachEnv = {}, keydFor = () => null, harnessDirsFor = () => [], runtimeEnvFor = null, providerEnvFor = null, log = null,
 }) {
   return ({ agentId, harness, cwd, env }) => {
     const identity = identities(agentId);
@@ -171,6 +171,15 @@ export function acpExecutorFor({
     // their env (GOROOT, UV_*), never HOME (#583 slice 3). A soul with no
     // folder yet runs with the host's PATH as before.
     if (runtimeEnvFor) { try { Object.assign(turnEnv, runtimeEnvFor({ agentId, harness, env: turnEnv }) ?? {}); } catch { /* host PATH */ } }
+    // The provider secret (#583 slice 4) goes to the launched harness and
+    // nowhere else: `mcpEnv` is the turn env without it, for the reach
+    // server and keyd's relay. A secret the store cannot give fails the
+    // turn here (coded `provider-secret-missing`), never silently.
+    const provided = providerEnvFor ? providerEnvFor({ agentId, harness }) ?? {} : {};
+    const stripped = provided.envKey ? [provided.envKey] : [];
+    const mcpEnv = { ...turnEnv };
+    for (const name of stripped) delete mcpEnv[name];
+    const harnessEnv = { ...turnEnv, ...(provided.env ?? {}) };
     let comms = true;
     try { comms = commsFor(agentId) !== false; } catch { /* no recorded setting: the default */ }
     let keyd = null;
@@ -180,13 +189,14 @@ export function acpExecutorFor({
     const mcpServers = ({ invocation }) => [reachMcpServerEntry({
       invocationId: storeInvocationId(invocation),
       agentId,
-      env: { ...turnEnv, ...reachEnv },
+      env: { ...mcpEnv, ...reachEnv },
       worktree: typeof cwd === 'string' && path.isAbsolute(cwd) ? cwd : null,
       binding,
       comms,
       correlation: typeof invocation?.correlation === 'string' ? invocation.correlation : null,
       turnId: typeof invocation?.turnId === 'string' ? invocation.turnId : null,
-    }), ...(keyd ? [keydMcpServerEntry({ bin: keyd, binding, env: turnEnv })] : [])];
+      strip: stripped,
+    }), ...(keyd ? [keydMcpServerEntry({ bin: keyd, binding, env: mcpEnv })] : [])];
     const executor = createExecutor({
       harness,
       identity: { app, agentId },
@@ -200,7 +210,7 @@ export function acpExecutorFor({
       // Where the soul's own harness install lives when its checkout has none (#417).
       harnessDirs: (() => { try { return harnessDirsFor(agentId) ?? []; } catch { return []; } })(),
       mcpServers,
-      env: turnEnv,
+      env: harnessEnv,
       ...(typeof log === 'function' ? { log } : {}),
     });
     if (typeof onHarnessSession !== 'function') return executor;
