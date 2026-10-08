@@ -2,10 +2,13 @@
 
 A soul declares the runtimes and non-npm harnesses it needs, and the engine
 provisions them inside the soul folder ([ADR-0583](decisions/ADR-0583-the-soul-root-owns-the-environment.md)
-decision 6, [ADR-0322](decisions/ADR-0322-agents-bring-their-own-runtime-and-harness.md)).
-A new Mac with GeniusBar installs no Homebrew, node, Python or Go for an
-agent: the soul carries what it runs on, and a copy of the soul on another
-machine provisions the same versions from the same pinned downloads.
+decision 6, [ADR-0322](decisions/ADR-0322-souls-carry-their-runtimes-and-non-npm-harnesses.md)).
+The target is to provision declared, supported tools without a host package
+manager. Exact sources and catalog resolutions determine the artifacts used;
+a range can resolve differently on a fresh machine with a newer engine catalog.
+[#617](https://github.com/qwts/agent-bot-identity/issues/617) tracks remaining
+integrity, override, resume and host-npm conformance; this page describes the
+implemented slice and its limits.
 
 ## Declaring
 
@@ -55,9 +58,12 @@ the archive once and checking it against the publisher's checksum file.
 
 A range resolves to the newest pin it matches (`24` → 24.21.0). An exact
 version the catalog does not pin is unsupported unless the soul declares its
-own `sources`. The catalog version is `RUNTIME_CATALOG_VERSION` 1; new pins
-are appended by a release, and a soul installed against an older pin keeps
-it until the owner installs again.
+own `sources`. The catalog version is `RUNTIME_CATALOG_VERSION` 1. Inspection
+resolves against the currently supplied catalog; it does not lock a range to an older install
+receipt. If a new matching pin becomes current, that version can be reported
+missing and the existing launch provisioning path can install it. A prior
+installed directory is retained, but retention alone does not select it.
+Owner-visible upgrade and retained-resolution guarantees remain #617.
 
 ## Commands
 
@@ -106,32 +112,46 @@ instead of starting the harness.
   harnesses/goose/1.9.0/   bin/goose and tools/ (UV_TOOL_BIN_DIR, UV_TOOL_DIR)
 ```
 
-Every install directory carries `.agent-bot-install.json`: the name, kind,
-version, platform, URL, verified `sha256`, `bin` and `installedAt`. That
-stamp is what `soul runtimes` and `soul env` read; a directory without one
-is not an install.
+Every completed install directory carries `.agent-bot-install.json`: the name,
+kind, version, platform, URL, `sha256`, `bin` and `installedAt`. Archive stamps
+record the digest verified by agent-bot. `uv-python` and `uv-tool` stamps instead
+record `url: null` and `sha256: null`; they do not attest that agent-bot verified
+every downloaded dependency byte. Python acquisition is delegated to uv, and
+uv tools currently use `package==version` without a dependency lock/hash input.
+That missing integrity contract is tracked in #617. The stamp is what
+`soul runtimes` and `soul env` inspect; absence or an incomplete-install marker
+must not be presented as a completed installation.
 
-Installs are atomic. An archive is downloaded into the shared cache
+Archive installs are staged and published per artifact. An archive is downloaded
+into the shared cache
 `~/.cache/agent-bot/downloads/<sha256>` (`AGENT_BOT_CACHE_HOME`, then
 `XDG_CACHE_HOME/agent-bot`), written as a partial file and renamed only
 after its digest matches; a cached file that no longer hashes is dropped and
 fetched again. The archive is extracted into
 `.soul-state/runtimes/<runtime>/.installing-<uuid>/`, checked for its
 executable, stamped, and renamed to its version directory. A failed install
-removes its staging directory and never touches a previous version, so a
-soul that ran on node 24.21.0 keeps running on it when a newer pin fails to
-download. Python installs the same way through `uv python install` with
+removes its staging directory and leaves a previous version available for
+recovery. A launch requiring the failed newer resolution still refuses; retaining
+node 24.21.0 does not automatically select it as a fallback. Python installs the
+same way through `uv python install` with
 `UV_PYTHON_INSTALL_DIR` in the staging directory; a uv tool installs in
 place (its virtualenv holds absolute paths) with an `.installing` marker
 beside it, and is reinstalled when the marker is left behind. Nothing writes
-to `~/.local`, `~/.cache/uv`, `~/go` or the login shell's PATH.
+to `~/.local`, `~/.cache/uv`, `~/go` or the login shell's PATH through these
+provisioning paths. The overall multi-artifact operation is not a transaction:
+a later failure can leave earlier successful installs while refusing launch;
+uv-tool marker recovery is not an atomic directory swap.
 
 ## Launch routing
 
-Each turn's environment routes the soul's installs first, in this order per
-runtime ([ADR-0322](decisions/ADR-0322-agents-bring-their-own-runtime-and-harness.md)
-decision 4): a per-agent override, the soul's install, the node bundled with
-the host (GeniusBar's, for an undeclared node only), then the host PATH.
+The runtime environment helper routes the soul's installs in this order per
+runtime ([ADR-0322](decisions/ADR-0322-souls-carry-their-runtimes-and-non-npm-harnesses.md)
+decision 4): a supplied override, the soul's install, the node bundled with
+the host (GeniusBar's, for an undeclared node only), then the host PATH. The
+managed daemon turn path supplies the soul environment, but does not wire a
+per-agent override request into this helper. A durable per-soul override CLI,
+exact override executable validation and resume parity remain #617; the helper
+argument is not evidence that these user-facing paths exist.
 The harness installs come before the runtimes on PATH, and a declared
 runtime that is not installed is installed at launch or fails the launch; it
 never falls through to a host copy. Beside PATH the turn gets
