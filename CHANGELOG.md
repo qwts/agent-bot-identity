@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.57
+
+- `agent-bot soul env history <soul> [--json] [--limit N]` lists the soul's history mirror (`.soul-state/runs`: turns and revisions, facts only, never a prompt or an output) newest first, at most `--limit` per file (1..500, default 50) from a bounded 16 MiB window, with line counts and skipped-line counts, so GeniusBar's Memory tab renders a soul's past without reading soul files itself; read-only, capability `env-history` (#583, GeniusBar#268).
+
 ## 0.10.56
 
 - A soul's npm ACP adapter now installs under `.soul-state/runtimes/harnesses/<harness>/<version>/` with an install stamp, and `agent-bot soul env migrate <soul> --harnesses-into-runtimes` (also run by `--complete`) moves a legacy `.soul-state/harnesses` install there; the legacy location still launches until moved (#583 slice 8).
