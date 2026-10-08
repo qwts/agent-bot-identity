@@ -130,5 +130,19 @@ and 5 precedes 7.
    appended from the turn registry, the session binding and the revision
    journal, best effort); `memory-not-contained`; see
    [soul-memory-history.md](../soul-memory-history.md).
-6. Migration completion, a doctor check, `soul env clean`.
+6. Migration completion, a doctor check, `soul env clean`. Shipped:
+   `soul env migrate --complete` (every step the descriptor lists as
+   pending, interrupted or failed, run through its own verb's mechanism and
+   recorded in the same journal; owner-gated once, refused while the soul
+   runs, `--plan` read-only; `harnesses-into-runtimes` is listed and stays
+   pending for a later release); `soul env clean` (`soul-env-clean.mjs`:
+   only `cache`, `temp` and the runtime caches and install stagings under
+   `runtimes`, each path classified by the contract before removal, a
+   revision staging kept within its 24-hour window, installed runtimes and
+   generated output left to their own commands, the retired space source
+   outside the root left to the owner; `--plan` with sizes; the run
+   recorded in `.soul-state/clean.json`); the doctor check
+   `souls.environment`, one per active soul from the same descriptor;
+   capabilities `migrate-complete` and `env-clean`; see
+   [soul-environment.md](../soul-environment.md).
 7. Export and import.

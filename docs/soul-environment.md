@@ -13,6 +13,8 @@ agent-bot soul env <agentId|name> [--json]
 agent-bot soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] [--json] [--principal-stdin]
 agent-bot soul env migrate <agentId|name> --space-into-soul [--json] [--principal-stdin]
 agent-bot soul env migrate <agentId|name> --template-name [--plan] [--json] [--principal-stdin]
+agent-bot soul env migrate <agentId|name> --complete [--plan] [--json] [--principal-stdin]
+agent-bot soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin]
 agent-bot soul template refresh <agentId|name> [--from TEMPLATE_PATH] [--plan] [--json] [--principal-stdin]
 agent-bot soul revision prepare <agentId|name> [--json] [--dest PATH]
 agent-bot soul revision prepare --discard STAGING
@@ -69,12 +71,14 @@ scalars `null`, collections `[]`), in this order:
 - `schemaVersion` 1; `engine` `{ version, contractVersion, capabilities }`.
   `capabilities` is `["env", "revision-prepare", "runtimes", "providers",
   "tool-homes", "memory", "history", "template-name", "template-refresh",
-  "launch-parent"]` today; a client gates each later slice on it
+  "launch-parent", "migrate-complete", "env-clean"]` today; a client gates
+  each later slice on it
   (`template-name` is the `soul env migrate --template-name` rename and the
   `templateName` / `nameSource` provenance, `template-refresh` the
   `soul template refresh` command, see [soul-templates.md](soul-templates.md);
   `launch-parent`: a principal launch may name the new soul's parent,
-  GeniusBar#261).
+  GeniusBar#261; `migrate-complete` the `soul env migrate --complete` verb
+  and `env-clean` the `soul env clean` command, both below).
 - `identity`: `agentId`, `name`, `displayName`, `status`, `harness`,
   `genesis { revision, parentSoul }`, the manifest's `revision`,
   `parentRevision`, `template`, `formatVersion`.
@@ -145,8 +149,10 @@ scalars `null`, collections `[]`), in this order:
   `.soul-state/migration.json` are listed as recorded (`done | skipped |
   failed`, or a phase `copying | verifying | switching` of a run under way,
   with `at` and `note`) and replace the pending entry of the same id. The
-  adoption and the space move run today; `harnesses-into-runtimes` waits
-  for slice 6.
+  adoption, the space move and the template rename run today, each by its
+  own verb or together through `soul env migrate --complete` (below);
+  `harnesses-into-runtimes` is listed and stays pending until a later
+  release migrates it (the legacy install still launches).
 - `retention`: component ids grouped as `durable`, `reconstructible`,
   `disposable`.
 - `errors[]`: `{ area, message }` for what could not be read; the rest of
@@ -174,6 +180,102 @@ scalars `null`, collections `[]`), in this order:
 | `memory-not-contained` | warning | `.soul-state/space` is a link to an Agent Space outside the soul, so the soul's memory does not travel with its folder; `agent-bot soul env migrate <id> --space-into-soul` moves it inside |
 
 Warnings leave `ready` true. Codes are appended, never renamed.
+
+## Completing a migration
+
+```sh
+agent-bot soul env migrate billy --complete --plan --json   # read-only
+agent-bot soul env migrate billy --complete [--json] [--principal-stdin]
+```
+
+`--complete` finishes every step the descriptor's `migration.steps` lists
+as not finished: an inventory entry still `pending`, a phase an interrupted
+run left (`copying | verifying | switching`), or a `failed` step, which is
+run again. Each step goes through the mechanism its own verb uses and is
+recorded as that verb records it (`soul-memory.mjs` for `space-into-soul`,
+the adoption for `adopt-host-signin:<harness>`, the rename for
+`template-name`), so `.soul-state/migration.json` keeps its format and
+`soul env` reflects the outcome. One owner gate for the lot (the action
+names the step ids); refused `soul-running` (action `agent-bot soul stop
+<id>`) while the soul has a turn in flight or a warm harness, checked
+before and after the gate. A step this release does not migrate
+(`harnesses-into-runtimes`) is listed as it is with a note and never
+recorded, so it stays pending in the descriptor. A step that cannot run
+(the retired source is gone: `space-migrate-source-missing`) is reported
+`failed` with the code in its `note` and the other steps still run.
+
+Idempotent: nothing pending is `decision: skipped` with `steps: []`, no
+gate and no receipt. `--plan` prints the steps as they stand with a note
+of what would happen, changes nothing and asks nobody; the same plan twice
+is byte-identical. `--json` prints `{ schemaVersion, agentId, soulDir,
+operation: "complete", decision: planned | completed | skipped | failed,
+steps[], root }` with `root` the soul root. One audit receipt
+`soul-env-migrate` with `operation` `complete` and a `detail` of `id:
+status` pairs; the steps' own records hold paths and notes, never a
+file's contents.
+
+## Cleaning
+
+```sh
+agent-bot soul env clean billy --plan --json          # what would go, with sizes
+agent-bot soul env clean billy [--component cache|temp|runtimes] [--json] [--principal-stdin]
+```
+
+A clean removes only what the contract classifies reconstructible or
+disposable, and only from these components:
+
+| Component | Removed | Kept |
+| --- | --- | --- |
+| `cache` | every entry under `.soul-state/cache/` | the directory itself |
+| `temp` | every entry under `.soul-state/tmp/`, a `revision-<uuid>` staging only once its 24-hour window has passed | a staging within its window (a host's edit in progress; `soul revision prepare --discard` removes it) |
+| `runtimes` | the runtime caches a routed launch fills (`node/npm-cache`, `uv/cache`, `go/cache`) and the `.installing-<uuid>` staging an interrupted install left | every installed version, its stamp and `last-install.json`, `go/gopath` |
+
+Never anything durable: the definition, generated output (reconstructible,
+but the builder's to rebuild), workspaces whether or not they hold
+uncommitted work, the home, tool state, credentials, secrets, sign-ins,
+memory and history. The retired source of a space move
+(`<source>.retired-<date>`, outside the root) is not the soul's and is left
+for the owner. Every path is classified by `classifyPath` once in the plan
+and again before removal; a durable retention is refused with
+`clean-component-durable`, as is `--component` naming anything but
+`cache`, `temp` or `runtimes`. A component root that is a link is never
+followed: it is listed under `kept` with the reason. A space move under
+way keeps its staging and is listed under `kept` pointing at `--complete`.
+
+`--plan` is read-only (no gate, nothing written, byte-identical on a
+rerun). The apply is owner-gated (the action names the components),
+refused `soul-running` (action `agent-bot soul stop <id>`) while the soul
+runs, checked before and after the gate, planned again after the gate,
+and records the run in `.soul-state/clean.json` (`{ schemaVersion: 1,
+agentId, at, files, bytes, removed[] { relative, classification, kind,
+files, bytes }, failed[] { relative, error } }`, 0600, written through a
+rename; the last run replaces the previous) plus one audit receipt
+`soul-env-clean` (`operation` `clean`, `decision` `cleaned | nothing |
+failed`, counts and the first few names). A path that cannot be removed is
+listed under `failed` with its error code and the rest still goes.
+
+`--json` prints `{ schemaVersion: 1, agentId, soulDir, applied, decision:
+planned | cleaned | nothing | failed, components[], removable[],
+removed[], failed[], kept[], files, bytes, journal }`; each row is
+`{ component, path, relative, classification, retention, kind: cache-entry
+| temp-entry | revision-staging | runtime-cache | install-staging | link |
+space-staging, files, bytes }` (`kept` rows carry `reason` instead of a
+size). Errors: `soul-not-found`, `soul-state-missing`, `soul-running`,
+`clean-component-durable`, each `{ error: { code, message, action } }`
+with `--json`.
+
+## Doctor
+
+`agent-bot doctor` describes each active soul that has a folder through
+the same descriptor, as one machine check `souls.environment` per soul:
+`ready` with no problem, `warning` (`soul-env-warnings`) with warnings
+only, `failed` (`soul-env-not-ready`) with an error-severity problem, which
+makes doctor exit 1. The message lists the problem codes, the action is
+the first problem's own fix (an error's before a warning's), and `evidence`
+holds `{ agentId, soulDir, ready, problems[], errors[] }` (codes only).
+A descriptor that cannot be read is `soul-env-unreadable` (warning).
+`doctor --json` carries the same checks. Doctor provisions and rebuilds
+nothing: the descriptor is read-only.
 
 ## Preparing a revision edit
 

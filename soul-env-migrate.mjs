@@ -31,9 +31,15 @@ import { TOOL_HOME_REGISTRY, adoptStepId, hostToolStore, toolHomeDecision, toolH
 // move); its API stays importable from here.
 export { MIGRATION_JOURNAL, MIGRATION_SCHEMA_VERSION, STEP_STATUSES, readMigrationJournal } from './soul-migration-journal.mjs';
 export const TEMPLATE_NAME_STEP_ID = 'template-name';
-export const MIGRATION_OPERATIONS = Object.freeze(['adopt-host-signin', 'space-into-soul', TEMPLATE_NAME_STEP_ID]);
+// `--complete` (#583 slice 6): every step the descriptor lists as not
+// finished, run through the mechanism its own verb uses.
+export const COMPLETE_OPERATION = 'complete';
+export const MIGRATION_OPERATIONS = Object.freeze(['adopt-host-signin', 'space-into-soul', TEMPLATE_NAME_STEP_ID, COMPLETE_OPERATION]);
+// Steps no release migrates yet: `--complete` lists them as they are and
+// says so, never records them, so the descriptor keeps them pending.
+const DEFERRED_STEPS = Object.freeze({ 'harnesses-into-runtimes': 'not migrated by this release; the harness install stays where it is and still launches' });
 const STATE = '.soul-state';
-const USAGE = 'usage: agent-bot soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul | --template-name [--plan] [--json] [--principal-stdin]';
+const USAGE = 'usage: agent-bot soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul | --template-name [--plan] | --complete [--plan] [--json] [--principal-stdin]';
 // A sign-in file is small; `.claude.json` carries project state and can
 // reach a few megabytes. Anything larger is not a file this adopts.
 const FILE_MAX_BYTES = 16 * 1024 * 1024;
@@ -222,7 +228,7 @@ export function formatMigration(result) {
     }
     for (const link of step.copied?.links ?? []) lines.push(`  link kept as a link: ${link}`);
   }
-  if (!result.steps.length) lines.push(result.operation === SPACE_STEP_ID ? 'nothing to move' : 'nothing to adopt');
+  if (!result.steps.length) lines.push(result.operation === SPACE_STEP_ID ? 'nothing to move' : result.operation === COMPLETE_OPERATION ? 'nothing pending' : 'nothing to adopt');
   return `${lines.join('\n')}\n`;
 }
 
@@ -242,6 +248,7 @@ export async function soulEnvMigrateCommand(argv, { gate = ownerGate, readStdin 
     if (arg === '--adopt-host-signin' && operation === null) operation = 'adopt-host-signin';
     else if (arg === '--space-into-soul' && operation === null) operation = SPACE_STEP_ID;
     else if (arg === '--template-name' && operation === null) operation = TEMPLATE_NAME_STEP_ID;
+    else if (arg === '--complete' && operation === null) operation = COMPLETE_OPERATION;
     else if (arg === '--plan' && !plan) plan = true;
     else if (arg === '--json' && !json) json = true;
     else if (arg === '--principal-stdin' && !presented) presented = true;
@@ -249,7 +256,7 @@ export async function soulEnvMigrateCommand(argv, { gate = ownerGate, readStdin 
     else if (!arg.startsWith('-') && id === null) id = arg;
     else throw new Error(USAGE);
   }
-  if (!id || operation === null || (harness !== null && operation !== 'adopt-host-signin') || (plan && (operation !== TEMPLATE_NAME_STEP_ID || presented))) throw new Error(USAGE);
+  if (!id || operation === null || (harness !== null && operation !== 'adopt-host-signin') || (plan && (![TEMPLATE_NAME_STEP_ID, COMPLETE_OPERATION].includes(operation) || presented))) throw new Error(USAGE);
   if (harness !== null && !Object.hasOwn(ACP_SPAWN_REGISTRY, harness) && !Object.hasOwn(TOOL_HOME_REGISTRY, harness)) {
     throw new Error(`--harness must be one of ${[...new Set([...Object.keys(ACP_SPAWN_REGISTRY), ...Object.keys(TOOL_HOME_REGISTRY)])].join(', ')}`);
   }
@@ -264,6 +271,7 @@ export async function soulEnvMigrateCommand(argv, { gate = ownerGate, readStdin 
   if (!existsSync(path.join(soulDir, STATE))) fail('soul-state-missing', `${soulDir} has no .soul-state yet; spawn or launch the soul first`);
   if (operation === SPACE_STEP_ID) return spaceIntoSoul({ soul, soulDir, principal, json, gate, running, write, env, home, cwd, now, file: options.file ?? populationFile(options) });
   if (operation === TEMPLATE_NAME_STEP_ID) return templateName({ soul, soulDir, principal, json, plan, gate, write, env, home, cwd, now, options: { ...options, file: options.file ?? populationFile(options) } });
+  if (operation === COMPLETE_OPERATION) return complete({ soul, soulDir, principal, json, plan, gate, running, write, env, home, cwd, now, options: { ...options, file: options.file ?? populationFile(options) } });
   if (harness !== null && !toolHomeFor(harness).routable) fail('tool-home-unsupported', `${harness}: ${toolHomeFor(harness).reason}`);
   // Without --harness: the soul's own harnesses (its execution identity's,
   // then its manifest's preferred ones), the routable ones only.
@@ -313,9 +321,7 @@ async function spaceIntoSoul({ soul, soulDir, principal, json, gate, running, wr
 // such, so a rerun says why without asking again. The receipt names the
 // names, never a file.
 async function templateName({ soul, soulDir, principal, json, plan, gate, write, env, home, cwd, now, options }) {
-  const planned = planTemplateRename(soulDir, { env });
-  const base = { id: TEMPLATE_NAME_STEP_ID, status: planned.status, from: planned.from, to: planned.to, at: now().toISOString(), note: planned.note,
-    templateName: planned.templateName, template: planned.template, displayName: { from: typeof soul.displayName === 'string' ? soul.displayName : null, to: null } };
+  const { planned, base } = templateNameBase(soul, soulDir, { env, now });
   const emit = (step, decision) => {
     const result = { schemaVersion: MIGRATION_SCHEMA_VERSION, agentId: soul.id, soulDir, operation: TEMPLATE_NAME_STEP_ID, decision, steps: [step], root: soulDir };
     write(json ? `${JSON.stringify(result)}\n` : formatMigration(result));
@@ -323,23 +329,95 @@ async function templateName({ soul, soulDir, principal, json, plan, gate, write,
   };
   if (plan) return emit({ ...base, displayName: { ...base.displayName, to: base.displayName.from } }, 'planned');
   const authorization = await gate(`rename ${soul.id} from template name ${planned.templateName.from ?? planned.from ?? 'unknown'} to ${planned.templateName.to ?? 'its template'}`, { principal, env, cwd });
-  let step;
+  const { step, decision } = await applyTemplateName({ soul, soulDir, planned, base, authorization, env, home, now, options }, { rethrow: true });
+  return emit(step, decision);
+}
+
+// The template-name step the plan calls for, recorded and receipted as
+// its own verb does: `skipped` for a name the owner chose, `done` after
+// the rename, `failed` with the code in the note. `rethrow` is the verb's
+// behaviour (the failure ends the command); `--complete` keeps going.
+async function applyTemplateName({ soul, soulDir, planned, base, authorization, env, home, now, options }, { rethrow = false } = {}) {
   if (planned.status !== 'pending') {
-    step = recordMigrationStep(soulDir, { ...base, displayName: { ...base.displayName, to: base.displayName.from } });
+    const step = recordMigrationStep(soulDir, { ...base, displayName: { ...base.displayName, to: base.displayName.from } });
     appendAuditReceipt({ event: 'soul-env-migrate', agentId: soul.id, operation: TEMPLATE_NAME_STEP_ID, decision: 'skipped', detail: `${planned.from ?? '-'}: ${planned.note}` }, { env, home, now });
-    return emit(step, 'skipped');
+    return { step, decision: 'skipped' };
   }
+  let step;
   try {
     const done = await renameFromTemplate(soul.id, soulDir, planned, { ...options, stateDir: options.stateDir ?? stateDirectory(options), now, ...(authorization?.method ? { authorization } : {}) });
     step = recordMigrationStep(soulDir, { ...base, status: 'done', at: now().toISOString(), note: done.note, revision: done.revision, parentRevision: done.parentRevision, displayName: done.displayName });
   } catch (error) {
-    recordMigrationStep(soulDir, { ...base, status: 'failed', at: now().toISOString(), note: `${error.code ?? 'error'}: ${error.message}` });
+    step = recordMigrationStep(soulDir, { ...base, status: 'failed', at: now().toISOString(), note: `${error.code ?? 'error'}: ${error.message}` });
     appendAuditReceipt({ event: 'soul-env-migrate', agentId: soul.id, operation: TEMPLATE_NAME_STEP_ID, decision: 'failed', detail: `${error.code ?? 'error'}: ${error.message}` }, { env, home, now });
-    throw error;
+    if (rethrow) throw error;
+    return { step, decision: 'failed' };
   }
   appendAuditReceipt({ event: 'soul-env-migrate', agentId: soul.id, operation: TEMPLATE_NAME_STEP_ID, decision: 'renamed',
     detail: `${step.from} -> ${step.to} (revision ${step.revision}); display name ${step.displayName.from ?? '-'} -> ${step.displayName.to ?? '-'}` }, { env, home, now });
-  return emit(step, 'renamed');
+  return { step, decision: 'renamed' };
+}
+
+// The template-name step as `templateName` builds it before deciding.
+function templateNameBase(soul, soulDir, { env, now }) {
+  const planned = planTemplateRename(soulDir, { env });
+  const base = { id: TEMPLATE_NAME_STEP_ID, status: planned.status, from: planned.from, to: planned.to, at: now().toISOString(), note: planned.note,
+    templateName: planned.templateName, template: planned.template, displayName: { from: typeof soul.displayName === 'string' ? soul.displayName : null, to: null } };
+  return { planned, base };
+}
+
+// `--complete` (#583 slice 6): every migration step the descriptor lists
+// as not finished (a pending inventory entry, a phase an interrupted run
+// left, a failed step to retry), run through the mechanism its own verb
+// uses and recorded as that verb records it, so the journal keeps its
+// format. Owner-gated once for the lot, refused `soul-running` while the
+// soul runs (checked before and after the gate), `--plan` read-only. A
+// step this release does not migrate is listed as it is with a note and
+// never recorded, so the descriptor keeps it pending. Idempotent: nothing
+// pending is `skipped` with no steps, no gate and no receipt.
+async function complete({ soul, soulDir, principal, json, plan, gate, running, write, env, home, cwd, now, options }) {
+  // Loaded on demand: soul-env.mjs imports this module for the tool homes
+  // and the journal, so a static import would be a cycle.
+  const { readSoulEnvironment } = await import('./soul-env.mjs');
+  const describe = () => readSoulEnvironment(soul.id, { env, home, now, ...(options.config === undefined ? {} : { config: options.config }),
+    ...(options.platform ? { platform: options.platform } : {}), ...(options.stateDir ? { stateDir: options.stateDir } : {}) });
+  const emit = (steps, decision) => {
+    const result = { schemaVersion: MIGRATION_SCHEMA_VERSION, agentId: soul.id, soulDir, operation: COMPLETE_OPERATION, decision, steps, root: soulDir };
+    write(json ? `${JSON.stringify(result)}\n` : formatMigration(result));
+    return result;
+  };
+  const inventory = () => describe().migration.steps.filter((step) => !['done', 'skipped'].includes(step.status));
+  const planned = inventory().map((step) => ({ ...step, note: DEFERRED_STEPS[step.id] ?? step.note ?? (step.status === 'failed' ? 'failed last time; run again' : step.status === 'pending' ? 'not started' : `interrupted while ${step.status}; resumed`) }));
+  if (plan) return emit(planned, 'planned');
+  const runnable = planned.filter((step) => !Object.hasOwn(DEFERRED_STEPS, step.id));
+  if (!runnable.length) return emit(planned, 'skipped');
+  const refuseRunning = () => fail('soul-running', `${soul.id} is running (a turn in flight or a warm harness); stop it before completing its migration`, { action: `agent-bot soul stop ${soul.id}` });
+  if (await running(soul.id, { env, home })) refuseRunning();
+  const authorization = await gate(`complete ${soul.id}'s pending migration (${runnable.map((step) => step.id).join(', ')})`, { principal, env, cwd });
+  if (await running(soul.id, { env, home })) refuseRunning();
+  const steps = [];
+  // The owner may have taken a while: what is pending is read again now.
+  for (const entry of inventory()) {
+    if (Object.hasOwn(DEFERRED_STEPS, entry.id)) { steps.push({ ...entry, note: DEFERRED_STEPS[entry.id] }); continue; }
+    try {
+      if (entry.id === SPACE_STEP_ID) steps.push(migrateSpaceIntoSoul(soulDir, { agentId: soul.id, file: options.file, now }));
+      else if (entry.id.startsWith('adopt-host-signin:')) steps.push(adoptHostSignIn(soulDir, { harness: entry.id.slice('adopt-host-signin:'.length), env, home, now }));
+      else if (entry.id === TEMPLATE_NAME_STEP_ID) {
+        const { planned: rename, base } = templateNameBase(soul, soulDir, { env, now });
+        steps.push((await applyTemplateName({ soul, soulDir, planned: rename, base, authorization, env, home, now, options })).step);
+      } else steps.push({ ...entry, status: 'failed', note: 'no mechanism for this step in this release' });
+    } catch (error) {
+      // A coded refusal (the source is gone, a verify failed) is this
+      // step's outcome; the other steps still run.
+      steps.push({ id: entry.id, status: 'failed', from: entry.from, to: entry.to, at: now().toISOString(), note: `${error.code ?? 'error'}: ${error.message}`, action: error.action ?? null });
+    }
+  }
+  const decision = steps.some((step) => step.status === 'failed') ? 'failed' : steps.some((step) => step.status === 'done') ? 'completed' : 'skipped';
+  // Step ids and outcomes only: each step's own record holds its note and
+  // paths, and a receipt's detail is bounded.
+  appendAuditReceipt({ event: 'soul-env-migrate', agentId: soul.id, operation: COMPLETE_OPERATION, decision,
+    detail: steps.map((step) => `${step.id}: ${step.status}`).join('; ') || 'nothing pending' }, { env, home, now });
+  return emit(steps, decision);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -6,9 +6,12 @@
 // `space-into-soul` step and resumable: copy into a staging directory
 // beside the link, verify every path, size and digest against the source,
 // switch the link for the directory, point the census at it, and only then
-// retire the source by renaming it (never deleting; `soul env clean` in
-// slice 6 deletes). A crash leaves either a verifiable staging to reuse or
-// a partial one to drop and copy again; the link stays until the switch.
+// retire the source by renaming it, never deleting it: the retired copy
+// is memory outside the root, which no clean touches; the owner removes
+// it once the soul has run from its folder. A crash leaves either a
+// verifiable staging to reuse or a partial one to drop and copy again;
+// the link stays until the switch, and `soul env migrate --complete`
+// resumes it.
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, constants, copyFileSync, chmodSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, utimesSync } from 'node:fs';
 import { homedir } from 'node:os';

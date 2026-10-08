@@ -293,6 +293,8 @@ agent-bot soul env <agentId|name> [--json]
 agent-bot soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] [--json] [--principal-stdin]
 agent-bot soul env migrate <agentId|name> --space-into-soul [--json] [--principal-stdin]
 agent-bot soul env migrate <agentId|name> --template-name [--plan] [--json] [--principal-stdin]
+agent-bot soul env migrate <agentId|name> --complete [--plan] [--json] [--principal-stdin]
+agent-bot soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin]
 agent-bot soul template refresh <agentId|name> [--from TEMPLATE_PATH] [--plan] [--json] [--principal-stdin]
 agent-bot soul runtimes <agentId|name> [--json]
 agent-bot soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin]
@@ -408,6 +410,10 @@ agent-bot soul env migrate AGENT_ID --space-into-soul --principal-stdin
 # owner only: move the soul's Agent Space into its folder (copied, verified, source retired, never deleted); see docs/soul-memory-history.md
 agent-bot soul env migrate AGENT_ID --template-name [--plan] --principal-stdin
 # owner only: rename an instance that kept its template's name when the bundled template was renamed (one revision, census display name); --plan reads only; see docs/soul-templates.md
+agent-bot soul env migrate AGENT_ID --complete [--plan] --principal-stdin
+# owner only: finish every migration step still pending, interrupted or failed through the same mechanisms; never while the soul runs; --plan reads only; see docs/soul-environment.md
+agent-bot soul env clean AGENT_ID [--plan] [--component cache|temp|runtimes] --principal-stdin
+# owner only: remove the cache, temporary files, runtime caches and leftover install stagings (reconstructible or disposable by the contract), never the definition, home, tool state, credentials, memory, history or a workspace; --plan lists paths and sizes; see docs/soul-environment.md
 agent-bot soul template refresh AGENT_ID [--from TEMPLATE_PATH] [--plan] --principal-stdin
 # owner only: replace the template's maintained paths in the instance from the bundled template in one revision; --plan reads only; see docs/soul-templates.md
 agent-bot soul runtimes AGENT_ID --json
