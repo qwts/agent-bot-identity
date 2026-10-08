@@ -117,7 +117,7 @@ test('the contract says which retentions a clean may remove, and the capabilitie
   assert.deepEqual(CLEAN_RETENTIONS, ['reconstructible', 'disposable']);
   assert.deepEqual(RETENTION, ['durable', 'reconstructible', 'disposable']);
   assert.deepEqual(CLEAN_COMPONENTS, ['cache', 'temp', 'runtimes']);
-  assert.deepEqual(MIGRATION_OPERATIONS, ['adopt-host-signin', 'space-into-soul', 'template-name', 'complete']);
+  assert.deepEqual(MIGRATION_OPERATIONS, ['adopt-host-signin', 'space-into-soul', 'template-name', 'harnesses-into-runtimes', 'complete']);
   assert.equal(COMPLETE_OPERATION, 'complete');
   assert.ok(ENV_CAPABILITIES.includes('env-clean') && ENV_CAPABILITIES.includes('migrate-complete'));
   // Every durable class is out of reach by construction.
@@ -315,7 +315,7 @@ test('the CLI prints the clean schema and coded errors with --json', (t) => {
   assert.match(usage.stderr, /usage: agent-bot soul env clean/);
   const help = spawnSync(process.execPath, [path.join(ROOT, 'agent-bot.mjs'), 'soul', '--help'], { encoding: 'utf8', timeout: 20000 });
   assert.match(help.stdout, /agent-bot soul env clean <agentId\|name> \[--plan\] \[--component cache\|temp\|runtimes\] \[--json\] \[--principal-stdin\]/);
-  assert.match(help.stdout, /--template-name \[--plan\] \| --complete \[--plan\]/);
+  assert.match(help.stdout, /--template-name \[--plan\] \| --harnesses-into-runtimes \[--plan\] \| --complete \[--plan\]/);
 });
 
 test('soul env migrate --complete resumes an interrupted space move from the journal, adopts a pending sign-in, and marks the journal done', async (t) => {
@@ -394,29 +394,41 @@ test('soul env migrate --complete resumes an interrupted space move from the jou
   assert.match(human, /operation: complete\ndecision: skipped\n\nnothing pending\n$/);
 });
 
-test('--complete keeps a deferred step pending, reports a step that cannot run as failed, and is refused while the soul runs', async (t) => {
+test('--complete runs the harness move with the other steps, reports a step that cannot run as failed, and is refused while the soul runs', async (t) => {
   const f = fixture(t);
-  // A legacy harness install: listed, noted, never recorded.
-  put(path.join(f.dir, '.soul-state', 'harnesses', 'node_modules', '@agentclientprotocol', 'codex-acp', 'package.json'), '{"version":"2.0.0"}');
+  // A legacy harness install with no adapter binary: the move refuses it and leaves it alone (#583 slice 8).
+  const legacy = path.join(f.dir, '.soul-state', 'harnesses');
+  put(path.join(legacy, 'node_modules', '@agentclientprotocol', 'codex-acp', 'package.json'), '{"version":"2.0.0"}');
   // The linked space's source is gone: its step fails with the sibling's code, in the result, not as a crash.
   rmSync(f.space, { recursive: true });
   const result = await soulEnvMigrateCommand([ID, '--complete', '--json'], { ...f.options, write: () => {} });
   assert.equal(result.decision, 'failed');
-  assert.deepEqual(result.steps.map((step) => [step.id, step.status]), [[SPACE_STEP_ID, 'failed'], ['harnesses-into-runtimes', 'pending']]);
+  assert.deepEqual(result.steps.map((step) => [step.id, step.status]), [[SPACE_STEP_ID, 'failed'], ['harnesses-into-runtimes', 'failed']]);
   assert.match(result.steps[0].note, /^space-migrate-source-missing: /);
-  assert.match(result.steps[1].note, /not migrated by this release/);
+  assert.match(result.steps[1].note, /^harness-migrate-source-invalid: .*without node_modules\/\.bin\/codex-acp/);
   assert.equal(f.gates.length, 1);
-  assert.equal(readMigrationStep(f.dir, 'harnesses-into-runtimes'), null, 'a deferred step is never recorded');
+  assert.equal(readMigrationStep(f.dir, 'harnesses-into-runtimes').status, 'failed', 'a refused move is recorded like any failed step');
+  assert.ok(existsSync(path.join(legacy, 'node_modules', '@agentclientprotocol', 'codex-acp', 'package.json')), 'the legacy install is left where it was');
   assert.equal(lstatSync(f.target).isSymbolicLink(), true, 'the link is left as it was');
   assert.deepEqual(f.receipts().map((receipt) => [receipt.operation, receipt.decision]), [['complete', 'failed']]);
   const described = readSoulEnvironment(ID, f.options);
-  assert.deepEqual(described.migration.steps.map((step) => [step.id, step.status]), [[SPACE_STEP_ID, 'pending'], ['harnesses-into-runtimes', 'pending']]);
-  // Only the deferred step left: nothing runnable, nothing gated.
+  assert.deepEqual(described.migration.steps.map((step) => [step.id, step.status]), [[SPACE_STEP_ID, 'pending'], ['harnesses-into-runtimes', 'failed']]);
+  // The space inside and the legacy install complete: the failed step runs again and moves it under the runtimes.
   rmSync(f.target);
   mkdirSync(f.target);
-  const deferred = await soulEnvMigrateCommand([ID, '--complete', '--json'], { ...f.options, write: () => {} });
-  assert.deepEqual([deferred.decision, deferred.steps.map((step) => step.id)], ['skipped', ['harnesses-into-runtimes']]);
-  assert.equal(f.gates.length, 1);
+  put(path.join(legacy, 'node_modules', '.bin', 'codex-acp'), '#!/bin/sh\n');
+  const moved = await soulEnvMigrateCommand([ID, '--complete', '--json'], { ...f.options, write: () => {} });
+  const target = path.join(f.dir, '.soul-state', 'runtimes', 'harnesses', 'codex', '2.0.0');
+  assert.deepEqual([moved.decision, moved.steps.map((step) => [step.id, step.status, step.to])], ['completed', [['harnesses-into-runtimes', 'done', target]]]);
+  assert.equal(f.gates.length, 2);
+  assert.equal(existsSync(legacy), false);
+  assert.equal(JSON.parse(readFileSync(path.join(target, INSTALL_STAMP), 'utf8')).kind, 'npm');
+  assert.ok(existsSync(path.join(target, 'node_modules', '.bin', 'codex-acp')));
+  assert.deepEqual(readSoulEnvironment(ID, f.options).migration.steps.map((step) => [step.id, step.status]), [['harnesses-into-runtimes', 'done']]);
+  // Nothing left: skipped, no gate.
+  const nothing = await soulEnvMigrateCommand([ID, '--complete', '--json'], { ...f.options, write: () => {} });
+  assert.deepEqual([nothing.decision, nothing.steps], ['skipped', []]);
+  assert.equal(f.gates.length, 2);
 
   const busy = fixture(t, { running: true });
   await assert.rejects(soulEnvMigrateCommand([ID, '--complete'], { ...busy.options, write: () => {} }), (error) => {

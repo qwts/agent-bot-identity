@@ -96,7 +96,7 @@ import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
 import { createDaemonLogCheck, daemonLogPath, DAEMON_LOG_CHECK_INTERVAL_MS } from './daemon-log.mjs';
 import { createTeamStarter, defaultTeamTemplate, harnessLaunchProblem, teamLimits } from './team-start.mjs';
-import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHarnessesPath } from './soul-home.mjs';
+import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulNpmHarnessDirs } from './soul-home.mjs';
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
@@ -1793,7 +1793,15 @@ export async function runDaemon({
       // launchd PATH does not reach.
       commsFor: (agentId) => showSoul(agentId, { file: populationFile({ env, home }) }).comms,
       reachEnv: { PATH: resumePath(harnessEnv, home) },
-      harnessDirsFor: (agentId) => [soulHarnessesPath(agentId, { env, home, config, file: populationFile({ env, home }) })],
+      // Where a joined soul's npm adapter is (#417, #583 slice 8): its
+      // runtimes installs newest first, then the legacy harness directory.
+      // A soul with no identity record has no recorded harness: the legacy
+      // directory alone, as before slice 8.
+      harnessDirsFor: (agentId) => {
+        let harness = null;
+        try { harness = identities(agentId).harness ?? null; } catch { /* no identity: legacy only */ }
+        return soulNpmHarnessDirs(agentId, harness, { env, home, config, file: populationFile({ env, home }) });
+      },
       // The soul's provisioned runtimes and harness installs first on its
       // PATH, with their env (#583 slice 3); read per turn from its stamps.
       runtimeEnvFor: ({ agentId, harness, env: turnEnv }) => soulRuntimeEnv(agentId, { env: turnEnv, home, config, file: populationFile({ env, home }), harness }),

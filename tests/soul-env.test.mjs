@@ -93,7 +93,7 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
     'runtimes', 'providers', 'launch', 'readiness', 'migration', 'retention', 'errors']);
   assert.equal(result.schemaVersion, 1);
   assert.deepEqual(result.engine, { version: JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version, contractVersion: 1, capabilities: [...ENV_CAPABILITIES] });
-  assert.deepEqual(result.engine.capabilities, ['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes', 'memory', 'history', 'template-name', 'template-refresh', 'launch-parent', 'migrate-complete', 'env-clean', 'env-export', 'env-import']);
+  assert.deepEqual(result.engine.capabilities, ['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes', 'memory', 'history', 'template-name', 'template-refresh', 'launch-parent', 'migrate-complete', 'env-clean', 'env-export', 'env-import', 'harnesses-into-runtimes']);
   assert.deepEqual(result.identity, { agentId: ID, name: 'billy', displayName: 'Billy - Starter', status: 'active', harness: 'codex',
     genesis: { revision: null, parentSoul: null }, revision: f.manifest.revision, parentRevision: null, template: false, formatVersion: 2 });
   assert.deepEqual(result.root, { soulDir: f.dir, soulsRoot: f.env.AGENT_BOT_SOULS_HOME, source: 'environment', registered: true, marker: 'ok',
@@ -227,7 +227,7 @@ test('generated drift, a legacy harness install, copies and unregistered roots a
   rmSync(copy, { recursive: true, force: true });
   rmSync(path.join(f.dir, '.soul-state', 'home', 'node_modules'), { recursive: true, force: true });
   const joined = readSoulEnvironment(ID, f.options);
-  assert.equal(joined.harnesses.launchable, true, 'a joined soul launches from .soul-state/harnesses (#417)');
+  assert.equal(joined.harnesses.launchable, true, 'a joined soul still launches from the legacy .soul-state/harnesses until it is migrated (#417)');
   rmSync(path.join(f.dir, '.soul-state', 'harnesses'), { recursive: true, force: true });
   const missing = readSoulEnvironment(ID, f.options);
   assert.deepEqual(missing.readiness.problems.map((p) => p.code).sort(), ['generated-drift', 'harness-missing', 'memory-not-contained', 'runtime-missing']);
@@ -237,6 +237,40 @@ test('generated drift, a legacy harness install, copies and unregistered roots a
   assert.equal(invalid.root.marker, 'invalid');
   assert.equal(invalid.readiness.ready, false);
   assert.ok(invalid.readiness.problems.some((p) => p.code === 'marker-invalid' && p.severity === 'error'));
+});
+
+test('an npm adapter installed under the runtimes is listed from its stamp, launches alone, and the migration step follows the legacy directory and the journal (#583 slice 8)', (t) => {
+  const f = fixture(t);
+  rmSync(path.join(f.dir, '.soul-state', 'home', 'node_modules'), { recursive: true, force: true });
+  const install = path.join(f.dir, '.soul-state', 'runtimes', 'harnesses', 'codex', '2.1.1');
+  put(path.join(install, INSTALL_STAMP), JSON.stringify({ schemaVersion: 1, name: 'codex', kind: 'npm', package: '@agentclientprotocol/codex-acp', version: '2.1.1', platform: null, url: null, sha256: null, bin: 'node_modules/.bin', installedAt: '2026-10-08T10:00:00.000Z' }));
+  put(path.join(install, 'node_modules', '.bin', 'codex-acp'), '#!/bin/sh\n');
+  put(path.join(install, 'node_modules', '@agentclientprotocol', 'codex-acp', 'package.json'), '{"version":"2.1.1"}');
+  // An older version beside it, a staging an interrupted install left, and a version directory without its stamp: only stamped installs count, newest first.
+  put(path.join(f.dir, '.soul-state', 'runtimes', 'harnesses', 'codex', '2.0.0', INSTALL_STAMP), JSON.stringify({ name: 'codex', kind: 'npm', version: '2.0.0', bin: 'node_modules/.bin' }));
+  mkdirSync(path.join(f.dir, '.soul-state', 'runtimes', 'harnesses', 'codex', '.installing-00000000-0000-4000-8000-000000000000'), { recursive: true });
+  mkdirSync(path.join(f.dir, '.soul-state', 'runtimes', 'harnesses', 'codex', '2.2.0'), { recursive: true });
+  const before = snapshot(f.home);
+  const result = readSoulEnvironment(ID, f.options);
+  assert.deepEqual(snapshot(f.home), before, 'reporting installs nothing');
+  assert.deepEqual(result.harnesses.installed, [
+    { name: 'codex', kind: 'npm', package: '@agentclientprotocol/codex-acp', version: '2.1.1', location: '.soul-state/runtimes/harnesses/codex/2.1.1', bin: path.join(install, 'node_modules', '.bin', 'codex-acp'), status: 'ok' },
+    { name: 'codex', kind: 'npm', package: '@agentclientprotocol/codex-acp', version: '2.0.0', location: '.soul-state/runtimes/harnesses/codex/2.0.0', bin: null, status: 'ok' }]);
+  assert.equal(result.harnesses.launchable, true, 'the runtimes install alone launches the soul');
+  assert.equal(result.readiness.problems.some((p) => p.code === 'harness-missing'), false);
+  assert.deepEqual(result.migration.steps.map((step) => step.id), ['space-into-soul'], 'no legacy directory: no pending step');
+  assert.ok(result.engine.capabilities.includes('harnesses-into-runtimes'));
+  // The legacy directory beside it: the step is pending, to the runtimes.
+  put(path.join(f.dir, '.soul-state', 'harnesses', 'node_modules', '@agentclientprotocol', 'codex-acp', 'package.json'), '{"version":"2.0.0"}');
+  const pending = readSoulEnvironment(ID, f.options);
+  assert.deepEqual(pending.migration.steps.find((step) => step.id === 'harnesses-into-runtimes'), { id: 'harnesses-into-runtimes', status: 'pending', from: path.join(f.dir, '.soul-state', 'harnesses'), to: path.join(f.dir, '.soul-state', 'runtimes', 'harnesses') });
+  assert.deepEqual(pending.harnesses.installed.map((row) => row.location), ['.soul-state/harnesses', '.soul-state/runtimes/harnesses/codex/2.1.1', '.soul-state/runtimes/harnesses/codex/2.0.0']);
+  // Once the journal records the step done, the record replaces the inventory entry.
+  rmSync(path.join(f.dir, '.soul-state', 'harnesses'), { recursive: true });
+  put(path.join(f.dir, '.soul-state', 'migration.json'), JSON.stringify({ schemaVersion: 1, steps: [{ id: 'harnesses-into-runtimes', status: 'done', from: path.join(f.dir, '.soul-state', 'harnesses'), to: install, at: '2026-10-08T10:00:00.000Z', note: `moved to ${install}`, harness: 'codex', version: '2.1.1', code: null }] }));
+  const done = readSoulEnvironment(ID, f.options);
+  assert.deepEqual(done.migration.steps.map((step) => [step.id, step.status]), [['space-into-soul', 'pending'], ['harnesses-into-runtimes', 'done']]);
+  assert.equal(done.migration.steps[1].note, `moved to ${install}`);
 });
 
 test('an installed runtime and a declared non-npm harness install are reported from their stamps, with the launch routing (#583 slice 3)', (t) => {

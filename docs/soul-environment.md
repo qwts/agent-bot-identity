@@ -13,6 +13,7 @@ agent-bot soul env <agentId|name> [--json]
 agent-bot soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] [--json] [--principal-stdin]
 agent-bot soul env migrate <agentId|name> --space-into-soul [--json] [--principal-stdin]
 agent-bot soul env migrate <agentId|name> --template-name [--plan] [--json] [--principal-stdin]
+agent-bot soul env migrate <agentId|name> --harnesses-into-runtimes [--plan] [--json] [--principal-stdin]
 agent-bot soul env migrate <agentId|name> --complete [--plan] [--json] [--principal-stdin]
 agent-bot soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin]
 agent-bot soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin]
@@ -74,14 +75,16 @@ scalars `null`, collections `[]`), in this order:
   `capabilities` is `["env", "revision-prepare", "runtimes", "providers",
   "tool-homes", "memory", "history", "template-name", "template-refresh",
   "launch-parent", "migrate-complete", "env-clean", "env-export",
-  "env-import"]` today; a client gates each later slice on it
+  "env-import", "harnesses-into-runtimes"]` today; a client gates each later slice on it
   (`template-name` is the `soul env migrate --template-name` rename and the
   `templateName` / `nameSource` provenance, `template-refresh` the
   `soul template refresh` command, see [soul-templates.md](soul-templates.md);
   `launch-parent`: a principal launch may name the new soul's parent,
   GeniusBar#261; `migrate-complete` the `soul env migrate --complete` verb
   and `env-clean` the `soul env clean` command, both below; `env-export`
-  and `env-import` the two commands under [Export and import](#export-and-import)).
+  and `env-import` the two commands under [Export and import](#export-and-import);
+  `harnesses-into-runtimes` the npm adapter install under the runtimes and
+  the `soul env migrate --harnesses-into-runtimes` verb, below).
 - `identity`: `agentId`, `name`, `displayName`, `status`, `harness`,
   `genesis { revision, parentSoul }`, the manifest's `revision`,
   `parentRevision`, `template`, `formatVersion`.
@@ -119,9 +122,12 @@ scalars `null`, collections `[]`), in this order:
   `package.json`, and the `soul.json` `harnesses.<name>.install` pins,
   `source` `soul.json` with `kind` `archive | uv-tool`), `installed[]`
   (adapters found in `.soul-state/home/node_modules` or a joined soul's
-  `.soul-state/harnesses`, and installs under
-  `.soul-state/runtimes/harnesses`, each with `version`, `bin`, `location`,
-  `status`), `launchable`.
+  legacy `.soul-state/harnesses`, then every stamped install under
+  `.soul-state/runtimes/harnesses/<name>/<version>`: an npm adapter listed
+  from its stamp as `kind: "npm"` with its `package`, the archive and uv
+  tool installs as before; each with `version`, `bin`, `location`,
+  `status`), `launchable` (true when any listed install has its binary,
+  the runtimes location alone included).
 - `runtimes`: `declared` from `soul.json` (`{}` when absent), `installed[]`
   `{ name, version, declared, requiredBy, source, path, bin }` read from
   each install's stamp, `missing[]` (reason `not provisioned` or `last
@@ -155,10 +161,9 @@ scalars `null`, collections `[]`), in this order:
   `.soul-state/migration.json` are listed as recorded (`done | skipped |
   failed`, or a phase `copying | verifying | switching` of a run under way,
   with `at` and `note`) and replace the pending entry of the same id. The
-  adoption, the space move and the template rename run today, each by its
-  own verb or together through `soul env migrate --complete` (below);
-  `harnesses-into-runtimes` is listed and stays pending until a later
-  release migrates it (the legacy install still launches).
+  adoption, the space move, the template rename and the harness move each
+  run by their own verb or together through `soul env migrate --complete`
+  (below); the legacy install still launches until it is moved.
 - `retention`: component ids grouped as `durable`, `reconstructible`,
   `disposable`.
 - `errors[]`: `{ area, message }` for what could not be read; the rest of
@@ -188,6 +193,35 @@ scalars `null`, collections `[]`), in this order:
 
 Warnings leave `ready` true. Codes are appended, never renamed.
 
+## Moving the npm adapter under the runtimes
+
+```sh
+agent-bot soul env migrate billy --harnesses-into-runtimes --plan --json   # read-only
+agent-bot soul env migrate billy --harnesses-into-runtimes [--json] [--principal-stdin]
+```
+
+A soul joined before #583 slice 8 keeps its ACP adapter in
+`.soul-state/harnesses`; a fresh install lands under
+`.soul-state/runtimes/harnesses/<harness>/<version>/` with an install stamp
+([soul-runtimes.md](soul-runtimes.md#npm-acp-adapters)). This verb moves the
+legacy install there, recorded as the `harnesses-into-runtimes` step. The
+harness is the soul's recorded one when its adapter is in the legacy
+directory, else the single adapter found there; the version is the
+adapter's `package.json`, else the lockfile. The directory is renamed into a
+`.installing-<uuid>` staging beside the target (copied and verified when
+another filesystem), checked for `node_modules/.bin/<adapter>`, stamped and
+renamed into place; on any failure it is put back where the soul still
+launches it from and the step is recorded `failed` with the code in its
+`note` (`harness-migrate-source-invalid`: no adapter package, two with no
+recorded harness to choose, no version or no binary;
+`harness-migrate-verify-failed`: the move itself). A target the runtimes
+already hold with its stamp and binary makes the legacy copy redundant
+(reconstructible from the pins, never exported): it is removed and the step
+is `done`. One owner gate, refused `soul-running` before and after it,
+`--plan` read-only. Idempotent: nothing left is `skipped` (`nothing to
+migrate`). Receipt `soul-env-migrate` with `operation
+harnesses-into-runtimes` and the decision `migrated | skipped | failed`.
+
 ## Completing a migration
 
 ```sh
@@ -201,15 +235,15 @@ run left (`copying | verifying | switching`), or a `failed` step, which is
 run again. Each step goes through the mechanism its own verb uses and is
 recorded as that verb records it (`soul-memory.mjs` for `space-into-soul`,
 the adoption for `adopt-host-signin:<harness>`, the rename for
-`template-name`), so `.soul-state/migration.json` keeps its format and
-`soul env` reflects the outcome. One owner gate for the lot (the action
-names the step ids); refused `soul-running` (action `agent-bot soul stop
-<id>`) while the soul has a turn in flight or a warm harness, checked
-before and after the gate. A step this release does not migrate
-(`harnesses-into-runtimes`) is listed as it is with a note and never
-recorded, so it stays pending in the descriptor. A step that cannot run
-(the retired source is gone: `space-migrate-source-missing`) is reported
-`failed` with the code in its `note` and the other steps still run.
+`template-name`, the harness move for `harnesses-into-runtimes`), so
+`.soul-state/migration.json` keeps its format and `soul env` reflects the
+outcome. One owner gate for the lot (the action names the step ids);
+refused `soul-running` (action `agent-bot soul stop <id>`) while the soul
+has a turn in flight or a warm harness, checked before and after the gate.
+A step that cannot run (the retired source is gone:
+`space-migrate-source-missing`; the legacy install holds no runnable
+adapter: `harness-migrate-source-invalid`) is reported `failed` with the
+code in its `note` and the other steps still run.
 
 Idempotent: nothing pending is `decision: skipped` with `steps: []`, no
 gate and no receipt. `--plan` prints the steps as they stand with a note

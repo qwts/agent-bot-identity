@@ -39,7 +39,7 @@ import { initAgentSpace } from './agent-space.mjs';
 import { ensureSoulSpace } from './soul-memory.mjs';
 import { daemonPreference, loadConfig } from './config.mjs';
 import { AGENT_ID_KEYS } from './resolve-agent.mjs';
-import { ensureSoulDirectory, installSoulHarnesses, soulHarnessesPath } from './soul-home.mjs';
+import { ensureSoulDirectory, installSoulHarnesses, soulNpmHarnessDirs } from './soul-home.mjs';
 import { bundledStarter, spawnSoulTemplate } from './soul-templates.mjs';
 export { bundledStarter } from './soul-templates.mjs';
 import { linkWorktree, soulWorktreePath } from './soul-worktrees.mjs';
@@ -101,17 +101,20 @@ function rowPackage(row) {
 /**
  * An ACP wake runs the harness's adapter. A soul home installs it; a joined
  * checkout is someone's repository and does not, and a launchd daemon has
- * no npx on PATH. So the adapter goes in the soul's own harness directory
- * (#417), pinned by the soul's package if it declares it, else by the
- * bundled Starter. Returns how the wake will find its adapter.
+ * no npx on PATH. So the adapter goes in the soul's own runtimes (#417,
+ * #583 slice 8), pinned by the soul's package if it declares it, else by
+ * the bundled Starter. It is looked for where the daemon's spawn looks:
+ * the checkout, the runtimes installs newest first, the legacy
+ * `.soul-state/harnesses` last. Returns how the wake will find its adapter.
  */
 export async function ensureAcpHarness(agentId, harness, worktree, { env, options, installHarness = installSoulHarnesses }) {
   const row = ACP_SPAWN_REGISTRY[harness];
   if (!row?.soulBin) return 'not needed';
   const has = (dir) => existsSync(path.join(dir, 'node_modules', '.bin', row.soulBin));
-  if (has(worktree)) return 'in checkout';
-  const own = soulHarnessesPath(agentId, options);
-  if (has(own)) return 'installed';
+  const found = () => [worktree, ...soulNpmHarnessDirs(agentId, harness, options)].find(has) ?? null;
+  const where = found();
+  if (where === worktree) return 'in checkout';
+  if (where) return 'installed';
   const wanted = row.adapter?.package ?? rowPackage(row);
   const declares = (dir) => {
     try { return Boolean(dir && wanted && JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')).dependencies?.[wanted]); }
@@ -125,7 +128,7 @@ export async function ensureAcpHarness(agentId, harness, worktree, { env, option
   if (!source) { if (row.adapter) throw missing(); return 'registry command'; }
   try { await installHarness(agentId, source, { ...options, harness }); }
   catch (error) { throw new Error(`--wake acp could not install the ${harness} adapter: ${error.message}`); }
-  if (has(own)) return 'installed';
+  if (found()) return 'installed';
   if (row.adapter) throw missing();
   return 'registry command';
 }

@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createSoulHomes, installHarnesses, installSoulHarnesses, soulHarnessesPath, npmCommand, soulHomePath, legacyHomePath, soulBindingForLaunch } from '../soul-home.mjs';
+import { createSoulHomes, installHarnesses, installSoulHarnesses, npmHarnessInstalls, soulHarnessesPath, soulNpmHarnessDirs, soulNpmHarnessTarget, npmCommand, soulHomePath, legacyHomePath, soulBindingForLaunch } from '../soul-home.mjs';
+import { INSTALL_STAMP } from '../soul-runtimes.mjs';
+import { resolveCatalogPin } from '../runtime-catalog.mjs';
 
 import { GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS } from '../soul-package.mjs';
 import { createBindingRegistry } from '../agent-binding.mjs';
@@ -291,18 +293,39 @@ function pinnedPackage(directory) {
   return directory;
 }
 
+// What a faked `npm ci` leaves behind: the adapter's binary, which the
+// install verifies before it stamps and publishes the directory.
+const fakeBin = (dir, name) => { mkdirSync(path.join(dir, 'node_modules', '.bin'), { recursive: true }); writeFileSync(path.join(dir, 'node_modules', '.bin', name), ''); };
+const soulBin = { claude: 'claude-code-acp', codex: 'codex-acp' };
+
 for (const harness of ['claude', 'codex']) {
-  test(`installs only ${harness}'s locked adapter and reachable dependencies`, async (t) => {
+  test(`installs only ${harness}'s locked adapter and reachable dependencies, under the soul's runtimes with a stamp (#583 slice 8)`, async (t) => {
     const root = mkdtempSync(path.join(tmpdir(), 'soul-prune-'));
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const options = census(root);
     const source = pinnedPackage(path.join(root, 'pkg'));
     const original = readFileSync(path.join(source, 'package-lock.json'), 'utf8');
     const calls = [];
-    const dir = await installSoulHarnesses(agentId, source, { ...options, harness,
+    const now = () => new Date('2026-10-08T10:00:00Z');
+    const dir = await installSoulHarnesses(agentId, source, { ...options, harness, now,
       install: (directory, opts) => installHarnesses(directory, { ...opts,
-        runImpl: async (command, args, settings) => calls.push({ command, args, cwd: settings.cwd }) }) });
-    assert.equal(dir, soulHarnessesPath(agentId, options));
+        runImpl: async (command, args, settings) => { calls.push({ command, args, cwd: settings.cwd }); fakeBin(settings.cwd, soulBin[harness]); } }) });
+    const version = harness === 'claude' ? '0.16.1' : '2.1.0';
+    const soulDir = path.dirname(path.dirname(soulHomePath(agentId, options)));
+    assert.equal(dir, soulNpmHarnessTarget(agentId, harness, version, options));
+    assert.equal(dir, path.join(soulDir, '.soul-state', 'runtimes', 'harnesses', harness, version));
+    // Staged in `.installing-<uuid>` beside the target (what `soul env clean` sweeps), then renamed.
+    assert.equal(calls.length, 1);
+    assert.equal(path.dirname(calls[0].cwd), path.dirname(dir));
+    assert.match(path.basename(calls[0].cwd), /^\.installing-[0-9a-f-]{36}$/);
+    assert.deepEqual(readdirSync(path.dirname(dir)), [version], 'the staging is gone');
+    assert.equal(existsSync(soulHarnessesPath(agentId, options)), false, 'nothing lands in the legacy location');
+    const stamp = JSON.parse(readFileSync(path.join(dir, INSTALL_STAMP), 'utf8'));
+    assert.deepEqual(stamp, { schemaVersion: 1, name: harness, kind: 'npm', package: harness === 'claude' ? claudePackage : codexPackage, version,
+      platform: null, url: null, sha256: null, bin: 'node_modules/.bin', installedAt: '2026-10-08T10:00:00.000Z' });
+    assert.equal(statSync(path.join(dir, INSTALL_STAMP)).mode & 0o777, 0o600);
+    assert.deepEqual(npmHarnessInstalls(soulDir, harness).map((entry) => [entry.version, entry.path, entry.stamp.kind]), [[version, dir, 'npm']]);
+    assert.deepEqual(soulNpmHarnessDirs(agentId, harness, options), [dir, soulHarnessesPath(agentId, options)]);
     const manifest = JSON.parse(readFileSync(path.join(dir, 'package.json')));
     const lock = JSON.parse(readFileSync(path.join(dir, 'package-lock.json')));
     const adapter = harness === 'claude' ? claudePackage : codexPackage;
@@ -317,9 +340,87 @@ for (const harness of ['claude', 'codex']) {
     for (const location of wanted.filter(Boolean)) assert.deepEqual(lock.packages[location], sourceLock.packages[location]);
     assert.equal(readFileSync(path.join(source, 'package-lock.json'), 'utf8'), original);
     assert.equal(Object.keys(JSON.parse(readFileSync(path.join(source, 'package.json'))).dependencies).length, 2);
-    assert.deepEqual(calls, [{ command: 'npm', args: ['ci', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund'], cwd: dir }]);
+    assert.deepEqual([calls[0].command, calls[0].args], ['npm', ['ci', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund']]);
   });
 }
+
+test('an install that leaves no adapter binary publishes nothing and removes its staging', async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'soul-no-bin-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const options = census(root);
+  const source = pinnedPackage(path.join(root, 'pkg'));
+  await assert.rejects(installSoulHarnesses(agentId, source, { ...options, harness: 'claude', install: async () => {} }), /left no node_modules\/\.bin\/claude-code-acp/);
+  const target = soulNpmHarnessTarget(agentId, 'claude', '0.16.1', options);
+  assert.equal(existsSync(target), false);
+  assert.deepEqual(readdirSync(path.dirname(target)), [], 'no staging left behind');
+  await assert.rejects(installSoulHarnesses(agentId, source, { ...options, harness: 'claude', install: async () => { throw new Error('npm said no'); } }), /npm said no/);
+  assert.deepEqual(readdirSync(path.dirname(target)), []);
+});
+
+test('a second install of the same adapter version keeps the one that landed first', async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'soul-race-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const options = census(root);
+  const source = pinnedPackage(path.join(root, 'pkg'));
+  const first = await installSoulHarnesses(agentId, source, { ...options, harness: 'claude', install: async (dir) => { fakeBin(dir, 'claude-code-acp'); writeFileSync(path.join(dir, 'node_modules', 'who'), 'first'); } });
+  const second = await installSoulHarnesses(agentId, source, { ...options, harness: 'claude', install: async (dir) => { fakeBin(dir, 'claude-code-acp'); writeFileSync(path.join(dir, 'node_modules', 'who'), 'second'); } });
+  assert.equal(second, first);
+  assert.equal(readFileSync(path.join(first, 'node_modules', 'who'), 'utf8'), 'first', 'theirs stands');
+  assert.deepEqual(readdirSync(path.dirname(first)), ['0.16.1'], 'the loser\'s staging is dropped');
+});
+
+test('npm runs with the soul\'s own node and npm cache when runtimes.node is provisioned', async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'soul-node-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const options = census(root);
+  const source = pinnedPackage(path.join(root, 'pkg'));
+  const soulDir = path.dirname(path.dirname(soulHomePath(agentId, options)));
+  const seen = [];
+  const install = async (dir, opts) => { seen.push(opts); fakeBin(dir, 'claude-code-acp'); };
+  // Nothing declared: the node running this process, as before.
+  await installSoulHarnesses(agentId, source, { ...options, env: { PATH: '/usr/bin' }, harness: 'claude', install });
+  assert.equal(seen[0].node, process.execPath);
+  assert.equal(seen[0].env.PATH.split(path.delimiter)[0], path.dirname(process.execPath), 'the host node first, as installHarnesses adds it');
+  assert.equal(seen[0].env.npm_config_cache, undefined);
+  // The soul declares node and has it installed: that node, its bin first on PATH, the cache inside the soul.
+  const version = resolveCatalogPin('node', '24').version;
+  const bin = path.join(soulDir, '.soul-state', 'runtimes', 'node', version, 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(path.join(bin, 'node'), '');
+  writeFileSync(path.join(soulDir, '.soul-state', 'runtimes', 'node', version, INSTALL_STAMP), JSON.stringify({ name: 'node', version, bin: 'bin' }));
+  writeFileSync(path.join(soulDir, 'soul.json'), JSON.stringify({ runtimes: { node: '24' } }));
+  rmSync(path.join(soulDir, '.soul-state', 'runtimes', 'harnesses'), { recursive: true, force: true });
+  await installSoulHarnesses(agentId, source, { ...options, env: { PATH: '/usr/bin', KEEP: 'me' }, harness: 'claude', install });
+  assert.equal(seen[1].node, path.join(bin, 'node'));
+  assert.equal(seen[1].env.PATH.split(path.delimiter)[0], bin);
+  assert.equal(seen[1].env.npm_config_cache, path.join(soulDir, '.soul-state', 'runtimes', 'node', 'npm-cache'));
+  assert.equal(seen[1].env.KEEP, 'me', 'the caller\'s env is kept underneath');
+  assert.equal(seen[1].env.AGENT_BOT_NPM, undefined);
+});
+
+test('soulNpmHarnessDirs lists stamped npm installs newest first, then the legacy directory', async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'soul-dirs-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const options = census(root);
+  const soulDir = path.dirname(path.dirname(soulHomePath(agentId, options)));
+  const legacy = soulHarnessesPath(agentId, options);
+  assert.deepEqual(soulNpmHarnessDirs(agentId, 'claude', options), [legacy], 'nothing provisioned: the legacy location alone');
+  assert.deepEqual(soulNpmHarnessDirs(agentId, null, options), [legacy], 'no recorded harness: the legacy location alone');
+  const harnesses = path.join(soulDir, '.soul-state', 'runtimes', 'harnesses', 'claude');
+  const stamped = (version, record) => { mkdirSync(path.join(harnesses, version), { recursive: true }); writeFileSync(path.join(harnesses, version, INSTALL_STAMP), JSON.stringify(record)); };
+  stamped('0.9.0', { kind: 'npm', version: '0.9.0', bin: 'node_modules/.bin' });
+  stamped('0.16.1', { kind: 'npm', version: '0.16.1', bin: 'node_modules/.bin' });
+  stamped('0.10.0', { kind: 'npm', version: '0.10.0', bin: 'node_modules/.bin' });
+  stamped('1.0.0', { kind: 'archive', version: '1.0.0', bin: '.' }); // not an npm install
+  stamped('2.0.0', { kind: 'npm', bin: 'node_modules/.bin' }); // no version: not a stamp
+  mkdirSync(path.join(harnesses, '3.0.0')); // never finished: no stamp
+  mkdirSync(path.join(harnesses, '.installing-00000000-0000-4000-8000-000000000000'));
+  assert.deepEqual(soulNpmHarnessDirs(agentId, 'claude', options), ['0.16.1', '0.10.0', '0.9.0'].map((version) => path.join(harnesses, version)).concat(legacy));
+  assert.deepEqual(npmHarnessInstalls(soulDir, 'claude').map((entry) => entry.version), ['0.16.1', '0.10.0', '0.9.0']);
+  assert.deepEqual(npmHarnessInstalls(soulDir, 'codex'), []);
+  assert.throws(() => soulNpmHarnessDirs(agentId, '../x', options), /registry key/);
+  assert.throws(() => soulNpmHarnessTarget(agentId, 'claude', '../x', options), /plain version/);
+});
 
 test('unknown and adapter-free harnesses, missing pins and absent package files install nothing', async (t) => {
   const root = mkdtempSync(path.join(tmpdir(), 'soul-no-adapter-'));
@@ -336,6 +437,7 @@ test('unknown and adapter-free harnesses, missing pins and absent package files 
   rmSync(path.join(source, 'package-lock.json'));
   assert.equal(await installSoulHarnesses(agentId, source, { ...options, install }), null);
   assert.equal(existsSync(soulHarnessesPath(agentId, options)), false);
+  assert.equal(existsSync(path.join(path.dirname(path.dirname(soulHomePath(agentId, options))), '.soul-state', 'runtimes')), false);
 });
 
 test('an omitted harness uses the identity record', async (t) => {
@@ -343,8 +445,9 @@ test('an omitted harness uses the identity record', async (t) => {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const options = census(root);
   const source = pinnedPackage(path.join(root, 'pkg'));
-  const dir = await installSoulHarnesses(agentId, source, { ...options, install: async () => {} });
+  const dir = await installSoulHarnesses(agentId, source, { ...options, install: async (directory) => fakeBin(directory, 'claude-code-acp') });
   assert.deepEqual(JSON.parse(readFileSync(path.join(dir, 'package.json'))).dependencies, { [claudePackage]: '0.16.1' });
+  assert.equal(path.basename(path.dirname(dir)), 'claude');
 });
 
 test('invalid or incomplete adapter locks fail before npm runs', async (t) => {

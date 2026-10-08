@@ -17,6 +17,7 @@ import { ENV_CONTRACT_VERSION, GENERATED_HARNESS_MARKER, GENERATED_HARNESS_PATHS
 import { credentialStores } from './soul-credentials.mjs';
 import { inspectToolHomes, readMigrationJournal } from './soul-env-migrate.mjs';
 import { REVISIONS_FILE, TURNS_FILE, runsDirectory } from './soul-history.mjs';
+import { npmHarnessInstalls } from './soul-home.mjs';
 import { inspectSoulSpace, spaceMigrateCommand } from './soul-memory.mjs';
 import { STEP_FINAL_STATUSES } from './soul-migration-journal.mjs';
 import { secretSetCommand } from './soul-providers.mjs';
@@ -28,9 +29,9 @@ import { soulsHome } from './souls-root.mjs';
 export const ENV_SCHEMA_VERSION = 1;
 // What this engine can do for a host, so a client gates each later slice
 // of #583 on the engine it talks to rather than on a version number.
-export const ENV_CAPABILITIES = Object.freeze(['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes', 'memory', 'history', 'template-name', 'template-refresh', 'launch-parent', 'migrate-complete', 'env-clean', 'env-export', 'env-import']);
+export const ENV_CAPABILITIES = Object.freeze(['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes', 'memory', 'history', 'template-name', 'template-refresh', 'launch-parent', 'migrate-complete', 'env-clean', 'env-export', 'env-import', 'harnesses-into-runtimes']);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const USAGE = 'usage: agent-bot soul env <agentId|name> [--json] | soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul | --template-name [--plan] | --complete [--plan] [--json] [--principal-stdin] | soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin] | soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin] | soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin]';
+const USAGE = 'usage: agent-bot soul env <agentId|name> [--json] | soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul | --template-name [--plan] | --harnesses-into-runtimes [--plan] | --complete [--plan] [--json] [--principal-stdin] | soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin] | soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin] | soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin]';
 const LINE_COUNT_MAX_BYTES = 256 * 1024 * 1024;
 const MANIFEST_MAX_BYTES = 64 * 1024;
 const SMALL_MAX_BYTES = 4 * 1024;
@@ -377,8 +378,10 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
   }
 
   // Declared: the package's npm pins for registry adapters (ADR-0276).
-  // Installed: where this engine puts them today (the home for launched
-  // souls, `.soul-state/harnesses` for joined ones).
+  // Installed: the home for launched souls, then a joined soul's legacy
+  // `.soul-state/harnesses` (until migrated), then every stamped install
+  // under `.soul-state/runtimes/harnesses/<name>/<version>` (#583 slice 8),
+  // newest first, read from the stamps like the other runtime installs.
   const pins = manifest ? readJson(path.join(root, 'package.json')) : null;
   for (const [name, row] of Object.entries(ACP_SPAWN_REGISTRY)) {
     const pkg = row?.adapter?.package;
@@ -388,6 +391,11 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
     for (const location of [`${STATE}/home`, `${STATE}/harnesses`]) {
       const installed = adapterInstall(root, location, row);
       if (installed) result.harnesses.installed.push({ name, ...installed });
+    }
+    for (const install of rootStat?.isDirectory() ? npmHarnessInstalls(root, name) : []) {
+      const bin = row.command ? path.join(install.path, 'node_modules', '.bin', row.command) : null;
+      result.harnesses.installed.push({ name, kind: 'npm', package: text(install.stamp.package) ?? pkg, version: install.version,
+        location: `${STATE}/runtimes/harnesses/${name}/${install.version}`, bin: bin && existsSync(bin) ? bin : null, status: 'ok' });
     }
   }
   if (present(`${STATE}/harnesses`)) {
