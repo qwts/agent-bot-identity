@@ -1,178 +1,137 @@
 # ADR-0322: Souls carry their runtimes and non-npm harnesses, with user overrides
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-10-02
 **Issue:** qwts/agent-bot-identity#322
+**Review:** [#616](https://github.com/qwts/agent-bot-identity/issues/616)
+— joint harness/runtime reconciliation, 2026-10-08.
+**Accepted:** 2026-10-08, [owner approval](https://github.com/qwts/agent-bot-identity/pull/622#pullrequestreview-5450714771)
+of commit `2ea0ed87bff357cb09eb955b0260c3f1d7894ce5`. Acceptance covers the
+reconciled contract; the linked implementation gaps remain separately tracked.
 
-Extends [ADR-0276](ADR-0276-souls-carry-their-harnesses-as-pinned-npm-dependencies.md)
-(qwts/agent-bot-identity#307). Decision only; no implementation until the
-owner approves this record.
+Extends [ADR-0276](ADR-0276-souls-carry-their-harnesses-as-pinned-npm-dependencies.md).
+Accepted [ADR-0583](ADR-0583-the-soul-root-owns-the-environment.md) takes precedence
+for environment ownership and provisioning. This refresh reconciles the older
+proposal with that decision; it does not rewrite ADR-0583 or declare every
+original requirement implemented because #322 closed.
 
 ## Context
 
-ADR-0276 makes npm harnesses self-contained: a soul's package pins its
-harness adapters, and the daemon runs `npm ci --ignore-scripts --omit=dev`
-inside the soul home with the host's Node and npm. Everything else a soul
-needs still comes from the host:
+The original proposal filled the gaps left by npm-only harness packaging:
+Node/Python versions and non-npm harnesses still depended on the host. It
+proposed shared installed-runtime caches, host-bundled uv, an exact-only manifest
+and override commands. ADR-0583 subsequently selected per-soul installs, shared
+verified download archives, per-soul uv, a bundled pin catalog and Go support.
 
-- **Node:** whatever the host provides (GeniusBar's bundled Node, or
-  Homebrew's). A soul cannot pin a Node version.
-- **Python:** not provided at all. A soul that needs Python tools, or a
-  Python-based harness, works only if the user already has a suitable
-  Python.
-- **Non-npm harnesses** (`opencode`, `goose`, `muse`; binaries or Python
-  tools): these must already be on PATH. The npm mechanism cannot carry
-  them.
-
-So a friend can run Starter on Claude out of the box, but not a soul built
-on anything else.
+#597 shipped the core runtime slice and closed #322. Its closeout explicitly
+excludes launch-wire overrides, resume routing, uv.lock, npm-install migration
+and a live Windows run. Those omissions remain tracked in
+[#617](https://github.com/qwts/agent-bot-identity/issues/617) and
+[#583](https://github.com/qwts/agent-bot-identity/issues/583).
 
 ## Decision
 
-1. **`soul.json` may declare pinned runtimes and harnesses** in the shape
-   set out under [Manifest shape](#manifest-shape). Both fields are
-   optional; absent means today's behavior (host Node, no Python, harnesses
-   from ADR-0276 or PATH). It rides as a preserved extension field: format-1 validation
-   already retains unknown manifest fields and covers them in the package
-   revision, so adding it changes no validation code — a package that
-   declares runtimes is a new revision like any other edit. Unknown runtime
-   names are rejected at provision time, not at pack time.
-2. **The daemon provides declared runtimes per soul,** with no admin
-   rights, no global install, and no system Python. Node resolves to a
-   pinned per-platform download. Python resolves exclusively through
-   **uv**: a single static binary a host can bundle the way GeniusBar
-   bundles Node. uv installs the pinned Python — and the soul's Python
-   packages from its lockfile — into the soul home or a shared,
-   content-addressed cache (decision 6). There is deliberately no fallback
-   to a system Python.
-3. **Non-npm harnesses are declared with pinned downloads and checksums:**
-   binary release assets (URL plus sha256 per platform), or `uv tool`
-   packages for Python harnesses (package plus version pin; checksums via
-   the lockfile). The daemon verifies the checksum before first use, and a
-   mismatch fails the launch (decision 5) — a corrupt or tampered asset
-   never runs.
-4. **Overrides follow the harness order from #307 / ADR-0276 decision 4,
-   extended to runtimes:** per-agent option, then the soul's default, then
-   the host-bundled or daemon-provided runtime, then PATH. The user can
-   always point a soul at their own `node` or `python`, per agent or per
-   soul. An explicit user path is used as-is and never verified against a
-   pin; everything the daemon fetches itself is pinned and checksummed.
-5. **A launch fails with a clear, actionable error** naming the declared
-   runtime or harness and the cause when it cannot be provided: offline,
-   checksum mismatch, or unsupported platform. Provisioning is all or
-   nothing: a failed provision leaves no half-installed runtime on the
-   soul's PATH, and the launch error tells the user which override would
-   unblock them (e.g. point the soul at an installed Python).
-6. **Provisioning is idempotent and cached.** Cache entries are keyed by
-   (kind, version, platform, checksum), so two souls that pin the same
-   Python share one install; soul homes reference the cache, never copy
-   it. Garbage collection is mark-and-sweep against live soul homes and
-   their package revisions: entries no live soul references may be
-   reclaimed, and nothing referenced is ever deleted. `doctor` reports the
-   runtimes per soul (declared, resolved version, source, health) and the
-   cache footprint.
-7. **Hosts may bundle uv; GeniusBar would.** uv ships as one static binary
-   per platform (order of 15–30 MB per arch), which the host release notes
-   must account for. A host without uv that is asked for a Python soul
-   gets the decision-5 error, not a silent system-Python fallback.
-8. **Trust model: pins and checksums, and only via package revisions.**
-   Every byte the daemon fetches — runtime, harness asset, uv-managed
-   Python — is pinned with a sha256 the daemon verifies first. New sources
-   enter only through a new package revision, which already passes the
-   package approval in ADR-0275. As in ADR-0276, a signed catalog stays
-   follow-up work; until then, review of the pin *is* the review.
+1. **Declarations are reviewed definition content.** `soul.json` may declare
+   `runtimes.node|python|go` and per-harness `install` entries. Package readers
+   validate these known fields, including unknown keys, version/source shapes
+   and integrity metadata; they are not opaque until provision time. Npm
+   adapters remain `package.json`/lockfile pins. The detailed maintained schema
+   is [soul-runtimes.md](../soul-runtimes.md#declaring), not a second incompatible
+   example in this ADR.
+2. **Provision inside the soul.** Active runtimes, harness installs and their
+   mutable state belong under `.soul-state/runtimes/`, without admin rights or
+   global installs. Node includes npm; uv itself is a per-soul managed binary,
+   and Python is provisioned through it. Declared Python cannot silently become
+   system Python. Tool-home routing follows ADR-0583 and does not change `HOME`.
+3. **Source integrity must be explicit.** Managed archive downloads use
+   per-platform URLs and SHA-256 verification before publication. Python and
+   Python tool installations go through uv; an exact tool version alone is not
+   a complete dependency lock or proof of every downloaded byte. The missing
+   lock/hash provenance contract is a tracked implementation requirement, not
+   an implied guarantee. Required integrity policy must refuse an install or
+   launch when its evidence is unavailable; successful tool exit or a stamp
+   with no digest cannot be described as daemon checksum verification.
+4. **Selection must distinguish overrides from managed pins.** The intended
+   order is an explicit owner-authorized override, the soul's declared install,
+   then disclosed host-bundled/PATH compatibility for undeclared requirements.
+   A declared missing/unsupported/failed requirement must install successfully
+   or refuse; it never silently falls through to a host copy. An external
+   override must identify the exact selected executable and be reported as
+   outside managed-pin verification. It cannot bypass a required policy.
+   The current helper accepts overrides, but end-to-end launch-wire and durable
+   per-soul override interfaces still need implementation and validation;
+   the original illustrative command is not a shipped CLI contract.
+5. **Failures are actionable and recoverable.** Name the runtime/harness,
+   failure and recovery action. Publish complete usable artifacts, never a
+   partially installed executable on the launch path. Preserve previous usable
+   versions. Publication is per artifact, not an all-components transaction:
+   a later failure may leave earlier successful installs while refusing launch.
+   Archive/Python staging and uv-tool incomplete markers have different recovery
+   mechanics and must be described and tested honestly.
+6. **Share verified download archives, not installed runtimes.** ADR-0583
+   decision 6 supersedes this record's original shared-install cache and
+   soul-to-cache references. Installs and mutable state are per soul. Cleanup
+   must preserve referenced installations and durable life; the original
+   mark-and-sweep proposal is not an implemented cleanup contract. Inspection
+   reports declared, resolved, installed, missing and unsupported state without
+   provisioning; migration/doctor/cleanup completion remains under #583.
+7. **uv is provisioned per soul.** ADR-0583 decision 6 supersedes the original
+   host-bundled-uv requirement. A host's bundled Node may support undeclared
+   compatibility, but a declared runtime or required uv cannot disappear into
+   that fallback. Supported platforms and adapter limitations are explicit;
+   fixture coverage does not establish a live installation on every platform.
+8. **Keep declarations, resolutions and trust separate.** A package revision
+   covers its declared versions and explicit sources. A range resolves against
+   the engine's bundled catalog; a fresh host with a newer catalog can choose
+   a different exact version. Preserve and expose resolved-version/source
+   evidence and define owner-visible upgrade behavior before claiming identical
+   reproduction across hosts. Catalog pins are reviewed with the engine release;
+   package-specific sources are reviewed as definition revisions. Checksums
+   establish byte identity, not publisher authenticity, authorization or safety.
+   A signed catalog and Python dependency-lock guarantees remain separate work.
 
-## Manifest shape
+## Schema and precedence map
 
-This section is normative. A provisioner that reads a package resolves it
-exactly this way, so two provisioners agree on the same package.
+| Earlier proposal | Reconciled contract |
+| --- | --- |
+| Node/Python only, exact versions, required Node sources | ADR-0583 adds Go and catalog-resolved versions/ranges; exact package-provided sources override the catalog. |
+| Provision-time-only validation | Known runtime/install objects are strictly validated by current package readers. |
+| `harnesses.<name>.kind = binary` | `harnesses.<name>.install.kind = archive` or `uv-tool`; npm adapters stay lockfile dependencies. |
+| `runtimes.python.lock` / uv.lock | Not accepted by the current schema; lock/hash integration remains #617, not a working option. |
+| Decisions 6–7: shared installed cache and bundled uv | Superseded by ADR-0583 decision 6: per-soul installs/uv, shared verified archives only. |
+| Per-agent/per-soul override commands | Retained as an explicit-authority design goal; helper support is not complete wiring or an available command. |
+| One atomic provisioning transaction | Per-artifact publication with launch refusal and recovery; incomplete uv-tool installs use markers. |
 
-```json
-{
-  "runtimes": {
-    "node": {
-      "version": "24.11.1",
-      "sources": {
-        "darwin-arm64": { "url": "https://nodejs.org/dist/v24.11.1/node-v24.11.1-darwin-arm64.tar.gz", "sha256": "<64 hex>" },
-        "darwin-x64":   { "url": "https://nodejs.org/dist/v24.11.1/node-v24.11.1-darwin-x64.tar.gz",   "sha256": "<64 hex>" }
-      }
-    },
-    "python": { "version": "3.12.7", "via": "uv", "lock": "uv.lock" }
-  },
-  "harnesses": {
-    "opencode": {
-      "kind": "binary",
-      "version": "1.18.34",
-      "bin": "opencode",
-      "sources": {
-        "darwin-arm64": { "url": "https://github.com/…/opencode-darwin-arm64.zip", "sha256": "<64 hex>" }
-      }
-    },
-    "goose": { "kind": "uv-tool", "package": "goose-ai", "version": "1.9.0" }
-  }
-}
-```
+## Implementation evidence and remaining work
 
-**Validation.** Checked when the daemon provisions a soul (decision 1),
-and failing as a decision-5 launch error:
+At runtime evidence commit
+[`759055e`](https://github.com/qwts/agent-bot-identity/tree/759055ef0b443c5f3988057249c3d65cdcc86c86),
+`soul-runtimes.mjs`, `runtime-catalog.mjs`, package validation and the daemon
+implement the core slice. Existing tests cover catalog resolution, archive
+checksums, staging failure, previous-version preservation and launch refusal.
+The `soul runtimes` inspection/install commands and `soul env` descriptor exist.
 
-- `runtimes` keys are `node` or `python`; any other key is an error.
-- `version` is an exact version, never a range: what the daemon fetches is
-  what was reviewed (decision 8).
-- `node` requires `sources`. `python` requires `"via": "uv"`, and may name a
-  `lock` file (relative, inside the package) for the soul's Python
-  packages.
-- `harnesses` keys are harness keys from the registry vocabulary
-  (`config.mjs`). `kind` is `binary` or `uv-tool`.
-  - `binary` requires `version`, `bin` (the executable's name inside the
-    asset) and `sources`.
-  - `uv-tool` requires `package` and `version`.
-  - An npm harness stays in `package.json` (ADR-0276) and may not appear
-    here.
-- `sources` keys are platforms: `darwin-arm64`, `darwin-x64`,
-  `linux-x64`, `linux-arm64`. Each value has an `https` `url` and a
-  lowercase 64-hex `sha256`.
-- Unknown fields inside these objects are errors, so a typo never silently
-  drops a pin.
+Archive stamps record the verified digest. uv-Python and uv-tool stamps instead
+have `sha256: null`; uv-tool installation currently uses `package==version`
+without a package dependency lock. The override helper currently routes through
+PATH directories; exact executable validation and the real launch consumers
+need review. The core daemon path passes runtime environment per turn; #322's
+closeout leaves resume parity unproved. These distinctions remain in #617.
 
-**Resolution.** For each declared runtime or harness, the first match wins:
-
-1. **The per-agent override:** a path given in the launch request's
-   `overrides` (`{ "node": "/abs/path/node" }`).
-2. **The per-soul override:** the same map, set by the owner with
-   `agent-bot soul runtime <agentId> <name> <path>|--clear` and stored in
-   daemon state, outside the package.
-3. **The pinned artifact:** the `sources` entry for the host's platform,
-   fetched once into the cache under
-   `(kind, name, version, platform, sha256)` and verified before first use.
-   For `uv`, this step is uv installing the pinned version.
-4. **The host-bundled copy:** GeniusBar's Node, or a bundled uv.
-5. **PATH.**
-
-Steps 4 and 5 apply only to a runtime the soul did not declare. A
-declared runtime whose host platform has no `sources` entry, and no
-override, fails with the "unsupported platform" error. It never falls
-through to PATH.
-
-Override paths must be absolute and executable. They are used as-is,
-without a pin check (decision 4), and `doctor` reports their source as
-`override`.
+[#583](https://github.com/qwts/agent-bot-identity/issues/583) retains migration,
+cleanup and complete environment ownership; [#378](https://github.com/qwts/agent-bot-identity/issues/378)
+and [#379](https://github.com/qwts/agent-bot-identity/issues/379) retain builder
+coverage; [#523](https://github.com/qwts/agent-bot-identity/issues/523) retains
+signed-in Kiro work; [#536](https://github.com/qwts/agent-bot-identity/issues/536)
+retains prerequisite progress. Accepting this record does not close them.
 
 ## Consequences
 
-- Souls on `opencode`, `goose`, `muse`, or Python tooling work out of the
-  box, subject only to each harness's own sign-in — the same bar ADR-0276
-  set for Claude.
-- Each soul pins its own runtime versions, so upgrades happen soul by soul
-  and two souls may run different Nodes or Pythons.
-- Disk growth is bounded by the shared cache (one install per pinned
-  version), not per home — unlike ADR-0276's per-home `node_modules`.
-- No admin rights, no global installs, no system Python: the daemon writes
-  only under the soul homes and its cache.
-- Host bundles grow by the uv binary per platform; that size cost is
-  explicit in decision 7.
-- Proprietary harnesses keep ADR-0276's rule: downloaded on the user's
-  machine under their own license, never redistributed inside a host.
-- This record decides the manifest shape and its resolution, cache and GC,
-  uv bundling, trust, and the override surface. Provisioner code and
-  `doctor` output follow after owner approval.
+- Each soul owns the executables and mutable environment it runs, at a per-soul
+  disk cost. Shared verified archives reduce downloads rather than that ownership.
+- Unsupported or unverified paths remain visible. Missing declared requirements
+  cause refusal instead of a deceptively successful launch with different tools.
+- Version ranges trade flexibility for weaker reproduction across catalog
+  releases; an exact resolved version and integrity evidence are separate facts.
+- Host installation and sign-in are not inferred from a valid declaration or
+  successful rendering. Proprietary harness licensing remains ADR-0276's rule.
