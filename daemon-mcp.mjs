@@ -235,16 +235,37 @@ const TOOLS = [
   {
     name: 'start_soul',
     description:
-      'Start a new teammate: a full agent soul of its own (its own folder, '
-      + 'identity, and inbox) with you as its parent, not a subagent in your '
-      + 'session. Use it when asked to set up a team. It joins agent-comms '
-      + 'and shows under you in fleet; pass brief to send it its first task '
-      + 'from you. The host limits how many teammates you may start.',
+      'Start a new agent soul: a full soul of its own (its own folder, '
+      + 'identity, and inbox), not a subagent in your session. By default it '
+      + 'is your teammate (parent: "self"); pass parent "none" to start an '
+      + 'independent root soul with no parent. Choose its harness, model and '
+      + 'provider here: the daemon validates them before creating anything '
+      + 'and refuses with the fix rather than starting a differently '
+      + 'configured soul. It joins agent-comms and shows in fleet; pass brief '
+      + 'to send it its first task from you. The result reports the '
+      + 'effective {harness, model, provider, parent}. The host limits how '
+      + 'many souls you may start.',
     inputSchema: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: 'the new teammate\'s name, e.g. "Researcher"' },
-        harness: { type: 'string', description: 'harness to run it on (claude, opencode, …); defaults to yours' },
+        name: { type: 'string', description: 'the new soul\'s name, e.g. "Researcher"' },
+        harness: { type: 'string', description: 'harness to run it on (claude, codex, opencode, …); defaults to yours' },
+        model: {
+          type: 'string',
+          description: 'model id the harness should run, as `agent-bot soul model` stores it (e.g. "claude-haiku-5-5"); '
+            + 'defaults to the harness default. An id the harness has listed as unavailable is refused with the list.',
+        },
+        provider: {
+          type: 'string',
+          description: 'provider id for the harness (claude: anthropic, anthropic-compatible; codex: openai, github, '
+            + 'openai-compatible; opencode: openai, anthropic, github, openai-compatible). Providers come from the soul '
+            + 'template\'s soul.json, so this confirms the template\'s (or the harness\'s built-in) provider; any other id is refused with the fix.',
+        },
+        parent: {
+          type: 'string',
+          enum: ['self', 'none'],
+          description: '"self" (default): the new soul is your teammate, under you in fleet; "none": an independent root soul with no parent.',
+        },
         template: { type: 'string', description: 'absolute path of a soul template; defaults to the host\'s Starter' },
         brief: { type: 'string', description: 'first message to send it, from you, at most 16 KiB' },
       },
@@ -603,11 +624,28 @@ async function callTool(state, name, args = {}) {
       if (args.template !== undefined && args.template !== null && args.template !== '') {
         request.template = boundedString(args.template, 'template', { max: 4096 });
       }
+      if (args.model !== undefined && args.model !== null && args.model !== '') {
+        request.model = boundedString(args.model, 'model', { max: 120 });
+      }
+      if (args.provider !== undefined && args.provider !== null && args.provider !== '') {
+        request.provider = boundedString(args.provider, 'provider', { max: 64 });
+      }
+      // "self" is the default (the request names no parent); "none" asks the
+      // daemon for an independent root soul. The daemon decides either way.
+      if (args.parent !== undefined && args.parent !== null && args.parent !== '' && args.parent !== 'self') {
+        if (args.parent !== 'none') throw new Error('parent must be "self" (default) or "none"');
+        request.parent = null;
+      }
       const brief = args.brief === undefined || args.brief === null || args.brief === ''
         ? null
         : boundedString(args.brief, 'brief', { max: MAX_MESSAGE_BYTES, bytes: true });
       const started = await startSoul(state, soul, request);
-      const result = { started: true, agentId: started.agentId, name: started.name, harness: started.harness, parent: soul.agentId };
+      // The daemon reports what the new soul effectively runs with; the
+      // parent is the caller unless the daemon started an independent soul.
+      const result = { started: true, agentId: started.agentId, name: started.name, harness: started.harness,
+        ...(started.model === undefined ? {} : { model: started.model }),
+        ...(started.provider === undefined ? {} : { provider: started.provider }),
+        parent: started.parent === undefined ? soul.agentId : started.parent };
       if (brief !== null) {
         try {
           const correlation = turnCorrelation(state);

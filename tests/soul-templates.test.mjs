@@ -256,11 +256,21 @@ test('a soul starts its team end to end: census parents, real ACP turn, limits, 
   // The researcher (depth 1) may start one; its child (depth 2) may not.
   const assistant = await start(researcher.agentId, { name: 'Assistant' });
   await assert.rejects(start(assistant.agentId, { name: 'Too deep' }), /2 levels/);
+  // An independent soul (GeniusBar#261): a root in the census and identity,
+  // joined and briefed without a parent, with the caller only in the receipt.
+  const rick = await start(researcher.agentId, { name: 'Rick', parent: 'none', model: 'claude-haiku-5-5' });
+  assert.deepEqual({ parent: rick.parent, model: rick.model, provider: rick.provider, startedBy: rick.startedBy },
+    { parent: null, model: 'claude-haiku-5-5', provider: 'anthropic', startedBy: researcher.agentId });
+  assert.equal(showSoul(rick.agentId, f.options).parentId, null);
+  assert.equal(readAgentIdentity(rick.agentId, { stateDir: f.options.stateDir }).parentId, null);
+  assert.equal(joins.at(-1).parent, undefined);
+  assert.match(turns.at(-1).input.message, /You have no parent agent/);
   await Promise.all(turns.map((entry) => entry.turn));
 
   assert.deepEqual(listSouls({ ...f.options, status: 'active' }).filter((row) => row.parentId === lead.id).length, 2);
   assert.deepEqual(receipts.map((row) => row.decision),
-    ['launched', 'launched', 'refused: child cap', 'refused: harness', 'launched', 'refused: depth']);
+    ['launched', 'launched', 'refused: child cap', 'refused: harness', 'launched', 'refused: depth', 'launched']);
+  assert.deepEqual(receipts.at(-1), { agentId: researcher.agentId, decision: 'launched', detail: 'independent soul, no parent' });
 });
 
 test('failed instance initialization retires its identity and removes the incomplete directory', async (t) => {

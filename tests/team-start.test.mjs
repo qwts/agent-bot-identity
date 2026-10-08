@@ -1,8 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
 import {
-  TEAM_DEFAULTS, createTeamStarter, defaultTeamTemplate, harnessLaunchProblem, harnessLaunchable, teamLimits,
+  TEAM_DEFAULTS, createTeamStarter, defaultTeamTemplate, effectiveProvider, harnessLaunchProblem, harnessLaunchable, teamLimits,
+  templateProviderId,
 } from '../team-start.mjs';
 import { ACP_SPAWN_REGISTRY } from '../acp-registry.mjs';
 
@@ -11,7 +16,7 @@ const id = (n) => `agent_${String(n).padStart(8, '0')}-0000-4000-8000-0000000000
 
 // A census in memory: launches append a child under the parent they name.
 function team({ rows = [{ id: LEAD, parentId: null }], harness = 'claude', launchable = () => true,
-  template = () => '/souls/starter.soul', limits, launchStatus = 'launched' } = {}) {
+  template = () => '/souls/starter.soul', limits, launchStatus = 'launched', models = () => null, templateProvider = () => null } = {}) {
   const census = [...rows];
   const receipts = [];
   const launches = [];
@@ -28,7 +33,7 @@ function team({ rows = [{ id: LEAD, parentId: null }], harness = 'claude', launc
       return { status: 'launched', agentId: child };
     },
     receipt: (row) => receipts.push(row),
-    limits, launchable, template, account: 'owner',
+    limits, launchable, template, account: 'owner', models, templateProvider,
   });
   return { start, census, receipts, launches };
 }
@@ -36,8 +41,12 @@ function team({ rows = [{ id: LEAD, parentId: null }], harness = 'claude', launc
 test('a soul starts a teammate under itself on its own harness and the default template', async () => {
   const t = team();
   const started = await t.start(LEAD, { name: ' Researcher ' });
-  assert.deepEqual(started, { agentId: id(101), name: 'Researcher', harness: 'claude', parent: LEAD });
+  // The result reports what the new soul effectively runs with: the harness
+  // default model (null) and claude's built-in provider, as the template declares none.
+  assert.deepEqual(started, { agentId: id(101), name: 'Researcher', harness: 'claude', model: null, provider: 'anthropic', parent: LEAD, startedBy: LEAD });
   assert.equal(t.launches.length, 1);
+  // A legacy `{ name }` request launches exactly as before: no model key, the caller as parent.
+  assert.equal('model' in t.launches[0], false);
   assert.deepEqual({ ...t.launches[0], requestId: 'x' },
     { requestId: 'x', account: 'owner', package: '/souls/starter.soul', harness: 'claude', name: 'Researcher', parent: LEAD });
   assert.match(t.launches[0].requestId, /^team_[0-9a-f-]{36}$/);
@@ -91,7 +100,7 @@ test('harness refusals: unknown, not launchable, or none recorded', async () => 
 
 test('a soul only starts souls as itself, and bad requests are refused and receipted', async () => {
   const t = team();
-  await assert.rejects(t.start(LEAD, { name: 'X', parent: id(9) }), (error) => error.statusCode === 403);
+  await assert.rejects(t.start(LEAD, { name: 'X', parent: id(9) }), (error) => error.statusCode === 403 && /as itself or with no parent/.test(error.message));
   await assert.rejects(t.start(LEAD, { name: '' }), /printable/);
   await assert.rejects(t.start(LEAD, { name: 'a\nb' }), /printable/);
   await assert.rejects(t.start(LEAD, ['x']), /object/);
@@ -149,4 +158,86 @@ test('the default template: configured, else the Starter this install ships', as
   assert.equal(await defaultTeamTemplate({ config: { teams: { template: '/c.soul' } }, starter }), '/c.soul');
   assert.equal(await defaultTeamTemplate({ config: { teams: { template: 'rel.soul' } }, starter }), '/bundle/souls/starter.soul');
   assert.equal(await defaultTeamTemplate({ config: {}, env: { AGENT_BOT_STARTER_TEMPLATE: '/env/starter.soul' } }), '/env/starter.soul');
+});
+
+// --- GeniusBar#261: parent, model and provider chosen at the tool boundary ---
+
+test('parent "none" starts an independent root soul: no parent in the launch or census, the caller in the receipt and result', async () => {
+  const t = team();
+  const rick = await t.start(LEAD, { name: 'Rick', parent: 'none' });
+  assert.deepEqual(rick, { agentId: id(101), name: 'Rick', harness: 'claude', model: null, provider: 'anthropic', parent: null, startedBy: LEAD });
+  assert.equal(t.launches[0].parent, null, 'the launch event carries a null parent, never the caller');
+  assert.deepEqual(t.census.at(-1), { id: id(101), parentId: null });
+  assert.deepEqual(t.receipts, [{ agentId: LEAD, decision: 'launched', detail: 'independent soul, no parent' }]);
+  // A JSON null asks for the same; "self" and the caller's own id keep it as a teammate.
+  const other = await t.start(LEAD, { name: 'Morty', parent: null });
+  assert.equal(other.parent, null);
+  assert.equal((await t.start(LEAD, { name: 'Summer', parent: 'self' })).parent, LEAD);
+  assert.equal((await t.start(LEAD, { name: 'Beth', parent: LEAD })).parent, LEAD);
+});
+
+test('an independent start still counts against the caller\'s cap and depth', async () => {
+  const t = team({ limits: { maxChildren: 1, maxDepth: 2 } });
+  await t.start(LEAD, { name: 'Only' });
+  await assert.rejects(t.start(LEAD, { name: 'Free', parent: 'none' }), (error) => error.statusCode === 429);
+  const grandchild = id(2);
+  const deep = team({ rows: [{ id: LEAD, parentId: null }, { id: id(1), parentId: LEAD }, { id: grandchild, parentId: id(1) }],
+    limits: { maxChildren: 5, maxDepth: 2 } });
+  await assert.rejects(deep.start(grandchild, { name: 'Free', harness: 'claude', parent: 'none' }), /2 levels/);
+  assert.equal(deep.launches.length, 0);
+});
+
+test('a requested model travels in the launch event and the result, never replaced by the default', async () => {
+  const t = team();
+  const started = await t.start(LEAD, { name: 'Rick', model: 'claude-haiku-5-5', parent: 'none' });
+  assert.equal(started.model, 'claude-haiku-5-5');
+  assert.equal(t.launches[0].model, 'claude-haiku-5-5');
+  await assert.rejects(t.start(LEAD, { name: 'X', model: 'a\u0000b' }), /model: modelId must be/);
+  await assert.rejects(t.start(LEAD, { name: 'X', model: '' }), /model: modelId must be/);
+  assert.deepEqual(t.receipts.map((row) => row.decision), ['launched', 'refused: model', 'refused: model']);
+  assert.equal(t.launches.length, 1);
+});
+
+test('a model the caller\'s harness listed as unavailable is refused before launch, with the list', async () => {
+  const listed = () => ({ model: null, available: [{ modelId: 'claude-sonnet-4-5', name: 'Sonnet' }, { modelId: 'claude-haiku-5-5', name: 'Haiku' }], listedAt: null });
+  const t = team({ models: listed });
+  await assert.rejects(t.start(LEAD, { name: 'X', model: 'gpt-5' }),
+    (error) => error.statusCode === 400 && /'gpt-5' is not one the claude harness listed as available \(claude-sonnet-4-5, claude-haiku-5-5\)/.test(error.message));
+  assert.equal(t.launches.length, 0);
+  assert.equal((await t.start(LEAD, { name: 'Ok', model: 'claude-haiku-5-5' })).model, 'claude-haiku-5-5');
+  // Another harness's model is not checked against the caller's list; an empty or absent list checks nothing.
+  assert.equal((await t.start(LEAD, { name: 'Codex', harness: 'codex', model: 'gpt-5' })).model, 'gpt-5');
+  const unlisted = team({ models: () => ({ model: null, available: null, listedAt: null }) });
+  assert.equal((await unlisted.start(LEAD, { name: 'Any', model: 'whatever-1' })).model, 'whatever-1');
+});
+
+test('a provider must be one the harness knows and the one the template gives; it is never substituted', async () => {
+  const t = team();
+  await assert.rejects(t.start(LEAD, { name: 'X', provider: 'openai' }), /provider 'openai' is not one the claude harness knows \(anthropic, anthropic-compatible\)/);
+  await assert.rejects(t.start(LEAD, { name: 'X', harness: 'muse', provider: 'openai' }), /harness 'muse' has no selectable providers; omit provider, or start on one of codex, claude, opencode/);
+  await assert.rejects(t.start(LEAD, { name: 'X', provider: 'anthropic-compatible' }),
+    /not selectable at launch: the claude harness takes its provider from the soul template's soul.json \(harnesses.claude.provider\), and \/souls\/starter.soul gives anthropic; pass a template that declares provider 'anthropic-compatible'/);
+  await assert.rejects(t.start(LEAD, { name: 'X', provider: '' }), /provider must be a provider id/);
+  assert.deepEqual(t.receipts.map((row) => row.decision), Array(4).fill('refused: provider'));
+  assert.equal(t.launches.length, 0);
+  // The built-in provider, or the template's declared one, is confirmed and reported.
+  assert.equal((await t.start(LEAD, { name: 'Ok', provider: 'anthropic' })).provider, 'anthropic');
+  const github = team({ templateProvider: (packagePath, harness) => (harness === 'codex' ? 'github' : null) });
+  assert.equal((await github.start(LEAD, { name: 'Gh', harness: 'codex', provider: 'github' })).provider, 'github');
+  await assert.rejects(github.start(LEAD, { name: 'X', harness: 'codex', provider: 'openai' }), /gives github/);
+  assert.equal((await github.start(LEAD, { name: 'Default', harness: 'codex' })).provider, 'github', 'absent reports the effective one');
+});
+
+test('the effective provider is the template\'s declaration, else the harness\'s built-in one', () => {
+  assert.equal(effectiveProvider('claude'), 'anthropic');
+  assert.equal(effectiveProvider('codex'), 'openai');
+  assert.equal(effectiveProvider('opencode', 'github'), 'github');
+  assert.equal(effectiveProvider('muse'), null);
+  const dir = mkdtempSync(path.join(tmpdir(), 'team-start-'));
+  assert.equal(templateProviderId(dir, 'codex'), null, 'no manifest reads as none');
+  writeFileSync(path.join(dir, 'soul.json'), JSON.stringify({ harnesses: { codex: { provider: { id: 'github', baseUrl: 'https://models.github.ai/inference' } } } }));
+  assert.equal(templateProviderId(dir, 'codex'), 'github');
+  assert.equal(templateProviderId(dir, 'claude'), null);
+  writeFileSync(path.join(dir, 'soul.json'), '{not json');
+  assert.equal(templateProviderId(dir, 'codex'), null);
 });

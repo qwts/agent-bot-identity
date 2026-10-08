@@ -1974,8 +1974,11 @@ export async function runDaemon({
       const { parent, ...request } = event;
       onLaunch(request, { account, parent, report: async (row) => resolve(row) }).catch(reject);
     }),
-    receipt: ({ agentId, decision }) => appendAuditReceipt({ event: 'team-start', agentId, operation: 'start_soul', decision }, { env, home, now }),
+    receipt: ({ agentId, decision, detail = null }) => appendAuditReceipt({ event: 'team-start', agentId, operation: 'start_soul', decision, detail }, { env, home, now }),
     limits: teamLimits(userConfig),
+    // The caller's own model listing (recorded from its ACP sessions) checks
+    // a requested model for a teammate on the same harness (GeniusBar#261).
+    models: (agentId) => { try { return soulModel(agentId, { env, home }); } catch { return null; } },
     launchable: (harness) => harnessLaunchProblem(harness, { env: harnessEnv }) ?? true,
     template: () => defaultTeamTemplate({ config: userConfig, env }),
     account,

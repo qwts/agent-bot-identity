@@ -687,6 +687,39 @@ test('start_soul asks the daemon as the soul, with a proof and never the secret'
   assert.equal(comms.calls[0].env.AGENT_BOT_ID, AGENT_ID);
 });
 
+test('start_soul passes model, provider and parent "none" to the daemon and reports the effective settings (GeniusBar#261)', async () => {
+  const { root } = scratch();
+  const daemon = fakeDaemon({ status: 200, body: { agentId: CHILD_ID, name: 'Rick', harness: 'claude', model: 'claude-haiku-5-5', provider: 'anthropic', parent: null, startedBy: AGENT_ID } });
+  const state = createReachState({
+    env: { [REACH_AGENT_ID_ENV]: AGENT_ID, [REACH_WORKTREE_ENV]: root, AGENT_BOT_BINDING: bindingFile(root) },
+    home: '/nonexistent', cwd: tmpdir(), run: fakeComms().run, fetch: daemon.fetch,
+  });
+  const started = await call(state, 'start_soul', { name: 'Rick', model: 'claude-haiku-5-5', provider: 'anthropic', parent: 'none' });
+  assert.deepEqual(started, { started: true, agentId: CHILD_ID, name: 'Rick', harness: 'claude', model: 'claude-haiku-5-5', provider: 'anthropic', parent: null });
+  assert.deepEqual(daemon.requests[0].body, { name: 'Rick', model: 'claude-haiku-5-5', provider: 'anthropic', parent: null });
+  // "self" is the default and sends no parent; anything else is refused here.
+  await call(state, 'start_soul', { name: 'Morty', parent: 'self' });
+  assert.deepEqual(daemon.requests[1].body, { name: 'Morty' });
+  await assert.rejects(call(state, 'start_soul', { name: 'X', parent: OTHER_ID }), /parent must be "self" \(default\) or "none"/);
+  assert.equal(daemon.requests.length, 2);
+  // The daemon's refusal reaches the harness verbatim, so it can act on it.
+  const refused = fakeDaemon({ status: 400, body: { error: "provider 'openai' is not one the claude harness knows (anthropic, anthropic-compatible)" } });
+  const refusing = createReachState({ env: { [REACH_AGENT_ID_ENV]: AGENT_ID, [REACH_WORKTREE_ENV]: root, AGENT_BOT_BINDING: bindingFile(root) },
+    home: '/nonexistent', cwd: tmpdir(), run: fakeComms().run, fetch: refused.fetch });
+  await assert.rejects(call(refusing, 'start_soul', { name: 'X', provider: 'openai' }), /anthropic, anthropic-compatible/);
+});
+
+test('the start_soul schema tells the harness about model, provider and parent', async () => {
+  const state = createReachState({ env: {}, cwd: tmpdir() });
+  const listed = await handleMcpMessage(state, { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+  const tool = listed.result.tools.find((entry) => entry.name === 'start_soul');
+  assert.deepEqual(Object.keys(tool.inputSchema.properties), ['name', 'harness', 'model', 'provider', 'parent', 'template', 'brief']);
+  assert.deepEqual(tool.inputSchema.properties.parent.enum, ['self', 'none']);
+  assert.deepEqual(tool.inputSchema.required, ['name']);
+  assert.match(tool.description, /parent "none"/);
+  assert.match(tool.description, /harness, model and provider/);
+});
+
 test('start_soul reports daemon refusals, a foreign binding, and comms off', async () => {
   const { root } = scratch();
   const refused = fakeDaemon({ status: 429, body: { error: 'you already have 5 active teammates you started (limit 5)' } });

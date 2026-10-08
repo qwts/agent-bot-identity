@@ -854,16 +854,38 @@ soul later, and a woken turn's prompt names the teammates it is still
 waiting on, asking for no re-sends or progress notes meanwhile.
 
 A soul can also start its own team (#377). `start_soul` (`name`, and
-optionally `harness`, `template`, `brief`) starts a new full soul — its own
-soul directory, identity and inbox, not a subagent in the caller's session —
-through the daemon's principal launch path, with the caller recorded as its
-parent in the identity and the population census. The harness defaults to
-the caller's, the template to the owner's default (`"teams": { "template":
-PATH }` in config, else the Starter the install ships, as for
-`agent-bot join`). Comms are on for the new soul as for any
-launch, and `brief`, when given, is its first agent-comms message, sent by
-the parent. The tool returns `{agentId, name, harness, parent}`; `fleet`
-shows each teammate's `parent`.
+optionally `harness`, `model`, `provider`, `parent`, `template`, `brief`)
+starts a new full soul — its own soul directory, identity and inbox, not a
+subagent in the caller's session — through the daemon's principal launch
+path, with the caller recorded as its parent in the identity and the
+population census. The harness defaults to the caller's, the template to the
+owner's default (`"teams": { "template": PATH }` in config, else the Starter
+the install ships, as for `agent-bot join`). Comms are on for the new soul
+as for any launch, and `brief`, when given, is its first agent-comms
+message, sent by the parent. The tool returns `{agentId, name, harness,
+model, provider, parent}`, the settings the new soul effectively runs with;
+`fleet` shows each teammate's `parent`.
+
+The caller chooses the new soul's configuration (GeniusBar#261), and the
+daemon validates every setting before it mints anything, refusing with the
+fix instead of starting a differently configured soul:
+
+- `parent`: `"self"` (default) makes the new soul the caller's teammate;
+  `"none"` starts an independent root soul with no parent (`parentId` null
+  in the census, as a soul the owner launches), still counted against the
+  caller's child cap and depth, with the caller named in the audit receipt.
+  Naming another soul as parent is refused.
+- `model`: the model id the harness runs, persisted as `agent-bot soul model
+  <soul> set` would and reported back; when the new soul runs on the
+  caller's own harness and that harness has listed its models to the caller,
+  an id outside that list is refused with the list. Absent, the harness
+  default applies; a requested model is never replaced by it.
+- `provider`: a provider id the harness knows (see `soul.json
+  harnesses.<h>.provider`). The engine selects a harness's provider from
+  the soul template, so the request may only confirm the template's (or the
+  harness's built-in) provider: another id, an unknown id, or a harness
+  without providers is refused naming what the template gives and how to
+  change it.
 
 The server asks the daemon (`POST /v0/team/start`, authenticated by the
 soul's binding proof, never its secret), and every limit lives in the daemon:
@@ -874,8 +896,10 @@ the ACP registry and launchable on the host. Starts are serialized, so
 concurrent calls cannot race past the cap. Every attempt, including
 unauthenticated and refused ones, appends a `team-start` audit receipt with
 the caller and the decision (`launched`, `refused: child cap`, `refused:
-depth`, `refused: harness`, `refused: not self`, `refused: template`,
-`failed`, `denied`), never the name, template or brief.
+depth`, `refused: harness`, `refused: model`, `refused: provider`,
+`refused: not self`, `refused: template`, `failed`, `denied`), never the
+name, template or brief; an independent start's receipt says so in its
+detail.
 
 agent-comms is part of every soul. Every daemon ACP turn (a launch or a cold
 wake) gets this server injected, with `fleet`, `send_message` and `start_soul`, unless the
