@@ -1,10 +1,13 @@
 # ADR-0322: Souls carry their runtimes and non-npm harnesses, with user overrides
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-10-02
 **Issue:** qwts/agent-bot-identity#322
 **Review:** [#616](https://github.com/qwts/agent-bot-identity/issues/616)
-— joint harness/runtime reconciliation, 2026-10-08; pending owner acceptance.
+— joint harness/runtime reconciliation, 2026-10-08.
+**Accepted:** 2026-10-08, [owner approval](https://github.com/qwts/agent-bot-identity/pull/622#pullrequestreview-5450714771)
+of commit `2ea0ed87bff357cb09eb955b0260c3f1d7894ce5`. Acceptance covers the
+reconciled contract; the linked implementation gaps remain separately tracked.
 
 Extends [ADR-0276](ADR-0276-souls-carry-their-harnesses-as-pinned-npm-dependencies.md).
 Accepted [ADR-0583](ADR-0583-the-soul-root-owns-the-environment.md) takes precedence

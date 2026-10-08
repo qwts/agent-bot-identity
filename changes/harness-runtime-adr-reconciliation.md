@@ -1,0 +1,1 @@
+- Clarify the accepted harness and runtime contracts and their documented implementation limits: per-soul installs, integrity evidence, explicit overrides, and catalog version resolution (ADR-0276/ADR-0322; #622).
