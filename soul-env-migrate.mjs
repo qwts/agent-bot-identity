@@ -2,7 +2,9 @@
 // `agent-bot soul env migrate`: the soul's tool homes on disk and the
 // adoption of host sign-ins (#583 slice 2, ADR-0583 decision 5), and the
 // move of a linked Agent Space into the soul folder (slice 5, decision 8,
-// the mechanism in soul-memory.mjs).
+// the mechanism in soul-memory.mjs), and the rename of an instance whose
+// bundled template changed its name (GeniusBar#287, the mechanism in
+// soul-templates.mjs).
 //
 // Reading is by existence only: whether a sign-in file is there, in the
 // soul's tool home and in the host store, never what it holds. Adoption
@@ -22,14 +24,16 @@ import { appendAuditReceipt } from './agent-principals.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
 import { SPACE_STEP_ID, migrateSpaceIntoSoul } from './soul-memory.mjs';
 import { MIGRATION_SCHEMA_VERSION, readMigrationJournal, recordMigrationStep } from './soul-migration-journal.mjs';
+import { planTemplateRename, renameFromTemplate } from './soul-templates.mjs';
 import { TOOL_HOME_REGISTRY, adoptStepId, hostToolStore, toolHomeDecision, toolHomeEnv, toolHomeFiles, toolHomeFor, toolHomePath, toolHomeRelative, toolHomesRoot } from './soul-tool-homes.mjs';
 
 // The journal lives in soul-migration-journal.mjs (shared with the space
 // move); its API stays importable from here.
 export { MIGRATION_JOURNAL, MIGRATION_SCHEMA_VERSION, STEP_STATUSES, readMigrationJournal } from './soul-migration-journal.mjs';
-export const MIGRATION_OPERATIONS = Object.freeze(['adopt-host-signin', 'space-into-soul']);
+export const TEMPLATE_NAME_STEP_ID = 'template-name';
+export const MIGRATION_OPERATIONS = Object.freeze(['adopt-host-signin', 'space-into-soul', TEMPLATE_NAME_STEP_ID]);
 const STATE = '.soul-state';
-const USAGE = 'usage: agent-bot soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul [--json] [--principal-stdin]';
+const USAGE = 'usage: agent-bot soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul | --template-name [--plan] [--json] [--principal-stdin]';
 // A sign-in file is small; `.claude.json` carries project state and can
 // reach a few megabytes. Anything larger is not a file this adopts.
 const FILE_MAX_BYTES = 16 * 1024 * 1024;
@@ -212,6 +216,10 @@ export function formatMigration(result) {
     lines.push(`${step.id}: ${step.status}${step.note ? ` - ${step.note}` : ''}`);
     for (const file of Array.isArray(step.files) ? step.files : []) lines.push(`  ${file.path}: ${file.status}`);
     for (const key of ['source', 'to', 'retired']) if (step.id === SPACE_STEP_ID && step[key]) lines.push(`  ${key}: ${step[key]}`);
+    if (step.id === TEMPLATE_NAME_STEP_ID) {
+      for (const key of ['from', 'to']) if (step[key]) lines.push(`  ${key}: ${step[key]}`);
+      if (step.displayName?.from || step.displayName?.to) lines.push(`  displayName: ${step.displayName.from ?? '-'} -> ${step.displayName.to ?? '-'}`);
+    }
     for (const link of step.copied?.links ?? []) lines.push(`  link kept as a link: ${link}`);
   }
   if (!result.steps.length) lines.push(result.operation === SPACE_STEP_ID ? 'nothing to move' : 'nothing to adopt');
@@ -228,18 +236,20 @@ async function soulIsRunning(agentId, { env, home }) {
 
 export async function soulEnvMigrateCommand(argv, { gate = ownerGate, readStdin = () => readFileSync(0, 'utf8'), write = (value) => process.stdout.write(value),
   env = process.env, home = env.HOME ?? homedir(), cwd = process.cwd(), now = () => new Date(), running = soulIsRunning, ...rest } = {}) {
-  let id = null, operation = null, harness = null, json = false, presented = false;
+  let id = null, operation = null, harness = null, json = false, presented = false, plan = false;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--adopt-host-signin' && operation === null) operation = 'adopt-host-signin';
     else if (arg === '--space-into-soul' && operation === null) operation = SPACE_STEP_ID;
+    else if (arg === '--template-name' && operation === null) operation = TEMPLATE_NAME_STEP_ID;
+    else if (arg === '--plan' && !plan) plan = true;
     else if (arg === '--json' && !json) json = true;
     else if (arg === '--principal-stdin' && !presented) presented = true;
     else if (arg === '--harness' && harness === null && typeof argv[i + 1] === 'string' && !argv[i + 1].startsWith('-')) { harness = argv[i + 1]; i += 1; }
     else if (!arg.startsWith('-') && id === null) id = arg;
     else throw new Error(USAGE);
   }
-  if (!id || operation === null || (harness !== null && operation !== 'adopt-host-signin')) throw new Error(USAGE);
+  if (!id || operation === null || (harness !== null && operation !== 'adopt-host-signin') || (plan && (operation !== TEMPLATE_NAME_STEP_ID || presented))) throw new Error(USAGE);
   if (harness !== null && !Object.hasOwn(ACP_SPAWN_REGISTRY, harness) && !Object.hasOwn(TOOL_HOME_REGISTRY, harness)) {
     throw new Error(`--harness must be one of ${[...new Set([...Object.keys(ACP_SPAWN_REGISTRY), ...Object.keys(TOOL_HOME_REGISTRY)])].join(', ')}`);
   }
@@ -253,6 +263,7 @@ export async function soulEnvMigrateCommand(argv, { gate = ownerGate, readStdin 
   const soulDir = soulRoot(soul, options);
   if (!existsSync(path.join(soulDir, STATE))) fail('soul-state-missing', `${soulDir} has no .soul-state yet; spawn or launch the soul first`);
   if (operation === SPACE_STEP_ID) return spaceIntoSoul({ soul, soulDir, principal, json, gate, running, write, env, home, cwd, now, file: options.file ?? populationFile(options) });
+  if (operation === TEMPLATE_NAME_STEP_ID) return templateName({ soul, soulDir, principal, json, plan, gate, write, env, home, cwd, now, options: { ...options, file: options.file ?? populationFile(options) } });
   if (harness !== null && !toolHomeFor(harness).routable) fail('tool-home-unsupported', `${harness}: ${toolHomeFor(harness).reason}`);
   // Without --harness: the soul's own harnesses (its execution identity's,
   // then its manifest's preferred ones), the routable ones only.
@@ -293,6 +304,42 @@ async function spaceIntoSoul({ soul, soulDir, principal, json, gate, running, wr
   const result = { schemaVersion: MIGRATION_SCHEMA_VERSION, agentId: soul.id, soulDir, operation: SPACE_STEP_ID, decision, steps: [step], root: step.to };
   write(json ? `${JSON.stringify(result)}\n` : formatMigration(result));
   return result;
+}
+
+// `--template-name`: one instance, owner-gated unless `--plan` (read-only,
+// nothing recorded). A pending rename is one package revision through the
+// host edit path and the census display name when it was the template's
+// (soul-templates.mjs); a name the owner chose is skipped and recorded as
+// such, so a rerun says why without asking again. The receipt names the
+// names, never a file.
+async function templateName({ soul, soulDir, principal, json, plan, gate, write, env, home, cwd, now, options }) {
+  const planned = planTemplateRename(soulDir, { env });
+  const base = { id: TEMPLATE_NAME_STEP_ID, status: planned.status, from: planned.from, to: planned.to, at: now().toISOString(), note: planned.note,
+    templateName: planned.templateName, template: planned.template, displayName: { from: typeof soul.displayName === 'string' ? soul.displayName : null, to: null } };
+  const emit = (step, decision) => {
+    const result = { schemaVersion: MIGRATION_SCHEMA_VERSION, agentId: soul.id, soulDir, operation: TEMPLATE_NAME_STEP_ID, decision, steps: [step], root: soulDir };
+    write(json ? `${JSON.stringify(result)}\n` : formatMigration(result));
+    return result;
+  };
+  if (plan) return emit({ ...base, displayName: { ...base.displayName, to: base.displayName.from } }, 'planned');
+  const authorization = await gate(`rename ${soul.id} from template name ${planned.templateName.from ?? planned.from ?? 'unknown'} to ${planned.templateName.to ?? 'its template'}`, { principal, env, cwd });
+  let step;
+  if (planned.status !== 'pending') {
+    step = recordMigrationStep(soulDir, { ...base, displayName: { ...base.displayName, to: base.displayName.from } });
+    appendAuditReceipt({ event: 'soul-env-migrate', agentId: soul.id, operation: TEMPLATE_NAME_STEP_ID, decision: 'skipped', detail: `${planned.from ?? '-'}: ${planned.note}` }, { env, home, now });
+    return emit(step, 'skipped');
+  }
+  try {
+    const done = await renameFromTemplate(soul.id, soulDir, planned, { ...options, stateDir: options.stateDir ?? stateDirectory(options), now, ...(authorization?.method ? { authorization } : {}) });
+    step = recordMigrationStep(soulDir, { ...base, status: 'done', at: now().toISOString(), note: done.note, revision: done.revision, parentRevision: done.parentRevision, displayName: done.displayName });
+  } catch (error) {
+    recordMigrationStep(soulDir, { ...base, status: 'failed', at: now().toISOString(), note: `${error.code ?? 'error'}: ${error.message}` });
+    appendAuditReceipt({ event: 'soul-env-migrate', agentId: soul.id, operation: TEMPLATE_NAME_STEP_ID, decision: 'failed', detail: `${error.code ?? 'error'}: ${error.message}` }, { env, home, now });
+    throw error;
+  }
+  appendAuditReceipt({ event: 'soul-env-migrate', agentId: soul.id, operation: TEMPLATE_NAME_STEP_ID, decision: 'renamed',
+    detail: `${step.from} -> ${step.to} (revision ${step.revision}); display name ${step.displayName.from ?? '-'} -> ${step.displayName.to ?? '-'}` }, { env, home, now });
+  return emit(step, 'renamed');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

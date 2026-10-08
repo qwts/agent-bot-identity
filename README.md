@@ -292,6 +292,8 @@ agent-bot soul profile <agentId|name> [--json] [--file RELATIVE_PATH]
 agent-bot soul env <agentId|name> [--json]
 agent-bot soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] [--json] [--principal-stdin]
 agent-bot soul env migrate <agentId|name> --space-into-soul [--json] [--principal-stdin]
+agent-bot soul env migrate <agentId|name> --template-name [--plan] [--json] [--principal-stdin]
+agent-bot soul template refresh <agentId|name> [--from TEMPLATE_PATH] [--plan] [--json] [--principal-stdin]
 agent-bot soul runtimes <agentId|name> [--json]
 agent-bot soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin]
 agent-bot soul secret <agentId|name> set|clear <name> [--json] [--principal-stdin]
@@ -351,8 +353,15 @@ Create independent tailored agents from one package with
 For example, `Principal SW Engineer.soul` produces
 `Billy - Principal SW Engineer.soul`, with its own genesis identity and
 revision history. Edit each instance's `AGENTS.md` through the existing
-revision flow. See [soul templates](docs/soul-templates.md) for naming,
-provenance and initialization details.
+revision flow. An instance records which template it came from and whether
+the owner kept the template's name (`templateName`, `nameSource`); when a
+release renames the bundled template, `agent-bot soul env migrate <soul>
+--template-name` renames the instances that kept the old name and leaves
+chosen names alone, and `agent-bot soul template refresh <soul>` brings the
+paths a template declares as `maintained` up to date in one revision without
+touching the owner's edits, memory or history. See
+[soul templates](docs/soul-templates.md) for naming, provenance,
+initialization, the rename migration and the refresh.
 
 [Sandbox](docs/sandbox.md) covers the persona account for sandboxed souls
 (`agent-bot sandbox`): status, the owner's steps, the switch and per-soul
@@ -397,6 +406,10 @@ agent-bot soul env migrate AGENT_ID --adopt-host-signin [--harness NAME] --princ
 # owner only: copy the host's harness sign-in files (never the keychain) into the soul's own tool home once; see docs/soul-tool-homes.md
 agent-bot soul env migrate AGENT_ID --space-into-soul --principal-stdin
 # owner only: move the soul's Agent Space into its folder (copied, verified, source retired, never deleted); see docs/soul-memory-history.md
+agent-bot soul env migrate AGENT_ID --template-name [--plan] --principal-stdin
+# owner only: rename an instance that kept its template's name when the bundled template was renamed (one revision, census display name); --plan reads only; see docs/soul-templates.md
+agent-bot soul template refresh AGENT_ID [--from TEMPLATE_PATH] [--plan] --principal-stdin
+# owner only: replace the template's maintained paths in the instance from the bundled template in one revision; --plan reads only; see docs/soul-templates.md
 agent-bot soul runtimes AGENT_ID --json
 # declared runtimes (node, python, go) and harness installs, resolved and installed; see docs/soul-runtimes.md
 agent-bot soul runtimes install AGENT_ID [--runtime NAME] --principal-stdin

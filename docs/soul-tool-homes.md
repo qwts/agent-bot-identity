@@ -104,13 +104,18 @@ and `toolHomes.prepare` from `soulToolHomeEnv`, `pendingSoulToolHome` and
 agent-bot soul env migrate billy --adopt-host-signin                 # every routable harness the soul names
 agent-bot soul env migrate billy --adopt-host-signin --harness codex
 agent-bot soul env migrate billy --space-into-soul                   # the Agent Space move; see soul-memory-history.md
+agent-bot soul env migrate billy --template-name [--plan]            # the template rename; see soul-templates.md
 ```
 
 `soul env migrate` takes exactly one operation per run: `--adopt-host-signin`
-(below, `--harness` applies to it alone) or `--space-into-soul`, which moves
+(below, `--harness` applies to it alone), `--space-into-soul`, which moves
 the soul's Agent Space into its folder and is described in
-[soul-memory-history.md](soul-memory-history.md). Both share the journal
-`.soul-state/migration.json` and the `soul-env-migrate` receipt.
+[soul-memory-history.md](soul-memory-history.md), or `--template-name`,
+which renames an instance that kept its template's name after the bundled
+template was renamed and is described in
+[soul-templates.md](soul-templates.md) (`--plan` applies to it alone). All
+share the journal `.soul-state/migration.json` and the `soul-env-migrate`
+receipt.
 
 - Owner action, gated like `soul runtimes install` (`--principal-stdin`
   carries the principal JSON). The action named to the gate is
