@@ -1,8 +1,9 @@
 # ADR-0603: Soul skills have distinct import, install, learn, and dream operations
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-10-07
 **Issue:** [qwts/agent-bot-identity#603](https://github.com/qwts/agent-bot-identity/issues/603)
+**Acceptance:** [Owner acceptance on PR #604](https://github.com/qwts/agent-bot-identity/pull/604#issuecomment-6050210566), 2026-10-07.
 
 ## Context
 
@@ -62,7 +63,7 @@ source/placement restrictions, including the governed CLI/shared-skill
 rules; a namespace change does not waive them. This product proposal does
 not amend those accepted decisions.
 
-## Proposed decision
+## Decision
 
 1. **Import is an explicit acquisition operation.** Add the proposed
    `agent-bot soul skill import <url|path>` command for a local skill directory,
@@ -232,9 +233,9 @@ not amend those accepted decisions.
     knowledge. Source-backed relationships and inferred ones remain
     distinguishable. Exact adapter schemas are a follow-up design question.
 
-## Proposed command scope
+## Command scope
 
-All names below are proposed; this record adds no runtime commands.
+The names below describe the accepted design; this record adds no runtime commands.
 Abbreviated verbs in each row share the `agent-bot soul skill` prefix.
 
 | Surface | Responsibility |
@@ -339,5 +340,5 @@ of copying a file.
 - What minimal capability contract supports knowledge search/status without
   assuming an embedding provider, graph backend, or complete index coverage?
 
-This document proposes the design only. Merging it does not implement the
-feature, accept the decision, or close the originating feature issue.
+This document records the accepted design only. Acceptance does not implement
+the feature or close the originating feature issue.
