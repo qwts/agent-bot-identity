@@ -110,6 +110,7 @@ instead of starting the harness.
   go/1.27.1/               GOROOT; go/gopath (GOPATH, GOMODCACHE under it), go/cache
   harnesses/opencode/1.2.3/opencode
   harnesses/goose/1.9.0/   bin/goose and tools/ (UV_TOOL_BIN_DIR, UV_TOOL_DIR)
+  harnesses/claude/0.16.2/ the npm ACP adapter: package.json, package-lock.json, node_modules/.bin/claude-code-acp
 ```
 
 Every completed install directory carries `.agent-bot-install.json`: the name,
@@ -180,6 +181,27 @@ of each runtime as a readiness problem with the same code.
 | `runtime-unsupported-platform` | Neither the catalog nor the package has a download for this host; declare `sources` (or `install.sha256`) for it in a revision |
 | `runtime-install-failed` | The archive did not extract, lacked its executable, uv could not install, or the declaration is invalid |
 
-The legacy npm harness location `.soul-state/harnesses` keeps working;
-`soul env` lists the `harnesses-into-runtimes` migration step as pending
-and nothing moves it yet (slice 6).
+## npm ACP adapters
+
+A joined soul's ACP adapter (`@zed-industries/claude-code-acp`,
+`@agentclientprotocol/codex-acp`) is `npm ci`-installed from the soul's
+pinned lockfile into `harnesses/<harness>/<adapterVersion>/` beside the other
+installs: `package.json`, `package-lock.json`, `node_modules/` and the stamp
+`{ schemaVersion: 1, name, kind: "npm", package, version, platform: null,
+url: null, sha256: null, bin: "node_modules/.bin", installedAt }`. The
+version is the lockfile's `packages["node_modules/<package>"].version`. The
+install is staged as `.installing-<uuid>` beside the target and renamed in
+once `node_modules/.bin/<adapter>` exists, so an interrupted one is a
+`soul env clean` candidate and a finished one never is; when two installs of
+one version race, the first to land stands. npm runs with the soul's own
+node and `npm_config_cache` when `runtimes.node` is provisioned, the host's
+otherwise (`AGENT_BOT_NPM` still wins). Integrity, overrides and the
+provisioning audit for these installs stay with #617.
+
+A launch resolves the adapter in order: the checkout's own `node_modules`,
+the runtimes installs newest version first, then the legacy
+`.soul-state/harnesses` a release before slice 8 made. The legacy install
+still launches until `agent-bot soul env migrate <soul>
+--harnesses-into-runtimes` (also run by `--complete`) moves it under the
+runtimes with its stamp; see
+[soul-environment.md](soul-environment.md#moving-the-npm-adapter-under-the-runtimes).

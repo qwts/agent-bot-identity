@@ -14,7 +14,8 @@ import { populationFile, registerSoulDir, setSoulSpacePath, showSoul, soulDirect
 import { initSoulSpace } from './agent-space.mjs';
 
 import { buildSoulDirectory } from './soul-build.mjs';
-import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
+import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN } from './acp-registry.mjs';
+import { INSTALL_STAMP, RUNTIMES_SCHEMA_VERSION, inspectSoulRuntimes, publishInstall, readInstallStamp, runtimeLaunchEnv, runtimesRoot } from './soul-runtimes.mjs';
 
 const run = promisify(execFile);
 export const INSTALL_TIMEOUT_MS = 10 * 60_000;
@@ -29,30 +30,129 @@ export function soulHomePath(agentId, options = {}) {
 
 /**
  * A joined soul's own harness install (#417): its checkout is someone's
- * repository, so the ACP adapter it wakes with lives here instead, under
- * the soul's private state, never in its shareable package.
+ * repository, so the ACP adapter it wakes with lives under the soul's
+ * private state, never in its shareable package. This is the legacy
+ * location, `.soul-state/harnesses`: it still launches until `soul env
+ * migrate --harnesses-into-runtimes` moves it under the runtimes.
  */
 export function soulHarnessesPath(agentId, options = {}) {
   return path.join(soulDirectory(agentId, options), '.soul-state', 'harnesses');
 }
 
+// A version directory name from a lockfile or a stamp, never a path.
+const VERSION_NAME = /^[0-9A-Za-z][0-9A-Za-z._+-]*$/;
+
+// A version that may name an install directory: one path segment, never
+// dot-led, so a manifest or lock cannot steer an install outside its root.
+export const isVersionName = (value) => typeof value === 'string' && VERSION_NAME.test(value);
+
+/** `<soul>/.soul-state/runtimes/harnesses/<harness>`: the npm adapter's version directories (#583 slice 8). */
+export function npmHarnessRoot(soulDir, harness) {
+  if (typeof harness !== 'string' || !HARNESS_KEY_PATTERN.test(harness)) throw new Error('harness must be a registry key');
+  return path.join(runtimesRoot(soulDir), 'harnesses', harness);
+}
+
+// Newest first by dotted parts, numerically where both are numbers
+// (2.10.0 above 2.9.1), else by string, so a stamp's version orders
+// without a semver dependency.
+function newestFirst(a, b) {
+  const left = a.split('.'), right = b.split('.');
+  for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+    const x = left[i] ?? '', y = right[i] ?? '';
+    if (x === y) continue;
+    if (/^\d+$/.test(x) && /^\d+$/.test(y)) return Number(y) - Number(x);
+    return x < y ? 1 : -1;
+  }
+  return 0;
+}
+
+/**
+ * The npm adapter installs a soul folder holds for a harness: every
+ * version directory with a valid stamp of kind `npm`, newest first, as
+ * `{ version, path, stamp }`. A directory without its stamp (an install
+ * that never finished) is not an install.
+ */
+export function npmHarnessInstalls(soulDir, harness) {
+  const root = npmHarnessRoot(soulDir, harness);
+  let names = [];
+  try { names = readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name); }
+  catch { /* nothing provisioned yet */ }
+  return names.filter(isVersionName).sort(newestFirst)
+    .map((version) => ({ version, path: path.join(root, version), stamp: readInstallStamp(path.join(root, version)) }))
+    .filter((entry) => entry.stamp?.kind === 'npm');
+}
+
+/** Where `installSoulHarnesses` puts one adapter version: `.soul-state/runtimes/harnesses/<harness>/<version>`. */
+export function soulNpmHarnessTarget(agentId, harness, version, options = {}) {
+  if (!isVersionName(version)) throw new Error('an adapter version must be a plain version string');
+  return path.join(npmHarnessRoot(soulDirectory(agentId, options), harness), version);
+}
+
+/**
+ * Where a launch looks for the soul's npm adapter after its checkout
+ * (#583 slice 8): the stamped installs under the runtimes, newest version
+ * first, then the legacy `.soul-state/harnesses`, which still launches
+ * until the migration moves it. A soul with no recorded harness has only
+ * the legacy location to offer.
+ */
+export function soulNpmHarnessDirs(agentId, harness, options = {}) {
+  const legacy = soulHarnessesPath(agentId, options);
+  if (!harness) return [legacy];
+  return [...npmHarnessInstalls(path.dirname(path.dirname(legacy)), harness).map((entry) => entry.path), legacy];
+}
+
+/** The stamp an npm adapter install carries, the shape soul-runtimes.mjs writes for a uv tool. */
+export function writeNpmInstallStamp(directory, { harness, package: pkg, version, now = () => new Date() }) {
+  writeFileSync(path.join(directory, INSTALL_STAMP), `${JSON.stringify({ schemaVersion: RUNTIMES_SCHEMA_VERSION, name: harness, kind: 'npm', package: pkg, version,
+    platform: null, url: null, sha256: null, bin: 'node_modules/.bin', installedAt: now().toISOString() })}\n`, { mode: 0o600 });
+}
+
 /**
  * Installs the soul's pinned adapter from `source` (a directory with package.json
  * and package-lock.json, such as the soul's own package or the bundled
- * Starter) into the soul's harness directory. Returns the directory, or
- * null when `source` does not pin this harness's adapter. An omitted harness
- * uses the identity record; the registry names the package, not its pin.
+ * Starter) under `.soul-state/runtimes/harnesses/<harness>/<version>/`,
+ * stamped like every other runtime install (#583 slice 8). Returns that
+ * directory, or null when `source` does not pin this harness's adapter. An
+ * omitted harness uses the identity record; the registry names the
+ * package, not its pin. The install is staged in an exclusive
+ * `.installing-<uuid>` beside the target, as soul-runtimes.mjs stages
+ * every install, so `soul env clean` sweeps one an interruption left; a
+ * target another install of the same version published first stands.
  */
-export async function installSoulHarnesses(agentId, source, { install = installHarnesses, harness, ...options } = {}) {
+export async function installSoulHarnesses(agentId, source, { install = installHarnesses, harness, now = () => new Date(), ...options } = {}) {
   harness ??= recordedHarness(agentId, options);
   const pinned = pinnedHarness(source, harness);
   if (!pinned) return null;
-  const directory = soulHarnessesPath(agentId, options);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  chmodSync(directory, 0o700);
-  writePinnedHarness(directory, pinned);
-  await install(directory, { env: options.env });
-  return directory;
+  const row = ACP_SPAWN_REGISTRY[harness];
+  const target = soulNpmHarnessTarget(agentId, harness, pinned.version, options);
+  mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  const staging = path.join(path.dirname(target), `.installing-${randomUUID()}`);
+  mkdirSync(staging, { mode: 0o700 });
+  try {
+    writePinnedHarness(staging, pinned);
+    await install(staging, soulInstallEnv(agentId, harness, options));
+    if (!existsSync(path.join(staging, 'node_modules', '.bin', row.soulBin))) {
+      throw new Error(`installing the soul's ${harness} adapter left no node_modules/.bin/${row.soulBin}`);
+    }
+    writeNpmInstallStamp(staging, { harness, package: row.adapter.package, version: pinned.version, now });
+    publishInstall(staging, staging, target);
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
+    throw error;
+  }
+  return target;
+}
+
+// The env and node npm runs with: the soul's provisioned runtimes on top
+// of the caller's env, so a soul that declares `runtimes.node` installs its
+// adapter with its own node and npm (that bin first on PATH,
+// `npm_config_cache` inside the soul); without one, the node running this
+// process. Integrity, overrides and the provisioning audit stay with #617.
+function soulInstallEnv(agentId, harness, options) {
+  const env = options.env ?? process.env;
+  const routed = runtimeLaunchEnv(inspectSoulRuntimes(soulDirectory(agentId, options), { env, home: options.home ?? env.HOME }), { env, harness });
+  const soulNode = routed.routing.node?.source === 'soul' ? path.join(routed.routing.node.bin, 'node') : null;
+  return { env: { ...env, ...routed.env }, node: soulNode && existsSync(soulNode) ? soulNode : process.execPath };
 }
 
 function recordedHarness(agentId, options) {
@@ -65,6 +165,7 @@ function recordedHarness(agentId, options) {
 // Keep npm ci's exact pins and package locations, including nested versions,
 // shared dependencies, platform optional packages and installed peers. No
 // resolution/download step is needed to derive this subset of a v3 lockfile.
+// `version` is the adapter's locked version, the install's directory name.
 function pinnedHarness(source, harness) {
   const adapter = ACP_SPAWN_REGISTRY[harness]?.adapter?.package;
   if (!adapter || !source || !existsSync(path.join(source, 'package.json'))
@@ -105,7 +206,10 @@ function pinnedHarness(source, harness) {
       }
     }
   }
-  return { manifest: { ...root, private: true },
+  const locked = packages[`node_modules/${adapter}`]?.version;
+  const version = isVersionName(locked) ? locked : /^\d+\.\d+\.\d+$/.test(dependencies[adapter]) ? dependencies[adapter] : null;
+  if (!version) throw new Error(`soul adapter lockfile has no version for ${adapter}`);
+  return { version, manifest: { ...root, private: true },
     lock: { ...(lock.name ? { name: lock.name } : {}), ...(lock.version ? { version: lock.version } : {}),
       lockfileVersion: 3, requires: true, packages } };
 }

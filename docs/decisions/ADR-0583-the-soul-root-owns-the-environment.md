@@ -134,8 +134,8 @@ and 5 precedes 7.
    `soul env migrate --complete` (every step the descriptor lists as
    pending, interrupted or failed, run through its own verb's mechanism and
    recorded in the same journal; owner-gated once, refused while the soul
-   runs, `--plan` read-only; `harnesses-into-runtimes` is listed and stays
-   pending for a later release); `soul env clean` (`soul-env-clean.mjs`:
+   runs, `--plan` read-only; `harnesses-into-runtimes` was listed and left
+   pending until slice 8); `soul env clean` (`soul-env-clean.mjs`:
    only `cache`, `temp` and the runtime caches and install stagings under
    `runtimes`, each path classified by the contract before removal, a
    revision staging kept within its 24-hour window, installed runtimes and
@@ -167,3 +167,19 @@ and 5 precedes 7.
    `workspace-unlinked` readiness warning, nothing is cloned; recorded as
    the `life-import` migration step; capabilities `env-export` and
    `env-import`; see [soul-environment.md](../soul-environment.md).
+8. npm harness installs under runtimes. Shipped: a joined soul's ACP
+   adapter installs from its pinned lockfile into
+   `.soul-state/runtimes/harnesses/<harness>/<adapterVersion>/` with the
+   stamp the other installs carry (`kind: npm`, the package, `bin:
+   node_modules/.bin`), staged as `.installing-<uuid>` and renamed in once
+   the adapter binary exists, npm run with the soul's node and
+   `npm_config_cache` when provisioned; a launch resolves the adapter from
+   the checkout, then the runtimes installs newest first, then the legacy
+   `.soul-state/harnesses`; `soul env migrate --harnesses-into-runtimes`
+   (`soul-env-migrate.mjs`, also run by `--complete`) moves a legacy
+   install there by rename-verify-stamp-switch, puts it back on any
+   failure, removes it when the runtimes already hold that version, and
+   records the `harnesses-into-runtimes` step; capability
+   `harnesses-into-runtimes`; see [soul-runtimes.md](../soul-runtimes.md).
+   Stays with #617: integrity of the npm install, overrides, and the
+   npm-provisioning audit.

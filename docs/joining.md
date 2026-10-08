@@ -56,7 +56,11 @@ are delivered to its inbox but nothing wakes it.
      reporting a wake that cannot run. The ACP adapter the turn runs (for
      Claude, `claude-code-acp`) is installed from the pinned lockfile of the
      soul's own package, or the bundled Starter, into the soul's private
-     `.soul-state/harnesses`. The checkout is never touched, and a GeniusBar
+     `.soul-state/runtimes/harnesses/<harness>/<version>/` with an install
+     stamp; a checkout that already holds it, or a runtimes install, is used
+     as is, and a legacy `.soul-state/harnesses` install still launches
+     until `soul env migrate --harnesses-into-runtimes` moves it
+     ([soul-runtimes.md](soul-runtimes.md#npm-acp-adapters)). The checkout is never touched, and a GeniusBar
      daemon needs no `npx` on its PATH. `--json` reports it as `adapter`.
      A harness with no ACP lane is refused before the owner is asked.
    - The wake runs the soul's stored harness, so an existing soul must be

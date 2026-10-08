@@ -9,7 +9,9 @@
 //
 //   .soul-state/runtimes/<runtime>/<version>/        one install, stamped
 //   .soul-state/runtimes/<runtime>/last-install.json the last attempt
-//   .soul-state/runtimes/harnesses/<name>/<version>/ a non-npm harness
+//   .soul-state/runtimes/harnesses/<name>/<version>/ a harness install: an
+//   archive or uv tool declared here, or the npm ACP adapter soul-home.mjs
+//   installs from the package's pins (#583 slice 8)
 //   .soul-state/runtimes/uv/cache, go/gopath, node/npm-cache: the caches
 //   a routed launch keeps out of the host's HOME
 import { execFile } from 'node:child_process';
@@ -113,6 +115,9 @@ function readStamp(directory) {
   const stamp = readJson(path.join(directory, INSTALL_STAMP), 16 * 1024);
   return stamp && typeof stamp.version === 'string' && typeof stamp.bin === 'string' ? stamp : null;
 }
+// The stamp reader and the staging publish, for the npm adapter installs
+// soul-home.mjs lays out the same way (#583 slice 8).
+export { readStamp as readInstallStamp, publish as publishInstall };
 
 function lastInstall(directory) {
   const record = readJson(path.join(directory, LAST_INSTALL), 16 * 1024);

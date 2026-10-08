@@ -7,12 +7,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { readAgentIdentity } from '../agent-identity.mjs';
-import { showSoul } from '../agent-population.mjs';
+import { mintAgentIdentity, readAgentIdentity, stateDirectory } from '../agent-identity.mjs';
+import { populationFile, showSoul, soulDirectory, upsertSoul } from '../agent-population.mjs';
 import { createDaemonServer, recordedWorktree } from '../agent-daemon.mjs';
 import { appendAuditReceipt, auditFile } from '../agent-principals.mjs';
 import { createColdWaker } from '../cold-wake.mjs';
-import { bundledStarter, joinSoul, parseJoinArgs, WORKSPACE_NAME } from '../soul-join.mjs';
+import { installSoulHarnesses } from '../soul-home.mjs';
+import { bundledStarter, ensureAcpHarness, joinSoul, parseJoinArgs, WORKSPACE_NAME } from '../soul-join.mjs';
+import { INSTALL_STAMP } from '../soul-runtimes.mjs';
 import { PACKAGE_IGNORE_LIST, computePackageRevision } from '../soul-package.mjs';
 import { createWebhookWaker } from '../wake-webhook.mjs';
 
@@ -374,7 +376,7 @@ test('join --wake turns the wake on before agent-comms registers the soul, and p
     'a soul whose registration failed is left with its wake off');
 });
 
-test('join --wake acp installs the pinned adapter in the soul\'s own harness directory, never in the checkout (#417)', async (t) => {
+test('join --wake acp installs the pinned adapter under the soul\'s own runtimes, never in the checkout (#417, #583 slice 8)', async (t) => {
   const a = account(t);
   const daemon = await startDaemon(t, a);
   // The Starter template pins the Claude adapter, as GeniusBar's bundled one does.
@@ -398,8 +400,10 @@ test('join --wake acp installs the pinned adapter in the soul\'s own harness dir
     } });
   assert.equal(joined.adapter, 'installed');
   assert.deepEqual(installs, [template]);
-  const harnesses = path.join(joined.soulDir, '.soul-state', 'harnesses');
-  assert.ok(existsSync(path.join(harnesses, 'node_modules', '.bin', 'claude-code-acp')));
+  const install = path.join(joined.soulDir, '.soul-state', 'runtimes', 'harnesses', 'claude', '0.16.2');
+  assert.ok(existsSync(path.join(install, 'node_modules', '.bin', 'claude-code-acp')));
+  assert.equal(JSON.parse(readFileSync(path.join(install, INSTALL_STAMP), 'utf8')).kind, 'npm');
+  assert.equal(existsSync(path.join(joined.soulDir, '.soul-state', 'harnesses')), false, 'the legacy location is not used for a new install');
   assert.equal(existsSync(path.join(repo, 'node_modules')), false, 'the checkout is left alone');
   assert.equal(existsSync(path.join(repo, 'package.json')), false);
 
@@ -410,6 +414,40 @@ test('join --wake acp installs the pinned adapter in the soul\'s own harness dir
   // A harness with no ACP lane is refused before the owner is asked.
   await assert.rejects(joinSoul({ name: 'g', harness: 'grokbot', template: null, cwd: a.outside, env: a.env, home: a.home, config: {}, wake: 'acp',
     gate: async () => assert.fail('not asked') }), /grokbot has no ACP lane/);
+});
+
+test('ensureAcpHarness looks in the checkout, then the runtimes installs, then the legacy directory, and installs under the runtimes (#583 slice 8)', async (t) => {
+  const a = account(t);
+  const id = 'agent_44444444-4444-4444-8444-444444444444';
+  const { template } = pinnedStarter(a.root);
+  const env = { ...a.env, AGENT_BOT_STARTER_TEMPLATE: template };
+  const options = { env, home: a.home, config: {} };
+  mintAgentIdentity({ stateDir: stateDirectory(options), idFactory: () => id, harness: 'claude', appSlug: null, useGithub: false });
+  options.file = populationFile(options);
+  upsertSoul({ id, status: 'active', spacePath: path.join(a.root, 'spaces', id) }, { file: options.file });
+  const soulDir = soulDirectory(id, options);
+  const bin = (dir) => { mkdirSync(path.join(dir, 'node_modules', '.bin'), { recursive: true }); writeFileSync(path.join(dir, 'node_modules', '.bin', 'claude-code-acp'), ''); };
+  const worktree = path.join(a.root, 'checkout');
+  mkdirSync(worktree);
+  const installs = [];
+  const installHarness = async (agentId, source, opts) => { installs.push(source); return installSoulHarnesses(agentId, source, { ...opts, install: async (dir) => bin(dir) }); };
+  // Neither location has it: installed from the Starter's pins, under the runtimes.
+  assert.equal(await ensureAcpHarness(id, 'claude', worktree, { env, options, installHarness }), 'installed');
+  assert.deepEqual(installs, [template]);
+  const runtimes = path.join(soulDir, '.soul-state', 'runtimes', 'harnesses', 'claude', '0.16.2');
+  assert.ok(existsSync(path.join(runtimes, 'node_modules', '.bin', 'claude-code-acp')));
+  assert.equal(existsSync(path.join(soulDir, '.soul-state', 'harnesses')), false);
+  const never = async () => assert.fail('not reinstalled');
+  // Found again; a legacy install beside it is not what a new wake would need.
+  bin(path.join(soulDir, '.soul-state', 'harnesses'));
+  assert.equal(await ensureAcpHarness(id, 'claude', worktree, { env, options, installHarness: never }), 'installed');
+  // Only the legacy install left (not migrated yet): it still counts.
+  rmSync(runtimes, { recursive: true });
+  assert.equal(await ensureAcpHarness(id, 'claude', worktree, { env, options, installHarness: never }), 'installed');
+  // The checkout's own install comes before both.
+  bin(worktree);
+  assert.equal(await ensureAcpHarness(id, 'claude', worktree, { env, options, installHarness: never }), 'in checkout');
+  assert.equal(await ensureAcpHarness(id, 'opencode', worktree, { env, options, installHarness: never }), 'not needed');
 });
 
 test('join --wake acp refused by daemon rolls back the created soul, comms membership and folder (#435)', async (t) => {

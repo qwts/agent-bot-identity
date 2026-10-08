@@ -73,8 +73,11 @@ At runtime evidence commit
 `soul-home.mjs` implements lockfile-based adapter extraction/installation and
 `soul-runtimes.mjs` provisions per-soul Node including npm. This does not prove
 that every install/launch path uses that npm: `npmCommand` still accepts host
-injection or PATH. Npm installs under `.soul-state/harnesses` remain a pending
-`harnesses-into-runtimes` migration in the environment descriptor.
+injection or PATH. Npm installs now land under
+`.soul-state/runtimes/harnesses/<harness>/<version>` with an install stamp, and
+#583 slice 8's `soul env migrate --harnesses-into-runtimes` moves a legacy
+`.soul-state/harnesses` install there (the descriptor's pending
+`harnesses-into-runtimes` step runs).
 
 [#617](https://github.com/qwts/agent-bot-identity/issues/617) tracks runtime,
 override, integrity and launch-path conformance; [#583](https://github.com/qwts/agent-bot-identity/issues/583)
