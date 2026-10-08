@@ -1,10 +1,13 @@
 # ADR-0275: Soul packages are versioned definitions that souls can grow
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-10-01
 **Issue:** qwts/agent-bot-identity#275
 **Review:** [#614](https://github.com/qwts/agent-bot-identity/issues/614)
-— definition/life reconciliation, 2026-10-08; refreshed text pending owner acceptance.
+— definition/life reconciliation, 2026-10-08.
+**Accepted:** 2026-10-08, [owner approval](https://github.com/qwts/agent-bot-identity/pull/615#pullrequestreview-5450542193)
+of commit `1093b25b2115d49878bace6ac37be65c1683f4a2`. Acceptance covers the
+definition/life contract; the linked runtime work remains separately tracked.
 
 ## Context
 
