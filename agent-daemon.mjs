@@ -1947,6 +1947,11 @@ export async function runDaemon({
     },
     // The comms setting is read here, at launch only; turns read the census.
     recordLaunch: (launch) => recordLaunchSettings(launch, { env, home, config, now }),
+    // A principal's launch may name the new soul's parent (GeniusBar#261),
+    // checked against the active census; its outcome leaves the receipt a
+    // team start leaves, on the parent, with the operation telling them apart.
+    souls: () => listSouls({ status: 'active', file: populationFile({ env, home }) }),
+    receipt: ({ parent, decision }) => appendAuditReceipt({ event: 'team-start', agentId: parent, operation: 'launch', decision }, { env, home, now }),
     executorFor,
   });
   // Souls launched before 0.10.9 read as unmanaged until marked from the

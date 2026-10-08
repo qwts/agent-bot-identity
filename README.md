@@ -431,6 +431,20 @@ the soul's identity in the launch message and records it in the population;
 `soul show --json` reports `brief`. Omission on relaunch preserves the recorded
 brief; an explicit empty string clears it. Whitespace-only strings are invalid.
 
+Launch events may also name the new soul's `parent` (GeniusBar#261; the
+engine lists `launch-parent` in `soul env --json` `engine.capabilities`):
+`null` or absent starts an independent soul, as every principal launch did
+before; an agent id must be an active soul in this account's census and not
+the launched soul itself, and the new soul is bound, censused and joined with
+that parent exactly as a teammate a soul starts is. A relaunch keeps the
+parent its census row records: naming that parent is accepted, naming a
+different one (or `null` for a soul that has one) fails with the fix, the
+census is never rewritten by a launch. Each refusal is the launch's `failed`
+result with its reason. A parent the event named leaves a `team-start`
+receipt on that parent with `operation: launch` (`launched`, `refused:
+parent`, `failed`), beside the `start_soul` receipts; child cap and depth
+apply to souls starting souls, not to the owner's launches.
+
 This command resolves the census directory without creating a home; it also
 re-registers a moved directory found one level below the souls root. Harness
 sign-in uses the same registry resolution. Working state in `.soul-state/`

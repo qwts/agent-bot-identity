@@ -68,11 +68,13 @@ scalars `null`, collections `[]`), in this order:
 
 - `schemaVersion` 1; `engine` `{ version, contractVersion, capabilities }`.
   `capabilities` is `["env", "revision-prepare", "runtimes", "providers",
-  "tool-homes", "memory", "history", "template-name", "template-refresh"]`
-  today; a client gates each later slice on it (`template-name` is the
-  `soul env migrate --template-name` rename and the `templateName` /
-  `nameSource` provenance, `template-refresh` the `soul template refresh`
-  command; see [soul-templates.md](soul-templates.md)).
+  "tool-homes", "memory", "history", "template-name", "template-refresh",
+  "launch-parent"]` today; a client gates each later slice on it
+  (`template-name` is the `soul env migrate --template-name` rename and the
+  `templateName` / `nameSource` provenance, `template-refresh` the
+  `soul template refresh` command, see [soul-templates.md](soul-templates.md);
+  `launch-parent`: a principal launch may name the new soul's parent,
+  GeniusBar#261).
 - `identity`: `agentId`, `name`, `displayName`, `status`, `harness`,
   `genesis { revision, parentSoul }`, the manifest's `revision`,
   `parentRevision`, `template`, `formatVersion`.
