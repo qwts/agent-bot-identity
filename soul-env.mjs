@@ -15,17 +15,19 @@ import { inspectAgentSpace } from './agent-space.mjs';
 import { buildSoulDirectory } from './soul-build.mjs';
 import { ENV_CONTRACT_VERSION, GENERATED_HARNESS_MARKER, GENERATED_HARNESS_PATHS, RETENTION, SOUL_LAYOUT, classificationContract } from './soul-env-contract.mjs';
 import { credentialStores } from './soul-credentials.mjs';
+import { inspectToolHomes, readMigrationJournal } from './soul-env-migrate.mjs';
 import { secretSetCommand } from './soul-providers.mjs';
 import { inspectSoulRuntimes, runtimeLaunchEnv } from './soul-runtimes.mjs';
 import { inspectSoulSecrets } from './soul-secrets.mjs';
+import { adoptCommand, adoptStepId } from './soul-tool-homes.mjs';
 import { soulsHome } from './souls-root.mjs';
 
 export const ENV_SCHEMA_VERSION = 1;
 // What this engine can do for a host, so a client gates each later slice
 // of #583 on the engine it talks to rather than on a version number.
-export const ENV_CAPABILITIES = Object.freeze(['env', 'revision-prepare', 'runtimes', 'providers']);
+export const ENV_CAPABILITIES = Object.freeze(['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes']);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const USAGE = 'usage: agent-bot soul env <agentId|name> [--json]';
+const USAGE = 'usage: agent-bot soul env <agentId|name> [--json] | soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] [--json] [--principal-stdin]';
 const MANIFEST_MAX_BYTES = 64 * 1024;
 const SMALL_MAX_BYTES = 4 * 1024;
 const STATE = '.soul-state';
@@ -147,7 +149,7 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
     harnesses: { selected: null, declared: [], installed: [], launchable: null },
     runtimes: { declared: {}, installed: [], missing: [], unsupported: [] },
     providers: { declared: [], secrets: [], invalid: [] },
-    launch: { supported: null, lane: null, cwd: null, routing: { HOME: 'host', PATH: 'host', TMPDIR: 'host', runtimes: {}, env: [] }, limitations: [] },
+    launch: { supported: null, lane: null, cwd: null, routing: { HOME: 'host', PATH: 'host', TMPDIR: 'host', toolHome: null, runtimes: {}, env: [] }, limitations: [] },
     readiness: { ready: false, problems: [] },
     migration: { status: 'none', journal: `${STATE}/migration.json`, steps: [] },
     retention: Object.fromEntries(RETENTION.map((kind) => [kind, []])),
@@ -254,14 +256,19 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
         if (!entry.present) problem('home-missing', 'warning', 'home', 'The soul has no private home yet; its first launch creates and binds one.');
         break;
       }
-      case 'tool-state':
-        entry.entries = harnessNames.filter((name) => hostStore(ACP_SPAWN_REGISTRY[name], home)).map((name) => ({
-          harness: name, path: `${STATE}/tools/${name}`, routing: [], containment: 'shared-host',
-          hostPath: hostStore(ACP_SPAWN_REGISTRY[name], home), signIn: 'unknown' }));
+      case 'tool-state': {
+        // Per harness the soul names (#583 slice 2): where its native state
+        // is routed, and whether a sign-in file exists in the soul's tool
+        // home and in the host store. Existence only, never contents.
+        entry.entries = inspectToolHomes(root, harnessNames, { env, home, platform: options.platform ?? process.platform }).map((row) => ({
+          harness: row.harness, path: row.path, routing: row.routing, containment: row.containment, reason: row.reason,
+          hostPath: row.hostPath ?? hostStore(ACP_SPAWN_REGISTRY[row.harness], home), signIn: row.signIn, hostSignIn: row.hostSignIn, note: row.note }));
         for (const row of entry.entries) {
-          result.launch.limitations.push({ harness: row.harness, message: `${row.harness}'s native state (${row.hostPath}) is shared on the host with every other soul until the launch environment contract routes it into the soul` });
+          if (row.containment === 'soul') continue;
+          result.launch.limitations.push({ harness: row.harness, message: `${row.harness}'s native state${row.hostPath ? ` (${row.hostPath})` : ''} stays shared on the host with every other soul: ${row.reason ?? 'the launch does not route it'}` });
         }
         break;
+      }
       case 'credentials':
         entry.exportable = false;
         entry.declared = text(manifest?.credentials?.github?.app);
@@ -384,11 +391,25 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
     }
     result.launch.supported = Boolean(row?.enabled);
     result.launch.lane = row?.enabled ? 'acp' : null;
+    // The selected harness's tool home (#583 slice 2): its variables are
+    // what the launch sets; a routable harness kept on the host store
+    // because its sign-in is not in the soul gets the adoption command.
+    const tool = result.components.find((component) => component.id === 'tool-state')?.entries.find((entry) => entry.harness === selected) ?? null;
+    if (tool) {
+      result.launch.routing.toolHome = tool.containment === 'soul' ? 'soul' : 'host';
+      result.launch.routing.env = [...new Set([...result.launch.routing.env, ...tool.routing])].sort();
+      if (tool.containment === 'shared-host') {
+        problem('tool-signin-missing', 'warning', 'tool-state', tool.hostSignIn === 'present'
+          ? `${selected}'s sign-in is on the host (${tool.hostPath}) but not in the soul's tool home, so the launch keeps the shared host store; adopt it once to contain this soul`
+          : `${selected}'s sign-in may be on the host where no file shows it, and it is not in the soul's tool home, so the launch keeps the shared host store; adopt once to contain this soul (the harness then signs in inside the soul)`,
+        adoptCommand(soul.id, selected));
+      }
+    }
   }
   if (provisioned) {
     const routed = runtimeLaunchEnv(provisioned, { env, harness: selected, node: process.execPath });
     result.launch.routing.runtimes = routed.routing;
-    result.launch.routing.env = Object.keys(routed.env).filter((name) => name !== 'PATH').sort();
+    result.launch.routing.env = [...new Set([...result.launch.routing.env, ...Object.keys(routed.env).filter((name) => name !== 'PATH')])].sort();
     result.launch.routing.PATH = Object.values(routed.routing).some((entry) => entry.source === 'soul' || entry.source === 'override') ? 'soul-runtimes'
       : routed.env.PATH ? 'host-bundled' : 'host';
   }
@@ -415,7 +436,19 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
     }
   }
 
-  result.migration.status = result.migration.steps.length ? 'pending' : 'none';
+  // What `soul env migrate` recorded in the journal, then the adoptions
+  // still to do: a routable harness kept on the host store for its sign-in.
+  const recorded = new Set();
+  for (const step of readMigrationJournal(root)) {
+    recorded.add(step.id);
+    result.migration.steps.push(step);
+  }
+  for (const tool of result.components.find((component) => component.id === 'tool-state')?.entries ?? []) {
+    if (tool.containment === 'shared-host' && !recorded.has(adoptStepId(tool.harness))) {
+      result.migration.steps.push({ id: adoptStepId(tool.harness), status: 'pending', from: tool.hostPath, to: path.join(root, STATE, 'tools', tool.harness) });
+    }
+  }
+  result.migration.status = result.migration.steps.some((step) => step.status === 'pending') ? 'pending' : 'none';
   result.readiness.ready = !result.readiness.problems.some((entry) => entry.severity === 'error');
   result.retention = retentionIndex(result.components);
   return result;

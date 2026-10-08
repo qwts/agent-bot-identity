@@ -17,6 +17,7 @@ import { createColdWaker } from './cold-wake.mjs';
 import { reachMcpServerEntry, reachPolicyRules } from './daemon-mcp.mjs';
 import { HARNESS_SESSION_EVENT, UPDATE_EVENT } from './executor-contract.mjs';
 import { keydMcpServerEntry, keydPolicyRules } from './keyd-client.mjs';
+import { NEVER_ROUTED } from './soul-tool-homes.mjs';
 import { createWakeDispatcher } from './wake-dispatch.mjs';
 
 // Shared by cold, launch and interactive turns. Keep each controller until
@@ -156,11 +157,15 @@ export function withReachRules(policy, { keyd = false } = {}) {
 // holds that soul's App key (#397); its relay is injected next to the reach
 // server so the soul mints tokens without ever seeing a key. `log` receives
 // the engine's one-line diagnostics (`acp engine: …`); without it they are
-// dropped.
+// dropped. `toolHomeEnvFor({ agentId, harness })` (#583 slice 2) is the
+// harness's own store routed into the soul (`CLAUDE_CONFIG_DIR`,
+// `CODEX_HOME`, OpenCode's XDG bases); it is not a secret, so the reach
+// server and keyd's relay carry it too, and a child they start reads the
+// same store as the harness.
 export function acpExecutorFor({
   identities, policy, baseEnv, onHarnessSession = null, createExecutor = createAcpExecutor,
   identityFor = null,
-  commsFor = () => true, modeFor = () => 'safe', modelFor = () => null, onModels = null, reachEnv = {}, keydFor = () => null, harnessDirsFor = () => [], runtimeEnvFor = null, providerEnvFor = null, log = null,
+  commsFor = () => true, modeFor = () => 'safe', modelFor = () => null, onModels = null, reachEnv = {}, keydFor = () => null, harnessDirsFor = () => [], runtimeEnvFor = null, toolHomeEnvFor = null, providerEnvFor = null, log = null,
 }) {
   return ({ agentId, harness, cwd, env }) => {
     const identity = identities(agentId);
@@ -171,6 +176,21 @@ export function acpExecutorFor({
     // their env (GOROOT, UV_*), never HOME (#583 slice 3). A soul with no
     // folder yet runs with the host's PATH as before.
     if (runtimeEnvFor) { try { Object.assign(turnEnv, runtimeEnvFor({ agentId, harness, env: turnEnv }) ?? {}); } catch { /* host PATH */ } }
+    // The harness's native state in the soul's tool home (#583 slice 2),
+    // harness-specific variables only: HOME and XDG_STATE_HOME are dropped
+    // whatever the port says. A soul with no folder (a lookup that fails
+    // without a code) runs on the host store as before; a tool home that
+    // cannot be made is a coded failure of the turn, never a silent fallback.
+    const routed = [];
+    if (toolHomeEnvFor) {
+      let patch = {};
+      try { patch = toolHomeEnvFor({ agentId, harness }) ?? {}; } catch (error) { if (error?.code === 'tool-home-unwritable') throw error; }
+      for (const [name, value] of Object.entries(patch)) {
+        if (NEVER_ROUTED.includes(name) || typeof value !== 'string') continue;
+        turnEnv[name] = value;
+        routed.push(name);
+      }
+    }
     // The provider secret (#583 slice 4) goes to the launched harness and
     // nowhere else: `mcpEnv` is the turn env without it, for the reach
     // server and keyd's relay. A secret the store cannot give fails the
@@ -196,7 +216,8 @@ export function acpExecutorFor({
       correlation: typeof invocation?.correlation === 'string' ? invocation.correlation : null,
       turnId: typeof invocation?.turnId === 'string' ? invocation.turnId : null,
       strip: stripped,
-    }), ...(keyd ? [keydMcpServerEntry({ bin: keyd, binding, env: mcpEnv })] : [])];
+      forward: routed,
+    }), ...(keyd ? [keydMcpServerEntry({ bin: keyd, binding, env: mcpEnv, forward: routed })] : [])];
     const executor = createExecutor({
       harness,
       identity: { app, agentId },

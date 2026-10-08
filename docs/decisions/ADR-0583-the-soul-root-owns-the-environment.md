@@ -106,6 +106,12 @@ prepare`, daemon route. Each later slice is releasable alone; 3 precedes 4
 and 5 precedes 7.
 
 2. Launch environment contract: per-soul tool homes, sign-in adoption.
+   Shipped: `soul-tool-homes.mjs`, `soul-env-migrate.mjs`, launch routing
+   of `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and OpenCode's XDG bases decided
+   per launch from sign-in presence (a host sign-in the soul lacks stays
+   `shared-host` until adopted), the `tool-home` stage,
+   `soul env migrate --adopt-host-signin`; see
+   [soul-tool-homes.md](../soul-tool-homes.md).
 3. Per-soul runtimes and harness installs (implements #322). Shipped:
    `soul runtimes`, `runtime-catalog.mjs`, launch routing; see
    [soul-runtimes.md](../soul-runtimes.md).

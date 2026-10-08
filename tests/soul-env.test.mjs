@@ -93,7 +93,7 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
     'runtimes', 'providers', 'launch', 'readiness', 'migration', 'retention', 'errors']);
   assert.equal(result.schemaVersion, 1);
   assert.deepEqual(result.engine, { version: JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version, contractVersion: 1, capabilities: [...ENV_CAPABILITIES] });
-  assert.deepEqual(result.engine.capabilities, ['env', 'revision-prepare', 'runtimes', 'providers']);
+  assert.deepEqual(result.engine.capabilities, ['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes']);
   assert.deepEqual(result.identity, { agentId: ID, name: 'billy', displayName: 'Billy - Starter', status: 'active', harness: 'codex',
     genesis: { revision: null, parentSoul: null }, revision: f.manifest.revision, parentRevision: null, template: false, formatVersion: 2 });
   assert.deepEqual(result.root, { soulDir: f.dir, soulsRoot: f.env.AGENT_BOT_SOULS_HOME, source: 'environment', registered: true, marker: 'ok',
@@ -120,8 +120,10 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
   ]);
   const home = component(result, 'home');
   assert.deepEqual([home.present, home.git, home.built, home.harnessInstall], [true, true, true, 'codex']);
-  assert.deepEqual(component(result, 'tool-state').entries, [{ harness: 'codex', path: '.soul-state/tools/codex', routing: [], containment: 'shared-host',
-    hostPath: path.join(f.home, '.codex'), signIn: 'unknown' }]);
+  // Routed into the soul (#583 slice 2); no sign-in on either side here, so
+  // nothing to adopt and no warning.
+  assert.deepEqual(component(result, 'tool-state').entries, [{ harness: 'codex', path: '.soul-state/tools/codex', routing: ['CODEX_HOME'], containment: 'soul', reason: null,
+    hostPath: path.join(f.home, '.codex'), signIn: 'missing', hostSignIn: 'missing', note: null }]);
   const credentials = component(result, 'credentials');
   assert.deepEqual([credentials.present, credentials.exportable, credentials.declared], [true, false, 'billy-app']);
   assert.ok(!JSON.stringify(result).includes('NEVER-RETURN-THIS'), 'credential contents never appear');
@@ -150,11 +152,9 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
   assert.equal(result.launch.supported, true);
   assert.equal(result.launch.lane, 'acp');
   assert.equal(result.launch.cwd, path.join(f.dir, '.soul-state', 'home'));
-  assert.deepEqual(result.launch.routing, { HOME: 'host', PATH: 'host', TMPDIR: 'host', env: [], runtimes: {
+  assert.deepEqual(result.launch.routing, { HOME: 'host', PATH: 'host', TMPDIR: 'host', toolHome: 'soul', env: ['CODEX_HOME'], runtimes: {
     node: { source: 'missing', version: NODE_PIN, bin: null }, python: { source: 'host', version: null, bin: null }, go: { source: 'host', version: null, bin: null } } });
-  assert.equal(result.launch.limitations.length, 1);
-  assert.equal(result.launch.limitations[0].harness, 'codex');
-  assert.match(result.launch.limitations[0].message, /shared on the host/);
+  assert.deepEqual(result.launch.limitations, [], 'a routed harness is no longer a limitation');
   assert.deepEqual(result.readiness, { ready: true, problems: [{ code: 'runtime-missing', severity: 'warning', component: 'runtimes',
     message: `node ${NODE_PIN} is declared but not installed in the soul; the next launch installs it.`, action: `agent-bot soul runtimes install ${ID}` }] });
   assert.deepEqual(result.migration, { status: 'pending', journal: '.soul-state/migration.json',
@@ -259,7 +259,7 @@ test('an installed runtime and a declared non-npm harness install are reported f
   assert.deepEqual(result.harnesses.installed.find((h) => h.name === 'opencode'), { name: 'opencode', kind: 'archive', package: null, version: '1.2.3',
     location: '.soul-state/runtimes/harnesses', bin: path.join(runtimes, 'harnesses', 'opencode', '1.2.3', 'opencode'), status: 'ok' });
   assert.equal(result.launch.routing.PATH, 'soul-runtimes');
-  assert.deepEqual(result.launch.routing.env, ['npm_config_cache']);
+  assert.deepEqual(result.launch.routing.env, ['CODEX_HOME', 'npm_config_cache'], 'the tool home beside the runtime routing');
   assert.deepEqual(result.launch.routing.runtimes.node, { source: 'soul', version: NODE_PIN, bin: path.join(runtimes, 'node', NODE_PIN, 'bin') });
   assert.deepEqual(result.launch.routing.runtimes.go, { source: 'missing', version: goPin, bin: null });
   assert.deepEqual(result.launch.routing.runtimes['harness:opencode'], { source: 'soul', version: '1.2.3', bin: path.join(runtimes, 'harnesses', 'opencode', '1.2.3') });
