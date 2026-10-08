@@ -3,11 +3,13 @@
 **Status:** Proposed
 **Date:** 2026-10-01
 **Issue:** qwts/agent-bot-identity#274
+**Review:** [#609](https://github.com/qwts/agent-bot-identity/issues/609)
+— product-policy reconciliation, 2026-10-08; refreshed text pending owner acceptance.
 
 ## Context
 
-agent-bot grew up as qwts's own runtime, and qwts's way of working is built
-into it:
+agent-bot grew up as qwts's own runtime. When this proposal was written on
+2026-10-01, qwts's way of working was built into it:
 
 - A soul cannot exist without a GitHub App: `ensureAgentIdentity` requires an
   `appSlug`, and `identity ensure` fails with "no GitHub App identity
@@ -19,10 +21,13 @@ into it:
 - The runtime knows the `qwts-*-agent` App names, writes `Agent-Identity`
   commit trailers, signs commits, and gates skills on `qwts-versions`.
 
+These are the original motivations, not a current implementation inventory.
+The review evidence below records mechanisms that have since shipped.
+
 The product is going to people who do not work the qwts way. The GeniusBar
 app will bundle this runtime for anyone who downloads it, with their own
-SOP or none. Today such a user cannot even create a soul without registering
-a GitHub App.
+SOP or none. At that point such a user could not even create a soul without
+registering a GitHub App.
 
 agentsop.ai already separates the shape of an SOP from one organization's
 copy of it
@@ -36,9 +41,17 @@ also the first record of its ADR series.
 ## Decision
 
 1. **Three layers.** The **product** is mechanism: souls, bindings, the
-   daemon, vouching, wakes, Agent Space, and soul packages. It decides nothing
-   about how an organization works. **Add-ons** are optional capabilities.
+   daemon, vouching, wakes, Agent Space, and soul packages. It defines the
+   platform's behavior and authority boundaries, without choosing an
+   organization's roster, account mapping, or working procedures.
+   **Add-ons** are optional capabilities.
    **SOP packs** carry one organization's policy.
+
+   Authorization, owner consent, connection-bound identity, and fail-closed
+   credential handling remain product responsibilities. A pack cannot grant
+   itself authority, bypass those checks, or turn a refused bot operation into
+   a human-login fallback. Detailed credential protocols belong in their own
+   decisions; this record does not specify them.
 2. **Add-ons are off by default, each behind a named feature gate.** The
    user turns a gate on in their configuration. Turning one on never changes
    what the product does for a soul that does not use it. The first two:
@@ -49,7 +62,9 @@ also the first record of its ADR series.
      deciding the persona.
 
    With both off, a soul has no GitHub identity and runs in the user's own
-   account. That is the default for a new install.
+   account. That is the default for a new install. Selecting an SOP or opening
+   a soul does not itself enable an add-on. A pack may select policy for an
+   enabled capability; it cannot silently opt the user into that capability.
 3. **An SOP pack applies policy only through extension points.** The product
    provides:
    - identity providers (none, a GitHub App, later others);
@@ -59,7 +74,9 @@ also the first record of its ADR series.
    - harness adapters.
 
    A pack is data and pinned code that live in the SOP and org repositories.
-   No pack is compiled into the product.
+   No pack is compiled into the product. These are explicit supported
+   interfaces, not permission to execute arbitrary fetched instructions or a
+   claim that every extension point already has a complete implementation.
 4. **`agent-bot sop` resolves the SOP the user or org chose.** It reads
    `~/.config/agent-sop/config.toml` as agentsop.ai defines it (ENG-0355 as
    amended 2026-09-16), resolves each
@@ -67,10 +84,14 @@ also the first record of its ADR series.
    repository's `org.json` pins, and nothing else. Fetched content is
    documentation and configuration, never an instruction that overrides the
    harness. With no config file there is no SOP, and the product runs on its
-   defaults.
+   defaults. A configured SOP that cannot be resolved or validated must be
+   reported distinctly from an intentional no-SOP configuration. Each
+   supported interface documents its fallback or refusal behavior; choosing a
+   repository alone does not establish that all its policy is enforced.
 5. **qwts is one instance.** qwts runs the product with both add-ons on and
    the qwts pack, which `qwts-agent-org` pins. ENG-0339 and ENG-0375 become
-   that pack's persona mapping. Nothing changes in how qwts works.
+   that pack's persona mapping. Preserving qwts's intended behavior is a
+   conformance requirement, not evidence that every migration is complete.
 6. **Two tests gate the work.**
    - **Zero SOP:** with no SOP and no add-ons, a fresh install binds a soul,
      chats, and wakes.
@@ -82,6 +103,47 @@ also the first record of its ADR series.
    name a user sees, such as a service label or a stored-credential name, is
    set by the host app that bundles the runtime. agent-comms records that
    embedding contract.
+
+## Review evidence and boundaries (2026-10-08)
+
+This review keeps ADR-0274 separate from the soul definition/revision contract
+in [ADR-0275](ADR-0275-soul-packages-are-versioned-definitions-souls-can-grow.md),
+the accepted environment contract in
+[ADR-0583](ADR-0583-the-soul-root-owns-the-environment.md), and the accepted
+skill lifecycle in
+[ADR-0603](ADR-0603-imported-skills-keep-local-snapshots-and-upstream-provenance.md).
+Those records use this product-policy boundary; they do not replace it.
+The [keyd protocol review (#594)](https://github.com/qwts/agent-bot-identity/issues/594)
+owns the separate grant, presence, and trust-bootstrap questions.
+
+Evidence at commit
+[`759055e`](https://github.com/qwts/agent-bot-identity/tree/759055ef0b443c5f3988057249c3d65cdcc86c86):
+
+| Area | Existing evidence | Remaining review or issue boundary |
+| --- | --- | --- |
+| Optional capabilities | `config.mjs` and `tests/feature-gates.test.mjs`: named, config-only gates default off; invalid settings are refused. | These tests establish the gate contract, not full zero-SOP bind/chat/wake conformance. |
+| SOP selection and provenance | `sop.mjs`, `tests/sop.test.mjs`, and `tests/sop-soul.test.mjs`: selected refs resolve to commits; document reads are bounded; foreign soul selections require trust. | General policy hooks, identity providers, and harness/skill extension coverage still need a requirement-to-evidence inventory before claiming the entire pack contract complete. |
+| Persona mapping and launch | `sandbox.mjs`, `daemon-launch.mjs`, and their tests: recorded `persona.toml` mapping, account readiness, and refusal to run a sandboxed soul from the wrong account. | [#376](https://github.com/qwts/agent-bot-identity/issues/376) retains in-account sign-in verification and account lifecycle/host handoff questions; mapping and launch checks are implemented. |
+| Account recovery | [#190](https://github.com/qwts/agent-bot-identity/issues/190) tracks account-level diagnosis and repair after managed state is lost. | This is separate from initial account provisioning. No live destructive account-recovery exercise is claimed by this review. |
+
+The persona interface currently uses the recorded mapping only when the
+`persona-accounts` gate is on. A valid matching pack rule takes precedence over
+the soul override and the global setting. An absent, unreadable, stale, or
+invalid mapping is reported and leaves the user setting in charge; launch does
+not fetch a replacement. This proposal retains that documented fallback,
+rather than introducing a required-policy mode implicitly. It does **not**
+establish enforcement of an unavailable pack rule. Once a soul resolves as
+sandboxed, an unready or wrong account refuses launch instead of running it
+unsandboxed. See [sandbox behavior](../sandbox.md) and its existing tests.
+
+[#611](https://github.com/qwts/agent-bot-identity/issues/611) tracks the full
+decision 6 conformance inventory and missing journey evidence, separately from
+this documentation review. Passing the individual tests above is not proof
+that every zero-SOP journey or every qwts rule is covered.
+The original issue and PR closures, shipped mechanisms, and this reconciliation
+do not by themselves accept the refreshed decision. Record explicit owner
+acceptance separately; keep runtime issues open until their own remaining
+criteria are met.
 
 ## Consequences
 
