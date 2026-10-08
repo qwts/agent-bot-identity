@@ -144,6 +144,15 @@ retired or unknown here, such as one a failed launch left before this
 rollback existed. Finalized souls keep their folders and are not listed.
 `agent-bot soul remove <agentId>` archives them the same way (#420).
 
+`soul remove` takes a scope (GeniusBar #283): `--scope soul` (the default)
+retires the one soul and clears the census `parentId` of the souls it led
+directly, so they stand on their own; `--scope team` retires every active
+descendant too, deepest first, and is refused while any of them runs. `--plan`
+prints what a scope would archive, make independent or leave unchanged
+without changing anything; the remove itself runs that same plan and reports
+it with what was done. Nothing restores or deletes an archived soul; the
+folders stay under `.archive` for the owner to move by hand.
+
 ## Repository worktrees
 
 Read `agent-bot skill agent-space` for the check-in, checkout, and cleanup procedure.
