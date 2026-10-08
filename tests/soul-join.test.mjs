@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { mintAgentIdentity, readAgentIdentity, stateDirectory } from '../agent-identity.mjs';
+import { mintAgentIdentity, readAgentIdentity, retireAgentIdentity, stateDirectory } from '../agent-identity.mjs';
 import { populationFile, showSoul, soulDirectory, upsertSoul } from '../agent-population.mjs';
 import { createDaemonServer, recordedWorktree } from '../agent-daemon.mjs';
 import { appendAuditReceipt, auditFile } from '../agent-principals.mjs';
@@ -518,4 +518,154 @@ test('a successful join --wake is unchanged by the rollback guard (#435)', async
   assert.equal(showSoul(joined.agentId, { file: a.env.AGENT_BOT_POPULATION_PATH }).status, 'active');
   assert.deepEqual(a.broker().joined[joined.agentId], { name: 'healthy', harness: 'codex' });
   assert.ok(existsSync(joined.soulDir), 'soul folder exists');
+});
+
+function mappedAccount(t, harness = 'codex') {
+  const a = account(t);
+  for (const key of Object.keys(a.env)) {
+    if (/^(CODEX_|CLAUDE|CURSOR_|WINDSURF_|VSCODE_|MUSE_|QWEN_|AI_AGENT$|ACP_BACKEND$|TERM_PROGRAM$)/.test(key)) delete a.env[key];
+  }
+  a.env.AGENT_BOT_ACCOUNT = 'test-owner';
+  a.env[harness === 'codex' ? 'CODEX_THREAD_ID' : 'CLAUDECODE'] = harness === 'codex' ? 'test-thread' : '1';
+  a.config = { apps: { codex: 'test-codex-app', claude: 'other-claude-app' }, features: { 'github-identity': true }, settings: { daemonPreference: 'off' } };
+  a.env.AGENT_BOT_CONFIG = path.join(a.root, 'config.json');
+  writeFileSync(a.env.AGENT_BOT_CONFIG, JSON.stringify(a.config));
+  a.join = (extra = {}) => joinSoul({ name: 'mapped', harness, template: null, cwd: a.outside, env: a.env, home: a.home, config: a.config, ...extra });
+  a.identity = (id) => readAgentIdentity(id, { stateDir: a.env.AGENT_BOT_STATE_HOME });
+  return a;
+}
+
+for (const harness of ['codex', 'claude']) {
+  for (const template of [false, true]) {
+    test(`marker onboarding: ${harness}, template=${template}, binding and credential use configured App`, async (t) => {
+      const a = mappedAccount(t, harness);
+      const joined = await a.join({ template: template ? starter(a.root) : null });
+      const slug = a.config.apps[harness];
+      assert.equal(a.identity(joined.agentId).github?.appSlug, slug);
+      assert.equal(showSoul(joined.agentId, { file: a.env.AGENT_BOT_POPULATION_PATH }).appSlug, slug);
+      const mints = [];
+      const server = createDaemonServer({ env: a.env, home: a.home, config: a.config,
+        mintImpl: async ({ slug, agentId }) => { mints.push({ slug, agentId }); return { token: 'mock-token', expires_at: '2030-01-01T00:00:00Z' }; } });
+      await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+      t.after(() => new Promise(resolve => server.close(resolve)));
+      const call = (route, body, secret, method = 'POST') => fetch(`http://127.0.0.1:${server.address().port}${route}`, {
+        method, headers: { authorization: `Bearer ${server.token}`, 'content-type': 'application/json', ...(secret ? { 'x-agent-binding': secret } : {}) },
+        ...(method === 'DELETE' ? {} : { body: JSON.stringify(body) }),
+      });
+      const gitDir = git(joined.worktree, 'rev-parse', '--absolute-git-dir');
+      const token = JSON.parse(readFileSync(path.join(gitDir, 'agent-bind-token.json'))).token;
+      const response = await call('/v0/bind', { gitDir, token, harness, transcript: { provider: harness, id: `mapped-${harness}-${template}` } });
+      assert.equal(response.status, 200, await response.clone().text());
+      const binding = await response.json();
+      assert.equal(binding.soul.appSlug, slug);
+      const again = await a.join({ cwd: joined.worktree });
+      assert.equal(again.agentId, joined.agentId);
+      assert.equal(again.created, false);
+      const grant = await call('/v0/credential', {}, binding.secret);
+      assert.equal(grant.status, 200);
+      assert.equal((await grant.json()).appSlug, slug);
+      assert.deepEqual(mints, [{ slug, agentId: joined.agentId }]);
+      assert.equal((await call('/v0/binding', null, binding.secret, 'DELETE')).status, 200);
+      await a.join({ cwd: joined.worktree });
+      assert.equal((await call('/v0/credential', {}, binding.secret)).status, 401, 'rejoin never revives a revoked binding');
+      assert.equal(mints.length, 1);
+    });
+  }
+}
+
+test('marker onboarding repairs an old hub-only join in place, once', async (t) => {
+  const a = mappedAccount(t);
+  const joined = await a.join({ config: {} });
+  assert.equal(a.identity(joined.agentId).github, undefined);
+  for (const args of [[], ['test-codex-app']]) {
+    const setup = spawnSync(process.execPath, [CLI, 'setup-worktree', ...args], {
+      cwd: joined.worktree, env: { ...a.env, AGENT_BOT_ID: joined.agentId }, encoding: 'utf8',
+    });
+    assert.notEqual(setup.status, 0);
+    assert.match(setup.stderr, /re-run agent-bot join/);
+    assert.doesNotMatch(setup.stderr, /use a new worktree/);
+  }
+  const repaired = await a.join({ cwd: joined.worktree });
+  assert.equal(repaired.agentId, joined.agentId);
+  assert.equal(repaired.created, false);
+  assert.equal(a.identity(joined.agentId).github.appSlug, 'test-codex-app');
+  const before = a.identity(joined.agentId);
+  await a.join({ cwd: joined.worktree });
+  assert.deepEqual(a.identity(joined.agentId), before);
+});
+
+test('marker onboarding respects environment selection and rejects a conflicting App pin or assigned soul', async (t) => {
+  const a = mappedAccount(t);
+  a.env.GH_AGENT_APP = 'explicit-app';
+  const joined = await a.join();
+  assert.equal(a.identity(joined.agentId).github.appSlug, 'explicit-app');
+  a.env.GH_AGENT_APP = 'different-app';
+  await assert.rejects(a.join({ cwd: joined.worktree }), /does not match/);
+  assert.equal(a.identity(joined.agentId).github.appSlug, 'explicit-app');
+  const repo = path.join(a.root, 'conflict');
+  mkdirSync(repo); git(repo, 'init', '-q'); git(repo, 'config', 'agentBot.app', 'pinned-app');
+  await assert.rejects(a.join({ cwd: repo }), /does not match/);
+  assert.throws(() => git(repo, 'config', '--get', 'agentBot.agentId'));
+});
+
+test('marker onboarding remains hub-only with disabled add-on or absent mapping', async (t) => {
+  const a = mappedAccount(t);
+  for (const config of [{ ...a.config, features: {} }, { features: a.config.features }]) {
+    const joined = await a.join({ config });
+    assert.equal(a.identity(joined.agentId).github, undefined);
+    await a.join({ cwd: joined.worktree, config });
+    assert.equal(a.identity(joined.agentId).github, undefined);
+  }
+});
+
+test('marker onboarding configures an isolated linked worktree; invalid credentials and the primary checkout stay unchanged', async (t) => {
+  const a = mappedAccount(t);
+  const primary = path.join(a.root, 'primary'), checkout = path.join(a.root, 'isolated');
+  mkdirSync(primary); git(primary, 'init', '-q', '-b', 'main');
+  git(primary, 'config', 'user.name', 'Owner'); git(primary, 'config', 'user.email', 'owner@example.com');
+  git(primary, 'config', 'core.hooksPath', '/dev/null');
+  git(primary, 'commit', '--allow-empty', '-q', '-m', 'initial');
+  git(primary, 'config', 'extensions.worktreeConfig', 'true');
+  git(primary, 'worktree', 'add', '-q', '-b', 'codex/test', checkout);
+  const sharedBefore = readFileSync(path.join(primary, '.git', 'config'));
+  const joined = await a.join({ cwd: checkout });
+  const gitDir = git(checkout, 'rev-parse', '--absolute-git-dir');
+  const configBefore = readFileSync(path.join(gitDir, 'config.worktree'));
+  const setupUrl = new URL('../setup-worktree.mjs', import.meta.url).href;
+  const run = (fail) => spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { main } from ${JSON.stringify(setupUrl)};
+    await main({
+      reconcileCredentials: async ({ slugs, onVerified }) => {
+        if (${fail}) throw new Error('invalid test credential');
+        if (slugs[0] !== 'test-codex-app') throw new Error('wrong App');
+        onVerified(slugs[0], { token: 'mock-token' });
+        return [{ local: { status: 'ready' } }];
+      },
+      resolveBotUid: async () => '123',
+    });
+  `], { cwd: checkout, env: { ...a.env, AGENT_BOT_ID: joined.agentId }, encoding: 'utf8' });
+  const denied = run(true);
+  assert.notEqual(denied.status, 0);
+  assert.match(denied.stderr, /invalid test credential/);
+  assert.deepEqual(readFileSync(path.join(gitDir, 'config.worktree')), configBefore);
+  const result = run(false);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(git(checkout, 'config', '--worktree', '--get', 'agentBot.app'), 'test-codex-app');
+  assert.equal(git(checkout, 'config', '--get', 'user.name'), 'test-codex-app[bot]');
+  assert.equal(git(primary, 'config', '--get', 'user.name'), 'Owner');
+  assert.deepEqual(readFileSync(path.join(primary, '.git', 'config')), sharedBefore);
+  assert.equal(existsSync(path.join(primary, '.git', 'config.worktree')), false);
+});
+
+test('marker onboarding refuses retired souls and inconsistent session claims without replacing them', async (t) => {
+  const a = mappedAccount(t);
+  const one = await a.join({ config: {} });
+  const two = await a.join({ config: {} });
+  await assert.rejects(a.join({ cwd: one.worktree, env: { ...a.env, AGENT_BOT_ID: two.agentId } }), /already pinned/);
+  await assert.rejects(a.join({ cwd: one.worktree, env: { ...a.env, AGENT_BOT_BINDING: path.join(a.root, 'missing') } }), /binding is missing/);
+  assert.equal(a.identity(one.agentId).github, undefined);
+  retireAgentIdentity(one.agentId, { stateDir: a.env.AGENT_BOT_STATE_HOME });
+  await assert.rejects(a.join({ cwd: one.worktree }), /not an active soul/);
+  assert.equal(a.identity(one.agentId).status, 'retired');
+  assert.equal(git(one.worktree, 'config', '--get', 'agentBot.agentId'), one.agentId);
 });

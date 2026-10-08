@@ -8,7 +8,7 @@ import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { mintAgentIdentity, retireAgentIdentity, stateDirectory } from './agent-identity.mjs';
 import { packageManifest, populationFile, recordSoulDisplayName, registerSoulDir, retireIdentityWithPopulation, showSoul, upsertIdentitySoul } from './agent-population.mjs';
 import { initSoulSpace } from './agent-space.mjs';
-import { loadConfig } from './config.mjs';
+import { isGateEnabled, loadConfig } from './config.mjs';
 import { computePackageRevision, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST,
   readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
 import { adoptSoulPackage, discardRevisionStaging, editSoulRevision, prepareRevisionEdit, revisionPackagePath } from './soul-revisions.mjs';
@@ -174,7 +174,7 @@ function workingPath(path) {
 
 // Mechanism shared by CLI and authenticated daemon package launches. No
 // template code runs; the package is validated before a directory or ID exists.
-export async function spawnSoulTemplate(templatePath, { name, role = null, harness = null, parentId = null, ...options } = {}) {
+export async function spawnSoulTemplate(templatePath, { name, role = null, harness = null, parentId = null, appSlug = null, ...options } = {}) {
   if (typeof name !== 'string' || !name.trim()) throw new Error('--name must be a nonempty string');
   // The instance's role (#535): soul.json `role`, as `population list` reads it (60 chars).
   if (role !== null && (typeof role !== 'string' || !role.trim() || role.trim().length > 60 || /[\u0000-\u001f\u007f]/.test(role))) {
@@ -225,8 +225,8 @@ export async function spawnSoulTemplate(templatePath, { name, role = null, harne
     save();
     manifest.revision = computePackageRevision(directory);
     save();
-    identity = mintAgentIdentity({ ...options, stateDir, appSlug: null, packagePath: directory,
-      parentId, harness, useGithub: false });
+    identity = mintAgentIdentity({ ...options, stateDir, appSlug, packagePath: directory,
+      parentId, harness, useGithub: Boolean(appSlug) && isGateEnabled('github-identity', options) });
     // The soul's life starts inside its folder (ADR-0583 decisions 8 and 9):
     // the marker, the Agent Space as a directory, and the history mirror
     // from the genesis revision on.

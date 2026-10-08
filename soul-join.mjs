@@ -32,13 +32,13 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN, resolveSpawn } from './acp-registry.mjs';
 import { mintBindToken, readBinding } from './agent-binding.mjs';
-import { mintAgentIdentity, readAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
-import { archiveSoulDirs, listSouls, populationFile, recordSoulDisplayName, retireIdentityWithPopulation, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
+import { initializeAgentApp, mintAgentIdentity, readAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
+import { archiveSoulDirs, listSouls, populationFile, recordSoulDisplayName, setSoulApp, retireIdentityWithPopulation, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
 import { describeSetting, ownerGate, readColdWakeSettings, setColdWake, wakeSetting } from './cold-wake-settings.mjs';
 import { initAgentSpace } from './agent-space.mjs';
 import { ensureSoulSpace } from './soul-memory.mjs';
-import { daemonPreference, loadConfig } from './config.mjs';
-import { AGENT_ID_KEYS } from './resolve-agent.mjs';
+import { daemonPreference, isGateEnabled, loadConfig } from './config.mjs';
+import { AGENT_ID_KEYS, pinnedSlug, resolveAgentSlug } from './resolve-agent.mjs';
 import { ensureSoulDirectory, installSoulHarnesses, soulNpmHarnessDirs } from './soul-home.mjs';
 import { bundledStarter, spawnSoulTemplate } from './soul-templates.mjs';
 export { bundledStarter } from './soul-templates.mjs';
@@ -50,6 +50,11 @@ const USAGE = 'usage: agent-bot join --name NAME --harness H [--template PATH] [
 const HELP = `${USAGE}
 
 Become a soul and join agent-comms. It needs no GitHub App.
+When github-identity is enabled, the configured harness markers resolve its
+App automatically. Rejoining fills a missing App on an active soul; an
+existing assignment or conflicting checkout/session identity is never changed.
+Then set AGENT_BOT_ID from the result and run setup-worktree in the linked
+worktree. No per-session identity app assign is needed.
 
 It reuses the soul already pinned in this checkout, or the soul whose binding
 the checkout holds. Otherwise it uses --soul, which must be an active soul.
@@ -207,9 +212,12 @@ export async function joinSoul({
   let checkout = ownWorkspace ? null : checkoutOf(cwd);
   const pinned = checkout ? pinnedSoul(checkout.worktree) : null;
   const binding = checkout ? readBinding({ env: {}, gitDir: checkout.gitDir }) : null;
+  const sessionBinding = !ownWorkspace && env.AGENT_BOT_BINDING ? readBinding({ env, cwd }) : null;
+  if (!ownWorkspace && env.AGENT_BOT_BINDING && !sessionBinding) throw new Error('session binding is missing; refusing to join');
   let agentId = soul === null ? null : validateAgentId(soul);
-  for (const claim of [pinned, binding?.agentId]) {
-    if (!claim || !activeIdentity(claim, stateDir)) continue;
+  for (const claim of [pinned, binding?.agentId, !ownWorkspace && (env.AGENT_BOT_ID || env.QWTS_AGENT_ID), sessionBinding?.agentId]) {
+    if (!claim) continue;
+    if (!activeIdentity(claim, stateDir)) throw new Error(`${claim} is not an active soul`);
     if (agentId && agentId !== claim) throw new Error(`this checkout is already pinned to ${claim}; join from another folder`);
     agentId = claim;
   }
@@ -217,6 +225,22 @@ export async function joinSoul({
   // A wake runs the soul's stored harness, not --harness: an existing soul
   // must be joined with its own harness before it can wake.
   const existing = agentId ? readAgentIdentity(agentId, { stateDir }) : null;
+  // Joining is deliberate onboarding. Resolve through the same configured
+  // markers as mint-token, before creating a soul or changing checkout state.
+  // Hook-driven setup still never claims a human checkout through detection.
+  const git = (args, { cwd: directory }) => execFileSync('git', args,
+    { cwd: directory, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  // Owner-driven fork joins must not inherit the caller's App or session.
+  const githubOn = !ownWorkspace && isGateEnabled('github-identity', options);
+  const appSlug = githubOn ? resolveAgentSlug({ env, cwd, config: loaded, git }) : null;
+  const appPin = githubOn ? pinnedSlug(cwd, { git }) : null;
+  if ((appPin && appSlug !== appPin)
+      || (appSlug && existing?.github?.appSlug && existing.github.appSlug !== appSlug)) {
+    throw new Error('GitHub App does not match the session soul or checkout pin');
+  }
+  if (appSlug && existing?.harness && existing.harness !== harness) {
+    throw new Error(`${agentId} runs ${existing.harness}; rejoin with its own harness`);
+  }
   if (wake !== null && existing?.harness && existing.harness !== harness) {
     throw new Error(`${agentId} runs ${existing.harness}; join it with --harness ${existing.harness} to set its wake`);
   }
@@ -239,13 +263,20 @@ export async function joinSoul({
       ? `wake the existing soul ${known ?? 'unnamed'} (${agentId}) on new messages (${wake})`
       : `create a new soul ${name} and wake it on new messages (${wake})`, { principal, env, cwd });
 
+  // Recovery for the old join path fills only absent App metadata. It
+  // never changes an assignment, revives a soul, or replaces a binding.
+  if (existing && appSlug && !existing.github) {
+    initializeAgentApp(agentId, appSlug, { stateDir,
+      afterWrite: () => setSoulApp(agentId, appSlug, { file }) });
+  }
+
   let created = false;
   if (!agentId) {
     const source = template === undefined ? bundledStarter({ env }) : template;
     if (source) {
-      agentId = (await spawn(source, { ...options, stateDir, file, name, harness })).id;
+      agentId = (await spawn(source, { ...options, stateDir, file, name, harness, appSlug })).id;
     } else {
-      agentId = mintAgentIdentity({ ...options, stateDir, appSlug: null, harness, useGithub: false }).id;
+      agentId = mintAgentIdentity({ ...options, stateDir, appSlug, harness, useGithub: Boolean(appSlug) }).id;
       upsertIdentitySoul(agentId, initAgentSpace(agentId, options).path, { file, stateDir });
     }
     created = true;
