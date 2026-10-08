@@ -119,9 +119,9 @@ for. `agent-bot skill path` prints the installed release's copy of this skill.
 |---|---|---|
 | read-only | `--help`, `doctor`, `sop`, `skill`, `skill path`, `population list`, `space path`, `signed-commit --dry-run`, `secret get` | Safe to repeat. |
 | local-write | `bootstrap`, `setup-worktree`, `install`, `install-gh-shim`, `daemon install`, `daemon disable`, `ensure-private-key`, `space ensure` | Converge on rerun; confirm with `doctor`. |
-| read-only | `soul show`, `soul profile`, `soul env`, `soul runtimes`, `soul locate`, `soul templates`, `soul asides`, `soul cold-wake ID show`, `soul model ID show`, `soul mode ID show`, `soul computer-use ID show`, `soul comms ID show`, `soul confinement-report`, `soul pack validate`, `soul build --check`, `approvals list`, `telegram status` | Safe to repeat. |
+| read-only | `soul show`, `soul profile`, `soul env`, `soul runtimes`, `soul secret ID status`, `soul locate`, `soul templates`, `soul asides`, `soul cold-wake ID show`, `soul model ID show`, `soul mode ID show`, `soul computer-use ID show`, `soul comms ID show`, `soul confinement-report`, `soul pack validate`, `soul build --check`, `approvals list`, `telegram status` | Safe to repeat. |
 | local-write | `soul dir` | May re-register a uniquely moved soul directory; see [soul-homes.md](../../docs/soul-homes.md). |
-| local-write | `soul spawn`, `soul build`, `soul revision`, `soul runtimes install`, `soul cold-wake`, `soul model`, `soul mode`, `soul computer-use`, `soul confinement`, `soul stop`, `soul pause`, `soul resume` | Inspect the subcommand and current state before retrying; spawning creates a new identity, and owner actions require the owner gate. |
+| local-write | `soul spawn`, `soul build`, `soul revision`, `soul runtimes install`, `soul secret ID set|clear`, `soul cold-wake`, `soul model`, `soul mode`, `soul computer-use`, `soul confinement`, `soul stop`, `soul pause`, `soul resume` | Inspect the subcommand and current state before retrying; spawning creates a new identity, and owner actions require the owner gate. |
 | local-write | `approvals approve`, `approvals deny`, `web open` | Decisions require the daemon's owner gate; inspect waiting proposals before retrying. Each web open mints a single-use pairing code and prints/opens its link. |
 | remote-write | `join` | Also writes local soul, census, checkout pin and bind-token state. Running it again from the same checkout reuses the soul; see [joining.md](../../docs/joining.md). |
 | remote-write | `soul comms`, `soul fork`, `telegram run` | Changes agent-comms membership or relays messages; also writes local state. Inspect current state before retrying. |
@@ -213,6 +213,18 @@ too. Failures are coded (`runtime-download-failed`,
 `runtime-install-failed`) and name the fixing command. Never install a
 runtime on the host for a soul; see
 [soul-runtimes.md](../../docs/soul-runtimes.md).
+
+`agent-bot soul secret <agentId|name> set <name>` stores the secret a
+harness's `soul.json` provider names (`harnesses.<h>.provider.credential`
+→ `credentials.secrets.<name>`), reading the value from stdin only: pipe
+it (`printf '%s' "$TOKEN" | agent-bot soul secret billy set github-models`),
+never put it on argv, never echo it, never write it into `soul.json` or a
+harness `env`. `clear <name>` removes it; both are owner actions. `status
+[--json]` says `present` or `missing` per secret and `ready` or
+`secret-missing` per provider with the fixing command, never the value.
+At launch the daemon injects it into that harness's process alone; a
+missing one fails the launch with `provider-secret-missing`. See
+[soul-providers.md](../../docs/soul-providers.md).
 
 `agent-bot sandbox status|plan|on|off|account NAME|override <agentId|name> [inherit|sandboxed|unrestricted]|resolve <agentId|name> [--json]` reports the persona account for sandboxed souls (`missing | creating | ready`), lists the owner's steps to create and onboard it (agent-bot never runs them), and keeps the global switch and per-soul overrides (#376). Writes are owner actions. The SOP pack's `persona.toml` decides first (`source: sop`; an override on such a soul is refused), then the override, then the switch; `agent-bot sop persona [--json]` records that mapping online (`<state>/sop-persona.json`) so status and launches read it offline, and the switch off keeps a pack decision reported but unapplied (GeniusBar#66, ADR-0274).
 

@@ -109,7 +109,10 @@ and 5 precedes 7.
 3. Per-soul runtimes and harness installs (implements #322). Shipped:
    `soul runtimes`, `runtime-catalog.mjs`, launch routing; see
    [soul-runtimes.md](../soul-runtimes.md).
-4. Providers per harness and `soul secret`.
+4. Providers per harness and `soul secret`. Shipped: `harnesses.<h>.provider`,
+   `credentials.secrets`, `soul-providers.mjs`, `soul secret`, launch
+   injection and the `provider` stage; see
+   [soul-providers.md](../soul-providers.md).
 5. Memory and history containment, with migration.
 6. Migration completion, a doctor check, `soul env clean`.
 7. Export and import.

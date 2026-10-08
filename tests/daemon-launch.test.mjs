@@ -802,3 +802,24 @@ test('a sandboxed launch off macOS fails at account rather than running unsandbo
   assert.equal(f.reports[0].code, 'sandbox-not-ready');
   assert.match(f.reports[0].detail, /persona accounts need macOS/);
 });
+
+test('a declared provider secret is checked at launch as its own stage before the soul joins, and a missing one is a coded failure naming the command (#583 slice 4)', async (t) => {
+  const checks = [];
+  const f = fixture(t, { joinSoul: async () => 'addr', providers: { pending: async ({ harness }) => (harness === 'claude' ? ['claude:anthropic'] : []), check: async (args) => { checks.push(args); } } });
+  const stages = [];
+  await f.handler(event, { ...f.ports, progress: async ({ stage }) => { stages.push(stage); } });
+  assert.deepEqual(stages, ['checking', 'account', 'provider', 'joining', 'harness']);
+  assert.deepEqual(checks, [{ agentId, harness: 'claude' }]);
+  assert.equal(f.reports[0].status, 'launched');
+  const g = fixture(t, { joinSoul: async () => 'addr', providers: { pending: async () => [], check: async () => { throw new Error('unexpected check'); } } });
+  const quiet = [];
+  await g.handler({ ...event, requestId: 'r2' }, { ...g.ports, progress: async ({ stage }) => { quiet.push(stage); } });
+  assert.deepEqual(quiet, ['checking', 'account', 'joining', 'harness']);
+  const error = Object.assign(new Error('claude\'s provider anthropic needs the secret "anthropic-key" (ANTHROPIC_API_KEY), which is not stored for this soul'),
+    { code: 'provider-secret-missing', action: `agent-bot soul secret ${agentId} set anthropic-key` });
+  const h = fixture(t, { joinSoul: async () => { throw new Error('joined without its secret'); }, providers: { pending: async () => ['claude:anthropic'], check: async () => { throw error; } } });
+  await h.handler({ ...event, requestId: 'r3' }, h.ports);
+  assert.deepEqual(h.reports[0], { requestId: 'r3', status: 'failed', agentId: null, detail: `provider-secret-missing: ${error.message}`, code: 'provider-secret-missing' });
+  assert.equal(JSON.parse(readFileSync(h.options.file)).find((row) => row.requestId === 'r3').code, 'provider-secret-missing');
+  assert.deepEqual(h.calls, [], 'no turn ran');
+});

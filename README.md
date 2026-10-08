@@ -292,6 +292,8 @@ agent-bot soul profile <agentId|name> [--json] [--file RELATIVE_PATH]
 agent-bot soul env <agentId|name> [--json]
 agent-bot soul runtimes <agentId|name> [--json]
 agent-bot soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin]
+agent-bot soul secret <agentId|name> set|clear <name> [--json] [--principal-stdin]
+agent-bot soul secret <agentId|name> status [--json]
 agent-bot sandbox status|plan [--json]
 agent-bot sandbox on|off|account NAME [--json] [--principal-stdin]
 agent-bot sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin]
@@ -387,6 +389,10 @@ agent-bot soul runtimes AGENT_ID --json
 # declared runtimes (node, python, go) and harness installs, resolved and installed; see docs/soul-runtimes.md
 agent-bot soul runtimes install AGENT_ID [--runtime NAME] --principal-stdin
 # owner only: provision what is missing into .soul-state/runtimes from pinned, checksum-verified downloads
+printf '%s' "$TOKEN" | agent-bot soul secret AGENT_ID set github-models
+# owner only: the provider secret a harness's soul.json provider names, value on stdin; see docs/soul-providers.md
+agent-bot soul secret AGENT_ID status --json
+# present or missing per declared secret, ready or secret-missing per provider; never the value
 ```
 
 `soul locate` emits JSON with or without `--json`. For `package`, `installed`

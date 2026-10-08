@@ -9,6 +9,7 @@ import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
 import { RUNTIME_NAMES, normalizeHarnessInstall, normalizeRuntimeDeclaration } from './runtime-catalog.mjs';
 import { buildHarnessFiles, envProblem, PERMISSION_RULE } from './soul-builder.mjs';
 import { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS, isGeneratedPath } from './soul-harness-contract.mjs';
+import { normalizeProvider, validateSecretsDeclaration } from './soul-providers.mjs';
 export { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS };
 
 /** The current format-2 ignore list, or one an earlier release wrote (read, never guessed at). */
@@ -37,13 +38,15 @@ export function canonicalJson(value) {
 // exported and hashed into revisions, so it may never hold key material:
 // only the closed set of keys below is accepted, and the App is a slug.
 // `keyd` is agent-bot-keyd's Keychain, which only that signed binary reads
-// (#397).
+// (#397). `secrets` (#583 slice 4) names provider secrets the same way:
+// `{ <name>: { store } }`, each set with `soul secret`, never written here.
 export const CREDENTIAL_STORES = Object.freeze(['keychain', 'file', 'keyd', 'pass-cli']);
 const APP_SLUG = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?$/;
 export function validateCredentialsDeclaration(credentials) {
   if (!object(credentials)) throw new Error('soul.json credentials must be an object');
-  const extra = Object.keys(credentials).filter((key) => key !== 'github');
-  if (extra.length) throw new Error(`soul.json credentials accepts only github (found ${extra.join(', ')})`);
+  const extra = Object.keys(credentials).filter((key) => key !== 'github' && key !== 'secrets');
+  if (extra.length) throw new Error(`soul.json credentials accepts only github and secrets (found ${extra.join(', ')})`);
+  if (credentials.secrets !== undefined) validateSecretsDeclaration(credentials.secrets);
   if (credentials.github === undefined) return credentials;
   const github = credentials.github;
   if (!object(github)) throw new Error('soul.json credentials.github must be an object');
@@ -74,8 +77,10 @@ export function validateRuntimesDeclaration(runtimes) {
 // opaque. Keep failures path-specific, including overrides that no adapter renders.
 // `install` (a pinned non-npm download, ADR-0322 decision 3) is only ever per
 // harness and never for one whose adapter is an npm pin (ADR-0276).
+// `provider` (#583 slice 4) is per harness too: the id must be one the
+// builder renders for that harness, and its credential a declared secret.
 const HARNESS_NAMES = ['claude', 'codex', 'gemini', 'opencode', 'cursor', 'copilot', 'devin', 'muse', 'kiro'];
-function validateHarnessSettings(settings, path, harness = null) {
+function validateHarnessSettings(settings, path, harness = null, secrets = {}) {
   if (!object(settings)) throw new Error(`${path} must be an object`);
   for (const [key, value] of Object.entries(settings)) {
     const field = `${path}.${key}`;
@@ -83,6 +88,12 @@ function validateHarnessSettings(settings, path, harness = null) {
       if (!harness) throw new Error(`${field} is only accepted under harnesses.<name>`);
       if (ACP_SPAWN_REGISTRY[harness]?.adapter) throw new Error(`${field}: ${harness} is an npm harness, pinned in package.json (ADR-0276)`);
       normalizeHarnessInstall(value, field, { defaultBin: ACP_SPAWN_REGISTRY[harness]?.command ?? null });
+    } else if (key === 'provider') {
+      if (!harness) throw new Error(`${field} is only accepted under harnesses.<name>`);
+      const provider = normalizeProvider(harness, value, field);
+      if (provider.credential && !Object.hasOwn(secrets, provider.credential)) {
+        throw new Error(`${field}.credential names credentials.secrets.${provider.credential}, which is not declared`);
+      }
     } else if (key === 'model') {
       if (!nonempty(value)) throw new Error(`${field} must be a nonempty string`);
     } else if (key === 'reasoningEffort') {
@@ -164,9 +175,10 @@ function validateManifest(manifest) {
   if (manifest.harness !== undefined) validateHarnessSettings(manifest.harness, 'soul.json harness');
   if (manifest.harnesses !== undefined) {
     if (!object(manifest.harnesses)) throw new Error('soul.json harnesses must be an object');
+    const secrets = object(manifest.credentials?.secrets) ? manifest.credentials.secrets : {};
     for (const [name, settings] of Object.entries(manifest.harnesses)) {
       if (!HARNESS_NAMES.includes(name)) throw new Error(`soul.json harnesses.${name} is an unknown harness`);
-      validateHarnessSettings(settings, `soul.json harnesses.${name}`, name);
+      validateHarnessSettings(settings, `soul.json harnesses.${name}`, name, secrets);
       if (settings.install?.kind === 'uv-tool' && manifest.runtimes?.python === undefined) {
         throw new Error(`soul.json harnesses.${name}.install is a uv tool, which needs runtimes.python`);
       }

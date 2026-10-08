@@ -13,12 +13,14 @@ import {
   REACH_COMMS_ENV,
   REACH_CORRELATION_ENV,
   REACH_INVOCATION_ENV,
+  REACH_STRIP_ENV,
   REACH_WORKTREE_ENV,
   reachPolicyRules,
   createReachState,
   handleMcpMessage,
   reachMcpServerEntry,
   resolveReachIdentity,
+  stripReachEnv,
 } from '../daemon-mcp.mjs';
 import {
   appendEvent,
@@ -817,4 +819,17 @@ test('a comms turn leaves out the invocation tools and refuses them by name', as
   for (const name of ['fetch_context', 'post_reply', 'report_status']) {
     await assert.rejects(call(state, name, { text: 'x', invocation_id: 'invocation_44444444-4444-4444-8444-444444444444' }), /not available in this turn/);
   }
+});
+
+test('the reach server drops the variables AGENT_BOT_REACH_STRIP_ENV names from its own environment at startup (#583 slice 4)', () => {
+  const env = { HOME: '/home/bot', GITHUB_TOKEN: 'ghp_never', OPENAI_API_KEY: 'sk_never', KEEP: 'yes', [REACH_STRIP_ENV]: 'GITHUB_TOKEN,OPENAI_API_KEY,not a name' };
+  const state = createReachState({ env, cwd: tmpdir() });
+  assert.deepEqual(Object.keys(state.env).sort(), ['AGENT_BOT_REACH_STRIP_ENV', 'HOME', 'KEEP']);
+  assert.equal(env.GITHUB_TOKEN, undefined, 'stripped in place, so no child of the server inherits it');
+  assert.equal(stripReachEnv({ A: '1' }).A, '1');
+  const entry = reachMcpServerEntry({ agentId: AGENT_ID, env: { GITHUB_TOKEN: 'ghp_never', PATH: '/bin' }, strip: ['GITHUB_TOKEN', 'GITHUB_TOKEN', 'bad name'] });
+  const vars = Object.fromEntries(entry.env.map((pair) => [pair.name, pair.value]));
+  assert.equal(vars[REACH_STRIP_ENV], 'GITHUB_TOKEN');
+  assert.equal('GITHUB_TOKEN' in vars, false, 'only the passthrough names are forwarded, never the secret');
+  assert.equal(reachMcpServerEntry({ agentId: AGENT_ID, env: {} }).env.some((pair) => pair.name === REACH_STRIP_ENV), false);
 });

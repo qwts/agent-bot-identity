@@ -24,6 +24,31 @@ Any other key, under `credentials` or `credentials.github`, fails validation,
 so a key cannot be packaged by mistake. `soul spawn` copies the declaration
 into every instance. The key is not copied.
 
+### Provider secrets (`credentials.secrets`)
+
+A soul whose harness talks to a model provider declares the secret that
+provider needs beside the App declaration (#583 slice 4):
+
+```json
+{
+  "credentials": {
+    "github": { "app": "you-claude-agent", "store": "keychain" },
+    "secrets": { "github-models": { "store": "keychain" } }
+  }
+}
+```
+
+`credentials.secrets.<name>` accepts `store` only (`keychain`, `file` or
+`pass-cli`; not `keyd`, which never returns a value). The same store
+implementations keep these under the same per-soul namespace: Keychain
+service `agent-bot.soul.<agentId>`, account `secret/<name>`; file
+`.soul-state/credentials/secret-<name>.json` (`.dpapi` on Windows, same
+0700/0600 owner checks); Proton Pass note `agent-bot.soul.<agentId>/secret/<name>`.
+The owner stores the value with `agent-bot soul secret <soul> set <name>`
+(value on stdin); `harnesses.<h>.provider.credential` names it; at launch
+it goes into that harness's environment only. See
+[soul-providers.md](soul-providers.md).
+
 ## Stores
 
 - **keychain**: a generic password in the login keychain, service

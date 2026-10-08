@@ -2,6 +2,7 @@
 // imports: ACP spawn data includes machine-specific paths and is not build input.
 import { GENERATED_HARNESS_MARKER as MARKER, isGeneratedPath } from './soul-harness-contract.mjs';
 import { CANONICAL_EVENTS, isBlocking, nativeHookEntry, SOUL_HOOK_MARKER, vendorEvent } from './hook-dialects.mjs';
+import { PROVIDERS, claudeProviderEnv, codexProviderConfig, normalizeProvider, opencodeProviderConfig, providerRenders } from './soul-providers.mjs';
 
 const compare = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b));
 const text = (bytes) => new TextDecoder('utf-8', { fatal: true }).decode(bytes).replace(/\r\n?/g, '\n');
@@ -67,11 +68,14 @@ const HARNESS_FILES = Object.freeze({
 
 // Settings are defaults for native harness launches; owner-selected launch
 // models remain outside the package and take precedence at launch.
+// `provider` (#583 slice 4) renders the non-secret parts of a per-harness
+// model provider: Codex's `model_providers` table, Claude's endpoint in its
+// settings `env`, OpenCode's `provider` block. The secret is launch-time only.
 export const SETTINGS_TARGETS = Object.freeze([
-  Object.freeze({ harness: 'claude', path: '.claude/settings.json', keys: Object.freeze(['env', 'model', 'permissionMode', 'permissions', 'reasoningEffort']) }),
-  Object.freeze({ harness: 'codex', path: '.codex/config.toml', keys: Object.freeze(['env', 'model', 'permissionMode', 'reasoningEffort']) }),
+  Object.freeze({ harness: 'claude', path: '.claude/settings.json', keys: Object.freeze(['env', 'model', 'permissionMode', 'permissions', 'provider', 'reasoningEffort']) }),
+  Object.freeze({ harness: 'codex', path: '.codex/config.toml', keys: Object.freeze(['env', 'model', 'permissionMode', 'provider', 'reasoningEffort']) }),
   Object.freeze({ harness: 'gemini', path: '.gemini/settings.json', keys: Object.freeze(['model']) }),
-  Object.freeze({ harness: 'opencode', path: 'opencode.json', keys: Object.freeze(['model', 'permissionMode', 'permissions']) }),
+  Object.freeze({ harness: 'opencode', path: 'opencode.json', keys: Object.freeze(['model', 'permissionMode', 'permissions', 'provider']) }),
 ]);
 
 const plainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -79,6 +83,7 @@ const plainObject = (value) => value !== null && typeof value === 'object' && !A
 // An override replaces the fields it declares, except that `env` merges per
 // variable over the shared `env`, and `permissions` keeps a shared list the
 // override does not declare (a declared list replaces the shared one whole).
+// `provider` is per harness only: a shared one is never applied.
 export function harnessSettings(manifest, name) {
   const shared = plainObject(manifest.harness) ? manifest.harness : {};
   const override = plainObject(manifest.harnesses?.[name]) ? manifest.harnesses[name] : {};
@@ -86,7 +91,15 @@ export function harnessSettings(manifest, name) {
   for (const key of ['env', 'permissions']) {
     if (plainObject(shared[key]) && plainObject(override[key])) settings[key] = { ...shared[key], ...override[key] };
   }
+  if (override.provider === undefined) delete settings.provider;
   return settings;
+}
+
+// The declared provider, normalized for this harness; a harness with no
+// provider rendering gets null, so the key is reported unsupported there.
+function declaredProvider(harness, settings) {
+  if (settings.provider === undefined || !Object.hasOwn(PROVIDERS, harness)) return null;
+  return normalizeProvider(harness, settings.provider);
 }
 
 // Environment variables (#379, slice 2). A soul is shared, copied and forked,
@@ -149,7 +162,8 @@ function opencodeRule(rule) {
 // `permissions` only when at least one rule maps; the rest are reported.
 function renderedKeys(target, settings) {
   return target.keys.filter((key) => Object.hasOwn(settings, key)
-    && (key !== 'permissions' || target.harness !== 'opencode' || permissionRules(settings).some(({ rule }) => opencodeRule(rule))));
+    && (key !== 'permissions' || target.harness !== 'opencode' || permissionRules(settings).some(({ rule }) => opencodeRule(rule)))
+    && (key !== 'provider' || providerRenders(target.harness, declaredProvider(target.harness, settings))));
 }
 
 export function settingsTargets(manifest) {
@@ -212,6 +226,12 @@ function renderCodexSettings(path, bytes, settings) {
   // to the commands it runs. That table is rebuilt at the end of the file:
   // undeclared authored variables are kept verbatim, declared ones replaced.
   const env = settings.env === undefined ? null : declaredEnv(settings);
+  // The provider (#583 slice 4): `model_provider` at the root and its own
+  // `[model_providers.<id>]` table, rebuilt whole; the secret is never here.
+  const provider = declaredProvider('codex', settings);
+  const codex = provider ? codexProviderConfig(provider) : null;
+  if (codex) values.model_provider = codex.model_provider;
+  const PROVIDERS_TABLE = 'model_providers', PROVIDER = codex ? `${PROVIDERS_TABLE}.${provider.id}` : null;
   const POLICY = 'shell_environment_policy', SET = `${POLICY}.set`;
   const setKept = [];
   let table = null;
@@ -232,13 +252,27 @@ function renderCodexSettings(path, bytes, settings) {
         return false;
       }
     }
+    if (PROVIDER) {
+      const conflict = (table === null && key === PROVIDERS_TABLE) || (table === PROVIDERS_TABLE && key === provider.id);
+      if (conflict) throw new Error(`${path}: ${PROVIDER} must be a [${PROVIDER}] table to merge the soul's provider`);
+      if (table === PROVIDER || table?.startsWith(`${PROVIDER}.`)) return false;
+    }
     return table !== null || !key || !Object.hasOwn(values, key);
   }).join('').replace(/^\n+|\n+$/g, '');
   const lines = Object.entries(values).map(([key, value]) => `${key} = ${quotedString(value)}`);
+  const providerTable = codex
+    ? `\n[${PROVIDER}]\n${Object.entries(codex.table).map(([key, value]) => `${key} = ${quotedString(value)}\n`).join('')}` : '';
   const envTable = env && (Object.keys(env).length || setKept.length)
     ? `\n[${SET}]\n${Object.keys(env).sort(compare).map((name) => `${name} = ${quotedString(env[name])}\n`).join('')}${setKept.join('')}` : '';
   const head = `# ${MARKER}\n${lines.length ? `${lines.join('\n')}\n` : ''}`;
-  return Buffer.from(`${head}${kept ? `${lines.length ? '\n' : ''}${kept}\n` : ''}${envTable && (lines.length || kept) ? envTable : envTable.slice(1)}`);
+  let out = `${head}${kept ? `${lines.length ? '\n' : ''}${kept}\n` : ''}`;
+  let filled = lines.length > 0 || Boolean(kept);
+  for (const section of [providerTable, envTable]) {
+    if (!section) continue;
+    out += filled ? section : section.slice(1);
+    filled = true;
+  }
+  return Buffer.from(out);
 }
 
 function renderSettings(target, bytes, settings) {
@@ -250,6 +284,8 @@ function renderSettings(target, bytes, settings) {
     if (keys.includes('reasoningEffort')) value.effortLevel = settings.reasoningEffort;
     // Declared variables replace their own names; other authored ones stay.
     if (keys.includes('env')) value.env = { ...nestedSettings(value, 'env', target.path), ...declaredEnv(settings) };
+    // The provider's endpoint rides in the same `env`; its key never does.
+    if (keys.includes('provider')) value.env = { ...nestedSettings(value, 'env', target.path), ...claudeProviderEnv(declaredProvider('claude', settings)) };
     if (keys.includes('permissionMode') || keys.includes('permissions')) {
       const permissions = { ...nestedSettings(value, 'permissions', target.path) };
       if (keys.includes('permissionMode')) permissions.defaultMode = settings.permissionMode === 'safe' ? 'default' : 'bypassPermissions';
@@ -282,6 +318,9 @@ function renderSettings(target, bytes, settings) {
       permission.bash = patterns.length === 1 && patterns[0] === '*' ? bash['*'] : bash;
     }
     value.permission = permission;
+  }
+  if (target.harness === 'opencode' && keys.includes('provider')) {
+    value.provider = { ...nestedSettings(value, 'provider', target.path), ...opencodeProviderConfig(declaredProvider('opencode', settings)) };
   }
   return Buffer.from(`${JSON.stringify({ _comment: MARKER, ...value }, null, 2)}\n`);
 }
@@ -593,7 +632,9 @@ export function harnessReport(output, { comms = true, manifest = {}, hooks = [] 
     const settingKeys = Object.keys(settings).sort(compare);
     const deliveredSettings = settingsTarget && output.has(settingsTarget.path)
       ? renderedKeys(settingsTarget, settings).sort(compare) : [];
-    unsupported.settings = settingKeys.filter((key) => !deliveredSettings.includes(key));
+    // A provider whose non-secret parts are all defaults (Claude's built-in
+    // endpoint) is launch-time only, not unsupported, where it is rendered.
+    unsupported.settings = settingKeys.filter((key) => !deliveredSettings.includes(key) && !(key === 'provider' && Object.hasOwn(PROVIDERS, harness)));
     if (deliveredSettings.length) rendered.push('settings');
     // Per rule, so a partly expressible rule set never loses one in silence.
     const rulesRendered = deliveredSettings.includes('permissions');
