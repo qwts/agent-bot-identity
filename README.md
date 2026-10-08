@@ -325,7 +325,8 @@ covering that subcommand. `agent-bot skill path` continues to report the
 `agent-bot` bundle directory and source commit (`{ path, commit }` with
 `--json`). See [docs/skills.md](docs/skills.md).
 
-Skill import is a proposal, not an available command: see
+Skill import, installation, agent-guided learning, and scheduled dream
+maintenance are proposed in
 [ADR-0603](docs/decisions/ADR-0603-imported-skills-keep-local-snapshots-and-upstream-provenance.md)
 in the [architecture decision index](docs/decisions/README.md).
 

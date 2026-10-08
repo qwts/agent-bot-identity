@@ -1,4 +1,4 @@
-# ADR-0603: Imported skills keep local snapshots and upstream provenance
+# ADR-0603: Skills have distinct import, install, learn, and dream operations
 
 **Status:** Proposed
 **Date:** 2026-10-07
@@ -23,6 +23,13 @@ Local adaptation complicates change detection: replacing a dependency URL
 with a local path intentionally changes a file. Comparing that edited file
 directly with upstream cannot distinguish the agent's adaptation from the
 source author's change. Both versions and their relationship must survive.
+
+Importing files into a library does not make them available to a harness or
+useful to a soul. Installing a skill at a repo or user location is different
+from an agent progressively incorporating useful pieces into its own skills.
+Learning and ongoing knowledge maintenance require agent judgment and may
+use tools that this runtime does not provide. They must not assume that
+every soul has an embedding service, retrieval index, or knowledge graph.
 
 ## Proposed decision
 
@@ -122,6 +129,96 @@ source author's change. Both versions and their relationship must survive.
    unavailable dependency is explicit in the report. Checksums establish
    byte identity and change detection, not authenticity, approval, or safety.
 
+9. **Install targets a repo or user harness location.**
+   `agent-bot skill install <skill> --harness <h> --repo <path>` or `--user`
+   places a selected local revision through a harness-specific adapter.
+   Record the destination, revision, managed files, and checksums; refuse
+   unsupported targets and conflicting files. `uninstall` removes the
+   managed installation, preserving the library and surfacing local edits.
+   Placement and verified harness discovery are separate outcomes; report
+   any reload requirement. There is no `install --soul` shortcut: the soul
+   path is agent-guided learning through its revision policy.
+
+10. **Learn instructs an agent; it is not an ingestion pipeline.**
+    `agent-bot skill learn <skill> --soul <soul>` supplies the entrypoint,
+    provenance, previous learning outcomes, and guidance for progressive
+    consumption. The agent selects relevant procedures, references, scripts,
+    and assets, follows their dependencies, and adapts useful material into
+    the soul's skills through the existing revision workflow. It need not
+    adopt the whole source skill. Record adopted source revisions and local
+    destinations so later source changes can be compared against the pieces
+    and dependencies the soul actually uses.
+
+    Guide the agent to discover existing knowledge tools and, where useful
+    and authorized, make adopted material retrievable through embeddings,
+    graph relationships, or other available capabilities. The guidance
+    describes outcomes and general methods, not mandatory providers or tool
+    calls. If a capability is absent, the agent explains what is missing
+    and how the user can configure it. The runtime neither provisions a new
+    external service implicitly nor claims to have embedded content merely
+    because files were copied. Report completed, skipped, and blocked work
+    with evidence from files or tools; record inference as inference.
+
+11. **Dream schedules agent-driven maintenance of the soul's knowledge.**
+    `agent-bot skill dream --soul <soul> --schedule <schedule>` registers or
+    updates a recurring maintenance task, analogous to `git maintenance`.
+    The runtime owns scheduling, execution bounds, overlap prevention,
+    checkpoints, and run records. The task instructs an agent to review
+    changed memories, conversations, learned skills, and other eligible
+    soul contents; consolidate useful knowledge; refresh embeddings; repair
+    references and graph relationships; and remove stale derived material
+    using available tools. It is not a deterministic embed-and-delete job.
+
+    A deleted source's embedding or a dangling relationship can be removed
+    as stale derived data. Superseded source knowledge can be consolidated
+    or retired under the soul's retention/revision policy, preserving
+    provenance; age or lack of recent retrieval alone does not establish
+    that a memory or conversation is disposable. Missing tools permit
+    partial maintenance with an explicit outcome, not fabricated success.
+    Repeated registration updates the existing soul task. Provide run-now,
+    status, pause, and unschedule controls. Operate quietly when nothing
+    actionable changes; notify on meaningful changes, failures, or required
+    user action without repeating unchanged missing-capability notices.
+    No maintenance task is registered by import, install, or this proposal.
+
+12. **Knowledge interfaces adapt to available capabilities.** Prioritize
+    `agent-bot soul knowledge search <soul> "<query>"` and
+    `agent-bot soul knowledge status <soul>` when a retrieval/capability
+    contract is defined. Search queries configured tools and returns local
+    citations and source revisions; it does not launch learning as an
+    implicit substitute for retrieval. Status distinguishes tool-verified
+    coverage and health from an agent's last report, including unknown or
+    unsupported states. Do not require agent-bot to own a vector database,
+    graph engine, embedding model, or universal network interceptor.
+    Retrieval and indexes must respect the soul's eligible-content and
+    provider boundaries. Derived entries retain source checksums and
+    revision references; removed content stops appearing as current
+    knowledge. Source-backed relationships and inferred ones remain
+    distinguishable. Exact adapter schemas are a follow-up design question.
+
+## Proposed command scope
+
+All names below are proposed; this record adds no runtime commands.
+
+| Surface | Responsibility |
+| --- | --- |
+| `skill import`, `list`, `show`, `verify` | Acquire, discover, explain, and verify library content; provide structured output for agents. |
+| `skill install`, `uninstall` | Manage a selected revision at an explicit repo or user harness location. |
+| `skill learn` | Guide progressive, agent-led adoption into a soul and optional knowledge-tool integration. |
+| `skill dream` | Register and manage recurring, agent-driven soul maintenance. |
+| Source check, diff, explicit update | Stage, explain, and adopt upstream candidates separately; exact command names remain open. |
+| `soul knowledge search`, `status` | Query configured capabilities and report evidenced state when a common interface is available. |
+
+Defer a dedicated `knowledge inspect` command until indexed items have a
+stable identity/provenance contract. Defer `knowledge reindex` and `graph`;
+focused dream tasks can guide available tools without assuming a universal
+backend. References can be a `show` view, recording can reuse revision
+tooling, and installation upgrades can select another revision through
+`install`. Separate snapshot, learned, upgrade, forget, rollback, and export
+verbs are not commitments of this proposal. Integrating knowledge into other
+skills makes forgetting an agent-guided revision, not necessarily the inverse
+of copying a file.
+
 ## Consequences
 
 - Agents can work from inspectable local files and explain upstream changes
@@ -141,6 +238,15 @@ source author's change. Both versions and their relationship must survive.
 - Hashes alone do not make skills trusted. Existing selection, review, and
   adoption policies remain necessary where the user or organization uses
   them.
+- A soul can learn without a repo/user installation and can perform useful
+  maintenance without embeddings or a graph. Outcomes vary with available
+  tools, so reports need evidence and explicit partial-completion states.
+- Harness placement adapters and optional knowledge interfaces add contracts
+  to maintain. Agent-bot provides a common workflow without committing to a
+  particular knowledge-storage implementation.
+- Dream tasks consume execution resources and can change durable knowledge.
+  Scheduling must be explicit, bounded, inspectable, and reversible; source
+  consolidation follows retention/revision policy rather than an age cutoff.
 
 ## Alternatives considered
 
@@ -157,6 +263,13 @@ source author's change. Both versions and their relationship must survive.
   instructions can change outside the soul's revision/proposal mechanism.
 - **Make every import a soul revision:** prevents standalone collection and
   review, and couples acquisition to adoption unnecessarily.
+- **Install the whole skill into a soul:** conflates harness placement with
+  progressive learning and hides the agent's selection and adaptation.
+- **Make learn/dream deterministic embedding pipelines:** assumes tools and
+  storage choices that may be absent, and replaces judgment about relevance
+  and consolidation with an inflexible sequence.
+- **Build a mandatory RAG/graph engine first:** makes useful import, learning,
+  and maintenance depend on a backend rather than on available capabilities.
 
 ## Questions before implementation
 
@@ -173,6 +286,14 @@ source author's change. Both versions and their relationship must survive.
   approval or revision model?
 - What retention and source-authentication mechanisms are needed beyond
   the initial public-URL/local-file support?
+- Which harness adapters and discovery checks ship first, and how does a
+  new installation avoid conflicts with unmanaged skills?
+- How are learn guidance, progressive disclosure, and evidenced learning
+  outcomes handed between the CLI, agent, and soul revision workflow?
+- Which existing task scheduler executes dream procedures, and what are the
+  schedule syntax, resource bounds, checkpoints, and retention defaults?
+- What minimal capability contract supports knowledge search/status without
+  assuming an embedding provider, graph backend, or complete index coverage?
 
 This document proposes the design only. Merging it does not implement the
 feature, accept the decision, or close the originating feature issue.
