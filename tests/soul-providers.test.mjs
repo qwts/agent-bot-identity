@@ -332,7 +332,7 @@ test('a soul with a broken declaration, an unreadable store or no folder is repo
 
 test('soul env lists providers and secrets with a readiness problem that names the fixing command, and the CLI prints the same', (t) => {
   const f = fixture(t);
-  assert.deepEqual([...ENV_CAPABILITIES], ['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes', 'memory', 'history', 'template-name', 'template-refresh']);
+  assert.deepEqual([...ENV_CAPABILITIES], ['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes', 'memory', 'history', 'template-name', 'template-refresh', 'launch-parent']);
   const missing = readSoulEnvironment(ID, { env: f.env, home: f.home, platform: 'linux' });
   assert.deepEqual(missing.providers, {
     declared: [{ harness: 'codex', id: 'github', name: 'GitHub', baseUrl: GITHUB.baseUrl, envKey: 'GITHUB_TOKEN', wireApi: 'chat', credential: 'github-models', store: 'file', status: 'secret-missing' }],

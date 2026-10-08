@@ -34,11 +34,41 @@ export const LAUNCH_ROLE_MAX = 60;
 // launch, so a running soul's comms cannot be switched off under it. A
 // launch that names `comms` writes it to the soul's soul.json first.
 //
-// `parent` (#377) comes only from the daemon's own caller in the second
-// argument, never from the event: a soul starting its team passes itself, a
-// principal launch passes nothing, and the broker's event cannot name one.
-// A broker event's own `parent` field is dropped before anything sees it.
+// `parent` (#377) comes from the daemon's own caller in the second argument
+// when a soul starts its team: it passes itself, and the event cannot
+// override that. A principal launch passes nothing there; its event may
+// name `parent` (GeniusBar#261), honoured only when the daemon supplies
+// `souls` (active census rows `{ id, parentId }`) to check it against:
+// `null` or absent starts an independent soul, an agent id must be an
+// active soul in this account's census and not the launched soul itself,
+// and a relaunch keeps the parent its census row records (a different one
+// is refused, never rewritten quietly). A handler without `souls` drops the
+// event's field as before. The event's `parent` never reaches the spawn
+// request as such; the resolved value does.
 const withoutParent = ({ parent: _ignored, ...fields }) => fields;
+const AGENT_ID = /^agent_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export function resolveLaunchParent(parent, { soul = null, souls }) {
+  if (parent === undefined) return null; // the default: a relaunch keeps whatever its census row records
+  if (parent === null) {
+    if (soul && souls().find((row) => row.id === soul)?.parentId) {
+      throw new Error(`relaunching ${soul} cannot make it independent: its census row names a parent; launch it with that parent, or omit parent`);
+    }
+    return null;
+  }
+  if (typeof parent !== 'string' || !AGENT_ID.test(parent)) throw new Error('invalid launch parent: null or an agent id');
+  if (parent === soul) throw new Error('a soul cannot be its own parent');
+  const rows = souls();
+  if (!rows.some((row) => row.id === parent)) throw new Error(`launch parent ${parent} is not an active soul in this account's census`);
+  if (soul) {
+    const recorded = rows.find((row) => row.id === soul)?.parentId ?? null;
+    if (recorded !== parent) {
+      throw new Error(`relaunching ${soul} cannot change its parent to ${parent}: its census row names ${recorded ?? 'no parent'}; launch it with that, or omit parent`);
+    }
+    // The same parent as recorded: the relaunch keeps it; nothing to rebind.
+    return null;
+  }
+  return parent;
+}
 
 // `locatePackage` says what a package path is (#80). A folder that is an
 // installed soul's own launches that soul, never a new one, and under its
@@ -89,7 +119,8 @@ const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other
 // carries it beside the unchanged `launched`/`failed` fields.
 
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
-  isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, sandboxFor = null, runtimes = null, toolHomes = null, providers = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
+  isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, sandboxFor = null, runtimes = null, toolHomes = null, providers = null,
+  souls = null, receipt = () => {}, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -113,7 +144,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
     row.reported = true;
     save();
   };
-  const handle = async (event, { report, progress = null, account, parent = null }) => {
+  const handle = async (event, { report, progress = null, account, parent: callerParent = null }) => {
     const { requestId } = event;
     if (typeof requestId !== 'string' || !requestId || requestId.length > 256) throw new Error('invalid launch requestId');
     const prior = requests.get(requestId);
@@ -134,6 +165,15 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
     };
     let spawned = null;
     const rollback = { binding: null, joined: false };
+    // The parent the launch records: the daemon's caller (a team start), else
+    // what a principal's event names once checked. `carried` is a parent the
+    // event named for a new soul, so the outcome leaves a `team-start`
+    // receipt on that parent as a team start's does. Receipts are best
+    // effort here: an audit line that cannot be written never turns a
+    // running soul into a failed launch.
+    let parent = callerParent;
+    let carried = null;
+    const note = (of, decision) => { try { receipt({ parent: of, decision }); } catch { /* the launch result is what the principal sees */ } };
     try {
       await step('checking');
       if (event.account !== account) throw new Error('launch account does not match paired daemon');
@@ -142,11 +182,17 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         throw new Error('launch requires exactly one soul or package');
       }
       const located = event.package !== undefined && locatePackage ? await locatePackage(event.package) : null;
-      const copied = located?.status === 'copy' && forkCopy !== null && parent === null;
+      const copied = located?.status === 'copy' && forkCopy !== null && callerParent === null;
       if (located && !LAUNCHABLE.has(located.status) && !copied) throw new Error(located.message ?? `cannot launch ${event.package}`);
       const soul = located?.status === 'installed' ? located.agentId : event.soul;
       if (soul) assertSoulUnpaused(isPaused(soul));
       const packagePath = soul ? null : event.package;
+      if (callerParent === null && souls !== null && event.parent !== undefined) {
+        const named = typeof event.parent === 'string' && AGENT_ID.test(event.parent) && event.parent !== soul ? event.parent : null;
+        try { parent = resolveLaunchParent(event.parent, { soul: soul ?? null, souls }); }
+        catch (error) { if (named) note(named, 'refused: parent'); throw error; }
+        carried = parent;
+      }
       // ADR-0276 order: the launch's own harness, else the soul's default,
       // else a registry harness found on PATH.
       const harness = event.harness ?? await defaultHarness(soul ? { soul } : { package: packagePath });
@@ -259,8 +305,10 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         }, executor, { turnTimeoutMs })).then(() => { if (!started) reject(new Error('harness ended before session creation')); }, reject);
       });
       Object.assign(row, { status: 'launched', agentId: identity.id });
+      if (carried) note(carried, 'launched');
       try { await onLaunched(identity.id); } catch { /* the soul runs; only later wakes are affected */ }
     } catch (error) {
+      if (carried && row.status === 'pending') note(carried, 'failed');
       // The broker's launch-result wire carries detail, so retain the code
       // there too; local callers and the journal also get a structured code.
       const coded = LAUNCH_CODES.has(error.code);

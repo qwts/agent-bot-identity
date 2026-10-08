@@ -263,7 +263,8 @@ test('a team start passes its parent to the spawn, the join, and the first turn;
   assert.equal(seen.join, parent);
   assert.match(seen.message, new RegExp(`started by ${parent}`));
 
-  // An event cannot name its own parent; only the daemon's caller can.
+  // Without `souls` to check it against, an event's own parent is dropped;
+  // only the daemon's caller can name one (a principal's goes through the census check below).
   const forged = fixture(t, { spawnPackage: (input) => { seen.forged = input.parent; return { id: spawnedId }; }, joinSoul: async () => {} });
   await forged.handler({ ...packageEvent, requestId: 'r2', parent }, forged.ports);
   assert.equal(forged.reports[0].status, 'launched');
@@ -273,6 +274,84 @@ test('a team start passes its parent to the spawn, the join, and the first turn;
   await existing.handler(event, { ...existing.ports, parent });
   assert.equal(existing.calls.length, 0);
   assert.match(existing.reports[0].detail, /new soul/);
+});
+
+test('a principal launch names the new soul\'s parent, checked against the active census; a relaunch keeps its recorded parent (GeniusBar#261)', async (t) => {
+  const parent = 'agent_33333333-3333-4333-8333-333333333333';
+  const other = 'agent_44444444-4444-4444-8444-444444444444';
+  const gone = 'agent_55555555-5555-4555-8555-555555555555';
+  const census = [{ id: parent, parentId: null }, { id: other, parentId: null }, { id: agentId, parentId: null }];
+  const make = (rows = census, extra = {}) => {
+    const seen = {};
+    const receipts = [];
+    const f = fixture(t, { souls: () => rows, receipt: (line) => receipts.push(line),
+      spawnPackage: (input) => { seen.request = input; return { id: spawnedId }; },
+      joinSoul: async (soul) => { seen.join = soul.parent; },
+      executorFor: () => async (input) => { seen.message = input.message; input.appendEvent(HARNESS_SESSION_EVENT, {}); }, ...extra });
+    return { ...f, seen, receipts };
+  };
+  // Absent and null both start an independent soul, as every launch did before.
+  for (const fields of [{}, { parent: null }]) {
+    const f = make();
+    await f.handler({ ...packageEvent, ...fields }, f.ports);
+    assert.equal(f.reports[0].status, 'launched');
+    assert.equal(Object.hasOwn(f.seen.request, 'parent'), false);
+    assert.equal(f.seen.join, undefined);
+    assert.match(f.seen.message, /You have no parent agent\. You were launched by a principal/);
+    assert.deepEqual(f.receipts, []);
+  }
+  // A valid parent reaches the spawn, the join and the first turn, with the receipt a team start leaves.
+  const ok = make();
+  await ok.handler({ ...packageEvent, parent }, ok.ports);
+  assert.equal(ok.reports[0].status, 'launched');
+  assert.equal(ok.seen.request.parent, parent);
+  assert.equal(ok.seen.join, parent);
+  assert.match(ok.seen.message, new RegExp(`Your parent is .*${parent}.*started by ${parent}, another agent soul, as part of its team`));
+  assert.deepEqual(ok.receipts, [{ parent, decision: 'launched' }]);
+  // A refusal is the launch's failed result; nothing is minted, and a parent that could be named gets the refusal receipt.
+  for (const [target, requested, reason, receipts] of [
+    [packageEvent, gone, /is not an active soul in this account's census/, [{ parent: gone, decision: 'refused: parent' }]],
+    [packageEvent, 'none', /invalid launch parent/, []],
+    [packageEvent, 42, /invalid launch parent/, []],
+    [event, agentId, /cannot be its own parent/, []],
+    [event, parent, /cannot change its parent to .* names no parent/, [{ parent, decision: 'refused: parent' }]],
+  ]) {
+    const f = make();
+    await f.handler({ ...target, parent: requested }, f.ports);
+    assert.equal(f.reports[0].status, 'failed', String(requested));
+    assert.match(f.reports[0].detail, reason);
+    assert.equal(f.seen.request, undefined);
+    assert.equal(f.seen.message, undefined);
+    assert.deepEqual(f.receipts, receipts);
+  }
+  // A relaunch names the parent its census row records: accepted as is, never rebound, no receipt.
+  const teamed = [{ id: parent, parentId: null }, { id: other, parentId: null }, { id: agentId, parentId: parent }];
+  const same = make(teamed);
+  await same.handler({ ...event, parent }, same.ports);
+  assert.equal(same.reports[0].status, 'launched');
+  assert.equal(same.seen.request, undefined);
+  assert.match(same.seen.message, /launched by a principal/);
+  assert.equal(same.seen.join, undefined);
+  assert.deepEqual(same.receipts, []);
+  for (const [requested, reason] of [[other, /cannot change its parent to .* names agent_3333/], [null, /cannot make it independent/]]) {
+    const f = make(teamed);
+    await f.handler({ ...event, parent: requested }, f.ports);
+    assert.equal(f.reports[0].status, 'failed');
+    assert.match(f.reports[0].detail, reason);
+    assert.equal(f.seen.message, undefined);
+  }
+  // A launch that fails after its parent was accepted leaves the failed receipt on that parent.
+  const broken = make(census, { executorFor: () => async () => { throw new Error('harness exploded'); } });
+  await broken.handler({ ...packageEvent, parent }, broken.ports);
+  assert.equal(broken.reports[0].status, 'failed');
+  assert.match(broken.reports[0].detail, /harness exploded/);
+  assert.deepEqual(broken.receipts, [{ parent, decision: 'failed' }]);
+  // A team start's caller still wins over anything the event says, with no principal receipt.
+  const team = make();
+  await team.handler({ ...packageEvent, parent: gone }, { ...team.ports, parent });
+  assert.equal(team.reports[0].status, 'launched');
+  assert.equal(team.seen.request.parent, parent);
+  assert.deepEqual(team.receipts, []);
 });
 
 test('a launch with no harness uses the default it resolves, and fails clearly without one', async (t) => {
