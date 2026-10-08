@@ -1,6 +1,9 @@
 # Soul packages, formats 1 and 2
 
-A soul package is a portable definition, not a running soul or its memory.
+A soul package is the portable definition inventory. A living `.soul` root can
+also contain memory and other working state under
+[ADR-0583](decisions/ADR-0583-the-soul-root-owns-the-environment.md); physical
+containment does not put that state into the format-2 definition inventory.
 This specifies ADR-0275 decisions 1–3 (#283) and ADR-0332 decision 4 (#341). Nothing in a package
 executes during validation or grants authority. No organization or harness is
 required. Revision history and approval are described in [soul-revisions.md](soul-revisions.md).
@@ -41,7 +44,10 @@ Only `soul.json` and `AGENTS.md` are required. Tool, MCP and policy files are
 opaque in both package formats: this validator neither interprets nor authorizes them.
 Their execution and policy schemas belong to their respective consumers. In
 particular, absence of a policy does not authorize automatic self-modification
-(ADR-0275 defaults to asking). Memory belongs in Agent Space, not this package.
+(ADR-0275 defaults to asking). Memory belongs in Agent Space, which ADR-0583
+places under the soul root but outside the format-2 definition inventory.
+Format 1 keeps its original all-entry behavior; do not add living state to it
+and assume the format-2 exclusions apply.
 
 Skills follow the open Agent Skills directory layout. `SKILL.md` begins with
 `---`, YAML front matter, and a closing `---`, on separate lines (LF or CRLF).
@@ -109,9 +115,9 @@ this example. Authors compute the revision and then replace that field. The
 exported `computePackageRevision(PATH)` accepts a syntactically valid placeholder;
 `validateSoulPackage(PATH)` also checks equality with the computed revision.
 Neither writes files. The parent must be set before computing a revision. The
-validator checks its syntax, not existence or ancestry. Immutability and chain
-storage must be enforced by future revision writers: edits, including undo,
-create a new revision with the previous revision as parent.
+validator checks its syntax, not existence or ancestry. The
+[revision writer](soul-revisions.md) enforces immutable snapshots and the chain:
+edits, including undo, create a new revision with the previous revision as parent.
 
 ## Format 2 working state and compatibility
 

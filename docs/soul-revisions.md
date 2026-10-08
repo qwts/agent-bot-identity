@@ -6,6 +6,12 @@ package code, grant tools, or alter an identity. Hosts remain
 responsible for authenticating the actor and approving requested tool authority
 on their bound connections.
 
+These are definition revisions. Format-2 snapshots exclude the soul's life
+state even when it is physically inside the same root. Undoing a definition
+does not rewind memory, conversations or working repositories. The current
+journal location above is distinct from ADR-0583's remaining history/life
+portability work; see [the environment decision](decisions/ADR-0583-the-soul-root-owns-the-environment.md).
+
 ## Commands
 
 All commands print JSON. Reasons are required positional strings; quote reasons
@@ -179,8 +185,8 @@ Each `objects/<64-hex>.soul` holds a full validated package. Package formats 1
 and 2 are supported; format 2 snapshots and diffs exclude working state and
 generated files whose bytes exactly match the package’s soul-builder output,
 using the [package ignore contract](soul-package.md). The marker alone has no
-effect. Until soul-builder ships (#342), nothing at generated paths is ignored;
-marked files are included in snapshots and proposal diffs. Numbered journal JSON
+effect: generated-looking files that do not match the expected build bytes are
+included in snapshots and proposal diffs. Numbered journal JSON
 records carry `schemaVersion: 1`, `kind`, and `at`. Revision records contain
 `revision`, `parentRevision`, `author: user|soul`, and `reason`. Approved proposals
 also record `proposalId`, `approval: user|auto`, and, for user approval,
