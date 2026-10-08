@@ -26,10 +26,10 @@ supersede them instead.
 
 | ID | Title | Status |
 | --- | --- | --- |
-| [ADR-0274](ADR-0274-product-is-mechanism-add-ons-and-sop-packs-carry-policy.md) | The product is mechanism; add-ons and SOP packs carry policy | Proposed |
+| [ADR-0274](ADR-0274-product-is-mechanism-add-ons-and-sop-packs-carry-policy.md) | The product is mechanism; add-ons and SOP packs carry policy | Accepted |
 | [ADR-0275](ADR-0275-soul-packages-are-versioned-definitions-souls-can-grow.md) | Soul packages are versioned definitions that souls can grow | Accepted |
 | [ADR-0276](ADR-0276-souls-carry-their-harnesses-as-pinned-npm-dependencies.md) | Souls carry their harnesses as pinned npm dependencies | Proposed |
 | [ADR-0322](ADR-0322-souls-carry-their-runtimes-and-non-npm-harnesses.md) | Souls carry their runtimes and non-npm harnesses, with user overrides | Proposed |
-| [ADR-0332](ADR-0332-souls-are-the-agents-territory.md) | Souls are the agent's territory | Proposed |
+| [ADR-0332](ADR-0332-souls-are-the-agents-territory.md) | Souls are the agent's territory | Accepted |
 | [ADR-0583](ADR-0583-the-soul-root-owns-the-environment.md) | The soul root owns the environment | Accepted |
 | [ADR-0603](ADR-0603-imported-skills-keep-local-snapshots-and-upstream-provenance.md) | Soul skills have distinct import, install, learn, and dream operations | Accepted |
