@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.54
+
+- Clarify the accepted harness and runtime contracts and their documented implementation limits: per-soul installs, integrity evidence, explicit overrides, and catalog version resolution (ADR-0276/ADR-0322; #622).
+- `agent-bot soul env clean <soul> [--plan] [--component cache|temp|runtimes]` removes only what the environment contract classifies reconstructible or disposable (the cache, temporary files past their window, the runtime caches, a leftover install staging), never the definition, home, tool state, credentials, memory, history or a workspace; `soul env migrate <soul> --complete [--plan]` finishes every migration step still pending, interrupted or failed through the same mechanisms and journal; `agent-bot doctor` reports each active soul's environment problems from the same descriptor as one `souls.environment` check per soul; capabilities `migrate-complete` and `env-clean` (#583 slice 6, ADR-0583).
+
 ## 0.10.53
 
 - A principal launch may name the new soul's `parent` (GeniusBar #261): `null` or absent starts an independent soul as before, an agent id must be an active soul in this account's census and not the launched soul itself, and the child is bound, censused and joined with that parent as a teammate a soul starts is, with a `team-start` receipt (`operation: launch`) on the parent. A relaunch keeps the parent its census row records; a different one is refused as a `failed` launch result, never written quietly. `soul env --json` lists `launch-parent` in `engine.capabilities` so a host can gate the form on it.
