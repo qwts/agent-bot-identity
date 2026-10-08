@@ -18,6 +18,7 @@ agent-bot soul env migrate <agentId|name> --complete [--plan] [--json] [--princi
 agent-bot soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin]
 agent-bot soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin]
 agent-bot soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin]
+agent-bot soul env history <agentId|name> [--json] [--limit N]
 agent-bot soul template refresh <agentId|name> [--from TEMPLATE_PATH] [--plan] [--json] [--principal-stdin]
 agent-bot soul revision prepare <agentId|name> [--json] [--dest PATH]
 agent-bot soul revision prepare --discard STAGING
@@ -75,7 +76,7 @@ scalars `null`, collections `[]`), in this order:
   `capabilities` is `["env", "revision-prepare", "runtimes", "providers",
   "tool-homes", "memory", "history", "template-name", "template-refresh",
   "launch-parent", "migrate-complete", "env-clean", "env-export",
-  "env-import", "harnesses-into-runtimes"]` today; a client gates each later slice on it
+  "env-import", "harnesses-into-runtimes", "env-history"]` today; a client gates each later slice on it
   (`template-name` is the `soul env migrate --template-name` rename and the
   `templateName` / `nameSource` provenance, `template-refresh` the
   `soul template refresh` command, see [soul-templates.md](soul-templates.md);
@@ -84,7 +85,9 @@ scalars `null`, collections `[]`), in this order:
   and `env-clean` the `soul env clean` command, both below; `env-export`
   and `env-import` the two commands under [Export and import](#export-and-import);
   `harnesses-into-runtimes` the npm adapter install under the runtimes and
-  the `soul env migrate --harnesses-into-runtimes` verb, below).
+  the `soul env migrate --harnesses-into-runtimes` verb, below;
+  `env-history` the `soul env history` read of the history mirror, see
+  [soul-memory-history.md](soul-memory-history.md#reading-the-mirror)).
 - `identity`: `agentId`, `name`, `displayName`, `status`, `harness`,
   `genesis { revision, parentSoul }`, the manifest's `revision`,
   `parentRevision`, `template`, `formatVersion`.

@@ -122,6 +122,49 @@ revision; the daemon logs `history mirror: <what> for <id> not written
 (`createSoulHistory` is the daemon's port; `appendSoulTurn` and
 `appendSoulRevision` take the soul root).
 
+### Reading the mirror
+
+```sh
+agent-bot soul env history <agentId|name> [--json] [--limit N]
+```
+
+Lists the mirror, newest first, so a host (GeniusBar's Memory tab) renders
+a soul's past turns and revisions without reading soul files itself.
+Read-only: no gate, no receipt, nothing written, and it reads nothing but
+the two mirror files. `--json` prints, schema 1:
+
+```json
+{ "schemaVersion": 1, "agentId": "agent_…", "soulDir": "…/Billy.soul",
+  "mirror": "…/Billy.soul/.soul-state/runs", "mirrored": true,
+  "turns":     { "total": 3, "listed": 2, "limit": 2, "skipped": 0, "truncated": false,
+                 "records": [ { "id", "kind", "startedAt", "endedAt", "harness", "outcome" } ] },
+  "revisions": { "total": 2, "listed": 2, "limit": 2, "skipped": 0, "truncated": false,
+                 "records": [ { "id", "parent", "reason", "at" } ] } }
+```
+
+Every record has exactly the keys above (each line passes through the
+same shaper the writer uses, so a stray field never reaches the listing).
+`total` is the file's line count, `listed` how many came back. Limits:
+
+- `--limit N` is 1..500 per file, default 50; anything else is a usage
+  error. A host pages by asking for more, up to the maximum.
+- Each file is read within a window of its last 16 MiB. Past that, only
+  the tail is parsed (the first partial line dropped) and the group says
+  `truncated: true`; `total` still counts the whole file up to 256 MiB,
+  `null` beyond.
+- A line that is not a JSON object is skipped and counted in `skipped`;
+  blank lines are nothing.
+- No `.soul-state/runs/` directory is `mirrored: false` with empty groups
+  and `null` totals, not an error: a life may not have started yet. A file
+  that cannot be read (a link in its place, say; a link is never followed)
+  is `total: null` with nothing listed; an absent file is `total: 0`.
+
+Without `--json`: `agentId`, `soulDir`, `mirror`, then `turns: <listed>
+of <total>` and one line per turn (`<startedAt>  <kind>  <harness>
+<outcome>  <id>`), then `revisions: <listed> of <total>` and one line per
+revision (`<at>  <id>  (<parent>)  <reason>`); `-` for an unknown value.
+The capability is `env-history`.
+
 ## In the descriptor
 
 `soul env` reports `memory { location: inside | linked, target, contained,

@@ -187,7 +187,7 @@ async function exportIt(f, { plan = false } = {}) {
 test('the capabilities name the slice and the plan lists every classification with its reason for staying or going', async (t) => {
   const f = fixture(t);
   assert.ok(ENV_CAPABILITIES.includes('env-export') && ENV_CAPABILITIES.includes('env-import'));
-  assert.deepEqual(ENV_CAPABILITIES.slice(-3), ['env-export', 'env-import', 'harnesses-into-runtimes']);
+  assert.deepEqual(ENV_CAPABILITIES.slice(-4), ['env-export', 'env-import', 'harnesses-into-runtimes', 'env-history']);
   const { result, out } = await exportIt(f, { plan: true });
   assert.deepEqual(JSON.parse(out), result);
   assert.deepEqual([result.schemaVersion, result.agentId, result.soulDir, result.applied, result.decision, result.file], [1, ID, f.dir, false, 'planned', f.archive]);

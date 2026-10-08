@@ -183,3 +183,15 @@ and 5 precedes 7.
    `harnesses-into-runtimes`; see [soul-runtimes.md](../soul-runtimes.md).
    Stays with #617: integrity of the npm install, overrides, and the
    npm-provisioning audit.
+9. History read: `soul env history`. Shipped: `soul env history <soul>
+   [--json] [--limit N]` (`soul-env-history.mjs`, `readSoulHistory` in
+   `soul-history.mjs`) lists the mirror of slice 5 newest first, turns
+   (`id, kind, startedAt, endedAt, harness, outcome`) and revisions (`id,
+   parent, reason, at`) with each file's line count, at most `--limit`
+   per file (1..500, default 50) from the last 16 MiB of each file, a
+   line that is not a JSON object skipped and counted; facts only, since
+   the mirror holds nothing else, so read-only with no gate and no
+   receipt; a soul without a mirror lists nothing rather than failing;
+   for GeniusBar#268's Memory tab, which renders it instead of reading
+   soul files; capability `env-history`; see
+   [soul-memory-history.md](../soul-memory-history.md#reading-the-mirror).
