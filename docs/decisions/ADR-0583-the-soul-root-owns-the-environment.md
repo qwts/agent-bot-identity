@@ -145,4 +145,25 @@ and 5 precedes 7.
    `souls.environment`, one per active soul from the same descriptor;
    capabilities `migrate-complete` and `env-clean`; see
    [soul-environment.md](../soul-environment.md).
-7. Export and import.
+7. Export and import. Shipped: `soul env export <soul> --to FILE` and
+   `soul env import FILE [--fork] [--replace]` (`soul-env-export.mjs`): one
+   gzip ustar archive whose first entry, `manifest.json`, lists every
+   carried path with the contract's classification, retention and SHA-256,
+   and every omitted one with its reason; carried are the definition, the
+   home, tool state minus every sign-in file the tool-home registry names,
+   memory (through its link when still linked), history, the settings and
+   journals under `.soul-state/`, the daemon's revision journal, soul-owned
+   workspaces whole and linked ones as a pointer with the `git diff`
+   patch and the untracked files; never credentials, secrets, sign-ins,
+   runtimes, caches, temporary files, harness installs or generated
+   output; `--plan` read-only, the write owner-gated and refused while the
+   soul runs. Import keeps the Agent ID, `--fork` mints one through the
+   same genesis path as `soul fork`, an active ID is `import-id-active`
+   unless `--replace` (the root moved aside as `<root>.replaced-<stamp>`),
+   a retired ID is a tombstone (`--fork` only); every entry is verified
+   against the manifest in a staging before anything reaches the souls
+   root, a symlink entry, traversal or a hash mismatch refuses the import;
+   linked workspaces come back under `.soul-state/imports/<name>/` with the
+   `workspace-unlinked` readiness warning, nothing is cloned; recorded as
+   the `life-import` migration step; capabilities `env-export` and
+   `env-import`; see [soul-environment.md](../soul-environment.md).

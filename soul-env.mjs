@@ -28,9 +28,9 @@ import { soulsHome } from './souls-root.mjs';
 export const ENV_SCHEMA_VERSION = 1;
 // What this engine can do for a host, so a client gates each later slice
 // of #583 on the engine it talks to rather than on a version number.
-export const ENV_CAPABILITIES = Object.freeze(['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes', 'memory', 'history', 'template-name', 'template-refresh', 'launch-parent', 'migrate-complete', 'env-clean']);
+export const ENV_CAPABILITIES = Object.freeze(['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes', 'memory', 'history', 'template-name', 'template-refresh', 'launch-parent', 'migrate-complete', 'env-clean', 'env-export', 'env-import']);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const USAGE = 'usage: agent-bot soul env <agentId|name> [--json] | soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul | --template-name [--plan] | --complete [--plan] [--json] [--principal-stdin] | soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin]';
+const USAGE = 'usage: agent-bot soul env <agentId|name> [--json] | soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul | --template-name [--plan] | --complete [--plan] [--json] [--principal-stdin] | soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin] | soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin] | soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin]';
 const LINE_COUNT_MAX_BYTES = 256 * 1024 * 1024;
 const MANIFEST_MAX_BYTES = 64 * 1024;
 const SMALL_MAX_BYTES = 4 * 1024;
@@ -268,6 +268,21 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
           let names = [];
           try { names = readdirSync(path.join(root, 'worktrees')).sort(); } catch { errors.push({ area: 'workspaces', message: 'Worktrees directory unreadable.' }); }
           for (const name of names) entry.entries.push(workspaceEntry(path.join(root, 'worktrees'), name));
+        }
+        // A linked workspace an import restored as a pointer (#583 slice 7):
+        // its record, patch and untracked files wait under
+        // `.soul-state/imports/<name>/` until the checkout is linked again.
+        entry.imported = [];
+        for (const name of listDirectories(path.join(root, STATE, 'imports'))) {
+          const pointer = readJson(path.join(root, STATE, 'imports', name, 'pointer.json'));
+          if (!pointer) continue;
+          const linked = entry.entries.some((workspace) => workspace.name === name);
+          entry.imported.push({ name, path: path.join(root, STATE, 'imports', name), target: text(pointer.target), branch: text(pointer.branch), head: text(pointer.head), remote: text(pointer.remote),
+            patch: Boolean(pointer.patch), untracked: Array.isArray(pointer.untracked) ? pointer.untracked.length : 0, linked });
+          if (!linked) {
+            problem('workspace-unlinked', 'warning', 'workspaces', `${name} was a linked workspace (${pointer.target ?? 'unknown path'}${pointer.branch ? `, ${pointer.branch}` : ''}) where the life was exported; its patch and untracked files are under ${STATE}/imports/${name}`,
+              `check out ${pointer.remote ?? pointer.target ?? 'the repository'} and link it at ${path.join(root, 'worktrees', name)}, then apply ${STATE}/imports/${name}/changes.patch and copy its untracked files`);
+          }
         }
         break;
       }

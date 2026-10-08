@@ -295,6 +295,8 @@ agent-bot soul env migrate <agentId|name> --space-into-soul [--json] [--principa
 agent-bot soul env migrate <agentId|name> --template-name [--plan] [--json] [--principal-stdin]
 agent-bot soul env migrate <agentId|name> --complete [--plan] [--json] [--principal-stdin]
 agent-bot soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin]
+agent-bot soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin]
+agent-bot soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin]
 agent-bot soul template refresh <agentId|name> [--from TEMPLATE_PATH] [--plan] [--json] [--principal-stdin]
 agent-bot soul runtimes <agentId|name> [--json]
 agent-bot soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin]
@@ -414,6 +416,10 @@ agent-bot soul env migrate AGENT_ID --complete [--plan] --principal-stdin
 # owner only: finish every migration step still pending, interrupted or failed through the same mechanisms; never while the soul runs; --plan reads only; see docs/soul-environment.md
 agent-bot soul env clean AGENT_ID [--plan] [--component cache|temp|runtimes] --principal-stdin
 # owner only: remove the cache, temporary files, runtime caches and leftover install stagings (reconstructible or disposable by the contract), never the definition, home, tool state, credentials, memory, history or a workspace; --plan lists paths and sizes; see docs/soul-environment.md
+agent-bot soul env export AGENT_ID --to FILE [--plan] --principal-stdin
+# owner only: the soul's life as one archive (definition, home, tool state minus sign-in files, memory, history, settings, revision journal, soul-owned workspaces whole, linked ones as pointer + patch + untracked files); never credentials, secrets, sign-ins, runtimes or caches; never while the soul runs; --plan prints the manifest; see docs/soul-environment.md
+agent-bot soul env import FILE [--fork] [--replace] [--name NAME] [--plan] --principal-stdin
+# owner only: restore a life keeping its Agent ID; --fork mints a new one; an active local ID is refused unless --replace, which moves the existing root aside (never deletes); linked workspaces come back as pointers under .soul-state/imports, nothing is cloned; --plan reads only; see docs/soul-environment.md
 agent-bot soul template refresh AGENT_ID [--from TEMPLATE_PATH] [--plan] --principal-stdin
 # owner only: replace the template's maintained paths in the instance from the bundled template in one revision; --plan reads only; see docs/soul-templates.md
 agent-bot soul runtimes AGENT_ID --json

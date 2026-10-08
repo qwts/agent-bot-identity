@@ -15,6 +15,8 @@ agent-bot soul env migrate <agentId|name> --space-into-soul [--json] [--principa
 agent-bot soul env migrate <agentId|name> --template-name [--plan] [--json] [--principal-stdin]
 agent-bot soul env migrate <agentId|name> --complete [--plan] [--json] [--principal-stdin]
 agent-bot soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin]
+agent-bot soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin]
+agent-bot soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin]
 agent-bot soul template refresh <agentId|name> [--from TEMPLATE_PATH] [--plan] [--json] [--principal-stdin]
 agent-bot soul revision prepare <agentId|name> [--json] [--dest PATH]
 agent-bot soul revision prepare --discard STAGING
@@ -71,14 +73,15 @@ scalars `null`, collections `[]`), in this order:
 - `schemaVersion` 1; `engine` `{ version, contractVersion, capabilities }`.
   `capabilities` is `["env", "revision-prepare", "runtimes", "providers",
   "tool-homes", "memory", "history", "template-name", "template-refresh",
-  "launch-parent", "migrate-complete", "env-clean"]` today; a client gates
-  each later slice on it
+  "launch-parent", "migrate-complete", "env-clean", "env-export",
+  "env-import"]` today; a client gates each later slice on it
   (`template-name` is the `soul env migrate --template-name` rename and the
   `templateName` / `nameSource` provenance, `template-refresh` the
   `soul template refresh` command, see [soul-templates.md](soul-templates.md);
   `launch-parent`: a principal launch may name the new soul's parent,
   GeniusBar#261; `migrate-complete` the `soul env migrate --complete` verb
-  and `env-clean` the `soul env clean` command, both below).
+  and `env-clean` the `soul env clean` command, both below; `env-export`
+  and `env-import` the two commands under [Export and import](#export-and-import)).
 - `identity`: `agentId`, `name`, `displayName`, `status`, `harness`,
   `genesis { revision, parentSoul }`, the manifest's `revision`,
   `parentRevision`, `template`, `formatVersion`.
@@ -91,7 +94,10 @@ scalars `null`, collections `[]`), in this order:
   `.drift` (the builder's pending writes and removals from
   `buildSoulDirectory(dir, { check: true })`, `null` when the check cannot
   run); `workspaces.entries[]` `{ name, path, location: inside | linked,
-  target, repository, branch }`; `home` `{ git, built, harnessInstall }`;
+  target, repository, branch }` and `workspaces.imported[]` `{ name, path,
+  target, branch, head, remote, patch, untracked, linked }`, one per linked
+  workspace an import left as a pointer under `.soul-state/imports/<name>/`
+  (`linked` once a `worktrees/<name>` entry exists again); `home` `{ git, built, harnessInstall }`;
   `tool-state.entries[]` per harness the soul names `{ harness, path,
   routing, containment: soul | shared-host | unsupported, reason, hostPath,
   signIn, hostSignIn, note }` (`signIn` and `hostSignIn` are `present |
@@ -178,6 +184,7 @@ scalars `null`, collections `[]`), in this order:
 | `provider-declaration-invalid` | error | `harnesses.<name>.provider` or `credentials.secrets` is refused; fix it in a revision |
 | `tool-signin-missing` | warning | The selected harness's sign-in is in the host store (or a Mac's keychain) but not in the soul's tool home, so the launch keeps the shared host store; `agent-bot soul env migrate <id> --adopt-host-signin --harness <name>` contains it |
 | `memory-not-contained` | warning | `.soul-state/space` is a link to an Agent Space outside the soul, so the soul's memory does not travel with its folder; `agent-bot soul env migrate <id> --space-into-soul` moves it inside |
+| `workspace-unlinked` | warning | A linked workspace came back from an import as a pointer (`.soul-state/imports/<name>/`) and no `worktrees/<name>` exists yet; check the repository out again, link it there, then apply `changes.patch` and copy the untracked files |
 
 Warnings leave `ready` true. Codes are appended, never renamed.
 
@@ -276,6 +283,116 @@ holds `{ agentId, soulDir, ready, problems[], errors[] }` (codes only).
 A descriptor that cannot be read is `soul-env-unreadable` (warning).
 `doctor --json` carries the same checks. Doctor provisions and rebuilds
 nothing: the descriptor is read-only.
+
+## Export and import
+
+```sh
+agent-bot soul env export billy --to ~/Desktop/billy.soul.tgz --plan --json   # the manifest, read-only
+agent-bot soul env export billy --to ~/Desktop/billy.soul.tgz [--json] [--principal-stdin]
+agent-bot soul env import ~/Desktop/billy.soul.tgz --plan --json              # identity decision and destination, read-only
+agent-bot soul env import ~/Desktop/billy.soul.tgz [--fork] [--replace] [--name NAME] [--json] [--principal-stdin]
+```
+
+An export is the soul's life as one file (ADR-0583 decision 10), not a
+copy of its root: every path is classified by the contract and travels
+only when it is durable and the soul's own. A definition-only template
+(`soul templates`, a package) and a life export are different artifacts;
+the export carries what a template never has.
+
+### What travels
+
+| Component | Carried | Left out |
+| --- | --- | --- |
+| definition | everything at the root that is the definition (`soul.json`, `AGENTS.md`, `skills/`, `hooks/`, `bin/`, `workflows/`, `sop/`, `package.json`, policy) | generated output (`CLAUDE.md`, `.claude/`, `.codex/`, …): the next build regenerates it |
+| home | `.soul-state/home` whole, its git history included | `node_modules` and `.soul-state/harnesses`: harness installs, the next launch installs them again |
+| tool state | `.soul-state/tools/<harness>` (sessions, settings, `.claude.json`) | every sign-in file the tool-home registry names (`.credentials.json`, `auth.json`, `opencode/auth.json`), and a harness's cache route (`XDG_CACHE_HOME`) |
+| credentials | nothing | `.soul-state/credentials` whole: GitHub App keys, file-store secrets |
+| memory | `.soul-state/space` whole; a space still linked from the spaces root is read through its link (the census says it is the soul's) and lands inside on import | |
+| history | `.soul-state/runs`, `confinement.log`, and the daemon's revision journal for the soul (its events and stored packages, under `journal/` in the archive) | locks and stagings |
+| settings | `home-harness`, `migration.json`, `clean.json`, anything else durable directly under `.soul-state/` | `agent-id` (the import writes the marker), `*.lock`, `space.migrating-*`, `space.link-*` |
+| workspaces | a soul-owned directory under `worktrees/` whole, admin directory included; a linked one as `pointer.json` (target, repository, `HEAD`, branch, `origin`), `changes.patch` (`git diff --binary HEAD`) and each untracked file (`git ls-files --others --exclude-standard`, up to 64 MiB each) | the linked repository itself, its ignored files |
+| runtimes, cache, temp | nothing | `.soul-state/runtimes`, `.soul-state/cache`, `.soul-state/tmp`: reconstructible or disposable |
+| any other link | a pointer row (`kind: pointer`, its target), nothing followed | |
+
+The archive is gzip over POSIX ustar (GNU long names), so `tar -tzf` lists
+it; its first entry is `manifest.json`: `{ schemaVersion: 1, agentId,
+name, displayName, exportedAt, engineVersion, root, identity { harness,
+parentId, genesis, createdAt }, memory { location, target }, workspaces[]
+{ name, location, target, head, branch, remote, patch, untracked, note },
+journal { entries }, components[], excluded[], totals { files, bytes } }`.
+Each component is `{ area: root | workspace | journal, entry, relative,
+classification, retention, kind: file | dir | pointer | patch, bytes,
+sha256, mode }` (plus `workspace` or `target`); entries live under `life/`
+(the root), `workspaces/<name>/` and `journal/`. Each `excluded` row is
+`{ relative, classification, reason }`. `--plan` prints the manifest and
+writes nothing; the same plan twice is byte-identical. The write is
+owner-gated (the archive holds the private home), refused `soul-running`
+(action `agent-bot soul stop <id>`) while the soul has a turn in flight or a
+warm harness, checked before and after the gate, planned again after it,
+and every file is hashed again while it is written (`export-changed` when
+one moved under the export). The file is written privately (0600) through
+a rename, must not exist (`export-target-exists`) and may not be inside the
+root (`export-target-inside-root`). One audit receipt `soul-env-export`
+with counts and the path, never contents. `--json` prints `{ schemaVersion:
+1, agentId, soulDir, applied, decision: planned | exported, file,
+manifest }`.
+
+### Identity on import
+
+- The ID is kept: a moved life. An ID unknown here gets its identity
+  record minted with the exported harness, the revision journal restored
+  from the archive (or, when the archive carries none, the restored
+  package adopted as the chain's start), the marker written, the space
+  marker checked, a census row (handle, display name, `soulDir`,
+  `spacePath` inside, `active`).
+- `--fork` mints a new ID through the same genesis path `soul fork` uses:
+  the restored package minus its `credentials` declaration (it names the
+  original's GitHub App), `template: false`, a new revision chain adopted
+  as `Import as a fork of <id>`, the display seed re-initialized, the space
+  marker rebound to the new ID, the census showing both souls. `--name`
+  sets the fork's display name; the handle derives from the new ID.
+- An ID that is active here is `import-id-active` (action: `--replace` or
+  `--fork`). `--replace` is refused `soul-running` while that soul runs
+  (before and after the gate), keeps the local identity record and revision
+  chain (`journal: kept-local`), moves the existing root aside as
+  `<root>.replaced-<stamp>` (the export's time, ISO-8601 with `:` and `.`
+  as `-`), never deletes it, then puts the restored root in its place and
+  points the census at it.
+- A retired ID is a tombstone: `import-id-retired`, even with `--replace`;
+  only `--fork` brings the life back.
+
+### Safety on import
+
+The archive is untrusted. Its first entry must be the manifest; every
+other entry must be a regular file or directory the manifest lists, under
+`life/`, `workspaces/<name>/` or `journal/`, a relative path without `..`,
+and must match the manifest's size and SHA-256. A symlink or any other
+entry type, an absolute path, traversal, an entry the manifest does not
+name, a manifest component outside the root or with a non-durable
+classification, is `import-unsafe-archive` or `import-manifest-invalid`;
+a hash that does not match is `import-checksum-mismatch`; a listed entry
+that never arrives is `import-archive-incomplete`. Everything is extracted
+and verified in a private staging under the souls root
+(`.import-<uuid>`, removed on any failure) before a byte reaches a soul
+root or the census. Pointers are never recreated as links. A linked
+workspace comes back as `.soul-state/imports/<name>/pointer.json`,
+`changes.patch` and `untracked/…`; the descriptor lists it under
+`workspaces.imported` with the `workspace-unlinked` warning until a
+`worktrees/<name>` exists again. Nothing is cloned: the owner checks the
+repository out, links it, applies the patch and copies the untracked files.
+
+The apply is owner-gated (the action names the archive and the decision)
+and recorded as migration step `life-import` (`done`, `from` the archive,
+`to` the root, `identity { decision, agentId, importedFrom }`, `journal`,
+`replaced`, `workspaces[]`, `space: restored | created`), plus one audit
+receipt `soul-env-import` with counts and the destination. `--plan` reads
+the manifest only, decides identity and destination, and writes nothing.
+`--json` prints `{ schemaVersion: 1, archive, applied, decision: planned |
+imported | replaced | forked, identity { decision: keep | replace | fork,
+agentId, importedFrom, existing }, soulDir, replaced, name, displayName,
+journal: restored | adopted | kept-local, restored { files, bytes,
+byClassification }, pointers[], workspaces[], migration }`. Errors are
+`{ error: { code, message, action } }` with `--json`, exit 1.
 
 ## Preparing a revision edit
 
