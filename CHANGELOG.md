@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.48
+
+- `harnesses.<h>.provider` and `credentials.secrets.<name>` in `soul.json` give each harness of a soul its model provider (Codex `openai`, `github`, `openai-compatible`; Claude Code and OpenCode ids too): `soul build` renders Codex `model_provider` + `[model_providers.<id>]`, Claude's endpoint env and OpenCode's provider block, never a secret; the new owner-gated `agent-bot soul secret <soul> set|clear <name>` (value on stdin) and `soul secret <soul> status` keep the secret in the soul's declared store, and every launch injects it into that soul's harness process only, stripped from the reach MCP server and keyd relay, failing with `provider-secret-missing` and the fixing command when it is not stored; `soul env` gains `providers` and the `providers` capability (#583 slice 4).
+
 ## 0.10.47
 
 - `agent-bot soul runtimes <id>` and `soul runtimes install <id>` provision the runtimes (`node`, `python` via uv, `go`) and non-npm harnesses a soul declares in `soul.json` into `.soul-state/runtimes/`, from a pinned, checksum-verified catalog, atomically and never on the host; launches route them first and install what is missing as a `runtimes` stage, with coded errors (#583 slice 3, #322).
