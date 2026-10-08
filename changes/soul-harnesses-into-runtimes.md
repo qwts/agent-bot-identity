@@ -1,1 +1,0 @@
-- A soul's npm ACP adapter now installs under `.soul-state/runtimes/harnesses/<harness>/<version>/` with an install stamp, and `agent-bot soul env migrate <soul> --harnesses-into-runtimes` (also run by `--complete`) moves a legacy `.soul-state/harnesses` install there; the legacy location still launches until moved (#583 slice 8).
