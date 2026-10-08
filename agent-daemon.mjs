@@ -56,7 +56,9 @@ import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
-import { initAgentSpace, spacePath } from './agent-space.mjs';
+import { spacePath } from './agent-space.mjs';
+import { createSoulHistory } from './soul-history.mjs';
+import { ensureSoulSpace, soulSpacePath } from './soul-memory.mjs';
 import { archiveSoulDirs, backfillManagedSouls, displayName, listSouls, locateSoulDir, populationFile, recordHarnessAuth, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, setSoulComputerUse, soulComputerUse, setSoulPaused, soulPaused, showSoul, soulDirectory, upsertIdentitySoul, withRoles } from './agent-population.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
 import {
@@ -623,13 +625,15 @@ export function createDaemonServer({
         case 'POST /v0/space/ensure': {
           const body = parseJsonBody(await readBody(req));
           const id = requireAgentId(body.agentId);
-          const space = initAgentSpace(id, { env, home, config });
+          // The census space when the soul has one (ADR-0583 decision 8); the root only for a soul without.
+          const space = ensureSoulSpace(id, { env, home, config, file: populationOverride(env, home) });
           sendJson(res, 200, { agentId: space.id, path: space.path, created: space.created });
           return;
         }
         case 'GET /v0/space/path': {
+          // The census path when the census knows the soul (ADR-0583 decision 8).
           const id = requireAgentId(url.searchParams.get('agentId'));
-          sendJson(res, 200, { agentId: id, path: spacePath(id, { env, home, config }) });
+          sendJson(res, 200, { agentId: id, path: soulSpacePath(id, { env, home, config, file: populationOverride(env, home) }) });
           return;
         }
         case 'POST /v0/register': {
@@ -1159,7 +1163,7 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now, pres
   }
   // Binding is the one moment place and conversation are both in view; the
   // census row picks up the provenance (#91) through the refreshed identity.
-  const space = initAgentSpace(bound.id, { env, home, config });
+  const space = ensureSoulSpace(bound.id, { env, home, config, file: populationOverride(env, home) });
   const soul = upsertIdentitySoul(bound.id, space.path, {
     file: populationOverride(env, home),
     stateDir,
@@ -1783,7 +1787,7 @@ export async function runDaemon({
       onModels: (agentId, models) => recordSoulModels(agentId, models, { env, home }),
       // A daemon-run soul's home is not a git worktree, so the session-start
       // hook cannot place its Claude session; the turn's binding does.
-      onHarnessSession: ({ agentId, harness, harnessSessionId }) => recordSoulSession({ agentId, provider: harness, sessionId: harnessSessionId, env, home, now }),
+      onHarnessSession: ({ agentId, harness, harnessSessionId }) => recordSoulSession({ agentId, provider: harness, sessionId: harnessSessionId, env, home, now, history }),
       // Every turn gets the soul's agent-comms tools unless its launch
       // recorded comms off; the reach server runs agent-comms, which a
       // launchd PATH does not reach.
@@ -1816,7 +1820,10 @@ export async function runDaemon({
     : null;
   const computerUse = createComputerUseActivity({ now });
   const isPaused = (agentId) => soulPaused(agentId, { file: populationFile({ env, home }) });
-  const turns = createTurnRegistry({ isPaused });
+  // Every turn and harness session is mirrored into the soul's own
+  // `.soul-state/runs/` beside the daemon's journals (#583 decision 9).
+  const history = createSoulHistory({ env, home, file: populationFile({ env, home }), log: (line) => process.stderr.write(`agent-daemon: ${line}\n`) });
+  const turns = createTurnRegistry({ isPaused, history, now });
   const executorFor = configuredExecutorFor
     ? (request) => withPermissionReceipts(configuredExecutorFor(request), { env, home, now, computerUse })
     : null;
@@ -1839,9 +1846,11 @@ export async function runDaemon({
     const file = populationFile({ env, home });
     // Older package launches could have an identity and home without a
     // census row. Register that provenance before resolving its directory.
+    // The row names the spaces-root path without creating it: the folder
+    // provisioned next starts the space inside itself (ADR-0583 decision 8),
+    // or links an older space already there.
     if (!listSouls({ file }).some((record) => record.id === soul.agentId)) {
-      const space = initAgentSpace(soul.agentId, { env, home, config });
-      upsertIdentitySoul(soul.agentId, space.path, { file, stateDir: stateDirectory({ env, home }), now });
+      upsertIdentitySoul(soul.agentId, spacePath(soul.agentId, { env, home, config }), { file, stateDir: stateDirectory({ env, home }), now });
     }
     homes ??= createSoulHomes({ env, home, config, stateDir: stateDirectory({ env, home }), bindings: server.bindings,
       install: (dir) => installHarnesses(dir, { env }) });

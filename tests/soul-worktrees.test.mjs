@@ -30,7 +30,9 @@ test('selects the soul path and provisions private worktrees and the soul marker
   const soulDir = showSoul(agentId, options).soulDir;
   assert.equal(readFileSync(path.join(soulDir, '.soul-state', 'agent-id'), 'utf8'), `${agentId}\n`);
   assert.equal(statSync(path.join(soulDir, '.soul-state', 'agent-id')).mode & 0o777, 0o600);
-  assert.equal(readlinkSync(path.join(soulDir, '.soul-state', 'space')), path.join(options.home, 'space'));
+  // A census space that does not exist yet is contained: a directory inside, the census following it (#583 slice 5).
+  assert.equal(lstatSync(path.join(soulDir, '.soul-state', 'space')).isDirectory(), true);
+  assert.equal(showSoul(agentId, options).spacePath, path.join(soulDir, '.soul-state', 'space'));
 });
 
 test('sanitizes separators, leading dots, empty names, and length', (t) => {

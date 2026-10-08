@@ -668,6 +668,25 @@ export function setSoulComputerUse(id, computerUse, { file = populationFile() } 
   });
 }
 
+// The census is authoritative for where a soul's memory is (ADR-0583
+// decision 8): the migration that moves the Agent Space into the soul
+// folder points the row at the new place once the copy is verified, and a
+// new soul's folder registers its in-soul space the same way.
+export function setSoulSpacePath(id, spacePath, { file = populationFile() } = {}) {
+  const target = agentId(id);
+  const root = printableText('spacePath', spacePath, { max: 4096 });
+  if (!path.isAbsolute(root)) throw new Error('spacePath must be absolute');
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
+    const existing = current.souls[target];
+    if (!existing) throw new Error(`no population record for ${target}`);
+    const soul = normalizeSoul({ ...existing, spacePath: root });
+    if (existing.spacePath !== soul.spacePath) writeDocument(file, { ...current.souls, [target]: soul });
+    return soul;
+  });
+}
+
 // Unregistered souls retain the default; corrupt population data fails closed.
 export function soulComputerUse(id, { file = populationFile() } = {}) {
   return readDocument(file).souls[agentId(id)]?.computerUse !== false;

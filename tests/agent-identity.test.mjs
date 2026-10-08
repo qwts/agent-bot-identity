@@ -3,6 +3,7 @@ import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -581,7 +582,9 @@ test('setup-worktree reuses a joined CODEX_THREAD_ID soul and refuses another co
   }).trim();
 
   const firstSetup = runSetup('thread-1');
-  assert.match(firstSetup, /space created/);
+  // The joined soul's folder already holds its space (#583 slice 5): setup
+  // reuses the census space rather than creating one under the root.
+  assert.match(firstSetup, /space ready/);
   const firstId = execFileSync('git', ['config', '--get', 'agentBot.agentId'], {
     cwd: worktree,
     env: cleanEnv,
@@ -619,12 +622,13 @@ test('setup-worktree reuses a joined CODEX_THREAD_ID soul and refuses another co
     env: cleanEnv,
     encoding: 'utf8',
   }), /308462948/);
-  assert.equal(
-    JSON.parse(readFileSync(path.join(spacesDir, firstId, 'space.json'), 'utf8')).agentId,
-    firstId,
-  );
   const firstPopulation = JSON.parse(readFileSync(populationPath, 'utf8'));
   assert.equal(firstPopulation.souls[firstId].soulDir, path.join(path.dirname(spacesDir), 'home', '.agent-bot', 'souls', `${displayName(firstId)}.soul`));
+  assert.equal(
+    JSON.parse(readFileSync(path.join(firstPopulation.souls[firstId].soulDir, '.soul-state', 'space', 'space.json'), 'utf8')).agentId,
+    firstId,
+  );
+  assert.equal(existsSync(path.join(spacesDir, firstId)), false, 'nothing is created under the spaces root');
   assert.deepEqual(firstPopulation.souls[firstId], {
     id: firstId,
     name: displayName(firstId),
@@ -633,7 +637,7 @@ test('setup-worktree reuses a joined CODEX_THREAD_ID soul and refuses another co
     appSlug: app,
     parentId: id(42),
     status: 'active',
-    spacePath: path.join(spacesDir, firstId),
+    spacePath: path.join(firstPopulation.souls[firstId].soulDir, '.soul-state', 'space'),
     worktree: worktreeTop,
     worktrees: [worktreeTop],
     transcriptLocator: { provider: 'codex', id: 'thread-1' },
@@ -692,7 +696,7 @@ test('setup-worktree reuses a joined CODEX_THREAD_ID soul and refuses another co
     );
   }
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(populationPath, 'utf8')).souls), [firstId]);
-  assert.deepEqual(readdirSync(spacesDir), [firstId]);
+  assert.equal(existsSync(spacesDir), false, 'every setup reused the space inside the soul');
 
   finalizeAgentIdentity(firstId, { stateDir });
   repeatedPopulation.souls[firstId].status = 'active';
@@ -704,11 +708,14 @@ test('setup-worktree reuses a joined CODEX_THREAD_ID soul and refuses another co
     'setup projects the resolved identity status instead of reviving a finalized soul',
   );
 
-  const savedSpaces = `${spacesDir}.saved`;
-  renameSync(spacesDir, savedSpaces);
-  writeFileSync(spacesDir, 'not a directory\n');
+  // The soul's space lives in its folder (#583 slice 5); a broken one is
+  // refused, never replaced by a new space under the root.
+  const soulSpace = path.join(firstPopulation.souls[firstId].soulDir, '.soul-state', 'space');
+  const savedSpaces = `${soulSpace}.saved`;
+  renameSync(soulSpace, savedSpaces);
+  writeFileSync(soulSpace, 'not a directory\n');
   // The session soul resolves (no transcript in view, so AGENT_BOT_ID), and
-  // its broken space root fails setup closed.
+  // its broken space fails setup closed.
   assert.throws(() => runSetup(null));
   assert.equal(
     execFileSync('git', ['config', '--worktree', '--get', 'agentBot.agentId'], {
@@ -719,8 +726,9 @@ test('setup-worktree reuses a joined CODEX_THREAD_ID soul and refuses another co
     firstId,
     'space initialization failure must not partially bind the new Agent ID',
   );
-  rmSync(spacesDir, { force: true });
-  renameSync(savedSpaces, spacesDir);
+  rmSync(soulSpace, { force: true });
+  renameSync(savedSpaces, soulSpace);
+  assert.equal(existsSync(spacesDir), false, 'the refusal created nothing under the spaces root');
 
   const savedPopulation = `${populationPath}.saved`;
   renameSync(populationPath, savedPopulation);

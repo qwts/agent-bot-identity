@@ -47,7 +47,12 @@ test('provisions a git home from the package once, then rebinds it', async (t) =
   assert.equal(path.basename(directory), `${displayName(agentId)}.soul`);
   assert.equal(readFileSync(path.join(directory, 'AGENTS.md'), 'utf8'), 'be kind\n');
   assert.equal(readFileSync(path.join(directory, '.soul-state', 'agent-id'), 'utf8').trim(), agentId);
-  assert.equal(readlinkSync(path.join(directory, '.soul-state', 'space')), path.join(root, 'spaces', agentId));
+  // A space the census names but that does not exist yet starts inside the
+  // soul (#583 slice 5), and the census follows it; a space that exists
+  // outside is linked as before (tests/soul-memory-history.test.mjs).
+  assert.equal(statSync(path.join(directory, '.soul-state', 'space')).isDirectory(), true);
+  assert.equal(JSON.parse(readFileSync(path.join(directory, '.soul-state', 'space', 'space.json'), 'utf8')).agentId, agentId);
+  assert.equal(showSoul(agentId, { file: options.file }).spacePath, path.join(directory, '.soul-state', 'space'));
   assert.equal(statSync(path.join(directory, '.soul-state')).mode & 0o777, 0o700);
   assert.equal(statSync(path.join(directory, '.soul-state', 'agent-id')).mode & 0o777, 0o600);
   assert.equal(showSoul(agentId, { file: options.file }).soulDir, directory);

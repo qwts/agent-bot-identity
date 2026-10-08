@@ -34,7 +34,7 @@ import { ensureAgentIdentity, readAgentIdentity, stateDirectory, withLock } from
 import { daemonPreference, harnessForSlug, isGateEnabled, loadConfig } from './config.mjs';
 import { configuredAccountIdentity } from './detect-harness.mjs';
 import { AGENT_ID_KEYS, resolveAgentSlug } from './resolve-agent.mjs';
-import { initAgentSpace } from './agent-space.mjs';
+import { ensureSoulSpace } from './soul-memory.mjs';
 import { showSoul, upsertIdentitySoul } from './agent-population.mjs';
 import { bindSoul } from './setup-worktree.mjs';
 import { daemonClient } from './agent-daemon.mjs';
@@ -277,7 +277,7 @@ async function main() {
     if (!registered) {
       await bindSoul({ agentId, policy: daemonPreference({ config }), client: daemonClient(),
         ensureLocal: () => {
-          const space = initAgentSpace(agentId);
+          const space = ensureSoulSpace(agentId);
           upsertIdentitySoul(agentId, space.path);
           return space;
         },

@@ -10,7 +10,8 @@ import { appendFileSync, chmodSync, cpSync, existsSync, linkSync, lstatSync, mkd
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { readAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
-import { populationFile, registerSoulDir, showSoul, soulDirectory } from './agent-population.mjs';
+import { populationFile, registerSoulDir, setSoulSpacePath, showSoul, soulDirectory } from './agent-population.mjs';
+import { initSoulSpace } from './agent-space.mjs';
 
 import { buildSoulDirectory } from './soul-build.mjs';
 import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
@@ -158,9 +159,20 @@ export function ensureSoulDirectory(agentId, packagePath = null, options = {}) {
   let present = false;
   try { lstatSync(link); present = true; } catch (error) { if (error.code !== 'ENOENT') throw error; }
   if (!present) {
-    const soul = showSoul(agentId, { file: options.file ?? populationFile(options) });
-    try { symlinkSync(soul.spacePath, link, 'dir'); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; }
+    // A space the census already has on disk outside the soul stays there,
+    // linked as before, until `soul env migrate --space-into-soul` moves it.
+    // A soul whose space does not exist yet starts contained: the directory
+    // inside its folder, the census pointing at it (ADR-0583 decision 8).
+    const file = options.file ?? populationFile(options);
+    const soul = showSoul(agentId, { file });
+    const outside = path.relative(directory, soul.spacePath).startsWith('..');
+    if (outside && existsSync(soul.spacePath)) {
+      try { symlinkSync(soul.spacePath, link, 'dir'); }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+    } else {
+      const space = initSoulSpace(agentId, directory, options);
+      if (soul.spacePath !== space.path) setSoulSpacePath(agentId, space.path, { file });
+    }
   }
   return directory;
 }

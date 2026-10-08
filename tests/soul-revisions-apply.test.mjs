@@ -61,6 +61,11 @@ function tree(directory) {
   return result;
 }
 
+// The history mirror (#583 slice 5) appends a line under `.soul-state/runs`
+// for every recorded revision; everything else in the folder must stay.
+const definition = (snapshot) => Object.fromEntries(Object.entries(snapshot).filter(([path]) => !path.startsWith('.soul-state/runs')));
+const mirrored = (f) => readFileSync(join(f.directory, '.soul-state', 'runs', 'revisions.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+
 const editArgs = (f, path = f.copy) => ['edit', f.id, path, 'Customize instructions', '--apply', '--json'];
 const editOptions = (f) => ({ ...f.options, presence: async () => f.authorization });
 
@@ -149,8 +154,9 @@ test('without --apply, edit only records a revision and leaves both folders unch
   const record = await revisionCommand(editArgs(f).filter((arg) => arg !== '--apply'), editOptions(f));
   assert.equal(record.applied, undefined);
   assert.equal(record.changed, undefined);
-  assert.deepEqual(tree(f.directory), before);
+  assert.deepEqual(definition(tree(f.directory)), definition(before));
   assert.deepEqual(tree(f.copy), copyBefore);
+  assert.deepEqual(mirrored(f).at(-1), { id: record.revision, parent: f.initial, reason: 'Customize instructions', at: mirrored(f).at(-1).at }, 'the revision is mirrored into the soul');
 });
 
 for (const failure of ['owner refusal', 'stale parent', 'source symlink', 'destination symlink', 'destination dangling symlink', 'source parent symlink']) {
@@ -252,7 +258,7 @@ test('a head moved after recording refuses application without touching the fold
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
   await assert.rejects(editSoulRevision(f.id, f.copy, { ...f.options, apply: true, reason: 'Stale apply' }),
     /stale apply: recorded head moved/);
-  assert.deepEqual(tree(f.directory), before);
+  assert.deepEqual(definition(tree(f.directory)), definition(before), 'only the mirror of the recorded revision was written');
   assert.equal(existsSync(join(root, '.lock')), false);
 });
 

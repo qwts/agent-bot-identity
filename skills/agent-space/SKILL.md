@@ -7,8 +7,11 @@ description: Check in with agent-bot and create, use, and clean up repository ch
 
 ## What this is
 
-Keep the Agent Space store (`~/.agent-space/<agentId>`,
-[ENG-0172](https://github.com/qwts/playbook-engineering/blob/main/docs/decisions/ENG-0172-agent-space-is-durable-per-soul-storage.md))
+Keep the Agent Space store (`~/.agent-space/<agentId>` for a soul from
+before #583 slice 5, `<soulDir>/.soul-state/space` for a contained one; the
+census path wins, see
+[ENG-0172](https://github.com/qwts/playbook-engineering/blob/main/docs/decisions/ENG-0172-agent-space-is-durable-per-soul-storage.md)
+and [soul-memory-history.md](../../docs/soul-memory-history.md))
 as a different surface: this skill is about the soul's work area,
 `<soulDir>/worktrees/<name>`, for repository checkouts.
 

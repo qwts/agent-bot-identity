@@ -36,6 +36,7 @@ import { mintAgentIdentity, readAgentIdentity, stateDirectory, validateAgentId }
 import { archiveSoulDirs, listSouls, populationFile, recordSoulDisplayName, retireIdentityWithPopulation, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
 import { describeSetting, ownerGate, readColdWakeSettings, setColdWake, wakeSetting } from './cold-wake-settings.mjs';
 import { initAgentSpace } from './agent-space.mjs';
+import { ensureSoulSpace } from './soul-memory.mjs';
 import { daemonPreference, loadConfig } from './config.mjs';
 import { AGENT_ID_KEYS } from './resolve-agent.mjs';
 import { ensureSoulDirectory, installSoulHarnesses, soulHarnessesPath } from './soul-home.mjs';
@@ -269,7 +270,7 @@ export async function joinSoul({
     client,
     worktree,
     ensureLocal: () => {
-      const local = initAgentSpace(agentId, options);
+      const local = ensureSoulSpace(agentId, { ...options, file });
       upsertIdentitySoul(agentId, local.path, { file, stateDir, worktree });
       return local;
     },

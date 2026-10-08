@@ -93,7 +93,7 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
     'runtimes', 'providers', 'launch', 'readiness', 'migration', 'retention', 'errors']);
   assert.equal(result.schemaVersion, 1);
   assert.deepEqual(result.engine, { version: JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version, contractVersion: 1, capabilities: [...ENV_CAPABILITIES] });
-  assert.deepEqual(result.engine.capabilities, ['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes']);
+  assert.deepEqual(result.engine.capabilities, ['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes', 'memory', 'history']);
   assert.deepEqual(result.identity, { agentId: ID, name: 'billy', displayName: 'Billy - Starter', status: 'active', harness: 'codex',
     genesis: { revision: null, parentSoul: null }, revision: f.manifest.revision, parentRevision: null, template: false, formatVersion: 2 });
   assert.deepEqual(result.root, { soulDir: f.dir, soulsRoot: f.env.AGENT_BOT_SOULS_HOME, source: 'environment', registered: true, marker: 'ok',
@@ -135,6 +135,8 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
   assert.equal(history.external[0].what, 'revision journal');
   assert.equal(history.external[0].path, path.join(stateDirectory(f.options), 'soul-revisions', ID));
   assert.ok(history.external.every((row) => typeof row.present === 'boolean'));
+  // The soul's own mirror (#583 slice 5): nothing written yet.
+  assert.deepEqual([history.mirror, history.mirrored, history.turns, history.revisions], ['.soul-state/runs', false, 0, 0]);
   assert.deepEqual(component(result, 'temp').entries, []);
   const tools = component(result, 'host-tools');
   assert.equal(tools.present, true);
@@ -155,8 +157,13 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
   assert.deepEqual(result.launch.routing, { HOME: 'host', PATH: 'host', TMPDIR: 'host', toolHome: 'soul', env: ['CODEX_HOME'], runtimes: {
     node: { source: 'missing', version: NODE_PIN, bin: null }, python: { source: 'host', version: null, bin: null }, go: { source: 'host', version: null, bin: null } } });
   assert.deepEqual(result.launch.limitations, [], 'a routed harness is no longer a limitation');
-  assert.deepEqual(result.readiness, { ready: true, problems: [{ code: 'runtime-missing', severity: 'warning', component: 'runtimes',
-    message: `node ${NODE_PIN} is declared but not installed in the soul; the next launch installs it.`, action: `agent-bot soul runtimes install ${ID}` }] });
+  assert.deepEqual(result.readiness, { ready: true, problems: [
+    // A linked space is a warning with the migrate command (#583 slice 5).
+    { code: 'memory-not-contained', severity: 'warning', component: 'memory',
+      message: `The Agent Space is a link to ${f.space}, outside the soul; the soul's memory does not travel with its folder until it is moved inside.`,
+      action: `agent-bot soul env migrate ${ID} --space-into-soul` },
+    { code: 'runtime-missing', severity: 'warning', component: 'runtimes',
+      message: `node ${NODE_PIN} is declared but not installed in the soul; the next launch installs it.`, action: `agent-bot soul runtimes install ${ID}` }] });
   assert.deepEqual(result.migration, { status: 'pending', journal: '.soul-state/migration.json',
     steps: [{ id: 'space-into-soul', status: 'pending', from: f.space, to: path.join(f.dir, '.soul-state', 'space') }] });
   assert.deepEqual(result.retention, {
@@ -208,7 +215,7 @@ test('generated drift, a legacy harness install, copies and unregistered roots a
   const result = readSoulEnvironment(ID, f.options);
   assert.deepEqual(snapshot(f.home), before, 'drift is reported, not rebuilt');
   assert.ok(component(result, 'generated').drift.length > 0);
-  assert.deepEqual(result.readiness.problems.map((p) => p.code).sort(), ['generated-drift', 'root-duplicate', 'runtime-missing']);
+  assert.deepEqual(result.readiness.problems.map((p) => p.code).sort(), ['generated-drift', 'memory-not-contained', 'root-duplicate', 'runtime-missing']);
   assert.equal(result.readiness.problems.find((p) => p.code === 'generated-drift').action, `agent-bot soul build ${JSON.stringify(f.dir)}`);
   assert.equal(result.readiness.ready, true, 'warnings do not make a soul unready');
   assert.deepEqual(result.root.copies, [copy]);
@@ -223,7 +230,7 @@ test('generated drift, a legacy harness install, copies and unregistered roots a
   assert.equal(joined.harnesses.launchable, true, 'a joined soul launches from .soul-state/harnesses (#417)');
   rmSync(path.join(f.dir, '.soul-state', 'harnesses'), { recursive: true, force: true });
   const missing = readSoulEnvironment(ID, f.options);
-  assert.deepEqual(missing.readiness.problems.map((p) => p.code).sort(), ['generated-drift', 'harness-missing', 'runtime-missing']);
+  assert.deepEqual(missing.readiness.problems.map((p) => p.code).sort(), ['generated-drift', 'harness-missing', 'memory-not-contained', 'runtime-missing']);
   assert.equal(missing.harnesses.launchable, false);
   writeFileSync(path.join(f.dir, '.soul-state', 'agent-id'), 'not-an-agent-id\n');
   const invalid = readSoulEnvironment(ID, f.options);

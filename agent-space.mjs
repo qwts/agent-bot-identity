@@ -1,14 +1,19 @@
 #!/usr/bin/env node
 
 // Durable per-soul storage keyed by a transcript-bound Agent ID. Agent Spaces
-// live under ~/.agent-space, outside any checkout, and survive worktree
-// teardown, context compaction, and identity finalization.
+// survive worktree teardown, context compaction, and identity finalization.
+// A soul with a folder keeps its space inside it, `<soul>/.soul-state/space`
+// (ADR-0583 decision 8, the census `spacePath` is authoritative); a soul
+// without one, and every space made before #583, lives under ~/.agent-space.
+// Readers resolve a soul's space through soul-memory.mjs, never by root alone.
 
 import { randomUUID } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -182,9 +187,48 @@ export function initAgentSpace(
   });
 }
 
-export function showAgentSpace(agentId, options = {}) {
+/**
+ * A soul's Agent Space inside its folder, `<soulDir>/.soul-state/space`, the
+ * place a new soul's memory starts (ADR-0583 decision 8). Same marker as a
+ * space under the spaces root, so every reader and pack sees one format.
+ * An empty unmarked directory there is claimed; anything else there that
+ * is not this soul's marked space is refused, never overwritten.
+ */
+export function initSoulSpace(agentId, soulDir, { now = () => new Date() } = {}) {
   const id = validateAgentId(agentId);
-  const root = spacePath(id, options);
+  if (typeof soulDir !== 'string' || !path.isAbsolute(soulDir)) throw new Error('soulDir must be an absolute path');
+  const state = path.join(soulDir, '.soul-state');
+  const root = path.join(state, 'space');
+  mkdirSync(state, { recursive: true, mode: 0o700 });
+  return withLock(path.join(state, '.space.lock'), `Agent Space ${id}`, () => {
+    if (existsSync(markerPath(root))) {
+      const marker = readMarker(root);
+      if (marker.agentId !== id) {
+        throw new Error(`agent space at ${root} is bound to ${marker.agentId}, not ${id}`);
+      }
+      return { id, path: root, created: false, marker };
+    }
+    const present = (() => { try { return lstatSync(root); } catch { return null; } })();
+    if (present && !(present.isDirectory() && readdirSync(root).length === 0)) {
+      throw new Error(`agent space path ${root} already exists without ${MARKER_NAME}; refusing to claim it`);
+    }
+    ensurePrivateDirectory(root);
+    const marker = {
+      schemaVersion: SCHEMA_VERSION,
+      agentId: id,
+      createdAt: now().toISOString(),
+    };
+    writeMarker(root, marker);
+    return { id, path: root, created: true, marker };
+  });
+}
+
+// `root` names the space to read (the census path, through soul-memory.mjs);
+// without it the spaces root is assumed, which is right only for a soul the
+// census does not know.
+export function showAgentSpace(agentId, { root: given = null, ...options } = {}) {
+  const id = validateAgentId(agentId);
+  const root = given ?? spacePath(id, options);
   if (!existsSync(markerPath(root))) throw new Error(`no agent space for ${id} at ${root}`);
   const marker = readMarker(root);
   if (marker.agentId !== id) {
@@ -197,10 +241,10 @@ export function showAgentSpace(agentId, options = {}) {
 // arbitrary marker fields because either may contain secret material.
 export function inspectAgentSpace(
   agentId,
-  { env = process.env, home = homedir(), config } = {},
+  { env = process.env, home = homedir(), config, root: given = null } = {},
 ) {
   const id = validateAgentId(agentId);
-  const root = spacePath(id, { env, home, config });
+  const root = given ?? spacePath(id, { env, home, config });
   if (!existsSync(markerPath(root))) {
     let directoryPresent = false;
     try {
@@ -227,15 +271,15 @@ export function inspectAgentSpace(
 export function recordSpaceHandoff(
   agentId,
   handoff,
-  { env = process.env, home = homedir(), config } = {},
+  { env = process.env, home = homedir(), config, root: given = null } = {},
 ) {
   const id = validateAgentId(agentId);
   if (typeof handoff !== 'string' || !HANDOFF_PATTERN.test(handoff)) {
     throw new Error('handoff pointer must look like gist:<id>');
   }
-  const spacesRoot = spacesHome({ env, home, config });
-  const root = path.join(spacesRoot, id);
-  return withLock(path.join(spacesRoot, `.${id}.lock`), `Agent Space ${id}`, () => {
+  const root = given ?? path.join(spacesHome({ env, home, config }), id);
+  // The lock sits beside the space, under the spaces root or the soul's state.
+  return withLock(path.join(path.dirname(root), `.${id}.lock`), `Agent Space ${id}`, () => {
     if (!existsSync(markerPath(root))) throw new Error(`no agent space for ${id} at ${root}`);
     const marker = readMarker(root);
     if (marker.agentId !== id) {
@@ -329,12 +373,11 @@ export function importAgentSpacePack(
 // marker must exist and bind to the id, or nothing is deleted.
 export function deleteAgentSpace(
   agentId,
-  { env = process.env, home = homedir(), config } = {},
+  { env = process.env, home = homedir(), config, root: given = null } = {},
 ) {
   const id = validateAgentId(agentId);
-  const spacesRoot = spacesHome({ env, home, config });
-  const root = path.join(spacesRoot, id);
-  return withLock(path.join(spacesRoot, `.${id}.lock`), `Agent Space ${id}`, () => {
+  const root = given ?? path.join(spacesHome({ env, home, config }), id);
+  return withLock(path.join(path.dirname(root), `.${id}.lock`), `Agent Space ${id}`, () => {
     if (!existsSync(markerPath(root))) {
       throw new Error(`refusing to delete ${root}: it is not a marked agent space for ${id}`);
     }
@@ -444,6 +487,9 @@ function spaceJson(space, { includeCreated = false } = {}) {
 
 async function main() {
   const args = parseCli(process.argv);
+  // The census path is authoritative for a soul it knows (ADR-0583
+  // decision 8); loaded on demand like the lifecycle commands below.
+  const { soulSpacePath } = await import('./soul-memory.mjs');
   switch (args.command) {
     case 'init': {
       const id = resolveTargetId(args);
@@ -464,20 +510,20 @@ async function main() {
     }
     case 'path': {
       const id = resolveTargetId(args);
-      const root = spacePath(id);
+      const root = soulSpacePath(id);
       if (args.json) process.stdout.write(`${JSON.stringify({ agentId: id, path: root }, null, 2)}\n`);
       else process.stdout.write(`${root}\n`);
       break;
     }
     case 'show': {
       const id = resolveTargetId(args);
-      const space = showAgentSpace(id);
+      const space = showAgentSpace(id, { root: soulSpacePath(id) });
       process.stdout.write(`${JSON.stringify(spaceJson(space), null, 2)}\n`);
       break;
     }
     case 'export': {
       const id = resolveTargetId(args);
-      const space = showAgentSpace(id);
+      const space = showAgentSpace(id, { root: soulSpacePath(id) });
       const { pack, excluded } = buildSpacePack(space.path, id);
       for (const relative of excluded) {
         process.stderr.write(`agent-space: excluded regenerable cache file ${relative}\n`);
@@ -485,7 +531,7 @@ async function main() {
       if (args.gist) {
         const gist = await uploadPackToGist(pack);
         const handoff = gistHandoffPointer(gist.id);
-        recordSpaceHandoff(id, handoff);
+        recordSpaceHandoff(id, handoff, { root: space.path });
         if (args.json) {
           process.stdout.write(`${JSON.stringify({
             agentId: id,
@@ -567,10 +613,10 @@ async function main() {
       // for lifecycle commands, and it fails closed on unknown ids.
       const { retireIdentityWithPopulation, showSoul } = await import('./agent-population.mjs');
       showSoul(id); // throws "no population record for <id>" — fail closed
-      const root = spacePath(id);
+      const root = soulSpacePath(id);
       let deletable = false;
       if (args.deleteSpace) {
-        const inspection = inspectAgentSpace(id);
+        const inspection = inspectAgentSpace(id, { root });
         if (inspection.status === 'ok') {
           deletable = true;
         } else if (!(inspection.status === 'missing' && !inspection.directoryPresent)) {
@@ -586,7 +632,7 @@ async function main() {
       if (!updated) throw new Error(`no population record for ${id}`);
       let spaceDeleted = false;
       if (deletable) {
-        deleteAgentSpace(id);
+        deleteAgentSpace(id, { root });
         spaceDeleted = true;
       }
       if (args.json) {

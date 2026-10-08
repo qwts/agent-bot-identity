@@ -120,7 +120,11 @@ devcontainer.
      `<state>/homes/<agentId>`. Existing homes migrate when the soul is
      next launched.
    - Agent Space stays where ENG-0172 puts it. It is linked from the soul
-     and does not move.
+     and does not move. Superseded by
+     [ADR-0583](ADR-0583-the-soul-root-owns-the-environment.md) decision 8:
+     the space lives at `.soul-state/space` inside the soul, the census
+     `spacePath` is authoritative, and an existing linked space is moved
+     by `soul env migrate --space-into-soul`.
 6. **A soul's worktrees go inside the soul.**
    - `agent-bot setup-worktree` and launch create checkouts under
      `<soul>/worktrees/<name>`.

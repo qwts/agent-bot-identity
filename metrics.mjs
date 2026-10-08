@@ -110,13 +110,17 @@ export function recordSession({ provider, sessionId, cwd, env = process.env, hom
  * such as the daemon's ACP turns, whose soul home is not a git worktree.
  * Returns the agentId recorded, or null for a non-Claude or invalid session.
  */
-export function recordSoulSession({ agentId, provider, sessionId, env = process.env, home = homedir(), now = () => new Date() } = {}) {
+export function recordSoulSession({ agentId, provider, sessionId, env = process.env, home = homedir(), now = () => new Date(), history = null } = {}) {
   if (provider !== 'claude' || !SESSION_ID.test(sessionId ?? '') || !AGENT_ID.test(agentId ?? '')) return null;
   const path = join(metricsDirectory({ env, home }), 'sessions.json');
   const sessions = readJson(path, {});
   const kept = (sessions[agentId] ?? []).filter((entry) => entry.sessionId !== sessionId);
-  sessions[agentId] = [{ provider, sessionId, recordedAt: now().toISOString() }, ...kept].slice(0, SESSIONS_PER_SOUL);
+  const recordedAt = now().toISOString();
+  sessions[agentId] = [{ provider, sessionId, recordedAt }, ...kept].slice(0, SESSIONS_PER_SOUL);
   writePrivateJson(path, sessions);
+  // The soul's own copy of the binding (#583 decision 9): the session id
+  // and harness, as the daemon records them, never the session's contents.
+  if (history) { try { history.turn(agentId, { id: sessionId, kind: 'session', startedAt: recordedAt, harness: provider }); } catch { /* best effort */ } }
   return agentId;
 }
 

@@ -10,7 +10,8 @@ import { pathToFileURL } from 'node:url';
 import { canonicalJson, computePackageRevision, readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
 import { diffPackageSkills, skillsChanged, skillsCommand } from './skill-manifest.mjs';
 import { currentAgentId, readAgentIdentity, recordAgentPackageRevision, stateDirectory, validateAgentId, withLock } from './agent-identity.mjs';
-import { spacePath } from './agent-space.mjs';
+import { appendSoulRevision, registeredSoulDir } from './soul-history.mjs';
+import { soulSpacePath } from './soul-memory.mjs';
 import { assertOwnerAction, consentOwner, ownerCredentialRequired, presenceOrConsent } from './owner-gate.mjs';
 import { populationFile, showSoulByName, soulDirectory } from './agent-population.mjs';
 import { appendAuditReceipt } from './agent-principals.mjs';
@@ -65,7 +66,18 @@ function append(root, event, options) {
     // Publish complete JSON exclusively; no partially written journal records.
     linkSync(temp, join(root, `${String(events(root).length).padStart(10, '0')}.json`));
   } finally { rmSync(temp, { force: true }); }
+  if (record.kind === 'revision') mirrorRevision(basename(root), record, options);
   return record;
+}
+// The soul's own copy of a revision entry under `.soul-state/runs/`
+// (#583 decision 9), after the journal has it. Best effort: a folder the
+// census does not name, or one that cannot be written, changes nothing
+// about the revision; the failure goes to stderr (or `options.log`).
+function mirrorRevision(id, record, options) {
+  const soulDir = options.soulDir ?? registeredSoulDir(id, options);
+  if (!soulDir) return;
+  try { appendSoulRevision(soulDir, record); }
+  catch (error) { (options.log ?? ((line) => process.stderr.write(`${line}\n`)))(`soul revisions: history mirror for ${id} not written (${error.code ?? error.message})`); }
 }
 function snapshot(root, source, parentRevision, { preserve = false } = {}) {
   // Use the same package inventory as hashing: never copy working state or
@@ -358,7 +370,7 @@ function noLinks(root, path) {
     if (existsSync(current) && lstatSync(current).isSymbolicLink()) throw new Error('promotion cannot follow symlinks');
   }
 }
-export async function promoteSpaceContent(id, source, destination, { actor = 'soul', reason, resolveSpace = spacePath, ...options } = {}) {
+export async function promoteSpaceContent(id, source, destination, { actor = 'soul', reason, resolveSpace = soulSpacePath, ...options } = {}) {
   safeRelative(source); safeRelative(destination); text(reason, 'reason');
   if (!['user', 'soul'].includes(actor)) throw new Error('promotion actor must be user or soul');
   const root = rootFor(id, options);

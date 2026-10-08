@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { mintAgentIdentity, retireAgentIdentity, stateDirectory } from './agent-identity.mjs';
 import { packageManifest, populationFile, registerSoulDir, retireIdentityWithPopulation, upsertIdentitySoul } from './agent-population.mjs';
-import { initAgentSpace } from './agent-space.mjs';
+import { initSoulSpace } from './agent-space.mjs';
 import { loadConfig } from './config.mjs';
 import { computePackageRevision, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST,
   readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
@@ -160,6 +160,14 @@ export async function spawnSoulTemplate(templatePath, { name, role = null, harne
     save();
     identity = mintAgentIdentity({ ...options, stateDir, appSlug: null, packagePath: directory,
       parentId, harness, useGithub: false });
+    // The soul's life starts inside its folder (ADR-0583 decisions 8 and 9):
+    // the marker, the Agent Space as a directory, and the history mirror
+    // from the genesis revision on.
+    const state = join(directory, '.soul-state');
+    mkdirSync(state, { mode: 0o700 });
+    writeFileSync(join(state, 'agent-id'), `${identity.id}\n`, { flag: 'wx', mode: 0o600 });
+    const space = initSoulSpace(identity.id, directory, revisionOptions);
+    revisionOptions.soulDir = directory;
     adoptSoulPackage(identity.id, directory, { ...revisionOptions, reason: 'Spawn template instance' });
     // The seed is hashed into revisions, so deriving it from the Agent ID
     // must happen after genesis. Record this initialization, never rewrite birth.
@@ -168,12 +176,8 @@ export async function spawnSoulTemplate(templatePath, { name, role = null, harne
     const initialized = await editSoulRevision(identity.id, directory,
       { ...revisionOptions, reason: 'Initialize display seed from instance identity' });
     writeFileSync(manifestPath, readFileSync(join(revisionPackagePath(identity.id, initialized.revision, revisionOptions), 'soul.json')));
-    const space = initAgentSpace(identity.id, options);
-    upsertIdentitySoul(identity.id, space.path, { file, ...revisionOptions });
+    upsertIdentitySoul(identity.id, space.path, { file, stateDir, ...(options.now ? { now: options.now } : {}) });
     registered = true;
-    const state = join(directory, '.soul-state');
-    mkdirSync(state, { mode: 0o700 });
-    writeFileSync(join(state, 'agent-id'), `${identity.id}\n`, { flag: 'wx', mode: 0o600 });
     registerSoulDir(identity.id, directory, { file });
     return { ...identity, soulDir: directory, displayName, revision: initialized.revision };
   } catch (error) {

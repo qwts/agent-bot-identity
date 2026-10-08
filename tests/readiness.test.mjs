@@ -984,6 +984,22 @@ test('machine readiness fails when the census is not under the resolved spaces r
   assert.match(homeCheck.action, /agent-bot update/);
 });
 
+// A space inside its soul folder (#583 slice 5) is where it belongs: the
+// census check does not report it as outside the spaces root.
+test('machine readiness accepts a census whose space lives inside the soul folder', async () => {
+  const home = tempRoot();
+  const census = join(home, '.local', 'state', 'agent-bot', 'population.json');
+  const id = 'agent_11111111-1111-4111-8111-111111111111';
+  const soulDir = join(home, '.agent-bot', 'souls', 'billy.soul');
+  mkdirSync(dirname(census), { recursive: true });
+  writeFileSync(census, `${JSON.stringify({ schemaVersion: 1, souls: { [id]: {
+    id, name: displayName(id), appSlug: 'qwts-codex-agent', parentId: null, status: 'active', soulDir,
+    spacePath: join(soulDir, '.soul-state', 'space'), transcriptLocator: null, lastSeen: '2026-08-16T00:00:00.000Z' } } }, null, 2)}\n`);
+  const report = await collectReadiness({ command: 'doctor', scope: 'machine', ...machineDependencies(home) });
+  const homeCheck = report.machine.checks.find(({ id: check }) => check === 'spaces.home');
+  assert.equal(homeCheck.status, 'ready');
+});
+
 test('machine readiness fails when the supervisor is missing or the daemon is down', async () => {
   const home = tempRoot();
   const missing = await collectReadiness({

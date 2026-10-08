@@ -12,7 +12,8 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { inspectAgentSpace, resolveSpacesHome } from './agent-space.mjs';
+import { resolveSpacesHome } from './agent-space.mjs';
+import { inspectSoulSpace } from './soul-memory.mjs';
 import { duplicateSoulDirs, listSouls, orphanSoulDirs, populationFile } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
 import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness } from './config.mjs';
@@ -370,7 +371,10 @@ function spacesHomeCheck({ home, env, config, inspectCutover = inspectSpacesCuto
       action: 'inspect population.json and repair it manually; doctor will not modify it',
     });
   }
-  const mismatches = souls.filter((soul) => !pathIsInside(inspection.resolvedRoot, soul.spacePath));
+  // A space inside its soul folder (ADR-0583 decision 8) is where it belongs,
+  // whatever the spaces root is.
+  const contained = (soul) => typeof soul.soulDir === 'string' && pathIsInside(join(soul.soulDir, '.soul-state'), soul.spacePath);
+  const mismatches = souls.filter((soul) => !contained(soul) && !pathIsInside(inspection.resolvedRoot, soul.spacePath));
   if (mismatches.length) {
     return readinessCheck({
       id: 'spaces.home',
@@ -2070,7 +2074,7 @@ export async function collectReadiness({
   access = accessSync,
   load = loadConfig,
   inspectCredentials = inspectAppCredentials,
-  inspectSpace = inspectAgentSpace,
+  inspectSpace = inspectSoulSpace,
   inspectDaemonSupervisor = inspectSupervisor,
   inspectCutover = inspectSpacesCutover,
   inspectShellGh = inspectShellGhShim,

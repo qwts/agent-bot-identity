@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // `agent-bot soul env migrate`: the soul's tool homes on disk and the
-// adoption of host sign-ins (#583 slice 2, ADR-0583 decision 5).
+// adoption of host sign-ins (#583 slice 2, ADR-0583 decision 5), and the
+// move of a linked Agent Space into the soul folder (slice 5, decision 8,
+// the mechanism in soul-memory.mjs).
 //
 // Reading is by existence only: whether a sign-in file is there, in the
 // soul's tool home and in the host store, never what it holds. Adoption
@@ -9,28 +11,28 @@
 // `.soul-state/migration.json` and leaves an audit receipt naming files,
 // never contents. The macOS keychain is never read: a keychain sign-in is
 // per user, and the harness asks for it once inside the soul.
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { randomUUID } from 'node:crypto';
 import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
 import { readAgentIdentity, stateDirectory } from './agent-identity.mjs';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
+import { SPACE_STEP_ID, migrateSpaceIntoSoul } from './soul-memory.mjs';
+import { MIGRATION_SCHEMA_VERSION, readMigrationJournal, recordMigrationStep } from './soul-migration-journal.mjs';
 import { TOOL_HOME_REGISTRY, adoptStepId, hostToolStore, toolHomeDecision, toolHomeEnv, toolHomeFiles, toolHomeFor, toolHomePath, toolHomeRelative, toolHomesRoot } from './soul-tool-homes.mjs';
 
-export const MIGRATION_SCHEMA_VERSION = 1;
-export const MIGRATION_JOURNAL = '.soul-state/migration.json';
-export const STEP_STATUSES = Object.freeze(['pending', 'done', 'skipped', 'failed']);
+// The journal lives in soul-migration-journal.mjs (shared with the space
+// move); its API stays importable from here.
+export { MIGRATION_JOURNAL, MIGRATION_SCHEMA_VERSION, STEP_STATUSES, readMigrationJournal } from './soul-migration-journal.mjs';
+export const MIGRATION_OPERATIONS = Object.freeze(['adopt-host-signin', 'space-into-soul']);
 const STATE = '.soul-state';
-const USAGE = 'usage: agent-bot soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] [--json] [--principal-stdin]';
+const USAGE = 'usage: agent-bot soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul [--json] [--principal-stdin]';
 // A sign-in file is small; `.claude.json` carries project state and can
 // reach a few megabytes. Anything larger is not a file this adopts.
 const FILE_MAX_BYTES = 16 * 1024 * 1024;
-const JOURNAL_MAX_BYTES = 256 * 1024;
-const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = (value) => (typeof value === 'string' && value.trim() ? value : null);
 
 function fail(code, message, { action = null } = {}) {
@@ -93,43 +95,6 @@ export function ensureToolHome(soulDir, harness) {
   return routed;
 }
 
-function readJournal(soulDir) {
-  const file = path.join(soulDir, STATE, 'migration.json');
-  let fd;
-  try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
-  catch { return { schemaVersion: MIGRATION_SCHEMA_VERSION, steps: [] }; }
-  try {
-    const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size > JOURNAL_MAX_BYTES) return { schemaVersion: MIGRATION_SCHEMA_VERSION, steps: [] };
-    const parsed = JSON.parse(readFileSync(fd, 'utf8'));
-    return object(parsed) && Array.isArray(parsed.steps) ? parsed : { schemaVersion: MIGRATION_SCHEMA_VERSION, steps: [] };
-  } catch { return { schemaVersion: MIGRATION_SCHEMA_VERSION, steps: [] }; }
-  finally { closeSync(fd); }
-}
-
-/**
- * The recorded steps of `.soul-state/migration.json`, each reduced to the
- * keys the descriptor publishes: `{ id, status, from, to, at, note }`. A
- * missing or malformed journal is an empty list.
- */
-export function readMigrationJournal(soulDir) {
-  return readJournal(soulDir).steps
-    .filter((step) => object(step) && typeof step.id === 'string' && STEP_STATUSES.includes(step.status))
-    .map((step) => ({ id: step.id, status: step.status, from: text(step.from), to: text(step.to), at: text(step.at), note: text(step.note) }));
-}
-
-// One entry per step id: a rerun replaces its record rather than growing
-// the journal. Written whole, privately, through a rename.
-function recordStep(soulDir, step) {
-  const journal = readJournal(soulDir);
-  journal.schemaVersion = MIGRATION_SCHEMA_VERSION;
-  journal.steps = [...journal.steps.filter((entry) => !object(entry) || entry.id !== step.id), step];
-  const file = path.join(soulDir, STATE, 'migration.json');
-  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  try { writeFileSync(temporary, `${JSON.stringify(journal)}\n`, { flag: 'wx', mode: 0o600 }); renameSync(temporary, file); }
-  finally { rmSync(temporary, { force: true }); }
-}
-
 // A private copy of one regular file: opened without following links,
 // bounded, written exclusively with mode 0600. The bytes stay in this
 // function; the caller learns only that it was copied.
@@ -181,7 +146,7 @@ export function adoptHostSignIn(soulDir, { harness, env = process.env, home = en
     // whenever the sign-in file itself did not come along.
     if (row.note && !signIns.every((file) => file.status === 'present' || file.status === 'copied')) step.note += `; ${row.note}`;
   }
-  recordStep(soulDir, step);
+  recordMigrationStep(soulDir, step);
   return step;
 }
 
@@ -245,25 +210,36 @@ export function formatMigration(result) {
   const lines = [`agentId: ${result.agentId}`, `soulDir: ${result.soulDir}`, `operation: ${result.operation}`, `decision: ${result.decision}`, ''];
   for (const step of result.steps) {
     lines.push(`${step.id}: ${step.status}${step.note ? ` - ${step.note}` : ''}`);
-    for (const file of step.files) lines.push(`  ${file.path}: ${file.status}`);
+    for (const file of Array.isArray(step.files) ? step.files : []) lines.push(`  ${file.path}: ${file.status}`);
+    for (const key of ['source', 'to', 'retired']) if (step.id === SPACE_STEP_ID && step[key]) lines.push(`  ${key}: ${step[key]}`);
+    for (const link of step.copied?.links ?? []) lines.push(`  link kept as a link: ${link}`);
   }
-  if (!result.steps.length) lines.push('nothing to adopt');
+  if (!result.steps.length) lines.push(result.operation === SPACE_STEP_ID ? 'nothing to move' : 'nothing to adopt');
   return `${lines.join('\n')}\n`;
 }
 
+// Whether the daemon has a turn in flight or a warm harness for the soul,
+// as `soul remove` asks (soul-comms.mjs); loaded on demand because that
+// module reaches the daemon client. No daemon means nothing is running.
+async function soulIsRunning(agentId, { env, home }) {
+  const { soulRunning } = await import('./soul-comms.mjs');
+  return soulRunning(agentId, { env, home });
+}
+
 export async function soulEnvMigrateCommand(argv, { gate = ownerGate, readStdin = () => readFileSync(0, 'utf8'), write = (value) => process.stdout.write(value),
-  env = process.env, home = env.HOME ?? homedir(), cwd = process.cwd(), now = () => new Date(), ...rest } = {}) {
-  let id = null, adopt = false, harness = null, json = false, presented = false;
+  env = process.env, home = env.HOME ?? homedir(), cwd = process.cwd(), now = () => new Date(), running = soulIsRunning, ...rest } = {}) {
+  let id = null, operation = null, harness = null, json = false, presented = false;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === '--adopt-host-signin' && !adopt) adopt = true;
+    if (arg === '--adopt-host-signin' && operation === null) operation = 'adopt-host-signin';
+    else if (arg === '--space-into-soul' && operation === null) operation = SPACE_STEP_ID;
     else if (arg === '--json' && !json) json = true;
     else if (arg === '--principal-stdin' && !presented) presented = true;
     else if (arg === '--harness' && harness === null && typeof argv[i + 1] === 'string' && !argv[i + 1].startsWith('-')) { harness = argv[i + 1]; i += 1; }
     else if (!arg.startsWith('-') && id === null) id = arg;
     else throw new Error(USAGE);
   }
-  if (!id || !adopt) throw new Error(USAGE);
+  if (!id || operation === null || (harness !== null && operation !== 'adopt-host-signin')) throw new Error(USAGE);
   if (harness !== null && !Object.hasOwn(ACP_SPAWN_REGISTRY, harness) && !Object.hasOwn(TOOL_HOME_REGISTRY, harness)) {
     throw new Error(`--harness must be one of ${[...new Set([...Object.keys(ACP_SPAWN_REGISTRY), ...Object.keys(TOOL_HOME_REGISTRY)])].join(', ')}`);
   }
@@ -276,6 +252,7 @@ export async function soulEnvMigrateCommand(argv, { gate = ownerGate, readStdin 
   const soul = resolveSoul(id, options);
   const soulDir = soulRoot(soul, options);
   if (!existsSync(path.join(soulDir, STATE))) fail('soul-state-missing', `${soulDir} has no .soul-state yet; spawn or launch the soul first`);
+  if (operation === SPACE_STEP_ID) return spaceIntoSoul({ soul, soulDir, principal, json, gate, running, write, env, home, cwd, now, file: options.file ?? populationFile(options) });
   if (harness !== null && !toolHomeFor(harness).routable) fail('tool-home-unsupported', `${harness}: ${toolHomeFor(harness).reason}`);
   // Without --harness: the soul's own harnesses (its execution identity's,
   // then its manifest's preferred ones), the routable ones only.
@@ -289,6 +266,31 @@ export async function soulEnvMigrateCommand(argv, { gate = ownerGate, readStdin 
   appendAuditReceipt({ event: 'soul-env-migrate', agentId: soul.id, operation: 'adopt-host-signin', decision,
     detail: steps.map((step) => `${step.id.split(':')[1]}: ${step.status} (${step.files.map((file) => `${file.path} ${file.status}`).join(', ') || step.note})`).join('; ') || 'no routable harness' }, { env, home, now });
   const result = { schemaVersion: MIGRATION_SCHEMA_VERSION, agentId: soul.id, soulDir, operation: 'adopt-host-signin', decision, steps, root: toolHomesRoot(soulDir) };
+  write(json ? `${JSON.stringify(result)}\n` : formatMigration(result));
+  return result;
+}
+
+// `--space-into-soul`: one soul, owner-gated, refused while the soul runs
+// (a turn could write into the space mid-copy), checked again after the
+// gate as `soul remove` does. The receipt names counts and paths, never a
+// file's contents.
+async function spaceIntoSoul({ soul, soulDir, principal, json, gate, running, write, env, home, cwd, now, file }) {
+  const refuseRunning = () => fail('space-migrate-busy', `${soul.id} is running (a turn in flight or a warm harness); stop it before moving its Agent Space`, { action: `agent-bot soul stop ${soul.id}` });
+  if (await running(soul.id, { env, home })) refuseRunning();
+  await gate(`move ${soul.id}'s Agent Space into its soul folder`, { principal, env, cwd });
+  if (await running(soul.id, { env, home })) refuseRunning();
+  let step;
+  try { step = migrateSpaceIntoSoul(soulDir, { agentId: soul.id, file, now }); }
+  catch (error) {
+    appendAuditReceipt({ event: 'soul-env-migrate', agentId: soul.id, operation: SPACE_STEP_ID, decision: 'failed', detail: `${error.code ?? 'error'}: ${error.message}` }, { env, home, now });
+    throw error;
+  }
+  const decision = step.status === 'done' ? 'migrated' : step.status;
+  const detail = step.status === 'done'
+    ? `${step.copied?.files ?? 0} file(s), ${step.copied?.links.length ?? 0} link(s) from ${step.source} to ${step.to}; source retired to ${step.retired ?? 'nowhere'}`
+    : `${step.status}: ${step.note ?? ''}`;
+  appendAuditReceipt({ event: 'soul-env-migrate', agentId: soul.id, operation: SPACE_STEP_ID, decision, detail }, { env, home, now });
+  const result = { schemaVersion: MIGRATION_SCHEMA_VERSION, agentId: soul.id, soulDir, operation: SPACE_STEP_ID, decision, steps: [step], root: step.to };
   write(json ? `${JSON.stringify(result)}\n` : formatMigration(result));
   return result;
 }

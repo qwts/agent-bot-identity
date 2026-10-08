@@ -31,7 +31,7 @@ import { mintAgentIdentity, readAgentIdentity, retireAgentIdentity, stateDirecto
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { archiveSoulDirs, locateSoulDir, populationFile, recordSoulDisplayName, registerSoulDir,
   retireIdentityWithPopulation, upsertIdentitySoul } from './agent-population.mjs';
-import { initAgentSpace } from './agent-space.mjs';
+import { initSoulSpace } from './agent-space.mjs';
 import { loadConfig } from './config.mjs';
 import { assertOwnerAction } from './owner-gate.mjs';
 import { joinComms, joinSoul } from './soul-join.mjs';
@@ -172,9 +172,15 @@ export async function forkSoul({
     save();
     next.revision = computePackageRevision(folder);
     save();
-    const revisionOptions = { stateDir, now };
     identity = mintAgentIdentity({ ...options, stateDir, now, appSlug: null, packagePath: folder, harness: runs, parentId, useGithub: false });
     result.agentId = identity.id;
+    // The fork's life starts inside its folder (ADR-0583 decisions 8 and 9),
+    // like a spawn's: marker, Agent Space directory, history mirror.
+    const state = path.join(folder, '.soul-state');
+    mkdirSync(state, { mode: 0o700 });
+    writeFileSync(path.join(state, 'agent-id'), `${identity.id}\n`, { flag: 'wx', mode: 0o600 });
+    const space = initSoulSpace(identity.id, folder, { now });
+    const revisionOptions = { stateDir, now, soulDir: folder };
     adoptSoulPackage(identity.id, folder, { ...revisionOptions, reason: `Fork of ${original}` });
     // The seed is hashed into revisions, so it changes after genesis, as a spawn's does.
     next.displaySeed = identity.id;
@@ -182,11 +188,8 @@ export async function forkSoul({
     const initialized = await editSoulRevision(identity.id, folder,
       { ...revisionOptions, reason: 'Initialize display seed from forked identity' });
     writeFileSync(manifestPath, readFileSync(path.join(revisionPackagePath(identity.id, initialized.revision, revisionOptions), 'soul.json')));
-    upsertIdentitySoul(identity.id, initAgentSpace(identity.id, options).path, { file, stateDir, now });
+    upsertIdentitySoul(identity.id, space.path, { file, stateDir, now });
     registered = true;
-    const state = path.join(folder, '.soul-state');
-    mkdirSync(state, { mode: 0o700 });
-    writeFileSync(path.join(state, 'agent-id'), `${identity.id}\n`, { flag: 'wx', mode: 0o600 });
     registerSoulDir(identity.id, folder, { file });
     recordSoulDisplayName(identity.id, name, { file });
     // agent-comms, as `agent-bot join` registers a soul: its own workspace

@@ -45,7 +45,7 @@ export const MODULES = new Map([
   ['agent-hook', 'agent-hook.mjs'],
 ]);
 
-const SOUL_USAGE = 'usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-] | soul build [PATH] [--check] [--json] | soul pack validate PATH | soul revision <command> | soul revision edit ID PATH REASON [--apply] [--json] [--principal-stdin] | soul revision prepare <agentId|name> [--json] [--dest PATH] | soul revision prepare --discard STAGING | soul model <agentId|name> [show|set <modelId>|clear] [--json] [--principal-stdin] | soul mode <agentId|name> [show|safe|autopilot] [--json] [--principal-stdin] | soul computer-use <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul stop <agentId|name> [--json] | soul pause|resume <agentId|name> [--json] | soul show <agentId|name> [--json] | soul profile <agentId|name> [--json] [--file RELATIVE_PATH] | soul env <agentId|name> [--json] | soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] [--json] [--principal-stdin] | soul runtimes <agentId|name> [--json] | soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin] | soul secret <agentId|name> set|clear <name> [--json] [--principal-stdin] | soul secret <agentId|name> status [--json] | soul comms <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul remove <agentId|name> [--json] [--principal-stdin] | soul fork <copy-path> --name NAME [--harness H] [--json] [--principal-stdin] | soul asides <agentId|name> [--after ASIDE_ID] [--limit N] [--json] | soul dir AGENT_ID | soul locate PATH [--json] | soul templates [--json] | soul spawn TEMPLATE_PATH --name NAME [--harness H] | soul confinement AGENT_ID off|warn|deny | soul confinement-report AGENT_ID [--json]';
+const SOUL_USAGE = 'usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-] | soul build [PATH] [--check] [--json] | soul pack validate PATH | soul revision <command> | soul revision edit ID PATH REASON [--apply] [--json] [--principal-stdin] | soul revision prepare <agentId|name> [--json] [--dest PATH] | soul revision prepare --discard STAGING | soul model <agentId|name> [show|set <modelId>|clear] [--json] [--principal-stdin] | soul mode <agentId|name> [show|safe|autopilot] [--json] [--principal-stdin] | soul computer-use <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul stop <agentId|name> [--json] | soul pause|resume <agentId|name> [--json] | soul show <agentId|name> [--json] | soul profile <agentId|name> [--json] [--file RELATIVE_PATH] | soul env <agentId|name> [--json] | soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul [--json] [--principal-stdin] | soul runtimes <agentId|name> [--json] | soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin] | soul secret <agentId|name> set|clear <name> [--json] [--principal-stdin] | soul secret <agentId|name> status [--json] | soul comms <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul remove <agentId|name> [--json] [--principal-stdin] | soul fork <copy-path> --name NAME [--harness H] [--json] [--principal-stdin] | soul asides <agentId|name> [--after ASIDE_ID] [--limit N] [--json] | soul dir AGENT_ID | soul locate PATH [--json] | soul templates [--json] | soul spawn TEMPLATE_PATH --name NAME [--harness H] | soul confinement AGENT_ID off|warn|deny | soul confinement-report AGENT_ID [--json]';
 
 // Wording from README.md, docs/soul-templates.md, and docs/joining.md.
 const SOUL_HELP = `${SOUL_USAGE.replaceAll(' | soul ', '\n  agent-bot soul ')}
@@ -68,7 +68,10 @@ soul env reads the soul's environment descriptor (where its definition,
 generated output, workspaces, home, memory and history live, what is
 installed, and what is not ready); it never provisions. soul env migrate
 --adopt-host-signin copies the host's harness sign-in files (never the
-keychain) into the soul's own tool home once (owner only). soul revision
+keychain) into the soul's own tool home once (owner only); soul env migrate
+--space-into-soul moves a linked Agent Space into .soul-state/space (copied,
+verified, the census updated, the source renamed .retired-<date>; owner
+only, never while the soul runs). soul revision
 prepare stages the editable definition under .soul-state/tmp for a host to
 edit and apply. soul runtimes reports the runtimes (node, python, go) and
 non-npm harnesses a soul declares against what is installed under its
@@ -78,7 +81,7 @@ the provider secrets a soul declares (credentials.secrets) for its
 harnesses' providers; set and clear are owner only and the value arrives on
 stdin, never on argv; status says present or missing, never the value.
 
-See docs/soul-homes.md, docs/soul-environment.md, docs/soul-tool-homes.md, docs/soul-runtimes.md, docs/soul-providers.md, docs/soul-templates.md,
+See docs/soul-homes.md, docs/soul-environment.md, docs/soul-tool-homes.md, docs/soul-memory-history.md, docs/soul-runtimes.md, docs/soul-providers.md, docs/soul-templates.md,
 docs/joining.md, docs/soul-revisions.md, and README.md for the subcommands
 and their effects.
 `;
