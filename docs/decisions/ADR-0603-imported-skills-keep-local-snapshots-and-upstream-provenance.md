@@ -1,4 +1,4 @@
-# ADR-0603: Skills have distinct import, install, learn, and dream operations
+# ADR-0603: Soul skills have distinct import, install, learn, and dream operations
 
 **Status:** Proposed
 **Date:** 2026-10-07
@@ -31,10 +31,41 @@ Learning and ongoing knowledge maintenance require agent judgment and may
 use tools that this runtime does not provide. They must not assume that
 every soul has an embedding service, retrieval index, or knowledge graph.
 
+## Command boundary and governance
+
+[ENG-0064](https://github.com/qwts/qwts-agent-sop/blob/main/docs/decisions/ENG-0064-cli-skill-command-family.md)
+and its [command contract](https://github.com/qwts/qwts-agent-sop/blob/main/docs/reference/cli-skill-command-contract.md)
+reserve `<cli> skill` for the CLI's own bundled router, feature references,
+bundle path, and guarded export. Its `list` lists the CLI's features; it is
+not an imported-skill catalog. All lifecycle commands proposed here live
+under **`agent-bot soul skill`**, including optional search/status interfaces.
+No new lifecycle aliases are added under `agent-bot skill`. Existing legacy
+disclosure behavior remains unchanged by this proposal; alignment of that
+behavior with ENG-0064 is separate work.
+
+The namespace identifies the soul subsystem, not necessarily one soul:
+import/list/show/verify can operate on the shared local library without a
+soul identity, install selects a repo/user target, and learn/dream or
+soul-scoped retrieval select a soul explicitly. The library remains at
+`~/.agent-bot/skills/<uuid>/<name>/`; its location does not change with the
+command spelling.
+
+The no-install direction in
+[ENG-0055 decision 6](https://github.com/qwts/qwts-agent-sop/blob/main/docs/decisions/ENG-0055-every-cli-ships-its-agent-skill.md)
+and the [ENG-0006 amendment](https://github.com/qwts/qwts-agent-sop/blob/main/docs/decisions/ENG-0006-agentic-primitives-governance.md#amendment-2026-09-23)
+protects against repo and context rot: duplicated or stale skill copies and
+irrelevant discovery metadata accumulating in every session. Preserve that
+intent with library-first storage and on-demand consumption. Installation
+is an explicit, managed product capability, not the default way to load
+skills or a requirement for learning. Organization packs retain applicable
+source/placement restrictions, including the governed CLI/shared-skill
+rules; a namespace change does not waive them. This product proposal does
+not amend those accepted decisions.
+
 ## Proposed decision
 
 1. **Import is an explicit acquisition operation.** Add the proposed
-   `agent-bot skill import <url|path>` command for a local skill directory,
+   `agent-bot soul skill import <url|path>` command for a local skill directory,
    local `SKILL.md`, direct skill-document URL, or supported repository
    skill-directory URL. Preserve existing disclosure commands. Import
    neither executes the skill nor activates it in a harness, overrides a
@@ -130,17 +161,22 @@ every soul has an embedding service, retrieval index, or knowledge graph.
    byte identity and change detection, not authenticity, approval, or safety.
 
 9. **Install targets a repo or user harness location.**
-   `agent-bot skill install <skill> --harness <h> --repo <path>` or `--user`
+   `agent-bot soul skill install <skill> --harness <h> --repo <path>` or `--user`
    places a selected local revision through a harness-specific adapter.
    Record the destination, revision, managed files, and checksums; refuse
    unsupported targets and conflicting files. `uninstall` removes the
    managed installation, preserving the library and surfacing local edits.
    Placement and verified harness discovery are separate outcomes; report
-   any reload requirement. There is no `install --soul` shortcut: the soul
-   path is agent-guided learning through its revision policy.
+   any reload requirement. Prefer library references and task-scoped reads
+   when placement is unnecessary. Do not bulk-install the library or add
+   every imported skill's metadata to repo instructions or session context.
+   Managed placement must remain attributable, verifiable, and removable so
+   it does not become an abandoned copy. There is no `install --soul`
+   shortcut: the soul path is agent-guided learning through its revision
+   policy. Apply the selected organization's installation restrictions.
 
 10. **Learn instructs an agent; it is not an ingestion pipeline.**
-    `agent-bot skill learn <skill> --soul <soul>` supplies the entrypoint,
+    `agent-bot soul skill learn <skill> --soul <soul>` supplies the entrypoint,
     provenance, previous learning outcomes, and guidance for progressive
     consumption. The agent selects relevant procedures, references, scripts,
     and assets, follows their dependencies, and adapts useful material into
@@ -160,7 +196,7 @@ every soul has an embedding service, retrieval index, or knowledge graph.
     with evidence from files or tools; record inference as inference.
 
 11. **Dream schedules agent-driven maintenance of the soul's knowledge.**
-    `agent-bot skill dream --soul <soul> --schedule <schedule>` registers or
+    `agent-bot soul skill dream --soul <soul> --schedule <schedule>` registers or
     updates a recurring maintenance task, analogous to `git maintenance`.
     The runtime owns scheduling, execution bounds, overlap prevention,
     checkpoints, and run records. The task instructs an agent to review
@@ -182,8 +218,8 @@ every soul has an embedding service, retrieval index, or knowledge graph.
     No maintenance task is registered by import, install, or this proposal.
 
 12. **Knowledge interfaces adapt to available capabilities.** Prioritize
-    `agent-bot soul knowledge search <soul> "<query>"` and
-    `agent-bot soul knowledge status <soul>` when a retrieval/capability
+    `agent-bot soul skill search --soul <soul> "<query>"` and
+    `agent-bot soul skill status --soul <soul>` when a retrieval/capability
     contract is defined. Search queries configured tools and returns local
     citations and source revisions; it does not launch learning as an
     implicit substitute for retrieval. Status distinguishes tool-verified
@@ -199,18 +235,19 @@ every soul has an embedding service, retrieval index, or knowledge graph.
 ## Proposed command scope
 
 All names below are proposed; this record adds no runtime commands.
+Abbreviated verbs in each row share the `agent-bot soul skill` prefix.
 
 | Surface | Responsibility |
 | --- | --- |
-| `skill import`, `list`, `show`, `verify` | Acquire, discover, explain, and verify library content; provide structured output for agents. |
-| `skill install`, `uninstall` | Manage a selected revision at an explicit repo or user harness location. |
-| `skill learn` | Guide progressive, agent-led adoption into a soul and optional knowledge-tool integration. |
-| `skill dream` | Register and manage recurring, agent-driven soul maintenance. |
+| `soul skill import`, `list`, `show`, `verify` | Acquire, discover, explain, and verify library content; provide structured output for agents. |
+| `soul skill install`, `uninstall` | Manage a selected revision at an explicit repo or user harness location. |
+| `soul skill learn` | Guide progressive, agent-led adoption into a soul and optional knowledge-tool integration. |
+| `soul skill dream` | Register and manage recurring, agent-driven soul maintenance. |
 | Source check, diff, explicit update | Stage, explain, and adopt upstream candidates separately; exact command names remain open. |
-| `soul knowledge search`, `status` | Query configured capabilities and report evidenced state when a common interface is available. |
+| `soul skill search`, `status` | Query configured capabilities and report evidenced state when a common interface is available. |
 
-Defer a dedicated `knowledge inspect` command until indexed items have a
-stable identity/provenance contract. Defer `knowledge reindex` and `graph`;
+Defer a dedicated `soul skill inspect` command until indexed items have a
+stable identity/provenance contract. Defer `soul skill reindex` and `graph`;
 focused dream tasks can guide available tools without assuming a universal
 backend. References can be a `show` view, recording can reuse revision
 tooling, and installation upgrades can select another revision through
@@ -243,13 +280,20 @@ of copying a file.
   tools, so reports need evidence and explicit partial-completion states.
 - Harness placement adapters and optional knowledge interfaces add contracts
   to maintain. Agent-bot provides a common workflow without committing to a
-  particular knowledge-storage implementation.
+  particular knowledge-storage implementation. A distinct soul skill
+  namespace preserves the application-skill discovery contract.
 - Dream tasks consume execution resources and can change durable knowledge.
   Scheduling must be explicit, bounded, inspectable, and reversible; source
   consolidation follows retention/revision policy rather than an age cutoff.
 
 ## Alternatives considered
 
+- **Use `agent-bot skill` for lifecycle management:** rejected. ENG-0064
+  gives that surface a different contract; even `list` and `show` would
+  otherwise have incompatible meanings.
+- **Install every imported skill for automatic discovery:** rejected.
+  This recreates repo/context rot. Managed installation is deliberate;
+  library reads and progressive learning require no blanket installation.
 - **Copy only `SKILL.md`:** loses supporting files and leaves mutable
   dependencies outside the snapshot.
 - **One checksum over the edited skill:** cannot distinguish upstream
