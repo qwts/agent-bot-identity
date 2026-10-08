@@ -987,17 +987,46 @@ routes accept `scope: "once" | "session"`; session scope requires approve.
 
 ### Removing a soul
 
-`agent-bot soul remove <soul> [--json]` takes a soul out of this account
-without deleting anything (#420). It is owner-gated like `soul comms` and
-refused while the soul runs (`soul-running`). It turns cold wake off, leaves
-agent-comms as the soul, retires it (there is no un-retire), and moves every
-folder carrying its marker to `<souls root>/.archive/<UTC stamp>-<folder>`.
-Every step can be repeated, so removing a retired soul finishes a cleanup a
-failed launch or an earlier remove left behind:
+`agent-bot soul remove <soul> [--scope soul|team] [--json]` takes a soul out
+of this account without deleting anything (#420). It is owner-gated like
+`soul comms` and refused while the soul runs (`soul-running`). It turns cold
+wake off, leaves agent-comms as the soul, retires it (there is no un-retire),
+and moves every folder carrying its marker to `<souls root>/.archive/<UTC
+stamp>-<folder>`. Every step can be repeated, so removing a retired soul
+finishes a cleanup a failed launch or an earlier remove left behind:
 
 ```sh
-agent-bot soul remove R8Scout --json   # {"agentId":…,"name":"R8Scout","wake":"off","comms":"left","retired":true,"archived":[{"from":…,"to":…}]}
+agent-bot soul remove R8Scout --json   # {"agentId":…,"name":"R8Scout","wake":"off","comms":"left","retired":true,"archived":[{"from":…,"to":…}],"plan":{…},"effects":{…}}
 ```
+
+The scope says what happens to the souls it leads (GeniusBar #283). `soul`,
+the default, removes the one soul; its direct active children become
+independent (their census `parentId` is cleared, audited as `soul-reparent`)
+and deeper descendants keep their own parent. `team` removes every active
+descendant as well, deepest first, with the same steps per soul, and is
+refused before anything changes if any soul in the plan runs. Retired
+descendants are left as they are in either scope.
+
+`--plan` is a dry run: it prints the exact souls a scope would touch, changes
+nothing and asks nobody, so a host can show names and counts before the
+owner decides. The executor runs the same plan, so what was declared is what
+happens; the result carries it as `plan` and what was done as `effects`
+(`archived`, `independent`, `notArchived`, each in execution order), also on
+a failure part way. Nothing restores or deletes an archived soul, and the
+capability flags say so:
+
+```sh
+agent-bot soul remove Luna --scope team --plan --json
+# {"schemaVersion":1,"scope":"team","agentId":"agent_…",
+#  "capabilities":{"plan":true,"team":true,"independent":true,"restore":false,"delete":false},
+#  "archived":[{"agentId":"agent_…","name":"luna","displayName":"Luna","status":"active","harness":"claude","parentId":null,"running":false,"depth":0}, …],
+#  "independent":[], "unchanged":[{…,"status":"retired",…}]}
+```
+
+Each entry names the soul (`agentId`, census `name`, shown `displayName`),
+its `status`, `harness` (null without an identity record here), `parentId`,
+whether it is `running` (null when the daemon could not be asked) and its
+`depth` below the soul removed. Counts are the lengths of these lists.
 
 A cold turn has nobody to approve a tool call, so the daemon prepends an
 exact allow rule for each of this server's tools to the executor policy

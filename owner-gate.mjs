@@ -107,6 +107,8 @@ export function ownerActionSummary(action, { env = process.env, souls = null } =
     summary = `let ${label(id)} wake on new messages by resuming its session (${rest[1]})`;
   } else if (first === 'soul' && second === 'remove' && rest.length === 0) {
     summary = `remove ${label(id)} from this Mac (its folders are archived, not deleted)`;
+  } else if (first === 'soul' && second === 'remove' && rest[0] === '--scope' && rest[1] === 'team' && rest.length === 2) {
+    summary = `remove ${label(id)} and every soul it leads from this Mac (their folders are archived, not deleted)`;
   } else if (first === 'soul' && second === 'fork' && rest.length > 0) {
     summary = `make a copy of ${label(id)} a new soul named ${rest.join(' ')}`;
   } else if (first === 'soul' && second === 'confinement' && rest.length === 1) {

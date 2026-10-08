@@ -739,6 +739,25 @@ export function setSoulComms(id, comms, { file = populationFile() } = {}) {
   });
 }
 
+// Sets or clears (`null`) the soul a row names as its parent. `soul remove`
+// clears it on the direct children of a soul it retires (GeniusBar #283), so
+// they stand on their own instead of pointing at a tombstone. Returns the row.
+export function setSoulParent(id, parent, { file = populationFile() } = {}) {
+  const target = agentId(id);
+  const parentId = parent === null ? null : agentId(parent, 'parentId');
+  if (parentId === target) throw new Error('a soul cannot be its own parent');
+  ensurePrivateDirectory(path.dirname(file));
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
+    const existing = current.souls[target];
+    if (!existing) throw new Error(`no population record for ${target}`);
+    const soul = normalizeSoul({ ...existing, parentId });
+    if (existing.parentId !== soul.parentId) writeDocument(file, { ...current.souls, [target]: soul });
+    return soul;
+  });
+}
+
 // Records a soul's sandbox override (#376). Returns the row.
 export function setSoulSandbox(id, sandbox, { file = populationFile() } = {}) {
   const target = agentId(id);

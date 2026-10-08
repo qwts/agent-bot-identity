@@ -155,6 +155,7 @@ test('prompts name the soul by name and Agent ID, and the change', () => {
   assert.equal(say(`identity migrate-credentials ${ID} --to keyd`), `move the GitHub App key of ${bill} to agent-bot-keyd`);
   assert.equal(say('identity migrate-credentials --all'), "move every soul's GitHub App key");
   assert.equal(say(`soul remove ${ID}`), `remove ${bill} from this Mac (its folders are archived, not deleted)`);
+  assert.equal(say(`soul remove ${ID} --scope team`), `remove ${bill} and every soul it leads from this Mac (their folders are archived, not deleted)`);
   // Anything else keeps its words, with each soul named.
   assert.equal(say(`soul spawn ${ID}`), `soul spawn ${bill}`);
   // The name a launch or join gave the soul wins over its handle (#429).

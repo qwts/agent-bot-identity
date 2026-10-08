@@ -125,7 +125,7 @@ for. `agent-bot skill path` prints the installed release's copy of this skill.
 | local-write | `approvals approve`, `approvals deny`, `web open` | Decisions require the daemon's owner gate; inspect waiting proposals before retrying. Each web open mints a single-use pairing code and prints/opens its link. |
 | remote-write | `join` | Also writes local soul, census, checkout pin and bind-token state. Running it again from the same checkout reuses the soul; see [joining.md](../../docs/joining.md). |
 | remote-write | `soul comms`, `soul fork`, `telegram run` | Changes agent-comms membership or relays messages; also writes local state. Inspect current state before retrying. |
-| destructive | `soul remove` | Owner-gated: leaves agent-comms, retires the soul (there is no un-retire), and archives its folders. Repeating finishes cleanup. |
+| destructive | `soul remove` | Owner-gated: leaves agent-comms, retires the soul (there is no un-retire), and archives its folders; `--scope team` does the same for every active soul it leads. Repeating finishes cleanup. `soul remove ID --plan` is read-only and shows what a scope would touch. |
 | remote-write | `mint-token` | Each run mints a new short-lived token; repeating is safe. |
 | remote-write | `signed-commit` | Never blindly rerun. Follow the printed recovery in [verified-publish.md](references/verified-publish.md), and inspect the remote branch head before any second attempt. |
 
