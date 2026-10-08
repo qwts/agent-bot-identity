@@ -16,7 +16,7 @@ import {
   discoverTranscript,
   readAgentIdentity,
 } from './agent-identity.mjs';
-import { initAgentSpace } from './agent-space.mjs';
+import { ensureSoulSpace } from './soul-memory.mjs';
 import { listSouls, showSoul, upsertIdentitySoul } from './agent-population.mjs';
 import { readAppMetadata, writeAppMetadata } from './identity-app-store.mjs';
 import { assertWorktreeArea, placeWorktree, soulWorktreePath } from './soul-worktrees.mjs';
@@ -221,7 +221,7 @@ async function bindExecutionIdentity({ config, daemon, executionIdentity }) {
     client: daemon ?? daemonClient(),
     worktree,
     ensureLocal: () => {
-      const local = initAgentSpace(executionIdentity.id);
+      const local = ensureSoulSpace(executionIdentity.id);
       upsertIdentitySoul(executionIdentity.id, local.path, { worktree });
       return local;
     },

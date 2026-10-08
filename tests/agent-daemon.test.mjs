@@ -20,6 +20,7 @@ import {
   soulPromptIdentity,
 } from '../agent-daemon.mjs';
 import { displayName, recordSoulDisplayName, upsertSoul } from '../agent-population.mjs';
+import { initSoulSpace } from '../agent-space.mjs';
 import { verifySoulToken, vouchKeyPath, vouchStateDir } from '../vouch.mjs';
 import { ensureAgentIdentity, stateDirectory } from '../agent-identity.mjs';
 import { mintBindToken, readBinding } from '../agent-binding.mjs';
@@ -195,6 +196,15 @@ test('space ensure, space path, register, and population share the CLI stores', 
     assert.equal(soul.id, AGENT_ID);
     assert.equal(soul.appSlug, 'you-codex-agent');
     assert.equal(soul.spacePath, created.path);
+    // The census path is authoritative (ADR-0583 decision 8): a soul whose
+    // space moved into its folder answers with that path, not the spaces root.
+    const soulDir = path.join(env.AGENT_BOT_SPACES_HOME, '..', 'souls', 'me.soul');
+    const contained = initSoulSpace(AGENT_ID, soulDir).path;
+    await call('/v0/register', { method: 'POST', body: { agentId: AGENT_ID, spacePath: contained } });
+    assert.equal((await (await call(`/v0/space/path?agentId=${AGENT_ID}`)).json()).path, contained);
+    // Ensuring again hands back the contained space rather than the one under the root.
+    assert.deepEqual(await (await call('/v0/space/ensure', { method: 'POST', body: { agentId: AGENT_ID } })).json(), { agentId: AGENT_ID, path: contained, created: false });
+    await call('/v0/register', { method: 'POST', body: { agentId: AGENT_ID, spacePath: created.path } });
 
     const population = await call('/v0/population');
     const { souls } = await population.json();

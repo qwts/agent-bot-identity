@@ -12,6 +12,7 @@ variable and nothing else.
 ```sh
 agent-bot soul env <agentId|name> [--json]                                   # tool-state rows, readiness
 agent-bot soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] [--json] [--principal-stdin]
+agent-bot soul env migrate <agentId|name> --space-into-soul [--json] [--principal-stdin]
 ```
 
 ## Contract
@@ -102,7 +103,14 @@ and `toolHomes.prepare` from `soulToolHomeEnv`, `pendingSoulToolHome` and
 ```sh
 agent-bot soul env migrate billy --adopt-host-signin                 # every routable harness the soul names
 agent-bot soul env migrate billy --adopt-host-signin --harness codex
+agent-bot soul env migrate billy --space-into-soul                   # the Agent Space move; see soul-memory-history.md
 ```
+
+`soul env migrate` takes exactly one operation per run: `--adopt-host-signin`
+(below, `--harness` applies to it alone) or `--space-into-soul`, which moves
+the soul's Agent Space into its folder and is described in
+[soul-memory-history.md](soul-memory-history.md). Both share the journal
+`.soul-state/migration.json` and the `soul-env-migrate` receipt.
 
 - Owner action, gated like `soul runtimes install` (`--principal-stdin`
   carries the principal JSON). The action named to the gate is

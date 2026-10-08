@@ -94,8 +94,10 @@ sign-ins and its tools. A symlink is not containment.
   verified archives are shared.
 - `HOME` stays the host's. A harness that cannot be routed stays shared and
   says so in `launch.limitations`, rather than being faked.
-- Until slice 5 the Agent Space is still a link; the descriptor reports it
-  as `location: linked`, `contained: false`, with a pending migration step.
+- A soul from before slice 5 keeps its Agent Space linked until the owner
+  runs `soul env migrate --space-into-soul`; the descriptor reports it as
+  `location: linked`, `contained: false`, `memory-not-contained`, with a
+  pending migration step. New souls start contained.
 - `soul revision edit --apply` removes the exact generated output a staging
   leaves out; the next build or launch regenerates it.
 
@@ -119,6 +121,14 @@ and 5 precedes 7.
    `credentials.secrets`, `soul-providers.mjs`, `soul secret`, launch
    injection and the `provider` stage; see
    [soul-providers.md](../soul-providers.md).
-5. Memory and history containment, with migration.
+5. Memory and history containment, with migration. Shipped: new souls get
+   `.soul-state/space` as a directory and the census `spacePath` is what
+   every reader resolves (`soul-memory.mjs`); the owner-gated, journaled,
+   resumable `soul env migrate --space-into-soul` (copy into a staging,
+   verify sizes and SHA-256, switch, census, source retired never deleted);
+   the per-soul history mirror `.soul-state/runs/` (`soul-history.mjs`,
+   appended from the turn registry, the session binding and the revision
+   journal, best effort); `memory-not-contained`; see
+   [soul-memory-history.md](../soul-memory-history.md).
 6. Migration completion, a doctor check, `soul env clean`.
 7. Export and import.

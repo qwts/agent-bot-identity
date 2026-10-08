@@ -11,6 +11,7 @@ GeniusBar read both instead of carrying their own path lists.
 ```sh
 agent-bot soul env <agentId|name> [--json]
 agent-bot soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] [--json] [--principal-stdin]
+agent-bot soul env migrate <agentId|name> --space-into-soul [--json] [--principal-stdin]
 agent-bot soul revision prepare <agentId|name> [--json] [--dest PATH]
 agent-bot soul revision prepare --discard STAGING
 agent-bot soul runtimes <agentId|name> [--json]
@@ -65,7 +66,8 @@ scalars `null`, collections `[]`), in this order:
 
 - `schemaVersion` 1; `engine` `{ version, contractVersion, capabilities }`.
   `capabilities` is `["env", "revision-prepare", "runtimes", "providers",
-  "tool-homes"]` today; a client gates each later slice on it.
+  "tool-homes", "memory", "history"]` today; a client gates each later
+  slice on it.
 - `identity`: `agentId`, `name`, `displayName`, `status`, `harness`,
   `genesis { revision, parentSoul }`, the manifest's `revision`,
   `parentRevision`, `template`, `formatVersion`.
@@ -87,9 +89,13 @@ scalars `null`, collections `[]`), in this order:
   `shared-host` keeps the host store for a sign-in the soul lacks until it
   is adopted; see [soul-tool-homes.md](soul-tool-homes.md)); `credentials`
   `{ exportable: false, declared }` (names, never contents); `memory`
-  `{ location: inside | linked, target, contained, spacePath, status }`;
-  `history.external[]` (the daemon journals that still live under the state
-  directory) and `confinementLog`; `temp.entries[]` (revision stagings);
+  `{ location: inside | linked, target, contained, spacePath, status }`
+  (`status` inspected at the census path); `history.external[]` (the daemon
+  journals that still live under the state directory), `confinementLog`,
+  and the soul's own mirror `mirror: ".soul-state/runs"`, `turns`,
+  `revisions` (line counts, `null` when unreadable), `mirrored`; see
+  [soul-memory-history.md](soul-memory-history.md); `temp.entries[]`
+  (revision stagings);
   `host-tools.entries[]` `{ name, path, source: engine | host }`.
 - `classification`: the contract's `enum` and `rules`.
 - `harnesses`: `selected`, `declared[]` (the `package.json` pins, `source`
@@ -130,8 +136,10 @@ scalars `null`, collections `[]`), in this order:
   `harnesses-into-runtimes` when `.soul-state/harnesses` exists, and
   `adopt-host-signin:<harness>` for each `shared-host` harness. Steps `soul env migrate` recorded in
   `.soul-state/migration.json` are listed as recorded (`done | skipped |
-  failed`, with `at` and `note`) and replace the pending entry of the same
-  id. Only the adoption runs today; the rest waits for slice 5 and 6.
+  failed`, or a phase `copying | verifying | switching` of a run under way,
+  with `at` and `note`) and replace the pending entry of the same id. The
+  adoption and the space move run today; `harnesses-into-runtimes` waits
+  for slice 6.
 - `retention`: component ids grouped as `durable`, `reconstructible`,
   `disposable`.
 - `errors[]`: `{ area, message }` for what could not be read; the rest of
@@ -156,6 +164,7 @@ scalars `null`, collections `[]`), in this order:
 | `provider-secret-unreadable` | error / warning | The declared store cannot give the secret (a loosened file mode, a store failure); store it again |
 | `provider-declaration-invalid` | error | `harnesses.<name>.provider` or `credentials.secrets` is refused; fix it in a revision |
 | `tool-signin-missing` | warning | The selected harness's sign-in is in the host store (or a Mac's keychain) but not in the soul's tool home, so the launch keeps the shared host store; `agent-bot soul env migrate <id> --adopt-host-signin --harness <name>` contains it |
+| `memory-not-contained` | warning | `.soul-state/space` is a link to an Agent Space outside the soul, so the soul's memory does not travel with its folder; `agent-bot soul env migrate <id> --space-into-soul` moves it inside |
 
 Warnings leave `ready` true. Codes are appended, never renamed.
 

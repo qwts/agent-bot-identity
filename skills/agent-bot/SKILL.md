@@ -218,6 +218,21 @@ it never reads the keychain, never copies sessions or caches, and a rerun is
 should be contained; the next launch then routes. See
 [soul-tool-homes.md](../../docs/soul-tool-homes.md).
 
+A soul's memory and history live in its folder too. A new soul's Agent
+Space is a real directory at `<soul>/.soul-state/space/` and the census
+`spacePath` is what every reader resolves (`agent-space path`, the daemon,
+`soul env`, promotion). A soul from before keeps its space under
+`~/.agent-space`, linked, and `soul env` reports `memory-not-contained`;
+`agent-bot soul env migrate <agentId|name> --space-into-soul` is the owner
+action that moves it: copied into a staging inside the soul, verified by
+size and SHA-256, switched in, the census updated, the source retired as
+`<source>.retired-<date>` (never deleted), journaled and resumable, refused
+`space-migrate-busy` while the soul runs. Each soul also carries an
+append-only history mirror under `.soul-state/runs/` (`turns.jsonl`,
+`revisions.jsonl`: ids, kinds, times, harness, outcome, reason; never
+prompts or outputs), written best effort beside the daemon's own journals.
+See [soul-memory-history.md](../../docs/soul-memory-history.md).
+
 `agent-bot soul runtimes <agentId|name> [--json]` reports the runtimes
 (`node`, `python`, `go`) and non-npm harness installs the soul's `soul.json`
 declares, resolved against the pinned catalog and what is installed under

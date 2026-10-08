@@ -88,7 +88,14 @@ for (const formatVersion of [1, 2]) test(`format ${formatVersion}: independent i
     assert.equal(showSoul(soul.id, f.options).soulDir, soul.soulDir);
     assert.match(showSoul(soul.id, f.options).name, /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     assert.equal(readFileSync(join(soul.soulDir, '.soul-state', 'agent-id'), 'utf8').trim(), soul.id);
-    assert.deepEqual(readdirSync(join(soul.soulDir, '.soul-state')), ['agent-id']);
+    // The life starts inside the folder (#583 slice 5): the Agent Space as a
+    // directory the census points at, and the revisions mirrored from genesis.
+    assert.deepEqual(readdirSync(join(soul.soulDir, '.soul-state')), ['agent-id', 'runs', 'space']);
+    assert.equal(JSON.parse(readFileSync(join(soul.soulDir, '.soul-state', 'space', 'space.json'), 'utf8')).agentId, soul.id);
+    assert.equal(showSoul(soul.id, f.options).spacePath, join(soul.soulDir, '.soul-state', 'space'));
+    assert.equal(existsSync(join(f.home, 'spaces')), false, 'nothing under the spaces root');
+    assert.deepEqual(readFileSync(join(soul.soulDir, '.soul-state', 'runs', 'revisions.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line).id),
+      [soul.genesis.revision, soul.revision]);
     assert.equal(existsSync(join(soul.soulDir, 'worktrees')), false);
     for (const file of GENERATED_HARNESS_PATHS) assert.equal(existsSync(join(soul.soulDir, file)), false, file);
     assert.deepEqual(readFileSync(join(soul.soulDir, 'unknown.bin')), Buffer.from([0, 255, 17]));
@@ -258,7 +265,9 @@ test('a soul starts its team end to end: census parents, real ACP turn, limits, 
 
 test('failed instance initialization retires its identity and removes the incomplete directory', async (t) => {
   const f = fixture(t);
-  writeFileSync(join(f.home, 'spaces'), 'cannot create a space beneath a file');
+  // The revision journal cannot be made: the failure comes after the identity is minted.
+  mkdirSync(f.options.stateDir, { recursive: true });
+  writeFileSync(join(f.options.stateDir, 'soul-revisions'), 'cannot record a revision beneath a file');
   await assert.rejects(spawnSoulTemplate(f.template, { ...f.options, name: 'Billy' }));
   assert.deepEqual(readdirSync(join(f.home, 'souls')), []);
   const identityFile = readdirSync(f.options.stateDir).find((name) => name.endsWith('.json'));

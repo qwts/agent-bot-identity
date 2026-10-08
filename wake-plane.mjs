@@ -23,7 +23,9 @@ import { createWakeDispatcher } from './wake-dispatch.mjs';
 // Shared by cold, launch and interactive turns. Keep each controller until
 // its executor settles: abort requests cancellation, it does not prove exit.
 // A soul may have overlapping interactive sessions; stop reaches every turn.
-export function createTurnRegistry({ isPaused = () => false } = {}) {
+// `history` (soul-history.mjs) hears every turn run here as one mirror
+// line: id, kind, times, harness, outcome; never the message or the reply.
+export function createTurnRegistry({ isPaused = () => false, history = null, now = () => new Date() } = {}) {
   const active = new Map();
   const sessionGrants = createSessionGrants();
   const track = (agentId, controller) => {
@@ -52,16 +54,26 @@ export function createTurnRegistry({ isPaused = () => false } = {}) {
       const controller = new AbortController();
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(turnTimeoutMs), ...(input.signal ? [input.signal] : [])]);
       const release = track(input.invocation.agentId, controller);
+      const startedAt = now().toISOString();
+      let outcome = 'ok';
       try {
         signal.throwIfAborted();
         const result = await executor({ ...input, signal, sessionGrants });
         signal.throwIfAborted();
         return result;
       } catch (error) {
+        outcome = signal.aborted ? 'cancelled' : 'failed';
         if (signal.aborted) throw new DOMException('turn cancelled', 'AbortError');
         throw error;
       } finally {
         release();
+        if (history) {
+          const { invocation } = input;
+          // A task turn is one whatever lane ran it; otherwise the caller says.
+          const kind = invocation.taskId !== undefined && invocation.taskId !== null ? 'task' : input.kind ?? 'turn';
+          try { history.turn(invocation.agentId, { id: invocation.invocationId ?? null, kind, startedAt, endedAt: now().toISOString(), harness: invocation.harness ?? null, outcome }); }
+          catch { /* the mirror is best effort; the port logs */ }
+        }
       }
     },
   };
@@ -91,7 +103,7 @@ export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onE
       if (update?.sessionUpdate === 'agent_message_chunk' && typeof update.content?.text === 'string') reply += update.content.text;
       else if (update?.sessionUpdate === 'tool_call') reply = '';
     };
-    const result = await turns.run({ invocation }, async ({ signal, sessionGrants }) => executor({
+    const result = await turns.run({ invocation, kind: 'wake' }, async ({ signal, sessionGrants }) => executor({
       sessionGrants,
       invocation,
       message,
@@ -269,7 +281,7 @@ export function createWakePlane({ isPaused = () => false, pool, settings, lookup
     ? createColdWaker({
       isPaused,
       executor: laneExecutor({ acpTurn: executorFor ? coldTurnExecutor({ executorFor, turnTimeoutMs, approvals, turns }) : null,
-        resumeTurn: resumeExecutor ? (input) => turns.run(input, resumeExecutor, { turnTimeoutMs }) : null }),
+        resumeTurn: resumeExecutor ? (input) => turns.run({ ...input, kind: 'wake' }, resumeExecutor, { turnTimeoutMs }) : null }),
       settings,
       lookupBinding: async (agentId) => lookupSoul(agentId),
       identities: async (agentId) => identities(agentId),

@@ -4,18 +4,21 @@
 // (readOnly census lookup) and never provisions: no ensureSoulDirectory,
 // createSoulHomes, initAgentSpace or registerSoulDir. A fresh census row
 // with no folder yet reads as a descriptor whose components are absent.
-import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync, readlinkSync, statSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
 import { readAgentIdentity, stateDirectory } from './agent-identity.mjs';
 import { duplicateSoulDirs, locateSoulDir, populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
-import { inspectAgentSpace } from './agent-space.mjs';
+
 import { buildSoulDirectory } from './soul-build.mjs';
 import { ENV_CONTRACT_VERSION, GENERATED_HARNESS_MARKER, GENERATED_HARNESS_PATHS, RETENTION, SOUL_LAYOUT, classificationContract } from './soul-env-contract.mjs';
 import { credentialStores } from './soul-credentials.mjs';
 import { inspectToolHomes, readMigrationJournal } from './soul-env-migrate.mjs';
+import { REVISIONS_FILE, TURNS_FILE, runsDirectory } from './soul-history.mjs';
+import { inspectSoulSpace, spaceMigrateCommand } from './soul-memory.mjs';
+import { STEP_FINAL_STATUSES } from './soul-migration-journal.mjs';
 import { secretSetCommand } from './soul-providers.mjs';
 import { inspectSoulRuntimes, runtimeLaunchEnv } from './soul-runtimes.mjs';
 import { inspectSoulSecrets } from './soul-secrets.mjs';
@@ -25,9 +28,10 @@ import { soulsHome } from './souls-root.mjs';
 export const ENV_SCHEMA_VERSION = 1;
 // What this engine can do for a host, so a client gates each later slice
 // of #583 on the engine it talks to rather than on a version number.
-export const ENV_CAPABILITIES = Object.freeze(['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes']);
+export const ENV_CAPABILITIES = Object.freeze(['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes', 'memory', 'history']);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const USAGE = 'usage: agent-bot soul env <agentId|name> [--json] | soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] [--json] [--principal-stdin]';
+const USAGE = 'usage: agent-bot soul env <agentId|name> [--json] | soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul [--json] [--principal-stdin]';
+const LINE_COUNT_MAX_BYTES = 256 * 1024 * 1024;
 const MANIFEST_MAX_BYTES = 64 * 1024;
 const SMALL_MAX_BYTES = 4 * 1024;
 const STATE = '.soul-state';
@@ -51,6 +55,28 @@ function readSmall(file, limit) {
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size > limit) return null;
     return readFileSync(fd);
+  } catch { return null; } finally { closeSync(fd); }
+}
+
+// Lines of an append-only journal, counted in chunks without following a
+// link; null when the file is absent, unreadable or past the bound.
+function countLines(file) {
+  let fd;
+  try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+  catch (error) { return error.code === 'ENOENT' ? 0 : null; }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > LINE_COUNT_MAX_BYTES) return null;
+    const chunk = Buffer.alloc(64 * 1024);
+    let lines = 0, read = 0, last = 0;
+    for (;;) {
+      read = readSync(fd, chunk, 0, chunk.length, null);
+      if (read === 0) break;
+      for (let i = 0; i < read; i += 1) if (chunk[i] === 10) lines += 1;
+      last = chunk[read - 1];
+    }
+    // A final line without its newline still counts.
+    return lines + (last !== 0 && last !== 10 ? 1 : 0);
   } catch { return null; } finally { closeSync(fd); }
 }
 
@@ -283,10 +309,12 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
         }
         entry.contained = entry.location === 'inside';
         entry.spacePath = soul.spacePath ?? null;
-        try { entry.status = inspectAgentSpace(soul.id, options).status; }
+        // Inspected at the census path (ADR-0583 decision 8), never at the spaces root alone.
+        try { entry.status = inspectSoulSpace(soul.id, options).status; }
         catch { entry.status = null; errors.push({ area: 'memory', message: 'Agent Space could not be inspected.' }); }
         if (entry.location === 'linked') {
           result.migration.steps.push({ id: 'space-into-soul', status: 'pending', from: entry.target ?? entry.spacePath, to: path.join(root, STATE, 'space') });
+          problem('memory-not-contained', 'warning', 'memory', `The Agent Space is a link to ${entry.target ?? entry.spacePath}, outside the soul; the soul's memory does not travel with its folder until it is moved inside.`, spaceMigrateCommand(soul.id));
         }
         break;
       }
@@ -299,6 +327,13 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
           { what: 'task turns', path: path.join(base, 'agent-bot', 'task-turns.jsonl') },
         ].map((row) => ({ ...row, present: existsSync(row.path) }));
         entry.confinementLog = present(`${STATE}/confinement.log`);
+        // The soul's own mirror (ADR-0583 decision 9): where it is and how
+        // many lines each file holds; `null` for a file that cannot be counted.
+        const runs = runsDirectory(root);
+        entry.mirror = `${STATE}/runs`;
+        entry.turns = countLines(path.join(runs, TURNS_FILE));
+        entry.revisions = countLines(path.join(runs, REVISIONS_FILE));
+        entry.mirrored = (entry.turns ?? 0) > 0 || (entry.revisions ?? 0) > 0;
         break;
       }
       case 'temp': {
@@ -438,17 +473,19 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
 
   // What `soul env migrate` recorded in the journal, then the adoptions
   // still to do: a routable harness kept on the host store for its sign-in.
+  // A recorded step replaces the inventory's pending entry of the same id:
+  // a space move under way is reported in its phase, a finished one as such.
   const recorded = new Set();
   for (const step of readMigrationJournal(root)) {
     recorded.add(step.id);
-    result.migration.steps.push(step);
+    result.migration.steps = [...result.migration.steps.filter((entry) => entry.id !== step.id), step];
   }
   for (const tool of result.components.find((component) => component.id === 'tool-state')?.entries ?? []) {
     if (tool.containment === 'shared-host' && !recorded.has(adoptStepId(tool.harness))) {
       result.migration.steps.push({ id: adoptStepId(tool.harness), status: 'pending', from: tool.hostPath, to: path.join(root, STATE, 'tools', tool.harness) });
     }
   }
-  result.migration.status = result.migration.steps.some((step) => step.status === 'pending') ? 'pending' : 'none';
+  result.migration.status = result.migration.steps.some((step) => !STEP_FINAL_STATUSES.includes(step.status)) ? 'pending' : 'none';
   result.readiness.ready = !result.readiness.problems.some((entry) => entry.severity === 'error');
   result.retention = retentionIndex(result.components);
   return result;

@@ -291,6 +291,7 @@ agent-bot soul show <agentId|name> [--json]
 agent-bot soul profile <agentId|name> [--json] [--file RELATIVE_PATH]
 agent-bot soul env <agentId|name> [--json]
 agent-bot soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] [--json] [--principal-stdin]
+agent-bot soul env migrate <agentId|name> --space-into-soul [--json] [--principal-stdin]
 agent-bot soul runtimes <agentId|name> [--json]
 agent-bot soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin]
 agent-bot soul secret <agentId|name> set|clear <name> [--json] [--principal-stdin]
@@ -394,6 +395,8 @@ agent-bot soul env AGENT_ID --json
 # the whole environment: components with classification, harnesses, readiness; see docs/soul-environment.md
 agent-bot soul env migrate AGENT_ID --adopt-host-signin [--harness NAME] --principal-stdin
 # owner only: copy the host's harness sign-in files (never the keychain) into the soul's own tool home once; see docs/soul-tool-homes.md
+agent-bot soul env migrate AGENT_ID --space-into-soul --principal-stdin
+# owner only: move the soul's Agent Space into its folder (copied, verified, source retired, never deleted); see docs/soul-memory-history.md
 agent-bot soul runtimes AGENT_ID --json
 # declared runtimes (node, python, go) and harness installs, resolved and installed; see docs/soul-runtimes.md
 agent-bot soul runtimes install AGENT_ID [--runtime NAME] --principal-stdin

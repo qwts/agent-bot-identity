@@ -244,6 +244,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       await new Promise((resolve, reject) => {
         let started = false;
         Promise.resolve().then(() => turns.run({
+          kind: 'launch',
           invocation: { agentId: identity.id, harness, cwd: binding.worktree },
           message: identityText + (launchBrief ? `\n\nYour brief from the person who launched you:\n${launchBrief}\n\n` : '') + (parent
             ? `You were started by ${parent}, another agent soul, as part of its team. Join agent-comms as usual, read your inbox, and handle incoming work; your parent will brief you there.`
