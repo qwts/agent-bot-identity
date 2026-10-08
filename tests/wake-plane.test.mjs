@@ -253,6 +253,48 @@ test('acpExecutorFor routes the soul\'s installed runtimes into the turn env, an
   assert.equal(seen[1].PATH, '/usr/bin');
 });
 
+test('acpExecutorFor routes the soul\'s tool home into the harness env and both MCP entries, never HOME or XDG_STATE_HOME, and only an unwritable home fails the turn (#583 slice 2)', () => {
+  const agentId = 'agent_11111111-1111-4111-8111-111111111111';
+  let options = null;
+  const createExecutor = (opts) => { options = opts; return async () => ({ stopReason: 'end_turn' }); };
+  const asked = [];
+  const baseEnv = { PATH: '/usr/bin', HOME: '/Users/host', XDG_STATE_HOME: '/Users/host/.local/state', CLAUDE_CONFIG_DIR: '/Users/host/.claude-custom' };
+  // A port that oversteps is cut back to harness-specific variables.
+  const toolHomeEnvFor = ({ agentId: id, harness }) => { asked.push([id, harness]); return { CLAUDE_CONFIG_DIR: `/souls/${id}/.soul-state/tools/claude`, HOME: '/souls/nope', XDG_STATE_HOME: '/souls/nope/state', EMPTY: 7 }; };
+  acpExecutorFor({ identities: () => ({ github: { appSlug: 'app' } }), policy: {}, baseEnv, createExecutor, toolHomeEnvFor, keydFor: () => '/opt/keyd', reachEnv: { PATH: '/opt/bin' } })(
+    { agentId, harness: 'claude', cwd: '/repo', env: { AGENT_BOT_BINDING: '/souls/bill/binding.json' } });
+  assert.deepEqual(asked, [[agentId, 'claude']]);
+  assert.equal(options.env.CLAUDE_CONFIG_DIR, `/souls/${agentId}/.soul-state/tools/claude`, 'the soul\'s tool home wins over the host\'s variable');
+  assert.equal(options.env.HOME, '/Users/host');
+  assert.equal(options.env.XDG_STATE_HOME, '/Users/host/.local/state');
+  assert.equal('EMPTY' in options.env, false);
+  const [reach, keyd] = options.mcpServers({ invocation: {} });
+  const reachVars = Object.fromEntries(reach.env.map((pair) => [pair.name, pair.value]));
+  const keydVars = Object.fromEntries(keyd.env.map((pair) => [pair.name, pair.value]));
+  assert.equal(reachVars.CLAUDE_CONFIG_DIR, `/souls/${agentId}/.soul-state/tools/claude`, 'the reach server reads the same store');
+  assert.deepEqual([reachVars.HOME, reachVars.XDG_STATE_HOME, reachVars.PATH], ['/Users/host', '/Users/host/.local/state', '/opt/bin']);
+  assert.equal(keydVars.CLAUDE_CONFIG_DIR, `/souls/${agentId}/.soul-state/tools/claude`, 'and so does keyd\'s relay');
+  assert.deepEqual([keydVars.HOME, keydVars.XDG_STATE_HOME], ['/Users/host', '/Users/host/.local/state']);
+  assert.equal('AGENT_BOT_REACH_STRIP_ENV' in reachVars, false, 'a tool home is not a secret: nothing is stripped');
+  // OpenCode: the three XDG bases, in the harness env and both entries.
+  const xdg = { XDG_CONFIG_HOME: '/souls/b/.soul-state/tools/opencode/config', XDG_DATA_HOME: '/souls/b/.soul-state/tools/opencode/data', XDG_CACHE_HOME: '/souls/b/.soul-state/tools/opencode/cache' };
+  acpExecutorFor({ identities: () => ({ github: { appSlug: 'app' } }), policy: {}, baseEnv, createExecutor, toolHomeEnvFor: () => xdg, keydFor: () => '/opt/keyd' })({ agentId, harness: 'opencode', cwd: '/repo', env: {} });
+  for (const [name, value] of Object.entries(xdg)) {
+    assert.equal(options.env[name], value);
+    for (const entry of options.mcpServers({ invocation: {} })) assert.ok(entry.env.some((pair) => pair.name === name && pair.value === value), `${entry.name} carries ${name}`);
+  }
+  assert.equal(options.env.CLAUDE_CONFIG_DIR, '/Users/host/.claude-custom', 'another harness\'s variable is left alone');
+  // No port, or a lookup that fails without a code (no soul folder): the host store, as before.
+  acpExecutorFor({ identities: () => ({}), policy: {}, baseEnv, createExecutor })({ agentId, harness: 'claude', cwd: '/repo', env: {} });
+  assert.equal(options.env.CLAUDE_CONFIG_DIR, '/Users/host/.claude-custom');
+  acpExecutorFor({ identities: () => ({}), policy: {}, baseEnv, createExecutor, toolHomeEnvFor: () => { throw new Error('no soul folder'); } })({ agentId, harness: 'claude', cwd: '/repo', env: {} });
+  assert.equal(options.env.CLAUDE_CONFIG_DIR, '/Users/host/.claude-custom');
+  assert.equal(options.mcpServers({ invocation: {} })[0].env.some((pair) => pair.name === 'CLAUDE_CONFIG_DIR'), false, 'nothing routed, nothing forwarded');
+  // A tool home that cannot be made is a coded failure, never a silent fallback to the shared store.
+  const unwritable = Object.assign(new Error('claude\'s tool home cannot be created (EACCES)'), { code: 'tool-home-unwritable' });
+  assert.throws(() => acpExecutorFor({ identities: () => ({}), policy: {}, baseEnv, createExecutor, toolHomeEnvFor: () => { throw unwritable; } })({ agentId, harness: 'claude', cwd: '/repo', env: {} }), (error) => error.code === 'tool-home-unwritable');
+});
+
 test('acpExecutorFor hands the daemon\'s log to the engine, and leaves the engine\'s default without one', () => {
   const agentId = 'agent_11111111-1111-4111-8111-111111111111';
   const seen = [];

@@ -98,6 +98,7 @@ import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHarnessesP
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
+import { pendingSoulToolHome, prepareSoulToolHome, soulToolHomeEnv } from './soul-env-migrate.mjs';
 import { harnessInstallDeclared, pendingSoulRuntimes, provisionSoulRuntimes, soulRuntimeEnv } from './soul-runtimes.mjs';
 import { checkSoulProvider, pendingSoulProvider, soulProviderEnv } from './soul-secrets.mjs';
 import { editSoulRevision, listSoulProposals, revisionCommand, revisionHistory } from './soul-revisions.mjs';
@@ -1792,6 +1793,10 @@ export async function runDaemon({
       // The soul's provisioned runtimes and harness installs first on its
       // PATH, with their env (#583 slice 3); read per turn from its stamps.
       runtimeEnvFor: ({ agentId, harness, env: turnEnv }) => soulRuntimeEnv(agentId, { env: turnEnv, home, config, file: populationFile({ env, home }), harness }),
+      // The harness's native state routed into the soul's tool home (#583
+      // slice 2); the executor hands it to the harness, the reach server
+      // and keyd's relay alike, since it is a path, not a secret.
+      toolHomeEnvFor: ({ agentId, harness }) => soulToolHomeEnv(agentId, { env, home, config, file: populationFile({ env, home }), harness }),
       // The provider secret for the launched harness, read from the soul's
       // store per turn (#583 slice 4); the executor keeps it out of the
       // reach server and keyd's relay.
@@ -1906,6 +1911,12 @@ export async function runDaemon({
       pending: ({ agentId }) => pendingSoulRuntimes(agentId, { env, home, config, file: populationFile({ env, home }) }),
       install: ({ agentId, harness }) => provisionSoulRuntimes(agentId, { env, home, config, file: populationFile({ env, home }), harness,
         log: (line) => process.stderr.write(`soul runtimes: ${line}\n`) }),
+    },
+    // The launched harness's tool home is made before the soul joins (#583
+    // slice 2), so it starts into its own store or fails `tool-home-unwritable`.
+    toolHomes: {
+      pending: ({ agentId, harness }) => pendingSoulToolHome(agentId, { env, home, config, file: populationFile({ env, home }), harness }),
+      prepare: ({ agentId, harness }) => prepareSoulToolHome(agentId, { env, home, config, file: populationFile({ env, home }), harness }),
     },
     // The launched harness's provider secret is checked before the soul
     // joins (#583 slice 4): a missing one fails the launch with the

@@ -691,7 +691,7 @@ async function startSoul(state, soul, request) {
 // so `invocationId` is optional; the soul's worktree and binding make the
 // teammate tools speak as it, and `comms: false` withholds them.
 export function reachMcpServerEntry({
-  invocationId = null, agentId, env = process.env, worktree = null, binding = null, comms = true, correlation = null, turnId = null, strip = [],
+  invocationId = null, agentId, env = process.env, worktree = null, binding = null, comms = true, correlation = null, turnId = null, strip = [], forward = [],
 } = {}) {
   const vars = [{ name: REACH_AGENT_ID_ENV, value: validateAgentId(agentId) }];
   // Names the server removes from its own environment at startup (#583
@@ -719,6 +719,12 @@ export function reachMcpServerEntry({
     if (typeof env[name] === 'string' && env[name] !== '') {
       vars.push({ name, value: env[name] });
     }
+  }
+  // The soul's routed tool home (#583 slice 2: CLAUDE_CONFIG_DIR, CODEX_HOME,
+  // OpenCode's XDG bases), so a child this server starts reads the same
+  // store as the harness. Named by the turn, never a store variable twice.
+  for (const name of new Set(forward)) {
+    if (STRIP_NAME.test(name) && !STORE_ENV_PASSTHROUGH.includes(name) && typeof env[name] === 'string' && env[name] !== '') vars.push({ name, value: env[name] });
   }
   return {
     name: REACH_SERVER_NAME,

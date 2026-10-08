@@ -121,7 +121,7 @@ for. `agent-bot skill path` prints the installed release's copy of this skill.
 | local-write | `bootstrap`, `setup-worktree`, `install`, `install-gh-shim`, `daemon install`, `daemon disable`, `ensure-private-key`, `space ensure` | Converge on rerun; confirm with `doctor`. |
 | read-only | `soul show`, `soul profile`, `soul env`, `soul runtimes`, `soul secret ID status`, `soul locate`, `soul templates`, `soul asides`, `soul cold-wake ID show`, `soul model ID show`, `soul mode ID show`, `soul computer-use ID show`, `soul comms ID show`, `soul confinement-report`, `soul pack validate`, `soul build --check`, `approvals list`, `telegram status` | Safe to repeat. |
 | local-write | `soul dir` | May re-register a uniquely moved soul directory; see [soul-homes.md](../../docs/soul-homes.md). |
-| local-write | `soul spawn`, `soul build`, `soul revision`, `soul runtimes install`, `soul secret ID set|clear`, `soul cold-wake`, `soul model`, `soul mode`, `soul computer-use`, `soul confinement`, `soul stop`, `soul pause`, `soul resume` | Inspect the subcommand and current state before retrying; spawning creates a new identity, and owner actions require the owner gate. |
+| local-write | `soul spawn`, `soul build`, `soul revision`, `soul env migrate`, `soul runtimes install`, `soul secret ID set|clear`, `soul cold-wake`, `soul model`, `soul mode`, `soul computer-use`, `soul confinement`, `soul stop`, `soul pause`, `soul resume` | Inspect the subcommand and current state before retrying; spawning creates a new identity, and owner actions require the owner gate. |
 | local-write | `approvals approve`, `approvals deny`, `web open` | Decisions require the daemon's owner gate; inspect waiting proposals before retrying. Each web open mints a single-use pairing code and prints/opens its link. |
 | remote-write | `join` | Also writes local soul, census, checkout pin and bind-token state. Running it again from the same checkout reuses the soul; see [joining.md](../../docs/joining.md). |
 | remote-write | `soul comms`, `soul fork`, `telegram run` | Changes agent-comms membership or relays messages; also writes local state. Inspect current state before retrying. |
@@ -201,6 +201,22 @@ steps. It is read-only: it never provisions, links, registers or rebuilds.
 the editable definition under `.soul-state/tmp/`; `soul revision edit ... --apply`
 finishes it and `prepare --discard STAGING` drops it. See
 [soul-environment.md](../../docs/soul-environment.md).
+
+Each soul's harness state can live in its own tool home,
+`<soul>/.soul-state/tools/<harness>/`: a launch sets `CLAUDE_CONFIG_DIR`,
+`CODEX_HOME` or OpenCode's XDG bases to it, never `HOME`, and a harness
+with no such variable (kiro, muse) is reported `unsupported`. Containment
+is decided per launch from sign-in presence: a soul holding its sign-in, or
+a host with none to lose, is routed (a new Mac is contained from the first
+launch); an existing host sign-in the soul lacks stays on the host store
+until adopted, reported `containment: shared-host` with the
+`tool-signin-missing` warning. `agent-bot soul env migrate <agentId|name>
+--adopt-host-signin [--harness NAME]` is the owner action that copies the
+host's sign-in files (and Claude's `.claude.json`) into the tool home once;
+it never reads the keychain, never copies sessions or caches, and a rerun is
+`skipped`. Run it when `soul env` reports `tool-signin-missing` and the soul
+should be contained; the next launch then routes. See
+[soul-tool-homes.md](../../docs/soul-tool-homes.md).
 
 `agent-bot soul runtimes <agentId|name> [--json]` reports the runtimes
 (`node`, `python`, `go`) and non-npm harness installs the soul's `soul.json`

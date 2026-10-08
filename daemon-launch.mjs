@@ -57,12 +57,20 @@ const LAUNCHABLE = new Set(['package', 'installed']);
 // a client that reads only the broker's detail still sees which one it was.
 const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other-account',
   'runtime-download-failed', 'runtime-checksum-mismatch', 'runtime-unsupported-platform', 'runtime-install-failed',
+  'tool-home-unwritable',
   'provider-secret-missing', 'provider-secret-unreadable', 'provider-declaration-invalid']);
 
 // `runtimes` (#583 slice 3): `pending({ agentId, harness })` names what the
 // soul declares and lacks; `install` provisions it into the soul folder.
 // The `runtimes` stage is reported only when there is something to install,
 // and a failure is the coded runtime error with the command that fixes it.
+//
+// `toolHomes` (#583 slice 2): `pending({ agentId, harness })` names the
+// tool home a routable harness gets (`tool-home:<harness>`); `prepare`
+// creates `.soul-state/tools/<harness>` so the harness starts into its own
+// store, and fails `tool-home-unwritable` (reported at the `tool-home`
+// stage) when it cannot, before the soul joins. An unroutable harness has
+// nothing pending and no stage.
 //
 // `providers` (#583 slice 4): `pending({ agentId, harness })` names the
 // provider the launched harness declares with a secret; `check` reads that
@@ -81,7 +89,7 @@ const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other
 // carries it beside the unchanged `launched`/`failed` fields.
 
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
-  isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, sandboxFor = null, runtimes = null, providers = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
+  isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, sandboxFor = null, runtimes = null, toolHomes = null, providers = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -196,6 +204,10 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       if (runtimes) {
         const pending = await runtimes.pending({ agentId: identity.id, harness });
         if (pending.length) { await step('runtimes'); await runtimes.install({ agentId: identity.id, harness }); }
+      }
+      if (toolHomes) {
+        const pending = await toolHomes.pending({ agentId: identity.id, harness });
+        if (pending.length) { await step('tool-home'); await toolHomes.prepare({ agentId: identity.id, harness }); }
       }
       if (providers) {
         const pending = await providers.pending({ agentId: identity.id, harness });

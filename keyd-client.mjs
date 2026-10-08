@@ -185,10 +185,13 @@ export function readKeydRecord({ env = process.env, home = homedir() } = {}) {
 
 // The harness-side entry for an ACP session: keyd's own relay, which reads
 // the soul's binding and never a key.
-export function keydMcpServerEntry({ bin, binding = null, env = process.env } = {}) {
+// `forward` names the soul's routed tool-home variables (#583 slice 2),
+// which are not secret; HOME and XDG_STATE_HOME always travel as they are.
+export function keydMcpServerEntry({ bin, binding = null, env = process.env, forward = [] } = {}) {
   const vars = [];
   if (binding) vars.push({ name: 'AGENT_BOT_BINDING', value: binding });
-  for (const name of ['HOME', 'XDG_STATE_HOME']) {
+  const names = ['HOME', 'XDG_STATE_HOME', ...new Set(forward)].filter((name, index, all) => /^[A-Z][A-Z0-9_]*$/.test(name) && all.indexOf(name) === index);
+  for (const name of names) {
     if (typeof env[name] === 'string' && env[name] !== '') vars.push({ name, value: env[name] });
   }
   return { name: KEYD_SERVER_NAME, command: bin, args: ['mcp'], env: vars };

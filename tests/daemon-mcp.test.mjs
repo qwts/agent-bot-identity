@@ -449,6 +449,12 @@ test('reachMcpServerEntry without an invocation stamps the soul, its worktree, b
   const off = reachMcpServerEntry({ agentId: AGENT_ID, env: {}, comms: false });
   assert.equal(Object.fromEntries(off.env.map((pair) => [pair.name, pair.value]))[REACH_COMMS_ENV], '0');
   assert.throws(() => reachMcpServerEntry({ agentId: AGENT_ID, worktree: 'relative' }), /absolute/);
+  // Routed tool-home variables travel by name (#583 slice 2): once each,
+  // well-formed and non-empty only, never doubling a store variable.
+  const forwarded = reachMcpServerEntry({ agentId: AGENT_ID, env: { HOME: '/home/bot', CODEX_HOME: '/souls/b/.soul-state/tools/codex', EMPTY: '', OTHER: 'x' },
+    forward: ['CODEX_HOME', 'CODEX_HOME', 'HOME', 'EMPTY', 'bad-name', 'MISSING'] });
+  assert.deepEqual(forwarded.env.filter((pair) => !pair.name.startsWith('AGENT_BOT_REACH')).map((pair) => pair.name), ['HOME', 'CODEX_HOME']);
+  assert.equal(forwarded.env.find((pair) => pair.name === 'CODEX_HOME').value, '/souls/b/.soul-state/tools/codex');
 });
 
 test('the policy rules allow exactly this server\'s tools under Claude\'s MCP naming', () => {

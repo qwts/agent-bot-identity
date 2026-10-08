@@ -803,6 +803,27 @@ test('a sandboxed launch off macOS fails at account rather than running unsandbo
   assert.match(f.reports[0].detail, /persona accounts need macOS/);
 });
 
+test('a routable harness gets its tool home made at launch as its own stage before the soul joins, and an unwritable one is a coded failure (#583 slice 2)', async (t) => {
+  const prepared = [];
+  const f = fixture(t, { joinSoul: async () => 'addr', toolHomes: { pending: async ({ harness }) => (harness === 'claude' ? ['tool-home:claude'] : []), prepare: async (args) => { prepared.push(args); } } });
+  const stages = [];
+  await f.handler(event, { ...f.ports, progress: async ({ stage }) => { stages.push(stage); } });
+  assert.deepEqual(stages, ['checking', 'account', 'tool-home', 'joining', 'harness']);
+  assert.deepEqual(prepared, [{ agentId, harness: 'claude' }]);
+  assert.equal(f.reports[0].status, 'launched');
+  // An unroutable harness has nothing pending and no stage.
+  const g = fixture(t, { joinSoul: async () => 'addr', toolHomes: { pending: async () => [], prepare: async () => { throw new Error('unexpected prepare'); } } });
+  const quiet = [];
+  await g.handler({ ...event, requestId: 'r2', harness: 'muse' }, { ...g.ports, progress: async ({ stage }) => { quiet.push(stage); } });
+  assert.deepEqual(quiet, ['checking', 'account', 'joining', 'harness']);
+  const error = Object.assign(new Error('claude\'s tool home /souls/x/.soul-state/tools/claude cannot be created (EACCES); fix the soul folder\'s permissions'), { code: 'tool-home-unwritable' });
+  const h = fixture(t, { joinSoul: async () => { throw new Error('joined without its tool home'); }, toolHomes: { pending: async () => ['tool-home:claude'], prepare: async () => { throw error; } } });
+  await h.handler({ ...event, requestId: 'r3' }, h.ports);
+  assert.deepEqual(h.reports[0], { requestId: 'r3', status: 'failed', agentId: null, detail: `tool-home-unwritable: ${error.message}`, code: 'tool-home-unwritable' });
+  assert.equal(JSON.parse(readFileSync(h.options.file)).find((row) => row.requestId === 'r3').stage, 'tool-home');
+  assert.deepEqual(h.calls, [], 'no turn ran');
+});
+
 test('a declared provider secret is checked at launch as its own stage before the soul joins, and a missing one is a coded failure naming the command (#583 slice 4)', async (t) => {
   const checks = [];
   const f = fixture(t, { joinSoul: async () => 'addr', providers: { pending: async ({ harness }) => (harness === 'claude' ? ['claude:anthropic'] : []), check: async (args) => { checks.push(args); } } });
