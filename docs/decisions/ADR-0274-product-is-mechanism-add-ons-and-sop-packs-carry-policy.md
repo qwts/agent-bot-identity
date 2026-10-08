@@ -65,6 +65,9 @@ also the first record of its ADR series.
    account. That is the default for a new install. Selecting an SOP or opening
    a soul does not itself enable an add-on. A pack may select policy for an
    enabled capability; it cannot silently opt the user into that capability.
+   If the selected policy requires a capability that is disabled, the affected
+   launch is refused with an owner-action diagnostic; the runtime neither
+   enables the capability nor silently ignores the requirement.
 3. **An SOP pack applies policy only through extension points.** The product
    provides:
    - identity providers (none, a GitHub App, later others);
@@ -85,9 +88,21 @@ also the first record of its ADR series.
    documentation and configuration, never an instruction that overrides the
    harness. With no config file there is no SOP, and the product runs on its
    defaults. A configured SOP that cannot be resolved or validated must be
-   reported distinctly from an intentional no-SOP configuration. Each
-   supported interface documents its fallback or refusal behavior; choosing a
-   repository alone does not establish that all its policy is enforced.
+   reported distinctly from an intentional no-SOP configuration. Configured
+   persona policy fails closed: an unrecorded, unreadable, invalid, or stale
+   policy blocks the affected launch before execution. A user setting or soul
+   override cannot substitute for policy that could not be evaluated.
+
+   No selected SOP, a verified selected revision with no persona policy, or a
+   valid policy with no applicable rule/default may use the explicit user
+   settings. A missing local record is not evidence that the selected revision
+   has no policy. A valid cached record for the selected immutable revision
+   permits offline evaluation; network failure does not invalidate otherwise
+   sufficient local evidence. A record for another selection/revision, or one
+   failing the defined validation/freshness checks, cannot be used as a
+   last-known fallback. Recovery identifies the policy and reason and asks the
+   owner to refresh/repair it or explicitly change the policy selection through
+   an authorized path; a launch failure does not remove the requirement.
 5. **qwts is one instance.** qwts runs the product with both add-ons on and
    the qwts pack, which `qwts-agent-org` pins. ENG-0339 and ENG-0375 become
    that pack's persona mapping. Preserving qwts's intended behavior is a
@@ -126,15 +141,21 @@ Evidence at commit
 | Persona mapping and launch | `sandbox.mjs`, `daemon-launch.mjs`, and their tests: recorded `persona.toml` mapping, account readiness, and refusal to run a sandboxed soul from the wrong account. | [#376](https://github.com/qwts/agent-bot-identity/issues/376) retains in-account sign-in verification and account lifecycle/host handoff questions; mapping and launch checks are implemented. |
 | Account recovery | [#190](https://github.com/qwts/agent-bot-identity/issues/190) tracks account-level diagnosis and repair after managed state is lost. | This is separate from initial account provisioning. No live destructive account-recovery exercise is claimed by this review. |
 
-The persona interface currently uses the recorded mapping only when the
-`persona-accounts` gate is on. A valid matching pack rule takes precedence over
-the soul override and the global setting. An absent, unreadable, stale, or
-invalid mapping is reported and leaves the user setting in charge; launch does
-not fetch a replacement. This proposal retains that documented fallback,
-rather than introducing a required-policy mode implicitly. It does **not**
-establish enforcement of an unavailable pack rule. Once a soul resolves as
-sandboxed, an unready or wrong account refuses launch instead of running it
-unsandboxed. See [sandbox behavior](../sandbox.md) and its existing tests.
+**Owner direction, 2026-10-08:** prefer security when configured persona policy
+cannot be evaluated. Decision 4 therefore replaces the earlier review draft's
+fallback recommendation with fail-closed launch behavior.
+
+The implementation at the evidence commit still falls back to user settings
+for an unrecorded, unreadable, stale, or invalid mapping, and ignores a pack's
+sandbox requirement when the add-on is off. These are implementation gaps
+against the revised decision, not behavior approved by this record. A valid
+matching pack rule already takes precedence over the soul override and global
+setting when the gate is on; once a soul resolves as sandboxed, an unready or
+wrong account already refuses launch. See the current
+[sandbox behavior](../sandbox.md) and its existing tests.
+[#613](https://github.com/qwts/agent-bot-identity/issues/613) tracks the resolver,
+every launch consumer, diagnostics, documentation and test changes needed to
+enforce the new decision together; this ADR edit changes no runtime behavior.
 
 [#611](https://github.com/qwts/agent-bot-identity/issues/611) tracks the full
 decision 6 conformance inventory and missing journey evidence, separately from
@@ -156,6 +177,9 @@ criteria are met.
   until they turn on `github-identity`.
 - Two configurations must stay tested: the zero-SOP default and qwts as a
   pack. CI needs both, and gate combinations multiply the cases.
+- A broken configured persona policy can prevent a launch until repaired.
+  Diagnostic and recovery operations remain available. This availability cost
+  is intentional: inability to evaluate a restriction does not remove it.
 - A pack's hooks run with the user's privileges. Choosing an SOP repository
   is a trust decision. The product pins packs by commit and shows which
   commit is in effect, but it cannot make an untrusted pack safe.
