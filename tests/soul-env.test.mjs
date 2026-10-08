@@ -93,7 +93,7 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
     'runtimes', 'providers', 'launch', 'readiness', 'migration', 'retention', 'errors']);
   assert.equal(result.schemaVersion, 1);
   assert.deepEqual(result.engine, { version: JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version, contractVersion: 1, capabilities: [...ENV_CAPABILITIES] });
-  assert.deepEqual(result.engine.capabilities, ['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes', 'memory', 'history', 'template-name', 'template-refresh', 'launch-parent', 'migrate-complete', 'env-clean']);
+  assert.deepEqual(result.engine.capabilities, ['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes', 'memory', 'history', 'template-name', 'template-refresh', 'launch-parent', 'migrate-complete', 'env-clean', 'env-export', 'env-import']);
   assert.deepEqual(result.identity, { agentId: ID, name: 'billy', displayName: 'Billy - Starter', status: 'active', harness: 'codex',
     genesis: { revision: null, parentSoul: null }, revision: f.manifest.revision, parentRevision: null, template: false, formatVersion: 2 });
   assert.deepEqual(result.root, { soulDir: f.dir, soulsRoot: f.env.AGENT_BOT_SOULS_HOME, source: 'environment', registered: true, marker: 'ok',

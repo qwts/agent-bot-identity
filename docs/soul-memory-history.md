@@ -149,7 +149,10 @@ migrate command as its action. The migration inventory lists
   copy of it. The staging lives inside the soul folder, so the folder needs
   the room.
 - `soul env migrate --space-into-soul` moves the space; it does not export
-  it. Export and import are slice 7.
+  it. `soul env export` carries the space (through its link when it is
+  still linked, so the life travels either way) and `soul env import` puts
+  it inside the restored folder; see
+  [soul-environment.md](soul-environment.md#export-and-import).
 - The retired source (`<source>.retired-<date>`) is memory outside the
   root: `soul env clean` never removes it (it removes only reconstructible
   and disposable paths inside the root). Remove it yourself once the soul

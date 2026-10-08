@@ -45,7 +45,7 @@ export const MODULES = new Map([
   ['agent-hook', 'agent-hook.mjs'],
 ]);
 
-const SOUL_USAGE = 'usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-] | soul build [PATH] [--check] [--json] | soul pack validate PATH | soul revision <command> | soul revision edit ID PATH REASON [--apply] [--json] [--principal-stdin] | soul revision prepare <agentId|name> [--json] [--dest PATH] | soul revision prepare --discard STAGING | soul model <agentId|name> [show|set <modelId>|clear] [--json] [--principal-stdin] | soul mode <agentId|name> [show|safe|autopilot] [--json] [--principal-stdin] | soul computer-use <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul stop <agentId|name> [--json] | soul pause|resume <agentId|name> [--json] | soul show <agentId|name> [--json] | soul profile <agentId|name> [--json] [--file RELATIVE_PATH] | soul env <agentId|name> [--json] | soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul | --template-name [--plan] | --complete [--plan] [--json] [--principal-stdin] | soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin] | soul runtimes <agentId|name> [--json] | soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin] | soul secret <agentId|name> set|clear <name> [--json] [--principal-stdin] | soul secret <agentId|name> status [--json] | soul comms <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul remove <agentId|name> [--scope soul|team] [--plan] [--json] [--principal-stdin] | soul fork <copy-path> --name NAME [--harness H] [--json] [--principal-stdin] | soul asides <agentId|name> [--after ASIDE_ID] [--limit N] [--json] | soul dir AGENT_ID | soul locate PATH [--json] | soul templates [--json] | soul spawn TEMPLATE_PATH --name NAME [--harness H] | soul template refresh <agentId|name> [--from TEMPLATE_PATH] [--plan] [--json] [--principal-stdin] | soul confinement AGENT_ID off|warn|deny | soul confinement-report AGENT_ID [--json]';
+const SOUL_USAGE = 'usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-] | soul build [PATH] [--check] [--json] | soul pack validate PATH | soul revision <command> | soul revision edit ID PATH REASON [--apply] [--json] [--principal-stdin] | soul revision prepare <agentId|name> [--json] [--dest PATH] | soul revision prepare --discard STAGING | soul model <agentId|name> [show|set <modelId>|clear] [--json] [--principal-stdin] | soul mode <agentId|name> [show|safe|autopilot] [--json] [--principal-stdin] | soul computer-use <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul stop <agentId|name> [--json] | soul pause|resume <agentId|name> [--json] | soul show <agentId|name> [--json] | soul profile <agentId|name> [--json] [--file RELATIVE_PATH] | soul env <agentId|name> [--json] | soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul | --template-name [--plan] | --complete [--plan] [--json] [--principal-stdin] | soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin] | soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin] | soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin] | soul runtimes <agentId|name> [--json] | soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin] | soul secret <agentId|name> set|clear <name> [--json] [--principal-stdin] | soul secret <agentId|name> status [--json] | soul comms <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul remove <agentId|name> [--scope soul|team] [--plan] [--json] [--principal-stdin] | soul fork <copy-path> --name NAME [--harness H] [--json] [--principal-stdin] | soul asides <agentId|name> [--after ASIDE_ID] [--limit N] [--json] | soul dir AGENT_ID | soul locate PATH [--json] | soul templates [--json] | soul spawn TEMPLATE_PATH --name NAME [--harness H] | soul template refresh <agentId|name> [--from TEMPLATE_PATH] [--plan] [--json] [--principal-stdin] | soul confinement AGENT_ID off|warn|deny | soul confinement-report AGENT_ID [--json]';
 
 // Wording from README.md, docs/soul-templates.md, and docs/joining.md.
 const SOUL_HELP = `${SOUL_USAGE.replaceAll(' | soul ', '\n  agent-bot soul ')}
@@ -86,6 +86,15 @@ only what the contract classifies reconstructible or disposable (the cache,
 temporary files, runtime caches, leftover install stagings), never the
 definition, home, tool state, credentials, memory, history or a workspace
 (owner only, never while the soul runs, --plan lists paths and sizes).
+a name the owner chose is never changed; owner only, --plan reads only).
+soul env export writes the soul's life as one archive (definition, home,
+tool state minus sign-in files, memory, history, settings, revision journal,
+soul-owned workspaces whole, linked ones as a pointer with patch and
+untracked files; never credentials, secrets, sign-ins, runtimes or caches;
+owner only, never while the soul runs, --plan prints the manifest). soul env
+import restores one keeping its Agent ID (a moved life); --fork mints a new
+one; an active local ID is refused unless --replace, which moves the
+existing root aside, never deletes it (owner only, --plan reads only).
 soul template refresh brings the paths a template declares as maintained
 (its soul.json "maintained" prefixes) up to the bundled template in one
 package revision, leaving AGENTS.md edits, memory and history alone
@@ -152,6 +161,9 @@ export function dispatchAgentBot(parsed) {
   }
   if (parsed.command === 'soul' && parsed.args[0] === 'env' && parsed.args[1] === 'clean') {
     return run(process.execPath, [join(ROOT, 'soul-env-clean.mjs'), ...parsed.args.slice(2)]);
+  }
+  if (parsed.command === 'soul' && parsed.args[0] === 'env' && ['export', 'import'].includes(parsed.args[1])) {
+    return run(process.execPath, [join(ROOT, 'soul-env-export.mjs'), ...parsed.args.slice(1)]);
   }
   if (parsed.command === 'soul' && parsed.args[0] === 'env') {
     return run(process.execPath, [join(ROOT, 'soul-env.mjs'), ...parsed.args.slice(1)]);
