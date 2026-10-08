@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.52
+
+- `agent-bot soul remove <soul> --plan [--scope soul|team] --json` previews exactly which souls a remove would archive, make independent or leave unchanged, to any depth and whether or not they are awake, with capability flags (`restore` and `delete` are false) so a host never infers more than the engine does; the remove itself runs that same plan and reports it with its effects. `--scope soul` (the default) now clears the census `parentId` of the souls the removed soul led directly (audited as `soul-reparent`); `--scope team` removes every active descendant too, deepest first, refused before anything changes while any of them runs (GeniusBar #283).
+
 ## 0.10.51
 
 - `start_soul` takes `model`, `provider` and `parent` (`"self"` or `"none"`) beside `name`, `harness`, `template` and `brief`, so a soul can start a new agent on a chosen harness, model and provider, as its teammate or as an independent root soul with no parent. The daemon validates each setting before minting anything: an unlisted model, an unknown or non-template provider, or another soul named as parent is refused with the fix, never replaced by a default; the result reports the effective `{harness, model, provider, parent}` (qwts/GeniusBar#261).
