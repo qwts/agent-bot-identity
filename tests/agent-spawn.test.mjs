@@ -8,8 +8,9 @@ import { createDaemonServer } from '../agent-daemon.mjs';
 import { childBindingPath, createBindingRegistry, readBinding } from '../agent-binding.mjs';
 import { mintAgentIdentity, readAgentIdentity, spawnIdentity, stateDirectory } from '../agent-identity.mjs';
 import { runSpawnHooks } from '../agent-hook.mjs';
+import { fileURLToPath } from 'node:url';
 
-const cli = new URL('../agent-identity.mjs', import.meta.url).pathname;
+const cli = fileURLToPath(new URL('../agent-identity.mjs', import.meta.url));
 async function fixture(t, extra = {}) {
   const root = mkdtempSync(path.join(tmpdir(), 'agent-spawn-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));

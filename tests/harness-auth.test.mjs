@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { authCommand, harnessAuth, LOGIN_TIMEOUT_MS } from '../harness-auth.mjs';
 import { ACP_SPAWN_REGISTRY } from '../acp-registry.mjs';
+import { fileURLToPath } from 'node:url';
 
 const row = ACP_SPAWN_REGISTRY.claude;
 
@@ -144,7 +145,7 @@ test('harness auth CLI uses the registered soul home and its installed CLI', (t)
   writeFileSync(path.join(sdk, 'cli.js'), `process.stdout.write(JSON.stringify({ loggedIn: process.cwd() === ${JSON.stringify(realpathSync(home))} }));`);
   upsertSoul({ id, status: 'active', spacePath: path.join(root, 'space') }, { file });
   registerSoulDir(id, dir, { file });
-  const result = spawnSync(process.execPath, [new URL('../agent-bot.mjs', import.meta.url).pathname, 'harness', 'auth', 'status', 'claude', '--soul', id], {
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../agent-bot.mjs', import.meta.url)), 'harness', 'auth', 'status', 'claude', '--soul', id], {
     encoding: 'utf8', env: { HOME: root, PATH: process.env.PATH, AGENT_BOT_POPULATION_PATH: file },
   });
   assert.equal(result.status, 0, result.stderr);

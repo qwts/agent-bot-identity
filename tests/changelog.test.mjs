@@ -11,6 +11,7 @@ import { join } from 'node:path';
 
 import { assemble, assembleChangelog, check, checkChanges, validateFragment } from '../scripts/changelog.mjs';
 import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
+import { fileURLToPath } from 'node:url';
 
 const OLD = '# Changelog\n\n## 0.1.0\n\n- First.\n';
 
@@ -107,7 +108,7 @@ test('check reads the PR diff from git and validates the added fragment', (t) =>
 });
 
 test('this repo keeps its changelog entries in changes/', () => {
-  const repo = new URL('..', import.meta.url).pathname;
+  const repo = fileURLToPath(new URL('..', import.meta.url));
   assert.ok(existsSync(join(repo, 'changes', 'README.md')));
   const workflow = readFileSync(join(repo, '.github', 'workflows', 'changelog.yml'), 'utf8');
   assert.match(workflow, /types: \[[^\]]*labeled, unlabeled\]/);

@@ -9,6 +9,7 @@ import { auditFile } from '../agent-principals.mjs';
 import { assertOwnerAction, confirmOwnerPresence, consentOwner, soulMarkers, verifyPrincipalOwner } from '../owner-gate.mjs';
 import { computePackageRevision } from '../soul-package.mjs';
 import { adoptSoulPackage, listSoulProposals, proposeSoulRevision, revisionCommand, revisionHistory } from '../soul-revisions.mjs';
+import { fileURLToPath } from 'node:url';
 
 const PRINCIPAL = 'principal_12345678-1234-4123-8123-123456789abc';
 const SECRET = 'f'.repeat(64);
@@ -139,7 +140,7 @@ test('principal proof needs a broker in another account and a well-formed creden
 
 test('the CLI reads a presented principal from stdin and refuses an own-account broker without a dialog', (t) => {
   const f = fixture(t);
-  const cli = new URL('../agent-bot.mjs', import.meta.url).pathname;
+  const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
   const env = { PATH: process.env.PATH, HOME: f.root, AGENT_BOT_CONFIG: join(f.root, 'no-config.json'), AGENT_BOT_STATE_HOME: f.options.stateDir };
   const run = (input) => spawnSync(process.execPath, [cli, 'soul', 'revision', 'approve', '--principal-stdin', f.id, f.proposal.proposalId, 'r'],
     { encoding: 'utf8', env, cwd: f.root, input });
@@ -204,7 +205,7 @@ test('a worktree binding refuses every owner revision action with stripped env, 
 test('unmarked CLI without a credential refuses noninteractive consent and audits without touching keychain', (t) => {
   const f = fixture(t);
   for (const command of ['approve', 'reject', 'adopt', 'edit']) {
-    const result = spawnSync(process.execPath, [new URL('../soul-revisions.mjs', import.meta.url).pathname,
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL('../soul-revisions.mjs', import.meta.url)),
       command, f.id, f.proposal.proposalId, 'Review'], {
       cwd: f.root, env: { ...f.options.env, AGENT_BOT_STATE_HOME: f.options.stateDir }, encoding: 'utf8',
     });
