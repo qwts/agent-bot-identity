@@ -20,6 +20,8 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { validateAgentId, withLock } from './agent-identity.mjs';
 import { REACH_CORRELATION_ENV } from './reach-env.mjs';
+import { whichOnPath } from './acp-registry.mjs';
+import { composeTurnEnv } from './turn-env.mjs';
 
 export const RESUME_POLICIES = Object.freeze(['read-only', 'workspace']);
 
@@ -214,7 +216,9 @@ export function runProcess(command, args, { cwd, env, stdin = null, timeoutMs, s
 
 // A launchd daemon gets a bare PATH, and harness CLIs and agent-comms live in
 // ~/.local/bin or Homebrew. Those are appended, so a host's own tool path
-// (GeniusBar's bundled tools) still comes first.
+// (GeniusBar's bundled tools) comes before them. On the resume lane this is
+// the base a soul's declared runtimes and harness installs are put ahead of
+// (#617 slice 3b).
 export function resumePath(env, home) {
   const dirs = [...(env.PATH || '').split(path.delimiter), path.join(home, '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
   return [...new Set(dirs.filter(Boolean))].join(path.delimiter);
@@ -230,39 +234,49 @@ function lastLine(text) {
  * (cwd); `env` carries its binding. Fails with a plain Error the cold waker
  * records, leaving the message unacked for the next wake.
  */
-export function createResumeExecutor({ sessions, baseEnv = process.env, home = homedir(), run = runProcess, turnTimeoutMs = 30 * 60_000 }) {
+export function createResumeExecutor({ sessions, baseEnv = process.env, home = homedir(), run = runProcess, turnTimeoutMs = 30 * 60_000,
+  runtimeEnvFor = null, toolHomeEnvFor = null, providerEnvFor = null }) {
   return async ({ invocation, message, env = {}, policy, signal }) => {
     const { agentId, harness, cwd } = invocation;
     const row = RESUME_HARNESSES[harness];
     if (!row) throw new Error(`resume wake does not support the ${harness} harness`);
     if (!RESUME_POLICIES.includes(policy)) throw new Error('resume wake needs a read-only or workspace policy');
-    const sessionId = sessions.get(agentId, harness, row.policyFixedAtStart ? policy : undefined);
-    const plan = row.plan({ sessionId, prompt: message, policy });
     // Only the target's own binding is presented: one the daemon inherited
     // never reaches a soul that has none. The same holds for the thread key.
     const { AGENT_BOT_BINDING: _inherited, [REACH_CORRELATION_ENV]: _thread, ...hostEnv } = baseEnv;
+    // The soul's turn env, composed by the daemon's shared ports as an ACP
+    // turn's is (#617 slice 3b): its declared runtimes and harness installs
+    // first on PATH, its tool home, its provider secret. A declaration that
+    // cannot be met throws here, before any harness process (Devin's
+    // session listing included) starts, so the message stays unacked and the
+    // recorded session is kept. Undeclared tools keep the host PATH.
+    const { harnessEnv } = composeTurnEnv({ agentId, harness, env,
+      baseEnv: { ...hostEnv, HOME: baseEnv.HOME || home, PATH: resumePath(baseEnv, home) },
+      runtimeEnvFor, toolHomeEnvFor, providerEnvFor });
+    // The harness CLI the composed PATH selects, so a soul-installed one
+    // wins over the host's; none is a refusal, never another lookup.
+    const command = whichOnPath(row.command, harnessEnv);
+    if (!command) throw Object.assign(new Error(`resume wake: ${row.command} is not on ${agentId}'s PATH`), { code: 'harness-tool-missing' });
+    const sessionId = sessions.get(agentId, harness, row.policyFixedAtStart ? policy : undefined);
+    const plan = row.plan({ sessionId, prompt: message, policy });
     // A relayed turn's thread key (#392) reaches the harness's own reach
     // server through its environment, so send_message and start_soul's brief
     // stay in the woken message's thread on this lane too.
     const correlation = typeof invocation.correlation === 'string' && invocation.correlation !== ''
       && invocation.correlation.length <= 128 ? invocation.correlation : null;
     const runEnv = {
-      ...hostEnv, ...env, ...plan.env,
+      ...harnessEnv, ...plan.env,
       ...(correlation ? { [REACH_CORRELATION_ENV]: correlation } : {}),
-      HOME: baseEnv.HOME || home,
-      PATH: resumePath(baseEnv, home),
-      QWTS_AGENT_ID: agentId,
-      AGENT_BOT_ID: agentId,
     };
     // A harness that prints no session id is asked which sessions exist in
     // the worktree before and after a fresh turn; only a single new one is
     // recorded, so a wake never adopts another soul's or project's session.
     const listIds = async () => {
-      const listed = await run(row.command, row.listArgs, { cwd, env: runEnv, stdin: null, timeoutMs: 30_000, signal }).catch(() => null);
+      const listed = await run(command, row.listArgs, { cwd, env: runEnv, stdin: null, timeoutMs: 30_000, signal }).catch(() => null);
       return listed?.code === 0 ? row.sessionsIn(listed.stdout, cwd) : null;
     };
     const before = !sessionId && row.listArgs ? await listIds() : null;
-    const result = await run(row.command, plan.args, { cwd, env: runEnv, stdin: plan.stdin, timeoutMs: turnTimeoutMs, signal });
+    const result = await run(command, plan.args, { cwd, env: runEnv, stdin: plan.stdin, timeoutMs: turnTimeoutMs, signal });
     signal?.throwIfAborted();
     const parsed = row.parse(result.stdout);
     if (result.code !== 0 || parsed.failure) {

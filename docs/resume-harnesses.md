@@ -7,6 +7,30 @@ needs no other code.
 
 Rows today: `codex`, `opencode`, `devin`, `grok`.
 
+## Which harness runs, and with what environment
+
+The executor composes each turn's environment through the daemon's shared
+`composeTurnEnv`, the same composition ACP turns use (#617 slice 3b). The base is
+the host environment, with `resumePath` and the soul's binding and thread key.
+On top of it go the soul's declared runtimes and harness installs, first on
+PATH with their variables, and the provider secret for the harness. The row's
+`command` is then resolved on that PATH, so a harness the soul installed wins
+over the host's copy. A soul that declares nothing runs the host CLI as before.
+
+Before any process starts, including Devin's session listing, a turn is refused
+with a coded error when:
+
+- a declared runtime or harness install is missing, mismatched or unsupported
+  (`runtime-install-failed`, `runtime-unsupported-platform`);
+- the provider secret cannot be read;
+- the row's command is not on the composed PATH (`harness-tool-missing`).
+
+The wake stays unacked and the recorded session is kept.
+
+Tool-home routing (`CODEX_HOME`, OpenCode's XDG bases) is not applied on this
+lane yet. Its recorded sessions live in the host store, and moving the store
+would strand them. That stays open on #617.
+
 The harness name is the row's key, so it must name the client that answers.
 `grok` is Grok Build, the `grok` CLI. Grok Bot, the desktop app, has no
 headless CLI; it joins as `--harness grokbot` and wakes by webhook (#334), not
@@ -34,7 +58,7 @@ for them), then confirm each one live:
 | What makes the turn run with nobody to approve anything, confined to the worktree? | `workspace` |
 | What makes it answer but change nothing, with every other call denied rather than asked? | `read-only` |
 | Is the sandbox or permission mode fixed when the session starts? | `policyFixedAtStart: true` |
-| What environment does it need under launchd? | `plan().env`; the executor already sets HOME and PATH |
+| What environment does it need under launchd? | `plan().env`; the executor already composes HOME, PATH and the soul's runtimes |
 
 A policy must never leave a tool call waiting for approval. A turn that hangs
 on an approval holds the message until it times out. Prefer an OS sandbox and

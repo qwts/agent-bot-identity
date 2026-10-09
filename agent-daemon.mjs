@@ -1707,6 +1707,13 @@ export async function runDaemon({
       sessions: createWakeSessions({ file: wakeSessionsFile({ env, home }) }),
       baseEnv: harnessEnv,
       home,
+      // The soul's declared runtimes and harness installs, and its provider
+      // secret, as an ACP turn gets them (#617 slice 3b). Tool-home routing
+      // stays off on this lane for now: its recorded sessions live in the
+      // host store, and moving CODEX_HOME / the OpenCode XDG bases would
+      // strand them (open on #617).
+      runtimeEnvFor: turnEnvPorts.runtimeEnvFor,
+      providerEnvFor: turnEnvPorts.providerEnvFor,
     }),
     // Webhook wake (#334) runs only for a soul the owner set to `webhook`.
     webhookWaker: createWebhookWaker({ read: (agentId) => readWebhook(agentId, { env, home }) }),

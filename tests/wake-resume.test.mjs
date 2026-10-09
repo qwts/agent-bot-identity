@@ -1,7 +1,7 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,14 @@ import { RESUME_HARNESSES, createResumeExecutor, createWakeSessions, resumePath,
 
 const ID = 'agent_32332332-3233-4233-8233-323323323323';
 const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
+
+// The resume lane runs the harness CLI its composed PATH selects (#617
+// slice 3b), so each fixture puts an executable stand-in for every resume
+// harness first on PATH; the `run` double never starts it.
+const STUBS = mkdtempSync(path.join(tmpdir(), 'wake-resume-bin-'));
+after(() => rmSync(STUBS, { recursive: true, force: true }));
+for (const name of Object.keys(RESUME_HARNESSES)) writeFileSync(path.join(STUBS, RESUME_HARNESSES[name].command), '#!/bin/sh\n', { mode: 0o755 });
+const stubbed = (env) => ({ ...env, PATH: [STUBS, env.PATH].filter(Boolean).join(path.delimiter) });
 
 function withState(run) {
   const root = mkdtempSync(path.join(tmpdir(), 'wake-resume-'));
@@ -121,7 +129,7 @@ test('a harness that fixes its policy at start begins a new session when the pol
     next += 1;
     return { code: 0, stdout: JSON.stringify({ text: 'pong', stopReason: 'end_turn', sessionId: `g-${next}` }), stderr: '' };
   };
-  const execute = createResumeExecutor({ sessions, baseEnv: {}, home: root, run });
+  const execute = createResumeExecutor({ sessions, baseEnv: stubbed({}), home: root, run });
   const turn = (policy) => execute({ invocation: { agentId: ID, harness: 'grok', cwd: root }, message: 'm', policy });
   await turn('read-only');
   await turn('read-only');
@@ -150,7 +158,7 @@ test('the first wake starts a session and every later wake resumes it', () => wi
     calls.push({ command, args, options });
     return { code: 0, stdout: CODEX_OUTPUT, stderr: '' };
   };
-  const execute = createResumeExecutor({ sessions, baseEnv: { PATH: '/usr/bin', SECRET_ELSEWHERE: 'kept', AGENT_BOT_BINDING: '/daemon/own/binding.json' }, home: root, run });
+  const execute = createResumeExecutor({ sessions, baseEnv: stubbed({ PATH: '/usr/bin', SECRET_ELSEWHERE: 'kept', AGENT_BOT_BINDING: '/daemon/own/binding.json' }), home: root, run });
   const invocation = { agentId: ID, harness: 'codex', cwd: '/work/tree' };
   const first = await execute({ invocation, message: 'one', env: { AGENT_BOT_BINDING: '/work/tree/.git/b.json' }, policy: 'workspace' });
   assert.equal(first.reply, 'pong');
@@ -177,7 +185,7 @@ test('a resume turn carries the woken message\'s thread key, and never an inheri
     calls.push(options.env);
     return { code: 0, stdout: CODEX_OUTPUT, stderr: '' };
   };
-  const execute = createResumeExecutor({ sessions, baseEnv: { AGENT_BOT_REACH_CORRELATION: 'msg_daemon' }, home: root, run });
+  const execute = createResumeExecutor({ sessions, baseEnv: stubbed({ AGENT_BOT_REACH_CORRELATION: 'msg_daemon' }), home: root, run });
   await execute({ invocation: { agentId: ID, harness: 'codex', cwd: '/work/tree', correlation: 'msg_starter' }, message: 'm', env: {}, policy: 'workspace' });
   assert.equal(calls.at(-1).AGENT_BOT_REACH_CORRELATION, 'msg_starter');
   await execute({ invocation: { agentId: ID, harness: 'codex', cwd: '/work/tree' }, message: 'm', env: {}, policy: 'workspace' });
@@ -190,7 +198,7 @@ test('a failed turn throws with the harness detail and keeps the recorded sessio
   const sessions = createWakeSessions({ file: wakeSessionsFile({ env }) });
   sessions.set(ID, 'devin', 'held-open');
   const run = async () => ({ code: 1, stdout: '', stderr: "Error: session 'held-open' is already open in another process (PID 1490)\n" });
-  const execute = createResumeExecutor({ sessions, baseEnv: {}, home: root, run });
+  const execute = createResumeExecutor({ sessions, baseEnv: stubbed({}), home: root, run });
   await assert.rejects(execute({ invocation: { agentId: ID, harness: 'devin', cwd: root }, message: 'm', policy: 'workspace' }), /devin turn failed: .*already open in another process/);
   assert.equal(sessions.get(ID, 'devin'), 'held-open');
   await assert.rejects(execute({ invocation: { agentId: ID, harness: 'aider', cwd: root }, message: 'm', policy: 'workspace' }), /does not support the aider harness/);
@@ -211,7 +219,7 @@ test('devin records only the one session its fresh turn created in the worktree'
       ? listing(lists++ === 0 ? ['human-session'] : after)
       : { code: 0, stdout: 'pong\n', stderr: '' });
   };
-  const turn = (run) => createResumeExecutor({ sessions, baseEnv: {}, home: root, run })({ invocation: { agentId: ID, harness: 'devin', cwd: root }, message: 'm', policy: 'read-only' });
+  const turn = (run) => createResumeExecutor({ sessions, baseEnv: stubbed({}), home: root, run })({ invocation: { agentId: ID, harness: 'devin', cwd: root }, message: 'm', policy: 'read-only' });
   // Two new sessions appeared (a human started one meanwhile): adopt neither.
   assert.equal((await turn(make(['human-session', 'mine', 'theirs']))).reply, 'pong');
   assert.equal(sessions.get(ID, 'devin'), null);
