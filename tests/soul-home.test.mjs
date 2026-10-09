@@ -374,7 +374,10 @@ test('a second install of the same adapter version keeps the one that landed fir
 test('npm runs with the soul\'s own node and npm cache when runtimes.node is provisioned', async (t) => {
   const root = mkdtempSync(path.join(tmpdir(), 'soul-node-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const options = census(root);
+  // A preinstalled runtime the readiness check rejects must fail here, not
+  // quietly download a real Node.
+  const fetchFn = async (url) => { throw new Error(`unexpected download ${url}`); };
+  const options = { ...census(root), fetchFn };
   const source = pinnedPackage(path.join(root, 'pkg'));
   const soulDir = path.dirname(path.dirname(soulHomePath(agentId, options)));
   const seen = [];
@@ -388,7 +391,7 @@ test('npm runs with the soul\'s own node and npm cache when runtimes.node is pro
   const version = resolveCatalogPin('node', '24').version;
   const bin = path.join(soulDir, '.soul-state', 'runtimes', 'node', version, 'bin');
   mkdirSync(bin, { recursive: true });
-  writeFileSync(path.join(bin, 'node'), '');
+  writeFileSync(path.join(bin, 'node'), '', { mode: 0o755 });
   const npm = path.join(path.dirname(bin), 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
   mkdirSync(path.dirname(npm), { recursive: true });
   writeFileSync(npm, '');
@@ -420,7 +423,7 @@ for (const managedHome of [false, true]) for (const platform of ['linux-x64', 'w
     node = path.join(bin, windows ? 'node.exe' : 'node');
     npm = path.join(runtime, ...(windows ? [] : ['lib']), 'node_modules', 'npm', 'bin', 'npm-cli.js');
     mkdirSync(bin, { recursive: true }); mkdirSync(path.dirname(npm), { recursive: true });
-    writeFileSync(node, ''); writeFileSync(npm, '');
+    writeFileSync(node, '', { mode: 0o755 }); writeFileSync(npm, '');
     writeFileSync(path.join(runtime, INSTALL_STAMP), JSON.stringify(nodeReceipt(version, platform)));
   };
   const install = (dir, opts) => installHarnesses(dir, { ...opts, runImpl: async (command, args, processOptions) => {
@@ -455,7 +458,7 @@ test('missing declared Node or npm refuses before npm, even with a host override
   const version = resolveCatalogPin('node', '24').version;
   const runtime = path.join(soulDir, '.soul-state', 'runtimes', 'node', version);
   mkdirSync(path.join(runtime, 'bin'), { recursive: true });
-  writeFileSync(path.join(runtime, 'bin', 'node'), '');
+  writeFileSync(path.join(runtime, 'bin', 'node'), '', { mode: 0o755 });
   writeFileSync(path.join(runtime, INSTALL_STAMP), JSON.stringify(nodeReceipt(version)));
   await assert.rejects(installSoulHarnesses(agentId, source, operation), error => error.code === 'runtime-install-failed' && error.runtime === 'node' && /npm/.test(error.message));
   const failure = Object.assign(new Error('archive did not verify'), { code: 'runtime-checksum-mismatch' });

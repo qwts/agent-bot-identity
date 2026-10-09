@@ -21,7 +21,8 @@ import { createResumeExecutor } from '../wake-resume.mjs';
 const ID = 'agent_12345678-1234-4234-8234-123456789abc';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const PLATFORM = 'darwin-arm64';
-const put = (file, contents) => { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, contents); };
+// A script is written executable, as a real archive or uv install carries it.
+const put = (file, contents) => { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, contents, { mode: String(contents).startsWith('#!') ? 0o755 : 0o644 }); };
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const NODE = resolveCatalogPin('node', '24');
 const GO = resolveCatalogPin('go', '1');
@@ -718,7 +719,7 @@ test('same-version archive repair retains the conflicting install and failures l
   const directory = path.join(f.runtimes, 'node', NODE.version);
   const originalReceipt = readFileSync(path.join(directory, INSTALL_STAMP), 'utf8');
   put(path.join(directory, 'owner-note'), 'keep for recovery');
-  const changed = archive({ [`node-v${NODE.version}/bin/node`]: 'new node', [`node-v${NODE.version}/bin/npm`]: 'new npm' });
+  const changed = archive({ [`node-v${NODE.version}/bin/node`]: '#!/bin/sh\n# new node\n', [`node-v${NODE.version}/bin/npm`]: '#!/bin/sh\n# new npm\n' });
   const source = f.catalog.node[0].sources[PLATFORM];
   source.url = 'https://example.test/replacement.tgz';
   source.sha256 = sha(changed);
@@ -732,7 +733,7 @@ test('same-version archive repair retains the conflicting install and failures l
   const repaired = await installSoulRuntimes(f.dir, { ...f.options, runImpl: d.runImpl,
     fetchFn: doubles({ archives: { [source.url]: changed } }).fetchFn, log: line => logs.push(line) });
   assert.equal(repaired.ready, true);
-  assert.equal(readFileSync(path.join(directory, 'bin/node'), 'utf8'), 'new node');
+  assert.equal(readFileSync(path.join(directory, 'bin/node'), 'utf8'), '#!/bin/sh\n# new node\n');
   const retained = readdirSync(path.dirname(directory)).filter(name => name.startsWith(`${NODE.version}.retained-`));
   assert.equal(retained.length, 1);
   assert.equal(readFileSync(path.join(path.dirname(directory), retained[0], INSTALL_STAMP), 'utf8'), originalReceipt);
@@ -742,6 +743,61 @@ test('same-version archive repair retains the conflicting install and failures l
   assert.deepEqual(again.skipped, ['node']);
 });
 
+test('an installed runtime without the execute bit is not ready and refuses rather than run a host Node (#617)', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { node: '24' } }, census: true });
+  await installSoulRuntimes(f.dir, { ...f.options, ...doubles({ archives: f.archives }) });
+  const node = path.join(f.runtimes, 'node', NODE.version, 'bin', 'node');
+  assert.equal(inspectSoulRuntimes(f.dir, f.options).ready, true);
+  chmodSync(node, 0o644);
+  const row = inspectSoulRuntimes(f.dir, f.options).runtimes[0];
+  assert.deepEqual([row.status, row.path, row.reason], ['missing', null, 'the installed node is missing or not executable']);
+  assert.throws(() => soulRuntimeEnv(ID, { ...f.options, node: process.execPath }), (error) => error.code === 'runtime-install-failed'
+    && error.runtime === 'node' && /not executable\); refusing host fallback/.test(error.message));
+  // An archive whose declared executable is not executable is never published.
+  const unexecutable = archive({ [`node-v${NODE.version}-darwin-arm64/bin/node`]: 'not a script', [`node-v${NODE.version}-darwin-arm64/bin/npm`]: 'not a script' });
+  const source = f.catalog.node[0].sources[PLATFORM];
+  source.url = 'https://example.test/unexecutable.tgz';
+  source.sha256 = sha(unexecutable);
+  rmSync(path.join(f.runtimes, 'node'), { recursive: true });
+  await assert.rejects(installSoulRuntimes(f.dir, { ...f.options, ...doubles({ archives: { [source.url]: unexecutable } }) }), (error) => error.code === 'runtime-install-failed');
+  assert.equal(inspectSoulRuntimes(f.dir, f.options).ready, false);
+});
+
+test('readiness selects the platform\'s executable name: a POSIX install is not satisfied by a node.exe, and a Windows one needs it (#617)', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { node: '24' } }, census: true });
+  await installSoulRuntimes(f.dir, { ...f.options, ...doubles({ archives: f.archives }) });
+  const bin = path.join(f.runtimes, 'node', NODE.version, 'bin');
+  chmodSync(path.join(bin, 'node'), 0o644);
+  put(path.join(bin, 'node.exe'), '#!/bin/sh\n# a Windows-named node\n');
+  const posix = inspectSoulRuntimes(f.dir, f.options).runtimes[0];
+  assert.deepEqual([posix.status, posix.reason], ['missing', 'the installed node is missing or not executable']);
+  assert.throws(() => soulRuntimeEnv(ID, { ...f.options, node: process.execPath }), (error) => error.code === 'runtime-install-failed' && error.runtime === 'node');
+
+  // A Windows-shaped archive installs and is ready for win32 only.
+  const w = fixture(t, { manifest: { runtimes: { node: '24' } } });
+  const windows = archive({ [`node-v${NODE.version}-win-x64/bin/node.exe`]: '#!/bin/sh\n# node.exe\n', [`node-v${NODE.version}-win-x64/bin/npm`]: '#!/bin/sh\n' });
+  const source = w.catalog.node[0].sources['win32-x64'];
+  source.url = 'https://example.test/node-win.zip';
+  source.sha256 = sha(windows);
+  const installed = await installSoulRuntimes(w.dir, { ...w.options, platform: 'win32-x64', ...doubles({ archives: { [source.url]: windows } }) });
+  assert.equal(installed.ready, true);
+  assert.equal(inspectSoulRuntimes(w.dir, { ...w.options, platform: 'win32-x64' }).runtimes[0].status, 'installed');
+  // On Windows only node.exe counts: a bare executable `node` does not stand in.
+  const winBin = path.join(w.runtimes, 'node', NODE.version, 'bin');
+  rmSync(path.join(winBin, 'node.exe'));
+  put(path.join(winBin, 'node'), '#!/bin/sh\n# bare node\n');
+  const bare = inspectSoulRuntimes(w.dir, { ...w.options, platform: 'win32-x64' }).runtimes[0];
+  assert.deepEqual([bare.status, bare.reason], ['missing', 'the installed node.exe is missing or not executable']);
+
+  // A harness install that declares `bin: 'Tool.EXE'` is not asked for Tool.EXE.exe.
+  const toolArchive = archive({ 'Tool.EXE': '#!/bin/sh\n# tool\n' });
+  const h = fixture(t, { manifest: { harnesses: { tool: { install: { kind: 'archive', version: '1.0.0', bin: 'Tool.EXE',
+    url: 'https://example.test/tool-{platform}-{version}.zip', sha256: { 'win32-x64': sha(toolArchive) } } } } } });
+  const toolInstall = await installSoulRuntimes(h.dir, { ...h.options, platform: 'win32-x64', ...doubles({ archives: { 'https://example.test/tool-win32-x64-1.0.0.zip': toolArchive } }) });
+  assert.equal(toolInstall.harnesses[0].status, 'installed');
+  assert.equal(inspectSoulRuntimes(h.dir, { ...h.options, platform: 'win32-x64' }).harnesses[0].status, 'installed');
+});
+
 test('readiness accepts internal executable links but refuses external links and escaped installation roots (#617)', async (t) => {
   const f = fixture(t, { manifest: { runtimes: { node: '24' } } });
   const d = doubles({ archives: f.archives });
@@ -749,7 +805,7 @@ test('readiness accepts internal executable links but refuses external links and
   const directory = path.join(f.runtimes, 'node', NODE.version);
   const executable = path.join(directory, 'bin/node');
   rmSync(executable);
-  put(path.join(directory, 'bin/node-real'), 'internal node');
+  put(path.join(directory, 'bin/node-real'), '#!/bin/sh\n# internal node\n');
   symlinkSync('node-real', executable);
   assert.equal(inspectSoulRuntimes(f.dir, f.options).ready, true);
   rmSync(executable);
