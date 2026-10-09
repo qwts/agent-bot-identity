@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -130,13 +130,15 @@ test('a harness is launchable only when enabled and runnable here', () => {
     on: { enabled: true, command: 'definitely-not-on-path-377' },
     adapter: { enabled: true, command: 'x-acp', soulBin: 'x-acp' },
     off: { enabled: false, command: 'node', soulBin: 'node' },
-    abs: { enabled: true, command: '/opt/x/bin/acp' },
+    abs: { enabled: true, command: process.execPath },
+    gone: { enabled: true, command: '/opt/x/bin/acp' },
   };
   const env = { PATH: '/nonexistent' };
   assert.equal(harnessLaunchable('on', { registry, env }), false);
   assert.equal(harnessLaunchable('adapter', { registry, env }), true);
   assert.equal(harnessLaunchable('off', { registry, env }), false);
   assert.equal(harnessLaunchable('abs', { registry, env }), true);
+  assert.equal(harnessLaunchable('gone', { registry, env }), false, 'an absolute command must exist (#536)');
   assert.equal(harnessLaunchable('missing', { registry, env }), false);
 });
 
@@ -245,4 +247,29 @@ test('the effective provider is the template\'s declaration, else the harness\'s
   assert.equal(templateProviderId(dir, 'claude'), null);
   writeFileSync(path.join(dir, 'soul.json'), '{not json');
   assert.equal(templateProviderId(dir, 'codex'), null);
+});
+
+test('availability needs an executable regular file, absolute or on PATH (#536)', (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'harness-exec-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const bin = path.join(root, 'bin');
+  mkdirSync(path.join(bin, 'dir-cli'), { recursive: true });
+  writeFileSync(path.join(bin, 'plain-cli'), '#!/bin/sh\n', { mode: 0o644 });
+  writeFileSync(path.join(bin, 'good-cli'), '#!/bin/sh\n');
+  chmodSync(path.join(bin, 'good-cli'), 0o755);
+  chmodSync(path.join(bin, 'dir-cli'), 0o755);
+  const env = { PATH: bin };
+  const registry = Object.fromEntries([
+    ['bare-good', 'good-cli'], ['bare-dir', 'dir-cli'], ['bare-plain', 'plain-cli'], ['bare-missing', 'none-cli'],
+    ['abs-good', path.join(bin, 'good-cli')], ['abs-dir', path.join(bin, 'dir-cli')], ['abs-plain', path.join(bin, 'plain-cli')], ['abs-missing', path.join(bin, 'none-cli')],
+  ].map(([key, command]) => [key, { enabled: true, command }]));
+  const refusals = Object.fromEntries(Object.keys(registry).map((key) => [key, harnessLaunchRefusal(key, { registry, env })?.code ?? null]));
+  assert.deepEqual(refusals, {
+    'bare-good': null, 'bare-dir': 'harness-tool-missing', 'bare-plain': 'harness-tool-missing', 'bare-missing': 'harness-tool-missing',
+    'abs-good': null, 'abs-dir': 'harness-tool-missing', 'abs-plain': 'harness-tool-missing', 'abs-missing': 'harness-tool-missing',
+  });
+  assert.match(harnessLaunchRefusal('abs-dir', { registry, env }).message, /is not an executable file on this host/);
+  // An adapter the soul installs, or a declared download, is still not looked up here.
+  assert.equal(harnessLaunchRefusal('x', { registry: { x: { enabled: true, command: 'none-cli', soulBin: 'x-acp' } }, env }), null);
+  assert.equal(harnessLaunchRefusal('bare-missing', { registry, env, declared: true }), null);
 });

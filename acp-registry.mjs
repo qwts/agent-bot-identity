@@ -41,7 +41,7 @@
 //                desktop apps this plane exists to reach (#141 census).
 //                Revisit only if that changes.
 import { accessSync, constants, existsSync, realpathSync, statSync } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { delimiter, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const HARNESS_KEY_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
@@ -318,12 +318,15 @@ export function whichOnPath(name, env = process.env) {
   return null;
 }
 
-/** Whether a bare command name is an executable on PATH. */
+/** Whether a bare command name is an executable regular file on PATH (never a directory). */
 export function onPath(command, env = process.env) {
   if (!command || command.includes('/')) return false;
-  return (env.PATH ?? '').split(delimiter).filter(Boolean).some((dir) => {
-    try { accessSync(join(dir, command), constants.X_OK); return true; } catch { return false; }
-  });
+  return whichOnPath(command, env) !== null;
+}
+
+/** Whether an absolute path is an executable regular file (#536). */
+export function executableFile(file) {
+  try { if (!isAbsolute(file) || !statSync(file).isFile()) return false; accessSync(file, constants.X_OK); return true; } catch { return false; }
 }
 
 /**

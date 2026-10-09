@@ -103,7 +103,7 @@ Before a package launch mints a soul, the launch is refused when the daemon can'
 | --- | --- |
 | `harness-unknown` | The registry has no such harness. The detail adds that such a harness joins from its own session with `agent-bot join`. |
 | `harness-disabled` | The registry row is disabled. |
-| `harness-tool-missing` | The row's command isn't on the daemon's PATH and no soul install provides it. The detail lists the PATH and the row's install hint. |
+| `harness-tool-missing` | The row's command isn't an executable regular file on the daemon's PATH, or, for an absolute command, at its path, and no soul install provides it. A directory or non-executable file of that name doesn't count. The detail lists the PATH and the row's install hint. |
 
 The agent-comms broker forwards `detail` only, so a launcher sees the code as the detail's prefix until the broker forwards `code`.
 

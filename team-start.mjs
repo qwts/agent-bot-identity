@@ -32,7 +32,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN, onPath } from './acp-registry.mjs';
+import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN, executableFile, onPath } from './acp-registry.mjs';
 import { LAUNCH_NAME_MAX } from './daemon-launch.mjs';
 import { validateModelId } from './soul-model.mjs';
 import { PROVIDERS, declaredProviders, providerIds } from './soul-providers.mjs';
@@ -65,7 +65,8 @@ export function teamLimits(config = {}) {
 
 /**
  * Why the daemon cannot start a soul on this harness here, or null when it
- * can: an enabled registry row whose command is on PATH (or absolute), or
+ * can: an enabled registry row whose command is an executable file on PATH
+ * (or at its absolute path), or
  * whose ACP adapter installs into the soul home (soulBin) and runs on the
  * bundled Node. A refusal names the missing command and how to install it
  * (#418), with a stable code a launcher can act on without reading the
@@ -78,7 +79,8 @@ export function harnessLaunchRefusal(harness, { registry = ACP_SPAWN_REGISTRY, e
   if (row.enabled !== true) return { code: 'harness-disabled', message: 'it is disabled in agent-bot' };
   // `declared`: the soul's soul.json pins a download for this harness (#583
   // slice 3), which the launch installs into the soul before it starts.
-  if (row.soulBin || declared || onPath(row.command, env) || path.isAbsolute(row.command)) return null;
+  if (row.soulBin || declared || onPath(row.command, env) || executableFile(row.command)) return null;
+  if (path.isAbsolute(row.command)) return { code: 'harness-tool-missing', message: `\`${row.command}\` is not an executable file on this host` };
   return { code: 'harness-tool-missing',
     message: `the \`${row.command}\` command is not on this host's PATH (${(env.PATH ?? '').split(path.delimiter).filter(Boolean).join(', ') || 'empty'})`
       + (row.installHint ? `; ${row.installHint}` : '') };

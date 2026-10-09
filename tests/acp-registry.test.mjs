@@ -72,6 +72,7 @@ test('a launch with no harness takes the soul preference, else an enabled harnes
   assert.equal(defaultHarnessFor(['unknown'], { available: () => false }), null);
   assert.equal(onPath('sh', { PATH: '/bin' }), true);
   assert.equal(onPath('/bin/sh', { PATH: '/bin' }), false);
+  assert.equal(onPath('bin', { PATH: '/' }), false, 'a directory is not a command (#536)');
 });
 
 test('the codex row opens the workspace-write sandbox to the network so the soul reaches agent-comms', () => {
