@@ -1646,7 +1646,7 @@ export async function runDaemon({
       upsertIdentitySoul(soul.agentId, spacePath(soul.agentId, { env, home, config }), { file, stateDir: stateDirectory({ env, home }), now });
     }
     homes ??= createSoulHomes({ env, home, config, stateDir: stateDirectory({ env, home }), bindings: server.bindings,
-      install: (dir) => installHarnesses(dir, { env }) });
+      install: (dir, installOptions) => installHarnesses(dir, installOptions) });
     return homes(soul);
   };
   // Whether the launched soul's (or package's) soul.json pins a download for
