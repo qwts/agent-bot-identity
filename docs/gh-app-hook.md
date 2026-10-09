@@ -52,7 +52,9 @@ For every GitHub App that agents act as, in the App's settings on github.com:
   case-insensitively against the `WEBHOOK_SECRETS` keys).
 - Webhook secret: the value stored for that slug in `WEBHOOK_SECRETS`.
 - Events: issue comments, pull request review comments and reviews, issues
-  and pull requests, so mentions of `<slug>[bot]` arrive.
+  and pull requests, so mentions of `<slug>[bot]` arrive. The pull request
+  subscription also carries `review_requested`; GitHub does not offer the App
+  as a reviewer unless its webhook is active and subscribed to pull requests.
 
 GitHub's `X-GitHub-Delivery` GUID becomes the record id, so a redelivery
 dedupes instead of being stored twice.
@@ -73,9 +75,13 @@ export GH_APP_HOOK_INBOX_TOKEN=<INBOX_TOKEN, from the secret store>
 
 The server is `agent-bot mcp`; a soul package's `agent-bot` entry runs
 `reach-mcp`, the daemon's reach-back server, which has no `take_inbox`, so
-`doctor` does not count it as inbox wiring (#247). The bearer today is a
-shared secret the agent's environment carries; #229 tracks moving it behind
-the daemon so an agent never holds it.
+`doctor` does not count it as inbox wiring (#247). The bearer today is
+**one fleet-wide value, not per-App**: every machine that calls `/inbox`
+holds the same `INBOX_TOKEN`, and that token can take any App's records for
+any repository. Distribute it only to machines you would trust with every
+App's mailbox. #229 tracks moving it behind the daemon so an agent never
+holds it; that changes how an agent obtains the bearer, not how the Worker is
+configured, so this procedure still applies once it lands.
 
 ## 5. Verify
 
@@ -92,3 +98,60 @@ waiting) or the oldest record for that App and repository.
 
 `GET /deadletter?app=<slug>` with the bearer lists the records whose pushes
 exhausted their retries (kept seven days).
+
+## 6. Troubleshooting and recovery
+
+**Cloudflare secrets are write-only.** `wrangler secret put` sets a value and
+`wrangler secret list` shows names only; nothing reads a value back. Record
+each value in the secret store when you set it. A value that was not recorded
+can only be replaced, which is a rotation.
+
+**A 401 does not say which side is wrong.** `POST /github/<slug>` answers
+`401 {"error":"bad signature"}` both when the slug has no entry in
+`WEBHOOK_SECRETS` and when the secret does not match. `/inbox` answers
+`401 {"error":"unauthorized"}` both when `INBOX_TOKEN` is unset on the Worker
+and when the presented bearer is wrong. Two probes separate the halves without
+changing anything stored.
+
+Delivery half: a correctly signed payload with no `repository` is verified
+and then stored nowhere, answering `200 {"stored":false}`:
+
+```sh
+SECRET='<app webhook secret>'; BODY='{"action":"ping"}'
+SIG="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}')"
+curl -sS -w '\nHTTP %{http_code}\n' -X POST \
+  -H "x-hub-signature-256: $SIG" -H 'content-type: application/json' \
+  -d "$BODY" https://<worker host>/github/<app slug>
+```
+
+`200 {"stored":false}` means the slug is in `WEBHOOK_SECRETS` and the secret
+matches; `401` means it does not, and no change on the GitHub side will help
+until it does. This isolates the Worker's half from the App's, which a `200`
+on GitHub's own ping does not.
+
+Retrieval half: **probe a repository that can never have records.** A
+successful take deletes the record it returns, so probing a real repository
+can consume a pending event. A nonexistent `owner/name` matches nothing:
+
+```sh
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
+  -H "Authorization: Bearer $GH_APP_HOOK_INBOX_TOKEN" \
+  "https://<worker host>/inbox?app=<app slug>&repo=<owner>/nonexistent-probe-repo"
+```
+
+`204` means the bearer is accepted; `401` means it is not.
+
+**GitHub disables a webhook after repeated failures.** Deliveries that keep
+failing (for example, a run of 401s while `WEBHOOK_SECRETS` was wrong) can
+get the App's webhook marked inactive. Fixing the secret does not re-enable
+it: re-save the webhook URL in the App's settings, which re-arms it, then
+check **Recent Deliveries** there, and redeliver anything missed. Redeliveries
+reuse the delivery GUID, so they dedupe.
+
+**Rotation.** For a webhook secret: generate a new value, update that slug's
+entry in `WEBHOOK_SECRETS` (`wrangler secret put` replaces the whole JSON
+object, so paste every entry), then set the same value on the App and save.
+Deliveries in between fail and can be redelivered afterwards. For
+`INBOX_TOKEN`: put the new value, then update `GH_APP_HOOK_INBOX_TOKEN` on
+every machine that calls `/inbox`; until each machine is updated its
+`take_inbox` calls get 401. Re-run the probes above after either rotation.
