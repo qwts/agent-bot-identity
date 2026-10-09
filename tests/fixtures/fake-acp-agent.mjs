@@ -2,7 +2,9 @@
 // JSON-RPC 2.0 on stdio, speaking just enough of the protocol to exercise
 // every engine path. The prompt text selects the scenario, so the test file
 // reads as a list of turns and this fixture stays a dumb switchboard.
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { createInterface } from 'node:readline';
 
 let nextId = 1;
@@ -36,6 +38,17 @@ async function handlePrompt({ sessionId, prompt }) {
   const session = sessions.get(sessionId);
   if (!session) throw new Error(`unknown session ${sessionId}`);
   const text = prompt?.[0]?.text ?? '';
+
+  // Optional native-history fixture: a separate adapter process per turn
+  // must load the same on-disk session to recover these facts.
+  if (text.startsWith('remember:') || text === 'recall') {
+    if (text.startsWith('remember:')) {
+      session.memory = text.slice('remember:'.length);
+      if (process.env.FAKE_ACP_HISTORY_DIR) writeFileSync(path.join(process.env.FAKE_ACP_HISTORY_DIR, sessionId), JSON.stringify({ memory: session.memory }));
+    }
+    chunk(sessionId, session.memory ?? 'no prior facts');
+    return { stopReason: 'end_turn' };
+  }
 
   if (text === 'model-probe') {
     chunk(sessionId, JSON.stringify({ model: session.model ?? models?.currentModelId ?? null, requests: session.modelRequests ?? [] }));
@@ -252,16 +265,20 @@ async function handlePrompt({ sessionId, prompt }) {
 
 async function handle(method, params) {
   if (method === 'initialize') {
-    return { protocolVersion: 1, agentCapabilities: { loadSession: true } };
+    return { protocolVersion: 1, agentCapabilities: { loadSession: process.env.FAKE_ACP_NO_LOAD !== '1' } };
   }
   if (method === 'session/new') {
     sessionCounter += 1;
-    const sessionId = `fake-ses-${sessionCounter}`;
+    const sessionId = `fake-ses-${process.env.FAKE_ACP_HISTORY_DIR ? randomUUID() : sessionCounter}`;
     sessions.set(sessionId, { cwd: params.cwd, mcpServers: params.mcpServers, loaded: false });
+    if (process.env.FAKE_ACP_HISTORY_DIR) writeFileSync(path.join(process.env.FAKE_ACP_HISTORY_DIR, sessionId), '{}');
     return { sessionId, ...(models ? { models } : {}) };
   }
   if (method === 'session/load') {
-    sessions.set(params.sessionId, { cwd: params.cwd, mcpServers: params.mcpServers, loaded: true });
+    if (process.env.FAKE_ACP_LOAD_ERROR) throw new Error('private provider error that must not reach public events');
+    const stored = process.env.FAKE_ACP_HISTORY_DIR
+      ? JSON.parse(readFileSync(path.join(process.env.FAKE_ACP_HISTORY_DIR, params.sessionId), 'utf8')) : {};
+    sessions.set(params.sessionId, { ...stored, cwd: params.cwd, mcpServers: params.mcpServers, loaded: true });
     // History replay: the engine must NOT re-record this as a fresh event.
     chunk(params.sessionId, 'replayed-history-line');
     return models ? { models } : {};

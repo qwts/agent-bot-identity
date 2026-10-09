@@ -374,8 +374,17 @@ export function createAcpExecutor({
 
   const run = async ({
     invocation, message, attachments, signal,
-    bindHarnessSession, emitUpdate, emitStop, requestPermission,
+    appendEvent, bindHarnessSession, emitUpdate, emitStop, requestPermission,
   }) => {
+    const unavailable = (reason) => appendEvent('continuity', { status: 'unavailable', reason });
+    let prior;
+    try {
+      // Resolve ownership and concurrent-turn conflicts before spawning.
+      prior = getHarnessSession === null ? null : await getHarnessSession(invocation);
+    } catch (error) {
+      if (['session-busy', 'harness-changed', 'binding-unavailable'].includes(error?.continuityReason)) unavailable(error.continuityReason);
+      throw error;
+    }
     // A factory gets the invocation so the reach-back server can be stamped
     // with per-invocation env (invocation id, identity) before injection.
     const turnMcpServers = typeof mcpServers === 'function'
@@ -532,20 +541,26 @@ export function createAcpExecutor({
     }, turnTimeoutMs);
 
     try {
-      await rpc.request('initialize', {
+      const initialized = await rpc.request('initialize', {
         protocolVersion: ACP_PROTOCOL_VERSION,
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
       });
 
       let sessionModels = null;
       let promptMessage = message;
-      const prior = getHarnessSession === null ? null : await getHarnessSession(invocation);
       if (prior && typeof prior.harnessSessionId === 'string') {
+        if (initialized?.agentCapabilities?.loadSession !== true) {
+          unavailable('native-resume-unsupported');
+          failEngine('native resume is unsupported; start a new interaction session explicitly');
+        }
         sessionId = prior.harnessSessionId;
         replaying = true;
         try {
           const loaded = await rpc.request('session/load', { sessionId, cwd, mcpServers: [...turnMcpServers] });
           sessionModels = loaded?.models ?? null;
+        } catch (error) {
+          unavailable('native-resume-failed');
+          throw error;
         } finally {
           replaying = false;
         }
