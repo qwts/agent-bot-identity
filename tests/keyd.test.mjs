@@ -13,9 +13,10 @@ import { auditFile } from '../agent-principals.mjs';
 import { registerSoulDir, upsertSoul } from '../agent-population.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
 import {
-  KEYD_GRANT_META, daemonGrantPublicKey, importIntoKeyd, installKeyd, keydMcpServerEntry, keydPaths, keydPolicyRules,
-  keydRequest, keydStatus, mintViaKeyd, readKeydRecord, signKeydGrant, uninstallKeyd,
+  KEYD_GRANT_META, daemonGrantPublicKey, importIntoKeyd, keydMcpServerEntry, keydPaths, keydPolicyRules,
+  keydRequest, keydStatus, mintViaKeyd, readKeydRecord, signKeydGrant,
 } from '../keyd-client.mjs';
+import { installKeyd, uninstallKeyd } from '../keyd-supervisor.mjs';
 import { appConfig, mint } from '../mint-token.mjs';
 import { credentialStores, migrateCredentialsCommand, resolveAppCredential } from '../soul-credentials.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, soulCredentialsDeclaration } from '../soul-package.mjs';
@@ -368,4 +369,14 @@ test('the daemon grants keyd calls only to a bound keyd soul, and receipts each 
 test('agent-bot --help lists the keyd command and its actions', async () => {
   const { helpText } = await import('../cli/output.mjs');
   assert.match(helpText(), /^ {2}keyd {2,}.*install --bin PATH \| uninstall \| status/m);
+});
+
+test('keyd-client.mjs run directly points at agent-bot keyd and does nothing (#645)', () => {
+  let failure = null;
+  try {
+    execFileSync(process.execPath, [path.join(import.meta.dirname, '..', 'keyd-client.mjs'), 'status', '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (error) { failure = error; }
+  assert.ok(failure, 'the client library must refuse to act as the command line');
+  assert.match(failure.stderr, /run agent-bot keyd/);
+  assert.equal(failure.stdout, '');
 });

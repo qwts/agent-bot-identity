@@ -19,7 +19,7 @@ export const MODULES = new Map([
   ['soul', 'cold-wake-settings.mjs'],
   ['harness', 'harness-auth.mjs'],
   ['daemon', 'agent-daemon.mjs'],
-  ['keyd', 'keyd-client.mjs'],
+  ['keyd', 'keyd-supervisor.mjs'],
   ['approvals', 'agent-approvals.mjs'],
   ['audit', 'agent-audit.mjs'],
   ['mcp', 'agent-mcp.mjs'],
