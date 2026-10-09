@@ -365,6 +365,45 @@ now its latest execution. Versions 1–3 remain readable without disk changes;
 the next write adds v4 state, leaving historical bytes and hash chains unchanged.
 Readers must be upgraded before opening a v4 journal.
 
+### Implemented notice derivation
+
+`skill-dream-notices.mjs` derives deduplicated notices from one terminal run
+and its validated outcome. It is pure: it holds no state, reads no clock and
+delivers nothing. It is not yet wired into the scheduler journal, daemon status
+or CLI, so no notice is produced by a running daemon.
+
+A fingerprint is the SHA-256 of the soul ID, notice kind and a fixed subject;
+run IDs, timestamps and agent-chosen reason codes are excluded. Kinds and their
+subjects are:
+
+| Kind | Subject | Claim | Cleared when |
+| --- | --- | --- | --- |
+| `execution` | none | host-observed | a later completed run (a cancelled run proves nothing) |
+| `report` | none | host-observed | a later structured report, even an empty one |
+| `evidence` | none | host-observed | a later structured report whose revision check ran |
+| `item-blocked` | path and captured digest | agent-reported | a later structured report names that path |
+| `capability` | none (no adapter is configurable yet) | host-observed | never by a quiet run; host capability state changes it |
+| `change` | artifact revision | unattributed-change | never; one notice per verified revision |
+
+A persisting condition renews its single live notice (`occurrences`,
+`lastRunId`, latest `detail`) instead of notifying every interval. An
+acknowledged condition stays deduplicated. A recurrence after an observed clear
+creates a new notice. A pending proposal is reported as `proposal-pending`,
+which is the owner's action. A change notice inherits the outcome's
+`attribution: not-established`: the artifact changed the source, but the run is
+not shown to have caused it. Runs are applied in journal order; replaying the
+latest run is idempotent.
+
+Each soul keeps at most 64 notices and each run contributes at most 32
+conditions. Retention drops only cleared notices, oldest first, so a live
+condition, even an acknowledged one, is never re-notified by eviction. When the
+ledger is full of live notices, a new execution, report or evidence failure
+displaces the oldest agent-reported blocked item, acknowledged ones first, so
+agent claims cannot hide an owner-visible failure. Anything else dropped increments a visible
+`suppressed` count. Delivery is `pending-host-read` until an authorized
+host acknowledges the notice, then `host-acknowledged`; nothing is ever marked
+`delivered` without a delivery adapter.
+
 ### Remaining checkpoint and notice contract
 
 Execution status and maintenance coverage are separate. A process can finish
