@@ -419,9 +419,9 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
       result.runtimes.unsupported.push({ ...entry, reason: row.reason });
       problem('runtime-unsupported-platform', 'error', 'runtimes', `${row.name}: ${row.reason}`, `declare runtimes.${row.name} sources for ${provisioned.platform ?? 'this platform'} in a revision`);
     } else {
-      result.runtimes.missing.push({ ...entry, reason: row.lastError ? `last install failed: ${row.lastError.code}` : 'not provisioned' });
+      result.runtimes.missing.push({ ...entry, reason: row.reason ?? (row.lastError ? `last install failed: ${row.lastError.code}` : 'not provisioned') });
       if (row.lastError) problem(row.lastError.code, 'error', 'runtimes', row.lastError.message, install);
-      else problem('runtime-missing', 'warning', 'runtimes', `${row.name} ${row.version} is declared but not installed in the soul; the next launch installs it.`, install);
+      else problem('runtime-missing', 'warning', 'runtimes', `${row.name} ${row.version} is declared but not installed in the soul${row.reason ? `: ${row.reason}` : ''}; the next launch installs it.`, install);
     }
   }
   for (const entry of provisioned?.harnesses ?? []) {

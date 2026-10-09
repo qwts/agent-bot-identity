@@ -12,7 +12,7 @@ import { buildSoulDirectory } from '../soul-build.mjs';
 import { CLASSIFICATIONS, SOUL_LAYOUT } from '../soul-env-contract.mjs';
 import { ENV_CAPABILITIES, readSoulEnvironment, soulEnvCommand } from '../soul-env.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS } from '../soul-package.mjs';
-import { resolveCatalogPin } from '../runtime-catalog.mjs';
+import { hostPlatform, resolveCatalogPin } from '../runtime-catalog.mjs';
 import { INSTALL_STAMP } from '../soul-runtimes.mjs';
 
 const ID = 'agent_12345678-1234-4234-8234-123456789abc';
@@ -279,7 +279,7 @@ test('an installed runtime and a declared non-npm harness install are reported f
   const f = fixture(t);
   const stamp = (dir, record) => put(path.join(dir, INSTALL_STAMP), JSON.stringify(record));
   const runtimes = path.join(f.dir, '.soul-state', 'runtimes');
-  stamp(path.join(runtimes, 'node', NODE_PIN), { name: 'node', version: NODE_PIN, bin: 'bin' });
+  stamp(path.join(runtimes, 'node', NODE_PIN), { schemaVersion: 1, name: 'node', kind: 'archive', version: NODE_PIN, platform: hostPlatform(), sha256: resolveCatalogPin('node', '24').sources[hostPlatform()].sha256, bin: 'bin' });
   put(path.join(runtimes, 'node', NODE_PIN, 'bin', 'node'), '');
   put(path.join(runtimes, 'node', 'last-install.json'), JSON.stringify({ version: NODE_PIN, status: 'ok', at: '2026-10-07T00:00:00.000Z' }));
   // Go declared but its last attempt failed offline: the coded error surfaces.
@@ -290,7 +290,7 @@ test('an installed runtime and a declared non-npm harness install are reported f
   f.manifest.harnesses = { opencode: { install: { kind: 'archive', version: '1.2.3', url: 'https://example.com/opencode-{platform}.zip', sha256: { 'darwin-arm64': sha, 'linux-x64': sha, 'darwin-x64': sha, 'linux-arm64': sha, 'win32-x64': sha } } } };
   f.manifest.revision = computePackageRevision(f.dir, { manifest: f.manifest });
   put(path.join(f.dir, 'soul.json'), JSON.stringify(f.manifest));
-  stamp(path.join(runtimes, 'harnesses', 'opencode', '1.2.3'), { name: 'opencode', version: '1.2.3', bin: '.' });
+  stamp(path.join(runtimes, 'harnesses', 'opencode', '1.2.3'), { schemaVersion: 1, name: 'opencode', kind: 'archive', version: '1.2.3', platform: hostPlatform(), sha256: sha, bin: '.' });
   put(path.join(runtimes, 'harnesses', 'opencode', '1.2.3', 'opencode'), '');
   const before = snapshot(f.home);
   const result = readSoulEnvironment(ID, f.options);
