@@ -1,0 +1,1 @@
+- Re-pinning keyd's presence key over a corrupt `presence.pub` now also makes the file owner-only (0600); before, a replaced file kept its earlier mode (#594).

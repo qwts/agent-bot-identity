@@ -23,7 +23,7 @@
 
 import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -82,6 +82,9 @@ export function pinnedPresenceKey({
   try { key = rawKey(String(run(record.bin)).trim()); } catch { return null; }
   if (!key) return null;
   writeFileSync(file, `${key}\n`, { mode: 0o600 });
+  // `mode` only applies when the file is created; a corrupt pin being
+  // replaced keeps whatever mode it had, so set it explicitly.
+  chmodSync(file, 0o600);
   return key;
 }
 
