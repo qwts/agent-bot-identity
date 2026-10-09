@@ -206,9 +206,30 @@ test('dynamic imports are literal edges or reported as computed, never dropped',
   assert.equal(computedImports(source).length, 3);
 });
 
+test('escaped, percent-encoded and suffixed specifiers still produce their edge', () => {
+  // Each line loads secret-store.mjs under Node ESM; none is a computed import.
+  const forms = [
+    String.raw`import './secret\x2dstore.mjs';`,
+    String.raw`import '.\u002fsecret-store.mjs';`,
+    String.raw`import './secret\u{2d}store.mjs';`,
+    'await import(`./secret\\x2dstore.mjs`);',
+    "import './secret-store.mjs?cache=1';",
+    "import './secret%2Dstore.mjs';",
+    "import './secret-store.mjs#fragment';",
+    "import './sub/../secret-store.mjs';",
+  ];
+  for (const form of forms) {
+    const sources = { 'a.mjs': form, 'secret-store.mjs': '' };
+    assert.deepEqual(moduleEdges('/unused', ['a.mjs', 'secret-store.mjs'], (file) => sources[file]), [{ from: 'a.mjs', to: 'secret-store.mjs' }], form);
+    assert.deepEqual(computedImports(form), [], form);
+  }
+});
+
 test('resolveSpecifier keeps repository-relative POSIX paths', () => {
   assert.equal(resolveSpecifier('cli/dispatch.mjs', '../git-hooks.mjs'), 'git-hooks.mjs');
   assert.equal(resolveSpecifier('agent-bot.mjs', './cli/parse.mjs'), 'cli/parse.mjs');
+  assert.equal(resolveSpecifier('cli/dispatch.mjs', '../git%2Dhooks.mjs?v=2#x'), 'git-hooks.mjs');
+  assert.equal(resolveSpecifier('a.mjs', './bad%zz.mjs'), 'bad%zz.mjs');
 });
 
 test('validateModuleMap rejects unowned files, unknown modules and bad rules', () => {
