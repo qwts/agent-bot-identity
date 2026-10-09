@@ -26,7 +26,7 @@ class AgentBot < Formula
   depends_on "node"
 
   def install
-    %w[tests tools governance Formula].each { |path| rm_r(path) if File.exist?(path) }
+    %w[tests tools governance keyd Formula].each { |path| rm_r(path) if File.exist?(path) }
 
     libexec.install Dir["*"]
     chmod 0755, libexec/"agent-bot"

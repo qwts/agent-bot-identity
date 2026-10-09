@@ -49,7 +49,7 @@ test('the ENG-0055 skill gate checks the packaged tree in every lane', () => {
   assert.match(ci, /cli-skill-gate@[0-9a-f]{40}/);
   assert.match(ci, /git archive HEAD \| tar -x/);
   assert.match(ci, /skill-workflows\.test\.mjs/);
-  assert.match(ci, /needs: \[policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime, skill-gate, linux-bundle\]/);
+  assert.match(ci, /needs: \[policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime, skill-gate, linux-bundle, keyd\]/);
 });
 
 // ADR-0332 decision 1 makes the headless-Linux archives a release artifact, so
@@ -106,4 +106,18 @@ test('every third-party action reference is immutable', () => {
       assert.match(match[1], /^[0-9a-f]{40}$/);
     }
   }
+});
+
+// #767: keyd builds and tests unsigned on a GitHub-hosted macOS runner. The
+// runner is a literal hosted label, not a repo variable, so outside pull
+// requests never reach a self-hosted runner (#752), and the lane holds no
+// signing secret: GeniusBar signs the binary.
+test('the keyd lane builds and tests unsigned on a hosted macOS runner', () => {
+  const lane = ci.slice(ci.indexOf('\n  keyd:\n'), ci.indexOf('\n  gate:\n'));
+  assert.match(lane, /runs-on: macos-latest\n/);
+  assert.match(lane, /working-directory: keyd/);
+  assert.match(lane, /cargo test --locked/);
+  assert.doesNotMatch(lane, /runs-on:.*(?:vars\.|self-hosted)/);
+  assert.doesNotMatch(lane, /\$\{\{\s*secrets\./);
+  assert.match(ci, /test "\$KEYD" = success/);
 });

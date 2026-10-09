@@ -344,7 +344,7 @@ test('the assembled archive carries the pinned Node, the runtime tree, and the i
   // the second, or copy its own output directory into itself.
   assert.ok(listed.includes('./bundle/lib/agent-bot/agent-bot.mjs'));
   assert.ok(listed.includes('./bundle/lib/agent-bot/skills/agent-bot/SKILL.md'));
-  for (const excluded of ['tests', 'docs', 'scripts', 'tools', 'Formula', 'governance', 'dist']) {
+  for (const excluded of ['tests', 'docs', 'scripts', 'tools', 'Formula', 'governance', 'keyd', 'dist']) {
     assert.ok(
       !listed.some((entry) => entry.startsWith(`./bundle/lib/agent-bot/${excluded}/`)),
       `${excluded} must not ship in the bundle`,

@@ -6,3 +6,5 @@ node_modules/
 .guard/
 # Linux CLI bundle build output (scripts/linux-bundle).
 dist/
+# keyd build output (cargo).
+keyd/target/

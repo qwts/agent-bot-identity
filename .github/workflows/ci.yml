@@ -231,9 +231,35 @@ jobs:
         # wrapper, which proves it reaches the bundled runtime.
         run: sh scripts/linux-bundle/ci-smoke.sh dist
 
+  keyd:
+    name: keyd
+    # agent-bot-keyd (#767) builds and tests here unsigned. GeniusBar's release
+    # job signs and notarizes the binary, so no signing secret reaches this
+    # public repository. The runner is GitHub-hosted on purpose, never a repo
+    # variable that could name a self-hosted runner, because pull requests from
+    # outside contributors reach this lane (#752).
+    needs: policy
+    if: needs.policy.result == 'success'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: keyd
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # rustup reads keyd/rust-toolchain.toml, so the pinned toolchain installs here.
+      - name: Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Format, lint and test
+        run: cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
+      - name: Build the unsigned binary
+        run: cargo build --release --locked
+
   gate:
     name: CI
-    needs: [policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime, skill-gate, linux-bundle]
+    needs: [policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime, skill-gate, linux-bundle, keyd]
     if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
@@ -247,6 +273,7 @@ jobs:
           WORKFLOW_RUNTIME: ${{ needs.workflow-runtime.result }}
           SKILL_GATE: ${{ needs.skill-gate.result }}
           LINUX_BUNDLE: ${{ needs.linux-bundle.result }}
+          KEYD: ${{ needs.keyd.result }}
           PREFLIGHT: ${{ needs.preflight-evidence.result }}
           PREFLIGHT_VALIDATED: ${{ needs.preflight-evidence.outputs.validated }}
           MERGE_VALIDATED: ${{ needs.merge-evidence.outputs.validated }}
@@ -255,6 +282,7 @@ jobs:
           test "$WORKFLOW_RUNTIME" = success
           test "$SKILL_GATE" = success
           test "$LINUX_BUNDLE" = success
+          test "$KEYD" = success
           case "$MODE" in
             full)
               if [ "$PREFLIGHT_VALIDATED" = true ]; then

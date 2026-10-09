@@ -1,19 +1,24 @@
 # keyd grant, owner-presence and trust-bootstrap protocol
 
 This page records what agent-bot does **today** with agent-bot-keyd (#397,
-#416, #438), the signed native helper GeniusBar ships: the grants agent-bot
-signs, the owner-presence assertions it verifies, and how each side learns the
-other's key. It describes current behaviour. The owner's decisions on the
+#416, #438), the native helper whose source lives in `keyd/` and which
+GeniusBar signs and ships: the grants agent-bot signs, the owner-presence
+assertions it verifies, and how each side learns the other's key. It describes current behaviour. The owner's decisions on the
 questions #594 raised are recorded at the end, under
 [Owner decisions](#owner-decisions-594).
 
 This repository owns this contract; GeniusBar reviews changes to it.
 
-keyd's own side (Keychain items, socket peer checks, its grant verifier and
-nonce cache, its presence prompt) lives in GeniusBar's
-[keyd README](https://github.com/qwts/GeniusBar/blob/363f52c590efe5df8cb75490ca81667e74425cf8/keyd/README.md).
-Where this page states keyd-side behaviour it says so, and nothing in this
-repository tests it. For key custody and the socket layout see
+keyd's source lives in this repository under [`keyd/`](../keyd/) (#767),
+imported from GeniusBar at `9433009`. CI builds and tests it here unsigned, on
+a GitHub-hosted macOS runner. GeniusBar's release job signs and notarizes the
+binary with its Developer ID, so no signing secret reaches this repository;
+until GeniusBar switches to building from here, the binary it ships is still
+built from its own copy. keyd's own side (Keychain items, socket peer checks,
+its grant verifier and nonce cache, its presence prompt) is described in
+[`keyd/README.md`](../keyd/README.md). Where this page states keyd-side
+behaviour it says so; the Rust tests under `keyd/` cover that side, and the
+Node suite does not. For key custody and the socket layout see
 [soul credentials](soul-credentials.md#agent-bot-keyd-397).
 
 ## Trust boundary

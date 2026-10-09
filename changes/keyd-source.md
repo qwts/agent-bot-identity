@@ -1,0 +1,1 @@
+- agent-bot-keyd's Rust source now lives in this repository under `keyd/`, built and tested unsigned in CI on a GitHub-hosted macOS runner; GeniusBar still signs and ships the binary (#767).
