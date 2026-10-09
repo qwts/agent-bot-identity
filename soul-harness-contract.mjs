@@ -7,6 +7,7 @@
 // stay the soul's. The harness adapters slice (#378) appends Copilot's and
 // Kiro's subagent folders and Kiro's MCP file — only those, never `.github/`
 // or `.kiro/` as a whole (`.cursor/` and `.devin/` already cover theirs).
+// #247 appends Qwen Code's settings file, never `.qwen/` as a whole.
 // Array order is part of the canonical format-2 ignore list, so entries are
 // only ever appended or deliberately reordered.
 export const GENERATED_HARNESS_PATHS = Object.freeze([
@@ -14,6 +15,7 @@ export const GENERATED_HARNESS_PATHS = Object.freeze([
   '.github/copilot-instructions.md', '.mcp.json', 'CLAUDE.md', 'GEMINI.md', 'opencode.json',
   '.github/hooks/agent-bot-soul.json',
   '.github/agents/', '.kiro/agents/', '.kiro/settings/mcp.json',
+  '.qwen/settings.json',
 ]);
 export const GENERATED_HARNESS_MARKER = '<!-- agent-bot soul-builder: generated -->';
 // Format 2's fixed contract. Generated paths are eligible only for exact-byte
@@ -27,11 +29,22 @@ export const PACKAGE_IGNORE_LIST = Object.freeze({
 // Ignore lists earlier releases wrote into format-2 souls, newest first
 // (#378 slice 1 inserted `.mcp.json` and `opencode.json`, 0.10.25; slice 3
 // appended Copilot's soul hook file; the adapters slice appended Copilot's and
-// Kiro's agent folders and Kiro's MCP file). A newer agent-bot
+// Kiro's agent folders and Kiro's MCP file; #247 appended Qwen Code's
+// settings file). A newer agent-bot
 // still reads a soul carrying one of these: the generated paths it adds are
 // its own renderer's, so the package hashes the same. An unknown list stays
 // refused, so an older agent-bot never guesses at a newer soul.
 export const PRIOR_PACKAGE_IGNORE_LISTS = Object.freeze([
+  Object.freeze({
+    directories: PACKAGE_IGNORE_LIST.directories,
+    generatedPaths: Object.freeze([
+      '.claude/', '.codex/', '.cursor/', '.opencode/', '.devin/', '.gemini/',
+      '.github/copilot-instructions.md', '.mcp.json', 'CLAUDE.md', 'GEMINI.md', 'opencode.json',
+      '.github/hooks/agent-bot-soul.json',
+      '.github/agents/', '.kiro/agents/', '.kiro/settings/mcp.json',
+    ]),
+    generatedMarker: GENERATED_HARNESS_MARKER,
+  }),
   Object.freeze({
     directories: PACKAGE_IGNORE_LIST.directories,
     generatedPaths: Object.freeze([
