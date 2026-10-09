@@ -47,6 +47,10 @@ const ACCOUNT_NAME = /^[a-z_][a-z0-9_-]{0,30}$/;
 
 function fail(code, message) { return Object.assign(new Error(message), { code }); }
 
+// The broker's launch-result detail limit (what reportCommsLaunch sends).
+const LAUNCH_DETAIL_LIMIT = 512;
+const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
 function configPath({ env = process.env, home = homedir() } = {}) {
   return env.AGENT_BOT_CONFIG ?? join(home, '.config', 'agent-bot', 'config.json');
 }
@@ -407,10 +411,13 @@ export function launchSandbox(agentId, { env = process.env, home = homedir(), pl
 export function sandboxLaunchProblem(sandbox) {
   if (sandbox?.refused) {
     const { code, reason, source, action } = sandbox.refused;
-    const from = source ? ` (${source.repository}@${source.commit.slice(0, 12)})` : '';
-    const tail = `${from}; ${action}`;
-    const room = 500 - tail.length;
-    return Object.assign(fail(code, `${reason.length > room ? `${reason.slice(0, room - 1)}…` : reason}${tail}`), { source: source ?? null, action });
+    // The launch handler sends `${code}: ${message}` as the broker's detail,
+    // so the whole line, prefix included, fits LAUNCH_DETAIL_LIMIT: the
+    // reason and the source/action tail are each bounded.
+    const budget = LAUNCH_DETAIL_LIMIT - code.length - 2;
+    const from = source ? ` (${clip(source.repository, 100)}@${source.commit.slice(0, 12)})` : '';
+    const tail = clip(`${from}; ${action}`, Math.floor(budget / 2));
+    return Object.assign(fail(code, `${clip(reason, budget - tail.length)}${tail}`), { source: source ?? null, action });
   }
   if (!sandbox || sandbox.resolution !== 'sandboxed') return null;
   const { account, status, steps = [] } = sandbox;
