@@ -97,12 +97,12 @@ override, else the global switch. The config, census and recorded mapping
 are read at each launch, so a switch flipped in GeniusBar applies to the
 next one, and nothing is fetched. A configured policy that cannot be
 evaluated refuses the launch instead of falling back to the user setting
-(ADR-0274, #613; see the state table below). No SOP, an SOP with no
-`persona.toml`, and (until #613 settles existing installs) a mapping not yet
-recorded leave the user setting in charge.
+(ADR-0274, #613; see the state table below). Only no SOP, or an SOP with
+no `persona.toml`, leaves the user setting in charge.
 
-- refused: `persona-policy-unavailable` (the config, record or
-  `persona.toml` cannot be read or is invalid), `persona-policy-stale` (the
+- refused: `persona-policy-unavailable` (an SOP is selected but its mapping
+  is not recorded, or the config, record or `persona.toml` cannot be read or
+  is invalid), `persona-policy-stale` (the
   record is for another repository than the config selects) or
   `persona-policy-requires-addon` (the pack decides sandboxed and
   `features.persona-accounts` is off). The launch fails at `account`,
@@ -215,16 +215,15 @@ report its `state`:
 | --- | --- | --- |
 | `ok` | the record is for the SOP the config selects and parses | the pack decides matched souls |
 | `none` | no `~/.config/agent-sop/config.toml` | the user setting |
-| `unrecorded` | a config, but `sop persona` has not run | the user setting |
+| `unrecorded` | a config, but `sop persona` has not run | **launch refused** (`persona-policy-unavailable`); run `agent-bot sop persona` |
 | `stale` | the record names another org or SOP repository than the config | **launch refused** (`persona-policy-stale`) |
 | `absent` | the SOP commit has no `persona.toml` | the user setting |
 | `invalid` | `persona.toml` does not parse (the message says why) | **launch refused** (`persona-policy-unavailable`) |
 | `error` | the config or the record could not be read | **launch refused** (`persona-policy-unavailable`) |
 
-`unrecorded` keeps the user setting for now: whether existing installs must
-record before launching is an open #613 decision, as is a stricter `stale`
-check over the selected ref, pin and `configPath`. Wakes and turns of an
-already-launched soul do not re-read the policy (also open in #613).
+A stricter `stale` check over the selected ref, pin and `configPath` (which
+needs the selection in the record) and whether wakes and turns of an
+already-launched soul re-read the policy are open in #613.
 
 A record cannot tell that the SOP's branch has moved to a new commit; it says
 which commit it is for.

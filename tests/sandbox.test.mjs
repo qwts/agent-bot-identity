@@ -387,7 +387,7 @@ test('with the add-on gate off a pack decision to sandbox is reported and refuse
   assert.equal(loadConfig(f.options).features['persona-accounts'], false, 'the gate is never turned on');
 });
 
-test('no SOP, no persona.toml or an unrecorded mapping leaves the user setting; a stale, unreadable or invalid policy refuses the launch (#613)', (t) => {
+test('no SOP or no persona.toml leaves the user setting; an unrecorded, stale, unreadable or invalid policy refuses the launch (#613)', (t) => {
   const f = fixture(t, { config: { features: { 'persona-accounts': true } } });
   const options = { ...f.options, platform: 'darwin', ...machine(), owner: 'owner' };
   const status = (state, pattern) => {
@@ -425,7 +425,7 @@ test('no SOP, no persona.toml or an unrecorded mapping leaves the user setting; 
     return refused;
   };
   pack(f, null, { record: false });
-  falls('unrecorded', /run `agent-bot sop persona`/);
+  refuses('unrecorded', /run `agent-bot sop persona`/, 'persona-policy-unavailable');
   pack(f, null);
   falls('absent', /has no persona\.toml/);
   pack(f, MAPPING, { org: 'elsewhere/org' });

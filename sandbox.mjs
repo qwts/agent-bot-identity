@@ -271,9 +271,8 @@ export function matchPersona(mapping, { names = [], role = null } = {}) {
 // The recorded pack decision, read offline (never git, never the network):
 // `agent-bot sop persona` records the user's SOP's persona.toml, pinned to
 // its commit. `state` is one of PERSONA_STATES; only `ok` decides anything.
-// `none`, `absent` and (until #613 decides existing installs) `unrecorded`
-// leave the user setting in charge; the rest refuse a launch (see
-// PERSONA_REFUSALS).
+// `none` and `absent` (verified absence) leave the user setting in charge;
+// the rest refuse a launch (see PERSONA_REFUSALS).
 export function loadPersona({ env = process.env, home = homedir() } = {}) {
   const record = readSopPersonaRecord({ env, home });
   const base = { state: record.state, decides: false, repository: record.repository ?? null, commit: record.commit ?? null,
@@ -287,6 +286,8 @@ export function loadPersona({ env = process.env, home = homedir() } = {}) {
 // refusal, never a fall back to the user setting or a soul override. The
 // action names the repair; nothing here changes the record or the add-on.
 const PERSONA_REFUSALS = Object.freeze({
+  // A missing local record is not verified absence (#613 requirement 1).
+  unrecorded: { code: 'persona-policy-unavailable', action: 'run `agent-bot sop persona` to record the selected SOP\'s mapping' },
   error: { code: 'persona-policy-unavailable', action: 'fix the SOP config or record, then run `agent-bot sop persona`' },
   invalid: { code: 'persona-policy-unavailable', action: 'fix persona.toml in the SOP, then run `agent-bot sop persona`' },
   stale: { code: 'persona-policy-stale', action: 'run `agent-bot sop persona` to record the selected SOP\'s mapping' },
@@ -368,8 +369,8 @@ function resolveSoul(target, file) {
 // --- at launch ----------------------------------------------------------------
 // The daemon's launch handler asks this what a soul gets before it starts it
 // (#376). The pack decides first, from the recorded mapping (no network: no
-// SOP, no persona.toml or a not-yet-recorded mapping leaves the user setting;
-// a policy that cannot be evaluated refuses the launch, #613).
+// SOP or no persona.toml leaves the user setting; a selected SOP whose policy
+// is unrecorded or cannot be evaluated refuses the launch, #613).
 // A soul not in the census yet (a package or team launch makes a new one)
 // is matched by the launch's `name` and `role`, and has no override, so
 // otherwise it follows the global switch. Only a sandboxed launch probes the
