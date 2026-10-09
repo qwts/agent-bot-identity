@@ -102,6 +102,7 @@ export function skillLearningPacket(libraryId, agentId, options = {}) {
     contentTrust: 'untrusted-source-data', entrypoint: path.join(accepted.record.path, 'SKILL.md'),
     accepted: { entrypoint: path.join(accepted.record.snapshot, 'payload/SKILL.md'), digest: accepted.digest, files: accepted.files, dependencies: accepted.dependencies },
     local: { entrypoint: path.join(local.record.path, 'SKILL.md'), digest: local.digest, files: local.files, dependencies: local.dependencies },
+    ...(accepted.record.repository ? { repository: accepted.record.repository } : {}),
     coverage: accepted.record.coverage, previousLearning: priorLearning(agentId, libraryId, history, options),
     knowledge: { status: 'unknown', verification: 'no-capability-adapter', provisioned: false },
     guidance: [
@@ -189,7 +190,7 @@ export async function proposeSkillLearning(libraryId, agentId, staging, outcome,
     captures.push({ ...entry, path: `${prefix(libraryId)}/sources/${material.digest.slice(7)}/${entry.path}` });
   }
   const record = { schemaVersion: 1, libraryId, agentId, parentRevision: head.revision, recordedAt: now().toISOString(),
-    source: { ...outcome.source, acceptedDigest: accepted.digest }, pieces, knowledge,
+    source: { ...outcome.source, acceptedDigest: accepted.digest, ...(accepted.record.repository ? { repository: accepted.record.repository } : {}) }, pieces, knowledge,
     captures: captures.map(entry => ({ path: entry.path, sha256: hash(entry.bytes), mode: entry.mode })),
     dependencies: source.dependencies.filter(edge => captured.has(edge.from)), acceptedDependencies: accepted.dependencies.filter(edge => captured.has(edge.from)),
     destinationReferences: 'agent-review-required', universalRetrieval: false };

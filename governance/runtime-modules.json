@@ -168,6 +168,7 @@
     "skill-library.mjs": "soul",
     "skill-learning.mjs": "soul",
     "skill-references.mjs": "soul",
+    "skill-github.mjs": "soul",
     "skill-remote.mjs": "soul",
     "skill-update-merge.mjs": "soul",
     "skill-manifest.mjs": "soul",

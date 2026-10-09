@@ -3,16 +3,17 @@
 The library collects a skill independently of a soul, retaining the acquired
 bytes and provenance separately from an editable copy. Importing does not run
 scripts, activate a harness skill, select an SOP, or create a soul revision.
-This implements local-directory and HTTPS-document acquisition and comparison
+This implements local-directory, HTTPS-document and public GitHub-directory acquisition and comparison
 for #603/#312. Learning guides selected adaptations through the existing soul
 revision/proposal policy. Explicit source updates merge a reviewed candidate into
-the standalone library. Repository directory adapters, installation and dreaming
+the standalone library. Other repository adapters, installation and dreaming
 remain separate work.
 
 ```sh
 agent-bot soul skill import /path/to/skill --json
 agent-bot soul skill import /path/to/skill/SKILL.md --json
 agent-bot soul skill import https://example.com/skills/demo/SKILL.md --json
+agent-bot soul skill import https://github.com/OWNER/REPO/tree/main/skills/demo --json
 agent-bot soul skill list --json
 agent-bot soul skill show UUID --json
 agent-bot soul skill verify UUID --json
@@ -43,7 +44,7 @@ Other origins or paths map to `remote/<sha256-of-final-url>/document.md`.
 The report maps references to retained paths. It does not rewrite instruction
 text: review replacements deliberately before using the material as guidance.
 All remote files have mode `100644`; no executable permission is inferred from
-a server response. Source root links, repository-directory URLs, arbitrary
+a server response. For direct document URLs, source root links, repository-directory URLs, arbitrary
 supporting assets/scripts, reference-style Markdown, HTML and dynamic fetches
 are not supported by this adapter. Noninstruction links are reported external;
 unsafe or sensitive locators are unresolved. Coverage is explicitly
@@ -98,6 +99,62 @@ rechecks the starting record under the lock and refuses a changed record. No
 network operation runs while holding that synchronous lock. Local library API
 calls retain their synchronous return values; HTTPS import/check return promises,
 and the CLI awaits them before producing its usual JSON and exit status.
+
+## Public GitHub skill directories
+
+`https://github.com/OWNER/REPO/tree/REF/PATH` selects a directory containing a
+regular `SKILL.md`. `REF` is one URL component: a full 40-hex commit, a branch or
+tag without slashes, or a ref whose internal slashes are explicitly `%2F`.
+There is no branch/directory suffix guessing; encode a slash-containing ref or
+use its commit URL. Omit `PATH` for a skill at the repository root. GitHub
+Enterprise, private repositories, `blob` web pages and other hosting providers
+are unsupported by this adapter; a direct raw document URL uses the document
+adapter above.
+
+Acquisition resolves the ref once through the public GitHub API, walks
+nonrecursive trees to the selected directory, and fetches allowed files from
+`raw.githubusercontent.com` using that full commit. Nonrecursive traversal avoids
+fetching an entire monorepo's tree; it consumes one API request per directory,
+not per file. GitHub's public API rate limits still apply. There is no `gh`, Git
+clone, App token, credential retry or imported command execution. API redirects
+must remain on `api.github.com`; raw-file redirects must remain on
+`raw.githubusercontent.com`. DNS/TLS checks remain the same as document capture.
+
+The adapter retains supporting scripts and binary assets, relative layout, and
+Git modes `100644`/`100755`. Each file must match the size and SHA-1 Git blob ID
+advertised by the tree (`blob <length>\0` plus exact bytes). The location receipt
+retains `gitBlob`; the library also records its usual SHA-256. This proves byte
+consistency with the tree received through GitHub TLS, not a signed publisher
+identity. The snapshot's `repository` records owner, repository, selected ref,
+directory, resolved commit and selected tree. `show`, source checks and learning
+provenance expose the repository revision. The original tree URL remains the
+refresh locator. A check re-resolves branches/tags and records the new commit
+even if bytes are unchanged; byte-keyed immutable snapshots retain their first
+capture provenance rather than being rewritten by a later identical capture.
+
+Every regular file under the selected directory is considered, subject to the
+same explicit exclusions and portable-path checks. Symlinks, submodules and
+unsupported modes become unresolved `kind: repository-entry` outcomes; they are
+not followed. Captured Git LFS pointer text is marked incomplete and never causes
+an LFS download. A raw response that does not match the tree blob is refused.
+Directory failures and missing/oversized files retain the valid entrypoint and
+other successful files as a partial import. Root failures or an invalid/truncated
+selected-directory listing publish no import. All truncation is explicit.
+
+Markdown, `.markdown` and `.txt` instruction files are scanned after the directory
+capture. Links to retained supporting files map directly; cycles are recorded.
+Links into missing/excluded paths or outside the selected directory at the same
+repository commit are unresolved rather than fetched around the tree boundary.
+Explicit external instruction URLs use the bounded document adapter, including
+nested links, under the **same** 30-second deadline, 100-attempt, 100-file, 8 MiB
+total and 1 MiB per-response budget. API JSON and failed response bytes consume
+that shared budget too. Directory depth is bounded to eight and inventories to
+4,000 entries. No phase resets the counters.
+
+API denial, not-found/private resources and rate limiting have separate codes.
+A rate limit with a valid reset timestamp includes `retryAt` in the unavailable
+check or per-entry report. Error bodies and credentials are never persisted.
+No automatic retry consumes the remaining quota.
 
 ## Stored bytes and receipts
 
@@ -253,7 +310,7 @@ URL user information and query-bearing locators are withheld from dependency
 metadata. Imported file contents still preserve the original bytes; this is
 not payload secret redaction. Local-directory import never fetches remote links;
 only the explicit HTTPS-document adapter performs the bounded capture above.
-No permission is inferred from a reference. Repository adapters, broader
+No permission is inferred from a reference. Other repository adapters, broader
 retrieval interception and harness installation remain open.
 
 ## Learn useful pieces through a soul revision

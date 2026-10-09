@@ -18,8 +18,9 @@ export const USAGE = `usage: agent-bot soul skill import PATH_OR_HTTPS_DOCUMENT 
        agent-bot soul skill learn UUID --soul AGENT_ID --package STAGING --outcome FILE --reason TEXT [--json]
 
 Local import preserves the selected directory; HTTPS import captures a skill
-document and supported inline instruction links. Neither executes content.
-Repository directory adapters and harness installation remain unimplemented.
+document and supported inline instruction links. Public GitHub tree URLs preserve
+the selected directory at one resolved commit. Neither executes content.
+Harness installation and other repository adapters remain unimplemented.
 check never replaces accepted snapshots or local edits. update previews a recorded
 check; applying requires reviewed digests and preserves prior material. learn supplies guidance;
 recording outcomes proposes reviewed adaptations through the soul revision policy.
