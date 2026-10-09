@@ -274,9 +274,11 @@ export function keydSignerSetting(config = loadConfig()) {
 }
 
 // AGENT_BOT_KEYD_TEAM_ID and AGENT_BOT_KEYD_IDENTIFIER win when set and
-// non-empty, then the config, then the defaults. Each is resolved on its own,
-// and the config is read only when the environment leaves one open. A
-// malformed value throws.
+// non-empty, then the config, then the defaults, each value on its own. The
+// config is read only when the environment leaves one open, and then as a
+// whole: like every other setting, a malformed keyd value makes the config
+// fail to load, even if the environment overrides that value. A malformed
+// value throws; the caller pins nothing.
 export function keydSigner({ env = process.env, config, home } = {}) {
   const fromEnv = (name) => (env[name] ? env[name].trim() : '');
   const envTeam = fromEnv('AGENT_BOT_KEYD_TEAM_ID');

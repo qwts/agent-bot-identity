@@ -237,7 +237,9 @@ Callers ([owner-gate.mjs](../owner-gate.mjs)):
    drops that clause; both set to it give the requirement from before #594,
    any Developer ID Application signature. Unset or empty never means that.
    A malformed value, or a config that does not load, pins nothing, as an
-   unsigned binary would.
+   unsigned binary would. The config is validated as a whole, so a malformed
+   `settings.keydTeamId` fails the load even when `AGENT_BOT_KEYD_TEAM_ID` is
+   set, unless both values come from the environment.
 3. Only if that passes, run `<bin> presence-key` (15-second timeout). If the
    output is a well-formed key, write it to `presence.pub` and use it. The
    file is left at mode 0600, whether it is new or replaces a pin that did

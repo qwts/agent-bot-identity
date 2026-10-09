@@ -124,6 +124,12 @@ test('a malformed keyd signer is refused, so nothing reaches the code-signing re
   const config = join(dir, 'config.json');
   writeFileSync(config, JSON.stringify({ settings: { keydTeamId: 42 } }));
   assert.throws(() => keydSigner({ env: { ...env, AGENT_BOT_CONFIG: config } }), /settings\.keydTeamId/);
+  // The config loads as a whole: overriding only the bad value is not enough,
+  // while overriding both never reads it.
+  assert.throws(() => keydSigner({ env: { ...env, AGENT_BOT_CONFIG: config, AGENT_BOT_KEYD_TEAM_ID: 'ABCDE12345' } }),
+    /settings\.keydTeamId/);
+  assert.deepEqual(keydSigner({ env: { ...env, AGENT_BOT_CONFIG: config, AGENT_BOT_KEYD_TEAM_ID: 'ABCDE12345',
+    AGENT_BOT_KEYD_IDENTIFIER: 'org.example.keyd' } }), { teamId: 'ABCDE12345', identifier: 'org.example.keyd' });
 
   // pinnedPresenceKey treats it like an unsigned binary: nothing is run or pinned.
   assert.equal(pinnedPresenceKey({ env: { ...env, AGENT_BOT_KEYD_TEAM_ID: 'bad' }, record: { bin: '/x/agent-bot-keyd' },
