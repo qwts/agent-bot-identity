@@ -106,8 +106,12 @@ Adapter evidence (official docs read 2026-10-07):
   imports Claude's `.mcp.json` MCP servers and `.claude/commands/**/*.md` as skills
   (it also imports `.cursor/mcp.json` and `opencode.json`, which carry the same
   `agent-bot` entry); [subagents](https://docs.devin.ai/cli/subagents) — project
-  `.devin/agents/<name>.md` with `name`, `description`, `model`, `allowed-tools`;
-  tool names from [permissions](https://docs.devin.ai/cli/reference/permissions).
+  `.devin/agents/<name>.md` with `name`, `description`, `model`, `allowed-tools`
+  (a restriction on a subagent profile); tool names `read`, `edit`, `grep`,
+  `glob`, `exec` and MCP tools as `mcp__<server>__<tool>`, from
+  [permissions](https://docs.devin.ai/cli/reference/permissions) and the
+  [skill `allowed-tools` reference](https://docs.devin.ai/cli/extensibility/skills/creating-skills)
+  (checked 2026-10-09).
 - Gemini CLI: [subagents](https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md)
   are documented in `.gemini/agents/*.md`, but their only switch is
   `experimental.enableAgents`, so they are not documented as stable and stay
@@ -216,11 +220,15 @@ JSON-quoted YAML strings, then the marker and the prompt. Only `tools` differs:
 | Cursor | No per-tool allowlist: `readonly: true` when every tool is read-only (`Read`, `Grep`, `Glob`, `LS`, `NotebookRead`, `WebFetch`, `WebSearch`, `TodoWrite`) or the list is empty; otherwise Cursor's defaults apply | Omitted |
 | Copilot CLI | `tools:` the Claude names verbatim (documented aliases; unknown names are ignored, which narrows) | Omitted (all tools) |
 | Kiro | `tools:` category tags: `Read`/`Grep`/`Glob`/`LS`/`NotebookRead` → `read`, `Edit`/`MultiEdit`/`Write`/`NotebookEdit` → `write`, `Bash` → `shell`, `WebFetch`/`WebSearch` → `web`, `Task` → `subagent`, `TodoWrite` → `todo_list` | `tools: ["*"]` (the default is undocumented) |
-| Devin CLI | `allowed-tools:` `Read` → `read`, `Edit`/`MultiEdit` → `edit`, `Write` → `write`, `Grep` → `grep`, `Glob` → `glob`, `Bash` → `exec` | Omitted (all tools) |
+| Devin CLI | `allowed-tools:` `Read` → `read`, `Edit`/`MultiEdit`/`Write` → `edit` (Devin has no `write` tool; `edit` covers file writes), `Grep` → `grep`, `Glob` → `glob`, `Bash` → `exec`; an MCP tool `mcp__<server>__<tool>` keeps its exact name | Omitted (all tools) |
 
-A declared tool Kiro or Devin has no name for (for example an MCP tool, or
-`WebFetch` for Devin) means that subagent is not rendered for that harness and
-is listed under its `unsupported.subagents`, never widened or cut down. Kiro's
+A declared tool Kiro or Devin has no name for (for example an MCP tool for
+Kiro, or `WebFetch` for Devin) means that subagent is not rendered for that
+harness and is listed under its `unsupported.subagents`, never widened or cut
+down. Devin spells MCP tools as Claude does and reads the shared `.mcp.json`, so
+a declared `mcp__<server>__<tool>` keeps its exact name; the declaration grammar
+admits no `*`, so no server-wide grant is produced. A server name containing
+`__`, or an empty server or tool, is ambiguous and stays unsupported. Kiro's
 tags are categories, so `Read` grants Kiro's whole read category (reading,
 listing, searching). Devin's subagents default to its subagent model rather
 than the parent's when `model` is omitted. Cursor and Copilot CLI also read the

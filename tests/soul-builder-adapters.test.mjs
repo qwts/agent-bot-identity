@@ -70,16 +70,41 @@ test('tool translation: inherit, read-only, empty, and names a harness cannot sp
   assert.match(output.get('.github/agents/none.agent.md').toString(), /\ntools: \[\]\n/);
   assert.match(output.get('.kiro/agents/none.md').toString(), /\ntools: \[\]\n/);
   assert.match(output.get('.devin/agents/none.md').toString(), /\nallowed-tools: \[\]\n/);
-  // A tool Kiro and Devin cannot name: not rendered there, and reported.
+  // An MCP tool: Kiro cannot name it, so it is not rendered there and is
+  // reported; Devin spells MCP tools as Claude does and keeps the exact name.
   assert.equal(output.has('.kiro/agents/mcp.md'), false);
-  assert.equal(output.has('.devin/agents/mcp.md'), false);
+  assert.match(output.get('.devin/agents/mcp.md').toString(), /\nallowed-tools: \["mcp__db__query", "read"\]\n/);
   assert.match(output.get('.github/agents/mcp.agent.md').toString(), /\ntools: \["Read", "mcp__db__query"\]\n/);
   const report = harnessReport(output);
   assert.deepEqual(report.kiro.subagents, { received: ['mcp', 'none', 'open', 'reader'], rendered: ['none', 'open', 'reader'] });
   assert.deepEqual(report.kiro.unsupported.subagents, ['mcp']);
-  assert.deepEqual(report.devin.unsupported.subagents, ['mcp', 'reader']);
+  assert.deepEqual(report.devin.unsupported.subagents, ['reader']);
   assert.deepEqual(report.copilot.subagents.rendered, ['mcp', 'none', 'open', 'reader'], '`.agent.md` is not part of the name');
   assert.deepEqual(report.cursor.unsupported.subagents, []);
+});
+
+// Devin's documented tool names are read, edit, grep, glob and exec; `edit`
+// covers file writes and there is no `write`. MCP tools keep Claude's
+// `mcp__<server>__<tool>` name; anything else stays unsupported (#378).
+test('Devin subagents spell Write as edit and keep exact MCP tool names', () => {
+  const output = buildHarnessFiles(source({
+    writer: 'Read, Write', editor: 'Edit, MultiEdit, Write', messenger: 'Read, mcp__agent-reach__send_message',
+    mixed: 'Bash, mcp__agent-reach__fleet, mcp__agent-reach__send_message', fetcher: 'mcp__agent-reach__fleet, WebFetch',
+    nameless: 'Read, mcp__agent-reach', empty: 'mcp____send', underscored: 'mcp___reach__send',
+  }));
+  const tools = (name) => output.get(`.devin/agents/${name}.md`)?.toString().match(/\nallowed-tools: (.*)\n/)?.[1];
+  assert.equal(tools('writer'), '["edit", "read"]');
+  assert.equal(tools('editor'), '["edit"]');
+  assert.equal(tools('messenger'), '["mcp__agent-reach__send_message", "read"]');
+  assert.equal(tools('mixed'), '["exec", "mcp__agent-reach__fleet", "mcp__agent-reach__send_message"]');
+  for (const name of ['fetcher', 'nameless', 'empty', 'underscored']) assert.equal(output.has(`.devin/agents/${name}.md`), false, name);
+  const devinFiles = [...output].filter(([path]) => path.startsWith('.devin/agents/')).map(([, bytes]) => String(bytes)).join('');
+  assert.doesNotMatch(devinFiles, /"write"/, 'Devin has no write tool name');
+  const report = harnessReport(output);
+  assert.deepEqual(report.devin.unsupported.subagents, ['empty', 'fetcher', 'nameless', 'underscored']);
+  // Kiro is unchanged: an MCP tool still has no Kiro spelling.
+  assert.deepEqual(report.kiro.unsupported.subagents, ['empty', 'fetcher', 'messenger', 'mixed', 'nameless', 'underscored']);
+  assert.match(output.get('.kiro/agents/writer.md').toString(), /\ntools: \["read", "write"\]\n/, 'Kiro keeps its write category');
 });
 
 test('Copilot CLI and Devin CLI are reported on the shared Claude MCP and command files', () => {
