@@ -108,7 +108,9 @@ export function harnessInstallDeclared(soulDir, harness) {
 // Windows archives carry `name.exe`; the declaration names the executable
 // without it on every platform.
 function hasExecutable(directory, name) {
-  return existsSync(path.join(directory, name)) || existsSync(path.join(directory, `${name}.exe`));
+  return [name, `${name}.exe`].some((file) => {
+    try { return statSync(path.join(directory, file)).isFile(); } catch { return false; }
+  });
 }
 
 function readStamp(directory) {
@@ -177,7 +179,8 @@ export function inspectSoulRuntimes(soulDir, { manifest = readSoulManifest(soulD
   for (const row of rows) {
     const directory = row.version ? path.join(root, row.name, row.version) : null;
     const stamp = directory ? readStamp(directory) : null;
-    const installed = stamp && existsSync(path.join(directory, stamp.bin));
+    const executable = row.name === 'python' ? (platform?.startsWith('win32-') ? 'python' : 'python3') : row.name;
+    const installed = stamp && hasExecutable(path.join(directory, stamp.bin), executable);
     const last = lastInstall(path.join(root, row.name));
     const entry = { name: row.name, declared: row.declared, requiredBy: row.requiredBy, version: row.version, source: row.source,
       status: row.status ?? (installed ? 'installed' : 'missing'), reason: row.reason, path: installed ? directory : null, bin: installed ? stamp.bin : null,
@@ -530,13 +533,30 @@ export function pendingSoulRuntimes(id, options = {}) {
   } catch { return []; }
 }
 
-/** The env patch a soul's turn gets (see runtimeLaunchEnv); {} when the soul has no folder. */
+/** The env patch a soul's turn gets, refusing unavailable declarations. */
 export function soulRuntimeEnv(id, { env = process.env, home = env.HOME ?? homedir(), harness = null, overrides = {}, node = process.execPath, ...rest } = {}) {
   const options = { env, home, ...rest };
   const soul = resolveSoul(id, options);
   const soulDir = soulRoot(soul, options);
   if (!existsSync(soulDir)) return runtimeLaunchEnv({ root: runtimesRoot(soulDir), runtimes: [], harnesses: [] }, { env, overrides, harness, node }).env;
-  return runtimeLaunchEnv(inspectSoulRuntimes(soulDir, { env, home }), { env, overrides, harness, node }).env;
+  const manifest = readSoulManifest(soulDir);
+  if (!manifest && existsSync(path.join(soulDir, 'soul.json'))) {
+    fail('runtime-install-failed', `${soul.id}: soul.json cannot be read as an object`, { runtime: 'soul.json', action: 'repair soul.json in a revision' });
+  }
+  const inspection = inspectSoulRuntimes(soulDir, { ...rest, env, home, manifest });
+  const invalid = inspection.invalid[0];
+  if (invalid) fail('runtime-install-failed', `${soul.id}: ${invalid.message}`, { runtime: invalid.path, action: `fix soul.json ${invalid.path} in a revision` });
+  const routed = runtimeLaunchEnv(inspection, { env, overrides, harness, node });
+  for (const name of routed.missing) {
+    const isHarness = name.startsWith('harness:');
+    const label = isHarness ? name.slice('harness:'.length) : name;
+    const row = (isHarness ? inspection.harnesses : inspection.runtimes).find((entry) => entry.name === label);
+    if (row.status === 'unsupported') {
+      fail('runtime-unsupported-platform', `${soul.id}: ${row.reason}`, { runtime: name, action: `fix soul.json ${isHarness ? 'harnesses' : 'runtimes'}.${label} for ${inspection.platform ?? 'this platform'} in a revision` });
+    }
+    fail('runtime-install-failed', `${soul.id}: declared ${name} ${row.version} is not installed; refusing host fallback`, { runtime: name, action: installCommand(soul.id, label === 'uv' ? null : label) });
+  }
+  return routed.env;
 }
 
 export function formatRuntimes(result) {

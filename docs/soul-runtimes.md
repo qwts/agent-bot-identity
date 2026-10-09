@@ -151,11 +151,19 @@ decision 4): a supplied override, the soul's install, the node bundled with
 the host (GeniusBar's, for an undeclared node only), then the host PATH. The
 managed daemon turn path supplies the soul environment, but does not wire a
 per-agent override request into this helper. A durable per-soul override CLI,
-exact override executable validation and resume parity remain #617; the helper
+exact override executable validation and remaining resume evidence stay in #617; the helper
 argument is not evidence that these user-facing paths exist.
 The harness installs come before the runtimes on PATH, and a declared
 runtime that is not installed is installed at launch or fails the launch; it
-never falls through to a host copy. Beside PATH the turn gets
+never falls through to a host copy. Every daemon ACP turn rechecks declared
+runtime readiness before creating an executor, including cold wakes and native
+session resumes. Missing selected installations, unsupported declarations,
+invalid runtime declarations, an unreadable existing manifest, or a runtime
+lookup error refuse the turn. A surviving install stamp and bin directory do
+not count as ready when the runtime executable is missing. This is a file
+presence check, not a rehash of installed bytes or dependency provenance.
+Souls without a manifest retain the undeclared host-tool behavior.
+Beside PATH the turn gets
 `npm_config_cache`; `GOROOT`, `GOPATH`, `GOMODCACHE`, `GOCACHE`;
 `UV_PYTHON_INSTALL_DIR`, `UV_PYTHON_PREFERENCE=only-managed`,
 `UV_CACHE_DIR`, `UV_TOOL_DIR`, `UV_TOOL_BIN_DIR`, all inside the soul.
@@ -168,6 +176,23 @@ never falls through to a host copy. Beside PATH the turn gets
 `launch.routing.PATH` (`soul-runtimes`, `host-bundled` or `host`).
 
 ## Errors
+
+### Launch enforcement audit (#617)
+
+The bounded readiness slice covers the shared daemon executor before a harness
+is created. It does not complete the remaining integrity or override contracts.
+
+| Requirement / consumer | Implementation path | Evidence and remaining work |
+| --- | --- | --- |
+| Managed launch | `daemon-launch.mjs` provisions pending runtimes, then calls `acpExecutorFor` | Existing launch tests cover installation refusal; runtime/factory fixtures cover rejection of stale or invalid readiness. |
+| Cold wake and resumed turns | `coldTurnExecutor` calls the same `acpExecutorFor` for each turn | Runtime/factory fixtures remove an executable after a successful turn and verify refusal before another executor is created. |
+| Native `/v1` turns, including resumed sessions | `agent-daemon.mjs` calls the same factory before the ACP engine loads or creates a session | The same readiness check applies before session restoration or spawning. |
+| Declared environment | `soulRuntimeEnv` inspects the current manifest and selected installation | Runtime/factory fixtures cover missing/unsupported declarations, invalid manifests, missing selected harnesses and missing runtime executables; undeclared runtimes retain the host routes. |
+| npm provisioning | `soul-home.mjs` uses `runtimeLaunchEnv` directly | Separate audit remains: `AGENT_BOT_NPM`, exact Node/npm selection and refusal before npm execution. |
+| Archive and Python integrity | `fetchArchive`, installation stamps, uv installers | Archive checksum refusal exists; complete dependency lock/hash provenance and installed-byte verification remain open. |
+| Overrides | Helper argument in `runtimeLaunchEnv` | Owner-managed override interface, exact executable validation and policy precedence remain open. |
+| Catalog and transfer | Inspection resolves against the supplied catalog | Retained resolution and owner-visible upgrade semantics remain open. |
+| Migration / platforms | #583 lifecycle paths; deterministic runtime fixtures | Migration evidence is tracked separately; fixtures do not establish live Windows support. |
 
 Every failure is coded, names the runtime, and carries the command that
 fixes it (`action`); the CLI prints `{ error: { code, message, runtime,

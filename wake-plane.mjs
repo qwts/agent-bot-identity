@@ -227,7 +227,9 @@ export function acpExecutorFor({
     // The soul's own runtimes and harness installs first on PATH, with
     // their env (GOROOT, UV_*), never HOME (#583 slice 3). A soul with no
     // folder yet runs with the host's PATH as before.
-    if (runtimeEnvFor) { try { Object.assign(turnEnv, runtimeEnvFor({ agentId, harness, env: turnEnv }) ?? {}); } catch { /* host PATH */ } }
+    // A failed lookup cannot establish that host tools satisfy the soul's
+    // declarations. Refuse before creating or resuming a harness.
+    if (runtimeEnvFor) Object.assign(turnEnv, runtimeEnvFor({ agentId, harness, env: turnEnv }) ?? {});
     // The harness's native state in the soul's tool home (#583 slice 2),
     // harness-specific variables only: HOME and XDG_STATE_HOME are dropped
     // whatever the port says. A soul with no folder (a lookup that fails
