@@ -2,7 +2,7 @@ import { worktreeSoul } from './helpers/worktree-soul.mjs';
 import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -189,4 +189,38 @@ test('Codex startup refuses a primary checkout even in an agent account', () => 
   assert.equal(execFileSync('node', [WORKTREE_TOKEN, '--slug'], {
     cwd: repo, env: { ...env, AGENT_BOT_ACCOUNT: app }, encoding: 'utf8',
   }).trim(), app, 'the area check never changes App resolution');
+});
+
+// agent-sop#186 requirement 2 (#104): with no runtime anywhere, startup must
+// route to the organization bootstrap (`./agent-bot bootstrap`), not a bare
+// CLI install that skips the profile and credentials, and must write nothing.
+test('Codex startup without an installed runtime routes to bootstrap and writes no identity', () => {
+  const { env, worktree } = fixture();
+  rmSync(join(env.HOME, '.local', 'bin', 'agent-bot'));
+  const bin = join(dirname(env.HOME), 'bin');
+  mkdirSync(bin);
+  const which = (name) => execFileSync('/usr/bin/which', [name], { env, encoding: 'utf8' }).trim();
+  symlinkSync(which('git'), join(bin, 'git'));
+  symlinkSync(process.execPath, join(bin, 'node'));
+  const bare = { ...env, PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin` };
+  delete bare.AGENT_BOT_HOME;
+  delete bare.PLAYBOOK_HOME;
+  assert.equal(spawnSync('/bin/sh', ['-c', 'command -v agent-bot'], { env: bare }).status, 1,
+    'agent-bot must be absent from the sanitized PATH');
+
+  const result = spawnSync('bash', [STARTUP], {
+    cwd: worktree,
+    env: { ...bare, CODEX_THREAD_ID: 'thread-uninstalled' },
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /agent-bot is not installed/);
+  assert.match(result.stderr, /\.\/agent-bot bootstrap/);
+  assert.doesNotMatch(result.stderr, /install\.mjs/);
+  assert.equal(spawnSync('git', ['config', '--get-regexp', '^agentbot\\.'], { cwd: worktree, env }).status, 1);
+  assert.equal(spawnSync('git', ['config', '--get', 'extensions.worktreeConfig'], { cwd: worktree, env }).status, 1);
+  assert.equal(execFileSync('git', ['config', '--get', 'user.name'], {
+    cwd: worktree, env, encoding: 'utf8',
+  }).trim(), 'Test');
 });

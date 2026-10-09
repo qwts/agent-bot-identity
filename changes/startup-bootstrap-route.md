@@ -1,0 +1,1 @@
+- When no agent-bot runtime is installed, `scripts/ensure-identity.sh` now tells you to run `./agent-bot bootstrap` from an agent-bot-identity source checkout instead of `node install.mjs`, which installed the CLI without the organization profile or credentials; the organization operations links now point at their new home in `qwts-agent-org` (#104).

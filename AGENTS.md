@@ -57,7 +57,7 @@ current harness:
    is absent. After installation, use `agent-bot` as the stable entrypoint.
 2. Obtain the explicit secret-free versioned organization profile and the
    shared-tooling procedure from the governance owner's
-   [agent bot organization operations](https://github.com/qwts/agent-sop/blob/main/docs/reference/agent-bot-operations.md).
+   [agent bot organization operations](https://github.com/qwts/qwts-agent-org/blob/main/docs/agent-bot-operations.md).
    Never assume or search for a local Playbook checkout, and never synthesize a
    roster from the currently running harness.
 3. In the owner's account run only machine preparation with `--machine-only`.
