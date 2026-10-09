@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs, { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -419,4 +419,68 @@ test('the history mirror is best effort: an unwritable mirror or a soul without 
   assert.deepEqual(logs, [`soul revisions: history mirror for ${ID} not written (EISDIR)`]);
   const described = component(readSoulEnvironment(ID, f.options), 'history');
   assert.deepEqual([described.mirrored, described.turns, described.revisions], [false, 0, null]);
+});
+
+test('at the default root ensure settles under the init lock and still refuses what is not the soul\'s space', (t) => {
+  const f = fixture(t);
+  const root = spacePath(OTHER, f.options);
+  // A concurrent creator's directory before its marker: unmarked, so refused
+  // here; once marked under the lock, the same call hands it back.
+  mkdirSync(root, { recursive: true });
+  assert.throws(() => ensureSoulSpace(OTHER, f.options), /already exists without .*refusing to claim it/);
+  rmSync(root, { recursive: true });
+  const made = ensureSoulSpace(OTHER, f.options);
+  assert.deepEqual([made.path, made.created], [root, true]);
+  const again = ensureSoulSpace(OTHER, f.options);
+  assert.deepEqual([again.path, again.created, again.marker.agentId], [root, false, OTHER]);
+  rmSync(root, { recursive: true });
+  writeFileSync(root, 'in the way');
+  assert.throws(() => ensureSoulSpace(OTHER, f.options), /refusing to claim it/);
+});
+
+// The window the concurrent worktree creators hit on CI: one creator has made
+// the default-root directory but not yet its marker. A's now() hook runs in
+// exactly that window, signals, and holds the lock; B then ensures.
+test('ensure waits for a concurrent creator\'s half-made default-root space instead of refusing it', async (t) => {
+  const f = fixture(t);
+  const sentinel = path.join(f.home, 'a-in-window');
+  const modules = { space: new URL('../agent-space.mjs', import.meta.url).href,
+    memory: new URL('../soul-memory.mjs', import.meta.url).href };
+  const shared = JSON.stringify({ env: f.env, home: f.home, file: f.file, id: OTHER, sentinel });
+  const creator = `
+    import { writeFileSync } from 'node:fs';
+    const { initAgentSpace } = await import(${JSON.stringify(modules.space)});
+    const { env, home, id, sentinel } = JSON.parse(process.argv[1]);
+    const made = initAgentSpace(id, { env, home, now: () => {
+      writeFileSync(sentinel, '');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 800);
+      return new Date();
+    } });
+    process.stdout.write(JSON.stringify({ path: made.path, created: made.created }));
+  `;
+  const ensurer = `
+    const { ensureSoulSpace } = await import(${JSON.stringify(modules.memory)});
+    const { env, home, file, id } = JSON.parse(process.argv[1]);
+    const made = ensureSoulSpace(id, { env, home, file });
+    process.stdout.write(JSON.stringify({ path: made.path, created: made.created, marker: made.marker.agentId }));
+  `;
+  const run = (source) => new Promise((resolve) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', source, shared], { env: { ...process.env, ...f.env } });
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', (data) => { stdout += data; });
+    child.stderr.on('data', (data) => { stderr += data; });
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+  });
+  const a = run(creator);
+  for (let waited = 0; !existsSync(sentinel); waited += 10) {
+    if (waited > 10_000) assert.fail('the creator never reached the window between mkdir and marker');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(existsSync(spacePath(OTHER, f.options)), true, 'B starts with the directory made and no marker yet');
+  const b = await run(ensurer);
+  const first = await a;
+  assert.equal(first.code, 0, first.stderr);
+  assert.equal(b.code, 0, b.stderr);
+  assert.deepEqual(JSON.parse(first.stdout), { path: spacePath(OTHER, f.options), created: true });
+  assert.deepEqual(JSON.parse(b.stdout), { path: spacePath(OTHER, f.options), created: false, marker: OTHER });
 });
