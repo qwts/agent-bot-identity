@@ -39,18 +39,41 @@ export function wakeReporter(report) {
 // A maintenance caller can supply its cancellation signal and a facts-only
 // history ID/kind. Neither creates an interaction-store or broker invocation.
 // Its timeout may shorten the host bound, never extend it.
+export const DREAM_REPLY_MAX_BYTES = 256 * 1024;
+
 export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onEvent = () => {}, approvals = null, turns = createTurnRegistry() }) {
-  return async ({ invocation, message, attachments, env, onSession = null, signal = null, kind = 'wake', historyId = null, timeoutMs = turnTimeoutMs }) => {
+  return async ({ invocation, message, attachments, env, onSession = null, signal = null, kind = 'wake', historyId = null,
+    timeoutMs = turnTimeoutMs, replyByteLimit = kind === 'dream' ? DREAM_REPLY_MAX_BYTES : null }) => {
     signal?.throwIfAborted(); // do not resolve runtime/provider credentials after a caller already cancelled
     if (!['wake', 'dream'].includes(kind)) throw new Error('cold turn kind must be wake or dream');
     if (![timeoutMs, turnTimeoutMs].every(value => Number.isSafeInteger(value) && value > 0 && value <= 0x7fffffff)) throw new Error('cold turn timeout must be a positive bounded integer');
+    if (replyByteLimit === null ? kind === 'dream' : !Number.isSafeInteger(replyByteLimit) || replyByteLimit < 1 || replyByteLimit > DREAM_REPLY_MAX_BYTES) {
+      throw new Error('cold turn reply limit must be a positive integer at most 256 KiB; dreams require a limit');
+    }
     const executor = executorFor({ agentId: invocation.agentId, harness: invocation.harness, cwd: invocation.cwd, env });
-    let reply = '';
+    let reply = '', replyBytes = 0, replyTruncated = false;
     const denied = [];
     const collect = (type, update) => {
       if (type !== UPDATE_EVENT) return;
-      if (update?.sessionUpdate === 'agent_message_chunk' && typeof update.content?.text === 'string') reply += update.content.text;
-      else if (update?.sessionUpdate === 'tool_call') reply = '';
+      if (update?.sessionUpdate === 'agent_message_chunk' && typeof update.content?.text === 'string') {
+        const text = update.content.text;
+        if (replyByteLimit === null) { reply += text; return; }
+        if (replyTruncated) return;
+        // A surrogate pair may cross event boundaries: concatenation replaces
+        // two three-byte unpaired encodings with one four-byte code point.
+        const paired = /[\uD800-\uDBFF]$/.test(reply) && /^[\uDC00-\uDFFF]/.test(text);
+        const size = replyBytes + Buffer.byteLength(text) - (paired ? 2 : 0);
+        if (size <= replyByteLimit) { reply += text; replyBytes = size; }
+        else {
+          // Slice before encoding, so even an oversized caller-supplied event
+          // cannot allocate an unbounded temporary buffer here.
+          const prefix = reply + text.slice(0, replyByteLimit - replyBytes + 3);
+          reply = new TextDecoder('utf-8', { ignoreBOM: true }).decode(Buffer.from(prefix).subarray(0, replyByteLimit), { stream: true });
+          replyBytes = Buffer.byteLength(reply); replyTruncated = true;
+        }
+      } else if (update?.sessionUpdate === 'tool_call') {
+        reply = ''; replyBytes = 0; replyTruncated = false;
+      }
     };
     const result = await turns.run({ invocation, kind, ...(signal ? { signal } : {}), ...(historyId === null ? {} : { historyId }) }, async ({ signal, sessionGrants }) => executor({
       sessionGrants,
@@ -81,7 +104,7 @@ export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onE
         if (outcome === 'deny' && typeof toolName === 'string' && !denied.includes(toolName)) denied.push(toolName);
       },
     }), { turnTimeoutMs: Math.min(timeoutMs, turnTimeoutMs) });
-    return { ...result, reply, denied };
+    return { ...result, reply, denied, ...(replyByteLimit === null ? {} : { replyTruncated }) };
   };
 }
 

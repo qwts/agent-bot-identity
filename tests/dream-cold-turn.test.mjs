@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { acpExecutorFor, coldTurnExecutor, createTurnRegistry } from '../wake-plane.mjs';
+import { acpExecutorFor, coldTurnExecutor, createTurnRegistry, DREAM_REPLY_MAX_BYTES } from '../wake-plane.mjs';
+import { UPDATE_EVENT } from '../executor-contract.mjs';
 import { createDreamScheduler } from '../skill-dream-scheduler.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
 import { createSoulHistory, readSoulHistory } from '../soul-history.mjs';
@@ -37,6 +38,40 @@ test('a pre-aborted maintenance caller never resolves the executor or provider c
   const run = coldTurnExecutor({ executorFor: () => { built = true; throw new Error('must not build'); } });
   await assert.rejects(run({ invocation: { agentId: ID }, signal: controller.signal, kind: 'dream', historyId: RUN }), { name: 'AbortError' });
   assert.equal(built, false);
+});
+
+test('dream replies are bounded across events and truncation resets only after a tool call', async () => {
+  let events = [];
+  const run = coldTurnExecutor({ executorFor: () => async input => {
+    for (const event of events) input.appendEvent(UPDATE_EVENT, typeof event === 'string'
+      ? { sessionUpdate: 'agent_message_chunk', content: { text: event } } : event);
+  } });
+  const input = { invocation: { agentId: ID }, kind: 'dream' };
+  events = Array.from({ length: 100 }, () => 'x'.repeat(4096));
+  let result = await run(input);
+  assert.equal(Buffer.byteLength(result.reply), DREAM_REPLY_MAX_BYTES); assert.equal(result.replyTruncated, true);
+  events = ['\ufeffa', '🙂', 'SHOULD_NOT_REPLACE_SKIPPED_TEXT'];
+  result = await run({ ...input, replyByteLimit: 7 });
+  assert.equal(result.reply, '\ufeffa', 'the UTF-8 prefix preserves BOM and excludes an incomplete code point');
+  assert.equal(result.replyTruncated, true);
+  events = ['\uD83D', '\uDE42'];
+  result = await run({ ...input, replyByteLimit: 4 });
+  assert.equal(result.reply, '🙂'); assert.equal(result.replyTruncated, false);
+  events = ['x'.repeat(100), { sessionUpdate: 'tool_call' }, '{"ok":true}'];
+  result = await run({ ...input, replyByteLimit: 16 });
+  assert.equal(result.reply, '{"ok":true}'); assert.equal(result.replyTruncated, false);
+  events = ['x'.repeat(DREAM_REPLY_MAX_BYTES + 1)];
+  result = await run({ ...input, kind: 'wake' });
+  assert.equal(result.reply.length, DREAM_REPLY_MAX_BYTES + 1); assert.equal(Object.hasOwn(result, 'replyTruncated'), false);
+});
+
+test('invalid dream reply bounds fail before resolving provider credentials', async () => {
+  let built = 0;
+  const run = coldTurnExecutor({ executorFor: () => { built++; throw new Error('must not build'); } });
+  for (const replyByteLimit of [null, 0, -1, 1.5, NaN, DREAM_REPLY_MAX_BYTES + 1]) {
+    await assert.rejects(run({ invocation: { agentId: ID }, kind: 'dream', replyByteLimit }), /reply limit/);
+  }
+  assert.equal(built, 0);
 });
 
 test('external cancellation reaches approvals and keeps the shared turn busy until execution settles', async () => {

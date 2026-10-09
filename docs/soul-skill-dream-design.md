@@ -257,6 +257,14 @@ an external operation remains agent-reported without a verifying adapter, even
 when a local log file exists. Unstructured final text is retained only as an
 explicitly unverified bounded report, not converted into successful outcomes.
 
+The cold executor caps accumulated dream reply text at 256 KiB before any
+outcome parsing. Hosts may request a smaller positive byte limit, but cannot
+disable or raise the dream cap. `replyTruncated` reports omitted output; a
+truncated prefix must never be accepted as a complete structured report. UTF-8
+code points are not split. As with ordinary cold replies, a tool-call event
+starts a new final-reply segment and resets its truncation flag. Ordinary wake
+reply behavior is unchanged unless its caller explicitly requests a bound.
+
 Checkpoint publication follows validation of the corresponding outcomes. Only
 verified processed items advance their source cursors; missing/blocked entries
 remain eligible on a later run. A cancelled or interrupted attempt must not
