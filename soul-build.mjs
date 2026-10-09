@@ -8,6 +8,7 @@ import { readSoulPackageEntries } from './soul-package.mjs';
 import { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, isGeneratedPath } from './soul-harness-contract.mjs';
 import { currentAgentId } from './agent-identity.mjs';
 import { soulDirInfo } from './soul-dir.mjs';
+import { REACH_SERVER_NAME } from './reach-contract.mjs';
 
 function stat(path) {
   try { return lstatSync(path); }
@@ -70,6 +71,28 @@ function generatedInventory(root) {
   return files;
 }
 
+// Locations only: a policy line may contain private arguments. This is a
+// migration hint, not a verdict about an authored server named agent-bot.
+// Inspect definition text and native config inputs, never rewrite a rule or
+// scan generated instruction/skill copies of the same source material.
+function legacyReachWarnings(source, authored) {
+  const files = new Map(source.filter(entry => entry.mode !== '040000').map(entry => [entry.path, entry.bytes]));
+  for (const [path, bytes] of authored) files.set(path, bytes);
+  const warnings = [];
+  for (const [path, bytes] of [...files].sort(([a], [b]) => compare(a, b))) {
+    let content;
+    try { content = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+    catch { continue; }
+    if (content.includes('\0')) continue;
+    for (const [index, line] of content.split(/\r\n|\r|\n/).entries()) {
+      if (!/\bmcp__agent-bot__/.test(line)) continue;
+      warnings.push({ code: 'legacy-reach-tool-name', path, line: index + 1,
+        message: `Review this mcp__agent-bot__ reference: the generated reach server is ${REACH_SERVER_NAME}. If it targets that server, update it to mcp__${REACH_SERVER_NAME}__; a custom agent-bot server may be intentional. Authored rules are not rewritten.` });
+    }
+  }
+  return warnings;
+}
+
 export function buildSoulDirectory(directory, { check = false } = {}) {
   const root = resolve(directory);
   const info = stat(root);
@@ -96,6 +119,7 @@ export function buildSoulDirectory(directory, { check = false } = {}) {
     const bytes = existing.get(target.path);
     if (bytes) authored.set(target.path, bytes);
   }
+  const warnings = comms ? legacyReachWarnings(source, authored) : [];
   const expected = buildHarnessFiles(source, { authored });
   // A merge is an unmarked file whose content the renderer adopted.
   for (const target of targets.values()) {
@@ -150,7 +174,7 @@ export function buildSoulDirectory(directory, { check = false } = {}) {
     }
   }
   return {
-    drift, writes, removals, merged,
+    drift, writes, removals, merged, warnings,
     harnesses: harnessReport(expected, { comms, manifest, hooks: declaredHooks(source) }),
   };
 }
@@ -175,9 +199,10 @@ export function main(argv = process.argv.slice(2), options = {}) {
 
 // The same report `--json` prints: every harness's rendered primitives, so a
 // primitive that reached no harness is visible without parsing JSON.
-function format({ drift, writes, removals, merged, harnesses }) {
+function format({ drift, writes, removals, merged, warnings, harnesses }) {
   const lines = [`agent-bot soul build: ${writes.length} written, ${removals.length} removed, ${merged.length} merged${drift.length ? `, ${drift.length} pending` : ''}`];
   if (merged.length) lines.push(...merged.map((entry) => `merged ${entry.path}: kept ${entry.kept.join(', ') || 'no servers of its own'}`));
+  for (const warning of warnings) lines.push(`warning ${warning.code} ${warning.path}:${warning.line}: ${warning.message}`);
   for (const [harness, { rendered, unsupported }] of Object.entries(harnesses)) {
     const missing = Object.entries(unsupported).filter(([, names]) => names.length)
       .map(([kind, names]) => `${kind} ${names.join(', ')}`);

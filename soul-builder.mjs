@@ -48,7 +48,7 @@ export const MCP_TARGETS = Object.freeze([
   Object.freeze({ harness: 'cursor', path: '.cursor/mcp.json', format: 'json', key: 'mcpServers', style: 'stdio' }),
   Object.freeze({ harness: 'kiro', path: '.kiro/settings/mcp.json', format: 'json', key: 'mcpServers', style: 'stdio' }),
   // Qwen Code's project settings file also holds the soul's other settings;
-  // only `mcpServers.agent-bot` is the builder's (#247).
+  // only `mcpServers.agent-reach` is the builder's (#247).
   Object.freeze({ harness: 'qwen', path: '.qwen/settings.json', format: 'json', key: 'mcpServers', style: 'stdio' }),
 ]);
 
