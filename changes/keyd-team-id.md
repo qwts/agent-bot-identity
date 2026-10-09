@@ -1,0 +1,1 @@
+- agent-bot pins keyd's presence key only from a binary signed by the configured Developer ID team on the `agent-bot-keyd` identifier, not from any Developer ID signature; set `settings.keydTeamId` / `settings.keydIdentifier` (or `AGENT_BOT_KEYD_TEAM_ID` / `AGENT_BOT_KEYD_IDENTIFIER`) for your own keyd build, and the keyd protocol doc records the owner's decisions (#594).

@@ -125,6 +125,18 @@ test('loadConfig validates settings while allowing settings-only identity inerti
   assert.throws(() => loadConfig({ home, env: {} }), /expected off, prefer, or required/);
 });
 
+test('loadConfig accepts a keyd Team ID and identifier and rejects anything else (#594)', () => {
+  const home = tempHome();
+  writeConfig(home, { settings: { keydTeamId: 'ABCDE12345', keydIdentifier: 'org.example.keyd' } });
+  assert.deepEqual(loadConfig({ home, env: {} }).settings, { keydTeamId: 'ABCDE12345', keydIdentifier: 'org.example.keyd' });
+  writeConfig(home, { settings: { keydTeamId: 'any-developer-id', keydIdentifier: 'any-developer-id' } });
+  assert.doesNotThrow(() => loadConfig({ home, env: {} }));
+  writeConfig(home, { settings: { keydTeamId: '' } });
+  assert.throws(() => loadConfig({ home, env: {} }), /invalid settings\.keydTeamId: expected a 10-character Team ID/);
+  writeConfig(home, { settings: { keydIdentifier: 'keyd" or anchor apple' } });
+  assert.throws(() => loadConfig({ home, env: {} }), /invalid settings\.keydIdentifier/);
+});
+
 test('invalid daemon preferences fail closed without reflecting the value', () => {
   const invalid = 'must-not-print-invalid-daemon-policy';
   for (const options of [

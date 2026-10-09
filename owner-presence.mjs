@@ -27,6 +27,7 @@ import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { ANY_DEVELOPER_ID, DEFAULT_KEYD_IDENTIFIER, DEFAULT_KEYD_TEAM_ID, keydSigner } from './config.mjs';
 import { keydPaths, keydRequest, readKeydRecord } from './keyd-client.mjs';
 
 export const PRESENCE_AUDIENCE = 'agent-bot-owner';
@@ -35,9 +36,19 @@ export const PRESENCE_UNAVAILABLE_RPC = -32001;
 const OWNER_TIMEOUT_MS = 150_000;
 const MAX_LIFETIME_SECONDS = 120;
 const CLOCK_SKEW_SECONDS = 30;
-// A Developer ID Application signature, checked before agent-bot runs a keyd
-// binary to learn its presence key.
-export const DEVELOPER_ID_REQUIREMENT = 'anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists';
+// The code-signing requirement checked before agent-bot runs a keyd binary
+// to learn its presence key: a Developer ID Application signature from the
+// configured team, on the configured identifier (#594). `keydSigner` in
+// config.mjs resolves both; ANY_DEVELOPER_ID drops that part of the check.
+export function developerIdRequirement({ teamId = DEFAULT_KEYD_TEAM_ID, identifier = DEFAULT_KEYD_IDENTIFIER } = {}) {
+  let requirement = 'anchor apple generic';
+  if (identifier !== ANY_DEVELOPER_ID) requirement += ` and identifier "${identifier}"`;
+  requirement += ' and certificate leaf[field.1.2.840.113635.100.6.1.13] exists';
+  if (teamId !== ANY_DEVELOPER_ID) requirement += ` and certificate leaf[subject.OU] = "${teamId}"`;
+  return requirement;
+}
+
+export const DEVELOPER_ID_REQUIREMENT = developerIdRequirement();
 
 function unavailable(message) {
   return Object.assign(new Error(message), { code: 'presence-unavailable' });
@@ -53,8 +64,8 @@ export function presencePinPath({ env = process.env, home = env.HOME || homedir(
   return path.join(keydPaths({ env, home }).dir, 'presence.pub');
 }
 
-function codesignVerify(bin) {
-  execFileSync('/usr/bin/codesign', ['--verify', '--strict', `-R=${DEVELOPER_ID_REQUIREMENT}`, bin],
+function codesignVerify(bin, requirement) {
+  execFileSync('/usr/bin/codesign', ['--verify', '--strict', `-R=${requirement}`, bin],
     { stdio: ['ignore', 'ignore', 'pipe'] });
 }
 
@@ -70,6 +81,7 @@ export function pinnedPresenceKey({
   record = readKeydRecord({ env, home }),
   verifyBinary = codesignVerify,
   run = runPresenceKey,
+  signer = keydSigner,
 } = {}) {
   const file = presencePinPath({ env, home });
   try {
@@ -77,7 +89,8 @@ export function pinnedPresenceKey({
     if (pinned) return pinned;
   } catch { /* not pinned yet */ }
   if (!record?.bin) return null;
-  try { verifyBinary(record.bin); } catch { return null; }
+  // A malformed signer setting pins nothing, like an unsigned binary.
+  try { verifyBinary(record.bin, developerIdRequirement(signer({ env, home }))); } catch { return null; }
   let key;
   try { key = rawKey(String(run(record.bin)).trim()); } catch { return null; }
   if (!key) return null;

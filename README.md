@@ -1513,6 +1513,13 @@ use the `apps` map with the exact slugs instead. `doctor` prints the resolved
   `ai9d` until organization profiles carry the list (#675). `doctor` reports
   the source as `unmanaged_authors_source` (`env`, `config`, `default`, or
   `invalid-config`, in which case the hooks refuse).
+- `settings.keydTeamId` and `settings.keydIdentifier` — the Developer ID Team
+  ID and code-signing identifier a keyd binary must carry before agent-bot
+  pins its presence key. The defaults are GeniusBar's (`Z5DM34QS5U`,
+  `agent-bot-keyd`); `AGENT_BOT_KEYD_TEAM_ID` and `AGENT_BOT_KEYD_IDENTIFIER`
+  override them when non-empty. `any-developer-id` drops that check and
+  accepts any Developer ID signature, as before #594. See
+  [keyd protocol](docs/keyd-protocol.md#presence-key-bootstrap).
 - `features.github-identity` and `features.persona-accounts` — optional add-on
   gates, both off unless explicitly set to `true`. qwts machines keep their
   current behavior by setting both to `true` in this same config. A config

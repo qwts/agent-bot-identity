@@ -3,8 +3,11 @@
 This page records what agent-bot does **today** with agent-bot-keyd (#397,
 #416, #438), the signed native helper GeniusBar ships: the grants agent-bot
 signs, the owner-presence assertions it verifies, and how each side learns the
-other's key. It describes current behaviour only. It proposes nothing and
-settles none of the open questions at the end; those are tracked in #594.
+other's key. It describes current behaviour. The owner's decisions on the
+questions #594 raised are recorded at the end, under
+[Owner decisions](#owner-decisions-594).
+
+This repository owns this contract; GeniusBar reviews changes to it.
 
 keyd's own side (Keychain items, socket peer checks, its grant verifier and
 nonce cache, its presence prompt) lives in GeniusBar's
@@ -77,6 +80,22 @@ wider envelope. With `now` in whole seconds it accepts a grant only when:
 The nonce is spent last, after every other check passes and before the mint
 ([grant.rs](https://github.com/qwts/GeniusBar/blob/363f52c590efe5df8cb75490ca81667e74425cf8/keyd/src/grant.rs#L50-L65), [#L126](https://github.com/qwts/GeniusBar/blob/363f52c590efe5df8cb75490ca81667e74425cf8/keyd/src/grant.rs#L126)). Spent nonces
 live in an in-memory map and are dropped once their `exp` has passed.
+
+### The 60-second replay window
+
+Because the spent-nonce map is in memory, keyd forgets it when it restarts.
+A grant that was already used can then be presented again, and keyd accepts
+it while it is still inside keyd's envelope above, that is until its `exp`.
+agent-bot issues every grant for 60 seconds, so for a grant agent-bot signed
+the window is at most 60 seconds from `iat`. This is the accepted guarantee
+(#594): grants stay at 60 seconds or less, and the nonce cache stays in
+memory.
+
+- keyd's envelope would accept a lifetime of up to 120 seconds. Only a holder
+  of the vouch key can sign such a grant, and that holder can sign a fresh
+  grant at any time, so the wider envelope gives it nothing more.
+- A nonce spent on a mint that then fails is not refunded. The caller asks
+  for a new grant; agent-bot's issuers sign a fresh one per call.
 
 ### Issuers
 
@@ -194,15 +213,31 @@ Callers ([owner-gate.mjs](../owner-gate.mjs)):
    again.
 2. Otherwise, if the keyd install record (`<state>/keyd/keyd.json`) names an
    absolute `bin`, run
-   `/usr/bin/codesign --verify --strict -R=<requirement> <bin>` with
-   `DEVELOPER_ID_REQUIREMENT`:
+   `/usr/bin/codesign --verify --strict -R=<requirement> <bin>`. By default
+   the requirement is `DEVELOPER_ID_REQUIREMENT`, a Developer ID Application
+   signature from GeniusBar's team on keyd's identifier (#594):
 
    ```text
-   anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists
+   anchor apple generic and identifier "agent-bot-keyd"
+     and certificate leaf[field.1.2.840.113635.100.6.1.13] exists
+     and certificate leaf[subject.OU] = "Z5DM34QS5U"
    ```
 
-   This accepts any Developer ID Application signature; it names no Team ID
-   and no identifier.
+   (one line in practice). A keyd built and signed by someone else names its
+   own team and identifier, resolved by `keydSigner` in
+   [config.mjs](../config.mjs), each on its own:
+
+   | Setting | Environment (wins when non-empty) | Config | Default |
+   | --- | --- | --- | --- |
+   | Team ID | `AGENT_BOT_KEYD_TEAM_ID` | `settings.keydTeamId` | `Z5DM34QS5U` |
+   | Identifier | `AGENT_BOT_KEYD_IDENTIFIER` | `settings.keydIdentifier` | `agent-bot-keyd` |
+
+   A Team ID is ten characters `A-Z0-9`; an identifier is letters, digits,
+   `.` and `-`. Either may instead be the literal `any-developer-id`, which
+   drops that clause; both set to it give the requirement from before #594,
+   any Developer ID Application signature. Unset or empty never means that.
+   A malformed value, or a config that does not load, pins nothing, as an
+   unsigned binary would.
 3. Only if that passes, run `<bin> presence-key` (15-second timeout). If the
    output is a well-formed key, write it to `presence.pub` and use it. The
    file is left at mode 0600, whether it is new or replaces a pin that did
@@ -212,6 +247,10 @@ Callers ([owner-gate.mjs](../owner-gate.mjs)):
 
 The key is never taken from the socket. A file in `presence.pub` that does
 not parse as a key is treated as no pin, and step 2 runs again.
+
+The requirement is checked only when a key is pinned. A host that pinned its
+key before #594 keeps that pin, and the Team ID and identifier apply the next
+time it pins, for example after `presence.pub` is removed.
 
 ### Known gaps
 
@@ -242,7 +281,10 @@ behaviour with no test in this repository.
 | An assertion verifies only for its key, action, nonce, audience and prefix | keyd | `verifyPresence` | `tests/owner-presence.test.mjs`: "an assertion verifies only for its key, action, nonce and time" |
 | Lifetime `0 < exp − iat ≤ 120`; skew 30 s on both sides; integer times; `kind: presence`; `v: 1` | keyd | `verifyPresence` | `tests/owner-presence.test.mjs`: "an assertion is accepted for up to 120 s of lifetime and 30 s of skew, and no more" |
 | keyd issues assertions for 60 s | keyd-side | — | none here |
-| Audience, unavailable RPC code and the code-signing requirement string | — | `owner-presence.mjs` constants | `tests/owner-presence.test.mjs`: "the presence contract constants keyd and agent-bot share" |
+| Audience, unavailable RPC code and the default code-signing requirement (Team ID and identifier) | — | `owner-presence.mjs` constants | `tests/owner-presence.test.mjs`: "the presence contract constants keyd and agent-bot share" |
+| The signer comes from the environment, then the config, then the defaults; empty is unset | — | `keydSigner` | `tests/owner-presence.test.mjs`: "the keyd signer comes from the environment, then the config, then the defaults (#594)" |
+| Only an explicit `any-developer-id` restores the requirement from before #594 | — | `developerIdRequirement` | `tests/owner-presence.test.mjs`: "only an explicit any-developer-id brings back the requirement from before #594" |
+| A malformed signer is refused and pins nothing; the binary is verified against the configured signer before it runs | — | `keydSigner`, `pinnedPresenceKey`, `loadConfig` | `tests/owner-presence.test.mjs`: "a malformed keyd signer is refused, so nothing reaches the code-signing requirement", "the binary is verified against the configured team and identifier before it is run"; `tests/config.test.mjs`: "loadConfig accepts a keyd Team ID and identifier and rejects anything else (#594)" |
 | Each request carries a fresh agent-bot nonce; a socket without keyd's key, or an assertion for another nonce, is refused | — | `keydPresence` | `tests/owner-presence.test.mjs`: "keydPresence asks keyd with the action and a fresh nonce, and checks the answer" |
 | The presence key is pinned from the signed binary once, the pin file 0600, never from the socket | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "the presence key is pinned from the signed binary, once, and never from the socket", "a corrupt pin is replaced from the binary and left owner-only" |
 | No record, an unsigned binary (never run) or a malformed answer pins nothing | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "no keyd, an unsigned keyd or a malformed answer pins nothing" |
@@ -251,17 +293,19 @@ behaviour with no test in this repository.
 | The administrator dialog only when keyd cannot ask; a refusal is final | — | `presenceOrConsent` | `tests/owner-presence.test.mjs`: "the gate asks keyd first and falls back to the administrator dialog only when keyd cannot ask"; "with no keyd installed the gate uses the administrator dialog, as before"; `tests/owner-gate.test.mjs`: "revision edit treats keyd refusal as final, without reaching the terminal-only dialog fallback" |
 | A decision on a soul's tool request always asks presence; a principal is checked as well, never instead | — | `confirmOwnerPresence`, `/v0/approvals/decide`, `/v1/proposals/<id>/decision` | `tests/owner-gate.test.mjs`: "a decision on a soul tool request asks for presence even when a principal verifies (#438)"; `tests/agent-approvals.test.mjs`: "the daemon token alone cannot decide: a refused owner gate decides nothing on either route (#438)" |
 
-## Open (owner decision, #594)
+## Owner decisions (#594)
 
-These are recorded without answers.
+The owner decided these on 2026-10-09
+([#594](https://github.com/qwts/agent-bot-identity/issues/594)).
 
-1. **Contract ownership.** Which repository owns the normative grant and
-   presence contract, and what role the other plays in reviewing it?
-2. **Replay across keyd restart.** keyd's grant nonce cache is in memory and
-   the nonce is spent before the downstream mint. What is guaranteed for a
-   grant presented again after keyd restarts, and for a nonce spent on a
-   mint that then fails?
-3. **Presence-key trust pinning.** The requirement accepts any Developer ID
-   Application signature, the binary comes from the install record, and the
-   pinned `presence.pub` is trusted as found. Is that chain sufficient, and
-   how are pin corruption, replacement, keyd updates and re-signing handled?
+1. **Contract ownership.** agent-bot-identity owns the grant and presence
+   contract, and this page is its record. GeniusBar reviews changes to it as
+   the native-helper side.
+2. **Replay across keyd restart.** The window is documented, not closed:
+   grants stay at 60 seconds or less and keyd's nonce cache stays in memory.
+   See [the 60-second replay window](#the-60-second-replay-window).
+3. **Presence-key trust pinning.** The code-signing requirement names the
+   Team ID and the identifier, so any other Developer ID signature is no
+   longer accepted. GeniusBar must sign keyd with that identifier. See
+   [presence-key bootstrap](#presence-key-bootstrap). Pin corruption is
+   handled as before (step 2 runs again); an existing pin is not re-checked.
