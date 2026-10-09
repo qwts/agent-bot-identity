@@ -25,7 +25,7 @@ import { inspectClaudeWorktreeAdapter } from './sync-hooks.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
 import { daemonStatus } from './agent-daemon.mjs';
-import { readBinding } from './agent-binding.mjs';
+import { readBindToken, readBinding } from './agent-binding.mjs';
 import { isSoulBound } from './git-credential-bot.mjs';
 import { inspectSupervisor, supervisorSkipLoad } from './daemon-supervisor.mjs';
 import { embeddingAppBundle, homebrewRuntimeRoot, inspectExecutableLink, installationPaths, isManagedExecutable } from './install.mjs';
@@ -610,6 +610,42 @@ function currentWorktreeBindingCheck({ cwd, env, git, roster, isSoulBoundImpl, r
       : `the current worktree is bound to ${slug}, which is not in the configured roster`,
     action: inRoster ? null : 'reconcile the App mapping, then bind again with: agent-bot setup-worktree',
     evidence: { worktree: cwd, app_slug: slug, roster: known },
+  });
+}
+
+// git copies config.worktree into each worktree it adds (#648), so a linked
+// worktree can carry a soul's pin that no soul ever set up there. Setup leaves
+// a bind token in the worktree's own git dir, and binding replaces it with
+// agent-binding.json; a pin with neither, for that soul, most likely arrived
+// by copy. Reported, never repaired: removing a pin is the owner's call.
+export function worktreePinOriginCheck({ gitDir, agentId,
+  readToken = readBindToken, readBindingImpl = readBinding } = {}) {
+  let local = false;
+  let unreadable = false;
+  for (const read of [() => readToken(gitDir), () => readBindingImpl({ env: {}, gitDir })]) {
+    try {
+      if (read()?.agentId === agentId) local = true;
+    } catch {
+      unreadable = true;
+    }
+  }
+  if (local) {
+    return readinessCheck({
+      id: 'worktree.pin_origin',
+      status: 'ready',
+      message: `the Agent ID pin was set up in this worktree`,
+      evidence: { agent_id: agentId },
+    });
+  }
+  return readinessCheck({
+    id: 'worktree.pin_origin',
+    status: 'warning',
+    code: unreadable ? 'worktree-pin-origin-unreadable' : 'worktree-pin-inherited',
+    message: unreadable
+      ? `the Agent ID pin ${agentId} could not be matched to setup or binding state in this worktree`
+      : `this worktree is pinned to ${agentId}, but holds no setup or binding state for it: git worktree add copies a pin from the checkout it was added from`,
+    action: `if ${agentId} set up this worktree, run agent-bot setup-worktree as that soul; otherwise this checkout is not that soul's: remove the agentBot.*, [bot] user.* and agent-bot credential.helper entries from git config --worktree, or recreate the worktree with agent-bot setup-worktree --name`,
+    evidence: { agent_id: agentId },
   });
 }
 
@@ -1857,6 +1893,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
         message: `Agent ID ${agentId}`,
         evidence: { agent_id: agentId },
       }));
+      if (!primary) checks.push(worktreePinOriginCheck({ gitDir: resolve(gitDir), agentId }));
     } catch {
       checks.push(readinessCheck({
         id: 'worktree.agent_id',

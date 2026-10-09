@@ -6,8 +6,16 @@
 
 HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SETUP="$HOOK_DIR/../setup-worktree.mjs"
+# A previous HEAD of all zeros means git just created this checkout (git
+# worktree add, clone): any pin in it was copied from the source checkout's
+# config.worktree, never set up here (#648).
+NEW_WORKTREE=
+case "$1" in
+  '' | *[!0]*) ;;
+  *) NEW_WORKTREE=--new-worktree ;;
+esac
 if [ -f "$SETUP" ] && command -v node >/dev/null 2>&1; then
-  node "$SETUP" --from-hook || true
+  node "$SETUP" --from-hook $NEW_WORKTREE || true
 fi
 
 # Preserve the hooks path that setup displaced. With none configured,

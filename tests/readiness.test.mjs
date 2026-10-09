@@ -23,6 +23,7 @@ import {
   renderReadinessJson,
   renderReadinessReport,
   requireReadinessSchema,
+  worktreePinOriginCheck,
 } from '../readiness.mjs';
 
 const roots = [];
@@ -2368,3 +2369,26 @@ for (const state of ['missing', 'unreadable', 'live', 'human', 'missing-without-
     }
   });
 }
+
+test('doctor reports a worktree pin with no setup or binding state as inherited (#648)', () => {
+  const agentId = 'agent_11111111-1111-4111-8111-111111111111';
+  const other = 'agent_22222222-2222-4222-8222-222222222222';
+  const none = () => null;
+  const check = (readToken, readBindingImpl) => worktreePinOriginCheck({ gitDir: '/repo/.git/worktrees/x', agentId, readToken, readBindingImpl });
+
+  assert.equal(check(() => ({ agentId }), none).status, 'ready');
+  assert.equal(check(none, () => ({ agentId })).status, 'ready');
+
+  const inherited = check(none, none);
+  assert.equal(inherited.status, 'warning');
+  assert.equal(inherited.code, 'worktree-pin-inherited');
+  assert.match(inherited.message, /git worktree add copies a pin/);
+  assert.match(inherited.action, /setup-worktree/);
+
+  // State that belongs to another soul does not vouch for this pin.
+  assert.equal(check(() => ({ agentId: other }), () => ({ agentId: other })).code, 'worktree-pin-inherited');
+
+  const unreadable = check(() => { throw new Error('bind token could not be read'); }, none);
+  assert.equal(unreadable.code, 'worktree-pin-origin-unreadable');
+  assert.doesNotMatch(JSON.stringify(unreadable), /token/);
+});
