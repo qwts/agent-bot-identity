@@ -1311,7 +1311,9 @@ The delegate has no marker: it is an agent that stated no bot identity. A
 session that did state one (`GH_AGENT_APP`, a pin, or an agent account) but
 whose worktree setup failed, for example because `setup-worktree` refused a
 primary checkout, is not your delegate. With the runner installed, its
-`git commit` and `git push` are refused, not attributed to you (#749).
+`git commit` and `git push` (and `merge`, `rebase`, `cherry-pick`, `revert`,
+`am`, `commit-tree`) are refused, not attributed to you, and it may not skip
+the git hooks with `--no-verify` or a `core.hooksPath` override (#749).
 A `.<tool>/worktrees/**` path is layout, never a signal. Bare human shells are
 never touched. The separate `setup-worktree` work-area check constrains where
 configuration may be written; it does not change these identity resolution rules.
@@ -1804,7 +1806,9 @@ contain secrets.
   the runner installed, a session that stated a bot identity (`GH_AGENT_APP`,
   a pin, an agent account) is refused a human-attributed commit or push
   because its worktree was never bound. The installed runner's pre-command
-  check refuses the same `git commit` or `git push` in every harness dialect. Agent context — the harness markers the `gh`
+  check refuses the same `git commit` or `git push`, and the other git
+  commands that write commits, in every harness dialect, and refuses a stated
+  bot `--no-verify` or a `core.hooksPath` override even where it is bound. Agent context — the harness markers the `gh`
   shim reads, or an agent account classified by exact roster slug — still
   decides that a bot-attributed commit must carry its Agent ID, and in
   uninstalled mode (no installed runner, ENG-0128) an agent's push as an

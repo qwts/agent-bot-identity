@@ -51,9 +51,13 @@ other `[bot]`-looking name is not a binding. `hooks/pre-commit` and `hooks/pre-p
 apply the same rule as the git backstop. Because those hooks are the
 backstop, a stated bot may not skip them, even in its bound worktree:
 `--no-verify` (or `commit -n`), a `core.hooksPath` override (`-c`,
-`--config-env`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_KEY_n`) and a
-`git config` write of `core.hooksPath` are denied. Git run indirectly, from
-a script file or `make`, is not seen by this check; the hooks cover it.
+`--config-env`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_KEY_n`, or an
+`include.path` that could set it) and a `git config` write of
+`core.hooksPath` are denied. Git run indirectly, from a script file or
+`make`, is not seen by this check; the hooks cover it. Neither is a command
+that relocates the global config (`GIT_CONFIG_GLOBAL`, `HOME`); a bound
+worktree keeps its `core.hooksPath` in worktree config, and an unbound
+checkout is refused by the bound-target check.
 The human's delegate states no identity, so it is not affected, and neither
 is an ordinary human shell.
 

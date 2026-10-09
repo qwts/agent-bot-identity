@@ -20,10 +20,11 @@
 //
 // `skipsHooks` says the command would run without the git backstop:
 // `--no-verify` (or `commit -n`), a `core.hooksPath` override for the
-// invocation (`-c`, `--config-env`, GIT_CONFIG_PARAMETERS, GIT_CONFIG_KEY_n),
-// or a `git config` write of `core.hooksPath`. Values the scan cannot read
-// (`git commit $FLAGS`) and indirect git (a script file, make) are not seen;
-// the git hooks still cover those.
+// invocation (`-c`, `--config-env`, GIT_CONFIG_PARAMETERS, GIT_CONFIG_KEY_n,
+// or an `include.path` that could set it), or a `git config` write of
+// `core.hooksPath`. Values the scan cannot read (`git commit $FLAGS`),
+// relocated global config (GIT_CONFIG_GLOBAL, HOME) and indirect git (a
+// script file, make) are not seen; the git hooks still cover the last.
 
 import { isAbsolute, resolve } from 'node:path';
 
@@ -32,16 +33,26 @@ const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'yash', 'bus
 // Subcommands that write commits; `push` publishes them.
 const COMMITTING = new Set(['commit', 'merge', 'rebase', 'cherry-pick', 'revert', 'am', 'commit-tree']);
 // Sequencer controls that write no commit.
-const NO_COMMIT = new Set(['--abort', '--quit', '--skip', '--show-current-patch', '--edit-todo']);
+const NO_COMMIT = new Set(['--abort', '--quit', '--show-current-patch', '--edit-todo']);
 // Subcommands whose `--no-verify` skips a hook the backstop runs in.
 const VERIFYING = new Set(['commit', 'merge', 'rebase', 'am', 'push']);
 // `git commit` short options whose value follows (attached or as the next
 // word), so a cluster stops there: `-nm x` is -n -m x, `-mn` is -m n.
 const COMMIT_VALUE_SHORT = 'mFCctSu';
-const VALUE_OPTS = new Set(['-m', '-F', '-C', '-c', '-t', '-o', '--message', '--file', '--reuse-message',
-  '--reedit-message', '--template', '--author', '--date', '--fixup', '--squash', '--trailer', '--cleanup',
-  '--pathspec-from-file', '--push-option', '--strategy', '--strategy-option', '-s', '-X', '--onto', '--repo']);
+// Options whose value is the next word, per subcommand, so a message of
+// `-n` is not read as one. (On commit `-s` and `-o` are flags.)
+const VALUE_OPTS = {
+  commit: new Set(['-m', '-F', '-C', '-c', '-t', '--message', '--file', '--reuse-message', '--reedit-message',
+    '--template', '--author', '--date', '--fixup', '--squash', '--trailer', '--cleanup', '--pathspec-from-file']),
+  merge: new Set(['-m', '-F', '-s', '-X', '--file', '--strategy', '--strategy-option', '--cleanup', '--into-name']),
+  rebase: new Set(['-s', '-X', '-x', '--exec', '--onto', '--strategy', '--strategy-option', '--empty']),
+  am: new Set(['-C', '-p', '--directory', '--exclude', '--include', '--patch-format', '--resolvemsg']),
+  push: new Set(['-o', '--push-option', '--repo', '--receive-pack', '--exec']),
+};
 const HOOKS_PATH = /^core\.hookspath$/i;
+// Config keys that can set core.hooksPath by pulling in another file.
+const HOOKS_PATH_BY_INCLUDE = /^(include\.path|includeif\..*\.path)$/i;
+const setsHooksPath = (key) => HOOKS_PATH.test(key) || HOOKS_PATH_BY_INCLUDE.test(key);
 const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done',
   'case', 'esac', 'select', 'function', '{', '}', '!', '[[', ']]', 'in']);
 // Builtins a git alias may not shadow. Anything else may be an alias.
@@ -480,14 +491,14 @@ function gitInvocation(args, { cwd, env, result, depth, aliases = new Map(), nam
       if (m) aliases.set(m[1].toLowerCase(), m[2]);
       const ident = /^(user|author|committer)\.name(?:=(.*))?$/is.exec(kv ?? '');
       if (ident) names.set(ident[1].toLowerCase(), ident[2] ?? '');
-      if (HOOKS_PATH.test(/^[^=]*/.exec(kv ?? '')[0])) hooksOff = true;
+      if (setsHooksPath(/^[^=]*/.exec(kv ?? '')[0])) hooksOff = true;
       continue;
     }
     if (arg === '--config-env' || arg.startsWith('--config-env=')) {
       const spec = arg === '--config-env' ? args[j += 1] : arg.slice(13);
       const ident = /^(user|author|committer)\.name=/i.exec(spec ?? '');
       if (ident || spec === null) names.set(ident ? ident[1].toLowerCase() : 'user', null);
-      if (spec === null || HOOKS_PATH.test(/^[^=]*/.exec(spec ?? '')[0])) hooksOff = true;
+      if (spec === null || setsHooksPath(/^[^=]*/.exec(spec ?? '')[0])) hooksOff = true;
       continue;
     }
     if (arg === '--git-dir' || arg === '--work-tree') {
@@ -536,7 +547,7 @@ function hooksPathInEnv(env, result) {
   for (const [key, value] of env) {
     if (key !== 'GIT_CONFIG_PARAMETERS' && !/^GIT_CONFIG_KEY_\d+$/.test(key)) continue;
     if (value === null) { result.ambiguous = true; continue; }
-    if (key === 'GIT_CONFIG_PARAMETERS' ? /core\.hookspath/i.test(value) : HOOKS_PATH.test(value)) found = true;
+    if (key === 'GIT_CONFIG_PARAMETERS' ? /core\.hookspath|include(if\..*)?\.path/i.test(value) : setsHooksPath(value)) found = true;
   }
   return found;
 }
@@ -550,7 +561,7 @@ function skipsVerify(sub, rest) {
     const arg = rest[k];
     if (arg === null) continue;
     if (arg === '--') break;
-    if (VALUE_OPTS.has(arg)) { k += 1; continue; }
+    if (VALUE_OPTS[sub].has(arg)) { k += 1; continue; }
     if (arg.length >= 6 && '--no-verify'.startsWith(arg)) return true;
     if (sub !== 'commit' || !/^-[^-]/.test(arg)) continue;
     for (let c = 1; c < arg.length; c += 1) {
@@ -565,12 +576,13 @@ function skipsVerify(sub, rest) {
   return false;
 }
 
-// `git config [scope] core.hooksPath <value>`, `--unset`, `--add`,
+// `git config [scope] core.hooksPath <value>` (or an include that could set
+// it), `--unset`, `--add`,
 // `--replace-all`, or the `set`/`unset` verbs. Reads (`--get`, a bare key)
 // change nothing.
 function writesHooksPath(rest) {
   const words = rest.filter((a) => a !== null);
-  const key = words.findIndex((a) => HOOKS_PATH.test(a));
+  const key = words.findIndex((a) => setsHooksPath(a));
   if (key < 0) return false;
   const writes = ['set', 'unset', '--unset', '--unset-all', '--add', '--replace-all'];
   if (words.some((a) => writes.includes(a))) return true;

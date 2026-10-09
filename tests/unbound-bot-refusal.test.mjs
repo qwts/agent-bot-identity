@@ -199,7 +199,7 @@ test('every generated pre-command dialect refuses the stated unbound bot and all
   }
 });
 
-test('the runner check reads only git commit and push, and only from a stated bot', () => {
+test('the runner check reads only git commands that write commits or push, and only from a stated bot', () => {
   const { repo } = primaryCheckout();
   const empty = join(root, 'no-hooks');
   mkdirSync(empty, { recursive: true });
@@ -353,12 +353,15 @@ test('a stated bot cannot skip the git hooks with --no-verify, -n or a core.hook
     'git commit --no-veri -m x',
     'git commit -n -m x',
     'git commit -anm x',
+    'git commit -s -n -m x',
+    'git commit -o -n work.txt',
     'git push --no-verify origin HEAD',
     'git merge --no-verify topic',
     'git rebase --no-verify main',
     'git am --no-verify < patch.mbox',
     'git -c core.hooksPath=/dev/null commit -m x',
     'git -c CORE.HooksPath=/tmp/none push',
+    'git -c include.path=/tmp/hooks.cfg commit -m x',
     'git --config-env=core.hooksPath=HOOKS commit -m x',
     "GIT_CONFIG_PARAMETERS=\"'core.hooksPath'='/dev/null'\" git commit -m x",
     'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x',
@@ -408,7 +411,7 @@ test('merge, rebase, cherry-pick, revert, am and commit-tree get the bound-targe
   const u = unbound.repo;
   const subcommands = [
     'merge topic', 'rebase main', 'cherry-pick HEAD', 'revert HEAD', 'am patch.mbox', 'commit-tree HEAD^{tree} -m x',
-    'rebase --continue',
+    'rebase --continue', 'rebase --skip',
   ];
   for (const sub of subcommands) {
     const command = `git -C ${u} ${sub}`;
