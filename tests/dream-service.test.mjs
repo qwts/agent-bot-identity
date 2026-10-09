@@ -14,6 +14,7 @@ import { computePackageRevision, PACKAGE_IGNORE_LIST } from '../soul-package.mjs
 import { upsertSoul } from '../agent-population.mjs';
 import { assertOwnerAction, ownerCredentialRequired, verifyPrincipalOwner } from '../owner-action.mjs';
 import { PROOF_HEADER } from '../binding-proof.mjs';
+import { auditFile } from '../agent-principals.mjs';
 
 const ID = 'agent_66666666-6666-4666-8666-666666666666';
 const posix = { skip: process.platform === 'win32' };
@@ -110,6 +111,33 @@ test('daemon dream controls require owner verification, reject bindings and vali
   assert.equal((await f.call('?agentId=' + ID)).status, 400);
   assert.ok(f.verified.length > 0);
   assert.equal(JSON.stringify(f.service.status()).includes(principal.secret), false);
+});
+
+test('dream audit retains authorization before a failed control and distinguishes its outcome', posix, async t => {
+  const f = await serverFixture(t, { configured: false });
+  const receipts = () => readFileSync(auditFile({ env: f.env, home: f.root }), 'utf8').trim().split('\n').map(JSON.parse)
+    .filter(row => row.event.startsWith('dream-control'));
+  const request = { agentId: ID, schedule: 'PT1H', principal };
+  assert.equal((await f.call('/register', { ...request, principal: null })).status, 403);
+  assert.deepEqual(receipts().map(row => row.decision), ['owner-refused']);
+  const control = f.service.control;
+  let calls = 0;
+  f.server.dream = { ...f.service, control(input) {
+    calls++;
+    assert.equal(receipts().at(-1).decision, 'authorized', 'approval is recorded before executing the control');
+    return control(input);
+  } };
+  assert.equal((await f.call('/register', request)).status, 409, 'missing executor refuses the authorized control');
+  assert.equal(calls, 1);
+  assert.deepEqual(receipts().slice(-2).map(row => [row.event, row.decision]), [
+    ['dream-control', 'authorized'], ['dream-control-outcome', 'failed'],
+  ]);
+  assert.equal((await f.call('/unschedule', { agentId: ID, principal })).status, 200);
+  assert.deepEqual(receipts().slice(-2).map(row => [row.event, row.decision]), [
+    ['dream-control', 'authorized'], ['dream-control-outcome', 'returned'],
+  ]);
+  assert.ok(receipts().every(row => row.agentId === ID));
+  assert.equal(JSON.stringify(receipts()).includes(principal.secret), false);
 });
 
 test('owner run-now uses the configured ACP factory, policy and bounded inputs, retaining only execution facts', posix, async t => {

@@ -480,8 +480,15 @@ export function createDaemonServer({
             appendAuditReceipt({ event: 'dream-control', agentId: request.agentId ?? null, operation: dreamAction, decision: 'owner-refused' }, { env, home, now });
             throw Object.assign(new Error('The owner did not authorize this dream control.'), { code: error.code ?? 'owner-credential-required', statusCode: 403 });
           }
-          const result = server.dream.control(request);
           appendAuditReceipt({ event: 'dream-control', agentId: request.agentId ?? null, operation: dreamAction, decision: 'authorized' }, { env, home, now });
+          let result;
+          try { result = server.dream.control(request); }
+          catch (error) {
+            appendAuditReceipt({ event: 'dream-control-outcome', agentId: request.agentId ?? null, operation: dreamAction, decision: 'failed' }, { env, home, now });
+            throw error;
+          }
+          // A returned control may defer a run. This is not a maintenance result.
+          appendAuditReceipt({ event: 'dream-control-outcome', agentId: request.agentId ?? null, operation: dreamAction, decision: 'returned' }, { env, home, now });
           sendJson(res, result.status === 'started' ? 202 : 200, { schemaVersion: 1, result });
         } else if (route.endsWith('/history')) {
           const query = {};

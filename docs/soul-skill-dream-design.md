@@ -1,10 +1,11 @@
 # Dream maintenance implementation contract
 
-Status: implementation proposal for #603, following
+Status: staged implementation contract for #603, following
 [ADR-0603 decision 11](decisions/ADR-0603-imported-skills-keep-local-snapshots-and-upstream-provenance.md).
-This document adds no command, schedule, daemon job or owner authorization.
-Names and limits below are proposed contracts to review before implementation;
-they do not describe capabilities already shipped.
+The scheduler, journal, bounded inputs and daemon service are implemented.
+Durable maintenance outcomes, checkpoints and the remaining owner-facing
+workflow are incomplete; their requirements below remain proposed contracts.
+Implementation does not register a schedule or grant owner authorization.
 
 Dreaming is a bounded agent turn that maintains eligible knowledge using the
 soul's existing tools and permissions. The runtime schedules the turn, records
@@ -48,6 +49,9 @@ mutation passes the existing owner settings gate. Binding-authenticated requests
 cannot authorize these actions; the bearer alone cannot replace principal
 verification or an explicit owner ceremony. Client paths, executor overrides and
 capability claims are rejected. `run-now` returns a run receipt immediately.
+The audit records owner authorization before executing a control, then records
+whether that control returned or failed. A returned control can defer execution;
+its audit receipt does not certify a completed maintenance run.
 
 The journal is under `dream/` beside the daemon state file. Creation establishes
 private directory permissions and syncs new directory entries. Unsupported or
