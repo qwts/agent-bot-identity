@@ -15,7 +15,7 @@ import { DIALECTS, encodeDecision, vendorEvent } from '../hook-dialects.mjs';
 import { runHooks } from '../agent-hook.mjs';
 import { renderConfig } from '../sync-hooks.mjs';
 import { unboundBotSlug } from '../resolve-agent.mjs';
-import { isGitPublishCommand } from '../uninstalled-identity-hook.mjs';
+import { scanGitPublish } from '../git-publish-scan.mjs';
 import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -208,14 +208,92 @@ test('the runner check reads only git commit and push, and only from a stated bo
     payload: { cwd: repo, tool_name: 'Bash', tool_input: { command } },
   }).decision;
   for (const command of ['git commit -m x', 'git -C . push', 'sh -c "git push origin HEAD"', 'echo "$(git commit -m y)"']) {
-    assert.equal(isGitPublishCommand(command), true, command);
+    assert.equal(scanGitPublish(command, { cwd: repo, env: {} }).publishes.length, 1, command);
     assert.equal(run(command, STATED), 'deny', command);
     assert.equal(run(command, DELEGATE), 'allow', command);
   }
-  for (const command of ['git status', 'git add .', 'gh pr create --title x --body y', 'git commit-tree HEAD^{tree}']) {
-    assert.equal(isGitPublishCommand(command), false, command);
+  for (const command of ['git status', 'git add .', 'gh pr create --title x --body y', 'git commit-tree HEAD^{tree}', 'git log --grep=commit']) {
+    assert.equal(scanGitPublish(command, { cwd: repo, env: {} }).publishes.length, 0, command);
     assert.equal(run(command, STATED), 'allow', command);
   }
+});
+
+// Copilot review on #757: the check must follow the repository git writes,
+// not the session's directory. From a bound worktree, `git -C <unbound>
+// commit --no-verify` skips the unbound checkout's own hook.
+test('a bound session cannot reach an unbound checkout through -C, --git-dir, GIT_DIR, cd or an alias', () => {
+  const unbound = primaryCheckout();
+  const bound = primaryCheckout(`${SLUG}[bot]`);
+  const empty = join(root, 'no-hooks');
+  mkdirSync(empty, { recursive: true });
+  const run = (command, extra) => runHooks({
+    dialectKey: 'claude', event: 'pre-command', dir: empty, env: baseEnv(extra),
+    payload: { cwd: bound.repo, tool_name: 'Bash', tool_input: { command } },
+  });
+  unbound.git('config', 'alias.ci', 'commit');
+  const u = unbound.repo;
+  for (const command of [
+    `git -C ${u} commit --no-verify -m x`,
+    `git --git-dir=${u}/.git --work-tree=${u} commit --no-verify -m x`,
+    `git --git-dir ${u}/.git push origin HEAD`,
+    `GIT_DIR=${u}/.git git commit --no-verify -m x`,
+    `cd ${u} && git commit --no-verify -m x`,
+    `B=${u}; cd "$B"; git push`,
+    `env -C ${u} git commit -n -m x`,
+    `git -C ${u} ci --no-verify -m x`,
+    `git -C ${u} -c alias.up='!git push' up`,
+  ]) {
+    const verdict = run(command, STATED);
+    assert.equal(verdict.decision, 'deny', command);
+    assert.match(verdict.reason, new RegExp(`stated bot identity ${SLUG}`), command);
+  }
+  // The bound worktree itself still publishes.
+  for (const command of ['git commit -m x', `git -C ${bound.repo} push`, 'cd . && git commit -m x']) {
+    assert.equal(run(command, STATED).decision, 'allow', command);
+  }
+  // A target no scan can place is refused for a stated bot, and only for one.
+  for (const command of ['git -C "$UNSEEN_DIR" commit -m x', 'false && cd /tmp; git commit -m x', '(cd /tmp); git push']) {
+    assert.match(run(command, STATED).reason ?? '', /cannot be proven/, command);
+    assert.equal(run(command, DELEGATE).decision, 'allow', command);
+    assert.equal(run(command, {}).decision, 'allow', command);
+  }
+  // The delegate and a human reach the unbound checkout as before.
+  assert.equal(run(`git -C ${u} commit --no-verify -m x`, DELEGATE).decision, 'allow');
+  assert.equal(run(`git -C ${u} commit --no-verify -m x`, {}).decision, 'allow');
+});
+
+// Copilot review on #757: shell escapes and quoting must not hide git from
+// the detector. The scan unquotes the way sh does, and a command word it
+// cannot read near git, commit or push is refused for a stated bot.
+test('shell escapes, quoting and indirection do not hide a commit from a stated bot', () => {
+  const { repo } = primaryCheckout();
+  const empty = join(root, 'no-hooks');
+  mkdirSync(empty, { recursive: true });
+  const run = (command, extra) => runHooks({
+    dialectKey: 'claude', event: 'pre-command', dir: empty, env: baseEnv(extra),
+    payload: { cwd: repo, tool_name: 'Bash', tool_input: { command } },
+  }).decision;
+  for (const command of [
+    'g\\it commit --no-verify -m x',
+    '\\git commit --no-verify -m x',
+    '"g"it commit --no-verify -m x',
+    "g''it push",
+    "$'git' commit -m x",
+    "$'\\x67it' commit -m x",
+    'G=git; $G commit -m x',
+    '$(echo git) commit -m x',
+    'g{i,}t commit -m x',
+    'eval "git commit -m x"',
+    'command git commit -m x',
+    'nohup git push',
+    'echo x | xargs git commit -m',
+  ]) {
+    assert.equal(run(command, STATED), 'deny', command);
+    assert.equal(run(command, DELEGATE), 'allow', command);
+    assert.equal(run(command, {}), 'allow', command);
+  }
+  // Here-document bodies are data, not commands.
+  assert.equal(run('cat > notes.md <<EOF\ngit commit -m x\nEOF', STATED), 'allow');
 });
 
 test('unboundBotSlug: stated identities without a bot committer, and nothing else', () => {

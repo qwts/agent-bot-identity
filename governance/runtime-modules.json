@@ -130,6 +130,7 @@
     "gh-shim.mjs": "identity",
     "git-credential-bot.mjs": "identity",
     "git-hooks.mjs": "identity",
+    "git-publish-scan.mjs": "identity",
     "harness-auth.mjs": "soul",
     "hook-dialects.mjs": "harness",
     "identity-app-store.mjs": "identity",

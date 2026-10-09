@@ -155,13 +155,17 @@ export function resolveAgentSlug({
 // stays the pre-commit hook's question. With github-identity off there is no
 // bot to bind and nothing to refuse. An unreadable pin propagates: an identity
 // that cannot be checked is not an absent one.
-export function unboundBotSlug({ env = process.env, cwd = process.cwd(), config, git = defaultGitRunner } = {}) {
+export function statedBotSlug({ env = process.env, cwd = process.cwd(), config, git = defaultGitRunner } = {}) {
   const cfg = config ?? loadConfig({ env });
   if (!isGateEnabled('github-identity', { config: cfg })) return null;
   const accountKey = accountHarness(cfg, accountName(env));
-  const slug = (env.GH_AGENT_APP ?? '').trim()
+  return (env.GH_AGENT_APP ?? '').trim()
     || pinnedSlug(cwd, { git })
     || (accountKey ? slugForHarness(accountKey, cfg) : null);
+}
+
+export function unboundBotSlug({ env = process.env, cwd = process.cwd(), config, git = defaultGitRunner } = {}) {
+  const slug = statedBotSlug({ env, cwd, config, git });
   if (!slug) return null;
   let name = '';
   try {
@@ -177,4 +181,12 @@ export function unboundBotReason(slug) {
     + 'worktree setup failed or never ran here, so this commit or push would be attributed to the human. '
     + 'Run `agent-bot setup-worktree` in a linked worktree (a primary checkout is refused) '
     + 'and check `agent-bot doctor`, then retry.';
+}
+
+// For a target the pre-command scan could not place (a variable path, a
+// shell indirection): a stated bot cannot prove it is bound there.
+export function unprovableBotReason(slug) {
+  return `agent-bot: this session stated bot identity ${slug}, and this command may commit or push in a repository `
+    + 'whose binding cannot be proven (a variable or unresolved path, a shell indirection, or an alias). '
+    + 'Run the git command with literal paths from the bound worktree, or run `agent-bot setup-worktree` there first.';
 }
