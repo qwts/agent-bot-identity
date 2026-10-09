@@ -1,0 +1,1 @@
+- Credential mint receipts now name the App (`appSlug`) and a fixed `reason` code, and `agent-bot mint-token` run by an operator leaves a `credential-mint` receipt too, so the audit log accounts for operator mints (#107).

@@ -697,7 +697,7 @@ export function createDaemonServer({
             binding = requireBinding(req, bindings);
           } catch (error) {
             appendAuditReceipt(
-              { event: 'credential-mint', operation: 'tier1-app-token', decision: 'denied' },
+              { event: 'credential-mint', operation: 'tier1-app-token', decision: 'denied', reason: 'no-live-binding' },
               { env, home, now },
             );
             throw error;
@@ -714,6 +714,7 @@ export function createDaemonServer({
               agentId: binding.agentId,
               operation: 'tier1-app-token',
               decision: 'failed',
+              reason: 'identity-unreadable',
             }, { env, home, now });
             throw error;
           }
@@ -726,6 +727,8 @@ export function createDaemonServer({
               agentId: binding.agentId,
               operation: 'tier1-app-token',
               decision: 'denied',
+              ...(identity.github?.appSlug ? { appSlug: identity.github.appSlug } : {}),
+              reason: githubOn ? 'no-github-app' : 'github-identity-off',
             }, { env, home, now });
             throw Object.assign(new Error(githubOn ? 'this soul has no GitHub App' : 'the github-identity add-on is off'), { statusCode: 409 });
           }
@@ -743,14 +746,19 @@ export function createDaemonServer({
               agentId: binding.agentId,
               operation: 'tier1-app-token',
               decision: 'failed',
+              appSlug: identity.github.appSlug,
+              reason: 'mint-failed',
             }, { env, home, now });
             throw error;
           }
+          // The App comes from the bound soul's own record, never the request.
           appendAuditReceipt({
             event: 'credential-mint',
             agentId: binding.agentId,
             operation: 'tier1-app-token',
             decision: 'granted',
+            appSlug: identity.github.appSlug,
+            reason: 'bound-soul-own-app',
           }, { env, home, now });
           sendJson(res, 200, {
             schemaVersion: SCHEMA_VERSION,

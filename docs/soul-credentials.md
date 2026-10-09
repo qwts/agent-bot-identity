@@ -199,6 +199,32 @@ daemon's `/v0/credential`) checks these places in order:
 working as before. Nothing in this path prints, logs, audits or returns key
 material. No agent-facing command or MCP tool returns a key.
 
+## Mint receipts (#107)
+
+Every mint through the daemon's `/v0/credential`, every `agent-bot
+mint-token` mint attempt and every owner-approval refusal in `mint-token`
+appends a `credential-mint` receipt to the interaction home's `audit.jsonl`.
+A `mint-token` run that stops before that, at `--help` or an argument error
+such as an unknown option, mints nothing and writes no receipt. A receipt carries no token, key, or
+error text. Besides `at`, `event`, `agentId` (daemon only), `operation` and
+`decision`, it adds two optional fields that older readers can ignore:
+
+- `appSlug`: the App the mint was for, once one is known.
+- `reason`: a fixed code for the outcome.
+
+| `operation` | `decision` | `reason` |
+| --- | --- | --- |
+| `tier1-app-token` | `granted` | `bound-soul-own-app` |
+| `tier1-app-token` | `denied` | `no-live-binding`, `github-identity-off`, `no-github-app` |
+| `tier1-app-token` | `failed` | `identity-unreadable`, `mint-failed` |
+| `mint-token` | `granted` | `owner-approved`, or the selector: `explicit-app`, `env-app`, `env-credential`, `ambient-app` (checkout pin, the soul's managed App from `AGENT_BOT_ID` or the worktree's Agent ID, account, or harness) |
+| `mint-token` | `denied` | `owner-approval-refused` |
+| `mint-token` | `failed` | `no-app-selected`, `mint-failed` |
+
+A `mint-token` receipt is best effort: if it can't be written, the command
+warns on stderr and the mint goes ahead as before. A `mint-token` run for a
+keyd-held key also leaves the daemon's own `tier1-app-token` receipt.
+
 ## Migrating
 
 ```sh

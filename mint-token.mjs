@@ -169,6 +169,17 @@ export function appConfig({
   );
 }
 
+// Which of appConfig()'s selectors chose the App, as a fixed receipt reason
+// code (#107). It follows appConfig()'s order; the checkout pin, the soul's
+// managed App (AGENT_BOT_ID or the worktree's Agent ID), the account and
+// harness detection are reported together as `ambient-app`.
+export function selectionReason({ argv = process.argv, env = process.env } = {}) {
+  if (argv.indexOf('--app') !== -1) return 'explicit-app';
+  if (env.GH_AGENT_APP) return 'env-app';
+  if (env.GH_APP_ID && (env.GH_APP_PRIVATE_KEY || env.GH_APP_PRIVATE_KEY_PATH)) return 'env-credential';
+  return 'ambient-app';
+}
+
 async function gh(base, method, path, jwt, payload = null) {
   const res = await fetch(`${base}${path}`, {
     method,
@@ -234,10 +245,15 @@ export function pickInstallation(installations, owner) {
 // is granted. Without it the token carries the whole grant, as before. A key
 // held by keyd mints through the daemon, which issues the soul's full grant,
 // so `permissions` is refused there rather than silently ignored.
-export async function mint({ slug, env = process.env, agentId = null, viaKeyd = null, permissions = null } = {}) {
+//
+// `selected` (#107), when given, is told which App was chosen and why, as
+// soon as it is resolved and before anything is minted, so a caller can
+// receipt the attempt whatever its outcome. It is never given key material.
+export async function mint({ slug, env = process.env, agentId = null, viaKeyd = null, permissions = null, selected = null } = {}) {
   const config = loadConfig({ env });
   const argv = slug ? ['node', 'mint-token.mjs', '--app', slug] : process.argv;
   const resolved = appConfig({ argv, env, config, agentId });
+  if (selected) selected({ appSlug: resolved.slug, reason: selectionReason({ argv, env }) });
   if (resolved.keyd) {
     if (permissions) throw new Error(`the ${resolved.slug} key is held by agent-bot-keyd, which mints the soul's full grant through the daemon; --permissions is not available for it`);
     if (viaKeyd) return viaKeyd({ agentId: resolved.keyd.agentId, app: resolved.slug, config });
