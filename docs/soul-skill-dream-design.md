@@ -2,8 +2,9 @@
 
 Status: staged implementation contract for #603, following
 [ADR-0603 decision 11](decisions/ADR-0603-imported-skills-keep-local-snapshots-and-upstream-provenance.md).
-The scheduler, journal, bounded inputs, daemon service and durable reported
-outcomes are implemented. Processing checkpoints and notices remain incomplete;
+The scheduler, journal, bounded inputs, daemon service, CLI, durable reported
+outcomes and selection checkpoints are implemented. Processing checkpoints and
+notices remain incomplete;
 their requirements below remain proposed contracts.
 Implementation does not register a schedule or grant owner authorization.
 
@@ -275,8 +276,8 @@ restart. References no longer needed by active/latest runs leave the current
 state, while their append-only history events remain available through bounded
 history pages. No source selection or processing checkpoint advances here.
 
-Version 1 and 2 journals remain readable. The next scheduler transaction writes
-state version 3 without rewriting historical records or their hash chain.
+Version 1, 2 and 3 journals remain readable. The next scheduler transaction writes
+state version 4 without rewriting historical records or their hash chain.
 Read-only inspection does not migrate disk. Older readers must be upgraded before
 opening a journal advanced by this implementation.
 
@@ -316,8 +317,42 @@ in one journal transaction. Staging an outcome in memory is not a durability
 acknowledgment. Uncertain publication retains the lease in the running process;
 restart sees either the unfinished flight or the complete terminal/outcome
 transaction. Unscheduling removes current references, not append-only history.
-All outcome records state `processingCoverage: unverified`. Selection rotation,
-processing checkpoints and notice deduplication remain to be integrated.
+All outcome records state `processingCoverage: unverified`. Selection rotation is
+implemented below; processing checkpoints and notice deduplication remain incomplete.
+
+### Implemented selection checkpoints
+
+Each registration may retain one version-1 selection checkpoint in scheduler
+state version 4. It names the soul, current registration generation, successful
+run, journal revision, source revision, exact input preparation receipt/digest
+and next selection cursor. Its `coverage` is `selection-only` and its
+`processingCoverage` is `unverified`. It proves which page comes next, not that
+any source was delivered, examined or processed.
+
+The checkpoint advances only when the executor settles successfully without a
+cancellation request and its report is structurally valid. The checkpoint,
+terminal run and outcome publish in one transaction. Failed, interrupted,
+truncated or unstructured attempts preserve the previous checkpoint. Even a
+valid report with zero items can advance selection: all those items remain
+unreported, and no processing credit is assigned. Missing or blocked items are
+never removed from eligibility; after the last page the cursor wraps to the
+start. Truncated source tails still have unknown coverage. Semantic processing
+checkpoints require a trusted operation-specific verifier and are not implemented.
+
+Before capture, the daemon reads the exact preparation transaction through a
+bounded one-record history query and checks its receipt and next cursor against
+the checkpoint. A mismatch refuses launch with `dream-selection-invalid` instead
+of trusting a structurally valid cursor. The bounded source reader resets to the
+first page if the package revision changed. Pause and schedule changes retain
+selection for the same directory and bind it to the new registration generation;
+an older generation's completion cannot advance it. Unscheduling removes current
+selection state while preserving its append-only events. One unsettled run per
+soul prevents manual and scheduled execution from racing checkpoint publication.
+
+Status exposes the selected soul's checkpoint even when a newer failed run is
+now its latest execution. Versions 1–3 remain readable without disk changes;
+the next write adds v4 state, leaving historical bytes and hash chains unchanged.
+Readers must be upgraded before opening a v4 journal.
 
 ### Remaining checkpoint and notice contract
 
@@ -350,7 +385,7 @@ starts a new final-reply segment and resets its truncation flag. Ordinary wake
 reply behavior is unchanged unless its caller explicitly requests a bound.
 
 Checkpoint publication follows validation of the corresponding outcomes. Only
-verified processed items advance their source cursors; missing/blocked entries
+verified processed items may advance future processing cursors; missing/blocked entries
 remain eligible on a later run. A cancelled or interrupted attempt must not
 advance the entire inventory. Changes already committed through normal revision
 or tool mechanisms are not rolled back by pretending that cancellation is a
@@ -404,21 +439,23 @@ of ADR-0603 complete.
 
 `skill-dream-scheduler.mjs` implements the scheduling state machine through
 injected ports. It has no default disk store, daemon registration, owner-control
-route, recurring timer loop, source reader, maintenance prompt, checkpoint
-publisher or notice consumer.
-Importing this module creates no job. A production adapter must authorize the
-controls and supply the existing configured turn executor before exposing them.
+route, recurring timer loop, source reader or maintenance prompt. It commits
+input receipts, reported outcomes and selection checkpoints through the storage
+port. The daemon service and CLI above provide authorization and composition.
+Importing this module creates no job.
 The separately supplied POSIX journal below implements the storage port; the
 scheduler still does not choose or create a default store.
 
-The version-1 host-local state has a revision, at most 256 registrations and
+The host-local state has a revision, at most 256 registrations and
 at most 256 unsettled flights. A registration records the soul ID, canonical
 directory, generation, interval, pause state, next due time and latest settled
 execution. A flight records its run and daemon generation, original registration
 and directory, trigger, start time, execution bound and cancellation state.
 Strict validation refuses unknown schemas, extra fields, duplicate souls/runs,
-invalid timestamps and inconsistent states. These are new records, not migrations
-of existing soul or daemon stores. Checkpoint/evidence schemas remain later work.
+invalid timestamps and inconsistent states. State v2 added input receipt
+references, v3 added outcome references, and v4 adds bounded selection checkpoints.
+These records belong to the dream journal; existing soul and daemon stores are
+not rewritten. Semantic processing and notice schemas remain later work.
 A canonical directory cannot be assigned to different souls across registrations
 and unsettled flights. The same soul may re-register at a new directory while its
 old flight remains quarantined; another soul cannot claim that old directory
@@ -453,8 +490,8 @@ journals their quarantine. Recovery never probes or kills a process, clears an
 unproven lease, or infers a task from imported history. Pause, unschedule and
 re-registration preserve that independent flight. An old run may record its
 actual settlement but cannot change a newer registration's due time or recreate
-a removed registration. Daemon/owner integration and the remaining maintenance
-gates still need their own implementation and validation.
+a removed registration. Daemon/owner integration is implemented above; remaining
+maintenance and notice gates still need their own implementation and validation.
 
 ## POSIX journal adapter
 

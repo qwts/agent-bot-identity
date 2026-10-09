@@ -184,7 +184,7 @@ test('structured and truncated replies are persisted atomically with terminal ru
     } });
     f.control('register', { schedule: 'PT1H' }); f.control('run-now'); await f.service.idle();
     const transaction = f.service.history().records.at(-1);
-    assert.deepEqual(transaction.events.map(event => event.kind), ['ended', 'outcome-recorded']);
+    assert.deepEqual(transaction.events.map(event => event.kind), ['ended', 'outcome-recorded', ...truncated ? [] : ['selection-advanced']]);
     const record = transaction.events[1];
     assert.equal(record.outcome.report.status, truncated ? 'truncated' : 'structured');
     assert.equal(record.outcome.items.length, truncated ? 0 : 1);
@@ -297,4 +297,52 @@ test('a failed stop observer cannot prevent the shared controller from cancellin
   const done = turns.run({ invocation: { agentId: ID } }, ({ signal }) => new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })));
   const rejected = assert.rejects(done, { name: 'AbortError' });
   assert.equal(turns.stop(ID), true); await rejected; assert.deepEqual(turns.busy(), []);
+});
+
+test('durable selection rotates bounded pages across restart, wraps blocked items and resets on source change', posix, async t => {
+  const seen = [];
+  const f = fixture(t, { executorFor: () => async input => {
+    const captured = JSON.parse(input.message.split('\n\n').at(-1)); seen.push(captured);
+    input.appendEvent(UPDATE_EVENT, { sessionUpdate: 'agent_message_chunk', content: { text: JSON.stringify({
+      schemaVersion: 1, runId: captured.runId, startingRevision: captured.revision,
+      items: captured.sources.map(source => ({ path: source.path, digest: source.digest, outcome: 'blocked', reason: 'missing-tool', evidence: null })),
+    }) } });
+  } });
+  const seal = () => {
+    const file = path.join(f.soul, 'soul.json'), manifest = JSON.parse(readFileSync(file, 'utf8'));
+    manifest.revision = computePackageRevision(f.soul); writeFileSync(file, JSON.stringify(manifest));
+  };
+  for (let i = 0; i < 102; i++) {
+    const dir = path.join(f.soul, 'skills', `fixture-${String(i).padStart(3, '0')}`);
+    mkdirSync(dir, { recursive: true }); writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: fixture-${String(i).padStart(3, '0')}\ndescription: Fixture skill\n---\nSkill ${i}`);
+  }
+  seal(); f.control('register', { schedule: 'PT1H' }); f.control('run-now'); await f.service.idle();
+  assert.equal(seen[0].sources.length, 100); assert.equal(seen[0].coverage.remaining, 3);
+  const firstPaths = seen[0].sources.map(source => source.path);
+  f.service.shutdown();
+  const reopened = createDreamService(f.options);
+  t.after(async () => { reopened.shutdown(); await reopened.idle(); });
+  const run = async () => { reopened.control({ action: 'run-now', agentId: ID }); await reopened.idle(); };
+  await run();
+  assert.equal(seen[1].sources.length, 3); assert.ok(seen[1].sources.every(source => !firstPaths.includes(source.path)));
+  assert.equal(reopened.status().selectionCheckpoints[0].nextCursor, null);
+  await run(); assert.deepEqual(seen[2].sources.map(source => source.path), firstPaths, 'blocked items return in the next cycle');
+  writeFileSync(path.join(f.soul, 'AGENTS.md'), 'Changed definition'); seal();
+  await run(); assert.deepEqual(seen[3].sources.map(source => source.path), firstPaths, 'new revision resets selection');
+  assert.notEqual(seen[3].revision, seen[2].revision);
+  assert.equal(reopened.status().maintenanceCoverage, 'unverified');
+  assert.ok(reopened.status().selectionCheckpoints.every(row => row.processingCoverage === 'unverified'));
+
+  // A same-revision cursor must match its immutable preparation receipt. A
+  // structurally valid journal checkpoint alone is not enough to skip sources.
+  reopened.shutdown();
+  const disk = createDreamFileStore({ directory: f.directory }), state = disk.read(), expectedRevision = state.revision;
+  state.selectionCheckpoints[0].nextCursor.path = 'AGENTS.md'; state.revision++;
+  assert.equal(disk.commit({ expectedRevision, state, events: [{ kind: 'registered', at: state.registrations[0].updatedAt,
+    registration: state.registrations[0] }] }), true);
+  const mismatched = createDreamService(f.options);
+  t.after(async () => { mismatched.shutdown(); await mismatched.idle(); });
+  mismatched.control({ action: 'run-now', agentId: ID }); await mismatched.idle();
+  assert.equal(seen.length, 4, 'a mismatched checkpoint never reaches the provider');
+  assert.equal(mismatched.status().diagnostics.inputFailures[0].code, 'dream-selection-invalid');
 });

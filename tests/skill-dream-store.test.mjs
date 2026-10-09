@@ -48,20 +48,20 @@ dreamStoreConformance('POSIX dream journal', fixture, posix);
 
 test('v1 journal state upgrades on the next transaction without rewriting history', posix, t => {
   const f = fixture(t), legacy = structuredClone(f.first);
-  legacy.state.schemaVersion = 1; delete legacy.state.inputReceipts; delete legacy.state.outcomeReceipts;
+  legacy.state.schemaVersion = 1; delete legacy.state.inputReceipts; delete legacy.state.outcomeReceipts; delete legacy.state.selectionCheckpoints;
   assert.equal(f.store.commit(legacy), true);
   const bytes = readFileSync(path.join(f.directory, name(1)));
   const store = f.reopen(), scheduler = createDreamScheduler({ store, execute: () => {}, soulDirectory: () => f.directory });
-  assert.equal(scheduler.status().schemaVersion, 3);
+  assert.equal(scheduler.status().schemaVersion, 4);
   assert.deepEqual(scheduler.status().inputReceipts, []);
   assert.equal(store.read().schemaVersion, 1, 'read-only inspection does not migrate disk');
   scheduler.pause(A);
-  assert.equal(store.read().schemaVersion, 3);
+  assert.equal(store.read().schemaVersion, 4);
   assert.deepEqual(readFileSync(path.join(f.directory, name(1))), bytes);
   assert.equal(store.history().records.length, 2);
 });
 
-test('v2 prepared runs retain their input references during v3 restart quarantine', posix, async t => {
+for (const version of [2, 3]) test(`v${version} prepared runs retain their input references during v4 restart quarantine`, posix, async t => {
   const f = fixture(t), captured = [], metadata = emptyInputs();
   let state = null;
   const old = createDreamScheduler({ soulDirectory: () => f.directory, setTimer: () => 1, clearTimer() {},
@@ -70,14 +70,15 @@ test('v2 prepared runs retain their input references during v3 restart quarantin
   });
   old.register(A, 'PT1H'); old.runNow(A); await Promise.resolve();
   for (const change of captured) {
-    change.state.schemaVersion = 2; delete change.state.outcomeReceipts;
+    change.state.schemaVersion = version; delete change.state.selectionCheckpoints;
+    if (version === 2) delete change.state.outcomeReceipts;
     assert.equal(f.store.commit(change), true);
   }
   const reference = f.store.read().inputReceipts[0], bytes = readFileSync(path.join(f.directory, name(3)));
   const scheduler = createDreamScheduler({ store: f.reopen(), execute() {}, soulDirectory: () => f.directory });
-  assert.equal(f.reopen().read().schemaVersion, 2);
+  assert.equal(f.reopen().read().schemaVersion, version);
   assert.equal(scheduler.recover().quarantined, 1);
-  assert.equal(f.reopen().read().schemaVersion, 3);
+  assert.equal(f.reopen().read().schemaVersion, 4);
   assert.deepEqual(scheduler.status().inputReceipts, [reference]);
   assert.deepEqual(readFileSync(path.join(f.directory, name(3))), bytes);
   assert.equal(scheduler.runNow(A).reason, 'recovery-required');
@@ -100,13 +101,15 @@ test('uncertain terminal writes recover either the live lease or the complete ou
     const reopened = f.reopen(), state = reopened.read(), events = reopened.history().records.at(-1).events;
     if (boundary === 'before-create') {
       assert.equal(state.flights.length, 1); assert.deepEqual(state.outcomeReceipts, []);
+      assert.deepEqual(state.selectionCheckpoints, []);
       assert.deepEqual(events.map(event => event.kind), ['inputs-prepared']);
       const recovered = createDreamScheduler({ store: reopened, execute() {}, soulDirectory: () => f.directory });
       assert.equal(recovered.recover().quarantined, 1);
     } else {
       assert.equal(state.flights.length, 0); assert.equal(state.registrations[0].lastRun.status, 'completed');
-      assert.deepEqual(events.map(event => event.kind), ['ended', 'outcome-recorded']);
+      assert.deepEqual(events.map(event => event.kind), ['ended', 'outcome-recorded', 'selection-advanced']);
       assert.deepEqual(state.outcomeReceipts, [events[1].receipt]);
+      assert.deepEqual(state.selectionCheckpoints, [events[2].checkpoint]);
       assert.equal(events[1].outcome.processingCoverage, 'unverified');
     }
   });

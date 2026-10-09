@@ -27,6 +27,8 @@ const STATUS = {
   ],
   flights: [run(ID, RUN), run(OTHER, OTHER_RUN)],
   inputReceipts: [{ runId: RUN, journalRevision: 3, startingRevision: HASH, digest: HASH }, { runId: OTHER_RUN, journalRevision: 4, startingRevision: HASH, digest: HASH }],
+  selectionCheckpoints: [{ agentId: ID, runId: 'previous-successful-run', coverage: 'selection-only', processingCoverage: 'unverified' },
+    { agentId: OTHER, runId: OTHER_RUN, coverage: 'selection-only', processingCoverage: 'unverified' }],
   outcomeReceipts: [{ runId: OTHER_RUN, journalRevision: 5, startingRevision: HASH, digest: HASH }],
   fault: null, orphanRecovery: 'quarantine-only',
   journal: { revision: 99999, transactions: 99999, capacity: 100000, full: false, temporaryFiles: 0, automaticPruning: false, maxRecordBytes: 8388608 },
@@ -83,6 +85,7 @@ test('status and history disclose only the named soul and always report unverifi
   assert.deepEqual(status.inputReceipts.map(item => item.runId), [RUN]);
   assert.deepEqual(status.outcomeReceipts, [], 'receipt kinds from later state versions are filtered too');
   assert.equal(status.registration.intervalHours, 24);
+  assert.deepEqual(status.selectionCheckpoints, [STATUS.selectionCheckpoints[0]], 'checkpoints are filtered by soul, including an older successful run');
   assert.deepEqual([status.started, status.closing, status.orphanRecovery], [true, false, 'quarantine-only']);
   assert.deepEqual(status.journal, STATUS.journal, 'journal budget and no-pruning facts stay visible');
   assert.deepEqual(status.diagnostics, { scope: 'this-daemon', inputFailures: [STATUS.diagnostics.inputFailures[0]] },
