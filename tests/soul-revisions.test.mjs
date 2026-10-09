@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { mintAgentIdentity, readAgentIdentity, recordAgentPackageRevision } from '../agent-identity.mjs';
 import { computePackageRevision, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, validateSoulPackage } from '../soul-package.mjs';
 import { adoptSoulPackage, createRevisionAppender, decideSoulProposal, diffSoulPackages,
@@ -229,7 +230,7 @@ test('CLI exposes JSON history/proposals and guards all user actions through hos
     await assert.rejects(revisionCommand(args, deny), /authorization denied/);
   }
   await revisionCommand(['approve', f.id, p.proposalId, 'Reviewed'], { ...f.options, assertUser: () => {} });
-  const cli = new URL('../agent-bot.mjs', import.meta.url).pathname;
+  const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
   for (const cmd of ['history', 'list']) {
     const result = spawnSync(process.execPath, [cli, 'soul', 'revision', cmd, f.id], { encoding: 'utf8', env: { ...process.env, AGENT_BOT_STATE_HOME: f.stateDir } });
     assert.equal(result.status, 0, result.stderr); assert.ok(Array.isArray(JSON.parse(result.stdout)));
@@ -266,7 +267,7 @@ test('self-consistent tampering cannot replace a content-addressed proposal snap
 test('CLI denies cross-soul proposals even if their policy would auto-apply', (t) => {
   const f = fixture(t, { mode: 'auto', paths: ['**'] }); update(f, 'AGENTS.md', 'Cross-soul');
   const other = mintAgentIdentity({ ...f.options, appSlug: 'test-agent' });
-  const result = spawnSync(process.execPath, [new URL('../agent-bot.mjs', import.meta.url).pathname,
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../agent-bot.mjs', import.meta.url)),
     'soul', 'revision', 'propose', f.id, f.packagePath, 'Unauthorized'], {
     encoding: 'utf8', env: { ...process.env, AGENT_BOT_ID: other.id, AGENT_BOT_STATE_HOME: f.stateDir },
   });
@@ -278,7 +279,7 @@ test('CLI denies soul actions from an unbound caller', (t) => {
   const f = fixture(t, { mode: 'auto', paths: ['**'] }); update(f, 'AGENTS.md', 'Unbound');
   // No Agent ID and no harness markers: an owner shell, where both lookups are null.
   const env = { PATH: process.env.PATH, HOME: f.stateDir, AGENT_BOT_STATE_HOME: f.stateDir, GIT_CONFIG_GLOBAL: '/dev/null' };
-  const result = spawnSync(process.execPath, [new URL('../agent-bot.mjs', import.meta.url).pathname,
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../agent-bot.mjs', import.meta.url)),
     'soul', 'revision', 'propose', f.id, f.packagePath, 'Unbound'], { encoding: 'utf8', env, cwd: f.stateDir });
   assert.equal(result.status, 1); assert.match(result.stderr, /only to its own package/);
   assert.equal(revisionHistory(f.id, f.options).length, 1);

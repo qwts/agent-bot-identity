@@ -8,6 +8,7 @@ import { soulsHome } from '../souls-root.mjs';
 import { loadConfig, soulsRootSetting } from '../config.mjs';
 import { archiveSoulDirs, duplicateSoulDirs, locateSoulDir, orphanSoulDirs, soulDirsOf, registerSoulDir, showSoul, soulDirectory, upsertSoul } from '../agent-population.mjs';
 import { soulDirInfo } from '../soul-dir.mjs';
+import { fileURLToPath } from 'node:url';
 
 const id = 'agent_33333333-3333-4333-8333-333333333333';
 function scratch(t) {
@@ -86,7 +87,7 @@ test('a default directory another soul marked falls back to an ID-suffixed one',
 
 test('soul dir CLI prints the shared host contract without creating a soul', (t) => {
   const options = scratch(t);
-  const result = spawnSync(process.execPath, [new URL('../agent-bot.mjs', import.meta.url).pathname, 'soul', 'dir', id], {
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../agent-bot.mjs', import.meta.url)), 'soul', 'dir', id], {
     encoding: 'utf8', env: { PATH: process.env.PATH, HOME: options.home, AGENT_BOT_POPULATION_PATH: options.file },
   });
   assert.equal(result.status, 0, result.stderr);

@@ -162,7 +162,7 @@ test('ordinary unmarked packages work, invalid input does not mint, and CLI wire
     [f.template, '--name', 'Billy', '--name', 'Other']]) await assert.rejects(templateSpawnCommand(args), /usage/);
   await assert.rejects(spawnSoulTemplate(f.template, { ...f.options, name: ' ' }), /nonempty/);
   await assert.rejects(spawnSoulTemplate(f.template, { ...f.options, name: 'Billy', harness: '../bad' }), /harness/);
-  const result = spawnSync(process.execPath, [new URL('../agent-bot.mjs', import.meta.url).pathname,
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../agent-bot.mjs', import.meta.url)),
     'soul', 'spawn', f.template, '--name', 'Billy', '--harness', 'codex'],
   { env: { ...process.env, ...f.options.env }, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);

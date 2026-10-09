@@ -11,6 +11,7 @@ import { mintAgentIdentity } from '../agent-identity.mjs';
 import { upsertSoul, soulDirectory } from '../agent-population.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, validateSoulPackage } from '../soul-package.mjs';
 import { adoptSoulPackage, editSoulRevision, revisionCommand, revisionHistory, revisionPackagePath } from '../soul-revisions.mjs';
+import { fileURLToPath } from 'node:url';
 
 function fixture(t) {
   const home = mkdtempSync(join(realpathSync(tmpdir()), 'revision-apply-'));
@@ -223,7 +224,7 @@ test('--apply holds the revision lock while recording, and releases it after pub
 
 test('the stable CLI accepts --apply --json and --principal-stdin before enforcing owner proof', (t) => {
   const f = fixture(t), before = tree(f.directory);
-  const result = spawnSync(process.execPath, [new URL('../agent-bot.mjs', import.meta.url).pathname,
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../agent-bot.mjs', import.meta.url)),
     'soul', 'revision', ...editArgs(f), '--principal-stdin'], {
     env: f.options.env, cwd: f.home, encoding: 'utf8',
     input: JSON.stringify({ principal: 'principal_12345678-1234-4123-8123-123456789abc', secret: 'test-only',
