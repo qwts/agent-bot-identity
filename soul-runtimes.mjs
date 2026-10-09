@@ -16,7 +16,7 @@
 //   a routed launch keeps out of the host's HOME
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, constants as fsConstants, createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
@@ -106,12 +106,18 @@ export function harnessInstallDeclared(soulDir, harness) {
   return Object.hasOwn(declaredRuntimes(readSoulManifest(soulDir)).harnesses, harness);
 }
 
+// A regular file this account may execute. A declared runtime whose file
+// lacks the execute bit is not installed: the engine would otherwise skip it
+// on PATH and run the daemon's own Node instead (#617). On Windows X_OK is
+// an existence check.
+function executableFile(file) {
+  try { if (!statSync(file).isFile()) return false; accessSync(file, fsConstants.X_OK); return true; } catch { return false; }
+}
+
 // Windows archives carry `name.exe`; the declaration names the executable
 // without it on every platform.
 function hasExecutable(directory, name) {
-  return [name, `${name}.exe`].some((file) => {
-    try { return statSync(path.join(directory, file)).isFile(); } catch { return false; }
-  });
+  return [name, `${name}.exe`].some((file) => executableFile(path.join(directory, file)));
 }
 
 function readStamp(directory) {
@@ -144,7 +150,7 @@ function containedExecutable(soulDir, directory, bin, executable) {
     const root = realpathSync(directory);
     if (!within(realpathSync(soulDir), root)) return false;
     return [executable, `${executable}.exe`].some(name => {
-      try { const file = realpathSync(path.join(directory, bin, name)); return within(root, file) && statSync(file).isFile(); }
+      try { const file = realpathSync(path.join(directory, bin, name)); return within(root, file) && executableFile(file); }
       catch { return false; }
     });
   } catch { return false; }
@@ -228,7 +234,7 @@ export function inspectSoulRuntimes(soulDir, { manifest = readSoulManifest(soulD
     const installed = stamp && !problem && containedExecutable(soulDir, directory, stamp.bin, executable);
     const last = lastInstall(path.join(root, row.name));
     const entry = { name: row.name, declared: row.declared, requiredBy: row.requiredBy, version: row.version, source: row.source,
-      status: row.status ?? (installed ? 'installed' : 'missing'), reason: row.reason ?? problem, path: installed ? directory : null, bin: installed ? stamp.bin : null,
+      status: row.status ?? (installed ? 'installed' : 'missing'), reason: row.reason ?? problem ?? (stamp && !installed ? `the installed ${executable} is missing or not executable` : null), path: installed ? directory : null, bin: installed ? stamp.bin : null,
       lastError: !installed && last?.status === 'failed' && last.version === row.version ? { code: last.code ?? 'runtime-install-failed', message: last.message ?? '', at: last.at ?? null } : null,
       archive: row.archive, via: row.via };
     if (entry.status !== 'installed') result.ready = false;

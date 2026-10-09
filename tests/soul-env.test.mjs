@@ -19,7 +19,7 @@ const ID = 'agent_12345678-1234-4234-8234-123456789abc';
 const OTHER = 'agent_12345678-1234-4234-8234-123456789def';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const NODE_PIN = resolveCatalogPin('node', '24').version;
-const put = (file, contents) => { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, contents); };
+const put = (file, contents, mode = 0o644) => { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, contents, { mode }); };
 
 // A real-shaped census: identity record, population row, souls root, spaces
 // root and state under one temp home. `installed` writes the soul folder the
@@ -280,7 +280,7 @@ test('an installed runtime and a declared non-npm harness install are reported f
   const stamp = (dir, record) => put(path.join(dir, INSTALL_STAMP), JSON.stringify(record));
   const runtimes = path.join(f.dir, '.soul-state', 'runtimes');
   stamp(path.join(runtimes, 'node', NODE_PIN), { schemaVersion: 1, name: 'node', kind: 'archive', version: NODE_PIN, platform: hostPlatform(), sha256: resolveCatalogPin('node', '24').sources[hostPlatform()].sha256, bin: 'bin' });
-  put(path.join(runtimes, 'node', NODE_PIN, 'bin', 'node'), '');
+  put(path.join(runtimes, 'node', NODE_PIN, 'bin', 'node'), '', 0o755);
   put(path.join(runtimes, 'node', 'last-install.json'), JSON.stringify({ version: NODE_PIN, status: 'ok', at: '2026-10-07T00:00:00.000Z' }));
   // Go declared but its last attempt failed offline: the coded error surfaces.
   const goPin = resolveCatalogPin('go', '1').version;
@@ -291,7 +291,7 @@ test('an installed runtime and a declared non-npm harness install are reported f
   f.manifest.revision = computePackageRevision(f.dir, { manifest: f.manifest });
   put(path.join(f.dir, 'soul.json'), JSON.stringify(f.manifest));
   stamp(path.join(runtimes, 'harnesses', 'opencode', '1.2.3'), { schemaVersion: 1, name: 'opencode', kind: 'archive', version: '1.2.3', platform: hostPlatform(), sha256: sha, bin: '.' });
-  put(path.join(runtimes, 'harnesses', 'opencode', '1.2.3', 'opencode'), '');
+  put(path.join(runtimes, 'harnesses', 'opencode', '1.2.3', 'opencode'), '', 0o755);
   const before = snapshot(f.home);
   const result = readSoulEnvironment(ID, f.options);
   assert.deepEqual(snapshot(f.home), before, 'reporting installs nothing');

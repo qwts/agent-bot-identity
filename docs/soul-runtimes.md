@@ -124,8 +124,8 @@ That missing integrity contract is tracked in #617. The stamp is what
 must not be presented as a completed installation. Readiness compares the
 receipt's schema, runtime/harness name, kind, exact version and platform with
 the current selection. Archive receipts must also match its SHA-256 and
-executable directory. The executable must resolve to a regular file inside
-the installation, and the installation must resolve inside the soul. A
+executable directory. The executable must resolve to a regular file this
+account may execute (the execute bit on POSIX) inside the installation, and the installation must resolve inside the soul. A
 mismatch reports `missing` with a reason and cannot route to a host fallback.
 Internal executable symlinks remain supported; links outside the install do not.
 
@@ -179,8 +179,9 @@ runtime readiness before creating an executor, including cold wakes and native
 session resumes. Missing selected installations, unsupported declarations,
 invalid runtime declarations, an unreadable existing manifest, or a runtime
 lookup error refuse the turn. A surviving install stamp and bin directory do
-not count as ready when the runtime executable is missing. This is a file
-presence check, not a rehash of installed bytes or dependency provenance.
+not count as ready when the runtime executable is missing or has lost its
+execute bit, so the engine never skips it for the daemon's own Node. This is a file
+presence and mode check, not a rehash of installed bytes or dependency provenance.
 Souls without a manifest retain the undeclared host-tool behavior.
 Beside PATH the turn gets
 `npm_config_cache`; `GOROOT`, `GOPATH`, `GOMODCACHE`, `GOCACHE`;
