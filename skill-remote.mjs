@@ -101,7 +101,7 @@ export async function acquireRemoteSkill(input, id, { remoteLimits, resolve, req
   const timer = setTimeout(() => controller.abort(), limits.milliseconds);
   const agent = new Agent({ keepAlive: false, proxyEnv: {} });
   const context = { limits, signal: controller.signal, total: 0, documents: 0, referencesExhausted: false, resolve, requestImpl, agent, hosts: new Set() };
-  const entries = [], edges = [], locations = [], known = new Map(), failures = new Map(), names = new Set();
+  const entries = [], edges = [], locations = [], known = new Map(), failures = new Map(), names = new Set(), pending = [];
   let base;
   const storedPath = url => {
     const source = new URL(url), root = new URL(base);
@@ -118,7 +118,8 @@ export async function acquireRemoteSkill(input, id, { remoteLimits, resolve, req
   async function visit(url, depth) {
     if (known.has(url)) return known.get(url);
     if (failures.has(url)) fail(failures.get(url), 'previous instruction acquisition failed');
-    if (depth > limits.depth || entries.length >= limits.files) fail('skill-limit', 'remote skill depth or file limit exceeded');
+    if (depth > limits.depth) fail('skill-depth-limit', 'remote skill depth limit exceeded');
+    if (entries.length >= limits.files) fail('skill-limit', 'remote skill file limit exceeded');
     const fetched = await document(url, context);
     if (known.has(fetched.resolvedUrl)) {
       const file = known.get(fetched.resolvedUrl), previous = entries.find(entry => entry.path === file);
@@ -150,17 +151,22 @@ export async function acquireRemoteSkill(input, id, { remoteLimits, resolve, req
       const pathname = new URL(target).pathname;
       if (!/\.(?:md|markdown|txt)$/i.test(pathname)) { Object.assign(item, { source: target, status: 'external', reason: 'noninstruction-reference-outside-capture' }); continue; }
       item.source = target;
-      try { item.target = await visit(target, depth + 1); item.status = 'captured'; }
-      catch (error) {
-        const reason = typeof error.code === 'string' && /^skill-[a-z-]+$/.test(error.code) ? error.code : 'skill-fetch-unavailable';
-        failures.set(target, reason);
-        Object.assign(item, { status: 'unresolved', reason });
-      }
+      pending.push({ item, target, depth: depth + 1 });
     }
     return file;
   }
   try {
     await visit(input, 0);
+    // Breadth-first expansion gives every document its shallowest discovered
+    // depth before expanding it. A deep path must not hide a later short path.
+    for (const { item, target, depth } of pending) {
+      try { item.target = await visit(target, depth); item.status = 'captured'; }
+      catch (error) {
+        const reason = typeof error.code === 'string' && /^skill-[a-z-]+$/.test(error.code) ? error.code : 'skill-fetch-unavailable';
+        if (reason !== 'skill-depth-limit') failures.set(target, reason);
+        Object.assign(item, { status: 'unresolved', reason });
+      }
+    }
     const graph = new Map();
     for (const edge of edges.filter(edge => edge.status === 'captured')) graph.set(edge.from, [...(graph.get(edge.from) ?? []), edge.target]);
     const reaches = (from, target, seen = new Set()) => {

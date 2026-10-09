@@ -197,7 +197,7 @@ test('partial import retains good instructions and reports each unavailable depe
   assert.equal(result.dependencies.at(-1).reason, 'skill-fetch-address-refused');
   assert.equal(readFileSync(path.join(result.path, 'refs/guide.md'), 'utf8'), 'retained dependency\r\n');
   assert.equal(net.calls.filter(call => call.url.endsWith('/missing.md')).length, 1, 'failed locators are deduplicated');
-  assert.equal(net.calls.some(call => call.url.includes('private.example.com')), false);
+  assert.equal(net.calls.some(call => new globalThis.URL(call.url).hostname === 'private.example.com'), false);
   assert.doesNotMatch(output, /CANARY/);
   assert.equal(verifySkill(result.id, f).verification, 'verified');
 });
@@ -237,6 +237,22 @@ test('partial capture bounds attempted documents, failed response bytes, depth a
   assert.equal(refs.dependencies.length, 2); assert.equal(refs.dependencies.at(-1).reason, 'skill-reference-limit');
   assert.equal(refs.coverage.discoveryTruncated, true);
   const depth = await importSkill(URL, { ...f, ...transport({ [URL]: { body: skill }, [guide]: { body: '[Deep](deep.md)' } }), remoteLimits: { depth: 1 } });
-  assert.equal(depth.dependencies.at(-1).reason, 'skill-limit');
+  assert.equal(depth.dependencies.at(-1).reason, 'skill-depth-limit');
   assert.equal(depth.coverage.acquisition, 'partial');
+});
+
+
+test('depth-limited diamonds capture shallow paths and expand their descendants independent of link order', async () => {
+  const base = 'https://skills.example.com/demo/';
+  for (const links of ['[A](a.md)\n[X](x.md)', '[X](x.md)\n[A](a.md)']) {
+    const net = transport({ [URL]: { body: skill.replace('[Guide](refs/guide.md)', links) },
+      [`${base}a.md`]: { body: '[B](b.md)' }, [`${base}b.md`]: { body: '[X](x.md)' },
+      [`${base}x.md`]: { body: '[Y](y.md)' }, [`${base}y.md`]: { body: 'retained within depth 2' } });
+    const result = await acquireRemoteSkill(URL, 'owner', { ...net, remoteLimits: { depth: 2 } });
+    assert.equal(result.coverage.acquisition, 'complete-within-boundary');
+    assert.equal(result.dependencies.every(edge => edge.status === 'captured'), true);
+    assert.deepEqual(result.entries.map(entry => entry.path).sort(), ['SKILL.md', 'a.md', 'b.md', 'x.md', 'y.md']);
+    assert.equal(net.calls.filter(call => call.url === `${base}x.md`).length, 1);
+    assert.equal(net.calls.filter(call => call.url === `${base}y.md`).length, 1);
+  }
 });

@@ -77,7 +77,9 @@ cannot look like a complete capture. `complete-within-boundary` means only the
 supported declared reference syntax, never universal coverage. Unsupported
 noninstruction links remain external rather than being fetched.
 
-Document attempts include DNS/connection failures; repeated failed locators are
+References expand breadth-first so a document uses its shallowest discovered
+depth before its own dependencies are expanded. Depth refusals do not poison
+URL failure caching. Document attempts include DNS/connection failures; repeated failed locators are
 not retried within the same acquisition. Failed streamed bodies consume the total
 byte budget. File/depth limits become unresolved references. Exhausting the
 reference-discovery budget records one terminal unresolved edge and
