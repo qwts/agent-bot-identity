@@ -108,6 +108,7 @@
     "config-migration.mjs": "shared",
     "config.mjs": "shared",
     "confinement.mjs": "soul",
+    "credential-names.mjs": "identity",
     "credential-reconciler.mjs": "identity",
     "daemon-client.mjs": "identity",
     "daemon-launch.mjs": "soul",

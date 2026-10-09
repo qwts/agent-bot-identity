@@ -1,8 +1,9 @@
 // Per-soul values use note templates on stdin. App-key imports and this store
 // share the same bounded process runner and redacted provider errors.
 import { runPass, passCliFailure } from './pass-cli.mjs';
+import { CREDENTIAL_VAULT } from '../credential-names.mjs';
 
-export const SOUL_CREDENTIAL_VAULT = 'Agent Identities';
+export const SOUL_CREDENTIAL_VAULT = CREDENTIAL_VAULT;
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 const malformed = () => fail('provider-failure', 'pass-cli returned malformed credential data');
 

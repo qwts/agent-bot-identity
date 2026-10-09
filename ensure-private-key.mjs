@@ -16,11 +16,12 @@ import { pathToFileURL } from 'node:url';
 import { loadConfig } from './config.mjs';
 import { appStoreTarget, readAppMetadata, readManagedAppCredential, updateAppConfig } from './identity-app-store.mjs';
 import { credentialStores, passCliItem, resolveAppCredential } from './soul-credentials.mjs';
+import { CREDENTIAL_VAULT, managedAppItem } from './credential-names.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { runPass, classifyPassCliFailure, STORE_UNAVAILABLE_CODES } from './secret-providers/pass-cli.mjs';
 export { classifyPassCliFailure, PROVIDER_SESSION_REQUIRED, PROVIDER_LOCKED, PROVIDER_UNAVAILABLE, STORE_UNAVAILABLE_CODES } from './secret-providers/pass-cli.mjs';
 
-export const AGENT_IDENTITIES_VAULT = 'Agent Identities';
+export const AGENT_IDENTITIES_VAULT = CREDENTIAL_VAULT;
 
 export class CredentialPreparationError extends Error {
   constructor(code, slug, message) {
@@ -400,8 +401,8 @@ export function ensurePrivateKey({
   const needKey = force || !key || !validateKey(key);
   const target = appStoreTarget(slug, { env, home });
   const kind = config.identityApps?.[slug]?.store ?? 'file';
-  const storedPath = stored?.source === 'pass-cli' ? `pass-cli:Agent Identities/${passCliItem(stored.agentId, slug)}`
-    : kind === 'file' ? join(target.soulDir, '.soul-state', 'credentials', `github-app-${slug}.json`) : `keychain:agent-bot.app.${slug}`;
+  const storedPath = stored?.source === 'pass-cli' ? `pass-cli:${CREDENTIAL_VAULT}/${passCliItem(stored.agentId, slug)}`
+    : kind === 'file' ? join(target.soulDir, '.soul-state', 'credentials', `github-app-${slug}.json`) : `keychain:${managedAppItem(slug).service}`;
   if (!needKey && !needId) return { path: stored ? storedPath : legacyPath, idPath,
     downloaded: false, appIdWritten: false, localStatus: 'ready', restored: [] };
 

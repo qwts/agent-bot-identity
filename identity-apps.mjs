@@ -15,6 +15,7 @@ import { assignAgentApp, readAgentIdentity, stateDirectory, validateAgentId } fr
 import { listSouls, populationFile, showSoul, setSoulApp, soulDirectory } from './agent-population.mjs';
 import { soulCredentialsDeclaration } from './soul-package.mjs';
 import { credentialStores, defaultCredentialStore, resolveAppCredential } from './soul-credentials.mjs';
+import { itemTitle, managedAppItem } from './credential-names.mjs';
 import { createProtonPassCredentialProvider, validateIssuer, validatePrivateKey } from './ensure-private-key.mjs';
 import { buildAppJwt, pickInstallation } from './mint-token.mjs';
 import { MINT_CODES, appStoreTarget, forgetAppDoctorRow, readAppDoctorCache, readAppMetadata, updateAppConfig, validAppSlug } from './identity-app-store.mjs';
@@ -272,7 +273,7 @@ function assign(body, options) {
 // what was removed, never what it held.
 function storeItemName(app, kind, options) {
   const target = appStoreTarget(app, options);
-  return kind === 'keychain' ? `agent-bot.app.${app}/github-app/${app}`
+  return kind === 'keychain' ? itemTitle(managedAppItem(app))
     : path.join(target.soulDir, '.soul-state', 'credentials', `github-app-${app}.json`);
 }
 // `remove` takes a slug or a numeric App ID; a slug record wins, since an
