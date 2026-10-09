@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -198,6 +198,25 @@ test('structured and truncated replies are persisted atomically with terminal ru
   });
 });
 
+test('report previews live outside the journal, read back by digest and refuse tampering', posix, async t => {
+  const f = fixture(t, { executorFor: () => async input => {
+    input.appendEvent(UPDATE_EVENT, { sessionUpdate: 'agent_message_chunk', content: { text: 'PREVIEW_CANARY unstructured' } });
+  } });
+  f.control('register', { schedule: 'PT1H' }); f.control('run-now'); await f.service.idle();
+  const journal = readdirSync(f.directory).map(name => readFileSync(path.join(f.directory, name), 'utf8')).join('');
+  assert.equal(journal.includes('PREVIEW_CANARY'), false);
+  const recorded = () => f.service.history().records.flatMap(record => record.events).find(event => event.kind === 'outcome-recorded');
+  assert.equal(recorded().outcome.report.text, 'PREVIEW_CANARY unstructured');
+  assert.equal(recorded().outcome.report.preview.status, 'available');
+  assert.deepEqual(f.service.status().previews, { location: 'outside-journal', retainPerSoul: 20 });
+  const dir = path.join(path.dirname(f.directory), 'dream-previews', ID), [file] = readdirSync(dir);
+  assert.equal(statSync(dir).mode & 0o777, 0o700); assert.equal(statSync(path.join(dir, file)).mode & 0o777, 0o600);
+  writeFileSync(path.join(dir, file), 'PREVIEW_CANARY edited');
+  assert.deepEqual([recorded().outcome.report.text, recorded().outcome.report.preview.status], [null, 'invalid']);
+  rmSync(path.join(dir, file));
+  assert.deepEqual([recorded().outcome.report.text, recorded().outcome.report.preview.status], [null, 'unavailable']);
+});
+
 test('durable preparation precedes provider resolution and survives a launch failure', posix, async t => {
   let f, sawReceipt = false;
   f = fixture(t, { executorFor: () => {
@@ -286,7 +305,7 @@ test('startup quarantines unsettled durable work and controls cannot erase that 
   const [notice] = again.status().noticeLedgers.find(ledger => ledger.agentId === ID).notices;
   assert.deepEqual([notice.kind, notice.detail, notice.occurrences], ['recovery', 'recovery-required', 1], 'a later startup does not renotify');
   assert.equal(again.control(dreamControlRequest('ack-notice', { agentId: ID, noticeId: notice.id })).notice.state, 'acknowledged');
-  assert.equal(again.status().schemaVersion, 7);
+  assert.equal(again.status().schemaVersion, 8);
 });
 
 test('a restarted daemon terminates its predecessor\'s owned agent group and settles the run as interrupted (#603)', posix, async t => {

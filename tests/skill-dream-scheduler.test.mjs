@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { createDreamScheduler, emptyDreamState, parseDreamSchedule, validateDreamEvents, validateDreamState, DREAM_TIMEOUT_MS } from '../skill-dream-scheduler.mjs';
-import { interpretDreamReport } from '../skill-dream-outcomes.mjs';
+import { dreamOutcomeDigest, dreamPreviewDigest, interpretDreamReport } from '../skill-dream-outcomes.mjs';
 
 const A = 'agent_12345678-1234-4234-8234-123456789abc';
 const B = 'agent_22345678-1234-4234-8234-123456789abc';
@@ -686,6 +686,46 @@ test('ownership recorded by this same daemon generation is never treated as an e
   await release();
 });
 
+test('v8 journals keep only the preview digest; inline v1 outcomes stay valid for older states', async () => {
+  const writes = [], pruned = [];
+  const previews = { write: value => { writes.push(value); }, prune: agentId => { pruned.push(agentId); } };
+  const f = fixture({ previews }); f.scheduler.register(A, 'PT1H');
+  const started = f.scheduler.runNow(A); await Promise.resolve();
+  const call = f.calls[0], outcome = interpretDreamReport({ run: call.run, inputs: metadata(), reply: 'PREVIEW_CANARY report' });
+  call.prepareInputs(metadata()); call.stageOutcome(outcome); call.resolve(); await started.done;
+  const transaction = f.events.slice(f.events.findLastIndex(event => event.kind === 'ended'));
+  const recorded = transaction.find(event => event.kind === 'outcome-recorded');
+  assert.equal(JSON.stringify(f.events).includes('PREVIEW_CANARY'), false);
+  assert.equal(recorded.outcome.schemaVersion, 2);
+  assert.deepEqual(recorded.outcome.report.preview, { digest: dreamPreviewDigest('PREVIEW_CANARY report'), bytes: 21 });
+  assert.equal(recorded.receipt.digest, dreamOutcomeDigest(recorded.outcome));
+  assert.deepEqual(writes, [{ agentId: A, runId: call.run.runId, startedAt: call.run.startedAt, text: 'PREVIEW_CANARY report' }]);
+  assert.deepEqual(pruned, [A]);
+  const state = f.state();
+  assert.deepEqual(validateDreamEvents(transaction, { state }), transaction);
+  // The same outcome inline is the pre-v8 journal form, valid only there.
+  const inline = copy(transaction), old = inline.find(event => event.kind === 'outcome-recorded');
+  old.outcome = copy(outcome); old.receipt.digest = dreamOutcomeDigest(outcome);
+  const oldState = { ...copy(state), schemaVersion: 7, outcomeReceipts: [copy(old.receipt)] };
+  assert.throws(() => validateDreamEvents(inline, { state: { ...copy(state), outcomeReceipts: [copy(old.receipt)] } }), { code: 'dream-state-invalid' });
+  assert.throws(() => validateDreamEvents(transaction, { state: { ...copy(state), schemaVersion: 7 } }), { code: 'dream-state-invalid' });
+  assert.deepEqual(validateDreamEvents(inline, { state: oldState }), inline);
+  assert.deepEqual(validateDreamEvents(inline), inline);
+});
+
+test('a failed preview write leaves the preview unavailable without faulting the run', async () => {
+  const previews = { write: () => { throw new Error('disk full'); }, prune: () => { throw new Error('disk full'); } };
+  const f = fixture({ previews }); f.scheduler.register(A, 'PT1H');
+  const started = f.scheduler.runNow(A); await Promise.resolve();
+  const call = f.calls[0];
+  call.prepareInputs(metadata()); call.stageOutcome(interpretDreamReport({ run: call.run, inputs: metadata(), reply: 'text' }));
+  call.resolve(); await started.done;
+  assert.equal(f.state().registrations[0].lastRun.status, 'completed');
+  assert.equal(f.scheduler.status().fault, null);
+  assert.equal(f.events.find(event => event.kind === 'outcome-recorded').outcome.report.preview.bytes, 4);
+  assert.throws(() => createDreamScheduler({ ...f.ports, previews: { write() {} } }), { code: 'dream-configuration-invalid' });
+});
+
 test('v6 state upgrades its runs with null ownership, and stateless v6 events still validate', async () => {
   const f = fixture(); f.scheduler.register(A, 'PT1H');
   const run = f.scheduler.runNow(A); await Promise.resolve();
@@ -694,7 +734,7 @@ test('v6 state upgrades its runs with null ownership, and stateless v6 events st
   assert.deepEqual(validateDreamState(legacy), legacy);
   f.replace(legacy);
   const upgraded = createDreamScheduler(f.ports).status();
-  assert.deepEqual([upgraded.schemaVersion, upgraded.flights[0].ownership], [7, null]);
+  assert.deepEqual([upgraded.schemaVersion, upgraded.flights[0].ownership], [8, null]);
   const started = copy(f.events.find(event => event.kind === 'started'));
   delete started.run.ownership;
   assert.deepEqual(validateDreamEvents([started]), [started]);

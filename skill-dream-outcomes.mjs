@@ -51,9 +51,11 @@ function textPrefix(text) {
   return { text: text.slice(0, low), textTruncated: low < text.length };
 }
 
+// Version 2 is the journal form: report text lives in the preview store and the
+// outcome keeps only its digest and size, so the text can be pruned (#603).
 export function validateDreamOutcome(value, { runId = null, inputs = null } = {}) {
   if (!exact(value, ['schemaVersion', 'runId', 'startingRevision', 'report', 'items', 'unreported', 'processingCoverage'])
-    || value.schemaVersion !== 1 || !uuid(value.runId) || !hash(value.startingRevision) || value.processingCoverage !== 'unverified'
+    || ![1, 2].includes(value.schemaVersion) || !uuid(value.runId) || !hash(value.startingRevision) || value.processingCoverage !== 'unverified'
     || runId !== null && value.runId !== runId || !Array.isArray(value.items) || value.items.length > DREAM_OUTCOME_LIMITS.items
     || !Number.isSafeInteger(value.unreported) || value.unreported < 0 || value.unreported + value.items.length > DREAM_OUTCOME_LIMITS.items) invalid();
   if (inputs) {
@@ -61,11 +63,14 @@ export function validateDreamOutcome(value, { runId = null, inputs = null } = {}
     if (value.startingRevision !== inputs.revision || value.unreported + value.items.length !== inputs.sources.length) invalid();
   }
   const report = value.report, seen = new Set(), sources = inputs ? new Map(inputs.sources.map(source => [source.path, source])) : null;
-  if (!exact(report, ['status', 'code', 'text', 'textTruncated']) || !statuses.includes(report.status) || typeof report.textTruncated !== 'boolean') invalid();
+  const field = value.schemaVersion === 1 ? 'text' : 'preview';
+  if (!exact(report, ['status', 'code', field, 'textTruncated']) || !statuses.includes(report.status) || typeof report.textTruncated !== 'boolean') invalid();
   if (report.status === 'structured') {
-    if (report.code !== null || report.text !== null || report.textTruncated) invalid();
-  } else if (!reportCodes[report.status].includes(report.code) || typeof report.text !== 'string' || value.items.length
-    || Buffer.byteLength(JSON.stringify(report.text)) > DREAM_OUTCOME_LIMITS.textBytes) invalid();
+    if (report.code !== null || report[field] !== null || report.textTruncated) invalid();
+  } else if (!reportCodes[report.status].includes(report.code) || value.items.length) invalid();
+  else if (field === 'text' ? typeof report.text !== 'string' || Buffer.byteLength(JSON.stringify(report.text)) > DREAM_OUTCOME_LIMITS.textBytes
+    : !exact(report.preview, ['digest', 'bytes']) || !hash(report.preview.digest) || !Number.isSafeInteger(report.preview.bytes)
+      || report.preview.bytes < 0 || report.preview.bytes > DREAM_OUTCOME_LIMITS.textBytes) invalid();
   for (const item of value.items) {
     if (!exact(item, ['claim', 'verification']) || seen.has(item.claim?.path)) invalid();
     claim(item.claim, sources); seen.add(item.claim.path);
@@ -79,6 +84,18 @@ export function validateDreamOutcome(value, { runId = null, inputs = null } = {}
   }
   if (Buffer.byteLength(JSON.stringify(value)) > DREAM_OUTCOME_LIMITS.bytes) invalid();
   return value;
+}
+
+export const dreamPreviewDigest = text => `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`;
+
+// Split an inline outcome into its journal form and the preview text to store
+// outside the journal. A structured report carries no text.
+export function detachDreamPreview(value) {
+  validateDreamOutcome(value);
+  if (value.schemaVersion === 2) return { outcome: structuredClone(value), text: null };
+  const { text, ...report } = value.report;
+  const preview = text === null ? null : { digest: dreamPreviewDigest(text), bytes: Buffer.byteLength(text) };
+  return { outcome: validateDreamOutcome({ ...structuredClone(value), schemaVersion: 2, report: { ...report, preview } }), text };
 }
 
 export const dreamOutcomeDigest = value => `sha256:${createHash('sha256').update(canonicalJson(validateDreamOutcome(value))).digest('hex')}`;

@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { isAgentId } from './agent-identity.mjs';
 import { createDreamScheduler, DREAM_TIMEOUT_MS, parseDreamSchedule } from './skill-dream-scheduler.mjs';
 import { createDreamFileStore } from './skill-dream-store.mjs';
+import { createDreamPreviewStore } from './skill-dream-previews.mjs';
 import { captureDreamInputs, dreamInputMetadata } from './skill-dream-inputs.mjs';
 import { interpretDreamReport } from './skill-dream-outcomes.mjs';
 import { createProcessOwnershipPort } from './process-ownership.mjs';
@@ -69,11 +70,22 @@ function dreamPrompt(run, inputs) {
   ].join('\n\n');
 }
 
-export function createDreamService({ directory, lookupSoul, executorFor = null, turns, approvals = null, verifyRevisionEvidence = null,
+// Old outcomes carry their preview text inline. Newer ones name a stored
+// preview by digest; it reads back as unavailable once pruned, or invalid if
+// the stored bytes no longer match.
+function withPreview(previews, event) {
+  if (event.kind !== 'outcome-recorded' || event.outcome.schemaVersion !== 2) return event;
+  const { preview, ...report } = event.outcome.report;
+  const found = preview === null ? { status: 'none', text: null }
+    : previews.read({ agentId: event.run.agentId, runId: event.run.runId, startedAt: event.run.startedAt, digest: preview.digest });
+  return { ...event, outcome: { ...event.outcome, report: { ...report, text: found.text, preview: preview && { ...preview, status: found.status } } } };
+}
+
+export function createDreamService({ directory, previewDirectory = path.join(path.dirname(path.resolve(directory ?? '.')), 'dream-previews'), lookupSoul, executorFor = null, turns, approvals = null, verifyRevisionEvidence = null,
   isPaused = () => false, now = () => new Date(), processOwnership = createProcessOwnershipPort(),
   setIntervalImpl = setInterval, clearIntervalImpl = clearInterval,
 } = {}) {
-  let store = null, scheduler = null, fault = null, timer = null, started = false, closed = false;
+  let store = null, previews = null, scheduler = null, fault = null, timer = null, started = false, closed = false;
   const pending = new Map();
   // Bounded diagnostics for this daemon only, not durable coverage evidence.
   const inputFailures = new Map();
@@ -102,8 +114,9 @@ export function createDreamService({ directory, lookupSoul, executorFor = null, 
   try {
     if (typeof lookupSoul !== 'function' || typeof turns?.run !== 'function' || typeof turns?.busy !== 'function') fail('dream-service-configuration', 'Dream service needs the daemon soul lookup and turn registry.');
     store = createDreamFileStore({ directory: prepareDreamDirectory(directory) });
+    previews = createDreamPreviewStore({ directory: prepareDreamDirectory(previewDirectory) });
     const executeCold = configured ? coldTurnExecutor({ executorFor, turns, approvals, turnTimeoutMs: DREAM_TIMEOUT_MS }) : null;
-    scheduler = createDreamScheduler({ store, now, isPaused, processOwnership, isBusy: id => turns.busy().includes(id),
+    scheduler = createDreamScheduler({ store, previews, now, isPaused, processOwnership, isBusy: id => turns.busy().includes(id),
       soulDirectory: id => launchable(id).directory,
       execute: async ({ run, selectionCheckpoint, signal, timeoutMs, prepareInputs, recordProcess, stageOutcome }) => {
         signal.throwIfAborted(); requireExecutor();
@@ -198,7 +211,11 @@ export function createDreamService({ directory, lookupSoul, executorFor = null, 
       for (const agentId of new Set([...pending.values()].map(run => run.agentId))) stopSoul(agentId, 'shutdown');
     },
     idle: () => Promise.allSettled([...pending.values()].map(run => run.done).concat(scheduler ? [scheduler.recovering()] : [])),
-    history(query) { ensure(); return store.history(query); },
+    history(query) {
+      ensure();
+      const page = store.history(query);
+      return { ...page, records: page.records.map(record => ({ ...record, events: record.events.map(event => withPreview(previews, event)) })) };
+    },
     status() {
       try {
         const state = scheduler.status();
@@ -206,7 +223,7 @@ export function createDreamService({ directory, lookupSoul, executorFor = null, 
         return { schemaVersion: 1, available: !fault, executorConfigured: configured, started, closing: closed,
           maintenanceCoverage: 'unverified', orphanRecovery: 'process-group-or-quarantine',
           diagnostics: { scope: 'this-daemon', inputFailures: [...inputFailures.values()].map(value => ({ ...value })) },
-          ...state, fault, journal: store.status() };
+          ...state, fault, journal: store.status(), previews: previews.status() };
       } catch (error) { fault ??= errorCode(error); return { schemaVersion: 1, available: false, executorConfigured: configured, fault }; }
     },
   };
