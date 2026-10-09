@@ -44,21 +44,32 @@ export async function harnessAuth(action, harness, { home, env = process.env, no
   let failure = null;
   try { output = (await runImpl(command, [...args, ...row.signIn.status], { ...options, timeout: 30_000 })).stdout; }
   catch (error) { failure = error; output = error.stdout ?? ''; }
-  return { harness, ...signInEvidence(row.signIn.read, output, failure) };
+  return { harness, ...signInEvidence(row.signIn, output, failure) };
 }
 
 const unknown = (reason) => ({ loggedIn: false, status: 'unknown', reason });
 const verdict = (signedIn) => ({ loggedIn: signedIn, status: signedIn ? 'signed-in' : 'signed-out' });
 
 // What a status probe proves (#536). `signed-out` needs positive evidence
-// from the harness; a CLI that is missing, timed out, or printed something
-// this reader does not recognise is `unknown`, never signed in. `loggedIn`
-// stays the boolean older callers read, so it is false for both.
-export function signInEvidence(read, output, failure = null) {
+// from the harness; a CLI that is missing, timed out, was interrupted, or
+// printed something this reader does not recognise is `unknown`, never
+// signed in. `loggedIn` stays the boolean older callers read, so it is false
+// for both. `signIn` is the registry row's reader (`read`, `signedOut`).
+export function signInEvidence(signIn, output, failure = null) {
+  const { read, signedOut = null } = signIn;
   if (failure?.code === 'ENOENT') return unknown('status-command-missing');
-  if (failure && (failure.killed || failure.signal)) return unknown('status-timeout');
-  const exited = failure === null || Number.isInteger(failure.code);
-  if (read === 'exit-code') return exited ? verdict(failure === null) : unknown('status-failed');
+  // execFile marks the child it killed at the timeout; any other signal is
+  // an interruption, not a timeout.
+  if (failure?.killed) return unknown('status-timeout');
+  if (failure?.signal) return unknown('status-interrupted');
+  if (read === 'exit-code') {
+    if (failure === null) return verdict(true);
+    // A non-zero exit is signed out only with the harness's own words for
+    // it: Codex exits 1 both for "Not logged in" and for an unreadable
+    // auth.json, and 2 for a usage error.
+    const text = `${failure.stdout ?? ''}\n${failure.stderr ?? ''}`;
+    return Number.isInteger(failure.code) && signedOut?.test(text) ? verdict(false) : unknown('status-failed');
+  }
   if (read === 'json') {
     // Claude prints its JSON on a non-zero exit too.
     try {

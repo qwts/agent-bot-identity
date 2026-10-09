@@ -54,12 +54,17 @@ const statusCases = {
   ],
   codex: [
     ['signed in', { stdout: '', stderr: 'Logged in using ChatGPT' }, 'signed-in'],
-    ['signed out', Object.assign(new Error('exit 1'), { code: 1, stderr: 'Not logged in' }), 'signed-out'],
-    // Codex promises an exit-code result, regardless of human-readable text.
+    // Observed with codex-cli 0.161.0 against an empty CODEX_HOME.
+    ['signed out', Object.assign(new Error('exit 1'), { code: 1, stderr: 'Not logged in\n' }), 'signed-out'],
+    // Exit 0 is the contract, regardless of human-readable text.
     ['unreadable output', { stdout: 'unknown output' }, 'signed-in'],
-    ['non-zero exit', Object.assign(new Error('exit 2'), { code: 2, stdout: 'Logged in using ChatGPT' }), 'signed-out'],
+    // The same exit 1 for an auth.json it cannot read proves nothing.
+    ['status error', Object.assign(new Error('exit 1'), { code: 1, stderr: 'Error checking login status: expected ident at line 1 column 2\n' }), 'unknown', 'status-failed'],
+    ['usage error', Object.assign(new Error('exit 2'), { code: 2, stderr: "error: unexpected argument '--bogus-flag' found\n" }), 'unknown', 'status-failed'],
+    ['non-zero exit without the sign-out line', Object.assign(new Error('exit 2'), { code: 2, stdout: 'Logged in using ChatGPT' }), 'unknown', 'status-failed'],
     ['missing CLI', missing, 'unknown', 'status-command-missing'],
     ['timeout', timedOut, 'unknown', 'status-timeout'],
+    ['interrupted', Object.assign(new Error('killed'), { killed: false, signal: 'SIGKILL', code: null }), 'unknown', 'status-interrupted'],
     ['failure without an exit code', new Error('spawn EACCES'), 'unknown', 'status-failed'],
   ],
   opencode: [
@@ -209,6 +214,9 @@ test('OpenCode signed-out needs its zero-credentials line; registry rows validat
   const row = ACP_SPAWN_REGISTRY.opencode;
   assert.ok(row.signIn.read.signedOut instanceof RegExp);
   assert.throws(() => validateSpawnRow({ ...row, signIn: { ...row.signIn, read: { loggedIn: row.signIn.read.loggedIn, signedOut: '0 credentials' } } }), /signIn/);
+  const codex = ACP_SPAWN_REGISTRY.codex;
+  assert.ok(codex.signIn.signedOut instanceof RegExp);
+  assert.throws(() => validateSpawnRow({ ...codex, signIn: { ...codex.signIn, signedOut: 'Not logged in' } }), /signIn/);
   // Credentials at zero but a provider environment variable present is signed in.
   const runImpl = async () => ({ stdout: '└  0 credentials\n\n┌  Environment\n│\n●  Provider ENV_VAR\n└  1 environment variable\n' });
   assert.equal((await harnessAuth('status', 'opencode', { env: {}, runImpl })).status, 'signed-in');
