@@ -12,7 +12,7 @@ import { stateDirectory } from '../agent-identity.mjs';
 import { loadConfig } from '../config.mjs';
 import {
   DEFAULT_SANDBOX_ACCOUNT, formatSandboxStatus, launchSandbox, loadPersona, parsePersonaMapping, probeSandboxAccount, readSandboxStatus, resolveSandbox,
-  sandboxAccountStatus, sandboxCommand, sandboxLaunchProblem, sandboxPlan, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount,
+  sandboxAccountStatus, sandboxCommand, sandboxLaunchProblem, sandboxPlan, setSandboxAccount, setSandboxEnabled, setSandboxOverride, turnSandboxProblem, validateSandboxAccount,
 } from '../sandbox.mjs';
 
 const ID = 'agent_12345678-1234-4234-8234-123456789abc';
@@ -285,6 +285,7 @@ function pack(f, persona, { org = 'local/org', sop = 'local/sop', record = true 
   mkdirSync(path.dirname(file), { recursive: true });
   if (record === false) return file;
   const body = record === true ? { schemaVersion: 1, recordedAt: '2026-10-07T00:00:00.000Z', configPath: config,
+    selection: { org: 'local/org@main', sop: 'local/sop@main' },
     org: { repository: 'local/org', commit: COMMIT }, sop: { repository: 'local/sop', commit: COMMIT }, persona } : record;
   writeFileSync(file, typeof body === 'string' ? body : JSON.stringify(body));
   return file;
@@ -429,7 +430,7 @@ test('no SOP or no persona.toml leaves the user setting; an unrecorded, stale, u
   pack(f, null);
   falls('absent', /has no persona\.toml/);
   pack(f, MAPPING, { org: 'elsewhere/org' });
-  assert.deepEqual(refuses('stale', /not the SOP the config selects/, 'persona-policy-stale').source, { repository: 'local/sop', commit: COMMIT });
+  assert.deepEqual(refuses('stale', /is for org local\/org@main, not elsewhere\/org@main/, 'persona-policy-stale').source, { repository: 'local/sop', commit: COMMIT });
   pack(f, null, { record: '{not json' });
   refuses('error', /JSON/, 'persona-policy-unavailable');
   // A soul override set while the pack cannot decide does not launch it either.
@@ -442,6 +443,91 @@ test('no SOP or no persona.toml leaves the user setting; an unrecorded, stale, u
   refuses('invalid', /persona\.toml: \[soul\.fixture\] sandbox account must be a short macOS account name.*launches are refused until the pack is fixed/, 'persona-policy-unavailable');
   writeFileSync(path.join(f.home, '.config', 'agent-sop', 'config.toml'), 'schema_version = true\n');
   refuses('error', /booleans are not supported/, 'persona-policy-unavailable');
+});
+
+test('a record is current only for the exact selection it was made from: ref, pin and config path (#613)', (t) => {
+  const f = fixture(t, { config: { features: { 'persona-accounts': true } } });
+  const config = path.join(f.home, '.config', 'agent-sop', 'config.toml');
+  const file = pack(f, MAPPING);
+  const body = JSON.parse(readFileSync(file, 'utf8'));
+  const record = (fields) => writeFileSync(file, JSON.stringify({ ...body, ...fields }));
+  const select = (text) => writeFileSync(config, `schema_version = 1\n[repos]\n${text}`);
+  const state = () => loadPersona(f.options);
+  assert.equal(state().state, 'ok');
+  // Repository names compare without case; refs compare exactly.
+  select('org = "Local/Org@main"\nsop = "local/sop@main"\n');
+  assert.equal(state().state, 'ok');
+  select('org = "local/org@release"\nsop = "local/sop@main"\n');
+  assert.match(state().message, /is for org local\/org@main, not local\/org@release/);
+  select('org = "local/org@main"\nsop = "local/sop@v2"\n');
+  assert.equal(state().state, 'stale');
+  // A selection routed by org.json (no repos.sop) is its own selection.
+  select('org = "local/org@main"\n');
+  assert.match(state().message, /is for sop local\/sop@main, not from org\.json/);
+  record({ selection: { org: 'local/org@main', sop: null } });
+  assert.equal(state().state, 'ok');
+  // A 40-hex pin must be the recorded commit, offline: no git runs here.
+  const other = 'b'.repeat(40);
+  select(`org = "local/org@main"\nsop = "local/sop@${COMMIT}"\n`);
+  record({ selection: { org: 'local/org@main', sop: `local/sop@${COMMIT}` } });
+  assert.equal(state().state, 'ok', 'a valid selected pin launches offline');
+  select(`org = "local/org@main"\nsop = "local/sop@${other}"\n`);
+  record({ selection: { org: 'local/org@main', sop: `local/sop@${other}` } });
+  assert.match(state().message, new RegExp(`is for sop commit ${COMMIT}, not the pinned ${other}`));
+  // Another config file, and a record from before selections were kept.
+  select('org = "local/org@main"\nsop = "local/sop@main"\n');
+  record({ selection: { org: 'local/org@main', sop: 'local/sop@main' }, configPath: path.join(f.home, 'elsewhere.toml') });
+  assert.match(state().message, /was recorded from .*elsewhere\.toml/);
+  const { selection: _legacy, ...legacy } = body;
+  writeFileSync(file, JSON.stringify(legacy));
+  const stale = state();
+  assert.equal(stale.state, 'stale');
+  assert.match(stale.message, /recorded before agent-bot kept the selection.*run `agent-bot sop persona`/);
+  // A malformed selection is an unreadable record, not a stale one.
+  record({ selection: { org: 'no-ref', sop: null } });
+  assert.equal(state().state, 'error');
+  // The selection must name the repositories the record's commits are for.
+  record({ selection: { org: 'other/org@main', sop: 'local/sop@main' } });
+  select('org = "other/org@main"\nsop = "local/sop@main"\n');
+  assert.equal(state().state, 'error', 'a record whose org is not the one its selection names is not current');
+  record({ selection: { org: 'local/org@main', sop: 'other/sop@main' } });
+  select('org = "local/org@main"\nsop = "other/sop@main"\n');
+  assert.equal(state().state, 'error');
+  select('org = "local/org@main"\nsop = "local/sop@main"\n');
+  // Owner-verified, that very stale record's own mapping decides, never the user setting.
+  writeFileSync(file, JSON.stringify(legacy));
+  const { digest } = state();
+  assert.match(digest, /^[0-9a-f]{64}$/);
+  assert.equal(loadPersona({ ...f.options, acceptStale: 'f'.repeat(64) }).state, 'stale', 'an approval of another record does not carry');
+  const verified = loadPersona({ ...f.options, acceptStale: digest });
+  assert.deepEqual([verified.state, verified.stale, verified.decides], ['ok', true, true]);
+  const launched = launchSandbox(ID, { ...f.options, platform: 'darwin', ...machine(), owner: 'owner', acceptStale: digest });
+  assert.deepEqual([launched.resolution, launched.account, launched.sop.rule, launched.sop.stale, launched.refused], ['sandboxed', 'gb-fixture', 'soul:fixture', true, undefined]);
+  // The record changes while the owner is asked: the approval no longer matches it.
+  writeFileSync(file, JSON.stringify({ ...legacy, persona: 'schema_version = 1\n[persona]\nsandbox = "unrestricted"\n' }));
+  const changed = launchSandbox(ID, { ...f.options, platform: 'darwin', ...machine(), owner: 'owner', acceptStale: digest });
+  assert.equal(changed.refused.code, 'persona-policy-stale');
+  writeFileSync(file, JSON.stringify({ ...legacy, persona: null }));
+  assert.equal(loadPersona({ ...f.options, acceptStale: state().digest }).state, 'absent');
+});
+
+test('every turn re-reads the persona policy: a record gone stale refuses the next turn unless the owner verified it (#613)', (t) => {
+  const f = fixture(t, { config: { features: { 'persona-accounts': true } } });
+  const file = pack(f, 'schema_version = 1\n[persona]\nsandbox = "unrestricted"\n');
+  const options = { ...f.options, owner: 'owner' };
+  assert.equal(turnSandboxProblem(ID, options), null);
+  const { selection: _legacy, ...legacy } = JSON.parse(readFileSync(file, 'utf8'));
+  writeFileSync(file, JSON.stringify(legacy));
+  const refused = turnSandboxProblem(ID, options);
+  assert.equal(refused.code, 'persona-policy-stale');
+  assert.match(refused.message, /\(local\/sop@a{12}\); run `agent-bot sop persona`/);
+  assert.equal(turnSandboxProblem(ID, { ...options, acceptStale: refused.digest }), null, 'a launch the owner verified runs its turn');
+  // The pack now puts the soul in another account: this daemon's next turn is refused.
+  pack(f, MAPPING);
+  assert.equal(turnSandboxProblem(ID, options).code, 'sandbox-other-account');
+  assert.equal(turnSandboxProblem(ID, { ...options, owner: 'gb-fixture' }), null, 'the account\'s own daemon runs it');
+  pack(f, null, { record: '{not json' });
+  assert.equal(turnSandboxProblem(ID, options).code, 'persona-policy-unavailable');
 });
 
 test('rules match by name before role, role from the soul\'s soul.json, and a new soul by its launch name and role', (t) => {

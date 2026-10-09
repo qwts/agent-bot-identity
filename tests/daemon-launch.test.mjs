@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync, statSync }
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createLaunchHandler, LAUNCH_NAME_MAX } from '../daemon-launch.mjs';
+import { createTurnRegistry } from '../turn-registry.mjs';
 import { HARNESS_SESSION_EVENT } from '../executor-contract.mjs';
 import { mintAgentIdentity, readAgentIdentity } from '../agent-identity.mjs';
 import { displayName, upsertSoul } from '../agent-population.mjs';
@@ -901,6 +902,67 @@ for (const [code, refused] of [
   assert.ok(report.detail.startsWith(`${code}: ${refused.reason}`));
   assert.ok(report.detail.length <= 512);
   assert.equal(journal(f).code, code);
+});
+
+// A stale record and the owner (#613, owner decision 2026-10-09): a
+// principal's launch asks the owner to verify instead of refusing; a team
+// start, which an agent makes, is refused as before.
+const STALE = { code: 'persona-policy-stale', reason: 'the recorded persona mapping was recorded before agent-bot kept the selection it was made from',
+  action: 'run `agent-bot sop persona` to record the selected SOP\'s mapping', source: { repository: 'o/sop', commit: 'a'.repeat(40) }, digest: 'd'.repeat(64) };
+function staleFixture(t, overrides = {}) {
+  const asked = [], verified = [], turned = [];
+  let f;
+  const resolve = (query) => {
+    asked.push(query);
+    // The receipt is durable before the approval decides anything.
+    if (query.acceptStale) assert.equal(journal(f).ownerVerified?.digest, STALE.digest);
+    return query.acceptStale
+      ? { resolution: 'unrestricted', override: 'inherit', source: 'sop', account: 'owner', self: 'owner', sop: { decides: true, state: 'ok', stale: true } }
+      : { resolution: 'unrestricted', override: 'inherit', source: 'global', account: 'owner', self: 'owner', refused: STALE };
+  };
+  const turns = createTurnRegistry({ policy: (check) => { turned.push(check); } });
+  f = fixture(t, { sandboxFor: resolve, turns,
+    verifyOwner: async (action, context) => { verified.push({ action, context }); return { method: 'presence', via: 'agent-bot-keyd' }; }, ...overrides });
+  return { ...f, asked, verified, turned };
+}
+
+test('an owner\'s launch past a stale persona record is verified, then runs on the stale record\'s mapping with a receipt (#613)', async (t) => {
+  const f = staleFixture(t);
+  await f.handler(event, f.ports);
+  assert.equal(f.verified.length, 1, 'the owner is asked once');
+  assert.match(f.verified[0].action, new RegExp(`^launch ${agentId} although its SOP persona record is stale \\(o/sop@a{40}\\)$`));
+  assert.deepEqual(f.verified[0].context, { soul: agentId, package: null, source: STALE.source });
+  assert.deepEqual(f.asked, [{ agentId, name: 'Helper' }, { agentId, name: 'Helper', acceptStale: STALE.digest }], 'approved, that stale record\'s mapping decides, not the user setting');
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId, sandbox: { resolution: 'unrestricted', account: 'owner' } });
+  assert.deepEqual(journal(f).ownerVerified, { code: 'persona-policy-stale', method: 'presence', source: STALE.source, digest: STALE.digest });
+  assert.deepEqual(f.turned, [{ agentId, kind: 'launch', ownerVerified: STALE.digest }], 'the launch turn carries the approval of that record');
+});
+
+test('an owner who declines a launch past a stale persona record stops it cleanly before any mint or harness (#613)', async (t) => {
+  let spawned = 0;
+  const f = staleFixture(t, { verifyOwner: async () => { throw Object.assign(new Error('the owner declined'), { code: 'presence-denied' }); },
+    spawnPackage: () => { spawned += 1; return { id: spawnedId }; }, discard: () => { throw new Error('nothing to discard'); } });
+  await f.handler(packageEvent, f.ports);
+  assert.equal(spawned, 0);
+  assert.equal(f.calls.length, 0);
+  assert.deepEqual(f.turned, []);
+  assert.equal(f.asked.length, 1, 'nothing is decided from the stale record');
+  const [report] = f.reports;
+  assert.equal(report.status, 'failed');
+  assert.equal(report.code, 'persona-policy-stale');
+  assert.match(report.detail, /^persona-policy-stale: the owner did not verify launching on a stale persona policy \(the owner declined\); run `agent-bot sop persona`/);
+  assert.equal('ownerVerified' in journal(f), false);
+});
+
+test('a team start, which an agent makes, past a stale persona record is refused without asking the owner (#613)', async (t) => {
+  let spawned = 0;
+  const f = staleFixture(t, { spawnPackage: () => { spawned += 1; return { id: spawnedId }; } });
+  await f.handler(packageEvent, { ...f.ports, parent: agentId });
+  assert.deepEqual(f.verified, []);
+  assert.equal(spawned, 0);
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.reports[0].code, 'persona-policy-stale');
+  assert.ok(f.reports[0].detail.startsWith(`persona-policy-stale: ${STALE.reason}`));
 });
 
 test('a persona refusal with an oversized reason and source still reports within the broker detail limit, prefix included (#613)', async (t) => {

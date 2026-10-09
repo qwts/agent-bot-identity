@@ -103,12 +103,22 @@ no `persona.toml`, leaves the user setting in charge.
 - refused: `persona-policy-unavailable` (an SOP is selected but its mapping
   is not recorded, or the config, record or `persona.toml` cannot be read or
   is invalid), `persona-policy-stale` (the
-  record is for another repository than the config selects) or
+  record is not for the selection the config makes now) or
   `persona-policy-requires-addon` (the pack decides sandboxed and
   `features.persona-accounts` is off). The launch fails at `account`,
   before anything is minted, bound or started, with the repair as its
   action. A soul override or the user setting does not turn it into a
   launch.
+- stale, on a principal's launch: the owner has the final say, so instead
+  of refusing, the daemon asks the owner to verify (Touch ID, else the
+  administrator dialog). Approved, that launch is decided by the stale
+  record's own mapping, never by the user setting in its place, and the
+  launch journal keeps `ownerVerified: { code, method, source, digest }`,
+  saved at once. The approval is for that very record (its sha256): one
+  that changes while the owner is asked is refused again. Declined,
+  or with no one to ask, the launch fails `persona-policy-stale` before
+  anything is minted. A team start, which a soul makes, is refused without
+  asking (#613).
 
 - `unrestricted`: the launch is unchanged and runs as the daemon's account.
 - `sandboxed`, and the account is `missing` or a step agent-bot can see is
@@ -187,6 +197,18 @@ not a template name. Every account name must be a short macOS account name
 rule without `sandbox`, makes the whole file invalid, and an invalid file is
 reported as a pack error, and launches are refused until it is fixed.
 
+### Every turn
+
+The policy is evaluated again at the start of every turn the daemon runs
+(launch, wake, task and dream turns), once for the turn (#613). A turn is
+refused, before its harness is prompted, with the same codes as a launch:
+the policy cannot be evaluated, the record is stale, or the pack now puts
+the soul in an account this daemon is not (`sandbox-other-account`). Only a
+launch the owner verified runs its own first turn past a stale record; the
+soul's next wake is refused until `agent-bot sop persona` records the
+current selection. Interactive turns a principal drives are not checked
+here yet.
+
 ### Recording the mapping
 
 The sandbox and the daemon's launch path never fetch anything, so the
@@ -199,8 +221,10 @@ agent-bot sop persona [--json]
 resolves the **user's** SOP (`~/.config/agent-sop/config.toml`, ENG-0355),
 reads `persona.toml` at the SOP commit through the same pinned, read-only git
 boundary as `org.json` (nothing is cloned or executed) and writes
-`<state>/sop-persona.json` (0600) with the org and SOP repositories, the
-commit, the time and the file's text. It prints the parsed rules, or that the
+`<state>/sop-persona.json` (0600) with the selection it was made from (the
+config file and its `owner/name@ref` for org, and for sop when the config
+names one), the org and SOP repositories, the commit, the time and the
+file's text. It prints the parsed rules, or that the
 commit has no `persona.toml`, or the pack error (exit 1; the file is still
 recorded so `sandbox status` reports the same error). A soul's own
 `agent-sop.toml` never decides personas: a soul must not choose the account
@@ -216,17 +240,19 @@ report its `state`:
 | `ok` | the record is for the SOP the config selects and parses | the pack decides matched souls |
 | `none` | no `~/.config/agent-sop/config.toml` | the user setting |
 | `unrecorded` | a config, but `sop persona` has not run | **launch refused** (`persona-policy-unavailable`); run `agent-bot sop persona` |
-| `stale` | the record names another org or SOP repository than the config | **launch refused** (`persona-policy-stale`) |
+| `stale` | the record is not for the selection the config makes now | **refused** (`persona-policy-stale`); a principal's launch asks the owner |
 | `absent` | the SOP commit has no `persona.toml` | the user setting |
 | `invalid` | `persona.toml` does not parse (the message says why) | **launch refused** (`persona-policy-unavailable`) |
 | `error` | the config or the record could not be read | **launch refused** (`persona-policy-unavailable`) |
 
-A stricter `stale` check over the selected ref, pin and `configPath` (which
-needs the selection in the record) and whether wakes and turns of an
-already-launched soul re-read the policy are open in #613.
+A record is current only for the exact selection it was made from: the same
+config file, the same org and sop `owner/name@ref` (repository names compare
+without case, refs exactly), and, where a ref is a 40-hex pin, that very
+commit. A record written before the selection was kept is `stale`; run
+`agent-bot sop persona` once to refresh it.
 
 A record cannot tell that the SOP's branch has moved to a new commit; it says
-which commit it is for.
+which commit it is for, and the next `sop persona` picks the move up.
 
 ### Resolution order and the gate
 

@@ -262,6 +262,7 @@ test('sop persona records the user SOP\'s persona.toml at its commit, through th
   const file = personaRecordFile(f.options);
   assert.equal(statSync(file).mode & 0o777, 0o600);
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { schemaVersion: 1, recordedAt: '2026-10-07T12:00:00.000Z', configPath: f.userPath,
+    selection: { org: `local/org@${repo.commit}`, sop: `local/sop@${repo.commit}` },
     org: { repository: 'local/org', commit: repo.commit }, sop: { repository: 'local/sop', commit: repo.commit }, persona: PERSONA });
   for (const args of f.calls) assertSopGitCommand(args);
   assert.ok(f.calls.some((args) => args.at(-1) === 'FETCH_HEAD:persona.toml'));
@@ -275,9 +276,12 @@ test('sop persona records the user SOP\'s persona.toml at its commit, through th
   assert.equal(parsed.mapping.rules[0].account, 'gb-reviewer');
   assert.equal(parsed.error, null);
   assert.equal('persona' in parsed, false, 'the JSON carries the parsed mapping, not the raw text');
-  // The config now names another organization: the record is stale until refreshed.
+  // The config now names another organization, or the same SOP at another
+  // ref: the record is stale until refreshed (#613 strict selection).
   f.put(f.userPath, repo.config('other/org'));
   assert.equal(readSopPersonaRecord(f.options).state, 'stale');
+  f.put(f.userPath, repo.config('local/org', 'local/sop', 'main'));
+  assert.match(readSopPersonaRecord(f.options).message, new RegExp(`is for sop local/sop@${repo.commit}, not local/sop@main`));
   // A symlinked record is refused, not followed.
   rmSync(file);
   symlinkSync(join(f.home, 'elsewhere.json'), file);
