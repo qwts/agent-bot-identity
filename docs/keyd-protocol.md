@@ -212,39 +212,57 @@ Callers ([owner-gate.mjs](../owner-gate.mjs)):
    bytes), use it. Nothing else is checked, and the binary is not consulted
    again.
 2. Otherwise, if the keyd install record (`<state>/keyd/keyd.json`) names an
-   absolute `bin`, run
-   `/usr/bin/codesign --verify --strict -R=<requirement> <bin>`. By default
-   the requirement is `DEVELOPER_ID_REQUIREMENT`, a Developer ID Application
-   signature from GeniusBar's team on keyd's identifier (#594):
+   absolute `bin` and a keyd Team ID is configured, run
+   `/usr/bin/codesign --verify --strict -R=<requirement> <bin>`. The
+   requirement is a Developer ID Application signature from the configured
+   team on the configured identifier (#594), built by
+   `developerIdRequirement`:
 
    ```text
    anchor apple generic and identifier "agent-bot-keyd"
      and certificate leaf[field.1.2.840.113635.100.6.1.13] exists
-     and certificate leaf[subject.OU] = "Z5DM34QS5U"
+     and certificate leaf[subject.OU] = "<Team ID>"
    ```
 
-   (one line in practice). A keyd built and signed by someone else names its
-   own team and identifier, resolved by `keydSigner` in
-   [config.mjs](../config.mjs), each on its own:
+   (one line in practice). `keydSigner` in [config.mjs](../config.mjs)
+   resolves each value on its own:
 
-   | Setting | Environment (wins when non-empty) | Config | Default |
-   | --- | --- | --- | --- |
-   | Team ID | `AGENT_BOT_KEYD_TEAM_ID` | `settings.keydTeamId` | `Z5DM34QS5U` |
-   | Identifier | `AGENT_BOT_KEYD_IDENTIFIER` | `settings.keydIdentifier` | `agent-bot-keyd` |
+   | Setting | Environment (wins when non-empty) | Config | Organization profile | Default |
+   | --- | --- | --- | --- | --- |
+   | Team ID | `AGENT_BOT_KEYD_TEAM_ID` | `settings.keydTeamId` | `settings.keyd_team_id` | none |
+   | Identifier | `AGENT_BOT_KEYD_IDENTIFIER` | `settings.keydIdentifier` | `settings.keyd_identifier` | `agent-bot-keyd` |
+
+   The Team ID has no built-in default: the runtime names no vendor (#752),
+   and the organization profile, projected into the config by `bootstrap`,
+   is where an organization names the team that signs its keyd. With no
+   Team ID configured nothing is pinned, so `keydPresence` reports
+   `presence-unavailable` and the owner gate uses the administrator dialog.
 
    A Team ID is ten characters `A-Z0-9`; an identifier is letters, digits,
-   `.` and `-`. Either may instead be the literal `any-developer-id`, which
-   drops that clause; both set to it give the requirement from before #594,
-   any Developer ID Application signature. Unset or empty never means that.
+   `.` and `-`. In the environment or the config, either may instead be the
+   literal `any-developer-id`, which drops that clause; both set to it give
+   the requirement from before #594, any Developer ID Application signature.
+   An organization profile cannot set it. Unset or empty never means that.
    A malformed value, or a config that does not load, pins nothing, as an
    unsigned binary would. The config is validated as a whole, so a malformed
    `settings.keydTeamId` fails the load even when `AGENT_BOT_KEYD_TEAM_ID` is
    set, unless both values come from the environment.
-3. Only if that passes, run `<bin> presence-key` (15-second timeout). If the
-   output is a well-formed key, write it to `presence.pub` and use it. The
-   file is left at mode 0600, whether it is new or replaces a pin that did
-   not parse (#746).
-4. Any failure along the way pins nothing and returns `null`, which
+3. **Loosening needs the owner.** Pinning under `any-developer-id` (either
+   value), or under another Team ID or identifier than the last pin was
+   taken under (recorded in `<state>/keyd/presence.signer`, mode 0600), asks
+   the owner first through the administrator dialog, naming the signer and
+   what it replaces. keyd cannot vouch here, since its key is the one being
+   pinned. The answer is receipted in the audit log (`event: keyd-signer`,
+   `operation: pin-presence-key`, `decision: approved|refused`). Without the
+   owner's approval nothing is run or pinned, and `pinnedPresenceKey` throws
+   `keyd-signer-unverified`; the owner gate refuses the action with that
+   code and does not fall back to another prompt. Setting a specific Team ID
+   where none was pinned before is not a loosening.
+4. Only then run `<bin> presence-key` (15-second timeout). If the output is
+   a well-formed key, write it to `presence.pub` and the signer to
+   `presence.signer`, and use it. Both files are left at mode 0600, whether
+   new or replacing a pin that did not parse (#746).
+5. Any other failure along the way pins nothing and returns `null`, which
    `keydPresence` reports as `presence-unavailable`.
 
 The key is never taken from the socket. A file in `presence.pub` that does
@@ -252,7 +270,8 @@ not parse as a key is treated as no pin, and step 2 runs again.
 
 The requirement is checked only when a key is pinned. A host that pinned its
 key before #594 keeps that pin, and the Team ID and identifier apply the next
-time it pins, for example after `presence.pub` is removed.
+time it pins, for example after `presence.pub` is removed. Such a pin has no
+`presence.signer`, so its next pin counts as a first pin.
 
 ### Known gaps
 
@@ -283,8 +302,11 @@ behaviour with no test in this repository.
 | An assertion verifies only for its key, action, nonce, audience and prefix | keyd | `verifyPresence` | `tests/owner-presence.test.mjs`: "an assertion verifies only for its key, action, nonce and time" |
 | Lifetime `0 < exp − iat ≤ 120`; skew 30 s on both sides; integer times; `kind: presence`; `v: 1` | keyd | `verifyPresence` | `tests/owner-presence.test.mjs`: "an assertion is accepted for up to 120 s of lifetime and 30 s of skew, and no more" |
 | keyd issues assertions for 60 s | keyd-side | — | none here |
-| Audience, unavailable RPC code and the default code-signing requirement (Team ID and identifier) | — | `owner-presence.mjs` constants | `tests/owner-presence.test.mjs`: "the presence contract constants keyd and agent-bot share" |
-| The signer comes from the environment, then the config, then the defaults; empty is unset | — | `keydSigner` | `tests/owner-presence.test.mjs`: "the keyd signer comes from the environment, then the config, then the defaults (#594)" |
+| Audience, unavailable RPC code and the code-signing requirement (Team ID and identifier) | — | `owner-presence.mjs` constants, `developerIdRequirement` | `tests/owner-presence.test.mjs`: "the presence contract constants keyd and agent-bot share" |
+| The signer comes from the environment, then the config; the Team ID has no default and empty is unset | — | `keydSigner` | `tests/owner-presence.test.mjs`: "the keyd signer comes from the environment, then the config; the Team ID has no default (#594)" |
+| With no Team ID configured nothing is verified, run or pinned | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "with no keyd Team ID configured nothing is verified, run or pinned" |
+| An organization profile names a specific signer, projects it into config, and can never set `any-developer-id` | — | `validateOrganizationProfile`, `organizationProfileToConfig` | `tests/owner-presence.test.mjs`: "the organization profile names the keyd signer and never loosens it" |
+| Pinning under `any-developer-id`, or another signer than the last pin, needs the owner's approval and is receipted; refused, nothing runs and the gate refuses with `keyd-signer-unverified` | — | `pinnedPresenceKey`, `presenceOrConsent` | `tests/owner-presence.test.mjs`: "pinning under any Developer ID needs the owner and leaves a receipt", "pinning again under another team than the pin was taken under needs the owner", "an unapproved signer refuses the owner action with its code, never falling back to the dialog" |
 | Only an explicit `any-developer-id` restores the requirement from before #594 | — | `developerIdRequirement` | `tests/owner-presence.test.mjs`: "only an explicit any-developer-id brings back the requirement from before #594" |
 | A malformed signer is refused and pins nothing; the binary is verified against the configured signer before it runs | — | `keydSigner`, `pinnedPresenceKey`, `loadConfig` | `tests/owner-presence.test.mjs`: "a malformed keyd signer is refused, so nothing reaches the code-signing requirement", "the binary is verified against the configured team and identifier before it is run"; `tests/config.test.mjs`: "loadConfig accepts a keyd Team ID and identifier and rejects anything else (#594)" |
 | Each request carries a fresh agent-bot nonce; a socket without keyd's key, or an assertion for another nonce, is refused | — | `keydPresence` | `tests/owner-presence.test.mjs`: "keydPresence asks keyd with the action and a fresh nonce, and checks the answer" |
@@ -311,3 +333,9 @@ The owner decided these on 2026-10-09
    longer accepted. GeniusBar must sign keyd with that identifier. See
    [presence-key bootstrap](#presence-key-bootstrap). Pin corruption is
    handled as before (step 2 runs again); an existing pin is not re-checked.
+4. **Where the Team ID lives.** The organization profile names it; the
+   runtime has no built-in Team ID (#752). With none configured, the owner
+   gate uses the administrator dialog.
+5. **Loosening.** The environment and config may name a specific signer
+   freely. Accepting any Developer ID, or pinning under another signer than
+   the last pin, needs the owner's verification and leaves a receipt.

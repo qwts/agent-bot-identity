@@ -19,7 +19,7 @@
 //       "daemonPreference": "off",         // off | prefer | required
 //       "unmanagedAuthors": ["ai9d"],      // humans who may publish as themselves
 //                                          // from an agent session (#675)
-//       "keydTeamId": "Z5DM34QS5U",        // Developer ID team that signs keyd (#594)
+//       "keydTeamId": "ABCDE12345",        // Developer ID team that signs keyd (#594)
 //       "keydIdentifier": "agent-bot-keyd" // keyd's code-signing identifier (#594)
 //     },
 //     "scope": { "apps": ["you-claude-agent"] } // this account serves only these Apps
@@ -248,13 +248,14 @@ export function unmanagedAuthorsWithLegacyDefault(options = {}) {
 }
 
 // Who must have signed the keyd binary before agent-bot pins its presence
-// key (#594). The defaults name the Developer ID team and identifier
-// GeniusBar's keyd ships with; a build signed by another team sets its own
-// (#752). ANY_DEVELOPER_ID, set explicitly, drops that check and accepts any
-// Developer ID Application signature, as before #594; unset or empty never
-// means that. Both values end up in a code-signing requirement, so only
+// key (#594). The Team ID has no built-in default: it comes from the
+// organization profile (`settings.keyd_team_id`, projected here), the
+// config, or the environment, and with none set nothing is pinned, so the
+// owner gate falls back to the administrator dialog (#752). The identifier
+// defaults to keyd's own. ANY_DEVELOPER_ID, set explicitly, drops that part
+// of the check; owner-presence.mjs pins under it only with the owner's
+// verification. Both values end up in a code-signing requirement, so only
 // these shapes are accepted.
-export const DEFAULT_KEYD_TEAM_ID = 'Z5DM34QS5U';
 export const DEFAULT_KEYD_IDENTIFIER = 'agent-bot-keyd';
 export const ANY_DEVELOPER_ID = 'any-developer-id';
 const KEYD_TEAM_ID = { pattern: /^[A-Z0-9]{10}$/, shape: 'a 10-character Team ID (A-Z, 0-9)' };
@@ -274,11 +275,12 @@ export function keydSignerSetting(config = loadConfig()) {
 }
 
 // AGENT_BOT_KEYD_TEAM_ID and AGENT_BOT_KEYD_IDENTIFIER win when set and
-// non-empty, then the config, then the defaults, each value on its own. The
-// config is read only when the environment leaves one open, and then as a
-// whole: like every other setting, a malformed keyd value makes the config
-// fail to load, even if the environment overrides that value. A malformed
-// value throws; the caller pins nothing.
+// non-empty, then the config, each value on its own; the identifier then
+// falls back to keyd's, the Team ID to null (nothing pinned). The config is
+// read only when the environment leaves one open, and then as a whole: like
+// every other setting, a malformed keyd value makes the config fail to load,
+// even if the environment overrides that value. A malformed value throws;
+// the caller pins nothing.
 export function keydSigner({ env = process.env, config, home } = {}) {
   const fromEnv = (name) => (env[name] ? env[name].trim() : '');
   const envTeam = fromEnv('AGENT_BOT_KEYD_TEAM_ID');
@@ -287,7 +289,7 @@ export function keydSigner({ env = process.env, config, home } = {}) {
     ? { teamId: null, identifier: null }
     : keydSignerSetting(config ?? loadConfig({ env, home }));
   return {
-    teamId: envTeam ? keydSignerValue(envTeam, KEYD_TEAM_ID, 'AGENT_BOT_KEYD_TEAM_ID') : configured.teamId ?? DEFAULT_KEYD_TEAM_ID,
+    teamId: envTeam ? keydSignerValue(envTeam, KEYD_TEAM_ID, 'AGENT_BOT_KEYD_TEAM_ID') : configured.teamId,
     identifier: envIdentifier ? keydSignerValue(envIdentifier, KEYD_IDENTIFIER, 'AGENT_BOT_KEYD_IDENTIFIER') : configured.identifier ?? DEFAULT_KEYD_IDENTIFIER,
   };
 }
