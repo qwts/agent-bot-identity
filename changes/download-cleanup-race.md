@@ -1,0 +1,1 @@
+- Prevent an early archive download failure from leaving a partial file on Node 20: the private output file now opens before streaming begins, so an asynchronous open cannot recreate it after cleanup. Hash verification and exclusive creation remain unchanged (#617).

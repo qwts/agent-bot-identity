@@ -16,7 +16,7 @@
 //   a routed launch keeps out of the host's HOME
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
@@ -300,7 +300,11 @@ export async function fetchArchive({ url, sha256 }, { cache, fetchFn = globalThi
   const partial = path.join(cache, `.partial-${sha256}-${randomUUID()}`);
   const hash = createHash('sha256');
   try {
-    await pipeline(bodyStream(response.body), new Transform({ transform(chunk, _encoding, done) { hash.update(chunk); done(null, chunk); } }), createWriteStream(partial, { mode: 0o600, flags: 'wx' }));
+    // Node 20 can reject an already-errored body before an output stream's
+    // async open completes. Create the private file before the pipeline so
+    // that a late open cannot recreate it after failure cleanup.
+    await pipeline(bodyStream(response.body), new Transform({ transform(chunk, _encoding, done) { hash.update(chunk); done(null, chunk); } }),
+      createWriteStream(partial, { fd: openSync(partial, 'wx', 0o600), autoClose: true }));
   } catch (error) {
     rmSync(partial, { force: true });
     fail('runtime-download-failed', `${label}: download of ${url} failed (${error.message}); check the network and retry`, { runtime: label, action });
