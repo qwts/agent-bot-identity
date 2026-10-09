@@ -31,6 +31,8 @@ Refuses primary checkouts outside the soul, arbitrary directories, conflicting
 pins, and cross-device placement. No TMPDIR fallback. With no session soul it
 leaves the checkout human and writes nothing (an error only with --name):
 an agent checks in with agent-bot join first, whatever its harness.
+A new worktree never keeps another soul's pin that git copied into it from
+the source checkout.
 `;
 
 function parseArgs(argv) {
@@ -38,6 +40,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--from-hook') options.hook = true;
+    else if (arg === '--new-worktree') options.newWorktree = true;
     else if (arg === '--name' || arg === '--branch') {
       const value = argv[++i];
       if (!value || value.startsWith('-') || options[arg.slice(2)]) throw new Error(USAGE);
@@ -46,6 +49,7 @@ function parseArgs(argv) {
     else throw new Error(USAGE);
   }
   if (options.branch && !options.name) throw new Error('--branch requires --name');
+  if (options.newWorktree && !options.hook) throw new Error('--new-worktree is only for the post-checkout hook');
   if (options.name && (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(options.name) || options.name.includes('..'))) {
     throw new Error('invalid worktree name: use 1–100 letters, numbers, dots, underscores or hyphens, starting with a letter or number');
   }
@@ -242,43 +246,92 @@ function bindTokenState({ gitDir, worktree, agentId }) {
   }
 }
 
+function worktreeConfig(key) {
+  try { return git('config', '--worktree', '--get', key); } catch { return ''; }
+}
+
+function unsetWorktreeConfig(key) {
+  try { git('config', '--worktree', '--unset-all', key); } catch { /* absent */ }
+}
+
+// Every value of a multi-valued key, exactly: an empty helper (the reset
+// that stops inherited helpers) is a real entry and must survive a rewrite.
+function worktreeConfigAll(key) {
+  let out;
+  try {
+    out = execFileSync('git', ['config', '--worktree', '--get-all', key], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch { return null; }
+  return (out.endsWith('\n') ? out.slice(0, -1) : out).split('\n');
+}
+
+function isBotHelper(value) {
+  return value.includes('git-credential-bot.mjs') || /(?:^|\/)agent-bot(?:'|\") credential /.test(value);
+}
+
+// Remove only GitHub-specific worktree state installed by this command.
+// Preserve unrelated credential helpers and restore an earlier hooks path.
+// The empty helper that resets inherited helpers stays unless asked: a soul
+// without an App must not fall back to the human's credentials.
+function clearAppAttribution({ dropHelperReset = false } = {}) {
+  const hooks = worktreeConfig('agentBot.chainedHooksPath');
+  if (hooks) git('config', '--worktree', 'core.hooksPath', hooks);
+  for (const key of ['agentBot.app', 'agentBot.chainedHooksPath']) unsetWorktreeConfig(key);
+  if (worktreeConfig('user.name').endsWith('[bot]')) {
+    for (const key of ['user.name', 'user.email']) unsetWorktreeConfig(key);
+  }
+  const helpers = worktreeConfigAll('credential.helper');
+  if (helpers && helpers.some(isBotHelper)) {
+    let retained = helpers.filter((value) => !isBotHelper(value));
+    if (dropHelperReset) retained = retained.filter(Boolean);
+    unsetWorktreeConfig('credential.helper');
+    for (const helper of retained) git('config', '--worktree', '--add', 'credential.helper', helper);
+  }
+  if (worktreeConfig('commit.gpgsign') === 'false') unsetWorktreeConfig('commit.gpgsign');
+  // core.hooksPath is removed only when it points at our installed hooks.
+  if (worktreeConfig('core.hooksPath').includes('/share/agent-bot/hooks')) unsetWorktreeConfig('core.hooksPath');
+}
+
+function isLinkedWorktree() {
+  const gitDir = realpathSync(git('rev-parse', '--absolute-git-dir'));
+  return gitDir !== realpathSync(git('rev-parse', '--path-format=absolute', '--git-common-dir'));
+}
+
+// git copies the source checkout's config.worktree into every worktree it
+// adds (#648), so a new linked worktree arrives pinned to whichever soul the
+// source was pinned to. That pin was never set up here. Unless it is the
+// session soul's own, remove everything agent-bot manages from it, leaving the
+// worktree human until a session soul configures it. Keys agent-bot does not
+// write (sparse checkout, a human author, other credential helpers) stay.
+export function clearInheritedPin(sessionId) {
+  let perWorktree = '';
+  try { perWorktree = git('config', '--type=bool', '--get', 'extensions.worktreeConfig'); } catch { /* unset */ }
+  // Without the extension git copies no config.worktree, so there is nothing
+  // inherited, and --worktree would write the shared config instead.
+  if (perWorktree !== 'true') return false;
+  if (!isLinkedWorktree()) return false;
+  const pins = AGENT_ID_KEYS.map(worktreeConfig).filter(Boolean);
+  // Only a checkout agent-bot configured carries these; a person's own
+  // config.worktree (signing off, a helper reset) is not agent-bot's to touch.
+  const attributed = pins.length > 0 || worktreeConfig('agentBot.app') !== ''
+    || worktreeConfig('user.name').endsWith('[bot]') || (worktreeConfigAll('credential.helper') ?? []).some(isBotHelper);
+  if (!attributed) return false;
+  if (sessionId && pins.length > 0 && pins.every((pin) => pin === sessionId)) return false;
+  clearAppAttribution({ dropHelperReset: true });
+  for (const key of AGENT_ID_KEYS) unsetWorktreeConfig(key);
+  return true;
+}
+
+function clearInheritedPinQuietly(sessionId) {
+  try { return clearInheritedPin(sessionId); } catch { return false; }
+}
+
 async function configureSoulWithoutApp({ gitDir, config, daemon, identity }) {
   const { executionIdentity, space, worktree } = await bindExecutionIdentity({
     config,
     daemon,
     executionIdentity: identity,
   });
-  // Remove only GitHub-specific worktree state installed by this command.
-  // Preserve unrelated credential helpers and restore an earlier hooks path.
-  const getConfig = (key) => {
-    try { return git('config', '--worktree', '--get', key); } catch { return ''; }
-  };
-  const hooks = getConfig('agentBot.chainedHooksPath');
-  if (hooks) git('config', '--worktree', 'core.hooksPath', hooks);
-  for (const key of ['agentBot.app', 'agentBot.chainedHooksPath']) {
-    try { git('config', '--worktree', '--unset-all', key); } catch { /* absent */ }
-  }
-  if (getConfig('user.name').endsWith('[bot]')) {
-    for (const key of ['user.name', 'user.email']) {
-      try { git('config', '--worktree', '--unset-all', key); } catch { /* absent */ }
-    }
-  }
-  try {
-    const helpers = git('config', '--worktree', '--get-all', 'credential.helper').split('\n');
-    const isBotHelper = (value) => value.includes('git-credential-bot.mjs')
-      || /(?:^|\/)agent-bot(?:'|\") credential /.test(value);
-    const retained = helpers.filter((value) => !isBotHelper(value));
-    git('config', '--worktree', '--unset-all', 'credential.helper');
-    for (const helper of retained) git('config', '--worktree', '--add', 'credential.helper', helper);
-  } catch { /* no worktree helpers */ }
-  if (getConfig('commit.gpgsign') === 'false') {
-    try { git('config', '--worktree', '--unset-all', 'commit.gpgsign'); } catch { /* absent */ }
-  }
-  // core.hooksPath is removed only when it points at our installed hooks.
-  const hooksPath = getConfig('core.hooksPath');
-  if (hooksPath.includes('/share/agent-bot/hooks')) {
-    try { git('config', '--worktree', '--unset-all', 'core.hooksPath'); } catch { /* absent */ }
-  }
+  clearAppAttribution();
   git('config', '--worktree', 'agentBot.agentId', executionIdentity.id);
   const bindState = bindTokenState({ gitDir, worktree, agentId: executionIdentity.id });
   const transcriptState = executionIdentity.transcript ? 'transcript bound' : 'transcript pending';
@@ -393,7 +446,14 @@ export async function main(dependencies = {}) {
     return;
   }
   const options = parseArgs(argv);
-  const identity = sessionIdentity();
+  let identity;
+  try {
+    identity = sessionIdentity();
+  } catch (error) {
+    if (options.newWorktree) clearInheritedPinQuietly(null);
+    throw error;
+  }
+  if (options.newWorktree) clearInheritedPinQuietly(identity?.id ?? null);
   if (!identity) {
     // No session soul: a human's own session, or a harness nobody approved.
     // The harness startup script and git's post-checkout hook run setup
@@ -416,6 +476,8 @@ export async function main(dependencies = {}) {
         let branchExists = false;
         try { git('show-ref', '--verify', `refs/heads/${branch}`); branchExists = true; } catch { /* new branch */ }
         git('-c', 'core.hooksPath=/dev/null', 'worktree', 'add', ...(branchExists ? [] : ['-b', branch]), placed.path, ...(branchExists ? [branch] : []));
+        process.chdir(destination);
+        clearInheritedPin(identity.id);
       }
       process.chdir(destination);
       if (realpathSync(git('rev-parse', '--show-toplevel')) !== realpathSync(destination)

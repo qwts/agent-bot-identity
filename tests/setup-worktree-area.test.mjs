@@ -9,6 +9,7 @@ import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
 import { worktreeSoul } from './helpers/worktree-soul.mjs';
 import { placeWorktree, linkWorktree } from '../soul-worktrees.mjs';
 import { installHookWrappers, installationPaths } from '../install.mjs';
+import { credentialHelperCommand } from '../setup-worktree.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 function fixture(t, harness = 'codex') {
@@ -178,4 +179,118 @@ test('an external checkout linked from another soul is refused until this soul e
   linkWorktree(f.identity.id, checkout, f.options);
   assert.equal(f.run(checkout).status, 0);
   assert.notEqual(f.run(checkout, [], { AGENT_BOT_ID: other.identity.id }).status, 0, 'an existing different soul pin cannot be overwritten');
+});
+
+// #648: git copies the source checkout's config.worktree into every worktree it
+// adds. Pin the primary checkout the way setup-worktree pins a soul's, plus
+// keys a person wrote, then add worktrees through git with the real hook.
+function pinSource(f, agentId) {
+  const set = (...args) => f.git(f.repo, 'config', '--worktree', ...args);
+  set('agentBot.app', 'other-grok-agent');
+  set('agentBot.agentId', agentId);
+  set('user.name', 'other-grok-agent[bot]');
+  set('user.email', '1+other-grok-agent[bot]@users.noreply.github.com');
+  set('commit.gpgsign', 'false');
+  set('--add', 'credential.helper', 'store');
+  set('--add', 'credential.helper', '');
+  set('--add', 'credential.helper', credentialHelperCommand(join(f.home, '.local', 'bin', 'agent-bot'), 'other-grok-agent', { subcommand: 'credential' }));
+  set('rerere.enabled', 'true');
+  return readFileSync(join(f.repo, '.git', 'config.worktree'));
+}
+
+function addWithHook(f, destination, sessionId) {
+  mkdirSync(dirname(destination), { recursive: true });
+  execFileSync('git', ['-c', `core.hooksPath=${join(root, 'hooks')}`, 'worktree', 'add', '-q', '-b', 'inherit', destination], {
+    cwd: f.repo, env: { ...f.env, AGENT_BOT_ID: sessionId }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return destination;
+}
+
+function worktreeValues(f, checkout, key) {
+  const result = spawnSync('git', ['config', '--worktree', '--get-all', key], { cwd: checkout, env: f.env, encoding: 'utf8' });
+  return result.status === 0 ? result.stdout.split('\n').slice(0, -1) : [];
+}
+
+function otherSoul(f) {
+  return worktreeSoul({ ...f.env }, null, { harness: 'grokbot' }).identity.id;
+}
+
+test('a worktree added from a pinned checkout with no session soul is human; the source is unchanged', (t) => {
+  const f = fixture(t);
+  const before = pinSource(f, otherSoul(f));
+  const checkout = addWithHook(f, join(f.home, 'scratch'), '');
+  for (const key of ['agentBot.app', 'agentBot.agentId', 'user.name', 'user.email', 'commit.gpgsign']) {
+    assert.deepEqual(worktreeValues(f, checkout, key), [], key);
+  }
+  assert.deepEqual(worktreeValues(f, checkout, 'credential.helper'), ['store']);
+  assert.deepEqual(worktreeValues(f, checkout, 'rerere.enabled'), ['true']);
+  assert.equal(f.git(checkout, 'config', 'user.name'), 'Test');
+  assert.deepEqual(readFileSync(join(f.repo, '.git', 'config.worktree')), before);
+});
+
+test('a worktree added for a different session soul is configured for that soul, not the source pin', (t) => {
+  const f = fixture(t);
+  pinSource(f, otherSoul(f));
+  const destination = placeWorktree(f.identity.id, 'inherit', { ...f.options, repoCommonDir: join(f.repo, '.git') }).path;
+  const checkout = addWithHook(f, destination, f.identity.id);
+  assert.deepEqual(worktreeValues(f, checkout, 'agentBot.agentId'), [f.identity.id]);
+  assert.deepEqual(worktreeValues(f, checkout, 'agentBot.app'), []);
+  assert.deepEqual(worktreeValues(f, checkout, 'user.name'), []);
+  const gitDir = f.git(checkout, 'rev-parse', '--absolute-git-dir');
+  assert.equal(JSON.parse(readFileSync(join(gitDir, 'agent-bind-token.json'), 'utf8')).agentId, f.identity.id);
+});
+
+test('a worktree added by the pinned soul itself keeps its pin and gets a fresh bind token', (t) => {
+  const f = fixture(t);
+  const before = pinSource(f, f.identity.id);
+  const destination = placeWorktree(f.identity.id, 'inherit', { ...f.options, repoCommonDir: join(f.repo, '.git') }).path;
+  const checkout = addWithHook(f, destination, f.identity.id);
+  assert.deepEqual(worktreeValues(f, checkout, 'agentBot.agentId'), [f.identity.id]);
+  const gitDir = f.git(checkout, 'rev-parse', '--absolute-git-dir');
+  assert.equal(JSON.parse(readFileSync(join(gitDir, 'agent-bind-token.json'), 'utf8')).agentId, f.identity.id);
+  assert.equal(existsSync(join(f.repo, '.git', 'agent-bind-token.json')), false);
+  assert.deepEqual(readFileSync(join(f.repo, '.git', 'config.worktree')), before);
+});
+
+test('setup-worktree --name from a checkout pinned to another soul configures the new worktree for the session soul', (t) => {
+  const f = fixture(t);
+  const before = pinSource(f, otherSoul(f));
+  const result = f.run(f.repo, ['--name', 'inherit']);
+  assert.equal(result.status, 0, result.stderr);
+  const checkout = placeWorktree(f.identity.id, 'inherit', { ...f.options, repoCommonDir: join(f.repo, '.git') }).path;
+  assert.deepEqual(worktreeValues(f, checkout, 'agentBot.agentId'), [f.identity.id]);
+  assert.deepEqual(worktreeValues(f, checkout, 'user.name'), []);
+  assert.deepEqual(worktreeValues(f, checkout, 'credential.helper'), ['store']);
+  assert.deepEqual(readFileSync(join(f.repo, '.git', 'config.worktree')), before);
+});
+
+test('a worktree added from a human checkout with its own config.worktree keeps it exactly', (t) => {
+  const f = fixture(t);
+  f.git(f.repo, 'config', '--worktree', '--unset-all', 'agentBot.app');
+  f.git(f.repo, 'config', '--worktree', 'commit.gpgsign', 'false');
+  f.git(f.repo, 'config', '--worktree', '--add', 'credential.helper', '');
+  f.git(f.repo, 'config', '--worktree', '--add', 'credential.helper', 'store');
+  const before = readFileSync(join(f.repo, '.git', 'config.worktree'));
+  const checkout = addWithHook(f, join(f.home, 'human'), '');
+  const gitDir = f.git(checkout, 'rev-parse', '--absolute-git-dir');
+  assert.deepEqual(readFileSync(join(gitDir, 'config.worktree')), before);
+  assert.deepEqual(worktreeValues(f, checkout, 'credential.helper'), ['', 'store']);
+  assert.deepEqual(worktreeValues(f, checkout, 'commit.gpgsign'), ['false']);
+});
+
+test('post-checkout in an existing worktree never strips a pin, and --new-worktree is hook-only', (t) => {
+  const f = fixture(t);
+  const other = otherSoul(f);
+  const checkout = f.add(join(f.home, 'existing'));
+  f.git(checkout, 'config', '--worktree', 'agentBot.agentId', other);
+  const head = f.git(checkout, 'rev-parse', 'HEAD');
+  const result = spawnSync(join(root, 'hooks', 'post-checkout'), [head, head, '1'], {
+    cwd: checkout, env: { ...f.env, AGENT_BOT_ID: '' }, encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(worktreeValues(f, checkout, 'agentBot.agentId'), [other]);
+  const direct = f.run(checkout, ['--new-worktree']);
+  assert.notEqual(direct.status, 0);
+  assert.match(direct.stderr, /only for the post-checkout hook/);
+  assert.deepEqual(worktreeValues(f, checkout, 'agentBot.agentId'), [other]);
 });
