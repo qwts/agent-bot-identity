@@ -187,14 +187,22 @@ agent-comms turns recover a bounded context from the existing per-soul
 thread journal (`soul-threads.mjs`) before the relay starts the harness:
 
 - Messages with `correlation` or `replyTo` receive that linked thread.
-- A principal message with neither field receives recent exchanges with
-  that exact principal in this soul's journal, including linked teammate
+- A principal message with neither field seeds from its eight most recent
+  exchanges with that exact principal in this soul's journal, including linked teammate
   work. This supports the GeniusBar composer, which sends `to`, `body` and
   an idempotency `key` without either thread field. Previously its next
   message received no earlier context, even though the UI showed it (#596).
 - An unthreaded message from another agent gets no implicit conversation
   history. A different principal or soul does not inherit this fallback.
   An explicit thread link always takes precedence, even when unknown.
+- Principal context never follows another principal's exchanges or teammate
+  links connected to them. A summary actually sent to the current principal
+  remains eligible, but shared correlations cannot pull the other person's
+  private conversation into it. This filter also applies to explicit principal
+  thread requests; ambiguous linked teammate work is omitted.
+- The fallback is per soul and principal, not per UI chat tab. The composer
+  supplies no conversation ID or fresh-chat marker; opening a new chat view
+  does not establish a separate context boundary in this mechanism.
 - Existing bounds still apply: at most eight recent entries within 6 KiB
   of serialized context, with each stored body capped at 2 KiB. Entries
   appear oldest first as quoted message data, not new instructions. The
@@ -208,13 +216,11 @@ thread boundaries. These are deterministic engine fixtures: they prove the
 input delivered to the executor, not a model's answer or a live GeniusBar
 restart. No native session-resume support is implied by this fallback.
 
-Remaining #596 acceptance includes live UI/app and daemon restarts,
-supported CLI transitions, and native-session association. The ACP engine
-has a `getHarnessSession`/`session/load` port, but the production executor
-factory does not yet supply it for `/v1` interactions. The CLI resume-wake
-lane has its own per-soul session registry. Neither path is demonstrated by
-the cold-relay fixtures, and relocating Agent Space alone does not resolve
-those continuity requirements.
+Remaining #596 acceptance includes live UI/app and daemon restarts and
+supported CLI transitions. Native `/v1` session association and the CLI
+resume-wake lane's per-soul session registry are separate paths requiring
+their own evidence. Neither is demonstrated by the cold-relay fixtures,
+and relocating Agent Space alone does not resolve those continuity requirements.
 
 ### Storage and migration limits
 

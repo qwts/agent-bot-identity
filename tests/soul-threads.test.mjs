@@ -114,6 +114,45 @@ test('principal conversation recovery keeps the existing count and byte bounds',
   assert.ok(context.every((entry) => !entry.body.includes('\uFFFD')));
 });
 
+test('principal context never crosses another principal through shared links or teammate bridges', () => {
+  const { options } = scratch();
+  const A = 'principal_a', B = 'principal_b';
+  const rec = (entry) => recordThreadMessage(BILL, entry, options);
+  rec({ dir: 'in', id: 'b1', from: B, body: 'B PRIVATE: salary is 123' });
+  rec({ dir: 'out', id: 'o1', to: B, replyTo: 'b1', correlation: 'b1', body: 'B PRIVATE: noted' });
+  rec({ dir: 'out', id: 'b-task', to: 'acct/ted', correlation: 'b1', body: 'B PRIVATE: assess salary' });
+  rec({ dir: 'in', id: 'b-answer', from: 'acct/ted', correlation: 'b-task', body: 'B PRIVATE: salary analysis' });
+  // A receives only this deliberately addressed summary from B's turn.
+  rec({ dir: 'out', id: 'o2', to: A, correlation: 'b1', body: 'FYI the meeting moved' });
+  rec({ dir: 'in', id: 'a1', from: A, body: 'Thanks. Check the new meeting room.' });
+  rec({ dir: 'out', id: 'a-task', to: 'acct/ada', correlation: 'a1', body: 'Check room 12' });
+  rec({ dir: 'in', id: 'a-answer', from: 'acct/ada', correlation: 'a1', body: 'Room 12 is ready' });
+  // A late cross-link tries to pull a foreign teammate result into A's work.
+  rec({ dir: 'in', id: 'bridge', from: 'acct/ted', correlation: 'b-answer', replyTo: 'o2', body: 'B PRIVATE: bridged analysis' });
+  const next = { id: 'a2', from: { principal: A } };
+  const fallback = threadContext(BILL, next, options);
+  assert.deepEqual(fallback.map((e) => e.id), ['o2', 'a1', 'a-task', 'a-answer']);
+  assert.doesNotMatch(formatThread(fallback), /B PRIVATE/);
+  for (const link of [{ correlation: 'b1' }, { replyTo: 'b-answer' }, { correlation: 'bridge' }]) {
+    assert.deepEqual(threadContext(BILL, { ...next, ...link }, options), []);
+  }
+  const explicit = threadContext(BILL, { ...next, correlation: 'a1' }, options);
+  assert.deepEqual(explicit.map((e) => e.id), ['a1', 'a-task', 'a-answer']);
+});
+
+test('old principal exchanges cannot seed unrelated recent teammate work over the latest conversation', () => {
+  const { options } = scratch();
+  recordThreadMessage(BILL, { dir: 'in', id: 'old', from: 'principal_a', body: 'Old task' }, options);
+  for (let i = 0; i < 8; i += 1) {
+    recordThreadMessage(BILL, { dir: 'in', id: `recent-${i}`, from: 'principal_a', body: `Recent decision ${i}` }, options);
+  }
+  for (let i = 0; i < 8; i += 1) {
+    recordThreadMessage(BILL, { dir: 'in', id: `old-work-${i}`, from: 'acct/ted', correlation: 'old', body: 'Late obsolete work' }, options);
+  }
+  const context = threadContext(BILL, { id: 'next', from: { principal: 'principal_a' } }, options);
+  assert.deepEqual(context.map((e) => e.id), Array.from({ length: 8 }, (_, i) => `recent-${i}`));
+});
+
 test('fresh cold turns recover a principal decision and teammate facts after restarting the waker', async () => {
   const { options } = scratch();
   const principal = 'principal_owner';
