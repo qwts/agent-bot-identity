@@ -297,6 +297,7 @@ function doctorOptions(home) {
     verifyApps: false,
     appResults: { results: [] },
     probeSecretStore: () => [],
+    probeSessionContext: () => [],
     listHarnessMcpServers: () => [],
   };
 }
