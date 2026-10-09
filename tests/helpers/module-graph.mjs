@@ -54,6 +54,8 @@ export function maskSource(source) {
     if (word) return KEYWORDS_BEFORE_EXPRESSION.has(word);
     return !/[\w$)\]}"'`]/u.test(char);
   };
+  // A backslash before CRLF is one line continuation, three characters long.
+  const escapeLength = (at) => (source[at + 1] === '\r' && source[at + 2] === '\n' ? 3 : 2);
   const quoted = (raw) => {
     strings.push(decodeEscapes(raw));
     return `"\0${strings.length - 1}"`;
@@ -63,7 +65,7 @@ export function maskSource(source) {
     let text = '';
     while (i < source.length) {
       const c = source[i];
-      if (c === '\\') { text += source.slice(i, i + 2); i += 2; continue; }
+      if (c === '\\') { const n = escapeLength(i); text += source.slice(i, i + n); i += n; continue; }
       if (c === '`') { i += 1; return { text, closed: true }; }
       if (c === '$' && source[i + 1] === '{') { i += 2; return { text, closed: false }; }
       text += c;
@@ -84,7 +86,7 @@ export function maskSource(source) {
       let value = '';
       i += 1;
       while (i < source.length && source[i] !== c && source[i] !== '\n') {
-        if (source[i] === '\\') { value += source.slice(i, i + 2); i += 2; } else { value += source[i]; i += 1; }
+        if (source[i] === '\\') { const n = escapeLength(i); value += source.slice(i, i + n); i += n; } else { value += source[i]; i += 1; }
       }
       i += 1;
       out += quoted(value);

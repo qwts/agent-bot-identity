@@ -217,6 +217,8 @@ test('escaped, percent-encoded and suffixed specifiers still produce their edge'
     "import './secret%2Dstore.mjs';",
     "import './secret-store.mjs#fragment';",
     "import './sub/../secret-store.mjs';",
+    "import './secret\\\r\n-store.mjs';",
+    "import './secret\\\n-store.mjs';",
   ];
   for (const form of forms) {
     const sources = { 'a.mjs': form, 'secret-store.mjs': '' };
