@@ -20,6 +20,8 @@ export const HEALTH_TIMEOUT_MS = 1_500;
 // so it needs a network-scale budget — the health-probe timeout would abort
 // legitimate mints on any slow round trip.
 const CREDENTIAL_TIMEOUT_MS = 30_000;
+// A take waits on pass-cli and then the broker's own 10 s limit.
+const INBOX_TAKE_TIMEOUT_MS = 30_000;
 // Longer than keyd's presence prompt, so the owner has time to answer.
 const OWNER_DECISION_TIMEOUT_MS = 180_000;
 
@@ -121,6 +123,10 @@ export function daemonClient({
     if (!res.ok) throw Object.assign(new Error(`daemon ${method} ${pathname} failed: ${payload.error ?? `HTTP ${res.status}`}`),
       ['soul-paused', 'owner-credential-required', 'owner-consent-unavailable'].includes(payload.code)
         || typeof payload.code === 'string' && /^dream-[a-z][a-z-]{0,63}$/.test(payload.code) ? { code: payload.code } : {},
+      // An inbox code comes with the daemon's own sentence, which take_inbox
+      // shows as is.
+      typeof payload.code === 'string' && /^inbox-[a-z][a-z-]{0,63}$/.test(payload.code)
+        ? { code: payload.code, detail: String(payload.error ?? '') } : {},
       method === 'POST' && pathname.startsWith('/v0/soul/dream/') && payload.audit?.status === 'unconfirmed'
         && payload.audit?.code === 'dream-control-audit-unconfirmed'
         ? { audit: { status: 'unconfirmed', code: 'dream-control-audit-unconfirmed' } } : {});
@@ -191,6 +197,11 @@ export function daemonClient({
     // caller is that identity — nothing is being borrowed.
     async credential(secret) {
       return request('POST', '/v0/credential', {}, { 'x-agent-binding': secret }, CREDENTIAL_TIMEOUT_MS);
+    },
+    // take_inbox (#229): the daemon holds the inbox bearer and derives the
+    // App and repository from this binding; the caller sends neither.
+    async takeInbox(secret) {
+      return request('POST', '/v0/inbox/take', {}, { 'x-agent-binding': secret }, INBOX_TAKE_TIMEOUT_MS);
     },
     // v1 interaction contract (#55). Adapters authenticate their provider
     // identity and pass the normalized pair on every call; the daemon owns

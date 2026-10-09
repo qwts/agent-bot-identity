@@ -97,6 +97,23 @@ test('supervisor paths follow the user-level convention', () => {
   assert.equal(supervisorPaths('/u', 'freebsd', {}).kind, null);
 });
 
+test('the daemon unit carries a plain inbox URL and nothing that could hold a credential (#229)', () => {
+  const plain = supervisorEnvironment({ env: { GH_APP_HOOK_INBOX_URL: 'https://gh-app-hook.example.org' }, home: '/u' });
+  assert.equal(plain.GH_APP_HOOK_INBOX_URL, 'https://gh-app-hook.example.org');
+  for (const value of [
+    'https://user:pass@gh-app-hook.example.org',
+    'https://gh-app-hook.example.org/?key=query-secret',
+    'ftp://gh-app-hook.example.org',
+    'not a url',
+    '',
+  ]) {
+    assert.equal('GH_APP_HOOK_INBOX_URL' in supervisorEnvironment({ env: { GH_APP_HOOK_INBOX_URL: value }, home: '/u' }), false, value);
+  }
+  // The bearer never goes into a unit, set or not.
+  const withBearer = supervisorEnvironment({ env: { GH_APP_HOOK_INBOX_TOKEN: 'x' }, home: '/u' });
+  assert.equal('GH_APP_HOOK_INBOX_TOKEN' in withBearer, false);
+});
+
 test('supervised units retain the log cap override and normalize invalid values', () => {
   assert.equal('AGENT_BOT_DAEMON_LOG_MAX_BYTES' in supervisorEnvironment({ env: {}, home: '/u' }), false);
   for (const [value, expected] of [['1024', '1024'], ['bad', '5242880']]) {

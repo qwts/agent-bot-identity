@@ -1791,7 +1791,9 @@ test('the inbox section reports presence without carrying the bearer', async () 
   }));
   const check = report.machine.checks.find((entry) => entry.id === 'inbox.configuration');
   assert.equal(check.status, 'ready');
-  assert.equal(check.evidence.credential_configured, true);
+  // The daemon holds the broker credential (#229); the shell's is not read.
+  assert.equal(check.evidence.credential_held_by, 'daemon');
+  assert.equal('credential_configured' in check.evidence, false);
   assert.deepEqual(check.evidence.harnesses_wired, ['opencode']);
   // The value is never echoed anywhere in the report.
   assert.doesNotMatch(JSON.stringify(report), /super-secret-bearer-value/);
@@ -1810,6 +1812,15 @@ test('the inbox section warns on a malformed inbox URL instead of reporting read
     assert.equal(check.evidence.host, null);
     assert.doesNotMatch(JSON.stringify(report), /super-secret-bearer-value/);
   }
+});
+
+test('the inbox section is ready without a credential in the shell (#229)', async () => {
+  const report = await collectReadiness(machineScopeOptions({
+    env: { HOME: tempRoot(), GH_APP_HOOK_INBOX_URL: 'https://example.invalid' },
+    listHarnessMcpServers: () => [{ harness: 'opencode', mcp: 'agent-bot' }],
+  }));
+  const check = report.machine.checks.find((entry) => entry.id === 'inbox.configuration');
+  assert.equal(check.status, 'ready');
 });
 
 test('the inbox section warns when a harness wires it but nothing is configured', async () => {

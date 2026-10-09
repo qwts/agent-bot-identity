@@ -59,15 +59,28 @@ For every GitHub App that agents act as, in the App's settings on github.com:
 GitHub's `X-GitHub-Delivery` GUID becomes the record id, so a redelivery
 dedupes instead of being stored twice.
 
-## 4. Wire the inbox into the harness
+## 4. Wire the inbox into the daemon and the harness
 
-The session's MCP server needs the inbox URL and the bearer in its
-environment, and the harness needs the server:
+`take_inbox` goes through the daemon (#229). The daemon holds the bearer and
+the URL; the session's MCP server holds neither and presents only its
+binding. Store `INBOX_TOKEN` as a pass-cli note, in the `Agent Identities`
+vault, titled exactly:
+
+```text
+agent-bot.inbox/gh-app-hook-inbox-token
+```
+
+with the bearer as the note's only content. The daemon reads it for each
+take, so a rotated value takes effect without a restart. Then install the
+daemon with the URL set, which writes it into the daemon's unit:
 
 ```bash
-export GH_APP_HOOK_INBOX_URL=https://<worker host>
-export GH_APP_HOOK_INBOX_TOKEN=<INBOX_TOKEN, from the secret store>
+GH_APP_HOOK_INBOX_URL=https://<worker host> agent-bot daemon install
 ```
+
+Only a plain `http(s)://host[:port][/path]` goes into the unit; a URL with
+userinfo, a query or a fragment is left out. The harness needs the MCP
+server:
 
 ```json
 { "mcpServers": { "agent-bot": { "command": "agent-bot", "args": ["mcp"] } } }
@@ -75,13 +88,25 @@ export GH_APP_HOOK_INBOX_TOKEN=<INBOX_TOKEN, from the secret store>
 
 The server is `agent-bot mcp`; a soul package's `agent-bot` entry runs
 `reach-mcp`, the daemon's reach-back server, which has no `take_inbox`, so
-`doctor` does not count it as inbox wiring (#247). The bearer today is
-**one fleet-wide value, not per-App**: every machine that calls `/inbox`
-holds the same `INBOX_TOKEN`, and that token can take any App's records for
-any repository. Distribute it only to machines you would trust with every
-App's mailbox. #229 tracks moving it behind the daemon so an agent never
-holds it; that changes how an agent obtains the bearer, not how the Worker is
-configured, so this procedure still applies once it lands.
+`doctor` does not count it as inbox wiring (#247). The bearer is **one
+fleet-wide value, not per-App**: it can take any App's records for any
+repository, which is why only the daemon reads it. The daemon takes for the
+App on the bound soul's own record and the repository of the bound
+worktree's `origin`; nothing the caller sends chooses either, and takes for
+one App and repository run one at a time. Each take leaves an `inbox-take`
+receipt in the audit log naming the soul, App and outcome, never the bearer.
+
+| take_inbox code | Meaning |
+| --- | --- |
+| `inbox-credential-missing` | The pass-cli note is missing or empty. |
+| `inbox-credential-unavailable` | pass-cli could not be read (no session, locked). |
+| `inbox-not-configured` | The daemon has no valid `GH_APP_HOOK_INBOX_URL`. |
+| `inbox-no-app` | The bound soul has no GitHub App. |
+| `inbox-auth-expired` | The Worker refused the bearer; update the note. |
+| `inbox-broker-unreachable`, `inbox-unavailable`, `inbox-bad-request` | The broker failed, timed out or refused the request. |
+| `inbox-not-bound`, `inbox-wrong-worktree`, `inbox-daemon-unreachable` | The session's own binding or daemon connection. |
+
+`GH_APP_HOOK_INBOX_TOKEN` in a session's environment is no longer read.
 
 ## 5. Verify
 
@@ -90,8 +115,8 @@ agent-bot doctor --machine-only --json | jq '.machine.checks[] | select(.id | st
 agent-bot doctor --machine-only --probe-inbox
 ```
 
-`inbox.configuration` is `ready` when the URL is set, the bearer is present
-and a harness wires `agent-bot mcp`; `--probe-inbox` sends one unauthenticated
+`inbox.configuration` is `ready` when the URL is set and a harness wires
+`agent-bot mcp` (the bearer is the daemon's, so doctor does not look for it); `--probe-inbox` sends one unauthenticated
 `HEAD /inbox` and reports the host's reachability. Then, from a bound
 worktree, `take_inbox` returns `{ "event": null }` (HTTP 204, nothing
 waiting) or the oldest record for that App and repository.
@@ -134,8 +159,9 @@ successful take deletes the record it returns, so probing a real repository
 can consume a pending event. A nonexistent `owner/name` matches nothing:
 
 ```sh
+INBOX_TOKEN='<the value of the pass-cli note>'
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
-  -H "Authorization: Bearer $GH_APP_HOOK_INBOX_TOKEN" \
+  -H "Authorization: Bearer $INBOX_TOKEN" \
   "https://<worker host>/inbox?app=<app slug>&repo=<owner>/nonexistent-probe-repo"
 ```
 
@@ -152,6 +178,6 @@ reuse the delivery GUID, so they dedupe.
 entry in `WEBHOOK_SECRETS` (`wrangler secret put` replaces the whole JSON
 object, so paste every entry), then set the same value on the App and save.
 Deliveries in between fail and can be redelivered afterwards. For
-`INBOX_TOKEN`: put the new value, then update `GH_APP_HOOK_INBOX_TOKEN` on
-every machine that calls `/inbox`; until each machine is updated its
-`take_inbox` calls get 401. Re-run the probes above after either rotation.
+`INBOX_TOKEN`: put the new value, then update the
+`agent-bot.inbox/gh-app-hook-inbox-token` note; until it is updated,
+`take_inbox` calls get `inbox-auth-expired`. Re-run the probes above after either rotation.

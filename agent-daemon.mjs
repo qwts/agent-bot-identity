@@ -73,6 +73,7 @@ import { createInteractionService } from './agent-interaction.mjs';
 import { mint } from './mint-token.mjs';
 import { KEYD_TOOL_NAMES, grantTarget, keydRequest, mintViaKeyd, readKeydRecord, signKeydGrant } from './keyd-client.mjs';
 import { recoverInteractionStore } from './agent-jobs.mjs';
+import { boundRepository, createInboxTaker, inboxError } from './inbox-take.mjs';
 import { createComputerUseActivity } from './computer-use-activity.mjs';
 import { isComputerUse } from './permission-risk.mjs';
 import { appendAuditReceipt, assertAuthorized, principalsFile, resolvePrincipal } from './agent-principals.mjs';
@@ -321,6 +322,9 @@ export function createDaemonServer({
   mintImpl = mint,
   // agent-bot-keyd's socket call (#397); tests pass a fake keyd.
   keydCall = keydRequest,
+  // take_inbox's broker call (#229): ({ app, repo }) => { event }. The default
+  // reads the bearer from pass-cli and the URL from this process's env.
+  inboxTake = createInboxTaker({ env }),
   spawnHook = runSpawnHooks,
   now = () => new Date(),
   computerUse = createComputerUseActivity({ now }),
@@ -441,7 +445,7 @@ export function createDaemonServer({
         appendAuditReceipt({ event: 'dream-control', operation: dreamAction, decision: 'owner-credential-required' }, { env, home, now });
         throw ownerCredentialRequired('a soul binding cannot authorize dream controls');
       }
-      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/credential', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start', 'POST /v0/asides/delivered'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
+      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/credential', 'POST /v0/inbox/take', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start', 'POST /v0/asides/delivered'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
         sendJson(res, 401, { error: 'missing or invalid daemon token' });
         return;
       }
@@ -773,6 +777,40 @@ export function createDaemonServer({
           });
           return;
         }
+        // take_inbox (#229): the next GitHub event for the App and repository
+        // the caller's binding is. The fleet-wide inbox bearer stays in the
+        // daemon, read from pass-cli; the App comes from the bound soul's own
+        // record and the repository from the bound worktree, never from the
+        // request.
+        case 'POST /v0/inbox/take': {
+          await readBody(req);
+          const receipt = (decision, fields = {}) => appendAuditReceipt({
+            event: 'inbox-take', operation: 'take', decision, ...fields,
+          }, { env, home, now });
+          let binding;
+          try { binding = requireBinding(req, bindings); }
+          catch (error) { receipt('denied', { reason: 'no-live-binding' }); throw error; }
+          const agentId = binding.agentId;
+          let identity;
+          try { identity = readAgentIdentity(agentId, { stateDir: stateDirectory({ env, home }) }); }
+          catch (error) { receipt('failed', { agentId, reason: 'identity-unreadable' }); throw error; }
+          const appSlug = identity.github?.appSlug;
+          if (!appSlug) {
+            receipt('denied', { agentId, reason: 'no-github-app' });
+            throw inboxError('inbox-no-app', 'take_inbox failed: this soul has no GitHub App', { statusCode: 409 });
+          }
+          let result;
+          try {
+            const repo = boundRepository(binding.worktree);
+            result = await inboxTake({ app: appSlug, repo });
+          } catch (error) {
+            receipt('failed', { agentId, appSlug, reason: typeof error.code === 'string' ? error.code : 'take-failed' });
+            throw error;
+          }
+          receipt('taken', { agentId, appSlug, reason: result.event ? 'event' : 'empty' });
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, event: result.event ?? null });
+          return;
+        }
         // agent-bot-keyd grants (#397): a soul's `agent-bot-keyd mcp` relay
         // asks here, on the soul's binding, before each keyd tool call. The
         // daemon keeps the policy — binding, add-on gate, the soul's own App,
@@ -995,10 +1033,10 @@ export function createDaemonServer({
       }
     } catch (error) {
       const failure = operationError(error);
-      // Dream service codes are fixed identifiers, so clients can act on them.
+      // Dream and inbox codes are fixed identifiers, so clients can act on them.
       sendJson(res, failure.statusCode, { error: failure.message,
         ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable'].includes(error.code)
-          || typeof error.code === 'string' && /^dream-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}) });
+          || typeof error.code === 'string' && /^(dream|inbox)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}) });
     }
   });
   server.once('close', () => appJobs.close());

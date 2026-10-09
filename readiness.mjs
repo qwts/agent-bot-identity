@@ -821,9 +821,10 @@ function inboxConfigurationCheck({ env, harnesses }) {
   const evidence = {
     url_configured: Boolean(url),
     host: url ? inboxHostForDoctor(url) : null,
-    // Named for what it is, and deliberately free of the words the leak guard
-    // screens for: this reports presence, never a value.
-    credential_configured: typeof env.GH_APP_HOOK_INBOX_TOKEN === 'string' && env.GH_APP_HOOK_INBOX_TOKEN.length > 0,
+    // The broker credential is the daemon's, read from pass-cli for each take
+    // (#229); nothing in this shell is consulted for it. Named, like every
+    // field here, free of the words the leak guard screens for.
+    credential_held_by: 'daemon',
     harnesses_wired: wired.map((entry) => entry.harness),
   };
   if (!url && wired.length === 0) {
@@ -844,7 +845,7 @@ function inboxConfigurationCheck({ env, harnesses }) {
       evidence,
     });
   }
-  if (url && evidence.credential_configured && wired.length > 0) return readinessCheck({
+  if (url && wired.length > 0) return readinessCheck({
     id: 'inbox.configuration',
     status: 'ready',
     message: `the inbox is configured and wired into ${wired.length} harness(es)`,
@@ -856,7 +857,7 @@ function inboxConfigurationCheck({ env, harnesses }) {
     code: 'inbox-incompletely-configured',
     message: !url
       ? 'a harness wires the inbox MCP server but no inbox URL is configured'
-      : 'the inbox is configured but no harness wires its MCP server, or the bearer is absent',
+      : 'the inbox is configured but no harness wires its MCP server',
     action: 'see docs/gh-app-hook.md (the gh-app-hook deployment procedure) for provisioning and harness wiring',
     evidence,
   });
