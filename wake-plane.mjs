@@ -36,8 +36,12 @@ export function wakeReporter(report) {
 // call, which the cold waker's relay sends back, and `denied`: the tools the
 // policy refused, so a turn that stopped on one is not answered with silence.
 // `onSession` hears the harness session the turn's prompt goes into (#404).
+// A maintenance caller can supply its cancellation signal and a facts-only
+// history ID/kind. Neither creates an interaction-store or broker invocation.
 export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onEvent = () => {}, approvals = null, turns = createTurnRegistry() }) {
-  return async ({ invocation, message, attachments, env, onSession = null }) => {
+  return async ({ invocation, message, attachments, env, onSession = null, signal = null, kind = 'wake', historyId = null }) => {
+    signal?.throwIfAborted(); // do not resolve runtime/provider credentials after a caller already cancelled
+    if (!['wake', 'dream'].includes(kind)) throw new Error('cold turn kind must be wake or dream');
     const executor = executorFor({ agentId: invocation.agentId, harness: invocation.harness, cwd: invocation.cwd, env });
     let reply = '';
     const denied = [];
@@ -46,7 +50,7 @@ export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onE
       if (update?.sessionUpdate === 'agent_message_chunk' && typeof update.content?.text === 'string') reply += update.content.text;
       else if (update?.sessionUpdate === 'tool_call') reply = '';
     };
-    const result = await turns.run({ invocation, kind: 'wake' }, async ({ signal, sessionGrants }) => executor({
+    const result = await turns.run({ invocation, kind, ...(signal ? { signal } : {}), ...(historyId === null ? {} : { historyId }) }, async ({ signal, sessionGrants }) => executor({
       sessionGrants,
       invocation,
       message,
