@@ -85,9 +85,40 @@ is never stored. The audit receipt reads `harness expired` or
 | `signed-out` | The harness positively reported no sign-in: Claude's `"loggedIn": false`, Codex's `Not logged in` (a non-zero exit alone is not enough: Codex exits 1 for an unreadable `auth.json` too), or OpenCode's `0 credentials`. |
 | `unknown` | The probe proved nothing. `reason` is `status-command-missing`, `status-timeout`, `status-interrupted`, `status-failed` or `status-unreadable`. |
 
+`harness auth status|login --soul` runs with the soul's turn environment
+(its runtimes and, when routed, its tool home), so it reads and signs in to
+the store the soul launches with, not the host's. The provider secret stays
+with the daemon: this status does not count an OpenCode provider variable,
+while the launch probe below does.
+
 `loggedIn` is true only for `signed-in`, so older readers never treat
 `unknown` as signed in. An `unknown` status does not clear a recorded
 `harnessAuth` failure.
+
+### Sign-in at launch
+
+A daemon launch probes the harness's sign-in at a `sign-in` stage after
+`provider` and before `joining` (#536). The probe runs with the exact
+environment the harness turn gets: runtimes, the routed tool home and the
+provider env, then the registry row's stripped and set variables (such as
+`CODEX_CONFIG`) applied by the same function the turn spawn uses. The
+harness's CLI, like the turn's installed ACP adapter, runs on the first Node
+on that PATH, so a soul's declared Node wins over the host's; the host's Node is only appended last for a bare
+PATH. So an OpenCode provider variable counts the same way it does for the
+turn. A harness with no status reader (Muse, for example) has no
+stage. The launch journal keeps `signIn: { status, reason? }`; the broker
+report is unchanged.
+
+| Probe | Launch |
+| --- | --- |
+| `signed-in` | Continues. Readiness is still the harness session, not the probe. |
+| `signed-out`, existing soul | Fails with `harness-signed-out`, naming `agent-bot harness auth login HARNESS --soul ID`, before the soul joins or a turn runs. |
+| `signed-out`, new soul | Continues and is recorded. A new soul's ID is discarded on rollback, so the login command could not be run; and a routed new soul's tool home starts empty, so a refusal would block every first launch. The first turn raises the sign-in notice above. |
+| `unknown` (or the probe failed) | Continues and is recorded. It is never treated as signed in. |
+
+Like `runtimes`, `tool-home` and `provider`, the `sign-in` stage is kept in
+the launch journal. The agent-comms broker's progress stages do not include
+it yet.
 
 ## Copied soul folders
 

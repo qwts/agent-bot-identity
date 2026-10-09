@@ -214,6 +214,7 @@
     "task-turns.mjs": "comms",
     "team-start.mjs": "soul",
     "telegram-adapter.mjs": "host",
+    "turn-env.mjs": "soul",
     "turn-registry.mjs": "soul",
     "uninstalled-identity-hook.mjs": "identity",
     "update.mjs": "cli",

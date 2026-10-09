@@ -89,7 +89,8 @@ const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other
   'persona-policy-unavailable', 'persona-policy-stale', 'persona-policy-requires-addon',
   'runtime-download-failed', 'runtime-checksum-mismatch', 'runtime-unsupported-platform', 'runtime-install-failed',
   'tool-home-unwritable',
-  'provider-secret-missing', 'provider-secret-unreadable', 'provider-declaration-invalid']);
+  'provider-secret-missing', 'provider-secret-unreadable', 'provider-declaration-invalid',
+  'harness-signed-out']);
 
 // `runtimes` (#583 slice 3): `pending({ agentId, harness })` names what the
 // soul declares and lacks; `install` provisions it into the soul folder.
@@ -110,6 +111,19 @@ const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other
 // soul joins. The `provider` stage is reported only when there is one to
 // check. The value itself never reaches this handler or its journal.
 
+// `signIn` (#536): `check({ agentId, harness })` probes the harness's
+// sign-in with the environment its turn will get, returning `{ status,
+// reason? }` (harness-auth.mjs evidence), or null for a harness with no
+// status reader. The `sign-in` stage is reported only when there is a
+// reader, and the journal keeps the evidence. Only positive `signed-out`
+// refuses, and only for an existing soul: `agent-bot harness auth login
+// HARNESS --soul ID` signs in to the same store, routed or not. A new soul
+// continues: its ID is discarded on rollback, so the command could not be
+// run, and a routed new soul's tool home starts empty, so a refusal would
+// block every first launch. Its first turn raises the #84 sign-in notice.
+// `unknown` continues and is never readiness; the harness-session event
+// still is. A probe that throws is `unknown`.
+
 // `sandboxFor` (#376) says what the soul gets, `sandboxed` or
 // `unrestricted`, and the account it runs as, from `launchSandbox` in
 // sandbox.mjs. Without it a launch is what it always was. A sandboxed soul
@@ -120,7 +134,7 @@ const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other
 // carries it beside the unchanged `launched`/`failed` fields.
 
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
-  isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, sandboxFor = null, runtimes = null, toolHomes = null, providers = null,
+  isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, sandboxFor = null, runtimes = null, toolHomes = null, providers = null, signIn = null,
   souls = null, receipt = () => {}, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
@@ -259,6 +273,18 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       if (providers) {
         const pending = await providers.pending({ agentId: identity.id, harness });
         if (pending.length) { await step('provider'); await providers.check({ agentId: identity.id, harness }); }
+      }
+      if (signIn) {
+        let evidence;
+        try { evidence = await signIn.check({ agentId: identity.id, harness }); }
+        catch { evidence = { status: 'unknown', reason: 'status-failed' }; }
+        if (evidence) {
+          await step('sign-in');
+          row.signIn = { status: evidence.status, ...(evidence.reason ? { reason: evidence.reason } : {}) };
+          if (evidence.status === 'signed-out' && soul) {
+            throw Object.assign(new Error(`${harness} is signed out for this soul; sign it in with \`agent-bot harness auth login ${harness} --soul ${identity.id}\` and launch again`), { code: 'harness-signed-out' });
+          }
+        }
       }
       if (joinSoul) {
         await step('joining');

@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { authCommand, harnessAuth, LOGIN_TIMEOUT_MS } from '../harness-auth.mjs';
-import { ACP_SPAWN_REGISTRY } from '../acp-registry.mjs';
+import { ACP_SPAWN_REGISTRY, whichOnPath } from '../acp-registry.mjs';
 import { fileURLToPath } from 'node:url';
 
 const row = ACP_SPAWN_REGISTRY.claude;
@@ -220,4 +220,36 @@ test('OpenCode signed-out needs its zero-credentials line; registry rows validat
   // Credentials at zero but a provider environment variable present is signed in.
   const runImpl = async () => ({ stdout: '└  0 credentials\n\n┌  Environment\n│\n●  Provider ENV_VAR\n└  1 environment variable\n' });
   assert.equal((await harnessAuth('status', 'opencode', { env: {}, runImpl })).status, 'signed-in');
+});
+
+test('harness auth --soul runs with the soul turn env: a routed tool home is the store it reads and signs in to (#536, #583)', async () => {
+  const { soulAuthEnv } = await import('../harness-auth.mjs');
+  const env = soulAuthEnv('agent_r', 'claude', { env: { PATH: '/usr/bin', HOME: '/Users/o' },
+    runtimeEnvFor: () => ({ PATH: '/soul/bin:/usr/bin' }),
+    toolHomeEnvFor: () => ({ CLAUDE_CONFIG_DIR: '/soul/.soul-state/tools/claude', HOME: '/never' }) });
+  assert.equal(env.CLAUDE_CONFIG_DIR, '/soul/.soul-state/tools/claude');
+  assert.equal(env.PATH, '/soul/bin:/usr/bin');
+  assert.equal(env.HOME, '/Users/o');
+  let seen;
+  await harnessAuth('login', 'claude', { home: null, env, runImpl: async (command, args, options) => { seen ??= options.env.CLAUDE_CONFIG_DIR; return { stdout: '{"loggedIn":true}' }; } });
+  assert.equal(seen, '/soul/.soul-state/tools/claude', 'login writes the routed store, not ~/.claude');
+  // An unrouted soul keeps the host store.
+  assert.equal(soulAuthEnv('agent_u', 'claude', { env: { PATH: '/usr/bin' }, toolHomeEnvFor: () => ({}) }).CLAUDE_CONFIG_DIR, undefined);
+});
+
+test('a bare PATH gets the host Node last, never ahead of the env\'s own (#536)', async () => {
+  const seen = [];
+  const runImpl = async (command, args, options) => { seen.push(options.env.PATH); return { stdout: JSON.stringify({ loggedIn: true }) }; };
+  await harnessAuth('status', 'claude', { home: null, env: { PATH: '/soul/bin:/usr/bin' }, runImpl });
+  assert.deepEqual(seen[0].split(path.delimiter), ['/soul/bin', '/usr/bin', path.dirname(process.execPath)]);
+});
+
+test('a directory named node on PATH is not a Node (#536)', (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'which-node-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(path.join(root, 'a', 'node'), { recursive: true });
+  mkdirSync(path.join(root, 'b'));
+  writeFileSync(path.join(root, 'b', 'node'), '#!/bin/sh\n', { mode: 0o755 });
+  const PATH = [path.join(root, 'a'), path.join(root, 'b')].join(path.delimiter);
+  assert.equal(whichOnPath('node', { PATH }), path.join(root, 'b', 'node'));
 });

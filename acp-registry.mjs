@@ -40,7 +40,7 @@
 //                stores, so driving them here would never surface in the
 //                desktop apps this plane exists to reach (#141 census).
 //                Revisit only if that changes.
-import { accessSync, constants, existsSync, realpathSync } from 'node:fs';
+import { accessSync, constants, existsSync, realpathSync, statSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -295,6 +295,27 @@ export function spawnCommand(row, cwd, { node = process.execPath, dirs = [] } = 
       + 'which this soul\'s package does not install');
   }
   return { command: row.command, args: [...row.args] };
+}
+
+/**
+ * The environment a harness process runs with: the caller's env without
+ * the row's nested-session variables, then the row's own settings. The
+ * engine's turn spawn and the sign-in probe/login share it (#536), so a
+ * status read sees the config the turn will run with.
+ */
+export function harnessProcessEnv(row, baseEnv = {}) {
+  const env = { ...baseEnv };
+  for (const name of row.stripEnv ?? []) delete env[name];
+  return Object.assign(env, row.setEnv ?? {});
+}
+
+/** The first executable regular file `name` on an env's PATH, else null. */
+export function whichOnPath(name, env = process.env) {
+  for (const dir of (env.PATH ?? '').split(delimiter).filter(Boolean)) {
+    const file = join(dir, name);
+    try { if (statSync(file).isFile()) { accessSync(file, constants.X_OK); return file; } } catch { /* next */ }
+  }
+  return null;
 }
 
 /** Whether a bare command name is an executable on PATH. */
