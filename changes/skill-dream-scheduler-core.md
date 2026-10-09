@@ -1,0 +1,1 @@
+- Add the dream scheduling core with strict host-local state, atomic storage/execution ports, bounded dispatch, cancellation that retains unsettled runs, and restart quarantine. Daemon storage, owner controls and the dream CLI are not connected yet (#603).
