@@ -21,9 +21,14 @@ harness launcher or a fabricated broker task.
 The service must use the daemon's configured executor factory, tool-home and
 runtime resolution, soul identity, permission/approval policy, and shared turn
 registry. `coldTurnExecutor` is the closest reusable execution boundary. Its
-input now accepts a caller's cancellation signal, `kind: 'dream'` and a facts-only
-`historyId`, with existing wake behavior as the default. The shared registry
-retains an aborted turn until the configured executor settles, and `dream` is
+input now accepts a caller's cancellation signal, `kind: 'dream'`, a facts-only
+`historyId` and `timeoutMs`, with existing wake behavior as the default. The
+caller timeout shortens the host's configured bound but cannot extend it; the
+scheduler's execution port passes its `timeoutMs` through. The shared registry
+retains an aborted turn until the configured executor settles. For dream calls,
+a successful executor return remains successful after an abort request, so the
+scheduler can retain cancellation facts without falsely claiming execution
+stopped; ordinary wake calls retain their post-execution abort check. `dream` is
 part of the history kind vocabulary. These internal ports do not wire a scheduler
 into the daemon or authorize registration by themselves. Do not invent an interaction-store invocation,
 session, principal or broker task ID to acquire unrelated capabilities.

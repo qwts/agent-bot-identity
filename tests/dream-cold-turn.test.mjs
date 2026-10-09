@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acpExecutorFor, coldTurnExecutor, createTurnRegistry } from '../wake-plane.mjs';
+import { createDreamScheduler } from '../skill-dream-scheduler.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
 import { createSoulHistory, readSoulHistory } from '../soul-history.mjs';
 
@@ -50,15 +51,14 @@ test('external cancellation reaches approvals and keeps the shared turn busy unt
     },
   });
   const done = run({ invocation: { agentId: ID }, message: 'CANARY', kind: 'dream', historyId: RUN, signal: controller.signal });
-  const rejected = assert.rejects(done, { name: 'AbortError' });
   await Promise.resolve();
   assert.deepEqual(turns.busy(), [ID]);
   controller.abort();
   assert.equal(observedSignal.aborted, true); assert.equal(approvalSignal.aborted, true);
   assert.deepEqual(turns.busy(), [ID], 'abort is not proof of settlement');
-  release(); await rejected;
+  release(); await done;
   assert.deepEqual(turns.busy(), []);
-  assert.equal(records[0].kind, 'dream'); assert.equal(records[0].id, RUN); assert.equal(records[0].outcome, 'cancelled');
+  assert.equal(records[0].kind, 'dream'); assert.equal(records[0].id, RUN); assert.equal(records[0].outcome, 'ok');
   assert.equal(JSON.stringify(records).includes('CANARY'), false);
 });
 
@@ -112,5 +112,83 @@ test('dream tool requests keep the configured deny/approval behavior through the
     assert.match(result.reply, mode === 'approval-allowed' ? /opt-allow/ : /opt-reject/);
     assert.equal(requests.length, mode === 'approval-allowed' ? 1 : 0);
     if (requests.length) { assert.equal(requests[0].agentId, ID); assert.equal(requests[0].tool, 'Bash'); }
+  });
+});
+
+test('ordinary wake calls still reject a resolved executor after cancellation', async () => {
+  const controller = new AbortController(), records = [];
+  const turns = createTurnRegistry({ history: { turn: (_id, record) => records.push(record) } });
+  const run = coldTurnExecutor({ turns, executorFor: () => async () => { controller.abort(); return {}; } });
+  await assert.rejects(run({ invocation: { agentId: ID }, signal: controller.signal }), { name: 'AbortError' });
+  assert.equal(records[0].kind, 'wake'); assert.equal(records[0].outcome, 'cancelled');
+});
+
+test('cold calls reject invalid deadlines before resolving runtime or credentials', async () => {
+  let built = 0;
+  const run = coldTurnExecutor({ executorFor: () => { built++; throw new Error('must not resolve'); } });
+  for (const timeoutMs of [null, 0, -1, 1.5, '1000', Infinity, 0x80000000]) {
+    await assert.rejects(run({ invocation: { agentId: ID }, kind: 'dream', timeoutMs }), /timeout must be/);
+  }
+  assert.equal(built, 0);
+});
+
+test('the shorter caller or host deadline aborts execution without prematurely releasing the turn', async t => {
+  for (const mode of ['caller', 'host']) await t.test(mode, async t => {
+    const turns = createTurnRegistry();
+    let settle;
+    const run = coldTurnExecutor({ turns, turnTimeoutMs: mode === 'host' ? 10 : 5_000,
+      executorFor: () => input => new Promise((resolve, reject) => {
+        input.signal.addEventListener('abort', () => { settle = () => reject(input.signal.reason); }, { once: true });
+      }),
+    });
+    const done = run({ invocation: { agentId: ID }, kind: 'dream', timeoutMs: mode === 'caller' ? 10 : 5_000 });
+    const rejected = assert.rejects(done, { name: 'AbortError' });
+    // Keep the event loop alive for AbortSignal.timeout's unref'ed timer.
+    const limit = Date.now() + 2_000;
+    while (!settle && Date.now() < limit) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.ok(settle, 'the shorter deadline reached the executor');
+    assert.deepEqual(turns.busy(), [ID], 'a timeout requests cancellation, not settlement');
+    settle(); await rejected;
+    assert.deepEqual(turns.busy(), []);
+  });
+});
+
+test('the scheduler and shared cold registry preserve actual settlement and durable cancellation facts', async t => {
+  for (const reason of ['owner', 'timeout']) for (const resolves of [true, false]) await t.test(`${reason}/${resolves ? 'resolved' : 'rejected'}`, async () => {
+    let state = null, settle, observedSignal, timer;
+    const records = [], events = [];
+    const turns = createTurnRegistry({ history: { turn: (_id, record) => records.push(record) } });
+    const runCold = coldTurnExecutor({ turns, executorFor: () => input => {
+      observedSignal = input.signal;
+      return new Promise((resolve, reject) => { settle = () => resolves ? resolve({}) : reject(new Error('executor stopped')); });
+    } });
+    const scheduler = createDreamScheduler({
+      store: { read: () => structuredClone(state), commit(change) {
+        if ((state?.revision ?? 0) !== change.expectedRevision) return false;
+        state = structuredClone(change.state); events.push(...structuredClone(change.events)); return true;
+      } },
+      soulDirectory: () => path.join(realpathSync(tmpdir()), 'dream-settlement-fixture'),
+      isBusy: id => turns.busy().includes(id),
+      execute: ({ run, signal, timeoutMs }) => runCold({ invocation: { agentId: run.agentId }, kind: 'dream', historyId: run.runId, signal, timeoutMs }),
+      setTimer: callback => { timer = callback; return 1; }, clearTimer: () => {},
+    });
+    scheduler.register(ID, 'PT1H');
+    const started = scheduler.runNow(ID);
+    await Promise.resolve();
+    assert.ok(settle);
+    if (reason === 'owner') scheduler.cancel(started.runId); else timer();
+    assert.equal(observedSignal.aborted, true);
+    assert.deepEqual(turns.busy(), [ID]);
+    assert.equal(scheduler.runNow(ID).status, 'deferred');
+    assert.equal(state.flights[0].status, 'cancelling');
+    settle();
+    const receipt = await started.done;
+    assert.equal(receipt.status, resolves ? 'completed' : reason === 'owner' ? 'cancelled' : 'timed-out');
+    assert.equal(receipt.cancelReason, reason); assert.ok(receipt.cancelRequestedAt);
+    assert.equal(records[0].outcome, resolves ? 'ok' : 'cancelled');
+    assert.equal(records[0].id, started.runId);
+    assert.deepEqual(state.flights, []); assert.deepEqual(turns.busy(), []);
+    assert.deepEqual(state.registrations[0].lastRun, receipt);
+    assert.deepEqual(events.at(-1).run, receipt);
   });
 });

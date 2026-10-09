@@ -38,10 +38,12 @@ export function wakeReporter(report) {
 // `onSession` hears the harness session the turn's prompt goes into (#404).
 // A maintenance caller can supply its cancellation signal and a facts-only
 // history ID/kind. Neither creates an interaction-store or broker invocation.
+// Its timeout may shorten the host bound, never extend it.
 export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onEvent = () => {}, approvals = null, turns = createTurnRegistry() }) {
-  return async ({ invocation, message, attachments, env, onSession = null, signal = null, kind = 'wake', historyId = null }) => {
+  return async ({ invocation, message, attachments, env, onSession = null, signal = null, kind = 'wake', historyId = null, timeoutMs = turnTimeoutMs }) => {
     signal?.throwIfAborted(); // do not resolve runtime/provider credentials after a caller already cancelled
     if (!['wake', 'dream'].includes(kind)) throw new Error('cold turn kind must be wake or dream');
+    if (![timeoutMs, turnTimeoutMs].every(value => Number.isSafeInteger(value) && value > 0 && value <= 0x7fffffff)) throw new Error('cold turn timeout must be a positive bounded integer');
     const executor = executorFor({ agentId: invocation.agentId, harness: invocation.harness, cwd: invocation.cwd, env });
     let reply = '';
     const denied = [];
@@ -78,7 +80,7 @@ export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onE
       onPermission: ({ toolName, outcome }) => {
         if (outcome === 'deny' && typeof toolName === 'string' && !denied.includes(toolName)) denied.push(toolName);
       },
-    }), { turnTimeoutMs });
+    }), { turnTimeoutMs: Math.min(timeoutMs, turnTimeoutMs) });
     return { ...result, reply, denied };
   };
 }

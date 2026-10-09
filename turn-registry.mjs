@@ -44,7 +44,10 @@ export function createTurnRegistry({ isPaused = () => false, history = null, now
       try {
         signal.throwIfAborted();
         const result = await executor({ ...input, signal, sessionGrants });
-        signal.throwIfAborted();
+        // Dream receipts retain cancellation requests separately. A resolved
+        // executor may have committed work, so report its actual settlement.
+        // Other turn callers keep their existing post-execution abort check.
+        if (input.kind !== 'dream') signal.throwIfAborted();
         return result;
       } catch (error) {
         outcome = signal.aborted ? 'cancelled' : 'failed';
