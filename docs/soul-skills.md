@@ -442,10 +442,13 @@ not an accepted package revision or a durable history of checks.
 The full upstream digest comparison is separate from file-level comparisons:
 only retained accepted files have old bytes available for a diff. Candidate
 files outside that baseline are labeled `unbaselined`, never proven additions.
-Text diffs share a 64 KiB output budget; binary, non-UTF-8 and larger changes
-remain visible through hashes, modes and candidate bytes. Failed root fetches
+Text diffs use whole-file replacement hunks and share a 64 KiB output budget;
+binary, non-UTF-8 and larger changes remain visible through hashes, modes and
+candidate bytes. Failed root fetches
 write an unavailable check without a candidate. An incomplete dependency capture
-keeps its partial candidate for diagnosis but also reports `unavailable`.
+keeps its partial candidate for diagnosis but also reports `unavailable`. Retained
+files missing from a partial candidate are `uncaptured`, with no deletion diff;
+only a complete candidate can classify missing retained files as `removed`.
 Version 1 receipts and local-source receipts report unavailable without fetching
 or guessing host paths. None of these outcomes changes accepted captures,
 adapted skills, the live package or revision history.

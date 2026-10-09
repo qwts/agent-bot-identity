@@ -54,7 +54,7 @@ async function fixture(t, { local = false, legacy = false, receiptEdit = null } 
 test('portable recheck survives library loss and preserves accepted bytes, history and the live definition', async t => {
   const f = await fixture(t), before = computePackageRevision(f.directory), result = await f.check();
   assert.equal(result.status, 'unchanged'); assert.equal(result.accepted, f.imported.accepted); assert.equal(result.candidate, result.accepted);
-  assert.deepEqual(result.comparison.changes, { modified: [], removed: [], unchanged: ['SKILL.md', 'guide.md'], unbaselined: [] });
+  assert.deepEqual(result.comparison.changes, { modified: [], removed: [], uncaptured: [], unchanged: ['SKILL.md', 'guide.md'], unbaselined: [] });
   assert.equal(result.comparison.basis, 'retained-accepted-files-only');
   assert.equal(readFileSync(path.join(result.staging, 'payload/guide.md'), 'utf8'), 'Original guide\r\n');
   assert.equal(JSON.parse(readFileSync(path.join(result.staging, 'manifest.json'))).manifest.digest, result.candidate);
@@ -70,7 +70,7 @@ test('changed sources stage byte-exact candidates and distinguish unbaselined fi
   f.documents.set('https://skills.example.com/demo/new.md', 'New instructions\n');
   const result = await f.check();
   assert.equal(result.status, 'changed'); assert.notEqual(result.candidate, result.accepted);
-  assert.deepEqual(result.comparison.changes, { modified: ['SKILL.md'], removed: ['guide.md'], unchanged: [], unbaselined: ['new.md'] });
+  assert.deepEqual(result.comparison.changes, { modified: ['SKILL.md'], removed: ['guide.md'], uncaptured: [], unchanged: [], unbaselined: ['new.md'] });
   assert.match(result.comparison.textDiffs[0].text, /-\[Guide\]\(guide.md\)/);
   assert.match(result.comparison.textDiffs[0].text, /\+\[New\]\(new.md\)/);
   assert.equal(readFileSync(path.join(f.acceptedTree, `provenance/skills/${f.imported.id}/sources/${f.imported.accepted.slice(7)}/guide.md`), 'utf8'), 'Original guide\r\n');
@@ -87,6 +87,9 @@ test('root failure and incomplete dependency acquisition record unavailable with
   result = await f.check();
   assert.equal(result.status, 'unavailable'); assert.equal(result.reason, 'skill-capture-incomplete');
   assert.equal(result.coverage.acquisition, 'partial'); assert.ok(result.candidate);
+  assert.deepEqual(result.comparison.changes, { modified: [], removed: [], uncaptured: ['guide.md'], unchanged: ['SKILL.md'], unbaselined: [] });
+  assert.deepEqual(result.comparison.textDiffs, []);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(result.staging, 'check.json'))).comparison, result.comparison);
   assert.equal(validateSoulPackage(f.acceptedTree).revision, f.revision);
 });
 
@@ -134,6 +137,6 @@ test('large text changes keep exact candidate bytes while bounding inline diffs'
   const result = await f.check();
   assert.equal(result.status, 'changed');
   assert.deepEqual(result.comparison.changes.modified, ['guide.md']);
-  assert.deepEqual(result.comparison.textDiffs, [{ path: 'guide.md', text: null, reason: 'binary-or-diff-limit' }]);
+  assert.deepEqual(result.comparison.textDiffs, [{ path: 'guide.md', text: null, reason: 'diff-limit' }]);
   assert.equal(readFileSync(path.join(result.staging, 'payload/guide.md'), 'utf8'), replacement);
 });

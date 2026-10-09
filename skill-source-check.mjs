@@ -21,18 +21,20 @@ function stagingRoot(agentId, options) {
   return tmp;
 }
 
-function compareRetained(before, after) {
+function compareRetained(before, after, complete) {
   const available = new Map(after.map(entry => [entry.path, entry]));
-  const changes = { modified: [], removed: [], unchanged: [], unbaselined: [] }, textDiffs = [];
+  const changes = { modified: [], removed: [], uncaptured: [], unchanged: [], unbaselined: [] }, textDiffs = [];
   const retained = new Set(before.map(entry => entry.path));
   let budget = 64 * 1024;
   for (const entry of before) {
     const next = available.get(entry.path);
     if (next && next.mode === entry.mode && next.bytes.equals(entry.bytes)) { changes.unchanged.push(entry.path); continue; }
+    // Missing bytes in an incomplete capture are not evidence of deletion.
+    if (!next && !complete) { changes.uncaptured.push(entry.path); continue; }
     changes[next ? 'modified' : 'removed'].push(entry.path);
     const right = next?.bytes ?? Buffer.alloc(0);
     if (entry.bytes.length + right.length > budget || entry.bytes.includes(0) || right.includes(0)) {
-      textDiffs.push({ path: entry.path, text: null, reason: 'binary-or-diff-limit' }); continue;
+      textDiffs.push({ path: entry.path, text: null, reason: entry.bytes.includes(0) || right.includes(0) ? 'binary' : 'diff-limit' }); continue;
     }
     let leftText, rightText;
     try { const decoder = new TextDecoder('utf-8', { fatal: true }); leftText = decoder.decode(entry.bytes); rightText = decoder.decode(right); }
@@ -94,7 +96,7 @@ export async function checkSoulSkillSource(libraryId, agentId, { now = () => new
   result.candidate = content.digest;
   result.status = result.accepted === result.candidate ? 'unchanged' : 'changed';
   result.coverage = content.coverage;
-  result.comparison = compareRetained(source.entries, content.entries);
+  result.comparison = compareRetained(source.entries, content.entries, content.coverage.acquisition === 'complete-within-boundary');
   // Full per-file locations live in the candidate manifest, under its existing
   // 4 MiB acquisition bound; the summary does not duplicate that entire graph.
   result.candidateSource = { ...content.source, capturedAt: checkedAt };
