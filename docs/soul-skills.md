@@ -1,15 +1,17 @@
-# Local skill library
+# Skill library
 
 The library collects a skill independently of a soul, retaining the acquired
 bytes and provenance separately from an editable copy. Importing does not run
 scripts, activate a harness skill, select an SOP, or create a soul revision.
-This is the local acquisition and comparison slice of #603 and #312; remote
-acquisition, installation and dreaming remain separate work. Learning guides
-selected adaptations through the existing soul revision/proposal policy.
+This implements local-directory and HTTPS-document acquisition and comparison
+for #603/#312. Learning guides selected adaptations through the existing soul
+revision/proposal policy. Repository directory adapters, source-update adoption,
+installation and dreaming remain separate work.
 
 ```sh
 agent-bot soul skill import /path/to/skill --json
 agent-bot soul skill import /path/to/skill/SKILL.md --json
+agent-bot soul skill import https://example.com/skills/demo/SKILL.md --json
 agent-bot soul skill list --json
 agent-bot soul skill show UUID --json
 agent-bot soul skill verify UUID --json
@@ -23,6 +25,57 @@ soul package. Its frontmatter name determines the editable directory's name;
 the source directory need not have that name. Each import receives a new UUID,
 even for the same name and bytes. There is no implicit deduplication or update.
 These operations require neither a GitHub App nor a soul binding.
+
+## HTTPS documents and instruction dependencies
+
+An explicit HTTPS document URL must yield a valid `SKILL.md`. Acquisition also
+captures inline Markdown links ending in `.md`, `.markdown` or `.txt`, including
+nested references and cycles. Relative URLs resolve against the **final URL of
+the referring document**, after redirects. Each retained file records its
+original and final URLs in `locations`; its exact bytes have the same digest
+and comparison rules as local imports. Source checking revisits the original
+refresh URL and retains new source bytes as a separate candidate. Every check
+also records the current URL/dependency mapping, even when bytes are unchanged.
+
+Files under the final entrypoint's URL directory keep their relative layout.
+Other origins or paths map to `remote/<sha256-of-final-url>/document.md`.
+The report maps references to retained paths. It does not rewrite instruction
+text: review replacements deliberately before using the material as guidance.
+All remote files have mode `100644`; no executable permission is inferred from
+a server response. Source root links, repository-directory URLs, arbitrary
+supporting assets/scripts, reference-style Markdown, HTML and dynamic fetches
+are not supported by this adapter. Noninstruction links are reported external;
+unsafe or sensitive locators are unresolved. Coverage is explicitly
+`markdown-inline-https-instructions-v1`, with `universalRetrieval: false`.
+
+The fetcher accepts public DNS hostnames over HTTPS port 443. It refuses literal
+IP URLs, local/special-use addresses, user information, query parameters and
+non-HTTPS redirects. Every redirect repeats URL and DNS validation; a mixed
+public/private DNS answer is refused. The connection uses the checked address
+without a second DNS lookup, preserves the original hostname for TLS/SNI, and
+requires certificate validation. Requests use no GitHub App, ambient
+authorization, cookies, proxy agent or credential forwarding. A dedicated HTTPS
+agent with an empty proxy environment also ignores ambient proxy variables.
+Provenance lists every contacted hostname, including intermediate redirects. Only an identity
+content encoding is accepted so retained bytes are unambiguous. Error messages
+do not include response bodies or rejected URLs. Exact imported payload bytes
+are still not secret-redacted; source authors must not put secrets in content or
+URL paths. The library is untrusted source data, never execution authority.
+
+Remote acquisition has a 30-second total deadline, at most five redirects per
+document, 100 files, 1 MiB per file, 8 MiB total, eight dependency levels and
+1,000 inline references. `SKILL.md` remains bounded to 64 KiB; metadata is bounded
+to 4 MiB. Unsafe portable paths, excluded metadata directories and normalized
+path collisions refuse. Internal API limits may only lower these bounds.
+One failed supported nested fetch or exceeded bound prevents an import from
+publishing; a source check reports `unavailable` and preserves accepted/local
+bytes. An unsupported link instead remains an explicit coverage gap.
+
+Network acquisition occurs before the per-import publication lock. Publication
+rechecks the starting record under the lock and refuses a changed record. No
+network operation runs while holding that synchronous lock. Local library API
+calls retain their synchronous return values; HTTPS import/check return promises,
+and the CLI awaits them before producing its usual JSON and exit status.
 
 ## Stored bytes and receipts
 
@@ -119,9 +172,10 @@ links, HTML, runtime fetches and harness retrieval are outside this boundary.
 
 URL user information and query-bearing locators are withheld from dependency
 metadata. Imported file contents still preserve the original bytes; this is
-not payload secret redaction. No remote URL is fetched, and no permission is
-inferred from a reference. Remote adapters, broader retrieval interception,
-update adoption and harness installation remain unimplemented.
+not payload secret redaction. Local-directory import never fetches remote links;
+only the explicit HTTPS-document adapter performs the bounded capture above.
+No permission is inferred from a reference. Repository adapters, broader
+retrieval interception, update adoption and harness installation remain open.
 
 ## Learn useful pieces through a soul revision
 

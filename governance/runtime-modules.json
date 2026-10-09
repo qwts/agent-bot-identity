@@ -167,6 +167,8 @@
     "skill-library-paths.mjs": "shared",
     "skill-library.mjs": "soul",
     "skill-learning.mjs": "soul",
+    "skill-references.mjs": "soul",
+    "skill-remote.mjs": "soul",
     "skill-manifest.mjs": "soul",
     "skill.mjs": "cli",
     "sop-policy.mjs": "org",
