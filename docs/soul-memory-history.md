@@ -179,6 +179,45 @@ migrate command as its action. The migration inventory lists
 
 ## Limits
 
+### Conversation continuity
+
+Stored history and the context delivered to a turn are separate. The run
+mirror above contains facts about executions, not conversation text. Cold
+agent-comms turns recover a bounded context from the existing per-soul
+thread journal (`soul-threads.mjs`) before the relay starts the harness:
+
+- Messages with `correlation` or `replyTo` receive that linked thread.
+- A principal message with neither field receives recent exchanges with
+  that exact principal in this soul's journal, including linked teammate
+  work. This supports the GeniusBar composer, which sends `to`, `body` and
+  an idempotency `key` without either thread field. Previously its next
+  message received no earlier context, even though the UI showed it (#596).
+- An unthreaded message from another agent gets no implicit conversation
+  history. A different principal or soul does not inherit this fallback.
+  An explicit thread link always takes precedence, even when unknown.
+- Existing bounds still apply: at most eight recent entries within 6 KiB
+  of serialized context, with each stored body capped at 2 KiB. Entries
+  appear oldest first as quoted message data, not new instructions. The
+  journal itself is bounded; this is not lifetime-memory retrieval.
+
+`tests/soul-threads.test.mjs` exercises the actual relay prompt with a
+distinctive decision and teammate facts, then checks the next turn, a new
+waker reading the same persisted journal, and a changed harness. Negative
+fixtures check another principal, another soul, agent messages and explicit
+thread boundaries. These are deterministic engine fixtures: they prove the
+input delivered to the executor, not a model's answer or a live GeniusBar
+restart. No native session-resume support is implied by this fallback.
+
+Remaining #596 acceptance includes live UI/app and daemon restarts,
+supported CLI transitions, and native-session association. The ACP engine
+has a `getHarnessSession`/`session/load` port, but the production executor
+factory does not yet supply it for `/v1` interactions. The CLI resume-wake
+lane has its own per-soul session registry. Neither path is demonstrated by
+the cold-relay fixtures, and relocating Agent Space alone does not resolve
+those continuity requirements.
+
+### Storage and migration limits
+
 - Interactive sessions tracked by `agent-bot join` (`turns.track`, no
   outcome) are not mirrored; the daemon's wake-session and launch-request
   files are not mirrored line by line (their turns pass the registry and
