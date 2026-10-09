@@ -276,7 +276,7 @@ test('skill library metadata stays outside soul write territory even with confin
   mkdirSync(record, { recursive: true });
   const alias = path.join(f.soul, 'library-alias'); symlinkSync(library, alias);
   await setConfinementMode(id, 'off', { ...f.opts, gate: owner });
-  for (const root of [library, alias]) for (const relative of ['', uuid, `${uuid}/manifest.json`, `${uuid}/.snapshots/digest/payload/SKILL.md`, `${uuid}/.checks/result.json`]) {
+  for (const root of [library, alias]) for (const relative of ['', uuid, `${uuid}/manifest.json`, `${uuid}/.snapshots/digest/payload/SKILL.md`, `${uuid}/.checks/result.json`, `${uuid}/.updates/update/previous/SKILL.md`, `${uuid}/.pending-update.json`]) {
     const target = path.join(root, relative);
     assert.equal(checkWrite(id, target, f.opts).inside, false);
     assert.equal(confinementCheck(f.envelope(target), f.opts).decision, 'deny');

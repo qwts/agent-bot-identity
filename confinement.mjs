@@ -146,7 +146,7 @@ function libraryMetadata(target, opts) {
   const parts = path.relative(root, target).split(path.sep);
   if (target === root) return true;
   if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(parts[0])) return false;
-  return parts.length === 1 || ['manifest.json', '.snapshots', '.checks', '.check.lock'].includes(parts[1]);
+  return parts.length === 1 || ['manifest.json', '.snapshots', '.checks', '.check.lock', '.updates', '.pending-update.json'].includes(parts[1]);
 }
 
 export function checkWrite(agentId, targetPath, opts = {}) {
