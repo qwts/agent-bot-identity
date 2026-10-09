@@ -1,0 +1,1 @@
+- Provision declared soul runtimes before installing npm harness adapters in both managed homes and joined worktrees. A declared Node now runs the npm CLI from that same distribution, ignoring host npm overrides; missing Node/npm files and runtime provisioning failures stop installation instead of falling back to host tools (#617).

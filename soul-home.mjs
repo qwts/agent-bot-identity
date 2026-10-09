@@ -6,7 +6,7 @@
 // only its own harness adapter from the package's pins (ADR-0276, #426).
 import { execFile, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, chmodSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { readAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
@@ -15,7 +15,7 @@ import { initSoulSpace } from './agent-space.mjs';
 
 import { buildSoulDirectory } from './soul-build.mjs';
 import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN } from './acp-registry.mjs';
-import { INSTALL_STAMP, RUNTIMES_SCHEMA_VERSION, inspectSoulRuntimes, publishInstall, readInstallStamp, runtimeLaunchEnv, runtimesRoot } from './soul-runtimes.mjs';
+import { INSTALL_STAMP, RUNTIMES_SCHEMA_VERSION, inspectSoulRuntimes, installSoulRuntimes, publishInstall, readInstallStamp, soulRuntimeEnv, runtimesRoot } from './soul-runtimes.mjs';
 
 const run = promisify(execFile);
 export const INSTALL_TIMEOUT_MS = 10 * 60_000;
@@ -130,7 +130,7 @@ export async function installSoulHarnesses(agentId, source, { install = installH
   mkdirSync(staging, { mode: 0o700 });
   try {
     writePinnedHarness(staging, pinned);
-    await install(staging, soulInstallEnv(agentId, harness, options));
+    await install(staging, await soulInstallEnv(agentId, harness, options));
     if (!existsSync(path.join(staging, 'node_modules', '.bin', row.soulBin))) {
       throw new Error(`installing the soul's ${harness} adapter left no node_modules/.bin/${row.soulBin}`);
     }
@@ -147,12 +147,28 @@ export async function installSoulHarnesses(agentId, source, { install = installH
 // of the caller's env, so a soul that declares `runtimes.node` installs its
 // adapter with its own node and npm (that bin first on PATH,
 // `npm_config_cache` inside the soul); without one, the node running this
-// process. Integrity, overrides and the provisioning audit stay with #617.
-function soulInstallEnv(agentId, harness, options) {
+// process. A declared distribution supplies both executables: a host npm
+// override must not substitute different code while using the soul's Node.
+async function soulInstallEnv(agentId, harness, options) {
   const env = options.env ?? process.env;
-  const routed = runtimeLaunchEnv(inspectSoulRuntimes(soulDirectory(agentId, options), { env, home: options.home ?? env.HOME }), { env, harness });
-  const soulNode = routed.routing.node?.source === 'soul' ? path.join(routed.routing.node.bin, 'node') : null;
-  return { env: { ...env, ...routed.env }, node: soulNode && existsSync(soulNode) ? soulNode : process.execPath };
+  const directory = soulDirectory(agentId, options);
+  const provision = options.provisionRuntimes ?? installSoulRuntimes;
+  await provision(directory, { ...options, agentId, env });
+  // The common turn check refuses missing, unsupported or malformed
+  // declarations even if a provisioner returned without satisfying them.
+  const patch = soulRuntimeEnv(agentId, { ...options, env, harness });
+  const state = inspectSoulRuntimes(directory, { ...options, env, home: options.home ?? env.HOME });
+  const selected = state.runtimes.find(row => row.name === 'node');
+  if (!selected) return { env: { ...env, ...patch }, node: process.execPath };
+  const windows = state.platform?.startsWith('win32-');
+  const node = path.join(selected.path, selected.bin, windows ? 'node.exe' : 'node');
+  const npm = path.join(selected.path, ...(windows ? [] : ['lib']), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  let npmPresent = false;
+  try { npmPresent = statSync(npm).isFile(); } catch { /* report the missing selected npm below */ }
+  if (!npmPresent) throw Object.assign(new Error(`declared Node ${selected.version} has no bundled npm CLI at ${npm}; refusing host npm`), {
+    code: 'runtime-install-failed', runtime: 'node', action: `repair the npm files in ${selected.path}, or select a complete Node distribution in a soul revision`,
+  });
+  return { env: { ...env, ...patch, AGENT_BOT_NPM: npm }, node };
 }
 
 function recordedHarness(agentId, options) {
@@ -320,7 +336,7 @@ export function createSoulHomes({ stateDir, bindings, install = installHarnesses
   // One creation per home at a time: a second launch of the same new soul
   // waits for the first instead of racing it through copy and install.
   const creating = new Map();
-  async function provisionHarness(worktree, source, harness) {
+  async function provisionHarness(worktree, source, harness, agentId) {
     const marker = path.join(path.dirname(worktree), 'home-harness');
     const selected = JSON.stringify(harness);
     const managed = existsSync(marker);
@@ -332,7 +348,7 @@ export function createSoulHomes({ stateDir, bindings, install = installHarnesses
     rmSync(marker, { force: true });
     if (pinned) {
       writePinnedHarness(worktree, pinned);
-      await install(worktree, { env: options.env });
+      await install(worktree, await soulInstallEnv(agentId, harness, options));
     } else if (managed) {
       // Only remove installs this provisioner owns. Legacy homes without a
       // package source keep their existing dependencies during migration.
@@ -345,14 +361,14 @@ export function createSoulHomes({ stateDir, bindings, install = installHarnesses
   // entry, #378). The build is deterministic and only touches its own marked
   // files; a conflict (a hand-edited generated file) is reported, never a
   // reason to refuse the launch.
-  async function refresh(worktree, source, harness) {
+  async function refresh(worktree, source, harness, agentId) {
     if (existsSync(path.join(worktree, 'AGENTS.md'))) {
       try { buildSoulDirectory(worktree); }
       catch (error) { warn(`soul home ${worktree} was not rebuilt: ${error.message}`); }
     }
-    await provisionHarness(worktree, source, harness);
+    await provisionHarness(worktree, source, harness, agentId);
   }
-  async function create(worktree, packagePath, harness) {
+  async function create(worktree, packagePath, harness, agentId) {
     mkdirSync(worktree, { recursive: true, mode: 0o700 });
     try {
       if (packagePath) {
@@ -362,7 +378,7 @@ export function createSoulHomes({ stateDir, bindings, install = installHarnesses
         }
       }
       if (existsSync(path.join(worktree, 'AGENTS.md'))) buildSoulDirectory(worktree);
-      await provisionHarness(worktree, packagePath, harness);
+      await provisionHarness(worktree, packagePath, harness, agentId);
       execFileSync('git', ['init', '-q'], { cwd: worktree, env: { PATH: process.env.PATH }, stdio: 'ignore' });
       appendFileSync(path.join(worktree, '.git', 'info', 'exclude'), 'node_modules/\n');
     } catch (error) {
@@ -395,7 +411,7 @@ export function createSoulHomes({ stateDir, bindings, install = installHarnesses
       }
     }
     const made = existsSync(path.join(worktree, '.git'))
-      ? refresh(worktree, directory, harness) : create(worktree, directory, harness);
+      ? refresh(worktree, directory, harness, agentId) : create(worktree, directory, harness, agentId);
     creating.set(worktree, made);
     try { await made; } finally { creating.delete(worktree); }
     const gitDir = realpathSync(path.join(worktree, '.git'));

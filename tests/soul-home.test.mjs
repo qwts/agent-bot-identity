@@ -387,15 +387,77 @@ test('npm runs with the soul\'s own node and npm cache when runtimes.node is pro
   const bin = path.join(soulDir, '.soul-state', 'runtimes', 'node', version, 'bin');
   mkdirSync(bin, { recursive: true });
   writeFileSync(path.join(bin, 'node'), '');
+  const npm = path.join(path.dirname(bin), 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  mkdirSync(path.dirname(npm), { recursive: true });
+  writeFileSync(npm, '');
   writeFileSync(path.join(soulDir, '.soul-state', 'runtimes', 'node', version, INSTALL_STAMP), JSON.stringify({ name: 'node', version, bin: 'bin' }));
   writeFileSync(path.join(soulDir, 'soul.json'), JSON.stringify({ runtimes: { node: '24' } }));
   rmSync(path.join(soulDir, '.soul-state', 'runtimes', 'harnesses'), { recursive: true, force: true });
-  await installSoulHarnesses(agentId, source, { ...options, env: { PATH: '/usr/bin', KEEP: 'me' }, harness: 'claude', install });
+  await installSoulHarnesses(agentId, source, { ...options, env: { PATH: '/usr/bin', KEEP: 'me', AGENT_BOT_NPM: '/host/npm-cli.js' }, harness: 'claude', install });
   assert.equal(seen[1].node, path.join(bin, 'node'));
   assert.equal(seen[1].env.PATH.split(path.delimiter)[0], bin);
   assert.equal(seen[1].env.npm_config_cache, path.join(soulDir, '.soul-state', 'runtimes', 'node', 'npm-cache'));
   assert.equal(seen[1].env.KEEP, 'me', 'the caller\'s env is kept underneath');
-  assert.equal(seen[1].env.AGENT_BOT_NPM, undefined);
+  assert.equal(seen[1].env.AGENT_BOT_NPM, npm, 'the host npm override cannot replace the declared distribution');
+});
+
+for (const managedHome of [false, true]) for (const platform of ['linux-x64', 'win32-x64']) test(`${managedHome ? 'managed home' : 'joined adapter'} provisions declared Node before npm and uses its exact npm CLI on ${platform} (#617)`, async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'soul-npm-routing-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const options = census(root);
+  const source = pinnedPackage(path.join(root, 'pkg'));
+  writeFileSync(path.join(source, 'soul.json'), JSON.stringify({ runtimes: { node: '24' } }));
+  const version = resolveCatalogPin('node', '24').version;
+  let bin, npm, node;
+  const windows = platform.startsWith('win32-');
+  const events = [];
+  const provisionRuntimes = async (dir) => {
+    events.push('runtimes');
+    const runtime = path.join(dir, '.soul-state', 'runtimes', 'node', version);
+    bin = windows ? runtime : path.join(runtime, 'bin');
+    node = path.join(bin, windows ? 'node.exe' : 'node');
+    npm = path.join(runtime, ...(windows ? [] : ['lib']), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    mkdirSync(bin, { recursive: true }); mkdirSync(path.dirname(npm), { recursive: true });
+    writeFileSync(node, ''); writeFileSync(npm, '');
+    writeFileSync(path.join(runtime, INSTALL_STAMP), JSON.stringify({ name: 'node', version, bin: windows ? '.' : 'bin' }));
+  };
+  const install = (dir, opts) => installHarnesses(dir, { ...opts, runImpl: async (command, args, processOptions) => {
+    events.push('npm');
+    assert.equal(command, node);
+    assert.equal(args[0], npm);
+    assert.equal(processOptions.env.PATH.split(path.delimiter)[0], bin);
+    assert.equal(processOptions.env.KEEP, 'yes');
+    fakeBin(dir, 'claude-code-acp');
+  } });
+  const operation = { ...options, platform, env: { PATH: '/host/bin', AGENT_BOT_NPM: '/host/npm-cli.js', KEEP: 'yes' }, install, provisionRuntimes };
+  if (managedHome) await createSoulHomes({ ...operation, bindings: fakeBindings() })({ agentId, harness: 'claude', packagePath: source });
+  else {
+    const soulDir = path.dirname(path.dirname(soulHomePath(agentId, options)));
+    mkdirSync(soulDir, { recursive: true });
+    writeFileSync(path.join(soulDir, 'soul.json'), readFileSync(path.join(source, 'soul.json')));
+    await installSoulHarnesses(agentId, source, { ...operation, harness: 'claude' });
+  }
+  assert.deepEqual(events, ['runtimes', 'npm']);
+});
+
+test('missing declared Node or npm refuses before npm, even with a host override (#617)', async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'soul-npm-refusal-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const options = census(root);
+  const source = pinnedPackage(path.join(root, 'pkg'));
+  const soulDir = path.dirname(path.dirname(soulHomePath(agentId, options)));
+  mkdirSync(soulDir, { recursive: true });
+  writeFileSync(path.join(soulDir, 'soul.json'), JSON.stringify({ runtimes: { node: '24' } }));
+  const operation = { ...options, harness: 'claude', env: { PATH: '/host/bin', AGENT_BOT_NPM: '/host/npm-cli.js' }, provisionRuntimes: async () => {}, install: async () => assert.fail('must never invoke npm') };
+  await assert.rejects(installSoulHarnesses(agentId, source, operation), error => error.code === 'runtime-install-failed');
+  const version = resolveCatalogPin('node', '24').version;
+  const runtime = path.join(soulDir, '.soul-state', 'runtimes', 'node', version);
+  mkdirSync(path.join(runtime, 'bin'), { recursive: true });
+  writeFileSync(path.join(runtime, 'bin', 'node'), '');
+  writeFileSync(path.join(runtime, INSTALL_STAMP), JSON.stringify({ name: 'node', version, bin: 'bin' }));
+  await assert.rejects(installSoulHarnesses(agentId, source, operation), error => error.code === 'runtime-install-failed' && error.runtime === 'node' && /npm/.test(error.message));
+  const failure = Object.assign(new Error('archive did not verify'), { code: 'runtime-checksum-mismatch' });
+  await assert.rejects(installSoulHarnesses(agentId, source, { ...operation, provisionRuntimes: async () => { throw failure; } }), error => error === failure);
 });
 
 test('soulNpmHarnessDirs lists stamped npm installs newest first, then the legacy directory', async (t) => {

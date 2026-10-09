@@ -188,7 +188,7 @@ is created. It does not complete the remaining integrity or override contracts.
 | Cold wake and resumed turns | `coldTurnExecutor` calls the same `acpExecutorFor` for each turn | Runtime/factory fixtures remove an executable after a successful turn and verify refusal before another executor is created. |
 | Native `/v1` turns, including resumed sessions | `agent-daemon.mjs` calls the same factory before the ACP engine loads or creates a session | The same readiness check applies before session restoration or spawning. |
 | Declared environment | `soulRuntimeEnv` inspects the current manifest and selected installation | Runtime/factory fixtures cover missing/unsupported declarations, invalid manifests, missing selected harnesses and missing runtime executables; undeclared runtimes retain the host routes. |
-| npm provisioning | `soul-home.mjs` uses `runtimeLaunchEnv` directly | Separate audit remains: `AGENT_BOT_NPM`, exact Node/npm selection and refusal before npm execution. |
+| npm provisioning | Both managed homes and joined adapters prepare declared runtimes through `soulInstallEnv` before npm | Fixtures verify the selected distribution's exact Node and npm CLI, reject a host npm override, and refuse missing files or failed provisioning before npm. Undeclared Node retains the host route. |
 | Archive and Python integrity | `fetchArchive`, installation stamps, uv installers | Archive checksum refusal exists; complete dependency lock/hash provenance and installed-byte verification remain open. |
 | Overrides | Helper argument in `runtimeLaunchEnv` | Owner-managed override interface, exact executable validation and policy precedence remain open. |
 | Catalog and transfer | Inspection resolves against the supplied catalog | Retained resolution and owner-visible upgrade semantics remain open. |
@@ -218,10 +218,15 @@ version is the lockfile's `packages["node_modules/<package>"].version`. The
 install is staged as `.installing-<uuid>` beside the target and renamed in
 once `node_modules/.bin/<adapter>` exists, so an interrupted one is a
 `soul env clean` candidate and a finished one never is; when two installs of
-one version race, the first to land stands. npm runs with the soul's own
-node and `npm_config_cache` when `runtimes.node` is provisioned, the host's
-otherwise (`AGENT_BOT_NPM` still wins). Integrity, overrides and the
-provisioning audit for these installs stay with #617.
+one version race, the first to land stands. Both joined adapters and managed
+homes provision declared runtimes before invoking npm. With `runtimes.node`,
+the selected distribution supplies Node and its bundled npm CLI
+(`lib/node_modules/npm/bin/npm-cli.js` on Unix, `node_modules/npm/bin/npm-cli.js`
+on Windows); a host `AGENT_BOT_NPM` cannot override it. Missing files or failed
+provisioning refuse installation. Without a Node declaration, the host route
+and its npm override remain available. The soul's npm cache stays contained.
+Windows layout fixtures verify selection; they do not establish live Windows
+execution. Installed-byte integrity and owner-managed overrides remain in #617.
 
 A launch resolves the adapter in order: the checkout's own `node_modules`,
 the runtimes installs newest version first, then the legacy
