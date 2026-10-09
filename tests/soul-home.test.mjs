@@ -374,7 +374,10 @@ test('a second install of the same adapter version keeps the one that landed fir
 test('npm runs with the soul\'s own node and npm cache when runtimes.node is provisioned', async (t) => {
   const root = mkdtempSync(path.join(tmpdir(), 'soul-node-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const options = census(root);
+  // A preinstalled runtime the readiness check rejects must fail here, not
+  // quietly download a real Node.
+  const fetchFn = async (url) => { throw new Error(`unexpected download ${url}`); };
+  const options = { ...census(root), fetchFn };
   const source = pinnedPackage(path.join(root, 'pkg'));
   const soulDir = path.dirname(path.dirname(soulHomePath(agentId, options)));
   const seen = [];
@@ -388,7 +391,7 @@ test('npm runs with the soul\'s own node and npm cache when runtimes.node is pro
   const version = resolveCatalogPin('node', '24').version;
   const bin = path.join(soulDir, '.soul-state', 'runtimes', 'node', version, 'bin');
   mkdirSync(bin, { recursive: true });
-  writeFileSync(path.join(bin, 'node'), '');
+  writeFileSync(path.join(bin, 'node'), '', { mode: 0o755 });
   const npm = path.join(path.dirname(bin), 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
   mkdirSync(path.dirname(npm), { recursive: true });
   writeFileSync(npm, '');
