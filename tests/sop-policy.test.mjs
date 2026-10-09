@@ -74,3 +74,20 @@ test('parsed data is frozen and evaluator revalidates caller-supplied objects', 
   assert.equal(evaluate(parsed).decision, 'deny');
   assert.throws(() => evaluate(input), /only deny/);
 });
+
+test('displayed reasons reject directional controls without rejecting ordinary RTL text', () => {
+  for (const point of [0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069]) {
+    const input = document([rule({ reason: `Blocked ${String.fromCodePoint(point)}CANARY` })]);
+    for (const check of [() => parse(input), () => evaluate(input)]) {
+      assert.throws(check, error => error.code === 'policy-invalid' && !error.message.includes('CANARY'));
+    }
+  }
+  const reason = 'هذا التشغيل غير مسموح';
+  assert.equal(evaluate(parse(document([rule({ reason })]))).reason, reason);
+});
+
+test('duplicate JSON members use the last value before schema validation', () => {
+  const input = `{"schemaVersion":1,"rules":${JSON.stringify([rule()])},"rules":[]}`;
+  assert.equal(evaluate(parseSopPolicy(input, options)).decision, 'continue');
+  assert.throws(() => parseSopPolicy('{"schemaVersion":1,"rules":[],"rules":null}', options), /bound/);
+});

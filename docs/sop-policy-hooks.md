@@ -54,7 +54,11 @@ filename; it must not permit general fetched-code execution.
 The parser rejects unknown keys, events, conditions or schema versions, including
 executable/script/URL fields. It accepts at most 64 KiB of strict UTF-8 JSON and
 64 rules. Rule IDs are unique ASCII identifiers of at most 64 characters; reason
-text is at most 256 Unicode characters without controls. `decision` is exactly
+text is at most 256 Unicode characters without controls, including Unicode
+bidirectional formatting controls (ordinary right-to-left text is allowed).
+JSON parsing uses the last value of any duplicate object member before schema
+validation, following `JSON.parse`. Other readers must preserve this behavior;
+activation retains the exact original bytes and digest. `decision` is exactly
 `deny`. `when` is either `{}` (all operations for the event) or a nonempty
 `harnesses` list of at most 32 distinct canonical execution keys supplied by the host. Match lists are
 exact and case-sensitive. Unknown or alias execution keys refuse evaluation;
@@ -163,6 +167,13 @@ host, keeping policy parsing out of identity and harness knowledge modules.
 Library callers cannot supply an allow result that bypasses product authorization.
 The host must wire the evaluator on every declared supported path; a missing
 implementation for active policy fails closed.
+
+If a runtime upgrade removes a canonical harness key named by an active policy,
+validation fails closed even when that rule would not match the current launch.
+The planned `show` and doctor integrations must flag that the active policy
+names a harness this runtime does not know. The bounded launch diagnostic must
+direct the owner to reactivate a compatible policy or explicitly deactivate it;
+silently deleting a rule or remapping an identity alias is not a repair.
 
 Launch refusals use the existing journal/report path with an explicit stable code.
 The whole rendered diagnostic, including code prefix, must fit the broker's
