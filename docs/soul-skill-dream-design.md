@@ -397,15 +397,20 @@ run with any other report is refused as inconsistent. A change notice inherits t
 not shown to have caused it. Runs are applied in journal order; replaying the
 latest run is idempotent.
 
-Each soul keeps at most 64 notices. Three slots are reserved for the
-subject-less host kinds (`execution`, `report`, `evidence`), so agent-reported
-conditions can never crowd out an owner-visible failure. A run creates at most 32
-new notices, admitting host conditions first; renewals and clearing always use
-the run's full bounded condition set, so an admission limit never makes a
-persisting condition look recovered. Retention drops only cleared notices,
-oldest first. A live notice, read or not, is never evicted, so eviction cannot
-cause a renotification. A new condition without room increments a visible
-`suppressed` count. Delivery is `pending-host-read` until an authorized
+Only live (open or acknowledged) notices are retained, because they are meant
+for scheduler state, which every journal transaction copies. A cleared notice
+leaves the ledger and is returned, with `clearedAt`, for the append-only journal.
+Each soul keeps at most 16 live notices within 8 KiB. Three slots, and the bytes
+for them, are reserved for the subject-less host kinds (`execution`, `report`,
+`evidence`), so agent-reported conditions can never crowd out an owner-visible
+failure by count or by long paths. Every notice is charged at its growth
+ceiling (longest detail, acknowledged, largest counter), so renewing or
+acknowledging an admitted notice cannot exceed the budget. In practice the byte
+budget admits about nine short claims. Renewal and clearing always use the run's
+full bounded condition set, so admission limits never make a persisting
+condition look recovered. A live notice, read or not, is never evicted, so
+eviction cannot cause a renotification. A new condition without room increments
+a visible `suppressed` count. Delivery is `pending-host-read` until an authorized
 host acknowledges the notice, then `host-acknowledged`; nothing is ever marked
 `delivered` without a delivery adapter.
 

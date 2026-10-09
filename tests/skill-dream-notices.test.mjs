@@ -26,7 +26,6 @@ function step(ledger, { status = 'completed', items = [], sources = items.map(en
     endedAt: at, executionFailed: status !== 'completed', verifyRevisionEvidence: verifier });
   return applyDreamNoticeRun(ledger, { run, outcome, inputs });
 }
-const live = ledger => ledger.notices.filter(notice => notice.state !== 'cleared');
 
 test('no-change runs are quiet and a repeated condition renews one notice instead of notifying every interval', () => {
   let ledger = emptyDreamNoticeLedger(AGENT), result = step(ledger, { items: [item('AGENTS.md')] });
@@ -56,10 +55,12 @@ test('failures clear only when a later run can observe recovery, and a recurrenc
   let result = step(ledger, { status: 'cancelled' });
   assert.deepEqual([result.created, result.cleared], [[], []], 'a cancelled run proves nothing');
   result = step(result.ledger, { items: [item('AGENTS.md')] });
-  assert.deepEqual(result.cleared, [ledger.notices[0].id]);
+  assert.deepEqual(result.cleared.map(notice => [notice.id, notice.occurrences]), [[ledger.notices[0].id, 2]]);
+  assert.ok(result.cleared[0].clearedAt > result.cleared[0].lastSeenAt);
+  assert.deepEqual(result.ledger.notices, [], 'a cleared notice leaves current state; its record goes to the journal');
   result = step(result.ledger, { status: 'failed' });
   assert.equal(result.created.length, 1); assert.notEqual(result.created[0], ledger.notices[0].id);
-  assert.equal(result.ledger.notices.length, 2); assert.equal(live(result.ledger).length, 1);
+  assert.equal(result.ledger.notices.length, 1);
 });
 
 test('unusable reports notify once per condition and a structured report clears them', () => {
@@ -103,7 +104,7 @@ test('verified changes notify once per artifact revision and pending proposals a
   assert.equal(ledger.notices.find(notice => notice.kind === 'evidence')?.detail, 'evidence-unavailable');
   const result = step(ledger, { items: [claimed], verifier });
   assert.equal(result.cleared.length, 1, 'a successful check clears evidence-unavailable, not the change');
-  assert.equal(live(result.ledger).length, 1);
+  assert.equal(result.ledger.notices.length, 1);
 });
 
 test('acknowledgement is idempotent, keeps deduplication, and never claims delivery', () => {
@@ -138,46 +139,53 @@ test('replaying a run is idempotent and a forged or inconsistent ledger is refus
   }
 });
 
-test('retention drops only cleared notices, reserves host slots, and counts overflow', () => {
-  let ledger = emptyDreamNoticeLedger(AGENT);
-  const blockedRun = (from, count) => Array.from({ length: count }, (_, i) => item(`skills/s${from + i}.md`, 'blocked'));
-  for (let from = 0; from < 64; from += 16) ledger = step(ledger, { items: blockedRun(from, 16) }).ledger;
-  const claimSlots = DREAM_NOTICE_LIMITS.perSoul - 3;
-  assert.equal(ledger.notices.length, claimSlots); assert.equal(ledger.suppressed, 3);
-  // An acknowledged live condition is never evicted, so it cannot renotify.
+test('live notices are slot- and byte-bounded, host failures are reserved, and overflow is counted', () => {
+  const claimSlots = DREAM_NOTICE_LIMITS.perSoul - DREAM_NOTICE_LIMITS.hostSlots;
+  const blockedRun = (from, count, name = i => `skills/s${i}.md`) => Array.from({ length: count }, (_, i) => item(name(from + i), 'blocked'));
+  let result = step(emptyDreamNoticeLedger(AGENT), { items: blockedRun(0, 20) });
+  const admitted = result.created.length;
+  assert.ok(admitted > 0 && admitted <= claimSlots); assert.equal(result.suppressed, 20 - admitted);
+  let ledger = result.ledger;
+  // Acknowledged or not, a live condition is never evicted, so it cannot renotify.
   const first = ledger.notices[0];
   ledger = acknowledgeDreamNotice(ledger, { noticeId: first.id, at: minute(58) });
-  let result = step(ledger, { items: blockedRun(200, 2) });
-  assert.deepEqual([result.created.length, result.suppressed], [0, 2]);
-  // Agent-reported claims cannot starve owner-visible host failures.
+  result = step(ledger, { items: [...blockedRun(0, admitted), ...blockedRun(200, 2)] });
+  assert.deepEqual([result.created.length, result.renewed.length, result.suppressed], [0, admitted, 2]);
+  assert.ok(result.ledger.notices.some(notice => notice.id === first.id && notice.state === 'acknowledged'));
+  // Agent claims cannot starve owner-visible host failures, by slots or bytes.
   result = step(result.ledger, { status: 'failed' });
-  assert.equal(result.created.length, 1); assert.equal(result.suppressed, 0);
+  assert.equal(result.created.length, 1);
+  assert.ok(Buffer.byteLength(JSON.stringify(result.ledger.notices)) <= DREAM_NOTICE_LIMITS.bytes);
+  // Long paths exhaust the byte budget before the slots; host conditions still land.
+  const long = i => `skills/${String(i).padStart(3, '0')}-${'x'.repeat(1500)}.md`;
+  result = step(emptyDreamNoticeLedger(AGENT), { items: blockedRun(0, 8, long) });
+  assert.ok(result.created.length < 8 && result.created.length > 0); assert.equal(result.suppressed, 8 - result.created.length);
   result = step(result.ledger, { reply: 'prose' });
-  assert.deepEqual([result.created.length, result.cleared.length], [1, 1], 'a completed run clears execution and reports its own failure');
-  result = step(result.ledger, { items: [item(first.subject.path, 'blocked')] });
-  assert.deepEqual(result.created, []); assert.ok(result.renewed.includes(first.id));
-  assert.ok(result.ledger.notices.some(notice => notice.id === first.id));
-  // Clearing frees room; a full ledger evicts the oldest cleared notice only.
-  result = step(result.ledger, { items: [item('skills/s1.md'), item('skills/s2.md')] });
-  const roomy = step(result.ledger, { items: blockedRun(300, 3) });
-  assert.deepEqual([roomy.created.length, roomy.suppressed], [2, 1]);
-  assert.equal(roomy.ledger.notices.length <= DREAM_NOTICE_LIMITS.perSoul, true);
-  const many = Array.from({ length: DREAM_NOTICE_LIMITS.conditionsPerRun + 4 }, (_, i) => item(`skills/x${i}.md`, 'blocked'));
-  assert.equal(step(emptyDreamNoticeLedger(AGENT), { items: many }).suppressed, 4);
+  assert.equal(result.created.length, 1, 'host bytes are reserved');
+  result = step(result.ledger, { status: 'failed' });
+  assert.equal(result.created.length, 1, 'every host kind fits beside saturated claims');
+  // Growth is charged up front: acknowledging every notice and renewing it keeps the budget.
+  ledger = result.ledger;
+  for (const notice of ledger.notices) ledger = acknowledgeDreamNotice(ledger, { noticeId: notice.id, at: minute(59) });
+  assert.ok(Buffer.byteLength(JSON.stringify(ledger.notices)) <= DREAM_NOTICE_LIMITS.bytes);
+  // Clearing frees room immediately for a new claim.
+  result = step(ledger, { items: [item(long(0))] });
+  assert.deepEqual(result.cleared.map(notice => notice.kind).sort(), ['execution', 'item-blocked', 'report'], 'a completed structured run clears host failures and the observed path');
+  const roomy = step(result.ledger, { items: [item('skills/new.md', 'blocked')] });
+  assert.deepEqual([roomy.created.length, roomy.suppressed], [1, 0]);
 });
 
-test('the admission cap never clears a persisting condition and admits host failures first', () => {
+test('the admission limit never clears a persisting condition and admits host failures first', () => {
   let { ledger } = step(emptyDreamNoticeLedger(AGENT), { items: [item('skills/target.md', 'blocked')] });
   const target = ledger.notices[0].id;
-  const others = Array.from({ length: DREAM_NOTICE_LIMITS.conditionsPerRun }, (_, i) => item(`skills/o${i}.md`, 'blocked'));
+  const others = Array.from({ length: 40 }, (_, i) => item(`skills/o${i}.md`, 'blocked'));
   let result = step(ledger, { items: [...others, item('skills/target.md', 'blocked')] });
-  assert.deepEqual(result.cleared, [], 'a retained live condition after the cap stays live');
-  assert.ok(result.renewed.includes(target)); assert.equal(result.suppressed, 0, 'renewal is not admission');
+  assert.deepEqual(result.cleared, [], 'a retained live condition after the limit stays live');
+  assert.ok(result.renewed.includes(target));
   const claimed = item('AGENTS.md', 'completed', { evidence: { revision: REV } });
   const broken = () => { throw new Error('journal unreadable'); };
-  result = step(emptyDreamNoticeLedger(AGENT), { items: [...others.slice(0, 40), claimed], verifier: broken });
+  result = step(emptyDreamNoticeLedger(AGENT), { items: [...others, claimed], verifier: broken });
   assert.ok(result.ledger.notices.some(notice => notice.kind === 'evidence'), 'evidence-unavailable is admitted before agent claims');
-  assert.equal(result.suppressed, 1);
 });
 
 test('only a completed attempt reports evidence; cancelled or inconsistent outcomes are refused', () => {

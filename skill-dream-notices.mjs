@@ -6,7 +6,9 @@ import { createHash } from 'node:crypto';
 import { canonicalJson } from './soul-package.mjs';
 import { validateDreamOutcome } from './skill-dream-outcomes.mjs';
 
-export const DREAM_NOTICE_LIMITS = Object.freeze({ perSoul: 64, conditionsPerRun: 32 });
+// Only live notices are retained, and they live in scheduler state that every
+// journal transaction copies, so each soul's set is small and byte-bounded.
+export const DREAM_NOTICE_LIMITS = Object.freeze({ perSoul: 16, hostSlots: 3, bytes: 8 * 1024 });
 const HASH = /^sha256:[a-f0-9]{64}$/;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const CODE = /^[a-z][a-z0-9-]{0,63}$/;
@@ -41,10 +43,20 @@ const path = value => typeof value === 'string' && value.length >= 1 && value.le
 const subjectValid = (kind, subject) => exact(subject, KINDS[kind].subject)
   && (kind !== 'item-blocked' || path(subject.path) && hash(subject.digest))
   && (kind !== 'change' || hash(subject.revision));
-// Subject-less host kinds have at most one live notice each; their slots are
-// reserved so agent-reported conditions can never crowd them out.
+// Subject-less host kinds have at most one live notice each. Their slots and
+// bytes are reserved so agent-reported conditions can never crowd them out.
 const HOST = new Set(['execution', 'report', 'evidence']);
-const CLAIM_SLOTS = DREAM_NOTICE_LIMITS.perSoul - HOST.size;
+const CLAIM_SLOTS = DREAM_NOTICE_LIMITS.perSoul - DREAM_NOTICE_LIMITS.hostSlots;
+// A notice is charged at its growth ceiling (longest detail, acknowledged,
+// largest counter), so renewing or acknowledging it can never exceed the budget.
+const ceiling = notice => Buffer.byteLength(JSON.stringify({ ...notice, detail: 'x'.repeat(64), state: 'acknowledged',
+  delivery: 'host-acknowledged', occurrences: Number.MAX_SAFE_INTEGER, acknowledgedAt: '2000-01-01T00:00:00.000Z' }));
+const SAMPLE_ID = '00000000-0000-4000-8000-000000000000', SAMPLE_AT = '2000-01-01T00:00:00.000Z';
+const HOST_BYTES = Math.max(...[...HOST].map(kind => ceiling({ id: `ntc_${'0'.repeat(24)}`, fingerprint: `sha256:${'0'.repeat(64)}`, kind,
+  subject: {}, detail: '', claim: KINDS[kind].claim, state: '', delivery: '', firstRunId: SAMPLE_ID, lastRunId: SAMPLE_ID,
+  firstSeenAt: SAMPLE_AT, lastSeenAt: SAMPLE_AT, occurrences: 0, acknowledgedAt: null })));
+const CLAIM_BYTES = DREAM_NOTICE_LIMITS.bytes - DREAM_NOTICE_LIMITS.hostSlots * HOST_BYTES;
+const claimBytes = notices => notices.filter(notice => !HOST.has(notice.kind)).reduce((sum, notice) => sum + ceiling(notice), 0);
 
 export const dreamNoticeFingerprint = (agentId, kind, subject) =>
   `sha256:${sha(canonicalJson({ schemaVersion: 1, agentId, kind, subject }))}`;
@@ -106,31 +118,25 @@ export function validateDreamNoticeLedger(ledger) {
     || typeof ledger.agentId !== 'string' || !AGENT.test(ledger.agentId) || !(ledger.lastRunId === null || uuid(ledger.lastRunId))
     || !Number.isSafeInteger(ledger.suppressed) || ledger.suppressed < 0
     || !Array.isArray(ledger.notices) || ledger.notices.length > DREAM_NOTICE_LIMITS.perSoul) invalid();
-  const ids = new Set(), active = new Set();
+  const ids = new Set(), live = new Set();
   for (const notice of ledger.notices) {
     if (!exact(notice, ['id', 'fingerprint', 'kind', 'subject', 'detail', 'claim', 'state', 'delivery', 'firstRunId', 'lastRunId',
-      'firstSeenAt', 'lastSeenAt', 'occurrences', 'acknowledgedAt', 'clearedAt'])
+      'firstSeenAt', 'lastSeenAt', 'occurrences', 'acknowledgedAt'])
       || typeof notice.id !== 'string' || !NOTICE_ID.test(notice.id) || ids.has(notice.id)
       || !Object.hasOwn(KINDS, notice.kind) || !subjectValid(notice.kind, notice.subject) || !code(notice.detail)
       || notice.claim !== KINDS[notice.kind].claim
       || notice.fingerprint !== dreamNoticeFingerprint(ledger.agentId, notice.kind, notice.subject)
       || notice.id !== noticeId(notice.fingerprint, notice.firstRunId)
-      || !['open', 'acknowledged', 'cleared'].includes(notice.state)
+      || notice.state !== (notice.acknowledgedAt === null ? 'open' : 'acknowledged')
       || notice.delivery !== (notice.acknowledgedAt === null ? 'pending-host-read' : 'host-acknowledged')
       || !uuid(notice.firstRunId) || !uuid(notice.lastRunId) || !date(notice.firstSeenAt) || !date(notice.lastSeenAt)
       || !Number.isSafeInteger(notice.occurrences) || notice.occurrences < 1
-      || !(notice.acknowledgedAt === null || date(notice.acknowledgedAt)) || !(notice.clearedAt === null || date(notice.clearedAt))
-      || (notice.state === 'open') !== (notice.acknowledgedAt === null && notice.clearedAt === null)
-      || notice.state === 'acknowledged' && (notice.acknowledgedAt === null || notice.clearedAt !== null)
-      || notice.state === 'cleared' && notice.clearedAt === null) invalid();
-    ids.add(notice.id);
-    if (notice.state !== 'cleared') {
+      || !(notice.acknowledgedAt === null || date(notice.acknowledgedAt))
       // At most one live notice per condition: deduplication is this invariant.
-      if (active.has(notice.fingerprint)) invalid();
-      active.add(notice.fingerprint);
-    }
+      || live.has(notice.fingerprint)) invalid();
+    ids.add(notice.id); live.add(notice.fingerprint);
   }
-  if (ledger.notices.filter(notice => notice.state !== 'cleared' && !HOST.has(notice.kind)).length > CLAIM_SLOTS) invalid();
+  if (ledger.notices.filter(notice => !HOST.has(notice.kind)).length > CLAIM_SLOTS || claimBytes(ledger.notices) > CLAIM_BYTES) invalid();
   return ledger;
 }
 
@@ -138,8 +144,9 @@ const noticeId = (fingerprint, runId) => `ntc_${sha(`${fingerprint}\n${runId}`).
 
 // Applies one terminal run. Run ID and timestamps never enter a fingerprint,
 // so a persisting condition renews its live notice instead of notifying every
-// interval; a recurrence after an observed clear creates a new notice. Runs
-// must be applied in journal order: only the latest run ID is idempotent.
+// interval. A cleared notice leaves the ledger (it is returned for the
+// append-only journal), so a recurrence after an observed clear creates a new
+// notice. Runs must be applied in journal order: only the latest is idempotent.
 export function applyDreamNoticeRun(ledger, { run, outcome = null, inputs = null }) {
   validateDreamNoticeLedger(ledger);
   if (run?.agentId !== ledger.agentId || !date(run.endedAt)) invalid();
@@ -153,40 +160,31 @@ export function applyDreamNoticeRun(ledger, { run, outcome = null, inputs = null
     const fingerprint = dreamNoticeFingerprint(ledger.agentId, condition.kind, condition.subject);
     if (!present.has(fingerprint)) present.set(fingerprint, condition);
   }
-  const created = [], renewed = [], cleared = [];
+  const cleared = next.notices.filter(notice => !present.has(notice.fingerprint) && observed(notice, observes));
+  next.notices = next.notices.filter(notice => !cleared.includes(notice));
+  const created = [], renewed = [];
   let suppressed = 0;
-  for (const notice of next.notices) {
-    if (notice.state === 'cleared' || present.has(notice.fingerprint) || !observed(notice, observes)) continue;
-    Object.assign(notice, { state: 'cleared', clearedAt: at });
-    cleared.push(notice.id);
-  }
-  const liveClaims = () => next.notices.filter(notice => notice.state !== 'cleared' && !HOST.has(notice.kind)).length;
   for (const [fingerprint, condition] of present) {
-    const live = next.notices.find(notice => notice.fingerprint === fingerprint && notice.state !== 'cleared');
+    const live = next.notices.find(notice => notice.fingerprint === fingerprint);
     if (live) {
       Object.assign(live, { detail: condition.detail, lastRunId: run.runId, lastSeenAt: at, occurrences: live.occurrences + 1 });
       renewed.push(live.id);
       continue;
     }
-    // Retention drops only cleared notices, oldest first: a live notice, read
-    // or not, is never evicted, so eviction cannot cause a renotification.
-    // A new condition with no room is counted as suppressed, never lost silently.
-    const host = HOST.has(condition.kind);
-    if (created.length >= DREAM_NOTICE_LIMITS.conditionsPerRun || !host && liveClaims() >= CLAIM_SLOTS) { suppressed++; continue; }
-    if (next.notices.length >= DREAM_NOTICE_LIMITS.perSoul) {
-      const victim = next.notices.filter(notice => notice.state === 'cleared')
-        .sort((a, b) => a.clearedAt.localeCompare(b.clearedAt))[0];
-      next.notices.splice(next.notices.indexOf(victim), 1);
-    }
     const notice = { id: noticeId(fingerprint, run.runId), fingerprint, kind: condition.kind, subject: condition.subject,
       detail: condition.detail, claim: KINDS[condition.kind].claim, state: 'open', delivery: 'pending-host-read',
-      firstRunId: run.runId, lastRunId: run.runId, firstSeenAt: at, lastSeenAt: at, occurrences: 1, acknowledgedAt: null, clearedAt: null };
+      firstRunId: run.runId, lastRunId: run.runId, firstSeenAt: at, lastSeenAt: at, occurrences: 1, acknowledgedAt: null };
+    // A live notice, read or not, is never evicted, so eviction cannot cause a
+    // renotification. A claim with no slot or bytes left is counted, not lost silently.
+    const claims = next.notices.filter(item => !HOST.has(item.kind));
+    if (!HOST.has(condition.kind) && (claims.length >= CLAIM_SLOTS || claimBytes(claims) + ceiling(notice) > CLAIM_BYTES)) { suppressed++; continue; }
     next.notices.push(notice);
     created.push(notice.id);
   }
   next.lastRunId = run.runId;
   next.suppressed += suppressed;
-  return { ledger: validateDreamNoticeLedger(next), created, renewed, cleared, suppressed };
+  return { ledger: validateDreamNoticeLedger(next), created, renewed,
+    cleared: cleared.map(notice => ({ ...notice, clearedAt: at })), suppressed };
 }
 
 // An authorized host read. Idempotent; acknowledging does not clear the
@@ -195,9 +193,7 @@ export function acknowledgeDreamNotice(ledger, { noticeId: id, at }) {
   validateDreamNoticeLedger(ledger);
   if (!date(at)) invalid();
   const next = structuredClone(ledger), notice = next.notices.find(item => item.id === id);
-  if (!notice) throw Object.assign(new Error('No dream notice with that ID belongs to this soul.'), { code: 'dream-notice-not-found' });
-  if (notice.acknowledgedAt === null) {
-    Object.assign(notice, { acknowledgedAt: at, delivery: 'host-acknowledged', ...(notice.state === 'open' ? { state: 'acknowledged' } : {}) });
-  }
+  if (!notice) throw Object.assign(new Error('No live dream notice with that ID belongs to this soul.'), { code: 'dream-notice-not-found' });
+  if (notice.acknowledgedAt === null) Object.assign(notice, { acknowledgedAt: at, state: 'acknowledged', delivery: 'host-acknowledged' });
   return validateDreamNoticeLedger(next);
 }
