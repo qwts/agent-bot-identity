@@ -59,7 +59,7 @@ import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingR
 import { spacePath } from './agent-space.mjs';
 import { createSoulHistory } from './soul-history.mjs';
 import { ensureSoulSpace, soulSpacePath } from './soul-memory.mjs';
-import { archiveSoulDirs, backfillManagedSouls, displayName, listSouls, locateSoulDir, populationFile, recordHarnessAuth, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, setSoulComputerUse, soulComputerUse, setSoulPaused, soulPaused, showSoul, soulDirectory, upsertIdentitySoul, withRoles } from './agent-population.mjs';
+import { archiveSoulDirs, backfillManagedSouls, displayName, listSouls, locateSoulDir, populationFile, recordHarnessAuth, recordSoulSighting, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, setSoulComputerUse, soulComputerUse, setSoulPaused, soulPaused, showSoul, soulDirectory, upsertIdentitySoul, withRoles } from './agent-population.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
 import {
   bindAgentLineage,
@@ -1042,6 +1042,9 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now, pres
       if (!holdsBinding && !holdsToken) throw Object.assign(new Error('this worktree is already bound; present its binding'), { statusCode: 403 });
       if (!holdsBinding) assertPrivateGitDir(body.gitDir, pending.worktree);
       if (body.parentId && body.parentId !== binding.parent) throw Object.assign(new Error('identity already records a different parent'), { statusCode: 409 });
+      // Re-binding is a sighting too (#109): the session is present again,
+      // with no step the agent has to remember.
+      recordSoulSighting(binding.agentId, { file: populationOverride(env, home), now });
       return { schemaVersion: SCHEMA_VERSION, ...binding, secret: existing.secret, repinRequired: false };
     }
   }

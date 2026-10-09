@@ -1,0 +1,1 @@
+- Re-binding an already-bound worktree now refreshes the soul's census `lastSeen`, as a first bind and `setup-worktree` already did, so a session that resumes on its existing binding shows as present. Only `lastSeen` changes; a missing or retired census row is never created or revived (#109).

@@ -19,7 +19,7 @@ import {
   stopDaemon,
   soulPromptIdentity,
 } from '../agent-daemon.mjs';
-import { displayName, recordSoulDisplayName, upsertSoul } from '../agent-population.mjs';
+import { displayName, recordSoulDisplayName, showSoul, upsertSoul } from '../agent-population.mjs';
 import { initSoulSpace } from '../agent-space.mjs';
 import { verifySoulToken, vouchKeyPath, vouchStateDir } from '../vouch.mjs';
 import { ensureAgentIdentity, stateDirectory } from '../agent-identity.mjs';
@@ -644,6 +644,34 @@ test('bind records provenance on the census row (#91)', async () => {
     assert.equal(bound.soul.transcriptLocator.id, 'thread-daemon');
     assert.equal(bound.soul.parentId, parentId);
   });
+});
+
+test('a re-bind of a bound worktree refreshes census presence and nothing else (#109)', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, worktree, record } = mintWorktreeToken(env, root);
+  // The first bind's census row takes the wall clock; the re-bind is
+  // sighted at a fixed later instant.
+  const now = () => new Date('2099-01-01T00:00:00.000Z');
+  await withServer(env, async ({ call }) => {
+    const first = await (await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
+    })).json();
+    const file = env.AGENT_BOT_POPULATION_PATH;
+    const before = showSoul(AGENT_ID, { file });
+    assert.notEqual(before.lastSeen, '2099-01-01T00:00:00.000Z');
+    const again = mintBindToken({ gitDir, worktree, agentId: AGENT_ID });
+    const rebound = await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: again.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
+    });
+    assert.equal(rebound.status, 200);
+    const body = await rebound.json();
+    assert.equal(body.secret, first.secret, 'reuse, not a second binding');
+    const after = showSoul(AGENT_ID, { file });
+    assert.equal(after.lastSeen, '2099-01-01T00:00:00.000Z');
+    assert.deepEqual({ ...after, lastSeen: before.lastSeen }, before, 'only lastSeen moves');
+  }, { now });
 });
 
 test('bind refuses to rewrite recorded lineage', async () => {
