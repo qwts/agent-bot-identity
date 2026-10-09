@@ -109,12 +109,14 @@ function newestIndex(root) {
 
 // A newer record naming the proposal decides it only when it is a well-formed
 // approval (the proposal's own revision and parent) or rejection made after it.
-// Any other matching record, more than one decision, or a pending proposal in
-// an unproven journal is `uncertain`, never a fabricated outcome.
+// Any other matching record or more than one decision is `uncertain`, never a
+// fabricated outcome. Current status needs a proven extent: an unproven journal
+// may hide a newer matching record, so every status there is `uncertain`.
 function proposalStatus(event, newer, proven) {
+  if (!proven) return 'uncertain';
   if (event.status === 'rejected') return 'rejected';
   const matching = newer.filter(row => Object.hasOwn(row, 'proposalId') && row.proposalId === event.proposalId);
-  if (matching.length === 0) return proven ? 'pending' : 'uncertain';
+  if (matching.length === 0) return 'pending';
   if (matching.length > 1) return 'uncertain';
   const [row] = matching;
   if (row.schemaVersion !== 1 || !date(row.at) || row.at < event.at) return 'uncertain';

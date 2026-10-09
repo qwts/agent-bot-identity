@@ -236,3 +236,25 @@ test('only a well-formed later decision changes proposal status; anything else i
   writeFileSync(eventFile(f, 3), JSON.stringify(approval) + '\n');
   assert.equal(status(), 'uncertain', 'more than one decision is uncertain');
 });
+
+test('an unproven extent reports no current status, even after an observed decision', t => {
+  for (const decided of ['approval', 'rejection']) {
+    const f = fixture(t);
+    f.put(SKILL, changed);
+    const proposal = f.propose(), reference = { proposalId: proposal.proposalId };
+    const record = decided === 'approval'
+      ? { schemaVersion: 1, kind: 'revision', revision: proposal.revision, parentRevision: proposal.parentRevision,
+        author: 'soul', reason: 'r', proposalId: proposal.proposalId, approval: 'user', at: '2026-10-09T12:00:00.000Z' }
+      : { schemaVersion: 1, kind: 'decision', proposalId: proposal.proposalId, author: 'user', reason: 'r', at: '2026-10-09T12:00:00.000Z' };
+    writeFileSync(eventFile(f, 2), JSON.stringify(record) + '\n');
+    writeFileSync(eventFile(f, 3), JSON.stringify({ schemaVersion: 1, kind: 'decision', proposalId: '00000000-0000-4000-8000-000000000000',
+      author: 'user', reason: 'r', at: '2026-10-09T12:00:00.000Z' }) + '\n');
+    assert.equal(f.verify({ reference }).checked.event.status, decided === 'approval' ? 'approved' : 'rejected');
+    // Reviewer repro: index 4 missing, a hidden matching record at index 5.
+    writeFileSync(eventFile(f, 5), JSON.stringify({ kind: 'not-a-decision', proposalId: proposal.proposalId }) + '\n');
+    const result = f.verify({ reference });
+    assert.equal(result.checked.journalExtent, 'unproven', decided);
+    assert.equal(result.checked.event.status, 'uncertain', decided);
+    assert.equal(result.verdict, 'verified-change');
+  }
+});

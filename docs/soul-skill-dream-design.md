@@ -480,9 +480,9 @@ falls inside the run window when one is given.
 A proposal's reported status comes from newer records naming it inside the
 scan. A record decides it only when it is a well-formed later approval (the
 soul author, an approval kind, and the proposal's own revision and parent) or a
-well-formed later user rejection. `pending` requires a proven journal. Any
-other matching record, more than one decision, or an unproven journal gives
-`uncertain`. Status is informational and never affects the verdict. A new file is never a delivered source, so a change that adds one is not
+well-formed later user rejection. Any other matching record or more than one
+decision gives `uncertain`. Every status in an unproven journal is
+`uncertain`, because an unscanned newer record could change it. Status is informational and never affects the verdict. A new file is never a delivered source, so a change that adds one is not
 verified. Revision records carry no diff, so there is no cross-check for them;
 the hash-verified objects stand alone. Truncated delivery is reported but never
 blocks the verdict. A change is not proof that the full source was reviewed.
