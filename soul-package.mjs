@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
+import { canonicalJson } from './canonical-json.mjs';
 import { RUNTIME_NAMES, normalizeHarnessInstall, normalizeRuntimeDeclaration } from './runtime-catalog.mjs';
 import { buildHarnessFiles, envProblem, PERMISSION_RULE } from './soul-builder.mjs';
 import { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS, isGeneratedPath } from './soul-harness-contract.mjs';
@@ -26,13 +27,7 @@ const REVISION = /^sha256:[a-f0-9]{64}$(?![\s\S])/;
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const nonempty = (value) => typeof value === 'string' && value.trim().length > 0;
 
-// JSON.stringify supplies scalar encoding; object keys sort by UTF-16 code units.
-export function canonicalJson(value) {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (object(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
-  if (typeof value === 'number' && !Number.isFinite(value)) throw new Error('soul.json numbers must be finite');
-  return JSON.stringify(value);
-}
+export { canonicalJson };
 
 // Where a soul's secrets live, by name only (#383). soul.json is packaged,
 // exported and hashed into revisions, so it may never hold key material:

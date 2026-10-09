@@ -1,0 +1,1 @@
+- Internal: soul ID derivation (`soul-genesis.mjs`) is identity-owned and hashes a shared `canonical-json.mjs`, removing the `agent-identity -> soul-genesis` module crossing (#645). Revisions and derived IDs are byte-identical.
