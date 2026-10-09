@@ -139,6 +139,7 @@
     "owner-presence.mjs": "identity",
     "permission-risk.mjs": "identity",
     "readiness.mjs": "cli",
+    "reach-contract.mjs": "comms",
     "resolve-agent.mjs": "identity",
     "runtime-catalog.mjs": "soul",
     "sandbox.mjs": "soul",

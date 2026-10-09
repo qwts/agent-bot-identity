@@ -51,7 +51,7 @@ for (const harness of names) {
         const value = output.get('.codex/config.toml').toString();
         assert.ok(value.startsWith(`# ${MARKER}\nmodel = "${settings.model}"\nmodel_reasoning_effort = "${settings.reasoningEffort}"\n`));
         assert.ok(value.includes(`approval_policy = "${override ? 'never' : 'on-request'}"\nsandbox_mode = "${override ? 'danger-full-access' : 'workspace-write'}"\n`));
-        assert.match(value, /\[mcp_servers.agent-bot\]/);
+        assert.match(value, /\[mcp_servers.agent-reach\]/);
       } else if (harness === 'gemini') assert.equal(json(output, '.gemini/settings.json').model, settings.model);
       else if (harness === 'opencode') {
         const value = json(output, 'opencode.json');

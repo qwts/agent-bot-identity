@@ -12,10 +12,66 @@ import { buildHarnessFiles, harnessReport, MCP_SERVER_NAME, MCP_TARGETS, mergeab
 import { buildSoulDirectory } from '../soul-build.mjs';
 import { computePackageRevision, readSoulPackageEntries, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS, GENERATED_HARNESS_MARKER as MARKER } from '../soul-package.mjs';
 import { isGeneratedPath } from '../soul-harness-contract.mjs';
+import { reachMcpServerEntry, reachPolicyRules, REACH_TOOL_NAMES } from '../daemon-mcp.mjs';
 const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
 
 const ENTRY = { command: 'agent-bot', args: ['reach-mcp'] };
 const LOCAL = { type: 'local', command: ['agent-bot', 'reach-mcp'] };
+
+test('rendered servers, injected servers and default policy share the same tool namespace (#378)', () => {
+  const injected = reachMcpServerEntry({ agentId: 'agent_33333333-3333-4333-8333-333333333333', env: {} });
+  assert.equal(MCP_SERVER_NAME, injected.name);
+  assert.deepEqual(reachPolicyRules().map(rule => rule.tool), REACH_TOOL_NAMES.map(tool => `mcp__${MCP_SERVER_NAME}__${tool}`));
+});
+
+for (const target of MCP_TARGETS) test(`${target.path}: a prior generated server migrates once and keeps other settings (#378)`, (t) => {
+  const root = fixture(t);
+  buildSoulDirectory(root);
+  let legacy;
+  if (target.format === 'toml') {
+    legacy = `# ${MARKER}\nmodel = "keep"\n\n[mcp_servers.agent-bot]\ncommand = "agent-bot"\nargs = ["reach-mcp"]\n\n[mcp_servers.other]\ncommand = "other"\n`;
+  } else {
+    legacy = JSON.stringify({ _comment: MARKER, keep: 'setting', [target.key]: { 'agent-bot': target.style === 'local' ? LOCAL : ENTRY, other: { command: 'other' } } });
+  }
+  put(root, target.path, legacy);
+  assert.ok(buildSoulDirectory(root, { check: true }).writes.includes(target.path));
+  assert.equal(readFileSync(join(root, target.path), 'utf8'), legacy, 'check does not migrate');
+  buildSoulDirectory(root);
+  const migrated = readFileSync(join(root, target.path), 'utf8');
+  if (target.format === 'toml') {
+    assert.ok(migrated.includes('[mcp_servers.agent-reach]'));
+    assert.ok(!migrated.includes('[mcp_servers.agent-bot]'));
+    assert.ok(migrated.includes('model = "keep"'));
+    assert.ok(migrated.includes('[mcp_servers.other]\ncommand = "other"'));
+  } else {
+    const value = JSON.parse(migrated);
+    assert.equal(value.keep, 'setting');
+    assert.deepEqual(value[target.key].other, { command: 'other' });
+    assert.equal(value[target.key]['agent-bot'], undefined);
+    assert.deepEqual(value[target.key][MCP_SERVER_NAME], target.style === 'local' ? LOCAL : ENTRY);
+  }
+  assert.deepEqual(buildSoulDirectory(root, { check: true }).drift, []);
+  buildSoulDirectory(root);
+  assert.equal(readFileSync(join(root, target.path), 'utf8'), migrated);
+});
+
+for (const target of MCP_TARGETS) test(`${target.path}: preserve custom legacy servers and refuse a canonical name collision (#378)`, (t) => {
+  const root = fixture(t);
+  const custom = target.format === 'toml'
+    ? `# ${MARKER}\n[mcp_servers.agent-bot]\ncommand = "agent-bot"\nargs = ["reach-mcp"]\n[mcp_servers.agent-bot.env]\nKEEP = "yes"\n`
+    : JSON.stringify({ _comment: MARKER, [target.key]: { 'agent-bot': { ...(target.style === 'local' ? LOCAL : ENTRY), env: { KEEP: 'yes' } } } });
+  put(root, target.path, custom);
+  buildSoulDirectory(root);
+  const output = readFileSync(join(root, target.path), 'utf8');
+  if (target.format === 'toml') assert.ok(output.includes('[mcp_servers.agent-bot.env]\nKEEP = "yes"'));
+  else assert.deepEqual(JSON.parse(output)[target.key]['agent-bot'].env, { KEEP: 'yes' });
+  const collision = target.format === 'toml'
+    ? '[mcp_servers."agent-reach"]\ncommand = "custom"\n'
+    : JSON.stringify({ [target.key]: { [MCP_SERVER_NAME]: { command: 'custom' } } });
+  put(root, target.path, collision);
+  assert.throws(() => buildSoulDirectory(root), /custom agent-reach MCP server/);
+  assert.equal(readFileSync(join(root, target.path), 'utf8'), collision, 'conflict is not overwritten');
+});
 
 // A minimal format-2 soul package: AGENTS.md, soul.json and nothing else, so
 // every assertion below is about this slice's output alone.
@@ -63,7 +119,7 @@ test('each harness gets the reach/comms server in its own native file', () => {
   assert.deepEqual(JSON.parse(output.get('opencode.json').toString()),
     { _comment: MARKER, mcp: { [MCP_SERVER_NAME]: LOCAL } });
   assert.equal(output.get('.codex/config.toml').toString(),
-    `# ${MARKER}\n[mcp_servers.agent-bot]\ncommand = "agent-bot"\nargs = ["reach-mcp"]\n`);
+    `# ${MARKER}\n[mcp_servers.agent-reach]\ncommand = "agent-bot"\nargs = ["reach-mcp"]\n`);
   // Cursor's, Kiro's and Qwen Code's documented project files carry the same stdio entry.
   for (const path of ['.cursor/mcp.json', '.kiro/settings/mcp.json', '.qwen/settings.json']) {
     assert.deepEqual(JSON.parse(output.get(path).toString()), { _comment: MARKER, mcpServers: { [MCP_SERVER_NAME]: ENTRY } }, path);
@@ -119,12 +175,12 @@ test('a soul that ships its own MCP file keeps its servers and gains ours', (t) 
   put(root, '.mcp.json', `${JSON.stringify({ mcpServers: { postgres: { command: 'pg-mcp' } } }, null, 2)}\n`);
   put(root, '.gemini/settings.json', `${JSON.stringify({ theme: 'Dracula' }, null, 2)}\n`);
   put(root, 'opencode.json', `${JSON.stringify({ model: 'anthropic/claude-sonnet-4-5', mcp: { files: LOCAL } }, null, 2)}\n`);
-  put(root, '.codex/config.toml', 'model = "gpt-5"\n\n[mcp_servers.agent-bot]\ncommand = "stale"\n\n[mcp_servers.pg]\ncommand = "pg-mcp"\n');
+  put(root, '.codex/config.toml', 'model = "gpt-5"\n\n[mcp_servers.agent-reach]\ncommand = "agent-bot"\nargs = ["reach-mcp"]\n\n[mcp_servers.pg]\ncommand = "pg-mcp"\n');
   reseal(root);
 
   const checked = buildSoulDirectory(root, { check: true });
   assert.deepEqual(checked.merged, [
-    { path: '.codex/config.toml', harness: 'codex', kept: ['agent-bot', 'pg'] },
+    { path: '.codex/config.toml', harness: 'codex', kept: ['agent-reach', 'pg'] },
     { path: '.gemini/settings.json', harness: 'gemini', kept: [] },
     { path: '.mcp.json', harness: 'claude', kept: ['postgres'] },
     { path: 'opencode.json', harness: 'opencode', kept: ['files'] },
@@ -143,7 +199,7 @@ test('a soul that ships its own MCP file keeps its servers and gains ours', (t) 
     _comment: MARKER, model: 'anthropic/claude-sonnet-4-5', mcp: { files: LOCAL, [MCP_SERVER_NAME]: LOCAL },
   });
   const toml = readFileSync(join(root, '.codex/config.toml'), 'utf8');
-  assert.equal(toml, `# ${MARKER}\nmodel = "gpt-5"\n\n[mcp_servers.pg]\ncommand = "pg-mcp"\n\n[mcp_servers.agent-bot]\ncommand = "agent-bot"\nargs = ["reach-mcp"]\n`);
+  assert.equal(toml, `# ${MARKER}\nmodel = "gpt-5"\n\n[mcp_servers.pg]\ncommand = "pg-mcp"\n\n[mcp_servers.agent-reach]\ncommand = "agent-bot"\nargs = ["reach-mcp"]\n`);
   assert.equal(toml.includes('stale'), false);
 
   // Rebuilding is a no-op: our own output is the merge base, byte for byte.

@@ -87,7 +87,8 @@ export const BINDING_ENV = 'AGENT_BOT_BINDING';
 // engine normalizes every adapter it can verify to that canonical name (see
 // MCP_TOOL_NAMINGS in acp-registry.mjs), and the daemon's permission policy
 // allows exactly these (see reachPolicyRules).
-export const REACH_SERVER_NAME = 'agent-reach';
+import { REACH_SERVER_NAME } from './reach-contract.mjs';
+export { REACH_SERVER_NAME };
 export const REACH_TOOL_NAMES = Object.freeze([
   'fetch_context', 'post_reply', 'report_status', 'clock_in', 'fleet', 'send_message', 'start_soul',
 ]);
