@@ -74,7 +74,8 @@ function soulStatus(status, agentId) {
   return { schemaVersion: 1, agentId, available: status.available === true, executorConfigured: status.executorConfigured === true,
     started: status.started ?? null, closing: status.closing ?? null, orphanRecovery: status.orphanRecovery ?? null,
     fault: status.fault ?? null, maintenanceCoverage: 'unverified', journal: status.journal ?? null, diagnostics,
-    registration, flights, inputReceipts: [], ...receipts };
+    registration, flights, inputReceipts: [], ...receipts,
+    selectionCheckpoints: (status.selectionCheckpoints ?? []).filter(checkpoint => checkpoint?.agentId === agentId) };
 }
 const eventSoul = event => event?.registration?.agentId ?? event?.run?.agentId ?? null;
 

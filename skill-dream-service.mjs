@@ -2,6 +2,7 @@
 // to the host routes; this module never treats an agent reply as evidence.
 import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { isAgentId } from './agent-identity.mjs';
 import { createDreamScheduler, DREAM_TIMEOUT_MS, parseDreamSchedule } from './skill-dream-scheduler.mjs';
 import { createDreamFileStore } from './skill-dream-store.mjs';
@@ -83,6 +84,17 @@ export function createDreamService({ directory, lookupSoul, executorFor = null, 
     if (!soul || typeof soul.directory !== 'string' || typeof soul.harness !== 'string' || !soul.harness) fail('dream-binding-unavailable', 'Soul directory and harness must be available.');
     return soul;
   };
+  const selectionCursor = checkpoint => {
+    if (checkpoint === null) return null;
+    const reference = checkpoint.inputReceipt;
+    const record = store.history({ afterRevision: reference.journalRevision - 1, limit: 1 }).records[0];
+    const prepared = record?.events.find(event => event.kind === 'inputs-prepared' && event.run.runId === checkpoint.runId);
+    if (record?.revision !== reference.journalRevision || prepared?.run.agentId !== checkpoint.agentId
+      || !isDeepStrictEqual(prepared?.receipt, reference) || !isDeepStrictEqual(prepared?.inputs.nextCursor, checkpoint.nextCursor)) {
+      fail('dream-selection-invalid', 'Selection checkpoint does not match its durable input preparation.');
+    }
+    return checkpoint.nextCursor;
+  };
   const requireExecutor = () => { if (!configured) fail('dream-executor-unavailable', 'The daemon has no configured dream executor.'); };
   try {
     if (typeof lookupSoul !== 'function' || typeof turns?.run !== 'function' || typeof turns?.busy !== 'function') fail('dream-service-configuration', 'Dream service needs the daemon soul lookup and turn registry.');
@@ -90,13 +102,13 @@ export function createDreamService({ directory, lookupSoul, executorFor = null, 
     const executeCold = configured ? coldTurnExecutor({ executorFor, turns, approvals, turnTimeoutMs: DREAM_TIMEOUT_MS }) : null;
     scheduler = createDreamScheduler({ store, now, isPaused, isBusy: id => turns.busy().includes(id),
       soulDirectory: id => launchable(id).directory,
-      execute: async ({ run, signal, timeoutMs, prepareInputs, stageOutcome }) => {
+      execute: async ({ run, selectionCheckpoint, signal, timeoutMs, prepareInputs, stageOutcome }) => {
         signal.throwIfAborted(); requireExecutor();
         const soul = launchable(run.agentId);
         if (soul.directory !== run.soulDir) fail('dream-binding-changed', 'Soul directory changed before execution.');
         let inputs;
         try {
-          inputs = captureDreamInputs(soul.directory);
+          inputs = captureDreamInputs(soul.directory, { cursor: selectionCursor(selectionCheckpoint) });
           inputFailures.delete(run.agentId);
         } catch (error) {
           inputFailures.delete(run.agentId);

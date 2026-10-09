@@ -38,12 +38,35 @@ export function parseDreamSchedule(value) {
   if (hours > 720) fail('dream-schedule-invalid', 'dream schedule must be PT<N>H with an integer from 1 to 720');
   return hours;
 }
-export const emptyDreamState = () => ({ schemaVersion: 3, revision: 0, registrations: [], flights: [], inputReceipts: [], outcomeReceipts: [] });
+export const emptyDreamState = () => ({ schemaVersion: 4, revision: 0, registrations: [], flights: [], inputReceipts: [], outcomeReceipts: [], selectionCheckpoints: [] });
 function inputReceipt(value) {
   keys(value, ['runId', 'journalRevision', 'startingRevision', 'digest']);
   const hash = value => typeof value === 'string' && value.length === 71 && /^sha256:[a-f0-9]{64}$/.test(value);
   if (!id(value.runId) || !Number.isSafeInteger(value.journalRevision) || value.journalRevision < 1
     || !hash(value.startingRevision) || !hash(value.digest)) invalid();
+}
+// Selection rotates bounded input pages; it never certifies processing or
+// excludes an item from future cycles. A null cursor wraps to the first page.
+function selectionCheckpoint(value) {
+  keys(value, ['schemaVersion', 'agentId', 'generation', 'runId', 'journalRevision', 'sourceRevision', 'inputReceipt', 'nextCursor', 'coverage', 'processingCoverage']);
+  const hash = value => typeof value === 'string' && value.length === 71 && /^sha256:[a-f0-9]{64}$/.test(value);
+  if (value.schemaVersion !== 1 || !isAgentId(value.agentId) || !id(value.generation) || !id(value.runId)
+    || !Number.isSafeInteger(value.journalRevision) || value.journalRevision < 1 || !hash(value.sourceRevision)
+    || value.coverage !== 'selection-only' || value.processingCoverage !== 'unverified') invalid();
+  inputReceipt(value.inputReceipt);
+  if (value.inputReceipt.runId !== value.runId || value.inputReceipt.startingRevision !== value.sourceRevision
+    || value.inputReceipt.journalRevision >= value.journalRevision) invalid();
+  if (value.nextCursor !== null) {
+    keys(value.nextCursor, ['revision', 'path']);
+    // Reuse the actual reader's path eligibility through metadata validation.
+    validateDreamInputMetadata({ schemaVersion: 1, revision: value.sourceRevision, sources: [],
+      coverage: { definition: 'supported', memory: 'unsupported', conversations: 'unsupported', eligible: 1,
+        selected: 0, suppliedBytes: 0, skippedBinary: 0, remaining: 1 }, nextCursor: value.nextCursor });
+  }
+}
+function rebindSelection(state, registration) {
+  const checkpoint = state.selectionCheckpoints.find(item => item.agentId === registration.agentId);
+  if (checkpoint) checkpoint.generation = registration.generation;
 }
 function runRecord(run, terminal) {
   keys(run, ['runId', 'agentId', 'soulDir', 'generation', 'daemonGeneration', 'trigger', 'startedAt', 'endedAt', 'status', 'timeoutMs', 'cancelRequestedAt', 'cancelReason']);
@@ -56,8 +79,8 @@ function runRecord(run, terminal) {
     || ['running', 'failed'].includes(run.status) && run.cancelReason !== null) invalid();
 }
 export function validateDreamState(state) {
-  keys(state, ['schemaVersion', 'revision', 'registrations', 'flights', ...(state?.schemaVersion >= 2 ? ['inputReceipts'] : []), ...(state?.schemaVersion === 3 ? ['outcomeReceipts'] : [])]);
-  if (![1, 2, 3].includes(state.schemaVersion) || !Number.isSafeInteger(state.revision) || state.revision < 0
+  keys(state, ['schemaVersion', 'revision', 'registrations', 'flights', ...(state?.schemaVersion >= 2 ? ['inputReceipts'] : []), ...(state?.schemaVersion >= 3 ? ['outcomeReceipts'] : []), ...(state?.schemaVersion === 4 ? ['selectionCheckpoints'] : [])]);
+  if (![1, 2, 3, 4].includes(state.schemaVersion) || !Number.isSafeInteger(state.revision) || state.revision < 0
     || !Array.isArray(state.registrations) || state.registrations.length > DREAM_REGISTRATION_LIMIT
     || !Array.isArray(state.flights) || state.flights.length > DREAM_REGISTRATION_LIMIT) invalid();
   const agents = new Set(), generations = new Set(), flying = new Set(), runs = new Set();
@@ -91,13 +114,23 @@ export function validateDreamState(state) {
       seen.add(receipt.runId);
     }
   }
-  if (state.schemaVersion === 3) {
+  if (state.schemaVersion >= 3) {
     if (!Array.isArray(state.outcomeReceipts) || state.outcomeReceipts.length > DREAM_REGISTRATION_LIMIT) invalid();
     const retained = new Set(state.registrations.flatMap(row => row.lastRun ? [row.lastRun.runId] : [])), seen = new Set();
     for (const receipt of state.outcomeReceipts) {
       inputReceipt(receipt);
       if (!retained.has(receipt.runId) || seen.has(receipt.runId) || receipt.journalRevision > state.revision) invalid();
       seen.add(receipt.runId);
+    }
+  }
+  if (state.schemaVersion === 4) {
+    if (!Array.isArray(state.selectionCheckpoints) || state.selectionCheckpoints.length > DREAM_REGISTRATION_LIMIT) invalid();
+    const seen = new Set();
+    for (const checkpoint of state.selectionCheckpoints) {
+      selectionCheckpoint(checkpoint);
+      if (seen.has(checkpoint.agentId) || checkpoint.journalRevision > state.revision
+        || !state.registrations.some(row => row.agentId === checkpoint.agentId && row.generation === checkpoint.generation)) invalid();
+      seen.add(checkpoint.agentId);
     }
   }
   return state;
@@ -109,13 +142,27 @@ export function validateDreamState(state) {
 export function validateDreamEvents(events, { state = null } = {}) {
   if (!Array.isArray(events) || events.length < 1 || events.length > DREAM_REGISTRATION_LIMIT) invalid();
   for (const event of events) {
+    if (event?.kind === 'selection-advanced') {
+      keys(event, ['kind', 'at', 'run', 'checkpoint']);
+      if (!date(event.at)) invalid();
+      runRecord(event.run, true); selectionCheckpoint(event.checkpoint);
+      if (event.run.status !== 'completed' || event.run.cancelRequestedAt !== null
+        || event.checkpoint.agentId !== event.run.agentId || event.checkpoint.generation !== event.run.generation
+        || event.checkpoint.runId !== event.run.runId
+        || !events.some(row => row.kind === 'outcome-recorded' && isDeepStrictEqual(row.run, event.run)
+          && row.outcome?.report?.status === 'structured' && row.outcome.startingRevision === event.checkpoint.sourceRevision)
+        || !events.some(row => row.kind === 'ended' && isDeepStrictEqual(row.run, event.run))) invalid();
+      if (state && (state.schemaVersion !== 4 || event.checkpoint.journalRevision !== state.revision
+        || !state.selectionCheckpoints.some(row => isDeepStrictEqual(row, event.checkpoint)))) invalid();
+      continue;
+    }
     if (event?.kind === 'outcome-recorded') {
       keys(event, ['kind', 'at', 'run', 'receipt', 'outcome']);
       if (!date(event.at)) invalid();
       runRecord(event.run, true); inputReceipt(event.receipt); validateDreamOutcome(event.outcome, { runId: event.run.runId });
       if (event.receipt.runId !== event.run.runId || event.receipt.startingRevision !== event.outcome.startingRevision
         || event.receipt.digest !== dreamOutcomeDigest(event.outcome)) invalid();
-      if (state && (state.schemaVersion !== 3 || event.receipt.journalRevision !== state.revision
+      if (state && (state.schemaVersion < 3 || event.receipt.journalRevision !== state.revision
         || state.registrations.some(row => row.lastRun?.runId === event.run.runId)
         && !state.outcomeReceipts.some(receipt => isDeepStrictEqual(receipt, event.receipt)))) invalid();
       if (!events.some(ended => ended.kind === 'ended' && isDeepStrictEqual(ended.run, event.run))) invalid();
@@ -175,7 +222,8 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
     const observed = synchronous(store.read());
     const state = structuredClone(validateDreamState(observed === null ? emptyDreamState() : observed));
     // Upgrade only the next transaction, leaving historical v1 bytes intact.
-    return state.schemaVersion < 3 ? { ...state, schemaVersion: 3, inputReceipts: state.inputReceipts ?? [], outcomeReceipts: [] } : state;
+    return state.schemaVersion < 4 ? { ...state, schemaVersion: 4, inputReceipts: state.inputReceipts ?? [],
+      outcomeReceipts: state.outcomeReceipts ?? [], selectionCheckpoints: [] } : state;
   };
   const healthy = () => { if (fault) fail(fault, 'dream scheduler state is uncertain; restart recovery is required'); };
   const time = () => { const value = now().toISOString(); if (!date(value)) invalid(); return value; };
@@ -193,6 +241,7 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
     state.inputReceipts = state.inputReceipts.filter(receipt => retained.has(receipt.runId));
     const latest = new Set(state.registrations.flatMap(row => row.lastRun ? [row.lastRun.runId] : []));
     state.outcomeReceipts = state.outcomeReceipts.filter(receipt => latest.has(receipt.runId));
+    state.selectionCheckpoints = state.selectionCheckpoints.filter(checkpoint => state.registrations.some(row => row.agentId === checkpoint.agentId));
     validateDreamState(state);
     validateDreamEvents(events, { state });
     try {
@@ -230,6 +279,7 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
     const at = time(), generation = newId(state);
     if (!row) { row = { agentId, soulDir, createdAt: at, lastRun: null }; state.registrations.push(row); }
     Object.assign(row, { generation, intervalHours, paused: false, nextDueAt: later(at, intervalHours), updatedAt: at });
+    rebindSelection(state, row);
     persist(state, [{ kind: 'registered', at, registration: row }]);
     return structuredClone(row);
   }
@@ -239,6 +289,7 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
     if (row.paused) return structuredClone(row);
     const at = time();
     Object.assign(row, { generation: newId(state), paused: true, nextDueAt: null, updatedAt: at });
+    rebindSelection(state, row);
     persist(state, [{ kind: 'paused', at, registration: row }]);
     return structuredClone(row);
   }
@@ -312,6 +363,16 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
           current.outcomeReceipts.push(receipt);
           events.push({ kind: 'outcome-recorded', at: endedAt, run: result, receipt, outcome: entry.outcome });
         }
+        if (owner && status === 'completed' && result.cancelRequestedAt === null && entry.inputs !== null
+          && entry.outcome?.report.status === 'structured') {
+          const checkpoint = { schemaVersion: 1, agentId, generation: owner.generation, runId: run.runId,
+            journalRevision: current.revision + 1, sourceRevision: entry.inputs.revision,
+            inputReceipt: structuredClone(current.inputReceipts.find(receipt => receipt.runId === run.runId)),
+            nextCursor: structuredClone(entry.inputs.nextCursor), coverage: 'selection-only', processingCoverage: 'unverified' };
+          current.selectionCheckpoints = current.selectionCheckpoints.filter(item => item.agentId !== agentId);
+          current.selectionCheckpoints.push(checkpoint);
+          events.push({ kind: 'selection-advanced', at: endedAt, run: result, checkpoint });
+        }
         persist(current, events);
         live.delete(run.runId);
         return structuredClone(result);
@@ -344,7 +405,7 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
         }
         entry.outcome = structuredClone(validateDreamOutcome(outcome, { runId: run.runId, inputs: entry.inputs }));
       };
-      return execute({ run: structuredClone(run), signal: entry.controller.signal, timeoutMs: turnTimeoutMs, prepareInputs, stageOutcome });
+      return execute({ run: structuredClone(run), selectionCheckpoint: structuredClone(state.selectionCheckpoints.find(item => item.agentId === agentId) ?? null), signal: entry.controller.signal, timeoutMs: turnTimeoutMs, prepareInputs, stageOutcome });
     }).then(() => finish(false), () => finish(true));
     return { agentId, runId: run.runId, status: 'started', done: entry.done };
   }

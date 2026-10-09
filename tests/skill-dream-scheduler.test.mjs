@@ -26,10 +26,10 @@ function fixture(extra = {}) {
       state = copy(change.state); events.push(...copy(change.events)); return true;
     },
   };
-  const execute = ({ run, signal, timeoutMs, prepareInputs, stageOutcome }) => {
+  const execute = ({ run, selectionCheckpoint, signal, timeoutMs, prepareInputs, stageOutcome }) => {
     assert.equal(state.flights.find(item => item.runId === run.runId)?.status, 'running', 'the durable lease precedes the executor');
     assert.ok(events.some(event => event.kind === 'started' && event.run.runId === run.runId));
-    return new Promise((resolve, reject) => calls.push({ run, signal, timeoutMs, prepareInputs, stageOutcome, resolve, reject }));
+    return new Promise((resolve, reject) => calls.push({ run, selectionCursor: selectionCheckpoint?.nextCursor ?? null, selectionCheckpoint, signal, timeoutMs, prepareInputs, stageOutcome, resolve, reject }));
   };
   const ports = { store, execute, soulDirectory: id => dirs.get(id), isPaused: id => paused.has(id), isBusy: id => busy.has(id),
     now: () => new Date(at), setTimer: (fn, delay) => { const token = {}; timers.set(token, { fn, delay }); return token; }, clearTimer: token => timers.delete(token), ...extra };
@@ -361,7 +361,7 @@ test('timer setup failure refuses execution while retaining the committed attemp
 test('invalid persisted schemas, duplicate souls and excess fields fail closed before execution', () => {
   const f = fixture(); f.scheduler.register(A, 'PT1H'); const good = f.state();
   for (const mutate of [
-    value => { value.schemaVersion = 4; }, value => { value.extra = 'CANARY'; },
+    value => { value.schemaVersion = 999; }, value => { value.extra = 'CANARY'; },
     value => { value.registrations.push(copy(value.registrations[0])); },
     value => { value.registrations[0].nextDueAt = 'not-a-date'; },
     value => { value.registrations[0].soulDir += '/../escape'; },
@@ -372,4 +372,66 @@ test('invalid persisted schemas, duplicate souls and excess fields fail closed b
     assert.throws(() => f.scheduler.runNow(A), { code: 'dream-state-invalid' });
   }
   assert.equal(f.calls.length, 0);
+});
+
+test('selection checkpoints rotate only validated settled attempts, retain retries and survive restart', async () => {
+  const f = fixture(); f.scheduler.register(A, 'PT1H');
+  const page = { ...metadata(), nextCursor: { revision: metadata().revision, path: 'AGENTS.md' },
+    coverage: { ...metadata().coverage, eligible: 2, remaining: 1 } };
+  const complete = async ({ report = 'structured', reject = false, cancel = false, mutate = null, inputs = page } = {}) => {
+    const started = f.scheduler.runNow(A);
+    assert.equal(f.scheduler.runNow(A).reason, 'already-running');
+    assert.ok(f.scheduler.tick().every(result => result.status !== 'started'), 'manual and due dispatch cannot race checkpoint ownership');
+    await Promise.resolve();
+    const call = f.calls.at(-1); call.prepareInputs(inputs);
+    // Empty items deliberately leaves every selected source unreported. Rotation
+    // must not promote any item to processed or remove it from later cycles.
+    const reply = report === 'structured'
+      ? JSON.stringify({ schemaVersion: 1, runId: call.run.runId, startingRevision: inputs.revision, items: [] }) : 'not structured';
+    call.stageOutcome(interpretDreamReport({ run: call.run, inputs, reply }));
+    if (cancel) f.scheduler.cancel(started.runId);
+    if (mutate) mutate();
+    if (reject) call.reject(new Error('failure')); else call.resolve();
+    await started.done;
+    return call;
+  };
+  assert.equal((await complete()).selectionCursor, null);
+  const checkpoint = f.state().selectionCheckpoints[0];
+  assert.equal(checkpoint.coverage, 'selection-only'); assert.equal(checkpoint.processingCoverage, 'unverified');
+  assert.deepEqual(checkpoint.nextCursor, page.nextCursor);
+  for (const options of [{ report: 'unstructured' }, { reject: true }, { cancel: true }, { cancel: true, reject: true }]) {
+    assert.deepEqual((await complete(options)).selectionCursor, page.nextCursor);
+    assert.deepEqual(f.state().selectionCheckpoints, [checkpoint], 'uncertain/failed/cancelled attempts do not advance selection');
+  }
+  const restored = createDreamScheduler(f.ports);
+  assert.deepEqual(restored.status().selectionCheckpoints, [checkpoint]);
+  f.scheduler.pause(A);
+  assert.equal(f.state().selectionCheckpoints[0].generation, f.state().registrations[0].generation);
+  f.scheduler.register(A, 'PT2H');
+  assert.deepEqual((await complete({ inputs: metadata() })).selectionCursor, page.nextCursor);
+  assert.equal(f.state().selectionCheckpoints[0].nextCursor, null, 'end of inventory wraps; unreported items stay eligible');
+  assert.equal((await complete()).selectionCursor, null);
+  const before = f.state().selectionCheckpoints[0];
+  await complete({ mutate: () => f.scheduler.pause(A) });
+  assert.equal(f.state().selectionCheckpoints[0].runId, before.runId, 'old-generation completion cannot advance selection');
+  f.scheduler.unschedule(A);
+  assert.deepEqual(f.state().selectionCheckpoints, []);
+  assert.ok(f.events.some(event => event.kind === 'selection-advanced'), 'unscheduling preserves history');
+});
+
+test('selection checkpoint validation refuses foreign generations, duplicates and processing claims', async () => {
+  const f = fixture(); f.scheduler.register(A, 'PT1H');
+  const run = f.scheduler.runNow(A); await Promise.resolve();
+  const call = f.calls[0], inputs = metadata(); call.prepareInputs(inputs);
+  call.stageOutcome(interpretDreamReport({ run: call.run, inputs,
+    reply: JSON.stringify({ schemaVersion: 1, runId: call.run.runId, startingRevision: inputs.revision, items: [] }) }));
+  call.resolve(); await run.done;
+  for (const mutate of [
+    state => { state.selectionCheckpoints[0].generation = '00000000-0000-4000-8000-000000000000'; },
+    state => { state.selectionCheckpoints[0].processingCoverage = 'verified'; },
+    state => { state.selectionCheckpoints.push(structuredClone(state.selectionCheckpoints[0])); },
+    state => { state.selectionCheckpoints[0].nextCursor = { revision: inputs.revision, path: '../secret' }; },
+  ]) {
+    const state = f.state(); mutate(state); assert.throws(() => validateDreamState(state));
+  }
 });
