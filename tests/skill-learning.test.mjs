@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
+import { Readable } from 'node:stream';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { mintAgentIdentity } from '../agent-identity.mjs';
@@ -211,4 +214,98 @@ test('malformed historical receipts are reported without suppressing later valid
   assert.equal(packet.parentRevision, learned.proposal.revision);
   assert.equal(packet.previousLearning.records[0].pieces[0].verification, 'verified-in-revision');
   assert.deepEqual(packet.previousLearning.records[1], { revision: bad.revision, status: 'invalid-receipt' });
+});
+
+
+for (const selection of ['accepted', 'local']) test(`HTTPS ${selection} learning retains portable origins separately from adaptations`, async t => {
+  const f = fixture(t), url = 'https://skills.example.com/demo/SKILL.md', final = 'https://cdn.example.com/demo/SKILL.md';
+  const text = '---\nname: demo\ndescription: Remote source\n---\n[Guide](guide.md)\n[Alias](alias.md)\n';
+  const guide = 'Retained upstream guide\n', adapted = text + 'Local adaptation\n';
+  const options = { ...f.options, resolve: async () => [{ address: '93.184.216.34', family: 4 }],
+    requestImpl(target, _options, callback) {
+      const request = new EventEmitter();
+      request.end = () => queueMicrotask(() => {
+        const redirect = target.href === url ? final : target.pathname.endsWith('/alias.md') ? 'https://cdn.example.com/demo/guide.md' : null;
+        const response = Readable.from(redirect ? [] : [Buffer.from(target.href === final ? text : guide)]);
+        response.statusCode = redirect ? 302 : 200;
+        response.headers = redirect ? { location: redirect } : {};
+        callback(response);
+      });
+      return request;
+    } };
+  const imported = await importSkill(url, options);
+  if (selection === 'local') put(path.join(imported.path, 'SKILL.md'), adapted);
+  const material = readSkillMaterial(imported.id, { ...f.options, selection });
+  put(path.join(f.staged.staging, 'skills/demo/SKILL.md'), selection === 'local' ? adapted : text);
+  const outcome = { ...f.outcome, source: { selection, digest: material.digest }, pieces: [f.outcome.pieces[0]], knowledge: [] };
+  const learned = await proposeSkillLearning(imported.id, f.id, f.staged.staging, outcome, { ...f.options, reason: 'Retain source provenance' });
+  const approved = decideSoulProposal(f.id, learned.proposal.proposalId, 'approve', { ...f.options, reason: 'Reviewed' });
+  const tree = revisionPackagePath(f.id, approved.revision, f.options);
+  const receipt = JSON.parse(readFileSync(path.join(tree, learned.receipt)));
+  assert.equal(receipt.schemaVersion, 2);
+  assert.equal(receipt.source.selection, selection);
+  assert.equal(receipt.source.digest, material.digest);
+  assert.equal(receipt.source.provenance.digest, imported.accepted);
+  assert.equal(receipt.source.provenance.capturedAt, options.now().toISOString());
+  assert.deepEqual(receipt.source.provenance.source, { kind: 'https', url });
+  const locations = receipt.source.provenance.locations;
+  assert.equal(locations.length, 3, 'root and both locators of one dependency have their origins');
+  const root = locations.find(location => location.path === 'SKILL.md');
+  assert.equal(root.url, url); assert.equal(root.resolvedUrl, final);
+  assert.equal(root.sha256, `sha256:${createHash('sha256').update(text).digest('hex')}`);
+  assert.equal(locations.find(location => location.path === 'guide.md').url, 'https://cdn.example.com/demo/guide.md');
+  const alias = locations.find(location => location.url.endsWith('/alias.md'));
+  assert.equal(alias.path, 'guide.md');
+  assert.equal(alias.resolvedUrl, 'https://cdn.example.com/demo/guide.md');
+  assert.doesNotMatch(JSON.stringify(receipt), new RegExp(f.home));
+  assert.equal(skillLearningPacket(imported.id, f.id, f.options).previousLearning.records[0].schemaVersion, 2);
+  // Simulate losing the local library while retaining the versioned soul package.
+  renameSync(path.dirname(imported.path), path.join(f.home, 'unavailable-library'));
+  assert.deepEqual(JSON.parse(readFileSync(path.join(tree, learned.receipt))), receipt);
+  for (const location of locations) {
+    const bytes = readFileSync(path.join(tree, `provenance/skills/${imported.id}/sources/${imported.accepted.slice(7)}/${location.path}`));
+    assert.equal(`sha256:${createHash('sha256').update(bytes).digest('hex')}`, location.sha256);
+  }
+  if (selection === 'local') {
+    assert.notEqual(material.digest, imported.accepted);
+    assert.equal(readFileSync(path.join(tree, `provenance/skills/${imported.id}/sources/${material.digest.slice(7)}/SKILL.md`), 'utf8'), adapted);
+  }
+});
+
+test('v1 learning history remains readable and a new receipt adds provenance without rewriting the old revision', async t => {
+  const f = fixture(t);
+  const first = await f.learn(f.outcome, { propose(id, tree, options) {
+    const file = path.join(tree, `provenance/skills/${f.imported.id}/learning.json`);
+    const record = JSON.parse(readFileSync(file));
+    record.schemaVersion = 1; delete record.source.provenance;
+    put(file, JSON.stringify(record));
+    return proposeSoulRevision(id, tree, options);
+  } });
+  const approved = decideSoulProposal(f.id, first.proposal.proposalId, 'approve', { ...f.options, reason: 'Historical format' });
+  const oldTree = revisionPackagePath(f.id, approved.revision, f.options), oldFile = path.join(oldTree, first.receipt), oldBytes = readFileSync(oldFile);
+  let packet = skillLearningPacket(f.imported.id, f.id, f.options);
+  assert.equal(packet.previousLearning.records[0].schemaVersion, 1);
+  assert.equal(packet.previousLearning.records[0].source.provenance, undefined);
+  cpSync(oldTree, f.directory, { recursive: true });
+  const next = prepareRevisionEdit(f.id, f.options);
+  const learned = await proposeSkillLearning(f.imported.id, f.id, next.staging, { ...f.outcome, parentRevision: approved.revision }, { ...f.options, reason: 'New learning' });
+  decideSoulProposal(f.id, learned.proposal.proposalId, 'approve', { ...f.options, reason: 'Reviewed' });
+  packet = skillLearningPacket(f.imported.id, f.id, f.options);
+  assert.deepEqual(packet.previousLearning.records.map(record => record.schemaVersion), [2, 1]);
+  assert.deepEqual(packet.previousLearning.records[0].source.provenance.source, { kind: 'local' });
+  assert.deepEqual(readFileSync(oldFile), oldBytes);
+});
+
+test('v2 provenance cannot name a different accepted capture when relearning or reading history', async t => {
+  const f = fixture(t), first = await f.learn();
+  const approved = decideSoulProposal(f.id, first.proposal.proposalId, 'approve', { ...f.options, reason: 'Reviewed' });
+  cpSync(revisionPackagePath(f.id, approved.revision, f.options), f.directory, { recursive: true });
+  const next = prepareRevisionEdit(f.id, f.options), file = path.join(next.staging, first.receipt);
+  const record = JSON.parse(readFileSync(file));
+  record.source.provenance.digest = `sha256:${'f'.repeat(64)}`;
+  put(file, JSON.stringify(record));
+  await assert.rejects(proposeSkillLearning(f.imported.id, f.id, next.staging, { ...f.outcome, parentRevision: approved.revision }, { ...f.options, reason: 'Invalid capture' }), /another accepted snapshot/);
+  const bad = proposeSoulRevision(f.id, next.staging, { ...f.options, reason: 'Owner imported malformed receipt' });
+  const badRevision = decideSoulProposal(f.id, bad.proposalId, 'approve', { ...f.options, reason: 'Fixture' });
+  assert.deepEqual(skillLearningPacket(f.imported.id, f.id, f.options).previousLearning.records[0], { revision: badRevision.revision, status: 'invalid-receipt' });
 });

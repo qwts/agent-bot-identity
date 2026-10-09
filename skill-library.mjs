@@ -358,14 +358,15 @@ function publishImport(content, id, now, options) {
   } finally { removeStaging(staging); }
   return showSkill(id, options);
 }
-export function showSkill(id, options = {}) {
+function inspectSkill(id, options = {}) {
   const { root, record } = load(id, options), source = readSnapshot(root, record.accepted);
   validateManifest(source.manifest);
   if (source.owner !== id || source.name !== record.name || source.manifest.digest !== record.accepted) fail('skill-record-invalid', 'accepted snapshot does not match the record');
-  return { ...record, path: path.join(root, record.name), snapshot: snapshotPath(root, record.accepted), dependencies: source.dependencies, coverage: source.coverage, excluded: source.excluded, materialized: source.materialized,
+  return { captureMetadata: source, record: { ...record, path: path.join(root, record.name), snapshot: snapshotPath(root, record.accepted), dependencies: source.dependencies, coverage: source.coverage, excluded: source.excluded, materialized: source.materialized,
     ...(source.locations ? { locations: source.locations, hosts: source.hosts } : {}),
-    ...(source.repository ? { repository: source.repository } : {}) };
+    ...(source.repository ? { repository: source.repository } : {}) } };
 }
+export function showSkill(id, options = {}) { return inspectSkill(id, options).record; }
 export function listSkills(options = {}) {
   const root = rootFor(options);
   if (!exists(root)) return [];
@@ -394,13 +395,13 @@ export function verifySkill(id, options = {}) {
 // the revision workflow, never a mutable library link or an implicit selection.
 export function readSkillMaterial(id, { selection = 'accepted', expectedDigest, ...options } = {}) {
   if (!['accepted', 'local'].includes(selection)) fail('skill-selection-invalid', 'select accepted or local skill material');
-  const record = showSkill(id, options);
+  const { record, captureMetadata } = inspectSkill(id, options);
   const content = inventory(selection === 'accepted' ? path.join(record.snapshot, 'payload') : record.path, options);
   if (selection === 'accepted' && content.digest !== record.accepted) fail('skill-record-invalid', 'accepted skill changed while being read');
   if (expectedDigest !== undefined && expectedDigest !== content.digest) fail('skill-source-changed', 'selected skill digest changed; review it again');
   try { validateSkill(content.entries.find(entry => entry.path === 'SKILL.md')?.bytes, record.name); }
   catch { fail('skill-entry-invalid', 'selected material must keep a valid skill entrypoint and name'); }
-  return { record, selection, ...content, dependencies: selection === 'accepted' ? record.dependencies
+  return { record, captureMetadata, selection, ...content, dependencies: selection === 'accepted' ? record.dependencies
     : dependencies(content.entries, id, boundedLimits(options.limits).references, record.locations) };
 }
 function checkReceipt(root, result) {
