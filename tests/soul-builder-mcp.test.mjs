@@ -275,7 +275,8 @@ test('--check --json reports every harness and never leaves a primitive unreport
   const dirty = cliRun(root, '--check', '--json');
   assert.equal(dirty.status, 1);
   const report = JSON.parse(dirty.stdout);
-  assert.deepEqual(Object.keys(report).sort(), ['drift', 'harnesses', 'merged', 'removals', 'writes']);
+  assert.deepEqual(Object.keys(report).sort(), ['drift', 'harnesses', 'merged', 'removals', 'warnings', 'writes']);
+  assert.deepEqual(report.warnings, []);
   assert.deepEqual(report.drift.sort(), ['.codex/config.toml', '.cursor/mcp.json', '.gemini/settings.json', '.kiro/settings/mcp.json', '.mcp.json', '.qwen/settings.json', 'CLAUDE.md', 'GEMINI.md', 'opencode.json']);
   assert.deepEqual(report.merged, []);
   assert.deepEqual(report.harnesses.claude, {
@@ -389,4 +390,50 @@ test('the ignore list only grows by Qwen Code\'s settings file; the list before 
   assert.equal(isGeneratedPath('.qwen/settings.json'), true);
   assert.equal(isGeneratedPath('.qwen/skills/review/SKILL.md'), false, 'the rest of .qwen/ stays the soul\'s');
   assert.equal(isGeneratedPath('.qwen/settings.local.json'), false);
+});
+
+test('legacy reach references report locations without rewriting policy or exposing line contents', (t) => {
+  const root = fixture(t, { harness: { permissions: { allow: ['mcp__agent-bot__send_message'] } } });
+  const instructions = 'Use mcp__agent-reach__fleet.\r\nReview mcp__agent-bot__fleet with private-example-argument.\r\n';
+  put(root, 'AGENTS.md', instructions);
+  const native = { permissions: { deny: ['mcp__agent-bot__private-example-argument'] } };
+  put(root, '.claude/settings.json', `${JSON.stringify(native, null, 2)}\n`);
+  const custom = { command: 'custom', args: ['intentional'] };
+  put(root, '.mcp.json', JSON.stringify({ mcpServers: { 'agent-bot': custom } }));
+  // Non-text payloads are not policy evidence and must not break inspection.
+  put(root, 'binary.dat', Buffer.from([0xff, ...Buffer.from('mcp__agent-bot__hidden')]));
+  reseal(root);
+  const revision = computePackageRevision(root);
+  const before = readFileSync(join(root, '.claude/settings.json'));
+  const checked = buildSoulDirectory(root, { check: true });
+  assert.ok(checked.warnings.some(w => w.path === 'AGENTS.md' && w.line === 2));
+  assert.ok(checked.warnings.some(w => w.path === 'soul.json'));
+  assert.ok(checked.warnings.some(w => w.path === '.claude/settings.json'));
+  assert.ok(checked.warnings.every(w => w.code === 'legacy-reach-tool-name' && w.line > 0));
+  assert.ok(checked.warnings.every(w => !['binary.dat', 'CLAUDE.md', 'GEMINI.md'].includes(w.path)));
+  assert.ok(!JSON.stringify(checked.warnings).includes('private-example-argument'));
+  assert.deepEqual(readFileSync(join(root, '.claude/settings.json')), before, '--check writes nothing');
+  assert.equal(computePackageRevision(root), revision);
+  buildSoulDirectory(root);
+  const after = JSON.parse(readFileSync(join(root, '.claude/settings.json'), 'utf8'));
+  assert.deepEqual(after.permissions.allow, ['mcp__agent-bot__send_message']);
+  assert.deepEqual(after.permissions.deny, native.permissions.deny);
+  assert.deepEqual(JSON.parse(readFileSync(join(root, '.mcp.json'), 'utf8')).mcpServers['agent-bot'], custom);
+  assert.equal(readFileSync(join(root, 'AGENTS.md'), 'utf8'), instructions);
+  const stable = cliRun(root, '--check');
+  assert.equal(stable.status, 0, stable.stderr);
+  assert.match(stable.stdout, /warning legacy-reach-tool-name AGENTS.md:2:/);
+  assert.match(stable.stdout, /custom agent-bot server may be intentional/);
+  assert.ok(!stable.stdout.includes('private-example-argument'));
+  const structured = JSON.parse(cliRun(root, '--check', '--json').stdout);
+  assert.deepEqual(structured.drift, []);
+  assert.ok(structured.warnings.length > 0, 'an advisory does not turn a clean build into drift');
+});
+
+test('canonical references stay quiet; comms-off does not suggest migrating an unrendered reach server', (t) => {
+  const canonical = fixture(t, { harness: { permissions: { allow: ['mcp__agent-reach__fleet'] } } });
+  assert.deepEqual(buildSoulDirectory(canonical, { check: true }).warnings, []);
+  const off = fixture(t, { comms: false, harness: { permissions: { deny: ['mcp__agent-bot__fleet'] } } });
+  assert.deepEqual(buildSoulDirectory(off).warnings, []);
+  assert.deepEqual(JSON.parse(readFileSync(join(off, '.claude/settings.json'), 'utf8')).permissions.deny, ['mcp__agent-bot__fleet']);
 });

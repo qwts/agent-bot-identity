@@ -556,7 +556,7 @@ rebuild. Use a quiescent directory; concurrent writers are unsupported, as for
 package validation. `--check` never writes and exits 1 for drift/conflicts;
 clean checks exit 0. Without `--json` the command prints a short human summary
 (counts, each merge, and the primitives every harness received); `--json`
-prints `{drift, writes, removals, merged, harnesses}`, where `harnesses` maps
+prints `{drift, writes, removals, merged, warnings, harnesses}`, where `harnesses` maps
 each known harness to `{rendered, files, subagents, commands, settings, hooks, unsupported}`
 as described above. New package homes build after copying, before dependency
 installation and git initialization; a failed build removes the half-created home.
@@ -601,7 +601,20 @@ are preserved. A custom `agent-reach` entry is a conflict: the builder refuses
 before writing any output, rather than replacing its configuration. Rename
 that custom entry explicitly before rebuilding. Existing user permission
 rules or prompts naming `mcp__agent-bot__...` must be updated to
-`mcp__agent-reach__...`; the builder does not rewrite user-authored policies.
+`mcp__agent-reach__...` when they refer to the generated reach server; a
+custom server named `agent-bot` can still be intentional. The builder does
+not rewrite user-authored policies.
+
+With comms enabled, `soul build` and `soul build --check` report
+`legacy-reach-tool-name` warnings for these references in definition text
+and native configuration inputs. JSON output includes a `warnings` array
+with `code`, package-relative `path`, one-based `line`, and a migration
+message. The warning never includes the matching line's contents. Locations
+refer to inputs read before the build; generated instruction/skill copies
+are not scanned again. Binary content is skipped. These are advisory
+references to review, not proof that an authored rule is invalid. Warnings
+alone do not change the exit status or count as generated-file drift;
+comms-off builds do not suggest migrating a server they do not render.
 
 [Codex ACP's session configuration](https://github.com/zed-industries/codex-acp/blob/296069e841634cd4bb9bc4515602d836e49231ec/src/codex_agent.rs#L335)
 merges injected entries into the configured server map by name for both new
