@@ -90,6 +90,7 @@
     "approval-action.mjs": "identity",
     "binding-proof.mjs": "identity",
     "bootstrap.mjs": "cli",
+    "canonical-json.mjs": "shared",
     "claude-worktree-create.mjs": "soul",
     "cli/dispatch.mjs": "cli",
     "cli/mint-output.mjs": "cli",
@@ -169,7 +170,7 @@
     "soul-env-migrate.mjs": "soul",
     "soul-env.mjs": "soul",
     "soul-fork.mjs": "soul",
-    "soul-genesis.mjs": "soul",
+    "soul-genesis.mjs": "identity",
     "soul-harness-contract.mjs": "soul",
     "soul-history.mjs": "soul",
     "soul-home.mjs": "soul",
@@ -211,6 +212,7 @@
   "notes": {
     "acp-registry.mjs": "Spawn rows select and launch harnesses, so soul owns them (ADR-0276, ADR-0322). Descriptive columns are candidates for agent-harness descriptors.",
     "agent-hook.mjs": "Process entry point every harness hook config calls; composes binding and confinement.",
+    "canonical-json.mjs": "The canonical byte form behind soul revisions and genesis IDs; shared so identity can derive IDs without importing soul. soul-package re-exports it.",
     "comms-membership.mjs": "Joins and leaves agent-comms as a launched soul; split from the daemon host so soul lifecycle commands need not import it.",
     "daemon-log.mjs": "Logging helper used by several modules; shared, not host.",
     "daemon-status.mjs": "Daemon status for callers outside the host; in comms because it folds in agent-comms status (readCommsStatus), which identity may not import.",
@@ -222,6 +224,7 @@
     "sop.mjs": "Per-soul SOP selection is soul policy (ADR-0332). Its pinned-source resolution is the org resolver to extract into org.",
     "soul-builder.mjs": "Generation stays in soul; its per-harness file tables are harness knowledge to be read from agent-harness.",
     "soul-credentials.mjs": "Named for souls but holds GitHub App credential custody (resolveAppCredential); identity-owned. Rename only with a compatibility plan.",
+    "soul-genesis.mjs": "Derives a soul's Agent ID from its genesis (revision, parent, nonce); identity owns ID minting, so it is identity even though the revision it hashes comes from soul.",
     "soul-tool-homes.mjs": "Tool-home routes are generated per soul (ADR-0583). Routability facts are harness knowledge.",
     "wake-plane.mjs": "Daemon side of the agent-comms wake plane (agent-comms ADR-0008): launches souls on wakes, so it composes soul and comms."
   },
@@ -229,7 +232,6 @@
   "baseline": [
     "agent-backfill.mjs -> agent-population.mjs",
     "agent-identity.mjs -> agent-population.mjs",
-    "agent-identity.mjs -> soul-genesis.mjs",
     "agent-identity.mjs -> soul-package.mjs",
     "agent-principals.mjs -> agent-jobs.mjs",
     "approval-action.mjs -> agent-population.mjs",

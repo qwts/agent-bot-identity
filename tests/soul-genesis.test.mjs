@@ -120,3 +120,10 @@ test('all Agent ID regex parsers accept derived UUIDv8, including transcript sca
   const { sightings } = scanTranscriptStores([{ provider: 'claude', root: store }]);
   assert.equal(sightings.has(row.id), true);
 });
+
+test('genesis hashes the one shared canonical JSON that soul-package re-exports (#645)', async () => {
+  const shared = await import('../canonical-json.mjs');
+  const pkg = await import('../soul-package.mjs');
+  assert.equal(pkg.canonicalJson, shared.canonicalJson);
+  assert.equal(shared.canonicalJson({ b: [1, { d: null, c: 'x' }], a: true }), '{"a":true,"b":[1,{"c":"x","d":null}]}');
+});
