@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { computePackageRevision, computePackageRevisionFromEntries, readSoulPackageEntries, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
 import { buildSoulDirectory } from '../soul-build.mjs';
-import { captureDreamInputs, DREAM_INPUT_LIMITS, DREAM_PACKAGE_LIMITS } from '../skill-dream-inputs.mjs';
+import { captureDreamInputs, dreamInputMetadata, dreamInputMetadataDigest, validateDreamInputMetadata, DREAM_INPUT_LIMITS, DREAM_PACKAGE_LIMITS } from '../skill-dream-inputs.mjs';
 
 const HASH = `sha256:${'0'.repeat(64)}`;
 function fixture(t, formatVersion = 2) {
@@ -20,6 +20,31 @@ function fixture(t, formatVersion = 2) {
   seal();
   return { root, manifest, put, seal };
 }
+
+test('durable input metadata excludes text and rejects forged fields, locators and coverage', t => {
+  const f = fixture(t), captured = captureDreamInputs(f.root), metadata = dreamInputMetadata(captured);
+  assert.equal(JSON.stringify(metadata).includes('Learned instructions'), false);
+  assert.ok(metadata.sources.every(source => !Object.hasOwn(source, 'excerpt')));
+  assert.equal(dreamInputMetadataDigest(structuredClone(metadata)), dreamInputMetadataDigest(metadata));
+  for (const mutate of [
+    value => { value.sources[0].excerpt = 'SECRET_CANARY'; },
+    value => { value.sources[0].path = '../outside'; },
+    value => { value.sources[0].path = 'skills/example/secrets.txt'; value.sources[0].kind = 'skill'; },
+    value => { value.sources[0].kind = 'generated'; },
+    value => { value.sources[0].digest += '\n'; },
+    value => { value.sources[0].truncated = true; },
+    value => { value.sources[0].size = DREAM_PACKAGE_LIMITS.maxFileBytes + 1; },
+    value => { value.sources.push(value.sources[0]); },
+    value => { value.coverage.suppliedBytes++; },
+    value => { value.coverage.memory = 'supported'; },
+    value => { value.nextCursor = { revision: HASH, path: 'AGENTS.md' }; },
+  ]) {
+    const malformed = structuredClone(metadata); mutate(malformed);
+    assert.throws(() => validateDreamInputMetadata(malformed), { code: 'dream-input-metadata-invalid' });
+  }
+  captured.coverage.selected = 0;
+  assert.equal(metadata.coverage.selected, 3, 'capture and durable metadata do not alias');
+});
 
 test('bounded snapshot hashing agrees with canonical revisions and does not mutate captured bytes', t => {
   for (const version of [1, 2]) {

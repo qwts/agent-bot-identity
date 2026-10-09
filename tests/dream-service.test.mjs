@@ -156,6 +156,29 @@ test('owner run-now uses the configured ACP factory, policy and bounded inputs, 
   assert.equal(f.records[0].kind, 'dream'); assert.equal(f.records[0].id, record.runId);
   assert.equal(JSON.stringify(f.service.history()).includes('CANARY'), false);
   assert.equal(JSON.stringify(f.service.history()).includes('opt-reject'), false);
+  const prepared = f.service.history().records.flatMap(record => record.events).find(event => event.kind === 'inputs-prepared');
+  assert.equal(prepared.run.runId, record.runId);
+  assert.equal(prepared.inputs.sources[0].path, 'AGENTS.md');
+  assert.deepEqual(status.inputReceipts, [prepared.receipt]);
+  const reopened = createDreamFileStore({ directory: f.directory });
+  assert.deepEqual(reopened.read().inputReceipts, status.inputReceipts);
+});
+
+test('durable preparation precedes provider resolution and survives a launch failure', posix, async t => {
+  let f, sawReceipt = false;
+  f = fixture(t, { executorFor: () => {
+    const disk = createDreamFileStore({ directory: f.directory });
+    const prepared = disk.history().records.flatMap(record => record.events).find(event => event.kind === 'inputs-prepared');
+    assert.ok(prepared); assert.equal(prepared.inputs.sources[0].path, 'AGENTS.md');
+    sawReceipt = true;
+    throw new Error('PROVIDER_SECRET_CANARY');
+  } });
+  f.control('register', { schedule: 'PT1H' }); f.control('run-now'); await f.service.idle();
+  assert.equal(sawReceipt, true);
+  assert.equal(f.service.status().registrations[0].lastRun.status, 'failed');
+  assert.equal(f.service.status().maintenanceCoverage, 'unverified');
+  assert.equal(JSON.stringify(f.service.history()).includes('CANARY'), false);
+  assert.equal(f.service.status().inputReceipts.length, 1);
 });
 
 test('shared stop and shutdown cancel real ACP runs through the scheduler and retain factual receipts', posix, async t => {

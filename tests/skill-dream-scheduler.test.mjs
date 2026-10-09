@@ -8,6 +8,9 @@ const A = 'agent_12345678-1234-4234-8234-123456789abc';
 const B = 'agent_22345678-1234-4234-8234-123456789abc';
 const HOUR = 3_600_000;
 const copy = value => JSON.parse(JSON.stringify(value));
+const metadata = () => ({ schemaVersion: 1, revision: `sha256:${'a'.repeat(64)}`,
+  sources: [{ path: 'AGENTS.md', kind: 'context', digest: `sha256:${'b'.repeat(64)}`, size: 12, excerptBytes: 12, truncated: false }],
+  coverage: { definition: 'supported', memory: 'unsupported', conversations: 'unsupported', eligible: 1, selected: 1, suppliedBytes: 12, skippedBinary: 0, remaining: 0 }, nextCursor: null });
 function fixture(extra = {}) {
   let state = null, at = Date.parse('2026-10-09T00:00:00.000Z'), failCommit = null;
   const events = [], calls = [], timers = new Map(), dirs = new Map([[A, path.join(tmpdir(), 'dream-a')], [B, path.join(tmpdir(), 'dream-b')]]);
@@ -22,10 +25,10 @@ function fixture(extra = {}) {
       state = copy(change.state); events.push(...copy(change.events)); return true;
     },
   };
-  const execute = ({ run, signal, timeoutMs }) => {
+  const execute = ({ run, signal, timeoutMs, prepareInputs }) => {
     assert.equal(state.flights.find(item => item.runId === run.runId)?.status, 'running', 'the durable lease precedes the executor');
     assert.ok(events.some(event => event.kind === 'started' && event.run.runId === run.runId));
-    return new Promise((resolve, reject) => calls.push({ run, signal, timeoutMs, resolve, reject }));
+    return new Promise((resolve, reject) => calls.push({ run, signal, timeoutMs, prepareInputs, resolve, reject }));
   };
   const ports = { store, execute, soulDirectory: id => dirs.get(id), isPaused: id => paused.has(id), isBusy: id => busy.has(id),
     now: () => new Date(at), setTimer: (fn, delay) => { const token = {}; timers.set(token, { fn, delay }); return token; }, clearTimer: token => timers.delete(token), ...extra };
@@ -40,6 +43,42 @@ test('strict elapsed schedules, initial state and unavailable production ports',
   }
   assert.deepEqual(validateDreamState(emptyDreamState()), emptyDreamState());
   assert.throws(() => createDreamScheduler(), { code: 'dream-configuration-invalid' });
+});
+
+test('input receipts persist once, survive recovery and retain history after current references expire', async () => {
+  const f = fixture(); f.scheduler.register(A, 'PT1H');
+  const run = f.scheduler.runNow(A); await Promise.resolve();
+  const captured = metadata(), receipt = f.calls[0].prepareInputs(captured);
+  captured.sources[0].digest = `sha256:${'c'.repeat(64)}`;
+  assert.equal(receipt.journalRevision, 3);
+  assert.deepEqual(f.state().inputReceipts, [receipt]);
+  assert.equal(f.events.at(-1).inputs.sources[0].digest, metadata().sources[0].digest);
+  assert.throws(() => f.calls[0].prepareInputs(metadata()), { code: 'dream-input-preparation-refused' });
+  const restored = createDreamScheduler(f.ports);
+  restored.recover();
+  assert.deepEqual(restored.status().inputReceipts, [receipt]);
+  assert.equal(restored.runNow(A).reason, 'recovery-required');
+  // The original executor settles; its recorded input reference remains with
+  // lastRun, even when the run failed. Preparation is not delivery evidence.
+  f.calls[0].reject(new Error('provider unavailable'));
+  assert.equal((await run.done).status, 'failed');
+  assert.deepEqual(f.state().inputReceipts, [receipt]);
+  assert.throws(() => f.calls[0].prepareInputs(metadata()), { code: 'dream-input-preparation-refused' });
+  f.scheduler.unschedule(A);
+  assert.deepEqual(f.state().inputReceipts, []);
+  assert.equal(f.events.filter(event => event.kind === 'inputs-prepared').length, 1);
+});
+
+test('an unconfirmed input commit freezes dispatch and retains the unfinished lease', async () => {
+  let entered = false;
+  const f = fixture({ execute: ({ prepareInputs }) => { prepareInputs(metadata()); entered = true; } });
+  f.scheduler.register(A, 'PT1H');
+  f.fail(change => change.events.some(event => event.kind === 'inputs-prepared'));
+  const result = await f.scheduler.runNow(A).done;
+  assert.equal(entered, false); assert.equal(result.status, 'persistence-failed');
+  assert.equal(f.state().flights.length, 1);
+  assert.deepEqual(f.state().inputReceipts, []);
+  assert.throws(() => f.scheduler.runNow(A), { code: 'dream-store-failed' });
 });
 
 test('registration is idempotent, bounded and bound to the canonical soul directory', () => {
@@ -303,7 +342,7 @@ test('timer setup failure refuses execution while retaining the committed attemp
 test('invalid persisted schemas, duplicate souls and excess fields fail closed before execution', () => {
   const f = fixture(); f.scheduler.register(A, 'PT1H'); const good = f.state();
   for (const mutate of [
-    value => { value.schemaVersion = 2; }, value => { value.extra = 'CANARY'; },
+    value => { value.schemaVersion = 3; }, value => { value.extra = 'CANARY'; },
     value => { value.registrations.push(copy(value.registrations[0])); },
     value => { value.registrations[0].nextDueAt = 'not-a-date'; },
     value => { value.registrations[0].soulDir += '/../escape'; },

@@ -11,6 +11,53 @@ const digest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex
 const eligible = entry => entry.mode !== '040000' && (['AGENTS.md', 'soul.md', 'SOUL.md'].includes(entry.path)
   || entry.path.startsWith('skills/') && kindOf(entry.path) === 'skill');
 
+// Durable preparation metadata contains identifiers and sizes, never excerpts.
+// It establishes what was captured, not that the harness received or reviewed it.
+export function validateDreamInputMetadata(value) {
+  const invalid = () => fail('dream-input-metadata-invalid', 'Invalid bounded maintenance input metadata.');
+  const keys = (object, names) => {
+    if (!object || typeof object !== 'object' || Array.isArray(object) || Object.keys(object).length !== names.length
+      || names.some(name => !Object.hasOwn(object, name))) invalid();
+  };
+  const hash = value => typeof value === 'string' && value.length === 71 && /^sha256:[a-f0-9]{64}$/.test(value);
+  const count = (value, max) => Number.isSafeInteger(value) && value >= 0 && value <= max;
+  const sourcePath = value => typeof value === 'string' && value.length <= 4096 && !!kindOf(value)
+    && eligible({ path: value });
+  keys(value, ['schemaVersion', 'revision', 'sources', 'coverage', 'nextCursor']);
+  if (value.schemaVersion !== 1 || !hash(value.revision) || !Array.isArray(value.sources)
+    || value.sources.length > DREAM_INPUT_LIMITS.entries) invalid();
+  const paths = new Set();
+  let suppliedBytes = 0;
+  for (const source of value.sources) {
+    keys(source, ['path', 'kind', 'digest', 'size', 'excerptBytes', 'truncated']);
+    if (!sourcePath(source.path) || paths.has(source.path) || source.kind !== kindOf(source.path) || !hash(source.digest)
+      || !count(source.size, DREAM_PACKAGE_LIMITS.maxFileBytes) || !count(source.excerptBytes, DREAM_INPUT_LIMITS.excerptBytes)
+      || source.excerptBytes > source.size || source.truncated !== (source.excerptBytes < source.size)) invalid();
+    paths.add(source.path); suppliedBytes += source.excerptBytes;
+  }
+  keys(value.coverage, ['definition', 'memory', 'conversations', 'eligible', 'selected', 'suppliedBytes', 'skippedBinary', 'remaining']);
+  const coverage = value.coverage;
+  if (coverage.definition !== 'supported' || coverage.memory !== 'unsupported' || coverage.conversations !== 'unsupported'
+    || !['eligible', 'selected', 'skippedBinary', 'remaining'].every(key => count(coverage[key], DREAM_PACKAGE_LIMITS.maxEntries))
+    || coverage.selected !== value.sources.length || coverage.suppliedBytes !== suppliedBytes || suppliedBytes > DREAM_INPUT_LIMITS.bytes
+    || coverage.selected + coverage.skippedBinary + coverage.remaining > coverage.eligible) invalid();
+  if (value.nextCursor !== null) {
+    keys(value.nextCursor, ['revision', 'path']);
+    if (value.nextCursor.revision !== value.revision || !sourcePath(value.nextCursor.path) || coverage.remaining === 0) invalid();
+  }
+  // Bounds include JSON escaping and multibyte paths as well as source counts.
+  if (Buffer.byteLength(JSON.stringify(value)) > 512 * 1024) invalid();
+  return value;
+}
+
+export function dreamInputMetadata(inputs) {
+  return validateDreamInputMetadata({ schemaVersion: inputs.schemaVersion, revision: inputs.revision,
+    sources: inputs.sources.map(({ path, kind, digest, size, excerptBytes, truncated }) => ({ path, kind, digest, size, excerptBytes, truncated })),
+    coverage: structuredClone(inputs.coverage), nextCursor: structuredClone(inputs.nextCursor) });
+}
+
+export const dreamInputMetadataDigest = value => digest(Buffer.from(JSON.stringify(validateDreamInputMetadata(value))));
+
 // This cursor is selection progress, never evidence of completed maintenance.
 // A new revision invalidates it; an unknown same-revision path is refused.
 export function captureDreamInputs(soulDir, { cursor = null } = {}) {
