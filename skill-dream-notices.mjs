@@ -41,7 +41,10 @@ const path = value => typeof value === 'string' && value.length >= 1 && value.le
 const subjectValid = (kind, subject) => exact(subject, KINDS[kind].subject)
   && (kind !== 'item-blocked' || path(subject.path) && hash(subject.digest))
   && (kind !== 'change' || hash(subject.revision));
+// Subject-less host kinds have at most one live notice each; their slots are
+// reserved so agent-reported conditions can never crowd them out.
 const HOST = new Set(['execution', 'report', 'evidence']);
+const CLAIM_SLOTS = DREAM_NOTICE_LIMITS.perSoul - HOST.size;
 
 export const dreamNoticeFingerprint = (agentId, kind, subject) =>
   `sha256:${sha(canonicalJson({ schemaVersion: 1, agentId, kind, subject }))}`;
@@ -55,6 +58,11 @@ export function dreamNoticeConditions({ run, outcome = null, inputs = null }) {
   if (!uuid(run?.runId) || !['completed', 'failed', 'cancelled', 'timed-out'].includes(run.status)) invalid();
   if (outcome !== null && inputs === null) invalid();
   if (outcome !== null) validateDreamOutcome(outcome, { runId: run.runId, inputs });
+  // Only a completed attempt's report is evidence. Any other settled attempt
+  // carries no outcome or the fixed execution-failed one; a cancelled attempt
+  // observes nothing at all.
+  if (outcome !== null && (run.status === 'completed') === (outcome.report.status === 'execution-failed')) invalid();
+  if (run.status === 'cancelled' && outcome !== null) invalid();
   const partial = new Set((inputs?.sources ?? []).filter(source => source.truncated).map(source => source.path));
   const conditions = [], observes = { kinds: new Set(), paths: new Set() };
   const add = (kind, subject, detail) => conditions.push({ kind, subject, detail });
@@ -123,6 +131,7 @@ export function validateDreamNoticeLedger(ledger) {
       active.add(notice.fingerprint);
     }
   }
+  if (ledger.notices.filter(notice => notice.state !== 'cleared' && !HOST.has(notice.kind)).length > CLAIM_SLOTS) invalid();
   return ledger;
 }
 
@@ -137,53 +146,44 @@ export function applyDreamNoticeRun(ledger, { run, outcome = null, inputs = null
   if (run?.agentId !== ledger.agentId || !date(run.endedAt)) invalid();
   if (ledger.lastRunId === run.runId) return { ledger, created: [], renewed: [], cleared: [], suppressed: 0 };
   const { conditions, observes } = dreamNoticeConditions({ run, outcome, inputs });
-  const at = run.endedAt, next = structuredClone(ledger), seen = new Map();
-  let suppressed = 0;
-  for (const condition of conditions) {
+  const at = run.endedAt, next = structuredClone(ledger), present = new Map();
+  // Presence is the full bounded condition set (an outcome has at most 100
+  // items): an admission limit must never make a persisting condition look
+  // recovered. Host conditions come first so they are admitted first.
+  for (const condition of [...conditions.filter(item => HOST.has(item.kind)), ...conditions.filter(item => !HOST.has(item.kind))]) {
     const fingerprint = dreamNoticeFingerprint(ledger.agentId, condition.kind, condition.subject);
-    if (seen.has(fingerprint)) continue;
-    if (seen.size >= DREAM_NOTICE_LIMITS.conditionsPerRun) { suppressed++; continue; }
-    seen.set(fingerprint, condition);
+    if (!present.has(fingerprint)) present.set(fingerprint, condition);
   }
   const created = [], renewed = [], cleared = [];
+  let suppressed = 0;
   for (const notice of next.notices) {
-    if (notice.state === 'cleared' || seen.has(notice.fingerprint) || !observed(notice, observes)) continue;
+    if (notice.state === 'cleared' || present.has(notice.fingerprint) || !observed(notice, observes)) continue;
     Object.assign(notice, { state: 'cleared', clearedAt: at });
     cleared.push(notice.id);
   }
-  for (const [fingerprint, condition] of seen) {
+  const liveClaims = () => next.notices.filter(notice => notice.state !== 'cleared' && !HOST.has(notice.kind)).length;
+  for (const [fingerprint, condition] of present) {
     const live = next.notices.find(notice => notice.fingerprint === fingerprint && notice.state !== 'cleared');
     if (live) {
       Object.assign(live, { detail: condition.detail, lastRunId: run.runId, lastSeenAt: at, occurrences: live.occurrences + 1 });
       renewed.push(live.id);
       continue;
     }
+    // Retention drops only cleared notices, oldest first: a live notice, read
+    // or not, is never evicted, so eviction cannot cause a renotification.
+    // A new condition with no room is counted as suppressed, never lost silently.
+    const host = HOST.has(condition.kind);
+    if (created.length >= DREAM_NOTICE_LIMITS.conditionsPerRun || !host && liveClaims() >= CLAIM_SLOTS) { suppressed++; continue; }
+    if (next.notices.length >= DREAM_NOTICE_LIMITS.perSoul) {
+      const victim = next.notices.filter(notice => notice.state === 'cleared')
+        .sort((a, b) => a.clearedAt.localeCompare(b.clearedAt))[0];
+      next.notices.splice(next.notices.indexOf(victim), 1);
+    }
     const notice = { id: noticeId(fingerprint, run.runId), fingerprint, kind: condition.kind, subject: condition.subject,
       detail: condition.detail, claim: KINDS[condition.kind].claim, state: 'open', delivery: 'pending-host-read',
       firstRunId: run.runId, lastRunId: run.runId, firstSeenAt: at, lastSeenAt: at, occurrences: 1, acknowledgedAt: null, clearedAt: null };
     next.notices.push(notice);
     created.push(notice.id);
-  }
-  // Retention: only cleared notices are dropped, oldest first, so a live
-  // (even acknowledged) condition is never re-notified by eviction. Beyond
-  // that, a new host-observed failure displaces an agent-reported blocked
-  // item, so agent claims cannot starve it; any live notice dropped is
-  // counted as suppressed rather than silently lost.
-  const oldest = list => list.sort((a, b) => (a.clearedAt ?? a.lastSeenAt).localeCompare(b.clearedAt ?? b.lastSeenAt))[0];
-  while (next.notices.length > DREAM_NOTICE_LIMITS.perSoul) {
-    const fresh = next.notices.filter(notice => created.includes(notice.id));
-    const host = fresh.find(notice => HOST.has(notice.kind));
-    let victim = oldest(next.notices.filter(notice => notice.state === 'cleared'));
-    if (!victim && host) {
-      // Prefer a claim the host already read: it may renotify once, while an
-      // unread one would be lost (and is then counted as suppressed).
-      const claims = next.notices.filter(notice => notice.kind === 'item-blocked' && !created.includes(notice.id));
-      victim = oldest(claims.filter(notice => notice.state === 'acknowledged')) ?? oldest(claims);
-    }
-    victim ??= fresh.findLast(notice => !HOST.has(notice.kind)) ?? fresh.at(-1);
-    if (created.includes(victim.id)) created.splice(created.indexOf(victim.id), 1);
-    if (victim.state !== 'cleared') suppressed++;
-    next.notices.splice(next.notices.indexOf(victim), 1);
   }
   next.lastRunId = run.runId;
   next.suppressed += suppressed;

@@ -389,17 +389,21 @@ A persisting condition renews its single live notice (`occurrences`,
 `lastRunId`, latest `detail`) instead of notifying every interval. An
 acknowledged condition stays deduplicated. A recurrence after an observed clear
 creates a new notice. A pending proposal is reported as `proposal-pending`,
-which is the owner's action. A change notice inherits the outcome's
+which is the owner's action. Only a completed attempt's report is evidence: a
+cancelled attempt observes nothing, and a cancelled, failed or timed-out run
+with a report other than `execution-failed` is refused as inconsistent. A change notice inherits the outcome's
 `attribution: not-established`: the artifact changed the source, but the run is
 not shown to have caused it. Runs are applied in journal order; replaying the
 latest run is idempotent.
 
-Each soul keeps at most 64 notices and each run contributes at most 32
-conditions. Retention drops only cleared notices, oldest first, so a live
-condition, even an acknowledged one, is never re-notified by eviction. When the
-ledger is full of live notices, a new execution, report or evidence failure
-displaces the oldest agent-reported blocked item, acknowledged ones first, so
-agent claims cannot hide an owner-visible failure. Anything else dropped increments a visible
+Each soul keeps at most 64 notices. Three slots are reserved for the
+subject-less host kinds (`execution`, `report`, `evidence`), so agent-reported
+conditions can never crowd out an owner-visible failure. A run creates at most 32
+new notices, admitting host conditions first; renewals and clearing always use
+the run's full bounded condition set, so an admission limit never makes a
+persisting condition look recovered. Retention drops only cleared notices,
+oldest first. A live notice, read or not, is never evicted, so eviction cannot
+cause a renotification. A new condition without room increments a visible
 `suppressed` count. Delivery is `pending-host-read` until an authorized
 host acknowledges the notice, then `host-acknowledged`; nothing is ever marked
 `delivered` without a delivery adapter.
