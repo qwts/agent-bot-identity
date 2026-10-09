@@ -417,6 +417,26 @@ export function updateSoulStatus(
   });
 }
 
+// A sighting (#109): a live session re-established on a soul's existing
+// binding. Presence is a census fact that grants nothing, so only `lastSeen`
+// moves; status, place and provenance stay as recorded. A missing or retired
+// row is left alone (null), never created or revived.
+export function recordSoulSighting(id, { file = populationFile(), now = () => new Date() } = {}) {
+  const target = agentId(id);
+  ensurePrivateDirectory(path.dirname(file));
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) {
+      throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
+    }
+    const existing = current.souls[target];
+    if (!existing || existing.status === 'retired') return null;
+    const candidate = normalizeSoul({ ...existing, lastSeen: now().toISOString() });
+    writeDocument(file, { ...current.souls, [target]: candidate });
+    return candidate;
+  });
+}
+
 function withSoulLifecycleLock(id, stateDir, operation) {
   const target = agentId(id);
   return withLock(

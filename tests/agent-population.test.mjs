@@ -22,6 +22,7 @@ import {
   populationFile,
   recordSoulLaunch,
   recordSoulDisplayName,
+  recordSoulSighting,
   registerSoulDir,
   soulDirectory,
   backfillManagedSouls,
@@ -124,6 +125,23 @@ test('status updates preserve registered soul fields and ignore unregistered ide
     lastSeen: '2026-08-06T14:00:00.000Z',
   });
   assert.deepEqual(showSoul(FIRST_ID, { file }), updated);
+});
+
+test('a sighting moves only lastSeen and never creates or revives a row (#109)', () => {
+  const file = path.join(scratch(), 'population.json');
+  const at = (iso) => ({ file, now: () => new Date(iso) });
+  assert.equal(recordSoulSighting(FIRST_ID, at('2026-08-06T14:00:00.000Z')), null);
+  assert.deepEqual(listSouls({ file }), [], 'no row is created');
+
+  const first = upsertSoul(fixture(), { file });
+  const seen = recordSoulSighting(FIRST_ID, at('2026-08-06T14:00:00.000Z'));
+  assert.deepEqual(seen, { ...first, lastSeen: '2026-08-06T14:00:00.000Z' });
+  assert.deepEqual(showSoul(FIRST_ID, { file }), seen);
+
+  upsertSoul(fixture({ status: 'retired', lastSeen: '2026-08-06T15:00:00.000Z' }), { file });
+  const tombstone = readFileSync(file, 'utf8');
+  assert.equal(recordSoulSighting(FIRST_ID, at('2026-08-06T16:00:00.000Z')), null);
+  assert.equal(readFileSync(file, 'utf8'), tombstone, 'a retired row is not touched');
 });
 
 test('upsert does not change permissions on an existing override parent', () => {
