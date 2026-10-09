@@ -10,7 +10,7 @@ import { MODULES } from '../cli/dispatch.mjs';
 import { PUBLIC_COMMANDS } from '../cli/parse.mjs';
 import { NO_SKILL_REFERENCE, SKILL_REFERENCES } from '../cli/skill-references.mjs';
 import {
-  BUNDLED_SKILLS, CATALOG, SkillError, decodeContents, main, parseCatalog, resolveCatalogEntry, sourceCommit,
+  BUNDLED_SKILLS, CATALOG_PATH, SkillError, decodeContents, main, parseCatalog, resolveCatalogEntry, sourceCommit,
 } from '../skill.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -69,7 +69,8 @@ function fakeFetcher(files = {}) {
   return { fetchContents, calls };
 }
 
-const catalogKey = `${CATALOG.repository}:${CATALOG.path}@`;
+const CATALOG = { repository: 'example/team-sop', path: CATALOG_PATH, commit: 'a'.repeat(40) };
+const catalogKey = `${CATALOG.repository}:${CATALOG.path}@${CATALOG.commit}`;
 const MANAGED = '---\nname: managed-machine\n---\n\n# managed-machine\n';
 
 function runMain(argv, files) {
@@ -78,6 +79,7 @@ function runMain(argv, files) {
   let stderr = '';
   const status = main(argv, {
     fetchContents,
+    resolveSop: () => ({ inEffect: true, repositories: { sop: CATALOG } }),
     stdout: { write: (text) => { stdout += text; } },
     stderr: { write: (text) => { stderr += text; } },
   });
@@ -116,14 +118,14 @@ test('a catalogued name prints its SKILL.md fetched at the pinned commit', () =>
   assert.equal(plain.stderr, '');
   assert.equal(plain.stdout, MANAGED);
   assert.deepEqual(plain.calls, [
-    { repository: CATALOG.repository, path: CATALOG.path, ref: undefined },
+    { repository: CATALOG.repository, path: CATALOG.path, ref: CATALOG.commit },
     { repository: 'qwts/managed-machine', path: 'skills/managed-machine/SKILL.md', ref: PIN_A },
   ]);
   const json = runMain(['managed-machine', '--json'], files);
   assert.equal(json.status, 0, json.stderr);
   assert.deepEqual(JSON.parse(json.stdout), {
     name: 'managed-machine', repository: 'qwts/managed-machine', commit: PIN_A,
-    path: 'skills/managed-machine/SKILL.md', text: MANAGED,
+    path: 'skills/managed-machine/SKILL.md', text: MANAGED, catalog: CATALOG,
   });
 });
 
@@ -154,7 +156,7 @@ test('a network failure is a clear resolution error and never partial output', (
   });
   assert.equal(offline.status, 1);
   assert.equal(offline.stdout, '');
-  assert.equal(offline.stderr, 'agent-bot skill: cannot read qwts/qwts-agent-sop/skills/README.md: error connecting to api.github.com\n');
+  assert.match(offline.stderr, /skill-catalog-unreadable:.*example\/team-sop.*error connecting to api.github.com/u);
   const timeout = runMain(['managed-machine', '--json'], {
     [catalogKey]: CATALOG_TEXT,
     [`qwts/managed-machine:skills/managed-machine/SKILL.md@${PIN_A}`]: new SkillError('timed out after 20s reading qwts/managed-machine/skills/managed-machine/SKILL.md'),
