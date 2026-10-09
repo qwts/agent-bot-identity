@@ -1,0 +1,4 @@
+# The Rust version CI and local builds share. Bump deliberately.
+[toolchain]
+channel = "1.96.1"
+components = ["rustfmt", "clippy"]

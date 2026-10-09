@@ -58,6 +58,7 @@ export const EXCLUDED_FROM_BUNDLE = [
   'Formula',
   'docs',
   'governance',
+  'keyd',
   'node_modules',
   'scripts',
   'tests',
