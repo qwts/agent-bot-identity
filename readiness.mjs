@@ -673,7 +673,9 @@ export function appRecordCheck({ agentId, slug, config = {}, readIdentity } = {}
     status: 'warning',
     code: 'soul-app-record-mismatch',
     message: `this checkout acts as ${slug}, but the identity record of ${agentId} names ${recorded}; the daemon mints the recorded App for a bound soul and refuses any other`,
-    action: `if ${slug} is right for this soul, the owner ${managed ? '' : `connects it as a managed App (agent-bot identity app connect --id <App ID> --pass-cli <item>), then `}runs: agent-bot identity app assign ${slug} --soul ${agentId}; otherwise stop stating ${slug} (unset GH_AGENT_APP, or rerun agent-bot setup-worktree)`,
+    // Diagnosis only: how such a record is reconciled is #107's migration
+    // contract, not a chore doctor hands the owner.
+    action: `nothing to do yet: the explicit ${slug} keeps working until #107 closes in-process mints, and it must be reconciled with the record before then (#107 migration contract)${managed ? '' : `; ${slug} is not a managed App on this machine`}`,
     evidence: { agent_id: agentId, app_slug: slug, recorded_app_slug: recorded, managed },
   });
 }

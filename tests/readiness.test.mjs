@@ -2409,10 +2409,11 @@ test('appRecordCheck flags a checkout acting as an App its soul record does not 
   assert.equal(unmanaged.status, 'warning');
   assert.equal(unmanaged.code, 'soul-app-record-mismatch');
   assert.deepEqual(unmanaged.evidence, { agent_id: agentId, app_slug: 'qwts-codex-agent', recorded_app_slug: 'qwts-grok-agent', managed: false });
-  assert.match(unmanaged.action, /identity app connect .*then runs: agent-bot identity app assign qwts-codex-agent --soul agent_b3d72312/);
+  assert.match(unmanaged.action, /#107 migration contract\); qwts-codex-agent is not a managed App on this machine$/);
+  assert.doesNotMatch(unmanaged.action, /identity app (connect|assign)/, 'no manual chore is prescribed');
 
   const managed = appRecordCheck({ agentId, slug: 'qwts-codex-agent', readIdentity: record('qwts-grok-agent'),
     config: { identityApps: { 'qwts-codex-agent': { store: 'keychain' } } } });
-  assert.doesNotMatch(managed.action, /identity app connect/);
-  assert.match(managed.action, /^if qwts-codex-agent is right for this soul, the owner runs: agent-bot identity app assign/);
+  assert.doesNotMatch(managed.action, /not a managed App/);
+  assert.match(managed.action, /^nothing to do yet: the explicit qwts-codex-agent keeps working until #107/);
 });
