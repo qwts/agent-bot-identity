@@ -2195,10 +2195,11 @@ test('the inbox section finds a project-scoped MCP registration', async () => {
   );
 });
 
-test('a soul package\'s reach-mcp server named agent-bot does not count as inbox wiring (#247)', async () => {
+test('an older soul package\'s reach-mcp server named agent-bot does not count as inbox wiring (#247)', async () => {
   const home = tempRoot();
   const project = tempRoot();
-  // What soul-builder renders: the same server name, the reach-back server.
+  // What older soul packages rendered (current builds name it agent-reach):
+  // the inbox server's name on the reach-back server.
   writeFileSync(join(project, '.mcp.json'), JSON.stringify({
     mcpServers: { 'agent-bot': { command: 'agent-bot', args: ['reach-mcp'] } },
   }));

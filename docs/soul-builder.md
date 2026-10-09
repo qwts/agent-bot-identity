@@ -604,8 +604,8 @@ and for Gemini CLI (until `.gemini/agents/` is documented as stable); commands
 for Codex, Cursor (replaced by skills) and Kiro (`.kiro/prompts/` file format
 undocumented); hooks for Gemini CLI, OpenCode (plugins), Muse and Kiro; a
 signed-in check that Cursor and Kiro accept the `_comment` marker key; and
-mapping MCP tool names into Kiro's and Devin's subagent tool lists; Qwen Code
-skills, subagents and commands.
+mapping MCP tool names into Kiro's subagent tool lists (Devin's shipped in
+#719); Qwen Code skills, subagents and commands.
 
 The renderer, injected entry and `reachPolicyRules()` now share the
 `agent-reach` name through `reach-contract.mjs`. Rebuilds remove the old

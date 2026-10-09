@@ -1143,11 +1143,11 @@ const PROJECT_MCP_CONFIG_LOCATIONS = [
   { harness: 'qwen', key: /"mcpServers"\s*:/, agent: /agent-bot/, paths: ['.qwen/settings.json'] },
 ];
 
-// The inbox server is `agent-bot mcp`. A soul package also renders a server
-// named agent-bot, but it runs `reach-mcp` (soul-builder.mjs), which has no
-// take_inbox: a file with only that entry has not wired the inbox (#247). The
-// shapes harnesses document: `"args": ["mcp"]`, opencode's
-// `"command": ["agent-bot", "mcp"]`, and codex's `args = ["mcp"]`.
+// The inbox server is `agent-bot mcp`. A soul package renders a server named
+// agent-reach (older packages named it agent-bot), which runs `reach-mcp`
+// (soul-builder.mjs) and has no take_inbox: a file with only that entry has
+// not wired the inbox (#247). The shapes harnesses document: `"args": ["mcp"]`,
+// opencode's `"command": ["agent-bot", "mcp"]`, and codex's `args = ["mcp"]`.
 const INBOX_SERVER = /\[\s*"mcp"\s*\]|"agent-bot"\s*,\s*"mcp"\s*\]/;
 
 function harnessWiresAgentBot({ home, cwd, locations }) {
