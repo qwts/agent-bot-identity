@@ -5,6 +5,7 @@ import { importSkill, listSkills, showSkill, verifySkill, checkSkill, planSkillU
 import { skillLearningPacket, proposeSkillLearning, readLearningOutcome } from '../skill-learning.mjs';
 import { currentAgentId } from '../agent-identity.mjs';
 import { revisionCommand } from '../soul-revisions.mjs';
+import { soulDreamCommand } from './soul-dream.mjs';
 
 export const USAGE = `usage: agent-bot soul skill import PATH_OR_HTTPS_DOCUMENT [--json]
        agent-bot soul skill list [--json]
@@ -16,6 +17,7 @@ export const USAGE = `usage: agent-bot soul skill import PATH_OR_HTTPS_DOCUMENT 
        agent-bot soul skill update UUID --recover [--json]
        agent-bot soul skill learn UUID --soul AGENT_ID [--json]
        agent-bot soul skill learn UUID --soul AGENT_ID --package STAGING --outcome FILE --reason TEXT [--json]
+       agent-bot soul skill dream --soul ID|NAME --schedule PT<N>H|--run-now|--pause|--unschedule|--cancel RUN_ID|--status|--history [--json]
 
 Local import preserves the selected directory; HTTPS import captures a skill
 document and supported inline instruction links. Public GitHub tree URLs preserve
@@ -24,6 +26,7 @@ Harness installation and other repository adapters remain unimplemented.
 check never replaces accepted snapshots or local edits. update previews a recorded
 check; applying requires reviewed digests and preserves prior material. learn supplies guidance;
 recording outcomes proposes reviewed adaptations through the soul revision policy.
+dream manages daemon-run maintenance; see agent-bot soul skill dream --help.
 `;
 async function learningMain(args, json, { stdout, stderr, assertSoulTarget = id => {
   if (currentAgentId() !== id) throw new Error('a soul may record learning only for its own package; bind an Agent ID first');
@@ -77,6 +80,7 @@ function updateMain(args, json, { stdout, stderr, ...options }) {
 }
 export function main(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, ...options } = {}) {
   if (argv.length === 1 && ['--help', '-h'].includes(argv[0])) { stdout.write(USAGE); return 0; }
+  if (argv[0] === 'dream') return soulDreamCommand(argv.slice(1), { stdout, stderr, ...options });
   const flags = argv.filter(arg => arg === '--json');
   const args = argv.filter(arg => arg !== '--json');
   const [verb, value, ...extra] = args;

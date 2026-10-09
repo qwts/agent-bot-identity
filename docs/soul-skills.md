@@ -23,6 +23,7 @@ agent-bot soul skill show UUID --json
 agent-bot soul skill verify UUID --json
 agent-bot soul skill check UUID --json
 agent-bot soul skill learn UUID --soul AGENT_ID --json
+agent-bot soul skill dream --soul AGENT_ID --status --json
 ```
 
 A source is a real local directory containing `SKILL.md`, or that file itself.
@@ -30,7 +31,9 @@ The entrypoint uses the same UTF-8/frontmatter/name/description validation as a
 soul package. Its frontmatter name determines the editable directory's name;
 the source directory need not have that name. Each import receives a new UUID,
 even for the same name and bytes. There is no implicit deduplication or update.
-These operations require neither a GitHub App nor a soul binding.
+These operations require neither a GitHub App nor a soul binding. `dream`
+manages owner-authorized maintenance runs in the daemon; see
+[the dream design](soul-skill-dream-design.md#schedule-and-controls).
 
 ## HTTPS documents and instruction dependencies
 

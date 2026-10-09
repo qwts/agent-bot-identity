@@ -971,8 +971,10 @@ export function createDaemonServer({
       }
     } catch (error) {
       const failure = operationError(error);
+      // Dream service codes are fixed identifiers, so clients can act on them.
       sendJson(res, failure.statusCode, { error: failure.message,
-        ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable'].includes(error.code) ? { code: error.code } : {}) });
+        ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable'].includes(error.code)
+          || typeof error.code === 'string' && /^dream-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}) });
     }
   });
   server.once('close', () => appJobs.close());

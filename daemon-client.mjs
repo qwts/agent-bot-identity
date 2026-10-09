@@ -119,7 +119,8 @@ export function daemonClient({
     });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) throw Object.assign(new Error(`daemon ${method} ${pathname} failed: ${payload.error ?? `HTTP ${res.status}`}`),
-      payload.code === 'soul-paused' ? { code: payload.code } : {});
+      ['soul-paused', 'owner-credential-required', 'owner-consent-unavailable'].includes(payload.code)
+        || typeof payload.code === 'string' && /^dream-[a-z][a-z-]{0,63}$/.test(payload.code) ? { code: payload.code } : {});
     return payload;
   }
   return {
@@ -210,6 +211,22 @@ export function daemonClient({
     },
     async approvals() {
       return request('GET', '/v0/approvals');
+    },
+    // Dream maintenance (#603): the daemon is the sole scheduler and verifies
+    // the owner for each control, so controls wait for its presence prompt.
+    async dreamStatus() {
+      return request('GET', '/v0/soul/dream');
+    },
+    async dreamHistory({ afterRevision, limit } = {}) {
+      const params = new URLSearchParams();
+      if (afterRevision !== undefined) params.set('afterRevision', String(afterRevision));
+      if (limit !== undefined) params.set('limit', String(limit));
+      const query = params.toString();
+      return request('GET', `/v0/soul/dream/history${query ? `?${query}` : ''}`);
+    },
+    async dreamControl(action, body, { principal = null } = {}) {
+      if (!['register', 'pause', 'unschedule', 'run-now', 'cancel'].includes(action)) throw new Error('unknown dream control');
+      return request('POST', `/v0/soul/dream/${action}`, { ...body, ...(principal ? { principal } : {}) }, {}, OWNER_DECISION_TIMEOUT_MS);
     },
     async setComputerUse(agentId, enabled, { principal = null } = {}) {
       return request('POST', '/v0/soul/computer-use', { agentId, enabled, ...(principal ? { principal } : {}) }, {}, OWNER_DECISION_TIMEOUT_MS);
