@@ -352,6 +352,40 @@ test('fetchArchive verifies before sharing and never leaves a partial file', asy
   assert.deepEqual(readdirSync(f.cache), [sha(bytes)]);
 });
 
+test('an early download failure cannot leave a file created by a late stream open (#617)', (t) => {
+  const f = fixture(t);
+  // Node 20 can reject pipeline before its output stream's asynchronous open
+  // finishes. Delay that open in a separate process so the race is reliable
+  // without monkeypatching fs for any other fixture in this test process.
+  const source = `
+    import fs from 'node:fs';
+    import assert from 'node:assert/strict';
+    const { fetchArchive } = await import(${JSON.stringify(new URL('../soul-runtimes.mjs', import.meta.url).href)});
+    const cache = process.argv[1];
+    const originalOpen = fs.open;
+    let pending;
+    fs.open = (...args) => {
+      if (!String(args[0]).includes('.partial-')) return originalOpen(...args);
+      pending = new Promise(resolve => setTimeout(() => {
+        originalOpen(...args.slice(0, -1), (error, fd) => { args.at(-1)(error, fd); resolve(); });
+      }, 100));
+    };
+    try {
+      await assert.rejects(fetchArchive({ url: 'https://example.test/early.tgz', sha256: 'a'.repeat(64) }, {
+        cache, label: 'fixture', fetchFn: async () => ({ ok: true,
+          body: new ReadableStream({ start(controller) { controller.error(new Error('early failure')); } }),
+        }),
+      }), error => error.code === 'runtime-download-failed' && /early failure/.test(error.message));
+      await pending;
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(fs.readdirSync(cache), []);
+    } finally { fs.open = originalOpen; }
+  `;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', source, f.cache], { encoding: 'utf8', timeout: 10_000 });
+  assert.equal(child.status, 0, `${child.error?.message ?? ''}${child.stderr}`);
+  assert.deepEqual(readdirSync(f.cache), []);
+});
+
 test('non-npm harnesses install from a pinned archive or as a uv tool into .soul-state/runtimes/harnesses, and the old npm location keeps working', async (t) => {
   const opencodeUrl = `https://example.test/opencode-${PLATFORM}-1.2.3.zip`;
   const f = fixture(t, { manifest: { runtimes: { python: '3.12' }, harnesses: {
