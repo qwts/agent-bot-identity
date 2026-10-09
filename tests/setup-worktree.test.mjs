@@ -63,6 +63,8 @@ test('setup reuses a Devin checkout already linked from its session soul', (t) =
   assert.equal(existsSync(`${link}-2`), false);
   assert.equal(soul.worktree, before);
   assert.deepEqual(soul.worktrees, [before]);
+  // setup-worktree (which the session-start hook runs) is a sighting (#109).
+  assert.match(soul.lastSightedAt, /^\d{4}-\d\d-\d\dT/);
 });
 
 test('accepts shell-safe GitHub App slugs', () => {
@@ -308,8 +310,8 @@ function fakeDaemon({ availableResult = true, failEnsure = false } = {}) {
       if (failEnsure) throw new Error('space is bound to another soul');
       return { agentId, path: `/spaces/${agentId}`, created: true };
     },
-    async registerSoul(agentId, spaceRoot) {
-      calls.push(`register:${agentId}:${spaceRoot}`);
+    async registerSoul(agentId, spaceRoot, { sighted = false } = {}) {
+      calls.push(`register:${agentId}:${spaceRoot}${sighted ? ':sighted' : ''}`);
       return { id: agentId };
     },
   };
@@ -344,6 +346,12 @@ test('bindSoul prefer uses a reachable daemon for ensure and register', async ()
     `ensure:${BIND_ID}`,
     `register:${BIND_ID}:/spaces/${BIND_ID}`,
   ]);
+});
+
+test('bindSoul passes a sighting to the daemon only when told to (#109)', async () => {
+  const daemon = fakeDaemon();
+  await bindSoul({ agentId: BIND_ID, policy: 'prefer', client: daemon, sighted: true, ensureLocal: () => { throw new Error('must not fall back'); } });
+  assert.equal(daemon.calls.at(-1), `register:${BIND_ID}:/spaces/${BIND_ID}:sighted`);
 });
 
 test('bindSoul prefer falls back in-process only when the daemon is unreachable', async () => {

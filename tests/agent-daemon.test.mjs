@@ -189,13 +189,15 @@ test('space ensure, space path, register, and population share the CLI stores', 
 
     const registered = await call('/v0/register', {
       method: 'POST',
-      body: { agentId: AGENT_ID, spacePath: created.path },
+      body: { agentId: AGENT_ID, spacePath: created.path, sighted: true },
     });
     assert.equal(registered.status, 200);
     const { soul } = await registered.json();
     assert.equal(soul.id, AGENT_ID);
     assert.equal(soul.appSlug, 'you-codex-agent');
     assert.equal(soul.spacePath, created.path);
+    // setup-worktree and its hooks register as a sighting (#109).
+    assert.equal(soul.lastSightedAt, soul.lastSeen);
     // The census path is authoritative (ADR-0583 decision 8): a soul whose
     // space moved into its folder answers with that path, not the spaces root.
     const soulDir = path.join(env.AGENT_BOT_SPACES_HOME, '..', 'souls', 'me.soul');
@@ -311,6 +313,12 @@ test('start, status, client operations, and stop round-trip through the real CLI
     const souls = await client.population();
     assert.equal(souls.length, 1);
     assert.deepEqual(souls[0].worktrees, ['/checkouts/demo', '/checkouts/second']);
+    // A join or repair registers without sighting; setup-worktree sights (#109).
+    assert.equal(souls[0].lastSightedAt, undefined);
+    assert.equal(souls[0].presence, null);
+    const sighted = await client.registerSoul(AGENT_ID, space.path, { sighted: true });
+    assert.equal(sighted.lastSightedAt, sighted.lastSeen);
+    assert.equal((await client.population())[0].presence, 'present');
 
     // v1 interaction contract through the same daemon: enroll locally, then
     // create a session, submit a message, and watch it fail on the
@@ -643,6 +651,8 @@ test('bind records provenance on the census row (#91)', async () => {
     assert.equal(bound.soul.transcriptLocator.provider, 'codex');
     assert.equal(bound.soul.transcriptLocator.id, 'thread-daemon');
     assert.equal(bound.soul.parentId, parentId);
+    // A first bind is a sighting (#109).
+    assert.equal(bound.soul.lastSightedAt, bound.soul.lastSeen);
   });
 });
 
@@ -670,7 +680,8 @@ test('a re-bind of a bound worktree refreshes census presence and nothing else (
     assert.equal(body.secret, first.secret, 'reuse, not a second binding');
     const after = showSoul(AGENT_ID, { file });
     assert.equal(after.lastSeen, '2099-01-01T00:00:00.000Z');
-    assert.deepEqual({ ...after, lastSeen: before.lastSeen }, before, 'only lastSeen moves');
+    assert.equal(after.lastSightedAt, '2099-01-01T00:00:00.000Z');
+    assert.deepEqual({ ...after, lastSeen: before.lastSeen, lastSightedAt: before.lastSightedAt }, before, 'only presence moves');
   }, { now });
 });
 

@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveSpacesHome } from './agent-space.mjs';
 import { inspectSoulSpace } from './soul-memory.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
-import { duplicateSoulDirs, listSouls, orphanSoulDirs, populationFile } from './agent-population.mjs';
+import { duplicateSoulDirs, listSouls, orphanSoulDirs, populationFile, PRESENCE_WINDOW_MS, soulPresence } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
 import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness, unmanagedAuthorsWithLegacyDefault } from './config.mjs';
 import { preGateConfigStatus } from './config-migration.mjs';
@@ -1285,6 +1285,34 @@ function unreferencedSoulsCheck({ home, env, git }) {
   });
 }
 
+// Present vs historical active souls (#109), from the last bind or
+// setup-worktree sighting within PRESENCE_WINDOW_MS. Informational: a
+// historical soul is not a fault.
+function soulPresenceCheck({ home, env, now }) {
+  let souls;
+  try {
+    souls = listSouls({ file: populationFile({ home, env }) })
+      .filter((soul) => soul.status === 'active');
+  } catch {
+    return null; // spaces.home already reports an unreadable census
+  }
+  const present = [];
+  const historical = [];
+  const neverSighted = [];
+  for (const soul of souls) {
+    const presence = soulPresence(soul, now);
+    (presence === 'present' ? present : presence === 'historical' ? historical : neverSighted).push(soul.id);
+  }
+  const hours = PRESENCE_WINDOW_MS / 3_600_000;
+  return readinessCheck({
+    id: 'souls.presence',
+    status: 'ready',
+    message: `${present.length} of ${souls.length} active soul(s) present (bound or set up in the last ${hours}h); `
+      + `${historical.length} historical, ${neverSighted.length} never sighted`,
+    evidence: { window_ms: PRESENCE_WINDOW_MS, present, historical, never_sighted: neverSighted },
+  });
+}
+
 // A copied soul folder carries the soul's marker (#80). agent-bot only runs
 // the soul from its registered folder; this names the copies to remove.
 // Reported only when there is something to report.
@@ -2376,6 +2404,8 @@ export async function collectReadiness({
     machineChecks.push(spacesHomeCheck({ home, env, config, inspectCutover }));
     const unreferencedSouls = unreferencedSoulsCheck({ home, env, git });
     if (unreferencedSouls) machineChecks.push(unreferencedSouls);
+    const presence = soulPresenceCheck({ home, env, now });
+    if (presence) machineChecks.push(presence);
     const soulFolders = duplicateSoulDirsCheck({ home, env, config });
     if (soulFolders) machineChecks.push(soulFolders);
     const orphanFolders = orphanSoulDirsCheck({ home, env, config });

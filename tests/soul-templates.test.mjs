@@ -87,6 +87,7 @@ for (const formatVersion of [1, 2]) test(`format ${formatVersion}: independent i
     assert.equal(soulDirectory(soul.id, f.options), soul.soulDir);
     assert.equal(showSoul(soul.id, f.options).soulDir, soul.soulDir);
     assert.match(showSoul(soul.id, f.options).name, /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+    assert.equal(showSoul(soul.id, f.options).lastSightedAt, undefined, 'a template instance is not a sighting (#109)');
     assert.equal(readFileSync(join(soul.soulDir, '.soul-state', 'agent-id'), 'utf8').trim(), soul.id);
     // The life starts inside the folder (#583 slice 5): the Agent Space as a
     // directory the census points at, and the revisions mirrored from genesis.

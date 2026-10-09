@@ -697,7 +697,8 @@ tree, then resets the local branch to the published signed history. Start with
 `$XDG_STATE_HOME/agent-bot/population.json` (or
 `$AGENT_BOT_POPULATION_PATH`). Records contain only the Agent ID, App slug,
 parent ID, status, Agent Space path, all known checkout references and the
-latest checkout, optional transcript locator, and last-seen timestamp. Identity JSON remains the provenance source of truth; this census
+latest checkout, optional transcript locator, last-seen timestamp, and
+optional last-sighted timestamp. Identity JSON remains the provenance source of truth; this census
 is a separate aggregate index. Filter the population with `--status` or
 `--app`, and use `--json` for machine-readable output:
 
@@ -715,8 +716,24 @@ meaning from the display string, the row stays keyed by Agent ID (names are
 handles and may collide; IDs cannot), and `population show` accepts a name
 whenever it is unambiguous.
 
+Presence (#109). `lastSeen` moves whenever the row is touched, including
+status changes, forks and template instances, so it means "last touched".
+`lastSightedAt` moves only when a live session is sighted: a first bind or
+re-bind through the daemon, a daemon-launched soul home's bind, or
+`setup-worktree` (which the `session-start` hook runs, so hook activity is
+covered with no extra step). Status changes, launch facts, fork, templates
+and `population backfill` never set it, and a join registers without it (its
+optional `--wake acp` daemon bind is a sighting like any other bind). Rows written before the field
+existed simply lack it. A soul is *present* when it was sighted within
+`PRESENCE_WINDOW_MS` (24 hours, in `agent-population.mjs`), *historical* when
+sighted earlier or retired, and unknown (`?`) when never sighted.
+`population list` shows this in its PRESENCE column with a count of present
+souls, and `doctor` reports it as the informational `souls.presence` check,
+whose evidence lists the present, historical and never-sighted Agent IDs.
+
 The JSON from `population list|show` and the daemon's `GET /v0/population`
-also carries four fields derived on read and never stored. These give the line
+also carries five fields derived on read and never stored. `presence` is
+`present`, `historical` or null as above; the other four give the line
 GeniusBar shows under a soul's name:
 
 - `role`: the soul's `soul.json` `role`, up to 60 characters.
@@ -771,7 +788,8 @@ when the supervisor is not in use; `status`/`stop` probe and terminate the
 recorded daemon; `disable` unloads the supervisor. MCP remains per-conversation
 stdio and is never supervised. With `settings.daemonPreference` set to
 `prefer` or `required`, `setup-worktree` registers and ensures space through
-the daemon: `prefer` falls back to the in-process path only when the daemon is
+the daemon (`POST /v0/register`, with `sighted: true` so the row's
+`lastSightedAt` moves; joins register without it): `prefer` falls back to the in-process path only when the daemon is
 unreachable, and `required` fails closed rather than diverging from the
 daemon-owned stores. After the supervisor path has been applied, `doctor`
 treats a missing supervisor or a down daemon as not-ready.

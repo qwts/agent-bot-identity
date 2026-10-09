@@ -10,7 +10,7 @@ import { appendFileSync, chmodSync, cpSync, existsSync, linkSync, lstatSync, mkd
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { readAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
-import { populationFile, registerSoulDir, setSoulSpacePath, showSoul, soulDirectory } from './agent-population.mjs';
+import { populationFile, recordSoulSighting, registerSoulDir, setSoulSpacePath, showSoul, soulDirectory } from './agent-population.mjs';
 import { initSoulSpace } from './agent-space.mjs';
 
 import { buildSoulDirectory } from './soul-build.mjs';
@@ -421,6 +421,8 @@ export function createSoulHomes({ stateDir, bindings, install = installHarnesses
     bindings.bind({ agentId, worktree, gitDir, harness, ...(replacesWorktree ? { replacesWorktree } : {}) });
     const bound = bindings.findAgent(agentId);
     if (!bound?.file) throw new Error('soul home could not be bound');
+    // A daemon-launched session is a sighting like any bind (#109).
+    recordSoulSighting(agentId, { file: options.file ?? populationFile(options), ...(options.now ? { now: options.now } : {}) });
     // Rebind before removing the old copy. A failed binding can be retried
     // without losing either complete home.
     if (migrated) {

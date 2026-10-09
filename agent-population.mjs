@@ -187,6 +187,12 @@ function normalizeSoul(record, { defaultLastSeen = null } = {}) {
     worktrees,
     transcriptLocator: transcriptLocator(record.transcriptLocator),
     lastSeen: canonicalTimestamp('lastSeen', record.lastSeen ?? defaultLastSeen),
+    // The last sighting (#109): a bind, re-bind or setup-worktree (which the
+    // session-start hook runs) of a live session. `lastSeen` also moves on
+    // status changes, fork and templates, so it means "last touched"; only
+    // this one answers "present". Absent until the first sighting, so rows
+    // written before the field existed need no migration.
+    ...lastSightedAtField(record.lastSightedAt),
     // Managed: the daemon started this soul from a launch (GeniusBar or a
     // package), rather than an already-running agent joining. Comms: the
     // agent-comms teammate tools its turns get, fixed at that launch from its
@@ -233,6 +239,25 @@ function harnessAuthField(value) {
       since: canonicalTimestamp('harnessAuth.since', value.since),
     },
   };
+}
+
+function lastSightedAtField(value) {
+  if (value === undefined || value === null) return {};
+  return { lastSightedAt: canonicalTimestamp('lastSightedAt', value) };
+}
+
+// How recent a sighting must be for a soul to count as present rather than
+// historical in `population list` and doctor (#109).
+export const PRESENCE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+// 'present' when sighted within PRESENCE_WINDOW_MS of `now`, 'historical'
+// when sighted earlier or retired, null when never sighted: a row that
+// predates the field cannot say, just as PARENT '?' cannot. Derived on read,
+// never stored.
+export function soulPresence(record, now = new Date()) {
+  if (!record?.lastSightedAt) return null;
+  if (record.status === 'retired') return 'historical';
+  return now.getTime() - Date.parse(record.lastSightedAt) <= PRESENCE_WINDOW_MS ? 'present' : 'historical';
 }
 
 function displayNameField(value) {
@@ -342,6 +367,8 @@ export function upsertSoul(
       if (record.paused === undefined) candidate.paused = existing.paused;
       if (record.computerUse === undefined) candidate.computerUse = existing.computerUse;
       if (record.sandbox === undefined) candidate.sandbox = existing.sandbox;
+      // Only a sighting moves lastSightedAt; any other upsert carries it.
+      if (record.lastSightedAt === undefined) candidate.lastSightedAt = existing.lastSightedAt;
       candidate.worktrees = [...new Set([...existing.worktrees, ...candidate.worktrees])];
       if (record.worktree === undefined) candidate.worktree = existing.worktree;
     }
@@ -419,8 +446,8 @@ export function updateSoulStatus(
 
 // A sighting (#109): a live session re-established on a soul's existing
 // binding. Presence is a census fact that grants nothing, so only `lastSeen`
-// moves; status, place and provenance stay as recorded. A missing or retired
-// row is left alone (null), never created or revived.
+// and `lastSightedAt` move; status, place and provenance stay as recorded. A
+// missing or retired row is left alone (null), never created or revived.
 export function recordSoulSighting(id, { file = populationFile(), now = () => new Date() } = {}) {
   const target = agentId(id);
   ensurePrivateDirectory(path.dirname(file));
@@ -431,7 +458,8 @@ export function recordSoulSighting(id, { file = populationFile(), now = () => ne
     }
     const existing = current.souls[target];
     if (!existing || existing.status === 'retired') return null;
-    const candidate = normalizeSoul({ ...existing, lastSeen: now().toISOString() });
+    const at = now().toISOString();
+    const candidate = normalizeSoul({ ...existing, lastSeen: at, lastSightedAt: at });
     writeDocument(file, { ...current.souls, [target]: candidate });
     return candidate;
   });
@@ -456,6 +484,9 @@ export function upsertIdentitySoul(
     // The checkout being bound. Undefined carries the recorded checkout
     // forward (a lifecycle upsert knows nothing about place); null clears it.
     worktree = undefined,
+    // True only for a bind or setup-worktree of a live session (#109). Fork,
+    // templates and repairs register a soul without sighting it.
+    sighted = false,
   } = {},
 ) {
   const target = agentId(id);
@@ -482,6 +513,7 @@ export function upsertIdentitySoul(
         `soul ${target} is retired in the population census; refusing to revive it`,
       );
     }
+    const at = now().toISOString();
     return upsertSoul({
       id: identity.id,
       // The census is authoritative for names: a lifecycle upsert must carry
@@ -496,7 +528,8 @@ export function upsertIdentitySoul(
       transcriptLocator: identity.transcript
         ? { provider: identity.transcript.provider, id: identity.transcript.id }
         : null,
-      lastSeen: now().toISOString(),
+      lastSeen: at,
+      ...(sighted ? { lastSightedAt: at } : {}),
     }, { file, now });
   });
 }
@@ -1168,7 +1201,7 @@ function formatParent(record) {
   return record.transcriptLocator ? '-' : '?';
 }
 
-function formatRow(record) {
+function formatRow(record, now) {
   const transcript = record.transcriptLocator
     ? `${record.transcriptLocator.provider}:${record.transcriptLocator.id}`
     : '-';
@@ -1181,6 +1214,7 @@ function formatRow(record) {
     record.lastSeen,
     record.spacePath,
     transcript,
+    soulPresence(record, now) ?? '?',
   ].join('\t');
 }
 
@@ -1206,7 +1240,7 @@ function shortText(value, max) {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-export function withRoles(records, { file = populationFile(), env = process.env, home = homedir() } = {}) {
+export function withRoles(records, { file = populationFile(), env = process.env, home = homedir(), now = new Date() } = {}) {
   const modes = readSoulModes({ env, home });
   const models = readSoulModels({ env, home });
   const children = new Map();
@@ -1236,21 +1270,22 @@ export function withRoles(records, { file = populationFile(), env = process.env,
       description: shortText(manifest?.description, 280),
       children: count,
       roleLine: parts.length ? parts.join(' · ') : null,
+      presence: soulPresence(record, now),
     };
   });
 }
 
-function formatPopulation(records) {
+export function formatPopulation(records, { now = new Date() } = {}) {
   // Retired souls are tombstones, not census peers: list them in their own
   // section so an operator scanning the living population never mistakes a
   // retired soul for an active one (issue #46).
   const active = records.filter((record) => record.status !== 'retired');
   const retired = records.filter((record) => record.status === 'retired');
-  const lines = ['NAME\tID\tAPP\tSTATUS\tPARENT\tLAST SEEN\tSPACE\tTRANSCRIPT'];
-  for (const record of active) lines.push(formatRow(record));
+  const lines = ['NAME\tID\tAPP\tSTATUS\tPARENT\tLAST SEEN\tSPACE\tTRANSCRIPT\tPRESENCE'];
+  for (const record of active) lines.push(formatRow(record, now));
   if (retired.length > 0) {
     lines.push('', 'RETIRED');
-    for (const record of retired) lines.push(formatRow(record));
+    for (const record of retired) lines.push(formatRow(record, now));
   }
   // "transcript pending" may not persist silently (#91): every listing counts
   // the souls that never bound and names the repair, so the gap stays loud
@@ -1262,6 +1297,12 @@ function formatPopulation(records) {
       `${pending.length} of ${active.length} souls have never bound a transcript (PARENT '?'); `
       + `'agent-bot population backfill' repairs what local transcripts still prove.`,
     );
+  }
+  // PRESENCE is from the last bind or setup-worktree, not LAST SEEN (#109).
+  const hours = PRESENCE_WINDOW_MS / 3_600_000;
+  const present = active.filter((record) => soulPresence(record, now) === 'present').length;
+  if (active.length > 0) {
+    lines.push('', `${present} of ${active.length} souls present (bound or set up in the last ${hours}h); PRESENCE '?' was never sighted.`);
   }
   return `${lines.join('\n')}\n`;
 }

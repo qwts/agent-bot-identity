@@ -1,0 +1,1 @@
+- The census records `lastSightedAt`, set only when a bind, re-bind, daemon soul-home launch or `setup-worktree` (and so the session-start hook) sights a live session; `agent-bot population list` and `agent-bot doctor` now show which souls are present (sighted in the last 24 hours) and which are historical (#109).

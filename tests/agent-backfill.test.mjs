@@ -151,6 +151,7 @@ test('apply repairs unambiguous rows and leaves everything else honest (#91)', (
   });
   // A backfill is a repair, not a sighting: lastSeen is untouched.
   assert.equal(showSoul(CLAUDE_ID, { file }).lastSeen, '2026-08-06T12:00:00.000Z');
+  assert.equal(showSoul(CLAUDE_ID, { file }).lastSightedAt, undefined);
   // Ambiguity and absence never turn into invented provenance.
   assert.equal(showSoul(AMBIGUOUS_ID, { file }).transcriptLocator, null);
   assert.equal(showSoul(UNFOUND_ID, { file }).transcriptLocator, null);
