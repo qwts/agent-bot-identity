@@ -2,7 +2,8 @@
 // harness a soul runs on is signed in, and starts its own sign-in, without
 // a terminal. The harness's CLI comes from the soul's home when it was
 // installed there, else from PATH. Credentials stay in the harness's own
-// store; this module only reports `loggedIn`.
+// store; this module only reports `loggedIn` and the evidence behind it:
+// `status` is signed-in, signed-out or unknown, with a `reason` when unknown.
 //
 // usage: agent-bot harness auth status|login HARNESS --soul AGENT_ID
 import { execFile } from 'node:child_process';
@@ -40,23 +41,38 @@ export async function harnessAuth(action, harness, { home, env = process.env, no
     catch (error) { throw new Error(`${harness} sign-in did not finish: ${String(error.message ?? error).split('\n')[0]}`); }
   }
   let output;
-  let succeeded = false;
-  try {
-    output = (await runImpl(command, [...args, ...row.signIn.status], { ...options, timeout: 30_000 })).stdout;
-    succeeded = true;
+  let failure = null;
+  try { output = (await runImpl(command, [...args, ...row.signIn.status], { ...options, timeout: 30_000 })).stdout; }
+  catch (error) { failure = error; output = error.stdout ?? ''; }
+  return { harness, ...signInEvidence(row.signIn.read, output, failure) };
+}
+
+const unknown = (reason) => ({ loggedIn: false, status: 'unknown', reason });
+const verdict = (signedIn) => ({ loggedIn: signedIn, status: signedIn ? 'signed-in' : 'signed-out' });
+
+// What a status probe proves (#536). `signed-out` needs positive evidence
+// from the harness; a CLI that is missing, timed out, or printed something
+// this reader does not recognise is `unknown`, never signed in. `loggedIn`
+// stays the boolean older callers read, so it is false for both.
+export function signInEvidence(read, output, failure = null) {
+  if (failure?.code === 'ENOENT') return unknown('status-command-missing');
+  if (failure && (failure.killed || failure.signal)) return unknown('status-timeout');
+  const exited = failure === null || Number.isInteger(failure.code);
+  if (read === 'exit-code') return exited ? verdict(failure === null) : unknown('status-failed');
+  if (read === 'json') {
+    // Claude prints its JSON on a non-zero exit too.
+    try {
+      const value = JSON.parse(String(output));
+      if (typeof value?.loggedIn === 'boolean') return verdict(value.loggedIn);
+    } catch { /* fall through */ }
+    return unknown('status-unreadable');
   }
-  catch (error) { output = error.stdout ?? ''; }
-  let loggedIn = false;
-  const read = row.signIn.read;
-  if (read === 'exit-code') loggedIn = succeeded;
-  else if (read === 'json') {
-    try { loggedIn = JSON.parse(String(output)).loggedIn === true; } catch { /* unreadable status is signed out */ }
-  } else if (succeeded) {
-    // OpenCode decorates its provider count with terminal colours.
-    const plain = String(output).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
-    loggedIn = read.loggedIn.test(plain);
-  }
-  return { harness, loggedIn };
+  if (failure) return unknown('status-failed');
+  // OpenCode decorates its provider count with terminal colours.
+  const plain = String(output).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+  if (read.loggedIn.test(plain)) return verdict(true);
+  if (read.signedOut?.test(plain)) return verdict(false);
+  return unknown('status-unreadable');
 }
 
 // A daemon turn that failed because its harness is signed out (#84): Claude's
