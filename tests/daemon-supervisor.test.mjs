@@ -291,6 +291,24 @@ test('a host label names the launchd and systemd units; the default is unchanged
   assert.equal('AGENT_BOT_SERVICE_LABEL' in supervisorEnvironment({ env: {}, home: '/u' }), false);
 });
 
+// #676: the host's credential names travel in the daemon's own unit.
+test('a host credential namespace and vault are written into the daemon unit', () => {
+  const env = { AGENT_BOT_CREDENTIAL_NAMESPACE: 'app.geniusbar', AGENT_BOT_CREDENTIAL_VAULT: 'GeniusBar Identities' };
+  const environment = supervisorEnvironment({ env, home: '/u' });
+  assert.equal(environment.AGENT_BOT_CREDENTIAL_NAMESPACE, 'app.geniusbar');
+  assert.equal(environment.AGENT_BOT_CREDENTIAL_VAULT, 'GeniusBar Identities');
+  const plist = renderLaunchdPlist({ executable: '/u/.local/bin/agent-bot', environment });
+  assert.match(plist, /<key>AGENT_BOT_CREDENTIAL_VAULT<\/key>\s*<string>GeniusBar Identities<\/string>/);
+  const unit = renderSystemdUnit({ executable: '/u/.local/bin/agent-bot', environment });
+  assert.match(unit, /^Environment=AGENT_BOT_CREDENTIAL_NAMESPACE=app\.geniusbar$/m);
+  assert.match(unit, /^Environment="AGENT_BOT_CREDENTIAL_VAULT=GeniusBar Identities"$/m);
+  const defaults = supervisorEnvironment({ env: {}, home: '/u' });
+  assert.equal('AGENT_BOT_CREDENTIAL_NAMESPACE' in defaults, false);
+  assert.equal('AGENT_BOT_CREDENTIAL_VAULT' in defaults, false);
+  assert.throws(() => supervisorEnvironment({ env: { AGENT_BOT_CREDENTIAL_NAMESPACE: 'a/b' }, home: '/u' }), { code: 'usage' });
+  assert.throws(() => supervisorEnvironment({ env: { AGENT_BOT_CREDENTIAL_VAULT: 'a"b' }, home: '/u' }), { code: 'usage' });
+});
+
 test('an unsafe host label is a usage error', () => {
   for (const label of ['../evil', 'a b', '-lead', 'x;rm', 'gui/501/x']) {
     assert.throws(() => supervisorPaths('/u', 'darwin', { AGENT_BOT_SERVICE_LABEL: label }), { code: 'usage', message: /^usage: AGENT_BOT_SERVICE_LABEL/ });

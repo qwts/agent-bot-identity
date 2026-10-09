@@ -16,7 +16,7 @@ import { pathToFileURL } from 'node:url';
 import { loadConfig } from './config.mjs';
 import { appStoreTarget, readAppMetadata, readManagedAppCredential, updateAppConfig } from './identity-app-store.mjs';
 import { credentialStores, passCliItem, resolveAppCredential } from './soul-credentials.mjs';
-import { CREDENTIAL_VAULT, managedAppItem } from './credential-names.mjs';
+import { CREDENTIAL_VAULT, credentialNamespace, credentialVault, managedAppItem } from './credential-names.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { runPass, classifyPassCliFailure, STORE_UNAVAILABLE_CODES } from './secret-providers/pass-cli.mjs';
 export { classifyPassCliFailure, PROVIDER_SESSION_REQUIRED, PROVIDER_LOCKED, PROVIDER_UNAVAILABLE, STORE_UNAVAILABLE_CODES } from './secret-providers/pass-cli.mjs';
@@ -239,7 +239,9 @@ function throwProviderReadError(error, slug) {
   throw preparationError(code, slug, message, error);
 }
 
-export function createProtonPassCredentialProvider({ run = runPass, write = writeFileSync } = {}) {
+// The import reads the host's vault (#676), resolved before any pass-cli call.
+export function createProtonPassCredentialProvider({ run = runPass, write = writeFileSync, env = process.env } = {}) {
+  const vault = credentialVault(env);
   return {
     id: 'proton-pass',
     restore({ slug, issuerDestination, privateKeyDestination }) {
@@ -253,7 +255,7 @@ export function createProtonPassCredentialProvider({ run = runPass, write = writ
           'item',
           'view',
           '--vault-name',
-          AGENT_IDENTITIES_VAULT,
+          vault,
           '--item-title',
           requireSlug(slug),
           '--output',
@@ -401,8 +403,9 @@ export function ensurePrivateKey({
   const needKey = force || !key || !validateKey(key);
   const target = appStoreTarget(slug, { env, home });
   const kind = config.identityApps?.[slug]?.store ?? 'file';
-  const storedPath = stored?.source === 'pass-cli' ? `pass-cli:${CREDENTIAL_VAULT}/${passCliItem(stored.agentId, slug)}`
-    : kind === 'file' ? join(target.soulDir, '.soul-state', 'credentials', `github-app-${slug}.json`) : `keychain:${managedAppItem(slug).service}`;
+  const names = { namespace: credentialNamespace(env) };
+  const storedPath = stored?.source === 'pass-cli' ? `pass-cli:${credentialVault(env)}/${passCliItem(stored.agentId, slug, names)}`
+    : kind === 'file' ? join(target.soulDir, '.soul-state', 'credentials', `github-app-${slug}.json`) : `keychain:${managedAppItem(slug, names).service}`;
   if (!needKey && !needId) return { path: stored ? storedPath : legacyPath, idPath,
     downloaded: false, appIdWritten: false, localStatus: 'ready', restored: [] };
 
@@ -413,7 +416,7 @@ export function ensurePrivateKey({
   const issuerTemporary = needId ? join(directory, `issuer.${suffix}`) : null;
   const keyTemporary = needKey ? join(directory, `key.${suffix}`) : null;
   try {
-    (provider ?? createProtonPassCredentialProvider({ run, write })).restore({ slug,
+    (provider ?? createProtonPassCredentialProvider({ run, write, env })).restore({ slug,
       issuerDestination: issuerTemporary, privateKeyDestination: keyTemporary });
     if (needId) {
       appId = validateIssuer(read(issuerTemporary, 'utf8'));
