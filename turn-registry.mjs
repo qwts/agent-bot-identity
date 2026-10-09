@@ -10,7 +10,7 @@ import { assertSoulUnpaused } from './agent-population.mjs';
 // A soul may have overlapping interactive sessions; stop reaches every turn.
 // `history` (soul-history.mjs) hears every turn run here as one mirror
 // line: id, kind, times, harness, outcome; never the message or the reply.
-export function createTurnRegistry({ isPaused = () => false, history = null, now = () => new Date() } = {}) {
+export function createTurnRegistry({ isPaused = () => false, history = null, now = () => new Date(), onStop = () => false } = {}) {
   const active = new Map();
   const sessionGrants = createSessionGrants();
   const track = (agentId, controller) => {
@@ -29,6 +29,9 @@ export function createTurnRegistry({ isPaused = () => false, history = null, now
     stop(agentId) {
       sessionGrants.clear(agentId);
       let stopped = false;
+      // Scheduling owners retain their own cancellation facts and leases.
+      // A failed receipt must never prevent shared stop from reaching children.
+      try { stopped = onStop(agentId) === true; } catch { /* controllers still abort below */ }
       for (const controller of active.get(agentId) ?? []) {
         if (!controller.signal.aborted) { controller.abort(); stopped = true; }
       }

@@ -42,8 +42,8 @@ function runRecord(run, terminal) {
   if (!id(run.runId) || !isAgentId(run.agentId) || !root(run.soulDir) || !id(run.generation) || !id(run.daemonGeneration)
     || !['due', 'manual'].includes(run.trigger) || !date(run.startedAt) || !(terminal ? date(run.endedAt) : run.endedAt === null)
     || !(terminal ? TERMINAL : ACTIVE).includes(run.status) || !Number.isSafeInteger(run.timeoutMs) || run.timeoutMs < 1 || run.timeoutMs > DREAM_TIMEOUT_MS
-    || !(run.cancelRequestedAt === null && run.cancelReason === null || date(run.cancelRequestedAt) && ['owner', 'timeout'].includes(run.cancelReason))) invalid();
-  if (run.status === 'cancelling' && run.cancelReason === null || run.status === 'cancelled' && run.cancelReason !== 'owner'
+    || !(run.cancelRequestedAt === null && run.cancelReason === null || date(run.cancelRequestedAt) && ['owner', 'timeout', 'shutdown'].includes(run.cancelReason))) invalid();
+  if (run.status === 'cancelling' && run.cancelReason === null || run.status === 'cancelled' && !['owner', 'shutdown'].includes(run.cancelReason)
     || run.status === 'timed-out' && run.cancelReason !== 'timeout'
     || ['running', 'failed'].includes(run.status) && run.cancelReason !== null) invalid();
 }
@@ -275,7 +275,10 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
   }
   return {
     register, pause, unschedule, recover,
-    cancel: runId => cancel(runId),
+    cancel: (runId, reason = 'owner') => {
+      if (!['owner', 'shutdown'].includes(reason)) fail('dream-cancellation-invalid', 'Cancellation must identify an owner request or daemon shutdown.');
+      return cancel(runId, reason);
+    },
     runNow: agentId => start(agentId, 'manual'),
     tick() {
       healthy();
