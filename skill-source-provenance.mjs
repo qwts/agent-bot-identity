@@ -21,12 +21,16 @@ export function validateSkillSourceProvenance(value) {
   if (value.source?.kind === 'local') {
     if (!exact(value.source, ['kind']) || value.locations.length || value.repository !== null) fail();
   } else if (!exact(value.source, ['kind', 'url']) || value.source.kind !== 'https' || !url(value.source.url)) fail();
-  const paths = new Set();
+  const origins = new Set();
   for (const location of value.locations) {
     if (!exact(location, ['path', 'url', 'resolvedUrl', 'sha256', 'mode'], ['gitBlob']) || !relative(location.path)
-      || paths.has(location.path) || !url(location.url) || !url(location.resolvedUrl) || !digest(location.sha256)
+      || !url(location.url) || !url(location.resolvedUrl) || !digest(location.sha256)
       || !['100644', '100755'].includes(location.mode) || location.gitBlob !== undefined && !commit(location.gitBlob)) fail();
-    paths.add(location.path);
+    // Distinct locators can redirect to one retained file. Preserve each origin
+    // while refusing duplicate records; readers bind all of them to its bytes.
+    const origin = JSON.stringify([location.path, location.url, location.resolvedUrl]);
+    if (origins.has(origin)) fail();
+    origins.add(origin);
   }
   if (value.repository !== null) {
     const repository = value.repository;

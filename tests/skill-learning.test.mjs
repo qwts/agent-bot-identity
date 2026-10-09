@@ -219,15 +219,16 @@ test('malformed historical receipts are reported without suppressing later valid
 
 for (const selection of ['accepted', 'local']) test(`HTTPS ${selection} learning retains portable origins separately from adaptations`, async t => {
   const f = fixture(t), url = 'https://skills.example.com/demo/SKILL.md', final = 'https://cdn.example.com/demo/SKILL.md';
-  const text = '---\nname: demo\ndescription: Remote source\n---\n[Guide](guide.md)\n';
+  const text = '---\nname: demo\ndescription: Remote source\n---\n[Guide](guide.md)\n[Alias](alias.md)\n';
   const guide = 'Retained upstream guide\n', adapted = text + 'Local adaptation\n';
   const options = { ...f.options, resolve: async () => [{ address: '93.184.216.34', family: 4 }],
     requestImpl(target, _options, callback) {
       const request = new EventEmitter();
       request.end = () => queueMicrotask(() => {
-        const response = Readable.from(target.href === url ? [] : [Buffer.from(target.href === final ? text : guide)]);
-        response.statusCode = target.href === url ? 302 : 200;
-        response.headers = target.href === url ? { location: final } : {};
+        const redirect = target.href === url ? final : target.pathname.endsWith('/alias.md') ? 'https://cdn.example.com/demo/guide.md' : null;
+        const response = Readable.from(redirect ? [] : [Buffer.from(target.href === final ? text : guide)]);
+        response.statusCode = redirect ? 302 : 200;
+        response.headers = redirect ? { location: redirect } : {};
         callback(response);
       });
       return request;
@@ -248,11 +249,14 @@ for (const selection of ['accepted', 'local']) test(`HTTPS ${selection} learning
   assert.equal(receipt.source.provenance.capturedAt, options.now().toISOString());
   assert.deepEqual(receipt.source.provenance.source, { kind: 'https', url });
   const locations = receipt.source.provenance.locations;
-  assert.equal(locations.length, 2, 'root and captured dependency have their origins');
+  assert.equal(locations.length, 3, 'root and both locators of one dependency have their origins');
   const root = locations.find(location => location.path === 'SKILL.md');
   assert.equal(root.url, url); assert.equal(root.resolvedUrl, final);
   assert.equal(root.sha256, `sha256:${createHash('sha256').update(text).digest('hex')}`);
   assert.equal(locations.find(location => location.path === 'guide.md').url, 'https://cdn.example.com/demo/guide.md');
+  const alias = locations.find(location => location.url.endsWith('/alias.md'));
+  assert.equal(alias.path, 'guide.md');
+  assert.equal(alias.resolvedUrl, 'https://cdn.example.com/demo/guide.md');
   assert.doesNotMatch(JSON.stringify(receipt), new RegExp(f.home));
   assert.equal(skillLearningPacket(imported.id, f.id, f.options).previousLearning.records[0].schemaVersion, 2);
   // Simulate losing the local library while retaining the versioned soul package.

@@ -23,7 +23,7 @@ test('projection whitelists repository and location metadata and retains only se
   assert.doesNotMatch(JSON.stringify(local), /PRIVATE_HOST_PATH/);
 });
 
-test('portable provenance refuses credentials, unbounded metadata, duplicate paths and mismatched repository selectors', () => {
+test('portable provenance refuses credentials, unbounded metadata, duplicate origins and mismatched repository selectors', () => {
   const base = projectSkillSourceProvenance(snapshot(), ['SKILL.md']);
   const mutations = [
     value => { value.source.url = 'https://user:secret@example.com/SKILL.md'; },
