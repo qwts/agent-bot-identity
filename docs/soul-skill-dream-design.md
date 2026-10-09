@@ -365,6 +365,55 @@ now its latest execution. Versions 1–3 remain readable without disk changes;
 the next write adds v4 state, leaving historical bytes and hash chains unchanged.
 Readers must be upgraded before opening a v4 journal.
 
+### Implemented notice derivation
+
+`skill-dream-notices.mjs` derives deduplicated notices from one terminal run
+and its validated outcome. It is pure: it holds no state, reads no clock and
+delivers nothing. It is not yet wired into the scheduler journal, daemon status
+or CLI, so no notice is produced by a running daemon.
+
+A fingerprint is the SHA-256 of the soul ID, notice kind and a fixed subject;
+run IDs, timestamps and agent-chosen reason codes are excluded. Kinds and their
+subjects are:
+
+| Kind | Subject | Claim | Cleared when |
+| --- | --- | --- | --- |
+| `execution` | none | host-observed | a later completed run (a cancelled run proves nothing) |
+| `report` | none | host-observed | a later structured report, even an empty one |
+| `evidence` | none | host-observed | a later structured report whose revision check ran |
+| `item-blocked` | path and captured digest | agent-reported | a later structured report names that path, supplied untruncated |
+| `capability` | none (no adapter is configurable yet) | host-observed | never by a quiet run; host capability state changes it |
+| `change` | artifact revision | unattributed-change | never; one notice per verified revision |
+
+A persisting condition renews its single live notice (`occurrences`,
+`lastRunId`, latest `detail`) instead of notifying every interval. An
+acknowledged condition stays deduplicated. A recurrence after an observed clear
+creates a new notice. A pending proposal is reported as `proposal-pending`,
+which is the owner's action. Only a completed attempt's report is evidence: a
+cancelled attempt observes nothing, even with the `execution-failed` outcome the
+service stages when a stopped executor rejects. A cancelled, failed or timed-out
+run with any other report is refused as inconsistent. A change notice inherits the outcome's
+`attribution: not-established`: the artifact changed the source, but the run is
+not shown to have caused it. Runs are applied in journal order; replaying the
+latest run is idempotent.
+
+Only live (open or acknowledged) notices are retained, because they are meant
+for scheduler state, which every journal transaction copies. A cleared notice
+leaves the ledger and is returned, with `clearedAt`, for the append-only journal.
+Each soul keeps at most 16 live notices within 8 KiB. Three slots, and the bytes
+for them, are reserved for the subject-less host kinds (`execution`, `report`,
+`evidence`), so agent-reported conditions can never crowd out an owner-visible
+failure by count or by long paths. Every notice is charged at its growth
+ceiling (longest detail, acknowledged, largest counter), so renewing or
+acknowledging an admitted notice cannot exceed the budget. In practice the byte
+budget admits about nine short claims. Renewal and clearing always use the run's
+full bounded condition set, so admission limits never make a persisting
+condition look recovered. A live notice, read or not, is never evicted, so
+eviction cannot cause a renotification. A new condition without room increments
+a visible `suppressed` count. Delivery is `pending-host-read` until an authorized
+host acknowledges the notice, then `host-acknowledged`; nothing is ever marked
+`delivered` without a delivery adapter.
+
 ### Remaining checkpoint and notice contract
 
 Execution status and maintenance coverage are separate. A process can finish
