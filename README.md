@@ -213,7 +213,7 @@ Opening this checkout before bootstrap, or a cloud / ephemeral session that
 cannot finish install, is the uninstalled class: committed hooks refuse
 human-attributed commits and GitHub writes unless the actor is in
 `AGENT_BOT_UNMANAGED_AUTHORS`, else the config's `settings.unmanagedAuthors`
-(default `ai9d` while neither is set). Reads and
+(with neither selected, nobody is allowlisted). Reads and
 uncommitted edits are allowed. `doctor` reports `identity.class` and does
 not install. Publishing as the bot still requires the durable-host journey
 below.
@@ -1440,10 +1440,12 @@ use the `apps` map with the exact slugs instead. `doctor` prints the resolved
 - `settings.unmanagedAuthors` — lowercase logins (or git names / email local
   parts) who may publish as themselves from an agent session in uninstalled
   mode (ENG-0128). `AGENT_BOT_UNMANAGED_AUTHORS`, when set (even empty),
-  overrides it; with neither set the committed hooks and `doctor` still use
-  `ai9d` until organization profiles carry the list (#675). `doctor` reports
-  the source as `unmanaged_authors_source` (`env`, `config`, `default`, or
-  `invalid-config`, in which case the hooks refuse).
+  overrides it. With neither set there is no allowlist and the committed
+  hooks refuse every human-attributed publish (#675); select one in the
+  organization profile (`settings.unmanaged_authors`), which `bootstrap
+  --profile` projects into the config. `doctor` reports the source as
+  `unmanaged_authors_source` (`env`, `config`, `none`, or `invalid-config`;
+  the hooks refuse on `invalid-config`).
 - `features.github-identity` and `features.persona-accounts` — optional add-on
   gates, both off unless explicitly set to `true`. qwts machines keep their
   current behavior by setting both to `true` in this same config. A config

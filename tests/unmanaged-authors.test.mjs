@@ -7,7 +7,8 @@ import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { LEGACY_UNMANAGED_AUTHORS, unmanagedAuthors, unmanagedAuthorsWithLegacyDefault } from '../config.mjs';
+import * as configModule from '../config.mjs';
+import { unmanagedAuthors } from '../config.mjs';
 import { organizationProfileToConfig, validateOrganizationProfile, ORGANIZATION_PROFILE_SCHEMA_VERSION } from '../organization-profile.mjs';
 import { UNINSTALLED_REASON, uninstalledDecision } from '../uninstalled-identity-hook.mjs';
 
@@ -34,10 +35,10 @@ test('a set env decides without reading the config, so a malformed config cannot
   assert.throws(() => unmanagedAuthors({ env: { AGENT_BOT_CONFIG: bad } }), /invalid settings\.unmanagedAuthors/);
 });
 
-test('only the entry-point helper supplies the legacy default, and only when nothing is set', () => {
-  assert.deepEqual(unmanagedAuthorsWithLegacyDefault({ env: {}, config: {} }), { authors: [...LEGACY_UNMANAGED_AUTHORS], source: 'default' });
-  assert.deepEqual(unmanagedAuthorsWithLegacyDefault({ env: { AGENT_BOT_UNMANAGED_AUTHORS: '' }, config: {} }), { authors: [], source: 'env' });
-  assert.deepEqual(unmanagedAuthorsWithLegacyDefault({ env: {}, config: configured }).source, 'config');
+test('nothing selected is no allowlist: there is no compiled default (#675)', () => {
+  assert.deepEqual(unmanagedAuthors({ env: {}, config: {} }), { authors: [], source: 'none' });
+  assert.equal('unmanagedAuthorsWithLegacyDefault' in configModule, false);
+  assert.equal('LEGACY_UNMANAGED_AUTHORS' in configModule, false);
 });
 
 test('the identity hook library is unchanged: nothing set still refuses a human commit', () => {
@@ -80,11 +81,12 @@ test('the git hooks resolve the same list doctor reports', () => {
   assert.equal(shellAuthors({ ...base, AGENT_BOT_CONFIG: good, AGENT_BOT_UNMANAGED_AUTHORS: 'zed' }), 'zed');
   assert.equal(shellAuthors({ ...base, AGENT_BOT_CONFIG: good, AGENT_BOT_UNMANAGED_AUTHORS: '' }), '');
   assert.equal(shellAuthors({ ...base, AGENT_BOT_CONFIG: good }), 'alice,bob@example.com');
-  assert.equal(shellAuthors({ ...base, AGENT_BOT_CONFIG: join(dir, 'absent.json') }), 'ai9d');
+  // Nothing selected: no compiled default, so the hook refuses (#675).
+  assert.equal(shellAuthors({ ...base, AGENT_BOT_CONFIG: join(dir, 'absent.json') }), '');
   // A config the resolver rejects yields nothing: the hook refuses.
   assert.equal(shellAuthors({ ...base, AGENT_BOT_CONFIG: bad }), '');
 });
 
-test('without Node the git hooks keep the compiled default they had before', { skip: ['/usr/bin/node', '/bin/node'].some(existsSync) && 'node is on the minimal PATH' }, () => {
-  assert.equal(shellAuthors({ PATH: '/usr/bin:/bin', HOME: tmpdir(), AGENT_BOT_CONFIG: '/nonexistent' }), 'ai9d');
+test('without Node the git hooks resolve nothing and refuse (#675)', { skip: ['/usr/bin/node', '/bin/node'].some(existsSync) && 'node is on the minimal PATH' }, () => {
+  assert.equal(shellAuthors({ PATH: '/usr/bin:/bin', HOME: tmpdir(), AGENT_BOT_CONFIG: '/nonexistent' }), '');
 });

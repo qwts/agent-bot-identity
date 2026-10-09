@@ -29,7 +29,7 @@ An uninstalled or ephemeral session — cloud offload, a fresh host, or this
 checkout opened before bootstrap — is already under identity policy.
 Committed hooks refuse human-attributed commits and GitHub writes unless the
 actor is in `AGENT_BOT_UNMANAGED_AUTHORS`, else the config's
-`settings.unmanagedAuthors` (default `ai9d` while neither is set); reads
+`settings.unmanagedAuthors` (nobody while neither is set); reads
 and uncommitted edits are allowed. `doctor` reports `identity.class` and
 does not install. Publishing as the bot still requires the durable journey
 below.

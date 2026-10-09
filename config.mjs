@@ -234,16 +234,6 @@ export function unmanagedAuthors({ env = process.env, config, home } = {}) {
   return configured === null ? { authors: [], source: 'none' } : { authors: configured, source: 'config' };
 }
 
-// Until the organization profile carries the list, the hooks and doctor keep
-// the compiled `ai9d` they used when nothing was set. Only those entry points
-// call this; the identity hook library never does, so nothing that refuses
-// today starts allowing. Removed once the profile migration lands (#675).
-export const LEGACY_UNMANAGED_AUTHORS = Object.freeze(['ai9d']);
-export function unmanagedAuthorsWithLegacyDefault(options = {}) {
-  const resolved = unmanagedAuthors(options);
-  return resolved.source === 'none' ? { authors: [...LEGACY_UNMANAGED_AUTHORS], source: 'default' } : resolved;
-}
-
 // `owner` names the GitHub account an App is installed on. It is a selector
 // for mint-token, not the roster's governance owner, and the two may differ.
 function validateOwner(config) {

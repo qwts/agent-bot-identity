@@ -331,14 +331,15 @@ test('generated adapters on a cold home deny publish and allow file edits, in ev
   }
 });
 
-test('generated adapters allow unmanaged publish only as ai9d', () => {
+test('generated adapters allow unmanaged publish only for an explicitly listed author (#675)', () => {
   const home = mkdtempSync(join(tmpdir(), 'uninstalled-ai9d-'));
+  const listed = { ...AI9D, AGENT_BOT_UNMANAGED_AUTHORS: 'ai9d' };
   try {
     for (const row of DIALECTS.filter((candidate) => candidate.file)) {
       const allow = runGenerated(row.key, 'pre-command', {
         home,
         payload: { command: 'git commit -m ship' },
-        env: actorEnv('ai9d', AI9D),
+        env: actorEnv('ai9d', listed),
       });
       const expectedAllow = encodeDecision({
         dialectKey: row.key,
@@ -351,14 +352,14 @@ test('generated adapters allow unmanaged publish only as ai9d', () => {
       const push = runGenerated(row.key, 'pre-command', {
         home,
         payload: { command: 'gh pr create --title x --body y' },
-        env: actorEnv('ai9d', AI9D),
+        env: actorEnv('ai9d', listed),
       });
       assert.equal(push.status, expectedAllow.exitCode, `${row.key} ai9d gh write exit`);
 
       const human = runGenerated(row.key, 'pre-command', {
         home,
         payload: { command: 'git commit -m ship' },
-        env: actorEnv('qwts', HUMAN),
+        env: actorEnv('qwts', { ...HUMAN, AGENT_BOT_UNMANAGED_AUTHORS: 'ai9d' }),
       });
       const expectedDeny = encodeDecision({
         dialectKey: row.key,
@@ -367,6 +368,15 @@ test('generated adapters allow unmanaged publish only as ai9d', () => {
         reason: UNINSTALLED_REASON,
       });
       assert.equal(human.status, expectedDeny.exitCode, `${row.key} human commit exit`);
+
+      // Nothing selected: the wrapper supplies no default, so ai9d is refused too.
+      const unlisted = runGenerated(row.key, 'pre-command', {
+        home,
+        payload: { command: 'git commit -m ship' },
+        env: actorEnv('ai9d', { ...AI9D, AGENT_BOT_UNMANAGED_AUTHORS: undefined }),
+      });
+      assert.equal(unlisted.status, expectedDeny.exitCode, `${row.key} unlisted ai9d commit exit`);
+      assert.equal(unlisted.stdout, expectedDeny.stdout, `${row.key} unlisted ai9d commit stdout`);
     }
   } finally {
     rmSync(home, { recursive: true, force: true });
@@ -427,19 +437,28 @@ test('source pre-push denies an agent when the installed hook is missing', () =>
     assert.equal(accountOnly.status, 2);
     assert.match(accountOnly.stderr, /uninstalled identity/);
 
-    const unmanaged = spawnSync(hook, ['origin', 'https://github.com/example/repo.git'], {
+    // Nothing selected refuses ai9d like anyone else (#675); the env or the
+    // config (an organization profile projects into it) selects it.
+    const pushAs = (extra) => spawnSync(hook, ['origin', 'https://github.com/example/repo.git'], {
       cwd: repo,
       input: '',
       encoding: 'utf8',
-      env: { ...stripped, CURSOR_AGENT: '1', ...actorEnv('ai9d') },
+      env: { ...stripped, AGENT_BOT_UNMANAGED_AUTHORS: undefined, AGENT_BOT_CONFIG: join(home, 'no-config.json'), CURSOR_AGENT: '1', ...actorEnv('ai9d'), ...extra },
     });
+    const unselected = pushAs({});
+    assert.equal(unselected.status, 2);
+    assert.match(unselected.stderr, /uninstalled identity/);
+    assert.equal(pushAs({ AGENT_BOT_UNMANAGED_AUTHORS: 'ai9d' }).status, 0);
+    const config = join(home, 'config.json');
+    writeFileSync(config, JSON.stringify({ settings: { unmanagedAuthors: ['ai9d'] } }));
+    const unmanaged = pushAs({ AGENT_BOT_CONFIG: config });
     assert.equal(unmanaged.status, 0, unmanaged.stderr);
 
     const spoofed = spawnSync(hook, ['origin', 'https://github.com/example/repo.git'], {
       cwd: repo,
       input: '',
       encoding: 'utf8',
-      env: { ...stripped, CURSOR_AGENT: '1', GH_USER: 'ai9d', ...actorEnv('qwts') },
+      env: { ...stripped, CURSOR_AGENT: '1', AGENT_BOT_UNMANAGED_AUTHORS: 'ai9d', GH_USER: 'ai9d', ...actorEnv('qwts') },
     });
     assert.equal(spoofed.status, 2);
 

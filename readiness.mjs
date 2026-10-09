@@ -17,7 +17,7 @@ import { inspectSoulSpace } from './soul-memory.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
 import { duplicateSoulDirs, listSouls, orphanSoulDirs, populationFile } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
-import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness, unmanagedAuthorsWithLegacyDefault } from './config.mjs';
+import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness, unmanagedAuthors } from './config.mjs';
 import { preGateConfigStatus } from './config-migration.mjs';
 import { inspectAppCredentials } from './credential-reconciler.mjs';
 import { configuredAccountIdentity, accountName, detectHarness, HARNESSES } from './detect-harness.mjs';
@@ -1313,7 +1313,7 @@ function orphanSoulDirsCheck({ home, env, config }) {
 // A malformed config is reported, not guessed around: the hooks refuse then.
 function unmanagedEvidence(env, home) {
   try {
-    const { authors, source } = unmanagedAuthorsWithLegacyDefault({ env, home });
+    const { authors, source } = unmanagedAuthors({ env, home });
     return { unmanaged_authors: authors, unmanaged_authors_source: source };
   } catch {
     return { unmanaged_authors: [], unmanaged_authors_source: 'invalid-config' };
@@ -1331,16 +1331,21 @@ function identityClassCheck({ home, env, access }) {
       evidence: { class: 'durable' },
     });
   } catch {
+    const evidence = { class: 'uninstalled', ...unmanagedEvidence(env, home) };
+    // Nothing selected is a valid policy, not a fault: every human-attributed
+    // publish is refused (#675). Say so and how to choose otherwise.
+    const none = evidence.unmanaged_authors_source === 'none';
     return readinessCheck({
       id: 'identity.class',
       status: 'warning',
       code: 'identity-uninstalled',
-      message: 'uninstalled or ephemeral session: committed hooks refuse human-attributed commits and GitHub writes unless the actor is an unmanaged allowlisted author',
-      action: 'on a host you will keep, run the source checkout bootstrap',
-      evidence: {
-        class: 'uninstalled',
-        ...unmanagedEvidence(env, home),
-      },
+      message: none
+        ? 'uninstalled or ephemeral session with no explicit unmanaged-author policy: committed hooks refuse every human-attributed commit and GitHub write'
+        : 'uninstalled or ephemeral session: committed hooks refuse human-attributed commits and GitHub writes unless the actor is an unmanaged allowlisted author',
+      action: none
+        ? 'on a host you will keep, run the source checkout bootstrap; to let named humans publish as themselves, select settings.unmanaged_authors in the organization profile, settings.unmanagedAuthors in the agent-bot config, or set AGENT_BOT_UNMANAGED_AUTHORS'
+        : 'on a host you will keep, run the source checkout bootstrap',
+      evidence,
     });
   }
 }
