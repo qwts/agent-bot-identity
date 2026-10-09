@@ -40,6 +40,11 @@ function fixture() {
   mkdirSync(repo);
   mkdirSync(home);
   writeFileSync(globalConfig, '');
+  // doctor probes the secure store by launching pass-cli from PATH. Shadow it
+  // so a test run never reaches the host's real store session.
+  const bin = path.join(root, 'bin');
+  mkdirSync(bin);
+  writeFileSync(path.join(bin, 'pass-cli'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
   git(repo, 'init', '--quiet', '--initial-branch=main');
   git(repo, 'config', 'user.name', 'Test');
   git(repo, 'config', 'user.email', 'test@example.com');
@@ -49,7 +54,7 @@ function fixture() {
   git(repo, 'worktree', 'add', '--quiet', '--detach', worktree);
   git(worktree, 'config', '--worktree', 'user.name', 'test-agent[bot]');
   git(worktree, 'config', '--worktree', 'agentBot.agentId', ID);
-  return { root, repo, worktree, home, spaces, globalConfig };
+  return { root, repo, worktree, home, spaces, globalConfig, bin };
 }
 
 function doctor(cwd, fx, args = []) {
@@ -62,6 +67,7 @@ function doctor(cwd, fx, args = []) {
     encoding: 'utf8',
     env: {
       ...env,
+      PATH: `${fx.bin}${path.delimiter}${env.PATH ?? ''}`,
       HOME: fx.home,
       ZDOTDIR: fx.home,
       GIT_CONFIG_GLOBAL: fx.globalConfig,

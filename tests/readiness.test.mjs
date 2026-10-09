@@ -87,6 +87,10 @@ function machineDependencies(home, { shim = false, inspectCredentials } = {}) {
       port: 50003,
       startedAt: '2026-08-16T00:00:00.000Z',
     }),
+    // Never the host's secure store: the defaults launch pass-cli from the
+    // test runner's PATH. A test that exercises a probe passes its own.
+    probeSecretStore: () => [],
+    probeSessionContext: () => [],
     inspectCredentials: inspectCredentials ?? (async ({ slugs }) => slugs.map((slug, index) => ({
       slug,
       local: { status: 'ready', restored: [] },
@@ -101,6 +105,27 @@ function machineDependencies(home, { shim = false, inspectCredentials } = {}) {
 
 after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
+});
+
+// A pass-cli canary first on PATH records any launch. The machine fixtures
+// must never reach it; the unstubbed default must, or the canary proves nothing.
+test('machine fixtures never launch the host secure-store CLI', async (t) => {
+  const home = tempRoot();
+  const bin = join(home, 'canary-bin');
+  const marker = join(home, 'pass-cli-launched');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'pass-cli'), `#!/bin/sh\necho launched >> '${marker}'\nexit 1\n`, { mode: 0o755 });
+  const PATH = process.env.PATH;
+  process.env.PATH = `${bin}:${PATH}`;
+  t.after(() => { process.env.PATH = PATH; });
+  // A launcher session directory, so the session-context probe is reached too.
+  mkdirSync(join(home, '.local', 'state', 'agent-bot', 'proton-pass'), { recursive: true });
+  await collectReadiness({ command: 'doctor', scope: 'machine', ...machineDependencies(home) });
+  await collectReadiness(machineScopeOptions({ root: home }));
+  assert.equal(existsSync(marker), false, 'a machine fixture launched pass-cli');
+  const { probeSecretStore, probeSessionContext, ...unstubbed } = machineDependencies(home);
+  await collectReadiness({ command: 'doctor', scope: 'machine', ...unstubbed });
+  assert.equal(existsSync(marker), true, 'the canary must catch the unstubbed default');
 });
 
 test('doctor warns when a pre-gate config has souls with GitHub Apps (#361)', async () => {
