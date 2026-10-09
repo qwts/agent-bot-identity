@@ -144,7 +144,8 @@ Consequences of these rules:
   fails if one is reassigned.
 - **The policy graph is acyclic.** `cli` may import `host`; `host` never
   imports `cli`.
-- **The 31 crossings that exist today form the test's `baseline`.**
+- **The crossings that existed when the map landed form the test's `baseline`.**
+  There were 31 at `a339a31`; 6 remain at `0aae907`.
   - A new crossing fails the test.
   - A removed crossing must also be removed from the baseline, so the baseline
     only shrinks.
