@@ -1,0 +1,1 @@
+- Reclassify `agent-backfill.mjs` and `approval-action.mjs` as soul and `agent-approvals.mjs` as cli in the runtime module map, removing two identity-to-population crossings. No code, command or format changes (#645).
