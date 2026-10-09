@@ -120,7 +120,10 @@ export function daemonClient({
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) throw Object.assign(new Error(`daemon ${method} ${pathname} failed: ${payload.error ?? `HTTP ${res.status}`}`),
       ['soul-paused', 'owner-credential-required', 'owner-consent-unavailable'].includes(payload.code)
-        || typeof payload.code === 'string' && /^dream-[a-z][a-z-]{0,63}$/.test(payload.code) ? { code: payload.code } : {});
+        || typeof payload.code === 'string' && /^dream-[a-z][a-z-]{0,63}$/.test(payload.code) ? { code: payload.code } : {},
+      method === 'POST' && pathname.startsWith('/v0/soul/dream/') && payload.audit?.status === 'unconfirmed'
+        && payload.audit?.code === 'dream-control-audit-unconfirmed'
+        ? { audit: { status: 'unconfirmed', code: 'dream-control-audit-unconfirmed' } } : {});
     return payload;
   }
   return {

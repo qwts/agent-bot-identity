@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { populationFile, upsertSoul } from '../agent-population.mjs';
 import { createDaemonServer, daemonClient, daemonStateFile } from '../agent-daemon.mjs';
+import { auditFile } from '../agent-principals.mjs';
 import { createTurnRegistry } from '../wake-plane.mjs';
 import { DREAM_USAGE, parseDreamArgs, soulDreamCommand } from '../cli/soul-dream.mjs';
 import { main as soulSkillMain } from '../cli/soul-skill.mjs';
@@ -194,6 +195,22 @@ test('the CLI reaches the real owner-gated daemon routes through the daemon clie
   server.dream.control = () => { throw Object.assign(new Error('boom'), { code: 'EACCES' }); };
   assert.equal(await cli(['--soul', 'bill', '--pause', '--principal-stdin', '--json']), 1);
   assert.equal(JSON.parse(out.at(-1)).error.code, 'dream-failed', 'other codes are not forwarded');
+  const audit = auditFile({ env: f.env, home: f.home });
+  const breakOutcomeAudit = () => { renameSync(audit, `${audit}.saved`); mkdirSync(audit); };
+  const restoreAudit = () => { rmSync(audit, { recursive: true }); renameSync(`${audit}.saved`, audit); };
+  server.dream.control = () => { breakOutcomeAudit(); return { agentId: ID, runId: RUN, status: 'started' }; };
+  assert.equal(await cli(['--soul', 'bill', '--run-now', '--principal-stdin', '--json']), 0, 'a started run must not be presented as failed');
+  assert.equal(JSON.parse(out.at(-1)).result.runId, RUN);
+  assert.deepEqual(JSON.parse(out.at(-1)).audit, { status: 'unconfirmed', code: 'dream-control-audit-unconfirmed' });
+  restoreAudit();
+  server.dream.control = () => { breakOutcomeAudit(); throw Object.assign(new Error('Executor unavailable.'), { code: 'dream-executor-unconfigured', statusCode: 409 }); };
+  assert.equal(await cli(['--soul', 'bill', '--pause', '--principal-stdin', '--json']), 1);
+  assert.equal(JSON.parse(out.at(-1)).error.code, 'dream-executor-unconfigured', 'the original failure survives a failed audit append');
+  assert.deepEqual(JSON.parse(out.at(-1)).audit, { status: 'unconfirmed', code: 'dream-control-audit-unconfirmed' });
+  restoreAudit();
+  assert.equal(await cli(['--soul', 'bill', '--pause', '--principal-stdin']), 1);
+  assert.match(err.at(-1), /control outcome audit could not be confirmed/);
+  assert.equal(JSON.stringify(out).includes(audit), false);
   assert.equal(JSON.stringify(out).includes(principal.secret), false);
 });
 

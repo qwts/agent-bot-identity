@@ -131,7 +131,9 @@ export async function soulDreamCommand(argv, {
         body = { runId: parsed.runId };
       }
       const response = await client.dreamControl(parsed.action, body, { principal });
-      result = { schemaVersion: 1, agentId: soul.id, action: parsed.action, maintenanceCoverage: 'unverified', result: response.result ?? null };
+      result = { schemaVersion: 1, agentId: soul.id, action: parsed.action, maintenanceCoverage: 'unverified', result: response.result ?? null,
+        ...(response.audit?.status === 'unconfirmed' && response.audit?.code === 'dream-control-audit-unconfirmed'
+          ? { audit: { status: 'unconfirmed', code: 'dream-control-audit-unconfirmed' } } : {}) };
       if (parsed.action === 'run-now') ok = response.result?.status === 'started';
       if (parsed.action === 'cancel') ok = response.result?.requested === true;
     }
@@ -139,8 +141,11 @@ export async function soulDreamCommand(argv, {
     return ok ? 0 : 1;
   } catch (error) {
     const failure = { code: typeof error.code === 'string' ? error.code : 'dream-failed', message: error.message };
-    if (parsed.json) stdout.write(`${JSON.stringify({ error: failure })}\n`);
-    else stderr.write(`agent-bot soul skill dream: ${failure.code}: ${failure.message}\n`);
+    const audit = error.audit?.status === 'unconfirmed' && error.audit?.code === 'dream-control-audit-unconfirmed'
+      ? { audit: { status: 'unconfirmed', code: 'dream-control-audit-unconfirmed' } } : {};
+    if (parsed.json) stdout.write(`${JSON.stringify({ error: failure, ...audit })}\n`);
+    else stderr.write(`agent-bot soul skill dream: ${failure.code}: ${failure.message}\n${audit.audit
+      ? 'The control outcome audit could not be confirmed; inspect status before retrying.\n' : ''}`);
     return 1;
   }
 }
