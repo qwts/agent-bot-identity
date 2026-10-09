@@ -1,0 +1,1 @@
+- Add explicit portable source checks from accepted soul receipts, retaining unchanged, changed or unavailable results and bounded review candidates independently of the local library. Checks preserve accepted revisions and distinguish retained-file diffs from unbaselined candidate files (#312, #603).

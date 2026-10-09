@@ -418,9 +418,47 @@ recorded accepted file hashes and modes against the retained package bytes.
 
 Version 1 receipts remain readable with their original missing provenance;
 relearning creates a new version 2 receipt without rewriting older revisions.
-The stored origin evidence survives loss of the local library. Rechecking a
-portable soul's upstream sources without that library remains unimplemented;
-origin metadata grants no fetching or adoption authority.
+The stored origin evidence survives loss of the local library. Origin metadata
+alone grants no fetching or adoption authority. The existing 256 KiB receipt
+limit includes this provenance, so extensive remote metadata can exceed the
+limit even when an older version 1 receipt for the same files would fit.
+
+### Recheck a portable soul's sources
+
+```sh
+agent-bot soul skill check IMPORT_UUID --soul AGENT_ID --json
+```
+
+This explicit operation requires the caller's binding to name the soul. It reads
+that soul's accepted revision and learning receipt, then reuses the bounded
+HTTPS/GitHub fetcher without consulting the original local library. The result
+names the accepted package revision, receipt digest and accepted upstream digest.
+It reports `unchanged`, `changed` or `unavailable`, and writes a version 1 check
+record under the soul's `.soul-state/tmp/skill-check-*/`. Available capture bytes
+are kept in `payload/` with their acquisition `manifest.json`; `check.json`
+records the comparison. The returned `staging` path is temporary review data,
+not an accepted package revision or a durable history of checks.
+
+The full upstream digest comparison is separate from file-level comparisons:
+only retained accepted files have old bytes available for a diff. Candidate
+files outside that baseline are labeled `unbaselined`, never proven additions.
+Text diffs use whole-file replacement hunks and share a 64 KiB output budget;
+binary, non-UTF-8 and larger changes remain visible through hashes, modes and
+candidate bytes. Failed root fetches
+write an unavailable check without a candidate. An incomplete dependency capture
+keeps its partial candidate for diagnosis but also reports `unavailable`. Retained
+files missing from a partial candidate are `uncaptured`, with no deletion diff;
+only a complete candidate can classify missing retained files as `removed`.
+Version 1 receipts and local-source receipts report unavailable without fetching
+or guessing host paths. None of these outcomes changes accepted captures,
+adapted skills, the live package or revision history.
+
+The candidate uses the existing acquisition bounds and a 4 MiB metadata limit;
+checks use the same 4 MiB JSON bound. There is no candidate apply command yet.
+Adopting reviewed changes still requires preparing a definition and submitting
+it through the existing revision/proposal policy; this check grants no bypass.
+Readers also verify Git blob hashes against retained bytes and reject a legacy
+`source.repository` alias that contradicts version 2 `source.provenance`.
 
 One current receipt/capture set per import replaces that import's prior set in
 the private candidate. Each source inventory retains the library's file/byte

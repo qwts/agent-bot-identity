@@ -1,6 +1,7 @@
 // Agent-guided learning (#603/#312). Mechanism API; hosts authenticate the
 // proposer. The CLI uses revisionCommand's existing own-soul authorization.
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { constants, closeSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, writeFileSync, chmodSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { readSkillMaterial } from './skill-library.mjs';
@@ -72,9 +73,11 @@ function validatePortableReceipt(record, files) {
   if (record.schemaVersion === 1) return; // old receipts remain readable, without invented provenance
   const provenance = validateSkillSourceProvenance(record.source?.provenance);
   if (provenance.digest !== record.source.acceptedDigest) fail('source provenance names another accepted snapshot');
+  if (Object.hasOwn(record.source, 'repository') && !isDeepStrictEqual(record.source.repository, provenance.repository)) fail('repository alias disagrees with source provenance');
   for (const location of provenance.locations) {
     const capture = files.get(`${prefix(record.libraryId)}/sources/${provenance.digest.slice(7)}/${location.path}`);
     if (!capture || hash(capture.bytes) !== location.sha256 || capture.mode !== location.mode) fail('source provenance does not match retained accepted bytes');
+    if (location.gitBlob !== undefined && createHash('sha1').update(`blob ${capture.bytes.length}\0`).update(capture.bytes).digest('hex') !== location.gitBlob) fail('repository blob does not match retained accepted bytes');
   }
 }
 
@@ -85,6 +88,25 @@ function current(id, options) {
   return { history, head: history.at(-1) };
 }
 function fileMap(entries) { return new Map(entries.filter(entry => entry.mode !== '040000').map(entry => [entry.path, entry])); }
+// Read the accepted package, independently of the originating local library.
+// Old receipts deliberately supply no invented remote source information.
+export function readLearnedSkillSource(libraryId, agentId, options = {}) {
+  if (typeof libraryId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(libraryId)) fail('select a skill import UUID');
+  const { head } = current(agentId, options);
+  const files = fileMap(readSoulPackageEntries(revisionPackagePath(agentId, head.revision, options)).entries);
+  const entry = files.get(receiptFile(libraryId));
+  if (!entry || entry.bytes.length > 256 * 1024) fail('accepted package has no bounded learning receipt for this import');
+  let record;
+  try { record = JSON.parse(entry.bytes.toString('utf8')); } catch { fail('invalid stored learning receipt'); }
+  if (![1, 2].includes(record?.schemaVersion) || record.libraryId !== libraryId || record.agentId !== agentId) fail('invalid stored learning receipt');
+  validatePortableReceipt(record, files);
+  const provenance = record.schemaVersion === 2 ? record.source.provenance : null;
+  const entries = [...new Set(provenance?.locations.map(location => location.path) ?? [])].map(file => {
+    const entry = files.get(`${prefix(libraryId)}/sources/${provenance.digest.slice(7)}/${file}`);
+    return { ...entry, path: file };
+  });
+  return { agentId, libraryId, parentRevision: head.revision, receiptDigest: hash(entry.bytes), provenance, entries };
+}
 function priorLearning(id, libraryId, history, options) {
   const records = [], seen = new Set();
   for (const revision of history.slice(-20).reverse()) {

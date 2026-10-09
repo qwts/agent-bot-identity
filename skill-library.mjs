@@ -167,7 +167,7 @@ function acquire(input, id, options = {}) {
     coverage: { boundary: 'markdown-inline-file-links-v1', unresolved: refs.filter(edge => edge.status === 'unresolved').length, external: refs.filter(edge => edge.status === 'external').length, universalRetrieval: false } };
 }
 function remote(input) { return typeof input === 'string' && /^https?:/i.test(input); }
-async function acquireHttps(input, id, options) {
+export async function acquireHttpsSkill(input, id, options = {}) {
   const local = boundedLimits(options.limits), remoteLimits = { ...options.remoteLimits };
   // Validate remote overrides before applying any stricter local bounds.
   for (const [key, value] of Object.entries(remoteLimits)) if (!Object.hasOwn(REMOTE_SKILL_LIMITS, key) || !Number.isSafeInteger(value) || value < 1 || value > REMOTE_SKILL_LIMITS[key]) fail('skill-limit-invalid', 'remote limits may only lower the documented positive bounds');
@@ -342,7 +342,7 @@ export function importSkill(input, { now = () => new Date(), ...options } = {}) 
   const id = randomUUID();
   if (remote(input)) {
     input = skillSourceUrl(input); // reject secret-bearing input before async I/O
-    return acquireHttps(input, id, { ...options, now }).then(content => publishImport(content, id, now, options));
+    return acquireHttpsSkill(input, id, { ...options, now }).then(content => publishImport(content, id, now, options));
   }
   return publishImport(acquire(input, id, options), id, now, options);
 }
@@ -434,7 +434,7 @@ function textDiffs(root, accepted, candidate, changes) {
 }
 export function checkSkill(id, { now = () => new Date(), ...options } = {}) {
   const { root, record } = load(id, options);
-  if (record.source.kind === 'https') return acquireHttps(record.source.url, id, { ...options, now }).then(
+  if (record.source.kind === 'https') return acquireHttpsSkill(record.source.url, id, { ...options, now }).then(
     source => publishCheck(source), error => publishCheck(null, error));
   return publishCheck();
   function publishCheck(fetched, fetchError) {
