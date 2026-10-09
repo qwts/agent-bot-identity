@@ -89,7 +89,8 @@ Accepted records constrain the design:
     its module has no remaining boundary crossings, one module per PR, behind
     re-export shims at the old paths.
   - The modules are `identity`, `soul`, `harness`, `comms`, `org` and `shared`,
-    plus two composition roots, `host` and `cli`.
+    plus two composition roots, `host` and `cli`. When the agent-comms broker
+    moves in (§5) it becomes one more module, `comms-broker`.
 - **No new process, package, binary or service is created to mirror a module
   name.**
   - `agent-bot` stays the command facade. An `agent-identity` or `agent-soul`
@@ -103,13 +104,13 @@ These are enforced by `tests/module-boundaries.test.mjs`:
 
 | Module | May import | Owns |
 | --- | --- | --- |
-| `shared` | nothing | Configuration, secret stores, shell path, logging |
+| `shared` | nothing | Configuration, shell path, logging; nothing that reads a credential or secret |
 | `harness` | `shared` | Harness knowledge: detection, hook dialects, configuration conventions, capability descriptors |
 | `org` | `shared` | Organization and SOP source resolution from pinned external data |
-| `identity` | `harness`, `org`, `shared` | Principals, Agent IDs, execution bindings, App credential custody, token minting, authorization, owner gate, revocation, audit |
-| `comms` | `identity`, `org`, `shared` | Broker client, relay, wake listener and dispatch, task turns; later the broker itself |
+| `identity` | `harness`, `org`, `shared` | Principals, Agent IDs, execution bindings, credential custody (App keys, secret stores and providers), token minting, authorization, owner gate, revocation, audit |
+| `comms` | `identity`, `org`, `shared` | In-process client side: broker client, relay, wake listener and dispatch, task turns |
 | `soul` | `identity`, `harness`, `comms`, `org`, `shared` | Definition, packages, population, lifecycle, workspace, environment, provisioning, configuration generation, launch, resume |
-| `host` | all | The daemon, its supervisor and wake plane, MCP servers, the interaction plane, the hook runner, adapters |
+| `host` | all but `cli` | The daemon, its supervisor and wake plane, MCP servers, the interaction plane, the hook runner, adapters, session metrics |
 | `cli` | all | `agent-bot` dispatch, install, update, doctor, readiness |
 
 Consequences of these rules:
@@ -118,19 +119,28 @@ Consequences of these rules:
   depend on whether a soul exists, and neither can comms.
 - **Nothing in a capability module may import a process host.**
 - **`harness` and `org` are leaf knowledge.** They cannot reach credentials,
-  launch code or routing.
+  launch code or routing. That holds because every credential-capable file
+  (App key stores, `secret*.mjs`, `secret-providers/*`, token minting) is
+  owned by `identity`, and `shared` holds none. The test lists those files and
+  fails if one is reassigned.
+- **The policy graph is acyclic.** `cli` may import `host`; `host` never
+  imports `cli`.
 - **The 31 crossings that exist today form the test's `baseline`.**
   - A new crossing fails the test.
   - A removed crossing must also be removed from the baseline, so the baseline
     only shrinks.
   - Widening a module's `may_import` row is an architecture decision: a new
-    record that supersedes this one, never a silent edit to the map.
+    record that supersedes this one, never a silent edit to the map. The test
+    keeps its own frozen copy of this table, so a map edit alone fails.
+  - An `import()` whose specifier is computed hides its target from the check.
+    The test fails on one unless the map lists that file, with a reason, under
+    `computed_imports`. Today there are none.
 
 ### 3. Authority and data ownership
 
 - **Identity is the only authority.**
-  - Only identity modules read App keys, mint tokens, verify execution bindings,
-    or decide owner and principal authorization.
+  - Only identity modules read App keys or secret stores, mint tokens, verify
+    execution bindings, or decide owner and principal authorization.
   - Soul code obtains credentials through identity's exported functions or the
     daemon's `/v0/credential` route, never by reading key stores itself.
   - An ID that names a soul is not proof. The authenticated execution binding
@@ -148,13 +158,25 @@ Consequences of these rules:
 
 ### 4. agent-harness is knowledge, never authority
 
-- **Descriptors.** `harness` will expose version-scoped descriptors sourced from
-  `qwts/harness-docs`. Each claim (instructions, skills, hooks, MCP, subagents,
-  session launch and resume APIs, platforms, runtimes, adapters) carries:
-  - a status: `documented`, `implemented`, `verified`, `unsupported` or
-    `unknown`;
-  - evidence and provenance, as a source commit and path.
-  - A missing claim is `unknown`, never assumed.
+- **Descriptors.** `harness` will expose descriptors sourced from
+  `qwts/harness-docs` for each capability (instructions, skills, hooks, MCP,
+  subagents, session launch and resume APIs, platforms, runtimes, adapters).
+  A capability is not one status. It has independent dimensions, each with its
+  own provenance and its own `unknown`:
+  - **Documentation evidence:** what the harness documents, `documented`,
+    `documented-unsupported` or `unknown`, with the harness-docs commit and
+    path.
+  - **Applicability:** the harness versions and platforms the evidence covers.
+    Outside that range the answer is `unknown`.
+  - **Adapter support:** whether this runtime implements the capability for the
+    harness (`implemented`, `not-implemented`, `unknown`) and which test covers
+    it.
+  - **Local observation:** what the soul observed on this machine: installed
+    version, sign-in, a successful use, and when. It is never in the bundled
+    snapshot, because a snapshot cannot prove a local install.
+  - A missing claim is `unknown` in every dimension, never assumed.
+  - A launch or privilege decision may rest only on adapter support and local
+    observation. Documentation evidence alone never enables anything.
 - **Pinned and offline.** The harness-docs data is pinned by commit, validated
   against a schema, and bundled with each runtime release, the same way
   `runtime-catalog.mjs` is reviewed per release. The runtime never needs network
@@ -166,8 +188,8 @@ Consequences of these rules:
   - It never supplies a version pin, so ADR-0276 and ADR-0322 pins stay with the
     soul.
   - Content from harness-docs is never executed.
-  - `documented` is never reported as installed, signed in or locally verified.
-    Those are separate facts that the soul observes.
+  - Documentation evidence is never reported as installed, signed in or
+    locally verified. Those are local observations, which the soul makes.
 - **What moves.** Tables that *describe or classify* move to `harness`,
   gradually and each behind its existing exports: hook dialect shapes, tool-home
   routability, configuration file conventions and harness detection.
@@ -189,10 +211,19 @@ Consequences of these rules:
 - **Wire contracts only.** The broker keeps authenticating souls through the
   daemon's vouch token (`/v0/vouch`) and the binding proof. It does not import
   identity internals; ENG-0128's no-imports boundary holds at the wire.
+  - The broker's files form their own module, `comms-broker`, whose
+    `may_import` is `shared` and the wire-contract files only. It may not import
+    `identity`, `comms`, `soul` or `host`, and the boundary test enforces that
+    like any other rule.
+  - The `comms` client module may use identity's exported functions; the broker
+    may not. Sharing a repository gives the broker no in-process path to
+    identity, and the daemon and broker share no secrets (see Non-goals).
   - The two byte-identical copies of `binding-proof.mjs` become one shared
     contract file only once both trees live here.
 - **Ordering.** This move comes after the boundary work. It is gated on this
-  record and on any ENG record ENG-0001 requires.
+  record and on the ENG decision in question 1. Nothing changes agent-comms
+  ownership, its release contract or ENG-0128's boundary until that decision is
+  recorded.
 
 ### 6. One coordinated release
 
@@ -288,7 +319,8 @@ installed surface. Steps 7 to 9 each carry a written rollback before they merge.
 
 1. Does the umbrella decision need an ENG record under ENG-0001, since it
    changes agent-comms, GeniusBar, qwts-agent-org and SOP references? Should
-   that record extend ENG-0128 or supersede it?
+   that record extend ENG-0128 or supersede it? Accepting this record does not
+   answer this: migration steps 7 and 8 stay blocked until it is answered.
 2. Is standalone agent-comms deployment, or a replaceable comms identity
    provider, a real requirement? If yes, comms keeps its own release cadence and
    §6 changes.
