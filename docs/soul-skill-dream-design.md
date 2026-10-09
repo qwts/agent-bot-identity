@@ -13,9 +13,9 @@ a file indexed it, or that an old conversation is disposable.
 
 ## Reuse the daemon's execution mechanisms
 
-There is currently no recurring task scheduler in this repository.
+`skill-dream-service.mjs` composes the host-local scheduler into the daemon.
 `task-turns.mjs` reports individual executions to the broker; it does not own
-recurrence. Dream needs a small daemon-owned scheduling service, not a second
+recurrence. Dream reuses the configured executor instead of adding a second
 harness launcher or a fabricated broker task.
 
 The service must use the daemon's configured executor factory, tool-home and
@@ -29,8 +29,8 @@ retains an aborted turn until the configured executor settles. For dream calls,
 a successful executor return remains successful after an abort request, so the
 scheduler can retain cancellation facts without falsely claiming execution
 stopped; ordinary wake calls retain their post-execution abort check. `dream` is
-part of the history kind vocabulary. These internal ports do not wire a scheduler
-into the daemon or authorize registration by themselves. Do not invent an interaction-store invocation,
+part of the history kind vocabulary. The daemon service composes these ports,
+but they do not authorize registration by themselves. Do not invent an interaction-store invocation,
 session, principal or broker task ID to acquire unrelated capabilities.
 
 Registration and control use the existing owner settings authorization path.
@@ -38,6 +38,38 @@ A daemon bearer token alone is not proof of owner authority. Imported skill
 text, a peer message, or an agent's proposed maintenance plan cannot register
 a job or broaden permission. Registering a schedule authorizes execution under
 the current policy; it does not preapprove later tool requests or revisions.
+
+The daemon exposes `GET /v0/soul/dream` for status and
+`GET /v0/soul/dream/history?afterRevision=N&limit=N` for bounded execution-history
+pages. `POST /v0/soul/dream/{register,pause,unschedule,run-now,cancel}` uses strict
+request fields: `agentId` for soul controls, `schedule` for registration, and
+`runId` for cancellation, with an optional owner `principal` credential. Every
+mutation passes the existing owner settings gate. Binding-authenticated requests
+cannot authorize these actions; the bearer alone cannot replace principal
+verification or an explicit owner ceremony. Client paths, executor overrides and
+capability claims are rejected. `run-now` returns a run receipt immediately.
+
+The journal is under `dream/` beside the daemon state file. Creation establishes
+private directory permissions and syncs new directory entries. Unsupported or
+invalid storage disables dreaming while other daemon services remain available;
+it never deletes or silently repairs state. A 30-second host timer offers due
+runs, with no registration or execution enabled by installation alone. Missing
+executor configuration prevents new registration/manual runs and defers timers.
+Existing run leases are quarantined before any timer starts. Shared stop records
+an owner cancellation request; daemon shutdown records `cancelReason: shutdown`
+and stops the timer. Older journal readers that reject that new reason must be
+upgraded before opening a journal containing shutdown receipts.
+
+This integration exposes execution status with `maintenanceCoverage: unverified`.
+It captures bounded starting inputs before runtime/provider resolution, but the
+detailed durable input/outcome/checkpoint schema remains incomplete. Raw replies
+are not stored as verified evidence, no processing checkpoints advance, and no
+maintenance-success notice is claimed. CLI controls and outcome/notice support
+remain subsequent acceptance work.
+Input preparation failures appear as bounded, content-free codes in status
+diagnostics (for example `dream-input-limit`, `dream-input-unavailable` or
+`dream-input-drift`). These diagnostics explicitly last only for this daemon
+process; they are not durable outcome records and clear after successful capture.
 
 ## Schedule and controls
 

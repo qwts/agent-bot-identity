@@ -1,0 +1,217 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createDreamService, dreamControlRequest, DREAM_POLL_MS, prepareDreamDirectory } from '../skill-dream-service.mjs';
+import { createDreamFileStore } from '../skill-dream-store.mjs';
+import { createDreamScheduler } from '../skill-dream-scheduler.mjs';
+import { createTurnRegistry, acpExecutorFor } from '../wake-plane.mjs';
+import { createAcpExecutor } from '../acp-engine.mjs';
+import { createDaemonServer } from '../agent-daemon.mjs';
+import { computePackageRevision, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
+import { upsertSoul } from '../agent-population.mjs';
+import { assertOwnerAction, ownerCredentialRequired, verifyPrincipalOwner } from '../owner-action.mjs';
+import { PROOF_HEADER } from '../binding-proof.mjs';
+
+const ID = 'agent_66666666-6666-4666-8666-666666666666';
+const posix = { skip: process.platform === 'win32' };
+const principal = { principal: 'principal_12345678-1234-4123-8123-123456789abc', secret: 'p'.repeat(64), brokerUid: process.getuid?.() + 1, mode: 'group' };
+const until = async check => { const end = Date.now() + 8_000; while (!check()) { assert.ok(Date.now() < end, 'fixture did not become ready'); await new Promise(resolve => setTimeout(resolve, 5)); } };
+
+function fixture(t, { scenario = null, configured = true, executorFor: customFactory = null } = {}) {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'dream-service-'))), soul = path.join(root, 'fixture.soul'), directory = path.join(root, 'state', 'dream');
+  mkdirSync(soul); mkdirSync(path.join(soul, '.soul-state'));
+  const manifest = { formatVersion: 2, ignore: PACKAGE_IGNORE_LIST, name: 'Fixture', description: 'Dream fixture', displaySeed: 'dream-fixture', preferredHarnesses: ['codex'], revision: `sha256:${'0'.repeat(64)}`, parentRevision: null, template: false };
+  writeFileSync(path.join(soul, 'AGENTS.md'), 'UNTRUSTED_SOURCE_CANARY'); writeFileSync(path.join(soul, 'soul.json'), JSON.stringify(manifest));
+  manifest.revision = computePackageRevision(soul); writeFileSync(path.join(soul, 'soul.json'), JSON.stringify(manifest));
+  writeFileSync(path.join(soul, '.soul-state', 'agent-id'), ID);
+  writeFileSync(path.join(soul, '.soul-state', 'secret'), 'PRIVATE_CANARY');
+  const env = { HOME: root, PATH: process.env.PATH, AGENT_BOT_CONFIG: path.join(root, 'missing-config'),
+    AGENT_BOT_POPULATION_PATH: path.join(root, 'population.json'), AGENT_BOT_INTERACTION_HOME: path.join(root, 'interaction'), AGENT_COMMS_SHARED_DIR: path.join(root, 'no-broker') };
+  upsertSoul({ id: ID, name: 'fixture', status: 'active', soulDir: soul, spacePath: root }, { file: env.AGENT_BOT_POPULATION_PATH });
+  let service, at = Date.parse('2026-10-09T00:00:00Z'), poll = null, ready = 0, paused = false, moved = false;
+  const records = [], prompts = [], resolutions = [], approvals = [], timers = [];
+  const turns = createTurnRegistry({ isPaused: () => paused, history: { turn: (_id, record) => records.push(record) }, onStop: id => service?.stopSoul(id) });
+  const registry = { codex: { harness: 'codex', enabled: true, command: process.execPath, args: [fileURLToPath(new URL('./fixtures/fake-acp-agent.mjs', import.meta.url))], stripEnv: [] } };
+  const factory = acpExecutorFor({ identities: () => ({ github: null }), baseEnv: env,
+    policy: { version: 1, rules: [], fallback: 'approval' }, runtimeEnvFor: () => ({ FAKE_KEEP: 'selected-runtime' }),
+    toolHomeEnvFor: () => ({ CODEX_HOME: path.join(soul, '.soul-state', 'home') }),
+    providerEnvFor: () => ({ env: { FAKE_SET: 'provider-canary' }, envKey: 'FAKE_SET' }),
+    createExecutor: options => {
+      resolutions.push(options);
+      const engine = createAcpExecutor({ ...options, registry });
+      return input => {
+        prompts.push(input.message);
+        return engine({ ...input, ...(scenario ? { message: scenario } : {}), appendEvent(type, data) {
+          if (data?.content?.text?.startsWith('pid:')) ready++;
+          return input.appendEvent(type, data);
+        } });
+      };
+    },
+  });
+  const options = { directory, turns, executorFor: configured ? customFactory ?? factory : null,
+    lookupSoul: () => ({ directory: moved ? `${soul}-moved` : soul, harness: 'codex' }), isPaused: () => paused,
+    now: () => new Date(at), approvals: async request => { approvals.push(request); return { decision: 'deny' }; },
+    setIntervalImpl: (callback, ms) => { poll = callback; timers.push(ms); return 1; }, clearIntervalImpl: () => { poll = null; },
+  };
+  service = createDreamService(options);
+  t.after(async () => { service.shutdown(); await service.idle(); rmSync(root, { recursive: true, force: true }); });
+  return { root, soul, directory, env, options, service, turns, records, prompts, resolutions, approvals, timers,
+    ready: () => ready, advance: ms => { at += ms; }, poll: () => poll?.(), paused: value => { paused = value; }, moved: () => { moved = true; },
+    control: (action, body = {}) => service.control(dreamControlRequest(action, { ...(action === 'cancel' ? {} : { agentId: ID }), ...body })) };
+}
+
+async function serverFixture(t, options = {}) {
+  const f = fixture(t, options), verified = [];
+  const server = createDaemonServer({ env: f.env, home: f.root, config: {}, turns: f.turns,
+    settingGate: (action, { principal: credential }) => assertOwnerAction(action, { env: f.env, cwd: f.root, detect: false,
+      principal: credential, consent: () => { throw ownerCredentialRequired('fixture has no owner ceremony'); },
+      verifyPrincipal: input => verifyPrincipalOwner(input, { env: f.env, clientFactory: () => ({ request: async request => {
+        verified.push(request);
+        if (request.auth.secret !== principal.secret) throw new Error('invalid fixture principal');
+        return { uptimeMs: 1 };
+      } }) }),
+    }),
+  });
+  server.dream = f.service;
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const call = async (route = '', body, headers = {}, token = server.token) => {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/v0/soul/dream${route}`, {
+      method: body === undefined ? 'GET' : 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...headers },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  return { ...f, server, call, verified };
+}
+
+test('daemon dream controls require owner verification, reject bindings and validate every mutation', posix, async t => {
+  const f = await serverFixture(t);
+  assert.equal((await f.call('', undefined, {}, 'bad')).status, 401);
+  for (const action of ['register', 'pause', 'unschedule', 'run-now', 'cancel']) {
+    const body = action === 'cancel' ? { runId: '12345678-1234-4234-8234-123456789abc' } : { agentId: ID, ...(action === 'register' ? { schedule: 'PT1H' } : {}) };
+    assert.equal((await f.call(`/${action}`, body)).status, 403, 'bearer alone cannot authorize a control');
+    assert.equal((await f.call(`/${action}`, { ...body, principal: { ...principal, secret: 'bad' } })).status, 403);
+    for (const header of ['x-agent-binding', PROOF_HEADER]) assert.equal((await f.call(`/${action}`, { ...body, principal }, { [header]: '' })).status, 403);
+    assert.equal((await f.call(`/${action}`, { ...body, principal, path: '/outside' })).status, 400);
+  }
+  assert.equal(f.service.status().revision, 0); assert.deepEqual(f.resolutions, []);
+  assert.equal((await f.call('/register', { agentId: ID, schedule: 'PT1H', principal })).status, 200);
+  assert.equal(f.service.status().registrations.length, 1);
+  assert.equal((await f.call('/pause', { agentId: ID, principal })).status, 200);
+  assert.equal((await f.call('/run-now', { agentId: ID, principal })).body.result.reason, 'paused');
+  assert.equal((await f.call('/unschedule', { agentId: ID, principal })).body.result.removed, true);
+  assert.equal((await f.call('/history?limit=1')).body.records.length, 1);
+  assert.equal((await f.call('/history?limit=1&limit=2')).status, 400);
+  assert.equal((await f.call('/history?limit=17')).status, 409);
+  assert.equal((await f.call('?agentId=' + ID)).status, 400);
+  assert.ok(f.verified.length > 0);
+  assert.equal(JSON.stringify(f.service.status()).includes(principal.secret), false);
+});
+
+test('owner run-now uses the configured ACP factory, policy and bounded inputs, retaining only execution facts', posix, async t => {
+  const f = await serverFixture(t, { scenario: 'need-permission' });
+  await f.call('/register', { agentId: ID, schedule: 'PT1H', principal });
+  const result = await f.call('/run-now', { agentId: ID, principal });
+  assert.equal(result.status, 202); assert.equal(result.body.result.status, 'started');
+  assert.equal(Object.hasOwn(result.body.result, 'done'), false);
+  await f.service.idle();
+  const status = f.service.status(), record = status.registrations[0].lastRun;
+  assert.equal(record.status, 'completed'); assert.equal(status.maintenanceCoverage, 'unverified');
+  assert.equal(f.approvals.length, 1); assert.equal(f.approvals[0].agentId, ID);
+  assert.equal(f.resolutions[0].env.FAKE_KEEP, 'selected-runtime'); assert.equal(f.resolutions[0].env.FAKE_SET, 'provider-canary');
+  assert.ok(f.prompts[0].includes('UNTRUSTED_SOURCE_CANARY')); assert.ok(f.prompts[0].includes('untrusted source data'));
+  assert.equal(f.prompts[0].includes('PRIVATE_CANARY'), false);
+  assert.equal(f.records[0].kind, 'dream'); assert.equal(f.records[0].id, record.runId);
+  assert.equal(JSON.stringify(f.service.history()).includes('CANARY'), false);
+  assert.equal(JSON.stringify(f.service.history()).includes('opt-reject'), false);
+});
+
+test('shared stop and shutdown cancel real ACP runs through the scheduler and retain factual receipts', posix, async t => {
+  for (const mode of ['stop', 'shutdown']) await t.test(mode, async t => {
+    const f = fixture(t, { scenario: 'hang' });
+    f.control('register', { schedule: 'PT1H' }); f.control('run-now');
+    await until(() => f.ready());
+    assert.deepEqual(f.turns.busy(), [ID]);
+    if (mode === 'stop') assert.equal(f.turns.stop(ID), true); else f.service.shutdown();
+    assert.equal(f.service.status().flights[0].status, 'cancelling');
+    await f.service.idle();
+    const record = f.service.status().registrations[0].lastRun;
+    assert.equal(record.status, 'cancelled'); assert.equal(record.cancelReason, mode === 'stop' ? 'owner' : 'shutdown'); assert.ok(record.cancelRequestedAt);
+    assert.deepEqual(f.turns.busy(), []);
+    if (mode === 'shutdown') assert.throws(() => f.control('run-now'), { code: 'dream-service-stopped' });
+  });
+});
+
+test('daemon timer dispatch defers paused/busy/moved souls and performs one catch-up', posix, async t => {
+  const f = fixture(t);
+  f.control('register', { schedule: 'PT1H' }); f.service.start(); f.service.start();
+  assert.deepEqual(f.timers, [DREAM_POLL_MS]); assert.equal(f.resolutions.length, 0);
+  f.advance(3_600_000 * 10);
+  f.paused(true); f.poll(); assert.equal(f.resolutions.length, 0); f.paused(false);
+  const controller = new AbortController(), release = f.turns.track(ID, controller);
+  f.poll(); assert.equal(f.resolutions.length, 0); release();
+  f.poll(); await f.service.idle();
+  assert.equal(f.resolutions.length, 1); f.poll(); await f.service.idle(); assert.equal(f.resolutions.length, 1);
+  f.advance(3_600_000); f.moved(); f.poll(); assert.equal(f.resolutions.length, 1);
+});
+
+test('unconfigured execution and invalid input never resolve credentials or launch a harness', posix, async t => {
+  const disabled = fixture(t, { configured: false });
+  assert.equal(disabled.service.status().executorConfigured, false);
+  assert.throws(() => disabled.control('register', { schedule: 'PT1H' }), { code: 'dream-executor-unavailable' });
+  assert.equal(disabled.service.status().revision, 0);
+  const f = fixture(t);
+  f.control('register', { schedule: 'PT1H' });
+  writeFileSync(path.join(f.soul, 'AGENTS.md'), 'unsealed change');
+  f.control('run-now'); await f.service.idle();
+  assert.equal(f.service.status().registrations[0].lastRun.status, 'failed'); assert.equal(f.resolutions.length, 0);
+  assert.equal(f.service.status().diagnostics.scope, 'this-daemon');
+  assert.equal(f.service.status().diagnostics.inputFailures[0].code, 'dream-input-drift');
+  assert.equal(JSON.stringify(f.service.status().diagnostics).includes('unsealed change'), false);
+  writeFileSync(path.join(f.soul, 'AGENTS.md'), 'UNTRUSTED_SOURCE_CANARY');
+  f.control('run-now'); await f.service.idle();
+  assert.deepEqual(f.service.status().diagnostics.inputFailures, []);
+});
+
+test('startup quarantines unsettled durable work and controls cannot erase that lease', posix, async t => {
+  const f = fixture(t);
+  // Seed an earlier daemon's running record using the production journal,
+  // without launching a child or leaving a live timeout in this process.
+  const old = createDreamScheduler({ store: createDreamFileStore({ directory: f.directory }), soulDirectory: () => f.soul,
+    execute: () => new Promise(() => {}), setTimer: () => 1, clearTimer: () => {}, now: () => new Date('2026-10-09T00:00:00Z') });
+  old.register(ID, 'PT1H'); old.runNow(ID); await Promise.resolve();
+  const recovered = createDreamService(f.options);
+  t.after(() => recovered.shutdown());
+  assert.equal(recovered.status().flights[0].status, 'recovery-required');
+  assert.equal(recovered.control(dreamControlRequest('run-now', { agentId: ID })).reason, 'recovery-required');
+  recovered.control(dreamControlRequest('unschedule', { agentId: ID }));
+  recovered.control(dreamControlRequest('register', { agentId: ID, schedule: 'PT1H' }));
+  assert.equal(recovered.control(dreamControlRequest('run-now', { agentId: ID })).reason, 'recovery-required');
+  assert.equal(f.resolutions.length, 0);
+});
+
+test('private directory failures and corrupt journals disable dreaming without repairing or deleting data', posix, t => {
+  const f = fixture(t);
+  chmodSync(f.directory, 0o755);
+  const bad = createDreamService(f.options);
+  assert.equal(bad.status().available, false); assert.equal(statSync(f.directory).mode & 0o777, 0o755);
+  assert.throws(() => prepareDreamDirectory(f.directory), { code: 'dream-store-directory' });
+  chmodSync(f.directory, 0o700);
+  writeFileSync(path.join(f.directory, 'unexpected'), 'RETAIN_CANARY');
+  const corrupt = createDreamService(f.options);
+  assert.equal(corrupt.status().available, false); assert.equal(readFileSync(path.join(f.directory, 'unexpected'), 'utf8'), 'RETAIN_CANARY');
+  const linked = path.join(f.root, 'linked'); symlinkSync(f.directory, linked);
+  assert.throws(() => prepareDreamDirectory(linked), { code: 'dream-store-directory' });
+  assert.equal(existsSync(f.directory), true);
+});
+
+test('a failed stop observer cannot prevent the shared controller from cancelling execution', async () => {
+  const turns = createTurnRegistry({ onStop: () => { throw new Error('receipt unavailable'); } });
+  const done = turns.run({ invocation: { agentId: ID } }, ({ signal }) => new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })));
+  const rejected = assert.rejects(done, { name: 'AbortError' });
+  assert.equal(turns.stop(ID), true); await rejected; assert.deepEqual(turns.busy(), []);
+});

@@ -48,7 +48,7 @@
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir, userInfo } from 'node:os';
 import path from 'node:path';
@@ -123,6 +123,7 @@ import { createCommsRelay, senderAddress } from './comms-relay.mjs';
 import { recordDeliveredAside } from './soul-asides.mjs';
 import { createResumeExecutor, createWakeSessions, resumePath, wakeSessionsFile } from './wake-resume.mjs';
 import { migratePreGateConfig } from './config-migration.mjs';
+import { createDreamService, dreamControlRequest } from './skill-dream-service.mjs';
 
 const LOGIN_PATH_MARK = '__agent_bot_login_path__';
 
@@ -434,6 +435,11 @@ export function createDaemonServer({
         appendAuditReceipt({ event: 'soul-revision', operation: revisionAction, decision: 'owner-credential-required' }, { env, home, now });
         throw ownerCredentialRequired('a soul binding cannot authorize an owner revision action');
       }
+      const dreamAction = req.method === 'POST' && /^\/v0\/soul\/dream\/(register|pause|unschedule|run-now|cancel)$/.exec(url.pathname)?.[1];
+      if (dreamAction && ('x-agent-binding' in req.headers || PROOF_HEADER in req.headers)) {
+        appendAuditReceipt({ event: 'dream-control', operation: dreamAction, decision: 'owner-credential-required' }, { env, home, now });
+        throw ownerCredentialRequired('a soul binding cannot authorize dream controls');
+      }
       if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/credential', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start', 'POST /v0/asides/delivered'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
         sendJson(res, 401, { error: 'missing or invalid daemon token' });
         return;
@@ -464,6 +470,34 @@ export function createDaemonServer({
         return;
       }
       const route = `${req.method} ${url.pathname}`;
+      if (dreamAction || route === 'GET /v0/soul/dream' || route === 'GET /v0/soul/dream/history') {
+        if (!server.dream) throw Object.assign(new Error('Dream service is unavailable.'), { code: 'dream-service-unavailable', statusCode: 503 });
+        if (dreamAction) {
+          const request = dreamControlRequest(dreamAction, parseJsonBody(await readBody(req)));
+          const action = `soul dream ${request.agentId ?? request.runId} ${dreamAction}${request.schedule ? ` ${request.schedule}` : ''}`;
+          try { await settingGate(action, { principal: request.principal }); }
+          catch (error) {
+            appendAuditReceipt({ event: 'dream-control', agentId: request.agentId ?? null, operation: dreamAction, decision: 'owner-refused' }, { env, home, now });
+            throw Object.assign(new Error('The owner did not authorize this dream control.'), { code: error.code ?? 'owner-credential-required', statusCode: 403 });
+          }
+          const result = server.dream.control(request);
+          appendAuditReceipt({ event: 'dream-control', agentId: request.agentId ?? null, operation: dreamAction, decision: 'authorized' }, { env, home, now });
+          sendJson(res, result.status === 'started' ? 202 : 200, { schemaVersion: 1, result });
+        } else if (route.endsWith('/history')) {
+          const query = {};
+          for (const [key, value] of url.searchParams) {
+            if (!['afterRevision', 'limit'].includes(key) || Object.hasOwn(query, key) || !/^(0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(Number(value))) {
+              throw Object.assign(new Error('Invalid dream history query.'), { code: 'dream-history-query', statusCode: 400 });
+            }
+            query[key] = Number(value);
+          }
+          sendJson(res, 200, { schemaVersion: 1, ...server.dream.history(query) });
+        } else {
+          if (url.search) throw Object.assign(new Error('Dream status accepts no query fields.'), { statusCode: 400 });
+          sendJson(res, 200, server.dream.status());
+        }
+        return;
+      }
       switch (route) {
         case 'POST /v0/asides/delivered': {
           const source = requireBinding(req, bindings);
@@ -1514,7 +1548,8 @@ export async function runDaemon({
   // Every turn and harness session is mirrored into the soul's own
   // `.soul-state/runs/` beside the daemon's journals (#583 decision 9).
   const history = createSoulHistory({ env, home, file: populationFile({ env, home }), log: (line) => process.stderr.write(`agent-daemon: ${line}\n`) });
-  const turns = createTurnRegistry({ isPaused, history, now });
+  let dream = null;
+  const turns = createTurnRegistry({ isPaused, history, now, onStop: agentId => dream?.stopSoul(agentId) ?? false });
   const executorFor = configuredExecutorFor
     ? (request) => withPermissionReceipts(configuredExecutorFor(request), { env, home, now, computerUse })
     : null;
@@ -1693,6 +1728,20 @@ export async function runDaemon({
     account,
   });
   server = createDaemonServer({ env, home, config, now, comms, executor, taskReporter, teamStarter, computerUse, turns, asideRelay: relay });
+  dream = createDreamService({ directory: path.join(path.dirname(daemonStateFile({ env, home })), 'dream'),
+    turns, executorFor, isPaused, now, approvals: request => server.interaction.requestTurnApproval(request),
+    lookupSoul: agentId => {
+      const options = { env, home, file: populationFile({ env, home }) };
+      const row = showSoul(agentId, options), identity = identities(agentId);
+      if (row.status !== 'active' || identity.status === 'retired') throw new Error('soul is inactive');
+      const directory = soulDirectory(agentId, { ...options, readOnly: true });
+      if (!lstatSync(directory).isDirectory() || !lstatSync(path.join(directory, '.soul-state')).isDirectory()) throw new Error('unsafe soul directory');
+      const located = locateSoulDir(directory, options);
+      if (located.status !== 'installed' || located.agentId !== agentId) throw new Error('soul directory is not authoritative');
+      return { directory: realpathSync(directory), harness: identity.harness };
+    },
+  });
+  server.dream = dream;
   await taskReporter.recover({ log: (line) => process.stderr.write(`agent-daemon: ${line}\n`) });
   server.wakePlane = createWakePlane({
     turns, isPaused,
@@ -1747,11 +1796,13 @@ export async function runDaemon({
   };
   writeStateFile(file, state);
   comms.start();
+  try { dream.start(); } catch { /* service status reports the fault; other daemon services remain available */ }
   const logTimer = setInterval(checkLog, DAEMON_LOG_CHECK_INTERVAL_MS);
   logTimer.unref();
-  server.once('close', () => clearInterval(logTimer));
+  server.once('close', () => { clearInterval(logTimer); dream.shutdown(); });
   const shutdown = () => {
     clearInterval(logTimer);
+    dream.shutdown();
     try {
       comms.stop();
     } catch {
