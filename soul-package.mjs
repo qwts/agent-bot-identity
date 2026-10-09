@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, opendirSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -286,7 +286,50 @@ export function validateSkill(bytes, directory) {
   if (skillField(front, 'description').length > 1024) throw new Error('skill description exceeds 1024 characters');
 }
 
-export function readSoulPackageEntries(packagePath, { expectedGeneratedFiles: buildExpected = expectedGeneratedFiles } = {}) {
+// Optional bounds apply to actual reads across both format-2 passes, including
+// entries later filtered as generated. No unbounded readdir/readFile allocation
+// is used in this mode. Existing package callers keep their original behavior.
+function boundedPackageReader(limits) {
+  if (!limits || Object.keys(limits).length !== 4
+    || !['maxEntries', 'maxBytes', 'maxFileBytes', 'maxDepth'].every(key => Number.isSafeInteger(limits[key]) && limits[key] > 0)) {
+    throw new Error('invalid package read limits');
+  }
+  const exceeded = () => { throw Object.assign(new Error('package exceeds read limits'), { code: 'soul-package-read-limit' }); };
+  let entries = 0, bytesRead = 0;
+  return {
+    *names(directory, depth) {
+      if (depth > limits.maxDepth) exceeded();
+      const dir = opendirSync(directory, { encoding: 'buffer', bufferSize: 1 });
+      try {
+        let entry;
+        while ((entry = dir.readSync())) {
+          if (++entries > limits.maxEntries) exceeded();
+          yield entry.name;
+        }
+      } finally { dir.closeSync(); }
+    },
+    read(file, expected) {
+      const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        const opened = fstatSync(fd);
+        if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== expected.dev || opened.ino !== expected.ino) throw new Error('unsafe or changed package file');
+        const limit = Math.min(limits.maxFileBytes, limits.maxBytes - bytesRead);
+        if (opened.size > limit) exceeded();
+        const buffer = Buffer.alloc(opened.size + 1);
+        let size = 0, count;
+        while (size < buffer.length && (count = readSync(fd, buffer, size, buffer.length - size, null))) size += count;
+        if (size > limit) exceeded();
+        const after = fstatSync(fd);
+        if (after.nlink !== 1 || size !== opened.size || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs) throw new Error('package changed during read');
+        bytesRead += size;
+        return buffer.subarray(0, size);
+      } finally { closeSync(fd); }
+    },
+  };
+}
+
+export function readSoulPackageEntries(packagePath, { expectedGeneratedFiles: buildExpected = expectedGeneratedFiles, limits = null, requiredFormatVersion = null } = {}) {
+  const bounded = limits === null ? null : boundedPackageReader(limits);
   const root = resolve(packagePath);
   if (!lstatSync(root).isDirectory()) throw new Error('package must be a directory, not a symlink or archive');
   const manifestPath = join(root, 'soul.json');
@@ -294,16 +337,18 @@ export function readSoulPackageEntries(packagePath, { expectedGeneratedFiles: bu
   const manifestStat = lstatSync(manifestPath);
   if (manifestStat.isSymbolicLink()) throw new Error('unsupported package entry: soul.json');
   if (!manifestStat.isFile()) throw new Error('missing required file: soul.json');
-  const manifest = JSON.parse(utf8(readFileSync(manifestPath), 'soul.json'));
+  const manifestBytes = bounded ? bounded.read(manifestPath, manifestStat) : readFileSync(manifestPath);
+  const manifest = JSON.parse(utf8(manifestBytes, 'soul.json'));
   validateManifest(manifest);
+  if (requiredFormatVersion !== null && manifest.formatVersion !== requiredFormatVersion) throw new Error('unsupported package format for this reader');
   // Inventory consumers must reject nonfinite JSON numbers before copying.
   canonicalJson(manifest);
   const ignoresState = manifest.formatVersion === 2;
   const entries = [];
   const names = new Set();
-  function walk(directory, prefix = '', expected = new Map()) {
+  function walk(directory, prefix = '', expected = new Map(), depth = 0) {
     let skipped = false;
-    for (const rawName of readdirSync(directory, { encoding: 'buffer' })) {
+    for (const rawName of bounded ? bounded.names(directory, depth) : readdirSync(directory, { encoding: 'buffer' })) {
       const name = utf8(rawName, 'path');
       if (/[\\\x00-\x1f\x7f]/.test(name)) throw new Error('package paths cannot contain backslashes or control characters');
       const path = `${prefix}${name.normalize('NFC')}`;
@@ -317,13 +362,13 @@ export function readSoulPackageEntries(packagePath, { expectedGeneratedFiles: bu
       if (stat.isDirectory()) {
         const index = entries.length;
         entries.push({ path, mode: '040000', bytes: Buffer.alloc(0) });
-        const omitted = walk(physical, `${path}/`, expected);
+        const omitted = walk(physical, `${path}/`, expected, depth + 1);
         // Generated-only container directories must not change the revision.
         // Preserve genuinely empty directories and containers of authored files.
         if (omitted && entries.length === index + 1) entries.splice(index, 1);
         skipped ||= omitted;
       } else {
-        const bytes = readFileSync(physical);
+        const bytes = bounded ? bounded.read(physical, stat) : readFileSync(physical);
         if (ignoresState && isGeneratedPath(path) && expected.get(path)?.equals(bytes)) {
           skipped = true;
           continue;
@@ -347,6 +392,7 @@ export function readSoulPackageEntries(packagePath, { expectedGeneratedFiles: bu
   }
   const files = new Map(entries.filter((entry) => entry.mode !== '040000').map((entry) => [entry.path, entry]));
   for (const required of ['soul.json', 'AGENTS.md']) if (!files.has(required)) throw new Error(`missing required file: ${required}`);
+  if (bounded && !files.get('soul.json').bytes.equals(manifestBytes)) throw new Error('package manifest changed during read');
   utf8(files.get('AGENTS.md').bytes, 'AGENTS.md');
   const skills = entries.find((entry) => entry.path === 'skills');
   if (skills && skills.mode !== '040000') throw new Error('skills must be a directory');
@@ -367,16 +413,24 @@ function frame(value) {
 
 // `options.manifest` hashes the package as if soul.json held that manifest,
 // so an edit can be hashed before it is published.
-export function canonicalPackageBytes(packagePath, options) {
-  const read = readSoulPackageEntries(packagePath, options);
+function canonicalEntryBytes(read, override) {
   const { entries } = read;
-  const manifest = options?.manifest ?? read.manifest;
+  const manifest = override ?? read.manifest;
   const { revision, parentRevision, ...content } = manifest;
-  entries.find((entry) => entry.path === 'soul.json').bytes = Buffer.from(canonicalJson(content));
   return Buffer.concat([
     Buffer.from(`agent-bot-soul-package-v${manifest.formatVersion}\0`), frame(manifest.parentRevision ?? ''),
-    ...entries.flatMap(({ path, mode, bytes }) => [frame(path), frame(mode), frame(bytes)]),
+    ...entries.flatMap(({ path, mode, bytes }) => [frame(path), frame(mode), frame(path === 'soul.json' ? canonicalJson(content) : bytes)]),
   ]);
+}
+
+export function canonicalPackageBytes(packagePath, options) {
+  return canonicalEntryBytes(readSoulPackageEntries(packagePath, options), options?.manifest);
+}
+
+// Hash the exact already-read snapshot, without reopening files or altering
+// its manifest bytes. Callers obtain this structure from the package reader.
+export function computePackageRevisionFromEntries(read) {
+  return `sha256:${createHash('sha256').update(canonicalEntryBytes(read)).digest('hex')}`;
 }
 
 export function computePackageRevision(packagePath, options) {

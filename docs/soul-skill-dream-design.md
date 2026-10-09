@@ -154,6 +154,28 @@ the same verified store origin as its session; an unknown origin cannot be
 guessed from a current environment override. These are explicit partial coverage,
 not proof that every soul knowledge source was maintained.
 
+`captureDreamInputs` implements the read-only capture boundary for format-2
+packages. It uses the canonical package reader and hashing format, with limits
+of 4096 visited entries, 16 MiB actually read across both inventory passes and
+the initial manifest read, 1 MiB per file, and depth 32. It refuses larger or
+unsafe packages; these are verification limits, separate from the smaller prompt
+limits below. It hashes the captured snapshot and compares that hash with the
+declared revision instead of trusting the manifest alone or reopening files.
+The snapshot proves the captured package content, not owner approval of a revision
+or immutability of the live directory after capture. Later outcome verification
+must detect source drift again.
+
+Only root `AGENTS.md`, `soul.md`/`SOUL.md` and eligible `skills/` files supply
+text, reusing the profile's private-path filter. Manifest settings, generated
+harness files, binary files and private working state do not supply prompt text.
+The format-2 ignore contract keeps private working state out of revision reads;
+legacy format-1 packages refuse maintenance capture. Text excerpts preserve
+UTF-8 boundaries and retain the whole captured file's digest and size. Truncated
+excerpts are explicit. Selection cursors are revision-bound pagination only;
+they never assert successful processing or advance a maintenance checkpoint.
+The host must pass the registered canonical soul directory. This internal reader
+does not expose daemon controls or activate execution.
+
 Inventory entries identify the source, revision/checksum or adapter cursor, and
 why it was selected. Source content remains untrusted data. Credentials, runtime
 caches, authorization records, host-private state and another soul's territory
