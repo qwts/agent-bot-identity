@@ -254,6 +254,16 @@ function unsetWorktreeConfig(key) {
   try { git('config', '--worktree', '--unset-all', key); } catch { /* absent */ }
 }
 
+// Every value of a multi-valued key, exactly: an empty helper (the reset
+// that stops inherited helpers) is a real entry and must survive a rewrite.
+function worktreeConfigAll(key) {
+  let out;
+  try {
+    out = execFileSync('git', ['config', '--worktree', '--get-all', key], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch { return null; }
+  return (out.endsWith('\n') ? out.slice(0, -1) : out).split('\n');
+}
+
 function isBotHelper(value) {
   return value.includes('git-credential-bot.mjs') || /(?:^|\/)agent-bot(?:'|\") credential /.test(value);
 }
@@ -269,13 +279,13 @@ function clearAppAttribution({ dropHelperReset = false } = {}) {
   if (worktreeConfig('user.name').endsWith('[bot]')) {
     for (const key of ['user.name', 'user.email']) unsetWorktreeConfig(key);
   }
-  try {
-    const helpers = git('config', '--worktree', '--get-all', 'credential.helper').split('\n');
+  const helpers = worktreeConfigAll('credential.helper');
+  if (helpers && helpers.some(isBotHelper)) {
     let retained = helpers.filter((value) => !isBotHelper(value));
-    if (dropHelperReset && retained.length !== helpers.length) retained = retained.filter(Boolean);
-    git('config', '--worktree', '--unset-all', 'credential.helper');
+    if (dropHelperReset) retained = retained.filter(Boolean);
+    unsetWorktreeConfig('credential.helper');
     for (const helper of retained) git('config', '--worktree', '--add', 'credential.helper', helper);
-  } catch { /* no worktree helpers */ }
+  }
   if (worktreeConfig('commit.gpgsign') === 'false') unsetWorktreeConfig('commit.gpgsign');
   // core.hooksPath is removed only when it points at our installed hooks.
   if (worktreeConfig('core.hooksPath').includes('/share/agent-bot/hooks')) unsetWorktreeConfig('core.hooksPath');
@@ -300,6 +310,11 @@ export function clearInheritedPin(sessionId) {
   if (perWorktree !== 'true') return false;
   if (!isLinkedWorktree()) return false;
   const pins = AGENT_ID_KEYS.map(worktreeConfig).filter(Boolean);
+  // Only a checkout agent-bot configured carries these; a person's own
+  // config.worktree (signing off, a helper reset) is not agent-bot's to touch.
+  const attributed = pins.length > 0 || worktreeConfig('agentBot.app') !== ''
+    || worktreeConfig('user.name').endsWith('[bot]') || (worktreeConfigAll('credential.helper') ?? []).some(isBotHelper);
+  if (!attributed) return false;
   if (sessionId && pins.length > 0 && pins.every((pin) => pin === sessionId)) return false;
   clearAppAttribution({ dropHelperReset: true });
   for (const key of AGENT_ID_KEYS) unsetWorktreeConfig(key);

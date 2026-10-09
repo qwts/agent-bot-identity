@@ -264,6 +264,20 @@ test('setup-worktree --name from a checkout pinned to another soul configures th
   assert.deepEqual(readFileSync(join(f.repo, '.git', 'config.worktree')), before);
 });
 
+test('a worktree added from a human checkout with its own config.worktree keeps it exactly', (t) => {
+  const f = fixture(t);
+  f.git(f.repo, 'config', '--worktree', '--unset-all', 'agentBot.app');
+  f.git(f.repo, 'config', '--worktree', 'commit.gpgsign', 'false');
+  f.git(f.repo, 'config', '--worktree', '--add', 'credential.helper', '');
+  f.git(f.repo, 'config', '--worktree', '--add', 'credential.helper', 'store');
+  const before = readFileSync(join(f.repo, '.git', 'config.worktree'));
+  const checkout = addWithHook(f, join(f.home, 'human'), '');
+  const gitDir = f.git(checkout, 'rev-parse', '--absolute-git-dir');
+  assert.deepEqual(readFileSync(join(gitDir, 'config.worktree')), before);
+  assert.deepEqual(worktreeValues(f, checkout, 'credential.helper'), ['', 'store']);
+  assert.deepEqual(worktreeValues(f, checkout, 'commit.gpgsign'), ['false']);
+});
+
 test('post-checkout in an existing worktree never strips a pin, and --new-worktree is hook-only', (t) => {
   const f = fixture(t);
   const other = otherSoul(f);
