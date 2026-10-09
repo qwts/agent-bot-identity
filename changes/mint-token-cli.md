@@ -1,0 +1,1 @@
+- `agent-bot mint-token` now runs from `cli/mint-token.mjs`; the flags, the owner-approval ceremony and the stdout format (plain token or the `--json` object) are unchanged. `node mint-token.mjs` run directly now refuses with "run agent-bot mint-token" and mints nothing; the module stays the minting library (#645).
