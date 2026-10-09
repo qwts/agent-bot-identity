@@ -20,7 +20,7 @@ connect them, one in each direction:
 
 | Key | Held by | Signs | Verified by | How the verifier learns it |
 | --- | --- | --- | --- | --- |
-| Vouch key (`<state>/vouch-key.pem`, PKCS#8, 0600) | the agent-bot daemon | grants (`v1.`) | keyd | sent with every `owner/import`; keyd pins it on the first one |
+| Vouch key (`<state>/vouch-key.pem`, PKCS#8, 0600) | the agent-bot daemon | grants (`v1.`) | keyd | sent with every `owner/import`; keyd-side, keyd pins it on the first one |
 | Presence key | keyd, seed in its Keychain | presence assertions (`p1.`) | agent-bot | pinned in `<state>/keyd/presence.pub` from the code-signed keyd binary |
 
 `<state>` is `$XDG_STATE_HOME/agent-bot` or `~/.local/state/agent-bot`.
@@ -58,11 +58,25 @@ payload: { v: 1, aud: "agent-bot-keyd", agentId, app, tool, iat, exp,
 
 ### Lifetime and nonce
 
-agent-bot sets the 60-second lifetime and a fresh nonce. It keeps no record
-of grants and does not check them again. **keyd-side:** keyd checks the
-signature against its pinned daemon key and spends each nonce once, in an
-in-memory replay cache
-([grant.rs](https://github.com/qwts/GeniusBar/blob/363f52c590efe5df8cb75490ca81667e74425cf8/keyd/src/grant.rs#L50)).
+agent-bot, the issuer, sets a 60-second lifetime and a fresh nonce. It keeps
+no record of grants and does not check them again.
+
+**keyd-side** (the verifier, `grant::verify` in
+[grant.rs](https://github.com/qwts/GeniusBar/blob/363f52c590efe5df8cb75490ca81667e74425cf8/keyd/src/grant.rs#L74-L130) at the commit linked above) has its own,
+wider envelope. With `now` in whole seconds it accepts a grant only when:
+
+- `exp > now`;
+- `iat ≤ now + 30` (`CLOCK_SKEW_SECONDS`);
+- `exp ≥ iat` and `exp − iat ≤ 120` (`MAX_LIFETIME_SECONDS`), so a zero
+  lifetime is allowed;
+- the token is at most 4096 bytes, the payload has no unknown fields, the
+  signature verifies under the pinned daemon key, `v` is 1, `aud` and `tool`
+  match, `apiBase` is `https://`, and a `git_credential` grant names a host;
+- the nonce is 16 to 64 base64url characters and not already spent.
+
+The nonce is spent last, after every other check passes and before the mint
+([grant.rs](https://github.com/qwts/GeniusBar/blob/363f52c590efe5df8cb75490ca81667e74425cf8/keyd/src/grant.rs#L50-L65), [#L126](https://github.com/qwts/GeniusBar/blob/363f52c590efe5df8cb75490ca81667e74425cf8/keyd/src/grant.rs#L126)). Spent nonces
+live in an in-memory map and are dropped once their `exp` has passed.
 
 ### Issuers
 
@@ -81,8 +95,13 @@ once per state directory.
    - otherwise the daemon signs a grant for the bound Agent ID and its App and
      answers `{ schemaVersion, grant }`.
 
-   Every outcome leaves a `credential-grant` receipt (`denied`, `failed` or
-   `granted`, operation `keyd <tool>`) that never contains the grant.
+   These outcomes leave a `credential-grant` receipt (operation
+   `keyd <tool>`, or `keyd unknown`) that never contains the grant: unknown
+   tool and no valid binding (`denied`, no Agent ID), an unreadable identity
+   or package (`failed`), a 409 refusal (`denied`), and a signed grant
+   (`granted`, written after signing). A body that is not valid JSON is
+   refused with 400 before any receipt, and a failure while reading the
+   config target or signing leaves no receipt.
 2. **In-process** (`mintViaKeyd`). The daemon's own `/v0/credential`, and
    through it the git credential helper and `mint-token` in a keyd soul's
    worktree, sign a `credential` grant and call keyd's `credential` tool on
@@ -91,13 +110,21 @@ once per state directory.
 
 ### Daemon-key pinning on first import
 
-`importIntoKeyd` (`identity migrate-credentials --to keyd`) sends every key
-in one `owner/import` call on `owner.sock`, with `daemonKey`: the vouch
-key's raw 32-byte Ed25519 public key, base64. It is sent on every import.
-**keyd-side:** keyd asks the owner (Touch ID or the login password), pins
-`daemonKey` on the first import and refuses a different one until the owner
-pins it with `owner/pin`. `agent-bot keyd status` reports keyd's `pinned`
-flag. agent-bot's tests prove the key is sent, not that keyd pins it.
+`identity migrate-credentials --to keyd` (`migrateToKeyd` in
+[soul-credentials.mjs](../soul-credentials.mjs)) collects every movable
+soul's key and calls `importIntoKeyd` once, so keyd asks the owner once. That
+sends one `owner/import` on `owner.sock` with all the keys as `items` and
+`daemonKey`: the vouch key's raw 32-byte Ed25519 public key, base64. The
+daemon key is sent on every import. If the call fails, every soul in it is
+reported `failed` and no `soul.json` is changed.
+
+**keyd-side** ([server.rs](https://github.com/qwts/GeniusBar/blob/363f52c590efe5df8cb75490ca81667e74425cf8/keyd/src/server.rs#L378-L462)): `items` must hold 1 to
+64 keys, otherwise the whole import is refused. Since agent-bot does not split
+the call, `--all` with more than 64 movable souls fails for all of them.
+keyd asks the owner (Touch ID or the login password), pins `daemonKey` on the
+first import and refuses a different one until the owner pins it with
+`owner/pin`. `agent-bot keyd status` reports keyd's `pinned` flag.
+agent-bot's tests prove the key is sent, not that keyd pins it.
 
 ## Owner presence (keyd → agent-bot)
 
@@ -133,7 +160,7 @@ payload: { v: 1, aud: "agent-bot-owner", kind: "presence",
 
 These are the verifier's bounds. **keyd-side:** keyd issues assertions with a
 60-second lifetime
-([presence.rs](https://github.com/qwts/GeniusBar/blob/363f52c590efe5df8cb75490ca81667e74425cf8/keyd/src/presence.rs#L54))
+([presence.rs](https://github.com/qwts/GeniusBar/blob/363f52c590efe5df8cb75490ca81667e74425cf8/keyd/src/presence.rs#L25))
 and gives up on the prompt at 120 s. agent-bot keeps no record of used
 nonces; an assertion answers one request because the nonce is generated per
 request and must match.
@@ -147,12 +174,16 @@ request and must match.
 | `owner-declined` | any other keyd refusal, including `keyd-timeout` | refused, nobody else is asked |
 | `presence-invalid` | the assertion does not verify | refused, nobody else is asked |
 
-Callers: every owner gate through `presenceOrConsent`
-([owner-gate.mjs](../owner-gate.mjs)), including the CLI owner actions and
-`soul revision`, and the daemon's decisions on a soul's waiting tool request
-(`POST /v0/approvals/decide` and `POST /v1/proposals/<id>/decision`), which
-go through `confirmOwnerPresence` and ask for presence even when a principal
-credential verifies (#438).
+Callers ([owner-gate.mjs](../owner-gate.mjs)):
+
+- `assertOwnerAction`, the ordinary owner gate (CLI owner actions,
+  `soul revision`), first refuses a caller with soul markers. With a
+  presented principal credential it returns once that verifies, and asks for
+  no presence. Without one it calls `presenceOrConsent`.
+- `confirmOwnerPresence`, used by the daemon's decisions on a soul's waiting
+  tool request (`POST /v0/approvals/decide` and
+  `POST /v1/proposals/<id>/decision`), always calls `presenceOrConsent`; a
+  presented principal is verified as well, never instead (#438).
 
 ### Presence-key bootstrap
 
@@ -173,12 +204,24 @@ credential verifies (#438).
    This accepts any Developer ID Application signature; it names no Team ID
    and no identifier.
 3. Only if that passes, run `<bin> presence-key` (15-second timeout). If the
-   output is a well-formed key, write it to `presence.pub` (0600) and use it.
+   output is a well-formed key, write it to `presence.pub` and use it. The
+   file is created with mode 0600; an existing file is overwritten in place
+   and keeps the mode it had.
 4. Any failure along the way pins nothing and returns `null`, which
    `keydPresence` reports as `presence-unavailable`.
 
 The key is never taken from the socket. A file in `presence.pub` that does
 not parse as a key is treated as no pin, and step 2 runs again.
+
+### Known gaps
+
+Current behaviour, recorded here and not changed by this page:
+
+- Re-pinning over an existing `presence.pub` that did not parse keeps that
+  file's previous mode; only a newly created pin file gets 0600.
+- `identity migrate-credentials --to keyd --all` sends every key in one
+  import, and keyd refuses more than 64, so a host with more than 64 movable
+  souls cannot complete that import.
 
 ## Conformance matrix
 
@@ -194,7 +237,8 @@ behaviour with no test in this repository.
 | Outside the daemon a keyd soul's token comes only through `/v0/credential` on its binding | daemon | `mintThroughDaemon` | `tests/keyd.test.mjs`: "a keyd soul resolves to keyd with no key, and mint goes through keyd"; "a bound keyd soul's mint through the daemon keeps the installation id" |
 | The import sends every key in one owner call, with the daemon key to pin | `importIntoKeyd` | keyd `owner/import` | `tests/keyd.test.mjs`: "the owner import sends every key at once with the daemon key to pin" |
 | keyd pins the daemon key on first import and refuses another | keyd-side | keyd | none here |
-| keyd spends each grant nonce once | keyd-side | keyd | none here |
+| keyd spends each grant nonce once, and accepts `exp > now`, `iat ≤ now + 30`, `0 ≤ exp − iat ≤ 120` | keyd-side | keyd | none here |
+| keyd accepts 1 to 64 import items | keyd-side | keyd | none here |
 | Souls are denied `vouch-key.pem` and keyd's sockets in every tool | — | confinement hook | `tests/soul-credentials.test.mjs`: "confinement denies a soul its key store, the legacy folder and secret-store CLIs in every tool" |
 | `action` in an assertion is SHA-256 hex, matching keyd | keyd | `actionDigest` | `tests/owner-presence.test.mjs`: "the action digest matches keyd (sha256 hex)" |
 | An assertion verifies only for its key, action, nonce, audience and prefix | keyd | `verifyPresence` | `tests/owner-presence.test.mjs`: "an assertion verifies only for its key, action, nonce and time" |
@@ -202,7 +246,7 @@ behaviour with no test in this repository.
 | keyd issues assertions for 60 s | keyd-side | — | none here |
 | Audience, unavailable RPC code and the code-signing requirement string | — | `owner-presence.mjs` constants | `tests/owner-presence.test.mjs`: "the presence contract constants keyd and agent-bot share" |
 | Each request carries a fresh agent-bot nonce; a socket without keyd's key, or an assertion for another nonce, is refused | — | `keydPresence` | `tests/owner-presence.test.mjs`: "keydPresence asks keyd with the action and a fresh nonce, and checks the answer" |
-| The presence key is pinned from the signed binary once, 0600, never from the socket | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "the presence key is pinned from the signed binary, once, and never from the socket" |
+| The presence key is pinned from the signed binary once, a new pin file 0600, never from the socket | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "the presence key is pinned from the signed binary, once, and never from the socket" |
 | No record, an unsigned binary (never run) or a malformed answer pins nothing | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "no keyd, an unsigned keyd or a malformed answer pins nothing" |
 | An unparseable pin file is pinned again from the signed binary | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "a pin that does not parse as a key is pinned again from the signed binary" |
 | `presence-unavailable` vs `owner-declined` (timeout included) | — | `keydPresence` | `tests/owner-presence.test.mjs`: "keydPresence tells \"nobody can be asked\" apart from \"the owner said no\"" |
