@@ -70,6 +70,26 @@ export function validateDreamState(state) {
   return state;
 }
 
+// Shared with durable adapters so persisted events cannot acquire fields that
+// the scheduling core would never emit (especially prompts or executor output).
+export function validateDreamEvents(events) {
+  if (!Array.isArray(events) || events.length < 1 || events.length > DREAM_REGISTRATION_LIMIT) invalid();
+  for (const event of events) {
+    const registrationEvent = ['registered', 'paused', 'unscheduled'].includes(event?.kind);
+    keys(event, ['kind', 'at', registrationEvent ? 'registration' : 'run']);
+    if (!date(event.at)) invalid();
+    if (registrationEvent) {
+      validateDreamState({ ...emptyDreamState(), registrations: [event.registration] });
+      if (event.kind === 'registered' && event.registration.paused || event.kind === 'paused' && !event.registration.paused) invalid();
+    } else {
+      const statuses = { started: ['running'], 'cancellation-requested': ['cancelling'], ended: TERMINAL, 'recovery-required': ['recovery-required'] };
+      if (!Object.hasOwn(statuses, event.kind) || !statuses[event.kind].includes(event.run?.status)) invalid();
+      runRecord(event.run, event.kind === 'ended');
+    }
+  }
+  return events;
+}
+
 /**
  * `store.read()` returns the current state or null. Synchronous
  * `store.commit({ expectedRevision, state, events })` MUST atomically compare
