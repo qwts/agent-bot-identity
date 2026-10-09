@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { importSkill, listSkills, showSkill, verifySkill, checkSkill, planSkillUpdate, applySkillUpdate, recoverSkillUpdate } from '../skill-library.mjs';
 import { skillLearningPacket, proposeSkillLearning, readLearningOutcome } from '../skill-learning.mjs';
 import { checkSoulSkillSource, proposeSoulSkillCandidate } from '../skill-source-check.mjs';
+import { NOT_CAPTURED } from '../skill-references.mjs';
 import { currentAgentId } from '../agent-identity.mjs';
 import { revisionCommand } from '../soul-revisions.mjs';
 import { soulDreamCommand } from './soul-dream.mjs';
@@ -33,7 +34,11 @@ check --soul reads accepted portable provenance without the local library and
 stages source bytes for review. learn --candidate refetches that reviewed digest
 and proposes it through the soul revision policy; nothing applies it directly.
 dream manages daemon-run maintenance; see agent-bot soul skill dream --help.
+Results carry notCaptured: only these commands capture and recheck instruction
+files; what a harness fetches or reads on its own (web fetch, MCP tools) is not.
 `;
+// Every successful report states what capture leaves out (#312).
+const report = (result, json) => `${JSON.stringify({ ...result, notCaptured: NOT_CAPTURED }, null, json ? 0 : 2)}\n`;
 async function portableCheckMain(args, json, { stdout, stderr, assertSoulTarget = id => {
   if (currentAgentId() !== id) throw new Error('a soul may check portable sources only for its own package; bind an Agent ID first');
 }, ...options }) {
@@ -42,7 +47,7 @@ async function portableCheckMain(args, json, { stdout, stderr, assertSoulTarget 
   try {
     await assertSoulTarget(agentId);
     const result = await checkSoulSkillSource(id, agentId, options);
-    stdout.write(`${JSON.stringify(result, null, json ? 0 : 2)}\n`);
+    stdout.write(report(result, json));
     return result.status === 'unavailable' ? 1 : 0;
   } catch (error) {
     const failure = { code: error.code ?? 'skill-source-check-failed', message: error.message };
@@ -69,7 +74,7 @@ async function learningMain(args, json, { stdout, stderr, assertSoulTarget = id 
     const result = recording ? await record(id, agentId, parsed['--package'], readLearningOutcome(parsed['--outcome']), {
       ...options, reason: parsed['--reason'], ...('--candidate' in parsed ? { candidate: parsed['--candidate'] } : {}), propose: (id, tree, proposalOptions) => revisionCommand(['propose', id, tree, parsed['--reason']], { ...proposalOptions, assertSoulTarget }),
     }) : skillLearningPacket(id, agentId, options);
-    stdout.write(`${JSON.stringify(result, null, json ? 0 : 2)}\n`);
+    stdout.write(report(result, json));
     return result.proposal?.status === 'rejected' ? 1 : 0;
   } catch (error) {
     const failure = { code: error.code ?? 'skill-learning-failed', message: error.message };
@@ -93,7 +98,7 @@ function updateMain(args, json, { stdout, stderr, ...options }) {
     const result = recover ? recoverSkillUpdate(id, options) : apply ? applySkillUpdate(id, parsed['--check'], {
       ...options, expectedAccepted: parsed['--expected-accepted'], expectedLocal: parsed['--expected-local'],
     }) : planSkillUpdate(id, parsed['--check'], options);
-    stdout.write(`${JSON.stringify(result, null, json ? 0 : 2)}\n`);
+    stdout.write(report(result, json));
     return result.status === 'conflicted' ? 1 : 0;
   } catch (error) {
     const failure = { code: error.code ?? 'skill-update-failed', message: error.message };
@@ -118,7 +123,7 @@ export function main(argv = process.argv.slice(2), { stdout = process.stdout, st
   try {
     const result = verb === 'list' ? { skills: listSkills(options) } : operations[verb](value, options);
     const finish = value => {
-      stdout.write(`${JSON.stringify(value, null, flags.length ? 0 : 2)}\n`);
+      stdout.write(report(value, flags.length));
       return value.verification === 'drifted' || value.status === 'unavailable' || value.coverage?.acquisition === 'partial' ? 1 : 0;
     };
     return result?.then ? result.then(finish, failed) : finish(result);

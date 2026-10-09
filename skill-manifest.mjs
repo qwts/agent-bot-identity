@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { canonicalJson, readSoulPackageEntries } from './soul-package.mjs';
 import { revisionHistory, revisionPackagePath } from './soul-revisions.mjs';
+import { NOT_CAPTURED } from './skill-references.mjs';
 
 const SKILL_PATH = /^skills\/([^/]+)(?:\/(.+))?$/;
 
@@ -119,7 +120,8 @@ export function skillChanges(id, { revision, since } = {}, options = {}) {
 export function skillsCommand(args, options = {}) {
   const [id, revision, since, ...extra] = args.filter((arg) => arg !== '--json');
   if (!id || extra.length > 0) throw new Error('usage: soul revision skills ID [REVISION [SINCE]] [--json]');
-  return skillChanges(id, { revision, since }, options);
+  // The checksums cover the package's own files; say what they leave out.
+  return { ...skillChanges(id, { revision, since }, options), notCaptured: NOT_CAPTURED };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

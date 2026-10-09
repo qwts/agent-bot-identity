@@ -1,0 +1,1 @@
+- `soul skill` import, list, show, verify, check, update and learn results and `soul revision skills` now carry a `notCaptured` statement: only agent-bot's own commands capture and recheck instruction files, and anything a harness fetches or reads on its own (web fetch, MCP tools) is not captured. A boundary test pins this (#312).

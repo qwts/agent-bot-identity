@@ -238,3 +238,6 @@ modification. The results of `edit` and `propose` carry the same `skills`
 report when the revision changed a skill (a proposal records it with its
 journal entry), so a host can show what a change does to a soul's skills
 before anyone adopts it. Digests establish byte identity, not trust.
+The `skills` output also carries `notCaptured`: the checksums cover the
+package's own files, not instructions a harness fetches or reads on its own
+(see [what is not captured](soul-skills.md#what-is-not-captured)).

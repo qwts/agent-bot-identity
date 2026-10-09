@@ -7,6 +7,7 @@ import { mintAgentIdentity } from '../agent-identity.mjs';
 import { computePackageRevision } from '../soul-package.mjs';
 import { adoptSoulPackage, decideSoulProposal, editSoulRevision, proposeSoulRevision, revisionCommand } from '../soul-revisions.mjs';
 import { diffPackageSkills, diffSkillManifest, diffSkillManifests, skillChanges, skillManifests, skillManifestsAt, skillsChanged } from '../skill-manifest.mjs';
+import { NOT_CAPTURED } from '../skill-references.mjs';
 
 const SHA = /^sha256:[a-f0-9]{64}$/;
 const skillMd = (name, body = 'Instructions\n') => `---\nname: ${name}\ndescription: A ${name} skill\n---\n${body}`;
@@ -105,6 +106,7 @@ test('edits and proposals report the skills they change, and every stored revisi
   assert.equal(head.revision, edited.revision);
   assert.equal(head.since, plain.revision);
   assert.deepEqual(head.changes, edited.skills);
+  assert.equal(head.notCaptured, NOT_CAPTURED);
   const span = await revisionCommand(['skills', identity.id, edited.revision, initial.revision], options);
   assert.deepEqual(span.changes.added, ['beta']);
   assert.deepEqual(skillManifestsAt(identity.id, initial.revision, options).skills, first.skills);

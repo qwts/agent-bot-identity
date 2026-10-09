@@ -330,8 +330,23 @@ metadata. Imported file contents still preserve the original bytes; this is
 not payload secret redaction. Local-directory import never fetches remote links;
 the explicit HTTPS-document and public GitHub-directory adapters perform the
 bounded remote capture described above. No permission is inferred from a
-reference. Other repository adapters, broader
-retrieval interception and harness installation remain open.
+reference. Other repository adapters and harness installation remain open;
+harness retrieval is out of scope, as the next section states.
+
+## What is not captured
+
+Capture means agent-bot's own commands: `soul skill import`, `check`, `update`
+and `learn`, plus the package checksums `soul revision skills` reports. Only
+the files those commands acquire are captured, checksummed and rechecked.
+
+Not captured: anything a harness fetches or reads on its own, such as web
+fetches, MCP tool results and the harness's own reads of `CLAUDE.md`,
+`AGENTS.md` or other instruction files; runtime fetches made while a skill
+runs; and references outside the reported dependency boundary above. agent-bot
+does not intercept harness retrieval, so a change to such a file never shows
+up in `verify` or `check`. Every successful `soul skill` import, list, show,
+verify, check, update and learn result, and every `soul revision skills`
+result, carries a `notCaptured` statement saying so.
 
 ## Learn useful pieces through a soul revision
 
