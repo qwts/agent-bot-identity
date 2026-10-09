@@ -146,7 +146,14 @@ bootstrap. A missing `~/.local/share/agent-bot/agent-hook` is not a license
 to run without identity policy. Adapters enter an explicit **uninstalled**
 mode (ENG-0128): they refuse `git commit`, `git push`, and GitHub writes
 as the human. An unmanaged session may publish only when the actor is in
-`AGENT_BOT_UNMANAGED_AUTHORS` (default `ai9d` when unset): git author for
+`AGENT_BOT_UNMANAGED_AUTHORS`, else the agent-bot config's
+`settings.unmanagedAuthors` (nobody when neither is selected; the generated
+wrapper supplies no default, #675). Without the installed hook, the wrapper's
+fallback grants the list `sync-hooks` resolved with the shared config validator,
+and only while the config file still has the bytes it hashed then. A config the
+validator refuses grants nobody. After any config edit the fallback grants
+nobody until `agent-bot sync-hooks` re-renders it (`--check` reports it stale).
+The allowlist covers git author for
 commits (`--author` or `GIT_AUTHOR_*`, never committer identity; amend and
 reuse require `--reset-author` or an explicit `--author`), and the
 authenticated `gh` login for pushes and `gh` writes. Reads and uncommitted

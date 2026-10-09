@@ -77,7 +77,7 @@ use. A repository URL or an ENG citation alone is not an authorization rule.
 | Occurrence | Classification | Disposition |
 | --- | --- | --- |
 | `skill.mjs::CATALOG_PATH` names `skills/README.md` | Product catalog path; repository and commit come from selected SOP | #674 removes the compiled qwts source and mutable index read; existing bundled ownership metadata is unchanged. |
-| `hooks/agent-context`, `sync-hooks.mjs`, `readiness.mjs` default `AGENT_BOT_UNMANAGED_AUTHORS` to `ai9d` | Active person-specific authorization exception, including a zero-policy install | #675: explicit organization configuration and reviewed migration; do not simply remove guards. |
+| `hooks/agent-context`, `sync-hooks.mjs`, `readiness.mjs` formerly defaulted `AGENT_BOT_UNMANAGED_AUTHORS` to `ai9d` | Removed: the allowlist comes only from the operator env or explicit configuration, which an organization profile projects | #675 slice 2, after the profile migration. With nothing selected the hooks refuse; guards are unchanged. |
 | `qwts.agentApp`, `qwts.agentId`, `qwts.chainedHooksPath`; `QWTS_*`, `PLAYBOOK_HOME` aliases | Deliberate compatibility input through 0.x | Retain. New behavior should use canonical names; existing consumers must not lose identity unexpectedly. |
 | `dev.qwts.agent-bot.daemon` / `.keyd` defaults | Compatibility deployment names with host overrides | Host label validation and propagation already exist; no claim that defaults themselves decide persona policy. |
 | Fixed `agent-bot.soul.*`, `agent-bot.app.*`, credential item display names | Product naming, not qwts authority; incomplete host naming seam | #676: namespace/collision/migration contract, no live secret movement in this audit. |

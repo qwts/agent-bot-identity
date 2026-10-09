@@ -28,6 +28,7 @@
 // not incomplete. It is written by `bootstrap --profile ... --scope-app`.
 
 import process from 'node:process';
+import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -59,8 +60,12 @@ export function gateStatus(config = {}) {
   }]));
 }
 
+export function configPath({ home = homedir(), env = process.env } = {}) {
+  return env.AGENT_BOT_CONFIG ?? join(home, '.config', 'agent-bot', 'config.json');
+}
+
 export function loadConfig({ home = homedir(), env = process.env } = {}) {
-  const path = env.AGENT_BOT_CONFIG ?? join(home, '.config', 'agent-bot', 'config.json');
+  const path = configPath({ home, env });
   let raw;
   try {
     raw = readFileSync(path, 'utf8');
@@ -75,6 +80,12 @@ export function loadConfig({ home = homedir(), env = process.env } = {}) {
     }
     throw new Error(`${path} exists but could not be read: ${err.message}`);
   }
+  return parseConfig(raw, path);
+}
+
+// Parse and validate config text. Pure in its input, so the same bytes always
+// validate the same way; the generated hook fallback relies on that (#675).
+export function parseConfig(raw, path = 'agent-bot config') {
   let config;
   try {
     config = JSON.parse(raw.replace(/^\uFEFF/, ''));
@@ -234,14 +245,25 @@ export function unmanagedAuthors({ env = process.env, config, home } = {}) {
   return configured === null ? { authors: [], source: 'none' } : { authors: configured, source: 'config' };
 }
 
-// Until the organization profile carries the list, the hooks and doctor keep
-// the compiled `ai9d` they used when nothing was set. Only those entry points
-// call this; the identity hook library never does, so nothing that refuses
-// today starts allowing. Removed once the profile migration lands (#675).
-export const LEGACY_UNMANAGED_AUTHORS = Object.freeze(['ai9d']);
-export function unmanagedAuthorsWithLegacyDefault(options = {}) {
-  const resolved = unmanagedAuthors(options);
-  return resolved.source === 'none' ? { authors: [...LEGACY_UNMANAGED_AUTHORS], source: 'default' } : resolved;
+// What a generated hook fallback may grant without the installed runtime
+// (#675): the configured allowlist for exactly these config bytes, resolved by
+// the shared validator. An absent file grants nothing; a malformed one grants
+// nothing, as the shared resolver refuses it. The fallback compares the digest
+// at decision time, so an edited config grants nothing until hooks re-sync.
+export function unmanagedAuthorsSnapshot({ home = homedir(), env = process.env } = {}) {
+  const path = configPath({ home, env });
+  let bytes;
+  try {
+    bytes = readFileSync(path);
+  } catch {
+    return { sha256: null, authors: [] };
+  }
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  try {
+    return { sha256, authors: unmanagedAuthorsSetting(parseConfig(bytes.toString('utf8'), path)) ?? [] };
+  } catch {
+    return { sha256, authors: [] };
+  }
 }
 
 // `owner` names the GitHub account an App is installed on. It is a selector

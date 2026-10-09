@@ -83,9 +83,8 @@ agent_bot_repo_reaches_github() {
 # The unmanaged-author allowlist, comma-separated, from the same resolver
 # doctor uses (config.mjs unmanagedAuthors, #675): AGENT_BOT_UNMANAGED_AUTHORS
 # when set (even empty), else the agent-bot config, which an organization
-# profile projects into. A config the resolver rejects yields nothing, so the
-# hook refuses. Without Node or the runtime the compiled `ai9d` stands, as it
-# did before the config existed.
+# profile projects into. Nothing selected, a config the resolver rejects, or
+# no Node/runtime to ask yields nothing, so the hook refuses (#675).
 agent_bot_unmanaged_authors() {
   if [ "${AGENT_BOT_UNMANAGED_AUTHORS+set}" = set ]; then
     printf '%s' "$AGENT_BOT_UNMANAGED_AUTHORS"
@@ -93,10 +92,9 @@ agent_bot_unmanaged_authors() {
   fi
   _config_module=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/../config.mjs
   if [ ! -f "$_config_module" ] || ! command -v node >/dev/null 2>&1; then
-    printf '%s' ai9d
     return 0
   fi
-  node --input-type=module -e 'import(process.argv[1]).then(({ unmanagedAuthorsWithLegacyDefault }) => process.stdout.write(unmanagedAuthorsWithLegacyDefault().authors.join(","))).catch((e) => { console.error("agent-bot: unmanaged authors unavailable: " + e.message); })' "$_config_module"
+  node --input-type=module -e 'import(process.argv[1]).then(({ unmanagedAuthors }) => process.stdout.write(unmanagedAuthors().authors.join(","))).catch((e) => { console.error("agent-bot: unmanaged authors unavailable: " + e.message); })' "$_config_module"
 }
 
 # True when $1 (a GitHub login, git name, or email) names an unmanaged author

@@ -8,9 +8,11 @@ import { execFileSync, spawnSync } from 'node:child_process';
 
 import { CANONICAL_EVENTS, DIALECTS, encodeDecision, vendorEvent } from '../hook-dialects.mjs';
 import { renderConfig } from '../sync-hooks.mjs';
+import { unmanagedAuthorsSnapshot } from '../config.mjs';
 import {
   UNINSTALLED_REASON,
   adapterFallback,
+  decideUninstalledHook,
   isHumanAttributedPublish,
   parseUnmanagedAuthors,
   uninstalledDecision,
@@ -112,9 +114,9 @@ function coldEnv(home, extra = {}) {
   };
 }
 
-function runGenerated(dialectKey, event, { payload = {}, env = {}, home } = {}) {
+function runGenerated(dialectKey, event, { payload = {}, env = {}, home, snapshot } = {}) {
   const row = DIALECTS.find((candidate) => candidate.key === dialectKey);
-  const config = JSON.parse(renderConfig(row));
+  const config = JSON.parse(renderConfig(row, '{}', snapshot));
   const mapped = vendorEvent(dialectKey, event);
   const entry = config.hooks[mapped.event].find((candidate) => (
     JSON.stringify(candidate).includes(`${dialectKey} --event ${event}`)
@@ -331,14 +333,15 @@ test('generated adapters on a cold home deny publish and allow file edits, in ev
   }
 });
 
-test('generated adapters allow unmanaged publish only as ai9d', () => {
+test('generated adapters allow unmanaged publish only for an explicitly listed author (#675)', () => {
   const home = mkdtempSync(join(tmpdir(), 'uninstalled-ai9d-'));
+  const listed = { ...AI9D, AGENT_BOT_UNMANAGED_AUTHORS: 'ai9d' };
   try {
     for (const row of DIALECTS.filter((candidate) => candidate.file)) {
       const allow = runGenerated(row.key, 'pre-command', {
         home,
         payload: { command: 'git commit -m ship' },
-        env: actorEnv('ai9d', AI9D),
+        env: actorEnv('ai9d', listed),
       });
       const expectedAllow = encodeDecision({
         dialectKey: row.key,
@@ -351,14 +354,14 @@ test('generated adapters allow unmanaged publish only as ai9d', () => {
       const push = runGenerated(row.key, 'pre-command', {
         home,
         payload: { command: 'gh pr create --title x --body y' },
-        env: actorEnv('ai9d', AI9D),
+        env: actorEnv('ai9d', listed),
       });
       assert.equal(push.status, expectedAllow.exitCode, `${row.key} ai9d gh write exit`);
 
       const human = runGenerated(row.key, 'pre-command', {
         home,
         payload: { command: 'git commit -m ship' },
-        env: actorEnv('qwts', HUMAN),
+        env: actorEnv('qwts', { ...HUMAN, AGENT_BOT_UNMANAGED_AUTHORS: 'ai9d' }),
       });
       const expectedDeny = encodeDecision({
         dialectKey: row.key,
@@ -367,6 +370,15 @@ test('generated adapters allow unmanaged publish only as ai9d', () => {
         reason: UNINSTALLED_REASON,
       });
       assert.equal(human.status, expectedDeny.exitCode, `${row.key} human commit exit`);
+
+      // Nothing selected: the wrapper supplies no default, so ai9d is refused too.
+      const unlisted = runGenerated(row.key, 'pre-command', {
+        home,
+        payload: { command: 'git commit -m ship' },
+        env: actorEnv('ai9d', { ...AI9D, AGENT_BOT_UNMANAGED_AUTHORS: undefined }),
+      });
+      assert.equal(unlisted.status, expectedDeny.exitCode, `${row.key} unlisted ai9d commit exit`);
+      assert.equal(unlisted.stdout, expectedDeny.stdout, `${row.key} unlisted ai9d commit stdout`);
     }
   } finally {
     rmSync(home, { recursive: true, force: true });
@@ -388,6 +400,87 @@ test('installed agent-hook still wins over uninstalled mode', () => {
     assert.equal(result.stdout, 'installed-ran');
   } finally {
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// The generated fallback grants what the shared resolver granted for the
+// config bytes sync-hooks snapshotted (#675): the env when set (even empty),
+// else that snapshot while the file is unchanged; anything else refuses.
+test('generated adapters apply the snapshotted allowlist with env precedence and fail closed (#675)', () => {
+  const home = mkdtempSync(join(tmpdir(), 'uninstalled-config-'));
+  const write = (name, body) => { const file = join(home, name); writeFileSync(file, typeof body === 'string' ? body : JSON.stringify(body)); return file; };
+  const listedConfig = { settings: { unmanagedAuthors: ['ai9d'] } };
+  const listed = write('listed.json', listedConfig);
+  const edited = write('edited.json', listedConfig);
+  const files = {
+    listed,
+    edited,
+    upper: write('upper.json', { settings: { unmanagedAuthors: ['AI9D'] } }),
+    broken: write('broken.json', '{ "settings": '),
+    'non-object settings': write('settings.json', { settings: ['ai9d'] }),
+    'invalid feature': write('feature.json', { ...listedConfig, features: { 'github-identity': 'false' } }),
+    'invalid daemonPreference': write('daemon.json', { settings: { ...listedConfig.settings, daemonPreference: 'invalid' } }),
+    'invalid profile': write('profile.json', { ...listedConfig, profile: 'not-a-profile' }),
+    absent: join(home, 'absent.json'),
+  };
+  const snapshots = Object.fromEntries(Object.entries(files).map(([name, file]) => [name, unmanagedAuthorsSnapshot({ env: { AGENT_BOT_CONFIG: file } })]));
+  writeFileSync(edited, JSON.stringify({ ...listedConfig, owner: 'someone' })); // valid, but not the snapshotted bytes
+  const cases = [
+    ['config-only', 'listed', {}, 'allow'],
+    ['empty env overrides config', 'listed', { AGENT_BOT_UNMANAGED_AUTHORS: '' }, 'deny'],
+    ['other env overrides config', 'listed', { AGENT_BOT_UNMANAGED_AUTHORS: 'zed' }, 'deny'],
+    ['env grants over a refused config', 'invalid feature', { AGENT_BOT_UNMANAGED_AUTHORS: 'ai9d' }, 'allow'],
+    ['config edited after sync', 'edited', {}, 'deny'],
+    ...['upper', 'broken', 'non-object settings', 'invalid feature', 'invalid daemonPreference', 'invalid profile', 'absent']
+      .map((name) => [name, name, {}, 'deny']),
+  ];
+  try {
+    for (const row of DIALECTS.filter((candidate) => candidate.file)) {
+      for (const [label, name, policy, decision] of cases) {
+        const env = actorEnv('ai9d', { ...AI9D, AGENT_BOT_UNMANAGED_AUTHORS: undefined, AGENT_BOT_CONFIG: files[name], ...policy });
+        const expected = encodeDecision({ dialectKey: row.key, event: 'pre-command', decision, ...(decision === 'deny' ? { reason: UNINSTALLED_REASON } : {}) });
+        const run = runGenerated(row.key, 'pre-command', { home, payload: { command: 'git commit -m ship' }, env, snapshot: snapshots[name] });
+        assert.equal(run.status, expected.exitCode, `${row.key} ${label} exit`);
+        assert.equal(run.stdout, expected.stdout, `${row.key} ${label} stdout`);
+        // The in-process decision resolves through config.mjs directly.
+        const inProcess = decideUninstalledHook({ dialectKey: row.key, event: 'pre-command', payload: { command: 'git commit -m ship' }, env: { ...coldEnv(home, env) } });
+        assert.equal(inProcess.exitCode, label === 'config edited after sync' ? encodeDecision({ dialectKey: row.key, event: 'pre-command', decision: 'allow' }).exitCode : expected.exitCode, `${row.key} ${label} in-process exit`);
+      }
+      const human = runGenerated(row.key, 'pre-command', {
+        home,
+        payload: { command: 'git commit -m ship' },
+        env: actorEnv('qwts', { ...HUMAN, AGENT_BOT_UNMANAGED_AUTHORS: undefined, AGENT_BOT_CONFIG: listed }),
+        snapshot: snapshots.listed,
+      });
+      const deny = encodeDecision({ dialectKey: row.key, event: 'pre-command', decision: 'deny', reason: UNINSTALLED_REASON });
+      assert.equal(human.status, deny.exitCode, `${row.key} config-listed policy still refuses a human`);
+      assert.equal(human.stdout, deny.stdout, `${row.key} config-listed policy still refuses a human (stdout)`);
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// The in-process decision reads the supplied env's config, never the host's
+// (#675 review): a differing process HOME must not lend its allowlist.
+test('in-process decisions locate config from the supplied env, not the process home', () => {
+  const host = mkdtempSync(join(tmpdir(), 'uninstalled-host-'));
+  const other = mkdtempSync(join(tmpdir(), 'uninstalled-other-'));
+  const saved = process.env.HOME;
+  try {
+    mkdirSync(join(host, '.config', 'agent-bot'), { recursive: true });
+    writeFileSync(join(host, '.config', 'agent-bot', 'config.json'), JSON.stringify({ settings: { unmanagedAuthors: ['ai9d'] } }));
+    process.env.HOME = host;
+    const decide = (env) => decideUninstalledHook({ dialectKey: 'claude', event: 'pre-command', payload: { command: 'git commit -m ship' }, env: actorEnv('ai9d', { ...AI9D, ...env }) });
+    const deny = encodeDecision({ dialectKey: 'claude', event: 'pre-command', decision: 'deny', reason: UNINSTALLED_REASON });
+    const allow = encodeDecision({ dialectKey: 'claude', event: 'pre-command', decision: 'allow' });
+    assert.deepEqual(decide({ HOME: other }), deny, 'another HOME without config grants nothing');
+    assert.deepEqual(decide({}), deny, 'no HOME and no AGENT_BOT_CONFIG grants nothing');
+    assert.deepEqual(decide({ HOME: host }), allow, 'the supplied HOME config still grants');
+  } finally {
+    if (saved === undefined) delete process.env.HOME; else process.env.HOME = saved;
+    rmSync(host, { recursive: true, force: true });
+    rmSync(other, { recursive: true, force: true });
   }
 });
 
@@ -427,19 +520,28 @@ test('source pre-push denies an agent when the installed hook is missing', () =>
     assert.equal(accountOnly.status, 2);
     assert.match(accountOnly.stderr, /uninstalled identity/);
 
-    const unmanaged = spawnSync(hook, ['origin', 'https://github.com/example/repo.git'], {
+    // Nothing selected refuses ai9d like anyone else (#675); the env or the
+    // config (an organization profile projects into it) selects it.
+    const pushAs = (extra) => spawnSync(hook, ['origin', 'https://github.com/example/repo.git'], {
       cwd: repo,
       input: '',
       encoding: 'utf8',
-      env: { ...stripped, CURSOR_AGENT: '1', ...actorEnv('ai9d') },
+      env: { ...stripped, AGENT_BOT_UNMANAGED_AUTHORS: undefined, AGENT_BOT_CONFIG: join(home, 'no-config.json'), CURSOR_AGENT: '1', ...actorEnv('ai9d'), ...extra },
     });
+    const unselected = pushAs({});
+    assert.equal(unselected.status, 2);
+    assert.match(unselected.stderr, /uninstalled identity/);
+    assert.equal(pushAs({ AGENT_BOT_UNMANAGED_AUTHORS: 'ai9d' }).status, 0);
+    const config = join(home, 'config.json');
+    writeFileSync(config, JSON.stringify({ settings: { unmanagedAuthors: ['ai9d'] } }));
+    const unmanaged = pushAs({ AGENT_BOT_CONFIG: config });
     assert.equal(unmanaged.status, 0, unmanaged.stderr);
 
     const spoofed = spawnSync(hook, ['origin', 'https://github.com/example/repo.git'], {
       cwd: repo,
       input: '',
       encoding: 'utf8',
-      env: { ...stripped, CURSOR_AGENT: '1', GH_USER: 'ai9d', ...actorEnv('qwts') },
+      env: { ...stripped, CURSOR_AGENT: '1', AGENT_BOT_UNMANAGED_AUTHORS: 'ai9d', GH_USER: 'ai9d', ...actorEnv('qwts') },
     });
     assert.equal(spoofed.status, 2);
 

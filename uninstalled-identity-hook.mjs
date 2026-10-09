@@ -13,9 +13,11 @@
 
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
+import { unmanagedAuthors } from './config.mjs';
 import { encodeDecision } from './hook-dialects.mjs';
 
 export const UNINSTALLED_REASON = 'uninstalled identity: refuse human-attributed commit or GitHub write; finish durable bootstrap to publish as the bot';
@@ -361,6 +363,35 @@ export function parseUnmanagedAuthors(env = {}) {
   return raw.split(",").map((part) => part.trim().toLowerCase()).filter(Boolean);
 }
 
+// The configured allowlist when the operator env does not decide (#675), as a
+// snapshot the installed runtime resolved with the shared config.mjs validator
+// when it generated these hooks: { sha256 of the config bytes, authors }. The
+// snapshot grants only while the file at the same path (AGENT_BOT_CONFIG, else
+// $HOME/.config/agent-bot/config.json) still has exactly those bytes, so the
+// fallback never re-validates config itself; an absent, unreadable or edited
+// file yields nothing and the decision refuses until hooks re-sync.
+export function snapshotUnmanagedAuthors(env = {}, snapshot = { sha256: null, authors: [] }) {
+  if (!snapshot || typeof snapshot.sha256 !== "string" || !Array.isArray(snapshot.authors)) return [];
+  const file = env.AGENT_BOT_CONFIG !== undefined
+    ? env.AGENT_BOT_CONFIG
+    : env.HOME ? env.HOME + "/.config/agent-bot/config.json" : "";
+  if (!file) return [];
+  try {
+    return createHash("sha256").update(readFileSync(file)).digest("hex") === snapshot.sha256
+      ? [...snapshot.authors]
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+// The operator env wins whenever it is set, even empty; otherwise the snapshot.
+export function unmanagedAuthorList(env = {}, snapshot = { sha256: null, authors: [] }) {
+  return env.AGENT_BOT_UNMANAGED_AUTHORS !== undefined
+    ? parseUnmanagedAuthors(env)
+    : snapshotUnmanagedAuthors(env, snapshot);
+}
+
 function identMatches(value, authors) {
   if (!value || !authors.length) return false;
   const lower = String(value).trim().toLowerCase();
@@ -557,8 +588,7 @@ export function isHumanAttributedPublish(command, depth) {
   return false;
 }
 
-export function uninstalledDecision({ event, command = "", env = {} }) {
-  const authors = parseUnmanagedAuthors(env);
+export function uninstalledDecision({ event, command = "", env = {}, authors = unmanagedAuthorList(env) }) {
   if (event === "pre-commit") {
     if (authors.length && isUnmanagedGitAuthor(env, authors, command)) {
       return { decision: "allow", reason: "" };
@@ -606,6 +636,8 @@ const DETECT_SOURCE = [
   gitPublishSubcommand,
   isGitPublishArgv,
   parseUnmanagedAuthors,
+  snapshotUnmanagedAuthors,
+  unmanagedAuthorList,
   identMatches,
   resolveGitAuthor,
   resolveGhLogin,
@@ -619,9 +651,10 @@ const DETECT_SOURCE = [
   uninstalledDecision,
 ].map((fn) => fn.toString()).join('\n');
 
-function eventDecisionFallback(allow, deny, event) {
+function eventDecisionFallback(allow, deny, event, snapshot) {
   const program = `import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 const UNINSTALLED_REASON = ${JSON.stringify(UNINSTALLED_REASON)};
 ${DETECT_SOURCE}
 const allow = ${JSON.stringify(allow)};
@@ -635,6 +668,7 @@ const verdict = uninstalledDecision({
   event: ${JSON.stringify(event)},
   command: extractCommand(payload, process.env),
   env: process.env,
+  authors: unmanagedAuthorList(process.env, ${JSON.stringify(snapshot)}),
 });
 const encoded = verdict.decision === "deny" ? deny : allow;
 if (encoded.stdout) process.stdout.write(encoded.stdout);
@@ -647,7 +681,9 @@ process.exit(encoded.exitCode);
   return `node --input-type=module -e ${shQuote(program)}`;
 }
 
-export function adapterFallback(dialectKey, event) {
+// `snapshot` is unmanagedAuthorsSnapshot() from config.mjs, taken by the
+// installed runtime as it writes these hooks; without one nothing is granted.
+export function adapterFallback(dialectKey, event, snapshot = { sha256: null, authors: [] }) {
   const allow = encodeDecision({ dialectKey, event, decision: 'allow' });
   const deny = encodeDecision({
     dialectKey,
@@ -656,9 +692,25 @@ export function adapterFallback(dialectKey, event) {
     reason: UNINSTALLED_REASON,
   });
   if (event === 'pre-commit' || event === 'pre-push' || event === 'pre-command') {
-    return eventDecisionFallback(allow, deny, event);
+    return eventDecisionFallback(allow, deny, event, {
+      sha256: typeof snapshot?.sha256 === 'string' && /^[0-9a-f]{64}$/.test(snapshot.sha256) ? snapshot.sha256 : null,
+      authors: Array.isArray(snapshot?.authors) ? snapshot.authors.filter((author) => typeof author === 'string' && /^[a-z0-9][a-z0-9._@+-]{0,99}$/.test(author)) : [],
+    });
   }
   return emitShellDecision(allow);
+}
+
+// In process the shared resolver decides directly; a config it refuses grants
+// nothing. The config is located from the supplied env exactly as the
+// generated fallback locates it, never from this process's home: without
+// AGENT_BOT_CONFIG or HOME there is no config to read.
+function sharedUnmanagedAuthors(env) {
+  if (env.AGENT_BOT_UNMANAGED_AUTHORS === undefined && env.AGENT_BOT_CONFIG === undefined && !env.HOME) return [];
+  try {
+    return unmanagedAuthors(env.HOME ? { env, home: env.HOME } : { env }).authors;
+  } catch {
+    return [];
+  }
 }
 
 export function decideUninstalledHook({ dialectKey, event, payload = {}, env = process.env }) {
@@ -666,6 +718,7 @@ export function decideUninstalledHook({ dialectKey, event, payload = {}, env = p
     event,
     command: extractCommand(payload, env),
     env,
+    authors: sharedUnmanagedAuthors(env),
   });
   return encodeDecision({ dialectKey, event, decision, reason });
 }
