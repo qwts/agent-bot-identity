@@ -32,6 +32,8 @@ import {
 
 import { readBinding } from './agent-binding.mjs';
 import { confinementCheck } from './confinement.mjs';
+import { unboundBotReason, unboundBotSlug } from './resolve-agent.mjs';
+import { isGitPublishCommand } from './uninstalled-identity-hook.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 
@@ -238,6 +240,23 @@ export function combine(results, event) {
   return { decision, reason: reasons.join('; '), contexts };
 }
 
+// No human fallback (#749): a shell command that commits or pushes from a
+// session that stated a bot identity its checkout is not bound to is refused,
+// here and again by hooks/pre-commit and hooks/pre-push. Built into the runner
+// like confinement, so a project's own agent-hooks/ cannot displace it. The
+// delegate states no identity and is never evaluated past the resolver.
+export function unboundIdentityCheck(envelope, { env = process.env, cwd = process.cwd() } = {}) {
+  if (envelope.event !== 'pre-command' || !isGitPublishCommand(envelope.command ?? '')) {
+    return { decision: 'allow' };
+  }
+  try {
+    const slug = unboundBotSlug({ env, cwd });
+    return slug ? { decision: 'deny', reason: unboundBotReason(slug) } : { decision: 'allow' };
+  } catch (error) {
+    return { decision: 'deny', reason: `cannot verify the stated bot identity: ${error.message}` };
+  }
+}
+
 export function runHooks({ dialectKey, event, payload, dir, env = process.env }) {
   const envelope = normalizeEnvelope({ dialectKey, event, payload });
   let binding;
@@ -256,10 +275,12 @@ export function runHooks({ dialectKey, event, payload, dir, env = process.env })
   // clock is meant to guarantee. Each hook gets what is left of the deadline.
   const budget = budgetMs(dialectKey, event, requested);
   const deadline = now() + budget;
-  const results = [{ name: 'confinement', ...confinementCheck(envelope, {
+  const checkCwd = envelope.cwd && existsSync(envelope.cwd) ? envelope.cwd : process.cwd();
+  const results = [{ name: 'identity', ...unboundIdentityCheck(envelope, { env, cwd: checkCwd }) }];
+  results.push({ name: 'confinement', ...confinementCheck(envelope, {
     env, binding, cwd: envelope.cwd ?? process.cwd(),
     boundCheckout: binding ? repoRoot(envelope.cwd ?? process.cwd()) : null,
-  }) }];
+  }) });
 
   for (const file of discoverHooks(dir, event)) {
     const name = file.slice(dir.length + 1);

@@ -94,7 +94,10 @@ path. Details and the governing contract link live in
 1. The account, not the directory, is bot territory (ENG-0339): a rostered
    agent account owns every checkout in it; in the owner's account act as the
    human's delegate unless `--app`, `GH_AGENT_APP`, or a pin states a bot.
-   Never treat a `.<tool>/worktrees/**` path as an identity signal.
+   Never treat a `.<tool>/worktrees/**` path as an identity signal. A stated
+   bot whose worktree setup failed is refused `git commit` and `git push`
+   rather than falling back to the human (#749). Fix the setup; do not
+   unstate the identity to get past the refusal.
 2. Resolve one App through the shared runtime; do not reproduce resolution in
    shell snippets or skill-local scripts.
 3. Stop on mint, credential, identity-pin, lease, verification, or tree-match

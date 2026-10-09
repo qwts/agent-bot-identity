@@ -247,7 +247,7 @@
     "acp-registry.mjs": "Spawn rows select and launch harnesses, so soul owns them (ADR-0276, ADR-0322). Descriptive columns are candidates for agent-harness descriptors.",
     "agent-approvals.mjs": "The `agent-bot approvals` command entry; cli, like skill.mjs. Approval decisions still go through the daemon and owner-gate.",
     "agent-backfill.mjs": "Repairs census provenance by writing population rows (upsertSoul); soul lifecycle, loaded by agent-population's backfill command.",
-    "agent-hook.mjs": "Process entry point every harness hook config calls; composes binding and confinement.",
+    "agent-hook.mjs": "Process entry point every harness hook config calls; composes binding, confinement and the unbound-bot identity check.",
     "approval-action.mjs": "Names a waiting proposal's soul from the population for the owner's prompt; soul, shared by the daemon host and the approvals command.",
     "canonical-json.mjs": "The canonical byte form behind soul revisions and genesis IDs; shared so identity can derive IDs without importing soul. soul-package re-exports it.",
     "cli/identity.mjs": "`agent-bot identity`: composes identity with soul (a local `spawn --package` hashes the package) and the census (`finalize`). agent-identity.mjs keeps the library and the git hooks' entry (current, show, record).",

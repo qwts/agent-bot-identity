@@ -557,6 +557,24 @@ export function isHumanAttributedPublish(command, depth) {
   return false;
 }
 
+// The git half of isHumanAttributedPublish: a `git commit` or `git push`
+// anywhere in the command, nested shells and substitutions included. The
+// installed runner's unbound-bot check (#749) asks only this; `gh` writes from
+// a stated bot already mint as that bot or fail (worktree-token.mjs).
+export function isGitPublishCommand(command, depth = 0) {
+  if (depth > 8) return true;
+  for (const segment of commandSegments(command)) {
+    const argv = tokenizeCommand(segment);
+    if (isGitPublishArgv(argv)) return true;
+    const nested = shellPayload(argv);
+    if (nested && isGitPublishCommand(nested, depth + 1)) return true;
+  }
+  for (const nested of commandSubstitutions(command)) {
+    if (isGitPublishCommand(nested, depth + 1)) return true;
+  }
+  return false;
+}
+
 export function uninstalledDecision({ event, command = "", env = {} }) {
   const authors = parseUnmanagedAuthors(env);
   if (event === "pre-commit") {

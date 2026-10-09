@@ -9,9 +9,12 @@
 # A human-attributed commit from an agent process is not refused (ENG-0339
 # supersedes ENG-0045's worktree enforcement): in the owner's account a
 # harness that resolves to the human is the human's delegate, and no guard
-# confines where it commits. Ordinary human shells are never evaluated.
+# confines where it commits. The exception is a session that stated a bot
+# identity whose worktree setup failed: it may not fall back to the human
+# (#749). Ordinary human shells are never evaluated.
 
 HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+AGENT_HOOK="${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}"
 SETUP="$HOOK_DIR/../setup-worktree.mjs"
 # shellcheck source=hooks/agent-context
 . "$HOOK_DIR/agent-context"
@@ -32,12 +35,13 @@ if agent_bot_agent_context; then
       fi
       ;;
     *)
-      : # human persona — delegate work is the human's own (ENG-0339)
+      # Human persona: delegate work is the human's own (ENG-0339), unless
+      # the session stated a bot it is not bound to (#749).
+      [ -x "$AGENT_HOOK" ] && agent_bot_refuse_unbound_bot commit
       ;;
   esac
 fi
 
-AGENT_HOOK="${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}"
 if [ -x "$AGENT_HOOK" ]; then
   "$AGENT_HOOK" --dialect git --event pre-commit || exit $?
 fi

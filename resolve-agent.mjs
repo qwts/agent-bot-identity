@@ -25,7 +25,7 @@ import { existsSync } from 'node:fs';
 import { readAgentIdentity, stateDirectory } from './agent-identity.mjs';
 import { accountHarness, accountName, detectHarness } from './detect-harness.mjs';
 import { PROFILE_HARNESSES } from './organization-profile.mjs';
-import { appLifecycleStatus, loadConfig, slugForHarness } from './config.mjs';
+import { appLifecycleStatus, isGateEnabled, loadConfig, slugForHarness } from './config.mjs';
 
 // Pin keys written by setup-worktree. Prefer the standalone name; accept the
 // playbook-engineering name so a migrated machine keeps working.
@@ -141,4 +141,40 @@ export function resolveAgentSlug({
   if (accountKey) return slugForHarness(accountKey, cfg);
   if (!detect) return null;
   return slugForHarness(detectHarness(env), cfg);
+}
+
+// No human fallback (#749, carried requirement 6 of #104). A session that
+// stated a bot identity — GH_AGENT_APP, a checkout pin, or an agent account,
+// the stated identities ENG-0375 names — publishes as that bot or not at all. When worktree setup failed or never ran (a primary
+// checkout is refused, for one), the checkout's committer is still the human,
+// and a commit or push from it would put the agent's work on the human's
+// record. The delegate (ENG-0339, ENG-0375) has no marker to check: it is
+// agent context that stated nothing, so the resolver yields null here and it
+// is never refused. Bound means the committer is a bot, which only
+// setup-worktree configures; whether that bot carries a resolvable Agent ID
+// stays the pre-commit hook's question. With github-identity off there is no
+// bot to bind and nothing to refuse. An unreadable pin propagates: an identity
+// that cannot be checked is not an absent one.
+export function unboundBotSlug({ env = process.env, cwd = process.cwd(), config, git = defaultGitRunner } = {}) {
+  const cfg = config ?? loadConfig({ env });
+  if (!isGateEnabled('github-identity', { config: cfg })) return null;
+  const accountKey = accountHarness(cfg, accountName(env));
+  const slug = (env.GH_AGENT_APP ?? '').trim()
+    || pinnedSlug(cwd, { git })
+    || (accountKey ? slugForHarness(accountKey, cfg) : null);
+  if (!slug) return null;
+  let name = '';
+  try {
+    name = (git(['config', '--get', 'user.name'], { cwd }) ?? '').trim();
+  } catch (error) {
+    if (error.status !== 1) throw error;
+  }
+  return /\[bot\]/.test(name) ? null : slug;
+}
+
+export function unboundBotReason(slug) {
+  return `agent-bot: this session stated bot identity ${slug}, but this checkout is not bound to it: `
+    + 'worktree setup failed or never ran here, so this commit or push would be attributed to the human. '
+    + 'Run `agent-bot setup-worktree` in a linked worktree (a primary checkout is refused) '
+    + 'and check `agent-bot doctor`, then retry.';
 }

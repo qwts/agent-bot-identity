@@ -116,7 +116,11 @@ current harness:
   roster slug in shell and JS alike — never a name glob) owns every checkout in
   it, primary or linked; in the owner's account unpinned work is the human's
   delegate. `.<tool>/worktrees` is layout only, and no guard confines where an
-  agent commits.
+  agent commits. A session that stated a bot (`GH_AGENT_APP`, a pin, an agent
+  account) but whose committer is still the human, because worktree setup
+  failed, may not commit or push. `resolve-agent.mjs` `unboundBotSlug` decides
+  this for the runner's pre-command check and for `hooks/pre-commit` and
+  `hooks/pre-push` (#749). The delegate states nothing and is never refused.
 - Worktree git config keys: `agentBot.app`, `agentBot.agentId`,
   `agentBot.chainedHooksPath` (still read the legacy `qwts.*` names).
 - User config at `~/.config/agent-bot/config.json` maps harness → App slug and
