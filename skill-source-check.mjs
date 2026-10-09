@@ -4,9 +4,10 @@
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { soulDirectory } from './agent-population.mjs';
-import { readLearnedSkillSource } from './skill-learning.mjs';
+import { proposeSkillLearning, readLearnedSkillSource } from './skill-learning.mjs';
 import { acquireHttpsSkill } from './skill-library.mjs';
 
+const refuse = (code, message) => { throw Object.assign(new Error(message), { code }); };
 const fail = () => { throw Object.assign(new Error('Portable source check staging is unavailable or unsafe.'), { code: 'skill-check-staging-invalid' }); };
 const safe = file => typeof file === 'string' && file.length > 0 && file.length <= 1024 && file.split('/').every(part => part && part !== '.' && part !== '..'
   && !/[\\:*?"<>|\x00-\x1f\x7f]/.test(part) && !/[. ]$/.test(part) && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part));
@@ -102,4 +103,27 @@ export async function checkSoulSkillSource(libraryId, agentId, { now = () => new
   result.candidateSource = { ...content.source, capturedAt: checkedAt };
   if (content.coverage.acquisition === 'partial') { result.status = 'unavailable'; result.reason = 'skill-capture-incomplete'; }
   return saveCheck(tmp, result, content);
+}
+
+// Apply a reviewed candidate through the existing learning proposal (#312).
+// The staged check bytes are review data only: the source is fetched again and
+// must match the reviewed digest exactly, so nothing a soul could edit in its
+// temporary state becomes provenance. The soul revision policy stays the gate.
+export async function proposeSoulSkillCandidate(libraryId, agentId, staging, outcome, { candidate, now = () => new Date(), ...options } = {}) {
+  if (typeof candidate !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(candidate)) refuse('skill-candidate-invalid', 'select the reviewed candidate digest from a portable check');
+  if (outcome?.source?.selection !== 'accepted' || outcome.source.digest !== candidate) refuse('skill-candidate-invalid', 'record the candidate as source {selection: "accepted", digest: CANDIDATE}');
+  return proposeSkillLearning(libraryId, agentId, staging, outcome, { ...options, now, async material() {
+    const source = readLearnedSkillSource(libraryId, agentId, options);
+    if (source.provenance?.source.kind !== 'https') refuse(source.provenance ? 'skill-local-source-not-portable' : 'skill-source-provenance-missing', 'the accepted receipt has no portable HTTPS source to fetch');
+    const content = await acquireHttpsSkill(source.provenance.source.url, libraryId, { ...options, now });
+    if (content.coverage.acquisition === 'partial') refuse('skill-capture-incomplete', 'instruction capture is incomplete; check again before applying');
+    if (content.digest !== candidate) refuse('skill-source-changed', 'the source no longer matches the reviewed candidate; check and review it again');
+    // Same shape as an accepted library snapshot, owned by the original import.
+    const captureMetadata = { schemaVersion: 1, owner: libraryId, name: content.name, manifest: { files: content.files, digest: content.digest },
+      source: content.source, capturedAt: now().toISOString(), dependencies: content.dependencies, coverage: content.coverage,
+      excluded: content.excluded, materialized: content.materialized, locations: content.locations, hosts: content.hosts,
+      ...(content.repository ? { repository: content.repository } : {}) };
+    const material = { selection: 'accepted', digest: content.digest, files: content.files, entries: content.entries, dependencies: content.dependencies, captureMetadata };
+    return { source: material, accepted: { ...material } };
+  } });
 }

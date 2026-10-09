@@ -454,11 +454,48 @@ or guessing host paths. None of these outcomes changes accepted captures,
 adapted skills, the live package or revision history.
 
 The candidate uses the existing acquisition bounds and a 4 MiB metadata limit;
-checks use the same 4 MiB JSON bound. There is no candidate apply command yet.
-Adopting reviewed changes still requires preparing a definition and submitting
-it through the existing revision/proposal policy; this check grants no bypass.
+checks use the same 4 MiB JSON bound. The check itself adopts nothing and
+grants no bypass of the revision/proposal policy; see the next section.
 Readers also verify Git blob hashes against retained bytes and reject a legacy
 `source.repository` alias that contradicts version 2 `source.provenance`.
+
+### Apply a reviewed portable candidate
+
+```sh
+agent-bot soul skill learn IMPORT_UUID --soul AGENT_ID --candidate CANDIDATE_DIGEST \
+  --package /absolute/path/from/prepare \
+  --outcome /absolute/path/to/outcome.json --reason 'Apply reviewed source update' --json
+```
+
+This is the learning recording operation with a different source of bytes.
+Review the check's `payload/`, prepare this soul's default staging with
+`soul revision prepare AGENT_ID`, and adapt or copy the pieces you want there.
+The outcome file is the same schema; its `source` must be
+`{"selection": "accepted", "digest": CANDIDATE_DIGEST}`, and its pieces name
+paths in the candidate. Local adaptations are a library concept and are not
+selectable here.
+
+The staged check bytes are review data only. Recording reads the soul's
+current receipt, fetches its HTTPS source again with the same bounded
+acquisition, and refuses unless the capture is complete and its digest equals
+`--candidate` (`skill-source-changed`, `skill-capture-incomplete`). A version 1
+or local-source receipt refuses without fetching. The CLI requires the caller's
+binding to name the soul before any fetch. Nothing the soul could edit in its
+temporary state becomes provenance.
+
+The resulting version 2 receipt records the candidate as the soul's accepted
+source: `source.acceptedDigest` and `source.provenance` name the candidate and
+its origin metadata, and the selected candidate bytes are retained under
+`provenance/skills/<uuid>/sources/<candidate-digest>/`. The receipt format is
+unchanged. The previous capture set leaves the current package as described
+below and stays in the prior revision. After the revision is applied, a new
+portable check compares against the candidate.
+
+The proposal uses the same expected-parent, ask/auto/never and exit-status rules
+as other learning (below). Nothing is applied to the live package, and the local
+library is neither required nor changed. When the library still holds the
+import, the library route remains `check`, `update --apply` with reviewed
+digests, then `learn` from the updated accepted snapshot.
 
 One current receipt/capture set per import replaces that import's prior set in
 the private candidate. Each source inventory retains the library's file/byte

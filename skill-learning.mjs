@@ -169,13 +169,16 @@ function put(tree, entry) {
   writeFileSync(file, entry.bytes, { flag: 'wx', mode: entry.mode === '100755' ? 0o755 : 0o644 });
   chmodSync(file, entry.mode === '100755' ? 0o755 : 0o644);
 }
-export async function proposeSkillLearning(libraryId, agentId, staging, outcome, { reason, now = () => new Date(), propose = proposeSoulRevision, ...options } = {}) {
+// `material` supplies verified source bytes other than the local library (the
+// portable candidate path); the outcome, receipt and proposal rules are shared.
+export async function proposeSkillLearning(libraryId, agentId, staging, outcome, { reason, now = () => new Date(), propose = proposeSoulRevision, material, ...options } = {}) {
   validateOutcome(outcome); text(reason);
   const { head } = current(agentId, options);
   if (head.revision !== outcome.parentRevision) fail('learning parent is stale; prepare from the current revision');
-  const source = readSkillMaterial(libraryId, { ...options, selection: outcome.source.selection, expectedDigest: outcome.source.digest });
-  const accepted = readSkillMaterial(libraryId, options);
   const candidate = preparedFor(agentId, staging, head.revision, options), files = fileMap(candidate.entries);
+  const { source, accepted } = material ? await material(outcome) : {
+    source: readSkillMaterial(libraryId, { ...options, selection: outcome.source.selection, expectedDigest: outcome.source.digest }),
+    accepted: readSkillMaterial(libraryId, options) };
   if (candidate.entries.some(entry => entry.path === prefix(libraryId) || entry.path.startsWith(`${prefix(libraryId)}/`))) {
     const prior = files.get(receiptFile(libraryId));
     if (!prior || prior.bytes.length > 256 * 1024) fail('learning provenance destination contains unmanaged material');
