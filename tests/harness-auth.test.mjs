@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { authCommand, harnessAuth, LOGIN_TIMEOUT_MS } from '../harness-auth.mjs';
-import { ACP_SPAWN_REGISTRY, onPath, whichOnPath } from '../acp-registry.mjs';
+import { ACP_SPAWN_REGISTRY, onPath, whichOnPath, windowsExecutable } from '../acp-registry.mjs';
 import { fileURLToPath } from 'node:url';
 
 const row = ACP_SPAWN_REGISTRY.claude;
@@ -277,4 +277,10 @@ test('Windows PATH lookup resolves name.exe and nothing else (#617)', (t) => {
   // POSIX lookup is unchanged: the bare file wins and .exe is not appended.
   assert.equal(whichOnPath('node', { PATH }, { platform: 'linux' }), path.join(root, 'bare', 'node'));
   assert.equal(whichOnPath('claude', { PATH: path.join(root, 'exe') }, { platform: 'darwin' }), null);
+});
+
+test('PATH lookup and runtime readiness share one Windows executable rule (#617)', () => {
+  assert.equal(windowsExecutable('node'), 'node.exe');
+  assert.equal(windowsExecutable('Tool.EXE'), 'Tool.EXE');
+  assert.equal(windowsExecutable('python3.12'), 'python3.12.exe');
 });
