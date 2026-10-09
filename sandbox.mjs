@@ -279,15 +279,17 @@ export function matchPersona(mapping, { names = [], role = null } = {}) {
 // the rest refuse a launch (see PERSONA_REFUSALS).
 //
 // `acceptStale` is for a launch the owner verified past a stale record
-// (#613, owner decision 2026-10-09): that one launch is decided by the
-// stale record's own mapping, never by the user setting in its place, so
-// the owner's approval cannot lower what the last recorded pack required.
-// The result keeps `stale: true` and the refresh message.
-export function loadPersona({ env = process.env, home = homedir(), acceptStale = false } = {}) {
+// (#613, owner decision 2026-10-09): the digest of the record the owner
+// approved. Only that very record is accepted, so a record that changed
+// while the owner was asked is stale again. That one launch is decided by
+// the stale record's own mapping, never by the user setting in its place,
+// so the owner's approval cannot lower what the last recorded pack
+// required. The result keeps `stale: true` and the refresh message.
+export function loadPersona({ env = process.env, home = homedir(), acceptStale = null } = {}) {
   const record = readSopPersonaRecord({ env, home });
   const base = { state: record.state, decides: false, repository: record.repository ?? null, commit: record.commit ?? null,
-    recordedAt: record.recordedAt ?? null, message: record.message ?? null, mapping: null };
-  if (record.state === 'stale' && acceptStale) {
+    recordedAt: record.recordedAt ?? null, message: record.message ?? null, mapping: null, ...(record.digest ? { digest: record.digest } : {}) };
+  if (record.state === 'stale' && typeof acceptStale === 'string' && acceptStale === record.digest) {
     const stale = { ...base, stale: true };
     if (record.text === null) return { ...stale, state: 'absent' };
     try { return { ...stale, state: 'ok', decides: true, mapping: parsePersonaMapping(record.text) }; }
@@ -313,7 +315,10 @@ function personaRefusal(persona, wanted) {
   if (!persona) return null;
   const source = persona.repository ? { repository: persona.repository, commit: persona.commit } : null;
   const known = PERSONA_REFUSALS[persona.state];
-  if (known) return { ...known, reason: persona.message ?? `the SOP persona policy is ${persona.state}`, ...(source ? { source } : {}) };
+  if (known) {
+    return { ...known, reason: persona.message ?? `the SOP persona policy is ${persona.state}`, ...(source ? { source } : {}),
+      ...(persona.state === 'stale' && persona.digest ? { digest: persona.digest } : {}) };
+  }
   if (wanted) {
     return { code: 'persona-policy-requires-addon', reason: `the SOP decides sandboxed as ${wanted}, but features.persona-accounts is off`,
       action: 'the owner turns persona accounts on with `agent-bot sandbox on`; agent-bot never turns it on itself', ...(source ? { source } : {}) };
@@ -404,7 +409,7 @@ function censusSoul(agentId, { env, home }) {
   }
 }
 
-export function launchSandbox(agentId, { env = process.env, home = homedir(), platform = process.platform, exec = defaultExec, fileExists = existsSync, owner = userInfo().username, name = null, role = null, acceptStale = false } = {}) {
+export function launchSandbox(agentId, { env = process.env, home = homedir(), platform = process.platform, exec = defaultExec, fileExists = existsSync, owner = userInfo().username, name = null, role = null, acceptStale = null } = {}) {
   // Read now, not at daemon start: the switch, overrides and record change under it.
   const settings = sandboxSettings(loadConfig({ env, home }));
   const persona = loadPersona({ env, home, acceptStale });
@@ -426,14 +431,14 @@ export function launchSandbox(agentId, { env = process.env, home = homedir(), pl
 // of the rest, which `agent-bot sandbox plan` prints in full.
 export function sandboxLaunchProblem(sandbox) {
   if (sandbox?.refused) {
-    const { code, reason, source, action } = sandbox.refused;
+    const { code, reason, source, action, digest = null } = sandbox.refused;
     // The launch handler sends `${code}: ${message}` as the broker's detail,
     // so the whole line, prefix included, fits LAUNCH_DETAIL_LIMIT: the
     // reason and the source/action tail are each bounded.
     const budget = LAUNCH_DETAIL_LIMIT - code.length - 2;
     const from = source ? ` (${clip(source.repository, 100)}@${source.commit.slice(0, 12)})` : '';
     const tail = clip(`${from}; ${action}`, Math.floor(budget / 2));
-    return Object.assign(fail(code, `${clip(reason, budget - tail.length)}${tail}`), { source: source ?? null, action });
+    return Object.assign(fail(code, `${clip(reason, budget - tail.length)}${tail}`), { source: source ?? null, action, ...(digest ? { digest } : {}) });
   }
   if (!sandbox || sandbox.resolution !== 'sandboxed') return null;
   const { account, status, steps = [] } = sandbox;
@@ -463,7 +468,7 @@ export function sandboxLaunchProblem(sandbox) {
 // soul in an account this daemon is not. Account readiness stays a launch
 // question, so nothing is probed. `acceptStale` carries a launch the owner
 // verified (see loadPersona) into that launch's own turn, and only that one.
-export function turnSandboxProblem(agentId, { env = process.env, home = homedir(), owner = userInfo().username, acceptStale = false } = {}) {
+export function turnSandboxProblem(agentId, { env = process.env, home = homedir(), owner = userInfo().username, acceptStale = null } = {}) {
   const settings = sandboxSettings(loadConfig({ env, home }));
   const persona = loadPersona({ env, home, acceptStale });
   const decided = decideSandbox(censusSoul(agentId, { env, home }), settings, { owner, persona });

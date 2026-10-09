@@ -486,14 +486,29 @@ test('a record is current only for the exact selection it was made from: ref, pi
   // A malformed selection is an unreadable record, not a stale one.
   record({ selection: { org: 'no-ref', sop: null } });
   assert.equal(state().state, 'error');
-  // Owner-verified, the stale record's own mapping decides, never the user setting.
+  // The selection must name the repositories the record's commits are for.
+  record({ selection: { org: 'other/org@main', sop: 'local/sop@main' } });
+  select('org = "other/org@main"\nsop = "local/sop@main"\n');
+  assert.equal(state().state, 'error', 'a record whose org is not the one its selection names is not current');
+  record({ selection: { org: 'local/org@main', sop: 'other/sop@main' } });
+  select('org = "local/org@main"\nsop = "other/sop@main"\n');
+  assert.equal(state().state, 'error');
+  select('org = "local/org@main"\nsop = "local/sop@main"\n');
+  // Owner-verified, that very stale record's own mapping decides, never the user setting.
   writeFileSync(file, JSON.stringify(legacy));
-  const verified = loadPersona({ ...f.options, acceptStale: true });
+  const { digest } = state();
+  assert.match(digest, /^[0-9a-f]{64}$/);
+  assert.equal(loadPersona({ ...f.options, acceptStale: 'f'.repeat(64) }).state, 'stale', 'an approval of another record does not carry');
+  const verified = loadPersona({ ...f.options, acceptStale: digest });
   assert.deepEqual([verified.state, verified.stale, verified.decides], ['ok', true, true]);
-  const launched = launchSandbox(ID, { ...f.options, platform: 'darwin', ...machine(), owner: 'owner', acceptStale: true });
+  const launched = launchSandbox(ID, { ...f.options, platform: 'darwin', ...machine(), owner: 'owner', acceptStale: digest });
   assert.deepEqual([launched.resolution, launched.account, launched.sop.rule, launched.sop.stale, launched.refused], ['sandboxed', 'gb-fixture', 'soul:fixture', true, undefined]);
+  // The record changes while the owner is asked: the approval no longer matches it.
+  writeFileSync(file, JSON.stringify({ ...legacy, persona: 'schema_version = 1\n[persona]\nsandbox = "unrestricted"\n' }));
+  const changed = launchSandbox(ID, { ...f.options, platform: 'darwin', ...machine(), owner: 'owner', acceptStale: digest });
+  assert.equal(changed.refused.code, 'persona-policy-stale');
   writeFileSync(file, JSON.stringify({ ...legacy, persona: null }));
-  assert.equal(loadPersona({ ...f.options, acceptStale: true }).state, 'absent');
+  assert.equal(loadPersona({ ...f.options, acceptStale: state().digest }).state, 'absent');
 });
 
 test('every turn re-reads the persona policy: a record gone stale refuses the next turn unless the owner verified it (#613)', (t) => {
@@ -506,7 +521,7 @@ test('every turn re-reads the persona policy: a record gone stale refuses the ne
   const refused = turnSandboxProblem(ID, options);
   assert.equal(refused.code, 'persona-policy-stale');
   assert.match(refused.message, /\(local\/sop@a{12}\); run `agent-bot sop persona`/);
-  assert.equal(turnSandboxProblem(ID, { ...options, acceptStale: true }), null, 'a launch the owner verified runs its turn');
+  assert.equal(turnSandboxProblem(ID, { ...options, acceptStale: refused.digest }), null, 'a launch the owner verified runs its turn');
   // The pack now puts the soul in another account: this daemon's next turn is refused.
   pack(f, MAPPING);
   assert.equal(turnSandboxProblem(ID, options).code, 'sandbox-other-account');

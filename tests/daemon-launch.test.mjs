@@ -908,17 +908,20 @@ for (const [code, refused] of [
 // principal's launch asks the owner to verify instead of refusing; a team
 // start, which an agent makes, is refused as before.
 const STALE = { code: 'persona-policy-stale', reason: 'the recorded persona mapping was recorded before agent-bot kept the selection it was made from',
-  action: 'run `agent-bot sop persona` to record the selected SOP\'s mapping', source: { repository: 'o/sop', commit: 'a'.repeat(40) } };
+  action: 'run `agent-bot sop persona` to record the selected SOP\'s mapping', source: { repository: 'o/sop', commit: 'a'.repeat(40) }, digest: 'd'.repeat(64) };
 function staleFixture(t, overrides = {}) {
   const asked = [], verified = [], turned = [];
+  let f;
   const resolve = (query) => {
     asked.push(query);
+    // The receipt is durable before the approval decides anything.
+    if (query.acceptStale) assert.equal(journal(f).ownerVerified?.digest, STALE.digest);
     return query.acceptStale
       ? { resolution: 'unrestricted', override: 'inherit', source: 'sop', account: 'owner', self: 'owner', sop: { decides: true, state: 'ok', stale: true } }
       : { resolution: 'unrestricted', override: 'inherit', source: 'global', account: 'owner', self: 'owner', refused: STALE };
   };
   const turns = createTurnRegistry({ policy: (check) => { turned.push(check); } });
-  const f = fixture(t, { sandboxFor: resolve, turns,
+  f = fixture(t, { sandboxFor: resolve, turns,
     verifyOwner: async (action, context) => { verified.push({ action, context }); return { method: 'presence', via: 'agent-bot-keyd' }; }, ...overrides });
   return { ...f, asked, verified, turned };
 }
@@ -929,10 +932,10 @@ test('an owner\'s launch past a stale persona record is verified, then runs on t
   assert.equal(f.verified.length, 1, 'the owner is asked once');
   assert.match(f.verified[0].action, new RegExp(`^launch ${agentId} although its SOP persona record is stale \\(o/sop@a{40}\\)$`));
   assert.deepEqual(f.verified[0].context, { soul: agentId, package: null, source: STALE.source });
-  assert.deepEqual(f.asked, [{ agentId, name: 'Helper' }, { agentId, name: 'Helper', acceptStale: true }], 'approved, the stale mapping decides, not the user setting');
+  assert.deepEqual(f.asked, [{ agentId, name: 'Helper' }, { agentId, name: 'Helper', acceptStale: STALE.digest }], 'approved, that stale record\'s mapping decides, not the user setting');
   assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId, sandbox: { resolution: 'unrestricted', account: 'owner' } });
-  assert.deepEqual(journal(f).ownerVerified, { code: 'persona-policy-stale', method: 'presence', source: STALE.source });
-  assert.deepEqual(f.turned, [{ agentId, kind: 'launch', ownerVerified: true }], 'the launch turn carries the approval');
+  assert.deepEqual(journal(f).ownerVerified, { code: 'persona-policy-stale', method: 'presence', source: STALE.source, digest: STALE.digest });
+  assert.deepEqual(f.turned, [{ agentId, kind: 'launch', ownerVerified: STALE.digest }], 'the launch turn carries the approval of that record');
 });
 
 test('an owner who declines a launch past a stale persona record stops it cleanly before any mint or harness (#613)', async (t) => {

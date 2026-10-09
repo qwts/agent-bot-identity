@@ -13,7 +13,8 @@ import { assertSoulUnpaused } from './agent-population.mjs';
 // `policy` (#613) is asked once at the start of every turn run here, before
 // the executor, with `{ agentId, kind, ownerVerified }`; it throws to refuse
 // the turn. `ownerVerified` is a launch's own turn after the owner verified
-// it. Interactive turns only `track`, so they are not asked here.
+// it: the digest of the stale record the owner approved, else null.
+// Interactive turns only `track`, so they are not asked here.
 export function createTurnRegistry({ isPaused = () => false, policy = null, history = null, now = () => new Date(), onStop = () => false } = {}) {
   const active = new Map();
   const sessionGrants = createSessionGrants();
@@ -41,9 +42,9 @@ export function createTurnRegistry({ isPaused = () => false, policy = null, hist
       }
       return stopped;
     },
-    async run(input, executor, { turnTimeoutMs = 30 * 60_000, ownerVerified = false } = {}) {
+    async run(input, executor, { turnTimeoutMs = 30 * 60_000, ownerVerified = null } = {}) {
       assertSoulUnpaused(isPaused(input.invocation.agentId));
-      if (policy) await policy({ agentId: input.invocation.agentId, kind: input.kind ?? 'turn', ownerVerified: ownerVerified === true });
+      if (policy) await policy({ agentId: input.invocation.agentId, kind: input.kind ?? 'turn', ownerVerified: typeof ownerVerified === 'string' ? ownerVerified : null });
       const controller = new AbortController();
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(turnTimeoutMs), ...(input.signal ? [input.signal] : [])]);
       const release = track(input.invocation.agentId, controller);

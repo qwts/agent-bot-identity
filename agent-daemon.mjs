@@ -1766,7 +1766,7 @@ export async function runDaemon({
     },
     // What the soul gets (#376): its override over the global switch, and
     // for a sandboxed one the account's readiness and the owner's steps.
-    sandboxFor: ({ agentId, name = null, role = null, acceptStale = false }) => launchSandbox(agentId, { env, home, name, role, acceptStale }),
+    sandboxFor: ({ agentId, name = null, role = null, acceptStale = null }) => launchSandbox(agentId, { env, home, name, role, acceptStale }),
     // A principal's launch past a stale persona record asks the owner (#613).
     verifyOwner: (action) => confirmOwnerPresence(action, { env }),
     joinSoul: async (soul) => {

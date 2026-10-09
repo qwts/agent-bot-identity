@@ -140,8 +140,10 @@ const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other
 // package, source })` and returns the gate's proof, or throws when the owner
 // declines or cannot be asked. Approved, the launch is decided by the stale
 // record's own mapping (sandboxFor with `acceptStale`, never the user
-// setting in its place), its turn carries the approval, and the journal row
-// keeps the receipt `ownerVerified: { code, method, source }`. Declined, it
+// setting in its place), bound to the digest of the record the owner was
+// shown, so a record that changes meanwhile is refused again. Its turn
+// carries the approval, and the journal row keeps the receipt
+// `ownerVerified: { code, method, source, digest }`, saved at once. Declined, it
 // fails `persona-policy-stale` before anything is minted. A team start (the
 // daemon's own caller, an agent) and a handler without `verifyOwner` are
 // refused as before: nothing wired is a refusal, never a pass.
@@ -264,10 +266,10 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       // the launch's), else an existing soul's override, else the switch.
       const sandboxRequest = { agentId: soul ?? null, ...(event.name === undefined ? {} : { name: event.name }), ...(event.role === undefined ? {} : { role: event.role.trim() }) };
       let sandbox = sandboxFor ? await sandboxFor(sandboxRequest) : null;
-      let ownerVerified = false;
+      let ownerVerified = null;
       if (sandbox) {
         let refused = sandboxLaunchProblem(sandbox);
-        if (refused?.code === 'persona-policy-stale' && callerParent === null && verifyOwner) {
+        if (refused?.code === 'persona-policy-stale' && refused.digest && callerParent === null && verifyOwner) {
           await step('account');
           const source = refused.source ? `${refused.source.repository}@${refused.source.commit}` : null;
           const target = soul ?? (event.name === undefined ? packagePath : `${event.name} from ${packagePath}`);
@@ -279,9 +281,10 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
             const why = String(error?.message ?? error).slice(0, 160);
             throw Object.assign(new Error(`the owner did not verify launching on a stale persona policy (${why}); ${refused.action}`), { code: refused.code });
           }
-          ownerVerified = true;
-          row.ownerVerified = { code: refused.code, method: typeof proof?.method === 'string' ? proof.method : 'owner', source: refused.source };
-          sandbox = await sandboxFor({ ...sandboxRequest, acceptStale: true });
+          ownerVerified = refused.digest;
+          row.ownerVerified = { code: refused.code, method: typeof proof?.method === 'string' ? proof.method : 'owner', source: refused.source, digest: refused.digest };
+          save(); // the receipt is durable before anything the approval allows
+          sandbox = await sandboxFor({ ...sandboxRequest, acceptStale: refused.digest });
           refused = sandboxLaunchProblem(sandbox);
         }
         row.sandbox = { resolution: sandbox.resolution, account: sandbox.account };

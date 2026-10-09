@@ -16,6 +16,7 @@
 // the ones ENG-0355 and docs/config.md name. An unknown key is an error.
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative } from 'node:path';
@@ -784,6 +785,7 @@ export function recordSopPersona(options = {}) {
   return { inEffect: true, ...record };
 }
 
+const specRepository = (value) => value.slice(0, value.lastIndexOf('@')).toLowerCase();
 const recordedSpec = (value) => typeof value === 'string' && value.lastIndexOf('@') > 0
   && value.lastIndexOf('@') < value.length - 1 && OWNER_NAME.test(value.slice(0, value.lastIndexOf('@')));
 
@@ -819,7 +821,9 @@ function personaRecordMismatch(record, config, configPath) {
 //   none        no user SOP config, so no pack decides anything
 //   unrecorded  a config, but `agent-bot sop persona` has not run
 //   stale       the record is not for the selection the config makes now
-//               (`text` is the stale record's persona.toml, or null)
+//               (`text` is the stale record's persona.toml, or null, and
+//               `digest` the record file's sha256, which an owner's approval
+//               of that very record names)
 //   absent      the SOP commit has no persona.toml
 //   error       the config or the record could not be read
 //   recorded    `text` is the pack's persona.toml at `commit`
@@ -834,9 +838,11 @@ export function readSopPersonaRecord(options = {}) {
     if (userText === null) return { state: 'none', message: 'No SOP is in effect.' };
     const config = loadSopConfig(userText);
     let record;
+    let raw;
     try {
       if (lstatSync(file).isSymbolicLink()) fail('persona-invalid', 'SOP persona record must not be a symlink');
-      record = JSON.parse(readFileSync(file, 'utf8'));
+      raw = readFileSync(file, 'utf8');
+      record = JSON.parse(raw);
     } catch (error) {
       if (error.code === 'ENOENT') return { state: 'unrecorded', message: `the SOP's persona mapping is not recorded; ${refresh}` };
       throw error;
@@ -850,12 +856,15 @@ export function readSopPersonaRecord(options = {}) {
       && (record.selection === undefined || (isObject(record.selection)
         && Object.keys(record.selection).every((key) => ['org', 'sop'].includes(key))
         && recordedSpec(record.selection.org) && (record.selection.sop === null || recordedSpec(record.selection.sop))))
-      && (record.persona === null || typeof record.persona === 'string');
+      && (record.persona === null || typeof record.persona === 'string')
+      // The selection names the repositories the record's commits are for.
+      && (record.selection === undefined || (specRepository(record.selection.org) === record.org.repository.toLowerCase()
+        && (record.selection.sop === null || specRepository(record.selection.sop) === record.sop.repository.toLowerCase())));
     if (!sane) fail('persona-invalid', `invalid SOP persona record at ${file}; ${refresh}`);
     const pinned = { repository: record.sop.repository, commit: record.sop.commit, recordedAt: record.recordedAt };
     const stale = personaRecordMismatch(record, config, configPath);
     if (stale) {
-      return { state: 'stale', ...pinned, text: record.persona,
+      return { state: 'stale', ...pinned, text: record.persona, digest: createHash('sha256').update(raw).digest('hex'),
         message: `the recorded persona mapping ${stale}; run \`agent-bot sop persona\` to record the selected SOP's mapping` };
     }
     if (record.persona === null) return { state: 'absent', ...pinned, message: `${record.sop.repository}@${record.sop.commit} has no ${PERSONA_FILE}` };

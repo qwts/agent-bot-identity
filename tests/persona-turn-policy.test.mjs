@@ -51,7 +51,7 @@ test('the persona policy is checked strictly once at the start of every turn, so
   await assert.rejects(f.turns.run({ invocation, kind: 'wake' }, executor),
     (error) => error.code === 'persona-policy-stale' && /is for sop local\/sop@main, not local\/sop@release.*agent-bot sop persona/.test(error.message));
   assert.deepEqual(ran, [ID], 'the refused turn never reached the executor');
-  assert.deepEqual(f.checks, [{ agentId: ID, kind: 'wake', ownerVerified: false }, { agentId: ID, kind: 'wake', ownerVerified: false }], 'one check per turn');
+  assert.deepEqual(f.checks, [{ agentId: ID, kind: 'wake', ownerVerified: null }, { agentId: ID, kind: 'wake', ownerVerified: null }], 'one check per turn');
   // Refreshed (the record now names the new selection), the next turn runs.
   const body = JSON.parse(readFileSync(f.record, 'utf8'));
   writeFileSync(f.record, JSON.stringify({ ...body, selection: { org: 'local/org@main', sop: 'local/sop@release' } }));
@@ -68,8 +68,11 @@ test('an agent-initiated cold wake on a legacy persona record is refused before 
   await assert.rejects(wake({ invocation: { agentId: ID, harness: 'claude', invocationId: null }, message: 'hi', attachments: [], env: {} }),
     (error) => error.code === 'persona-policy-stale' && /recorded before agent-bot kept the selection/.test(error.message));
   assert.equal(prompted, 0);
-  // Only a launch the owner verified carries past the stale record, and only into its own turn.
-  await f.turns.run({ invocation: { agentId: ID }, kind: 'launch' }, async () => { prompted += 1; }, { ownerVerified: true });
+  // Only a launch the owner verified carries past that stale record, and only into its own turn.
+  const { digest } = turnSandboxProblem(ID, { env: f.env, home: f.home, owner: 'owner' });
+  await assert.rejects(f.turns.run({ invocation: { agentId: ID }, kind: 'launch' }, async () => { prompted += 1; }, { ownerVerified: 'f'.repeat(64) }),
+    { code: 'persona-policy-stale' });
+  await f.turns.run({ invocation: { agentId: ID }, kind: 'launch' }, async () => { prompted += 1; }, { ownerVerified: digest });
   assert.equal(prompted, 1);
   await assert.rejects(f.turns.run({ invocation: { agentId: ID }, kind: 'wake' }, async () => { prompted += 1; }), { code: 'persona-policy-stale' });
   assert.equal(prompted, 1);

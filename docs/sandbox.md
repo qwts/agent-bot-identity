@@ -113,7 +113,9 @@ no `persona.toml`, leaves the user setting in charge.
   of refusing, the daemon asks the owner to verify (Touch ID, else the
   administrator dialog). Approved, that launch is decided by the stale
   record's own mapping, never by the user setting in its place, and the
-  launch journal keeps `ownerVerified: { code, method, source }`. Declined,
+  launch journal keeps `ownerVerified: { code, method, source, digest }`,
+  saved at once. The approval is for that very record (its sha256): one
+  that changes while the owner is asked is refused again. Declined,
   or with no one to ask, the launch fails `persona-policy-stale` before
   anything is minted. A team start, which a soul makes, is refused without
   asking (#613).
