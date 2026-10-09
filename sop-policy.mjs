@@ -32,7 +32,7 @@ function validate(value, { canonicalHarnesses } = {}) {
     if (!SOP_POLICY_EVENTS.includes(rule.event)) code('policy-event-unsupported', 'this policy evaluator supports only before-launch');
     if (rule.decision !== 'deny') invalid('policy rules may only deny continuation');
     if (typeof rule.reason !== 'string' || !rule.reason.trim() || [...rule.reason].length > SOP_POLICY_LIMITS.reason
-      || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(rule.reason)) invalid('policy reason must be bounded text without controls');
+      || /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/u.test(rule.reason)) invalid('policy reason must be bounded text without controls');
     exact(rule.when, ['harnesses'], []);
     let when = {};
     if (Object.hasOwn(rule.when, 'harnesses')) {
