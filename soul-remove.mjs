@@ -23,7 +23,8 @@ import { readAgentIdentity, stateDirectory, validateAgentId } from './agent-iden
 import {
   archiveSoulDirs, listSouls, populationFile, retireIdentityWithPopulation, setSoulParent, showSoul, showSoulByName, soulDirectory, soulShownName,
 } from './agent-population.mjs';
-import { daemonStatus, leaveLaunchedSoul } from './agent-daemon.mjs';
+import { leaveLaunchedSoul } from './comms-membership.mjs';
+import { daemonStatus } from './daemon-status.mjs';
 import { readColdWakeSettings, setColdWake, wakeSetting } from './cold-wake-settings.mjs';
 import { assertOwnerAction } from './owner-gate.mjs';
 import { soulRunning } from './soul-comms.mjs';

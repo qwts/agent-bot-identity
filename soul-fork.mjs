@@ -26,7 +26,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
-import { leaveLaunchedSoul } from './agent-daemon.mjs';
+import { leaveLaunchedSoul } from './comms-membership.mjs';
 import { mintAgentIdentity, readAgentIdentity, retireAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { archiveSoulDirs, locateSoulDir, populationFile, recordSoulDisplayName, registerSoulDir,

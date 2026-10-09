@@ -368,7 +368,7 @@ export async function joinSoul({
     if (created) {
       try {
         if (joined) {
-          const { leaveLaunchedSoul } = await import('./agent-daemon.mjs');
+          const { leaveLaunchedSoul } = await import('./comms-membership.mjs');
           const leaveFn = leave ?? ((soul) => leaveLaunchedSoul(soul, { env }));
           try { await leaveFn({ agentId }); } catch { /* best effort */ }
         }

@@ -24,7 +24,7 @@ import {
   appendFileSync, chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync,
   rmSync, statSync, writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import path, { basename, dirname, join } from 'node:path';
 
 // Where zsh actually reads its startup files. With ZDOTDIR exported — the
 // XDG-style `~/.config/zsh` layout is common — zsh reads `$ZDOTDIR/.zshenv` and
@@ -239,4 +239,25 @@ export function ensureBlock({
       remove(tmp, { force: true });
     }
   }
+}
+
+/**
+ * What a soul's harness inherits: the daemon's environment with the host's
+ * tools (AGENT_BOT_TOOL_PATH, such as GeniusBar's agent-comms) first on
+ * PATH, so a soul on a machine without them installed can still use them.
+ * With `home`, the user's own tool directories follow (#418): a launchd
+ * daemon gets a bare PATH, while harness CLIs such as `opencode` live where
+ * the login shell (`loginPath`) or an installer put them.
+ */
+export function soulEnvironment(env = process.env, { home = null, loginPath = null } = {}) {
+  const tools = env.AGENT_BOT_TOOL_PATH && path.isAbsolute(env.AGENT_BOT_TOOL_PATH) ? env.AGENT_BOT_TOOL_PATH : null;
+  if (!home) return tools ? { ...env, PATH: [tools, env.PATH].filter(Boolean).join(path.delimiter) } : env;
+  const dirs = [tools, ...(env.PATH ?? '').split(path.delimiter), ...(loginPath ?? '').split(path.delimiter),
+    ...userToolDirs(home)].filter((dir) => dir && path.isAbsolute(dir));
+  return { ...env, PATH: [...new Set(dirs)].join(path.delimiter) };
+}
+
+/** Where harness installers put their CLIs, after the login shell's PATH. */
+export function userToolDirs(home) {
+  return [path.join(home, '.local', 'bin'), path.join(home, '.opencode', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'];
 }
