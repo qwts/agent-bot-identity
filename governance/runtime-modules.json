@@ -168,6 +168,7 @@
     "skill-library.mjs": "soul",
     "skill-manifest.mjs": "soul",
     "skill.mjs": "cli",
+    "sop-policy.mjs": "org",
     "sop.mjs": "soul",
     "soul-asides.mjs": "soul",
     "soul-build.mjs": "soul",
