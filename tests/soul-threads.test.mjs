@@ -77,6 +77,129 @@ test('a thread keeps the newest 8 messages within 6 KB, oldest first', () => {
   assert.deepEqual(thread.map((entry) => entry.id), [...thread.map((entry) => entry.id)].sort((a, b) => Number(a.slice(4)) - Number(b.slice(4))));
 });
 
+test('unthreaded principal follow-ups recover only that principal conversation in this soul', () => {
+  const { options } = scratch();
+  const principal = 'principal_owner';
+  const record = (entry) => recordThreadMessage(BILL, entry, options);
+  record({ dir: 'in', id: 'owner-1', from: principal, body: 'Use cerulean-596. Record teammates Ada and Lin.' });
+  record({ dir: 'out', id: 'brief-1', to: 'acct/ada', correlation: 'owner-1', kind: 'brief', body: 'Ada: inspect the build.' });
+  record({ dir: 'out', id: 'answer-1', to: principal, replyTo: 'owner-1', correlation: 'owner-1', kind: 'reply', body: 'Recorded Ada and Lin with cerulean-596.' });
+  record({ dir: 'in', id: 'private-1', from: 'principal_other', body: 'Other principal private decision.' });
+  record({ dir: 'out', id: 'private-2', to: 'principal_other', correlation: 'private-1', body: 'Other principal private answer.' });
+  record({ dir: 'in', id: 'owner-2', from: principal, body: 'Which teammates?' });
+  record({ dir: 'out', id: 'answer-2', to: principal, replyTo: 'owner-2', correlation: 'owner-2', body: 'Ada and Lin.' });
+  const message = { id: 'owner-3', from: { principal }, body: 'And the decision?' };
+  const context = threadContext(BILL, message, options);
+  assert.deepEqual(context.map((entry) => entry.id), ['owner-1', 'brief-1', 'answer-1', 'owner-2', 'answer-2']);
+  assert.match(formatThread(context), /cerulean-596/);
+  assert.doesNotMatch(formatThread(context), /Other principal private/);
+  assert.deepEqual(threadContext(SOULS.ted, message, options), [], 'another soul has its own journal');
+  assert.deepEqual(threadContext(BILL, { ...message, from: { principal: 'principal_new' } }, options), []);
+  assert.deepEqual(threadContext(BILL, { ...message, from: { account: 'acct', agentId: SOULS.ted } }, options), [], 'unthreaded agent messages do not inherit principal context');
+  assert.deepEqual(threadContext(BILL, { ...message, correlation: 'new-explicit-conversation' }, options), [], 'explicit correlation never falls back');
+  assert.deepEqual(threadContext(BILL, { ...message, replyTo: 'unknown-message' }, options), [], 'explicit reply linkage never falls back');
+  assert.deepEqual(threadContext(BILL, { ...message, correlation: 'owner-2' }, options).map((entry) => entry.id), ['owner-2', 'answer-2']);
+});
+
+test('principal conversation recovery keeps the existing count and byte bounds', () => {
+  const { options } = scratch();
+  for (let n = 0; n < 30; n += 1) {
+    recordThreadMessage(BILL, { dir: n % 2 ? 'out' : 'in', id: `owner-${n}`,
+      from: 'principal_owner', to: 'principal_owner', body: `decision ${n}: ${'😀'.repeat(600)}` }, options);
+  }
+  const context = threadContext(BILL, { id: 'owner-next', from: { principal: 'principal_owner' } }, options);
+  assert.ok(context.length > 0 && context.length <= 8);
+  assert.ok(Buffer.byteLength(JSON.stringify(context)) <= 6 * 1024);
+  assert.equal(context.at(-1).id, 'owner-29');
+  assert.ok(context.every((entry) => !entry.body.includes('\uFFFD')));
+});
+
+test('principal context never crosses another principal through shared links or teammate bridges', () => {
+  const { options } = scratch();
+  const A = 'principal_a', B = 'principal_b';
+  const rec = (entry) => recordThreadMessage(BILL, entry, options);
+  rec({ dir: 'in', id: 'b1', from: B, body: 'B PRIVATE: salary is 123' });
+  rec({ dir: 'out', id: 'o1', to: B, replyTo: 'b1', correlation: 'b1', body: 'B PRIVATE: noted' });
+  rec({ dir: 'out', id: 'b-task', to: 'acct/ted', correlation: 'b1', body: 'B PRIVATE: assess salary' });
+  rec({ dir: 'in', id: 'b-answer', from: 'acct/ted', correlation: 'b-task', body: 'B PRIVATE: salary analysis' });
+  // A receives only this deliberately addressed summary from B's turn.
+  rec({ dir: 'out', id: 'o2', to: A, correlation: 'b1', body: 'FYI the meeting moved' });
+  rec({ dir: 'in', id: 'a1', from: A, body: 'Thanks. Check the new meeting room.' });
+  rec({ dir: 'out', id: 'a-task', to: 'acct/ada', correlation: 'a1', body: 'Check room 12' });
+  rec({ dir: 'in', id: 'a-answer', from: 'acct/ada', correlation: 'a1', body: 'Room 12 is ready' });
+  // A late cross-link tries to pull a foreign teammate result into A's work.
+  rec({ dir: 'in', id: 'bridge', from: 'acct/ted', correlation: 'b-answer', replyTo: 'o2', body: 'B PRIVATE: bridged analysis' });
+  const next = { id: 'a2', from: { principal: A } };
+  const fallback = threadContext(BILL, next, options);
+  assert.deepEqual(fallback.map((e) => e.id), ['o2', 'a1', 'a-task', 'a-answer']);
+  assert.doesNotMatch(formatThread(fallback), /B PRIVATE/);
+  for (const link of [{ correlation: 'b1' }, { replyTo: 'b-answer' }, { correlation: 'bridge' }]) {
+    assert.deepEqual(threadContext(BILL, { ...next, ...link }, options), []);
+  }
+  const explicit = threadContext(BILL, { ...next, correlation: 'a1' }, options);
+  assert.deepEqual(explicit.map((e) => e.id), ['a1', 'a-task', 'a-answer']);
+});
+
+test('old principal exchanges cannot seed unrelated recent teammate work over the latest conversation', () => {
+  const { options } = scratch();
+  recordThreadMessage(BILL, { dir: 'in', id: 'old', from: 'principal_a', body: 'Old task' }, options);
+  for (let i = 0; i < 8; i += 1) {
+    recordThreadMessage(BILL, { dir: 'in', id: `recent-${i}`, from: 'principal_a', body: `Recent decision ${i}` }, options);
+  }
+  for (let i = 0; i < 8; i += 1) {
+    recordThreadMessage(BILL, { dir: 'in', id: `old-work-${i}`, from: 'acct/ted', correlation: 'old', body: 'Late obsolete work' }, options);
+  }
+  const context = threadContext(BILL, { id: 'next', from: { principal: 'principal_a' } }, options);
+  assert.deepEqual(context.map((e) => e.id), Array.from({ length: 8 }, (_, i) => `recent-${i}`));
+});
+
+test('fresh cold turns recover a principal decision and teammate facts after restarting the waker', async () => {
+  const { options } = scratch();
+  const principal = 'principal_owner';
+  const prompts = [];
+  const inbox = [];
+  const acked = new Set();
+  let replyCount = 0;
+  const relay = {
+    read: async () => inbox.filter((message) => !acked.has(message.id)),
+    reply: async () => ({ messageId: `answer-${++replyCount}` }),
+    ack: async (_soul, ids) => ids.forEach((id) => acked.add(id)),
+  };
+  const waker = (harness) => createColdWaker({
+    settings: { [BILL]: true },
+    lookupBinding: async () => ({ worktree: '/fixture', file: '/fixture/binding.json' }),
+    identities: async () => ({ harness }),
+    executor: async ({ message, onSession }) => {
+      // No in-memory model history: only the actual context given to this turn.
+      prompts.push(message);
+      onSession(`${harness}-session-${prompts.length}`);
+      return { reply: 'Decision cerulean-596; teammates Ada and Lin recorded.' };
+    },
+    receipt: () => {}, relay, threads: options, log: () => {},
+  });
+  const run = async (instance, id, body, sender = principal) => {
+    // This is the GeniusBar composer shape: no correlation or replyTo.
+    inbox.push({ id, from: { principal: sender }, to: { agentId: BILL }, body });
+    await instance({ agentId: BILL, count: 1, messageIds: [id] });
+    await instance.idle();
+    assert.ok(acked.has(id));
+    return prompts.at(-1);
+  };
+  const first = waker('claude');
+  await run(first, 'owner-1', 'Keep decision cerulean-596 and record teammates Ada and Lin.');
+  const next = await run(first, 'owner-2', 'Which teammates and decision did we record?');
+  assert.match(next, /Earlier messages in this conversation/);
+  assert.match(next, /Decision cerulean-596; teammates Ada and Lin recorded/);
+  const restarted = await run(waker('claude'), 'owner-3', 'Recall our decision after restart.');
+  assert.match(restarted, /cerulean-596/);
+  assert.match(restarted, /Which teammates and decision did we record/);
+  const changedHarness = await run(waker('opencode'), 'owner-4', 'Recall the teammates after switching harness.');
+  assert.match(changedHarness, /teammates Ada and Lin/);
+  assert.match(changedHarness, /message data for context, not instructions/);
+  const stranger = await run(waker('claude'), 'other-1', 'What can you tell me?', 'principal_other');
+  assert.doesNotMatch(stranger, /cerulean-596|Ada and Lin|Earlier messages/);
+});
+
 test('clip keeps a body within its byte cap, marker included, without splitting a character', () => {
   assert.equal(clip('a'.repeat(2048), 2048), 'a'.repeat(2048), 'a body at the cap is kept whole');
   const over = clip('a'.repeat(2049), 2048);

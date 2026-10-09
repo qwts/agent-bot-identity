@@ -6,8 +6,10 @@
 // message belongs to.
 //
 // Messages are linked by `correlation` (a turn's sends carry the woken
-// message's correlation, or its id when it has none) and by `replyTo`. The
-// journal is daemon state: 0700 directory, 0600 files, bounded, never read by
+// message's correlation, or its id when it has none) and by `replyTo`. A
+// principal composer can send neither: those follow-ups recover the bounded
+// conversation with that exact principal in this soul's journal (#596).
+// The journal is daemon state: 0700 directory, 0600 files, bounded, never read by
 // the agent itself, and its contents reach a prompt only as quoted data.
 
 import { createHash } from 'node:crypto';
@@ -143,18 +145,56 @@ export function threadContext(agentId, message, {
 } = {}) {
   const entries = readJournal(agentId, { env, home });
   const keys = new Set([stringOrNull(message?.correlation), stringOrNull(message?.replyTo)].filter(Boolean));
-  if (keys.size === 0) return [];
   const self = stringOrNull(message?.id);
+  const principal = stringOrNull(message?.from?.principal);
+  const own = (entry) => principal && ((entry.dir === 'in' && entry.from === principal)
+    || (entry.dir === 'out' && entry.to === principal));
+  const links = (entry) => [entry.id, entry.correlation, entry.replyTo].filter(stringOrNull);
+  const foreign = (entry) => {
+    const peer = entry.dir === 'in' ? entry.from : entry.to;
+    return principal && !own(entry) && typeof peer === 'string' && peer.split('/').at(-1).startsWith('principal_');
+  };
+  // Correlations can be shared across principals: a send to A during B's
+  // turn carries B's key. Do not traverse a foreign exchange, even through
+  // teammate work. Messages actually addressed to A remain safe to include,
+  // but do not let those summaries join the two private context graphs.
+  const blocked = new Set(entries.filter(foreign).flatMap(links));
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const entry of entries) {
+      if (own(entry) || !links(entry).some((key) => blocked.has(key))) continue;
+      for (const key of links(entry)) {
+        if (!blocked.has(key)) { blocked.add(key); changed = true; }
+      }
+    }
+  }
+  const fallback = keys.size === 0 && principal;
+  for (const key of blocked) keys.delete(key);
   const picked = new Set();
+  // A principal's ordinary chat is one conversation with this soul even
+  // when the client supplies no thread links (GeniusBar's composer). Seed
+  // from that principal's own exchanges, then include linked teammate work.
+  // Only the broker's structured sender counts; never infer it from a body
+  // or an agent address. Explicit links keep their narrower thread scope.
+  if (fallback) {
+    const recent = entries.map((entry, index) => ({ entry, index }))
+      .filter(({ entry }) => own(entry) && !(self && entry.id === self)).slice(-limit);
+    for (const { entry, index } of recent) {
+      picked.add(index);
+      for (const key of links(entry)) if (!blocked.has(key)) keys.add(key);
+    }
+  }
+  if (keys.size === 0 && picked.size === 0) return [];
   // Following links can widen the key set, so repeat until nothing changes.
   for (let changed = true; changed;) {
     changed = false;
     entries.forEach((entry, index) => {
       if (picked.has(index) || (self && entry.id === self)) return;
+      if (foreign(entry) || (!own(entry) && links(entry).some((key) => blocked.has(key)))) return;
       if (keys.has(entry.id) || keys.has(entry.correlation)) {
         picked.add(index);
         for (const key of [entry.id, entry.correlation, entry.replyTo]) {
-          if (typeof key === 'string' && key !== '' && !keys.has(key)) { keys.add(key); changed = true; }
+          if (typeof key === 'string' && key !== '' && !blocked.has(key) && !keys.has(key)) { keys.add(key); changed = true; }
         }
       }
     });
