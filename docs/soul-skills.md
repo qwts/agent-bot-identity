@@ -63,13 +63,32 @@ are still not secret-redacted; source authors must not put secrets in content or
 URL paths. The library is untrusted source data, never execution authority.
 
 Remote acquisition has a 30-second total deadline, at most five redirects per
-document, 100 files, 1 MiB per file, 8 MiB total, eight dependency levels and
+document, 100 document attempts, 100 retained files, 1 MiB per file, 8 MiB total,
+eight dependency levels and
 1,000 inline references. `SKILL.md` remains bounded to 64 KiB; metadata is bounded
 to 4 MiB. Unsafe portable paths, excluded metadata directories and normalized
 path collisions refuse. Internal API limits may only lower these bounds.
-One failed supported nested fetch or exceeded bound prevents an import from
-publishing; a source check reports `unavailable` and preserves accepted/local
-bytes. An unsupported link instead remains an explicit coverage gap.
+An invalid, unavailable or over-limit root document still prevents publication.
+After a valid root is acquired, failed or refused nested instructions become
+`unresolved` dependency records with a bounded reason code and referring file/line.
+The import retains valid documents and reports `coverage.acquisition: partial`;
+CLI import returns exit 1 with the retained import UUID/report so partial work
+cannot look like a complete capture. `complete-within-boundary` means only the
+supported declared reference syntax, never universal coverage. Unsupported
+noninstruction links remain external rather than being fetched.
+
+Document attempts include DNS/connection failures; repeated failed locators are
+not retried within the same acquisition. Failed streamed bodies consume the total
+byte budget. File/depth limits become unresolved references. Exhausting the
+reference-discovery budget records one terminal unresolved edge and
+`discoveryTruncated: true`, without pretending to enumerate every remaining link.
+No refusal relaxes destination, credential, TLS or path checks.
+
+A source recheck with partial capture reports `unavailable` even if the retained
+bytes match the accepted digest. It keeps an inspectable partial candidate and
+its current dependency report while preserving accepted snapshots and locally
+edited files. An unavailable root records the ordinary unavailable receipt
+without a candidate. Nothing implicitly adopts a partial candidate.
 
 Network acquisition occurs before the per-import publication lock. Publication
 rechecks the starting record under the lock and refuses a changed record. No

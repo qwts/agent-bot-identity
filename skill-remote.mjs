@@ -6,7 +6,7 @@ import { Agent, request } from 'node:https';
 import { isIP } from 'node:net';
 import { inlineMarkdownLinks } from './skill-references.mjs';
 
-export const REMOTE_SKILL_LIMITS = Object.freeze({ milliseconds: 30_000, redirects: 5, files: 100, bytes: 8 * 1024 * 1024, fileBytes: 1024 * 1024, depth: 8, references: 1000 });
+export const REMOTE_SKILL_LIMITS = Object.freeze({ milliseconds: 30_000, redirects: 5, documents: 100, files: 100, bytes: 8 * 1024 * 1024, fileBytes: 1024 * 1024, depth: 8, references: 1000 });
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 const unavailable = () => fail('skill-fetch-unavailable', 'remote instruction source could not be acquired');
 export function skillSourceUrl(value) {
@@ -49,6 +49,9 @@ async function abortable(promise, signal) {
 }
 async function document(input, context) {
   const { resolve = lookup, requestImpl = request, signal, limits } = context;
+  if (context.documents >= limits.documents) fail('skill-document-limit', 'remote document attempt limit exceeded');
+  if (context.total >= limits.bytes) fail('skill-byte-limit', 'remote total byte limit reached');
+  context.documents++;
   let url = skillSourceUrl(input);
   for (let redirects = 0; ; redirects++) {
     if (signal.aborted) unavailable();
@@ -82,13 +85,12 @@ async function document(input, context) {
     const chunks = []; let size = 0;
     try {
       for await (const chunk of response) {
-        const bytes = Buffer.from(chunk); size += bytes.length;
+        const bytes = Buffer.from(chunk); size += bytes.length; context.total += bytes.length;
         if (signal.aborted) unavailable();
-        if (size > limits.fileBytes || context.total + size > limits.bytes) fail('skill-limit', 'remote skill byte limit exceeded');
+        if (size > limits.fileBytes || context.total > limits.bytes) fail('skill-limit', 'remote skill byte limit exceeded');
         chunks.push(bytes);
       }
     } catch (error) { response.destroy(); if (error.code === 'skill-limit') throw error; unavailable(); }
-    context.total += size;
     return { url: input, resolvedUrl: url, bytes: Buffer.concat(chunks), mode: '100644' };
   }
 }
@@ -98,8 +100,8 @@ export async function acquireRemoteSkill(input, id, { remoteLimits, resolve, req
   const limits = bounded(remoteLimits), controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), limits.milliseconds);
   const agent = new Agent({ keepAlive: false, proxyEnv: {} });
-  const context = { limits, signal: controller.signal, total: 0, resolve, requestImpl, agent, hosts: new Set() };
-  const entries = [], edges = [], locations = [], known = new Map(), names = new Set();
+  const context = { limits, signal: controller.signal, total: 0, documents: 0, referencesExhausted: false, resolve, requestImpl, agent, hosts: new Set() };
+  const entries = [], edges = [], locations = [], known = new Map(), failures = new Map(), names = new Set();
   let base;
   const storedPath = url => {
     const source = new URL(url), root = new URL(base);
@@ -115,6 +117,7 @@ export async function acquireRemoteSkill(input, id, { remoteLimits, resolve, req
   };
   async function visit(url, depth) {
     if (known.has(url)) return known.get(url);
+    if (failures.has(url)) fail(failures.get(url), 'previous instruction acquisition failed');
     if (depth > limits.depth || entries.length >= limits.files) fail('skill-limit', 'remote skill depth or file limit exceeded');
     const fetched = await document(url, context);
     if (known.has(fetched.resolvedUrl)) {
@@ -128,13 +131,17 @@ export async function acquireRemoteSkill(input, id, { remoteLimits, resolve, req
     const file = depth === 0 ? 'SKILL.md' : storedPath(fetched.resolvedUrl);
     const normalized = file.normalize('NFC').toLowerCase();
     if (names.has(normalized)) fail('skill-path-unsafe', 'remote sources collide at a portable local path');
+    let text;
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(fetched.bytes); } catch { fail('skill-entry-invalid', 'remote instruction document must be UTF-8'); }
     names.add(normalized); known.set(url, file); known.set(fetched.resolvedUrl, file);
     entries.push({ path: file, bytes: fetched.bytes, mode: fetched.mode });
     locations.push({ path: file, url, resolvedUrl: fetched.resolvedUrl });
-    let text;
-    try { text = new TextDecoder('utf-8', { fatal: true }).decode(fetched.bytes); } catch { fail('skill-entry-invalid', 'remote instruction document must be UTF-8'); }
     for (const link of inlineMarkdownLinks(text)) {
-      if (edges.length >= limits.references) fail('skill-limit', 'remote instruction reference limit exceeded');
+      if (edges.length >= limits.references) {
+        if (!context.referencesExhausted) edges.push({ owner: id, from: file, line: link.line, status: 'unresolved', reason: 'skill-reference-limit' });
+        context.referencesExhausted = true;
+        break;
+      }
       const item = { owner: id, from: file, line: link.line }; edges.push(item);
       if (link.url.startsWith('#')) { Object.assign(item, { status: 'external', reason: 'document-anchor' }); continue; }
       let target;
@@ -142,8 +149,13 @@ export async function acquireRemoteSkill(input, id, { remoteLimits, resolve, req
       catch { Object.assign(item, { status: 'unresolved', reason: 'unsafe-or-sensitive-locator-withheld' }); continue; }
       const pathname = new URL(target).pathname;
       if (!/\.(?:md|markdown|txt)$/i.test(pathname)) { Object.assign(item, { source: target, status: 'external', reason: 'noninstruction-reference-outside-capture' }); continue; }
-      Object.assign(item, { source: target, status: 'captured' });
-      item.target = await visit(target, depth + 1);
+      item.source = target;
+      try { item.target = await visit(target, depth + 1); item.status = 'captured'; }
+      catch (error) {
+        const reason = typeof error.code === 'string' && /^skill-[a-z-]+$/.test(error.code) ? error.code : 'skill-fetch-unavailable';
+        failures.set(target, reason);
+        Object.assign(item, { status: 'unresolved', reason });
+      }
     }
     return file;
   }
@@ -159,7 +171,8 @@ export async function acquireRemoteSkill(input, id, { remoteLimits, resolve, req
     };
     for (const edge of edges.filter(edge => edge.status === 'captured')) if (reaches(edge.target, edge.from)) edge.cycle = true;
     return { entries, source: { kind: 'https', url: input }, dependencies: edges, locations, hosts: [...context.hosts].sort(), excluded: [], materialized: [],
-      coverage: { boundary: 'markdown-inline-https-instructions-v1', unresolved: edges.filter(edge => edge.status === 'unresolved').length,
+      coverage: { boundary: 'markdown-inline-https-instructions-v1', acquisition: edges.some(edge => edge.status === 'unresolved') ? 'partial' : 'complete-within-boundary',
+        discoveryTruncated: context.referencesExhausted, documentAttempts: context.documents, receivedBytes: context.total, unresolved: edges.filter(edge => edge.status === 'unresolved').length,
         external: edges.filter(edge => edge.status === 'external').length, universalRetrieval: false } };
   } finally { clearTimeout(timer); agent.destroy(); }
 }

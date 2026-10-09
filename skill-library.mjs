@@ -430,6 +430,10 @@ export function checkSkill(id, { now = () => new Date(), ...options } = {}) {
       candidatePath: snapshotPath(root, source.digest), candidateName: source.name, changes: diffSkillManifest(accepted.manifest, source), localAdaptations: diffSkillManifest(accepted.manifest, local), localDrift: diffSkillManifest(record.localBaseline, local), coverage: source.coverage, checkedAt: now().toISOString() };
     result.textDiffs = textDiffs(root, record.accepted, source.digest, result.changes);
     if (source.locations) { result.locations = source.locations; result.hosts = source.hosts; result.dependencies = source.dependencies; }
+    if (source.coverage.acquisition === 'partial') Object.assign(result, {
+      status: 'unavailable', reason: 'skill-capture-incomplete',
+      message: 'instruction capture is incomplete; partial candidate retained, accepted snapshot and local files are unchanged',
+    });
     return checkReceipt(root, result);
   }, { keepLiveOwners: true });
   }
