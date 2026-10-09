@@ -176,6 +176,7 @@
     "skill-dream-store.mjs": "soul",
     "skill-learning.mjs": "soul",
     "skill-source-provenance.mjs": "soul",
+    "skill-source-check.mjs": "soul",
     "skill-references.mjs": "soul",
     "skill-github.mjs": "soul",
     "skill-remote.mjs": "soul",

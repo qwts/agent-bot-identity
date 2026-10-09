@@ -3,6 +3,7 @@
 import { pathToFileURL } from 'node:url';
 import { importSkill, listSkills, showSkill, verifySkill, checkSkill, planSkillUpdate, applySkillUpdate, recoverSkillUpdate } from '../skill-library.mjs';
 import { skillLearningPacket, proposeSkillLearning, readLearningOutcome } from '../skill-learning.mjs';
+import { checkSoulSkillSource } from '../skill-source-check.mjs';
 import { currentAgentId } from '../agent-identity.mjs';
 import { revisionCommand } from '../soul-revisions.mjs';
 import { soulDreamCommand } from './soul-dream.mjs';
@@ -12,6 +13,7 @@ export const USAGE = `usage: agent-bot soul skill import PATH_OR_HTTPS_DOCUMENT 
        agent-bot soul skill show UUID [--json]
        agent-bot soul skill verify UUID [--json]
        agent-bot soul skill check UUID [--json]
+       agent-bot soul skill check UUID --soul AGENT_ID [--json]
        agent-bot soul skill update UUID --check CHECK_ID [--json]
        agent-bot soul skill update UUID --check CHECK_ID --apply --expected-accepted DIGEST --expected-local DIGEST [--json]
        agent-bot soul skill update UUID --recover [--json]
@@ -26,8 +28,27 @@ Harness installation and other repository adapters remain unimplemented.
 check never replaces accepted snapshots or local edits. update previews a recorded
 check; applying requires reviewed digests and preserves prior material. learn supplies guidance;
 recording outcomes proposes reviewed adaptations through the soul revision policy.
+check --soul reads accepted portable provenance without the local library and
+stages source bytes for review; it cannot apply that candidate.
 dream manages daemon-run maintenance; see agent-bot soul skill dream --help.
 `;
+async function portableCheckMain(args, json, { stdout, stderr, assertSoulTarget = id => {
+  if (currentAgentId() !== id) throw new Error('a soul may check portable sources only for its own package; bind an Agent ID first');
+}, ...options }) {
+  const [id, flag, agentId] = args;
+  if (args.length !== 3 || !id || id.startsWith('--') || flag !== '--soul' || !agentId || agentId.startsWith('--')) { stderr.write(USAGE); return 2; }
+  try {
+    await assertSoulTarget(agentId);
+    const result = await checkSoulSkillSource(id, agentId, options);
+    stdout.write(`${JSON.stringify(result, null, json ? 0 : 2)}\n`);
+    return result.status === 'unavailable' ? 1 : 0;
+  } catch (error) {
+    const failure = { code: error.code ?? 'skill-source-check-failed', message: error.message };
+    if (json) stdout.write(`${JSON.stringify({ error: failure })}\n`);
+    else stderr.write(`agent-bot soul skill: ${failure.code}: ${failure.message}\n`);
+    return 1;
+  }
+}
 async function learningMain(args, json, { stdout, stderr, assertSoulTarget = id => {
   if (currentAgentId() !== id) throw new Error('a soul may record learning only for its own package; bind an Agent ID first');
 }, ...options }) {
@@ -86,6 +107,7 @@ export function main(argv = process.argv.slice(2), { stdout = process.stdout, st
   const [verb, value, ...extra] = args;
   if (verb === 'update' && flags.length <= 1) return updateMain(args.slice(1), flags.length, { stdout, stderr, ...options });
   if (verb === 'learn' && flags.length <= 1) return learningMain(args.slice(1), flags.length, { stdout, stderr, ...options });
+  if (verb === 'check' && extra.length && flags.length <= 1) return portableCheckMain(args.slice(1), flags.length, { stdout, stderr, ...options });
   const operations = { import: importSkill, show: showSkill, verify: verifySkill, check: checkSkill };
   if (flags.length > 1 || extra.length || (verb === 'list' ? value !== undefined : !Object.hasOwn(operations, verb ?? '') || !value || value.startsWith('--'))) {
     stderr.write(USAGE); return 2;
