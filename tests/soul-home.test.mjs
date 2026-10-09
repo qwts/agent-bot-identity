@@ -45,8 +45,11 @@ test('provisions a git home from the package once, then rebinds it', async (t) =
   const options = census(root);
   const provision = createSoulHomes({ ...options, stateDir: path.join(root, 'state'), bindings, install: async (dir) => { installs.push(dir); } });
   const home = soulHomePath(agentId, options);
+  assert.equal(showSoul(agentId, { file: options.file }).lastSightedAt, undefined, 'registering is not a sighting');
   const first = await provision({ agentId, harness: 'claude', packagePath: pkg });
   assert.equal(first.worktree, home);
+  // A daemon-launched session's bind is a sighting (#109).
+  assert.match(showSoul(agentId, { file: options.file }).lastSightedAt, /^\d{4}-\d\d-\d\dT/);
   const directory = path.dirname(path.dirname(home));
   assert.equal(path.basename(directory), `${displayName(agentId)}.soul`);
   assert.equal(readFileSync(path.join(directory, 'AGENTS.md'), 'utf8'), 'be kind\n');

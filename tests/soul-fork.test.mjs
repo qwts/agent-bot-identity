@@ -123,6 +123,7 @@ test('fork gives a Finder copy its own identity in place; the original is untouc
   assert.equal(soul.status, 'active');
   assert.equal(soul.displayName, 'Ted');
   assert.equal(soul.soulDir, a.copy);
+  assert.equal(soul.lastSightedAt, undefined, 'a fork is not a sighting (#109)');
   assert.deepEqual(a.broker().joined[result.agentId], { name: 'Ted', harness: 'claude' });
   // The original's working state left the copy for the archive, sign-ins included.
   assert.equal(result.state, path.join(a.env.AGENT_BOT_SOULS_HOME, '.archive', '20261004T040000Z-Bill - Starter copy.soul-state'));

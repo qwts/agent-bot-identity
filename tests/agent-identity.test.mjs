@@ -642,6 +642,8 @@ test('setup-worktree reuses a joined CODEX_THREAD_ID soul and refuses another co
     worktrees: [worktreeTop],
     transcriptLocator: { provider: 'codex', id: 'thread-1' },
     lastSeen: firstPopulation.souls[firstId].lastSeen,
+    // setup-worktree is a sighting (#109).
+    lastSightedAt: firstPopulation.souls[firstId].lastSeen,
     // A soul that set itself up is unmanaged, with agent-comms on.
     managed: false,
     comms: true,

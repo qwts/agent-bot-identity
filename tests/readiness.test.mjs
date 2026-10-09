@@ -1309,6 +1309,44 @@ test('doctor names active souls that no checkout references', async () => {
   assert.deepEqual(unverified.evidence.unverified, [ids.held]);
 });
 
+// doctor shows present vs historical souls from the last sighting (#109):
+// informational, so historical souls never fail or warn.
+test('doctor reports present and historical souls from lastSightedAt', async () => {
+  const home = tempRoot();
+  const census = join(home, '.local', 'state', 'agent-bot', 'population.json');
+  const now = new Date('2026-08-16T12:00:00.000Z');
+  const ids = {
+    present: 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    historical: 'agent_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    never: 'agent_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    retired: 'agent_dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+  };
+  const row = (id, lastSightedAt, status = 'active') => ({
+    id, name: displayName(id), appSlug: 'qwts-codex-agent', parentId: null, status,
+    spacePath: join(home, '.agent-space', id), worktree: null, transcriptLocator: null,
+    // lastSeen is "last touched" and plays no part in presence.
+    lastSeen: now.toISOString(),
+    ...(lastSightedAt ? { lastSightedAt } : {}),
+  });
+  mkdirSync(dirname(census), { recursive: true });
+  writeFileSync(census, `${JSON.stringify({ schemaVersion: 1, souls: {
+    [ids.present]: row(ids.present, '2026-08-16T01:00:00.000Z'),
+    [ids.historical]: row(ids.historical, '2026-08-14T12:00:00.000Z'),
+    [ids.never]: row(ids.never, null),
+    [ids.retired]: row(ids.retired, '2026-08-16T11:00:00.000Z', 'retired'),
+  } }, null, 2)}\n`);
+  const report = await collectReadiness({ command: 'doctor', scope: 'machine', ...machineDependencies(home), now });
+  const check = report.machine.checks.find(({ id }) => id === 'souls.presence');
+  assert.equal(check.status, 'ready');
+  assert.deepEqual(check.evidence, {
+    window_ms: 24 * 60 * 60 * 1000,
+    present: [ids.present],
+    historical: [ids.historical],
+    never_sighted: [ids.never],
+  });
+  assert.match(check.message, /1 of 3 active soul\(s\) present \(bound or set up in the last 24h\); 1 historical, 1 never sighted/);
+});
+
 // A copied soul folder keeps the soul's marker (#80): doctor names it, and
 // says nothing while each soul has one folder.
 test('doctor warns when two soul folders claim one soul', async () => {

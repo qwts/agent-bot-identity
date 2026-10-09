@@ -597,10 +597,13 @@ export function createDaemonServer({
             }
             worktree = body.worktree;
           }
+          // `sighted` comes from setup-worktree and its hooks, a live
+          // session; a join or repair registers without it (#109).
           const soul = upsertIdentitySoul(id, body.spacePath, {
             file: populationOverride(env, home),
             stateDir: stateDirectory({ env, home }),
             worktree,
+            sighted: body.sighted === true,
           });
           sendJson(res, 200, { soul });
           return;
@@ -1129,6 +1132,7 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now, pres
     file: populationOverride(env, home),
     stateDir,
     worktree: record.worktree,
+    sighted: true,
   });
   const secret = bindings.bind({
     agentId: bound.id,

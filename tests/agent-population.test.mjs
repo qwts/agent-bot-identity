@@ -18,12 +18,15 @@ import { fileURLToPath } from 'node:url';
 
 import {
   displayName,
+  formatPopulation,
   listSouls,
+  PRESENCE_WINDOW_MS,
   populationFile,
   recordSoulLaunch,
   recordSoulDisplayName,
   recordSoulSighting,
   registerSoulDir,
+  soulPresence,
   soulDirectory,
   backfillManagedSouls,
   locateSoulDir,
@@ -127,7 +130,7 @@ test('status updates preserve registered soul fields and ignore unregistered ide
   assert.deepEqual(showSoul(FIRST_ID, { file }), updated);
 });
 
-test('a sighting moves only lastSeen and never creates or revives a row (#109)', () => {
+test('a sighting moves only lastSeen and lastSightedAt and never creates or revives a row (#109)', () => {
   const file = path.join(scratch(), 'population.json');
   const at = (iso) => ({ file, now: () => new Date(iso) });
   assert.equal(recordSoulSighting(FIRST_ID, at('2026-08-06T14:00:00.000Z')), null);
@@ -135,13 +138,67 @@ test('a sighting moves only lastSeen and never creates or revives a row (#109)',
 
   const first = upsertSoul(fixture(), { file });
   const seen = recordSoulSighting(FIRST_ID, at('2026-08-06T14:00:00.000Z'));
-  assert.deepEqual(seen, { ...first, lastSeen: '2026-08-06T14:00:00.000Z' });
+  assert.deepEqual(seen, { ...first, lastSeen: '2026-08-06T14:00:00.000Z', lastSightedAt: '2026-08-06T14:00:00.000Z' });
   assert.deepEqual(showSoul(FIRST_ID, { file }), seen);
 
   upsertSoul(fixture({ status: 'retired', lastSeen: '2026-08-06T15:00:00.000Z' }), { file });
   const tombstone = readFileSync(file, 'utf8');
   assert.equal(recordSoulSighting(FIRST_ID, at('2026-08-06T16:00:00.000Z')), null);
   assert.equal(readFileSync(file, 'utf8'), tombstone, 'a retired row is not touched');
+});
+
+test('lastSightedAt is optional, canonical, and only a sighting moves it (#109)', () => {
+  const file = path.join(scratch(), 'population.json');
+  // Rows written before the field existed read back without it.
+  const old = upsertSoul(fixture(), { file });
+  assert.equal('lastSightedAt' in old, false);
+  assert.equal('lastSightedAt' in upsertSoul(fixture({ lastSightedAt: null }), { file }), false);
+  assert.throws(() => upsertSoul(fixture({ lastSightedAt: '2026-08-06' }), { file }), /lastSightedAt must be a canonical ISO timestamp/);
+
+  const sighted = recordSoulSighting(FIRST_ID, { file, now: () => new Date('2026-08-06T14:00:00.000Z') });
+  assert.equal(sighted.lastSightedAt, '2026-08-06T14:00:00.000Z');
+  const later = { file, now: () => new Date('2026-08-07T00:00:00.000Z') };
+  // Status changes, launch facts and plain upserts are not sightings.
+  assert.equal(updateSoulStatus(FIRST_ID, 'finalized', later).lastSightedAt, '2026-08-06T14:00:00.000Z');
+  assert.equal(recordSoulLaunch(FIRST_ID, { comms: false }, { file }).lastSightedAt, '2026-08-06T14:00:00.000Z');
+  assert.equal(upsertSoul(fixture({ lastSeen: '2026-08-07T00:00:00.000Z' }), { file }).lastSightedAt, '2026-08-06T14:00:00.000Z');
+  assert.equal(showSoul(FIRST_ID, { file }).lastSightedAt, '2026-08-06T14:00:00.000Z');
+});
+
+test('upsertIdentitySoul records a sighting only when told the soul was sighted (#109)', () => {
+  const root = scratch();
+  const file = path.join(root, 'population.json');
+  const stateDir = path.join(root, 'identities');
+  const identity = mintAgentIdentity({ appSlug: 'qwts-codex-agent', stateDir });
+  const at = (iso) => ({ file, stateDir, now: () => new Date(iso) });
+  // Fork, templates and repairs register without sighting.
+  const registered = upsertIdentitySoul(identity.id, `/spaces/${identity.id}`, at('2026-08-06T12:00:00.000Z'));
+  assert.equal('lastSightedAt' in registered, false);
+  const bound = upsertIdentitySoul(identity.id, `/spaces/${identity.id}`, { ...at('2026-08-06T13:00:00.000Z'), sighted: true });
+  assert.equal(bound.lastSightedAt, '2026-08-06T13:00:00.000Z');
+  const touched = upsertIdentitySoul(identity.id, `/spaces/${identity.id}`, at('2026-08-06T14:00:00.000Z'));
+  assert.equal(touched.lastSeen, '2026-08-06T14:00:00.000Z');
+  assert.equal(touched.lastSightedAt, '2026-08-06T13:00:00.000Z', 'a lifecycle upsert carries the sighting forward');
+});
+
+test('presence is present within the window, historical after it, unknown when never sighted (#109)', () => {
+  const now = new Date('2026-08-07T12:00:00.000Z');
+  const sightedAt = (ms) => new Date(now.getTime() - ms).toISOString();
+  assert.equal(PRESENCE_WINDOW_MS, 24 * 60 * 60 * 1000);
+  assert.equal(soulPresence(fixture(), now), null);
+  assert.equal(soulPresence(fixture({ lastSightedAt: sightedAt(PRESENCE_WINDOW_MS) }), now), 'present');
+  assert.equal(soulPresence(fixture({ lastSightedAt: sightedAt(PRESENCE_WINDOW_MS + 1) }), now), 'historical');
+  assert.equal(soulPresence(fixture({ lastSightedAt: sightedAt(-1) }), now), 'historical', 'a future sighting is not presence');
+  assert.equal(soulPresence(fixture({ status: 'retired', lastSightedAt: now.toISOString() }), now), 'historical');
+
+  const recent = fixture({ lastSightedAt: sightedAt(60_000) });
+  const stale = fixture({ id: SECOND_ID, name: displayName(SECOND_ID), lastSightedAt: sightedAt(2 * PRESENCE_WINDOW_MS) });
+  const never = fixture({ id: 'agent_33333333-3333-4333-8333-333333333333', name: displayName('agent_33333333-3333-4333-8333-333333333333') });
+  const lines = formatPopulation([recent, stale, never], { now }).split('\n');
+  assert.equal(lines[0], 'NAME\tID\tAPP\tSTATUS\tPARENT\tLAST SEEN\tSPACE\tTRANSCRIPT\tPRESENCE');
+  assert.deepEqual(lines.slice(1, 4).map((line) => line.split('\t').at(-1)), ['present', 'historical', '?']);
+  assert.match(lines.join('\n'), /1 of 3 souls present \(bound or set up in the last 24h\)/);
+  assert.deepEqual(withRoles([recent], { file: path.join(scratch(), 'population.json'), env: {}, home: scratch(), now }).map((row) => row.presence), ['present']);
 });
 
 test('upsert does not change permissions on an existing override parent', () => {
@@ -416,7 +473,7 @@ test('population CLI lists, filters, and shows records', () => {
 
   const filtered = runCli(['population', 'list', '--status', 'active', '--app', 'qwts-codex-agent', '--json'], file);
   assert.equal(filtered.status, 0, filtered.stderr);
-  assert.deepEqual(JSON.parse(filtered.stdout), [{ ...fixture(), mode: 'safe', model: null, role: null, description: null, children: 0, roleLine: null }]);
+  assert.deepEqual(JSON.parse(filtered.stdout), [{ ...fixture(), mode: 'safe', model: null, role: null, description: null, children: 0, roleLine: null, presence: null }]);
 
   const shown = runCli(['population', 'show', SECOND_ID], file);
   assert.equal(shown.status, 0, shown.stderr);

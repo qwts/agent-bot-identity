@@ -193,13 +193,15 @@ export async function botUid(slug, base, verifiedToken, {
 // in-process only when the daemon is UNREACHABLE — a reachable daemon that
 // refuses an operation is a real conflict (a space bound to another soul, a
 // corrupt census) that the in-process path would hit too, so it propagates.
-// `required` fails closed when the daemon is down.
-export async function bindSoul({ agentId, policy, client, ensureLocal, worktree = null }) {
+// `required` fails closed when the daemon is down. `sighted` marks a live
+// session (setup-worktree and its hooks) rather than a join or repair (#109);
+// ensureLocal applies the same rule in-process.
+export async function bindSoul({ agentId, policy, client, ensureLocal, worktree = null, sighted = false }) {
   if (policy !== 'off') {
     const available = await client.available();
     if (available) {
       const space = await client.ensureSpace(agentId);
-      await client.registerSoul(agentId, space.path, { worktree });
+      await client.registerSoul(agentId, space.path, { worktree, sighted });
       return { ...space, via: 'daemon' };
     }
     if (policy === 'required') {
@@ -224,9 +226,10 @@ async function bindExecutionIdentity({ config, daemon, executionIdentity }) {
     policy: daemonPreference({ config }),
     client: daemon ?? daemonClient(),
     worktree,
+    sighted: true,
     ensureLocal: () => {
       const local = ensureSoulSpace(executionIdentity.id);
-      upsertIdentitySoul(executionIdentity.id, local.path, { worktree });
+      upsertIdentitySoul(executionIdentity.id, local.path, { worktree, sighted: true });
       return local;
     },
   });

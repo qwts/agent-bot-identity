@@ -138,11 +138,12 @@ export function daemonClient({
     async ensureSpace(agentId) {
       return request('POST', '/v0/space/ensure', { agentId });
     },
-    async registerSoul(agentId, spaceRoot, { worktree = null } = {}) {
+    async registerSoul(agentId, spaceRoot, { worktree = null, sighted = false } = {}) {
       const { soul } = await request('POST', '/v0/register', {
         agentId,
         spacePath: spaceRoot,
         ...(worktree ? { worktree } : {}),
+        ...(sighted ? { sighted: true } : {}),
       });
       return soul;
     },
