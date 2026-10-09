@@ -121,7 +121,18 @@ every downloaded dependency byte. Python acquisition is delegated to uv, and
 uv tools currently use `package==version` without a dependency lock/hash input.
 That missing integrity contract is tracked in #617. The stamp is what
 `soul runtimes` and `soul env` inspect; absence or an incomplete-install marker
-must not be presented as a completed installation.
+must not be presented as a completed installation. Readiness compares the
+receipt's schema, runtime/harness name, kind, exact version and platform with
+the current selection. Archive receipts must also match its SHA-256 and
+executable directory. The executable must resolve to a regular file inside
+the installation, and the installation must resolve inside the soul. A
+mismatch reports `missing` with a reason and cannot route to a host fallback.
+Internal executable symlinks remain supported; links outside the install do not.
+
+These checks validate receipt consistency and path containment. They do not
+rehash the extracted installation on every launch, detect arbitrary changes
+to its file contents, or provide Python dependency provenance. Those stronger
+integrity requirements remain #617.
 
 Archive installs are staged and published per artifact. An archive is downloaded
 into the shared cache
@@ -130,7 +141,15 @@ into the shared cache
 after its digest matches; a cached file that no longer hashes is dropped and
 fetched again. The archive is extracted into
 `.soul-state/runtimes/<runtime>/.installing-<uuid>/`, checked for its
-executable, stamped, and renamed to its version directory. A failed install
+executable, stamped, and renamed to its version directory. If that version
+already exists with a mismatched receipt or unusable executable, publication
+moves it to `<version>.retained-<uuid>` before installing the replacement and
+logs the retained path. A per-target publication lock prevents two repairs
+from replacing one another; a matching concurrent install is reused. A failed
+replacement rename restores the retained directory. If a process stops between
+these renames, the old bytes remain at the retained path and the next launch
+reprovisions the missing version. Runtime cleanup does not delete these
+retained directories. A failed install
 removes its staging directory and leaves a previous version available for
 recovery. A launch requiring the failed newer resolution still refuses; retaining
 node 24.21.0 does not automatically select it as a fallback. Python installs the

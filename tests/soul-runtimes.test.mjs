@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -310,7 +310,7 @@ test('a failed install keeps the previous one and records its coded error; check
   await expectCode(attempt({ [url]: corrupt }), 'runtime-install-failed', /could not extract next\.tgz \(tar: Unrecognized archive format\)/);
   const noBin = archive({ 'node-v24.99.0/README': 'no binaries' });
   next.sources[PLATFORM].sha256 = sha(noBin);
-  await expectCode(attempt({ [url]: noBin }), 'runtime-install-failed', /the archive has no bin directory/);
+  await expectCode(attempt({ [url]: noBin }), 'runtime-install-failed', /the archive has no bin\/node/);
   // The descriptor-facing inspection carries the last error until the install succeeds.
   const state = inspectSoulRuntimes(f.dir, { ...f.options, catalog: bumped });
   assert.deepEqual(state.runtimes[0].lastError, { code: 'runtime-install-failed', message: state.runtimes[0].lastError.message, at: '2026-10-07T12:00:00.000Z' });
@@ -536,11 +536,97 @@ test('soul runtimes and soul runtimes install report by Agent ID or name with --
   assert.equal(cli.status, 0, cli.stderr);
   const printed = JSON.parse(cli.stdout);
   assert.equal(printed.agentId, ID);
-  assert.equal(printed.runtimes[0].status, 'installed');
+  // This child uses the shipped catalog, not our fake archive digests.
+  assert.equal(printed.runtimes[0].status, 'missing');
+  assert.match(printed.runtimes[0].reason, /receipt does not match/);
   const unknown = spawnSync(process.execPath, [path.join(ROOT, 'agent-bot.mjs'), 'soul', 'runtimes', 'nobody', '--json'], { cwd: f.home, env: { ...f.env, PATH: process.env.PATH }, encoding: 'utf8', timeout: 20000 });
   assert.equal(unknown.status, 1);
   assert.deepEqual(JSON.parse(unknown.stdout), { error: { code: 'soul-not-found', message: 'Soul not found.', runtime: null, action: null } });
   const help = spawnSync(process.execPath, [path.join(ROOT, 'agent-bot.mjs'), 'soul', '--help'], { encoding: 'utf8', timeout: 20000 });
   assert.match(help.stdout, /agent-bot soul runtimes install <agentId\|name> \[--json\] \[--runtime NAME\] \[--principal-stdin\]/);
   assert.ok(RUNTIME_NAMES.every((name) => help.stdout.includes(name)));
+});
+
+
+test('readiness rejects mismatched receipts and never routes their executable (#617)', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { node: '24' } }, census: true });
+  const d = doubles({ archives: f.archives });
+  await installSoulRuntimes(f.dir, { ...f.options, ...d });
+  const directory = path.join(f.runtimes, 'node', NODE.version);
+  const file = path.join(directory, INSTALL_STAMP);
+  const good = JSON.parse(readFileSync(file, 'utf8'));
+  for (const patch of [
+    { schemaVersion: 2 }, { name: 'go' }, { kind: 'uv-python' }, { version: '0.0.0' },
+    { platform: 'win32-x64' }, { sha256: '0'.repeat(64) }, { bin: '../outside' },
+    { bin: '/tmp' }, { bin: 'C:/outside' }, { bin: 'bin\\outside' }, { bin: '.' },
+  ]) {
+    put(file, JSON.stringify({ ...good, ...patch }));
+    const state = inspectSoulRuntimes(f.dir, f.options);
+    assert.equal(state.ready, false, JSON.stringify(patch));
+    assert.equal(state.runtimes[0].status, 'missing');
+    assert.equal(state.runtimes[0].path, null);
+    assert.equal(state.runtimes[0].bin, null);
+    assert.match(state.runtimes[0].reason, /install receipt/);
+    assert.throws(() => soulRuntimeEnv(ID, f.options), /refusing host fallback/);
+  }
+  put(file, JSON.stringify(good));
+  assert.equal(inspectSoulRuntimes(f.dir, f.options).ready, true);
+});
+
+test('same-version archive repair retains the conflicting install and failures leave it untouched (#617)', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { node: '24' } } });
+  const d = doubles({ archives: f.archives });
+  await installSoulRuntimes(f.dir, { ...f.options, ...d });
+  const directory = path.join(f.runtimes, 'node', NODE.version);
+  const originalReceipt = readFileSync(path.join(directory, INSTALL_STAMP), 'utf8');
+  put(path.join(directory, 'owner-note'), 'keep for recovery');
+  const changed = archive({ [`node-v${NODE.version}/bin/node`]: 'new node', [`node-v${NODE.version}/bin/npm`]: 'new npm' });
+  const source = f.catalog.node[0].sources[PLATFORM];
+  source.url = 'https://example.test/replacement.tgz';
+  source.sha256 = sha(changed);
+  assert.match(inspectSoulRuntimes(f.dir, f.options).runtimes[0].reason, /archive digest/);
+  await assert.rejects(installSoulRuntimes(f.dir, { ...f.options, runImpl: d.runImpl,
+    fetchFn: doubles({ archives: { [source.url]: Buffer.from('bad') } }).fetchFn }), error => error.code === 'runtime-checksum-mismatch');
+  assert.equal(readFileSync(path.join(directory, INSTALL_STAMP), 'utf8'), originalReceipt);
+  assert.equal(readFileSync(path.join(directory, 'owner-note'), 'utf8'), 'keep for recovery');
+  assert.equal(readdirSync(path.dirname(directory)).some(name => name.includes('.retained-')), false);
+  const logs = [];
+  const repaired = await installSoulRuntimes(f.dir, { ...f.options, runImpl: d.runImpl,
+    fetchFn: doubles({ archives: { [source.url]: changed } }).fetchFn, log: line => logs.push(line) });
+  assert.equal(repaired.ready, true);
+  assert.equal(readFileSync(path.join(directory, 'bin/node'), 'utf8'), 'new node');
+  const retained = readdirSync(path.dirname(directory)).filter(name => name.startsWith(`${NODE.version}.retained-`));
+  assert.equal(retained.length, 1);
+  assert.equal(readFileSync(path.join(path.dirname(directory), retained[0], INSTALL_STAMP), 'utf8'), originalReceipt);
+  assert.equal(readFileSync(path.join(path.dirname(directory), retained[0], 'owner-note'), 'utf8'), 'keep for recovery');
+  assert.ok(logs.some(line => line.includes(retained[0])));
+  const again = await installSoulRuntimes(f.dir, { ...f.options, fetchFn: () => { throw new Error('no download'); } });
+  assert.deepEqual(again.skipped, ['node']);
+});
+
+test('readiness accepts internal executable links but refuses external links and escaped installation roots (#617)', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { node: '24' } } });
+  const d = doubles({ archives: f.archives });
+  await installSoulRuntimes(f.dir, { ...f.options, ...d });
+  const directory = path.join(f.runtimes, 'node', NODE.version);
+  const executable = path.join(directory, 'bin/node');
+  rmSync(executable);
+  put(path.join(directory, 'bin/node-real'), 'internal node');
+  symlinkSync('node-real', executable);
+  assert.equal(inspectSoulRuntimes(f.dir, f.options).ready, true);
+  rmSync(executable);
+  const outside = path.join(f.home, 'outside-node');
+  put(outside, 'outside node');
+  symlinkSync(outside, executable);
+  assert.equal(inspectSoulRuntimes(f.dir, f.options).ready, false);
+  const repaired = await installSoulRuntimes(f.dir, { ...f.options, ...d });
+  assert.equal(repaired.ready, true);
+  assert.equal(readFileSync(outside, 'utf8'), 'outside node');
+  const escaped = fixture(t, { manifest: { runtimes: { node: '24' } } });
+  const externalRoot = path.join(escaped.home, 'external');
+  mkdirSync(externalRoot);
+  symlinkSync(externalRoot, escaped.runtimes);
+  await assert.rejects(installSoulRuntimes(escaped.dir, { ...escaped.options,
+    fetchFn: () => { throw new Error('must not download'); } }), /installation path escapes/);
+  assert.deepEqual(readdirSync(externalRoot), []);
 });
