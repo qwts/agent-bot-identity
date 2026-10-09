@@ -1,0 +1,1 @@
+- Move the turn registry (`createTurnRegistry`) from `wake-plane.mjs` into `turn-registry.mjs` in the soul module, so `daemon-launch.mjs` no longer imports the daemon host. `wake-plane.mjs` re-exports it; behavior is unchanged (#645).
