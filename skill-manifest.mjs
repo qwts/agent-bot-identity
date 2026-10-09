@@ -60,8 +60,8 @@ export function diffSkillManifest(before, after) {
   const left = before?.files ?? {}, right = after?.files ?? {};
   const added = [], modified = [], removed = [];
   for (const path of new Set([...Object.keys(left), ...Object.keys(right)])) {
-    if (!(path in left)) added.push(path);
-    else if (!(path in right)) removed.push(path);
+    if (!Object.hasOwn(left, path)) added.push(path);
+    else if (!Object.hasOwn(right, path)) removed.push(path);
     else if (left[path].sha256 !== right[path].sha256 || left[path].mode !== right[path].mode) modified.push(path);
   }
   return { added: added.sort(), modified: modified.sort(), removed: removed.sort() };

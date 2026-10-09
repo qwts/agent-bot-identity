@@ -266,3 +266,22 @@ test('built-in runs in the real chain and keeps external hook denials', async (t
   const cli = spawnSync(process.execPath, ['agent-bot.mjs', 'soul', 'confinement-report', id, '--json'], { env: opts.env, encoding: 'utf8' });
   assert.equal(cli.status, 0, cli.stderr); assert.equal(JSON.parse(cli.stdout).total, 2);
 });
+
+
+test('skill library metadata stays outside soul write territory even with confinement off', async t => {
+  const f = fixture(t), library = path.join(f.soul, 'library');
+  f.opts.env.AGENT_BOT_SKILLS_HOME = library;
+  const uuid = '11111111-1111-4111-8111-111111111111';
+  const record = path.join(library, uuid);
+  mkdirSync(record, { recursive: true });
+  const alias = path.join(f.soul, 'library-alias'); symlinkSync(library, alias);
+  await setConfinementMode(id, 'off', { ...f.opts, gate: owner });
+  for (const root of [library, alias]) for (const relative of ['', uuid, `${uuid}/manifest.json`, `${uuid}/.snapshots/digest/payload/SKILL.md`, `${uuid}/.checks/result.json`]) {
+    const target = path.join(root, relative);
+    assert.equal(checkWrite(id, target, f.opts).inside, false);
+    assert.equal(confinementCheck(f.envelope(target), f.opts).decision, 'deny');
+  }
+  const payload = path.join(record, 'demo/SKILL.md');
+  assert.equal(checkWrite(id, payload, f.opts).inside, true);
+  assert.equal(confinementCheck(f.envelope(payload), f.opts).decision, 'allow');
+});
