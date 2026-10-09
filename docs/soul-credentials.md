@@ -201,9 +201,11 @@ material. No agent-facing command or MCP tool returns a key.
 
 ## Mint receipts (#107)
 
-Every mint through the daemon's `/v0/credential` and every `agent-bot
-mint-token` run that gets past `--help` appends a `credential-mint` receipt
-to the interaction home's `audit.jsonl`. A receipt carries no token, key, or
+Every mint through the daemon's `/v0/credential`, every `agent-bot
+mint-token` mint attempt and every owner-approval refusal in `mint-token`
+appends a `credential-mint` receipt to the interaction home's `audit.jsonl`.
+A `mint-token` run that stops before that, at `--help` or an argument error
+such as an unknown option, mints nothing and writes no receipt. A receipt carries no token, key, or
 error text. Besides `at`, `event`, `agentId` (daemon only), `operation` and
 `decision`, it adds two optional fields that older readers can ignore:
 
@@ -215,7 +217,7 @@ error text. Besides `at`, `event`, `agentId` (daemon only), `operation` and
 | `tier1-app-token` | `granted` | `bound-soul-own-app` |
 | `tier1-app-token` | `denied` | `no-live-binding`, `github-identity-off`, `no-github-app` |
 | `tier1-app-token` | `failed` | `identity-unreadable`, `mint-failed` |
-| `mint-token` | `granted` | `owner-approved`, or the selector: `explicit-app`, `env-app`, `env-credential`, `ambient-app` (pin, account or harness) |
+| `mint-token` | `granted` | `owner-approved`, or the selector: `explicit-app`, `env-app`, `env-credential`, `ambient-app` (checkout pin, the soul's managed App from `AGENT_BOT_ID` or the worktree's Agent ID, account, or harness) |
 | `mint-token` | `denied` | `owner-approval-refused` |
 | `mint-token` | `failed` | `no-app-selected`, `mint-failed` |
 

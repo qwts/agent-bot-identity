@@ -462,9 +462,9 @@ test('selectionReason follows appConfig\'s selector order (#107)', () => {
 
 // The CLI is the operator path: each run that reaches a mint leaves a
 // credential-mint receipt naming the App and a reason, never the token (#107).
-function runMintCli(env, args = []) {
+function runMintCli(env, args = [], { nodeArgs = [], cwd } = {}) {
   return new Promise((resolve) => {
-    execFile(process.execPath, [join(import.meta.dirname, '..', 'cli', 'mint-token.mjs'), ...args], { env, encoding: 'utf8' },
+    execFile(process.execPath, [...nodeArgs, join(import.meta.dirname, '..', 'cli', 'mint-token.mjs'), ...args], { env, encoding: 'utf8', cwd },
       (error, stdout, stderr) => resolve({ code: error ? error.code : 0, stdout, stderr }));
   });
 }
@@ -526,6 +526,32 @@ test('a failed operator mint still receipts the App, with no error text (#107)',
       { operation: 'mint-token', decision: 'failed', appSlug: 'you-claude-agent', reason: 'mint-failed' },
     ]);
     assert.equal(receipts[0].detail, undefined);
+  } finally {
+    await github.close();
+  }
+});
+
+test('an owner-approval refusal receipts the explicit App as denied and mints nothing (#107)', async () => {
+  const github = await installationServer([ORG]);
+  try {
+    // An explicit --app in the owner's account with no other identity marker
+    // needs owner approval. The child process reports a non-macOS platform,
+    // so the approval refuses without a dialog on every OS.
+    const env = operatorEnv(github.apiBase);
+    delete env.GH_AGENT_APP;
+    const cwd = mkdtempSync(join(tmpdir(), 'agent-bot-owner-'));
+    const refused = await runMintCli(env, ['--app', 'you-claude-agent'], {
+      cwd,
+      nodeArgs: ['--import', 'data:text/javascript,Object.defineProperty(process,"platform",{value:"linux"})'],
+    });
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.stderr, /owner approval needs the macOS authorization dialog/);
+    assert.equal(refused.stdout, '');
+    assert.equal(github.requests.length, 0);
+    const receipts = mintReceipts(env);
+    assert.deepEqual(receipts.map(({ operation, decision, appSlug, reason }) => ({ operation, decision, appSlug, reason })), [
+      { operation: 'mint-token', decision: 'denied', appSlug: 'you-claude-agent', reason: 'owner-approval-refused' },
+    ]);
   } finally {
     await github.close();
   }

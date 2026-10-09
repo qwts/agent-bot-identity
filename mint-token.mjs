@@ -170,8 +170,9 @@ export function appConfig({
 }
 
 // Which of appConfig()'s selectors chose the App, as a fixed receipt reason
-// code (#107). It follows appConfig()'s order; the checkout pin, the account
-// and harness detection are reported together as `ambient-app`.
+// code (#107). It follows appConfig()'s order; the checkout pin, the soul's
+// managed App (AGENT_BOT_ID or the worktree's Agent ID), the account and
+// harness detection are reported together as `ambient-app`.
 export function selectionReason({ argv = process.argv, env = process.env } = {}) {
   if (argv.indexOf('--app') !== -1) return 'explicit-app';
   if (env.GH_AGENT_APP) return 'env-app';
