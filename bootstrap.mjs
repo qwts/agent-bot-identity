@@ -354,6 +354,12 @@ export function repairBootstrapProfile({
   if (optionalLstat(destination, lstat)) {
     return { ...installConfig({ home, env }), repair: { source: 'installed' } };
   }
+  // A profile is only ever published to the default path, so restoring it
+  // while AGENT_BOT_CONFIG names a missing file would leave the runtime
+  // reading nothing. Refuse before any read or mutation.
+  if (env.AGENT_BOT_CONFIG) {
+    throw new OrganizationProfileError('profile-config-override', 'AGENT_BOT_CONFIG names a missing runtime config');
+  }
   let selected;
   try {
     selected = readSelected({ home, env });
@@ -459,6 +465,7 @@ function safeProfileFailure(error) {
     'profile-selection-missing': 'bootstrap --repair found no selected organization to restore the profile from',
     'profile-selection-unreadable': 'bootstrap --repair could not read the organization profile from the selected organization',
     'profile-account-unresolved': 'bootstrap --repair found no active App in the organization profile for this account',
+    'profile-config-override': 'bootstrap --repair cannot restore a runtime config that AGENT_BOT_CONFIG redirects to a missing file',
   };
   return {
     code: Object.hasOwn(messages, code) ? code : 'profile-apply-failed',
@@ -551,6 +558,8 @@ export async function bootstrap(options, {
                   ? 'run agent-bot sop to check the organization selection and its org.json, or pass --profile'
                   : profileFailure.code === 'profile-account-unresolved'
                     ? 'run --repair from the agent account, pass --scope-app, or pass --profile'
+                    : profileFailure.code === 'profile-config-override'
+                      ? 'restore the file AGENT_BOT_CONFIG names, or unset AGENT_BOT_CONFIG, then retry bootstrap --repair'
                     : 'obtain a complete compatible secret-free organization profile, then retry bootstrap',
         );
       } else {

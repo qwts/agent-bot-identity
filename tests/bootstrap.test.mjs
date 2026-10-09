@@ -1040,6 +1040,11 @@ test('--repair refuses with a named code, and writes nothing, when it would have
     refuses('profile-account-unresolved', (home) => ({ env: { HOME: home, AGENT_BOT_ACCOUNT: account } }));
   }
   refuses('profile-app-retired', () => ({ scopeApps: ['example-old-agent'] }));
+  // A config redirected to a missing file cannot be restored where it is read.
+  refuses('profile-config-override', (home) => ({
+    env: { HOME: home, AGENT_BOT_ACCOUNT: 'example-codex-agent', AGENT_BOT_CONFIG: join(home, 'elsewhere.json') },
+    readSelected: () => assert.fail('fetched despite a redirected config'),
+  }));
   refuses('profile-invalid', () => ({ readSelected: () => ({ repository: 'example/org', commit: '11'.repeat(20), path: 'p.json', text: '{}' }) }));
 
   // An explicit --scope-app stands in for the account.

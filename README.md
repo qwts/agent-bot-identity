@@ -1362,7 +1362,8 @@ rule), or to explicit `--scope-app` Apps. The first machine check,
 `bootstrap.repair`, names the repository, commit and path it restored from.
 It never guesses: no selection (`profile-selection-missing`), a selection,
 `org.json` or profile that cannot be read (`profile-selection-unreadable`), an
-account that resolves no active App (`profile-account-unresolved`), or a
+account that resolves no active App (`profile-account-unresolved`), an
+`AGENT_BOT_CONFIG` naming a missing file (`profile-config-override`), or a
 conflicting config stop before any machine mutation. `--profile` remains the
 explicit override.
 
