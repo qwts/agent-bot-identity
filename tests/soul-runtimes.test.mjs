@@ -16,6 +16,7 @@ import { INSTALL_STAMP, RUNTIME_ERROR_CODES, downloadCacheDir, fetchArchive, ins
 import { createAcpExecutor } from '../acp-engine.mjs';
 import { createLaunchHandler } from '../daemon-launch.mjs';
 import { acpExecutorFor, coldTurnExecutor } from '../wake-plane.mjs';
+import { createResumeExecutor } from '../wake-resume.mjs';
 
 const ID = 'agent_12345678-1234-4234-8234-123456789abc';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -573,6 +574,58 @@ test('a removed executable or a corrupt receipt refuses every daemon turn start 
     assert.equal(r.reports[0].status, 'failed', damage);
     assert.match(r.reports[0].detail, /^runtime-install-failed: .*refusing host fallback/, damage);
     assert.deepEqual(r.spawns, [], `${damage}: no harness process starts`);
+  }
+});
+
+// #617 slice 3b: the resume wake lane composes its env through the same
+// runtime port as ACP turns and runs the harness CLI that env selects. A
+// host stand-in for each CLI sits on the host PATH, so a lane that ignored
+// the soul's declarations would run it instead.
+function resumeRig(t, f, { session = null } = {}) {
+  const hostBin = path.join(f.home, 'host-bin');
+  for (const name of ['opencode', 'devin']) { put(path.join(hostBin, name), '#!/bin/sh\n'); chmodSync(path.join(hostBin, name), 0o755); }
+  const runs = [];
+  const recorded = [];
+  const sessions = { get: () => session, set: (...args) => recorded.push(args) };
+  const execute = createResumeExecutor({ sessions, home: f.home, baseEnv: { ...f.env, PATH: `${hostBin}${path.delimiter}${f.env.PATH}` },
+    runtimeEnvFor: ({ agentId, harness, env }) => soulRuntimeEnv(agentId, { ...f.options, env, harness }),
+    run: async (command, args, options) => { runs.push({ command, env: options.env }); return { code: 0, stdout: '[]', stderr: '' }; } });
+  const turn = (harness) => execute({ invocation: { agentId: ID, harness, cwd: f.dir }, message: 'm', env: {}, policy: 'read-only' });
+  return { hostBin, runs, recorded, turn };
+}
+
+test('the resume lane runs a declared, installed harness from the soul and the host CLI only when undeclared (#617)', async (t) => {
+  const opencodeUrl = `https://example.test/opencode-${PLATFORM}-1.2.3.zip`;
+  const f = fixture(t, { census: true, manifest: { harnesses: {
+    opencode: { install: { kind: 'archive', version: '1.2.3', url: 'https://example.test/opencode-{platform}-{version}.zip', sha256: { [PLATFORM]: sha(OPENCODE_ARCHIVE) } } } } } });
+  await installSoulRuntimes(f.dir, { ...f.options, ...doubles({ archives: { [opencodeUrl]: OPENCODE_ARCHIVE } }) });
+  const installed = path.join(f.runtimes, 'harnesses', 'opencode', '1.2.3', 'opencode');
+  chmodSync(installed, 0o755); // a real archive carries the bit; the fake tar writes 0644
+  const r = resumeRig(t, f, { session: 'ses_kept' });
+  await r.turn('opencode').catch(() => {});
+  assert.equal(r.runs.length, 1);
+  assert.equal(r.runs[0].command, installed, 'the soul\'s installed opencode, not the host\'s');
+  assert.equal(r.runs[0].env.PATH.split(path.delimiter)[0], path.dirname(installed));
+  // Undeclared: the explicit host route, unchanged.
+  f.writeManifest((m) => { delete m.harnesses; });
+  await r.turn('opencode').catch(() => {});
+  assert.equal(r.runs[1].command, path.join(r.hostBin, 'opencode'));
+});
+
+test('a removed or mismatched declared install refuses the resume lane before any run, Devin\'s session listing included (#617)', async (t) => {
+  for (const damage of ['executable', 'receipt']) {
+    const f = fixture(t, { census: true, manifest: { runtimes: { node: '24' } } });
+    await installSoulRuntimes(f.dir, { ...f.options, ...doubles({ archives: f.archives }) });
+    const installed = path.join(f.runtimes, 'node', NODE.version);
+    if (damage === 'executable') rmSync(path.join(installed, 'bin', 'node'));
+    else put(path.join(installed, INSTALL_STAMP), JSON.stringify({ ...JSON.parse(readFileSync(path.join(installed, INSTALL_STAMP), 'utf8')), sha256: '0'.repeat(64) }));
+    // No recorded session: a Devin turn would list sessions first.
+    const r = resumeRig(t, f);
+    for (const harness of ['devin', 'opencode']) {
+      await assert.rejects(r.turn(harness), (error) => error.code === 'runtime-install-failed' && error.runtime === 'node' && /refusing host fallback/.test(error.message), `${damage} ${harness}`);
+    }
+    assert.deepEqual(r.runs, [], `${damage}: no harness process, not even devin list`);
+    assert.deepEqual(r.recorded, [], 'no session is recorded or replaced');
   }
 });
 

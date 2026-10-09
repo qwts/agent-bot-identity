@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -105,7 +105,11 @@ test('stop launch uses the shared registry after session readiness', async (t) =
 
 test('stop on the resume lane forwards abort to the harness process', async (t) => {
   const f = await fixture(t);
-  const resumeExecutor = createResumeExecutor({ baseEnv: f.env, home: f.home, sessions: { get: () => 'session-id' },
+  // The lane runs the codex its PATH selects; this stand-in is never started.
+  const bin = path.join(f.home, 'stub-bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\n', { mode: 0o755 });
+  const resumeExecutor = createResumeExecutor({ baseEnv: { ...f.env, PATH: `${bin}${path.delimiter}${f.env.PATH ?? ''}` }, home: f.home, sessions: { get: () => 'session-id' },
     run: (_command, _args, options) => runProcess(process.execPath, ['-e',
       'require("node:fs").writeFileSync(process.env.FAKE_CANCEL_FILE, "ready"); setInterval(() => {}, 1000);'], options) });
   const plane = createWakePlane({ turns: f.turns, pool: { has: () => false, send: () => 0 },
