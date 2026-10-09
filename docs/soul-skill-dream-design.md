@@ -88,8 +88,9 @@ interactive session concurrency as a side effect of adding dreaming. Dream
 holds no lock that blocks a new interactive turn; foreground work remains
 available. The registry currently has no exclusive soul lease to reuse.
 
-Timeout, cancellation and daemon shutdown request abort. The lease stays held
-until the executor settles; an abort request is not evidence of process exit.
+Timeout, cancellation and daemon shutdown request abort. The dream run's own
+per-soul lease stays held until the executor settles; an abort request is not
+evidence of process exit.
 On restart, an unfinished record becomes `interrupted`, never successful. Before
 another run may start, recovery must establish that the earlier child is gone.
 The current ACP engine's process-group ownership is only in memory: it does not
@@ -232,7 +233,57 @@ pure scheduler or outcome schema alone does not implement the `dream` command.
    repeated missing-capability deduplication, acknowledgments, delivery failure,
    and explicit re-registration after soul transfer.
 
-Before runtime implementation, peer review must resolve the host-local
-activation boundary, orphan-process evidence and the exact source adapters to
-ship first. If an adapter or notification consumer is not implemented, report
-that coverage explicitly rather than declaring all of ADR-0603 complete.
+The peer review of this contract settled host-local activation, quarantine when
+child exit is unproven, and definition/learned-skill sources first. Changing
+those boundaries reopens design review. If an adapter or notification consumer
+is not implemented, report that coverage explicitly rather than declaring all
+of ADR-0603 complete.
+
+## Implemented scheduling core
+
+`skill-dream-scheduler.mjs` implements the scheduling state machine through
+injected ports. It has no default disk store, daemon registration, owner-control
+route, recurring timer loop, source reader, maintenance prompt, checkpoint
+publisher or notice consumer. The proposed CLI above is still unavailable.
+Importing this module creates no job. A production adapter must authorize the
+controls and supply the existing configured turn executor before exposing them.
+
+The version-1 host-local state has a revision, at most 256 registrations and
+at most 256 unsettled flights. A registration records the soul ID, canonical
+directory, generation, interval, pause state, next due time and latest settled
+execution. A flight records its run and daemon generation, original registration
+and directory, trigger, start time, execution bound and cancellation state.
+Strict validation refuses unknown schemas, extra fields, duplicate souls/runs,
+invalid timestamps and inconsistent states. These are new records, not migrations
+of existing soul or daemon stores. Checkpoint/evidence schemas remain later work.
+
+The required synchronous store port reads a state snapshot and atomically commits
+the replacement state **together with** its execution/control events against an
+expected revision. It must retain those events in durable history before returning
+true. State and event records must not be written independently by a future
+adapter. A false, throwing or otherwise unconfirmed commit freezes dispatch on
+that service instance. Only an explicit `null` read means absent state; undefined
+or malformed reads refuse. An acknowledged state must also read back unchanged.
+That check detects an observable bad acknowledgment, not history atomicity or
+power-loss durability; those require the actual backend's integration tests.
+No executor starts before the durable started event and
+flight commit. Losing a completion receipt retains the flight; it cannot trigger
+a retry of already executed work. The current tests use a JSON-round-tripped
+atomic port fixture and do not claim filesystem crash-durability evidence.
+
+`tick()` performs one bounded pass when the daemon calls it; it does not install
+a timer. `runNow()` returns a run handle whose `done` settles only after the
+executor and completion persistence. `cancel()` requests abort without releasing
+the slot. A failed completion reports `persistence-failed`. The host concurrency
+bound defaults to one and accepts 1–16 through the internal port configuration;
+one unsettled dream per soul remains mandatory regardless of that bound. The
+per-turn deadline defaults to ten minutes and may only be lowered. The injected
+deadline timer is independent of the wall clock used for due times and receipts.
+
+After a service restart, stored flights block dispatch even before `recover()`
+journals their quarantine. Recovery never probes or kills a process, clears an
+unproven lease, or infers a task from imported history. Pause, unschedule and
+re-registration preserve that independent flight. An old run may record its
+actual settlement but cannot change a newer registration's due time or recreate
+a removed registration. Production storage, daemon/owner integration and the
+remaining maintenance gates still need their own implementation and validation.

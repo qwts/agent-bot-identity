@@ -166,6 +166,7 @@
     "signed-commit.mjs": "identity",
     "skill-library-paths.mjs": "shared",
     "skill-library.mjs": "soul",
+    "skill-dream-scheduler.mjs": "soul",
     "skill-learning.mjs": "soul",
     "skill-references.mjs": "soul",
     "skill-github.mjs": "soul",
