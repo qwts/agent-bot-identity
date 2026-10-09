@@ -1,0 +1,1 @@
+- Document the implemented skill import, source-update, learning and dream workflows in the README and bundled agent guidance, replacing obsolete unimplemented claims while preserving capture, authorization and remaining-feature boundaries (#603, #312).

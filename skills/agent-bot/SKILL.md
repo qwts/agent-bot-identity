@@ -1,6 +1,6 @@
 ---
 name: agent-bot
-description: Bootstrap, configure, and operate per-harness GitHub App identities and authorized secure-store reads for coding agents. Use for fresh-clone requests such as "install agent bot identities," source or installed agent-bot setup and diagnosis, bot credential minting, password or API-key retrieval, identity attribution, GitHub-verified bot commits, transcript-bound Agent IDs, Agent Spaces, joining the hub (agent-comms), and the account-local soul population. Do not use to bind a human's own checkout to a bot on harness detection alone, broaden password-manager access, or fall back to human credentials.
+description: Bootstrap, configure, and operate per-harness GitHub App identities and authorized secure-store reads for coding agents. Use for fresh-clone requests such as "install agent bot identities," source or installed agent-bot setup and diagnosis, bot credential minting, password or API-key retrieval, identity attribution, GitHub-verified bot commits, transcript-bound Agent IDs, Agent Spaces, joining the hub (agent-comms), the account-local soul population, skill import and source updates, soul learning, and dream maintenance. Do not use to bind a human's own checkout to a bot on harness detection alone, broaden password-manager access, or fall back to human credentials.
 metadata:
   qwts-contract: "1"
   qwts-cli: "agent-bot"
@@ -27,7 +27,8 @@ minted; never continue with an ambient human GitHub login.
   Bot-authored commits on a qwts repository are signed. `agent-bot signed-commit` is how.
 - Read [execution-identities.md](references/execution-identities.md) for Agent
   ID creation, binding, recording, lookup, transcript provenance, or Agent
-  Space resolution.
+  Space resolution. For skill import, source checks, reviewed updates, learning
+  or dream maintenance, read its [skill lifecycle section](references/execution-identities.md#operate-the-soul-skill-lifecycle).
 - Read [storage-surfaces.md](references/storage-surfaces.md) when deciding
   where a file belongs among worktree, scratchpad, and Agent Space.
 
@@ -124,6 +125,8 @@ for. `agent-bot skill path` prints the installed release's copy of this skill.
 | read-only | `--help`, `doctor`, `sop`, `skill`, `skill path`, `population list`, `space path`, `signed-commit --dry-run`, `secret get` | Safe to repeat. |
 | local-write | `bootstrap`, `setup-worktree`, `install`, `install-gh-shim`, `daemon install`, `daemon disable`, `ensure-private-key`, `space ensure` | Converge on rerun; confirm with `doctor`. |
 | read-only | `soul show`, `soul profile`, `soul env`, `soul runtimes`, `soul secret ID status`, `soul locate`, `soul templates`, `soul asides`, `soul cold-wake ID show`, `soul model ID show`, `soul mode ID show`, `soul computer-use ID show`, `soul comms ID show`, `soul confinement-report`, `soul pack validate`, `soul build --check`, `approvals list`, `telegram status` | Safe to repeat. |
+| read-only | `soul skill list`, `soul skill show`, `soul skill verify`, `soul skill learn` without an outcome, `soul skill dream --status|--history` | Inspect existing library, guidance or daemon state; no adoption or scheduling. |
+| local-write | `soul skill import`, `soul skill check`, `soul skill update`, `soul skill learn` with an outcome, dream control actions | Imports/checks can read remote sources. Updates and learning require reviewed inputs; dream controls are owner-gated. Inspect UUIDs, candidates, proposals and run status before retrying. |
 | local-write | `soul dir` | May re-register a uniquely moved soul directory; see [soul-homes.md](../../docs/soul-homes.md). |
 | local-write | `soul spawn`, `soul build`, `soul revision`, `soul env migrate`, `soul runtimes install`, `soul secret ID set|clear`, `soul cold-wake`, `soul model`, `soul mode`, `soul computer-use`, `soul confinement`, `soul stop`, `soul pause`, `soul resume` | Inspect the subcommand and current state before retrying; spawning creates a new identity, and owner actions require the owner gate. |
 | local-write | `approvals approve`, `approvals deny`, `web open` | Decisions require the daemon's owner gate; inspect waiting proposals before retrying. Each web open mints a single-use pairing code and prints/opens its link. |

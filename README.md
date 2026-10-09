@@ -335,11 +335,19 @@ covering that subcommand. `agent-bot skill path` continues to report the
 `agent-bot` bundle directory and source commit (`{ path, commit }` with
 `--json`). See [docs/skills.md](docs/skills.md).
 
-The accepted design for `agent-bot soul skill` import, installation,
-agent-guided learning, and scheduled dream maintenance is recorded in
-[ADR-0603](docs/decisions/ADR-0603-imported-skills-keep-local-snapshots-and-upstream-provenance.md)
-in the [architecture decision index](docs/decisions/README.md).
-The design is not yet implemented.
+`agent-bot soul skill` implements local, HTTPS-document and public GitHub-directory
+imports, library listing/verification, explicit source checks and reviewed updates,
+and agent-guided learning through the existing soul revision policy. See the
+[skill library guide](docs/soul-skills.md) for commands, provenance and capture
+limits. `agent-bot soul skill dream` provides owner-authorized daemon scheduling,
+run-now, status/history, pause, cancellation and unscheduling; see the
+[dream maintenance guide](docs/soul-skill-dream-design.md).
+
+Importing does not activate a skill, adopt it into a soul or register maintenance.
+Managed harness installation/uninstallation and optional knowledge search/status
+adapters remain unimplemented. Maintenance processing coverage stays unverified;
+check each guide for the current implementation boundary. The full lifecycle is
+specified in [ADR-0603](docs/decisions/ADR-0603-imported-skills-keep-local-snapshots-and-upstream-provenance.md).
 
 ### Soul directories and homes
 

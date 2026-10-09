@@ -6,12 +6,14 @@ scripts, activate a harness skill, select an SOP, or create a soul revision.
 This implements local-directory, HTTPS-document and public GitHub-directory acquisition and comparison
 for #603/#312. Learning guides selected adaptations through the existing soul
 revision/proposal policy. Explicit source updates merge a reviewed candidate into
-the standalone library. Other repository adapters, installation and dreaming
-remain separate work.
+the standalone library. Managed harness installation/uninstallation, other
+repository adapters and optional knowledge search/status remain unimplemented.
 
-The [dream maintenance implementation proposal](soul-skill-dream-design.md)
-defines scheduling, execution, recovery and evidence boundaries for that next
-operation. It does not register a task or add a working `dream` command.
+The [dream maintenance guide](soul-skill-dream-design.md) describes the implemented
+owner CLI, daemon scheduling, bounded definition/learned-skill inputs, recovery
+and reported outcomes. Register maintenance explicitly; importing or learning a
+skill creates no schedule. Maintenance coverage remains unverified, and the guide
+identifies the remaining processing, notice and retrieval work.
 
 ```sh
 agent-bot soul skill import /path/to/skill --json
@@ -31,8 +33,10 @@ The entrypoint uses the same UTF-8/frontmatter/name/description validation as a
 soul package. Its frontmatter name determines the editable directory's name;
 the source directory need not have that name. Each import receives a new UUID,
 even for the same name and bytes. There is no implicit deduplication or update.
-These operations require neither a GitHub App nor a soul binding. `dream`
-manages owner-authorized maintenance runs in the daemon; see
+Library import/list/show/verify/check/update require neither a GitHub App nor a
+soul binding. Recording a learning outcome requires the target soul's binding
+and existing revision policy. `dream` controls require owner authorization and
+run in the daemon; see
 [the dream design](soul-skill-dream-design.md#schedule-and-controls).
 
 ## HTTPS documents and instruction dependencies
@@ -324,8 +328,9 @@ links, HTML, runtime fetches and harness retrieval are outside this boundary.
 URL user information and query-bearing locators are withheld from dependency
 metadata. Imported file contents still preserve the original bytes; this is
 not payload secret redaction. Local-directory import never fetches remote links;
-only the explicit HTTPS-document adapter performs the bounded capture above.
-No permission is inferred from a reference. Other repository adapters, broader
+the explicit HTTPS-document and public GitHub-directory adapters perform the
+bounded remote capture described above. No permission is inferred from a
+reference. Other repository adapters, broader
 retrieval interception and harness installation remain open.
 
 ## Learn useful pieces through a soul revision
