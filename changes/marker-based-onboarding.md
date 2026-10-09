@@ -1,1 +1,0 @@
-- Agent onboarding now carries the GitHub App resolved from harness markers into new identities, and rejoining restores a missing App on existing hub-only identities without overwriting an assigned App, so configured agents can publish without manual per-session App assignment (#644).
