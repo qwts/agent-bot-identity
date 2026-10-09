@@ -963,10 +963,10 @@ test('a declared provider secret is checked at launch as its own stage before th
   assert.deepEqual(h.calls, [], 'no turn ran');
 });
 
-test('sign-in is probed as its own stage before the soul joins; evidence is journaled and only a positive sign-out of an existing unrouted soul refuses (#536)', async (t) => {
+test('sign-in is probed as its own stage before the soul joins; evidence is journaled and only a positive sign-out of an existing soul refuses (#536)', async (t) => {
   const journal = (f, requestId) => JSON.parse(readFileSync(f.options.file)).find((row) => row.requestId === requestId);
   const probes = [];
-  const signedIn = fixture(t, { joinSoul: async () => 'addr', signIn: { check: async (args) => { probes.push(args); return { status: 'signed-in', routed: false }; } } });
+  const signedIn = fixture(t, { joinSoul: async () => 'addr', signIn: { check: async (args) => { probes.push(args); return { status: 'signed-in' }; } } });
   const stages = [];
   await signedIn.handler(event, { ...signedIn.ports, progress: async ({ stage }) => { stages.push(stage); } });
   assert.deepEqual(stages, ['checking', 'account', 'sign-in', 'joining', 'harness']);
@@ -977,7 +977,7 @@ test('sign-in is probed as its own stage before the soul joins; evidence is jour
   // Positive sign-out of an existing soul: refused with the command, before joining or any turn.
   let joined = 0, discarded = 0;
   const out = fixture(t, { joinSoul: async () => { joined++; return 'addr'; }, discard: () => { discarded++; },
-    signIn: { check: async () => ({ status: 'signed-out', routed: false }) } });
+    signIn: { check: async () => ({ status: 'signed-out' }) } });
   await out.handler(event, out.ports);
   assert.equal(out.reports[0].status, 'failed');
   assert.equal(out.reports[0].code, 'harness-signed-out');
@@ -986,10 +986,9 @@ test('sign-in is probed as its own stage before the soul joins; evidence is jour
   assert.deepEqual([joined, discarded, out.calls.length], [0, 0, 0]);
   assert.deepEqual(journal(out, 'r1'), { ...journal(out, 'r1'), stage: 'sign-in', signIn: { status: 'signed-out' }, code: 'harness-signed-out' });
 
-  // Unknown, a routed store, or a probe that throws continue; none is readiness.
+  // Unknown, or a probe that throws, continues; neither is readiness.
   for (const [check, signIn] of [
-    [async () => ({ status: 'unknown', reason: 'status-timeout', routed: false }), { status: 'unknown', reason: 'status-timeout' }],
-    [async () => ({ status: 'signed-out', routed: true }), { status: 'signed-out' }],
+    [async () => ({ status: 'unknown', reason: 'status-timeout' }), { status: 'unknown', reason: 'status-timeout' }],
     [async () => { throw new Error('probe crashed'); }, { status: 'unknown', reason: 'status-failed' }],
   ]) {
     const f = fixture(t, { joinSoul: async () => 'addr', signIn: { check } });
@@ -1011,7 +1010,7 @@ test('a new soul that probes signed out still launches: its ID would not survive
   delete fresh.soul;
   let discarded = 0;
   const f = fixture(t, { spawnPackage: async () => ({ id: agentId }), joinSoul: async () => 'addr', discard: () => { discarded++; },
-    signIn: { check: async () => ({ status: 'signed-out', routed: false }) } });
+    signIn: { check: async () => ({ status: 'signed-out' }) } });
   await f.handler(fresh, f.ports);
   assert.equal(f.reports[0].status, 'launched');
   assert.equal(discarded, 0);

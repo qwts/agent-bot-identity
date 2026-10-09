@@ -221,3 +221,18 @@ test('OpenCode signed-out needs its zero-credentials line; registry rows validat
   const runImpl = async () => ({ stdout: '└  0 credentials\n\n┌  Environment\n│\n●  Provider ENV_VAR\n└  1 environment variable\n' });
   assert.equal((await harnessAuth('status', 'opencode', { env: {}, runImpl })).status, 'signed-in');
 });
+
+test('harness auth --soul runs with the soul turn env: a routed tool home is the store it reads and signs in to (#536, #583)', async () => {
+  const { soulAuthEnv } = await import('../harness-auth.mjs');
+  const env = soulAuthEnv('agent_r', 'claude', { env: { PATH: '/usr/bin', HOME: '/Users/o' },
+    runtimeEnvFor: () => ({ PATH: '/soul/bin:/usr/bin' }),
+    toolHomeEnvFor: () => ({ CLAUDE_CONFIG_DIR: '/soul/.soul-state/tools/claude', HOME: '/never' }) });
+  assert.equal(env.CLAUDE_CONFIG_DIR, '/soul/.soul-state/tools/claude');
+  assert.equal(env.PATH, '/soul/bin:/usr/bin');
+  assert.equal(env.HOME, '/Users/o');
+  let seen;
+  await harnessAuth('login', 'claude', { home: null, env, runImpl: async (command, args, options) => { seen ??= options.env.CLAUDE_CONFIG_DIR; return { stdout: '{"loggedIn":true}' }; } });
+  assert.equal(seen, '/soul/.soul-state/tools/claude', 'login writes the routed store, not ~/.claude');
+  // An unrouted soul keeps the host store.
+  assert.equal(soulAuthEnv('agent_u', 'claude', { env: { PATH: '/usr/bin' }, toolHomeEnvFor: () => ({}) }).CLAUDE_CONFIG_DIR, undefined);
+});

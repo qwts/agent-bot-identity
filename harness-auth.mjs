@@ -13,7 +13,10 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { ACP_SPAWN_REGISTRY, resolveSpawn } from './acp-registry.mjs';
 import { populationFile, recordHarnessAuth } from './agent-population.mjs';
+import { soulToolHomeEnv } from './soul-env-migrate.mjs';
 import { soulHomePath } from './soul-home.mjs';
+import { soulRuntimeEnv } from './soul-runtimes.mjs';
+import { composeTurnEnv } from './turn-env.mjs';
 
 const run = promisify(execFile);
 export const LOGIN_TIMEOUT_MS = 10 * 60_000;
@@ -119,13 +122,27 @@ function clearRecorded(agentId, harness) {
   } catch { /* no census row to clear */ }
 }
 
+// The environment `harness auth --soul` runs with: the soul's turn
+// environment (composeTurnEnv) without its provider secret, so status and
+// login read and write the store the soul launches with. A soul whose
+// harness store is routed into its tool home signs in there, not to the
+// host's store (#536, #583). The provider secret stays with the daemon: a
+// status here does not count an OpenCode provider variable.
+export function soulAuthEnv(agentId, harness, { env = process.env, runtimeEnvFor = null, toolHomeEnvFor = null } = {}) {
+  return composeTurnEnv({ agentId, harness, baseEnv: env, runtimeEnvFor, toolHomeEnvFor }).turnEnv;
+}
+
 async function main(argv) {
   const [sub, action, harness, flag, agentId] = argv;
   if (sub !== 'auth' || !harness || flag !== '--soul' || !agentId) {
     throw new Error('usage: agent-bot harness auth status|login HARNESS --soul AGENT_ID');
   }
   const home = soulHomePath(agentId);
-  const result = await harnessAuth(action, harness, { home: existsSync(home) ? home : null });
+  const env = soulAuthEnv(agentId, harness, {
+    runtimeEnvFor: ({ agentId: id, harness: name, env: turnEnv }) => soulRuntimeEnv(id, { env: turnEnv, harness: name }),
+    toolHomeEnvFor: ({ agentId: id, harness: name }) => soulToolHomeEnv(id, { harness: name }),
+  });
+  const result = await harnessAuth(action, harness, { home: existsSync(home) ? home : null, env });
   // A signed-in harness clears the failure a turn recorded for it (#84).
   if (result.loggedIn) clearRecorded(agentId, harness);
   process.stdout.write(`${JSON.stringify(result)}\n`);

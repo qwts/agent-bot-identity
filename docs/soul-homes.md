@@ -85,6 +85,12 @@ is never stored. The audit receipt reads `harness expired` or
 | `signed-out` | The harness positively reported no sign-in: Claude's `"loggedIn": false`, Codex's `Not logged in` (a non-zero exit alone is not enough: Codex exits 1 for an unreadable `auth.json` too), or OpenCode's `0 credentials`. |
 | `unknown` | The probe proved nothing. `reason` is `status-command-missing`, `status-timeout`, `status-interrupted`, `status-failed` or `status-unreadable`. |
 
+`harness auth status|login --soul` runs with the soul's turn environment
+(its runtimes and, when routed, its tool home), so it reads and signs in to
+the store the soul launches with, not the host's. The provider secret stays
+with the daemon: this status does not count an OpenCode provider variable,
+while the launch probe below does.
+
 `loggedIn` is true only for `signed-in`, so older readers never treat
 `unknown` as signed in. An `unknown` status does not clear a recorded
 `harnessAuth` failure.
@@ -102,8 +108,8 @@ report is unchanged.
 | Probe | Launch |
 | --- | --- |
 | `signed-in` | Continues. Readiness is still the harness session, not the probe. |
-| `signed-out`, existing soul whose store is not routed | Fails with `harness-signed-out`, naming `agent-bot harness auth login HARNESS --soul ID`, before the soul joins or a turn runs. |
-| `signed-out`, new soul or routed store | Continues and is recorded. A new soul's ID would not survive a rollback, and for a routed store `harness auth login` signs in to the host store. The first turn raises the sign-in notice above. |
+| `signed-out`, existing soul | Fails with `harness-signed-out`, naming `agent-bot harness auth login HARNESS --soul ID`, before the soul joins or a turn runs. |
+| `signed-out`, new soul | Continues and is recorded. A new soul's ID is discarded on rollback, so the login command could not be run; and a routed new soul's tool home starts empty, so a refusal would block every first launch. The first turn raises the sign-in notice above. |
 | `unknown` (or the probe failed) | Continues and is recorded. It is never treated as signed in. |
 
 Like `runtimes`, `tool-home` and `provider`, the `sign-in` stage is kept in

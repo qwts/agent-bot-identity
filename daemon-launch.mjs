@@ -113,15 +113,16 @@ const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other
 
 // `signIn` (#536): `check({ agentId, harness })` probes the harness's
 // sign-in with the environment its turn will get, returning `{ status,
-// reason?, routed }` (harness-auth.mjs evidence, `routed` true when the
-// soul's store is routed into its tool home), or null for a harness with no
+// reason? }` (harness-auth.mjs evidence), or null for a harness with no
 // status reader. The `sign-in` stage is reported only when there is a
 // reader, and the journal keeps the evidence. Only positive `signed-out`
-// refuses, and only for an existing soul whose store is the one `agent-bot
-// harness auth login HARNESS --soul ID` signs in to: a new soul's ID is
-// gone after rollback, so it continues and its first turn raises the #84
-// sign-in notice. `unknown` continues and is never readiness; the
-// harness-session event still is. A probe that throws is `unknown`.
+// refuses, and only for an existing soul: `agent-bot harness auth login
+// HARNESS --soul ID` signs in to the same store, routed or not. A new soul
+// continues: its ID is discarded on rollback, so the command could not be
+// run, and a routed new soul's tool home starts empty, so a refusal would
+// block every first launch. Its first turn raises the #84 sign-in notice.
+// `unknown` continues and is never readiness; the harness-session event
+// still is. A probe that throws is `unknown`.
 
 // `sandboxFor` (#376) says what the soul gets, `sandboxed` or
 // `unrestricted`, and the account it runs as, from `launchSandbox` in
@@ -276,11 +277,11 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       if (signIn) {
         let evidence;
         try { evidence = await signIn.check({ agentId: identity.id, harness }); }
-        catch { evidence = { status: 'unknown', reason: 'status-failed', routed: false }; }
+        catch { evidence = { status: 'unknown', reason: 'status-failed' }; }
         if (evidence) {
           await step('sign-in');
           row.signIn = { status: evidence.status, ...(evidence.reason ? { reason: evidence.reason } : {}) };
-          if (evidence.status === 'signed-out' && soul && !evidence.routed) {
+          if (evidence.status === 'signed-out' && soul) {
             throw Object.assign(new Error(`${harness} is signed out for this soul; sign it in with \`agent-bot harness auth login ${harness} --soul ${identity.id}\` and launch again`), { code: 'harness-signed-out' });
           }
         }

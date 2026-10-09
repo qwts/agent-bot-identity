@@ -1631,11 +1631,11 @@ export async function runDaemon({
     signIn: {
       check: async ({ agentId, harness }) => {
         if (!ACP_SPAWN_REGISTRY[harness]?.signIn) return null;
-        const { harnessEnv: probeEnv, routed } = composeTurnEnv({ agentId, harness, baseEnv: harnessEnv, ...turnEnvPorts });
+        const { harnessEnv: probeEnv } = composeTurnEnv({ agentId, harness, baseEnv: harnessEnv, ...turnEnvPorts });
         let soulHome = null;
         try { soulHome = soulHomePath(agentId, { file: populationFile({ env, home }), env, home }); } catch { /* no folder: PATH's CLI */ }
         const evidence = await harnessAuth('status', harness, { home: soulHome && existsSync(soulHome) ? soulHome : null, env: probeEnv });
-        return { status: evidence.status, ...(evidence.reason ? { reason: evidence.reason } : {}), routed: routed.length > 0 };
+        return { status: evidence.status, ...(evidence.reason ? { reason: evidence.reason } : {}) };
       },
     },
     // What the soul gets (#376): its override over the global switch, and

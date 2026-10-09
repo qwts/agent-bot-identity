@@ -2,7 +2,7 @@
 // (#536): runtimes, the routed tool home and the provider env together.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { composeTurnEnv } from '../wake-plane.mjs';
+import { composeTurnEnv } from '../turn-env.mjs';
 
 test('composeTurnEnv layers runtimes, routed tool home and provider env as the turn does', () => {
   const result = composeTurnEnv({
