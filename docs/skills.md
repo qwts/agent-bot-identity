@@ -31,8 +31,14 @@ the local `SKILL.md`.
 
 ## Catalogued skills
 
-Any other name is resolved through the fleet catalog,
-[`skills/README.md` in qwts/qwts-agent-sop](https://github.com/qwts/qwts-agent-sop/blob/main/skills/README.md).
+Any other name is resolved through `skills/README.md` in the explicitly
+selected SOP repository (#674). Selection reuses `agent-bot sop`: the current
+soul's `agent-sop.toml` takes precedence over the user's
+`~/.config/agent-sop/config.toml`, and an explicit `[repos] sop` takes
+precedence over the SOP pin in the selected organization's `org.json`.
+A foreign soul selection requires the existing trust decision for that
+repository and commit. Neither the catalog nor an entry can redirect the
+index lookup to another organization. There is no implicit qwts selection.
 Only its **Available skills** list is read. An entry is a link to the skill's
 directory at a commit in its owning repository:
 
@@ -53,24 +59,72 @@ The name must match exactly one entry. The command then fetches
 | the link is not a `tree/<ref>/<path>` link | error: no pin |
 | "owned by" names a different repository from the link | error |
 
-Nothing falls back to a default branch. The catalog itself is read at its
-repository's default branch: it is the reviewed index of pins, and each skill
-it names is then read at a commit.
+Both the catalog and each skill are read at full commits. The SOP resolver
+may resolve a configured branch or tag once; the index request then uses the
+resulting immutable commit, including when `org.json` pins an older revision.
+Missing catalogs never fall back to a repository's default branch. A catalog
+entry may name a different owning repository, but its full commit and the
+existing owner/path checks remain mandatory.
 
-`--json` prints `{ name, repository, commit, path, text }`, where `path` is
-the file's path in `repository` at `commit`.
+For non-bundled skills, `--json` prints
+`{ name, repository, commit, path, text, catalog }`, where `path` is the
+skill file's path in `repository` at `commit`, and `catalog` contains the
+selected index's `{ repository, commit, path }`. Bundled JSON is unchanged.
+
+### Selection and migration
+
+An existing explicit qwts selection continues to select its configured SOP
+repository. Its index now comes from that selected commit, which can differ
+from the default-branch version earlier releases read. Installations that
+relied on the implicit qwts default without configuring any SOP now receive
+`skill-catalog-unselected` for non-bundled requests. Zero-SOP runtime use and
+bundled skills remain supported; no add-on or credential configuration changes.
+
+To select an organization, create or edit the existing user config (or the
+soul's `agent-sop.toml` for a soul-specific selection):
+
+```toml
+schema_version = 1
+[repos]
+org = "your-org/agent-org@<reviewed-ref-or-full-commit>"
+```
+
+Run `agent-bot sop --json` to verify the resolved repository and commit. The
+selected SOP must contain `skills/README.md`. An explicit `[repos] sop`
+selection uses the same `owner/repository@ref` syntax. There is no `sop set`
+command and this migration never writes a config or updates a live policy
+repository automatically. If a foreign soul selection is withheld, review
+it before `agent-bot sop trust OWNER/REPOSITORY --soul ID`.
+
+Catalog failures exit 1, keep stdout empty (also with `--json`), and put a
+stable code in stderr; programmatic callers receive `SkillError.code`:
+
+| Code | Meaning |
+|---|---|
+| `skill-catalog-unselected` | No SOP selected |
+| `skill-catalog-selection-failed` | Selection cannot be resolved or lacks a valid pin |
+| `skill-catalog-untrusted` | Foreign soul selection has not been trusted |
+| `skill-catalog-missing` | Index is absent at the selected commit |
+| `skill-catalog-unreadable` | Index fetch failed |
+| `skill-catalog-invalid` | Index is empty, oversized or malformed |
+| `skill-entry-unpinned` | Entry names a mutable or incomplete ref |
+| `skill-entry-unreadable` | Pinned entry could not be fetched or decoded |
 
 ### Fetching
 
-Both reads are `gh api` GET requests to the contents API, with prompts
+After the existing bounded SOP resolver determines the selection, both content
+reads are `gh api` GET requests to the contents API, with prompts
 disabled and a 20-second timeout each. `gh` uses whatever credential it has;
 none is printed. The document is printed only after it has been fetched and
 decoded in full. A response that is truncated, is not a file, or does not
 match its declared size is refused. With no network, the command exits 1 with
 the `gh` error and prints nothing to stdout.
 
-Nothing is cached or written: not `~/.claude/skills`, not `~/.codex`, not any
-harness configuration. The fetched text is untrusted input: it is what the
+Remote skill disclosure remains online-only in this change. Catalog and skill
+content are not cached, even after a successful disclosure; cache-backed
+offline reads are deferred. The SOP resolver may use temporary directories
+for its bounded organization read, but no skill is installed, no persistent
+skill cache is created, and no harness configuration is written. The fetched text is untrusted input: it is what the
 pinned commit contains, and the pin is the whole guarantee. No checksum or
 signature is checked.
 

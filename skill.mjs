@@ -7,7 +7,7 @@
 // own skills. They are read from this runtime's tree with no network, and
 // they always win over the fleet catalog: the copy that ships with the
 // running release is the one its commands match. Every other name resolves
-// through the fleet catalog (qwts/qwts-agent-sop skills/README.md) to exactly
+// through the selected SOP catalog (skills/README.md at its resolved commit) to exactly
 // one entry, and that entry's SKILL.md is fetched at the entry's pinned
 // commit. Absent, ambiguous, or unpinned names fail; a branch or tag is never
 // followed. Nothing is installed or cached: output goes to stdout only.
@@ -24,12 +24,13 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolveSop } from './sop.mjs';
 import { SKILL_REFERENCES, NO_SKILL_REFERENCE, skillReferenceFor } from './cli/skill-references.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 export const OWN_REPOSITORY = 'qwts/agent-bot-identity';
 export const BUNDLED_SKILLS = Object.freeze(['agent-bot', 'agent-space', 'thread-orders']);
-export const CATALOG = Object.freeze({ repository: 'qwts/qwts-agent-sop', path: 'skills/README.md' });
+export const CATALOG_PATH = 'skills/README.md';
 export const FETCH_TIMEOUT_MS = 20_000;
 const NAME = /^[a-z][a-z0-9-]{0,63}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
@@ -44,7 +45,7 @@ const USAGE = `usage: agent-bot skill path [--json]
 path: Print this release's agent skill bundle directory and its source commit.
 <name>: Print one skill's SKILL.md. Bundled skills (${BUNDLED_SKILLS.join(', ')})
   are read from this release with no network. Any other name is resolved
-  through the fleet catalog (${CATALOG.repository} ${CATALOG.path}) to exactly
+  through the selected SOP catalog (${CATALOG_PATH}, at its resolved commit) to exactly
   one entry and fetched read-only at that entry's pinned commit; an absent,
   ambiguous, or unpinned name is an error. Nothing is installed.
 --for <subcommand>: Print the one agent-bot reference file that covers that
@@ -53,10 +54,11 @@ path: Print this release's agent skill bundle directory and its source commit.
 `;
 
 export class SkillError extends Error {
-  constructor(message, exitCode = 1) {
+  constructor(message, exitCode = 1, code = null) {
     super(message);
     this.name = 'SkillError';
     this.exitCode = exitCode;
+    this.code = code;
   }
 }
 
@@ -119,10 +121,10 @@ export function parseCatalog(text) {
 }
 
 // Exactly one entry, pinned, with a well-formed repository and path.
-export function resolveCatalogEntry(entries, name) {
+export function resolveCatalogEntry(entries, name, catalog = null) {
   const matches = entries.filter((entry) => entry.name === name);
   if (matches.length === 0) {
-    throw new SkillError(`no skill named ${name} in the fleet catalog (${CATALOG.repository} ${CATALOG.path}); bundled: ${BUNDLED_SKILLS.join(', ')}`);
+    throw new SkillError(`no skill named ${name} in the fleet catalog ${catalog ? `(${catalog.repository}@${catalog.commit} ${catalog.path})` : '(selected SOP)'}; bundled: ${BUNDLED_SKILLS.join(', ')}`);
   }
   if (matches.length > 1) {
     const where = matches.map((entry) => entry.repository ?? entry.owner ?? 'unknown repository').join(', ');
@@ -137,17 +139,17 @@ export function resolveCatalogEntry(entries, name) {
     throw new SkillError(`catalog entry ${name} links ${entry.repository} but says it is owned by ${entry.owner}`);
   }
   if (!entry.commit) {
-    throw new SkillError(`catalog entry ${name} is not pinned: ${entry.ref ? `ref ${entry.ref} is not a 40-hex commit` : 'it carries no ref'}; a branch or tag is never followed`);
+    throw new SkillError(`catalog entry ${name} is not pinned: ${entry.ref ? `ref ${entry.ref} is not a 40-hex commit` : 'it carries no ref'}; a branch or tag is never followed`, 1, 'skill-entry-unpinned');
   }
   return { name, repository: entry.repository, commit: entry.commit, path: `${entry.directory}/SKILL.md` };
 }
 
-// Read one file through `gh api` (GET only). `ref` is undefined only for the
-// catalog itself, which is read at its repository's default branch: it is the
-// reviewed index of pins, and every skill it names is then read at a commit.
+// Read one file through `gh api` (GET only), always at a full commit.
+// Both the selected catalog and the skill it names must have a pin.
 export function ghContentsFetcher({ timeoutMs = FETCH_TIMEOUT_MS, gh = 'gh', env = process.env } = {}) {
   return (repository, path, ref) => {
-    const query = ref ? `?ref=${encodeURIComponent(ref)}` : '';
+    if (!COMMIT.test(ref ?? '')) throw new SkillError('skill content reads require a full commit');
+    const query = `?ref=${encodeURIComponent(ref)}`;
     const endpoint = `repos/${repository}/contents/${path.split('/').map(encodeURIComponent).join('/')}${query}`;
     const result = spawnSync(gh, ['api', '--method', 'GET', endpoint], {
       encoding: 'utf8',
@@ -163,7 +165,7 @@ export function ghContentsFetcher({ timeoutMs = FETCH_TIMEOUT_MS, gh = 'gh', env
     if (result.error) throw new SkillError(`cannot run gh to read ${repository}/${path}: ${result.error.code ?? result.error.message}`);
     if (result.status !== 0) {
       const reason = (result.stderr ?? '').split('\n').map((line) => line.trim()).find(Boolean) ?? `gh exited ${result.status}`;
-      throw new SkillError(`cannot read ${repository}/${path}${ref ? ` at ${ref}` : ''}: ${reason.slice(0, 200)}`);
+      throw new SkillError(`cannot read ${repository}/${path}${ref ? ` at ${ref}` : ''}: ${reason.slice(0, 200)}`, 1, /HTTP 404/u.test(result.stderr ?? '') ? 'skill-content-missing' : 'skill-content-unreadable');
     }
     return decodeContents(result.stdout, `${repository}/${path}`);
   };
@@ -183,16 +185,46 @@ export function decodeContents(body, label) {
   if (typeof data.size === 'number' && bytes.length !== data.size) {
     throw new SkillError(`incomplete content reading ${label}: ${bytes.length} of ${data.size} bytes`);
   }
-  if (bytes.length > MAX_DOCUMENT) throw new SkillError(`${label} is larger than ${MAX_DOCUMENT} bytes`);
+  if (bytes.length > MAX_DOCUMENT) throw new SkillError(`${label} is larger than ${MAX_DOCUMENT} bytes`, 1, 'skill-content-invalid');
   return bytes.toString('utf8');
 }
 
-export function resolveCatalogSkill(name, fetchContents) {
-  const catalog = fetchContents(CATALOG.repository, CATALOG.path);
-  const entry = resolveCatalogEntry(parseCatalog(catalog), name);
-  const text = fetchContents(entry.repository, entry.path, entry.commit);
-  if (typeof text !== 'string' || !text.length) throw new SkillError(`${entry.repository}/${entry.path} at ${entry.commit} is empty`);
-  return { ...entry, text };
+// Resolve policy selection only for non-bundled names. Reuse the SOP's
+// soul/user precedence, org.json pins and foreign-pack trust decision.
+export function selectedCatalog({ sopOptions = {}, resolve = resolveSop } = {}) {
+  let report;
+  try { report = resolve(sopOptions); }
+  catch (error) { throw new SkillError(`cannot select a skill catalog: ${error.message}; inspect agent-bot sop`, 1, 'skill-catalog-selection-failed'); }
+  if (!report.inEffect) throw new SkillError(`no skill catalog: no SOP is selected; set [repos] org in ~/.config/agent-sop/config.toml or the soul's agent-sop.toml, then run agent-bot sop to verify`, 1, 'skill-catalog-unselected');
+  const sop = report.repositories?.sop;
+  if (!sop || !REPOSITORY.test(sop.repository ?? '') || !COMMIT.test(sop.commit ?? '')) {
+    throw new SkillError('selected SOP has no valid repository and full commit for its skill catalog; inspect agent-bot sop', 1, 'skill-catalog-selection-failed');
+  }
+  if (report.trust?.required && !report.trust.accepted) {
+    throw new SkillError(`skill catalog withheld: the selected SOP requires trust; review it with agent-bot sop, then accept with agent-bot sop trust ${sop.repository}${report.soul ? ` --soul ${report.soul.agentId}` : ''}`, 1, 'skill-catalog-untrusted');
+  }
+  return { repository: sop.repository, commit: sop.commit, path: CATALOG_PATH };
+}
+
+function boundedText(text, label) {
+  if (typeof text !== 'string' || !text.length) throw new SkillError(`${label} is empty or not text`, 1, 'skill-content-invalid');
+  if (Buffer.byteLength(text, 'utf8') > MAX_DOCUMENT) throw new SkillError(`${label} is larger than ${MAX_DOCUMENT} bytes`, 1, 'skill-content-invalid');
+  return text;
+}
+
+export function resolveCatalogSkill(name, fetchContents, selection = {}) {
+  const catalog = selectedCatalog(selection);
+  let index;
+  try { index = boundedText(fetchContents(catalog.repository, catalog.path, catalog.commit), 'selected skill catalog'); }
+  catch (error) { throw new SkillError(`cannot read skill catalog ${catalog.repository}/${catalog.path} at ${catalog.commit}: ${error.message}; verify the selected SOP and its catalog with agent-bot sop`, 1, error.code === 'skill-content-missing' ? 'skill-catalog-missing' : error.code === 'skill-content-invalid' ? 'skill-catalog-invalid' : 'skill-catalog-unreadable'); }
+  let entries;
+  try { entries = parseCatalog(index); }
+  catch (error) { throw new SkillError(`invalid catalog ${catalog.repository}@${catalog.commit}: ${error.message}`, 1, 'skill-catalog-invalid'); }
+  const entry = resolveCatalogEntry(entries, name, catalog);
+  let text;
+  try { text = boundedText(fetchContents(entry.repository, entry.path, entry.commit), `${entry.repository}/${entry.path} at ${entry.commit}`); }
+  catch (error) { throw new SkillError(`cannot read skill entry: ${error.message}`, 1, 'skill-entry-unreadable'); }
+  return { ...entry, text, catalog };
 }
 
 function parseArgs(argv) {
@@ -223,7 +255,7 @@ function forReference(options) {
   return { name: 'agent-bot', for: options.for, repository: OWN_REPOSITORY, commit: sourceCommit(), path, text: readFileSync(path, 'utf8') };
 }
 
-function disclose(options, fetchContents) {
+function disclose(options, fetchContents, selection) {
   if (options.for !== null) return forReference(options);
   const name = options.sub;
   if (!NAME.test(name)) throw new SkillError(`invalid skill name ${name}`, 2);
@@ -231,7 +263,7 @@ function disclose(options, fetchContents) {
     const path = join(ROOT, 'skills', name, 'SKILL.md');
     return { name, repository: OWN_REPOSITORY, commit: sourceCommit(), path, text: readFileSync(path, 'utf8') };
   }
-  return resolveCatalogSkill(name, fetchContents);
+  return resolveCatalogSkill(name, fetchContents, selection);
 }
 
 export function main(argv = process.argv.slice(2), deps = {}) {
@@ -264,10 +296,10 @@ export function main(argv = process.argv.slice(2), deps = {}) {
   }
   let skill;
   try {
-    skill = disclose(options, deps.fetchContents ?? ghContentsFetcher());
+    skill = disclose(options, deps.fetchContents ?? ghContentsFetcher(), { sopOptions: deps.sopOptions, resolve: deps.resolveSop });
   } catch (error) {
     if (!(error instanceof SkillError)) throw error;
-    stderr.write(`agent-bot skill: ${error.message}\n`);
+    stderr.write(`agent-bot skill: ${error.code ? `${error.code}: ` : ''}${error.message}\n`);
     return error.exitCode;
   }
   stdout.write(options.json ? `${JSON.stringify(skill)}\n` : skill.text);
