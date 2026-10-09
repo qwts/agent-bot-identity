@@ -1,0 +1,1 @@
+- Recheck declared runtimes before every daemon ACP turn and refuse missing or unsupported installs, invalid manifests and lookup errors instead of falling back to host tools. Install stamps no longer report a runtime ready when its executable is missing (#617).

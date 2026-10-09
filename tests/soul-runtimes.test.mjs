@@ -13,6 +13,7 @@ import { initAgentSpace } from '../agent-space.mjs';
 import { RUNTIME_CATALOG, RUNTIME_NAMES, RUNTIME_PLATFORMS, SHA256_HEX, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, resolveCatalogPin, versionMatches } from '../runtime-catalog.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, validateRuntimesDeclaration, validateSoulPackage } from '../soul-package.mjs';
 import { INSTALL_STAMP, RUNTIME_ERROR_CODES, downloadCacheDir, fetchArchive, inspectSoulRuntimes, installSoulRuntimes, pendingSoulRuntimes, runtimeLaunchEnv, soulRuntimeEnv, soulRuntimesCommand } from '../soul-runtimes.mjs';
+import { acpExecutorFor, coldTurnExecutor } from '../wake-plane.mjs';
 
 const ID = 'agent_12345678-1234-4234-8234-123456789abc';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -425,6 +426,42 @@ test('the launch env follows the override order: per-agent option, the soul inst
   const host = runtimeLaunchEnv(inspectSoulRuntimes(f.dir, f.options), { env: { PATH: '/usr/bin' }, node: '/Applications/GeniusBar.app/Contents/node' });
   assert.deepEqual(host.env, { PATH: ['/Applications/GeniusBar.app/Contents', '/usr/bin'].join(path.delimiter) });
   assert.deepEqual(host.routing, { node: { source: 'host-bundled', version: null, bin: '/Applications/GeniusBar.app/Contents' }, python: { source: 'host', version: null, bin: null }, go: { source: 'host', version: null, bin: null } });
+});
+
+test('daemon turns refuse unavailable declarations before harness creation, including later cold turns (#617)', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { node: '24' } }, census: true });
+  const d = doubles({ archives: f.archives });
+  let created = 0;
+  const factory = acpExecutorFor({ identities: () => ({}), policy: {}, baseEnv: f.env,
+    runtimeEnvFor: ({ agentId, harness, env }) => soulRuntimeEnv(agentId, { ...f.options, env, harness }),
+    createExecutor: (options) => { created++; return async () => ({ path: options.env.PATH }); } });
+  const request = { agentId: ID, harness: 'opencode', cwd: f.dir, env: {} };
+  const refused = (code, runtime) => (error) => error.code === code && error.runtime === runtime && typeof error.action === 'string';
+  assert.throws(() => factory(request), refused('runtime-install-failed', 'node'));
+  assert.equal(created, 0);
+  await installSoulRuntimes(f.dir, { ...f.options, fetchFn: d.fetchFn, runImpl: d.runImpl });
+  const executor = factory(request);
+  assert.equal((await executor()).path.split(path.delimiter)[0], path.join(f.runtimes, 'node', NODE.version, 'bin'));
+  assert.equal(created, 1);
+  // A later cold/resumed turn must re-inspect, even when a stamp and bin
+  // directory survive deletion of the executable.
+  rmSync(path.join(f.runtimes, 'node', NODE.version, 'bin', 'node'));
+  await assert.rejects(coldTurnExecutor({ executorFor: factory })({ invocation: request, message: 'continue', env: {} }), refused('runtime-install-failed', 'node'));
+  assert.equal(created, 1);
+  f.writeManifest((m) => { m.runtimes.node = '999'; });
+  assert.throws(() => factory(request), refused('runtime-unsupported-platform', 'node'));
+  f.writeManifest((m) => { m.runtimes.node = false; });
+  assert.throws(() => factory(request), refused('runtime-install-failed', 'runtimes.node'));
+  put(path.join(f.dir, 'soul.json'), '{broken');
+  assert.throws(() => factory(request), refused('runtime-install-failed', 'soul.json'));
+  assert.equal(created, 1, 'none of the failed resolutions reached the harness');
+});
+
+test('daemon env refuses a missing selected harness install but allows undeclared host tools (#617)', (t) => {
+  const f = fixture(t, { manifest: { harnesses: { muse: { install: { kind: 'archive', version: '1.2.3', bin: 'muse', url: 'https://example.test/muse.tgz', sha256: { [PLATFORM]: 'a'.repeat(64) } } } } }, census: true });
+  assert.throws(() => soulRuntimeEnv(ID, { ...f.options, harness: 'muse' }), (error) => error.code === 'runtime-install-failed' && error.runtime === 'harness:muse');
+  const env = soulRuntimeEnv(ID, { ...f.options, harness: 'opencode', node: '/host/bin/node' });
+  assert.equal(env.PATH.split(path.delimiter)[0], '/host/bin');
 });
 
 test('soul runtimes and soul runtimes install report by Agent ID or name with --json, the install is owner gated, and the daemon helpers answer', async (t) => {
