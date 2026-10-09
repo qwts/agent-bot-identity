@@ -255,10 +255,10 @@ Consequences of these rules:
 [agent-comms
 ADR-0059](https://github.com/qwts/agent-comms/blob/main/docs/decisions/ADR-0059-host-apps-embed-agent-comms.md)
 already has host apps embed pinned releases as a compatible set. After the
-extraction the set may have three members: agent-identity, agent-bot and
-agent-comms. agent-identity ships inside each agent-bot release at a pinned version
-(answer 3), so GeniusBar, Homebrew and the Linux bundle carry it through
-their existing agent-bot component. Either way:
+extraction, agent-identity ships inside each agent-bot release at a pinned
+version (answer 3), so GeniusBar, Homebrew and the Linux bundle carry it
+through their existing agent-bot component, and the compatible set they pin
+stays agent-bot and agent-comms. Because of that:
 
 - pins never move backwards;
 - GeniusBar's compatibility checks (`scripts/compat-check.mjs`, its ADR-0282
