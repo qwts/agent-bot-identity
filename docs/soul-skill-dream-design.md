@@ -2,9 +2,9 @@
 
 Status: staged implementation contract for #603, following
 [ADR-0603 decision 11](decisions/ADR-0603-imported-skills-keep-local-snapshots-and-upstream-provenance.md).
-The scheduler, journal, bounded inputs and daemon service are implemented.
-Durable maintenance outcomes, checkpoints and the remaining owner-facing
-workflow are incomplete; their requirements below remain proposed contracts.
+The scheduler, journal, bounded inputs, daemon service and durable reported
+outcomes are implemented. Processing checkpoints and notices remain incomplete;
+their requirements below remain proposed contracts.
 Implementation does not register a schedule or grant owner authorization.
 
 Dreaming is a bounded agent turn that maintains eligible knowledge using the
@@ -66,10 +66,10 @@ upgraded before opening a journal containing shutdown receipts.
 
 This integration exposes execution status with `maintenanceCoverage: unverified`.
 It captures bounded starting inputs and durably records their metadata before
-runtime/provider resolution. The outcome/checkpoint schema remains incomplete. Raw replies
-are not stored as verified evidence, no processing checkpoints advance, and no
-maintenance-success notice is claimed. CLI controls and outcome/notice support
-remain subsequent acceptance work.
+runtime/provider resolution. Bounded outcomes publish with terminal run facts.
+Raw replies are not stored as verified evidence, no processing checkpoints advance,
+and no maintenance-success notice is claimed. Notice support remains subsequent
+acceptance work.
 Input preparation failures appear as bounded, content-free codes in status
 diagnostics (for example `dream-input-limit`, `dream-input-unavailable` or
 `dream-input-drift`). These diagnostics explicitly last only for this daemon
@@ -258,7 +258,7 @@ Age and infrequent retrieval alone are not deletion evidence.
 
 ### Implemented input preparation receipts
 
-Journal state version 2 adds bounded `inputReceipts` references for active runs
+Journal state version 2 introduced bounded `inputReceipts` references for active runs
 and each registration's latest run. A reference names the run, journal revision,
 starting soul revision and metadata digest. The corresponding `inputs-prepared`
 event retains the selected paths, kinds, digests, byte sizes, excerpt sizes,
@@ -275,12 +275,51 @@ restart. References no longer needed by active/latest runs leave the current
 state, while their append-only history events remain available through bounded
 history pages. No source selection or processing checkpoint advances here.
 
-Version 1 journals remain readable. The next scheduler transaction writes state
-version 2 without rewriting historical records or their hash chain. Read-only
-inspection does not migrate disk. Readers supporting only state version 1 must
-be upgraded before opening a journal advanced by this implementation.
+Version 1 and 2 journals remain readable. The next scheduler transaction writes
+state version 3 without rewriting historical records or their hash chain.
+Read-only inspection does not migrate disk. Older readers must be upgraded before
+opening a journal advanced by this implementation.
 
-### Remaining outcome and checkpoint contract
+### Implemented reported outcomes
+
+The final reply must be one JSON object with `schemaVersion: 1`, the active
+`runId`, its `startingRevision`, and `items`. Each item names a captured `path`
+and `digest`, an `outcome` of `completed`, `skipped` or `blocked`, a short
+lowercase hyphenated `reason` code, and `evidence`. Evidence is null, a
+`{proposalId}` or `{revision}` reference, a captured-source `{digest}`, or an
+unverified `{adapter, receipt}` claim. Unknown fields, duplicate items, wrong
+runs/revisions and sources outside the captured inventory invalidate the report.
+Missing items are counted as unreported; they do not become completed or skipped.
+
+Every maintenance claim remains `agent-reported`. A matched captured digest
+establishes `source-identity` only. At most four distinct revision references
+are checked, with repeated references sharing one result. The daemon uses its
+own identity-state root and the bounded revision verifier. A `verified-change`
+result must include the particular item's path; a reference that changes only
+another source does not verify that item's evidence. Records retain the artifact
+revision and proposal status (including pending, rejected and uncertain), with
+`attribution: not-established`. This does not prove adoption, semantic review,
+indexing or causation by the run. No external adapter is provisioned or queried.
+
+Truncated replies cannot become complete structured reports, even if the prefix
+parses as JSON. Invalid, unstructured and truncated replies retain only a bounded
+untrusted display preview, capped at 64 KiB including JSON escaping. Structured
+outcomes retain normalized claims and check facts without duplicating the raw
+reply. Every complete outcome is capped at 256 KiB. Provider exceptions retain
+an `execution-failed` code without provider error text. Preparation failures
+before a source revision is known still have execution facts and process-local
+diagnostics, but no fabricated outcome record.
+
+State version 3 adds `outcomeReceipts` references for latest registered runs.
+The `outcome-recorded` event and its terminal `ended` event publish atomically
+in one journal transaction. Staging an outcome in memory is not a durability
+acknowledgment. Uncertain publication retains the lease in the running process;
+restart sees either the unfinished flight or the complete terminal/outcome
+transaction. Unscheduling removes current references, not append-only history.
+All outcome records state `processingCoverage: unverified`. Selection rotation,
+processing checkpoints and notice deduplication remain to be integrated.
+
+### Remaining checkpoint and notice contract
 
 Execution status and maintenance coverage are separate. A process can finish
 successfully while some sources or capabilities remain blocked or unsupported.
@@ -292,7 +331,7 @@ selection coverage, terminal execution state and bounded per-item outcomes:
 | Item identity | Source revision/checksum or adapter-owned stable locator; never a free-form claim of ownership. |
 | Outcome | `completed`, `skipped` or `blocked`, with a bounded reason code. |
 | Evidence | Existing revision/proposal ID, eligible file digest, or configured adapter receipt. |
-| Verification | `runtime-verified`, `adapter-verified` or `agent-reported`, according to the actual checker. |
+| Verification | Claims remain `agent-reported`; source identity and verified artifact changes are separate evidence. Adapter verification requires a configured checker. |
 | Knowledge coverage | Explicit covered, unavailable and truncated sources/capabilities; unknown indexing stays unknown. |
 
 An agent report must name the active run and starting revision. Reject malformed,

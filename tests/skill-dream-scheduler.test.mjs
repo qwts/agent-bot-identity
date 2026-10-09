@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { createDreamScheduler, emptyDreamState, parseDreamSchedule, validateDreamState, DREAM_TIMEOUT_MS } from '../skill-dream-scheduler.mjs';
+import { interpretDreamReport } from '../skill-dream-outcomes.mjs';
 
 const A = 'agent_12345678-1234-4234-8234-123456789abc';
 const B = 'agent_22345678-1234-4234-8234-123456789abc';
@@ -25,10 +26,10 @@ function fixture(extra = {}) {
       state = copy(change.state); events.push(...copy(change.events)); return true;
     },
   };
-  const execute = ({ run, signal, timeoutMs, prepareInputs }) => {
+  const execute = ({ run, signal, timeoutMs, prepareInputs, stageOutcome }) => {
     assert.equal(state.flights.find(item => item.runId === run.runId)?.status, 'running', 'the durable lease precedes the executor');
     assert.ok(events.some(event => event.kind === 'started' && event.run.runId === run.runId));
-    return new Promise((resolve, reject) => calls.push({ run, signal, timeoutMs, prepareInputs, resolve, reject }));
+    return new Promise((resolve, reject) => calls.push({ run, signal, timeoutMs, prepareInputs, stageOutcome, resolve, reject }));
   };
   const ports = { store, execute, soulDirectory: id => dirs.get(id), isPaused: id => paused.has(id), isBusy: id => busy.has(id),
     now: () => new Date(at), setTimer: (fn, delay) => { const token = {}; timers.set(token, { fn, delay }); return token; }, clearTimer: token => timers.delete(token), ...extra };
@@ -79,6 +80,24 @@ test('an unconfirmed input commit freezes dispatch and retains the unfinished le
   assert.equal(f.state().flights.length, 1);
   assert.deepEqual(f.state().inputReceipts, []);
   assert.throws(() => f.scheduler.runNow(A), { code: 'dream-store-failed' });
+});
+
+test('outcomes are run-bound, publish only at settlement and survive unscheduling in history', async () => {
+  const f = fixture(); f.scheduler.register(A, 'PT1H');
+  const started = f.scheduler.runNow(A); await Promise.resolve();
+  const call = f.calls[0], outcome = interpretDreamReport({ run: call.run, inputs: metadata(), reply: 'Unstructured report' });
+  assert.throws(() => call.stageOutcome(outcome), { code: 'dream-outcome-refused' });
+  call.prepareInputs(metadata());
+  assert.throws(() => call.stageOutcome({ ...outcome, runId: '00000000-0000-4000-8000-000000000000' }), { code: 'dream-outcome-invalid' });
+  call.stageOutcome(outcome);
+  assert.throws(() => call.stageOutcome(outcome), { code: 'dream-outcome-refused' });
+  assert.deepEqual(f.state().outcomeReceipts, []);
+  assert.equal(f.events.some(event => event.kind === 'outcome-recorded'), false);
+  f.scheduler.unschedule(A); call.resolve(); await started.done;
+  assert.deepEqual(f.state().outcomeReceipts, []);
+  assert.equal(f.events.at(-1).kind, 'outcome-recorded');
+  assert.equal(f.events.at(-1).outcome.runId, started.runId);
+  assert.throws(() => call.stageOutcome(outcome), { code: 'dream-outcome-refused' });
 });
 
 test('registration is idempotent, bounded and bound to the canonical soul directory', () => {
@@ -342,7 +361,7 @@ test('timer setup failure refuses execution while retaining the committed attemp
 test('invalid persisted schemas, duplicate souls and excess fields fail closed before execution', () => {
   const f = fixture(); f.scheduler.register(A, 'PT1H'); const good = f.state();
   for (const mutate of [
-    value => { value.schemaVersion = 3; }, value => { value.extra = 'CANARY'; },
+    value => { value.schemaVersion = 4; }, value => { value.extra = 'CANARY'; },
     value => { value.registrations.push(copy(value.registrations[0])); },
     value => { value.registrations[0].nextDueAt = 'not-a-date'; },
     value => { value.registrations[0].soulDir += '/../escape'; },
