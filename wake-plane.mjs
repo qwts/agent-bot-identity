@@ -12,10 +12,10 @@ import { createSessionGrants } from './session-approvals.mjs';
 import { assertSoulUnpaused } from './agent-population.mjs';
 
 import { createAcpExecutor } from './acp-engine.mjs';
-import { validateInvocationId } from './agent-jobs.mjs';
+import { getInvocation, getSession, listInvocations, readEvents, TERMINAL_STATUSES, validateInvocationId } from './agent-jobs.mjs';
 import { createColdWaker } from './cold-wake.mjs';
 import { reachMcpServerEntry, reachPolicyRules } from './daemon-mcp.mjs';
-import { HARNESS_SESSION_EVENT, UPDATE_EVENT } from './executor-contract.mjs';
+import { HARNESS_SESSION_EVENT, UPDATE_EVENT, validateHarnessBinding } from './executor-contract.mjs';
 import { keydMcpServerEntry, keydPolicyRules } from './keyd-client.mjs';
 import { NEVER_ROUTED } from './soul-tool-homes.mjs';
 import { createWakeDispatcher } from './wake-dispatch.mjs';
@@ -155,6 +155,41 @@ export function withReachRules(policy, { keyd = false } = {}) {
   return { ...policy, rules: [...reachPolicyRules(), ...(keyd ? keydPolicyRules() : []), ...policy.rules] };
 }
 
+// The interaction event log, not the soul's last observed cold-wake session,
+// owns /v1 continuity. Never cross a principal, soul, transport or session.
+// Cold/launch invocations have no interaction session and stay independent.
+function interactionHarnessSession(invocation, { agentId, harness, store }) {
+  if (invocation?.sessionId === undefined || invocation.sessionId === null) return null;
+  const session = getSession(invocation.sessionId, store);
+  const current = getInvocation(invocation.invocationId, store);
+  const owns = (record) => record && record.agentId === agentId
+    && record.sessionId === invocation.sessionId
+    && record.principalId === invocation.principalId && record.transport === invocation.transport;
+  if (!owns(invocation) || !owns(session) || !owns(current)) throw new Error('interaction session ownership mismatch');
+  const unavailable = (reason) => {
+    throw Object.assign(new Error(`interaction continuity unavailable: ${reason}`), { continuityReason: reason });
+  };
+  const prior = listInvocations({ sessionId: session.sessionId }, store)
+    .filter((record) => record.invocationId !== current.invocationId);
+  if (prior.some((record) => !owns(record))) throw new Error('interaction session ownership mismatch');
+  // A cancellation request is still running. Loading its native session
+  // before the executor actually stops can corrupt history or fork it.
+  if (prior.some((record) => !TERMINAL_STATUSES.includes(record.status))) unavailable('session-busy');
+  for (const record of prior.reverse()) {
+    const event = readEvents(record.invocationId, {}, store).findLast((item) => item.type === HARNESS_SESSION_EVENT);
+    if (!event) {
+      // A rejected turn never replaced the previous binding. A successful
+      // non-ACP turn, however, cannot silently disappear from the context.
+      if (record.status === 'completed') unavailable('binding-unavailable');
+      continue;
+    }
+    const binding = validateHarnessBinding(event.data);
+    if (binding.harness !== harness) unavailable('harness-changed');
+    return { harnessSessionId: binding.harnessSessionId };
+  }
+  return null;
+}
+
 // The production executor factory: one ACP turn under the soul's own
 // identity, in its worktree, with its binding in the environment, and the
 // reach-back MCP server (#146) injected so the soul can see its teammates and
@@ -174,8 +209,13 @@ export function withReachRules(policy, { keyd = false } = {}) {
 // `CODEX_HOME`, OpenCode's XDG bases); it is not a secret, so the reach
 // server and keyd's relay carry it too, and a child they start reads the
 // same store as the harness.
+// `interactionStore` is the daemon's /v1 job store (env/home), deliberately
+// separate from the routed harness environment. Persisted binding events
+// resume only the matching principal/soul/transport/session; cold turns do
+// not acquire an interaction session merely by sharing the same soul.
 export function acpExecutorFor({
   identities, policy, baseEnv, onHarnessSession = null, createExecutor = createAcpExecutor,
+  interactionStore = { env: baseEnv },
   identityFor = null,
   commsFor = () => true, modeFor = () => 'safe', modelFor = () => null, onModels = null, reachEnv = {}, keydFor = () => null, harnessDirsFor = () => [], runtimeEnvFor = null, toolHomeEnvFor = null, providerEnvFor = null, log = null,
 }) {
@@ -237,6 +277,7 @@ export function acpExecutorFor({
       mode: modeFor(agentId),
       model: modelFor(agentId),
       identityFor,
+      getHarnessSession: (invocation) => interactionHarnessSession(invocation, { agentId, harness, store: interactionStore }),
       onModels: (models) => onModels?.(agentId, models),
       policy: withReachRules(policy, { keyd: Boolean(keyd) }),
       cwd,

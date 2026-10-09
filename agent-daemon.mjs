@@ -1781,6 +1781,7 @@ export async function runDaemon({
       identities,
       policy: setup?.policy ?? { version: 1, rules: [], fallback: 'deny' },
       baseEnv: harnessEnv,
+      interactionStore: { env, home },
       modeFor: (agentId) => soulMode(agentId, { env, home }),
       modelFor: (agentId) => soulModel(agentId, { env, home }).model,
       identityFor,
