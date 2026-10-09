@@ -1,5 +1,6 @@
 // Dream notices (#603): deduplicated conditions a host reads and acknowledges.
-// Derived only from a run's terminal facts and its validated bounded outcome.
+// Derived from a run's terminal facts and its validated bounded outcome, or,
+// for `recovery`, from the host quarantining a run it could not settle.
 // This module keeps no state, has no clock and delivers nothing: without a
 // configured delivery adapter a notice is pending host read, never delivered.
 import { createHash } from 'node:crypto';
@@ -8,7 +9,9 @@ import { validateDreamOutcome } from './skill-dream-outcomes.mjs';
 
 // Only live notices are retained, and they live in scheduler state that every
 // journal transaction copies, so each soul's set is small and byte-bounded.
-export const DREAM_NOTICE_LIMITS = Object.freeze({ perSoul: 16, hostSlots: 3, bytes: 8 * 1024 });
+// Version 1 reserved three host slots within 16/8 KiB; the fourth (recovery)
+// adds a slot and 1 KiB, so no claim admitted under the old budget is refused.
+export const DREAM_NOTICE_LIMITS = Object.freeze({ perSoul: 17, hostSlots: 4, bytes: 9 * 1024 });
 const HASH = /^sha256:[a-f0-9]{64}$/;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const CODE = /^[a-z][a-z0-9-]{0,63}$/;
@@ -35,6 +38,7 @@ const KINDS = Object.freeze({
   'item-blocked': { subject: ['path', 'digest'], claim: 'agent-reported' },
   capability: { subject: [], claim: 'host-observed' },
   change: { subject: ['revision'], claim: 'unattributed-change' },
+  recovery: { subject: [], claim: 'host-observed' },
 });
 const CHANGE_DETAIL = { pending: 'proposal-pending', approved: 'revision-approved', rejected: 'proposal-rejected',
   uncertain: 'proposal-uncertain', null: 'revision-recorded' };
@@ -45,7 +49,7 @@ const subjectValid = (kind, subject) => exact(subject, KINDS[kind].subject)
   && (kind !== 'change' || hash(subject.revision));
 // Subject-less host kinds have at most one live notice each. Their slots and
 // bytes are reserved so agent-reported conditions can never crowd them out.
-const HOST = new Set(['execution', 'report', 'evidence']);
+const HOST = new Set(['execution', 'report', 'evidence', 'recovery']);
 const CLAIM_SLOTS = DREAM_NOTICE_LIMITS.perSoul - DREAM_NOTICE_LIMITS.hostSlots;
 // A notice is charged at its growth ceiling (longest detail, acknowledged,
 // largest counter), so renewing or acknowledging it can never exceed the budget.
@@ -106,8 +110,9 @@ export function dreamNoticeConditions({ run, outcome = null, inputs = null }) {
 
 function observed(notice, observes) {
   if (notice.kind === 'item-blocked') return observes.paths.has(notice.subject.path);
-  // Host capability state and recorded changes are not disproved by a quiet run.
-  if (notice.kind === 'capability' || notice.kind === 'change') return false;
+  // Host capability state, recorded changes and a quarantined run are not
+  // disproved by a quiet run (and no run starts while a soul is quarantined).
+  if (['capability', 'change', 'recovery'].includes(notice.kind)) return false;
   return observes.kinds.has(notice.kind);
 }
 
@@ -185,6 +190,27 @@ export function applyDreamNoticeRun(ledger, { run, outcome = null, inputs = null
   next.suppressed += suppressed;
   return { ledger: validateDreamNoticeLedger(next), created, renewed,
     cleared: cleared.map(notice => ({ ...notice, clearedAt: at })), suppressed };
+}
+
+// The host quarantined a run it could not settle after a restart. This is a
+// host fact, not a run outcome: it neither reads nor advances the terminal-run
+// cursor (`lastRunId`), and no run clears it. It stays live until an explicit
+// owner recovery procedure exists to settle the quarantine. Idempotent per run.
+export function applyDreamNoticeRecovery(ledger, { run, at }) {
+  validateDreamNoticeLedger(ledger);
+  if (run?.agentId !== ledger.agentId || !uuid(run.runId) || run.status !== 'recovery-required' || !date(at)) invalid();
+  const next = structuredClone(ledger), fingerprint = dreamNoticeFingerprint(ledger.agentId, 'recovery', {});
+  const live = next.notices.find(notice => notice.fingerprint === fingerprint);
+  if (live?.lastRunId === run.runId) return { ledger, created: [], renewed: [], cleared: [], suppressed: 0 };
+  if (live) {
+    Object.assign(live, { lastRunId: run.runId, lastSeenAt: at, occurrences: live.occurrences + 1 });
+    return { ledger: validateDreamNoticeLedger(next), created: [], renewed: [live.id], cleared: [], suppressed: 0 };
+  }
+  const notice = { id: noticeId(fingerprint, run.runId), fingerprint, kind: 'recovery', subject: {}, detail: 'recovery-required',
+    claim: KINDS.recovery.claim, state: 'open', delivery: 'pending-host-read', firstRunId: run.runId, lastRunId: run.runId,
+    firstSeenAt: at, lastSeenAt: at, occurrences: 1, acknowledgedAt: null };
+  next.notices.push(notice);
+  return { ledger: validateDreamNoticeLedger(next), created: [notice.id], renewed: [], cleared: [], suppressed: 0 };
 }
 
 // An authorized host read. Idempotent; acknowledging does not clear the

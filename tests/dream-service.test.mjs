@@ -275,6 +275,14 @@ test('startup quarantines unsettled durable work and controls cannot erase that 
   recovered.control(dreamControlRequest('register', { agentId: ID, schedule: 'PT1H' }));
   assert.equal(recovered.control(dreamControlRequest('run-now', { agentId: ID })).reason, 'recovery-required');
   assert.equal(f.resolutions.length, 0);
+  // The quarantine's owner-visible notice is durable across another restart and acknowledgeable.
+  recovered.shutdown();
+  const again = createDreamService(f.options);
+  t.after(() => again.shutdown());
+  const [notice] = again.status().noticeLedgers.find(ledger => ledger.agentId === ID).notices;
+  assert.deepEqual([notice.kind, notice.detail, notice.occurrences], ['recovery', 'recovery-required', 1], 'a later startup does not renotify');
+  assert.equal(again.control(dreamControlRequest('ack-notice', { agentId: ID, noticeId: notice.id })).notice.state, 'acknowledged');
+  assert.equal(again.status().schemaVersion, 6);
 });
 
 test('private directory failures and corrupt journals disable dreaming without repairing or deleting data', posix, t => {

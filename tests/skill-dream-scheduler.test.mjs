@@ -525,3 +525,40 @@ test('a run that clears every live notice drops the ledger and still journals th
   const forged = copy(update); forged.renewed = [notice.id]; forged.cleared = [];
   assert.throws(() => validateDreamEvents([events[0], forged], { state: f.state() }), { code: 'dream-state-invalid' });
 });
+
+test('a restart quarantine publishes one owner-visible recovery notice that survives unscheduling', async () => {
+  const f = fixture(); f.scheduler.register(A, 'PT1H');
+  const run = f.scheduler.runNow(A); await Promise.resolve();
+  const restarted = createDreamScheduler(f.ports), before = f.events.length;
+  assert.deepEqual(restarted.recover(), { quarantined: 1 });
+  const tail = f.events.slice(before);
+  assert.deepEqual(tail.map(event => event.kind), ['recovery-required', 'notices-updated'], 'the notice publishes in the quarantine transaction');
+  const [notice] = tail[1].created;
+  assert.deepEqual({ kind: notice.kind, subject: notice.subject, detail: notice.detail, claim: notice.claim, delivery: notice.delivery,
+    firstRunId: notice.firstRunId }, { kind: 'recovery', subject: {}, detail: 'recovery-required', claim: 'host-observed',
+    delivery: 'pending-host-read', firstRunId: run.runId });
+  assert.equal(f.state().noticeLedgers[0].lastRunId, null, 'a quarantine is not a terminal run');
+  // Recovery is idempotent: a second pass writes nothing.
+  const revision = f.state().revision;
+  assert.deepEqual(restarted.recover(), { quarantined: 0 }); assert.equal(f.state().revision, revision);
+  // Unscheduling cannot clear the quarantine, so it cannot hide its notice either.
+  restarted.unschedule(A);
+  assert.deepEqual(f.state().noticeLedgers.map(ledger => ledger.notices.map(row => row.id)), [[notice.id]]);
+  const acked = restarted.acknowledgeNotice(A, notice.id);
+  assert.equal(acked.notice.state, 'acknowledged');
+  restarted.register(A, 'PT24H');
+  assert.equal(restarted.runNow(A).reason, 'recovery-required');
+  assert.equal(f.state().noticeLedgers[0].notices[0].state, 'acknowledged', 're-registering neither clears nor renotifies');
+  // A recovery notice must name its own quarantine, never a terminal run's.
+  const state = f.state(), update = copy(tail[1]), quarantine = copy(tail[0]);
+  assert.deepEqual(validateDreamEvents([quarantine, update]), [quarantine, update]);
+  for (const events of [
+    [update],
+    [quarantine, { ...update, created: [], renewed: [] }],
+    [quarantine, { ...update, cleared: [{ ...notice, clearedAt: update.at }] }],
+    [quarantine, { ...update, suppressed: 1 }],
+  ]) assert.throws(() => validateDreamEvents(events), { code: 'dream-state-invalid' });
+  const old = { ...copy(state), schemaVersion: 5 };
+  assert.throws(() => validateDreamState(old), { code: 'dream-state-invalid' }, 'version 5 readers never see the recovery kind');
+  f.calls[0].resolve(); await run.done;
+});
