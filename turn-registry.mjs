@@ -56,7 +56,9 @@ export function createTurnRegistry({ isPaused = () => false, history = null, now
           const { invocation } = input;
           // A task turn is one whatever lane ran it; otherwise the caller says.
           const kind = invocation.taskId !== undefined && invocation.taskId !== null ? 'task' : input.kind ?? 'turn';
-          try { history.turn(invocation.agentId, { id: invocation.invocationId ?? null, kind, startedAt, endedAt: now().toISOString(), harness: invocation.harness ?? null, outcome }); }
+          // An internal maintenance run has a history ID but no job-store
+          // invocation. This fallback is mirror metadata, never a capability.
+          try { history.turn(invocation.agentId, { id: invocation.invocationId ?? input.historyId ?? null, kind, startedAt, endedAt: now().toISOString(), harness: invocation.harness ?? null, outcome }); }
           catch { /* the mirror is best effort; the port logs */ }
         }
       }

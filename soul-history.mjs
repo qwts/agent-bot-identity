@@ -15,7 +15,7 @@ import { populationFile, showSoul } from './agent-population.mjs';
 export const RUNS_DIRECTORY = '.soul-state/runs';
 export const TURNS_FILE = 'turns.jsonl';
 export const REVISIONS_FILE = 'revisions.jsonl';
-export const TURN_KINDS = Object.freeze(['turn', 'wake', 'task', 'launch', 'session']);
+export const TURN_KINDS = Object.freeze(['turn', 'wake', 'task', 'launch', 'session', 'dream']);
 export const TURN_OUTCOMES = Object.freeze(['ok', 'failed', 'cancelled']);
 // `soul env history` lists at most this many records per file by default
 // and never more than the maximum: a host pages, it does not slurp a life.
