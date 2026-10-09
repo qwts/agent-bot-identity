@@ -46,7 +46,9 @@ elif [[ -f "$HOME/.config/agent-bot/playbook-home" ]]; then
     fail "deprecated playbook-home pointer does not contain setup-worktree.mjs"
   node "$legacy_home/tools/agent-bot/setup-worktree.mjs"
 else
-  fail "agent-bot is not installed; run node install.mjs from agent-bot-identity"
+  # Installing the CLI alone skips the organization profile and credentials;
+  # the organization bootstrap must run before identity can be verified.
+  fail "agent-bot is not installed; from an agent-bot-identity source checkout, use ./agent-bot bootstrap"
 fi
 
 agent_id="$(git config --worktree --get agentBot.agentId 2>/dev/null ||

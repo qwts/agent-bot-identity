@@ -10,7 +10,7 @@ import { sourceCommit } from '../skill.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SKILL = join(ROOT, 'skills', 'agent-bot');
-const PLAYBOOK_OPERATIONS = 'https://github.com/qwts/agent-sop/blob/main/docs/reference/agent-bot-operations.md';
+const PLAYBOOK_OPERATIONS = 'https://github.com/qwts/qwts-agent-org/blob/main/docs/agent-bot-operations.md';
 const runSkill = (...args) => spawnSync(join(ROOT, 'agent-bot'), ['skill', ...args], {
   encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -122,7 +122,7 @@ test('skill delegates executable behavior to the stable runtime', () => {
   assert.match(operations, /install agent bot identities/u);
   assert.match(operations, /\.\/agent-bot bootstrap --profile <path\\\|->/u);
   assert.match(operations, /agent-bot bootstrap --worktree-only/u);
-  assert.match(operations, /agent-sop\/blob\/main\/docs\/reference\/agent-bot-operations\.md/u);
+  assert.match(operations, /qwts-agent-org\/blob\/main\/docs\/agent-bot-operations\.md/u);
   assert.match(operations, /agent-bot secret get/u);
   assert.match(operations, /--reason <text>/u);
   assert.match(operations, /does not replace or call\n`ensure-private-key`/u);
