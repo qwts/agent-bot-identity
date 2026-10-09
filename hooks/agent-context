@@ -49,8 +49,9 @@ agent_bot_account_slug() {
 }
 
 # The App this session stated it is (GH_AGENT_APP, a pin, an agent account),
-# printed only when the checkout is not bound to it: the committer is still
-# the human because worktree setup failed or never ran (#749). Nothing for
+# printed only when the checkout is not bound to it: the author or committer
+# git resolves here is not exactly `<slug>[bot]`, because worktree setup
+# failed or never ran, or the command overrides it (#749). Nothing for
 # the delegate, which states no identity (ENG-0339, ENG-0375). One decision,
 # resolve-agent.mjs unboundBotSlug, shared with the installed runner's
 # pre-command check. Exits non-zero when the identity cannot be checked.
@@ -68,7 +69,7 @@ agent_bot_refuse_unbound_bot() {
   _slug=$(agent_bot_unbound_bot) || exit 1
   [ -n "$_slug" ] || return 0
   echo "agent-bot guard: this session stated bot identity $_slug, but this checkout is not bound to it." >&2
-  echo "Worktree setup failed or never ran here, so this $1 would be attributed to the human." >&2
+  echo "Worktree setup failed or never ran here, so this $1 would be attributed to the human, not $_slug[bot]." >&2
   echo "Run: agent-bot setup-worktree in a linked worktree (a primary checkout is refused), check agent-bot doctor, then retry." >&2
   exit 1
 }

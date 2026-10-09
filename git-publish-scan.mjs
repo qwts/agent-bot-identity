@@ -439,7 +439,7 @@ function evaluate(argv, ctx) {
 }
 
 // Parse git's global options to the subcommand and record where it runs.
-function gitInvocation(args, { cwd, env, result, depth, aliases = new Map() }) {
+function gitInvocation(args, { cwd, env, result, depth, aliases = new Map(), names = new Map() }) {
   let dir = cwd;
   let gitDir = env.get('GIT_DIR') ?? undefined;
   let workTree = env.get('GIT_WORK_TREE') ?? undefined;
@@ -454,6 +454,14 @@ function gitInvocation(args, { cwd, env, result, depth, aliases = new Map() }) {
       if (kv === null) { result.ambiguous = true; continue; }
       const m = /^alias\.([^=]+)=(.*)$/is.exec(kv ?? '');
       if (m) aliases.set(m[1].toLowerCase(), m[2]);
+      const ident = /^(user|author|committer)\.name(?:=(.*))?$/is.exec(kv ?? '');
+      if (ident) names.set(ident[1].toLowerCase(), ident[2] ?? '');
+      continue;
+    }
+    if (arg === '--config-env' || arg.startsWith('--config-env=')) {
+      const spec = arg === '--config-env' ? args[j += 1] : arg.slice(13);
+      const ident = /^(user|author|committer)\.name=/i.exec(spec ?? '');
+      if (ident || spec === null) names.set(ident ? ident[1].toLowerCase() : 'user', null);
       continue;
     }
     if (arg === '--git-dir' || arg === '--work-tree') {
@@ -463,7 +471,7 @@ function gitInvocation(args, { cwd, env, result, depth, aliases = new Map() }) {
     }
     if (arg.startsWith('--git-dir=')) { gitDir = arg.slice(10); continue; }
     if (arg.startsWith('--work-tree=')) { workTree = arg.slice(12); continue; }
-    if (arg === '--namespace' || arg === '--config-env') { j += 1; continue; }
+    if (arg === '--namespace') { j += 1; continue; }
     if (arg.startsWith('-')) continue;
     break;
   }
@@ -476,10 +484,11 @@ function gitInvocation(args, { cwd, env, result, depth, aliases = new Map() }) {
     workTree: workTree === undefined ? undefined : place(dir, workTree),
   };
   if (target.gitDir === null || target.workTree === null) target.cwd = null;
-  if (PUBLISH.has(sub)) { result.publishes.push(target); return; }
+  if (sub === 'push') { result.publishes.push(target); return; }
+  if (sub === 'commit') { result.publishes.push({ ...target, identity: commitIdentity(args.slice(j + 1), env, names) }); return; }
   const alias = aliases.get(sub.toLowerCase());
   if (alias !== undefined) {
-    expandAlias(alias, target, args.slice(j + 1), { env, result, depth, aliases });
+    expandAlias(alias, target, args.slice(j + 1), { env, result, depth, aliases, names });
     return;
   }
   if (!GIT_BUILTINS.has(sub)) result.aliases.push({ ...target, name: sub, rest: args.slice(j + 1) });
@@ -488,7 +497,7 @@ function gitInvocation(args, { cwd, env, result, depth, aliases = new Map() }) {
 // An alias value: `!cmd` runs in the shell at the repository top level (the
 // target directory is close enough to place it); anything else is git
 // arguments, which may themselves name commit or push.
-export function expandAlias(value, target, rest, { env = new Map(), result, depth = 0, aliases = new Map() }) {
+export function expandAlias(value, target, rest, { env = new Map(), result, depth = 0, aliases = new Map(), names = new Map() }) {
   const into = result ?? { publishes: [], aliases: [], ambiguous: false };
   const envObject = env instanceof Map ? Object.fromEntries(env) : env;
   if (value.startsWith('!')) {
@@ -501,6 +510,31 @@ export function expandAlias(value, target, rest, { env = new Map(), result, dept
   if (target.gitDir !== undefined) inner.set('GIT_DIR', target.gitDir);
   if (target.workTree !== undefined) inner.set('GIT_WORK_TREE', target.workTree);
   if (depth > 8) { into.ambiguous = true; return into; }
-  gitInvocation([...words, ...rest], { cwd: target.cwd, env: inner, result: into, depth: depth + 1, aliases });
+  gitInvocation([...words, ...rest], { cwd: target.cwd, env: inner, result: into, depth: depth + 1, aliases, names });
   return into;
+}
+
+// The author and committer names a commit's own command sets, in git's
+// precedence; undefined where it sets none (git var answers), null where it
+// sets one this scan cannot read.
+function commitIdentity(args, env, names) {
+  let author;
+  for (let k = 0; k < args.length; k += 1) {
+    const arg = args[k];
+    if (arg === '--') break;
+    const value = arg === '--author' ? args[k += 1] : arg?.startsWith('--author=') ? arg.slice(9) : undefined;
+    if (value === undefined) continue;
+    // `Name <email>` is literal; anything else is a pattern git looks up.
+    const m = value === null ? null : /^(.*?)\s*<[^<>]*>$/.exec(value);
+    author = m ? m[1] : null;
+  }
+  const pick = (...candidates) => {
+    for (const value of candidates) if (value !== undefined) return value;
+    return undefined;
+  };
+  const fromEnv = (key) => (env.has(key) ? env.get(key) : undefined);
+  return {
+    author: pick(author, fromEnv('GIT_AUTHOR_NAME'), names.get('author'), names.get('user')),
+    committer: pick(fromEnv('GIT_COMMITTER_NAME'), names.get('committer'), names.get('user')),
+  };
 }

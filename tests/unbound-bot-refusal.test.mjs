@@ -262,6 +262,46 @@ test('a bound session cannot reach an unbound checkout through -C, --git-dir, GI
   assert.equal(run(`git -C ${u} commit --no-verify -m x`, {}).decision, 'allow');
 });
 
+// Cursor security review on #757: a `[bot]`-looking name is not a binding.
+// Bound means author and committer are exactly `<slug>[bot]`, as git
+// resolves them for this command, overrides included.
+test('a decoy bot name or an identity override is not a binding', () => {
+  const decoy = primaryCheckout('decoy[bot]');
+  const bound = primaryCheckout(`${SLUG}[bot]`);
+  const empty = join(root, 'no-hooks');
+  mkdirSync(empty, { recursive: true });
+  const run = (cwd, command, extra = STATED) => runHooks({
+    dialectKey: 'claude', event: 'pre-command', dir: empty, env: baseEnv(extra),
+    payload: { cwd, tool_name: 'Bash', tool_input: { command } },
+  }).decision;
+  assert.equal(run(decoy.repo, 'git commit -m x'), 'deny');
+  assert.equal(run(decoy.repo, 'git push'), 'deny');
+  for (const command of [
+    "git -c user.name='Owner Human' -c user.email=o@x -c core.hooksPath=/dev/null commit -m x",
+    "git -c author.name='Owner Human' commit -m x",
+    'git commit --author "Owner Human <o@x>" -m x',
+    'git commit --author=Owner -m x',
+    "GIT_AUTHOR_NAME='Owner Human' git commit -m x",
+    "GIT_COMMITTER_NAME='Owner Human' git commit -m x",
+    'git --config-env=user.name=SOMEVAR commit -m x',
+  ]) {
+    assert.equal(run(bound.repo, command), 'deny', command);
+    assert.equal(run(bound.repo, command, DELEGATE), 'allow', command);
+  }
+  assert.equal(run(bound.repo, `git commit --author "${SLUG}[bot] <b@x>" -m x`), 'allow');
+  assert.equal(run(bound.repo, 'git commit -m x'), 'allow');
+
+  // The git backstop resolves the same identity at commit time.
+  const env = baseEnv(STATED);
+  writeFileSync(join(bound.repo, 'decoy.txt'), 'x\n');
+  bound.git('add', 'decoy.txt');
+  const head = bound.git('rev-parse', 'HEAD');
+  const commit = spawnSync('git', ['-c', 'user.name=Owner Human', 'commit', '-m', 'x'], { cwd: bound.repo, env, encoding: 'utf8' });
+  assert.notEqual(commit.status, 0);
+  assert.match(commit.stderr, new RegExp(`stated bot identity ${SLUG}`));
+  assert.equal(bound.git('rev-parse', 'HEAD'), head);
+});
+
 // Copilot review on #757: shell escapes and quoting must not hide git from
 // the detector. The scan unquotes the way sh does, and a command word it
 // cannot read near git, commit or push is refused for a stated bot.

@@ -286,7 +286,7 @@ export function unboundIdentityCheck(envelope, { env = process.env, cwd = proces
   for (const target of publishes) {
     if (!target.cwd || !existsSync(target.cwd)) { uncertain = true; continue; }
     try {
-      const slug = unboundBotSlug({ env, cwd: target.cwd, git: targetGit(target, env) });
+      const slug = unboundBotSlug({ env, cwd: target.cwd, git: targetGit(target, env), identity: target.identity ?? {} });
       if (slug) return { decision: 'deny', reason: unboundBotReason(slug) };
     } catch {
       uncertain = true;

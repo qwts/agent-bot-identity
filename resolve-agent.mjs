@@ -150,9 +150,13 @@ export function resolveAgentSlug({
 // and a commit or push from it would put the agent's work on the human's
 // record. The delegate (ENG-0339, ENG-0375) has no marker to check: it is
 // agent context that stated nothing, so the resolver yields null here and it
-// is never refused. Bound means the committer is a bot, which only
-// setup-worktree configures; whether that bot carries a resolvable Agent ID
-// stays the pre-commit hook's question. With github-identity off there is no
+// is never refused. Bound means the commit's author and committer are both
+// exactly `<slug>[bot]`, the identity setup-worktree configures, as git would
+// resolve them here (`git var`, so config, `-c` and GIT_AUTHOR_* all count).
+// Any other `[bot]` name is not a binding. A pre-command caller passes the
+// command's own overrides (`--author`, `-c user.name`) as `identity`; null
+// there means the command sets one the caller could not read. Whether the bot
+// carries a resolvable Agent ID stays the pre-commit hook's question. With github-identity off there is no
 // bot to bind and nothing to refuse. An unreadable pin propagates: an identity
 // that cannot be checked is not an absent one.
 export function statedBotSlug({ env = process.env, cwd = process.cwd(), config, git = defaultGitRunner } = {}) {
@@ -164,16 +168,20 @@ export function statedBotSlug({ env = process.env, cwd = process.cwd(), config, 
     || (accountKey ? slugForHarness(accountKey, cfg) : null);
 }
 
-export function unboundBotSlug({ env = process.env, cwd = process.cwd(), config, git = defaultGitRunner } = {}) {
+export function unboundBotSlug({ env = process.env, cwd = process.cwd(), config, git = defaultGitRunner, identity = {} } = {}) {
   const slug = statedBotSlug({ env, cwd, config, git });
   if (!slug) return null;
-  let name = '';
-  try {
-    name = (git(['config', '--get', 'user.name'], { cwd }) ?? '').trim();
-  } catch (error) {
-    if (error.status !== 1) throw error;
-  }
-  return /\[bot\]/.test(name) ? null : slug;
+  const expected = `${slug}[bot]`;
+  const resolved = (key) => {
+    try {
+      return (git(['var', key], { cwd }) ?? '').trim().replace(/\s*<[^<]*$/, '');
+    } catch {
+      return ''; // no identity git can resolve is not the bot's
+    }
+  };
+  const author = identity.author !== undefined ? identity.author : resolved('GIT_AUTHOR_IDENT');
+  const committer = identity.committer !== undefined ? identity.committer : resolved('GIT_COMMITTER_IDENT');
+  return author === expected && committer === expected ? null : slug;
 }
 
 export function unboundBotReason(slug) {

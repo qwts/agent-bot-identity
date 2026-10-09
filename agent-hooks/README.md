@@ -42,7 +42,10 @@ will write, not the session's directory: `cd`, `git -C`, `--git-dir`,
 aliases are resolved, and quoting and backslash escapes are removed the way
 the shell removes them. When a stated bot's command reaches a repository
 the check cannot place, or hides its command word behind a variable,
-substitution or glob, it is denied too. `hooks/pre-commit` and `hooks/pre-push`
+substitution or glob, it is denied too. Bound means the commit's author
+and committer are exactly `<slug>[bot]` as git resolves them for that
+command, so `--author`, `-c user.name` and `GIT_AUTHOR_NAME` count, and any
+other `[bot]`-looking name is not a binding. `hooks/pre-commit` and `hooks/pre-push`
 apply the same rule as the git backstop. The human's delegate states no
 identity, so it is not affected, and neither is an ordinary human shell.
 

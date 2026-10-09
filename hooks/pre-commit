@@ -20,6 +20,9 @@ SETUP="$HOOK_DIR/../setup-worktree.mjs"
 . "$HOOK_DIR/agent-context"
 
 if agent_bot_agent_context; then
+  # A session that stated a bot commits as exactly that bot or not at all
+  # (#749): any other name, `[bot]` or not, is not its binding.
+  [ -x "$AGENT_HOOK" ] && agent_bot_refuse_unbound_bot commit
   NAME=$(git config user.name 2>/dev/null || true)
   case "$NAME" in
     *"[bot]"*)
@@ -35,9 +38,7 @@ if agent_bot_agent_context; then
       fi
       ;;
     *)
-      # Human persona: delegate work is the human's own (ENG-0339), unless
-      # the session stated a bot it is not bound to (#749).
-      [ -x "$AGENT_HOOK" ] && agent_bot_refuse_unbound_bot commit
+      : # human persona — delegate work is the human's own (ENG-0339)
       ;;
   esac
 fi
