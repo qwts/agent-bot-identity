@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn as spawnChild, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,8 @@ import { initAgentSpace } from '../agent-space.mjs';
 import { RUNTIME_CATALOG, RUNTIME_NAMES, RUNTIME_PLATFORMS, SHA256_HEX, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, resolveCatalogPin, versionMatches } from '../runtime-catalog.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, validateRuntimesDeclaration, validateSoulPackage } from '../soul-package.mjs';
 import { INSTALL_STAMP, RUNTIME_ERROR_CODES, downloadCacheDir, fetchArchive, inspectSoulRuntimes, installSoulRuntimes, pendingSoulRuntimes, runtimeLaunchEnv, soulRuntimeEnv, soulRuntimesCommand } from '../soul-runtimes.mjs';
+import { createAcpExecutor } from '../acp-engine.mjs';
+import { createLaunchHandler } from '../daemon-launch.mjs';
 import { acpExecutorFor, coldTurnExecutor } from '../wake-plane.mjs';
 
 const ID = 'agent_12345678-1234-4234-8234-123456789abc';
@@ -489,6 +491,89 @@ test('daemon turns refuse unavailable declarations before harness creation, incl
   put(path.join(f.dir, 'soul.json'), '{broken');
   assert.throws(() => factory(request), refused('runtime-install-failed', 'soul.json'));
   assert.equal(created, 1, 'none of the failed resolutions reached the harness');
+});
+
+// #617 slice 3: the interactive executor factory, a cold wake and a launch
+// share the daemon's one acpExecutorFor, built here as agent-daemon.mjs
+// builds it: runtimeEnvFor is the real soulRuntimeEnv over the soul's
+// soul.json, census row and install receipt. The real ACP engine resolves
+// the adapter; a capturing spawn records what it chose, then runs the
+// fixture agent on this Node (the fake archive's node is an empty script).
+function parityRig(t, f) {
+  const adapter = fileURLToPath(new URL('./fixtures/fake-acp-agent.mjs', import.meta.url));
+  put(path.join(f.dir, 'node_modules', '.bin', '.keep'), '');
+  symlinkSync(adapter, path.join(f.dir, 'node_modules', '.bin', 'fake-acp'));
+  const registry = { claude: { harness: 'claude', enabled: true, soulBin: 'fake-acp', command: '/nonexistent/claude', args: [], stripEnv: [] } };
+  const spawns = [];
+  const factory = acpExecutorFor({ identities: () => ({}), policy: { version: 1, rules: [], fallback: 'deny' }, baseEnv: f.env,
+    runtimeEnvFor: ({ agentId, harness, env }) => soulRuntimeEnv(agentId, { ...f.options, env, harness }),
+    createExecutor: (options) => createAcpExecutor({ ...options, registry,
+      spawn: (command, args, spawnOptions) => {
+        spawns.push({ command: [command, ...args], env: spawnOptions.env });
+        return spawnChild(process.execPath, args, spawnOptions);
+      } }) });
+  const journal = mkdtempSync(path.join(tmpdir(), 'launch-parity-'));
+  t.after(() => rmSync(journal, { recursive: true, force: true }));
+  const reports = [];
+  const handler = createLaunchHandler({ file: path.join(journal, 'launch-requests.json'),
+    identities: () => ({ id: ID, harness: 'claude' }),
+    spawnPackage: () => { throw new Error('unexpected package spawn'); },
+    lookupBinding: () => ({ worktree: f.dir, file: path.join(f.dir, '.soul-state', 'binding.json') }),
+    provisionHome: () => null, executorFor: factory });
+  const request = { agentId: ID, harness: 'claude', cwd: f.dir, env: {} };
+  const port = { invocation: { agentId: ID, harness: 'claude', cwd: f.dir }, message: 'ping', attachments: [],
+    appendEvent: () => ({}), addArtifact: () => ({}), signal: new AbortController().signal, requestApproval: async () => ({ decision: 'deny' }) };
+  const coldEvents = [];
+  const paths = {
+    interactive: () => factory(request)(port),
+    cold: () => coldTurnExecutor({ executorFor: factory, onEvent: (type) => coldEvents.push(type) })({ invocation: port.invocation, message: 'ping', attachments: [], env: {} }),
+    launch: (requestId) => handler({ event: 'launch', requestId, principal: 'p1', account: 'worker', soul: ID, harness: 'claude' },
+      { account: 'worker', report: async (result) => { reports.push(result); } }),
+  };
+  return { adapter: realpathSync(adapter), spawns, reports, coldEvents, paths };
+}
+
+test('a declared, installed runtime is the Node every daemon turn start spawns the adapter on, with one env (#617)', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { node: '24' } }, census: true });
+  await installSoulRuntimes(f.dir, { ...f.options, ...doubles({ archives: f.archives }) });
+  // A real archive carries the executable bit; the fake tar writes 0644.
+  const soulNode = path.join(f.runtimes, 'node', NODE.version, 'bin', 'node');
+  chmodSync(soulNode, 0o755);
+  const r = parityRig(t, f);
+  await r.paths.interactive();
+  await r.paths.cold();
+  await r.paths.launch('r1');
+  assert.ok(r.coldEvents.includes('harness-session') && r.coldEvents.includes('update'), `the cold turn completed: ${r.coldEvents}`);
+  assert.equal(r.reports[0].status, 'launched', JSON.stringify(r.reports[0]));
+  assert.equal(r.spawns.length, 3);
+  for (const spawned of r.spawns) {
+    assert.deepEqual(spawned.command, [soulNode, r.adapter], 'the receipt-verified install, never a host Node');
+    assert.equal(spawned.env.PATH.split(path.delimiter)[0], path.dirname(soulNode));
+    assert.equal(spawned.env.npm_config_cache, path.join(f.runtimes, 'node', 'npm-cache'));
+  }
+  // One env on every path, save the launch's binding file.
+  const { AGENT_BOT_BINDING, ...launchEnv } = r.spawns[2].env;
+  assert.equal(AGENT_BOT_BINDING, path.join(f.dir, '.soul-state', 'binding.json'));
+  assert.deepEqual(r.spawns[1].env, r.spawns[0].env);
+  assert.deepEqual(launchEnv, r.spawns[0].env);
+});
+
+test('a removed executable or a corrupt receipt refuses every daemon turn start before any spawn (#617)', async (t) => {
+  for (const damage of ['executable', 'receipt']) {
+    const f = fixture(t, { manifest: { runtimes: { node: '24' } }, census: true });
+    await installSoulRuntimes(f.dir, { ...f.options, ...doubles({ archives: f.archives }) });
+    const installed = path.join(f.runtimes, 'node', NODE.version);
+    if (damage === 'executable') rmSync(path.join(installed, 'bin', 'node'));
+    else put(path.join(installed, INSTALL_STAMP), JSON.stringify({ ...JSON.parse(readFileSync(path.join(installed, INSTALL_STAMP), 'utf8')), sha256: '0'.repeat(64) }));
+    const r = parityRig(t, f);
+    const refused = (error) => error.code === 'runtime-install-failed' && error.runtime === 'node';
+    await assert.rejects(async () => r.paths.interactive(), refused, damage);
+    await assert.rejects(r.paths.cold(), refused, damage);
+    await r.paths.launch('r1');
+    assert.equal(r.reports[0].status, 'failed', damage);
+    assert.match(r.reports[0].detail, /^runtime-install-failed: .*refusing host fallback/, damage);
+    assert.deepEqual(r.spawns, [], `${damage}: no harness process starts`);
+  }
 });
 
 test('daemon env refuses a missing selected harness install but allows undeclared host tools (#617)', (t) => {
