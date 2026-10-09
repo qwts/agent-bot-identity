@@ -25,7 +25,7 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 import { validateAgentId, withLock } from './agent-identity.mjs';
-import { interactionHome } from './agent-jobs.mjs';
+import { interactionHome } from './state-paths.mjs';
 
 const SCHEMA_VERSION = 1;
 

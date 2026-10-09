@@ -18,7 +18,7 @@ import { closeSync, fchmodSync, fsyncSync, openSync, readdirSync, readFileSync, 
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { FEATURE_GATES } from './config.mjs';
-import { stateDirectory } from './agent-identity.mjs';
+import { stateDirectory } from './state-paths.mjs';
 
 export const PRE_GATE_FEATURES = Object.freeze(Object.fromEntries(FEATURE_GATES.map((name) => [name, true])));
 

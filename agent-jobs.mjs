@@ -24,6 +24,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { interactionHome } from './state-paths.mjs';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
@@ -129,15 +130,7 @@ function canonicalTimestamp(name, value) {
   return text;
 }
 
-// Operational interaction state (sessions, jobs, events, audit) lives in one
-// home so retention, backup, and inspection have a single root.
-export function interactionHome({ env = process.env, home = homedir() } = {}) {
-  if (env.AGENT_BOT_INTERACTION_HOME) return path.resolve(env.AGENT_BOT_INTERACTION_HOME);
-  const stateHome = env.XDG_STATE_HOME
-    ? path.resolve(env.XDG_STATE_HOME)
-    : path.join(home, '.local', 'state');
-  return path.join(stateHome, 'agent-bot', 'interaction');
-}
+export { interactionHome } from './state-paths.mjs';
 
 function sessionsFile(options) {
   return path.join(interactionHome(options), 'sessions.json');

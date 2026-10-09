@@ -19,7 +19,7 @@ import { chmodSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, w
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { validateAgentId, withLock } from './agent-identity.mjs';
-import { REACH_CORRELATION_ENV } from './daemon-mcp.mjs';
+import { REACH_CORRELATION_ENV } from './reach-env.mjs';
 
 export const RESUME_POLICIES = Object.freeze(['read-only', 'workspace']);
 
