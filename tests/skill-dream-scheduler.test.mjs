@@ -121,7 +121,10 @@ test('cancellation holds the lease until the executor actually settles, even aft
   f.scheduler.unschedule(A); f.dirs.set(A, path.join(tmpdir(), 'new-soul-location'));
   const updated = f.scheduler.register(A, 'PT2H');
   assert.equal(f.scheduler.runNow(A).reason, 'already-running');
-  f.calls[0].resolve(); assert.equal((await run.done).status, 'cancelled');
+  f.calls[0].resolve();
+  const result = await run.done;
+  assert.equal(result.status, 'completed');
+  assert.equal(result.cancelReason, 'owner', 'the cancellation request remains visible after successful execution');
   assert.deepEqual(f.scheduler.status().registrations[0], updated, 'old completion cannot change new registration');
   assert.equal(f.events.filter(event => event.kind === 'ended').length, 1, 'history remains after unschedule');
 });
@@ -143,6 +146,47 @@ test('cancelling before the execution microtask never starts the executor', asyn
   const run = f.scheduler.runNow(A); f.scheduler.cancel(run.runId);
   assert.equal((await run.done).status, 'cancelled');
   assert.equal(f.calls.length, 0);
+});
+
+test('resolved execution stays completed when owner cancellation or timeout races settlement', async () => {
+  for (const reason of ['owner', 'timeout']) for (const order of ['request-first', 'resolve-first']) {
+    const f = fixture(); f.scheduler.register(A, 'PT1H');
+    const run = f.scheduler.runNow(A); await Promise.resolve();
+    if (order === 'resolve-first') f.calls[0].resolve();
+    if (reason === 'owner') f.scheduler.cancel(run.runId);
+    else [...f.timers.values()][0].fn();
+    assert.equal(f.scheduler.status().flights[0].status, 'cancelling');
+    if (order === 'request-first') f.calls[0].resolve();
+    const result = await run.done;
+    assert.equal(result.status, 'completed', `${reason}/${order}`);
+    assert.equal(result.cancelReason, reason);
+    assert.equal(result.cancelRequestedAt, '2026-10-09T00:00:00.000Z');
+    assert.deepEqual(f.scheduler.status().registrations[0].lastRun, result);
+    assert.deepEqual(f.events.at(-1).run, result);
+    assert.equal(f.scheduler.status().flights.length, 0);
+  }
+  const f = fixture(); f.scheduler.register(A, 'PT1H');
+  const run = f.scheduler.runNow(A); await Promise.resolve();
+  f.scheduler.cancel(run.runId); f.calls[0].reject(new Error('abort'));
+  assert.equal((await run.done).status, 'cancelled', 'rejection following an abort still records cancellation');
+});
+
+test('a canonical directory cannot be owned by different souls across registrations or unsettled flights', async () => {
+  const f = fixture(); f.scheduler.register(A, 'PT1H');
+  const original = f.dirs.get(A); f.dirs.set(B, original);
+  assert.throws(() => f.scheduler.register(B, 'PT1H'), { code: 'dream-state-invalid' });
+  assert.equal(f.state().registrations.length, 1);
+  const run = f.scheduler.runNow(A); await Promise.resolve();
+  const duplicate = f.state();
+  duplicate.flights.push({ ...duplicate.flights[0], agentId: B, runId: '22345678-1234-4234-8234-123456789abc' });
+  assert.throws(() => validateDreamState(duplicate), { code: 'dream-state-invalid' });
+  f.scheduler.unschedule(A);
+  assert.throws(() => f.scheduler.register(B, 'PT1H'), { code: 'dream-state-invalid' });
+  f.dirs.set(A, path.join(tmpdir(), 'moved-dream-a'));
+  f.scheduler.register(A, 'PT1H'); // same soul may retain its old-directory lease
+  assert.throws(() => f.scheduler.register(B, 'PT1H'), { code: 'dream-state-invalid' });
+  f.calls[0].resolve(); await run.done;
+  assert.equal(f.scheduler.register(B, 'PT1H').soulDir, original, 'a settled flight no longer reserves the old directory');
 });
 
 test('a failed attempt waits one interval, and a changed or paused registration rejects stale completion', async () => {
