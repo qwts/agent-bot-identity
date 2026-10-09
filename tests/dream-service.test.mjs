@@ -15,6 +15,7 @@ import { upsertSoul } from '../agent-population.mjs';
 import { assertOwnerAction, ownerCredentialRequired, verifyPrincipalOwner } from '../owner-action.mjs';
 import { PROOF_HEADER } from '../binding-proof.mjs';
 import { auditFile } from '../agent-principals.mjs';
+import { UPDATE_EVENT } from '../executor-contract.mjs';
 
 const ID = 'agent_66666666-6666-4666-8666-666666666666';
 const posix = { skip: process.platform === 'win32' };
@@ -140,7 +141,7 @@ test('dream audit retains authorization before a failed control and distinguishe
   assert.equal(JSON.stringify(receipts()).includes(principal.secret), false);
 });
 
-test('owner run-now uses the configured ACP factory, policy and bounded inputs, retaining only execution facts', posix, async t => {
+test('owner run-now uses configured ACP and keeps its unverified reply separate from execution facts', posix, async t => {
   const f = await serverFixture(t, { scenario: 'need-permission' });
   await f.call('/register', { agentId: ID, schedule: 'PT1H', principal });
   const result = await f.call('/run-now', { agentId: ID, principal });
@@ -155,13 +156,44 @@ test('owner run-now uses the configured ACP factory, policy and bounded inputs, 
   assert.equal(f.prompts[0].includes('PRIVATE_CANARY'), false);
   assert.equal(f.records[0].kind, 'dream'); assert.equal(f.records[0].id, record.runId);
   assert.equal(JSON.stringify(f.service.history()).includes('CANARY'), false);
-  assert.equal(JSON.stringify(f.service.history()).includes('opt-reject'), false);
+  const events = f.service.history().records.flatMap(record => record.events);
+  const outcome = events.find(event => event.kind === 'outcome-recorded');
+  assert.equal(outcome.outcome.report.status, 'unstructured');
+  assert.ok(outcome.outcome.report.text.includes('opt-reject'));
+  assert.deepEqual(outcome.outcome.items, []);
+  assert.equal(JSON.stringify(events.filter(event => event.kind !== 'outcome-recorded')).includes('opt-reject'), false);
   const prepared = f.service.history().records.flatMap(record => record.events).find(event => event.kind === 'inputs-prepared');
   assert.equal(prepared.run.runId, record.runId);
   assert.equal(prepared.inputs.sources[0].path, 'AGENTS.md');
   assert.deepEqual(status.inputReceipts, [prepared.receipt]);
   const reopened = createDreamFileStore({ directory: f.directory });
   assert.deepEqual(reopened.read().inputReceipts, status.inputReceipts);
+  assert.deepEqual(reopened.read().outcomeReceipts, status.outcomeReceipts);
+  assert.equal(status.outcomeReceipts[0].runId, record.runId);
+});
+
+test('structured and truncated replies are persisted atomically with terminal run facts', posix, async t => {
+  for (const truncated of [false, true]) await t.test(String(truncated), async t => {
+    const f = fixture(t, { executorFor: () => async input => {
+      const captured = JSON.parse(input.message.split('\n\n').at(-1));
+      const text = JSON.stringify({ schemaVersion: 1, runId: captured.runId, startingRevision: captured.revision,
+        items: captured.sources.map(source => ({ path: source.path, digest: source.digest, outcome: 'skipped', reason: 'no-change', evidence: null })) });
+      const emit = text => input.appendEvent(UPDATE_EVENT, { sessionUpdate: 'agent_message_chunk', content: { text } });
+      emit(text);
+      if (truncated) emit(' '.repeat(256 * 1024)); // a valid JSON prefix is still an incomplete reply
+    } });
+    f.control('register', { schedule: 'PT1H' }); f.control('run-now'); await f.service.idle();
+    const transaction = f.service.history().records.at(-1);
+    assert.deepEqual(transaction.events.map(event => event.kind), ['ended', 'outcome-recorded']);
+    const record = transaction.events[1];
+    assert.equal(record.outcome.report.status, truncated ? 'truncated' : 'structured');
+    assert.equal(record.outcome.items.length, truncated ? 0 : 1);
+    assert.equal(record.outcome.processingCoverage, 'unverified');
+    assert.equal(record.receipt.journalRevision, transaction.revision);
+    const reopened = createDreamFileStore({ directory: f.directory });
+    assert.deepEqual(reopened.read().outcomeReceipts, [record.receipt]);
+    assert.equal(reopened.read().flights.length, 0);
+  });
 });
 
 test('durable preparation precedes provider resolution and survives a launch failure', posix, async t => {

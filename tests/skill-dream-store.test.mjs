@@ -7,12 +7,15 @@ import { tmpdir } from 'node:os';
 import { spawn, spawnSync } from 'node:child_process';
 import { createDreamFileStore, DREAM_STORE_LIMITS } from '../skill-dream-store.mjs';
 import { createDreamScheduler, validateDreamEvents } from '../skill-dream-scheduler.mjs';
+import { interpretDreamReport } from '../skill-dream-outcomes.mjs';
 import { dreamStoreConformance } from './helpers/dream-store-conformance.mjs';
 
 const A = 'agent_12345678-1234-4234-8234-123456789abc';
 const posix = { skip: process.platform === 'win32' };
 const moduleURL = new URL('../skill-dream-store.mjs', import.meta.url).href;
 const name = revision => `${String(revision).padStart(16, '0')}.json`;
+const emptyInputs = () => ({ schemaVersion: 1, revision: `sha256:${'a'.repeat(64)}`, sources: [],
+  coverage: { definition: 'supported', memory: 'unsupported', conversations: 'unsupported', eligible: 0, selected: 0, suppliedBytes: 0, skippedBinary: 0, remaining: 0 }, nextCursor: null });
 function changes(directory) {
   let state = null;
   const result = [];
@@ -45,17 +48,68 @@ dreamStoreConformance('POSIX dream journal', fixture, posix);
 
 test('v1 journal state upgrades on the next transaction without rewriting history', posix, t => {
   const f = fixture(t), legacy = structuredClone(f.first);
-  legacy.state.schemaVersion = 1; delete legacy.state.inputReceipts;
+  legacy.state.schemaVersion = 1; delete legacy.state.inputReceipts; delete legacy.state.outcomeReceipts;
   assert.equal(f.store.commit(legacy), true);
   const bytes = readFileSync(path.join(f.directory, name(1)));
   const store = f.reopen(), scheduler = createDreamScheduler({ store, execute: () => {}, soulDirectory: () => f.directory });
-  assert.equal(scheduler.status().schemaVersion, 2);
+  assert.equal(scheduler.status().schemaVersion, 3);
   assert.deepEqual(scheduler.status().inputReceipts, []);
   assert.equal(store.read().schemaVersion, 1, 'read-only inspection does not migrate disk');
   scheduler.pause(A);
-  assert.equal(store.read().schemaVersion, 2);
+  assert.equal(store.read().schemaVersion, 3);
   assert.deepEqual(readFileSync(path.join(f.directory, name(1))), bytes);
   assert.equal(store.history().records.length, 2);
+});
+
+test('v2 prepared runs retain their input references during v3 restart quarantine', posix, async t => {
+  const f = fixture(t), captured = [], metadata = emptyInputs();
+  let state = null;
+  const old = createDreamScheduler({ soulDirectory: () => f.directory, setTimer: () => 1, clearTimer() {},
+    store: { read: () => state, commit(change) { state = structuredClone(change.state); captured.push(structuredClone(change)); return true; } },
+    execute: ({ prepareInputs }) => { prepareInputs(metadata); return new Promise(() => {}); },
+  });
+  old.register(A, 'PT1H'); old.runNow(A); await Promise.resolve();
+  for (const change of captured) {
+    change.state.schemaVersion = 2; delete change.state.outcomeReceipts;
+    assert.equal(f.store.commit(change), true);
+  }
+  const reference = f.store.read().inputReceipts[0], bytes = readFileSync(path.join(f.directory, name(3)));
+  const scheduler = createDreamScheduler({ store: f.reopen(), execute() {}, soulDirectory: () => f.directory });
+  assert.equal(f.reopen().read().schemaVersion, 2);
+  assert.equal(scheduler.recover().quarantined, 1);
+  assert.equal(f.reopen().read().schemaVersion, 3);
+  assert.deepEqual(scheduler.status().inputReceipts, [reference]);
+  assert.deepEqual(readFileSync(path.join(f.directory, name(3))), bytes);
+  assert.equal(scheduler.runNow(A).reason, 'recovery-required');
+});
+
+test('uncertain terminal writes recover either the live lease or the complete outcome transaction', posix, async t => {
+  for (const boundary of ['before-create', 'after-publish']) await t.test(boundary, async t => {
+    const f = fixture(t), metadata = emptyInputs(); let completing = false;
+    const store = createDreamFileStore({ directory: f.directory, checkpoint(point) {
+      if (completing && point === boundary) throw new Error('interrupted terminal publication');
+    } });
+    const scheduler = createDreamScheduler({ store, soulDirectory: () => f.directory, execute: ({ run, prepareInputs, stageOutcome }) => {
+      prepareInputs(metadata);
+      stageOutcome(interpretDreamReport({ run, inputs: metadata,
+        reply: JSON.stringify({ schemaVersion: 1, runId: run.runId, startingRevision: metadata.revision, items: [] }) }));
+      completing = true;
+    } });
+    scheduler.register(A, 'PT1H');
+    assert.equal((await scheduler.runNow(A).done).status, 'persistence-failed');
+    const reopened = f.reopen(), state = reopened.read(), events = reopened.history().records.at(-1).events;
+    if (boundary === 'before-create') {
+      assert.equal(state.flights.length, 1); assert.deepEqual(state.outcomeReceipts, []);
+      assert.deepEqual(events.map(event => event.kind), ['inputs-prepared']);
+      const recovered = createDreamScheduler({ store: reopened, execute() {}, soulDirectory: () => f.directory });
+      assert.equal(recovered.recover().quarantined, 1);
+    } else {
+      assert.equal(state.flights.length, 0); assert.equal(state.registrations[0].lastRun.status, 'completed');
+      assert.deepEqual(events.map(event => event.kind), ['ended', 'outcome-recorded']);
+      assert.deepEqual(state.outcomeReceipts, [events[1].receipt]);
+      assert.equal(events[1].outcome.processingCoverage, 'unverified');
+    }
+  });
 });
 
 test('competing writers publish exactly one transaction at the same revision', posix, async t => {

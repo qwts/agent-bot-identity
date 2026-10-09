@@ -6,6 +6,7 @@ import { isAgentId } from './agent-identity.mjs';
 import { createDreamScheduler, DREAM_TIMEOUT_MS, parseDreamSchedule } from './skill-dream-scheduler.mjs';
 import { createDreamFileStore } from './skill-dream-store.mjs';
 import { captureDreamInputs, dreamInputMetadata } from './skill-dream-inputs.mjs';
+import { interpretDreamReport } from './skill-dream-outcomes.mjs';
 import { coldTurnExecutor } from './wake-plane.mjs';
 
 export const DREAM_POLL_MS = 30_000;
@@ -58,11 +59,13 @@ function dreamPrompt(run, inputs) {
     'Do not delete durable sources based on age alone, broaden permissions, register schedules, provision retrieval services, or claim unsupported memory/conversation coverage.',
     'Report completed, skipped and blocked sources with concrete evidence. Truncated excerpts are partial context, not proof that the entire source was examined.',
     'Execution completion does not certify maintenance coverage; the host must verify any claimed result separately.',
+    'Return one JSON object with schemaVersion: 1, runId, startingRevision, and items. Each item must contain exactly path, digest (both copied from the supplied source), outcome (completed, skipped or blocked), reason (a short lowercase hyphenated code), and evidence.',
+    'Evidence is null, {proposalId}, {revision}, {digest} for captured source identity only, or {adapter, receipt} for an unverified external claim. Omit unsupported evidence rather than inventing it. Use at most four distinct proposal/revision references and 100 items. The entire reply must fit 256 KiB. No Markdown fences or surrounding prose.',
     JSON.stringify({ runId: run.runId, agentId: run.agentId, ...inputs }),
   ].join('\n\n');
 }
 
-export function createDreamService({ directory, lookupSoul, executorFor = null, turns, approvals = null,
+export function createDreamService({ directory, lookupSoul, executorFor = null, turns, approvals = null, verifyRevisionEvidence = null,
   isPaused = () => false, now = () => new Date(),
   setIntervalImpl = setInterval, clearIntervalImpl = clearInterval,
 } = {}) {
@@ -87,7 +90,7 @@ export function createDreamService({ directory, lookupSoul, executorFor = null, 
     const executeCold = configured ? coldTurnExecutor({ executorFor, turns, approvals, turnTimeoutMs: DREAM_TIMEOUT_MS }) : null;
     scheduler = createDreamScheduler({ store, now, isPaused, isBusy: id => turns.busy().includes(id),
       soulDirectory: id => launchable(id).directory,
-      execute: async ({ run, signal, timeoutMs, prepareInputs }) => {
+      execute: async ({ run, signal, timeoutMs, prepareInputs, stageOutcome }) => {
         signal.throwIfAborted(); requireExecutor();
         const soul = launchable(run.agentId);
         if (soul.directory !== run.soulDir) fail('dream-binding-changed', 'Soul directory changed before execution.');
@@ -102,12 +105,19 @@ export function createDreamService({ directory, lookupSoul, executorFor = null, 
           throw error;
         }
         signal.throwIfAborted();
-        prepareInputs(dreamInputMetadata(inputs));
+        const metadata = dreamInputMetadata(inputs);
+        prepareInputs(metadata);
         // No interaction or broker ID is created. The run ID is only history.
-        await executeCold({ invocation: { agentId: run.agentId, harness: soul.harness, cwd: soul.directory },
-          message: dreamPrompt(run, inputs), attachments: [], env: {}, signal, timeoutMs, kind: 'dream', historyId: run.runId });
-        // A future outcome verifier owns checkpoints. The raw reply is not a
-        // verified result and is deliberately absent from the facts journal.
+        let output;
+        try {
+          output = await executeCold({ invocation: { agentId: run.agentId, harness: soul.harness, cwd: soul.directory },
+            message: dreamPrompt(run, inputs), attachments: [], env: {}, signal, timeoutMs, kind: 'dream', historyId: run.runId });
+        } catch (error) {
+          stageOutcome(interpretDreamReport({ run, inputs: metadata, executionFailed: true }));
+          throw error;
+        }
+        stageOutcome(interpretDreamReport({ run, inputs: metadata, reply: output.reply, replyTruncated: output.replyTruncated,
+          endedAt: now().toISOString(), verifyRevisionEvidence }));
       },
     });
     scheduler.recover();

@@ -124,6 +124,7 @@ import { recordDeliveredAside } from './soul-asides.mjs';
 import { createResumeExecutor, createWakeSessions, resumePath, wakeSessionsFile } from './wake-resume.mjs';
 import { migratePreGateConfig } from './config-migration.mjs';
 import { createDreamService, dreamControlRequest } from './skill-dream-service.mjs';
+import { verifyDreamRevisionEvidence } from './skill-dream-evidence.mjs';
 
 const LOGIN_PATH_MARK = '__agent_bot_login_path__';
 
@@ -1737,6 +1738,7 @@ export async function runDaemon({
   server = createDaemonServer({ env, home, config, now, comms, executor, taskReporter, teamStarter, computerUse, turns, asideRelay: relay });
   dream = createDreamService({ directory: path.join(path.dirname(daemonStateFile({ env, home })), 'dream'),
     turns, executorFor, isPaused, now, approvals: request => server.interaction.requestTurnApproval(request),
+    verifyRevisionEvidence: request => verifyDreamRevisionEvidence({ ...request, stateDir: stateDirectory({ env, home }) }),
     lookupSoul: agentId => {
       const options = { env, home, file: populationFile({ env, home }) };
       const row = showSoul(agentId, options), identity = identities(agentId);

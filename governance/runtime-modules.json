@@ -168,6 +168,7 @@
     "skill-library.mjs": "soul",
     "skill-dream-evidence.mjs": "soul",
     "skill-dream-inputs.mjs": "soul",
+    "skill-dream-outcomes.mjs": "soul",
     "skill-dream-scheduler.mjs": "soul",
     "skill-dream-service.mjs": "host",
     "skill-dream-store.mjs": "soul",
