@@ -110,7 +110,7 @@ import { createTeamStarter, defaultTeamTemplate, harnessLaunchProblem, teamLimit
 import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulNpmHarnessDirs } from './soul-home.mjs';
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
 import { defaultHarnessFor, onPath } from './acp-registry.mjs';
-import { soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
+import { computePackageRevision, soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
 import { pendingSoulToolHome, prepareSoulToolHome, soulToolHomeEnv } from './soul-env-migrate.mjs';
 import { harnessInstallDeclared, pendingSoulRuntimes, provisionSoulRuntimes, soulRuntimeEnv } from './soul-runtimes.mjs';
 import { checkSoulProvider, pendingSoulProvider, soulProviderEnv } from './soul-secrets.mjs';
@@ -578,7 +578,7 @@ export function createDaemonServer({
           const identity = mintAgentIdentity({
             appSlug: parentApp, botUid: parent.github?.botUid ?? null, harness,
             transcript: body.transcript, parentId: source.agentId,
-            packagePath: body.packagePath ?? null,
+            packageRevision: body.packagePath == null ? null : computePackageRevision(body.packagePath),
             team: body.team ?? parent.team, squad: body.squad ?? parent.squad,
             type: body.type ?? 'agent', level: body.level, subjects: body.subjects ?? [], stateDir, now,
             useGithub,
@@ -1561,7 +1561,7 @@ export async function runDaemon({
       if (name !== undefined) return spawnSoulTemplate(packagePath, { name, role, harness, parentId: parent, env, home, config, now,
         stateDir: stateDirectory({ env, home }) });
       validateSoulPackage(packagePath);
-      return mintAgentIdentity({ appSlug: null, harness, packagePath, useGithub: false, parentId: parent,
+      return mintAgentIdentity({ appSlug: null, harness, packageRevision: computePackageRevision(packagePath), useGithub: false, parentId: parent,
         stateDir: stateDirectory({ env, home }), now });
     },
     lookupBinding: (agentId, { harness } = {}) => soulBindingForLaunch(agentId, {

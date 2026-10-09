@@ -745,7 +745,7 @@ async function restoreSoul({ archive, staging, manifest, plan, env, home, file, 
     save();
     next.revision = computePackageRevision(staging);
     save();
-    const identity = mintAgentIdentity({ env, home, stateDir, now, appSlug: null, packagePath: staging, harness: manifest.identity?.harness ?? null, parentId: null, useGithub: false });
+    const identity = mintAgentIdentity({ env, home, stateDir, now, appSlug: null, packageRevision: computePackageRevision(staging), harness: manifest.identity?.harness ?? null, parentId: null, useGithub: false });
     agentId = identity.id;
     const revisionOptions = { stateDir, now, soulDir: staging, ...(authorization?.method ? { authorization } : {}) };
     adoptSoulPackage(agentId, staging, { ...revisionOptions, reason: `Import as a fork of ${manifest.agentId}` });

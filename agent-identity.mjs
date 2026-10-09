@@ -23,14 +23,12 @@ import {
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { resolveAgentSlug, AGENT_ID_KEYS } from './resolve-agent.mjs';
+import { AGENT_ID_KEYS } from './resolve-agent.mjs';
 import { harnessForSlug, isGateEnabled, loadConfig } from './config.mjs';
 import { deriveSoulId, spawnNonce, validateGenesis } from './soul-genesis.mjs';
-import { readAppMetadata } from './identity-app-store.mjs';
-import { computePackageRevision } from './soul-package.mjs';
 
 const SCHEMA_VERSION = 1;
 const ID_PATTERN = /^agent_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -434,9 +432,15 @@ export function mintAgentIdentity({
   gate: isEnabled = isGateEnabled,
   home = homedir(),
   env = process.env,
-  packagePath = null,
+  // The package revision a genesis-derived ID hashes; the caller (soul)
+  // computes it, so identity never reads a package (#645).
+  packageRevision = null,
   nonceFactory = spawnNonce,
+  ...unexpected
 } = {}) {
+  if (unexpected.packagePath != null) {
+    throw new Error('mintAgentIdentity takes packageRevision, not packagePath: compute it with computePackageRevision');
+  }
   const githubOn = useGithub ?? isEnabled('github-identity', { env, home });
   let slug = null;
   let github = null;
@@ -452,9 +456,9 @@ export function mintAgentIdentity({
   }
   const normalizedParent = parentId ? validateAgentId(parentId) : null;
   const createdAt = now().toISOString();
-  const genesis = packagePath === null ? null : {
-    revision: computePackageRevision(packagePath), parentSoul: normalizedParent,
-  };
+  const genesis = packageRevision === null ? null : validateGenesis({
+    revision: packageRevision, parentSoul: normalizedParent,
+  });
 
   for (let attempt = 0; attempt < 8; attempt++) {
     const record = {
@@ -490,14 +494,14 @@ export function mintAgentIdentity({
 
 // Integration port for the revision-chain owner. It must durably append before
 // resolving; no default silently drops history. Also supports legacy adoption.
-export async function recordAgentPackageRevision(id, packagePath, {
+export async function recordAgentPackageRevision(id, revision, {
   appendRevision,
   stateDir = stateDirectory(),
 } = {}) {
   if (typeof appendRevision !== 'function') throw new Error('appendRevision chain writer is required');
   const identity = readAgentIdentity(id, { stateDir });
   if (identity.status === 'retired') throw retiredReuseError(id);
-  const revision = computePackageRevision(packagePath);
+  validateGenesis({ revision, parentSoul: null });
   await appendRevision({ agentId: identity.id, revision, genesis: identity.genesis });
   return identity;
 }
@@ -783,7 +787,7 @@ export function currentAgentId({ env = process.env, cwd = process.cwd() } = {}) 
   return null;
 }
 
-function parseCli(argv) {
+export function parseIdentityArgs(argv) {
   const [command = 'current', ...tokens] = argv.slice(2);
   const positional = [];
   let childCommand = null;
@@ -810,15 +814,7 @@ function parseCli(argv) {
   return { command, childCommand, positional, flags, one, json: flags.has('json') };
 }
 
-function botUidForSlug(slug, home = homedir()) {
-  try {
-    return readAppMetadata(slug, { home }).botUid ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function printRecord(record, json) {
+export function printIdentityRecord(record, json) {
   if (json) {
     process.stdout.write(`${JSON.stringify(record, null, 2)}\n`);
     return;
@@ -853,149 +849,40 @@ export async function spawnIdentity({ options = {}, env = process.env, cwd = pro
   return { agentId: result.agentId, parent: result.parent, binding: result.binding };
 }
 
+// The git hooks' entry (hooks/*): `current`, `show` and `record`, with the
+// output they have always had. Every other command is `agent-bot identity`
+// (cli/identity.mjs), which composes soul and the population census (#645).
 async function main() {
-  const args = parseCli(process.argv);
+  const args = parseIdentityArgs(process.argv);
   const stateDir = stateDirectory();
   const targetId = () => args.positional[0] ?? currentAgentId();
 
   switch (args.command) {
-    case 'ensure': {
-      // The shared resolver (ENG-0079): --app, GH_AGENT_APP, the pin, the
-      // account, then harness detection. Explicit inputs win wherever the
-      // process runs. With github-identity off, no App is required (#280).
-      const githubOn = isGateEnabled('github-identity', { env: process.env, home: homedir() });
-      const appSlug = githubOn ? resolveAgentSlug({ explicit: args.one('app') }) : null;
-      if (githubOn && !appSlug) throw new Error('no GitHub App identity resolves in this context');
-      const identity = ensureAgentIdentity({
-        currentId: currentAgentId(),
-        appSlug,
-        botUid: appSlug ? botUidForSlug(appSlug) : null,
-        harness: appSlug ? harnessForApp(appSlug) : args.one('harness'),
-        useGithub: githubOn,
-        transcript: args.one('transcript')
-          ? { provider: args.one('provider') ?? 'custom', id: args.one('transcript') }
-          : discoverTranscript(),
-        fields: {
-          ...identityFieldsFromEnv(),
-          team: args.one('team') ?? identityFieldsFromEnv().team,
-          squad: args.one('squad') ?? identityFieldsFromEnv().squad,
-          type: args.one('type') ?? identityFieldsFromEnv().type,
-          level: args.one('level') ?? identityFieldsFromEnv().level,
-          parentId: args.one('parent') ?? identityFieldsFromEnv().parentId,
-        },
-        subjects: args.flags.get('subject') ?? [],
-        stateDir,
-      });
-      gitConfig(['config', 'extensions.worktreeConfig', 'true']);
-      gitConfig(['config', '--worktree', 'agentBot.agentId', identity.id]);
-      printRecord(identity, args.json);
-      break;
-    }
-    case 'spawn': {
-      if (args.childCommand && !args.childCommand.length) throw new Error('spawn -- requires a command');
-      const result = await spawnIdentity({
-        options: {
-          name: args.one('name'), harness: args.one('harness'),
-          packagePath: args.one('package') ? path.resolve(args.one('package')) : null,
-          parent: args.one('parent'), app: args.one('app'),
-          transcript: args.one('transcript')
-            ? { provider: args.one('provider') ?? 'custom', id: args.one('transcript') } : null,
-          team: args.one('team'), squad: args.one('squad'), type: args.one('type'),
-          level: args.one('level'), subjects: args.flags.get('subject') ?? [],
-        },
-      });
-      if (!result) {
-        // No binding means no daemon to vouch: mint a claimed identity locally,
-        // as before ADR-0008.
-        if (args.childCommand) throw new Error('spawn -- requires a parent binding');
-        const parentId = args.one('parent') ?? currentAgentId();
-        const parent = parentId ? readAgentIdentity(parentId, { stateDir }) : null;
-        const requestedApp = args.one('app');
-        const parentApp = parent?.github?.appSlug ?? null;
-        // A parent with no github field does not gain one by the gate being
-        // on. An explicit --app opts that child into the add-on.
-        const githubOn = isGateEnabled('github-identity', { env: process.env, home: homedir() })
-          && (!parent || parent.github != null || Boolean(requestedApp));
-        const appSlug = githubOn ? (requestedApp ?? parentApp ?? resolveAgentSlug()) : null;
-        if (githubOn && !appSlug) throw new Error('spawn requires an App identity or a resolvable parent');
-        const identity = mintAgentIdentity({
-          appSlug,
-          botUid: githubOn ? (parent?.github?.botUid ?? botUidForSlug(appSlug)) : null,
-          harness: parent?.harness ?? args.one('harness') ?? (githubOn ? harnessForApp(appSlug) : null),
-          useGithub: githubOn,
-          transcript: args.one('transcript')
-            ? { provider: args.one('provider') ?? 'custom', id: args.one('transcript') }
-            : discoverTranscript(),
-          team: args.one('team') ?? parent?.team,
-          squad: args.one('squad') ?? parent?.squad,
-          type: args.one('type') ?? 'agent',
-          level: args.one('level'),
-          parentId,
-          packagePath: args.one('package') ? path.resolve(args.one('package')) : null,
-          subjects: args.flags.get('subject') ?? [],
-          stateDir,
-        });
-        printRecord(identity, args.json);
-      } else if (args.childCommand) {
-        const [command, ...argv] = args.childCommand;
-        const child = spawnSync(command, argv, {
-          stdio: 'inherit', env: childIdentityEnv(result),
-        });
-        if (child.error) throw new Error(`spawn command failed: ${child.error.message}`);
-        process.exitCode = child.status ?? 1;
-      } else process.stdout.write(`${JSON.stringify(result)}\n`);
-      break;
-    }
-    case 'bind': {
-      const id = targetId();
-      if (!id) throw new Error('bind requires an Agent ID');
-      const transcriptId = args.one('transcript');
-      if (!transcriptId) throw new Error('bind requires --transcript');
-      printRecord(bindAgentTranscript(id, {
-        provider: args.one('provider') ?? 'custom',
-        id: transcriptId,
-        sha256: args.one('sha256'),
-      }, { stateDir }), args.json);
-      break;
-    }
     case 'record': {
       const id = targetId();
       if (!id) throw new Error('record requires an Agent ID');
-      printRecord(recordAgentEvidence(id, {
+      printIdentityRecord(recordAgentEvidence(id, {
         subjects: args.flags.get('subject') ?? [],
         artifacts: args.flags.get('artifact') ?? [],
         stateDir,
       }), args.json);
       break;
     }
-    case 'finalize': {
-      const id = targetId();
-      if (!id) throw new Error('finalize requires an Agent ID');
-      // Loaded only for this command because population validation imports the
-      // identity primitives above. The coordinator owns the cross-store lock.
-      const { finalizeIdentityWithPopulation } = await import('./agent-population.mjs');
-      const identity = finalizeIdentityWithPopulation(id, {
-        transcriptSha256: args.one('sha256'),
-        stateDir,
-      });
-      printRecord(identity, args.json);
-      break;
-    }
     case 'show': {
       const id = targetId();
       if (!id) throw new Error('show requires an Agent ID');
-      printRecord(readAgentIdentity(id, { stateDir }), true);
+      printIdentityRecord(readAgentIdentity(id, { stateDir }), true);
       break;
     }
     case 'current': {
       const id = currentAgentId();
       if (!id) return;
-      if (args.json) printRecord(readAgentIdentity(id, { stateDir }), true);
+      if (args.json) printIdentityRecord(readAgentIdentity(id, { stateDir }), true);
       else process.stdout.write(`${id}\n`);
       break;
     }
     default:
-      throw new Error('usage: agent-identity.mjs <ensure|spawn|bind|record|finalize|show|current|migrate-credentials>');
+      throw new Error(`usage: agent-identity.mjs <current|show|record> is the git hooks' entry; run agent-bot identity ${args.command}`);
   }
 }
 

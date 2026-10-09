@@ -181,7 +181,7 @@ export async function editSoulRevision(id, packagePath, { reason, expectedParent
     if (expectedParent !== undefined) assertParent(root, expectedParent);
     return snapshot(root, packagePath, requireHead(root).revision);
   });
-  await recordAgentPackageRevision(id, stored.packagePath, { ...options,
+  await recordAgentPackageRevision(id, computePackageRevision(stored.packagePath), { ...options,
     appendRevision: createRevisionAppender(stored.packagePath, { ...options, reason }) });
   return { ...revisionHistory(id, options).find((record) => record.revision === stored.revision),
     ...skillReport(rootFor(id, options), stored.parentRevision, stored.packagePath) };

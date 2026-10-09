@@ -124,7 +124,7 @@ test('execution-identity CLI resolves the UID entirely from the App record', (t)
   writeFileSync(configPath, JSON.stringify(config));
   rmSync(f.legacy, { recursive: true });
   execFileSync('git', ['init', '--quiet', f.home], { env: f.env });
-  const result = execFileSync(process.execPath, [fileURLToPath(new URL('../agent-identity.mjs', import.meta.url)),
+  const result = execFileSync(process.execPath, [fileURLToPath(new URL('../cli/identity.mjs', import.meta.url)),
     'ensure', '--app', slug, '--json'], { cwd: f.home, env: f.env, encoding: 'utf8' });
   assert.equal(JSON.parse(result).github.botUid, '456');
 });

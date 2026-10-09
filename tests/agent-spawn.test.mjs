@@ -10,7 +10,7 @@ import { mintAgentIdentity, readAgentIdentity, spawnIdentity, stateDirectory } f
 import { runSpawnHooks } from '../agent-hook.mjs';
 import { fileURLToPath } from 'node:url';
 
-const cli = fileURLToPath(new URL('../agent-identity.mjs', import.meta.url));
+const cli = fileURLToPath(new URL('../cli/identity.mjs', import.meta.url));
 async function fixture(t, extra = {}) {
   const root = mkdtempSync(path.join(tmpdir(), 'agent-spawn-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));

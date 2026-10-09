@@ -28,7 +28,7 @@ function fixture(t, policy, { genesis = true } = {}) {
   manifest.revision = computePackageRevision(packagePath);
   writeFileSync(join(packagePath, 'soul.json'), JSON.stringify(manifest));
   const options = { env: { HOME: root }, home: root, stateDir: join(root, 'state'), now: () => new Date('2026-10-01T12:00:00Z') };
-  const identity = mintAgentIdentity({ ...options, appSlug: 'test-agent', packagePath: genesis ? packagePath : null });
+  const identity = mintAgentIdentity({ ...options, appSlug: 'test-agent', packageRevision: genesis ? computePackageRevision(packagePath) : null });
   const initial = adoptSoulPackage(identity.id, packagePath, options);
   return { ...options, root, options, packagePath, id: identity.id, identity, initial };
 }
@@ -154,7 +154,7 @@ test('legacy adoption and genesis initialization use the same chain without chan
   const f = fixture(t, undefined, { genesis: false });
   assert.equal(readAgentIdentity(f.id, f.options).genesis, null);
   assert.throws(() => adoptSoulPackage(f.id, f.packagePath, f.options), /already/);
-  const other = mintAgentIdentity({ ...f.options, appSlug: 'test-agent', packagePath: f.packagePath });
+  const other = mintAgentIdentity({ ...f.options, appSlug: 'test-agent', packageRevision: computePackageRevision(f.packagePath) });
   update(f, 'AGENTS.md', 'Wrong genesis');
   assert.throws(() => adoptSoulPackage(other.id, f.packagePath, f.options), /genesis/);
   assert.equal(revisionHistory(other.id, f.options).length, 0);
@@ -167,9 +167,9 @@ test('revision appender plugs into #284 and refuses hash-only, wrong-parent, and
   manifest.parentRevision = f.initial.revision;
   update(f, 'soul.json', manifest); manifest.revision = computePackageRevision(f.packagePath); update(f, 'soul.json', manifest);
   const appendRevision = createRevisionAppender(f.packagePath, { ...f.options, reason: 'Host edit' });
-  await recordAgentPackageRevision(f.id, f.packagePath, { ...f.options, appendRevision });
+  await recordAgentPackageRevision(f.id, computePackageRevision(f.packagePath), { ...f.options, appendRevision });
   assert.equal(revisionHistory(f.id, f.options).at(-1).revision, manifest.revision);
-  await assert.rejects(recordAgentPackageRevision(f.id, f.packagePath, { ...f.options, appendRevision }), /stale/);
+  await assert.rejects(recordAgentPackageRevision(f.id, computePackageRevision(f.packagePath), { ...f.options, appendRevision }), /stale/);
   assert.throws(() => appendRevision({ agentId: f.id, revision: f.initial.revision }), /changed/);
   assert.throws(() => createRevisionAppender(f.packagePath, { reason: 'bypass', author: 'soul' }), /propose/);
 });

@@ -47,7 +47,7 @@ function fixture(t) {
     AGENT_BOT_POPULATION_PATH: join(home, 'population.json'), AGENT_BOT_STATE_HOME: join(home, 'state'),
     AGENT_BOT_SOULS_HOME: join(home, 'souls') };
   const options = { env, home, cwd: home, stateDir: env.AGENT_BOT_STATE_HOME, file: env.AGENT_BOT_POPULATION_PATH };
-  const { id } = mintAgentIdentity({ ...options, appSlug: 'test-agent', packagePath: directory });
+  const { id } = mintAgentIdentity({ ...options, appSlug: 'test-agent', packageRevision: computePackageRevision(directory) });
   adoptSoulPackage(id, directory, options);
   mkdirSync(join(directory, '.soul-state'), { mode: 0o700 });
   writeFileSync(join(directory, '.soul-state', 'agent-id'), `${id}\n`);

@@ -9,6 +9,8 @@ import { mintAgentIdentity, readAgentIdentity } from '../agent-identity.mjs';
 import { displayName, upsertSoul } from '../agent-population.mjs';
 import { soulPromptIdentity } from '../agent-daemon.mjs';
 import { sandboxPlan } from '../sandbox.mjs';
+import { computePackageRevision } from '../soul-package.mjs';
+
 
 const agentId = 'agent_11111111-1111-4111-8111-111111111111';
 const event = { event: 'launch', requestId: 'r1', principal: 'p1', account: 'worker', soul: agentId, harness: 'claude', name: 'Helper' };
@@ -486,7 +488,7 @@ test('package mint uses genesis IDs, no inferred App authority, and is not repea
   const stateDir = path.join(f.root, 'identities');
   const handler = createLaunchHandler({ ...f.options, spawnPackage: (request) => {
     spawns++;
-    identity = mintAgentIdentity({ packagePath: request.package, harness: request.harness, useGithub: false, stateDir });
+    identity = mintAgentIdentity({ packageRevision: computePackageRevision(request.package), harness: request.harness, useGithub: false, stateDir });
     return identity;
   } });
   const request = { ...event, soul: undefined, package: packagePath };

@@ -27,7 +27,7 @@ async function fixture(t, { realVerifier = false } = {}) {
   writeFileSync(join(packagePath, 'soul.json'), JSON.stringify(manifest));
   manifest.revision = computePackageRevision(packagePath);
   writeFileSync(join(packagePath, 'soul.json'), JSON.stringify(manifest));
-  const { id } = mintAgentIdentity({ ...options, appSlug: 'test-agent', packagePath });
+  const { id } = mintAgentIdentity({ ...options, appSlug: 'test-agent', packageRevision: computePackageRevision(packagePath) });
   const calls = [];
   const revisionPrincipal = (credential) => verifyPrincipalOwner(credential, { env,
     clientFactory: () => ({ request: async (request) => {

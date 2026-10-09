@@ -11,7 +11,7 @@ export const MODULES = new Map([
   ['join', 'soul-join.mjs'],
   ['mint-token', 'mint-token.mjs'],
   ['doctor', 'doctor.mjs'],
-  ['identity', 'agent-identity.mjs'],
+  ['identity', 'cli/identity.mjs'],
   ['space', 'agent-space.mjs'],
   ['population', 'agent-population.mjs'],
   ['principal', 'agent-principals.mjs'],

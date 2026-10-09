@@ -1,0 +1,1 @@
+- `agent-bot identity` now runs from `cli/identity.mjs`; running `agent-identity.mjs` directly serves only the git hooks' `current`, `show` and `record` (same output) and points other commands at `agent-bot identity`. Identity no longer reads soul packages: callers pass the package revision for genesis-derived IDs (#645).
