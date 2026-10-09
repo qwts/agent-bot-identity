@@ -57,40 +57,33 @@ import { profileAppSlugs } from './organization-profile.mjs';
 import { loadConfig } from './config.mjs';
 import { editSoulRevision, revisionHistory } from './soul-revisions.mjs';
 import { createPassCredentialStore } from './secret-providers/pass-cli-credentials.mjs';
+import { itemTitle, managedAppItem, slugOrThrow, soulAppItem, soulSecretItem } from './credential-names.mjs';
 
-const APP_SLUG = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?$/;
 const SECURITY = '/usr/bin/security';
 // `security` exits 44 when no item matches.
 const KEYCHAIN_NOT_FOUND = 44;
-
-function slugOrThrow(slug) {
-  if (typeof slug !== 'string' || !APP_SLUG.test(slug)) throw new Error('invalid GitHub App slug');
-  return slug;
-}
 
 export function defaultCredentialStore(platform = process.platform) {
   return platform === 'darwin' ? 'keychain' : 'file';
 }
 
 export function keychainItem(agentId, slug) {
-  return { service: `agent-bot.soul.${validateAgentId(agentId)}`, account: `github-app/${slugOrThrow(slug)}` };
+  return soulAppItem(agentId, slug);
 }
 
 // A provider secret (#583 slice 4) sits in the same service, under
 // `secret/<name>`: one namespace per soul, one item per declared secret.
 export function secretItem(agentId, name) {
-  return { service: `agent-bot.soul.${validateAgentId(agentId)}`, account: `secret/${secretNameOrThrow(name)}` };
+  return soulSecretItem(agentId, secretNameOrThrow(name));
 }
 
 // Same service/account namespace as Keychain, joined into one item title.
 export function passCliItem(agentId, slug) {
-  const { service, account } = keychainItem(agentId, slug);
-  return `${service}/${account}`;
+  return itemTitle(keychainItem(agentId, slug));
 }
 
 export function passCliSecretItem(agentId, name) {
-  const { service, account } = secretItem(agentId, name);
-  return `${service}/${account}`;
+  return itemTitle(secretItem(agentId, name));
 }
 
 // A secret is one opaque string; base64 keeps it single-line on `security
@@ -188,7 +181,7 @@ export function keychainStore({ env = process.env, run = spawnSync } = {}) {
     return true;
   };
   const appItem = ({ agentId, slug, appScoped = false }) => (appScoped
-    ? { service: `agent-bot.app.${slugOrThrow(slug)}`, account: `github-app/${slug}` }
+    ? managedAppItem(slug)
     : keychainItem(agentId, slug));
   return {
     kind: 'keychain',
