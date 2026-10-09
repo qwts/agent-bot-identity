@@ -8,6 +8,8 @@
 // - a soul's provider secret: the same service, account `secret/<name>`
 // - a managed App's key: service `agent-bot.app.<slug>`, account
 //   `github-app/<slug>`
+// - the gh-app-hook inbox bearer the daemon presents for take_inbox (#229):
+//   service `agent-bot.inbox`, account `gh-app-hook-inbox-token`
 // - pass-cli: one note in the `Agent Identities` vault, titled
 //   `<service>/<account>`
 //
@@ -73,6 +75,12 @@ export function soulSecretItem(agentId, name, { namespace = credentialNamespace(
 
 export function managedAppItem(slug, { namespace = credentialNamespace() } = {}) {
   return { service: `${namespace}.app.${slugOrThrow(slug)}`, account: `github-app/${slug}` };
+}
+
+// One fleet-wide value, not per App or soul (docs/gh-app-hook.md): only the
+// daemon reads it, so no caller holds it.
+export function inboxBearerItem() {
+  return { service: `${CREDENTIAL_NAMESPACE}.inbox`, account: 'gh-app-hook-inbox-token' };
 }
 
 // A pass-cli note joins the Keychain service and account into one title.

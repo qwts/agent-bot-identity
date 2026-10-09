@@ -32,12 +32,6 @@ import { detectAgentHarness } from './detect-harness.mjs';
 
 const PROTOCOL_VERSION = '2025-06-18';
 
-// Inbox take timeout (#299): a hung broker connection must not stall the
-// tool forever. Matches the push timeout scale (5s) with headroom for a
-// cold Worker; the error names the timeout so it is distinguishable from a
-// refusal.
-export const INBOX_TIMEOUT_MS = 10_000;
-
 function serverVersion() {
   try {
     const root = dirname(fileURLToPath(import.meta.url));
@@ -124,13 +118,11 @@ export function createMcpState({
   home = homedir(),
   cwd = process.cwd(),
   client = null,
-  fetchImpl = globalThis.fetch,
 } = {}) {
   return {
     env,
     home,
     cwd,
-    fetchImpl,
     client: client ?? daemonClient({ env, home, cwd }),
     // Held in memory for the life of this server process; never serialized.
     secret: null,
@@ -138,25 +130,11 @@ export function createMcpState({
   };
 }
 
-function githubRepo(remote) {
-  const match = String(remote).match(/github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?$/);
-  if (!match) throw new Error('origin is not a GitHub repository');
-  return `${match[1]}/${match[2]}`;
-}
-
 // Stable take_inbox error codes (#299). The MCP tool surface returns only
 // the message text to the agent, so the code is embedded as [code] as well
 // as carried on error.code for programmatic use.
 function inboxError(code, message, { cause = undefined } = {}) {
   return Object.assign(new Error(`${message} [${code}]`), { code, ...(cause === undefined ? {} : { cause }) });
-}
-
-function inboxHost(inboxUrl) {
-  try {
-    return new URL(inboxUrl).host || 'inbox';
-  } catch {
-    return 'inbox';
-  }
 }
 
 // The bearer must never appear in an error, even when a lower layer echoes
@@ -241,81 +219,22 @@ async function takeInbox(state) {
       'take_inbox failed: this server only serves its bound worktree; run the MCP server from the bound worktree',
     );
   }
-  const app = git(state.cwd, 'config', '--worktree', '--get', 'agentBot.app');
-  const repo = githubRepo(git(state.cwd, 'remote', 'get-url', 'origin'));
-  const inboxUrl = state.env.GH_APP_HOOK_INBOX_URL;
-  const token = state.env.GH_APP_HOOK_INBOX_TOKEN;
-  if (typeof inboxUrl !== 'string' || inboxUrl === '' || typeof token !== 'string' || token === '') {
-    throw inboxError(
-      'inbox-not-configured',
-      'take_inbox failed: the inbox is not configured for this MCP server; set GH_APP_HOOK_INBOX_URL and GH_APP_HOOK_INBOX_TOKEN from Proton Pass, then retry',
-    );
-  }
-  const host = inboxHost(inboxUrl);
-  let url;
+  // The daemon holds the inbox bearer and names the App and repository from
+  // the binding (#229); this process never sees the bearer.
+  let result;
   try {
-    url = new URL('/inbox', inboxUrl);
+    result = await state.client.takeInbox(state.secret);
   } catch (error) {
-    throw inboxError(
-      'inbox-not-configured',
-      `take_inbox failed: the inbox URL is invalid (${sanitizeInboxDetail(error?.message ?? 'bad URL', token)}); check GH_APP_HOOK_INBOX_URL, then run \`agent-bot doctor\``,
-      { cause: error },
-    );
-  }
-  url.searchParams.set('app', app);
-  url.searchParams.set('repo', repo);
-  let response;
-  try {
-    response = await state.fetchImpl(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(INBOX_TIMEOUT_MS),
-    });
-  } catch (error) {
-    const cause = describeFetchCause(error);
-    const safeMessage = sanitizeInboxDetail(cause.message, token);
-    const causeCode = cause.code ? `${cause.code}: ` : '';
-    if (cause.kind === 'timeout') {
-      throw inboxError(
-        'inbox-broker-unreachable',
-        `take_inbox failed: broker ${host} timed out after ${INBOX_TIMEOUT_MS}ms (${causeCode}${safeMessage}); check GH_APP_HOOK_INBOX_URL and the broker status, then retry`,
-        { cause: error },
-      );
+    if (typeof error?.code === 'string' && error.code.startsWith('inbox-') && error.detail) {
+      throw inboxError(error.code, error.detail, { cause: error });
     }
     throw inboxError(
-      'inbox-broker-unreachable',
-      `take_inbox failed: broker ${host} unreachable (${causeCode}${safeMessage}); check GH_APP_HOOK_INBOX_URL and network/DNS/TLS, then retry`,
+      'inbox-daemon-unreachable',
+      `take_inbox failed: the daemon could not take from the inbox (${daemonDetail(error)}); run \`agent-bot daemon status\`, then \`agent-bot doctor\`, and retry`,
       { cause: error },
     );
   }
-  if (response.status === 204) return { event: null };
-  if (response.status === 401) {
-    throw inboxError(
-      'inbox-auth-expired',
-      `take_inbox failed: inbox at ${host} rejected the bearer (HTTP 401); refresh GH_APP_HOOK_INBOX_TOKEN from Proton Pass, then retry`,
-    );
-  }
-  if (response.status === 400) {
-    throw inboxError(
-      'inbox-bad-request',
-      `take_inbox failed: inbox at ${host} rejected the request (HTTP 400 for app=${app} repo=${repo}); check the worktree binding with \`agent-bot doctor\``,
-    );
-  }
-  if (!response.ok) {
-    throw inboxError(
-      'inbox-unavailable',
-      `take_inbox failed: inbox at ${host} returned HTTP ${response.status}; the broker may be down — wait and retry, then check broker status`,
-    );
-  }
-  try {
-    return { event: await response.json() };
-  } catch (error) {
-    throw inboxError(
-      'inbox-unavailable',
-      `take_inbox failed: inbox at ${host} returned an unreadable response (${sanitizeInboxDetail(error?.message ?? 'bad body', token)}); wait and retry, then check broker status`,
-      { cause: error },
-    );
-  }
+  return { event: result?.event ?? null };
 }
 
 async function callTool(state, name, args = {}) {

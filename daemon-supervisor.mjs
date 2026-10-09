@@ -130,7 +130,23 @@ export function supervisorEnvironment({ env = process.env, home = homedir() } = 
     ...(env.AGENT_BOT_EXECUTOR === '1' ? { AGENT_BOT_EXECUTOR: '1' } : {}),
     // The host's agent-comms and agent-bot, put first on souls' PATH.
     ...(env.AGENT_BOT_TOOL_PATH && isAbsolute(env.AGENT_BOT_TOOL_PATH) ? { AGENT_BOT_TOOL_PATH: env.AGENT_BOT_TOOL_PATH } : {}),
+    // The gh-app-hook broker the daemon takes from for take_inbox (#229).
+    ...(inboxUrlForUnit(env.GH_APP_HOOK_INBOX_URL) ? { GH_APP_HOOK_INBOX_URL: env.GH_APP_HOOK_INBOX_URL } : {}),
   };
+}
+
+// Only a plain http(s) URL goes into the unit: userinfo or a query string
+// could write a credential into a file the bearer itself is kept out of, and
+// the take uses the origin alone.
+function inboxUrlForUnit(value) {
+  if (typeof value !== 'string' || value === '' || /[\s"\\]/.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return /^https?:$/.test(url.protocol) && url.hostname !== '' && url.username === '' && url.password === ''
+      && url.search === '' && url.hash === '';
+  } catch {
+    return false;
+  }
 }
 
 // #321: Homebrew keg paths are versioned (`.../Cellar/<formula>/<version>/...`)

@@ -138,6 +138,7 @@
     "identity-app-store.mjs": "identity",
     "identity-apps.mjs": "identity",
     "inbox-probe.mjs": "identity",
+    "inbox-take.mjs": "identity",
     "install-gh-shim.mjs": "identity",
     "install.mjs": "cli",
     "keyd-client.mjs": "identity",

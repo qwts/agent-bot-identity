@@ -242,46 +242,34 @@ test('population forwards filters and works unbound', async () => {
   assert.deepEqual(filters, { status: 'active', app: 'qwts-claude-agent' });
 });
 
-test('take_inbox requires the bound worktree and does not accept another repository', async () => {
+test('take_inbox asks the daemon on the held binding and sends no App, repository or bearer (#229)', async () => {
   const { root, gitDir } = scratchRepo();
   git(root, 'remote', 'add', 'origin', 'https://github.com/qwts/example1.git');
-  git(root, 'config', 'extensions.worktreeConfig', 'true');
-  git(root, 'config', '--worktree', 'agentBot.app', 'qwts-grok-agent');
   mintBindToken({ gitDir, worktree: root, agentId: AGENT_ID });
-  const seen = [];
-  const fetchImpl = async (url, options) => {
-    seen.push({ url: String(url), authorization: options.headers.authorization });
-    return new Response(JSON.stringify({
-      app: 'qwts-grok-agent',
-      repo: 'qwts/example1',
-      kind: 'mention',
-    }), { status: 200, headers: { 'content-type': 'application/json' } });
-  };
   const client = fakeClient();
   client.binding = async (secret) => {
     client.calls.push(['binding', secret]);
     return { agentId: AGENT_ID, worktree: root, transcript: { provider: 'claude', id: 's' } };
   };
-  const state = createMcpState({
-    client,
-    cwd: root,
-    env: { GH_APP_HOOK_INBOX_URL: 'https://gh-app-hook.qwts.org', GH_APP_HOOK_INBOX_TOKEN: 'inbox-secret' },
-    fetchImpl,
-  });
+  client.takeInbox = async (...args) => {
+    client.calls.push(['takeInbox', ...args]);
+    return { schemaVersion: 1, event: { app: 'you-codex-agent', repo: 'qwts/example1', kind: 'mention' } };
+  };
+  // A bearer left in this process's environment is no longer read.
+  const state = createMcpState({ client, cwd: root, env: { GH_APP_HOOK_INBOX_TOKEN: 'inbox-secret' } });
   const unbound = await callTool(state, 'take_inbox', { app: 'qwts-claude-agent', repo: 'qwts/example2' });
   assert.equal(unbound.isError, true);
   assert.match(unbound.text, /not bound/);
-  assert.equal(seen.length, 0);
+  assert.equal(client.calls.some(([name]) => name === 'takeInbox'), false);
 
   await callTool(state, 'bind', { transcript_id: 'session-inbox' });
   const taken = await callTool(state, 'take_inbox', { app: 'qwts-claude-agent', repo: 'qwts/example2' });
   assert.equal(taken.isError, false);
   assert.match(taken.text, /qwts\/example1/);
   assert.doesNotMatch(taken.text, /inbox-secret/);
-  assert.match(seen[0].url, /app=qwts-grok-agent/);
-  assert.match(seen[0].url, /repo=qwts%2Fexample1/);
-  assert.doesNotMatch(seen[0].url, /example2/);
-  assert.equal(seen[0].authorization, 'Bearer inbox-secret');
+  const take = client.calls.find(([name]) => name === 'takeInbox');
+  // Only the connection secret, which the client turns into a proof.
+  assert.deepEqual(take, ['takeInbox', 'a'.repeat(64)]);
 });
 
 test('the surrendered token is consumed by the daemon, not the MCP server', async () => {
