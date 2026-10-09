@@ -420,3 +420,20 @@ test('the history mirror is best effort: an unwritable mirror or a soul without 
   const described = component(readSoulEnvironment(ID, f.options), 'history');
   assert.deepEqual([described.mirrored, described.turns, described.revisions], [false, 0, null]);
 });
+
+test('at the default root ensure settles under the init lock and still refuses what is not the soul\'s space', (t) => {
+  const f = fixture(t);
+  const root = spacePath(OTHER, f.options);
+  // A concurrent creator's directory before its marker: unmarked, so refused
+  // here; once marked under the lock, the same call hands it back.
+  mkdirSync(root, { recursive: true });
+  assert.throws(() => ensureSoulSpace(OTHER, f.options), /already exists without .*refusing to claim it/);
+  rmSync(root, { recursive: true });
+  const made = ensureSoulSpace(OTHER, f.options);
+  assert.deepEqual([made.path, made.created], [root, true]);
+  const again = ensureSoulSpace(OTHER, f.options);
+  assert.deepEqual([again.path, again.created, again.marker.agentId], [root, false, OTHER]);
+  rmSync(root, { recursive: true });
+  writeFileSync(root, 'in the way');
+  assert.throws(() => ensureSoulSpace(OTHER, f.options), /refusing to claim it/);
+});

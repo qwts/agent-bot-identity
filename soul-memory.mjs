@@ -74,6 +74,10 @@ export function ensureSoulSpace(agentId, options = {}) {
   const recorded = soulSpacePath(id, options);
   const inspection = inspectAgentSpace(id, { ...options, root: recorded });
   if (inspection.status === 'ok') return { id, path: recorded, created: false, marker: showAgentSpace(id, { ...options, root: recorded }).marker };
+  // At the default root, initAgentSpace decides under its per-soul lock: a
+  // concurrent creator's directory may exist here before its marker does,
+  // and the lock settles that race. It still refuses an unmarked directory.
+  if (recorded === spacePath(id, options)) return initAgentSpace(id, options);
   if (inspection.status !== 'missing' || lstat(recorded)) {
     throw new Error(`agent space path ${recorded} is not ${id}'s Agent Space (${inspection.status}); refusing to replace it`);
   }
