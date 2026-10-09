@@ -7,7 +7,7 @@ import { validateAgentId } from './agent-identity.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
 import { soulMarkers } from './owner-gate.mjs';
 import { setSoulComputerUse } from './agent-population.mjs';
-import { daemonClient } from './agent-daemon.mjs';
+import { daemonClient } from './daemon-client.mjs';
 
 export async function soulComputerUseCommand(argv, {
   gate = ownerGate,

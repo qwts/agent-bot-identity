@@ -296,7 +296,7 @@ export async function joinSoul({
   // 4. The record. Same daemon policy as setup-worktree, so the census and
   //    spaces never diverge by invocation path.
   const { bindSoul } = await import('./setup-worktree.mjs');
-  const { daemonClient } = await import('./agent-daemon.mjs');
+  const { daemonClient } = await import('./daemon-client.mjs');
   const client = daemon ?? daemonClient({ env, home });
   await bindSoul({
     agentId,

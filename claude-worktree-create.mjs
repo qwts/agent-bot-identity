@@ -37,7 +37,7 @@ import { AGENT_ID_KEYS, resolveAgentSlug } from './resolve-agent.mjs';
 import { ensureSoulSpace } from './soul-memory.mjs';
 import { showSoul, upsertIdentitySoul } from './agent-population.mjs';
 import { bindSoul } from './setup-worktree.mjs';
-import { daemonClient } from './agent-daemon.mjs';
+import { daemonClient } from './daemon-client.mjs';
 import { linkWorktree, placeWorktree, sanitizeWorktreeName, soulWorktreePath } from './soul-worktrees.mjs';
 
 const SETUP = join(dirname(fileURLToPath(import.meta.url)), 'setup-worktree.mjs');

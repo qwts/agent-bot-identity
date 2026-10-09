@@ -27,7 +27,7 @@ import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { readBinding, readBindToken } from './agent-binding.mjs';
-import { daemonClient } from './agent-daemon.mjs';
+import { daemonClient } from './daemon-client.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
 
 const PROTOCOL_VERSION = '2025-06-18';

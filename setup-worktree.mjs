@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { resolveAgentSlug, pinnedSlug, AGENT_ID_KEYS } from './resolve-agent.mjs';
 import { mintBindToken, readBinding } from './agent-binding.mjs';
 import { loadConfig, isGateEnabled, apiBase, daemonPreference, githubHost } from './config.mjs';
-import { daemonClient } from './agent-daemon.mjs';
+import { daemonClient } from './daemon-client.mjs';
 import { reconcileAppCredentials } from './credential-reconciler.mjs';
 import {
   discoverTranscript,

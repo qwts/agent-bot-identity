@@ -45,7 +45,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import { daemonClient, daemonStatus } from './agent-daemon.mjs';
+import { daemonStatus } from './agent-daemon.mjs';
+import { daemonClient } from './daemon-client.mjs';
 import { validateAgentId } from './agent-identity.mjs';
 import { MAX_MESSAGE_BYTES } from './agent-interaction.mjs';
 import { appendAuditReceipt, principalsFile, resolvePrincipal } from './agent-principals.mjs';

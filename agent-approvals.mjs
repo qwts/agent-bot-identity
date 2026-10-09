@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 
-import { daemonClient } from './agent-daemon.mjs';
+import { daemonClient } from './daemon-client.mjs';
 import { shown } from './approval-action.mjs';
 import { soulMarkers } from './owner-gate.mjs';
 

@@ -38,7 +38,7 @@ export async function mintCredential({
   soulBound = isSoulBound({ env, cwd }),
   mintImpl = mint,
   readBindingImpl = readBinding,
-  clientFactory = async (options) => (await import('./agent-daemon.mjs')).daemonClient(options),
+  clientFactory = async (options) => (await import('./daemon-client.mjs')).daemonClient(options),
 } = {}) {
   if (!soulBound) return mintImpl({ slug, env });
 
