@@ -41,6 +41,8 @@ const STATUS = {
   ] },
 };
 
+const acknowledged = agentId => ({ kind: 'notice-acknowledged', at: '2026-10-09T00:00:00.000Z', agentId, noticeId: `ntc_${'a'.repeat(24)}` });
+
 function fixture(t, { available = true, markers = [], control = null } = {}) {
   const home = mkdtempSync(path.join(tmpdir(), 'soul-dream-cli-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
@@ -56,7 +58,9 @@ function fixture(t, { available = true, markers = [], control = null } = {}) {
     dreamHistory: async query => { calls.push(['history', query]); return { records: [
       { revision: 2, events: [{ kind: 'registered', registration: { agentId: OTHER } }] },
       { revision: 3, events: [{ kind: 'started', run: run(ID, RUN) }, { kind: 'started', run: run(OTHER, OTHER_RUN) }] },
-    ], nextRevision: 3, remaining: 1 }; },
+      { revision: 4, events: [acknowledged(ID)] },
+      { revision: 5, events: [acknowledged(OTHER)] },
+    ], nextRevision: 5, remaining: 1 }; },
     dreamControl: async (action, body, options) => { calls.push(['control', action, body, options]); return { schemaVersion: 1, result: control ?? { agentId: ID, runId: RUN, status: 'started' } }; },
   };
   const invoke = (args, stdin = JSON.stringify(principal)) => soulDreamCommand(args, { env, home, cwd: home, client, markers: () => markers,
@@ -103,8 +107,10 @@ test('status and history disclose only the named soul and always report unverifi
   assert.equal(await f.invoke(['--soul', ID, '--history', '--after-revision', '1', '--limit', '2']), 0);
   assert.deepEqual(f.calls.at(-1), ['history', { afterRevision: 1, limit: 2 }]);
   const history = JSON.parse(f.out.at(-1));
-  assert.deepEqual(history.records.map(record => [record.revision, record.events.length]), [[3, 1]]);
-  assert.deepEqual([history.nextRevision, history.remaining, history.maintenanceCoverage], [3, 1, 'unverified']);
+  assert.deepEqual(history.records.map(record => [record.revision, record.events.length]), [[3, 1], [4, 1]],
+    "this soul's acknowledgement is kept, even as a transaction's sole event; another soul's is not");
+  assert.deepEqual(history.records[1].events[0], { kind: 'notice-acknowledged', at: '2026-10-09T00:00:00.000Z', agentId: ID, noticeId: `ntc_${'a'.repeat(24)}` });
+  assert.deepEqual([history.nextRevision, history.remaining, history.maintenanceCoverage], [5, 1, 'unverified']);
   assert.equal(JSON.stringify(history).includes(OTHER), false);
 });
 

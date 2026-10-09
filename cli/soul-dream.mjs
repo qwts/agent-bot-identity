@@ -82,7 +82,8 @@ function soulStatus(status, agentId) {
     selectionCheckpoints: (status.selectionCheckpoints ?? []).filter(checkpoint => checkpoint?.agentId === agentId),
     notices: (status.noticeLedgers ?? []).find(ledger => ledger?.agentId === agentId) ?? null };
 }
-const eventSoul = event => event?.registration?.agentId ?? event?.run?.agentId ?? null;
+// Notice acknowledgements name their soul at the top level, not in a run.
+const eventSoul = event => event?.registration?.agentId ?? event?.run?.agentId ?? event?.agentId ?? null;
 
 export async function soulDreamCommand(argv, {
   readStdin = () => readFileSync(0, 'utf8'),
