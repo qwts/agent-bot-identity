@@ -79,11 +79,12 @@ process; they are not durable outcome records and clear after successful capture
 
 One registration exists per soul on the current host, bound to its agent ID and
 canonical soul directory. Dispatch rechecks that binding against the population;
-a copied or moved directory does not inherit activation. The proposed CLI is:
+a copied or moved directory does not inherit activation. The CLI is:
 
 ```text
 agent-bot soul skill dream --soul SOUL --schedule PT24H
 agent-bot soul skill dream --soul SOUL --status
+agent-bot soul skill dream --soul SOUL --history [--after-revision N] [--limit N]
 agent-bot soul skill dream --soul SOUL --run-now
 agent-bot soul skill dream --soul SOUL --pause
 agent-bot soul skill dream --soul SOUL --unschedule
@@ -103,7 +104,8 @@ Pause disables future dispatch. Unschedule removes future registration while
 preserving run history. Neither operation claims to terminate an executing
 turn. Cancellation targets the named maintenance run through its own abort
 controller; the normal soul-wide stop command still reaches it through the
-shared registry. Status distinguishes cancellation requested from settled.
+shared registry. The CLI cancels a run only after current status shows it
+belongs to the named soul, because the route names the run alone. Status distinguishes cancellation requested from settled.
 If the executor resolves successfully despite a cancellation request, settlement
 is `completed` and retains the request timestamp/reason. A rejected execution
 after an abort records `cancelled` or `timed-out`; an abort before launch never
@@ -125,6 +127,17 @@ pause, unschedule, dispatch and completion serialize through the same service.
 A completion from an older registration generation cannot recreate or overwrite
 a subsequently changed registration. CLI clients do not start an alternative
 scheduler when the daemon is unavailable.
+
+`cli/soul-dream.mjs` is a thin client of the daemon routes above. `SOUL` is an
+agent ID or census name. Controls send `--principal-stdin` to the daemon, which
+performs the owner verification; a caller with soul markers is refused before
+any request. Without a running daemon every action fails with
+`dream-daemon-unavailable`; nothing runs in process. Status and history show
+only the named soul's registration, runs, input receipts and events, and always
+carry `maintenanceCoverage: unverified`. Output is JSON, compact with `--json`
+and indented otherwise. A deferred run-now, or a cancel that requests nothing,
+exits 1. Daemon error responses carry only `soul-paused` and owner credential
+codes; other dream failures report the daemon's message under a generic code.
 
 At most one dream turn per soul may be unsettled. The scheduler defers a due
 run while the soul is paused or the shared registry reports another active
@@ -347,7 +360,7 @@ of ADR-0603 complete.
 `skill-dream-scheduler.mjs` implements the scheduling state machine through
 injected ports. It has no default disk store, daemon registration, owner-control
 route, recurring timer loop, source reader, maintenance prompt, checkpoint
-publisher or notice consumer. The proposed CLI above is still unavailable.
+publisher or notice consumer.
 Importing this module creates no job. A production adapter must authorize the
 controls and supply the existing configured turn executor before exposing them.
 The separately supplied POSIX journal below implements the storage port; the

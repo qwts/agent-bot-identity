@@ -101,6 +101,7 @@
     "cli/output.mjs": "cli",
     "cli/parse.mjs": "cli",
     "cli/skill-references.mjs": "cli",
+    "cli/soul-dream.mjs": "cli",
     "cli/soul-skill.mjs": "cli",
     "cold-wake-settings.mjs": "soul",
     "cold-wake.mjs": "soul",
