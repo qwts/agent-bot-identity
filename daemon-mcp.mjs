@@ -30,6 +30,7 @@
 // under the same user — this server authenticates placement (env stamped by
 // the engine, or a worktree the user configured), not the calling process.
 
+import { REACH_CORRELATION_ENV } from './reach-env.mjs';
 import { readFileSync, realpathSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
@@ -67,10 +68,8 @@ export const REACH_AGENT_ID_ENV = 'AGENT_BOT_REACH_AGENT_ID';
 // teammate tools for a soul launched with comms off.
 export const REACH_WORKTREE_ENV = 'AGENT_BOT_REACH_WORKTREE';
 export const REACH_COMMS_ENV = 'AGENT_BOT_REACH_COMMS';
-// The thread a relayed turn belongs to (#392): the woken message's
-// correlation, or its id. send_message and start_soul's brief carry it, so a
-// teammate's answer finds its way back into this soul's thread.
-export const REACH_CORRELATION_ENV = 'AGENT_BOT_REACH_CORRELATION';
+// The thread a relayed turn belongs to (#392); named in reach-env.mjs.
+export { REACH_CORRELATION_ENV };
 const MAX_CORRELATION_LENGTH = 128;
 // The daemon's id for the relayed turn this server serves (#404), so a send's
 // aside joins the turn's other asides. Opaque to the agent.

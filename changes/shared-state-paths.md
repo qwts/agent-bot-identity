@@ -1,0 +1,1 @@
+- Internal: the state-root resolvers (`stateDirectory`, `interactionHome`) and the relayed-turn correlation variable name now live in shared modules (`state-paths.mjs`, `reach-env.mjs`). The original modules re-export them, and paths and environment names are unchanged (#645).

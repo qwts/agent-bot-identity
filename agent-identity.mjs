@@ -22,6 +22,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { stateDirectory } from './state-paths.mjs';
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -59,14 +60,7 @@ export function validateAgentId(id) {
   return id;
 }
 
-export function stateDirectory({ env = process.env, home = homedir() } = {}) {
-  // AGENT_BOT_STATE_HOME is the standalone name; QWTS_AGENT_STATE_HOME remains
-  // accepted so playbook-engineering launchers keep working against this clone.
-  const override = env.AGENT_BOT_STATE_HOME ?? env.QWTS_AGENT_STATE_HOME;
-  if (override) return path.resolve(override);
-  const base = env.XDG_STATE_HOME ? path.resolve(env.XDG_STATE_HOME) : path.join(home, '.local', 'state');
-  return path.join(base, 'agent-bot', 'agent-identities');
-}
+export { stateDirectory } from './state-paths.mjs';
 
 export function discoverTranscript(env = process.env) {
   const transcriptId = env.AGENT_BOT_TRANSCRIPT_ID ?? env.QWTS_AGENT_TRANSCRIPT_ID;

@@ -147,6 +147,7 @@
     "owner-principal.mjs": "comms",
     "permission-risk.mjs": "identity",
     "reach-contract.mjs": "comms",
+    "reach-env.mjs": "shared",
     "readiness.mjs": "cli",
     "resolve-agent.mjs": "identity",
     "runtime-catalog.mjs": "soul",
@@ -202,6 +203,7 @@
     "soul-worktrees.mjs": "soul",
     "souls-root.mjs": "soul",
     "spaces-cutover.mjs": "soul",
+    "state-paths.mjs": "shared",
     "sync-hooks.mjs": "cli",
     "task-turns.mjs": "comms",
     "team-start.mjs": "soul",
@@ -239,9 +241,7 @@
   "computed_imports": {},
   "baseline": [
     "agent-backfill.mjs -> agent-population.mjs",
-    "agent-principals.mjs -> agent-jobs.mjs",
     "approval-action.mjs -> agent-population.mjs",
-    "config-migration.mjs -> agent-identity.mjs",
     "config.mjs -> organization-profile.mjs",
     "daemon-launch.mjs -> wake-plane.mjs",
     "detect-harness.mjs -> organization-profile.mjs",
@@ -251,7 +251,6 @@
     "soul-credentials.mjs -> agent-population.mjs",
     "soul-credentials.mjs -> soul-package.mjs",
     "soul-credentials.mjs -> soul-providers.mjs",
-    "soul-credentials.mjs -> soul-revisions.mjs",
-    "wake-resume.mjs -> daemon-mcp.mjs"
+    "soul-credentials.mjs -> soul-revisions.mjs"
   ]
 }
