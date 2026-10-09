@@ -14,10 +14,29 @@ const KEYWORDS_BEFORE_EXPRESSION = new Set([
   'return', 'throw', 'typeof', 'void', 'yield',
 ]);
 
+const SIMPLE_ESCAPES = { b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', 0: '\0' };
+
+// The value a string literal denotes: `'./secret\x2dstore.mjs'` is the
+// specifier './secret-store.mjs', and Node imports it as such.
+export function decodeEscapes(raw) {
+  return raw.replace(
+    /\\(?:x([0-9A-Fa-f]{2})|u\{([0-9A-Fa-f]{1,6})\}|u([0-9A-Fa-f]{4})|(\r\n|[\n\r\u2028\u2029])|([\s\S]))/gu,
+    (match, hex, braced, unicode, lineContinuation, other) => {
+      if (hex || unicode) return String.fromCharCode(Number.parseInt(hex ?? unicode, 16));
+      if (braced) {
+        const point = Number.parseInt(braced, 16);
+        return point <= 0x10ffff ? String.fromCodePoint(point) : match;
+      }
+      if (lineContinuation) return '';
+      return SIMPLE_ESCAPES[other] ?? other;
+    },
+  );
+}
+
 // A small lexer, enough to tell code from comments, strings, template text
 // and regular expressions. It returns the code with every comment removed,
 // every literal string (and template without substitutions) replaced by a
-// placeholder `"\0<n>"` whose value is strings[n], and regex bodies blanked,
+// placeholder `"\0<n>"` whose decoded value is strings[n], and regex bodies blanked,
 // so the import patterns below only ever match real code.
 export function maskSource(source) {
   const strings = [];
@@ -35,8 +54,10 @@ export function maskSource(source) {
     if (word) return KEYWORDS_BEFORE_EXPRESSION.has(word);
     return !/[\w$)\]}"'`]/u.test(char);
   };
-  const quoted = (value) => {
-    strings.push(value);
+  // A backslash before CRLF is one line continuation, three characters long.
+  const escapeLength = (at) => (source[at + 1] === '\r' && source[at + 2] === '\n' ? 3 : 2);
+  const quoted = (raw) => {
+    strings.push(decodeEscapes(raw));
     return `"\0${strings.length - 1}"`;
   };
   // Reads template text from i (just past ` or }) to the closing ` or ${.
@@ -44,7 +65,7 @@ export function maskSource(source) {
     let text = '';
     while (i < source.length) {
       const c = source[i];
-      if (c === '\\') { text += source.slice(i, i + 2); i += 2; continue; }
+      if (c === '\\') { const n = escapeLength(i); text += source.slice(i, i + n); i += n; continue; }
       if (c === '`') { i += 1; return { text, closed: true }; }
       if (c === '$' && source[i + 1] === '{') { i += 2; return { text, closed: false }; }
       text += c;
@@ -65,7 +86,7 @@ export function maskSource(source) {
       let value = '';
       i += 1;
       while (i < source.length && source[i] !== c && source[i] !== '\n') {
-        if (source[i] === '\\') { value += source.slice(i, i + 2); i += 2; } else { value += source[i]; i += 1; }
+        if (source[i] === '\\') { const n = escapeLength(i); value += source.slice(i, i + n); i += n; } else { value += source[i]; i += 1; }
       }
       i += 1;
       out += quoted(value);
@@ -153,9 +174,13 @@ export function computedImports(source) {
   return dynamicCalls(maskSource(source)).computed;
 }
 
-// Repository-relative POSIX path of a specifier imported by `from`.
+// Repository-relative POSIX path of a specifier imported by `from`. Node
+// resolves a relative specifier as a URL: a query or fragment does not change
+// the file, and percent-escapes are decoded, so both are applied here too.
 export function resolveSpecifier(from, specifier) {
-  return normalize(join(dirname(from), specifier)).split('\\').join('/');
+  let path = specifier.replace(/[?#].*$/su, '');
+  try { path = decodeURIComponent(path); } catch { /* a malformed escape stays literal */ }
+  return normalize(join(dirname(from), path)).split('\\').join('/');
 }
 
 // Edges between files the map knows about. Imports of anything else (web
