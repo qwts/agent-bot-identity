@@ -1,1 +1,0 @@
-- Move the organization profile schema, validator and runtime-config projection into `organization-profile-schema.mjs`, a shared leaf, so `config.mjs` and `detect-harness.mjs` no longer cross into the org module. `organization-profile.mjs` keeps external acquisition (`readOrganizationProfile`) and re-exports the schema, so no import or command changes (#645).

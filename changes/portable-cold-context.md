@@ -1,1 +1,0 @@
-- Keep a registered soul's bounded cold-conversation journal under its durable history, preserve legacy context during migration and life export, and recover it after import. Environment inspection now identifies contained and legacy cold context (#583, #596).

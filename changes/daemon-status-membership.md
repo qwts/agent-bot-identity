@@ -1,1 +1,0 @@
-- `daemonStatus` (now `daemon-status.mjs`) and the agent-comms join/leave helpers (now `comms-membership.mjs`) move out of the `agent-daemon.mjs` process host, and the soul PATH helpers into `shell-path.mjs`, so no soul module imports the host any more; four more cross-module imports leave the boundary baseline. `agent-daemon.mjs` re-exports every moved name unchanged (#645).

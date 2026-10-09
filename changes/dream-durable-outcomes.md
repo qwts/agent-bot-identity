@@ -1,1 +1,0 @@
-- Persist bounded dream reports and independently checked revision evidence atomically with terminal execution facts, while retaining unverified claims, truncation and unsupported adapters explicitly (#603).

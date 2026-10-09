@@ -1,1 +1,0 @@
-- Render the soul's MCP server as `agent-reach`, matching the daemon's injected server and permission rules. Rebuilds migrate unchanged, marked `agent-bot` entries across all supported MCP files, keep customized legacy entries and other settings, and refuse to overwrite a custom server already using the canonical name (#378).

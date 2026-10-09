@@ -1,1 +1,0 @@
-- Resume `/v1` ACP conversations from their persisted, ownership-checked native session binding; report unsupported continuity and overlapping turns explicitly instead of silently starting over (#596).

@@ -1,1 +1,0 @@
-- `agent-bot keyd install|uninstall|status` now runs from `keyd-supervisor.mjs`, beside the daemon supervisor. Commands, flags, output and the launchd unit are unchanged; `keyd-client.mjs` keeps the protocol and grants (#645).

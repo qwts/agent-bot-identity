@@ -1,1 +1,0 @@
-- Concurrent first-time soul creators no longer refuse each other's half-made Agent Space at the default root: `ensureSoulSpace` lets `initAgentSpace` decide under its per-soul lock, which still refuses an unmarked directory or another soul's space.

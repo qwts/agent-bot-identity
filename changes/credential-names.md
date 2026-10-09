@@ -1,1 +1,0 @@
-- Credential item names (Keychain services and accounts, pass-cli note titles and vault, and the store names doctor and `identity apps remove` print) are now built in one place, `credential-names.mjs`. Every stored name is unchanged; this prepares host-owned namespaces (#676).

@@ -1,1 +1,0 @@
-- A launch refused because its harness can't start now carries a stable code in the launch journal and the failure detail: `harness-unknown`, `harness-disabled` or `harness-tool-missing` (#536). The message is unchanged after the code prefix. `harnessLaunchProblem` still returns the message alone; `harnessLaunchRefusal` returns `{ code, message }`.

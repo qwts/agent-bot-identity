@@ -1,1 +1,0 @@
-- Retain valid imported instruction documents with explicit partial reports when nested acquisition fails or is refused. Charge failed attempts and response bytes to shared limits; incomplete rechecks retain reviewable candidates but report freshness unavailable without replacing accepted or local material (#603, #312).

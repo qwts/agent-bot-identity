@@ -1,1 +1,0 @@
-- Skill source checks return a selectable receipt ID. `soul skill update` previews a three-way merge, applies only reviewed accepted/local digests, retains prior bytes, and recovers interrupted publication without changing soul or harness activation (#603, #312).
