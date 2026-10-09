@@ -104,19 +104,23 @@ agent-bot soul tool-home <harness> soul|global --soul <agentId|name> [--json] [-
 
 - With no choice it shows the recorded entry, or `unset (current setup)`.
 - **Who may set it:** the owner, for any soul, and the soul itself, for its
-  own soul only. A caller carrying a soul marker (an Agent ID, a binding or
-  an App identity) must be the target soul by Agent ID, or the command is
-  refused with `tool-home-not-own-soul`. A soul cannot present the owner's
-  principal (`tool-home-principal-not-accepted`).
+  own soul only.
+  - The owner passes the owner gate for every change (a presented
+    principal, else keyd presence, else the administrator dialog). A caller
+    without soul markers is not thereby the owner: a soul can unset them.
+  - A caller with a soul marker (an Agent ID, a binding or an App identity)
+    proves which soul it is with its live binding, which the daemon resolves
+    to an Agent ID. A stated `AGENT_BOT_ID` or git config is not proof. No
+    binding the daemon knows is `tool-home-soul-unproven`; a binding for
+    another soul is `tool-home-not-own-soul`. A soul cannot present the
+    owner's principal (`tool-home-principal-not-accepted`).
 - **`soul`** keeps the harness in the soul's own tool home. That never
-  widens what the soul can reach, so it needs no further proof.
-- **`global`** gives the soul the host's shared sign-in and sessions, so it
-  needs the owner. The owner passes the owner gate (a presented principal,
-  else keyd presence, else the administrator dialog). A soul asking for it
-  waits for the owner's presence (Touch ID or the login password, else the
-  administrator dialog). The prompt reads "let <soul> use this Mac's shared
-  <harness> sign-in and sessions instead of its own". A "no" changes nothing
-  and fails with `tool-home-owner-not-approved`.
+  widens what the soul can reach, so a soul's binding is enough.
+- **`global`** gives the soul the host's shared sign-in and sessions, so a
+  soul asking for it waits for the owner's presence (Touch ID or the login
+  password, else the administrator dialog). The prompt reads "let <soul> use
+  this Mac's shared <harness> sign-in and sessions instead of its own". A
+  "no" changes nothing and fails with `tool-home-owner-not-approved`.
 - Setting the entry it already has is a no-op: no prompt, no write, no
   receipt. Every change writes a `tool-home` audit receipt naming the
   harness, the old and new entry, who asked (owner or soul) and how it was

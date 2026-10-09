@@ -30,9 +30,11 @@ function fixture(t) {
   upsertSoul({ id: OTHER, name: 'ann', status: 'active', spacePath: home }, { file });
   const out = [], gates = [], asks = [];
   // The soul marker check is injected; `markers` decides who the caller is.
-  const run = (argv, { markers = [], caller = env, approve = true, stdin = '' } = {}) => soulToolHomeCommand(argv, {
+  // `proven` is the Agent ID the daemon resolves the caller's binding to.
+  const run = (argv, { markers = [], caller = env, approve = true, stdin = '', proven = null } = {}) => soulToolHomeCommand(argv, {
     env: caller, home, cwd: home, now: () => new Date(AT), write: (text) => out.push(text),
-    markers: () => markers, readStdin: () => stdin,
+    markers: () => markers, readStdin: () => stdin, provenSoul: async () => proven,
+    client: { binding: async () => assert.fail('the proof is injected') },
     ownerGate: async (action, input) => { gates.push({ action, principal: input.principal });
       if (!approve) throw new Error('the owner said no'); return { method: 'presence' }; },
     askOwner: async (action) => { asks.push(action); if (!approve) throw new Error('the owner said no'); return { method: 'presence' }; },
@@ -51,22 +53,32 @@ test('with no choice it shows the recorded choice, unset for a soul without a re
   assert.deepEqual(f.receipts(), []);
 });
 
-test('the owner sets soul without a prompt and global through the owner gate, each with a receipt', async (t) => {
+test('every owner change goes through the owner gate and writes a receipt', async (t) => {
   const f = fixture(t);
   const kept = await f.run(['codex', 'soul', '--soul', ID]);
   assert.equal(kept.choice, 'soul');
-  assert.equal(kept.authorization, 'none');
-  assert.deepEqual(f.gates, []);
+  assert.equal(kept.authorization, 'presence');
   const global = await f.run(['codex', 'global', '--soul', ID, '--json']);
   assert.equal(global.choice, 'global');
   assert.equal(global.previous, 'soul');
   assert.equal(global.caller, 'owner');
-  assert.deepEqual(f.gates, [{ action: `soul tool-home ${ID} codex global`, principal: null }]);
+  assert.deepEqual(f.gates, [
+    { action: `soul tool-home ${ID} codex soul`, principal: null },
+    { action: `soul tool-home ${ID} codex global`, principal: null },
+  ]);
   assert.deepEqual(readToolHomeRecord(f.soulDir).harnesses, { codex: 'global' });
   assert.deepEqual(f.receipts().map(({ event, agentId, decision, detail }) => ({ event, agentId, decision, detail })), [
-    { event: 'tool-home', agentId: ID, decision: 'soul', detail: 'codex: unset -> soul by owner (none)' },
+    { event: 'tool-home', agentId: ID, decision: 'soul', detail: 'codex: unset -> soul by owner (presence)' },
     { event: 'tool-home', agentId: ID, decision: 'global', detail: 'codex: soul -> global by owner (presence)' },
   ]);
+});
+
+test('a caller with no soul marker is not the owner without the gate: a refusal changes nothing', async (t) => {
+  const f = fixture(t);
+  setToolHomeChoice(f.soulDir, 'codex', 'global');
+  await assert.rejects(f.run(['codex', 'soul', '--soul', ID], { approve: false }), { code: 'tool-home-owner-not-approved' });
+  assert.deepEqual(readToolHomeRecord(f.soulDir).harnesses, { codex: 'global' });
+  assert.deepEqual(f.receipts(), []);
 });
 
 test('a presented principal reaches the owner gate', async (t) => {
@@ -77,36 +89,58 @@ test('a presented principal reaches the owner gate', async (t) => {
 
 test('a soul changes its own tool home; global asks the owner, and a refusal changes nothing', async (t) => {
   const f = fixture(t);
-  const soul = { ...f.env, AGENT_BOT_ID: ID };
-  assert.equal((await f.run(['codex', 'soul', '--soul', ID], { markers: ['Agent ID'], caller: soul })).caller, 'soul');
+  const soul = { markers: ['Agent ID', 'agent binding'], proven: ID };
+  const kept = await f.run(['codex', 'soul', '--soul', ID], soul);
+  assert.equal(kept.caller, 'soul');
+  assert.equal(kept.authorization, 'binding');
   assert.deepEqual(f.asks, []);
-  await assert.rejects(f.run(['codex', 'global', '--soul', ID], { markers: ['Agent ID'], caller: soul, approve: false }),
+  await assert.rejects(f.run(['codex', 'global', '--soul', ID], { ...soul, approve: false }),
     { code: 'tool-home-owner-not-approved' });
   assert.deepEqual(f.asks, [`soul tool-home ${ID} codex global`]);
   assert.deepEqual(readToolHomeRecord(f.soulDir).harnesses, { codex: 'soul' });
   assert.equal(f.receipts().length, 1);
-  const approved = await f.run(['codex', 'global', '--soul', ID], { markers: ['Agent ID'], caller: soul });
+  const approved = await f.run(['codex', 'global', '--soul', ID], soul);
   assert.equal(approved.authorization, 'presence');
   assert.deepEqual(readToolHomeRecord(f.soulDir).harnesses, { codex: 'global' });
   assert.deepEqual(f.gates, [], 'a soul never goes through the owner-only gate');
 });
 
-test('a soul cannot change another soul, or one it cannot name, and cannot present the owner principal', async (t) => {
+test('a soul proves itself by its live binding: a stated Agent ID is not enough, and it cannot change another soul', async (t) => {
   const f = fixture(t);
-  await assert.rejects(f.run(['codex', 'soul', '--soul', ID], { markers: ['Agent ID'], caller: { ...f.env, AGENT_BOT_ID: OTHER } }),
+  // Names the target in AGENT_BOT_ID, but the daemon knows no binding for it.
+  await assert.rejects(f.run(['codex', 'soul', '--soul', ID], { markers: ['Agent ID'], caller: { ...f.env, AGENT_BOT_ID: ID } }),
+    { code: 'tool-home-soul-unproven' });
+  await assert.rejects(f.run(['codex', 'soul', '--soul', ID], { markers: ['Agent ID', 'agent binding'], proven: OTHER }),
     { code: 'tool-home-not-own-soul' });
-  await assert.rejects(f.run(['codex', 'soul', '--soul', ID], { markers: ['App identity'] }), { code: 'tool-home-not-own-soul' });
-  await assert.rejects(f.run(['codex', 'global', '--soul', ID, '--principal-stdin'], { markers: ['Agent ID'], caller: { ...f.env, AGENT_BOT_ID: ID }, stdin: '{}' }),
+  await assert.rejects(f.run(['codex', 'global', '--soul', ID, '--principal-stdin'], { markers: ['Agent ID'], proven: ID, stdin: '{}' }),
     { code: 'tool-home-principal-not-accepted' });
   assert.equal(readToolHomeRecord(f.soulDir), null);
   assert.deepEqual([...f.gates, ...f.asks], []);
   assert.deepEqual(f.receipts(), []);
 });
 
+test('the binding proof is resolved by the daemon, not taken from the binding file', async (t) => {
+  const f = fixture(t);
+  const binding = { v: 1, secret: 'A'.repeat(43), account: 'test', daemon: 'http://127.0.0.1:1/', agentId: ID, parent: null };
+  const { writeFileSync } = await import('node:fs');
+  const file = path.join(f.home, 'agent-binding.json');
+  writeFileSync(file, JSON.stringify(binding), { mode: 0o600 });
+  const presented = [];
+  const run = (answer) => soulToolHomeCommand(['codex', 'soul', '--soul', ID], {
+    env: { ...f.env, AGENT_BOT_BINDING: file }, home: f.home, cwd: f.home, write: () => {}, markers: () => ['agent binding'],
+    client: { binding: async (secret) => { presented.push(secret); if (answer instanceof Error) throw answer; return answer; } },
+  });
+  await assert.rejects(run(new Error('missing or invalid agent binding')), { code: 'tool-home-soul-unproven' });
+  await assert.rejects(run({ agentId: OTHER }), { code: 'tool-home-soul-unproven' });
+  assert.equal((await run({ agentId: ID })).authorization, 'binding');
+  assert.deepEqual(presented, Array(3).fill(binding.secret));
+});
+
 test('setting the recorded choice again is a no-op without a prompt or receipt', async (t) => {
   const f = fixture(t);
   setToolHomeChoice(f.soulDir, 'codex', 'global');
   assert.equal((await f.run(['codex', 'global', '--soul', ID])).changed, false);
+  assert.equal((await f.run(['codex', 'global', '--soul', ID], { markers: ['Agent ID'] })).changed, false, 'nothing to prove for a no-op');
   assert.deepEqual(f.gates, []);
   assert.deepEqual(f.receipts(), []);
 });

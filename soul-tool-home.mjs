@@ -4,20 +4,25 @@
 // tool home (`soul`) or uses the host's global install and store (`global`).
 //
 // Who may set it:
-// - the owner, always (no soul marker);
-// - the soul itself, for its own soul only (its Agent ID is the target).
-// `soul` keeps the harness inside the soul, which never widens what it can
-// reach, so it needs no further proof. `global` gives the soul the host's
-// shared sign-in and sessions: the owner proves it through the owner gate,
-// and a soul asking for it waits for the owner's presence (Touch ID, the
-// login password, else the administrator dialog). A "no" changes nothing.
-// Every change writes an audit receipt; showing and a no-op do not.
+// - the owner, for any soul, through the owner gate (owner-gate.mjs): a
+//   caller without soul markers is not thereby the owner, so every owner
+//   change is proven;
+// - the soul itself, for its own soul only, proven by its live binding,
+//   which the daemon resolves to an Agent ID. A stated Agent ID or git
+//   config is not proof: a soul could name another.
+// For a soul, `soul` keeps the harness inside itself, which never widens
+// what it can reach, so the binding is enough. `global` gives it the host's
+// shared sign-in and sessions, so it waits for the owner's presence (Touch
+// ID, the login password, else the administrator dialog). A "no" changes
+// nothing. Every change writes an audit receipt; showing and a no-op do not.
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { appendAuditReceipt } from './agent-principals.mjs';
-import { currentAgentId, validateAgentId, withLock } from './agent-identity.mjs';
+import { readBinding } from './agent-binding.mjs';
+import { validateAgentId, withLock } from './agent-identity.mjs';
+import { daemonClient } from './daemon-client.mjs';
 import { assertOwnerAction, presenceOrConsent, soulMarkers } from './owner-action.mjs';
 import { readToolHomeRecord, setToolHomeChoice, toolHomeRecordPath } from './soul-tool-home-record.mjs';
 import { TOOL_HOME_CHOICES, toolHomeFor } from './soul-tool-homes.mjs';
@@ -59,22 +64,31 @@ async function resolveSoul(target, { env, home }) {
   return { id: soul.id, soulDir };
 }
 
-// The Agent ID a soul caller runs as, or null when its markers name none
-// (an App identity alone) or name an invalid one.
-function callerAgentId({ env, cwd }) {
-  try { return currentAgentId({ env, cwd }); } catch { return null; }
+// The Agent ID a soul caller has proven: its binding, presented to the
+// daemon and resolved there. Null without a binding, without a daemon, or
+// when the daemon does not know the binding.
+async function provenSoulId({ env, cwd, client }) {
+  let binding;
+  try { binding = readBinding({ env, cwd }); } catch { return null; }
+  if (!binding) return null;
+  try {
+    const live = await client.binding(binding.secret);
+    return live?.agentId === binding.agentId ? live.agentId : null;
+  } catch { return null; }
 }
 
 export async function soulToolHomeCommand(argv, {
   ownerGate = (action, options) => assertOwnerAction(action, { ...options, detect: false }),
   askOwner = presenceOrConsent,
   markers = (options) => soulMarkers({ ...options, detect: false }),
+  provenSoul = provenSoulId,
   readStdin = () => readFileSync(0, 'utf8'),
   write = (text) => process.stdout.write(text),
   env = process.env,
   home = homedir(),
   cwd = process.cwd(),
   now = () => new Date(),
+  client = daemonClient({ env, home, cwd }),
 } = {}) {
   const { harness: name, choice, target, json, presented } = parse(argv);
   const row = toolHomeFor(name);
@@ -86,10 +100,10 @@ export async function soulToolHomeCommand(argv, {
     const found = markers({ env, cwd });
     const caller = found.length ? 'soul' : 'owner';
     if (caller === 'soul') {
-      if (callerAgentId({ env, cwd }) !== soul.id) {
-        fail('tool-home-not-own-soul', `a soul may change only its own tool homes; this caller has a soul's ${found.join(', ')}`, 403);
-      }
       if (presented) fail('tool-home-principal-not-accepted', '--principal-stdin is the owner\'s; a soul asks the owner instead', 403);
+      const proven = await provenSoul({ env, cwd, client });
+      if (proven === null) fail('tool-home-soul-unproven', `a soul changes its tool homes with its live binding, and this caller has none the daemon knows (it has a soul's ${found.join(', ')})`, 403);
+      if (proven !== soul.id) fail('tool-home-not-own-soul', `a soul may change only its own tool homes; this caller is bound as ${proven}`, 403);
     }
     let principal = null;
     if (presented) {
@@ -97,15 +111,15 @@ export async function soulToolHomeCommand(argv, {
       catch { fail('tool-home-principal-invalid', '--principal-stdin needs the principal credential as JSON on stdin'); }
     }
     const action = `soul tool-home ${soul.id} ${row.harness} ${choice}`;
-    let authorization = { method: 'none' };
-    if (choice === 'global') {
+    let authorization = { method: 'binding' };
+    if (caller === 'owner' || choice === 'global') {
       try {
         authorization = caller === 'owner'
           ? await ownerGate(action, { principal, env, cwd })
           : await askOwner(action, { env });
       } catch (error) {
         throw Object.assign(new Error(`${action} needs the owner and was not approved: ${error.message}`),
-          { code: 'tool-home-owner-not-approved', statusCode: 403, cause: error });
+          { code: error.code === 'owner-credential-required' ? error.code : 'tool-home-owner-not-approved', statusCode: 403, cause: error });
       }
     }
     // The record has no other writer after a soul's birth, but two of these
