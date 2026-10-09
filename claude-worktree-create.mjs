@@ -275,10 +275,10 @@ async function main() {
     }
     catch (error) { if (!error.message.startsWith('no population record for ')) throw error; }
     if (!registered) {
-      await bindSoul({ agentId, policy: daemonPreference({ config }), client: daemonClient(), sighted: true,
+      await bindSoul({ agentId, policy: daemonPreference({ config }), client: daemonClient(),
         ensureLocal: () => {
           const space = ensureSoulSpace(agentId);
-          upsertIdentitySoul(agentId, space.path, { sighted: true });
+          upsertIdentitySoul(agentId, space.path);
           return space;
         },
       });

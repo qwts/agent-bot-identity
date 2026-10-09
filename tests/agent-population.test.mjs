@@ -188,6 +188,7 @@ test('presence is present within the window, historical after it, unknown when n
   assert.equal(soulPresence(fixture(), now), null);
   assert.equal(soulPresence(fixture({ lastSightedAt: sightedAt(PRESENCE_WINDOW_MS) }), now), 'present');
   assert.equal(soulPresence(fixture({ lastSightedAt: sightedAt(PRESENCE_WINDOW_MS + 1) }), now), 'historical');
+  assert.equal(soulPresence(fixture({ lastSightedAt: sightedAt(-1) }), now), 'historical', 'a future sighting is not presence');
   assert.equal(soulPresence(fixture({ status: 'retired', lastSightedAt: now.toISOString() }), now), 'historical');
 
   const recent = fixture({ lastSightedAt: sightedAt(60_000) });

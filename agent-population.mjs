@@ -250,14 +250,15 @@ function lastSightedAtField(value) {
 // historical in `population list` and doctor (#109).
 export const PRESENCE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-// 'present' when sighted within PRESENCE_WINDOW_MS of `now`, 'historical'
-// when sighted earlier or retired, null when never sighted: a row that
+// 'present' when sighted within PRESENCE_WINDOW_MS before `now`, 'historical'
+// when sighted earlier, in the future (a clock rollback), or retired, null when never sighted: a row that
 // predates the field cannot say, just as PARENT '?' cannot. Derived on read,
 // never stored.
 export function soulPresence(record, now = new Date()) {
   if (!record?.lastSightedAt) return null;
   if (record.status === 'retired') return 'historical';
-  return now.getTime() - Date.parse(record.lastSightedAt) <= PRESENCE_WINDOW_MS ? 'present' : 'historical';
+  const age = now.getTime() - Date.parse(record.lastSightedAt);
+  return age >= 0 && age <= PRESENCE_WINDOW_MS ? 'present' : 'historical';
 }
 
 function displayNameField(value) {
