@@ -10,6 +10,7 @@ import { diffSkillManifest } from './skill-manifest.mjs';
 import { skillLibraryRoot } from './skill-library-paths.mjs';
 import { acquireRemoteSkill, skillSourceUrl, REMOTE_SKILL_LIMITS } from './skill-remote.mjs';
 import { inlineMarkdownLinks } from './skill-references.mjs';
+import { mergeSkillUpdate } from './skill-update-merge.mjs';
 
 export const SKILL_LIBRARY_LIMITS = Object.freeze({ files: 1000, entries: 4000, bytes: 32 * 1024 * 1024, fileBytes: 8 * 1024 * 1024, entryBytes: 64 * 1024, depth: 16, references: 1000 });
 function boundedLimits(limits = {}) {
@@ -242,10 +243,15 @@ function validateManifest(value) {
   }
   if (hash(Buffer.from(canonicalJson(value.files))) !== value.digest) fail('skill-record-invalid', 'skill manifest digest does not match its files');
 }
-function load(id, options) {
-  const root = recordRoot(id, options), record = json(path.join(root, 'manifest.json'));
-  if (record.schemaVersion !== 1 || record.id !== id || !validName(record.name) || !DIGEST.test(record.accepted ?? '') || !validSource(record.source)) fail('skill-record-invalid', 'invalid skill library record');
+function validateRecord(record, id) {
+  if (!record || record.schemaVersion !== 1 || record.id !== id || !validName(record.name) || !DIGEST.test(record.accepted ?? '') || !validSource(record.source)) fail('skill-record-invalid', 'invalid skill library record');
   validateManifest(record.localBaseline);
+  return record;
+}
+function load(id, options) {
+  const root = recordRoot(id, options);
+  if (exists(path.join(root, '.pending-update.json'))) fail('skill-update-pending', 'an interrupted skill update needs update --recover before further library operations');
+  const record = validateRecord(json(path.join(root, 'manifest.json')), id);
   return { root, record };
 }
 function writeJson(file, value) {
@@ -385,8 +391,9 @@ export function readSkillMaterial(id, { selection = 'accepted', expectedDigest, 
 function checkReceipt(root, result) {
   const checks = storedPath(root, '.checks');
   mkdirSync(checks, { recursive: true, mode: 0o700 });
-  writeJson(path.join(checks, `${randomUUID()}.json`), result);
-  return result;
+  const receipt = { ...result, checkId: randomUUID() };
+  writeJson(path.join(checks, `${receipt.checkId}.json`), receipt);
+  return receipt;
 }
 function textDiffs(root, accepted, candidate, changes) {
   let budget = 64 * 1024;
@@ -437,4 +444,137 @@ export function checkSkill(id, { now = () => new Date(), ...options } = {}) {
     return checkReceipt(root, result);
   }, { keepLiveOwners: true });
   }
+}
+
+
+const recordDigest = record => hash(Buffer.from(canonicalJson(record)));
+function updateInput(id, checkId, options) {
+  if (!UUID.test(checkId ?? '')) fail('skill-check-invalid', 'select a recorded source-check UUID');
+  const { root, record } = load(id, options);
+  const check = json(storedPath(root, '.checks', `${checkId}.json`));
+  if (!check || check.id !== id || (check.checkId !== undefined && check.checkId !== checkId)
+    || !['changed', 'unchanged'].includes(check.status) || !DIGEST.test(check.candidate ?? '')) fail('skill-check-invalid', 'only an available source check can be adopted');
+  if (check.accepted !== record.accepted) fail('skill-update-stale', 'source check is based on an older accepted snapshot');
+  const accepted = readSnapshot(root, record.accepted), candidate = readSnapshot(root, check.candidate);
+  if (accepted.owner !== id || accepted.name !== record.name) fail('skill-record-invalid', 'accepted snapshot does not match the import');
+  if (candidate.owner !== id || candidate.name !== check.candidateName || (check.coverage ?? candidate.coverage).acquisition === 'partial') fail('skill-check-invalid', 'source check candidate is incomplete or belongs to another import');
+  const base = inventory(path.join(snapshotPath(root, record.accepted), 'payload'), options);
+  const upstream = inventory(path.join(snapshotPath(root, check.candidate), 'payload'), options);
+  const local = inventory(path.join(root, record.name), options);
+  if (local.excluded.length) fail('skill-update-unmanaged', 'remove or relocate excluded local material before updating; no files were changed');
+  const merge = mergeSkillUpdate(base.entries, local.entries, upstream.entries);
+  if (candidate.name !== record.name && exists(path.join(root, candidate.name))) merge.conflicts.push({ path: candidate.name, reason: 'destination-exists' });
+  merge.status = merge.conflicts.length ? 'conflicted' : 'ready';
+  const merged = manifest(merge.entries), limits = boundedLimits(options.limits);
+  if (merge.entries.length > limits.files || merge.entries.reduce((sum, entry) => sum + entry.bytes.length, 0) > limits.bytes) fail('skill-limit', 'merged skill exceeds library bounds');
+  if (merge.status === 'ready') {
+    try { validateSkill(merge.entries.find(entry => entry.path === 'SKILL.md')?.bytes, candidate.name); }
+    catch { fail('skill-update-entry-conflict', 'merged entrypoint does not match the upstream name; resolve the local entrypoint before updating'); }
+  }
+  return { root, record, check, candidate, local, merge, merged, accepted };
+}
+function updateReport(id, checkId, input) {
+  return { id, checkId, status: input.merge.status, accepted: input.record.accepted, candidate: input.check.candidate,
+    currentLocal: input.local.digest, merged: input.merged.digest, name: input.candidate.name,
+    conflicts: input.merge.conflicts, decisions: input.merge.decisions,
+    upstreamChanges: diffSkillManifest(input.accepted.manifest, input.candidate.manifest),
+    proposedLocalChanges: diffSkillManifest(input.local, input.merged),
+    coverage: input.check.coverage ?? input.candidate.coverage, activationChanged: false };
+}
+export function planSkillUpdate(id, checkId, options = {}) {
+  return updateReport(id, checkId, updateInput(id, checkId, options));
+}
+function updateReceipt(directory, value) {
+  const file = storedPath(directory, 'result.json');
+  if (exists(file)) {
+    const prior = json(file);
+    if (prior.updateId !== value.updateId || prior.id !== value.id || prior.status !== value.status) fail('skill-update-invalid', 'update outcome conflicts with its recovery record');
+    return prior;
+  }
+  const staging = path.join(directory, `.result-${randomUUID()}.json`);
+  try { writeJson(staging, value); renameSync(staging, file); }
+  finally { rmSync(staging, { force: true }); }
+  return value;
+}
+export function applySkillUpdate(id, checkId, { expectedAccepted, expectedLocal, now = () => new Date(), checkpoint = () => {}, ...options } = {}) {
+  if (!DIGEST.test(expectedAccepted ?? '') || !DIGEST.test(expectedLocal ?? '')) fail('skill-update-review-required', 'apply requires the accepted and local digests from an update preview');
+  const root = recordRoot(id, options);
+  return withLock(path.join(root, '.check.lock'), 'skill source update', () => {
+    const input = updateInput(id, checkId, options), report = updateReport(id, checkId, input);
+    if (expectedAccepted !== input.record.accepted || expectedLocal !== input.local.digest) fail('skill-update-stale', 'accepted or local skill changed since review; preview again');
+    if (report.status === 'conflicted') return report;
+    const updateId = randomUUID(), updates = storedPath(root, '.updates');
+    mkdirSync(updates, { recursive: true, mode: 0o700 });
+    const directory = path.join(updates, updateId), pending = path.join(root, '.pending-update.json');
+    mkdirSync(directory, { mode: 0o700 });
+    const after = { ...input.record, name: input.candidate.name, accepted: input.check.candidate,
+      localBaseline: input.merged, updatedAt: now().toISOString(), lastUpdate: updateId };
+    let prepared = false;
+    try {
+      writePayload(path.join(directory, 'candidate'), input.merge.entries);
+      if (inventory(path.join(directory, 'candidate'), options).digest !== input.merged.digest) fail('skill-update-invalid', 'prepared update differs from the reviewed merge');
+      writeJson(path.join(directory, 'before-manifest.json'), input.record);
+      writeJson(path.join(directory, 'after-manifest.json'), after);
+      writeJson(path.join(directory, 'next-manifest.json'), after);
+      chmodSync(path.join(directory, 'next-manifest.json'), 0o444);
+      const transaction = { schemaVersion: 1, id, updateId, checkId, oldName: input.record.name, newName: after.name,
+        before: recordDigest(input.record), after: recordDigest(after) };
+      const stagedPending = path.join(directory, 'pending.json');
+      writeJson(stagedPending, transaction);
+      renameSync(stagedPending, pending); prepared = true;
+      checkpoint('prepared');
+      if (inventory(path.join(root, input.record.name), options).digest !== expectedLocal
+        || recordDigest(json(path.join(root, 'manifest.json'))) !== transaction.before) fail('skill-update-stale', 'skill changed during update preparation');
+      renameSync(path.join(root, input.record.name), path.join(directory, 'previous'));
+      checkpoint('previous-retained');
+      renameSync(path.join(directory, 'candidate'), path.join(root, after.name));
+      checkpoint('payload-published');
+      if (inventory(path.join(root, after.name), options).digest !== input.merged.digest) fail('skill-update-stale', 'published payload changed before metadata commit');
+      renameSync(path.join(directory, 'next-manifest.json'), path.join(root, 'manifest.json'));
+      checkpoint('record-published');
+      const result = updateReceipt(directory, { ...report, status: 'updated', updateId, previousPayload: path.join(directory, 'previous'), recordedAt: now().toISOString() });
+      rmSync(pending);
+      return result;
+    } catch (error) {
+      if (!prepared) { removeStaging(directory); throw error; }
+      fail('skill-update-pending', 'skill update was interrupted; run update --recover before further operations; prior local material is retained');
+    }
+  }, { keepLiveOwners: true });
+}
+export function recoverSkillUpdate(id, { now = () => new Date(), ...options } = {}) {
+  const root = recordRoot(id, options);
+  return withLock(path.join(root, '.check.lock'), 'skill update recovery', () => {
+    const pending = storedPath(root, '.pending-update.json');
+    if (!exists(pending)) return { id, status: 'clean', activationChanged: false };
+    const transaction = json(pending);
+    if (!transaction || transaction.schemaVersion !== 1 || transaction.id !== id || !UUID.test(transaction.updateId ?? '') || !UUID.test(transaction.checkId ?? '')
+      || !validName(transaction.oldName) || !validName(transaction.newName) || !DIGEST.test(transaction.before ?? '') || !DIGEST.test(transaction.after ?? '')) fail('skill-update-invalid', 'invalid interrupted-update record');
+    const directory = storedPath(root, '.updates', transaction.updateId);
+    const before = validateRecord(json(storedPath(directory, 'before-manifest.json')), id);
+    const after = validateRecord(json(storedPath(directory, 'after-manifest.json')), id);
+    if (recordDigest(before) !== transaction.before || recordDigest(after) !== transaction.after || before.name !== transaction.oldName || after.name !== transaction.newName || after.lastUpdate !== transaction.updateId
+      || canonicalJson(before.source) !== canonicalJson(after.source)) fail('skill-update-invalid', 'interrupted-update records disagree');
+    const current = recordDigest(validateRecord(json(path.join(root, 'manifest.json')), id));
+    let status, drift = null;
+    if (current === transaction.after) {
+      drift = inventory(storedPath(root, after.name), options).digest !== after.localBaseline.digest;
+      status = 'updated';
+    } else if (current === transaction.before) {
+      const previous = storedPath(directory, 'previous'), old = storedPath(root, before.name), next = storedPath(root, after.name);
+      if (exists(previous)) {
+        if (!exists(previous).isDirectory() || (before.name !== after.name && exists(old))) fail('skill-update-conflict', 'recovery destination contains unrelated material');
+        if (exists(next)) {
+          if (!exists(next).isDirectory() || exists(path.join(directory, 'candidate')) || exists(path.join(directory, 'interrupted-payload'))) fail('skill-update-conflict', 'recovery cannot move an unexpected destination');
+          renameSync(next, path.join(directory, 'interrupted-payload'));
+        }
+        renameSync(previous, old);
+      } else if (!exists(old)?.isDirectory()) fail('skill-update-conflict', 'previous payload is missing; recovery refuses to discard material');
+      drift = inventory(old, options).digest !== before.localBaseline.digest;
+      status = 'rolled-back';
+    } else fail('skill-update-conflict', 'library metadata changed outside the interrupted update');
+    const result = updateReceipt(directory, { id, updateId: transaction.updateId, checkId: transaction.checkId, status,
+      localDrift: drift, retainedMaterial: directory, activationChanged: false, recordedAt: now().toISOString() });
+    rmSync(pending);
+    return result;
+  }, { keepLiveOwners: true });
 }

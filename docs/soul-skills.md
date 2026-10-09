@@ -5,8 +5,9 @@ bytes and provenance separately from an editable copy. Importing does not run
 scripts, activate a harness skill, select an SOP, or create a soul revision.
 This implements local-directory and HTTPS-document acquisition and comparison
 for #603/#312. Learning guides selected adaptations through the existing soul
-revision/proposal policy. Repository directory adapters, source-update adoption,
-installation and dreaming remain separate work.
+revision/proposal policy. Explicit source updates merge a reviewed candidate into
+the standalone library. Repository directory adapters, installation and dreaming
+remain separate work.
 
 ```sh
 agent-bot soul skill import /path/to/skill --json
@@ -115,8 +116,11 @@ lives at `<root>/<uuid>/`:
 - `.snapshots/<sha256-hex>/payload/` retains exact acquired bytes. Its sibling
   `manifest.json` records file hashes, byte sizes, executable modes, source,
   acquisition time, dependency edges, coverage, exclusions and materialized links.
-- `.checks/<uuid>.json` records each successful or unavailable source check. Receipts are append-only;
+- `.checks/<uuid>.json` records each successful or unavailable source check, returned as `checkId`. Receipts are append-only;
   automatic retention/pruning is not implemented, so repeated checks grow this directory.
+- `.updates/<uuid>/` retains before/after records, prior local material and the
+  outcome of an explicit update. `.pending-update.json` identifies an interrupted
+  transaction requiring recovery. These are protected library metadata too.
 
 Metadata stays outside the skill payload and its checksum. File receipts use
 SHA-256 of exact bytes and mode `100644` or `100755`; the aggregate hashes the
@@ -135,8 +139,8 @@ This cooperative guard does not intercept arbitrary shell commands.
 Snapshot bytes are immutable through these commands. Reads verify the snapshot
 against its receipt and refuse corrupt records. This is corruption detection,
 not protection from another process with the same filesystem account's access
-or authority to change permissions. Later adoption must verify again and use
-the existing revision authorization.
+or authority to change permissions. Adoption into a soul must verify again and
+use the existing revision authorization.
 Editing the local payload never edits its retained upstream snapshot.
 
 ## Compare without adopting
@@ -154,12 +158,66 @@ reasons and remain available in the snapshots.
 A source that disappeared, became invalid or exceeded a limit is unavailable.
 The check records the reason and retains the accepted snapshot and local edits.
 Neither changed nor unchanged results replace the local files, accepted snapshot
-pointer or local baseline. Later adoption must go through the soul revision
-policy; this library does not introduce a second soul revision history.
+pointer or local baseline. The explicit update below affects only the library;
+adoption into a soul still goes through its existing revision policy.
 
 All successful output is JSON (pretty by default; compact with `--json`). Exit 0
 means the operation succeeded, including a changed candidate. Exit 1 reports
 errors, local drift or an unavailable source; exit 2 is incorrect command usage.
+
+## Review and apply a source update
+
+A successful source check returns `checkId`. Select that recorded check for a
+read-only three-way preview of accepted upstream, current local files and the
+candidate. Preview and apply use retained snapshots; they do not fetch again.
+
+```sh
+agent-bot soul skill update UUID --check CHECK_ID --json
+agent-bot soul skill update UUID --check CHECK_ID --apply \
+  --expected-accepted sha256:ACCEPTED_FROM_PREVIEW \
+  --expected-local sha256:CURRENT_LOCAL_FROM_PREVIEW --json
+agent-bot soul skill update UUID --recover --json
+```
+
+The preview reports per-file decisions, conflicts, upstream differences and
+proposed local changes. A file changed only upstream takes the upstream bytes;
+one changed only locally keeps the local bytes. Identical results converge.
+Different changes on both sides, add/add or delete/modify conflicts refuse the
+whole update with `status: conflicted` (exit 1). This is an exact-file merge,
+including executable mode, not a text merge: it never inserts conflict markers
+or guesses how two edits combine. File/directory and portable-name collisions
+also refuse. Resolve conflicting local files deliberately, then preview again.
+
+Apply requires both digests from the reviewed preview. It rechecks under the
+same lock as source checking and refuses stale local bytes, an older accepted
+snapshot or an unavailable/partial candidate. Excluded local entries, such as
+`.git` or `node_modules`, also refuse: move them out deliberately before retrying.
+An upstream name change renames the editable directory only when the destination
+is free and the merged entrypoint still declares that name.
+
+A successful apply advances the accepted upstream pointer and records the merged
+local baseline. It retains the entire previous local directory under
+`.updates/<updateId>/previous`, alongside the before/after metadata and result.
+Earlier immutable upstream snapshots remain intact. `verify` checks the new
+baseline; later source checks still identify local adaptations relative to the
+new accepted upstream. There is no automatic pruning of update material.
+
+The update stages bytes and metadata before publishing a pending marker, then
+moves the previous payload aside, publishes the candidate, and commits the
+manifest pointer. A process interruption after the marker blocks normal library
+operations on that import with `skill-update-pending`. Run `update --recover`:
+before metadata commit it restores the previous payload; after commit it keeps
+the new state. Edits made to an interrupted published payload are retained under
+`interrupted-payload` when rolling back; post-commit edits stay live and report
+local drift. Unexpected paths, links or altered metadata refuse recovery rather
+than overwrite them. Repeating completed recovery reports `clean`. This covers
+process interruption; it does not claim power-loss durability or protection from
+uncooperative same-account writers.
+
+Library updates require no soul binding, never execute skill contents, and
+report `activationChanged: false`. Existing soul packages, harness installations
+and schedules are unaffected. Use the learning/revision flow below to adopt
+selected updated material into a soul.
 
 ## Acquisition and coverage boundaries
 
@@ -196,7 +254,7 @@ metadata. Imported file contents still preserve the original bytes; this is
 not payload secret redaction. Local-directory import never fetches remote links;
 only the explicit HTTPS-document adapter performs the bounded capture above.
 No permission is inferred from a reference. Repository adapters, broader
-retrieval interception, update adoption and harness installation remain open.
+retrieval interception and harness installation remain open.
 
 ## Learn useful pieces through a soul revision
 
