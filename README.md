@@ -212,7 +212,8 @@ CLI to install itself, and do not configure only the harness currently running.
 Opening this checkout before bootstrap, or a cloud / ephemeral session that
 cannot finish install, is the uninstalled class: committed hooks refuse
 human-attributed commits and GitHub writes unless the actor is in
-`AGENT_BOT_UNMANAGED_AUTHORS` (default `ai9d` when unset). Reads and
+`AGENT_BOT_UNMANAGED_AUTHORS`, else the config's `settings.unmanagedAuthors`
+(default `ai9d` while neither is set). Reads and
 uncommitted edits are allowed. `doctor` reports `identity.class` and does
 not install. Publishing as the bot still requires the durable-host journey
 below.
@@ -576,8 +577,9 @@ daemon that cannot start yet, and doctor reports `daemon-load-skipped` as a
 warning instead of failing the account.
 
 Optional `api_base` must be a credential-free HTTPS URL. Optional `settings`
-may contain `spaces_root` and `daemon_preference` (`off`, `prefer`, or
-`required`). Unknown fields are rejected under schema v1 instead of being
+may contain `spaces_root`, `daemon_preference` (`off`, `prefer`, or
+`required`) and `unmanaged_authors` (at most 64 distinct lowercase logins,
+projected to `settings.unmanagedAuthors`). Unknown fields are rejected under schema v1 instead of being
 silently ignored.
 
 ```bash
@@ -1435,6 +1437,13 @@ use the `apps` map with the exact slugs instead. `doctor` prints the resolved
 - `settings.spacesRoot` — an absolute, durable Agent Space root.
 - `settings.daemonPreference` — `off`, `prefer`, or `required`; the default is
   `off`.
+- `settings.unmanagedAuthors` — lowercase logins (or git names / email local
+  parts) who may publish as themselves from an agent session in uninstalled
+  mode (ENG-0128). `AGENT_BOT_UNMANAGED_AUTHORS`, when set (even empty),
+  overrides it; with neither set the committed hooks and `doctor` still use
+  `ai9d` until organization profiles carry the list (#675). `doctor` reports
+  the source as `unmanaged_authors_source` (`env`, `config`, `default`, or
+  `invalid-config`, in which case the hooks refuse).
 - `features.github-identity` and `features.persona-accounts` — optional add-on
   gates, both off unless explicitly set to `true`. qwts machines keep their
   current behavior by setting both to `true` in this same config. A config

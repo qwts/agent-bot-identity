@@ -16,8 +16,9 @@
 //     "settings": {                        // durable, secret-free user policy
 //       "spacesRoot": "/absolute/path",
 //       "soulsRoot": "/absolute/path",
-//       "daemonPreference": "off"          // off | prefer | required
-//     },
+//       "daemonPreference": "off",         // off | prefer | required
+//       "unmanagedAuthors": ["ai9d"]       // humans who may publish as themselves
+//     },                                   // from an agent session (#675)
 //     "scope": { "apps": ["you-claude-agent"] } // this account serves only these Apps
 //   }
 //
@@ -197,6 +198,50 @@ export function scopeConfigToApps(config, apps = []) {
   return { ...config, scope: { apps: wanted } };
 }
 
+// The unmanaged authors (ENG-0128): people who may publish as themselves from
+// an agent session. Lowercase logins, git names or email local parts, as the
+// hooks compare them; no commas or whitespace, since the environment form is
+// a comma list.
+const UNMANAGED_AUTHOR = /^[a-z0-9][a-z0-9._@+-]{0,99}$/;
+const MAX_UNMANAGED_AUTHORS = 64;
+
+export function unmanagedAuthorsSetting(config = loadConfig()) {
+  const value = settingsSection(config).unmanagedAuthors;
+  if (value === undefined) return null;
+  if (!Array.isArray(value) || value.length > MAX_UNMANAGED_AUTHORS
+    || !value.every((author) => typeof author === 'string' && UNMANAGED_AUTHOR.test(author))) {
+    throw new Error(`invalid settings.unmanagedAuthors: expected at most ${MAX_UNMANAGED_AUTHORS} lowercase logins (letters, digits, . _ @ + -)`);
+  }
+  return [...new Set(value)];
+}
+
+export function parseUnmanagedAuthorList(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  return raw.split(',').map((part) => part.trim().toLowerCase()).filter(Boolean);
+}
+
+// The one resolver every reader of the allowlist uses (#675). An operator's
+// AGENT_BOT_UNMANAGED_AUTHORS wins whenever it is set, even empty; otherwise
+// the validated config (an organization profile projects into it); otherwise
+// none. A malformed config throws: the callers refuse rather than guess.
+export function unmanagedAuthors({ env = process.env, config } = {}) {
+  if (env.AGENT_BOT_UNMANAGED_AUTHORS !== undefined) {
+    return { authors: parseUnmanagedAuthorList(env.AGENT_BOT_UNMANAGED_AUTHORS), source: 'env' };
+  }
+  const configured = unmanagedAuthorsSetting(config ?? loadConfig({ env }));
+  return configured === null ? { authors: [], source: 'none' } : { authors: configured, source: 'config' };
+}
+
+// Until the organization profile carries the list, the hooks and doctor keep
+// the compiled `ai9d` they used when nothing was set. Only those entry points
+// call this; the identity hook library never does, so nothing that refuses
+// today starts allowing. Removed once the profile migration lands (#675).
+export const LEGACY_UNMANAGED_AUTHORS = Object.freeze(['ai9d']);
+export function unmanagedAuthorsWithLegacyDefault(options = {}) {
+  const resolved = unmanagedAuthors(options);
+  return resolved.source === 'none' ? { authors: [...LEGACY_UNMANAGED_AUTHORS], source: 'default' } : resolved;
+}
+
 // `owner` names the GitHub account an App is installed on. It is a selector
 // for mint-token, not the roster's governance owner, and the two may differ.
 function validateOwner(config) {
@@ -213,6 +258,7 @@ function validateSettings(config) {
   if (settings.spacesRoot !== undefined) spacesRootSetting(config);
   if (settings.soulsRoot !== undefined) soulsRootSetting(config);
   if (settings.daemonPreference !== undefined) validateDaemonPreference(settings.daemonPreference);
+  if (settings.unmanagedAuthors !== undefined) unmanagedAuthorsSetting(config);
   rosterScope(config);
   validateFeatures(config);
 }

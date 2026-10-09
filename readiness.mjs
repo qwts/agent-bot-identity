@@ -17,7 +17,7 @@ import { inspectSoulSpace } from './soul-memory.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
 import { duplicateSoulDirs, listSouls, orphanSoulDirs, populationFile } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
-import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness } from './config.mjs';
+import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness, unmanagedAuthorsWithLegacyDefault } from './config.mjs';
 import { preGateConfigStatus } from './config-migration.mjs';
 import { inspectAppCredentials } from './credential-reconciler.mjs';
 import { configuredAccountIdentity, accountName, detectHarness, HARNESSES } from './detect-harness.mjs';
@@ -46,7 +46,6 @@ import {
   territoryHarness,
 } from './resolve-agent.mjs';
 import { credentialHelperCommand } from './setup-worktree.mjs';
-import { parseUnmanagedAuthors } from './uninstalled-identity-hook.mjs';
 import { BUILTIN_SECRET_PROVIDERS } from './secret.mjs';
 import { createSecretProviderRegistry, probeSecretStore } from './secret-store.mjs';
 
@@ -1310,6 +1309,17 @@ function orphanSoulDirsCheck({ home, env, config }) {
   });
 }
 
+// The allowlist the committed hooks apply, and where it came from (#675).
+// A malformed config is reported, not guessed around: the hooks refuse then.
+function unmanagedEvidence(env, home) {
+  try {
+    const { authors, source } = unmanagedAuthorsWithLegacyDefault({ env, config: loadConfig({ env, home }) });
+    return { unmanaged_authors: authors, unmanaged_authors_source: source };
+  } catch {
+    return { unmanaged_authors: [], unmanaged_authors_source: 'invalid-config' };
+  }
+}
+
 function identityClassCheck({ home, env, access }) {
   const hook = env.AGENT_BOT_HOOK_BIN || installationPaths(home).agentHook;
   try {
@@ -1329,11 +1339,7 @@ function identityClassCheck({ home, env, access }) {
       action: 'on a host you will keep, run the source checkout bootstrap',
       evidence: {
         class: 'uninstalled',
-        unmanaged_authors: parseUnmanagedAuthors({
-          AGENT_BOT_UNMANAGED_AUTHORS: env.AGENT_BOT_UNMANAGED_AUTHORS === undefined
-            ? 'ai9d'
-            : env.AGENT_BOT_UNMANAGED_AUTHORS,
-        }),
+        ...unmanagedEvidence(env, home),
       },
     });
   }
