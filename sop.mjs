@@ -40,7 +40,7 @@ const ORGANIZATION_FIELDS = ['id', 'account', 'profile'];
 // repository's root. agent-bot sandbox parses it; this file reads, records
 // and reports it.
 export const PERSONA_FILE = 'persona.toml';
-const PERSONA_RECORD_FIELDS = ['schemaVersion', 'recordedAt', 'configPath', 'org', 'sop', 'persona'];
+const PERSONA_RECORD_FIELDS = ['schemaVersion', 'recordedAt', 'configPath', 'selection', 'org', 'sop', 'persona'];
 
 // git show would run a configured textconv. cat-file prints the raw blob.
 export const SOP_GIT_COMMANDS = Object.freeze(['ls-remote', 'init', 'remote', 'config', 'fetch', 'cat-file']);
@@ -767,10 +767,15 @@ export function recordSopPersona(options = {}) {
   if (persona !== null && (typeof persona !== 'string' || persona.includes('\0') || Buffer.byteLength(persona) > ORG_JSON_LIMIT)) {
     fail('persona-unreadable', `${PERSONA_FILE} in ${repository}@${commit} must be text of at most 1 MiB`);
   }
+  // The selection the record was made from (#613), as the config spells it:
+  // `owner/name@ref` for org, and for sop only when the config names one
+  // (else org.json routes it, and `null` says so).
+  const { org, sop } = report.repositories;
   const record = {
     schemaVersion: SCHEMA_VERSION,
     recordedAt: (options.now ?? (() => new Date()))().toISOString(),
     configPath,
+    selection: { org: `${org.repository}@${org.ref}`, sop: sop.selected === 'config' ? `${sop.repository}@${sop.ref}` : null },
     org: { repository: report.repositories.org.repository, commit: report.repositories.org.commit },
     sop: { repository, commit },
     persona,
@@ -779,12 +784,42 @@ export function recordSopPersona(options = {}) {
   return { inEffect: true, ...record };
 }
 
+const recordedSpec = (value) => typeof value === 'string' && value.lastIndexOf('@') > 0
+  && value.lastIndexOf('@') < value.length - 1 && OWNER_NAME.test(value.slice(0, value.lastIndexOf('@')));
+
+// Strict selection (#613, owner decision 2026-10-09): a record is current
+// only for the exact selection it was made from: the same config file, the
+// same org and sop `owner/name@ref` (repository names compare without case,
+// refs exactly), and, where a ref is a 40-hex pin, that very commit. A record
+// from before selections were kept never matches. Offline, a branch or tag
+// that moved upstream is not detectable; the next `sop persona` picks it up.
+// Returns why the record does not match, or null.
+function personaRecordMismatch(record, config, configPath) {
+  if (record.selection === undefined) return 'was recorded before agent-bot kept the selection it was made from';
+  if (record.configPath !== configPath) return `was recorded from ${record.configPath}, not ${configPath}`;
+  const spell = (spec) => (spec ? `${spec.repo}@${spec.ref}` : null);
+  const sameSpec = (recorded, spec) => {
+    if (recorded === null || spec === null) return recorded === spec;
+    const at = recorded.lastIndexOf('@');
+    return recorded.slice(0, at).toLowerCase() === spec.repo.toLowerCase() && recorded.slice(at + 1) === spec.ref;
+  };
+  const pinMatches = (spec, commit) => !spec || !COMMIT_SHA.test(spec.ref.toLowerCase()) || spec.ref.toLowerCase() === commit;
+  if (!sameSpec(record.selection.org, config.repos.org)) return `is for org ${record.selection.org}, not ${spell(config.repos.org)}`;
+  if (!sameSpec(record.selection.sop, config.repos.sop)) {
+    return `is for sop ${record.selection.sop ?? 'from org.json'}, not ${spell(config.repos.sop) ?? 'from org.json'}`;
+  }
+  if (!pinMatches(config.repos.org, record.org.commit)) return `is for org commit ${record.org.commit}, not the pinned ${config.repos.org.ref}`;
+  if (!pinMatches(config.repos.sop, record.sop.commit)) return `is for sop commit ${record.sop.commit}, not the pinned ${config.repos.sop.ref}`;
+  return null;
+}
+
 // Offline: what the record says about the SOP the user's config selects now.
 // Never throws and never runs git: a sandbox status or a launch must not
 // wait on the network or fail for a missing pack. `state` is one of
 //   none        no user SOP config, so no pack decides anything
 //   unrecorded  a config, but `agent-bot sop persona` has not run
-//   stale       the record is for another org or SOP repository than the config names
+//   stale       the record is not for the selection the config makes now
+//               (`text` is the stale record's persona.toml, or null)
 //   absent      the SOP commit has no persona.toml
 //   error       the config or the record could not be read
 //   recorded    `text` is the pack's persona.toml at `commit`
@@ -812,13 +847,17 @@ export function readSopPersonaRecord(options = {}) {
       && OWNER_NAME.test(record.org.repository ?? '') && COMMIT_SHA.test(record.org.commit ?? '')
       && OWNER_NAME.test(record.sop.repository ?? '') && COMMIT_SHA.test(record.sop.commit ?? '')
       && typeof record.recordedAt === 'string'
+      && (record.selection === undefined || (isObject(record.selection)
+        && Object.keys(record.selection).every((key) => ['org', 'sop'].includes(key))
+        && recordedSpec(record.selection.org) && (record.selection.sop === null || recordedSpec(record.selection.sop))))
       && (record.persona === null || typeof record.persona === 'string');
     if (!sane) fail('persona-invalid', `invalid SOP persona record at ${file}; ${refresh}`);
-    const same = (a, b) => a.toLowerCase() === b.toLowerCase();
-    const stale = !same(record.org.repository, config.repos.org.repo)
-      || (config.repos.sop && !same(record.sop.repository, config.repos.sop.repo));
     const pinned = { repository: record.sop.repository, commit: record.sop.commit, recordedAt: record.recordedAt };
-    if (stale) return { state: 'stale', ...pinned, message: `the recorded persona mapping is for ${record.sop.repository}, not the SOP the config selects; ${refresh}` };
+    const stale = personaRecordMismatch(record, config, configPath);
+    if (stale) {
+      return { state: 'stale', ...pinned, text: record.persona,
+        message: `the recorded persona mapping ${stale}; run \`agent-bot sop persona\` to record the selected SOP's mapping` };
+    }
     if (record.persona === null) return { state: 'absent', ...pinned, message: `${record.sop.repository}@${record.sop.commit} has no ${PERSONA_FILE}` };
     return { state: 'recorded', ...pinned, text: record.persona };
   } catch (error) {

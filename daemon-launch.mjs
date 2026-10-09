@@ -132,10 +132,23 @@ const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other
 // account cannot run fails there too (see `sandboxLaunchProblem`). The
 // journal row keeps `sandbox: { resolution, account }`, and the report
 // carries it beside the unchanged `launched`/`failed` fields.
+//
+// `verifyOwner` (#613, owner decision 2026-10-09): the owner has the final
+// say, so a principal's launch refused only because the recorded persona
+// policy is stale (`persona-policy-stale`) asks the owner to verify, by
+// Touch ID or the dialog, instead of refusing. It gets `(action, { soul,
+// package, source })` and returns the gate's proof, or throws when the owner
+// declines or cannot be asked. Approved, the launch is decided by the stale
+// record's own mapping (sandboxFor with `acceptStale`, never the user
+// setting in its place), its turn carries the approval, and the journal row
+// keeps the receipt `ownerVerified: { code, method, source }`. Declined, it
+// fails `persona-policy-stale` before anything is minted. A team start (the
+// daemon's own caller, an agent) and a handler without `verifyOwner` are
+// refused as before: nothing wired is a refusal, never a pass.
 
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
   isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, sandboxFor = null, runtimes = null, toolHomes = null, providers = null, signIn = null,
-  souls = null, receipt = () => {}, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
+  souls = null, receipt = () => {}, verifyOwner = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -249,12 +262,29 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       // The soul's sandbox resolution: the SOP pack's persona mapping (by
       // the soul's name or role, so a soul this launch makes is matched by
       // the launch's), else an existing soul's override, else the switch.
-      const sandbox = sandboxFor
-        ? await sandboxFor({ agentId: soul ?? null, ...(event.name === undefined ? {} : { name: event.name }), ...(event.role === undefined ? {} : { role: event.role.trim() }) })
-        : null;
+      const sandboxRequest = { agentId: soul ?? null, ...(event.name === undefined ? {} : { name: event.name }), ...(event.role === undefined ? {} : { role: event.role.trim() }) };
+      let sandbox = sandboxFor ? await sandboxFor(sandboxRequest) : null;
+      let ownerVerified = false;
       if (sandbox) {
+        let refused = sandboxLaunchProblem(sandbox);
+        if (refused?.code === 'persona-policy-stale' && callerParent === null && verifyOwner) {
+          await step('account');
+          const source = refused.source ? `${refused.source.repository}@${refused.source.commit}` : null;
+          const target = soul ?? (event.name === undefined ? packagePath : `${event.name} from ${packagePath}`);
+          let proof;
+          try {
+            proof = await verifyOwner(`launch ${target} although its SOP persona record is stale${source ? ` (${source})` : ''}`,
+              { soul: soul ?? null, package: packagePath, source: refused.source });
+          } catch (error) {
+            const why = String(error?.message ?? error).slice(0, 160);
+            throw Object.assign(new Error(`the owner did not verify launching on a stale persona policy (${why}); ${refused.action}`), { code: refused.code });
+          }
+          ownerVerified = true;
+          row.ownerVerified = { code: refused.code, method: typeof proof?.method === 'string' ? proof.method : 'owner', source: refused.source };
+          sandbox = await sandboxFor({ ...sandboxRequest, acceptStale: true });
+          refused = sandboxLaunchProblem(sandbox);
+        }
         row.sandbox = { resolution: sandbox.resolution, account: sandbox.account };
-        const refused = sandboxLaunchProblem(sandbox);
         if (refused) { await step('account'); throw refused; }
       }
       const request = { ...withoutParent(event), harness, ...(event.role === undefined ? {} : { role: event.role.trim() }), ...(parent ? { parent } : {}) };
@@ -332,7 +362,7 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
           },
           addArtifact: () => { throw new Error('a launch turn has no artifact store'); },
           requestApproval: async () => ({ decision: 'deny' }),
-        }, executor, { turnTimeoutMs })).then(() => { if (!started) reject(new Error('harness ended before session creation')); }, reject);
+        }, executor, { turnTimeoutMs, ownerVerified })).then(() => { if (!started) reject(new Error('harness ended before session creation')); }, reject);
       });
       Object.assign(row, { status: 'launched', agentId: identity.id });
       if (carried) note(carried, 'launched');

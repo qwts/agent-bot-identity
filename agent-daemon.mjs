@@ -101,7 +101,7 @@ import { resolveSoulMode } from './soul-mode.mjs';
 import { createIdentityAppJobs, identityAppOperation, identityAppFailure, listIdentityApps } from './identity-apps.mjs';
 import { readSoulProfile } from './soul-profile.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
-import { launchSandbox, readSandboxStatus, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount } from './sandbox.mjs';
+import { launchSandbox, readSandboxStatus, turnSandboxProblem, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount } from './sandbox.mjs';
 import { soulModel, setSoulModel, recordSoulModels } from './soul-model.mjs';
 import { ownerGate as soulSettingOwnerGate, readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
@@ -1635,7 +1635,12 @@ export async function runDaemon({
   // `.soul-state/runs/` beside the daemon's journals (#583 decision 9).
   const history = createSoulHistory({ env, home, file: populationFile({ env, home }), log: (line) => process.stderr.write(`agent-daemon: ${line}\n`) });
   let dream = null;
-  const turns = createTurnRegistry({ isPaused, history, now, onStop: agentId => dream?.stopSoul(agentId) ?? false });
+  // The persona policy is checked again at the start of every turn (#613).
+  const policy = ({ agentId, ownerVerified }) => {
+    const problem = turnSandboxProblem(agentId, { env, home, acceptStale: ownerVerified });
+    if (problem) throw problem;
+  };
+  const turns = createTurnRegistry({ isPaused, policy, history, now, onStop: agentId => dream?.stopSoul(agentId) ?? false });
   const executorFor = configuredExecutorFor
     ? (request) => withPermissionReceipts(configuredExecutorFor(request), { env, home, now, computerUse })
     : null;
@@ -1761,7 +1766,9 @@ export async function runDaemon({
     },
     // What the soul gets (#376): its override over the global switch, and
     // for a sandboxed one the account's readiness and the owner's steps.
-    sandboxFor: ({ agentId, name = null, role = null }) => launchSandbox(agentId, { env, home, name, role }),
+    sandboxFor: ({ agentId, name = null, role = null, acceptStale = false }) => launchSandbox(agentId, { env, home, name, role, acceptStale }),
+    // A principal's launch past a stale persona record asks the owner (#613).
+    verifyOwner: (action) => confirmOwnerPresence(action, { env }),
     joinSoul: async (soul) => {
       const address = await joinLaunchedSoul(soul, { env });
       // The census shows the launch name; every command shows it too (#429).

@@ -277,10 +277,22 @@ export function matchPersona(mapping, { names = [], role = null } = {}) {
 // its commit. `state` is one of PERSONA_STATES; only `ok` decides anything.
 // `none` and `absent` (verified absence) leave the user setting in charge;
 // the rest refuse a launch (see PERSONA_REFUSALS).
-export function loadPersona({ env = process.env, home = homedir() } = {}) {
+//
+// `acceptStale` is for a launch the owner verified past a stale record
+// (#613, owner decision 2026-10-09): that one launch is decided by the
+// stale record's own mapping, never by the user setting in its place, so
+// the owner's approval cannot lower what the last recorded pack required.
+// The result keeps `stale: true` and the refresh message.
+export function loadPersona({ env = process.env, home = homedir(), acceptStale = false } = {}) {
   const record = readSopPersonaRecord({ env, home });
   const base = { state: record.state, decides: false, repository: record.repository ?? null, commit: record.commit ?? null,
     recordedAt: record.recordedAt ?? null, message: record.message ?? null, mapping: null };
+  if (record.state === 'stale' && acceptStale) {
+    const stale = { ...base, stale: true };
+    if (record.text === null) return { ...stale, state: 'absent' };
+    try { return { ...stale, state: 'ok', decides: true, mapping: parsePersonaMapping(record.text) }; }
+    catch (error) { return { ...stale, state: 'invalid', message: `${error.message}; launches are refused until the pack is fixed` }; }
+  }
   if (record.state !== 'recorded') return base;
   try { return { ...base, state: 'ok', decides: true, mapping: parsePersonaMapping(record.text) }; }
   catch (error) { return { ...base, state: 'invalid', message: `${error.message}; launches are refused until the pack is fixed` }; }
@@ -336,6 +348,7 @@ function decideSandbox(soul, settings, { owner, persona = null, role = null, nam
   const sop = persona ? {
     decides: Boolean(decision),
     state: persona.state,
+    ...(persona.stale ? { stale: true } : {}),
     ...(persona.repository ? { repository: persona.repository, commit: persona.commit } : {}),
     ...(decision ? { rule: decision.rule, sandbox: decision.sandbox, account: decision.sandbox === 'sandboxed' ? account : owner } : {}),
     ...(persona.message ? { message: persona.message } : {}),
@@ -380,19 +393,22 @@ function resolveSoul(target, file) {
 // otherwise it follows the global switch. Only a sandboxed launch probes the
 // account: an unrestricted one runs nothing.
 
-export function launchSandbox(agentId, { env = process.env, home = homedir(), platform = process.platform, exec = defaultExec, fileExists = existsSync, owner = userInfo().username, name = null, role = null } = {}) {
+function censusSoul(agentId, { env, home }) {
+  if (!agentId) return { id: agentId, sandbox: 'inherit' };
+  try { return showSoul(validateAgentId(agentId), { file: populationFile({ env, home }) }); }
+  catch (error) {
+    // Only an absent row means "no override"; an unreadable census fails
+    // the launch rather than starting a sandboxed soul unrestricted.
+    if (!/^no population record/.test(error.message)) throw error;
+    return { id: agentId, sandbox: 'inherit' };
+  }
+}
+
+export function launchSandbox(agentId, { env = process.env, home = homedir(), platform = process.platform, exec = defaultExec, fileExists = existsSync, owner = userInfo().username, name = null, role = null, acceptStale = false } = {}) {
   // Read now, not at daemon start: the switch, overrides and record change under it.
   const settings = sandboxSettings(loadConfig({ env, home }));
-  const persona = loadPersona({ env, home });
-  let soul = { id: agentId, sandbox: 'inherit' };
-  if (agentId) {
-    try { soul = showSoul(validateAgentId(agentId), { file: populationFile({ env, home }) }); }
-    catch (error) {
-      // Only an absent row means "no override"; an unreadable census fails
-      // the launch rather than starting a sandboxed soul unrestricted.
-      if (!/^no population record/.test(error.message)) throw error;
-    }
-  }
+  const persona = loadPersona({ env, home, acceptStale });
+  const soul = censusSoul(agentId, { env, home });
   const decided = decideSandbox(soul, settings, { owner, persona, role, names: [name] });
   const resolved = { resolution: decided.sandboxed ? 'sandboxed' : 'unrestricted', override: decided.override, source: decided.source,
     account: decided.runsAs, self: owner, sop: decided.sop, ...(decided.reason ? { reason: decided.reason } : {}),
@@ -435,6 +451,25 @@ export function sandboxLaunchProblem(sandbox) {
     // no account or uid to start one as, and the owner's daemon holds no
     // privilege to switch. A daemon running in the account itself can.
     return fail('sandbox-other-account', `this soul runs sandboxed as ${account}, and this daemon runs as ${sandbox.self}: agent-bot starts a harness only as its own daemon's account, so start it from a daemon running in ${account}`);
+  }
+  return null;
+}
+
+// --- every turn ---------------------------------------------------------------
+// The owner's decision on #613 (2026-10-09): the persona policy is evaluated
+// again at the start of every turn the daemon runs (launch, wake, task and
+// dream turns), once for the turn. The turn is refused, as a launch is, when
+// the policy cannot be evaluated or is stale, or when the pack now puts the
+// soul in an account this daemon is not. Account readiness stays a launch
+// question, so nothing is probed. `acceptStale` carries a launch the owner
+// verified (see loadPersona) into that launch's own turn, and only that one.
+export function turnSandboxProblem(agentId, { env = process.env, home = homedir(), owner = userInfo().username, acceptStale = false } = {}) {
+  const settings = sandboxSettings(loadConfig({ env, home }));
+  const persona = loadPersona({ env, home, acceptStale });
+  const decided = decideSandbox(censusSoul(agentId, { env, home }), settings, { owner, persona });
+  if (decided.refusal) return sandboxLaunchProblem({ refused: decided.refusal });
+  if (decided.source === 'sop' && decided.sandboxed && decided.runsAs !== owner) {
+    return sandboxLaunchProblem({ resolution: 'sandboxed', account: decided.runsAs, self: owner, status: 'ready', steps: [] });
   }
   return null;
 }
