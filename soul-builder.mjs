@@ -805,6 +805,8 @@ const DEVIN_TOOLS = Object.freeze({ Read: 'read', Edit: 'edit', MultiEdit: 'edit
 // Devin names an MCP tool `mcp__<server>__<tool>`, as Claude does, and reads
 // the shared `.mcp.json`, so a declared MCP tool keeps its exact name there.
 // The declaration grammar admits no `*`, so no server-wide grant is invented.
+// The server segment ends at the first `__` (as in `mcp__foo__bar__baz`:
+// server `foo`, tool `bar__baz`); passthrough keeps whatever Devin infers.
 const MCP_TOOL = /^mcp__[A-Za-z0-9-]+(?:_[A-Za-z0-9-]+)*__[A-Za-z0-9_-]+$/;
 // Cursor has no per-tool allowlist, only `readonly`; it is set when every
 // declared tool is one of these, so a read-only agent stays read-only.
