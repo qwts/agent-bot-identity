@@ -1059,7 +1059,7 @@ export function formatPersonaRecord(result) {
     for (const rule of rules) lines.push(`  ${rule.match}:${rule.value}: ${rule.sandbox}${rule.account ? ` as ${rule.account}` : ''}`);
     lines.push('agent-bot sandbox status shows what each soul gets.');
   } else if (result.error) {
-    lines.push(`persona mapping recorded, but invalid: ${oneLine(result.error.message)}`, 'The user setting applies until the pack is fixed.');
+    lines.push(`persona mapping recorded, but invalid: ${oneLine(result.error.message)}`, 'Launches are refused until the pack is fixed (#613).');
   } else {
     lines.push(`no ${PERSONA_FILE} at this commit: the user's sandbox setting applies.`);
   }

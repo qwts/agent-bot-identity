@@ -47,6 +47,10 @@ const ACCOUNT_NAME = /^[a-z_][a-z0-9_-]{0,30}$/;
 
 function fail(code, message) { return Object.assign(new Error(message), { code }); }
 
+// The broker's launch-result detail limit (what reportCommsLaunch sends).
+const LAUNCH_DETAIL_LIMIT = 512;
+const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
 function configPath({ env = process.env, home = homedir() } = {}) {
   return env.AGENT_BOT_CONFIG ?? join(home, '.config', 'agent-bot', 'config.json');
 }
@@ -270,15 +274,39 @@ export function matchPersona(mapping, { names = [], role = null } = {}) {
 
 // The recorded pack decision, read offline (never git, never the network):
 // `agent-bot sop persona` records the user's SOP's persona.toml, pinned to
-// its commit. `state` is one of PERSONA_STATES; only `ok` decides anything,
-// and every other state says why the user setting applies instead.
+// its commit. `state` is one of PERSONA_STATES; only `ok` decides anything.
+// `none` and `absent` (verified absence) leave the user setting in charge;
+// the rest refuse a launch (see PERSONA_REFUSALS).
 export function loadPersona({ env = process.env, home = homedir() } = {}) {
   const record = readSopPersonaRecord({ env, home });
   const base = { state: record.state, decides: false, repository: record.repository ?? null, commit: record.commit ?? null,
     recordedAt: record.recordedAt ?? null, message: record.message ?? null, mapping: null };
   if (record.state !== 'recorded') return base;
   try { return { ...base, state: 'ok', decides: true, mapping: parsePersonaMapping(record.text) }; }
-  catch (error) { return { ...base, state: 'invalid', message: `${error.message}; the user setting applies until the pack is fixed` }; }
+  catch (error) { return { ...base, state: 'invalid', message: `${error.message}; launches are refused until the pack is fixed` }; }
+}
+
+// ADR-0274 (#613): configured persona policy that cannot be evaluated is a
+// refusal, never a fall back to the user setting or a soul override. The
+// action names the repair; nothing here changes the record or the add-on.
+const PERSONA_REFUSALS = Object.freeze({
+  // A missing local record is not verified absence (#613 requirement 1).
+  unrecorded: { code: 'persona-policy-unavailable', action: 'run `agent-bot sop persona` to record the selected SOP\'s mapping' },
+  error: { code: 'persona-policy-unavailable', action: 'fix the SOP config or record, then run `agent-bot sop persona`' },
+  invalid: { code: 'persona-policy-unavailable', action: 'fix persona.toml in the SOP, then run `agent-bot sop persona`' },
+  stale: { code: 'persona-policy-stale', action: 'run `agent-bot sop persona` to record the selected SOP\'s mapping' },
+});
+
+function personaRefusal(persona, wanted) {
+  if (!persona) return null;
+  const source = persona.repository ? { repository: persona.repository, commit: persona.commit } : null;
+  const known = PERSONA_REFUSALS[persona.state];
+  if (known) return { ...known, reason: persona.message ?? `the SOP persona policy is ${persona.state}`, ...(source ? { source } : {}) };
+  if (wanted) {
+    return { code: 'persona-policy-requires-addon', reason: `the SOP decides sandboxed as ${wanted}, but features.persona-accounts is off`,
+      action: 'the owner turns persona accounts on with `agent-bot sandbox on`; agent-bot never turns it on itself', ...(source ? { source } : {}) };
+  }
+  return null;
 }
 
 // Resolution order: the pack's decision for this soul (source `sop`), else
@@ -297,7 +325,7 @@ function decideSandbox(soul, settings, { owner, persona = null, role = null, nam
     source = 'sop';
     const wants = decision.sandbox === 'sandboxed';
     sandboxed = wants && settings.enabled;
-    if (wants && !settings.enabled) reason = `the SOP decides sandboxed as ${account}, but features.persona-accounts is off (agent-bot sandbox on turns it on); runs unrestricted`;
+    if (wants && !settings.enabled) reason = `the SOP decides sandboxed as ${account}, but features.persona-accounts is off (agent-bot sandbox on turns it on); launches are refused`;
   } else if (override !== 'inherit') {
     source = 'override';
     sandboxed = override === 'sandboxed';
@@ -312,7 +340,9 @@ function decideSandbox(soul, settings, { owner, persona = null, role = null, nam
     ...(decision ? { rule: decision.rule, sandbox: decision.sandbox, account: decision.sandbox === 'sandboxed' ? account : owner } : {}),
     ...(persona.message ? { message: persona.message } : {}),
   } : null;
-  return { override, sandboxed, source, account, runsAs: sandboxed ? account : owner, sop, reason };
+  const refusal = personaRefusal(persona, decision?.sandbox === 'sandboxed' && !settings.enabled ? account : null);
+  if (refusal && !reason) reason = `${refusal.reason}; launches are refused`;
+  return { override, sandboxed, source, account, runsAs: sandboxed ? account : owner, sop, reason, refusal };
 }
 
 // --- per-soul resolution ----------------------------------------------------
@@ -328,6 +358,7 @@ export function resolveSandbox(soul, settings, { owner = userInfo().username, pe
     source: decided.source,
     ...(decided.sop ? { sop: decided.sop } : {}),
     ...(decided.reason ? { reason: decided.reason } : {}),
+    ...(decided.refusal ? { refused: decided.refusal } : {}),
   };
 }
 
@@ -341,8 +372,9 @@ function resolveSoul(target, file) {
 
 // --- at launch ----------------------------------------------------------------
 // The daemon's launch handler asks this what a soul gets before it starts it
-// (#376). The pack decides first, from the recorded mapping (no network: a
-// missing or unreadable record falls back to the user setting and says so).
+// (#376). The pack decides first, from the recorded mapping (no network: no
+// SOP or no persona.toml leaves the user setting; a selected SOP whose policy
+// is unrecorded or cannot be evaluated refuses the launch, #613).
 // A soul not in the census yet (a package or team launch makes a new one)
 // is matched by the launch's `name` and `role`, and has no override, so
 // otherwise it follows the global switch. Only a sandboxed launch probes the
@@ -363,8 +395,9 @@ export function launchSandbox(agentId, { env = process.env, home = homedir(), pl
   }
   const decided = decideSandbox(soul, settings, { owner, persona, role, names: [name] });
   const resolved = { resolution: decided.sandboxed ? 'sandboxed' : 'unrestricted', override: decided.override, source: decided.source,
-    account: decided.runsAs, self: owner, sop: decided.sop, ...(decided.reason ? { reason: decided.reason } : {}) };
-  if (!decided.sandboxed) return resolved;
+    account: decided.runsAs, self: owner, sop: decided.sop, ...(decided.reason ? { reason: decided.reason } : {}),
+    ...(decided.refusal ? { refused: decided.refusal } : {}) };
+  if (decided.refusal || !decided.sandboxed) return resolved;
   const checks = probeSandboxAccount(decided.account, { platform, exec, fileExists });
   return { ...resolved, status: sandboxAccountStatus(checks), steps: sandboxPlan({ account: decided.account, owner, checks }) };
 }
@@ -376,6 +409,16 @@ export function launchSandbox(agentId, { env = process.env, home = homedir(), pl
 // 512-character launch detail: the next step with its command, then the ids
 // of the rest, which `agent-bot sandbox plan` prints in full.
 export function sandboxLaunchProblem(sandbox) {
+  if (sandbox?.refused) {
+    const { code, reason, source, action } = sandbox.refused;
+    // The launch handler sends `${code}: ${message}` as the broker's detail,
+    // so the whole line, prefix included, fits LAUNCH_DETAIL_LIMIT: the
+    // reason and the source/action tail are each bounded.
+    const budget = LAUNCH_DETAIL_LIMIT - code.length - 2;
+    const from = source ? ` (${clip(source.repository, 100)}@${source.commit.slice(0, 12)})` : '';
+    const tail = clip(`${from}; ${action}`, Math.floor(budget / 2));
+    return Object.assign(fail(code, `${clip(reason, budget - tail.length)}${tail}`), { source: source ?? null, action });
+  }
   if (!sandbox || sandbox.resolution !== 'sandboxed') return null;
   const { account, status, steps = [] } = sandbox;
   if (status === 'unsupported') {

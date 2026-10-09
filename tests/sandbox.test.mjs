@@ -9,6 +9,7 @@ import { upsertSoul, showSoul } from '../agent-population.mjs';
 import { createDaemonServer, daemonClient } from '../agent-daemon.mjs';
 import { auditFile } from '../agent-principals.mjs';
 import { stateDirectory } from '../agent-identity.mjs';
+import { loadConfig } from '../config.mjs';
 import {
   DEFAULT_SANDBOX_ACCOUNT, formatSandboxStatus, launchSandbox, loadPersona, parsePersonaMapping, probeSandboxAccount, readSandboxStatus, resolveSandbox,
   sandboxAccountStatus, sandboxCommand, sandboxLaunchProblem, sandboxPlan, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount,
@@ -359,7 +360,7 @@ test('a pack decision wins over the user override and the global switch, and an 
   assert.equal(JSON.parse(out).source, 'sop');
 });
 
-test('with the add-on gate off a pack decision is reported but the soul runs unrestricted, with the reason', async (t) => {
+test('with the add-on gate off a pack decision to sandbox is reported and refuses the launch, never auto-enabling the gate (#613)', async (t) => {
   const f = fixture(t, { config: { features: { 'persona-accounts': false } } });
   pack(f, MAPPING);
   const status = readSandboxStatus({ ...f.options, platform: 'darwin', ...machine(), owner: 'owner' });
@@ -376,43 +377,71 @@ test('with the add-on gate off a pack decision is reported but the soul runs unr
   const text = formatSandboxStatus(status);
   assert.match(text, /^sandbox off \(standard_macos_account\)\naccount: geniusbar-agent ready\n  exists yes.*\nsop: persona mapping from local\/sop@a{40}: 2 rules, default unrestricted\n/);
   assert.match(text, new RegExp(`  ${ID} Fixture: inherit, runs as owner \\(sop soul:fixture\\)\n    the SOP decides sandboxed as gb-fixture`));
+  assert.equal(soul.refused.code, 'persona-policy-requires-addon');
   const launched = launchSandbox(ID, { ...f.options, platform: 'darwin', exec: () => { throw new Error('no probe'); }, owner: 'owner' });
-  assert.equal(launched.resolution, 'unrestricted');
-  assert.match(launched.reason, /persona-accounts is off/);
+  assert.match(launched.reason, /persona-accounts is off.*launches are refused/);
+  const refused = sandboxLaunchProblem(launched);
+  assert.equal(refused.code, 'persona-policy-requires-addon');
+  assert.match(refused.message, /\(local\/sop@a{12}\); the owner turns persona accounts on with `agent-bot sandbox on`/);
+  assert.deepEqual(refused.source, { repository: 'local/sop', commit: COMMIT });
+  assert.equal(loadConfig(f.options).features['persona-accounts'], false, 'the gate is never turned on');
 });
 
-test('an unreadable, stale, missing or invalid pack falls back to the user setting and says so; the launch never fails', (t) => {
+test('no SOP or no persona.toml leaves the user setting; an unrecorded, stale, unreadable or invalid policy refuses the launch (#613)', (t) => {
   const f = fixture(t, { config: { features: { 'persona-accounts': true } } });
   const options = { ...f.options, platform: 'darwin', ...machine(), owner: 'owner' };
-  const expect = (state, pattern) => {
-    const status = readSandboxStatus(options);
-    assert.equal(status.sop.state, state);
-    assert.equal(status.sop.decides, false);
-    assert.match(status.sop.message, pattern);
-    assert.deepEqual(status.sop.rules, []);
-    const [soul] = status.souls;
+  const status = (state, pattern) => {
+    const read = readSandboxStatus(options);
+    assert.equal(read.sop.state, state);
+    assert.equal(read.sop.decides, false);
+    assert.match(read.sop.message, pattern);
+    assert.deepEqual(read.sop.rules, []);
+    const [soul] = read.souls;
+    assert.equal(soul.sop.state, state);
+    return soul;
+  };
+  const falls = (state, pattern) => {
+    const soul = status(state, pattern);
     assert.equal(soul.source, 'global');
     assert.equal(soul.sandboxed, true, 'the user setting applies');
-    assert.equal(soul.sop.state, state);
+    assert.equal(soul.refused, undefined);
     const launched = launchSandbox(ID, options);
     assert.equal(launched.resolution, 'sandboxed');
     assert.equal(launched.source, 'global');
     assert.equal(launched.sop.state, state);
+    assert.equal(launched.refused, undefined);
+  };
+  const refuses = (state, pattern, code) => {
+    const soul = status(state, pattern);
+    assert.equal(soul.refused.code, code);
+    assert.match(soul.reason, /launches are refused$/);
+    let probed = false;
+    const launched = launchSandbox(ID, { ...options, exec: () => { probed = true; throw new Error('no probe on a refusal'); } });
+    assert.equal(probed, false, 'a refusal probes no account');
+    const refused = sandboxLaunchProblem(launched);
+    assert.equal(refused.code, code);
+    assert.ok(refused.message.length <= 512);
+    assert.match(refused.message, /agent-bot sop persona/);
+    return refused;
   };
   pack(f, null, { record: false });
-  expect('unrecorded', /run `agent-bot sop persona`/);
-  pack(f, MAPPING, { org: 'elsewhere/org' });
-  expect('stale', /not the SOP the config selects/);
+  refuses('unrecorded', /run `agent-bot sop persona`/, 'persona-policy-unavailable');
   pack(f, null);
-  expect('absent', /has no persona\.toml/);
+  falls('absent', /has no persona\.toml/);
+  pack(f, MAPPING, { org: 'elsewhere/org' });
+  assert.deepEqual(refuses('stale', /not the SOP the config selects/, 'persona-policy-stale').source, { repository: 'local/sop', commit: COMMIT });
   pack(f, null, { record: '{not json' });
-  expect('error', /JSON/);
+  refuses('error', /JSON/, 'persona-policy-unavailable');
+  // A soul override set while the pack cannot decide does not launch it either.
+  setSandboxOverride(ID, 'unrestricted', f.options);
+  assert.equal(sandboxLaunchProblem(launchSandbox(ID, options)).code, 'persona-policy-unavailable');
+  setSandboxOverride(ID, 'inherit', f.options);
   pack(f, null, { record: { schemaVersion: 1, extra: true } });
-  expect('error', /invalid SOP persona record/);
+  refuses('error', /invalid SOP persona record/, 'persona-policy-unavailable');
   pack(f, 'schema_version = 1\n[soul.fixture]\nsandbox = "sandboxed"\naccount = "Not Valid!"\n');
-  expect('invalid', /persona\.toml: \[soul\.fixture\] sandbox account must be a short macOS account name.*user setting applies/);
+  refuses('invalid', /persona\.toml: \[soul\.fixture\] sandbox account must be a short macOS account name.*launches are refused until the pack is fixed/, 'persona-policy-unavailable');
   writeFileSync(path.join(f.home, '.config', 'agent-sop', 'config.toml'), 'schema_version = true\n');
-  expect('error', /booleans are not supported/);
+  refuses('error', /booleans are not supported/, 'persona-policy-unavailable');
 });
 
 test('rules match by name before role, role from the soul\'s soul.json, and a new soul by its launch name and role', (t) => {

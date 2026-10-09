@@ -869,6 +869,43 @@ test('a sandboxed launch whose account is missing fails at account with the owne
   assert.deepEqual(row.sandbox, { resolution: 'sandboxed', account: 'geniusbar-agent' });
 });
 
+for (const [code, refused] of [
+  ['persona-policy-unavailable', { reason: 'invalid SOP persona record at /p', action: 'fix the SOP config or record, then run `agent-bot sop persona`' }],
+  ['persona-policy-stale', { reason: 'the recorded persona mapping is for o/sop, not the SOP the config selects', action: 'run `agent-bot sop persona`', source: { repository: 'o/sop', commit: 'a'.repeat(40) } }],
+  ['persona-policy-requires-addon', { reason: 'the SOP decides sandboxed as gb-x, but features.persona-accounts is off', action: 'the owner turns persona accounts on with `agent-bot sandbox on`' }],
+]) test(`a configured persona policy that refuses (${code}) fails at account before any mint, binding or harness (#613)`, async (t) => {
+  const stages = [];
+  let spawned = 0;
+  // The user setting (unrestricted here) is what a fallback would have run.
+  const f = fixture(t, { sandboxFor: () => ({ resolution: 'unrestricted', override: 'inherit', source: 'global', account: 'owner', self: 'owner', refused: { code, ...refused } }),
+    spawnPackage: () => { spawned += 1; return { id: spawnedId }; }, discard: () => { throw new Error('nothing to discard'); } });
+  await f.handler(packageEvent, { ...f.ports, progress: async ({ stage }) => { stages.push(stage); } });
+  assert.deepEqual(stages, ['checking', 'account']);
+  assert.equal(spawned, 0, 'no identity is minted');
+  assert.equal(f.calls.length, 0, 'no harness runs');
+  const [report] = f.reports;
+  assert.equal(report.status, 'failed');
+  assert.equal(report.code, code);
+  assert.ok(report.detail.startsWith(`${code}: ${refused.reason}`));
+  assert.ok(report.detail.length <= 512);
+  assert.equal(journal(f).code, code);
+});
+
+test('a persona refusal with an oversized reason and source still reports within the broker detail limit, prefix included (#613)', async (t) => {
+  const { sandboxLaunchProblem } = await import('../sandbox.mjs');
+  const refused = { code: 'persona-policy-unavailable', reason: `invalid SOP persona record at /${'x'.repeat(2000)}`,
+    action: 'fix the SOP config or record, then run `agent-bot sop persona`', source: { repository: `${'o'.repeat(60)}/${'r'.repeat(200)}`, commit: 'a'.repeat(40) } };
+  const sandbox = { resolution: 'unrestricted', override: 'inherit', source: 'global', account: 'owner', self: 'owner', refused };
+  assert.ok(`${refused.code}: ${sandboxLaunchProblem(sandbox).message}`.length <= 512);
+  const f = fixture(t, { sandboxFor: () => sandbox });
+  await f.handler(event, f.ports);
+  const [report] = f.reports;
+  assert.equal(report.status, 'failed');
+  assert.equal(report.code, 'persona-policy-unavailable');
+  assert.ok(report.detail.length <= 512, `detail is ${report.detail.length} characters`);
+  assert.match(report.detail, /^persona-policy-unavailable: invalid SOP persona record at \/x+…/);
+});
+
 test('a sandboxed launch with an account still being set up names the step that is not done (#376)', async (t) => {
   const f = fixture(t, { sandboxFor: () => sandboxed({ status: 'creating', checks: { ...READY, standard: false, paired: false, fleet: false } }) });
   await f.handler(event, f.ports);
