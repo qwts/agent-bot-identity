@@ -25,7 +25,7 @@ import { existsSync } from 'node:fs';
 import { readAgentIdentity, stateDirectory } from './agent-identity.mjs';
 import { accountHarness, accountName, detectHarness } from './detect-harness.mjs';
 import { PROFILE_HARNESSES } from './organization-profile.mjs';
-import { appLifecycleStatus, loadConfig, slugForHarness } from './config.mjs';
+import { appLifecycleStatus, isGateEnabled, loadConfig, slugForHarness } from './config.mjs';
 
 // Pin keys written by setup-worktree. Prefer the standalone name; accept the
 // playbook-engineering name so a migrated machine keeps working.
@@ -141,4 +141,60 @@ export function resolveAgentSlug({
   if (accountKey) return slugForHarness(accountKey, cfg);
   if (!detect) return null;
   return slugForHarness(detectHarness(env), cfg);
+}
+
+// No human fallback (#749, carried requirement 6 of #104). A session that
+// stated a bot identity — GH_AGENT_APP, a checkout pin, or an agent account,
+// the stated identities ENG-0375 names — publishes as that bot or not at all. When worktree setup failed or never ran (a primary
+// checkout is refused, for one), the checkout's committer is still the human,
+// and a commit or push from it would put the agent's work on the human's
+// record. The delegate (ENG-0339, ENG-0375) has no marker to check: it is
+// agent context that stated nothing, so the resolver yields null here and it
+// is never refused. Bound means the commit's author and committer are both
+// exactly `<slug>[bot]`, the identity setup-worktree configures, as git would
+// resolve them here (`git var`, so config, `-c` and GIT_AUTHOR_* all count).
+// Any other `[bot]` name is not a binding. A pre-command caller passes the
+// command's own overrides (`--author`, `-c user.name`) as `identity`; null
+// there means the command sets one the caller could not read. Whether the bot
+// carries a resolvable Agent ID stays the pre-commit hook's question. With github-identity off there is no
+// bot to bind and nothing to refuse. An unreadable pin propagates: an identity
+// that cannot be checked is not an absent one.
+export function statedBotSlug({ env = process.env, cwd = process.cwd(), config, git = defaultGitRunner } = {}) {
+  const cfg = config ?? loadConfig({ env });
+  if (!isGateEnabled('github-identity', { config: cfg })) return null;
+  const accountKey = accountHarness(cfg, accountName(env));
+  return (env.GH_AGENT_APP ?? '').trim()
+    || pinnedSlug(cwd, { git })
+    || (accountKey ? slugForHarness(accountKey, cfg) : null);
+}
+
+export function unboundBotSlug({ env = process.env, cwd = process.cwd(), config, git = defaultGitRunner, identity = {} } = {}) {
+  const slug = statedBotSlug({ env, cwd, config, git });
+  if (!slug) return null;
+  const expected = `${slug}[bot]`;
+  const resolved = (key) => {
+    try {
+      return (git(['var', key], { cwd }) ?? '').trim().replace(/\s*<[^<]*$/, '');
+    } catch {
+      return ''; // no identity git can resolve is not the bot's
+    }
+  };
+  const author = identity.author !== undefined ? identity.author : resolved('GIT_AUTHOR_IDENT');
+  const committer = identity.committer !== undefined ? identity.committer : resolved('GIT_COMMITTER_IDENT');
+  return author === expected && committer === expected ? null : slug;
+}
+
+export function unboundBotReason(slug) {
+  return `agent-bot: this session stated bot identity ${slug}, but this checkout is not bound to it: `
+    + 'worktree setup failed or never ran here, so this commit or push would be attributed to the human. '
+    + 'Run `agent-bot setup-worktree` in a linked worktree (a primary checkout is refused) '
+    + 'and check `agent-bot doctor`, then retry.';
+}
+
+// For a target the pre-command scan could not place (a variable path, a
+// shell indirection): a stated bot cannot prove it is bound there.
+export function unprovableBotReason(slug) {
+  return `agent-bot: this session stated bot identity ${slug}, and this command may commit or push in a repository `
+    + 'whose binding cannot be proven (a variable or unresolved path, a shell indirection, or an alias). '
+    + 'Run the git command with literal paths from the bound worktree, or run `agent-bot setup-worktree` there first.';
 }

@@ -3,7 +3,9 @@
 # an agent's push as an unmanaged human. Where an agent may push is not a
 # question the hook asks any more: under ENG-0339 the account, not the
 # directory, is bot territory, and a human-attributed push from a harness in
-# the owner's account is delegate work (the human's own).
+# the owner's account is delegate work (the human's own). A session that
+# stated a bot identity its checkout is not bound to may not push as the
+# human (#749).
 HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 INPUT=$(mktemp "${TMPDIR:-/tmp}/agent-bot-pre-push.XXXXXX") || exit 1
 trap 'rm -f "$INPUT"' EXIT HUP INT TERM
@@ -20,6 +22,7 @@ if agent_bot_agent_context; then AGENT=1; fi
 # Ordinary human shells still reach the chained hook.
 AGENT_HOOK="${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}"
 if [ -x "$AGENT_HOOK" ]; then
+  [ -n "$AGENT" ] && agent_bot_refuse_unbound_bot push
   "$AGENT_HOOK" --dialect git --event pre-push <"$INPUT" || exit $?
 elif [ -n "$AGENT" ]; then
   LOGIN=$(gh api user --jq .login 2>/dev/null || true)

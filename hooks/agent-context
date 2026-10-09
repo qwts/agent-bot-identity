@@ -20,7 +20,8 @@
 # the account, not the directory, is bot territory, and a harness in the
 # owner's account that resolves to the human is the human's delegate. What
 # remains is attribution hygiene — a bot-attributed commit must carry a
-# resolvable Agent ID — and the uninstalled-mode rule (ENG-0128).
+# resolvable Agent ID — the uninstalled-mode rule (ENG-0128), and no human
+# fallback for a session that stated a bot its checkout is not bound to (#749).
 agent_bot_agent_context() {
   [ "$CLAUDECODE" = "1" ] && return 0
   [ "$CURSOR_AGENT" = "1" ] && return 0
@@ -45,6 +46,32 @@ agent_bot_account_slug() {
   [ -f "$_token_tool" ] || return 0
   command -v node >/dev/null 2>&1 || return 0
   node "$_token_tool" --account-slug 2>/dev/null || true
+}
+
+# The App this session stated it is (GH_AGENT_APP, a pin, an agent account),
+# printed only when the checkout is not bound to it: the author or committer
+# git resolves here is not exactly `<slug>[bot]`, because worktree setup
+# failed or never ran, or the command overrides it (#749). Nothing for
+# the delegate, which states no identity (ENG-0339, ENG-0375). One decision,
+# resolve-agent.mjs unboundBotSlug, shared with the installed runner's
+# pre-command check. Exits non-zero when the identity cannot be checked.
+agent_bot_unbound_bot() {
+  _resolver=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/../resolve-agent.mjs
+  [ -f "$_resolver" ] || return 0
+  command -v node >/dev/null 2>&1 || return 0
+  node --input-type=module -e 'import(process.argv[1]).then(({ unboundBotSlug }) => { const slug = unboundBotSlug(); if (slug) process.stdout.write(slug); }).catch((e) => { console.error("agent-bot: cannot verify the stated bot identity: " + e.message); process.exit(1); })' "$_resolver"
+}
+
+# Refuse a commit or push from a stated bot that is not bound here (#749).
+# Only with the installed runner: uninstalled mode keeps its own rule
+# (ENG-0128), which already refuses human-attributed publishing.
+agent_bot_refuse_unbound_bot() {
+  _slug=$(agent_bot_unbound_bot) || exit 1
+  [ -n "$_slug" ] || return 0
+  echo "agent-bot guard: this session stated bot identity $_slug, but this checkout is not bound to it." >&2
+  echo "Worktree setup failed or never ran here, so this $1 would be attributed to the human, not $_slug[bot]." >&2
+  echo "Run: agent-bot setup-worktree in a linked worktree (a primary checkout is refused), check agent-bot doctor, then retry." >&2
+  exit 1
 }
 
 agent_bot_github_url() {

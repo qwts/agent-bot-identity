@@ -1307,6 +1307,11 @@ git worktree add …            (run by ANY tool: Codex, Cursor, VS Code, Claude
 (`<prefix>-<harness>-agent`, or the `apps` override) every checkout — primary
 or linked — is that harness's App. In your own account an unpinned checkout is
 your delegate: commits, pushes, and `gh` run as you, and nothing is refused.
+The delegate has no marker: it is an agent that stated no bot identity. A
+session that did state one (`GH_AGENT_APP`, a pin, or an agent account) but
+whose worktree setup failed, for example because `setup-worktree` refused a
+primary checkout, is not your delegate. With the runner installed, its
+`git commit` and `git push` are refused, not attributed to you (#749).
 A `.<tool>/worktrees/**` path is layout, never a signal. Bare human shells are
 never touched. The separate `setup-worktree` work-area check constrains where
 configuration may be written; it does not change these identity resolution rules.
@@ -1795,7 +1800,11 @@ contain secrets.
 - `pre-commit` refuses bot-attributed commits with no resolvable Agent ID
 - neither `pre-commit` nor `pre-push` confines where an agent may commit or
   push: a human-attributed commit from a harness in your own account is your
-  delegate's work (ENG-0339). Agent context — the harness markers the `gh`
+  delegate's work (ENG-0339). The exception is no human fallback (#749): with
+  the runner installed, a session that stated a bot identity (`GH_AGENT_APP`,
+  a pin, an agent account) is refused a human-attributed commit or push
+  because its worktree was never bound. The installed runner's pre-command
+  check refuses the same `git commit` or `git push` in every harness dialect. Agent context — the harness markers the `gh`
   shim reads, or an agent account classified by exact roster slug — still
   decides that a bot-attributed commit must carry its Agent ID, and in
   uninstalled mode (no installed runner, ENG-0128) an agent's push as an

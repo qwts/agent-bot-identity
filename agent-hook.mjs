@@ -13,7 +13,7 @@
 // change rarely, not hooks, which change constantly.
 
 import process from 'node:process';
-import { spawnSync, execFile } from 'node:child_process';
+import { spawnSync, execFile, execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -32,6 +32,8 @@ import {
 
 import { readBinding } from './agent-binding.mjs';
 import { confinementCheck } from './confinement.mjs';
+import { statedBotSlug, unboundBotReason, unboundBotSlug, unprovableBotReason } from './resolve-agent.mjs';
+import { expandAlias, scanGitPublish } from './git-publish-scan.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 
@@ -238,6 +240,67 @@ export function combine(results, event) {
   return { decision, reason: reasons.join('; '), contexts };
 }
 
+// No human fallback (#749): a shell command that commits or pushes from a
+// session that stated a bot identity its target checkout is not bound to is
+// refused, here and again by hooks/pre-commit and hooks/pre-push. Built into
+// the runner like confinement, so a project's own agent-hooks/ cannot
+// displace it. The target is the repository git will actually write
+// (`-C`, `--git-dir`, `cd`, aliases), because `--no-verify` skips that
+// repository's own hook. A target the scan cannot place is refused only for
+// a session that stated a bot; the delegate and a human shell are allowed.
+function targetGit(target, env) {
+  const prefix = [];
+  if (target.gitDir) prefix.push(`--git-dir=${target.gitDir}`);
+  if (target.workTree) prefix.push(`--work-tree=${target.workTree}`);
+  return (args, { cwd }) => execFileSync('git', [...prefix, ...args], {
+    cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+export function unboundIdentityCheck(envelope, { env = process.env, cwd = process.cwd() } = {}) {
+  const allow = { decision: 'allow' };
+  if (envelope.event !== 'pre-command' || !envelope.command) return allow;
+  const command = envelope.command;
+  const scan = scanGitPublish(command, { cwd, env });
+  if (!scan.publishes.length && !scan.aliases.length && !scan.ambiguous) return allow;
+  // A command word the scan cannot read only matters when git could be in it.
+  let uncertain = scan.ambiguous && /git|commit|push/i.test(command.replace(/[\\'"]/g, ''));
+  const publishes = [...scan.publishes];
+  const aliases = [...scan.aliases];
+  for (let n = 0; aliases.length && n < 16; n += 1) {
+    const alias = aliases.shift();
+    if (!alias.cwd || !existsSync(alias.cwd)) { uncertain = true; continue; }
+    let value;
+    try {
+      value = targetGit(alias, env)(['config', '--get', `alias.${alias.name}`], { cwd: alias.cwd }).trim();
+    } catch (error) {
+      if (error.status !== 1) uncertain = true;
+      continue;
+    }
+    const inner = expandAlias(value, alias, alias.rest, { env: new Map(Object.entries(env)) });
+    publishes.push(...inner.publishes);
+    aliases.push(...inner.aliases);
+    uncertain ||= inner.ambiguous;
+  }
+  if (aliases.length) uncertain = true;
+  for (const target of publishes) {
+    if (!target.cwd || !existsSync(target.cwd)) { uncertain = true; continue; }
+    try {
+      const slug = unboundBotSlug({ env, cwd: target.cwd, git: targetGit(target, env), identity: target.identity ?? {} });
+      if (slug) return { decision: 'deny', reason: unboundBotReason(slug) };
+    } catch {
+      uncertain = true;
+    }
+  }
+  if (!uncertain) return allow;
+  try {
+    const slug = statedBotSlug({ env, cwd });
+    return slug ? { decision: 'deny', reason: unprovableBotReason(slug) } : allow;
+  } catch (error) {
+    return { decision: 'deny', reason: `cannot verify the stated bot identity: ${error.message}` };
+  }
+}
+
 export function runHooks({ dialectKey, event, payload, dir, env = process.env }) {
   const envelope = normalizeEnvelope({ dialectKey, event, payload });
   let binding;
@@ -256,10 +319,12 @@ export function runHooks({ dialectKey, event, payload, dir, env = process.env })
   // clock is meant to guarantee. Each hook gets what is left of the deadline.
   const budget = budgetMs(dialectKey, event, requested);
   const deadline = now() + budget;
-  const results = [{ name: 'confinement', ...confinementCheck(envelope, {
+  const checkCwd = envelope.cwd && existsSync(envelope.cwd) ? envelope.cwd : process.cwd();
+  const results = [{ name: 'identity', ...unboundIdentityCheck(envelope, { env, cwd: checkCwd }) }];
+  results.push({ name: 'confinement', ...confinementCheck(envelope, {
     env, binding, cwd: envelope.cwd ?? process.cwd(),
     boundCheckout: binding ? repoRoot(envelope.cwd ?? process.cwd()) : null,
-  }) }];
+  }) });
 
   for (const file of discoverHooks(dir, event)) {
     const name = file.slice(dir.length + 1);

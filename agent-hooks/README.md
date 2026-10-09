@@ -32,6 +32,23 @@ allow. Explicit owner-selected deny fails closed; off skips the check.
 Existing executable verdicts keep their usual fail modes. See
 [confinement](../docs/confinement.md) for allowed roots, reports and coverage.
 
+The runner also has a built-in identity check on `pre-command` (#749). When a
+session stated a bot identity (`GH_AGENT_APP`, a checkout pin, or an agent
+account) and its checkout's committer is still the human because worktree
+setup failed or never ran, a `git commit` or `git push` is denied. The denial
+names the setup failure and the fix. The check follows the repository git
+will write, not the session's directory: `cd`, `git -C`, `--git-dir`,
+`--work-tree`, `GIT_DIR`, `sh -c`, `eval`, command substitutions and git
+aliases are resolved, and quoting and backslash escapes are removed the way
+the shell removes them. When a stated bot's command reaches a repository
+the check cannot place, or hides its command word behind a variable,
+substitution or glob, it is denied too. Bound means the commit's author
+and committer are exactly `<slug>[bot]` as git resolves them for that
+command, so `--author`, `-c user.name` and `GIT_AUTHOR_NAME` count, and any
+other `[bot]`-looking name is not a binding. `hooks/pre-commit` and `hooks/pre-push`
+apply the same rule as the git backstop. The human's delegate states no
+identity, so it is not affected, and neither is an ordinary human shell.
+
 ## Events
 
 | Event | Fires | Blocking |

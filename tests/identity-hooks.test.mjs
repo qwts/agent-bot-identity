@@ -161,7 +161,9 @@ test('pre-commit blocks a bot-attributed agent commit until its Agent ID resolve
 // makes a bot-attributed commit answer for its Agent ID. Under ENG-0339 the
 // same context no longer refuses a human-attributed commit: in the owner's
 // account that is the human's delegate at work, wherever the checkout sits.
-test('pre-commit recognizes agent markers for bot attribution and lets the delegate commit as the human', () => {
+// A session that stated a bot (GH_AGENT_APP) is not the delegate: its
+// unbound human-attributed commit is refused (#749).
+test('pre-commit recognizes agent markers for bot attribution and lets the delegate, never a stated bot, commit as the human', () => {
   for (const [name, marker] of [
     ['app-marker', { GH_AGENT_APP: 'you-codex-agent' }],
     ['claude-entrypoint', { CLAUDE_CODE_ENTRYPOINT: 'cli' }],
@@ -194,12 +196,18 @@ test('pre-commit recognizes agent markers for bot attribution and lets the deleg
     );
     const run = () => execFileSync(preCommit, {
       cwd: repo,
-      env: { ...env, ...marker, AGENT_BOT_HOOK_BIN: allowingAgentHook() },
+      env: { ...env, ...marker, AGENT_BOT_CONFIG: gateOnConfig, AGENT_BOT_HOOK_BIN: allowingAgentHook() },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    // Human-attributed: delegate work, never refused, no directory rule.
-    assert.doesNotThrow(run, `${name}: a human-attributed commit is the delegate's own`);
+    if (marker.GH_AGENT_APP) {
+      // #749: a stated bot whose checkout is not bound to it may not fall
+      // back to the human.
+      assert.throws(run, (error) => /stated bot identity you-codex-agent/.test(error.stderr), `${name}: no human fallback`);
+    } else {
+      // Human-attributed: delegate work, never refused, no directory rule.
+      assert.doesNotThrow(run, `${name}: a human-attributed commit is the delegate's own`);
+    }
     // Bot-attributed with no Agent ID: the marker must still be seen as agent
     // context, or this would slip through as an unidentified bot commit.
     git('config', 'user.name', 'you-codex-agent[bot]');
