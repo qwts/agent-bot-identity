@@ -160,6 +160,14 @@ test('unmanaged provenance conflicts refuse and repeated learning retains prior 
   const next = prepareRevisionEdit(f.id, f.options);
   const single = { ...f.outcome, parentRevision: approved.revision, pieces: [{ ...f.outcome.pieces[2], status: 'completed', destination: 'skills/demo/scripts/run', method: 'copied' }] };
   put(path.join(next.staging, 'skills/demo/scripts/run'), '#!/bin/sh\nexit 99\n', 0o755);
+  for (const extra of ['notes.md', `sources/${'f'.repeat(64)}/stale.md`]) {
+    const file = path.join(next.staging, `provenance/skills/${f.imported.id}`, extra);
+    put(file, 'unmanaged material');
+    await assert.rejects(proposeSkillLearning(f.imported.id, f.id, next.staging, single, { ...f.options, reason: 'Keep extra material' }), /unmanaged/);
+    assert.equal(readFileSync(file, 'utf8'), 'unmanaged material');
+    rmSync(file);
+    if (extra.startsWith('sources/')) rmSync(path.dirname(file), { recursive: true });
+  }
   const result = await proposeSkillLearning(f.imported.id, f.id, next.staging, single, { ...f.options, reason: 'Learn script now' });
   const second = decideSoulProposal(f.id, result.proposal.proposalId, 'approve', { ...f.options, reason: 'Second' });
   const tree = revisionPackagePath(f.id, second.revision, f.options), source = `provenance/skills/${f.imported.id}/sources/${f.imported.accepted.slice(7)}`;
@@ -169,4 +177,38 @@ test('unmanaged provenance conflicts refuse and repeated learning retains prior 
   const packet = skillLearningPacket(f.imported.id, f.id, f.options);
   assert.equal(packet.previousLearning.records.length, 2);
   assert.equal(packet.previousLearning.truncated, false);
+});
+
+
+test('default prepare staging works through a soul directory alias while linked staging still refuses', async t => {
+  const f = fixture(t), alias = path.join(f.home, 'soul-alias');
+  symlinkSync(path.dirname(f.directory), alias);
+  const aliasedSoul = path.join(alias, path.basename(f.directory));
+  upsertSoul({ id: f.id, name: 'example', status: 'active', soulDir: aliasedSoul, spacePath: path.join(f.home, 'space'), roles: ['test'], harness: 'codex', app: 'test-agent' }, { file: f.options.file });
+  const staged = prepareRevisionEdit(f.id, f.options);
+  assert.equal(staged.staging.startsWith(alias), true);
+  put(path.join(staged.staging, 'skills/demo/SKILL.md'), skill);
+  const outcome = { ...f.outcome, pieces: [f.outcome.pieces[0]] };
+  assert.equal((await proposeSkillLearning(f.imported.id, f.id, staged.staging, outcome, { ...f.options, reason: 'Learn through alias' })).proposal.status, 'pending');
+});
+
+test('malformed historical receipts are reported without suppressing later valid learning', async t => {
+  const f = fixture(t, { mode: 'auto', paths: ['**'] });
+  const receipt = `provenance/skills/${f.imported.id}/learning.json`;
+  put(path.join(f.staged.staging, receipt), '{broken');
+  const bad = proposeSoulRevision(f.id, f.staged.staging, { ...f.options, reason: 'Owner imported malformed receipt' });
+  assert.equal(bad.status, 'approved');
+  let packet = skillLearningPacket(f.imported.id, f.id, f.options);
+  assert.deepEqual(packet.previousLearning.records, [{ revision: bad.revision, status: 'invalid-receipt' }]);
+  // A new accepted package with a valid receipt must remain readable too.
+  const { cpSync } = await import('node:fs');
+  cpSync(revisionPackagePath(f.id, bad.revision, f.options), f.directory, { recursive: true });
+  const next = prepareRevisionEdit(f.id, f.options);
+  await assert.rejects(proposeSkillLearning(f.imported.id, f.id, next.staging, { ...f.outcome, parentRevision: bad.revision }, { ...f.options, reason: 'Invalid current provenance' }), /receipt is invalid/);
+  rmSync(path.join(next.staging, 'provenance'), { recursive: true });
+  const learned = await proposeSkillLearning(f.imported.id, f.id, next.staging, { ...f.outcome, parentRevision: bad.revision }, { ...f.options, reason: 'Learn after owner repairs candidate' });
+  packet = skillLearningPacket(f.imported.id, f.id, f.options);
+  assert.equal(packet.parentRevision, learned.proposal.revision);
+  assert.equal(packet.previousLearning.records[0].pieces[0].verification, 'verified-in-revision');
+  assert.deepEqual(packet.previousLearning.records[1], { revision: bad.revision, status: 'invalid-receipt' });
 });

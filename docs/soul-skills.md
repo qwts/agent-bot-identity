@@ -219,3 +219,5 @@ evidence files but labels the external operation **agent-reported**. It does not
 claim verified embedding, indexing, graph updates or retrieval, and provisions
 no service or maintenance schedule. Capability adapters and dream scheduling
 remain open requirements in #603.
+
+Learning receipts enumerate retained source paths, byte hashes and modes. Relearning refuses extra or changed provenance material, including material beside an otherwise valid receipt. Read-only learning history reports malformed receipts as `invalid-receipt` and continues; recording still refuses an invalid current candidate receipt. Default prepared paths may traverse an alias of the soul root, but staging leaves and internal state directories must remain real directories.

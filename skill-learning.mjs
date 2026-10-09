@@ -81,15 +81,17 @@ function priorLearning(id, libraryId, history, options) {
     const files = fileMap(entries), entry = files.get(receiptFile(libraryId));
     if (!entry || seen.has(hash(entry.bytes))) continue;
     seen.add(hash(entry.bytes));
-    if (entry.bytes.length > 256 * 1024) fail('stored learning receipt exceeds the supported bound');
-    const record = JSON.parse(entry.bytes.toString('utf8'));
-    if (record.schemaVersion !== 1 || record.libraryId !== libraryId || record.agentId !== id || !Array.isArray(record.pieces) || record.pieces.length > 128) fail('invalid stored learning receipt');
-    records.push({ ...record, revision: revision.revision, pieces: record.pieces.map(piece => {
-      if (piece.status !== 'completed') return piece;
-      relative(piece.destination);
-      const actual = files.get(piece.destination);
-      return { ...piece, verification: actual && hash(actual.bytes) === piece.destinationSha256 && actual.mode === piece.destinationMode ? 'verified-in-revision' : 'changed-or-missing' };
-    }) });
+    try {
+      if (entry.bytes.length > 256 * 1024) fail('stored learning receipt exceeds the supported bound');
+      const record = JSON.parse(entry.bytes.toString('utf8'));
+      if (record.schemaVersion !== 1 || record.libraryId !== libraryId || record.agentId !== id || !Array.isArray(record.pieces) || record.pieces.length > 128) fail('invalid stored learning receipt');
+      records.push({ ...record, revision: revision.revision, pieces: record.pieces.map(piece => {
+        if (piece.status !== 'completed') return piece;
+        relative(piece.destination);
+        const actual = files.get(piece.destination);
+        return { ...piece, verification: actual && hash(actual.bytes) === piece.destinationSha256 && actual.mode === piece.destinationMode ? 'verified-in-revision' : 'changed-or-missing' };
+      }) });
+    } catch { records.push({ revision: revision.revision, status: 'invalid-receipt' }); }
   }
   return { records, revisionsScanned: Math.min(history.length, 20), truncated: history.length > 20 };
 }
@@ -114,7 +116,7 @@ export function skillLearningPacket(libraryId, agentId, options = {}) {
 function preparedFor(agentId, staging, parentRevision, options) {
   const soul = realpathSync(soulDirectory(agentId, { ...options, readOnly: true }));
   const stage = path.resolve(staging), tmp = path.join(soul, '.soul-state', 'tmp');
-  if (path.dirname(stage) !== tmp || !/^revision-[a-f0-9-]{36}$/.test(path.basename(stage))) fail('use this soul’s default soul revision prepare staging directory');
+  if (realpathSync(path.dirname(stage)) !== tmp || !/^revision-[a-f0-9-]{36}$/.test(path.basename(stage))) fail('use this soul’s default soul revision prepare staging directory');
   for (const file of [path.join(soul, '.soul-state'), tmp, stage]) {
     const stat = lstatSync(file);
     if (!stat.isDirectory() || stat.isSymbolicLink()) fail('learning staging must not follow links');
@@ -143,7 +145,23 @@ export async function proposeSkillLearning(libraryId, agentId, staging, outcome,
     if (!prior || prior.bytes.length > 256 * 1024) fail('learning provenance destination contains unmanaged material');
     let record;
     try { record = JSON.parse(prior.bytes.toString('utf8')); } catch { fail('existing learning receipt is invalid'); }
-    if (record.schemaVersion !== 1 || record.libraryId !== libraryId || record.agentId !== agentId) fail('existing learning receipt belongs to another import or soul');
+    if (record?.schemaVersion !== 1 || record.libraryId !== libraryId || record.agentId !== agentId) fail('existing learning receipt belongs to another import or soul');
+    if (!Array.isArray(record.captures)) fail('learning provenance destination contains unmanaged material');
+    const managed = new Map([[receiptFile(libraryId), prior]]), directories = new Set();
+    for (const capture of record.captures) {
+      if (!object(capture)) fail('existing learning capture is invalid');
+      relative(capture.path);
+      if (!new RegExp(`^${prefix(libraryId)}/sources/[a-f0-9]{64}/`).test(capture.path)
+        || !DIGEST.test(capture.sha256) || !['100644', '100755'].includes(capture.mode) || managed.has(capture.path)) fail('existing learning capture is invalid');
+      const entry = files.get(capture.path);
+      if (!entry || hash(entry.bytes) !== capture.sha256 || entry.mode !== capture.mode) fail('learning provenance destination contains unmanaged or changed material');
+      managed.set(capture.path, entry);
+    }
+    for (const file of managed.keys()) for (let dir = path.posix.dirname(file); dir !== '.'; dir = path.posix.dirname(dir)) directories.add(dir);
+    for (const entry of candidate.entries) {
+      if (entry.path !== prefix(libraryId) && !entry.path.startsWith(`${prefix(libraryId)}/`)) continue;
+      if (entry.mode === '040000' ? !directories.has(entry.path) : !managed.has(entry.path)) fail('learning provenance destination contains unmanaged material');
+    }
   }
   const captured = new Set(), pieces = [];
   for (const piece of outcome.pieces) {
@@ -164,8 +182,14 @@ export async function proposeSkillLearning(libraryId, agentId, staging, outcome,
     const entry = files.get(file); if (!entry) fail('knowledge evidence is absent from the candidate');
     return { path: file, sha256: hash(entry.bytes) };
   }) }));
+  const captures = [];
+  for (const material of [source, accepted]) for (const entry of material.entries) {
+    if (!captured.has(entry.path) || (material === accepted && material.digest === source.digest)) continue;
+    captures.push({ ...entry, path: `${prefix(libraryId)}/sources/${material.digest.slice(7)}/${entry.path}` });
+  }
   const record = { schemaVersion: 1, libraryId, agentId, parentRevision: head.revision, recordedAt: now().toISOString(),
     source: { ...outcome.source, acceptedDigest: accepted.digest }, pieces, knowledge,
+    captures: captures.map(entry => ({ path: entry.path, sha256: hash(entry.bytes), mode: entry.mode })),
     dependencies: source.dependencies.filter(edge => captured.has(edge.from)), acceptedDependencies: accepted.dependencies.filter(edge => captured.has(edge.from)),
     destinationReferences: 'agent-review-required', universalRetrieval: false };
   const bytes = Buffer.from(`${JSON.stringify(record, null, 2)}\n`);
@@ -180,12 +204,7 @@ export async function proposeSkillLearning(libraryId, agentId, staging, outcome,
       if (entry.mode === '040000') mkdirSync(path.join(tree, entry.path), { recursive: true });
       else put(tree, entry);
     }
-    for (const material of [source, accepted]) for (const entry of material.entries) {
-      if (!captured.has(entry.path)) continue;
-      const target = `${prefix(libraryId)}/sources/${material.digest.slice(7)}/${entry.path}`;
-      if (material === accepted && material.digest === source.digest) continue;
-      put(tree, { ...entry, path: target });
-    }
+    for (const entry of captures) put(tree, entry);
     put(tree, { path: receiptFile(libraryId), bytes, mode: '100644' });
     const proposal = await propose(agentId, tree, { ...options, reason, expectedParent: head.revision });
     return { libraryId, agentId, receipt: receiptFile(libraryId), proposal, livePackageChanged: false,
