@@ -1,0 +1,1 @@
+- Bound accumulated dream replies to 256 KiB before outcome parsing, retain a UTF-8-safe prefix, and explicitly report truncation (#603).
