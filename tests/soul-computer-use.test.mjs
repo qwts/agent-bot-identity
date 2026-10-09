@@ -13,7 +13,7 @@ import { auditFile } from '../agent-principals.mjs';
 import { createComputerUseActivity } from '../computer-use-activity.mjs';
 import { createContractExecutor } from '../executor-contract.mjs';
 import { createTurnRegistry, coldTurnExecutor } from '../wake-plane.mjs';
-import { assertOwnerAction } from '../owner-gate.mjs';
+import { assertOwnerAction } from '../owner-action.mjs';
 
 const ID = 'agent_11111111-1111-4111-8111-111111111111';
 const OTHER = 'agent_22222222-2222-4222-8222-222222222222';

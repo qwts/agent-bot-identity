@@ -10,7 +10,7 @@ import { loadConfig } from './config.mjs';
 import { currentAgentId, stateDirectory, validateAgentId, withLock } from './agent-identity.mjs';
 import { populationFile, showSoul, soulDirectory } from './agent-population.mjs';
 import { revisionHistory, revisionPackagePath } from './soul-revisions.mjs';
-import { assertOwnerAction } from './owner-gate.mjs';
+import { assertOwnerAction } from './owner-action.mjs';
 import { readBinding } from './agent-binding.mjs';
 import { supportsContext, vendorEvent } from './hook-dialects.mjs';
 import { vouchKeyPath, vouchStateDir } from './vouch.mjs';

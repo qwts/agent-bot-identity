@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { coldWakeCommand, coldWakeFile, readColdWakeSettings, setColdWake } from '../cold-wake-settings.mjs';
-import { assertOwnerAction, consentOwner } from '../owner-gate.mjs';
+import { assertOwnerAction, consentOwner } from '../owner-action.mjs';
 
 const id = 'agent_12345678-1234-4123-8123-123456789abc';
 const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));

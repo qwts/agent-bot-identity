@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { validateAgentId, withLock } from './agent-identity.mjs';
 import { loadConfig } from './config.mjs';
-import { assertOwnerAction } from './owner-gate.mjs';
+import { assertOwnerAction } from './owner-action.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { RESUME_POLICIES } from './wake-resume.mjs';
 import { readWebhook, removeWebhook, saveWebhook } from './wake-webhook.mjs';

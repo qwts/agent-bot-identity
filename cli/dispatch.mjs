@@ -197,10 +197,10 @@ export function dispatchAgentBot(parsed) {
     return run(process.execPath, [join(ROOT, 'soul-template-refresh.mjs'), ...parsed.args.slice(1)]);
   }
   if (parsed.command === 'identity' && ['app', 'apps', 'addon'].includes(parsed.args[0])) {
-    return run(process.execPath, [join(ROOT, 'identity-apps.mjs'), ...parsed.args]);
+    return run(process.execPath, [join(ROOT, 'cli', 'identity-apps.mjs'), ...parsed.args]);
   }
   if (parsed.command === 'identity' && parsed.args[0] === 'migrate-credentials') {
-    return run(process.execPath, [join(ROOT, 'soul-credentials.mjs'), ...parsed.args.slice(1)]);
+    return run(process.execPath, [join(ROOT, 'cli', 'migrate-credentials.mjs'), ...parsed.args.slice(1)]);
   }
   if (parsed.command === 'hook') {
     if (!HOOK_PATTERN.test(parsed.hook)) throw new Error(`invalid hook name: ${parsed.hook}`);

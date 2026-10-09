@@ -22,7 +22,7 @@ import { currentAgentId, stateDirectory, withLock } from './agent-identity.mjs';
 import { soulDirectory } from './agent-population.mjs';
 import { readBinding } from './agent-binding.mjs';
 import process from 'node:process';
-import { assertOwnerAction } from './owner-gate.mjs';
+import { assertOwnerAction } from './owner-action.mjs';
 import { pathToFileURL } from 'node:url';
 
 const SCHEMA_VERSION = 1;

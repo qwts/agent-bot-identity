@@ -7,7 +7,7 @@ import { createDaemonServer } from '../agent-daemon.mjs';
 import { mintAgentIdentity, stateDirectory } from '../agent-identity.mjs';
 import { auditFile } from '../agent-principals.mjs';
 import { PROOF_HEADER } from '../binding-proof.mjs';
-import { verifyPrincipalOwner } from '../owner-gate.mjs';
+import { verifyPrincipalOwner } from '../owner-action.mjs';
 import { computePackageRevision } from '../soul-package.mjs';
 import { adoptSoulPackage, listSoulProposals, proposeSoulRevision, revisionHistory } from '../soul-revisions.mjs';
 

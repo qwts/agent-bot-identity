@@ -33,7 +33,7 @@ import { archiveSoulDirs, locateSoulDir, populationFile, recordSoulDisplayName, 
   retireIdentityWithPopulation, upsertIdentitySoul } from './agent-population.mjs';
 import { initSoulSpace } from './agent-space.mjs';
 import { loadConfig } from './config.mjs';
-import { assertOwnerAction } from './owner-gate.mjs';
+import { assertOwnerAction } from './owner-action.mjs';
 import { joinComms, joinSoul } from './soul-join.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
 import { adoptSoulPackage, editSoulRevision, revisionPackagePath } from './soul-revisions.mjs';

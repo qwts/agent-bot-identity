@@ -554,7 +554,8 @@ export async function migrateCredentialsCommand(argv, {
   readStdin = () => readFileSync(0, 'utf8'),
   write = (text) => process.stdout.write(text),
   markers = soulMarkers,
-  gate = (action, { principal }) => assertOwnerAction(action, { principal, env, cwd }),
+  assertOwner = assertOwnerAction,
+  gate = (action, { principal }) => assertOwner(action, { principal, env, cwd }),
   stores = credentialStores({ env }),
   verify = (credential) => verifyAppCredential(credential, { env }),
   revisions = { history: revisionHistory, edit: editSoulRevision },
@@ -808,14 +809,10 @@ function finishMigration(results, { options, env, home, now, write, stores }) {
   return report;
 }
 
+// The command line is cli/migrate-credentials.mjs, which wires the owner
+// gate's principal check and census (owner-action.mjs, #645). Run directly,
+// this file only points there.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  migrateCredentialsCommand(process.argv.slice(2)).then((report) => {
-    if (report.souls.some((row) => row.status === 'failed') || report.apps.some((row) => row.metadata.status === 'failed')) process.exitCode = 1;
-  }).catch((error) => {
-    if (process.argv.includes('--json')) {
-      process.stdout.write(`${JSON.stringify({ error: { code: error.code ?? 'migrate-credentials-failed', message: error.message } })}\n`);
-    }
-    process.stderr.write(`agent-bot identity migrate-credentials: ${error.message}\n`);
-    process.exitCode = 1;
-  });
+  process.stderr.write('soul-credentials: run agent-bot identity migrate-credentials\n');
+  process.exitCode = 1;
 }

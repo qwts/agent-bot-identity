@@ -4,7 +4,7 @@ import { generateKeyPairSync, sign } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assertOwnerAction, ownerActionSummary, presenceOrConsent } from '../owner-gate.mjs';
+import { assertOwnerAction, ownerActionSummary, presenceOrConsent } from '../owner-action.mjs';
 import { actionDigest, keydPresence, pinnedPresenceKey, presencePinPath, verifyPresence } from '../owner-presence.mjs';
 
 const ID = 'agent_121b5b35-0000-4000-8000-000000000000';

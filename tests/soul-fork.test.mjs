@@ -12,7 +12,7 @@ import { auditFile } from '../agent-principals.mjs';
 import { listSouls, locateSoulDir, recordSoulDisplayName, showSoul } from '../agent-population.mjs';
 import { createLaunchHandler } from '../daemon-launch.mjs';
 import { HARNESS_SESSION_EVENT } from '../executor-contract.mjs';
-import { ownerActionSummary } from '../owner-gate.mjs';
+import { ownerActionSummary } from '../owner-action.mjs';
 import { forkSoul, parseForkArgs } from '../soul-fork.mjs';
 import { createSoulHomes } from '../soul-home.mjs';
 import { joinSoul } from '../soul-join.mjs';
