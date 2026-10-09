@@ -48,8 +48,9 @@ access:
   the account it `runsAs` and the `source`: `sop` when the pack decided,
   else `override`, else `global`. Each row carries `sop` (`decides`, `state`,
   and for a decided soul the `rule` that matched, the pack's `sandbox` and
-  `account`) and, when the pack decides sandboxed but the add-on gate is off,
-  a `reason`.
+  `account`), a `reason` when the pack decides sandboxed but the add-on gate
+  is off, and `refused` (`code`, `reason`, `action`, `source`) when a launch
+  of that soul would be refused (#613).
 
 ## Plan
 
@@ -94,9 +95,20 @@ daemon's launch handler resolves what the soul gets: the SOP pack's decision
 launch makes by the launch's `name` and `role`), else an existing soul's
 override, else the global switch. The config, census and recorded mapping
 are read at each launch, so a switch flipped in GeniusBar applies to the
-next one, and nothing is fetched: a pack that is not recorded, stale or
-unreadable leaves the user setting in charge and says so in `sop`, never
-failing the launch.
+next one, and nothing is fetched. A configured policy that cannot be
+evaluated refuses the launch instead of falling back to the user setting
+(ADR-0274, #613; see the state table below). No SOP, an SOP with no
+`persona.toml`, and (until #613 settles existing installs) a mapping not yet
+recorded leave the user setting in charge.
+
+- refused: `persona-policy-unavailable` (the config, record or
+  `persona.toml` cannot be read or is invalid), `persona-policy-stale` (the
+  record is for another repository than the config selects) or
+  `persona-policy-requires-addon` (the pack decides sandboxed and
+  `features.persona-accounts` is off). The launch fails at `account`,
+  before anything is minted, bound or started, with the repair as its
+  action. A soul override or the user setting does not turn it into a
+  launch.
 
 - `unrestricted`: the launch is unchanged and runs as the daemon's account.
 - `sandboxed`, and the account is `missing` or a step agent-bot can see is
@@ -173,7 +185,7 @@ Bot". There is no template matcher: the census records a template revision,
 not a template name. Every account name must be a short macOS account name
 (`validateSandboxAccount`); anything else, an unknown table or key, or a
 rule without `sandbox`, makes the whole file invalid, and an invalid file is
-reported as a pack error while the user setting applies.
+reported as a pack error, and launches are refused until it is fixed.
 
 ### Recording the mapping
 
@@ -204,10 +216,15 @@ report its `state`:
 | `ok` | the record is for the SOP the config selects and parses | the pack decides matched souls |
 | `none` | no `~/.config/agent-sop/config.toml` | the user setting |
 | `unrecorded` | a config, but `sop persona` has not run | the user setting |
-| `stale` | the record names another org or SOP repository than the config | the user setting |
+| `stale` | the record names another org or SOP repository than the config | **launch refused** (`persona-policy-stale`) |
 | `absent` | the SOP commit has no `persona.toml` | the user setting |
-| `invalid` | `persona.toml` does not parse (the message says why) | the user setting |
-| `error` | the config or the record could not be read | the user setting |
+| `invalid` | `persona.toml` does not parse (the message says why) | **launch refused** (`persona-policy-unavailable`) |
+| `error` | the config or the record could not be read | **launch refused** (`persona-policy-unavailable`) |
+
+`unrecorded` keeps the user setting for now: whether existing installs must
+record before launching is an open #613 decision, as is a stricter `stale`
+check over the selected ref, pin and `configPath`. Wakes and turns of an
+already-launched soul do not re-read the policy (also open in #613).
 
 A record cannot tell that the SOP's branch has moved to a new commit; it says
 which commit it is for.
@@ -224,10 +241,12 @@ For each soul, in order:
 3. **The switch.** `features.persona-accounts`, `source` `global`.
 
 The pack never turns the add-on on. With `features.persona-accounts` off, a
-pack decision is reported (`sop.rule`, `sop.sandbox`, `sop.account`) but the
-soul runs `unrestricted`, with a `reason` saying the gate is off; `agent-bot
-sandbox on` is still the owner's consent to persona accounts, and creating
-the account stays the owner's steps above.
+pack decision to sandbox is reported (`sop.rule`, `sop.sandbox`,
+`sop.account`) and its launch is refused (`persona-policy-requires-addon`),
+with a `reason` saying the gate is off; it never runs unrestricted instead.
+`agent-bot sandbox on` is still the owner's consent to persona accounts, and
+creating the account stays the owner's steps above. A pack decision of
+`unrestricted` launches as before.
 
 ## Daemon routes
 
