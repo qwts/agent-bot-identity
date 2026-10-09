@@ -43,6 +43,21 @@ function fixture(t, options = {}) {
 }
 dreamStoreConformance('POSIX dream journal', fixture, posix);
 
+test('v1 journal state upgrades on the next transaction without rewriting history', posix, t => {
+  const f = fixture(t), legacy = structuredClone(f.first);
+  legacy.state.schemaVersion = 1; delete legacy.state.inputReceipts;
+  assert.equal(f.store.commit(legacy), true);
+  const bytes = readFileSync(path.join(f.directory, name(1)));
+  const store = f.reopen(), scheduler = createDreamScheduler({ store, execute: () => {}, soulDirectory: () => f.directory });
+  assert.equal(scheduler.status().schemaVersion, 2);
+  assert.deepEqual(scheduler.status().inputReceipts, []);
+  assert.equal(store.read().schemaVersion, 1, 'read-only inspection does not migrate disk');
+  scheduler.pause(A);
+  assert.equal(store.read().schemaVersion, 2);
+  assert.deepEqual(readFileSync(path.join(f.directory, name(1))), bytes);
+  assert.equal(store.history().records.length, 2);
+});
+
 test('competing writers publish exactly one transaction at the same revision', posix, async t => {
   const f = fixture(t);
   const source = `import { createDreamFileStore } from ${JSON.stringify(moduleURL)};

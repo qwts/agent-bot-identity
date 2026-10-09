@@ -61,8 +61,8 @@ and stops the timer. Older journal readers that reject that new reason must be
 upgraded before opening a journal containing shutdown receipts.
 
 This integration exposes execution status with `maintenanceCoverage: unverified`.
-It captures bounded starting inputs before runtime/provider resolution, but the
-detailed durable input/outcome/checkpoint schema remains incomplete. Raw replies
+It captures bounded starting inputs and durably records their metadata before
+runtime/provider resolution. The outcome/checkpoint schema remains incomplete. Raw replies
 are not stored as verified evidence, no processing checkpoints advance, and no
 maintenance-success notice is claimed. CLI controls and outcome/notice support
 remain subsequent acceptance work.
@@ -232,6 +232,32 @@ policy and the relevant revision authorization; otherwise record it as blocked.
 Age and infrequent retrieval alone are not deletion evidence.
 
 ## Outcomes, checkpoints and notices
+
+### Implemented input preparation receipts
+
+Journal state version 2 adds bounded `inputReceipts` references for active runs
+and each registration's latest run. A reference names the run, journal revision,
+starting soul revision and metadata digest. The corresponding `inputs-prepared`
+event retains the selected paths, kinds, digests, byte sizes, excerpt sizes,
+truncation flags, selection counts and optional pagination cursor. Excerpts and
+raw replies are excluded. The existing 100-source bound applies; serialized
+metadata is additionally capped at 512 KiB. A receipt proves capture preparation,
+not successful delivery, processing or maintenance coverage.
+
+The host's execution port commits preparation synchronously before resolving
+the runtime/provider or launching the harness. Duplicate or late preparation is
+refused. An uncertain write freezes dispatch and retains the unfinished lease
+for restart quarantine. Preparation references survive failed execution and
+restart. References no longer needed by active/latest runs leave the current
+state, while their append-only history events remain available through bounded
+history pages. No source selection or processing checkpoint advances here.
+
+Version 1 journals remain readable. The next scheduler transaction writes state
+version 2 without rewriting historical records or their hash chain. Read-only
+inspection does not migrate disk. Readers supporting only state version 1 must
+be upgraded before opening a journal advanced by this implementation.
+
+### Remaining outcome and checkpoint contract
 
 Execution status and maintenance coverage are separate. A process can finish
 successfully while some sources or capabilities remain blocked or unsupported.

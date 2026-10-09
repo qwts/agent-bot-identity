@@ -5,7 +5,7 @@ import path from 'node:path';
 import { isAgentId } from './agent-identity.mjs';
 import { createDreamScheduler, DREAM_TIMEOUT_MS, parseDreamSchedule } from './skill-dream-scheduler.mjs';
 import { createDreamFileStore } from './skill-dream-store.mjs';
-import { captureDreamInputs } from './skill-dream-inputs.mjs';
+import { captureDreamInputs, dreamInputMetadata } from './skill-dream-inputs.mjs';
 import { coldTurnExecutor } from './wake-plane.mjs';
 
 export const DREAM_POLL_MS = 30_000;
@@ -87,7 +87,7 @@ export function createDreamService({ directory, lookupSoul, executorFor = null, 
     const executeCold = configured ? coldTurnExecutor({ executorFor, turns, approvals, turnTimeoutMs: DREAM_TIMEOUT_MS }) : null;
     scheduler = createDreamScheduler({ store, now, isPaused, isBusy: id => turns.busy().includes(id),
       soulDirectory: id => launchable(id).directory,
-      execute: async ({ run, signal, timeoutMs }) => {
+      execute: async ({ run, signal, timeoutMs, prepareInputs }) => {
         signal.throwIfAborted(); requireExecutor();
         const soul = launchable(run.agentId);
         if (soul.directory !== run.soulDir) fail('dream-binding-changed', 'Soul directory changed before execution.');
@@ -102,6 +102,7 @@ export function createDreamService({ directory, lookupSoul, executorFor = null, 
           throw error;
         }
         signal.throwIfAborted();
+        prepareInputs(dreamInputMetadata(inputs));
         // No interaction or broker ID is created. The run ID is only history.
         await executeCold({ invocation: { agentId: run.agentId, harness: soul.harness, cwd: soul.directory },
           message: dreamPrompt(run, inputs), attachments: [], env: {}, signal, timeoutMs, kind: 'dream', historyId: run.runId });

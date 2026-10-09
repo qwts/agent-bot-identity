@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { isAgentId } from './agent-identity.mjs';
+import { dreamInputMetadataDigest, validateDreamInputMetadata } from './skill-dream-inputs.mjs';
 
 export const DREAM_TIMEOUT_MS = 10 * 60_000;
 export const DREAM_REGISTRATION_LIMIT = 256;
@@ -36,7 +37,13 @@ export function parseDreamSchedule(value) {
   if (hours > 720) fail('dream-schedule-invalid', 'dream schedule must be PT<N>H with an integer from 1 to 720');
   return hours;
 }
-export const emptyDreamState = () => ({ schemaVersion: 1, revision: 0, registrations: [], flights: [] });
+export const emptyDreamState = () => ({ schemaVersion: 2, revision: 0, registrations: [], flights: [], inputReceipts: [] });
+function inputReceipt(value) {
+  keys(value, ['runId', 'journalRevision', 'startingRevision', 'digest']);
+  const hash = value => typeof value === 'string' && value.length === 71 && /^sha256:[a-f0-9]{64}$/.test(value);
+  if (!id(value.runId) || !Number.isSafeInteger(value.journalRevision) || value.journalRevision < 1
+    || !hash(value.startingRevision) || !hash(value.digest)) invalid();
+}
 function runRecord(run, terminal) {
   keys(run, ['runId', 'agentId', 'soulDir', 'generation', 'daemonGeneration', 'trigger', 'startedAt', 'endedAt', 'status', 'timeoutMs', 'cancelRequestedAt', 'cancelReason']);
   if (!id(run.runId) || !isAgentId(run.agentId) || !root(run.soulDir) || !id(run.generation) || !id(run.daemonGeneration)
@@ -48,8 +55,8 @@ function runRecord(run, terminal) {
     || ['running', 'failed'].includes(run.status) && run.cancelReason !== null) invalid();
 }
 export function validateDreamState(state) {
-  keys(state, ['schemaVersion', 'revision', 'registrations', 'flights']);
-  if (state.schemaVersion !== 1 || !Number.isSafeInteger(state.revision) || state.revision < 0
+  keys(state, ['schemaVersion', 'revision', 'registrations', 'flights', ...(state?.schemaVersion === 2 ? ['inputReceipts'] : [])]);
+  if (![1, 2].includes(state.schemaVersion) || !Number.isSafeInteger(state.revision) || state.revision < 0
     || !Array.isArray(state.registrations) || state.registrations.length > DREAM_REGISTRATION_LIMIT
     || !Array.isArray(state.flights) || state.flights.length > DREAM_REGISTRATION_LIMIT) invalid();
   const agents = new Set(), generations = new Set(), flying = new Set(), runs = new Set();
@@ -74,14 +81,34 @@ export function validateDreamState(state) {
     if (flying.has(run.agentId) || runs.has(run.runId)) invalid();
     flying.add(run.agentId); runs.add(run.runId);
   }
+  if (state.schemaVersion === 2) {
+    if (!Array.isArray(state.inputReceipts) || state.inputReceipts.length > 2 * DREAM_REGISTRATION_LIMIT) invalid();
+    const retained = new Set([...runs, ...state.registrations.flatMap(row => row.lastRun ? [row.lastRun.runId] : [])]), seen = new Set();
+    for (const receipt of state.inputReceipts) {
+      inputReceipt(receipt);
+      if (!retained.has(receipt.runId) || seen.has(receipt.runId) || receipt.journalRevision > state.revision) invalid();
+      seen.add(receipt.runId);
+    }
+  }
   return state;
 }
 
 // Shared with durable adapters so persisted events cannot acquire fields that
 // the scheduling core would never emit (especially prompts or executor output).
-export function validateDreamEvents(events) {
+export function validateDreamEvents(events, { state = null } = {}) {
   if (!Array.isArray(events) || events.length < 1 || events.length > DREAM_REGISTRATION_LIMIT) invalid();
   for (const event of events) {
+    if (event?.kind === 'inputs-prepared') {
+      keys(event, ['kind', 'at', 'run', 'receipt', 'inputs']);
+      if (!date(event.at) || event.run?.status !== 'running') invalid();
+      runRecord(event.run, false); inputReceipt(event.receipt); validateDreamInputMetadata(event.inputs);
+      if (event.receipt.runId !== event.run.runId || event.receipt.startingRevision !== event.inputs.revision
+        || event.receipt.digest !== dreamInputMetadataDigest(event.inputs)) invalid();
+      if (state && (state.schemaVersion !== 2 || event.receipt.journalRevision !== state.revision
+        || !state.inputReceipts.some(receipt => isDeepStrictEqual(receipt, event.receipt))
+        || !state.flights.some(run => isDeepStrictEqual(run, event.run)))) invalid();
+      continue;
+    }
     const registrationEvent = ['registered', 'paused', 'unscheduled'].includes(event?.kind);
     keys(event, ['kind', 'at', registrationEvent ? 'registration' : 'run']);
     if (!date(event.at)) invalid();
@@ -120,7 +147,9 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
   let fault = null;
   const read = () => {
     const observed = synchronous(store.read());
-    return structuredClone(validateDreamState(observed === null ? emptyDreamState() : observed));
+    const state = structuredClone(validateDreamState(observed === null ? emptyDreamState() : observed));
+    // Upgrade only the next transaction, leaving historical v1 bytes intact.
+    return state.schemaVersion === 1 ? { ...state, schemaVersion: 2, inputReceipts: [] } : state;
   };
   const healthy = () => { if (fault) fail(fault, 'dream scheduler state is uncertain; restart recovery is required'); };
   const time = () => { const value = now().toISOString(); if (!date(value)) invalid(); return value; };
@@ -134,7 +163,10 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
     healthy();
     const expectedRevision = state.revision;
     state.revision++;
+    const retained = new Set([...state.flights.map(run => run.runId), ...state.registrations.flatMap(row => row.lastRun ? [row.lastRun.runId] : [])]);
+    state.inputReceipts = state.inputReceipts.filter(receipt => retained.has(receipt.runId));
     validateDreamState(state);
+    validateDreamEvents(events, { state });
     try {
       if (synchronous(store.commit({ expectedRevision, state: structuredClone(state), events: structuredClone(events) })) !== true) {
         fault = 'dream-store-conflict';
@@ -258,7 +290,19 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
     };
     entry.done = Promise.resolve().then(() => {
       entry.controller.signal.throwIfAborted();
-      return execute({ run: structuredClone(run), signal: entry.controller.signal, timeoutMs: turnTimeoutMs });
+      const prepareInputs = inputs => {
+        healthy(); entry.controller.signal.throwIfAborted();
+        const current = read(), lease = current.flights.find(item => item.runId === run.runId);
+        if (live.get(run.runId) !== entry || lease?.status !== 'running' || current.inputReceipts.some(receipt => receipt.runId === run.runId)) {
+          fail('dream-input-preparation-refused', 'Input preparation requires a live run without a previous input receipt.');
+        }
+        const metadata = structuredClone(validateDreamInputMetadata(inputs));
+        const receipt = { runId: run.runId, journalRevision: current.revision + 1, startingRevision: metadata.revision, digest: dreamInputMetadataDigest(metadata) };
+        current.inputReceipts.push(receipt);
+        persist(current, [{ kind: 'inputs-prepared', at: time(), run: lease, receipt, inputs: metadata }]);
+        return structuredClone(receipt);
+      };
+      return execute({ run: structuredClone(run), signal: entry.controller.signal, timeoutMs: turnTimeoutMs, prepareInputs });
     }).then(() => finish(false), () => finish(true));
     return { agentId, runId: run.runId, status: 'started', done: entry.done };
   }

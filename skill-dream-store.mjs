@@ -21,7 +21,7 @@ function validateRecord(record, revision) {
     || record.schemaVersion !== 1 || record.state?.revision !== revision
     || !(revision === 1 ? record.previousDigest === null : HASH.test(record.previousDigest)) || !HASH.test(record.digest)) invalid();
   validateDreamState(record.state);
-  validateDreamEvents(record.events);
+  validateDreamEvents(record.events, { state: record.state });
   const { schemaVersion, previousDigest, state, events } = record;
   if (digest({ schemaVersion, previousDigest, state, events }) !== record.digest) invalid();
   return record;
@@ -117,7 +117,7 @@ export function createDreamFileStore({ directory, capacity = DREAM_STORE_LIMITS.
     return { revision: head, temporaryFiles, current };
   }
   function commit({ expectedRevision, state, events }) {
-    validateDreamState(state); validateDreamEvents(events);
+    validateDreamState(state); validateDreamEvents(events, { state });
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || state.revision !== expectedRevision + 1) invalid();
     let before;
     try { before = latest(); }
