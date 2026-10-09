@@ -62,6 +62,11 @@ preserving run history. Neither operation claims to terminate an executing
 turn. Cancellation targets the named maintenance run through its own abort
 controller; the normal soul-wide stop command still reaches it through the
 shared registry. Status distinguishes cancellation requested from settled.
+If the executor resolves successfully despite a cancellation request, settlement
+is `completed` and retains the request timestamp/reason. A rejected execution
+after an abort records `cancelled` or `timed-out`; an abort before launch never
+calls the executor. None of these execution states claims maintenance coverage
+or rolls back changes already committed by tools.
 
 After a completed, failed or interrupted attempt, the next normal due time is
 one interval after that attempt ends. A daemon starting after several missed
@@ -258,6 +263,10 @@ and directory, trigger, start time, execution bound and cancellation state.
 Strict validation refuses unknown schemas, extra fields, duplicate souls/runs,
 invalid timestamps and inconsistent states. These are new records, not migrations
 of existing soul or daemon stores. Checkpoint/evidence schemas remain later work.
+A canonical directory cannot be assigned to different souls across registrations
+and unsettled flights. The same soul may re-register at a new directory while its
+old flight remains quarantined; another soul cannot claim that old directory
+until the earlier flight settles.
 
 The required synchronous store port reads a state snapshot and atomically commits
 the replacement state **together with** its execution/control events against an

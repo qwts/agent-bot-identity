@@ -45,7 +45,7 @@ function runRecord(run, terminal) {
     || !(run.cancelRequestedAt === null && run.cancelReason === null || date(run.cancelRequestedAt) && ['owner', 'timeout'].includes(run.cancelReason))) invalid();
   if (run.status === 'cancelling' && run.cancelReason === null || run.status === 'cancelled' && run.cancelReason !== 'owner'
     || run.status === 'timed-out' && run.cancelReason !== 'timeout'
-    || ['running', 'completed', 'failed'].includes(run.status) && run.cancelReason !== null) invalid();
+    || ['running', 'failed'].includes(run.status) && run.cancelReason !== null) invalid();
 }
 export function validateDreamState(state) {
   keys(state, ['schemaVersion', 'revision', 'registrations', 'flights']);
@@ -53,6 +53,11 @@ export function validateDreamState(state) {
     || !Array.isArray(state.registrations) || state.registrations.length > DREAM_REGISTRATION_LIMIT
     || !Array.isArray(state.flights) || state.flights.length > DREAM_REGISTRATION_LIMIT) invalid();
   const agents = new Set(), generations = new Set(), flying = new Set(), runs = new Set();
+  const directoryOwners = new Map();
+  const ownsDirectory = (agentId, soulDir) => {
+    if (directoryOwners.has(soulDir) && directoryOwners.get(soulDir) !== agentId) invalid();
+    directoryOwners.set(soulDir, agentId);
+  };
   for (const row of state.registrations) {
     keys(row, ['agentId', 'soulDir', 'generation', 'intervalHours', 'paused', 'nextDueAt', 'createdAt', 'updatedAt', 'lastRun']);
     if (!isAgentId(row.agentId) || agents.has(row.agentId) || !root(row.soulDir) || !id(row.generation) || generations.has(row.generation)
@@ -60,10 +65,12 @@ export function validateDreamState(state) {
       || typeof row.paused !== 'boolean' || !(row.paused ? row.nextDueAt === null : date(row.nextDueAt))
       || !date(row.createdAt) || !date(row.updatedAt)) invalid();
     if (row.lastRun !== null) { runRecord(row.lastRun, true); if (row.lastRun.agentId !== row.agentId || row.lastRun.soulDir !== row.soulDir) invalid(); }
+    ownsDirectory(row.agentId, row.soulDir);
     agents.add(row.agentId); generations.add(row.generation);
   }
   for (const run of state.flights) {
     runRecord(run, false);
+    ownsDirectory(run.agentId, run.soulDir);
     if (flying.has(run.agentId) || runs.has(run.runId)) invalid();
     flying.add(run.agentId); runs.add(run.runId);
   }
@@ -231,7 +238,10 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
         healthy();
         const current = read(), lease = current.flights.find(item => item.runId === run.runId);
         if (!lease) invalid();
-        const endedAt = time(), status = entry.controller.signal.aborted ? entry.reason === 'timeout' ? 'timed-out' : 'cancelled' : failed ? 'failed' : 'completed';
+        // A requested abort is not evidence that successful execution stopped.
+        // Keep the request on the receipt, but report the executor's settlement.
+        const endedAt = time(), status = !failed ? 'completed'
+          : entry.controller.signal.aborted ? entry.reason === 'timeout' ? 'timed-out' : 'cancelled' : 'failed';
         const result = { ...lease, status, endedAt };
         current.flights = current.flights.filter(item => item.runId !== run.runId);
         const owner = current.registrations.find(item => item.agentId === agentId && item.generation === run.generation);
