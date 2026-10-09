@@ -1,0 +1,1 @@
+- Add `soul skill learn` guidance and outcome recording through the existing soul revision policy. Selected source pieces, captured dependencies and accepted originals remain inside versioned packages; file-verified adoption is separate from agent-reported knowledge work (#603, #312).
