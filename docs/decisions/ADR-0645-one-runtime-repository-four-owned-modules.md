@@ -1,12 +1,12 @@
-# ADR-0645: One runtime repository, four owned modules, contracts before moves
+# ADR-0645: Owned modules and contracts first, then identity becomes its own repository
 
-**Status:** Proposed
+**Status:** Proposed (revised 2026-10-09)
 **Date:** 2026-10-08
 **Issue:** [qwts/agent-bot-identity#645](https://github.com/qwts/agent-bot-identity/issues/645)
 
 ## Context
 
-[#645](https://github.com/qwts/agent-bot-identity/issues/645) proposes
+[#645](https://github.com/qwts/agent-bot-identity/issues/645) proposed
 consolidating this repository and
 [agent-comms](https://github.com/qwts/agent-comms) into one runtime. It would
 have four capabilities:
@@ -15,6 +15,20 @@ have four capabilities:
 - **soul:** what am I, and how do I operate?
 - **harness:** what can a harness do, and how is it configured?
 - **comms:** how do I interact?
+
+The first version of this record (2026-10-08) chose one repository for all
+four. On 2026-10-09 the owner chose a different end state
+([#645 comment](https://github.com/qwts/agent-bot-identity/issues/645#issuecomment-6086695983)):
+
+- **identity is extracted into its own repository, `agent-identity`;**
+- **soul, harness and the development workflows stay here;**
+- **agent-comms stays its own repository**, so the history import
+  ([#737](https://github.com/qwts/agent-bot-identity/issues/737)) is on hold;
+- **no submodules.**
+
+This revision records that direction. The module map, the dependency rules and
+the harness rules (§2 to §4) are unchanged, and they are what makes the
+extraction possible.
 
 Organization, SOP and harness-documentation sources stay in their own
 repositories.
@@ -78,25 +92,30 @@ Accepted records constrain the design:
 
 ## Decision
 
-### 1. One source repository, logical modules first
+### 1. Logical modules here first; identity is the one module that leaves
 
-- **The runtime's source home is this repository.** Its name, the `agent-bot`
-  command, service labels and state paths stay as they are. A rename is a
-  separate decision.
+- **This repository stays the source home for soul, harness, host and cli.**
+  Its name, the `agent-bot` command, service labels and state paths stay as
+  they are.
 - **Each runtime file has one owning module, recorded in
   [`governance/runtime-modules.json`](../../governance/runtime-modules.json).**
   - Modules are logical first. A file moves into a module directory only when
     its module has no remaining boundary crossings, one module per PR, behind
     re-export shims at the old paths.
   - The modules are `identity`, `soul`, `harness`, `comms`, `org` and `shared`,
-    plus two composition roots, `host` and `cli`. When the agent-comms broker
-    moves in (§5) it becomes one more module, `comms-broker`.
+    plus two composition roots, `host` and `cli`.
+- **identity is extracted into `qwts/agent-identity`** once it has no boundary
+  crossings and has a reviewed public contract (§5). It is the module to move
+  because it is the trust boundary, and because it is the smaller side: 38 of
+  172 runtime files at `0aae907`, with 6 crossings left, all credential custody.
+  Moving soul, host and cli (about 130 files) instead would move the parts that
+  change daily.
 - **No new process, package, binary or service is created to mirror a module
-  name.**
-  - `agent-bot` stays the command facade. An `agent-identity` or `agent-soul`
-    binary needs a demonstrated consumer first.
-  - The identity daemon, `keyd` and the agent-comms broker remain separate
-    processes with their current sockets, labels and authentication.
+  name.** `agent-bot` stays the command facade, and every command it has today
+  keeps working after the extraction. An `agent-identity` command, if any, is
+  added only alongside it, never instead of it.
+- **The identity daemon, `keyd` and the agent-comms broker remain separate
+  processes** with their current sockets, labels and authentication.
 
 ### 2. Dependency rules
 
@@ -125,7 +144,8 @@ Consequences of these rules:
   fails if one is reassigned.
 - **The policy graph is acyclic.** `cli` may import `host`; `host` never
   imports `cli`.
-- **The 31 crossings that exist today form the test's `baseline`.**
+- **The crossings that existed when the map landed form the test's `baseline`.**
+  There were 31 at `a339a31`; 6 remain at `0aae907`.
   - A new crossing fails the test.
   - A removed crossing must also be removed from the baseline, so the baseline
     only shrinks.
@@ -200,141 +220,164 @@ Consequences of these rules:
   resolve through an alias table, and no persisted key (`soul.json`
   `preferredHarnesses`, config slugs, the roster) is rewritten.
 
-### 5. agent-comms joins without losing its seams
+### 5. Extracting identity
 
-- **History.** agent-comms moves in with its history, issues and ADRs traceable.
-  It stays its own package root with its own `package.json`,
-  `bin/agent-comms.mjs` and `lib/principal-client.mjs` at stable relative paths,
-  because GeniusBar imports that file directly.
-- **Unchanged.** The `agent-comms` command, broker service label, sockets, wire
-  protocol and state directories do not change.
-- **Wire contracts only.** The broker keeps authenticating souls through the
-  daemon's vouch token (`/v0/vouch`) and the binding proof. It does not import
-  identity internals; ENG-0128's no-imports boundary holds at the wire.
-  - The broker's files form their own module, `comms-broker`, whose
-    `may_import` is `shared` and the wire-contract files only. It may not import
-    `identity`, `comms`, `soul` or `host`, and the boundary test enforces that
-    like any other rule.
-  - The `comms` client module may use identity's exported functions; the broker
-    may not. Sharing a repository gives the broker no in-process path to
-    identity, and the daemon and broker share no secrets (see Non-goals).
-  - The two byte-identical copies of `binding-proof.mjs` become one shared
-    contract file only once both trees live here.
-- **Ordering.** This move comes after the boundary work. It is gated on this
-  record and on the ENG decision in question 1. Nothing changes agent-comms
-  ownership, its release contract or ENG-0128's boundary until that decision is
-  recorded.
+- **Contract first.** Before any file leaves, identity gets a written public
+  contract: what the rest of the runtime may call, in which form, and what it
+  persists. It starts from what already exists: the daemon routes
+  (`/v0/credential`, `/v0/vouch`, `/v0/keyd/grant`, `/v0/identity/apps`), the
+  binding proof, the `mint-token` and git credential helper behavior, the owner
+  gate, and keyd's grant format.
+- **How the rest of the runtime consumes identity is decided before the
+  extraction plan.** At `0aae907`, 72 files outside identity import 24 identity
+  files: 147 import edges, 76 of them from soul and 50 into
+  `agent-identity.mjs` alone. Identity imports `shared` 19 times, `harness` 4
+  and `org` 3. The choice between consuming identity over the wire and as a
+  pinned dependency is open question 2. Until it is answered, steps 1 to 6
+  proceed and step 7 does not.
+- **Unchanged by the move:** the `agent-bot` command and its subcommands,
+  service labels (`app.geniusbar.agent-bot`, `app.geniusbar.keyd` and the
+  Homebrew and Linux equivalents), sockets, state directories
+  (`~/.local/state/agent-bot` and others), Keychain and pass item names, and
+  credential formats. Changing any of them is a separate decision with a
+  migration and a rollback.
+- **History.** identity's files move with their history traceable. The
+  publishing path for signed history in a new repository is the same problem
+  #737 raised, so it is solved once in the extraction plan.
+- **agent-comms is not imported.** It stays its own repository behind its wire
+  contracts: the vouch token (`/v0/vouch`) and the binding proof.
+  [agent-comms
+  ADR-0002](https://github.com/qwts/agent-comms/blob/main/docs/decisions/ADR-0002-messaging-plane-on-the-agent-bot-daemon.md)
+  stands. #737 stays open for reference and is revisited only if consolidation
+  is chosen later.
 
-### 6. One coordinated release
+### 6. Releases stay a pinned compatible set
 
-A release produces the `agent-bot` and `agent-comms` artifacts from one tag as
-one tested compatible set:
+[agent-comms
+ADR-0059](https://github.com/qwts/agent-comms/blob/main/docs/decisions/ADR-0059-host-apps-embed-agent-comms.md)
+already has host apps embed pinned releases as a compatible set. After the
+extraction the set may have three members: agent-identity, agent-bot and
+agent-comms. Whether agent-identity ships as its own GeniusBar component,
+formula and Linux bundle entry, or inside each agent-bot release at a pinned
+version, is open question 3. Either way:
 
-- the Homebrew formulae;
-- the Linux bundle, whose `components.json` agent-comms pin becomes the same
-  tag;
-- the GeniusBar component pins.
-
-Compatibility checks in GeniusBar (`scripts/compat-check.mjs`, its ADR-0282
-minimum-reader policy) keep working: old tags remain fetchable, and pins never
-move backwards.
+- pins never move backwards;
+- GeniusBar's compatibility checks (`scripts/compat-check.mjs`, its ADR-0282
+  minimum-reader policy) keep working;
+- no install falls back from a declared pin to another version.
 
 ### Supersedes and amends (on acceptance)
 
-- **agent-comms ADR-0002:** superseded in part. The rejected alternative "put
-  agent-comms inside agent-bot-identity" becomes the decision. Its process and
-  security separation (broker separate from the daemon, versioned interfaces
-  between them) is retained.
-- **ADR-0332 decision 1:** amended. The three channels and both commands remain,
-  but they are built from one tag.
-- **agent-comms ADR-0059 decision 1:** amended. The embedded "pinned agent-comms
-  and agent-bot releases" become one release that ships two components.
+- **[ENG-0128](https://github.com/qwts/qwts-agent-sop/blob/main/docs/decisions/ENG-0128-agent-bot-runtime-ownership.md):**
+  amended. It names this repository as the identity runtime owner. After step 9,
+  `qwts/agent-identity` owns identity, and this repository owns soul, harness
+  and the `agent-bot` facade. The ENG change is recorded under ENG-0001 (open
+  question 1) before step 9.
+- **ADR-0332 decision 1:** amended only if open question 3 makes
+  agent-identity its own install component. Its three channels stay.
+- The first version of this record superseded agent-comms ADR-0002 and amended
+  agent-comms ADR-0059. This revision withdraws both.
 
 ## Migration strategy
 
 The work is done in dependency order. Every step is its own PR, keeps observable
 behavior, and shrinks the baseline or adds a contract:
 
-1. **Module map and boundary ratchet** (this record's companion PR). No code
-   moves.
+1. **Module map and boundary ratchet.** Done (#649).
 2. **Identity untangling:**
-   - App credential custody moves out of `soul-credentials.mjs` behind a
-     re-export shim.
-   - The `agent-identity` ↔ `soul-genesis` and `soul-package` cycle is broken by
-     passing the package revision in.
+   - The `agent-identity` ↔ `soul-genesis` and `soul-package` cycle is broken
+     by passing the package revision in. Done.
    - The owner gate gets its soul census and comms dependencies through
-     parameters.
-   - Overlaps the [#104](https://github.com/qwts/agent-bot-identity/issues/104)
-     epic, which it should be reconciled with.
-3. **Daemon client contract.** `daemonClient` moves out of `agent-daemon.mjs`,
-   so soul modules stop importing the process host.
+     parameters. Done.
+   - App credential custody moves out of `soul-credentials.mjs` behind a
+     re-export shim. This removes the last 6 crossings (`identity-apps.mjs` and
+     `soul-credentials.mjs` into `agent-population`, `soul-package`,
+     `soul-providers` and `soul-revisions`). It overlaps
+     [#676](https://github.com/qwts/agent-bot-identity/issues/676) and the
+     [#104](https://github.com/qwts/agent-bot-identity/issues/104) epic.
+3. **Daemon client contract.** `daemonClient` moved out of `agent-daemon.mjs`,
+   so soul modules no longer import the process host. Done.
 4. **Harness descriptor schema** in harness-docs plus a validator and bundled
    snapshot in `harness`, starting with every claim `unknown` and
    evidence-backed entries added by review.
 5. **Harness knowledge consolidation.** Descriptive tables read from `harness`,
    and the key alias table is added. Selection tables stay in soul.
 6. **Physical module directories**, one module at a time once its crossings
-   reach zero, with shims at the old paths.
-7. **agent-comms history import** and a combined CI run of both suites.
-8. **Coordinated release:** formulae, Linux bundle, GeniusBar pins and
-   compatibility fixtures; overlaps
-   [agent-comms#127](https://github.com/qwts/agent-comms/issues/127).
-9. **Organization and SOP integration:** org capability pins for the runtime
-   entries
-   ([qwts-agent-org#32](https://github.com/qwts/qwts-agent-org/issues/32)) and
-   SOP references.
-10. **Verification against #645's acceptance criteria**, then a completion
-    report. Old repositories are archived or redirected only after a validated
-    rollout.
+   reach zero, with shims at the old paths. `identity/` goes first.
+7. **Identity public contract** (§5), reviewed and tested here, including the
+   consumption model from open question 2. Outside callers move onto it, so
+   nothing outside `identity/` depends on identity internals.
+8. **Extraction plan** for `qwts/agent-identity`: history, CI, release,
+   formula, the GeniusBar component, the Linux bundle, the `agent-bot` facade,
+   and a written rollback. Reviewed before the repository is created.
+9. **Extraction and first compatible release.** `identity/` is replaced by the
+   pinned consumer from step 7. Old paths keep working.
+10. **Organization and SOP integration:** an org capability pin for
+    agent-identity
+    ([qwts-agent-org#32](https://github.com/qwts/qwts-agent-org/issues/32)),
+    the agent-bot pin update, and SOP references.
+11. **Verification against #645's acceptance criteria**, then a completion
+    report. Nothing is archived.
 
-Rollback for steps 1 to 6 is a revert. They change no persisted state or
-installed surface. Steps 7 to 9 each carry a written rollback before they merge.
+Rollback for steps 1 to 7 is a revert. They change no persisted state or
+installed surface. Steps 8 to 10 each carry a written rollback before they
+merge.
 
 ## Alternatives considered
 
+- **One runtime repository with agent-comms imported** (the first version of
+  this record). Rejected by the owner on 2026-10-09. It would end agent-comms'
+  separate release cadence and make one repository own every secret-bearing
+  process.
+- **Extract soul and keep identity here.** Rejected. Soul, host and cli are
+  about three quarters of the runtime and change daily, so moving them is the
+  larger and riskier change. The trust boundary is the part that benefits from
+  a small, separately reviewed codebase.
+- **Git submodules.** Rejected. A submodule pin goes stale silently. The org
+  pin to agent-bot is already about 50 releases behind.
 - **Move files into `packages/*` first, then untangle.** Rejected. Every cycle
-  would come along, PRs would mix moves with behavior, and GeniusBar's path
-  assumptions would break at once.
-- **One npm workspace package per module, published separately.** Rejected for
-  now. There is no consumer for separate packages, it adds tooling to a
-  zero-dependency runtime, and it multiplies the release surface ADR-0332 just
-  settled.
+  would come along, and PRs would mix moves with behavior.
 - **A separate `agent-harness` repository or service.** Rejected. harness-docs
-  is the independent source. A second repository or a network service would add
-  an online dependency and a second registry.
-- **Keep two repositories and only add contracts.** This is the fallback if
-  consolidation is not accepted. Steps 1 to 5 deliver value either way.
+  is the independent source. A second repository would add a second registry.
 
 ## Non-goals
 
-- Merging agent-org, qwts-agent-org, agent-sop, qwts-agent-sop, harness-docs or
-  GeniusBar into this repository.
+- Merging agent-comms, agent-org, qwts-agent-org, agent-sop, qwts-agent-sop,
+  harness-docs or GeniusBar into this repository.
 - Combining the daemon, keyd and broker into one process, or sharing their
   secrets.
-- Renaming commands, services, state directories or this repository.
+- Renaming this repository, the `agent-bot` command, services or state
+  directories.
 - Rewriting identity, soul, messaging or authorization protocols.
 - Changing installed harness versions or pins.
 
 ## Questions before acceptance
 
-1. Does the umbrella decision need an ENG record under ENG-0001, since it
-   changes agent-comms, GeniusBar, qwts-agent-org and SOP references? Should
-   that record extend ENG-0128 or supersede it? Accepting this record does not
-   answer this: migration steps 7 and 8 stay blocked until it is answered.
-2. Is standalone agent-comms deployment, or a replaceable comms identity
-   provider, a real requirement? If yes, comms keeps its own release cadence and
-   §6 changes.
-3. Which harness key vocabulary is canonical: the roster's (`claude-code`,
-   `qwen-code`) or the runtime's (`claude`, `qwen`)?
-4. What is the Node engine floor for the combined tree? agent-bot is `>=20`;
-   agent-comms is `^22.22.2 || ^24.15.0 || >=26`.
+1. **The ENG record.** The extraction changes runtime ownership in
+   qwts-agent-sop (ENG-0128), GeniusBar and qwts-agent-org. Does it need a new
+   ENG record under ENG-0001, or an amendment to ENG-0128? Step 9 waits on the
+   answer.
+2. **How the runtime consumes identity after extraction.** Over the wire (the
+   daemon routes and the binding proof, with pure format helpers kept as a
+   small shared contract), or as a pinned package that this repository imports
+   at an exact version? Step 7 waits on the answer.
+3. **How agent-identity ships.** As its own install component (formula,
+   GeniusBar component, Linux bundle entry), or bundled inside each agent-bot
+   release at a pinned version? Step 8 waits on the answer.
+4. **Harness key vocabulary.** Which spelling is canonical: the roster's
+   (`claude-code`, `qwen-code`) or the runtime's (`claude`, `qwen`)? Step 5
+   waits on the answer.
+
+The first version's question about agent-comms deployment is answered: it stays
+standalone. Its question about one Node engine floor for a combined tree no
+longer applies.
 
 ## Consequences
 
 - Reviewers see ownership and every crossing a PR adds or removes. The cost is
   maintaining the map: a new runtime file must be assigned before its PR passes.
-- The baseline makes today's debt explicit: 12 identity → soul imports, 10 soul
-  → host imports, and 9 others.
-- Physical consolidation is slower. Each module moves only once it is untangled.
-- agent-comms loses an independent release cadence. Question 2 is the escape
-  hatch.
+- The baseline makes today's debt explicit. It went from 31 crossings to 6.
+- Identity becomes a small codebase with its own review and release. The cost
+  is one more repository and pin to keep current, and a contract that changes
+  more slowly than the code behind it.
+- agent-comms keeps its own release cadence.
