@@ -225,7 +225,7 @@ export async function spawnSoulTemplate(templatePath, { name, role = null, harne
     save();
     manifest.revision = computePackageRevision(directory);
     save();
-    identity = mintAgentIdentity({ ...options, stateDir, appSlug, packagePath: directory,
+    identity = mintAgentIdentity({ ...options, stateDir, appSlug, packageRevision: computePackageRevision(directory),
       parentId, harness, useGithub: Boolean(appSlug) && isGateEnabled('github-identity', options) });
     // The soul's life starts inside its folder (ADR-0583 decisions 8 and 9):
     // the marker, the Agent Space as a directory, and the history mirror

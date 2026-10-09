@@ -23,7 +23,7 @@ import { collectReadiness } from '../readiness.mjs';
 import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const IDENTITY_CLI = path.join(ROOT, 'agent-identity.mjs');
+const IDENTITY_CLI = path.join(ROOT, 'cli', 'identity.mjs');
 const SETUP_CLI = path.join(ROOT, 'setup-worktree.mjs');
 const TOKEN_CLI = path.join(ROOT, 'worktree-token.mjs');
 const ENSURE_SCRIPT = path.join(ROOT, 'scripts', 'ensure-identity.sh');

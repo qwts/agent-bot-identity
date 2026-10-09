@@ -29,7 +29,7 @@ function fixture(t) {
   writeFileSync(join(packagePath, 'soul.json'), JSON.stringify(manifest));
   const env = { PATH: process.env.PATH, HOME: root, AGENT_BOT_CONFIG: join(root, 'no-config.json') };
   const options = { env, home: root, cwd: root, stateDir: join(root, 'state'), now: () => new Date('2026-10-02T12:00:00Z') };
-  const { id } = mintAgentIdentity({ ...options, appSlug: 'test-agent', packagePath });
+  const { id } = mintAgentIdentity({ ...options, appSlug: 'test-agent', packageRevision: computePackageRevision(packagePath) });
   adoptSoulPackage(id, packagePath, { ...options, reason: 'Start' });
   writeFileSync(join(packagePath, 'AGENTS.md'), 'Proposed\n');
   const proposal = proposeSoulRevision(id, packagePath, { ...options, reason: 'Improve' });

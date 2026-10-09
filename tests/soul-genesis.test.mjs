@@ -20,7 +20,11 @@ function fixture(t) {
   writeFileSync(path.join(packagePath, 'soul.json'), JSON.stringify({ formatVersion: 1,
     name: 'Test', description: 'Test soul', displaySeed: 'test', preferredHarnesses: [], revision, parentRevision: null }));
   writeFileSync(path.join(packagePath, 'AGENTS.md'), 'Test instructions\n');
-  return { packagePath, stateDir: path.join(root, 'identities'), appSlug: 'test-agent', root };
+  // Spread into mintAgentIdentity: the revision is read at spread time, as
+  // identity used to compute it at mint; the path itself is not a mint option.
+  const f = { stateDir: path.join(root, 'identities'), appSlug: 'test-agent', root,
+    get packageRevision() { return computePackageRevision(packagePath); } };
+  return Object.defineProperty(f, 'packagePath', { value: packagePath, enumerable: false });
 }
 
 test('fixed SHA-256 canonical JSON UUIDv8 vectors', () => {
@@ -62,7 +66,8 @@ test('collision retries with a fresh nonce and fails closed when exhausted', (t)
   assert.equal(calls, 2);
   assert.equal(next.id, deriveSoulId({ revision: computePackageRevision(f.packagePath), nonce: '1'.repeat(64) }));
   assert.throws(() => mintAgentIdentity({ ...f, nonceFactory: () => nonce }), /unique Agent ID/);
-  assert.throws(() => mintAgentIdentity({ ...f, packagePath: path.join(f.root, 'missing') }));
+  assert.throws(() => mintAgentIdentity({ ...f, packageRevision: 'sha256:missing' }), /genesis revision/);
+  assert.throws(() => mintAgentIdentity({ ...f, packagePath: f.packagePath }), /takes packageRevision, not packagePath/);
 });
 
 test('revision-chain port preserves genesis and ID, records every move including undo', async (t) => {
@@ -70,11 +75,11 @@ test('revision-chain port preserves genesis and ID, records every move including
   const row = mintAgentIdentity(f);
   const chain = [];
   const appendRevision = async (entry) => { chain.push(entry); };
-  await recordAgentPackageRevision(row.id, f.packagePath, { ...f, appendRevision });
+  await recordAgentPackageRevision(row.id, computePackageRevision(f.packagePath), { ...f, appendRevision });
   writeFileSync(path.join(f.packagePath, 'AGENTS.md'), 'New instructions\n');
-  const updated = await recordAgentPackageRevision(row.id, f.packagePath, { ...f, appendRevision });
+  const updated = await recordAgentPackageRevision(row.id, computePackageRevision(f.packagePath), { ...f, appendRevision });
   writeFileSync(path.join(f.packagePath, 'AGENTS.md'), 'Test instructions\n');
-  await recordAgentPackageRevision(row.id, f.packagePath, { ...f, appendRevision });
+  await recordAgentPackageRevision(row.id, computePackageRevision(f.packagePath), { ...f, appendRevision });
   assert.deepEqual(updated, row);
   assert.deepEqual(chain.map((e) => e.agentId), [row.id, row.id, row.id]);
   assert.equal(chain[0].revision, row.genesis.revision);
@@ -82,24 +87,24 @@ test('revision-chain port preserves genesis and ID, records every move including
   assert.equal(chain[2].revision, row.genesis.revision);
   assert.deepEqual(readAgentIdentity(row.id, f), row);
   assert.deepEqual(bindAgentLineage(row.id, parent, f).genesis, row.genesis);
-  await assert.rejects(recordAgentPackageRevision(row.id, f.packagePath, f), /chain writer/);
-  await assert.rejects(recordAgentPackageRevision(row.id, f.packagePath, { ...f,
+  await assert.rejects(recordAgentPackageRevision(row.id, computePackageRevision(f.packagePath), f), /chain writer/);
+  await assert.rejects(recordAgentPackageRevision(row.id, computePackageRevision(f.packagePath), { ...f,
     appendRevision: async () => { throw new Error('storage failure'); } }), /storage failure/);
   writeFileSync(path.join(f.stateDir, `${row.id}.json`), JSON.stringify({ ...row, status: 'retired' }));
-  await assert.rejects(recordAgentPackageRevision(row.id, f.packagePath, { ...f, appendRevision }), /retired/);
+  await assert.rejects(recordAgentPackageRevision(row.id, computePackageRevision(f.packagePath), { ...f, appendRevision }), /retired/);
   assert.equal(chain.length, 3);
 });
 
 test('legacy rows normalize to no genesis and adopt packages without changing ID', async (t) => {
   const f = fixture(t);
-  const row = mintAgentIdentity({ ...f, packagePath: null });
+  const row = mintAgentIdentity({ ...f, packageRevision: null });
   assert.equal(row.genesis, null);
   delete row.genesis;
   writeFileSync(path.join(f.stateDir, `${row.id}.json`), JSON.stringify(row));
   assert.deepEqual(validateIdentity(row), []);
   assert.equal(readAgentIdentity(row.id, f).genesis, null);
   const entries = [];
-  const adopted = await recordAgentPackageRevision(row.id, f.packagePath, { ...f, appendRevision: (e) => entries.push(e) });
+  const adopted = await recordAgentPackageRevision(row.id, computePackageRevision(f.packagePath), { ...f, appendRevision: (e) => entries.push(e) });
   assert.equal(adopted.id, row.id);
   assert.equal(adopted.genesis, null);
   assert.equal(entries[0].genesis, null);

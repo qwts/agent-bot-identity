@@ -227,7 +227,7 @@ test('every consumer that mints or commits shares this resolver', async () => {
   // identity their own way. Import-level check, so a future consumer that
   // rolls its own chain shows up here rather than in production attribution.
   const sources = await Promise.all(
-    ['../setup-worktree.mjs', '../mint-token.mjs', '../ensure-private-key.mjs', '../agent-identity.mjs', '../worktree-token.mjs', '../signed-commit.mjs', '../agent-space-pack.mjs'].map(async (path) => ({
+    ['../setup-worktree.mjs', '../mint-token.mjs', '../ensure-private-key.mjs', '../agent-identity.mjs', '../cli/identity.mjs', '../worktree-token.mjs', '../signed-commit.mjs', '../agent-space-pack.mjs'].map(async (path) => ({
       path,
       text: await import('node:fs').then((fs) =>
         fs.readFileSync(new URL(path, import.meta.url), 'utf8'),

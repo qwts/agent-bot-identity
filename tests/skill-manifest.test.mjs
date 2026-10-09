@@ -82,7 +82,7 @@ test('one-byte edits, line endings, mode flips, additions and removals show in t
 test('edits and proposals report the skills they change, and every stored revision has a manifest', async (t) => {
   const { root, packagePath } = pkg(t, { skills: { alpha: { 'reference/notes.md': 'notes\n' } } });
   const options = { env: { HOME: root }, home: root, stateDir: join(root, 'state'), now: () => new Date('2026-10-07T12:00:00Z') };
-  const identity = mintAgentIdentity({ ...options, appSlug: 'test-agent', packagePath });
+  const identity = mintAgentIdentity({ ...options, appSlug: 'test-agent', packageRevision: computePackageRevision(packagePath) });
   const initial = adoptSoulPackage(identity.id, packagePath, options);
   // The first revision: everything is new.
   const first = skillChanges(identity.id, {}, options);

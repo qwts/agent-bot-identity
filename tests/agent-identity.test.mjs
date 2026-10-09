@@ -335,7 +335,7 @@ test('identity finalize synchronizes a registered population row', () => {
   const cli = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
     '..',
-    'agent-identity.mjs',
+    'cli', 'identity.mjs',
   );
 
   const finalized = spawnSync(process.execPath, [cli, 'finalize', record.id], {
@@ -440,7 +440,7 @@ test('ensure binds the GH_AGENT_APP identity in any checkout (ENG-0339)', () => 
   for (const key of Object.keys(cleanEnv)) {
     if (/^(CODEX|CLAUDE|AI_AGENT|QWTS_AGENT|AGENT_BOT)/.test(key)) delete cleanEnv[key];
   }
-  const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'agent-identity.mjs');
+  const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'cli', 'identity.mjs');
   const ensured = spawnSync(process.execPath, [cli, 'ensure', '--json'], {
     cwd: repo,
     encoding: 'utf8',
@@ -867,4 +867,27 @@ test('a takeover mutex left by a dead process does not wedge the lock forever', 
 
   assert.equal(reclaimStaleLock(lock, statSync(lock)), true);
   assert.throws(() => statSync(lock), /ENOENT/);
+});
+
+// hooks/* run agent-identity.mjs directly; `agent-bot identity` runs cli/identity.mjs (#645).
+test('the hook entry serves current, show and record as the CLI does, and points every other command at agent-bot identity', () => {
+  const stateDir = state();
+  const record = mintAgentIdentity(mintOptions(stateDir));
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const env = { ...process.env, AGENT_BOT_STATE_HOME: stateDir, AGENT_BOT_ID: record.id };
+  delete env.QWTS_AGENT_ID;
+  const run = (script, args) => spawnSync(process.execPath, [path.join(root, ...script), ...args], { encoding: 'utf8', env });
+  const hook = ['agent-identity.mjs'];
+  const cli = ['cli', 'identity.mjs'];
+  for (const args of [['current'], ['current', '--json'], ['show', record.id]]) {
+    const viaHook = run(hook, args);
+    assert.equal(viaHook.status, 0, viaHook.stderr);
+    assert.equal(viaHook.stdout, run(cli, args).stdout, args.join(' '));
+  }
+  const recorded = run(hook, ['record', record.id, '--artifact', 'commit:abc123', '--json']);
+  assert.equal(recorded.status, 0, recorded.stderr);
+  assert.deepEqual(JSON.parse(recorded.stdout).artifacts, ['commit:abc123']);
+  const refused = run(hook, ['ensure', '--json']);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /^agent-identity: usage: agent-identity\.mjs <current\|show\|record> is the git hooks' entry; run agent-bot identity ensure\n$/);
 });
