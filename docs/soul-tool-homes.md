@@ -95,15 +95,47 @@ another runs Codex against a different one. The choice is recorded in
   the record. The decision itself is the pure
   `toolHomeDecision(harness, { ..., choice })`.
 
+#### Setting the choice: `soul tool-home`
+
+```sh
+agent-bot soul tool-home <harness> --soul <agentId|name> [--json]                                  # show
+agent-bot soul tool-home <harness> soul|global --soul <agentId|name> [--json] [--principal-stdin]   # set
+```
+
+- With no choice it shows the recorded entry, or `unset (current setup)`.
+- **Who may set it:** the owner, for any soul, and the soul itself, for its
+  own soul only.
+  - The owner passes the owner gate for every change (a presented
+    principal, else keyd presence, else the administrator dialog). A caller
+    without soul markers is not thereby the owner: a soul can unset them.
+  - A caller with a soul marker (an Agent ID, a binding or an App identity)
+    proves which soul it is with its live binding, which the daemon resolves
+    to an Agent ID. A stated `AGENT_BOT_ID` or git config is not proof. No
+    binding the daemon knows is `tool-home-soul-unproven`; a binding for
+    another soul is `tool-home-not-own-soul`. A soul cannot present the
+    owner's principal (`tool-home-principal-not-accepted`).
+- **`soul`** keeps the harness in the soul's own tool home. That never
+  widens what the soul can reach, so a soul's binding is enough.
+- **`global`** gives the soul the host's shared sign-in and sessions, so a
+  soul asking for it waits for the owner's presence (Touch ID or the login
+  password, else the administrator dialog). The prompt reads "let <soul> use
+  this Mac's shared <harness> sign-in and sessions instead of its own". A
+  "no" changes nothing and fails with `tool-home-owner-not-approved`.
+- Setting the entry it already has is a no-op: no prompt, no write, no
+  receipt. Every change writes a `tool-home` audit receipt naming the
+  harness, the old and new entry, who asked (owner or soul) and how it was
+  authorized. Writes hold the record's lock.
+- An unroutable harness is `tool-home-unsupported`; an unknown soul is
+  `soul-not-found`.
+
 **Slice 1 scope:** only Codex (`CODEX_HOME`) is stamped by default
 (`SOUL_DEFAULT_HARNESSES`). The resolver honours an entry for any routable
 harness. These are the next slices of #617:
 
 - stamp Claude (`CLAUDE_CONFIG_DIR`) and OpenCode (the XDG bases) for new
   souls, each with its own end-to-end fixture;
-- an owner/agent command to set or clear an entry. Today only the module
-  function exists, and the command name and its authorization still need
-  agreement;
+- clearing an entry from the command (back to "current setup"). Only the
+  module function can clear one today;
 - the resume lane (`wake-resume`), which still runs on the host store.
   It needs the store each recorded session lives in, and a coded refusal
   when that store has moved, before it can follow a soul's tool home;
