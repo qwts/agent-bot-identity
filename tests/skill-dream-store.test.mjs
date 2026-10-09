@@ -52,16 +52,24 @@ test('v1 journal state upgrades on the next transaction without rewriting histor
   assert.equal(f.store.commit(legacy), true);
   const bytes = readFileSync(path.join(f.directory, name(1)));
   const store = f.reopen(), scheduler = createDreamScheduler({ store, execute: () => {}, soulDirectory: () => f.directory });
-  assert.equal(scheduler.status().schemaVersion, 6);
+  assert.equal(scheduler.status().schemaVersion, 7);
   assert.deepEqual(scheduler.status().inputReceipts, []);
   assert.equal(store.read().schemaVersion, 1, 'read-only inspection does not migrate disk');
   scheduler.pause(A);
-  assert.equal(store.read().schemaVersion, 6);
+  assert.equal(store.read().schemaVersion, 7);
   assert.deepEqual(readFileSync(path.join(f.directory, name(1))), bytes);
   assert.equal(store.history().records.length, 2);
 });
 
-for (const version of [2, 3, 4, 5]) test(`v${version} prepared runs retain their input references during v6 restart quarantine`, posix, async t => {
+// Version 7 added run ownership; an older journal's runs never carried it.
+function withoutOwnership(change) {
+  const strip = run => { if (run && typeof run === 'object') delete run.ownership; };
+  change.state.flights.forEach(strip); change.state.registrations.forEach(row => strip(row.lastRun));
+  for (const event of change.events) { strip(event.run); strip(event.registration?.lastRun); }
+  return change;
+}
+
+for (const version of [2, 3, 4, 5, 6]) test(`v${version} prepared runs retain their input references during v7 restart quarantine`, posix, async t => {
   const f = fixture(t), captured = [], metadata = emptyInputs();
   let state = null;
   const old = createDreamScheduler({ soulDirectory: () => f.directory, setTimer: () => 1, clearTimer() {},
@@ -70,6 +78,7 @@ for (const version of [2, 3, 4, 5]) test(`v${version} prepared runs retain their
   });
   old.register(A, 'PT1H'); old.runNow(A); await Promise.resolve();
   for (const change of captured) {
+    withoutOwnership(change);
     change.state.schemaVersion = version; if (version < 5) delete change.state.noticeLedgers;
     if (version < 4) delete change.state.selectionCheckpoints;
     if (version === 2) delete change.state.outcomeReceipts;
@@ -79,7 +88,7 @@ for (const version of [2, 3, 4, 5]) test(`v${version} prepared runs retain their
   const scheduler = createDreamScheduler({ store: f.reopen(), execute() {}, soulDirectory: () => f.directory });
   assert.equal(f.reopen().read().schemaVersion, version);
   assert.equal(scheduler.recover().quarantined, 1);
-  assert.equal(f.reopen().read().schemaVersion, 6);
+  assert.equal(f.reopen().read().schemaVersion, 7);
   assert.deepEqual(scheduler.status().inputReceipts, [reference]);
   assert.deepEqual(scheduler.status().noticeLedgers.map(ledger => ledger.notices.map(notice => notice.kind)), [['recovery']],
     'the migrating quarantine transaction carries its recovery notice');
@@ -203,7 +212,7 @@ test('a published start with a lost acknowledgment freezes execution and survive
   assert.equal(called, false);
   const resumed = createDreamScheduler({ store: f.reopen(), soulDirectory: () => f.directory, execute: () => { called = true; } });
   assert.equal(resumed.runNow(A).reason, 'recovery-required');
-  assert.deepEqual(resumed.recover(), { quarantined: 1 });
+  assert.deepEqual(resumed.recover(), { quarantined: 1, settled: 0, terminating: 0 });
   assert.equal(resumed.status().flights[0].status, 'recovery-required');
 });
 

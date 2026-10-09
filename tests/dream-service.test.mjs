@@ -16,6 +16,8 @@ import { assertOwnerAction, ownerCredentialRequired, verifyPrincipalOwner } from
 import { PROOF_HEADER } from '../binding-proof.mjs';
 import { auditFile } from '../agent-principals.mjs';
 import { UPDATE_EVENT } from '../executor-contract.mjs';
+import { createProcessOwnershipPort } from '../process-ownership.mjs';
+import { spawn } from 'node:child_process';
 
 const ID = 'agent_66666666-6666-4666-8666-666666666666';
 const posix = { skip: process.platform === 'win32' };
@@ -219,6 +221,8 @@ test('shared stop and shutdown cancel real ACP runs through the scheduler and re
     f.control('register', { schedule: 'PT1H' }); f.control('run-now');
     await until(() => f.ready());
     assert.deepEqual(f.turns.busy(), [ID]);
+    // The production wiring recorded the real agent group before its prompt.
+    assert.ok(Number.isSafeInteger(f.service.status().flights[0].ownership?.pgid));
     if (mode === 'stop') assert.equal(f.turns.stop(ID), true); else f.service.shutdown();
     assert.equal(f.service.status().flights[0].status, 'cancelling');
     await f.service.idle();
@@ -282,7 +286,34 @@ test('startup quarantines unsettled durable work and controls cannot erase that 
   const [notice] = again.status().noticeLedgers.find(ledger => ledger.agentId === ID).notices;
   assert.deepEqual([notice.kind, notice.detail, notice.occurrences], ['recovery', 'recovery-required', 1], 'a later startup does not renotify');
   assert.equal(again.control(dreamControlRequest('ack-notice', { agentId: ID, noticeId: notice.id })).notice.state, 'acknowledged');
-  assert.equal(again.status().schemaVersion, 6);
+  assert.equal(again.status().schemaVersion, 7);
+});
+
+test('a restarted daemon terminates its predecessor\'s owned agent group and settles the run as interrupted (#603)', posix, async t => {
+  const f = fixture(t);
+  // An earlier daemon recorded a real detached group, then vanished without settling.
+  let child;
+  const old = createDreamScheduler({ store: createDreamFileStore({ directory: f.directory }), soulDirectory: () => f.soul,
+    processOwnership: createProcessOwnershipPort(), setTimer: () => 1, clearTimer: () => {}, now: () => new Date('2026-10-09T00:00:00Z'),
+    execute: ({ recordProcess }) => {
+      child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' });
+      recordProcess({ pid: child.pid });
+      return new Promise(() => {});
+    } });
+  old.register(ID, 'PT1H'); old.runNow(ID); await Promise.resolve();
+  t.after(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone */ } });
+  const { ownership } = createDreamFileStore({ directory: f.directory }).read().flights[0];
+  assert.equal(ownership.pgid, child.pid);
+  const recovered = createDreamService(f.options);
+  t.after(async () => { recovered.shutdown(); await recovered.idle(); });
+  assert.equal(recovered.status().orphanRecovery, 'process-group-or-quarantine');
+  assert.equal(recovered.control(dreamControlRequest('run-now', { agentId: ID })).reason, 'recovering');
+  await recovered.idle();
+  const status = recovered.status();
+  assert.deepEqual(status.flights, []);
+  assert.deepEqual([status.registrations[0].lastRun.status, status.registrations[0].lastRun.ownership], ['interrupted', ownership]);
+  assert.throws(() => process.kill(-ownership.pgid, 0), { code: 'ESRCH' });
+  assert.equal(f.resolutions.length, 0, 'recovery never launched a new turn');
 });
 
 test('private directory failures and corrupt journals disable dreaming without repairing or deleting data', posix, t => {

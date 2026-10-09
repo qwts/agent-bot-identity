@@ -69,7 +69,8 @@ invalid storage disables dreaming while other daemon services remain available;
 it never deletes or silently repairs state. A 30-second host timer offers due
 runs, with no registration or execution enabled by installation alone. Missing
 executor configuration prevents new registration/manual runs and defers timers.
-Existing run leases are quarantined before any timer starts. Shared stop records
+Existing run leases are settled, or quarantined, before any timer starts; see
+restart recovery under ownership below. Shared stop records
 an owner cancellation request; daemon shutdown records `cancelReason: shutdown`
 and stops the timer. Older journal readers that reject that new reason must be
 upgraded before opening a journal containing shutdown receipts.
@@ -169,27 +170,44 @@ per-soul lease stays held until the executor settles; an abort request is not
 evidence of process exit.
 On restart, an unfinished record becomes `interrupted`, never successful. Before
 another run may start, recovery must establish that the earlier child is gone.
-The current ACP engine's process-group ownership is only in memory: it does not
-persist a PID/PGID, so existing job recovery cannot establish child exit. Gate 2
-therefore needs a process-ownership reporting port before unattended restart
-recovery can be claimed. If exit cannot be established,
-status reports `recovery-required` and dispatch remains deferred. A stale PID or
-an elapsed lease timestamp alone cannot prove exit or authorize killing a reused
-process. Restart recovery is an acceptance requirement, not a best-effort promise.
+The ACP engine's process-group ownership lives only in memory, so the dream
+service records it through a process-ownership port (`process-ownership.mjs`).
+If exit cannot be established, status reports `recovery-required` and dispatch
+remains deferred. A stale PID or an elapsed lease timestamp alone cannot prove
+exit or authorize killing a reused process. Restart recovery is an acceptance
+requirement, not a best-effort promise.
 
-The proposed POSIX port records the process group, leader start time and daemon
-generation before sending the first prompt. Only `ESRCH` from a process-group
-probe proves absence. A still-live group may be signalled through the existing
-termination ladder only when the leader's start time establishes ownership;
-then recovery must again verify group absence. Missing ownership metadata,
-permission errors, a reused PID, or a crash between spawning and recording the
-child remain `recovery-required`. No signal is sent on an ambiguous match.
-Windows needs its own process-ownership/reaping adapter; until then it reports
-`recovery-required` for interrupted runs rather than simulating POSIX evidence.
+The POSIX port (macOS and Linux) records the agent's process group and its
+leader's start time (`ps -o pgid=,lstart=` under `LC_ALL=C` and `TZ=UTC`) on the
+run record, beside its daemon generation, right after spawning and before the
+first ACP request. That `ownership-recorded` transaction is durable before the
+agent hears anything; if recording fails, no request is sent and the engine
+stops the group. When the port cannot read the evidence, the run then settles
+as `failed`. When the journal write fails, the scheduler freezes on the storage
+fault and keeps the flight, which has no ownership on disk, so a restart
+quarantines it. The start time has one-second resolution: a PID reused within
+the same second would still match, but a different start time never does.
 
-An initial daemon integration may ship with all ambiguous interrupted runs
-quarantined, leaving the ownership port to a separate reviewed change. Pausing,
-unscheduling, updating the schedule or moving the soul cannot clear that
+Restart recovery inspects only ownership that an earlier daemon generation
+recorded. Only `ESRCH` from a process-group probe proves absence. Such a run
+settles as `interrupted`: its next due time is one interval later, and a
+run-now may start at once. A
+still-live group whose leader still leads it with the recorded start time is
+owned: recovery holds the lease (run-now defers as `recovering`), walks the
+termination ladder that ACP turns use (SIGTERM, then SIGKILL after the grace
+period, then a bounded reap wait), and re-establishes ownership before each
+signal. It settles only if the group is then absent; otherwise the run is
+quarantined. Missing ownership metadata, permission errors, a reused PID, a
+missing leader, a crash between spawning and recording the child, or any port
+failure stays `recovery-required`, with the recovery notice. No signal is sent
+on an ambiguous match. An `interrupted` settlement publishes no notice, because
+the notice vocabulary has no interrupted condition; it shows as the soul's
+last run. A run already quarantined is not probed again. Windows and other
+platforms need their own process-ownership/reaping adapter; until then the
+port reports `unsupported`, nothing is recorded, and interrupted runs stay
+`recovery-required` rather than simulating POSIX evidence.
+
+Pausing, unscheduling, updating the schedule or moving the soul cannot clear a
 quarantine. Any later explicit owner recovery procedure must retain its evidence
 and distinguish an owner attestation from runtime-verified child exit. Ordinary
 confirmation alone must not be reported as verified process absence.
@@ -440,6 +458,12 @@ procedure is not implemented. The fourth host slot came with one more slot and
 1 KiB, so no claim admitted under version 5 limits is refused. If the recovery
 notice cannot be derived, the quarantine is still journaled without it.
 
+State version 7 adds `ownership` to every run record: null, or the recorded
+`{ pgid, leaderStartedAt }`. It also adds the `ownership-recorded` event and
+the terminal status `interrupted`, used only by restart recovery. Earlier
+states read as version 7 with null ownership and upgrade on the next write;
+their journal records are never rewritten.
+
 `agent-bot soul skill dream --soul ID|NAME --status` shows the soul's ledger.
 `--ack-notice NOTICE_ID` is an owner control through the same gate and audit
 receipts as other dream controls; the gate prompt names the notice. It persists
@@ -582,8 +606,9 @@ per-turn deadline defaults to ten minutes and may only be lowered. The injected
 deadline timer is independent of the wall clock used for due times and receipts.
 
 After a service restart, stored flights block dispatch even before `recover()`
-journals their quarantine. Recovery never probes or kills a process, clears an
-unproven lease, or infers a task from imported history. Pause, unschedule and
+journals their settlement or quarantine. Recovery probes and signals only a
+process group whose recorded ownership it re-establishes; it never clears an
+unproven lease or infers a task from imported history. Pause, unschedule and
 re-registration preserve that independent flight. An old run may record its
 actual settlement but cannot change a newer registration's due time or recreate
 a removed registration. Daemon/owner integration is implemented above; remaining

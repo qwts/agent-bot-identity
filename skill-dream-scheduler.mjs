@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { isAgentId } from './agent-identity.mjs';
 import { dreamInputMetadataDigest, validateDreamInputMetadata } from './skill-dream-inputs.mjs';
 import { dreamOutcomeDigest, validateDreamOutcome } from './skill-dream-outcomes.mjs';
+import { validProcessOwnership } from './process-ownership.mjs';
 import { acknowledgeDreamNotice, applyDreamNoticeRecovery, applyDreamNoticeRun, emptyDreamNoticeLedger, validateDreamNoticeLedger, DREAM_NOTICE_LIMITS } from './skill-dream-notices.mjs';
 
 export const DREAM_TIMEOUT_MS = 10 * 60_000;
@@ -15,6 +16,8 @@ const HOUR = 60 * 60_000;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const ACTIVE = ['running', 'cancelling', 'recovery-required'];
 const TERMINAL = ['completed', 'failed', 'cancelled', 'timed-out'];
+// Version 7 run records carry process ownership and may settle as interrupted.
+const terminal = version => version >= 7 ? [...TERMINAL, 'interrupted'] : TERMINAL;
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 const invalid = () => fail('dream-state-invalid', 'dream scheduler state is invalid; no dispatch occurred');
 const id = value => typeof value === 'string' && UUID.test(value);
@@ -39,7 +42,10 @@ export function parseDreamSchedule(value) {
   if (hours > 720) fail('dream-schedule-invalid', 'dream schedule must be PT<N>H with an integer from 1 to 720');
   return hours;
 }
-export const emptyDreamState = () => ({ schemaVersion: 6, revision: 0, registrations: [], flights: [], inputReceipts: [], outcomeReceipts: [], selectionCheckpoints: [], noticeLedgers: [] });
+const emptyAt = schemaVersion => ({ schemaVersion, revision: 0, registrations: [], flights: [],
+  ...(schemaVersion >= 2 ? { inputReceipts: [] } : {}), ...(schemaVersion >= 3 ? { outcomeReceipts: [] } : {}),
+  ...(schemaVersion >= 4 ? { selectionCheckpoints: [] } : {}), ...(schemaVersion >= 5 ? { noticeLedgers: [] } : {}) });
+export const emptyDreamState = () => emptyAt(7);
 function inputReceipt(value) {
   keys(value, ['runId', 'journalRevision', 'startingRevision', 'digest']);
   const hash = value => typeof value === 'string' && value.length === 71 && /^sha256:[a-f0-9]{64}$/.test(value);
@@ -69,19 +75,23 @@ function rebindSelection(state, registration) {
   const checkpoint = state.selectionCheckpoints.find(item => item.agentId === registration.agentId);
   if (checkpoint) checkpoint.generation = registration.generation;
 }
-function runRecord(run, terminal) {
-  keys(run, ['runId', 'agentId', 'soulDir', 'generation', 'daemonGeneration', 'trigger', 'startedAt', 'endedAt', 'status', 'timeoutMs', 'cancelRequestedAt', 'cancelReason']);
+// From version 7 `ownership` is null until the daemon records the agent's
+// process group, before its first prompt, as `{ pgid, leaderStartedAt }`.
+function runRecord(run, settled, version) {
+  keys(run, ['runId', 'agentId', 'soulDir', 'generation', 'daemonGeneration', 'trigger', 'startedAt', 'endedAt', 'status', 'timeoutMs', 'cancelRequestedAt', 'cancelReason',
+    ...(version >= 7 ? ['ownership'] : [])]);
   if (!id(run.runId) || !isAgentId(run.agentId) || !root(run.soulDir) || !id(run.generation) || !id(run.daemonGeneration)
-    || !['due', 'manual'].includes(run.trigger) || !date(run.startedAt) || !(terminal ? date(run.endedAt) : run.endedAt === null)
-    || !(terminal ? TERMINAL : ACTIVE).includes(run.status) || !Number.isSafeInteger(run.timeoutMs) || run.timeoutMs < 1 || run.timeoutMs > DREAM_TIMEOUT_MS
+    || !['due', 'manual'].includes(run.trigger) || !date(run.startedAt) || !(settled ? date(run.endedAt) : run.endedAt === null)
+    || !(settled ? terminal(version) : ACTIVE).includes(run.status) || !Number.isSafeInteger(run.timeoutMs) || run.timeoutMs < 1 || run.timeoutMs > DREAM_TIMEOUT_MS
     || !(run.cancelRequestedAt === null && run.cancelReason === null || date(run.cancelRequestedAt) && ['owner', 'timeout', 'shutdown'].includes(run.cancelReason))) invalid();
   if (run.status === 'cancelling' && run.cancelReason === null || run.status === 'cancelled' && !['owner', 'shutdown'].includes(run.cancelReason)
     || run.status === 'timed-out' && run.cancelReason !== 'timeout'
-    || ['running', 'failed'].includes(run.status) && run.cancelReason !== null) invalid();
+    || ['running', 'failed'].includes(run.status) && run.cancelReason !== null
+    || version >= 7 && run.ownership !== null && !validProcessOwnership(run.ownership)) invalid();
 }
 export function validateDreamState(state) {
   keys(state, ['schemaVersion', 'revision', 'registrations', 'flights', ...(state?.schemaVersion >= 2 ? ['inputReceipts'] : []), ...(state?.schemaVersion >= 3 ? ['outcomeReceipts'] : []), ...(state?.schemaVersion >= 4 ? ['selectionCheckpoints'] : []), ...(state?.schemaVersion >= 5 ? ['noticeLedgers'] : [])]);
-  if (![1, 2, 3, 4, 5, 6].includes(state.schemaVersion) || !Number.isSafeInteger(state.revision) || state.revision < 0
+  if (![1, 2, 3, 4, 5, 6, 7].includes(state.schemaVersion) || !Number.isSafeInteger(state.revision) || state.revision < 0
     || !Array.isArray(state.registrations) || state.registrations.length > DREAM_REGISTRATION_LIMIT
     || !Array.isArray(state.flights) || state.flights.length > DREAM_REGISTRATION_LIMIT) invalid();
   const agents = new Set(), generations = new Set(), flying = new Set(), runs = new Set();
@@ -96,12 +106,12 @@ export function validateDreamState(state) {
       || !Number.isSafeInteger(row.intervalHours) || row.intervalHours < 1 || row.intervalHours > 720
       || typeof row.paused !== 'boolean' || !(row.paused ? row.nextDueAt === null : date(row.nextDueAt))
       || !date(row.createdAt) || !date(row.updatedAt)) invalid();
-    if (row.lastRun !== null) { runRecord(row.lastRun, true); if (row.lastRun.agentId !== row.agentId || row.lastRun.soulDir !== row.soulDir) invalid(); }
+    if (row.lastRun !== null) { runRecord(row.lastRun, true, state.schemaVersion); if (row.lastRun.agentId !== row.agentId || row.lastRun.soulDir !== row.soulDir) invalid(); }
     ownsDirectory(row.agentId, row.soulDir);
     agents.add(row.agentId); generations.add(row.generation);
   }
   for (const run of state.flights) {
-    runRecord(run, false);
+    runRecord(run, false, state.schemaVersion);
     ownsDirectory(run.agentId, run.soulDir);
     if (flying.has(run.agentId) || runs.has(run.runId)) invalid();
     flying.add(run.agentId); runs.add(run.runId);
@@ -168,6 +178,9 @@ function noticeRecords(agentId, notices, cleared = false) {
 // a bounded, explicitly unverified report preview; it never carries a prompt.
 export function validateDreamEvents(events, { state = null } = {}) {
   if (!Array.isArray(events) || events.length < 1 || events.length > DREAM_REGISTRATION_LIMIT) invalid();
+  // A stateless check reads a run's version from its shape; with state, the
+  // transaction's own version decides.
+  const version = run => state?.schemaVersion ?? (run && typeof run === 'object' && Object.hasOwn(run, 'ownership') ? 7 : 6);
   for (const event of events) {
     if (event?.kind === 'notices-updated') {
       // Created and cleared notice records are the append-only history; state
@@ -176,7 +189,7 @@ export function validateDreamEvents(events, { state = null } = {}) {
       keys(event, ['kind', 'at', 'run', 'created', 'renewed', 'cleared', 'suppressed']);
       if (!date(event.at)) invalid();
       const recovery = event.run?.status === 'recovery-required';
-      runRecord(event.run, !recovery);
+      runRecord(event.run, !recovery, version(event.run));
       noticeRecords(event.run.agentId, event.created); noticeRecords(event.run.agentId, event.cleared, true);
       if (!Array.isArray(event.renewed) || event.renewed.length > DREAM_NOTICE_LIMITS.perSoul
         || event.renewed.some(value => typeof value !== 'string' || !/^ntc_[a-f0-9]{24}$/.test(value))
@@ -208,7 +221,7 @@ export function validateDreamEvents(events, { state = null } = {}) {
     if (event?.kind === 'selection-advanced') {
       keys(event, ['kind', 'at', 'run', 'checkpoint']);
       if (!date(event.at)) invalid();
-      runRecord(event.run, true); selectionCheckpoint(event.checkpoint);
+      runRecord(event.run, true, version(event.run)); selectionCheckpoint(event.checkpoint);
       if (event.run.status !== 'completed' || event.run.cancelRequestedAt !== null
         || event.checkpoint.agentId !== event.run.agentId || event.checkpoint.generation !== event.run.generation
         || event.checkpoint.runId !== event.run.runId
@@ -222,7 +235,7 @@ export function validateDreamEvents(events, { state = null } = {}) {
     if (event?.kind === 'outcome-recorded') {
       keys(event, ['kind', 'at', 'run', 'receipt', 'outcome']);
       if (!date(event.at)) invalid();
-      runRecord(event.run, true); inputReceipt(event.receipt); validateDreamOutcome(event.outcome, { runId: event.run.runId });
+      runRecord(event.run, true, version(event.run)); inputReceipt(event.receipt); validateDreamOutcome(event.outcome, { runId: event.run.runId });
       if (event.receipt.runId !== event.run.runId || event.receipt.startingRevision !== event.outcome.startingRevision
         || event.receipt.digest !== dreamOutcomeDigest(event.outcome)) invalid();
       if (state && (state.schemaVersion < 3 || event.receipt.journalRevision !== state.revision
@@ -234,7 +247,7 @@ export function validateDreamEvents(events, { state = null } = {}) {
     if (event?.kind === 'inputs-prepared') {
       keys(event, ['kind', 'at', 'run', 'receipt', 'inputs']);
       if (!date(event.at) || event.run?.status !== 'running') invalid();
-      runRecord(event.run, false); inputReceipt(event.receipt); validateDreamInputMetadata(event.inputs);
+      runRecord(event.run, false, version(event.run)); inputReceipt(event.receipt); validateDreamInputMetadata(event.inputs);
       if (event.receipt.runId !== event.run.runId || event.receipt.startingRevision !== event.inputs.revision
         || event.receipt.digest !== dreamInputMetadataDigest(event.inputs)) invalid();
       if (state && (state.schemaVersion < 2 || event.receipt.journalRevision !== state.revision
@@ -246,12 +259,15 @@ export function validateDreamEvents(events, { state = null } = {}) {
     keys(event, ['kind', 'at', registrationEvent ? 'registration' : 'run']);
     if (!date(event.at)) invalid();
     if (registrationEvent) {
-      validateDreamState({ ...emptyDreamState(), registrations: [event.registration] });
+      validateDreamState({ ...emptyAt(version(event.registration?.lastRun)), registrations: [event.registration] });
       if (event.kind === 'registered' && event.registration.paused || event.kind === 'paused' && !event.registration.paused) invalid();
     } else {
-      const statuses = { started: ['running'], 'cancellation-requested': ['cancelling'], ended: TERMINAL, 'recovery-required': ['recovery-required'] };
+      const statuses = { started: ['running'], 'cancellation-requested': ['cancelling'], ended: terminal(7), 'recovery-required': ['recovery-required'],
+        'ownership-recorded': ['running', 'cancelling'] };
       if (!Object.hasOwn(statuses, event.kind) || !statuses[event.kind].includes(event.run?.status)) invalid();
-      runRecord(event.run, event.kind === 'ended');
+      runRecord(event.run, event.kind === 'ended', version(event.run));
+      if (event.kind === 'ownership-recorded' && (version(event.run) < 7 || event.run.ownership === null
+        || state && !state.flights.some(run => isDeepStrictEqual(run, event.run)))) invalid();
     }
   }
   return events;
@@ -270,23 +286,35 @@ export function validateDreamEvents(events, { state = null } = {}) {
  * Its execute port may prepare inputs durably, then stage one typed outcome.
  * Staging acknowledges no persistence: the outcome and terminal run facts
  * publish in the same final transaction, or the lease remains uncertain.
+ *
+ * `processOwnership` is the process-group evidence port (process-ownership.mjs).
+ * Its synchronous `record(pid)` runs before the agent's first prompt and its
+ * synchronous `inspect` and async `terminate` serve restart recovery. The
+ * default reports `unsupported`, so every interrupted run is quarantined.
  */
+const UNSUPPORTED_OWNERSHIP = Object.freeze({ record: () => null, inspect: () => 'unsupported', terminate: async () => false });
 export function createDreamScheduler({ store, execute, soulDirectory, isPaused = () => false, isBusy = () => false,
   now = () => new Date(), idFactory = randomUUID, daemonGeneration = randomUUID(), maxConcurrent = 1,
-  turnTimeoutMs = DREAM_TIMEOUT_MS, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
+  turnTimeoutMs = DREAM_TIMEOUT_MS, setTimer = setTimeout, clearTimer = clearTimeout, processOwnership = UNSUPPORTED_OWNERSHIP } = {}) {
   if (typeof store?.read !== 'function' || typeof store?.commit !== 'function' || typeof execute !== 'function' || typeof soulDirectory !== 'function'
+    || ['record', 'inspect', 'terminate'].some(name => typeof processOwnership?.[name] !== 'function')
     || !id(daemonGeneration) || !Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 16
     || !Number.isSafeInteger(turnTimeoutMs) || turnTimeoutMs < 1 || turnTimeoutMs > DREAM_TIMEOUT_MS) {
     fail('dream-configuration-invalid', 'dream scheduling requires atomic storage, execution and canonical soul-directory ports with bounded concurrency and timeout');
   }
-  const live = new Map();
+  // `reaping` holds this daemon's recovery terminations of earlier orphans.
+  const live = new Map(), reaping = new Map();
   let fault = null;
   const read = () => {
     const observed = synchronous(store.read());
     const state = structuredClone(validateDreamState(observed === null ? emptyDreamState() : observed));
+    if (state.schemaVersion >= 7) return state;
     // Upgrade only the next transaction, leaving historical v1 bytes intact.
-    return state.schemaVersion < 6 ? { ...state, schemaVersion: 6, inputReceipts: state.inputReceipts ?? [],
-      outcomeReceipts: state.outcomeReceipts ?? [], selectionCheckpoints: state.selectionCheckpoints ?? [], noticeLedgers: state.noticeLedgers ?? [] } : state;
+    // An older run recorded no ownership, so its interruption stays ambiguous.
+    const unowned = run => run === null ? null : { ...run, ownership: null };
+    return { ...state, schemaVersion: 7, inputReceipts: state.inputReceipts ?? [],
+      outcomeReceipts: state.outcomeReceipts ?? [], selectionCheckpoints: state.selectionCheckpoints ?? [], noticeLedgers: state.noticeLedgers ?? [],
+      registrations: state.registrations.map(row => ({ ...row, lastRun: unowned(row.lastRun) })), flights: state.flights.map(unowned) };
   };
   const healthy = () => { if (fault) fail(fault, 'dream scheduler state is uncertain; restart recovery is required'); };
   const time = () => { const value = now().toISOString(); if (!date(value)) invalid(); return value; };
@@ -389,7 +417,7 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
     const defer = reason => ({ agentId, status: 'deferred', reason });
     if (row.paused || isPaused(agentId)) return defer('paused');
     const old = state.flights.find(run => run.agentId === agentId);
-    if (old) return defer(live.has(old.runId) ? 'already-running' : 'recovery-required');
+    if (old) return defer(live.has(old.runId) ? 'already-running' : reaping.has(old.runId) ? 'recovering' : 'recovery-required');
     if (live.size >= maxConcurrent || state.flights.length >= DREAM_REGISTRATION_LIMIT) return defer('capacity');
     if (isBusy(agentId)) return defer('busy');
     try { if (canonical(agentId) !== row.soulDir) return defer('binding-changed'); }
@@ -397,7 +425,7 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
     const at = time();
     if (trigger === 'due' && Date.parse(row.nextDueAt) > Date.parse(at)) return defer('not-due');
     const run = { runId: newId(state), agentId, soulDir: row.soulDir, generation: row.generation, daemonGeneration,
-      trigger, startedAt: at, endedAt: null, status: 'running', timeoutMs: turnTimeoutMs, cancelRequestedAt: null, cancelReason: null };
+      trigger, startedAt: at, endedAt: null, status: 'running', timeoutMs: turnTimeoutMs, cancelRequestedAt: null, cancelReason: null, ownership: null };
     state.flights.push(run);
     persist(state, [{ kind: 'started', at, run }]); // must precede any executor call
     const entry = { controller: new AbortController(), timer: null, reason: null, done: null, inputs: null, outcome: null };
@@ -465,6 +493,22 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
         entry.inputs = metadata;
         return structuredClone(receipt);
       };
+      // The agent's group is durable before its first prompt, or that prompt
+      // is never sent. A crash before this commit leaves no ownership, so the
+      // interrupted run stays recovery-required.
+      const recordProcess = ({ pid } = {}) => {
+        healthy();
+        const current = read(), lease = current.flights.find(item => item.runId === run.runId);
+        if (live.get(run.runId) !== entry || !['running', 'cancelling'].includes(lease?.status) || lease.ownership !== null) {
+          fail('dream-ownership-refused', 'Process ownership requires a live run without recorded ownership.');
+        }
+        const ownership = synchronous(processOwnership.record(pid));
+        if (ownership === null) return null; // unsupported platform
+        if (!validProcessOwnership(ownership) || ownership.pgid !== pid) fail('dream-ownership-unavailable', 'Process ownership evidence is incomplete.');
+        lease.ownership = { pgid: ownership.pgid, leaderStartedAt: ownership.leaderStartedAt };
+        persist(current, [{ kind: 'ownership-recorded', at: time(), run: lease }]);
+        return structuredClone(lease.ownership);
+      };
       const stageOutcome = outcome => {
         healthy();
         if (live.get(run.runId) !== entry || entry.inputs === null || entry.outcome !== null) {
@@ -472,7 +516,7 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
         }
         entry.outcome = structuredClone(validateDreamOutcome(outcome, { runId: run.runId, inputs: entry.inputs }));
       };
-      return execute({ run: structuredClone(run), selectionCheckpoint: structuredClone(state.selectionCheckpoints.find(item => item.agentId === agentId) ?? null), signal: entry.controller.signal, timeoutMs: turnTimeoutMs, prepareInputs, stageOutcome });
+      return execute({ run: structuredClone(run), selectionCheckpoint: structuredClone(state.selectionCheckpoints.find(item => item.agentId === agentId) ?? null), signal: entry.controller.signal, timeoutMs: turnTimeoutMs, prepareInputs, recordProcess, stageOutcome });
     }).then(() => finish(false), () => finish(true));
     return { agentId, runId: run.runId, status: 'started', done: entry.done };
   }
@@ -525,20 +569,61 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
       created: applied.ledger.notices.filter(notice => applied.created.includes(notice.id)),
       renewed: applied.renewed, cleared: [], suppressed: 0 });
   }
+  const quarantine = (state, events, run, at) => {
+    run.status = 'recovery-required';
+    events.push({ kind: 'recovery-required', at, run });
+    recoveryNotice(state, events, run, at);
+  };
+  // Verified group absence settles the lease as interrupted, never successful.
+  // The notice vocabulary has no interrupted condition, so none is published.
+  function settle(state, events, run, at) {
+    const result = { ...run, status: 'interrupted', endedAt: at };
+    state.flights = state.flights.filter(item => item.runId !== run.runId);
+    const owner = state.registrations.find(item => item.agentId === run.agentId && item.generation === run.generation);
+    if (owner) { owner.lastRun = result; if (!owner.paused) owner.nextDueAt = later(at, owner.intervalHours); }
+    events.push({ kind: 'ended', at, run: result });
+  }
+  // Only ownership an earlier daemon recorded can be inspected. Any port
+  // failure or unknown answer is ambiguous, and an ambiguous run is never signalled.
+  function verdict(run) {
+    if (run.ownership === null || run.daemonGeneration === daemonGeneration) return 'ambiguous';
+    try {
+      const found = synchronous(processOwnership.inspect(structuredClone(run.ownership)));
+      return ['absent', 'owned'].includes(found) ? found : 'ambiguous';
+    } catch { return 'ambiguous'; }
+  }
+  async function reap(run) {
+    try { await processOwnership.terminate(structuredClone(run.ownership)); } catch { /* the probe below decides */ }
+    try {
+      healthy();
+      const state = read(), current = state.flights.find(item => item.runId === run.runId), events = [], at = time();
+      if (!current || current.status === 'recovery-required') return;
+      if (verdict(current) === 'absent') settle(state, events, current, at); else quarantine(state, events, current, at);
+      persist(state, events);
+    } catch { fault ??= 'dream-store-failed'; }
+    finally { reaping.delete(run.runId); }
+  }
+  // Absent groups settle and ambiguous ones are quarantined in one
+  // transaction. An owned live group keeps its lease while the termination
+  // ladder runs; it settles only if the group is then absent.
   function recover() {
     healthy();
-    const state = read(), events = [], at = time();
-    for (const run of state.flights) {
-      if (live.has(run.runId) || run.status === 'recovery-required') continue;
-      run.status = 'recovery-required';
-      events.push({ kind: 'recovery-required', at, run });
-      recoveryNotice(state, events, run, at);
+    const state = read(), events = [], at = time(), owned = [];
+    let quarantined = 0, settled = 0;
+    for (const run of [...state.flights]) {
+      if (live.has(run.runId) || reaping.has(run.runId) || run.status === 'recovery-required') continue;
+      const found = verdict(run);
+      if (found === 'absent') { settle(state, events, run, at); settled++; }
+      else if (found === 'owned') owned.push(structuredClone(run));
+      else { quarantine(state, events, run, at); quarantined++; }
     }
     if (events.length) persist(state, events);
-    return { quarantined: events.filter(event => event.kind === 'recovery-required').length };
+    for (const run of owned) reaping.set(run.runId, Promise.resolve().then(() => reap(run)));
+    return { quarantined, settled, terminating: owned.length };
   }
   return {
     register, pause, unschedule, recover, acknowledgeNotice,
+    recovering: () => Promise.allSettled([...reaping.values()]).then(() => undefined),
     cancel: (runId, reason = 'owner') => {
       if (!['owner', 'shutdown'].includes(reason)) fail('dream-cancellation-invalid', 'Cancellation must identify an owner request or daemon shutdown.');
       return cancel(runId, reason);

@@ -307,10 +307,13 @@ export function createContractExecutor({ harness, identity, policy, run, mode = 
     onPermission = null,
     computerUseEnabled = () => true,
     sessionGrants = null,
+    // Optional: receives the spawned agent's { pid } before its first prompt.
+    onProcess = null,
   }) {
     if (!invocation || typeof appendEvent !== 'function'
       || typeof addArtifact !== 'function' || typeof requestApproval !== 'function'
-      || !signal || typeof signal.aborted !== 'boolean') {
+      || !signal || typeof signal.aborted !== 'boolean'
+      || (onProcess !== null && typeof onProcess !== 'function')) {
       fail('executor port is missing required capabilities');
     }
     // The message is the turn's prompt text. An object here reached the
@@ -417,6 +420,7 @@ export function createContractExecutor({ harness, identity, policy, run, mode = 
       emitUpdate,
       emitStop,
       requestPermission,
+      ...(onProcess === null ? {} : { onProcess }),
     });
     // A run that returns normally has promised its terminal stop event; an
     // aborted turn is excused because the service records the cancellation.

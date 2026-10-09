@@ -8,6 +8,7 @@ import { acpExecutorFor, coldTurnExecutor, createTurnRegistry, DREAM_REPLY_MAX_B
 import { UPDATE_EVENT } from '../executor-contract.mjs';
 import { createDreamScheduler } from '../skill-dream-scheduler.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
+import { createProcessOwnershipPort } from '../process-ownership.mjs';
 import { createSoulHistory, readSoulHistory } from '../soul-history.mjs';
 
 const ID = 'agent_66666666-6666-4666-8666-666666666666';
@@ -226,4 +227,17 @@ test('the scheduler and shared cold registry preserve actual settlement and dura
     assert.deepEqual(state.registrations[0].lastRun, receipt);
     assert.deepEqual(events.at(-1).run, receipt);
   });
+});
+
+test('a real cold dream turn hands its agent group to the ownership port before any prompt (#603)', { skip: process.platform === 'win32' }, async t => {
+  const { run, input } = fixture(t, { fallback: 'allow' });
+  const port = createProcessOwnershipPort();
+  let recorded = null;
+  const result = await run({ ...input, message: 'hello', onProcess: ({ pid }) => {
+    recorded = port.record(pid);
+    assert.equal(port.inspect(recorded), 'owned');
+  } });
+  assert.equal(typeof result.reply, 'string');
+  assert.ok(recorded, 'the engine reported its spawned group');
+  assert.equal(port.inspect(recorded), 'absent', 'the settled turn left no group behind');
 });
