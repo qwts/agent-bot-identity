@@ -1025,7 +1025,8 @@ echo the proposal's operation digest, so a decision lands only on the
 operation it names, and refuse a caller with a soul marker. Before any
 decision lands, the daemon asks for the owner's presence (#438): keyd's
 Touch ID or login-password prompt naming the soul and tool, or the
-administrator dialog when keyd cannot ask. The daemon token alone never
+administrator dialog when keyd cannot ask ([keyd protocol](docs/keyd-protocol.md)).
+The daemon token alone never
 decides, and a `--principal-stdin` credential is checked as well, not
 instead. An expired proposal, or a turn that ends or times out first, is a
 deny. A principal with the `approve` operation can decide for its own souls

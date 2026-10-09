@@ -170,6 +170,9 @@ daemon's vouch key file can sign grants and get tokens, never keys.
 Confinement denies souls `vouch-key.pem` and keyd's directory and sockets in
 every tool; like the rest of confinement, that is a cooperative hook.
 
+The grant, owner-presence and key-pinning protocol as implemented, with the
+test behind each invariant, is in [keyd protocol](keyd-protocol.md).
+
 ```sh
 agent-bot keyd install --bin PATH [--json]   # GeniusBar runs this at setup
 agent-bot keyd status [--json]
