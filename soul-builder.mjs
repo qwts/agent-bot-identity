@@ -1,6 +1,7 @@
 // Pure package-to-harness rendering. No filesystem, environment or registry
 // imports: ACP spawn data includes machine-specific paths and is not build input.
 import { GENERATED_HARNESS_MARKER as MARKER, isGeneratedPath } from './soul-harness-contract.mjs';
+import { REACH_SERVER_NAME } from './reach-contract.mjs';
 import { CANONICAL_EVENTS, isBlocking, nativeHookEntry, SOUL_HOOK_MARKER, vendorEvent } from './hook-dialects.mjs';
 import { PROVIDERS, claudeProviderEnv, codexProviderConfig, normalizeProvider, opencodeProviderConfig, providerRenders } from './soul-providers.mjs';
 
@@ -29,7 +30,8 @@ function markedSibling(path, bytes) {
 // machine-specific is written: the server identifies the soul from the working
 // directory's `agentBot.agentId` pin, so one package renders the same bytes on
 // every host.
-export const MCP_SERVER_NAME = 'agent-bot';
+export const MCP_SERVER_NAME = REACH_SERVER_NAME;
+const LEGACY_MCP_SERVER_NAME = 'agent-bot';
 export const MCP_COMMAND = 'agent-bot';
 export const MCP_SUBCOMMAND = 'reach-mcp';
 
@@ -425,27 +427,58 @@ function renderMcp(target, authored) {
   }
   if (target.format === 'toml') return Buffer.from(tomlMerge(target, authored));
   const { _comment: _authored, ...rest } = authoredObject(target, authored);
+  const servers = { ...(rest[target.key] ?? {}) };
+  const own = mcpServer(target.style);
+  const same = (entry) => entry && Object.keys(entry).length === Object.keys(own).length
+    && Object.keys(own).every(key => JSON.stringify(entry[key]) === JSON.stringify(own[key]));
+  if (Object.hasOwn(servers, MCP_SERVER_NAME) && !same(servers[MCP_SERVER_NAME])) {
+    throw new Error(`${target.path} already declares a custom ${MCP_SERVER_NAME} MCP server; rename it before building`);
+  }
+  // Only our marked, unchanged former output is a migration candidate.
+  // A server with extra fields (env, permissions, etc.) belongs to its author.
+  if (_authored === MARKER && same(servers[LEGACY_MCP_SERVER_NAME])) delete servers[LEGACY_MCP_SERVER_NAME];
   return Buffer.from(`${JSON.stringify({
     _comment: MARKER,
     ...rest,
-    [target.key]: { ...(rest[target.key] ?? {}), [MCP_SERVER_NAME]: mcpServer(target.style) },
+    [target.key]: { ...servers, [MCP_SERVER_NAME]: own },
   }, null, 2)}\n`);
 }
 
-// TOML has no parser here (zero dependencies), so the merge is section-level
-// and only ever touches the one table the builder owns: every other table,
-// key, comment and blank line is kept verbatim and in order. A previous
-// render's table and marker line are dropped first, so the merge is idempotent
-// byte for byte.
+// TOML has no parser here (zero dependencies), so only our exact generated
+// section can be replaced/migrated. Custom sections stay byte-for-byte; a
+// conflicting canonical server is refused before any file is written.
 function tomlMerge(target, authored) {
+  const content = authoredText(target.path, authored);
+  const headerOf = (line) => {
+    const match = line.trim().match(/^(?:\[([^\]]+)\]|\[\[([^\]]+)\]\])[ \t]*(#.*)?$/);
+    return match ? { name: (match[1] ?? match[2]).replace(/"([A-Za-z0-9_-]+)"|'([A-Za-z0-9_-]+)'/g, '$1$2'), array: match[2] !== undefined } : null;
+  };
+  const sections = [{ name: null, lines: [] }];
+  for (const line of tomlStatements(content)) {
+    const header = headerOf(line);
+    if (header) sections.push({ ...header, lines: [line] });
+    else sections.at(-1).lines.push(line);
+  }
+  const isDefault = (section) => {
+    const lines = section.lines.slice(1).map(line => line.trim()).filter(Boolean);
+    return !section.array && lines.length === 2 && lines[0] === `command = "${MCP_COMMAND}"`
+      && lines[1] === `args = ["${MCP_SUBCOMMAND}"]`;
+  };
+  const canonical = sections.filter(section => section.name === target.table || section.name?.startsWith(`${target.table}.`));
+  if (canonical.length && (canonical.length !== 1 || !isDefault(canonical[0]))) {
+    throw new Error(`${target.path} already declares a custom ${MCP_SERVER_NAME} MCP server; rename it before building`);
+  }
+  const legacyTable = `mcp_servers.${LEGACY_MCP_SERVER_NAME}`;
+  const legacy = sections.filter(section => section.name === legacyTable || section.name?.startsWith(`${legacyTable}.`));
+  const migrateLegacy = content.split('\n').some(line => line.trim() === `# ${MARKER}`)
+    && legacy.length === 1 && isDefault(legacy[0]);
   const kept = [];
-  let skipping = false;
-  for (const line of tomlStatements(authoredText(target.path, authored))) {
-    const header = line.trim().match(/^\[\[?([^\]\s]+)\]\]?[ \t]*(#.*)?$/);
-    if (header) skipping = header[1] === target.table || header[1].startsWith(`${target.table}.`);
-    if (skipping) continue;
-    if (line.trim() === MARKER || line.trim() === `# ${MARKER}`) continue;
-    kept.push(line);
+  for (const section of sections) {
+    if (section.name === target.table || (migrateLegacy && section === legacy[0])) continue;
+    for (const line of section.lines) {
+      if (line.trim() === MARKER || line.trim() === `# ${MARKER}`) continue;
+      kept.push(line);
+    }
   }
   const body = kept.join('').replace(/^\n+|\n+$/g, '');
   const table = [`[${target.table}]`, `command = "${MCP_COMMAND}"`, `args = ["${MCP_SUBCOMMAND}"]`].join('\n');

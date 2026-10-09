@@ -141,7 +141,7 @@ test('the builder renders the provider per harness without any secret, and --che
   const output = buildHarnessFiles(entries(soul));
   const toml = output.get('.codex/config.toml').toString();
   // The provider table sits after the generated MCP entry and before the env table.
-  assert.ok(toml.startsWith(`# ${MARKER}\nmodel_provider = "github"\n\n[mcp_servers.agent-bot]\n`), toml);
+  assert.ok(toml.startsWith(`# ${MARKER}\nmodel_provider = "github"\n\n[mcp_servers.agent-reach]\n`), toml);
   assert.ok(toml.endsWith(`\n[model_providers.github]\nname = "GitHub"\nbase_url = "${GITHUB.baseUrl}"\nenv_key = "GITHUB_TOKEN"\nwire_api = "chat"\n\n[shell_environment_policy.set]\nLOG_LEVEL = "debug"\n`), toml);
   assert.equal(toml.match(/model_provider/g).length, 2);
   assert.deepEqual(JSON.parse(output.get('.claude/settings.json').toString()).env, { ANTHROPIC_BASE_URL: 'https://proxy.example.com/v1' });

@@ -387,13 +387,13 @@ the same bytes on every host.
 
 | File | Entry |
 | --- | --- |
-| `.mcp.json` | `"mcpServers": { "agent-bot": { "command": "agent-bot", "args": ["reach-mcp"] } }` |
-| `.gemini/settings.json` | `"mcpServers": { "agent-bot": { "command": "agent-bot", "args": ["reach-mcp"] } }` |
-| `.codex/config.toml` | `[mcp_servers.agent-bot]` with `command` and `args` |
-| `opencode.json` | `"mcp": { "agent-bot": { "type": "local", "command": ["agent-bot", "reach-mcp"] } }` |
-| `.cursor/mcp.json` | `"mcpServers": { "agent-bot": { "command": "agent-bot", "args": ["reach-mcp"] } }` |
-| `.kiro/settings/mcp.json` | `"mcpServers": { "agent-bot": { "command": "agent-bot", "args": ["reach-mcp"] } }` |
-| `.qwen/settings.json` | `"mcpServers": { "agent-bot": { "command": "agent-bot", "args": ["reach-mcp"] } }` |
+| `.mcp.json` | `"mcpServers": { "agent-reach": { "command": "agent-bot", "args": ["reach-mcp"] } }` |
+| `.gemini/settings.json` | `"mcpServers": { "agent-reach": { "command": "agent-bot", "args": ["reach-mcp"] } }` |
+| `.codex/config.toml` | `[mcp_servers.agent-reach]` with `command` and `args` |
+| `opencode.json` | `"mcp": { "agent-reach": { "type": "local", "command": ["agent-bot", "reach-mcp"] } }` |
+| `.cursor/mcp.json` | `"mcpServers": { "agent-reach": { "command": "agent-bot", "args": ["reach-mcp"] } }` |
+| `.kiro/settings/mcp.json` | `"mcpServers": { "agent-reach": { "command": "agent-bot", "args": ["reach-mcp"] } }` |
+| `.qwen/settings.json` | `"mcpServers": { "agent-reach": { "command": "agent-bot", "args": ["reach-mcp"] } }` |
 
 Copilot CLI and Devin CLI read the shared `.mcp.json` natively, so they get no
 file of their own; their report lists `mcp` with `.mcp.json`.
@@ -421,9 +421,9 @@ so the build still owns the file either way.
 ### Merging a soul's own MCP config
 
 A soul that ships one of these files keeps everything it declared. The builder
-adds or overwrites only its own `agent-bot` entry and leaves every other server,
+adds or refreshes its own `agent-reach` entry and leaves every other server,
 key, table and comment verbatim: JSON is merged object-wise, and TOML is merged
-by section — only the `[mcp_servers.agent-bot]` table and its sub-tables are
+by section — only the `[mcp_servers.agent-reach]` table and its sub-tables are
 replaced, because this repository parses no TOML. The result is the builder's
 file (marked, rewritten on every build), so a rebuild over its own output is a
 no-op. Content that cannot be merged into — invalid JSON, a JSON array, binary
@@ -593,12 +593,24 @@ signed-in check that Cursor and Kiro accept the `_comment` marker key; and
 mapping MCP tool names into Kiro's and Devin's subagent tool lists; Qwen Code
 skills, subagents and commands.
 
-The rendered entry is named `agent-bot`; the daemon's injected entry and
-`reachPolicyRules()` name the same server `agent-reach`, so a
-policy-checked daemon turn sees the rendered copy under a name its rules do not
-cover, and a harness that loads both files mounts one server twice under two
-names. Reconciling the name (or teaching the launcher that a rendered entry
-exists) belongs with the daemon and executor changes this slice does not touch.
+The renderer, injected entry and `reachPolicyRules()` now share the
+`agent-reach` name through `reach-contract.mjs`. Rebuilds remove the old
+`agent-bot` entry only when the file has the generated marker and the entry
+still has exactly the generated command/arguments. Modified legacy entries
+are preserved. A custom `agent-reach` entry is a conflict: the builder refuses
+before writing any output, rather than replacing its configuration. Rename
+that custom entry explicitly before rebuilding. Existing user permission
+rules or prompts naming `mcp__agent-bot__...` must be updated to
+`mcp__agent-reach__...`; the builder does not rewrite user-authored policies.
+
+[Codex ACP's session configuration](https://github.com/zed-industries/codex-acp/blob/296069e841634cd4bb9bc4515602d836e49231ec/src/codex_agent.rs#L335)
+merges injected entries into the configured server map by name for both new
+and loaded sessions, so the injected invocation context wins without a second
+name. [Claude Code's scope contract](https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence)
+says duplicate names connect once. These source contracts and deterministic
+migration/policy fixtures establish the name reconciliation; they do not
+prove every supported adapter's live mount precedence. Signed-in duplicate
+mount checks across the harness matrix remain part of #378/#379.
 
 `mcp.json`, `tools.json` and `policy.json` are opaque package extensions in
 `docs/soul-package.md`; no common machine-readable translation schema is
