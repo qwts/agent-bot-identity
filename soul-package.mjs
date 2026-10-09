@@ -275,7 +275,7 @@ export function skillField(front, key) {
   return value;
 }
 
-function validateSkill(bytes, directory) {
+export function validateSkill(bytes, directory) {
   const text = utf8(bytes, 'SKILL.md');
   const front = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1];
   if (!front) throw new Error(`${directory}/SKILL.md needs YAML front matter`);

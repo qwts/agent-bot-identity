@@ -14,6 +14,7 @@ import { assertOwnerAction } from './owner-action.mjs';
 import { readBinding } from './agent-binding.mjs';
 import { supportsContext, vendorEvent } from './hook-dialects.mjs';
 import { vouchKeyPath, vouchStateDir } from './vouch.mjs';
+import { skillLibraryRoot } from './skill-library-paths.mjs';
 
 const MODES = ['off', 'warn', 'deny'];
 function readJson(file, fallback) {
@@ -129,10 +130,29 @@ export function allowedRoots(agentId, opts = {}) {
   return [...new Set(roots)];
 }
 
+function libraryMetadata(target, opts) {
+  let selected;
+  try { selected = skillLibraryRoot(opts); }
+  catch (error) {
+    if (error.code !== 'skill-root-invalid') throw error;
+    // Invalid configuration cannot select a library. Preserve protection of
+    // the default metadata without breaking unrelated file tools.
+    const env = { ...(opts.env ?? process.env) };
+    delete env.AGENT_BOT_SKILLS_HOME;
+    selected = skillLibraryRoot({ ...opts, skillsRoot: undefined, env });
+  }
+  const root = canonicalPath(selected);
+  if (!contains(root, target)) return false;
+  const parts = path.relative(root, target).split(path.sep);
+  if (target === root) return true;
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(parts[0])) return false;
+  return parts.length === 1 || ['manifest.json', '.snapshots', '.checks', '.check.lock'].includes(parts[1]);
+}
+
 export function checkWrite(agentId, targetPath, opts = {}) {
   const roots = allowedRoots(agentId, opts);
   const target = canonicalPath(targetPath, opts.cwd);
-  if (isBindingFile(target, opts.env ?? process.env)) return { inside: false, path: target, roots };
+  if (libraryMetadata(target, opts) || isBindingFile(target, opts.env ?? process.env)) return { inside: false, path: target, roots };
   // The soul's key store is inside its directory but never its territory.
   if (contains(path.join(roots[0], '.soul-state', 'credentials'), target)) return { inside: false, path: target, roots };
   return { inside: roots.some((root) => contains(root, target)), path: target, roots };
@@ -223,6 +243,13 @@ export function confinementCheck(envelope, opts = {}) {
   try {
     const agentId = opts.binding?.agentId ?? currentAgentId({ env: opts.env ?? process.env, cwd: envelope.cwd ?? opts.cwd });
     if (!agentId) return allow;
+    // Library receipts are never editable payload, even with confinement off.
+    // This only guards recognized file tools, not arbitrary shell commands.
+    try {
+      if (envelope.file_path && libraryMetadata(canonicalPath(envelope.file_path, envelope.cwd ?? opts.cwd), opts)) {
+        return { decision: 'deny', reason: 'skill library snapshots and receipts are read-only; use soul skill import or check' };
+      }
+    } catch { return { decision: 'deny', reason: 'skill library path check failed; write refused' }; }
     mode = confinementMode(agentId, opts);
     if (mode === 'off') return allow;
     if (!envelope.file_path) throw new Error('file tool has no path');

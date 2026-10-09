@@ -266,3 +266,39 @@ test('built-in runs in the real chain and keeps external hook denials', async (t
   const cli = spawnSync(process.execPath, ['agent-bot.mjs', 'soul', 'confinement-report', id, '--json'], { env: opts.env, encoding: 'utf8' });
   assert.equal(cli.status, 0, cli.stderr); assert.equal(JSON.parse(cli.stdout).total, 2);
 });
+
+
+test('skill library metadata stays outside soul write territory even with confinement off', async t => {
+  const f = fixture(t), library = path.join(f.soul, 'library');
+  f.opts.env.AGENT_BOT_SKILLS_HOME = library;
+  const uuid = '11111111-1111-4111-8111-111111111111';
+  const record = path.join(library, uuid);
+  mkdirSync(record, { recursive: true });
+  const alias = path.join(f.soul, 'library-alias'); symlinkSync(library, alias);
+  await setConfinementMode(id, 'off', { ...f.opts, gate: owner });
+  for (const root of [library, alias]) for (const relative of ['', uuid, `${uuid}/manifest.json`, `${uuid}/.snapshots/digest/payload/SKILL.md`, `${uuid}/.checks/result.json`]) {
+    const target = path.join(root, relative);
+    assert.equal(checkWrite(id, target, f.opts).inside, false);
+    assert.equal(confinementCheck(f.envelope(target), f.opts).decision, 'deny');
+  }
+  const payload = path.join(record, 'demo/SKILL.md');
+  assert.equal(checkWrite(id, payload, f.opts).inside, true);
+  assert.equal(confinementCheck(f.envelope(payload), f.opts).decision, 'allow');
+});
+
+
+test('invalid skill root keeps normal confinement and still protects default metadata', async t => {
+  const f = fixture(t), file = path.join(f.soul, 'notes.md');
+  const metadata = path.join(f.home, '.agent-bot/skills/11111111-1111-4111-8111-111111111111/manifest.json');
+  await setConfinementMode(id, 'off', { ...f.opts, gate: owner });
+  for (const value of ['relative/dir', '', '~/skills']) {
+    f.opts.env.AGENT_BOT_SKILLS_HOME = value;
+    assert.equal(checkWrite(id, file, f.opts).inside, true);
+    assert.equal(confinementCheck(f.envelope(file), f.opts).decision, 'allow');
+    assert.equal(checkWrite(id, metadata, f.opts).inside, false);
+    assert.equal(confinementCheck(f.envelope(metadata), f.opts).decision, 'deny');
+  }
+  await setConfinementMode(id, 'deny', { ...f.opts, gate: owner });
+  assert.equal(confinementCheck(f.envelope(file), f.opts).decision, 'allow');
+  assert.equal(confinementCheck(f.envelope(path.join(f.home, 'outside.md')), f.opts).decision, 'deny');
+});
