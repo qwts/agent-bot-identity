@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +12,10 @@ import { initAgentSpace } from '../agent-space.mjs';
 import { PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
 import { ENV_CAPABILITIES, readSoulEnvironment } from '../soul-env.mjs';
 import { adoptHostSignIn, ensureToolHome, inspectToolHomes, pendingSoulToolHome, prepareSoulToolHome, readMigrationJournal, soulEnvMigrateCommand, soulToolHomeEnv } from '../soul-env-migrate.mjs';
-import { NEVER_ROUTED, TOOL_CONTAINMENTS, TOOL_HOME_REGISTRY, adoptCommand, adoptStepId, hostToolStore, toolHomeDecision, toolHomeEnv, toolHomeFiles, toolHomeFor, toolHomePath, validateToolHomeRow } from '../soul-tool-homes.mjs';
+import { NEVER_ROUTED, SOUL_DEFAULT_HARNESSES, TOOL_CONTAINMENTS, TOOL_HOME_REGISTRY, adoptCommand, adoptStepId, hostToolStore, newSoulToolHomeRecord, normalizeToolHomeRecord, toolHomeDecision, toolHomeEnv, toolHomeFiles, toolHomeFor, toolHomePath, validateToolHomeRow } from '../soul-tool-homes.mjs';
+import { readToolHomeRecord, setToolHomeChoice, stampNewSoulToolHomes, toolHomeChoice, toolHomeRecordPath } from '../soul-tool-home-record.mjs';
+import { ensureSoulDirectory } from '../soul-home.mjs';
+import { composeTurnEnv } from '../turn-env.mjs';
 
 const ID = 'agent_12345678-1234-4234-8234-123456789abc';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -413,4 +416,119 @@ test('the launch helpers route only what the decision contains, create the tool 
     assert.throws(call, (error) => error.code === 'tool-home-unwritable' && /codex's tool home/.test(error.message));
   }
   assert.rejects(soulEnvMigrateCommand([ID, '--adopt-host-signin', '--harness', 'codex'], { ...blocked.options, write: () => {} }), (error) => error.code === 'tool-home-unwritable');
+});
+
+// #617: a soul's own choice per harness, `soul | global`, decides before
+// the sign-in files; a soul born managed is stamped `soul` for Codex; a
+// soul without the record keeps the decision above.
+test('a recorded choice decides containment before any sign-in file; the record is checked and refuses what it cannot mean with a code', () => {
+  assert.deepEqual(toolHomeDecision('codex', { signIn: 'missing', hostSignIn: 'present', choice: 'soul' }), { containment: 'soul', reason: null });
+  assert.deepEqual(toolHomeDecision('codex', { signIn: 'missing', hostSignIn: 'missing', choice: 'global' }),
+    { containment: 'shared-host', reason: 'the soul is set to use the global codex install and its host store' });
+  assert.equal(toolHomeDecision('codex', { signIn: 'present', choice: 'global' }).containment, 'shared-host', 'global wins over a soul sign-in');
+  assert.equal(toolHomeDecision('codex', { hostSignIn: 'present', choice: null }).containment, 'shared-host', 'no choice: the sign-in decision');
+  assert.equal(toolHomeDecision('kiro', { choice: 'soul' }).containment, 'unsupported');
+  assert.deepEqual(SOUL_DEFAULT_HARNESSES, ['codex']);
+  assert.deepEqual(newSoulToolHomeRecord(), { schemaVersion: 1, harnesses: { codex: 'soul' } });
+  assert.deepEqual(normalizeToolHomeRecord({ schemaVersion: 1, harnesses: { codex: 'global', claude: 'soul' }, extra: 1 }), { schemaVersion: 1, harnesses: { codex: 'global', claude: 'soul' } });
+  for (const bad of [null, [], { schemaVersion: 2, harnesses: {} }, { schemaVersion: 1 }, { schemaVersion: 1, harnesses: [] },
+    { schemaVersion: 1, harnesses: { codex: 'host' } }, { schemaVersion: 1, harnesses: { kiro: 'soul' } }, { schemaVersion: 1, harnesses: { nope: 'soul' } }]) {
+    assert.throws(() => normalizeToolHomeRecord(bad), (error) => error.code === 'tool-home-record-invalid' && /tool-homes\.json/.test(error.message), JSON.stringify(bad));
+  }
+});
+
+test('the record is stamped once, privately; a choice is set or cleared per harness; an unusable record is coded, never read as absent', (t) => {
+  const f = fixture(t, { host: false });
+  assert.equal(readToolHomeRecord(f.dir), null);
+  assert.equal(toolHomeChoice(f.dir, 'codex'), null);
+  assert.equal(stampNewSoulToolHomes(f.dir), true);
+  assert.equal(mode(toolHomeRecordPath(f.dir)), 0o600);
+  assert.deepEqual(readToolHomeRecord(f.dir), { schemaVersion: 1, harnesses: { codex: 'soul' } });
+  assert.deepEqual(setToolHomeChoice(f.dir, 'codex', 'global'), { schemaVersion: 1, harnesses: { codex: 'global' } });
+  assert.equal(stampNewSoulToolHomes(f.dir), false, 'a later stamp never replaces a choice');
+  assert.equal(toolHomeChoice(f.dir, 'codex'), 'global');
+  assert.deepEqual(setToolHomeChoice(f.dir, 'claude', 'soul').harnesses, { codex: 'global', claude: 'soul' });
+  assert.deepEqual(setToolHomeChoice(f.dir, 'codex', null).harnesses, { claude: 'soul' });
+  assert.equal(mode(toolHomeRecordPath(f.dir)), 0o600);
+  assert.deepEqual(readdirSync(path.join(f.dir, '.soul-state')).filter((name) => name.startsWith('tool-homes')), ['tool-homes.json'], 'no temp file left');
+  assert.throws(() => setToolHomeChoice(f.dir, 'kiro', 'soul'), (error) => error.code === 'tool-home-unsupported');
+  assert.throws(() => setToolHomeChoice(f.dir, 'codex', 'host'), (error) => error.code === 'tool-home-record-invalid');
+  for (const contents of ['not json', '{"schemaVersion":1,"harnesses":{"codex":"elsewhere"}}', 'x'.repeat(20000)]) {
+    put(toolHomeRecordPath(f.dir), contents);
+    assert.throws(() => readToolHomeRecord(f.dir), (error) => error.code === 'tool-home-record-invalid');
+  }
+  rmSync(toolHomeRecordPath(f.dir));
+  put(path.join(f.home, 'elsewhere.json'), JSON.stringify(newSoulToolHomeRecord()));
+  symlinkSync(path.join(f.home, 'elsewhere.json'), toolHomeRecordPath(f.dir));
+  assert.throws(() => readToolHomeRecord(f.dir), (error) => error.code === 'tool-home-record-invalid' && /link/.test(error.message));
+});
+
+test('Codex end to end: a soul born managed routes CODEX_HOME into its tool home whatever the host holds, global keeps the host store explicitly, and an existing soul keeps its setup; no harness state moves', (t) => {
+  const hostCodex = (f) => readdirSync(path.join(f.home, '.codex'), { recursive: true }).sort();
+  // A host signed in to Codex: before #617 a soul without its own sign-in stays on the host store.
+  const existing = fixture(t);
+  const before = hostCodex(existing);
+  assert.deepEqual(soulToolHomeEnv(ID, { ...existing.options, harness: 'codex' }), {}, 'no record: the existing setup');
+  // Born managed: its own Codex home, empty, though the host is signed in.
+  const born = fixture(t);
+  stampNewSoulToolHomes(born.dir);
+  const codexHome = path.join(born.tools, 'codex');
+  assert.deepEqual(pendingSoulToolHome(ID, { ...born.options, harness: 'codex' }), ['tool-home:codex']);
+  assert.deepEqual(soulToolHomeEnv(ID, { ...born.options, harness: 'codex' }), { CODEX_HOME: codexHome });
+  assert.deepEqual(readdirSync(codexHome), [], 'nothing copied: the soul signs in once in its own home');
+  assert.deepEqual(hostCodex(born), before, 'the host store is untouched');
+  const turn = composeTurnEnv({ agentId: ID, harness: 'codex', baseEnv: { PATH: '/usr/bin', CODEX_HOME: path.join(born.home, '.codex') },
+    toolHomeEnvFor: ({ agentId, harness }) => soulToolHomeEnv(agentId, { ...born.options, harness }) });
+  assert.equal(turn.turnEnv.CODEX_HOME, codexHome, 'the host value is replaced for the turn');
+  assert.deepEqual(turn.routed, ['CODEX_HOME']);
+  // Only Codex in this slice: Claude keeps the sign-in decision.
+  assert.deepEqual(soulToolHomeEnv(ID, { ...born.options, harness: 'claude' }), {});
+  const env = readSoulEnvironment(ID, born.options);
+  const row = env.components.find((component) => component.id === 'tool-state').entries[0];
+  assert.deepEqual([row.harness, row.containment, row.choice, row.routing], ['codex', 'soul', 'soul', ['CODEX_HOME']]);
+  assert.equal(env.launch.routing.toolHome, 'soul');
+  // Overridden to the global install: the host store, even with nothing on it to lose, and nothing to adopt or warn about.
+  const global = fixture(t, { host: false });
+  stampNewSoulToolHomes(global.dir);
+  setToolHomeChoice(global.dir, 'codex', 'global');
+  assert.deepEqual(soulToolHomeEnv(ID, { ...global.options, harness: 'codex' }), {});
+  assert.deepEqual(pendingSoulToolHome(ID, { ...global.options, harness: 'codex' }), []);
+  assert.equal(composeTurnEnv({ agentId: ID, harness: 'codex', baseEnv: { PATH: '/usr/bin' }, toolHomeEnvFor: ({ agentId, harness }) => soulToolHomeEnv(agentId, { ...global.options, harness }) }).turnEnv.CODEX_HOME, undefined);
+  const chosen = readSoulEnvironment(ID, global.options);
+  const globalRow = chosen.components.find((component) => component.id === 'tool-state').entries[0];
+  assert.deepEqual([globalRow.containment, globalRow.choice, globalRow.routing], ['shared-host', 'global', []]);
+  assert.match(globalRow.reason, /set to use the global codex install/);
+  assert.equal(chosen.launch.routing.toolHome, 'host');
+  assert.deepEqual(chosen.readiness.problems.filter((problem) => problem.code === 'tool-signin-missing'), []);
+  assert.deepEqual(chosen.migration.steps.filter((step) => step.id === 'adopt-host-signin:codex'), []);
+  // An existing soul may choose its own tool home explicitly too; its host store stays where it is.
+  setToolHomeChoice(existing.dir, 'codex', 'soul');
+  assert.deepEqual(soulToolHomeEnv(ID, { ...existing.options, harness: 'codex' }), { CODEX_HOME: path.join(existing.tools, 'codex') });
+  assert.deepEqual(hostCodex(existing), before);
+});
+
+test('an unusable record fails the launch and the turn with its code, never a silent host fallback, and the descriptor reports it', (t) => {
+  const f = fixture(t, { host: false });
+  put(toolHomeRecordPath(f.dir), '{"schemaVersion":1,"harnesses":{"codex":"maybe"}}');
+  const coded = (error) => error.code === 'tool-home-record-invalid';
+  assert.throws(() => soulToolHomeEnv(ID, { ...f.options, harness: 'codex' }), coded);
+  assert.deepEqual(pendingSoulToolHome(ID, { ...f.options, harness: 'codex' }), ['tool-home:codex'], 'pending, so the tool-home stage fails with the code');
+  assert.throws(() => prepareSoulToolHome(ID, { ...f.options, harness: 'codex' }), coded);
+  assert.throws(() => composeTurnEnv({ agentId: ID, harness: 'codex', baseEnv: {}, toolHomeEnvFor: ({ agentId, harness }) => soulToolHomeEnv(agentId, { ...f.options, harness }) }), coded);
+  const result = readSoulEnvironment(ID, f.options);
+  assert.deepEqual(result.readiness.problems.filter((problem) => problem.code === 'tool-home-record-invalid').map((problem) => [problem.severity, problem.component]), [['error', 'tool-state']]);
+  assert.equal(result.readiness.ready, false);
+});
+
+test('only a soul born in a managed launch is stamped: an existing .soul-state, a pre-folder home or a join keeps its setup', (t) => {
+  const existing = fixture(t, { host: false });
+  ensureSoulDirectory(ID, null, { ...existing.options, stampToolHomes: true });
+  assert.equal(readToolHomeRecord(existing.dir), null, 'the soul already had its state');
+  const born = fixture(t, { host: false });
+  rmSync(path.join(born.dir, '.soul-state'), { recursive: true });
+  ensureSoulDirectory(ID, null, born.options);
+  assert.equal(readToolHomeRecord(born.dir), null, 'not managed (a join or a worktree): no stamp');
+  rmSync(path.join(born.dir, '.soul-state'), { recursive: true });
+  ensureSoulDirectory(ID, null, { ...born.options, stampToolHomes: true });
+  assert.deepEqual(readToolHomeRecord(born.dir), newSoulToolHomeRecord());
 });

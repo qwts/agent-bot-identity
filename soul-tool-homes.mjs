@@ -17,12 +17,27 @@
 // soul lacks is kept exactly where it works, `shared-host`, until the owner
 // adopts it. A harness is never started into an empty store it would ask
 // to sign in to.
+//
+// A soul's own choice, one entry per harness in `.soul-state/tool-homes.json`
+// (#617, soul-tool-home-record.mjs reads and writes it), comes before that:
+// `soul` keeps the harness's config, sign-in and sessions in the soul's tool
+// home whatever the host holds, `global` uses the host's install and store,
+// explicitly. A soul born managed gets `soul` for the harnesses in
+// `SOUL_DEFAULT_HARNESSES`; a soul without the file (one that existed before
+// it) keeps the sign-in decision above, so nothing it has moves.
 import path from 'node:path';
 
 export const TOOL_HOMES_SCHEMA_VERSION = 1;
 export const TOOL_CONTAINMENTS = Object.freeze(['soul', 'shared-host', 'unsupported']);
 export const SIGN_IN_STATES = Object.freeze(['present', 'missing', 'unknown']);
 export const TOOL_FILE_KINDS = Object.freeze(['sign-in', 'state']);
+// A soul's per-harness choice: its own tool home, or the host's (global)
+// install and store.
+export const TOOL_HOME_CHOICES = Object.freeze(['soul', 'global']);
+// The harnesses a soul born managed is stamped `soul` for. Codex only in
+// this slice of #617; the other routable harnesses keep the sign-in
+// decision until their slice adds them here.
+export const SOUL_DEFAULT_HARNESSES = Object.freeze(['codex']);
 // Never routed, whatever a registry row says (decision 5).
 export const NEVER_ROUTED = Object.freeze(['HOME', 'XDG_STATE_HOME']);
 const STATE = '.soul-state';
@@ -170,14 +185,19 @@ export function toolHomeEnv(soulDir, harness) {
  *   done or skipped; on macOS that is how a Claude keychain sign-in, which
  *   no file copy carries, is knowingly left behind for one sign-in inside
  *   the soul).
+ * - `choice` (the soul's tool-homes record, #617), when set, wins:
+ *   `soul` is `soul`, `global` is `shared-host` by the soul's own choice.
  * - `shared-host`: the host has a sign-in the soul lacks, or may have one
  *   no file shows (`hostSignIn: unknown`): routing would start the harness
  *   into an empty store that asks to sign in, so it keeps the host store
  *   exactly as before, and says so, until `adoptCommand` is run.
  */
-export function toolHomeDecision(harness, { signIn = 'unknown', hostSignIn = 'unknown', adopted = false } = {}) {
+export function toolHomeDecision(harness, { signIn = 'unknown', hostSignIn = 'unknown', adopted = false, choice = null } = {}) {
   const row = toolHomeFor(harness);
   if (!row.routable) return { containment: 'unsupported', reason: row.reason };
+  // The soul's recorded choice (#617) decides before any sign-in file.
+  if (choice === 'soul') return { containment: 'soul', reason: null };
+  if (choice === 'global') return { containment: 'shared-host', reason: `the soul is set to use the global ${row.harness} install and its host store` };
   if (signIn === 'present' || adopted === true || hostSignIn === 'missing') return { containment: 'soul', reason: null };
   if (hostSignIn === 'present') return { containment: 'shared-host', reason: `the host store holds ${row.harness}'s sign-in and the soul's tool home does not; the launch keeps the host store until the owner adopts it` };
   return { containment: 'shared-host', reason: `the host may hold ${row.harness}'s sign-in where no file shows it (${row.note ?? 'a keychain'}); the launch keeps the host store until the owner adopts it` };
@@ -210,3 +230,27 @@ export function toolHomeFiles(soulDir, harness, { env = {}, home } = {}) {
 
 export const adoptCommand = (agentId, harness = null) => `agent-bot soul env migrate ${agentId} --adopt-host-signin${harness ? ` --harness ${harness}` : ''}`;
 export const adoptStepId = (harness) => `adopt-host-signin:${harness}`;
+
+/**
+ * A soul's tool-homes record (#617), checked: `{ schemaVersion, harnesses }`
+ * with one `soul | global` entry per routable harness. Anything else is a
+ * coded `tool-home-record-invalid`: a launch never guesses where a
+ * harness's sign-in and sessions live.
+ */
+export function normalizeToolHomeRecord(value) {
+  const invalid = (why) => { throw Object.assign(new Error(`the soul's tool-homes record is invalid: ${why}; fix or remove .soul-state/tool-homes.json`), { code: 'tool-home-record-invalid' }); };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) invalid('not an object');
+  if (value.schemaVersion !== TOOL_HOMES_SCHEMA_VERSION) invalid(`schemaVersion ${JSON.stringify(value.schemaVersion)} is not ${TOOL_HOMES_SCHEMA_VERSION}`);
+  const entries = value.harnesses;
+  if (!entries || typeof entries !== 'object' || Array.isArray(entries)) invalid('harnesses must be an object');
+  const harnesses = {};
+  for (const [harness, choice] of Object.entries(entries)) {
+    if (!Object.hasOwn(TOOL_HOME_REGISTRY, harness) || !TOOL_HOME_REGISTRY[harness].routable) invalid(`${JSON.stringify(harness)} is not a routable harness`);
+    if (!TOOL_HOME_CHOICES.includes(choice)) invalid(`${harness} must be one of ${TOOL_HOME_CHOICES.join(', ')}`);
+    harnesses[harness] = choice;
+  }
+  return { schemaVersion: TOOL_HOMES_SCHEMA_VERSION, harnesses };
+}
+
+/** The record a soul born managed starts with: its own tool home for each default harness. */
+export const newSoulToolHomeRecord = () => ({ schemaVersion: TOOL_HOMES_SCHEMA_VERSION, harnesses: Object.fromEntries(SOUL_DEFAULT_HARNESSES.map((harness) => [harness, 'soul'])) });

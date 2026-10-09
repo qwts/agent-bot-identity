@@ -62,6 +62,8 @@ test('provisions a git home from the package once, then rebinds it', async (t) =
   assert.equal(showSoul(agentId, { file: options.file }).spacePath, path.join(directory, '.soul-state', 'space'));
   assert.equal(statSync(path.join(directory, '.soul-state')).mode & 0o777, 0o700);
   assert.equal(statSync(path.join(directory, '.soul-state', 'agent-id')).mode & 0o777, 0o600);
+  // Born in a managed launch: Codex's state in its own tool home (#617).
+  assert.deepEqual(JSON.parse(readFileSync(path.join(directory, '.soul-state', 'tool-homes.json'), 'utf8')), { schemaVersion: 1, harnesses: { codex: 'soul' } });
   assert.equal(showSoul(agentId, { file: options.file }).soulDir, directory);
   assert.equal(readFileSync(path.join(home, 'AGENTS.md'), 'utf8'), 'be kind\n');
   assert.match(readFileSync(path.join(home, 'skills', 'hello', 'SKILL.md'), 'utf8'), /hi\n$/);
@@ -178,6 +180,7 @@ for (const crossDevice of [false, true]) {
     assert.equal(existsSync(staging), false);
     assert.equal(existsSync(path.join(home, 'partial')), false);
     assert.equal(readFileSync(path.join(path.dirname(home), 'migrated-from'), 'utf8').trim(), legacy);
+    assert.equal(existsSync(path.join(path.dirname(home), 'tool-homes.json')), false, 'an existing soul moving in keeps its setup (#617)');
     assert.equal(bindings.bound[0].worktree, home);
     await provision({ agentId });
     assert.equal(attempts, crossDevice ? 2 : 1);

@@ -303,8 +303,15 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
         // Per harness the soul names (#583 slice 2): where its native state
         // is routed, and whether a sign-in file exists in the soul's tool
         // home and in the host store. Existence only, never contents.
-        entry.entries = inspectToolHomes(root, harnessNames, { env, home, platform: options.platform ?? process.platform }).map((row) => ({
-          harness: row.harness, path: row.path, routing: row.routing, containment: row.containment, reason: row.reason,
+        // `choice` is the soul's recorded `soul | global` (#617), or null.
+        let rows = [];
+        try { rows = inspectToolHomes(root, harnessNames, { env, home, platform: options.platform ?? process.platform }); }
+        catch (error) {
+          if (error?.code !== 'tool-home-record-invalid') throw error;
+          problem('tool-home-record-invalid', 'error', 'tool-state', error.message);
+        }
+        entry.entries = rows.map((row) => ({
+          harness: row.harness, path: row.path, routing: row.routing, containment: row.containment, reason: row.reason, choice: row.choice,
           hostPath: row.hostPath ?? hostStore(ACP_SPAWN_REGISTRY[row.harness], home), signIn: row.signIn, hostSignIn: row.hostSignIn, note: row.note }));
         for (const row of entry.entries) {
           if (row.containment === 'soul') continue;
@@ -459,7 +466,8 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
     if (tool) {
       result.launch.routing.toolHome = tool.containment === 'soul' ? 'soul' : 'host';
       result.launch.routing.env = [...new Set([...result.launch.routing.env, ...tool.routing])].sort();
-      if (tool.containment === 'shared-host') {
+      // A soul set to the global install chose the host store: nothing to adopt.
+      if (tool.containment === 'shared-host' && tool.choice !== 'global') {
         problem('tool-signin-missing', 'warning', 'tool-state', tool.hostSignIn === 'present'
           ? `${selected}'s sign-in is on the host (${tool.hostPath}) but not in the soul's tool home, so the launch keeps the shared host store; adopt it once to contain this soul`
           : `${selected}'s sign-in may be on the host where no file shows it, and it is not in the soul's tool home, so the launch keeps the shared host store; adopt once to contain this soul (the harness then signs in inside the soul)`,
@@ -507,7 +515,7 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
     result.migration.steps = [...result.migration.steps.filter((entry) => entry.id !== step.id), step];
   }
   for (const tool of result.components.find((component) => component.id === 'tool-state')?.entries ?? []) {
-    if (tool.containment === 'shared-host' && !recorded.has(adoptStepId(tool.harness))) {
+    if (tool.containment === 'shared-host' && tool.choice !== 'global' && !recorded.has(adoptStepId(tool.harness))) {
       result.migration.steps.push({ id: adoptStepId(tool.harness), status: 'pending', from: tool.hostPath, to: path.join(root, STATE, 'tools', tool.harness) });
     }
   }

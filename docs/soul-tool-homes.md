@@ -33,8 +33,11 @@ agent-bot soul env migrate <agentId|name> --space-into-soul [--json] [--principa
   | sign-in missing | unknown (a Mac's Claude keychain, which no file shows) | `shared-host`: a signed-in host is never mistaken for one with nothing to lose |
   | anything, after `soul env migrate --adopt-host-signin` ran for it (journal step `done` or `skipped`) | anything | `soul`: the owner decided |
 
+  A soul's own choice for a harness, recorded in its tool-homes record
+  (below), comes before this table.
+
   A harness is never started into an empty store that would ask it to sign
-  in. An existing sign-in stays on the host store until adopted; the
+  in, unless the soul's own choice (below) says so. An existing sign-in stays on the host store until adopted; the
   descriptor says so (`containment: "shared-host"`, `routing: []`, a
   `launch.limitations` row and the `tool-signin-missing` warning with the
   adoption command). After the adoption the next launch routes.
@@ -53,6 +56,60 @@ agent-bot soul env migrate <agentId|name> --space-into-soul [--json] [--principa
   servers start reads the same store as the harness.
 - Existing sign-ins are adopted once, explicitly, by the owner
   (`--adopt-host-signin`). The launch never copies a credential.
+
+### A soul's own choice (#617)
+
+Each soul can choose, per harness, where that harness's config, sign-in and
+sessions live. One soul can then run Codex against one provider while
+another runs Codex against a different one. The choice is recorded in
+`.soul-state/tool-homes.json`, with one entry per harness:
+
+```json
+{ "schemaVersion": 1, "harnesses": { "codex": "soul" } }
+```
+
+| Entry | Containment | Meaning |
+| --- | --- | --- |
+| `soul` | `soul` | The harness runs in the soul's own tool home, whatever the host store holds. An empty tool home means the harness signs in once inside the soul. Nothing is copied. |
+| `global` | `shared-host` | The harness uses the host's global install and store, as an explicit choice. The descriptor shows `choice: "global"`, there is no `tool-signin-missing` warning and no pending adoption step. |
+| no entry, or no record | the sign-in table above | The soul keeps its current setup. |
+
+- **New managed souls** get `{ "codex": "soul" }` once, when the soul is
+  born: at `soul spawn` from a template, at `soul fork`, and in a launch
+  that creates the soul's `.soul-state`. A soul that already has a
+  `.soul-state`, a soul moving in from a pre-folder home, and a soul that
+  joins from the user's own session (`agent-bot join`) are not stamped. A
+  later stamp never replaces a record.
+- **Existing souls** have no record, so nothing about them changes and no
+  harness state moves. An entry can still be added for one, and it then
+  wins.
+- The record is private-home state, so `soul env export` does not carry it.
+  An imported soul arrives without one and is treated as an existing soul.
+- The record is read without following a link, and its size is bounded. A
+  record that is a link, is not JSON, or names an unknown harness or
+  choice fails with `tool-home-record-invalid`. That code fails the launch
+  at the `tool-home` stage and fails the turn; it is never treated as "no
+  record". `soul env` reports it as an error problem.
+- `soul-tool-home-record.mjs` reads, stamps (`stampNewSoulToolHomes`) and
+  sets (`setToolHomeChoice(soulDir, harness, 'soul' | 'global' | null)`)
+  the record. The decision itself is the pure
+  `toolHomeDecision(harness, { ..., choice })`.
+
+**Slice 1 scope:** only Codex (`CODEX_HOME`) is stamped by default
+(`SOUL_DEFAULT_HARNESSES`). The resolver honours an entry for any routable
+harness. These are the next slices of #617:
+
+- stamp Claude (`CLAUDE_CONFIG_DIR`) and OpenCode (the XDG bases) for new
+  souls, each with its own end-to-end fixture;
+- an owner/agent command to set or clear an entry. Today only the module
+  function exists, and the command name and its authorization still need
+  agreement;
+- the resume lane (`wake-resume`), which still runs on the host store.
+  It needs the store each recorded session lives in, and a coded refusal
+  when that store has moved, before it can follow a soul's tool home;
+- per-soul harness installs (the "global install" half of the choice for
+  the executable, not just the store) and the unroutable harnesses (Kiro,
+  Muse, Gemini, Copilot).
 
 `soul-tool-homes.mjs` is the pure registry (`TOOL_HOME_REGISTRY`,
 `toolHomeEnv`, `toolHomeFiles`, `hostToolStore`); `soul-env-migrate.mjs`
@@ -162,7 +219,8 @@ receipt.
 
 `agent-bot soul env` ([soul-environment.md](soul-environment.md)) reports,
 per harness the soul names, a `tool-state.entries[]` row `{ harness, path,
-routing, containment, reason, hostPath, signIn, hostSignIn, note }`:
+routing, containment, reason, choice, hostPath, signIn, hostSignIn, note }`
+(`choice` is the soul's recorded `soul | global`, or null):
 `containment` is the decision above: `soul` (routed), `shared-host` (kept
 on the host store for its sign-in, with `reason`) or `unsupported` (with
 `reason`); `routing` the variables the next launch sets (empty unless
@@ -175,10 +233,12 @@ variables; a routed harness is no longer a `launch.limitations` row, a
 `shared-host` or `unsupported` one is, with its reason.
 
 `readiness.problems` gets `tool-signin-missing` (warning, component
-`tool-state`) when the selected harness is `shared-host`; the action is the
-adoption command. The `migration.steps[]` list carries what the journal
-recorded and a `pending` `adopt-host-signin:<harness>` step for each
-`shared-host` harness.
+`tool-state`) when the selected harness is `shared-host` and the soul did
+not choose `global`; the action is the adoption command. It gets
+`tool-home-record-invalid` (error) when the tool-homes record is unusable.
+The `migration.steps[]` list carries what the journal recorded and a
+`pending` `adopt-host-signin:<harness>` step for each `shared-host`
+harness the soul did not set to `global`.
 
 ## Limits
 

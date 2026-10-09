@@ -191,6 +191,7 @@ scalars `null`, collections `[]`), in this order:
 | `provider-secret-unreadable` | error / warning | The declared store cannot give the secret (a loosened file mode, a store failure); store it again |
 | `provider-declaration-invalid` | error | `harnesses.<name>.provider` or `credentials.secrets` is refused; fix it in a revision |
 | `tool-signin-missing` | warning | The selected harness's sign-in is in the host store (or a Mac's keychain) but not in the soul's tool home, so the launch keeps the shared host store; `agent-bot soul env migrate <id> --adopt-host-signin --harness <name>` contains it |
+| `tool-home-record-invalid` | error | `.soul-state/tool-homes.json` (a soul's per-harness `soul`/`global` choice, #617) is a link, is not JSON, or names an unknown harness or choice; fix or remove it ([soul-tool-homes.md](soul-tool-homes.md)) |
 | `memory-not-contained` | warning | `.soul-state/space` is a link to an Agent Space outside the soul, so the soul's memory does not travel with its folder; `agent-bot soul env migrate <id> --space-into-soul` moves it inside |
 | `workspace-unlinked` | warning | A linked workspace came back from an import as a pointer (`.soul-state/imports/<name>/`) and no `worktrees/<name>` exists yet; check the repository out again, link it there, then apply `changes.patch` and copy the untracked files |
 

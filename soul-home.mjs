@@ -15,6 +15,7 @@ import { initSoulSpace } from './agent-space.mjs';
 
 import { buildSoulDirectory } from './soul-build.mjs';
 import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN } from './acp-registry.mjs';
+import { stampNewSoulToolHomes } from './soul-tool-home-record.mjs';
 import { INSTALL_STAMP, RUNTIMES_SCHEMA_VERSION, inspectSoulRuntimes, installSoulRuntimes, publishInstall, readInstallStamp, soulRuntimeEnv, runtimesRoot } from './soul-runtimes.mjs';
 
 const run = promisify(execFile);
@@ -250,6 +251,10 @@ export function soulBindingForLaunch(agentId, { stateDir, bindings, provision, h
 }
 
 // Claim only an empty/unmarked soul directory, never another soul's state.
+// `options.stampToolHomes` (a managed launch's provisioning) stamps the
+// soul's default tool homes (#617), only when this call creates its
+// `.soul-state`: a soul that already had one keeps its current setup, and
+// a join never stamps.
 export function ensureSoulDirectory(agentId, packagePath = null, options = {}) {
   validateAgentId(agentId);
   const directory = soulDirectory(agentId, options);
@@ -263,6 +268,7 @@ export function ensureSoulDirectory(agentId, packagePath = null, options = {}) {
       filter: (source) => !['.soul-state', 'worktrees'].includes(path.relative(packagePath, source).split(path.sep)[0]) });
     else mkdirSync(directory, { recursive: true, mode: 0o700 });
   }
+  const born = !existsSync(state);
   mkdirSync(state, { recursive: true, mode: 0o700 });
   chmodSync(state, 0o700);
   // Publish the marker atomically: a concurrent creator must never read it
@@ -275,6 +281,7 @@ export function ensureSoulDirectory(agentId, packagePath = null, options = {}) {
     if (readFileSync(marker, 'utf8').trim() !== agentId) throw new Error('soul directory belongs to another Agent ID');
   } finally { rmSync(pending, { force: true }); }
   registerSoulDir(agentId, directory, { file: options.file ?? populationFile(options) });
+  if (born && options.stampToolHomes === true) stampNewSoulToolHomes(directory);
   const link = path.join(state, 'space');
   let present = false;
   try { lstatSync(link); present = true; } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -391,10 +398,12 @@ export function createSoulHomes({ stateDir, bindings, install = installHarnesses
   return async function provision({ agentId, harness = null, packagePath = null }) {
     validateAgentId(agentId);
     harness ??= recordedHarness(agentId, { ...options, stateDir });
-    const directory = ensureSoulDirectory(agentId, packagePath, options);
+    const legacy = legacyHomePath(stateDir, agentId);
+    // A soul with a pre-folder home is an existing soul moving in, not one
+    // being born: it keeps its current tool-home setup (#617).
+    const directory = ensureSoulDirectory(agentId, packagePath, { ...options, stampToolHomes: !existsSync(path.join(legacy, '.git')) });
     const worktree = path.join(directory, '.soul-state', 'home');
     while (creating.has(worktree)) await creating.get(worktree).catch(() => {});
-    const legacy = legacyHomePath(stateDir, agentId);
     const state = path.dirname(worktree);
     const migratedFrom = path.join(state, 'migrated-from');
     const staging = path.join(state, 'home.migrating');
