@@ -167,6 +167,11 @@ that every zero-SOP journey or every qwts rule is covered.
 The acceptance recorded above approves the decision, not implementation
 completeness. Keep runtime issues open until their own remaining criteria are met.
 
+The [2026-10-09 conformance inventory](../product-policy-conformance.md)
+adds isolated zero-SOP and selected-pack bind/chat/wake evidence, maps every
+decision and extension point to its implementation or gap, and links focused
+follow-ups. It does not claim full pack conformance or change this decision.
+
 ## Consequences
 
 - Anyone can use souls, bindings, chat, and wakes without GitHub, a

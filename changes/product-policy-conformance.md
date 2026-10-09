@@ -1,0 +1,1 @@
+- Add isolated zero-SOP and selected-policy bind/chat/wake journey tests and an ADR-0274 conformance matrix that identifies remaining persona enforcement, policy extension, catalog, author-exception and host-naming gaps.
