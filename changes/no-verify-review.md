@@ -1,0 +1,1 @@
+- The stated-bot hook-bypass refusal now also covers a bypass that reaches a pinned checkout from elsewhere, `git config --remove-section`/`--rename-section` on the section holding `core.hooksPath`, and a commit whose path or message is `--abort` or `--quit` (#749).

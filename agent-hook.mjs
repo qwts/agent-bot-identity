@@ -270,6 +270,7 @@ export function unboundIdentityCheck(envelope, { env = process.env, cwd = proces
   let uncertain = scan.ambiguous && /git|commit|push/i.test(command.replace(/[\\'"]/g, ''));
   const publishes = [...scan.publishes];
   let skipsHooks = scan.skipsHooks;
+  const bypasses = [...scan.bypasses];
   const aliases = [...scan.aliases];
   for (let n = 0; aliases.length && n < 16; n += 1) {
     const alias = aliases.shift();
@@ -288,11 +289,20 @@ export function unboundIdentityCheck(envelope, { env = process.env, cwd = proces
     aliases.push(...inner.aliases);
     uncertain ||= inner.ambiguous;
     skipsHooks ||= inner.skipsHooks;
+    bypasses.push(...inner.bypasses);
   }
   if (aliases.length) uncertain = true;
   if (skipsHooks) {
+    // A checkout pin is a stated identity too, so ask the session's directory
+    // and every repository the bypass reaches.
     try {
-      const slug = statedBotSlug({ env, cwd });
+      // A target git cannot read is a git command that fails on its own, so
+      // it does not deny the delegate or a human.
+      const pinned = (target) => {
+        if (!target.cwd || !existsSync(target.cwd)) return null;
+        try { return statedBotSlug({ env, cwd: target.cwd, git: targetGit(target, env) }); } catch { return null; }
+      };
+      const slug = statedBotSlug({ env, cwd }) || bypasses.map(pinned).find(Boolean);
       if (slug) return { decision: 'deny', reason: hookBypassReason(slug) };
     } catch (error) {
       return { decision: 'deny', reason: `cannot verify the stated bot identity: ${error.message}` };

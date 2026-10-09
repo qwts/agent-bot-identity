@@ -18,7 +18,8 @@
 // aliases cannot shadow builtins, so a subcommand that is not a known
 // builtin is returned as an alias candidate for the caller to look up.
 //
-// `skipsHooks` says the command would run without the git backstop:
+// `skipsHooks` says the command would run without the git backstop, and
+// `bypasses` lists the repositories it would do that in:
 // `--no-verify` (or `commit -n`), a `core.hooksPath` override for the
 // invocation (`-c`, `--config-env`, GIT_CONFIG_PARAMETERS, GIT_CONFIG_KEY_n,
 // or an `include.path` that could set it), or a `git config` write of
@@ -32,8 +33,14 @@ const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'yash', 'busybox']);
 // Subcommands that write commits; `push` publishes them.
 const COMMITTING = new Set(['commit', 'merge', 'rebase', 'cherry-pick', 'revert', 'am', 'commit-tree']);
-// Sequencer controls that write no commit.
-const NO_COMMIT = new Set(['--abort', '--quit', '--show-current-patch', '--edit-todo']);
+// Sequencer controls that write no commit, per subcommand.
+const NO_COMMIT = {
+  merge: new Set(['--abort', '--quit']),
+  rebase: new Set(['--abort', '--quit', '--show-current-patch', '--edit-todo']),
+  'cherry-pick': new Set(['--abort', '--quit']),
+  revert: new Set(['--abort', '--quit']),
+  am: new Set(['--abort', '--quit', '--show-current-patch']),
+};
 // Subcommands whose `--no-verify` skips a hook the backstop runs in.
 const VERIFYING = new Set(['commit', 'merge', 'rebase', 'am', 'push']);
 // `git commit` short options whose value follows (attached or as the next
@@ -48,6 +55,9 @@ const VALUE_OPTS = {
   rebase: new Set(['-s', '-X', '-x', '--exec', '--onto', '--strategy', '--strategy-option', '--empty']),
   am: new Set(['-C', '-p', '--directory', '--exclude', '--include', '--patch-format', '--resolvemsg']),
   push: new Set(['-o', '--push-option', '--repo', '--receive-pack', '--exec']),
+  'cherry-pick': new Set(['-m', '--mainline', '-s', '-X', '--strategy', '--strategy-option', '--cleanup']),
+  revert: new Set(['-m', '--mainline', '-s', '-X', '--strategy', '--strategy-option', '--cleanup']),
+  'commit-tree': new Set(['-p', '-m', '-F']),
 };
 const HOOKS_PATH = /^core\.hookspath$/i;
 // Config keys that can set core.hooksPath by pulling in another file.
@@ -317,7 +327,7 @@ const WRAPPERS = {
 };
 
 export function scanGitPublish(command, { cwd = process.cwd(), env = process.env, depth = 0 } = {}) {
-  const result = { publishes: [], aliases: [], ambiguous: false, skipsHooks: false };
+  const result = { publishes: [], aliases: [], ambiguous: false, skipsHooks: false, bypasses: [] };
   if (depth > 8) { result.ambiguous = true; return result; }
   const vars = new Map(Object.entries(env ?? {}));
   const exported = new Set(Object.keys(env ?? {}));
@@ -378,6 +388,7 @@ function merge(into, from) {
   into.aliases.push(...from.aliases);
   into.ambiguous ||= from.ambiguous;
   into.skipsHooks ||= from.skipsHooks;
+  into.bypasses.push(...from.bypasses);
 }
 
 function evaluate(argv, ctx) {
@@ -522,9 +533,10 @@ function gitInvocation(args, { cwd, env, result, depth, aliases = new Map(), nam
   };
   if (target.gitDir === null || target.workTree === null) target.cwd = null;
   const rest = args.slice(j + 1);
-  if (sub === 'config') { if (writesHooksPath(rest)) result.skipsHooks = true; return; }
-  if (sub === 'push' || (COMMITTING.has(sub) && !rest.some((a) => NO_COMMIT.has(a)))) {
-    if (hooksOff || skipsVerify(sub, rest)) result.skipsHooks = true;
+  const bypass = () => { result.skipsHooks = true; result.bypasses.push(target); };
+  if (sub === 'config') { if (writesHooksPath(rest)) bypass(); return; }
+  if (sub === 'push' || (COMMITTING.has(sub) && !controlOnly(sub, rest))) {
+    if (hooksOff || skipsVerify(sub, rest)) bypass();
     if (sub === 'rebase') rebaseExecs(rest, target, env, result, depth);
     if (sub === 'push') { result.publishes.push(target); return; }
     // Only `commit` takes --author; the others use the configured identity.
@@ -550,6 +562,20 @@ function hooksPathInEnv(env, result) {
     if (key === 'GIT_CONFIG_PARAMETERS' ? /core\.hookspath|include(if\..*)?\.path/i.test(value) : setsHooksPath(value)) found = true;
   }
   return found;
+}
+
+// A sequencer control (`--abort`, `--quit`, …) as an option of this
+// subcommand: before `--`, and not the value of another option.
+function controlOnly(sub, rest) {
+  const controls = NO_COMMIT[sub];
+  if (!controls) return false;
+  for (let k = 0; k < rest.length; k += 1) {
+    const arg = rest[k];
+    if (arg === '--') return false;
+    if (VALUE_OPTS[sub]?.has(arg)) { k += 1; continue; }
+    if (controls.has(arg)) return true;
+  }
+  return false;
 }
 
 // `--no-verify` in any unambiguous abbreviation (git accepts `--no-veri`),
@@ -582,6 +608,9 @@ function skipsVerify(sub, rest) {
 // change nothing.
 function writesHooksPath(rest) {
   const words = rest.filter((a) => a !== null);
+  // Renaming or removing a section that holds it drops it without naming it.
+  const section = words.findIndex((a) => /^(--)?(rename|remove)-section$/.test(a));
+  if (section >= 0 && /^(core|include|includeif\..*)$/i.test(words[section + 1] ?? '')) return true;
   const key = words.findIndex((a) => setsHooksPath(a));
   if (key < 0) return false;
   const writes = ['set', 'unset', '--unset', '--unset-all', '--add', '--replace-all'];
@@ -611,7 +640,7 @@ function rebaseExecs(rest, target, env, result, depth) {
 export function expandAlias(value, target, rest, {
   env = new Map(), result, depth = 0, aliases = new Map(), names = new Map(), hooksOverridden = false,
 }) {
-  const into = result ?? { publishes: [], aliases: [], ambiguous: false, skipsHooks: false };
+  const into = result ?? { publishes: [], aliases: [], ambiguous: false, skipsHooks: false, bypasses: [] };
   const envObject = { ...(env instanceof Map ? Object.fromEntries(env) : env) };
   if (value.startsWith('!')) {
     // A shell alias's git inherits the outer `-c` through this variable.
