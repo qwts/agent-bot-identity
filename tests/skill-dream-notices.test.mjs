@@ -183,13 +183,18 @@ test('the admission cap never clears a persisting condition and admits host fail
 test('only a completed attempt reports evidence; cancelled or inconsistent outcomes are refused', () => {
   const { ledger } = step(emptyDreamNoticeLedger(AGENT), { items: [item('AGENTS.md', 'blocked')] });
   const inputs = inputsFor([source('AGENTS.md')]);
-  for (const [status, executionFailed] of [['cancelled', false], ['cancelled', true], ['failed', false], ['timed-out', false], ['completed', true]]) {
+  for (const [status, executionFailed] of [['cancelled', false], ['failed', false], ['timed-out', false], ['completed', true]]) {
     const run = { runId: runId(), agentId: AGENT, startedAt: minute(0), endedAt: minute(45), status };
     const outcome = interpretDreamReport({ reply: JSON.stringify({ schemaVersion: 1, runId: run.runId, startingRevision: HASH, items: [item('AGENTS.md')] }),
       run, inputs, endedAt: run.endedAt, executionFailed });
     assert.throws(() => applyDreamNoticeRun(ledger, { run, outcome, inputs }), { code: 'dream-notice-invalid' }, `${status}/${executionFailed}`);
   }
-  const run = { runId: runId(), agentId: AGENT, startedAt: minute(0), endedAt: minute(46), status: 'cancelled' };
-  const result = applyDreamNoticeRun(ledger, { run });
-  assert.deepEqual([result.created, result.cleared, result.renewed], [[], [], []]);
+  // The service stages execution-failed when a stopped executor rejects: a
+  // real producer pair, accepted without observing or clearing anything.
+  for (const executionFailed of [false, true]) {
+    const run = { runId: runId(), agentId: AGENT, startedAt: minute(0), endedAt: minute(46), status: 'cancelled' };
+    const outcome = executionFailed ? interpretDreamReport({ reply: '', run, inputs, endedAt: run.endedAt, executionFailed }) : null;
+    const result = applyDreamNoticeRun(ledger, { run, outcome, inputs: outcome && inputs });
+    assert.deepEqual([result.created, result.cleared, result.renewed], [[], [], []]);
+  }
 });

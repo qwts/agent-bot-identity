@@ -390,8 +390,9 @@ A persisting condition renews its single live notice (`occurrences`,
 acknowledged condition stays deduplicated. A recurrence after an observed clear
 creates a new notice. A pending proposal is reported as `proposal-pending`,
 which is the owner's action. Only a completed attempt's report is evidence: a
-cancelled attempt observes nothing, and a cancelled, failed or timed-out run
-with a report other than `execution-failed` is refused as inconsistent. A change notice inherits the outcome's
+cancelled attempt observes nothing, even with the `execution-failed` outcome the
+service stages when a stopped executor rejects. A cancelled, failed or timed-out
+run with any other report is refused as inconsistent. A change notice inherits the outcome's
 `attribution: not-established`: the artifact changed the source, but the run is
 not shown to have caused it. Runs are applied in journal order; replaying the
 latest run is idempotent.

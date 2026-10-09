@@ -59,10 +59,9 @@ export function dreamNoticeConditions({ run, outcome = null, inputs = null }) {
   if (outcome !== null && inputs === null) invalid();
   if (outcome !== null) validateDreamOutcome(outcome, { runId: run.runId, inputs });
   // Only a completed attempt's report is evidence. Any other settled attempt
-  // carries no outcome or the fixed execution-failed one; a cancelled attempt
-  // observes nothing at all.
+  // carries no outcome or the fixed execution-failed one (the service stages
+  // that when a stopped executor rejects); a cancelled attempt observes nothing.
   if (outcome !== null && (run.status === 'completed') === (outcome.report.status === 'execution-failed')) invalid();
-  if (run.status === 'cancelled' && outcome !== null) invalid();
   const partial = new Set((inputs?.sources ?? []).filter(source => source.truncated).map(source => source.path));
   const conditions = [], observes = { kinds: new Set(), paths: new Set() };
   const add = (kind, subject, detail) => conditions.push({ kind, subject, detail });
