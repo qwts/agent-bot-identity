@@ -7,7 +7,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { isAgentId } from './agent-identity.mjs';
 import { dreamInputMetadataDigest, validateDreamInputMetadata } from './skill-dream-inputs.mjs';
 import { dreamOutcomeDigest, validateDreamOutcome } from './skill-dream-outcomes.mjs';
-import { acknowledgeDreamNotice, applyDreamNoticeRun, emptyDreamNoticeLedger, validateDreamNoticeLedger, DREAM_NOTICE_LIMITS } from './skill-dream-notices.mjs';
+import { acknowledgeDreamNotice, applyDreamNoticeRecovery, applyDreamNoticeRun, emptyDreamNoticeLedger, validateDreamNoticeLedger, DREAM_NOTICE_LIMITS } from './skill-dream-notices.mjs';
 
 export const DREAM_TIMEOUT_MS = 10 * 60_000;
 export const DREAM_REGISTRATION_LIMIT = 256;
@@ -39,7 +39,7 @@ export function parseDreamSchedule(value) {
   if (hours > 720) fail('dream-schedule-invalid', 'dream schedule must be PT<N>H with an integer from 1 to 720');
   return hours;
 }
-export const emptyDreamState = () => ({ schemaVersion: 5, revision: 0, registrations: [], flights: [], inputReceipts: [], outcomeReceipts: [], selectionCheckpoints: [], noticeLedgers: [] });
+export const emptyDreamState = () => ({ schemaVersion: 6, revision: 0, registrations: [], flights: [], inputReceipts: [], outcomeReceipts: [], selectionCheckpoints: [], noticeLedgers: [] });
 function inputReceipt(value) {
   keys(value, ['runId', 'journalRevision', 'startingRevision', 'digest']);
   const hash = value => typeof value === 'string' && value.length === 71 && /^sha256:[a-f0-9]{64}$/.test(value);
@@ -80,8 +80,8 @@ function runRecord(run, terminal) {
     || ['running', 'failed'].includes(run.status) && run.cancelReason !== null) invalid();
 }
 export function validateDreamState(state) {
-  keys(state, ['schemaVersion', 'revision', 'registrations', 'flights', ...(state?.schemaVersion >= 2 ? ['inputReceipts'] : []), ...(state?.schemaVersion >= 3 ? ['outcomeReceipts'] : []), ...(state?.schemaVersion >= 4 ? ['selectionCheckpoints'] : []), ...(state?.schemaVersion === 5 ? ['noticeLedgers'] : [])]);
-  if (![1, 2, 3, 4, 5].includes(state.schemaVersion) || !Number.isSafeInteger(state.revision) || state.revision < 0
+  keys(state, ['schemaVersion', 'revision', 'registrations', 'flights', ...(state?.schemaVersion >= 2 ? ['inputReceipts'] : []), ...(state?.schemaVersion >= 3 ? ['outcomeReceipts'] : []), ...(state?.schemaVersion >= 4 ? ['selectionCheckpoints'] : []), ...(state?.schemaVersion >= 5 ? ['noticeLedgers'] : [])]);
+  if (![1, 2, 3, 4, 5, 6].includes(state.schemaVersion) || !Number.isSafeInteger(state.revision) || state.revision < 0
     || !Array.isArray(state.registrations) || state.registrations.length > DREAM_REGISTRATION_LIMIT
     || !Array.isArray(state.flights) || state.flights.length > DREAM_REGISTRATION_LIMIT) invalid();
   const agents = new Set(), generations = new Set(), flying = new Set(), runs = new Set();
@@ -134,14 +134,18 @@ export function validateDreamState(state) {
       seen.add(checkpoint.agentId);
     }
   }
-  if (state.schemaVersion === 5) {
+  if (state.schemaVersion >= 5) {
     // Live notices only, each soul's set byte-bounded by the notice module:
-    // every transaction copies this state.
+    // every transaction copies this state. From version 6 a soul's ledger also
+    // outlives its registration while a quarantined flight survives, and may
+    // carry the `recovery` kind that version 5 readers do not know.
     if (!Array.isArray(state.noticeLedgers) || state.noticeLedgers.length > DREAM_REGISTRATION_LIMIT) invalid();
     const seen = new Set();
     for (const ledger of state.noticeLedgers) {
       try { validateDreamNoticeLedger(ledger); } catch { invalid(); }
-      if (seen.has(ledger.agentId) || !agents.has(ledger.agentId) || !ledger.notices.length && !ledger.suppressed) invalid();
+      if (seen.has(ledger.agentId) || !agents.has(ledger.agentId) && !(state.schemaVersion >= 6 && flying.has(ledger.agentId))
+        || !ledger.notices.length && !ledger.suppressed
+        || state.schemaVersion === 5 && ledger.notices.some(notice => notice.kind === 'recovery')) invalid();
       seen.add(ledger.agentId);
     }
   }
@@ -167,19 +171,27 @@ export function validateDreamEvents(events, { state = null } = {}) {
   for (const event of events) {
     if (event?.kind === 'notices-updated') {
       // Created and cleared notice records are the append-only history; state
-      // keeps only live ones. Must accompany the same run's terminal facts.
+      // keeps only live ones. Must accompany the same run's terminal facts, or
+      // its quarantine, which only creates or renews the recovery notice.
       keys(event, ['kind', 'at', 'run', 'created', 'renewed', 'cleared', 'suppressed']);
       if (!date(event.at)) invalid();
-      runRecord(event.run, true);
+      const recovery = event.run?.status === 'recovery-required';
+      runRecord(event.run, !recovery);
       noticeRecords(event.run.agentId, event.created); noticeRecords(event.run.agentId, event.cleared, true);
       if (!Array.isArray(event.renewed) || event.renewed.length > DREAM_NOTICE_LIMITS.perSoul
         || event.renewed.some(value => typeof value !== 'string' || !/^ntc_[a-f0-9]{24}$/.test(value))
         || !Number.isSafeInteger(event.suppressed) || event.suppressed < 0
         || !event.created.length && !event.renewed.length && !event.cleared.length && !event.suppressed
-        || !events.some(row => row.kind === 'ended' && isDeepStrictEqual(row.run, event.run))) invalid();
+        || !events.some(row => row.kind === (recovery ? 'recovery-required' : 'ended') && isDeepStrictEqual(row.run, event.run))
+        || recovery && (event.cleared.length || event.suppressed || event.created.length + event.renewed.length !== 1
+          || event.created.some(notice => notice.kind !== 'recovery'))) invalid();
       if (state) {
-        const ledger = state.schemaVersion === 5 ? state.noticeLedgers.find(row => row.agentId === event.run.agentId) : undefined;
-        if (state.schemaVersion !== 5 || (event.created.length || event.renewed.length) && ledger?.lastRunId !== event.run.runId
+        const ledger = state.schemaVersion >= 5 ? state.noticeLedgers.find(row => row.agentId === event.run.agentId) : undefined;
+        // A recovery notice does not advance the terminal-run cursor; it names the run itself.
+        const named = noticeId => recovery ? ledger?.notices.some(row => row.id === noticeId && row.kind === 'recovery' && row.lastRunId === event.run.runId)
+          : ledger?.lastRunId === event.run.runId;
+        if (state.schemaVersion < (recovery ? 6 : 5)
+          || [...event.created.map(notice => notice.id), ...event.renewed].some(noticeId => !named(noticeId))
           || event.created.some(notice => !ledger.notices.some(row => row.id === notice.id))
           || event.renewed.some(noticeId => !ledger.notices.some(row => row.id === noticeId))
           || event.cleared.some(notice => ledger?.notices.some(row => row.id === notice.id))) invalid();
@@ -189,7 +201,7 @@ export function validateDreamEvents(events, { state = null } = {}) {
     if (event?.kind === 'notice-acknowledged') {
       keys(event, ['kind', 'at', 'agentId', 'noticeId']);
       if (!date(event.at) || !isAgentId(event.agentId) || typeof event.noticeId !== 'string' || !/^ntc_[a-f0-9]{24}$/.test(event.noticeId)) invalid();
-      if (state && (state.schemaVersion !== 5 || !state.noticeLedgers.some(row => row.agentId === event.agentId
+      if (state && (state.schemaVersion < 5 || !state.noticeLedgers.some(row => row.agentId === event.agentId
         && row.notices.some(notice => notice.id === event.noticeId && notice.acknowledgedAt === event.at)))) invalid();
       continue;
     }
@@ -273,8 +285,8 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
     const observed = synchronous(store.read());
     const state = structuredClone(validateDreamState(observed === null ? emptyDreamState() : observed));
     // Upgrade only the next transaction, leaving historical v1 bytes intact.
-    return state.schemaVersion < 5 ? { ...state, schemaVersion: 5, inputReceipts: state.inputReceipts ?? [],
-      outcomeReceipts: state.outcomeReceipts ?? [], selectionCheckpoints: state.selectionCheckpoints ?? [], noticeLedgers: [] } : state;
+    return state.schemaVersion < 6 ? { ...state, schemaVersion: 6, inputReceipts: state.inputReceipts ?? [],
+      outcomeReceipts: state.outcomeReceipts ?? [], selectionCheckpoints: state.selectionCheckpoints ?? [], noticeLedgers: state.noticeLedgers ?? [] } : state;
   };
   const healthy = () => { if (fault) fail(fault, 'dream scheduler state is uncertain; restart recovery is required'); };
   const time = () => { const value = now().toISOString(); if (!date(value)) invalid(); return value; };
@@ -293,7 +305,9 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
     const latest = new Set(state.registrations.flatMap(row => row.lastRun ? [row.lastRun.runId] : []));
     state.outcomeReceipts = state.outcomeReceipts.filter(receipt => latest.has(receipt.runId));
     state.selectionCheckpoints = state.selectionCheckpoints.filter(checkpoint => state.registrations.some(row => row.agentId === checkpoint.agentId));
-    state.noticeLedgers = state.noticeLedgers.filter(ledger => state.registrations.some(row => row.agentId === ledger.agentId));
+    // Unscheduling cannot clear a quarantine, so its notice outlives the registration too.
+    state.noticeLedgers = state.noticeLedgers.filter(ledger => state.registrations.some(row => row.agentId === ledger.agentId)
+      || state.flights.some(run => run.agentId === ledger.agentId));
     validateDreamState(state);
     validateDreamEvents(events, { state });
     try {
@@ -497,6 +511,20 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
     persist(state, [{ kind: 'notice-acknowledged', at, agentId, noticeId }]);
     return { agentId, notice: structuredClone(next.notices.find(notice => notice.id === noticeId)) };
   }
+  // Recording the quarantine never depends on its notice: a notice fault leaves
+  // the soul's ledger as it was, and the quarantine is still journaled.
+  function recoveryNotice(state, events, run, at) {
+    let applied;
+    try {
+      const ledger = state.noticeLedgers.find(row => row.agentId === run.agentId) ?? emptyDreamNoticeLedger(run.agentId);
+      applied = applyDreamNoticeRecovery(ledger, { run, at });
+    } catch { return; }
+    if (!applied.created.length && !applied.renewed.length) return;
+    state.noticeLedgers = [...state.noticeLedgers.filter(row => row.agentId !== run.agentId), applied.ledger];
+    events.push({ kind: 'notices-updated', at, run: structuredClone(run),
+      created: applied.ledger.notices.filter(notice => applied.created.includes(notice.id)),
+      renewed: applied.renewed, cleared: [], suppressed: 0 });
+  }
   function recover() {
     healthy();
     const state = read(), events = [], at = time();
@@ -504,9 +532,10 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
       if (live.has(run.runId) || run.status === 'recovery-required') continue;
       run.status = 'recovery-required';
       events.push({ kind: 'recovery-required', at, run });
+      recoveryNotice(state, events, run, at);
     }
     if (events.length) persist(state, events);
-    return { quarantined: events.length };
+    return { quarantined: events.filter(event => event.kind === 'recovery-required').length };
   }
   return {
     register, pause, unschedule, recover, acknowledgeNotice,

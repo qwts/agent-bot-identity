@@ -1,0 +1,1 @@
+- Publish an owner-visible `recovery` dream notice in the same transaction that quarantines a run restart recovery cannot settle. Scheduler state moves to version 6; versions 1–5 migrate on the next write (#603).

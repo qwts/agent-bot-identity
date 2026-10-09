@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { interpretDreamReport } from '../skill-dream-outcomes.mjs';
 import { kindOf } from '../soul-profile.mjs';
-import { acknowledgeDreamNotice, applyDreamNoticeRun, dreamNoticeFingerprint, emptyDreamNoticeLedger,
+import { acknowledgeDreamNotice, applyDreamNoticeRecovery, applyDreamNoticeRun, dreamNoticeFingerprint, emptyDreamNoticeLedger,
   validateDreamNoticeLedger, DREAM_NOTICE_LIMITS } from '../skill-dream-notices.mjs';
 
 const AGENT = 'agent_12345678-1234-4234-8234-123456789abc';
@@ -204,5 +204,35 @@ test('only a completed attempt reports evidence; cancelled or inconsistent outco
     const outcome = executionFailed ? interpretDreamReport({ reply: '', run, inputs, endedAt: run.endedAt, executionFailed }) : null;
     const result = applyDreamNoticeRun(ledger, { run, outcome, inputs: outcome && inputs });
     assert.deepEqual([result.created, result.cleared, result.renewed], [[], [], []]);
+  }
+});
+
+test('a quarantined run is a reserved host notice that no run clears and that renews per quarantine', () => {
+  const quarantine = () => ({ runId: runId(), agentId: AGENT, status: 'recovery-required' });
+  const first = quarantine();
+  let result = applyDreamNoticeRecovery(emptyDreamNoticeLedger(AGENT), { run: first, at: minute(1) });
+  assert.equal(result.created.length, 1); assert.equal(result.ledger.lastRunId, null, 'it never moves the terminal-run cursor');
+  const [notice] = result.ledger.notices;
+  assert.equal(notice.fingerprint, dreamNoticeFingerprint(AGENT, 'recovery', {}));
+  assert.deepEqual(applyDreamNoticeRecovery(result.ledger, { run: first, at: minute(2) }).ledger, result.ledger, 'idempotent per run');
+  result = applyDreamNoticeRecovery(result.ledger, { run: quarantine(), at: minute(3) });
+  assert.deepEqual([result.created.length, result.renewed, result.ledger.notices[0].occurrences], [0, [notice.id], 2]);
+  // Neither a quiet completed run nor a failure observes or clears it.
+  let ledger = step(result.ledger, { items: [item('AGENTS.md')] }).ledger;
+  ledger = step(ledger, { status: 'failed' }).ledger;
+  assert.ok(ledger.notices.some(row => row.id === notice.id));
+  // Saturated claims and every run-derived host kind still leave its slot and bytes.
+  const long = i => `skills/${String(i).padStart(3, '0')}-${'x'.repeat(1500)}.md`;
+  let full = step(emptyDreamNoticeLedger(AGENT), { items: Array.from({ length: 13 }, (_, i) => item(`skills/s${i}.md`, 'blocked')) }).ledger;
+  full = step(full, { status: 'failed' }).ledger;
+  full = step(full, { reply: 'prose' }).ledger;
+  assert.equal(applyDreamNoticeRecovery(full, { run: quarantine(), at: minute(4) }).created.length, 1);
+  full = step(emptyDreamNoticeLedger(AGENT), { items: Array.from({ length: 8 }, (_, i) => item(long(i), 'blocked')) }).ledger;
+  full = step(full, { status: 'failed' }).ledger;
+  result = applyDreamNoticeRecovery(full, { run: quarantine(), at: minute(5) });
+  assert.equal(result.created.length, 1);
+  assert.ok(Buffer.byteLength(JSON.stringify(result.ledger.notices)) <= DREAM_NOTICE_LIMITS.bytes);
+  for (const run of [{ ...quarantine(), status: 'failed' }, { ...quarantine(), agentId: 'agent_22345678-1234-4234-8234-123456789abc' }, { ...quarantine(), runId: 'x' }]) {
+    assert.throws(() => applyDreamNoticeRecovery(emptyDreamNoticeLedger(AGENT), { run, at: minute(6) }), { code: 'dream-notice-invalid' });
   }
 });

@@ -400,9 +400,9 @@ latest run is idempotent.
 Only live (open or acknowledged) notices are retained, because they are meant
 for scheduler state, which every journal transaction copies. A cleared notice
 leaves the ledger and is returned, with `clearedAt`, for the append-only journal.
-Each soul keeps at most 16 live notices within 8 KiB. Three slots, and the bytes
+Each soul keeps at most 17 live notices within 9 KiB. Four slots, and the bytes
 for them, are reserved for the subject-less host kinds (`execution`, `report`,
-`evidence`), so agent-reported conditions can never crowd out an owner-visible
+`evidence`, `recovery`), so agent-reported conditions can never crowd out an owner-visible
 failure by count or by long paths. Every notice is charged at its growth
 ceiling (longest detail, acknowledged, largest counter), so renewing or
 acknowledging an admitted notice cannot exceed the budget. In practice the byte
@@ -425,17 +425,29 @@ event is the append-only notice history; current state never retains cleared
 notices. A quiet run writes no notice state or event. If a staged outcome is
 inconsistent with the run's settlement, notices come from the terminal facts
 alone; if even that fails, the transaction publishes without notices, so notice
-derivation never blocks terminal publication. Recovery
-quarantine does not create notices yet.
+derivation never blocks terminal publication.
+
+State version 6 adds the host kind `recovery`. When restart recovery quarantines
+a run it cannot settle, the same transaction carries `recovery-required` and a
+`notices-updated` event creating, or renewing for a later quarantine, that
+soul's one recovery notice (detail `recovery-required`). It is a host fact, not
+a run outcome: it does not move the ledger's terminal-run cursor, no run clears
+it, and a later startup that finds the run already quarantined writes nothing.
+A soul's ledger is kept while it has a registration or a surviving flight, so
+unscheduling cannot hide an unresolved quarantine. The notice stays live,
+acknowledgeable, until an explicit owner recovery procedure exists; that
+procedure is not implemented. The fourth host slot came with one more slot and
+1 KiB, so no claim admitted under version 5 limits is refused. If the recovery
+notice cannot be derived, the quarantine is still journaled without it.
 
 `agent-bot soul skill dream --soul ID|NAME --status` shows the soul's ledger.
 `--ack-notice NOTICE_ID` is an owner control through the same gate and audit
 receipts as other dream controls; the gate prompt names the notice. It persists
 a `notice-acknowledged` event; acknowledging again writes nothing, and a cleared
 or unknown notice is `dream-notice-not-found`. Unscheduling removes current
-notices while their events remain. Versions 1–4 remain readable without disk
-changes; the next write adds v5 state, and readers must be upgraded before
-opening a v5 journal.
+notices while their events remain, except while a quarantined flight survives.
+Versions 1–5 remain readable without disk changes; the next write adds v6
+state, and readers must be upgraded before opening a v6 journal.
 
 ### Remaining checkpoint and notice contract
 
@@ -537,7 +549,7 @@ and directory, trigger, start time, execution bound and cancellation state.
 Strict validation refuses unknown schemas, extra fields, duplicate souls/runs,
 invalid timestamps and inconsistent states. State v2 added input receipt
 references, v3 added outcome references, v4 added bounded selection checkpoints,
-and v5 adds bounded live notice ledgers.
+v5 added bounded live notice ledgers, and v6 adds the recovery notice kind.
 These records belong to the dream journal; existing soul and daemon stores are
 not rewritten. Semantic processing schemas remain later work.
 A canonical directory cannot be assigned to different souls across registrations
