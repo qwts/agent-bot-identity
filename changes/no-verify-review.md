@@ -1,0 +1,1 @@
+- The stated-bot hook-bypass refusal now also covers a bypass that reaches a pinned checkout from elsewhere (including `git config --file`), `git config` section removes and renames that drop or set `core.hooksPath` in any argument order, and commits whose path or message reads like `--abort` or `--quit`: a sequencer control counts as one only on its own (#749).

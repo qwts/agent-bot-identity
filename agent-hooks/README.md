@@ -53,7 +53,9 @@ backstop, a stated bot may not skip them, even in its bound worktree:
 `--no-verify` (or `commit -n`), a `core.hooksPath` override (`-c`,
 `--config-env`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_KEY_n`, or an
 `include.path` that could set it) and a `git config` write of
-`core.hooksPath` are denied. Git run indirectly, from a script file or
+`core.hooksPath` (or removing or renaming the section holding it) are
+denied. A checkout pin is a stated identity, so a bypass that reaches a
+pinned checkout is denied even from the delegate. Git run indirectly, from a script file or
 `make`, is not seen by this check; the hooks cover it. Neither is a command
 that relocates the global config (`GIT_CONFIG_GLOBAL`, `HOME`); a bound
 worktree keeps its `core.hooksPath` in worktree config, and an unbound

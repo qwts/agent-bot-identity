@@ -399,6 +399,59 @@ test('a stated bot cannot skip the git hooks with --no-verify, -n or a core.hook
   }));
 });
 
+// Copilot review on #760.
+test('a bypass is judged by the repository it reaches, and section writes and -- paths count', () => {
+  const plain = primaryCheckout();
+  const pinned = primaryCheckout(`${SLUG}[bot]`);
+  pinned.git('config', 'agentBot.app', SLUG);
+  const empty = join(root, 'no-hooks');
+  mkdirSync(empty, { recursive: true });
+  const run = (cwd, command, extra) => runHooks({
+    dialectKey: 'claude', event: 'pre-command', dir: empty, env: baseEnv(extra),
+    payload: { cwd, tool_name: 'Bash', tool_input: { command } },
+  });
+  // From an unpinned checkout, the delegate reaching a pinned one: the pin
+  // is the stated identity, so its hooks may not be skipped.
+  for (const command of [
+    `git -C ${pinned.repo} commit --no-verify -m x`,
+    `git -C ${pinned.repo} config core.hooksPath /dev/null`,
+  ]) {
+    const verdict = run(plain.repo, command, DELEGATE);
+    assert.equal(verdict.decision, 'deny', command);
+    assert.match(verdict.reason, /skip the git hooks/, command);
+  }
+  assert.equal(run(plain.repo, `git -C ${plain.repo} commit --no-verify -m x`, DELEGATE).decision, 'allow');
+  // A --file write reaches the repository holding that file.
+  for (const file of [`${pinned.repo}/.git/config`, `${pinned.repo}/.git/config.worktree`]) {
+    const command = `git config --file ${file} core.hooksPath /dev/null`;
+    assert.equal(run(plain.repo, command, DELEGATE).decision, 'deny', command);
+  }
+  assert.equal(run(plain.repo, `git config --file ${plain.repo}/.git/config core.hooksPath /dev/null`, DELEGATE).decision, 'allow');
+
+  // Removing or renaming a section that holds core.hooksPath writes it.
+  for (const command of [
+    'git config --remove-section core', 'git config --rename-section core saved',
+    'git config rename-section include saved', 'git config --remove-section includeIf.gitdir:/x/',
+    'git config --remove-section --local core', 'git config --remove-section=core',
+    'git config --rename-section=core saved', 'git config --rename-section saved include',
+    'git config --rename-section --file .git/config saved includeIf.gitdir:/x/',
+  ]) {
+    assert.equal(run(pinned.repo, command, STATED).decision, 'deny', command);
+    assert.equal(run(plain.repo, command, DELEGATE).decision, 'allow', command);
+  }
+  assert.equal(run(pinned.repo, 'git config --remove-section user', STATED).decision, 'allow');
+
+  // A control word after `--` or as a value is a path or a message.
+  for (const command of [
+    'git commit -m x -- --abort', 'git merge -m --abort topic', 'git rebase -- --quit',
+    'git merge --no-ff --message --abort topic', 'git merge --mes --abort topic', 'git cherry-pick -s --abort',
+  ]) {
+    assert.equal(scanGitPublish(command, { cwd: plain.repo, env: {} }).publishes.length, 1, command);
+    assert.equal(run(plain.repo, command, STATED).decision, 'deny', command);
+  }
+  assert.equal(scanGitPublish('git rebase --abort', { cwd: plain.repo, env: {} }).publishes.length, 0);
+});
+
 test('merge, rebase, cherry-pick, revert, am and commit-tree get the bound-target check', () => {
   const unbound = primaryCheckout();
   const bound = primaryCheckout(`${SLUG}[bot]`);
