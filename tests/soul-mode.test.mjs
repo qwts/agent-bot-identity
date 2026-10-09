@@ -9,7 +9,7 @@ import { SOUL_MODES, readSoulModes, setSoulMode, soulMode, soulModeCommand, soul
 import { coldWakeFile } from '../cold-wake-settings.mjs';
 import { populationFile, upsertSoul, withRoles, listSouls } from '../agent-population.mjs';
 import { auditFile } from '../agent-principals.mjs';
-import { assertOwnerAction, ownerActionSummary } from '../owner-gate.mjs';
+import { assertOwnerAction, ownerActionSummary } from '../owner-action.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
 
 const ID = 'agent_11111111-1111-4111-8111-111111111111';

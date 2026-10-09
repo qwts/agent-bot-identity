@@ -31,15 +31,12 @@
 import process from 'node:process';
 import { readBinding } from './agent-binding.mjs';
 import { currentAgentId } from './agent-identity.mjs';
-import { listSouls, populationFile } from './agent-population.mjs';
-import { CommsClient, commsPaths } from './comms-client.mjs';
 import { requireOwnerApproval } from './owner-approval.mjs';
 import { keydPresence } from './owner-presence.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 
 const AGENT_ID = /agent_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
 const MAX_SUMMARY = 400;
-const PRINCIPAL = /^principal_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export function ownerCredentialRequired(message = 'an authenticated owner principal or explicit owner consent is required') {
   return Object.assign(new Error(message), { code: 'owner-credential-required', statusCode: 403 });
@@ -58,40 +55,23 @@ export function soulMarkers({ env = process.env, cwd = process.cwd(), detect = t
   return markers;
 }
 
-// One authenticated `health` request as the presented principal. Returns the
-// principal ID for the record; the secret never leaves this function.
-export async function verifyPrincipalOwner(credential, {
-  env = process.env,
-  paths = commsPaths({ env }),
-  clientFactory = (options) => new CommsClient(options),
-  uid = process.getuid(),
-} = {}) {
-  if (!credential || typeof credential !== 'object' || !PRINCIPAL.test(credential.principal ?? '')
-    || typeof credential.secret !== 'string' || !credential.secret
-    || !Number.isInteger(credential.brokerUid) || credential.brokerUid < 0) {
-    throw new Error('the presented principal credential is invalid');
-  }
-  if ((credential.mode ?? 'group') !== 'group' || credential.brokerUid === uid) {
-    throw new Error('a broker in this account cannot vouch for the owner; approve with the consent dialog instead');
-  }
-  const client = clientFactory({ socketPath: paths.socket, brokerUid: credential.brokerUid, mode: 'group' });
-  try {
-    await client.request({ op: 'health', auth: { principal: credential.principal, secret: credential.secret } }, { paths });
-  } catch {
-    // A broker/transport error can reflect the credential. Never relay it.
-    throw ownerCredentialRequired('the broker did not accept the owner principal');
-  }
-  return { method: 'principal', principal: credential.principal };
+// A presented principal is checked by a verifier the caller wires in: the
+// broker check lives with comms (owner-principal.mjs), and owner-action.mjs
+// wires it for soul-level and host commands (#645). Nothing wired is a
+// refusal, never a skipped check and never a fall-through to consent.
+async function noPrincipalVerifier() {
+  throw ownerCredentialRequired('no owner principal verifier is wired for this command');
 }
 
 // The action in the owner's words, naming each soul by name and Agent ID:
 // what the Touch ID prompt and the administrator dialog show. The gate's
 // `action` stays the stable, command-shaped string audits record.
-export function ownerActionSummary(action, { env = process.env, souls = null } = {}) {
+// `listSouls` reads the census; owner-action.mjs wires the population's.
+export function ownerActionSummary(action, { souls = null, listSouls = null } = {}) {
   let names = new Map();
   try {
     // The name the census shows (#429): the launch or join name, else the handle.
-    names = new Map((souls ?? listSouls({ file: populationFile({ env }) })).map((soul) => [soul.id, soul.displayName ?? soul.name]));
+    names = new Map((souls ?? listSouls?.() ?? []).map((soul) => [soul.id, soul.displayName ?? soul.name]));
   } catch { /* no population: Agent IDs alone */ }
   const label = (id) => (names.get(id) ? `${names.get(id)} (${id})` : id);
   const words = action.split(' ');
@@ -140,8 +120,9 @@ export async function presenceOrConsent(action, {
   presence = keydPresence,
   consent = consentOwner,
   summarize = ownerActionSummary,
+  listSouls = null,
 } = {}) {
-  const summary = summarize(action, { env });
+  const summary = summarize(action, { env, listSouls });
   try {
     return await presence(summary, { env });
   } catch (error) {
@@ -159,11 +140,12 @@ export async function presenceOrConsent(action, {
 export async function confirmOwnerPresence(action, {
   env = process.env,
   principal = null,
-  verifyPrincipal = verifyPrincipalOwner,
+  verifyPrincipal = noPrincipalVerifier,
   consent = presenceOrConsent,
+  listSouls = null,
 } = {}) {
   const vouched = principal ? await verifyPrincipal(principal, { env }) : null;
-  const proof = await consent(action, { env });
+  const proof = await consent(action, { env, listSouls });
   return vouched ? { ...proof, principal: vouched.principal } : proof;
 }
 
@@ -176,10 +158,11 @@ export async function assertOwnerAction(action, {
   detect = true,
   principal = null,
   markers = soulMarkers,
-  verifyPrincipal = verifyPrincipalOwner,
+  verifyPrincipal = noPrincipalVerifier,
   consent = presenceOrConsent,
+  listSouls = null,
 } = {}) {
   const found = markers({ env, cwd, detect });
   if (found.length) throw ownerCredentialRequired(`${action} is owner only; this caller has a soul's ${found.join(', ')}`);
-  return principal ? verifyPrincipal(principal, { env }) : consent(action, { env });
+  return principal ? verifyPrincipal(principal, { env }) : consent(action, { env, listSouls });
 }

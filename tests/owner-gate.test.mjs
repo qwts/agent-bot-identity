@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { auditFile } from '../agent-principals.mjs';
-import { assertOwnerAction, confirmOwnerPresence, consentOwner, soulMarkers, verifyPrincipalOwner } from '../owner-gate.mjs';
+import { assertOwnerAction, confirmOwnerPresence, consentOwner, soulMarkers, verifyPrincipalOwner } from '../owner-action.mjs';
 import { computePackageRevision } from '../soul-package.mjs';
 import { adoptSoulPackage, listSoulProposals, proposeSoulRevision, revisionCommand, revisionHistory } from '../soul-revisions.mjs';
 import { fileURLToPath } from 'node:url';

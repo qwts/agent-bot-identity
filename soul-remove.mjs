@@ -26,7 +26,7 @@ import {
 import { leaveLaunchedSoul } from './comms-membership.mjs';
 import { daemonStatus } from './daemon-status.mjs';
 import { readColdWakeSettings, setColdWake, wakeSetting } from './cold-wake-settings.mjs';
-import { assertOwnerAction } from './owner-gate.mjs';
+import { assertOwnerAction } from './owner-action.mjs';
 import { soulRunning } from './soul-comms.mjs';
 
 const USAGE = 'usage: agent-bot soul remove <agentId|name> [--scope soul|team] [--plan] [--json] [--principal-stdin]';

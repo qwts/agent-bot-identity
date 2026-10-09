@@ -78,7 +78,7 @@ import { isComputerUse } from './permission-risk.mjs';
 import { appendAuditReceipt, assertAuthorized, principalsFile, resolvePrincipal } from './agent-principals.mjs';
 import { validateApprovalScope } from './session-approvals.mjs';
 import { approvalAction, shown } from './approval-action.mjs';
-import { confirmOwnerPresence, ownerCredentialRequired, verifyPrincipalOwner } from './owner-gate.mjs';
+import { confirmOwnerPresence, ownerCredentialRequired, verifyPrincipalOwner } from './owner-action.mjs';
 import { runSpawnHooks } from './agent-hook.mjs';
 import { createWebLayer } from './agent-web.mjs';
 import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs';

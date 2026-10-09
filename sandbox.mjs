@@ -31,7 +31,7 @@ import { pathToFileURL } from 'node:url';
 import { loadConfig } from './config.mjs';
 import { validateAgentId } from './agent-identity.mjs';
 import { SANDBOX_OVERRIDES, listSouls, populationFile, setSoulSandbox, showSoul, showSoulByName, soulShownName } from './agent-population.mjs';
-import { assertOwnerAction } from './owner-gate.mjs';
+import { assertOwnerAction } from './owner-action.mjs';
 import { PERSONA_FILE, parseTomlSubset, readSopPersonaRecord } from './sop.mjs';
 
 export const SANDBOX_PROVIDER = 'standard_macos_account';

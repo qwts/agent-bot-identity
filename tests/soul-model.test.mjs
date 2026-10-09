@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { readSoulModels, recordSoulModels, setSoulModel, soulModel, soulModelCommand, soulModelFile } from '../soul-model.mjs';
 import { populationFile, upsertSoul, withRoles, listSouls } from '../agent-population.mjs';
 import { appendAuditReceipt, auditFile } from '../agent-principals.mjs';
-import { assertOwnerAction } from '../owner-gate.mjs';
+import { assertOwnerAction } from '../owner-action.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
 
 const ID = 'agent_11111111-1111-4111-8111-111111111111';

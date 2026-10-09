@@ -421,7 +421,7 @@ export async function identityAppOperation(action, body = {}, options = {}) {
     if (action === 'remove') slug(body.slug);
     const label = action === 'addon' ? `identity addon ${body.name} ${body.enabled ? 'on' : 'off'}`
       : `identity app ${action}${validAppSlug(body.slug) ? ` ${body.slug}` : ''}${body.harness && PROFILE_HARNESSES.includes(body.harness) ? ` --harness ${body.harness}` : ''}${body.name && action === 'create' ? ` ${body.name}` : ''}`;
-    try { await (opts.gate ?? ((label, { principal }) => assertOwnerAction(label, { env: opts.env, cwd: opts.cwd ?? opts.home, principal })))(label, { principal: body.principal ?? null }); }
+    try { await (opts.gate ?? ((label, { principal }) => (opts.assertOwner ?? assertOwnerAction)(label, { env: opts.env, cwd: opts.cwd ?? opts.home, principal })))(label, { principal: body.principal ?? null }); }
     catch { fail('identity-app-owner-required', 'The owner must approve this App operation.', 403); }
     if (action === 'create') return await startAppManifest(body, opts);
     if (action === 'connect') return await connect(body, opts);
@@ -514,11 +514,10 @@ export async function identityAppsCommand(argv, { write = (value) => process.std
   write(`${JSON.stringify(result)}\n`);
   return result;
 }
+// The command line is cli/identity-apps.mjs, which wires the owner gate's
+// principal check and census (owner-action.mjs, #645). Run directly, this
+// file only points there.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  identityAppsCommand(process.argv.slice(2)).catch((error) => {
-    const failure = identityAppFailure(error);
-    if (process.argv.includes('--json')) process.stdout.write(`${JSON.stringify({ error: failure })}\n`);
-    else process.stderr.write(`${failure.code}: ${failure.message}\n`);
-    process.exitCode = 1;
-  });
+  process.stderr.write('identity-apps: run agent-bot identity apps\n');
+  process.exitCode = 1;
 }
