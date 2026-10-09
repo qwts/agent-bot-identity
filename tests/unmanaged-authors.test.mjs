@@ -3,14 +3,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as configModule from '../config.mjs';
 import { unmanagedAuthors } from '../config.mjs';
 import { organizationProfileToConfig, validateOrganizationProfile, ORGANIZATION_PROFILE_SCHEMA_VERSION } from '../organization-profile.mjs';
-import { UNINSTALLED_REASON, uninstalledDecision } from '../uninstalled-identity-hook.mjs';
+import { UNINSTALLED_REASON, unmanagedAuthorList, uninstalledDecision } from '../uninstalled-identity-hook.mjs';
 
 const HOOKS = fileURLToPath(new URL('../hooks/', import.meta.url));
 
@@ -89,4 +89,24 @@ test('the git hooks resolve the same list doctor reports', () => {
 
 test('without Node the git hooks resolve nothing and refuse (#675)', { skip: ['/usr/bin/node', '/bin/node'].some(existsSync) && 'node is on the minimal PATH' }, () => {
   assert.equal(shellAuthors({ PATH: '/usr/bin:/bin', HOME: tmpdir(), AGENT_BOT_CONFIG: '/nonexistent' }), '');
+});
+
+test('the embedded fallback resolver agrees with the shared resolver (#675)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'unmanaged-parity-'));
+  const write = (name, value) => { const file = join(dir, name); writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value)); return file; };
+  const files = [write('good.json', configured), write('bad.json', malformed), write('empty.json', {}), write('dup.json', { settings: { unmanagedAuthors: ['a', 'a'] } }), join(dir, 'absent.json')];
+  for (const file of files) {
+    for (const extra of [{}, { AGENT_BOT_UNMANAGED_AUTHORS: '' }, { AGENT_BOT_UNMANAGED_AUTHORS: 'Zed, y' }]) {
+      const env = { AGENT_BOT_CONFIG: file, ...extra };
+      let shared;
+      try { shared = unmanagedAuthors({ env }).authors; } catch { shared = []; } // a throw makes the hooks refuse
+      assert.deepEqual(unmanagedAuthorList(env), shared, `${file} ${JSON.stringify(extra)}`);
+    }
+  }
+  // HOME locates the default config exactly as loadConfig does.
+  const home = mkdtempSync(join(tmpdir(), 'unmanaged-home-'));
+  mkdirSync(join(home, '.config', 'agent-bot'), { recursive: true });
+  writeFileSync(join(home, '.config', 'agent-bot', 'config.json'), JSON.stringify(configured));
+  assert.deepEqual(unmanagedAuthorList({ HOME: home }), unmanagedAuthors({ env: { HOME: home }, home }).authors);
+  assert.deepEqual(unmanagedAuthorList({}), []);
 });

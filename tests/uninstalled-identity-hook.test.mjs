@@ -401,6 +401,48 @@ test('installed agent-hook still wins over uninstalled mode', () => {
   }
 });
 
+// The generated fallback reads the same explicit policy the git hooks and
+// doctor resolve (#675): the env when set (even empty), else the config.
+test('generated adapters apply the configured allowlist with env precedence and fail closed (#675)', () => {
+  const home = mkdtempSync(join(tmpdir(), 'uninstalled-config-'));
+  const write = (name, body) => { const file = join(home, name); writeFileSync(file, body); return file; };
+  const listed = write('listed.json', JSON.stringify({ settings: { unmanagedAuthors: ['ai9d'] } }));
+  const upper = write('upper.json', JSON.stringify({ settings: { unmanagedAuthors: ['AI9D'] } }));
+  const broken = write('broken.json', '{ "settings": ');
+  const cases = [
+    ['config-only', { AGENT_BOT_CONFIG: listed }, 'allow'],
+    ['empty env overrides config', { AGENT_BOT_CONFIG: listed, AGENT_BOT_UNMANAGED_AUTHORS: '' }, 'deny'],
+    ['other env overrides config', { AGENT_BOT_CONFIG: listed, AGENT_BOT_UNMANAGED_AUTHORS: 'zed' }, 'deny'],
+    ['malformed list', { AGENT_BOT_CONFIG: upper }, 'deny'],
+    ['unparsable config', { AGENT_BOT_CONFIG: broken }, 'deny'],
+    ['absent config', { AGENT_BOT_CONFIG: join(home, 'absent.json') }, 'deny'],
+  ];
+  try {
+    for (const row of DIALECTS.filter((candidate) => candidate.file)) {
+      for (const [label, policy, decision] of cases) {
+        const expected = encodeDecision({ dialectKey: row.key, event: 'pre-command', decision, ...(decision === 'deny' ? { reason: UNINSTALLED_REASON } : {}) });
+        const run = runGenerated(row.key, 'pre-command', {
+          home,
+          payload: { command: 'git commit -m ship' },
+          env: actorEnv('ai9d', { ...AI9D, AGENT_BOT_UNMANAGED_AUTHORS: undefined, ...policy }),
+        });
+        assert.equal(run.status, expected.exitCode, `${row.key} ${label} exit`);
+        assert.equal(run.stdout, expected.stdout, `${row.key} ${label} stdout`);
+      }
+      const human = runGenerated(row.key, 'pre-command', {
+        home,
+        payload: { command: 'git commit -m ship' },
+        env: actorEnv('qwts', { ...HUMAN, AGENT_BOT_UNMANAGED_AUTHORS: undefined, AGENT_BOT_CONFIG: listed }),
+      });
+      const deny = encodeDecision({ dialectKey: row.key, event: 'pre-command', decision: 'deny', reason: UNINSTALLED_REASON });
+      assert.equal(human.status, deny.exitCode, `${row.key} config-listed policy still refuses a human`);
+      assert.equal(human.stdout, deny.stdout, `${row.key} config-listed policy still refuses a human (stdout)`);
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('source pre-push denies an agent when the installed hook is missing', () => {
   const home = mkdtempSync(join(tmpdir(), 'uninstalled-pre-push-'));
   const repo = join(home, 'repo');

@@ -361,6 +361,40 @@ export function parseUnmanagedAuthors(env = {}) {
   return raw.split(",").map((part) => part.trim().toLowerCase()).filter(Boolean);
 }
 
+// The configured allowlist when the operator env does not decide (#675): the
+// file and rules config.mjs unmanagedAuthors uses (AGENT_BOT_CONFIG, else
+// $HOME/.config/agent-bot/config.json; settings.unmanagedAuthors of at most 64
+// lowercase logins). Self-contained so the generated fallback can embed it.
+// Unreadable, unparsable or malformed yields nothing, so the decision refuses.
+export function configuredUnmanagedAuthors(env = {}) {
+  const file = env.AGENT_BOT_CONFIG !== undefined
+    ? env.AGENT_BOT_CONFIG
+    : env.HOME ? env.HOME + "/.config/agent-bot/config.json" : "";
+  if (!file) return [];
+  let config;
+  try {
+    config = JSON.parse(String(readFileSync(file, "utf8")).replace(/^\uFEFF/, ""));
+  } catch {
+    return [];
+  }
+  if (!config || typeof config !== "object" || Array.isArray(config)) return [];
+  const settings = config.settings;
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) return [];
+  const value = settings.unmanagedAuthors;
+  if (!Array.isArray(value) || value.length > 64
+    || !value.every((author) => typeof author === "string" && /^[a-z0-9][a-z0-9._@+-]{0,99}$/.test(author))) {
+    return [];
+  }
+  return [...new Set(value)];
+}
+
+// The operator env wins whenever it is set, even empty; otherwise the config.
+export function unmanagedAuthorList(env = {}) {
+  return env.AGENT_BOT_UNMANAGED_AUTHORS !== undefined
+    ? parseUnmanagedAuthors(env)
+    : configuredUnmanagedAuthors(env);
+}
+
 function identMatches(value, authors) {
   if (!value || !authors.length) return false;
   const lower = String(value).trim().toLowerCase();
@@ -558,7 +592,7 @@ export function isHumanAttributedPublish(command, depth) {
 }
 
 export function uninstalledDecision({ event, command = "", env = {} }) {
-  const authors = parseUnmanagedAuthors(env);
+  const authors = unmanagedAuthorList(env);
   if (event === "pre-commit") {
     if (authors.length && isUnmanagedGitAuthor(env, authors, command)) {
       return { decision: "allow", reason: "" };
@@ -606,6 +640,8 @@ const DETECT_SOURCE = [
   gitPublishSubcommand,
   isGitPublishArgv,
   parseUnmanagedAuthors,
+  configuredUnmanagedAuthors,
+  unmanagedAuthorList,
   identMatches,
   resolveGitAuthor,
   resolveGhLogin,
