@@ -89,6 +89,27 @@ is never stored. The audit receipt reads `harness expired` or
 `unknown` as signed in. An `unknown` status does not clear a recorded
 `harnessAuth` failure.
 
+### Sign-in at launch
+
+A daemon launch probes the harness's sign-in at a `sign-in` stage after
+`provider` and before `joining` (#536). The probe runs with the exact
+environment the harness turn gets: runtimes, the routed tool home and the
+provider env. So an OpenCode provider variable counts the same way it does
+for the turn. A harness with no status reader (Muse, for example) has no
+stage. The launch journal keeps `signIn: { status, reason? }`; the broker
+report is unchanged.
+
+| Probe | Launch |
+| --- | --- |
+| `signed-in` | Continues. Readiness is still the harness session, not the probe. |
+| `signed-out`, existing soul whose store is not routed | Fails with `harness-signed-out`, naming `agent-bot harness auth login HARNESS --soul ID`, before the soul joins or a turn runs. |
+| `signed-out`, new soul or routed store | Continues and is recorded. A new soul's ID would not survive a rollback, and for a routed store `harness auth login` signs in to the host store. The first turn raises the sign-in notice above. |
+| `unknown` (or the probe failed) | Continues and is recorded. It is never treated as signed in. |
+
+Like `runtimes`, `tool-home` and `provider`, the `sign-in` stage is kept in
+the launch journal. The agent-comms broker's progress stages do not include
+it yet.
+
 ## Copied soul folders
 
 Copying a soul folder (a Finder Duplicate, for example) copies its

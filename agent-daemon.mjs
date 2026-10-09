@@ -48,7 +48,7 @@
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir, userInfo } from 'node:os';
 import path from 'node:path';
@@ -107,15 +107,16 @@ import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
 import { createDaemonLogCheck, daemonLogPath, DAEMON_LOG_CHECK_INTERVAL_MS } from './daemon-log.mjs';
 import { createTeamStarter, defaultTeamTemplate, harnessLaunchProblem, teamLimits } from './team-start.mjs';
-import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulNpmHarnessDirs } from './soul-home.mjs';
+import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHomePath, soulNpmHarnessDirs } from './soul-home.mjs';
+import { harnessAuth } from './harness-auth.mjs';
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
-import { defaultHarnessFor, onPath } from './acp-registry.mjs';
+import { ACP_SPAWN_REGISTRY, defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { computePackageRevision, soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
 import { pendingSoulToolHome, prepareSoulToolHome, soulToolHomeEnv } from './soul-env-migrate.mjs';
 import { harnessInstallDeclared, pendingSoulRuntimes, provisionSoulRuntimes, soulRuntimeEnv } from './soul-runtimes.mjs';
 import { checkSoulProvider, pendingSoulProvider, soulProviderEnv } from './soul-secrets.mjs';
 import { editSoulRevision, listSoulProposals, revisionCommand, revisionHistory } from './soul-revisions.mjs';
-import { acpExecutorFor, createWakePlane, createTurnRegistry } from './wake-plane.mjs';
+import { acpExecutorFor, composeTurnEnv, createWakePlane, createTurnRegistry } from './wake-plane.mjs';
 import { recordSoulSession } from './metrics.mjs';
 import { createTaskReporter } from './task-turns.mjs';
 import { createCommsRelay, senderAddress } from './comms-relay.mjs';
@@ -1445,6 +1446,21 @@ export async function runDaemon({
   // Harness CLIs resolve the same way for every soul turn, launch check and
   // relay (#418).
   const harnessEnv = soulEnvironment(env, { home, loginPath: loginShellPath({ env, home }) });
+  // How a soul's turn environment is composed (composeTurnEnv): the
+  // executor and the launch's sign-in probe (#536) share these ports.
+  const turnEnvPorts = {
+    // The soul's provisioned runtimes and harness installs first on its
+    // PATH, with their env (#583 slice 3); read per turn from its stamps.
+    runtimeEnvFor: ({ agentId, harness, env: turnEnv }) => soulRuntimeEnv(agentId, { env: turnEnv, home, config, file: populationFile({ env, home }), harness }),
+    // The harness's native state routed into the soul's tool home (#583
+    // slice 2); the executor hands it to the harness, the reach server
+    // and keyd's relay alike, since it is a path, not a secret.
+    toolHomeEnvFor: ({ agentId, harness }) => soulToolHomeEnv(agentId, { env, home, config, file: populationFile({ env, home }), harness }),
+    // The provider secret for the launched harness, read from the soul's
+    // store per turn (#583 slice 4); the executor keeps it out of the
+    // reach server and keyd's relay.
+    providerEnvFor: ({ agentId, harness }) => soulProviderEnv(agentId, { env, home, config, file: populationFile({ env, home }), harness }),
+  };
   // The ACP executor is off unless the user config turns it on (#259):
   // `"executor": { "enabled": true, "policy": { ... } }`. Without it /v1
   // keeps its unconfigured error and cold wake reports `waiting`.
@@ -1479,17 +1495,7 @@ export async function runDaemon({
         try { harness = identities(agentId).harness ?? null; } catch { /* no identity: legacy only */ }
         return soulNpmHarnessDirs(agentId, harness, { env, home, config, file: populationFile({ env, home }) });
       },
-      // The soul's provisioned runtimes and harness installs first on its
-      // PATH, with their env (#583 slice 3); read per turn from its stamps.
-      runtimeEnvFor: ({ agentId, harness, env: turnEnv }) => soulRuntimeEnv(agentId, { env: turnEnv, home, config, file: populationFile({ env, home }), harness }),
-      // The harness's native state routed into the soul's tool home (#583
-      // slice 2); the executor hands it to the harness, the reach server
-      // and keyd's relay alike, since it is a path, not a secret.
-      toolHomeEnvFor: ({ agentId, harness }) => soulToolHomeEnv(agentId, { env, home, config, file: populationFile({ env, home }), harness }),
-      // The provider secret for the launched harness, read from the soul's
-      // store per turn (#583 slice 4); the executor keeps it out of the
-      // reach server and keyd's relay.
-      providerEnvFor: ({ agentId, harness }) => soulProviderEnv(agentId, { env, home, config, file: populationFile({ env, home }), harness }),
+      ...turnEnvPorts,
       // Engine diagnostics (a spawn that failed, a nameless permission) go
       // to the daemon's stderr, which the supervisor unit files as a log.
       log: (line) => process.stderr.write(`${line}\n`),
@@ -1618,6 +1624,19 @@ export async function runDaemon({
     providers: {
       pending: ({ agentId, harness }) => pendingSoulProvider(agentId, { env, home, config, file: populationFile({ env, home }), harness }),
       check: ({ agentId, harness }) => checkSoulProvider(agentId, { env, home, config, file: populationFile({ env, home }), harness }),
+    },
+    // The launched harness's sign-in, probed with the environment its turn
+    // gets (#536): routed tool home, runtimes and provider env included, so
+    // an OpenCode provider variable counts as it does for the harness.
+    signIn: {
+      check: async ({ agentId, harness }) => {
+        if (!ACP_SPAWN_REGISTRY[harness]?.signIn) return null;
+        const { harnessEnv: probeEnv, routed } = composeTurnEnv({ agentId, harness, baseEnv: harnessEnv, ...turnEnvPorts });
+        let soulHome = null;
+        try { soulHome = soulHomePath(agentId, { file: populationFile({ env, home }), env, home }); } catch { /* no folder: PATH's CLI */ }
+        const evidence = await harnessAuth('status', harness, { home: soulHome && existsSync(soulHome) ? soulHome : null, env: probeEnv });
+        return { status: evidence.status, ...(evidence.reason ? { reason: evidence.reason } : {}), routed: routed.length > 0 };
+      },
     },
     // What the soul gets (#376): its override over the global switch, and
     // for a sandboxed one the account's readiness and the owner's steps.
