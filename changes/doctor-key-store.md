@@ -1,0 +1,1 @@
+- `agent-bot doctor` reports which key store each configured App's key is recorded in, and warns when a legacy `~/.config/<slug>/private-key.pem` remains, pointing at `identity migrate-credentials`; no store is read and the key file is never opened (#110).

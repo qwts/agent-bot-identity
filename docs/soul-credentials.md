@@ -245,6 +245,16 @@ legacy key is removable; selecting just one soul cannot bypass this check.
 A keyd declaration records a completed owner import; doctor does not read the
 keyd key. A dry run never declares a legacy key removable.
 
+Doctor's `credential.key_store` check (#110) reports, per configured App, the
+store kinds recorded for its key: `identityApps[slug].store` for a managed
+App, and each declaring soul's `store` (or the platform default). It reads no
+store, so a locked store does not change it. It also reports
+`legacy_key_file` from an `lstat` of `~/.config/<slug>/private-key.pem`; the
+file is never opened. A remaining legacy file is a warning whose action is
+this command, never a failure, and doctor deletes nothing. Migration keeps
+the legacy copy too, so the warning stays until the owner runs the
+`removalCommand` above once `legacyFolderRemovable` is true.
+
 The command never deletes the folder or its contents. Inspect the report and
 run `removalCommand` yourself only when `legacyFolderRemovable` is true.
 Public metadata has one source of truth per App, even when several souls use

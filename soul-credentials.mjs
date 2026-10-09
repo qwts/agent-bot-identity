@@ -499,6 +499,23 @@ export function legacyKeyRemovable(slug, { env = process.env, home = homedir(), 
   } catch { return false; }
 }
 
+// Where an App's key is recorded to live, for doctor (#110). Records only:
+// the managed App's config `store` and each declaring soul's `store` (or the
+// platform default), never a store read, so a locked store cannot change
+// the answer. The legacy key file is checked with lstat and never opened.
+export function appKeyStores(slug, { env = process.env, home = homedir(), config = loadConfig({ env, home }), platform = process.platform } = {}) {
+  const stores = [];
+  const managed = config.identityApps?.[slug]?.store;
+  if (typeof managed === 'string') stores.push({ source: 'managed-app', store: managed, agentId: null });
+  for (const soul of declaringSouls(slug, { env, home, cwd: home, readOnly: true })) {
+    stores.push({ source: 'soul', store: soul.declaration.store ?? defaultCredentialStore(platform), agentId: soul.agentId });
+  }
+  let legacyKeyFile = true;
+  try { lstatSync(path.join(legacyCredentialDirectory(slug, home), 'private-key.pem')); }
+  catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') legacyKeyFile = false; }
+  return { slug, stores, legacyKeyFile };
+}
+
 // --- agent-bot identity migrate-credentials ---------------------------------
 
 const USAGE = 'usage: agent-bot identity migrate-credentials [--soul AGENT_ID|NAME | --all] [--to keyd|pass-cli] [--dry-run] [--json] [--principal-stdin]';

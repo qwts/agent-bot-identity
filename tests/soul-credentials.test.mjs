@@ -22,7 +22,7 @@ import { fakePassCli } from './fixtures/fake-pass-cli.mjs';
 import { runPass } from '../secret-providers/pass-cli.mjs';
 import { ensurePrivateKey } from '../ensure-private-key.mjs';
 import { inspectLocalAppCredential } from '../credential-reconciler.mjs';
-import { credentialStores, passCliItem, passCliStore, fileStore, keychainItem, keychainStore, migrateCredentialsCommand,
+import { appKeyStores, credentialStores, passCliItem, passCliStore, fileStore, keychainItem, keychainStore, migrateCredentialsCommand,
   resolveAppCredential } from '../soul-credentials.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -564,4 +564,28 @@ test('failed pass-cli migration keeps the declaration and redacts verifier/provi
     assertNoSecret(output.join(''), 'failed migration');
     assert.ok(existsSync(path.join(f.home, '.config', SLUG, 'private-key.pem')));
   }
+});
+
+// #110: doctor's key-store report reads records and stats the legacy key file;
+// it never reads a store or opens the key.
+test('appKeyStores names recorded stores and a remaining legacy key file without reading either', (t) => {
+  const f = fixture(t);
+  const keyFile = path.join(f.home, '.config', SLUG, 'private-key.pem');
+  chmodSync(keyFile, 0o000); // an open would fail; lstat still sees the file
+  const report = appKeyStores(SLUG, { env: f.env, home: f.home, config: {} });
+  assert.deepEqual(report, { slug: SLUG, stores: [{ source: 'soul', store: 'keychain', agentId: id }], legacyKeyFile: true });
+  assert.equal(existsSync(f.env.FAKE_KEYCHAIN_LOG), false, 'no Keychain call');
+  assertNoSecret(JSON.stringify(report), 'key store report');
+  rmSync(keyFile);
+  const managed = appKeyStores(SLUG, { env: f.env, home: f.home, config: { identityApps: { [SLUG]: { id: '12345', store: 'pass-cli' } } } });
+  assert.equal(managed.legacyKeyFile, false);
+  assert.deepEqual(managed.stores.map((entry) => `${entry.source}:${entry.store}`), ['managed-app:pass-cli', 'soul:keychain']);
+});
+
+test('appKeyStores reports keyd and platform-default declarations and Apps with no record', (t) => {
+  const keyd = fixture(t, { declare: { app: SLUG, store: 'keyd' }, legacy: false });
+  assert.deepEqual(appKeyStores(SLUG, { env: keyd.env, home: keyd.home, config: {} }).stores.map((entry) => entry.store), ['keyd']);
+  const bare = fixture(t, { declare: { app: SLUG }, legacy: false });
+  assert.deepEqual(appKeyStores(SLUG, { env: bare.env, home: bare.home, config: {}, platform: 'linux' }).stores.map((entry) => entry.store), ['file']);
+  assert.deepEqual(appKeyStores('other-app', { env: bare.env, home: bare.home, config: {} }), { slug: 'other-app', stores: [], legacyKeyFile: false });
 });
