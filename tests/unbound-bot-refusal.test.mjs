@@ -199,7 +199,7 @@ test('every generated pre-command dialect refuses the stated unbound bot and all
   }
 });
 
-test('the runner check reads only git commit and push, and only from a stated bot', () => {
+test('the runner check reads only git commands that write commits or push, and only from a stated bot', () => {
   const { repo } = primaryCheckout();
   const empty = join(root, 'no-hooks');
   mkdirSync(empty, { recursive: true });
@@ -207,12 +207,12 @@ test('the runner check reads only git commit and push, and only from a stated bo
     dialectKey: 'claude', event: 'pre-command', dir: empty, env: baseEnv(extra),
     payload: { cwd: repo, tool_name: 'Bash', tool_input: { command } },
   }).decision;
-  for (const command of ['git commit -m x', 'git -C . push', 'sh -c "git push origin HEAD"', 'echo "$(git commit -m y)"']) {
+  for (const command of ['git commit -m x', 'git -C . push', 'sh -c "git push origin HEAD"', 'echo "$(git commit -m y)"', 'git commit-tree HEAD^{tree}']) {
     assert.equal(scanGitPublish(command, { cwd: repo, env: {} }).publishes.length, 1, command);
     assert.equal(run(command, STATED), 'deny', command);
     assert.equal(run(command, DELEGATE), 'allow', command);
   }
-  for (const command of ['git status', 'git add .', 'gh pr create --title x --body y', 'git commit-tree HEAD^{tree}', 'git log --grep=commit']) {
+  for (const command of ['git status', 'git add .', 'gh pr create --title x --body y', 'git log --grep=commit', 'git merge --abort']) {
     assert.equal(scanGitPublish(command, { cwd: repo, env: {} }).publishes.length, 0, command);
     assert.equal(run(command, STATED), 'allow', command);
   }
@@ -334,6 +334,102 @@ test('shell escapes, quoting and indirection do not hide a commit from a stated 
   }
   // Here-document bodies are data, not commands.
   assert.equal(run('cat > notes.md <<EOF\ngit commit -m x\nEOF', STATED), 'allow');
+});
+
+// #749 follow-up: the git hooks are the backstop for git the pre-command
+// scan cannot see, so a stated bot may not skip them, even where it is bound.
+test('a stated bot cannot skip the git hooks with --no-verify, -n or a core.hooksPath override', () => {
+  const bound = primaryCheckout(`${SLUG}[bot]`);
+  bound.git('config', 'alias.ci', 'commit -n');
+  bound.git('config', 'alias.up', '!git push');
+  const empty = join(root, 'no-hooks');
+  mkdirSync(empty, { recursive: true });
+  const run = (command, extra) => runHooks({
+    dialectKey: 'claude', event: 'pre-command', dir: empty, env: baseEnv(extra),
+    payload: { cwd: bound.repo, tool_name: 'Bash', tool_input: { command } },
+  });
+  for (const command of [
+    'git commit --no-verify -m x',
+    'git commit --no-veri -m x',
+    'git commit -n -m x',
+    'git commit -anm x',
+    'git commit -s -n -m x',
+    'git commit -o -n work.txt',
+    'git push --no-verify origin HEAD',
+    'git merge --no-verify topic',
+    'git rebase --no-verify main',
+    'git am --no-verify < patch.mbox',
+    'git -c core.hooksPath=/dev/null commit -m x',
+    'git -c CORE.HooksPath=/tmp/none push',
+    'git -c include.path=/tmp/hooks.cfg commit -m x',
+    'git --config-env=core.hooksPath=HOOKS commit -m x',
+    "GIT_CONFIG_PARAMETERS=\"'core.hooksPath'='/dev/null'\" git commit -m x",
+    'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x',
+    'git config core.hooksPath /dev/null && git commit -m x',
+    'git config --local --unset core.hooksPath',
+    "git -c alias.x='commit --no-verify' x -m x",
+    'git ci -m x',
+    'git -c core.hooksPath=/dev/null up',
+    "git rebase -x 'git commit --amend --no-verify --no-edit' main",
+    'sh -c "git commit --no-verify -m x"',
+  ]) {
+    const verdict = run(command, STATED);
+    assert.equal(verdict.decision, 'deny', command);
+    assert.match(verdict.reason, new RegExp(`stated bot identity ${SLUG}.*skip the git hooks`), command);
+    assert.equal(run(command, DELEGATE).decision, 'allow', command);
+    assert.equal(run(command, {}).decision, 'allow', command);
+  }
+  // Not a bypass: `push -n` is --dry-run, `-m -n` is a message, a read of
+  // core.hooksPath changes nothing, and -c on a command that writes no commit.
+  for (const command of [
+    'git push -n origin HEAD', 'git commit -m -n', 'git commit -mn', 'git config --get core.hooksPath',
+    'git -c core.hooksPath=/dev/null status', 'git commit -m x', 'git push origin HEAD',
+  ]) {
+    assert.equal(run(command, STATED).decision, 'allow', command);
+  }
+
+  // Through the generated adapter, end to end.
+  denied('claude', runAdapter('claude', 'pre-command', {
+    cwd: bound.repo, env: baseEnv(STATED),
+    payload: { session_id: 's4', cwd: bound.repo, tool_name: 'Bash', tool_input: { command: 'git commit --no-verify -m x' } },
+  }));
+  allowed('claude', runAdapter('claude', 'pre-command', {
+    cwd: bound.repo, env: baseEnv(DELEGATE),
+    payload: { session_id: 's4', cwd: bound.repo, tool_name: 'Bash', tool_input: { command: 'git commit --no-verify -m x' } },
+  }));
+});
+
+test('merge, rebase, cherry-pick, revert, am and commit-tree get the bound-target check', () => {
+  const unbound = primaryCheckout();
+  const bound = primaryCheckout(`${SLUG}[bot]`);
+  const empty = join(root, 'no-hooks');
+  mkdirSync(empty, { recursive: true });
+  const run = (command, extra) => runHooks({
+    dialectKey: 'claude', event: 'pre-command', dir: empty, env: baseEnv(extra),
+    payload: { cwd: bound.repo, tool_name: 'Bash', tool_input: { command } },
+  });
+  const u = unbound.repo;
+  const subcommands = [
+    'merge topic', 'rebase main', 'cherry-pick HEAD', 'revert HEAD', 'am patch.mbox', 'commit-tree HEAD^{tree} -m x',
+    'rebase --continue', 'rebase --skip',
+  ];
+  for (const sub of subcommands) {
+    const command = `git -C ${u} ${sub}`;
+    const verdict = run(command, STATED);
+    assert.equal(verdict.decision, 'deny', command);
+    assert.match(verdict.reason, /would be attributed to the human/, command);
+    assert.equal(run(command, DELEGATE).decision, 'allow', command);
+    assert.equal(run(command, {}).decision, 'allow', command);
+    // The bound worktree itself still writes commits.
+    assert.equal(run(`git ${sub}`, STATED).decision, 'allow', sub);
+  }
+  // Sequencer controls write no commit.
+  for (const command of [`git -C ${u} rebase --abort`, `git -C ${u} merge --abort`, `git -C ${u} cherry-pick --quit`]) {
+    assert.equal(run(command, STATED).decision, 'allow', command);
+  }
+  // cherry-pick runs no pre-commit hook, so the pre-command check is the guard.
+  assert.equal(run(`cd ${u} && git cherry-pick HEAD`, STATED).decision, 'deny');
+  assert.equal(scanGitPublish(`git -C ${u} commit-tree HEAD^{tree}`, { cwd: bound.repo, env: {} }).publishes[0].cwd, u);
 });
 
 test('unboundBotSlug: stated identities without a bot committer, and nothing else', () => {

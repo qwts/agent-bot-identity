@@ -32,7 +32,7 @@ import {
 
 import { readBinding } from './agent-binding.mjs';
 import { confinementCheck } from './confinement.mjs';
-import { statedBotSlug, unboundBotReason, unboundBotSlug, unprovableBotReason } from './resolve-agent.mjs';
+import { hookBypassReason, statedBotSlug, unboundBotReason, unboundBotSlug, unprovableBotReason } from './resolve-agent.mjs';
 import { expandAlias, scanGitPublish } from './git-publish-scan.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -248,6 +248,9 @@ export function combine(results, event) {
 // (`-C`, `--git-dir`, `cd`, aliases), because `--no-verify` skips that
 // repository's own hook. A target the scan cannot place is refused only for
 // a session that stated a bot; the delegate and a human shell are allowed.
+// A stated bot is also refused a command that skips the hooks themselves
+// (`--no-verify`, `commit -n`, a `core.hooksPath` override), bound or not:
+// they are the backstop for git this scan cannot see.
 function targetGit(target, env) {
   const prefix = [];
   if (target.gitDir) prefix.push(`--git-dir=${target.gitDir}`);
@@ -262,10 +265,11 @@ export function unboundIdentityCheck(envelope, { env = process.env, cwd = proces
   if (envelope.event !== 'pre-command' || !envelope.command) return allow;
   const command = envelope.command;
   const scan = scanGitPublish(command, { cwd, env });
-  if (!scan.publishes.length && !scan.aliases.length && !scan.ambiguous) return allow;
+  if (!scan.publishes.length && !scan.aliases.length && !scan.ambiguous && !scan.skipsHooks) return allow;
   // A command word the scan cannot read only matters when git could be in it.
   let uncertain = scan.ambiguous && /git|commit|push/i.test(command.replace(/[\\'"]/g, ''));
   const publishes = [...scan.publishes];
+  let skipsHooks = scan.skipsHooks;
   const aliases = [...scan.aliases];
   for (let n = 0; aliases.length && n < 16; n += 1) {
     const alias = aliases.shift();
@@ -277,12 +281,23 @@ export function unboundIdentityCheck(envelope, { env = process.env, cwd = proces
       if (error.status !== 1) uncertain = true;
       continue;
     }
-    const inner = expandAlias(value, alias, alias.rest, { env: new Map(Object.entries(env)) });
+    const inner = expandAlias(value, alias, alias.rest, {
+      env: new Map(Object.entries(env)), hooksOverridden: alias.hooksOverridden,
+    });
     publishes.push(...inner.publishes);
     aliases.push(...inner.aliases);
     uncertain ||= inner.ambiguous;
+    skipsHooks ||= inner.skipsHooks;
   }
   if (aliases.length) uncertain = true;
+  if (skipsHooks) {
+    try {
+      const slug = statedBotSlug({ env, cwd });
+      if (slug) return { decision: 'deny', reason: hookBypassReason(slug) };
+    } catch (error) {
+      return { decision: 'deny', reason: `cannot verify the stated bot identity: ${error.message}` };
+    }
+  }
   for (const target of publishes) {
     if (!target.cwd || !existsSync(target.cwd)) { uncertain = true; continue; }
     try {

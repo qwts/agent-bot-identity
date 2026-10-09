@@ -35,7 +35,9 @@ Existing executable verdicts keep their usual fail modes. See
 The runner also has a built-in identity check on `pre-command` (#749). When a
 session stated a bot identity (`GH_AGENT_APP`, a checkout pin, or an agent
 account) and its checkout's committer is still the human because worktree
-setup failed or never ran, a `git commit` or `git push` is denied. The denial
+setup failed or never ran, a `git commit` or `git push` is denied, and so
+is any other git command that writes commits (`merge`, `rebase`,
+`cherry-pick`, `revert`, `am`, `commit-tree`). The denial
 names the setup failure and the fix. The check follows the repository git
 will write, not the session's directory: `cd`, `git -C`, `--git-dir`,
 `--work-tree`, `GIT_DIR`, `sh -c`, `eval`, command substitutions and git
@@ -46,8 +48,18 @@ substitution or glob, it is denied too. Bound means the commit's author
 and committer are exactly `<slug>[bot]` as git resolves them for that
 command, so `--author`, `-c user.name` and `GIT_AUTHOR_NAME` count, and any
 other `[bot]`-looking name is not a binding. `hooks/pre-commit` and `hooks/pre-push`
-apply the same rule as the git backstop. The human's delegate states no
-identity, so it is not affected, and neither is an ordinary human shell.
+apply the same rule as the git backstop. Because those hooks are the
+backstop, a stated bot may not skip them, even in its bound worktree:
+`--no-verify` (or `commit -n`), a `core.hooksPath` override (`-c`,
+`--config-env`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_KEY_n`, or an
+`include.path` that could set it) and a `git config` write of
+`core.hooksPath` are denied. Git run indirectly, from a script file or
+`make`, is not seen by this check; the hooks cover it. Neither is a command
+that relocates the global config (`GIT_CONFIG_GLOBAL`, `HOME`); a bound
+worktree keeps its `core.hooksPath` in worktree config, and an unbound
+checkout is refused by the bound-target check.
+The human's delegate states no identity, so it is not affected, and neither
+is an ordinary human shell.
 
 ## Events
 
