@@ -277,7 +277,7 @@ partial current-harness setup.
 Installation provides one executable at `~/.local/bin/agent-bot`:
 
 ```bash
-agent-bot bootstrap [--profile <path|->] [--config <path>] [--app <slug>] [--scope-app <slug>] [--with-gh-shim] [--json]
+agent-bot bootstrap [--profile <path|->] [--config <path>] [--repair] [--app <slug>] [--scope-app <slug>] [--with-gh-shim] [--json]
 agent-bot --version
 agent-bot setup-worktree [app-slug] [--name NAME [--branch BRANCH]]
 agent-bot join --name NAME --harness H [--template PATH] [--soul AGENT_ID] [--wake resume:read-only|resume:workspace|acp] [--principal-stdin] [--json]
@@ -556,7 +556,7 @@ config is a conflict that requires explicit reconciliation.
 A machine account that exists to run one identity (a per-harness agent
 account whose home holds exactly one App key) is not an incomplete copy of
 the operator's roster. `--scope-app <slug>` (repeatable, only with
-`--profile`) projects the same profile with a `scope` of those Apps:
+`--profile` or `--repair`) projects the same profile with a `scope` of those Apps:
 
 ```bash
 agent-bot bootstrap --profile organization-profile.json --scope-app you-claude-agent --with-gh-shim --machine-only
@@ -1345,6 +1345,32 @@ use `--machine-only` deliberately, or the bind phase reports
 resolves an App, so a bootstrap run outside a repository there reports
 `checkout-unbound` instead (the identity is there; run it from the checkout,
 or `--machine-only`), and the `account.app` machine check names the App.
+
+`bootstrap --repair` restores a machine whose runtime config is gone
+(`~/.config/agent-bot` deleted; doctor reports `account-config-unavailable`)
+without a `--profile` file. It is a machine operation (it implies
+`--machine-only`). An installed config, and the profile snapshot it carries,
+always wins: nothing is fetched and the usual idempotent machine repair runs.
+Only when the config is missing does it read the organization profile from
+the selected organization: `[repos] org = "owner/name@ref"` in
+`~/.config/agent-sop/config.toml` is resolved to a commit, its `org.json`
+names the profile (`organization.profile`), and that file is read at the same
+commit through the same restricted temporary git read as `agent-bot sop`.
+The profile is projected and scoped exactly as `--profile` with
+`--scope-app` would: to the App this account resolves to (the `account.app`
+rule), or to explicit `--scope-app` Apps. The first machine check,
+`bootstrap.repair`, names the repository, commit and path it restored from.
+It never guesses: no selection (`profile-selection-missing`), a selection,
+`org.json` or profile that cannot be read (`profile-selection-unreadable`), an
+account that resolves no active App (`profile-account-unresolved`), or a
+conflicting config stop before any machine mutation. `--profile` remains the
+explicit override.
+
+```bash
+rm -rf ~/.config/agent-bot      # lost
+agent-bot bootstrap --repair    # restored from the selected organization
+agent-bot doctor                # passes, no --profile
+```
 
 The numbered sections below document standalone operator provisioning and the
 runtime's underlying components. They are not a substitute for an

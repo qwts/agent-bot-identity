@@ -1,10 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readlinkSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -19,7 +21,10 @@ import {
   installBootstrapProfile,
   main as bootstrapMain,
   parseBootstrapArgs,
+  repairBootstrapProfile,
 } from '../bootstrap.mjs';
+import { readSelectedOrganizationProfile } from '../sop.mjs';
+import { createOrgRepo } from './helpers/org-repo.mjs';
 import { parseDoctorArgs } from '../doctor.mjs';
 import { installExecutable, installationPaths } from '../install.mjs';
 import { loadConfig, rosterScope, scopeConfigToApps } from '../config.mjs';
@@ -83,6 +88,7 @@ test('bootstrap CLI parses explicit phases and rejects ignored machine options',
       help: false,
       json: false,
       phase: 'all',
+      repair: false,
       requireSchemaVersion: null,
       scopeApps: [],
       withGhShim: true,
@@ -958,4 +964,138 @@ test('an explicit --config source applies its own feature gates over a projected
   assert.equal(result.updated, true);
   assert.deepEqual(loadConfig({ home, env: {} }).features, { 'github-identity': true });
   assert.equal(installBootstrapConfig({ sourcePath, home, env: {} }).updated, false);
+});
+
+// bootstrap --repair (#190): with ~/.config/agent-bot gone, the profile comes
+// from the selected organization at its resolved commit.
+function repairFixture(profile = organizationProfile()) {
+  const home = tempHome();
+  const org = createOrgRepo(home, profile);
+  org.select(home);
+  const readSelected = (options) => readSelectedOrganizationProfile({ ...options, ...org.sopOptions });
+  return { home, org, readSelected };
+}
+
+test('--repair is a machine operation that keeps --profile and --scope-app as overrides', () => {
+  assert.equal(parseBootstrapArgs(['--repair']).repair, true);
+  assert.equal(parseBootstrapArgs(['--repair']).phase, 'machine');
+  assert.equal(parseBootstrapArgs(['--repair', '--machine-only']).phase, 'machine');
+  assert.deepEqual(parseBootstrapArgs(['--repair', '--scope-app', 'example-codex-agent']).scopeApps, ['example-codex-agent']);
+  assert.equal(parseBootstrapArgs(['--repair', '--profile', '-']).profilePath, '-');
+  assert.throws(() => parseBootstrapArgs(['--repair', '--config', '/config.json']), /--repair conflicts with --config/);
+  assert.throws(() => parseBootstrapArgs(['--repair', '--worktree-only']), /--repair conflicts with --worktree-only/);
+  assert.throws(() => parseBootstrapArgs(['--scope-app', 'example-codex-agent']), /requires --profile or --repair/);
+});
+
+test('--repair restores a deleted runtime config from the selected organization, scoped to the account App', () => {
+  const { home, org, readSelected } = repairFixture();
+  const env = { HOME: home, AGENT_BOT_ACCOUNT: 'example-codex-sol-agent' };
+  installBootstrapProfile({
+    sourcePath: '-', scopeApps: ['example-codex-sol-agent'], home, env: {},
+    read: () => JSON.stringify(organizationProfile()),
+  });
+  const original = readFileSync(bootstrapConfigPath(home), 'utf8');
+  rmSync(join(home, '.config', 'agent-bot'), { recursive: true });
+
+  const repaired = repairBootstrapProfile({ home, env, readSelected });
+  assert.equal(repaired.updated, true);
+  assert.deepEqual(repaired.repair, {
+    source: 'organization',
+    repository: 'example/org',
+    commit: org.commit,
+    path: 'governance/organization-profile.json',
+    scope: ['example-codex-sol-agent'],
+  });
+  assert.equal(readFileSync(bootstrapConfigPath(home), 'utf8'), original);
+  assert.equal(statSync(bootstrapConfigPath(home)).mode & 0o777, 0o600);
+  assert.equal(isProjectedRuntimeConfig(loadConfig({ home, env: {} })), true);
+
+  // The installed snapshot now wins: nothing is fetched again.
+  const kept = repairBootstrapProfile({ home, env, readSelected: () => assert.fail('fetched despite an installed config') });
+  assert.deepEqual(kept.repair, { source: 'installed' });
+  assert.equal(kept.updated, false);
+  assert.equal(readFileSync(bootstrapConfigPath(home), 'utf8'), original);
+});
+
+test('--repair refuses with a named code, and writes nothing, when it would have to guess', () => {
+  const refuses = (code, options) => {
+    const { home, readSelected } = repairFixture();
+    assert.throws(
+      () => repairBootstrapProfile({ home, readSelected, env: { HOME: home, AGENT_BOT_ACCOUNT: 'example-codex-agent' }, ...options(home) }),
+      (error) => error instanceof OrganizationProfileError && error.code === code,
+    );
+    assert.equal(existsSync(bootstrapConfigPath(home)), false);
+  };
+  refuses('profile-selection-missing', (home) => {
+    rmSync(join(home, '.config', 'agent-sop'), { recursive: true });
+    return {};
+  });
+  refuses('profile-selection-unreadable', () => ({
+    readSelected: (options) => {
+      const { org } = repairFixture();
+      return readSelectedOrganizationProfile({ ...options, ...org.sopOptions, readFile: () => 'schema_version = 1\n[repos]\norg = "example/org@missing"\n' });
+    },
+  }));
+  for (const account of ['example', 'example-old-agent', 'example-unknown-agent']) {
+    refuses('profile-account-unresolved', (home) => ({ env: { HOME: home, AGENT_BOT_ACCOUNT: account } }));
+  }
+  refuses('profile-app-retired', () => ({ scopeApps: ['example-old-agent'] }));
+  refuses('profile-invalid', () => ({ readSelected: () => ({ repository: 'example/org', commit: '11'.repeat(20), path: 'p.json', text: '{}' }) }));
+
+  // An explicit --scope-app stands in for the account.
+  const { home, readSelected } = repairFixture();
+  const scoped = repairBootstrapProfile({ home, readSelected, env: { HOME: home, AGENT_BOT_ACCOUNT: 'example' }, scopeApps: ['example-codex-agent'] });
+  assert.deepEqual(scoped.config.scope, { apps: ['example-codex-agent'] });
+});
+
+test('bootstrap --repair reports the pinned source, and a refusal stops every machine mutation', async () => {
+  const { home, org, readSelected } = repairFixture();
+  const calls = [];
+  const dependencies = (account) => ({
+    home,
+    env: { HOME: home, AGENT_BOT_ACCOUNT: account },
+    repairProfile: (options) => repairBootstrapProfile({ ...options, readSelected }),
+    gate: () => false,
+    installRuntime: () => {
+      calls.push('runtime');
+      return { executable: '/installed/agent-bot' };
+    },
+    run: () => assert.fail('repair must not bind a worktree'),
+    collect: ({ operationFailure, scope }) => (operationFailure
+      ? {
+        ...readyReport(scope),
+        ready: false,
+        machine: { status: 'not_ready', checks: [operationFailure.check], apps: [] },
+        first_actionable_failure: { ...operationFailure.check, check_id: operationFailure.check.id },
+      }
+      : readyReport(scope)),
+  });
+
+  const refused = await bootstrap(parseBootstrapArgs(['--repair']), dependencies('example'));
+  assert.equal(refused.ready, false);
+  assert.equal(refused.first_actionable_failure.code, 'profile-account-unresolved');
+  assert.match(refused.first_actionable_failure.action, /--scope-app|--profile/);
+  assert.deepEqual(calls, []);
+
+  const report = await bootstrap(parseBootstrapArgs(['--repair']), dependencies('example-codex-agent'));
+  assert.equal(report.ready, true);
+  assert.equal(report.scope, 'machine');
+  const [repair] = report.machine.checks;
+  assert.equal(repair.id, 'bootstrap.repair');
+  assert.equal(repair.status, 'ready');
+  assert.match(repair.message, new RegExp(`restored the runtime config from example/org@${org.commit}:governance/organization-profile.json`));
+  assert.deepEqual(repair.evidence.scope, ['example-codex-agent']);
+  assert.deepEqual(calls, ['runtime']);
+
+  // --profile stays the explicit override.
+  const overridden = await bootstrap(parseBootstrapArgs(['--repair', '--profile', '-']), {
+    ...dependencies('example-codex-agent'),
+    repairProfile: () => assert.fail('--profile was ignored'),
+    installProfile: ({ sourcePath }) => {
+      calls.push(['profile', sourcePath]);
+      return { config: {}, path: '/config', updated: false };
+    },
+  });
+  assert.equal(overridden.ready, true);
+  assert.deepEqual(calls.slice(-2), [['profile', '-'], 'runtime']);
 });

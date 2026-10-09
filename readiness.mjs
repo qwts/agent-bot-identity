@@ -2344,7 +2344,7 @@ export async function collectReadiness({
         status: 'failed',
         code: 'account-config-unavailable',
         message: 'account identity cannot be classified without a valid runtime config',
-        action: 'restore the organization runtime config/profile, then rerun doctor',
+        action: 'restore the organization runtime config/profile (agent-bot bootstrap --repair), then rerun doctor',
         evidence: { account },
       }));
     } else {

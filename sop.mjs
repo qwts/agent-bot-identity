@@ -7,8 +7,9 @@
 // is resolved to a commit with git ls-remote. A 40-hex ref is already a
 // commit: ls-remote does not advertise non-tip commits, so it is not looked
 // up again. org.json is fetched at the org commit and reported. Its pins are
-// already commits (ENG-0282); they are not resolved or applied. The
-// profile and capability entry files are not read. SOP Markdown is read on
+// already commits (ENG-0282); they are not resolved or applied. Capability
+// entry files are not read. The organization profile is read at the org
+// commit only for `bootstrap --repair` (#190). SOP Markdown is read on
 // demand. Nothing is cloned, checked out, or executed.
 //
 // agentsop.ai was not reachable from this implementation. The keys above are
@@ -296,10 +297,14 @@ export function assertSopGitCommand(args) {
     const mode = args[args.indexOf('cat-file') + 1];
     const pinned = /^([0-9a-f]{40})(?::(.*))?$/.exec(spec ?? '');
     const doc = pinned?.[2];
-    const permitted = (mode === 'blob' && (spec === 'FETCH_HEAD:org.json' || spec === `FETCH_HEAD:${PERSONA_FILE}`))
+    const fetched = /^FETCH_HEAD:(.*)$/.exec(spec ?? '')?.[1];
+    // A JSON file beside org.json at the fetched commit is the organization
+    // profile org.json names (organization.profile, #190).
+    const profile = fetched !== undefined && isRelativePath(fetched) && !/[\u0000-\u001f\u007f]/.test(fetched) && fetched.endsWith('.json');
+    const permitted = (mode === 'blob' && (spec === 'FETCH_HEAD:org.json' || spec === `FETCH_HEAD:${PERSONA_FILE}` || profile))
       || (mode === '-p' && pinned && !doc)
       || (mode === 'blob' && pinned && doc && isRelativePath(doc) && !/[\u0000-\u001f\u007f]/.test(doc) && doc.endsWith('.md'));
-    if (!permitted) fail('git-refused', 'refusing to read any file other than org.json, persona.toml or pinned SOP Markdown/trees');
+    if (!permitted) fail('git-refused', 'refusing to read any file other than org.json, persona.toml, the organization profile JSON or pinned SOP Markdown/trees');
   }
 }
 
@@ -641,6 +646,35 @@ function resolveSelection(options = {}) {
       capabilities: pins.capabilities,
     },
     read: [{ repository: config.repos.org.repo, commit: orgCommit, path: 'org.json' }],
+  };
+}
+
+// The organization profile at the selected org commit (#190): the user's
+// [repos] org selection resolved to a commit, its org.json, and the file
+// organization.profile names, read at that same commit through the same
+// temporary blobless read. It does not depend on ~/.config/agent-bot, so
+// bootstrap --repair can restore a deleted runtime config from it. Only the
+// org repository is resolved; repos.sop and repos.comms are not consulted.
+// Null when no selection exists.
+export function readSelectedOrganizationProfile(options = {}) {
+  const home = options.home ?? homedir();
+  const configPath = options.configPath ?? configPathFor(home);
+  const readFile = options.readFile ?? ((path) => readFileSync(path, 'utf8'));
+  const runGit = options.runGit ?? defaultRunGit;
+  const remoteUrl = options.remoteUrl ?? githubRemote;
+  const text = readConfigText(configPath, readFile);
+  if (text === null) return null;
+  const { org } = loadSopConfig(text).repos;
+  const commit = resolveRepoRef(org, { runGit, remoteUrl });
+  const reads = { runGit, remoteUrl, makeTemp: options.makeTemp };
+  const pins = parseOrgPins(readOrgJson(org.repo, commit, reads));
+  const path = pins.organization.profile;
+  return {
+    repository: org.repo,
+    ref: org.ref,
+    commit,
+    path,
+    text: readRepoFile(org.repo, commit, path, reads),
   };
 }
 
