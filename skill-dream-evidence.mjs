@@ -4,14 +4,14 @@
 // reviewed anything, so attribution stays `not-established`. Unbounded journal
 // readers in soul-revisions.mjs are deliberately not used here.
 import { createHash } from 'node:crypto';
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, opendirSync, openSync, readSync } from 'node:fs';
 import { join } from 'node:path';
 import { canonicalJson, computePackageRevisionFromEntries, readSoulPackageEntries } from './soul-package.mjs';
 import { DREAM_PACKAGE_LIMITS } from './skill-dream-inputs.mjs';
 import { revisionJournalRoot } from './soul-revisions.mjs';
 
 export const DREAM_EVIDENCE_LIMITS = Object.freeze({
-  events: 256, eventBytes: 64 * 1024, journalBytes: 2 * 1024 * 1024, delivered: 100, changedPaths: 256, pathBytes: 4096,
+  events: 256, eventBytes: 64 * 1024, journalBytes: 2 * 1024 * 1024, inventoryEntries: 512, delivered: 100, changedPaths: 256, pathBytes: 4096,
 });
 const REVISION = /^sha256:[a-f0-9]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -74,8 +74,31 @@ function present(root, index) {
   try { lstatSync(join(root, eventName(index))); return true; }
   catch (error) { if (error.code === 'ENOENT') return false; fail('dream-evidence-unavailable', 'Revision journal cannot be safely read.'); }
 }
+// The journal's extent is proven only by a bounded inventory of a small
+// journal whose record names are exactly 0..N. A larger journal, or one with a
+// gap, is unproven: probing still finds a newest index, but absence, and a
+// proposal that is still pending, can no longer be claimed from what is read.
+function journalExtent(root) {
+  let dir;
+  try { dir = opendirSync(root, { bufferSize: 32 }); }
+  catch { fail('dream-evidence-unavailable', 'Revision journal cannot be safely read.'); }
+  const indices = [];
+  try {
+    let entry, entries = 0;
+    while ((entry = dir.readSync())) {
+      if (++entries > DREAM_EVIDENCE_LIMITS.inventoryEntries) return { proven: false, newest: newestIndex(root) };
+      if (/^\d{10}\.json$/.test(entry.name)) indices.push(Number(entry.name.slice(0, 10)));
+    }
+  } catch (error) {
+    if (error.code === 'dream-evidence-unavailable') throw error;
+    fail('dream-evidence-unavailable', 'Revision journal cannot be safely read.');
+  } finally { dir.closeSync(); }
+  indices.sort((a, b) => a - b);
+  const contiguous = indices.every((value, index) => value === index);
+  return contiguous ? { proven: true, newest: indices.length - 1 } : { proven: false, newest: newestIndex(root) };
+}
 // The journal appends contiguous indices from zero. Probe exponentially then
-// binary-search the newest index instead of listing the whole directory.
+// binary-search a newest index instead of listing a large directory.
 function newestIndex(root) {
   if (!present(root, 0)) return -1;
   let low = 0, high = 1;
@@ -84,13 +107,25 @@ function newestIndex(root) {
   return low;
 }
 
-function proposalStatus(event, newer) {
-  const decision = newer.find(row => row.kind !== 'proposal' && row.proposalId === event.proposalId);
-  return decision ? decision.kind === 'revision' ? 'approved' : 'rejected' : event.status;
+// A newer record naming the proposal decides it only when it is a well-formed
+// approval (the proposal's own revision and parent) or rejection made after it.
+// Any other matching record, more than one decision, or a pending proposal in
+// an unproven journal is `uncertain`, never a fabricated outcome.
+function proposalStatus(event, newer, proven) {
+  if (event.status === 'rejected') return 'rejected';
+  const matching = newer.filter(row => Object.hasOwn(row, 'proposalId') && row.proposalId === event.proposalId);
+  if (matching.length === 0) return proven ? 'pending' : 'uncertain';
+  if (matching.length > 1) return 'uncertain';
+  const [row] = matching;
+  if (row.schemaVersion !== 1 || !date(row.at) || row.at < event.at) return 'uncertain';
+  if (row.kind === 'revision' && row.author === 'soul' && ['auto', 'user'].includes(row.approval)
+    && row.revision === event.revision && row.parentRevision === event.parentRevision) return 'approved';
+  if (row.kind === 'decision' && row.author === 'user') return 'rejected';
+  return 'uncertain';
 }
 // Validate only the fields reported or relied on; journal reasons, approval
 // text and skill reports are never copied into the result.
-function eventSummary(event, index, newer) {
+function eventSummary(event, index, newer, proven) {
   const common = event.schemaVersion === 1 && date(event.at) && typeof event.revision === 'string' && REVISION.test(event.revision)
     && (event.parentRevision === null || typeof event.parentRevision === 'string' && REVISION.test(event.parentRevision));
   if (!common) return null;
@@ -99,7 +134,7 @@ function eventSummary(event, index, newer) {
       || !['pending', 'rejected'].includes(event.status) || !Array.isArray(event.diff) || event.diff.length > DREAM_PACKAGE_LIMITS.maxEntries
       || !event.diff.every(row => exact(row, ['path', 'change']) && typeof row.path === 'string' && CHANGES.includes(row.change))) return null;
     return { index, kind: 'proposal', proposalId: event.proposalId, revision: event.revision, parentRevision: event.parentRevision,
-      author: 'soul', at: event.at, status: proposalStatus(event, newer) };
+      author: 'soul', at: event.at, status: proposalStatus(event, newer, proven) };
   }
   if (event.kind === 'revision') {
     if (!['user', 'soul'].includes(event.author) || event.proposalId !== undefined && (typeof event.proposalId !== 'string' || !UUID.test(event.proposalId))) return null;
@@ -110,19 +145,20 @@ function eventSummary(event, index, newer) {
 }
 
 // Newest-first, at most DREAM_EVIDENCE_LIMITS.events records and journalBytes.
-// `complete` is true only when every record back to index zero was read.
+// `complete` is true only when the journal's extent is proven and every record
+// back to index zero was read.
 function findReference(root, reference) {
-  const newest = newestIndex(root), newer = [], budget = { remaining: DREAM_EVIDENCE_LIMITS.journalBytes };
+  const { proven, newest } = journalExtent(root), newer = [], budget = { remaining: DREAM_EVIDENCE_LIMITS.journalBytes };
   const oldest = Math.max(0, newest - DREAM_EVIDENCE_LIMITS.events + 1);
   for (let index = newest; index >= oldest; index--) {
     const event = readEvent(root, index, budget);
     if (event === null || event === 'unreadable') return { complete: false };
     const matches = reference.proposalId ? event.kind === 'proposal' && event.proposalId === reference.proposalId
       : event.kind === 'revision' && event.revision === reference.revision;
-    if (matches) return { complete: true, event, summary: eventSummary(event, index, newer) };
-    newer.push({ kind: event.kind, proposalId: event.proposalId });
+    if (matches) return { complete: true, proven, event, summary: eventSummary(event, index, newer, proven) };
+    newer.push(event);
   }
-  return { complete: oldest === 0 };
+  return { complete: proven && oldest === 0 };
 }
 
 // Same comparison as soul-revisions diffSoulPackages: directories by presence,
@@ -172,7 +208,7 @@ export function verifyDreamRevisionEvidence(request = {}) {
   const event = found.summary, reasons = result.reasons;
   const parent = storedObject(root, event.parentRevision), candidate = storedObject(root, event.revision);
   const checked = result.checked = {
-    event, parentIsStart: event.parentRevision === startingRevision,
+    event, journalExtent: found.proven ? 'proven' : 'unproven', parentIsStart: event.parentRevision === startingRevision,
     objects: { parent: parent.state, candidate: candidate.state },
     changedPaths: null, changedCount: null, journalDiffMatches: null, outsideDelivered: null,
     deliveredMatchParent: null, truncatedChanged: null,

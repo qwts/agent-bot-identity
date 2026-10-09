@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { mintAgentIdentity } from '../agent-identity.mjs';
@@ -61,6 +61,7 @@ test('a pending proposal that changes only delivered sources is verified change 
   assert.equal(result.attribution, 'not-established');
   assert.deepEqual(result.checked.event, { index: 1, kind: 'proposal', proposalId: proposal.proposalId, revision: proposal.revision,
     parentRevision: f.start, author: 'soul', at: '2026-10-09T12:00:00.000Z', status: 'pending' });
+  assert.equal(result.checked.journalExtent, 'proven');
   assert.deepEqual(result.checked.objects, { parent: 'verified', candidate: 'verified' });
   assert.deepEqual(result.checked.changedPaths, [{ path: SKILL, change: 'modified' }]);
   assert.equal(result.checked.journalDiffMatches, true);
@@ -182,4 +183,56 @@ test('inputs are strictly validated and a missing journal is unavailable', t => 
     assert.throws(() => f.verify({ reference: bad }), { code: 'dream-evidence-reference' });
   }
   assert.throws(() => f.verify({ reference, stateDir: path.join(f.root, 'elsewhere') }), { code: 'dream-evidence-unavailable' });
+});
+
+test('a journal gap or an unproven extent never yields absence or a pending claim', t => {
+  for (const gap of ['start', 'probe']) {
+    const f = fixture(t);
+    f.put(SKILL, changed);
+    const proposal = f.propose();
+    if (gap === 'start') rmSync(eventFile(f, 0));
+    else renameSync(eventFile(f, 1), eventFile(f, 2)); // records 0 and 2, no 1
+    for (const reference of [{ proposalId: proposal.proposalId }, { proposalId: '11111111-1111-4111-8111-111111111111' }]) {
+      assert.deepEqual(f.verify({ reference }).reasons, ['search-incomplete'], gap);
+    }
+  }
+  const f = fixture(t);
+  f.put(SKILL, changed);
+  const proposal = f.propose();
+  for (let i = 0; i < DREAM_EVIDENCE_LIMITS.inventoryEntries; i++) writeFileSync(path.join(f.journal, `.stray-${i}.tmp`), '');
+  const unproven = f.verify({ reference: { proposalId: proposal.proposalId } });
+  assert.equal(unproven.verdict, 'verified-change', 'verified change does not depend on the journal extent');
+  assert.equal(unproven.checked.journalExtent, 'unproven');
+  assert.equal(unproven.checked.event.status, 'uncertain', 'pending is never claimed without a proven extent');
+  assert.deepEqual(f.verify({ reference: { proposalId: '11111111-1111-4111-8111-111111111111' } }).reasons, ['search-incomplete']);
+});
+
+test('only a well-formed later decision changes proposal status; anything else is uncertain', t => {
+  const f = fixture(t);
+  f.put(SKILL, changed);
+  const proposal = f.propose(), reference = { proposalId: proposal.proposalId }, next = eventFile(f, 2);
+  const status = () => f.verify({ reference }).checked.event.status;
+  assert.equal(status(), 'pending');
+  const approval = { schemaVersion: 1, kind: 'revision', revision: proposal.revision, parentRevision: proposal.parentRevision,
+    author: 'soul', reason: 'r', proposalId: proposal.proposalId, approval: 'user', at: '2026-10-09T12:00:00.000Z' };
+  const rejection = { schemaVersion: 1, kind: 'decision', proposalId: proposal.proposalId, author: 'user', reason: 'r', at: '2026-10-09T12:00:00.000Z' };
+  for (const [record, expected] of [
+    [{ kind: 'not-a-decision', proposalId: proposal.proposalId }, 'uncertain'],
+    [{ kind: 'revision', proposalId: proposal.proposalId }, 'uncertain'],
+    [{ ...approval, revision: HASH }, 'uncertain'],
+    [{ ...approval, parentRevision: HASH }, 'uncertain'],
+    [{ ...approval, author: 'user' }, 'uncertain'],
+    [{ ...approval, approval: undefined }, 'uncertain'],
+    [{ ...approval, at: '2026-10-09T11:59:59.999Z' }, 'uncertain'],
+    [{ ...rejection, author: 'soul' }, 'uncertain'],
+    [{ ...rejection, schemaVersion: 2 }, 'uncertain'],
+    [approval, 'approved'],
+    [rejection, 'rejected'],
+  ]) {
+    writeFileSync(next, JSON.stringify(record) + '\n');
+    assert.equal(status(), expected, JSON.stringify(record));
+    assert.equal(f.verify({ reference }).verdict, 'verified-change', 'status never affects the verdict');
+  }
+  writeFileSync(eventFile(f, 3), JSON.stringify(approval) + '\n');
+  assert.equal(status(), 'uncertain', 'more than one decision is uncertain');
 });

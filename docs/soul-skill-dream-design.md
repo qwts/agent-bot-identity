@@ -459,7 +459,10 @@ unchanged across the read. Both content-addressed packages are read with the
 dream package limits and must hash to their object names.
 
 A reference older than the scan window, or behind an unreadable record, reports
-`search-incomplete`. Only a whole-journal scan reports `reference-not-found`.
+`search-incomplete`. The journal's extent is `proven` only when a bounded
+inventory (at most 512 directory entries) finds record names exactly `0..N`.
+A gap or a larger directory leaves it `unproven`. Only a whole scan of a proven
+journal reports `reference-not-found`.
 The result reports the validated record fields (never journal reasons or
 approval text), whether its parent is the starting revision, both object states,
 the recomputed change set, whether a proposal's recorded diff matches it, which
@@ -474,9 +477,12 @@ falls inside the run window when one is given.
 - every changed path delivered with a digest matching the parent bytes;
 - the run window, when supplied.
 
-A proposal's reported status (pending, approved or rejected) comes from newer
-records naming it inside the scan. It is informational, those records are only
-shape-checked, and it never affects the verdict. A new file is never a delivered source, so a change that adds one is not
+A proposal's reported status comes from newer records naming it inside the
+scan. A record decides it only when it is a well-formed later approval (the
+soul author, an approval kind, and the proposal's own revision and parent) or a
+well-formed later user rejection. `pending` requires a proven journal. Any
+other matching record, more than one decision, or an unproven journal gives
+`uncertain`. Status is informational and never affects the verdict. A new file is never a delivered source, so a change that adds one is not
 verified. Revision records carry no diff, so there is no cross-check for them;
 the hash-verified objects stand alone. Truncated delivery is reported but never
 blocks the verdict. A change is not proof that the full source was reviewed.
