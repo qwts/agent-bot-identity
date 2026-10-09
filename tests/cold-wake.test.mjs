@@ -540,3 +540,44 @@ test('other turn failures are not sign-in failures', async () => {
   assert.deepEqual(statuses, []);
   assert.deepEqual(relay.sent, []);
 });
+
+// #596: a client that sends unlinked messages (GeniusBar's composer sends
+// `{ to, body }`) gets a cold turn with no native session to resume, so the
+// prior conversation must come from the soul's journal. That journal is on
+// disk, so a rebuilt waker (a daemon restart) still finds it; another soul
+// or another principal does not. The /v1 native-resume path is covered in
+// interaction-continuity.test.mjs.
+test('a cold relayed turn after a restart gets its principal\'s prior conversation, and no one else\'s', async () => {
+  const soul = 'agent_59659659-5965-4965-8965-596596596596';
+  const otherSoul = 'agent_59659659-5965-4965-8965-596596596597';
+  const owner = 'principal_59659659-5965-4965-8965-596596596596';
+  const stranger = 'principal_59659659-5965-4965-8965-596596596597';
+  let replies = 0;
+  const turnFor = (agentId, inbox, answer) => {
+    const relay = { ...oneShotRelay(inbox), reply: async () => ({ messageId: `r596-${++replies}` }) };
+    const seen = [];
+    const wake = createColdWaker({
+      executor: async (input) => { seen.push(input); return { reply: answer }; },
+      settings: { [agentId]: true }, lookupBinding: async () => binding, identities: async () => githubIdentity, receipt: () => {}, relay,
+    });
+    return async () => {
+      await wake({ agentId, count: inbox.length, messageIds: inbox.map((m) => m.id) });
+      await wake.idle();
+      assert.deepEqual(relay.acked, inbox.map((m) => m.id));
+      return seen;
+    };
+  };
+  await turnFor(soul, [{ id: 'm596-1', from: { principal: owner }, body: 'Remember the codeword cerulean-596.' }], 'Noted: cerulean-596.')();
+
+  // A fresh waker over the same journal is the daemon after a restart.
+  const [resumed] = await turnFor(soul, [{ id: 'm596-2', from: { principal: owner }, body: 'What was the codeword?' }], 'cerulean-596')();
+  assert.equal(resumed.invocation.sessionId, undefined, 'a cold turn carries no /v1 session to resume');
+  assert.match(resumed.message, /This session does not remember earlier turns, so the conversation so far is below\./);
+  assert.match(resumed.message, /Remember the codeword cerulean-596\.[\s\S]*Noted: cerulean-596\.[\s\S]*The new message:\n\nWhat was the codeword\?$/);
+
+  for (const [agentId, principal] of [[soul, stranger], [otherSoul, owner]]) {
+    const [isolated] = await turnFor(agentId, [{ id: `m596-${agentId.slice(-1)}-${principal.slice(-1)}`, from: { principal }, body: 'What was the codeword?' }], 'none')();
+    assert.doesNotMatch(isolated.message, /cerulean|does not remember earlier turns/);
+    assert.match(isolated.message, /\n\nWhat was the codeword\?$/);
+  }
+});
