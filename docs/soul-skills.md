@@ -9,6 +9,10 @@ revision/proposal policy. Explicit source updates merge a reviewed candidate int
 the standalone library. Other repository adapters, installation and dreaming
 remain separate work.
 
+The [dream maintenance implementation proposal](soul-skill-dream-design.md)
+defines scheduling, execution, recovery and evidence boundaries for that next
+operation. It does not register a task or add a working `dream` command.
+
 ```sh
 agent-bot soul skill import /path/to/skill --json
 agent-bot soul skill import /path/to/skill/SKILL.md --json

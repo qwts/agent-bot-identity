@@ -1,0 +1,1 @@
+- Document the proposed dream maintenance scheduler, owner controls, process recovery, bounded evidence, checkpoints and notice behavior for #603. No command or recurring maintenance is activated by this design document.
