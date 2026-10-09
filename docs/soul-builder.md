@@ -227,8 +227,14 @@ Kiro, or `WebFetch` for Devin) means that subagent is not rendered for that
 harness and is listed under its `unsupported.subagents`, never widened or cut
 down. Devin spells MCP tools as Claude does and reads the shared `.mcp.json`, so
 a declared `mcp__<server>__<tool>` keeps its exact name; the declaration grammar
-admits no `*`, so no server-wide grant is produced. A server name containing
-`__`, or an empty server or tool, is ambiguous and stays unsupported. Kiro's
+admits no `*`, so no server-wide grant is produced. The name is passed through
+unchanged, so Devin interprets it exactly as Claude would; the builder only
+requires a non-empty server segment ending at the first `__` after `mcp__` and a
+non-empty tool (`mcp__foo__bar__baz` is server `foo`, tool `bar__baz`). A server
+whose own name contains `__` cannot be told apart from that form and is not
+detected; an empty server or tool stays unsupported. Devin labels custom
+subagents experimental, and none of these Devin files was verified in a live
+Devin session. Kiro's
 tags are categories, so `Read` grants Kiro's whole read category (reading,
 listing, searching). Devin's subagents default to its subagent model rather
 than the parent's when `model` is omitted. Cursor and Copilot CLI also read the

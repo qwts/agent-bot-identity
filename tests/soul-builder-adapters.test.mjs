@@ -90,20 +90,21 @@ test('Devin subagents spell Write as edit and keep exact MCP tool names', () => 
   const output = buildHarnessFiles(source({
     writer: 'Read, Write', editor: 'Edit, MultiEdit, Write', messenger: 'Read, mcp__agent-reach__send_message',
     mixed: 'Bash, mcp__agent-reach__fleet, mcp__agent-reach__send_message', fetcher: 'mcp__agent-reach__fleet, WebFetch',
-    nameless: 'Read, mcp__agent-reach', empty: 'mcp____send', underscored: 'mcp___reach__send',
+    nameless: 'Read, mcp__agent-reach', empty: 'mcp____send', underscored: 'mcp___reach__send', nested: 'mcp__foo__bar__baz',
   }));
   const tools = (name) => output.get(`.devin/agents/${name}.md`)?.toString().match(/\nallowed-tools: (.*)\n/)?.[1];
   assert.equal(tools('writer'), '["edit", "read"]');
   assert.equal(tools('editor'), '["edit"]');
   assert.equal(tools('messenger'), '["mcp__agent-reach__send_message", "read"]');
   assert.equal(tools('mixed'), '["exec", "mcp__agent-reach__fleet", "mcp__agent-reach__send_message"]');
+  assert.equal(tools('nested'), '["mcp__foo__bar__baz"]', 'the first __ ends the server; the name is kept verbatim');
   for (const name of ['fetcher', 'nameless', 'empty', 'underscored']) assert.equal(output.has(`.devin/agents/${name}.md`), false, name);
   const devinFiles = [...output].filter(([path]) => path.startsWith('.devin/agents/')).map(([, bytes]) => String(bytes)).join('');
   assert.doesNotMatch(devinFiles, /"write"/, 'Devin has no write tool name');
   const report = harnessReport(output);
   assert.deepEqual(report.devin.unsupported.subagents, ['empty', 'fetcher', 'nameless', 'underscored']);
   // Kiro is unchanged: an MCP tool still has no Kiro spelling.
-  assert.deepEqual(report.kiro.unsupported.subagents, ['empty', 'fetcher', 'messenger', 'mixed', 'nameless', 'underscored']);
+  assert.deepEqual(report.kiro.unsupported.subagents, ['empty', 'fetcher', 'messenger', 'mixed', 'nameless', 'nested', 'underscored']);
   assert.match(output.get('.kiro/agents/writer.md').toString(), /\ntools: \["read", "write"\]\n/, 'Kiro keeps its write category');
 });
 
