@@ -26,6 +26,7 @@ import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
 import { daemonStatus } from './agent-daemon.mjs';
 import { readBindToken, readBinding } from './agent-binding.mjs';
+import { readAgentIdentity, stateDirectory } from './agent-identity.mjs';
 import { isSoulBound } from './git-credential-bot.mjs';
 import { inspectSupervisor, supervisorSkipLoad } from './daemon-supervisor.mjs';
 import { embeddingAppBundle, homebrewRuntimeRoot, inspectExecutableLink, installationPaths, isManagedExecutable } from './install.mjs';
@@ -646,6 +647,36 @@ export function worktreePinOriginCheck({ gitDir, agentId,
       : `this worktree is pinned to ${agentId}, but holds no setup or binding state for it: git worktree add copies a pin from the checkout it was added from`,
     action: `if ${agentId} set up this worktree, run agent-bot setup-worktree as that soul; otherwise this checkout is not that soul's: remove the agentBot.*, [bot] user.* and agent-bot credential.helper entries from git config --worktree, or recreate the worktree with agent-bot setup-worktree --name`,
     evidence: { agent_id: agentId },
+  });
+}
+
+// The App a checkout acts as against the App the soul's identity record names
+// (#107 rollout). For a bound soul the daemon mints the recorded App and the
+// helper refuses any other, so a mismatch is a soul that cannot use its door
+// once in-process mints close. Diagnosis only: the fix is an owner-gated App
+// assignment, never something doctor does.
+export function appRecordCheck({ agentId, slug, config = {}, readIdentity } = {}) {
+  let recorded = null;
+  try { recorded = readIdentity(agentId)?.github?.appSlug ?? null; } catch { return null; }
+  if (!recorded || !slug) return null;
+  if (recorded === slug) {
+    return readinessCheck({
+      id: 'worktree.app_record',
+      status: 'ready',
+      message: `the soul's identity record names ${slug}`,
+      evidence: { agent_id: agentId, app_slug: slug },
+    });
+  }
+  const managed = Boolean(config.identityApps?.[slug]?.store);
+  return readinessCheck({
+    id: 'worktree.app_record',
+    status: 'warning',
+    code: 'soul-app-record-mismatch',
+    message: `this checkout acts as ${slug}, but the identity record of ${agentId} names ${recorded}; the daemon mints the recorded App for a bound soul and refuses any other`,
+    // Diagnosis only: how such a record is reconciled is #107's migration
+    // contract, not a chore doctor hands the owner.
+    action: `nothing to do yet: the explicit ${slug} keeps working until #107 closes in-process mints, and it must be reconciled with the record before then (#107 migration contract)${managed ? '' : `; ${slug} is not a managed App on this machine`}`,
+    evidence: { agent_id: agentId, app_slug: slug, recorded_app_slug: recorded, managed },
   });
 }
 
@@ -1894,6 +1925,9 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
         evidence: { agent_id: agentId },
       }));
       if (!primary) checks.push(worktreePinOriginCheck({ gitDir: resolve(gitDir), agentId }));
+      const appRecord = appRecordCheck({ agentId, slug, config,
+        readIdentity: (id) => readAgentIdentity(id, { stateDir: stateDirectory({ env, home }) }) });
+      if (appRecord) checks.push(appRecord);
     } catch {
       checks.push(readinessCheck({
         id: 'worktree.agent_id',
