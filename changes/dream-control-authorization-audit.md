@@ -1,0 +1,1 @@
+- Record dream-control owner authorization before executing the operation, retaining the approval when a control fails and recording its outcome separately (#603).
