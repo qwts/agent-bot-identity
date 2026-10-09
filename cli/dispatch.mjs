@@ -173,7 +173,7 @@ export function dispatchAgentBot(parsed) {
     return run(process.execPath, [join(ROOT, 'soul-env-history.mjs'), ...parsed.args.slice(2)]);
   }
   if (parsed.command === 'soul' && parsed.args[0] === 'env' && ['export', 'import'].includes(parsed.args[1])) {
-    return run(process.execPath, [join(ROOT, 'soul-env-export.mjs'), ...parsed.args.slice(1)]);
+    return run(process.execPath, [join(ROOT, 'cli', 'soul-env-transfer.mjs'), ...parsed.args.slice(1)]);
   }
   if (parsed.command === 'soul' && parsed.args[0] === 'env') {
     return run(process.execPath, [join(ROOT, 'soul-env.mjs'), ...parsed.args.slice(1)]);

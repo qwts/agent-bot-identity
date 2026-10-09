@@ -1,0 +1,1 @@
+- A soul's life export now carries its own interaction records: its sessions, invocations, event logs and message payloads, but never another soul's. A moved or replaced life merges them back into the new host's store without overwriting anything already there, and a fork keeps them as the parent's read-only history (#583).

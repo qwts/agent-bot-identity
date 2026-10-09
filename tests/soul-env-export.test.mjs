@@ -18,6 +18,8 @@ import { PACKAGE_IGNORE_LIST, computePackageRevision } from '../soul-package.mjs
 import { adoptSoulPackage, revisionHistory } from '../soul-revisions.mjs';
 import { INSTALL_STAMP } from '../soul-runtimes.mjs';
 import { recordThreadMessage, threadContext } from '../soul-threads.mjs';
+import { appendEvent, createSession, getInvocation, interactionHome, listSessions, mergeSoulInteraction, readEvents, readInvocationPayload, readSoulInteraction, submitInvocation, writeInvocationPayload } from '../agent-jobs.mjs';
+import { SOUL_INTERACTION } from '../cli/soul-env-transfer.mjs';
 
 const ID = 'agent_12345678-1234-4234-8234-123456789abc';
 const SECRET = 'NEVER-IN-THE-ARCHIVE';
@@ -196,7 +198,8 @@ test('the capabilities name the slice and the plan lists every classification wi
   assert.deepEqual(f.gates, [], 'a plan asks nobody');
   assert.deepEqual(f.receipts(), []);
   const m = result.manifest;
-  assert.deepEqual(Object.keys(m), ['schemaVersion', 'agentId', 'name', 'displayName', 'exportedAt', 'engineVersion', 'root', 'identity', 'memory', 'workspaces', 'journal', 'components', 'excluded', 'totals']);
+  assert.deepEqual(Object.keys(m), ['schemaVersion', 'agentId', 'name', 'displayName', 'exportedAt', 'engineVersion', 'root', 'identity', 'memory', 'workspaces', 'journal', 'interaction', 'components', 'excluded', 'totals']);
+  assert.equal(m.interaction, null, 'without the store at hand the archive says it carries no interaction records');
   assert.deepEqual([m.schemaVersion, m.agentId, m.name, m.displayName, m.exportedAt, m.root], [1, ID, 'billy', 'Billy', NOW.toISOString(), f.dir]);
   assert.equal(m.engineVersion, JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version);
   assert.deepEqual(m.identity, { harness: 'codex', parentId: null, genesis: null, createdAt: readAgentIdentity(ID, { stateDir: f.stateDir }).createdAt });
@@ -585,7 +588,7 @@ test('the library surface: the plan maps entries to sources and the writer refus
 
 test('the CLI entry prints JSON errors with code, message and action, and text otherwise', (t) => {
   const f = fixture(t);
-  const run = (args) => spawnSync(process.execPath, [path.join(ROOT, 'soul-env-export.mjs'), ...args], { encoding: 'utf8', env: f.env, cwd: f.home });
+  const run = (args) => spawnSync(process.execPath, [path.join(ROOT, 'cli', 'soul-env-transfer.mjs'), ...args], { encoding: 'utf8', env: f.env, cwd: f.home });
   const planned = run(['export', ID, '--to', f.archive, '--plan']);
   assert.equal(planned.status, 0, planned.stderr);
   assert.ok(planned.stdout.includes(`agentId: ${ID}`) && planned.stdout.includes('excluded (') && planned.stdout.includes('app: linked ->'));
@@ -601,4 +604,151 @@ test('the CLI entry prints JSON errors with code, message and action, and text o
   assert.equal(dispatched.status, 0, dispatched.stderr);
   assert.equal(JSON.parse(dispatched.stdout).decision, 'planned');
   assert.ok(lstatSync(f.dir).isDirectory());
+});
+
+// ---------------------------------------------------------------------------
+// The soul's interaction records (#583): its own rows out of the shared
+// store, and back in on import.
+
+const OTHER = 'agent_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const PRINCIPAL = 'principal_11111111-1111-4111-8111-111111111111';
+const FOREIGN = 'FOREIGN-SOUL-MESSAGE';
+const uuid = (n) => `${String(n).padStart(8, '0')}-0000-4000-8000-000000000000`;
+
+// One session, one invocation with two events and its payload, for `agentId`.
+function seedInteraction(options, agentId, n, message) {
+  const store = { env: options.env, home: options.home, now: () => NOW };
+  const session = createSession({ agentId, principalId: PRINCIPAL, transport: 'cli' }, { ...store, idFactory: () => `session_${uuid(n)}` });
+  const { invocation } = submitInvocation({ sessionId: session.sessionId, agentId, principalId: PRINCIPAL, transport: 'cli', idempotencyKey: `key-${n}` },
+    { ...store, idFactory: () => `invocation_${uuid(n)}` });
+  writeInvocationPayload(invocation.invocationId, { message }, store);
+  appendEvent(invocation.invocationId, 'accepted', { n }, { ...store, idFactory: () => `event_${uuid(n)}-a` });
+  appendEvent(invocation.invocationId, 'note', { n }, { ...store, idFactory: () => `event_${uuid(n)}-b` });
+  return { session, invocation };
+}
+
+const withStore = (target) => ({ ...target, options: { ...target.options, interaction: SOUL_INTERACTION } });
+const mode = (file) => statSync(file).mode & 0o777;
+
+test('the life carries the soul\'s own interaction records, privately, and a moved life merges them back (#583)', async (t) => {
+  const f = withStore(fixture(t));
+  const own = seedInteraction(f.options, ID, 1, `${LIFE} message body`);
+  seedInteraction(f.options, OTHER, 2, FOREIGN);
+  const { result } = await exportIt(f);
+  assert.deepEqual(result.manifest.interaction, { sessions: 1, invocations: 1, events: 1, payloads: 1 });
+  const carried = result.manifest.components.filter((c) => c.relative?.startsWith('.soul-state/runs/interaction/'));
+  assert.deepEqual(carried.map((c) => c.relative).sort(), ['.soul-state/runs/interaction/events/invocation_00000001-0000-4000-8000-000000000000.jsonl',
+    '.soul-state/runs/interaction/interaction.json', '.soul-state/runs/interaction/payloads/invocation_00000001-0000-4000-8000-000000000000.json']);
+  assert.ok(carried.every((c) => c.classification === 'history' && c.retention === 'durable' && c.mode === 0o600));
+  const tar = gunzipSync(readFileSync(f.archive));
+  assert.ok(tar.includes(Buffer.from(`${LIFE} message body`)), 'the payload travels');
+  assert.ok(!tar.includes(Buffer.from(FOREIGN)) && !tar.includes(Buffer.from(OTHER)), 'no other soul\'s row, event or payload leaves the store');
+  const events = path.join(interactionHome(f.options), 'events', `${own.invocation.invocationId}.jsonl`);
+  const document = listArchive(f.archive).find((e) => e.name === 'life/.soul-state/runs/interaction/interaction.json');
+  assert.deepEqual(JSON.parse(document.body.toString('utf8')), { schemaVersion: 1, agentId: ID, invocations: [own.invocation], sessions: [own.session] });
+  assert.ok(listArchive(f.archive).find((e) => e.name.endsWith('.jsonl') && e.name.includes('/interaction/events/')).body.equals(readFileSync(events)), 'event logs travel byte for byte');
+
+  const h = withStore(host(t));
+  const { result: planned } = await importIt(h, f.archive, ['--plan']);
+  assert.deepEqual(planned.interaction, { sessions: 1, invocations: 1, events: 1, payloads: 1 });
+  const { result: imported } = await importIt(h, f.archive);
+  assert.deepEqual(imported.interaction, { decision: 'merged', sessions: { added: 1, kept: 0 }, invocations: { added: 1, kept: 0 }, events: { added: 1, kept: 0 }, payloads: { added: 1, kept: 0 } });
+  const store = { env: h.env, home: h.home };
+  assert.deepEqual(listSessions({ agentId: ID }, store), [own.session]);
+  assert.deepEqual(getInvocation(own.invocation.invocationId, store), own.invocation);
+  assert.deepEqual(readEvents(own.invocation.invocationId, {}, store), readEvents(own.invocation.invocationId, {}, f.options));
+  assert.equal(readInvocationPayload(own.invocation.invocationId, store).message, `${LIFE} message body`);
+  assert.equal(mode(path.join(interactionHome(store), 'events', `${own.invocation.invocationId}.jsonl`)), 0o600);
+  assert.equal(mode(path.join(interactionHome(store), 'payloads', `${own.invocation.invocationId}.json`)), 0o600);
+  assert.deepEqual(listSessions({ agentId: OTHER }, store), [], 'the other soul never arrives');
+  assert.ok(!existsSync(path.join(imported.soulDir, '.soul-state', 'runs', 'interaction')), 'the store holds the merged rows; the root keeps no second copy');
+  assert.deepEqual(readMigrationStep(imported.soulDir, LIFE_IMPORT_STEP_ID).interaction.decision, 'merged');
+  // The same idempotency handle still finds the moved invocation.
+  const again = submitInvocation({ sessionId: own.session.sessionId, agentId: ID, principalId: PRINCIPAL, transport: 'cli', idempotencyKey: 'key-1' }, { ...store, now: () => NOW });
+  assert.deepEqual([again.created, again.invocation.invocationId], [false, own.invocation.invocationId]);
+});
+
+test('a replaced life adds only the rows this host lacks and never overwrites one it has (#583)', async (t) => {
+  const f = withStore(fixture(t));
+  const own = seedInteraction(f.options, ID, 3, 'exported body');
+  await exportIt(f);
+  // The same invocation, already here with a later state and its own log.
+  transitionTo(f.options, own.invocation.invocationId);
+  appendEvent(own.invocation.invocationId, 'local', {}, { env: f.env, home: f.home, now: () => NOW, idFactory: () => 'event_local' });
+  const before = readEvents(own.invocation.invocationId, {}, f.options);
+  const { result } = await importIt(f, f.archive, ['--replace']);
+  assert.deepEqual(result.interaction, { decision: 'merged', sessions: { added: 0, kept: 1 }, invocations: { added: 0, kept: 1 }, events: { added: 0, kept: 1 }, payloads: { added: 0, kept: 1 } });
+  assert.equal(getInvocation(own.invocation.invocationId, f.options).status, 'running');
+  assert.deepEqual(readEvents(own.invocation.invocationId, {}, f.options), before);
+});
+
+function transitionTo(options, invocationId) {
+  const file = path.join(interactionHome(options), 'jobs.json');
+  const jobs = JSON.parse(readFileSync(file, 'utf8'));
+  jobs.invocations[invocationId].status = 'running';
+  writeFileSync(file, JSON.stringify(jobs));
+}
+
+test('a soul with no interaction records exports an empty document and imports nothing (#583)', async (t) => {
+  const f = withStore(fixture(t));
+  seedInteraction(f.options, OTHER, 4, FOREIGN);
+  const { result } = await exportIt(f);
+  assert.deepEqual(result.manifest.interaction, { sessions: 0, invocations: 0, events: 0, payloads: 0 });
+  const h = withStore(host(t));
+  const { result: imported } = await importIt(h, f.archive);
+  assert.deepEqual(imported.interaction, { decision: 'merged', sessions: { added: 0, kept: 0 }, invocations: { added: 0, kept: 0 }, events: { added: 0, kept: 0 }, payloads: { added: 0, kept: 0 } });
+  assert.ok(!existsSync(path.join(interactionHome({ env: h.env, home: h.home }), 'jobs.json')), 'nothing is written to the store');
+});
+
+test('a fork keeps the parent\'s interaction records as read-only history, never merged or reassigned (#583)', async (t) => {
+  const f = withStore(fixture(t));
+  const own = seedInteraction(f.options, ID, 5, 'parent body');
+  await exportIt(f);
+  const h = withStore(host(t));
+  const { result } = await importIt(h, f.archive, ['--fork']);
+  const forked = result.identity.agentId;
+  assert.deepEqual(result.interaction, { decision: 'history', parentAgentId: ID, path: `.soul-state/runs/interaction-history/${ID}` });
+  const history = path.join(result.soulDir, '.soul-state', 'runs', 'interaction-history', ID);
+  const document = JSON.parse(readFileSync(path.join(history, 'interaction.json'), 'utf8'));
+  assert.deepEqual([document.agentId, document.invocations[0].agentId], [ID, ID], 'the records still name the parent');
+  assert.equal(readFileSync(path.join(history, 'payloads', `${own.invocation.invocationId}.json`), 'utf8'), readFileSync(path.join(interactionHome(f.options), 'payloads', `${own.invocation.invocationId}.json`), 'utf8'));
+  const store = { env: h.env, home: h.home };
+  assert.equal(getInvocation(own.invocation.invocationId, store), null, 'nothing is merged into the store');
+  assert.deepEqual(listSessions({ agentId: forked }, store), []);
+  assert.ok(!existsSync(path.join(result.soulDir, '.soul-state', 'runs', 'interaction')));
+  // The fork's own export carries the history with the life, and its own (empty) document.
+  const next = planSoulExport(result.soulDir, { agentId: forked, stateDir: h.stateDir, env: h.env, home: h.home, now: () => NOW, interaction: SOUL_INTERACTION });
+  const relatives = next.manifest.components.map((c) => c.relative);
+  assert.ok(relatives.includes(`.soul-state/runs/interaction-history/${ID}/interaction.json`));
+  assert.ok(relatives.includes('.soul-state/runs/interaction/interaction.json'));
+  assert.deepEqual(next.manifest.interaction, { sessions: 0, invocations: 0, events: 0, payloads: 0 });
+});
+
+test('an interaction directory naming another soul, or holding a stray or malformed file, is refused before the store is touched (#583)', (t) => {
+  const home = mkdtempSync(path.join(realpathSync(tmpdir()), 'sx-ia-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const source = { env: { HOME: home, XDG_STATE_HOME: path.join(home, 'src') }, home };
+  const target = { env: { HOME: home, XDG_STATE_HOME: path.join(home, 'dst') }, home };
+  const { invocation } = seedInteraction(source, ID, 6, 'body');
+  const exported = SOUL_INTERACTION.collect(ID, source);
+  const write = (name, document, files = exported.files) => {
+    const dir = path.join(home, name);
+    put(path.join(dir, 'interaction.json'), JSON.stringify(document));
+    for (const file of files) put(path.join(dir, file.relative), readFileSync(file.file));
+    return dir;
+  };
+  const refused = (dir, code) => {
+    assert.throws(() => mergeSoulInteraction(dir, { agentId: ID }, target), (error) => error.code === code);
+    assert.ok(!existsSync(interactionHome(target)), 'the store is untouched');
+  };
+  assert.equal(readSoulInteraction(write('ok', exported.document), { agentId: ID }).invocations.length, 1);
+  refused(write('other-document', { ...exported.document, agentId: OTHER }), 'import-interaction-foreign');
+  refused(write('other-row', { ...exported.document, sessions: [{ ...exported.document.sessions[0], agentId: OTHER }] }), 'import-interaction-foreign');
+  const stray = write('stray', exported.document);
+  put(path.join(stray, 'events', 'invocation_99999999-0000-4000-8000-000000000000.jsonl'), '');
+  refused(stray, 'import-interaction-invalid');
+  const malformed = write('malformed', exported.document);
+  writeFileSync(path.join(malformed, 'events', `${invocation.invocationId}.jsonl`), 'not json\n');
+  refused(malformed, 'import-interaction-invalid');
+  refused(write('future', { ...exported.document, schemaVersion: 2 }), 'import-interaction-invalid');
 });

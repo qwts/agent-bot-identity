@@ -158,9 +158,13 @@ absent. Never switch versions with two writers active or simply remove the
 new file without first preserving its newer messages. No automatic downgrade
 or live old/new-writer reconciliation is claimed.
 
-Native `/v1` sessions, jobs and events still live in the separate interaction
-store. This change does not transfer their session ownership or make imported
-native harness sessions resumable. The descriptor lists the legacy conversation
+Native `/v1` sessions, invocations, events and payloads live in the
+separate interaction store. A life export now carries the soul's own rows
+from it and a kept or replaced import merges them back, adding only; a
+fork keeps them as the parent's read-only history (#583, see
+[Export and import](soul-environment.md#export-and-import)). That moves the
+record, not continuity: imported native harness sessions are not made
+resumable. The descriptor lists the legacy conversation
 journal and reports the contained one at `history.conversation { path, present }`.
 Native interaction inventory/transfer, full native continuity and host-view
 reconstruction remain tracked in #596; #583 is not complete merely because
