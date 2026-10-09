@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { generateKeyPairSync, createVerify } from 'node:crypto';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { buildAppJwt, appConfig, mint, pickInstallation, parseMintArgs, parsePermissions, ungrantedPermissions, MINT_USAGE } from '../mint-token.mjs';
+import { buildAppJwt, appConfig, mint, pickInstallation, parseMintArgs, parsePermissions, selectionReason, ungrantedPermissions, MINT_USAGE } from '../mint-token.mjs';
 
 const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const pem = privateKey.export({ type: 'pkcs8', format: 'pem' });
@@ -447,6 +447,85 @@ test('a pinned GH_APP_INSTALLATION_ID reads that installation\'s grant before a 
     assert.equal(grant.installation_id, 43);
     assert.deepEqual(github.requests.map((r) => `${r.method} ${r.url}`), ['GET /app/installations/43', 'POST /app/installations/43/access_tokens']);
     await assert.rejects(mint({ env, permissions: { contents: 'write' } }), /does not grant contents: write \(granted: read\)/);
+  } finally {
+    await github.close();
+  }
+});
+
+test('selectionReason follows appConfig\'s selector order (#107)', () => {
+  const cred = { GH_APP_ID: '1', GH_APP_PRIVATE_KEY: pem };
+  assert.equal(selectionReason({ argv: ['node', 'mint-token.mjs', '--app', 'a'], env: { ...cred, GH_AGENT_APP: 'b' } }), 'explicit-app');
+  assert.equal(selectionReason({ argv: ['node', 'mint-token.mjs'], env: { ...cred, GH_AGENT_APP: 'b' } }), 'env-app');
+  assert.equal(selectionReason({ argv: ['node', 'mint-token.mjs'], env: cred }), 'env-credential');
+  assert.equal(selectionReason({ argv: ['node', 'mint-token.mjs'], env: {} }), 'ambient-app');
+});
+
+// The CLI is the operator path: each run that reaches a mint leaves a
+// credential-mint receipt naming the App and a reason, never the token (#107).
+function runMintCli(env, args = []) {
+  return new Promise((resolve) => {
+    execFile(process.execPath, [join(import.meta.dirname, '..', 'cli', 'mint-token.mjs'), ...args], { env, encoding: 'utf8' },
+      (error, stdout, stderr) => resolve({ code: error ? error.code : 0, stdout, stderr }));
+  });
+}
+
+function operatorEnv(apiBase) {
+  const root = mkdtempSync(join(tmpdir(), 'agent-bot-mint-receipt-'));
+  const home = fakeHome('you-claude-agent');
+  const configPath = join(root, 'config.json');
+  writeFileSync(configPath, `${JSON.stringify({ apiBase })}\n`);
+  return {
+    PATH: process.env.PATH,
+    HOME: home,
+    XDG_STATE_HOME: join(root, 'state'),
+    AGENT_BOT_CONFIG: configPath,
+    AGENT_BOT_INTERACTION_HOME: join(root, 'interaction'),
+    GH_AGENT_APP: 'you-claude-agent',
+  };
+}
+
+function mintReceipts(env) {
+  const file = join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl');
+  if (!existsSync(file)) return [];
+  return readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+    .filter((receipt) => receipt.event === 'credential-mint');
+}
+
+test('an operator mint-token run receipts the App and the reason, never the token (#107)', async () => {
+  const github = await installationServer([ORG]);
+  try {
+    const env = operatorEnv(github.apiBase);
+    const minted = await runMintCli(env, ['--json']);
+    assert.equal(minted.code, 0, minted.stderr);
+    assert.equal(JSON.parse(minted.stdout).token, 'fixture-token-never-logged-42');
+    const receipts = mintReceipts(env);
+    assert.equal(receipts.length, 1);
+    assert.equal(receipts[0].operation, 'mint-token');
+    assert.equal(receipts[0].decision, 'granted');
+    assert.equal(receipts[0].appSlug, 'you-claude-agent');
+    assert.equal(receipts[0].reason, 'env-app');
+    assert.doesNotMatch(readFileSync(join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8'), /fixture-token|PRIVATE KEY/);
+
+    // --help mints nothing and so receipts nothing.
+    await runMintCli(env, ['--help']);
+    assert.equal(mintReceipts(env).length, 1);
+  } finally {
+    await github.close();
+  }
+});
+
+test('a failed operator mint still receipts the App, with no error text (#107)', async () => {
+  const github = await installationServer([]);
+  try {
+    const env = operatorEnv(github.apiBase);
+    const failed = await runMintCli(env);
+    assert.notEqual(failed.code, 0);
+    assert.equal(failed.stdout, '');
+    const receipts = mintReceipts(env);
+    assert.deepEqual(receipts.map(({ operation, decision, appSlug, reason }) => ({ operation, decision, appSlug, reason })), [
+      { operation: 'mint-token', decision: 'failed', appSlug: 'you-claude-agent', reason: 'mint-failed' },
+    ]);
+    assert.equal(receipts[0].detail, undefined);
   } finally {
     await github.close();
   }

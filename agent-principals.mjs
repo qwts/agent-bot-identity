@@ -247,7 +247,9 @@ function requirePrincipal(principals, principalId) {
 
 // Secret-free audit receipts (#57 req 7, #31). Append-only JSONL under the
 // interaction home. Only whitelisted identifier fields are recorded — never
-// provider tokens, display names, or message bodies.
+// provider tokens, display names, or message bodies. A credential mint also
+// names the App it minted for (`appSlug`) and a fixed reason code for its
+// outcome (`reason`, #107); both are optional, so older readers ignore them.
 export function auditFile({ env = process.env, home = homedir() } = {}) {
   return path.join(interactionHome({ env, home }), 'audit.jsonl');
 }
@@ -260,7 +262,7 @@ function receiptDetail(value) {
 }
 
 export function appendAuditReceipt(
-  { event, principalId = null, transport = null, agentId = null, operation = null, decision = null, detail = null },
+  { event, principalId = null, transport = null, agentId = null, operation = null, decision = null, detail = null, appSlug = null, reason = null },
   { env = process.env, home = homedir(), now = () => new Date() } = {},
 ) {
   const receipt = {
@@ -272,6 +274,8 @@ export function appendAuditReceipt(
     ...(operation === null ? {} : { operation: printableText('operation', operation, { max: 40 }) }),
     ...(decision === null ? {} : { decision: printableText('decision', decision, { max: 40 }) }),
     ...(detail === null ? {} : { detail: receiptDetail(detail) }),
+    ...(appSlug === null ? {} : { appSlug: printableText('appSlug', appSlug, { max: 100 }) }),
+    ...(reason === null ? {} : { reason: printableText('reason', reason, { max: 40 }) }),
   };
   const file = auditFile({ env, home });
   ensurePrivateDirectory(path.dirname(file));

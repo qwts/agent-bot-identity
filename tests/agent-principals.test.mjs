@@ -230,6 +230,22 @@ test('audit receipts are append-only, whitelisted, and secret-free', () => {
   assert.equal(raw.includes('owner-phone'), false);
 });
 
+test('a credential-mint receipt adds the App slug and reason only when given (#107)', () => {
+  const { options } = scratch();
+  const storeOptions = { env: options.env, home: options.home, now: NOW };
+  const minted = appendAuditReceipt(
+    { event: 'credential-mint', operation: 'mint-token', decision: 'granted', appSlug: 'you-claude-agent', reason: 'env-app' },
+    storeOptions,
+  );
+  assert.equal(minted.appSlug, 'you-claude-agent');
+  assert.equal(minted.reason, 'env-app');
+  // A receipt that names neither keeps the shape existing readers know.
+  const plain = appendAuditReceipt({ event: 'credential-mint', decision: 'denied' }, storeOptions);
+  assert.deepEqual(Object.keys(plain), ['at', 'event', 'decision']);
+  assert.throws(() => appendAuditReceipt({ event: 'credential-mint', reason: 'a\nb' }, storeOptions), /reason must be printable/);
+  assert.throws(() => appendAuditReceipt({ event: 'credential-mint', appSlug: '' }, storeOptions), /appSlug must be printable/);
+});
+
 test('duplicate enrollment of the same principal ID is refused', () => {
   const { options } = scratch();
   const idFactory = () => 'principal_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';

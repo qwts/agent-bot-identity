@@ -835,6 +835,11 @@ test('tier-1 credential minting answers only a live binding and receipts both ou
       .filter((receipt) => receipt.event === 'credential-mint');
     assert.deepEqual(receipts.map((receipt) => receipt.decision), ['denied', 'granted']);
     assert.equal(receipts[1].agentId, AGENT_ID);
+    // Which App and why (#107): a refusal before any binding names no App.
+    assert.equal(receipts[0].appSlug, undefined);
+    assert.equal(receipts[0].reason, 'no-live-binding');
+    assert.equal(receipts[1].appSlug, 'you-codex-agent');
+    assert.equal(receipts[1].reason, 'bound-soul-own-app');
     // The receipt records who and what — never the credential itself.
     assert.doesNotMatch(JSON.stringify(receipts), /ghs_test-grant/);
   } finally {
@@ -882,7 +887,55 @@ test('a mint failure after a verified binding still leaves a secret-free receipt
       .filter((receipt) => receipt.event === 'credential-mint');
     assert.deepEqual(receipts.map((receipt) => receipt.decision), ['failed']);
     assert.equal(receipts[0].agentId, bound.agentId);
+    assert.equal(receipts[0].appSlug, 'you-codex-agent');
+    assert.equal(receipts[0].reason, 'mint-failed');
     assert.doesNotMatch(JSON.stringify(receipts), /ghs_never-leaks/);
+  } finally {
+    await new Promise((resolve) => { server.close(resolve); });
+  }
+});
+
+test('a refusal by the github-identity gate receipts its reason and mints nothing (#107)', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  let minted = 0;
+  const server = createDaemonServer({
+    env,
+    home: '/nonexistent',
+    config: { features: { 'github-identity': false } },
+    mintImpl: async () => { minted += 1; return { token: 'ghs_gate-off', expires_at: '2026-08-12T09:00:00.000Z' }; },
+  });
+  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+  const port = server.address().port;
+  const call = (pathname, options = {}) =>
+    fetch(`http://127.0.0.1:${port}${pathname}`, {
+      method: options.method ?? 'GET',
+      headers: {
+        authorization: `Bearer ${server.token}`,
+        ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...(options.headers ?? {}),
+      },
+      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+    });
+  try {
+    const bound = await (await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-gate-off' } },
+    })).json();
+    const refused = await call('/v0/credential', {
+      method: 'POST',
+      body: {},
+      headers: { 'x-agent-binding': bound.secret },
+    });
+    assert.equal(refused.status, 409);
+    assert.equal(minted, 0);
+    const receipts = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8')
+      .trim().split('\n').map((line) => JSON.parse(line))
+      .filter((receipt) => receipt.event === 'credential-mint');
+    // With the add-on off the soul's record carries no App to name.
+    assert.deepEqual(receipts.map(({ decision, appSlug, reason }) => ({ decision, appSlug, reason })), [
+      { decision: 'denied', appSlug: undefined, reason: 'github-identity-off' },
+    ]);
   } finally {
     await new Promise((resolve) => { server.close(resolve); });
   }
