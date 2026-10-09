@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.58
+
+- Agent onboarding now carries the GitHub App resolved from harness markers into new identities, and rejoining restores a missing App on existing hub-only identities without overwriting an assigned App, so configured agents can publish without manual per-session App assignment (#644).
+
 ## 0.10.57
 
 - `agent-bot soul env history <soul> [--json] [--limit N]` lists the soul's history mirror (`.soul-state/runs`: turns and revisions, facts only, never a prompt or an output) newest first, at most `--limit` per file (1..500, default 50) from a bounded 16 MiB window, with line counts and skipped-line counts, so GeniusBar's Memory tab renders a soul's past without reading soul files itself; read-only, capability `env-history` (#583, GeniusBar#268).
