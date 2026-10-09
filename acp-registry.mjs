@@ -309,13 +309,20 @@ export function harnessProcessEnv(row, baseEnv = {}) {
   return Object.assign(env, row.setEnv ?? {});
 }
 
-// Windows runs `node.exe`, never an extensionless `node`; a name that
-// already ends in .exe keeps it. Only .exe: npm's .cmd shims need a shell
-// that spawn() refuses, so finding one would pick a harness that cannot
-// start (#617). `platform` is the host's process.platform, not a catalog
-// platform like `win32-x64`.
+/**
+ * The file Windows runs for a command: `name.exe`, keeping a name that
+ * already ends in .exe. Only .exe: npm's .cmd shims need a shell that
+ * spawn() refuses, so finding one would pick a harness that cannot start
+ * (#617). PATH lookup and runtime readiness share this one rule.
+ */
+export function windowsExecutable(name) {
+  return /\.exe$/i.test(name) ? name : `${name}.exe`;
+}
+
+// `platform` is the host's process.platform, not a catalog platform like
+// `win32-x64`.
 function commandFile(name, platform) {
-  return platform === 'win32' && !/\.exe$/i.test(name) ? `${name}.exe` : name;
+  return platform === 'win32' ? windowsExecutable(name) : name;
 }
 
 /** The first executable regular file `name` on an env's PATH, else null. */

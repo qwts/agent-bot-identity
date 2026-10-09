@@ -23,7 +23,7 @@ import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
+import { ACP_SPAWN_REGISTRY, windowsExecutable } from './acp-registry.mjs';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { withLock } from './agent-identity.mjs';
@@ -117,10 +117,10 @@ function executableFile(file) {
 // The file a declared executable is on the inspected platform: Windows
 // archives carry `name.exe`, every other platform the bare name. Only that
 // one counts, so a POSIX install with just a `node.exe` is not ready (the
-// engine's PATH lookup would skip it for the daemon's own Node).
-// A declared bin that already names `tool.exe` keeps it.
+// engine's PATH lookup would skip it for the daemon's own Node). The
+// Windows name is the one PATH lookup resolves (`windowsExecutable`).
 function executableName(name, platform) {
-  return platform?.startsWith('win32-') && !/\.exe$/i.test(name) ? `${name}.exe` : name;
+  return platform?.startsWith('win32-') ? windowsExecutable(name) : name;
 }
 
 function hasExecutable(directory, name, platform) {
