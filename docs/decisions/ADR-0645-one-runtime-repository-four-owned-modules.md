@@ -232,9 +232,8 @@ Consequences of these rules:
   extraction plan.** At `0aae907`, 72 files outside identity import 24 identity
   files: 147 import edges, 76 of them from soul and 50 into
   `agent-identity.mjs` alone. Identity imports `shared` 19 times, `harness` 4
-  and `org` 3. The choice between consuming identity over the wire and as a
-  pinned dependency is open question 2. Until it is answered, steps 1 to 6
-  proceed and step 7 does not.
+  and `org` 3. It is consumed over the daemon (answer 2): no identity imports
+  remain outside `identity/`.
 - **Unchanged by the move:** the `agent-bot` command and its subcommands,
   service labels (`app.geniusbar.agent-bot`, `app.geniusbar.keyd` and the
   Homebrew and Linux equivalents), sockets, state directories
@@ -256,10 +255,10 @@ Consequences of these rules:
 [agent-comms
 ADR-0059](https://github.com/qwts/agent-comms/blob/main/docs/decisions/ADR-0059-host-apps-embed-agent-comms.md)
 already has host apps embed pinned releases as a compatible set. After the
-extraction the set may have three members: agent-identity, agent-bot and
-agent-comms. Whether agent-identity ships as its own GeniusBar component,
-formula and Linux bundle entry, or inside each agent-bot release at a pinned
-version, is open question 3. Either way:
+extraction, agent-identity ships inside each agent-bot release at a pinned
+version (answer 3), so GeniusBar, Homebrew and the Linux bundle carry it
+through their existing agent-bot component, and the compatible set they pin
+stays agent-bot and agent-comms. Because of that:
 
 - pins never move backwards;
 - GeniusBar's compatibility checks (`scripts/compat-check.mjs`, its ADR-0282
@@ -271,10 +270,10 @@ version, is open question 3. Either way:
 - **[ENG-0128](https://github.com/qwts/qwts-agent-sop/blob/main/docs/decisions/ENG-0128-agent-bot-runtime-ownership.md):**
   amended. It names this repository as the identity runtime owner. After step 9,
   `qwts/agent-identity` owns identity, and this repository owns soul, harness
-  and the `agent-bot` facade. The ENG change is recorded under ENG-0001 (open
-  question 1) before step 9.
-- **ADR-0332 decision 1:** amended only if open question 3 makes
-  agent-identity its own install component. Its three channels stay.
+  and the `agent-bot` facade. The ENG-0128 amendment (answer 1) is recorded before
+  step 9.
+- **ADR-0332 decision 1:** unchanged. agent-identity ships inside agent-bot
+  (answer 3).
 - The first version of this record superseded agent-comms ADR-0002 and amended
   agent-comms ADR-0059. This revision withdraws both.
 
@@ -305,10 +304,11 @@ behavior, and shrinks the baseline or adds a contract:
 6. **Physical module directories**, one module at a time once its crossings
    reach zero, with shims at the old paths. `identity/` goes first.
 7. **Identity public contract** (§5), reviewed and tested here, including the
-   consumption model from open question 2. Outside callers move onto it, so
+   daemon-only consumption from answer 2. Outside callers move onto it, so
    nothing outside `identity/` depends on identity internals.
 8. **Extraction plan** for `qwts/agent-identity`: history, CI, release,
-   formula, the GeniusBar component, the Linux bundle, the `agent-bot` facade,
+   how each agent-bot release pins and bundles it (GeniusBar, Homebrew and the
+   Linux bundle through their agent-bot component), the `agent-bot` facade,
    and a written rollback. Reviewed before the repository is created.
 9. **Extraction and first compatible release.** `identity/` is replaced by the
    pinned consumer from step 7. Old paths keep working.
@@ -351,22 +351,27 @@ merge.
 - Rewriting identity, soul, messaging or authorization protocols.
 - Changing installed harness versions or pins.
 
-## Questions before acceptance
+## Answers to the questions before acceptance
 
-1. **The ENG record.** The extraction changes runtime ownership in
-   qwts-agent-sop (ENG-0128), GeniusBar and qwts-agent-org. Does it need a new
-   ENG record under ENG-0001, or an amendment to ENG-0128? Step 9 waits on the
-   answer.
-2. **How the runtime consumes identity after extraction.** Over the wire (the
-   daemon routes and the binding proof, with pure format helpers kept as a
-   small shared contract), or as a pinned package that this repository imports
-   at an exact version? Step 7 waits on the answer.
-3. **How agent-identity ships.** As its own install component (formula,
-   GeniusBar component, Linux bundle entry), or bundled inside each agent-bot
-   release at a pinned version? Step 8 waits on the answer.
-4. **Harness key vocabulary.** Which spelling is canonical: the roster's
-   (`claude-code`, `qwen-code`) or the runtime's (`claude`, `qwen`)? Step 5
-   waits on the answer.
+The owner answered on 2026-10-09
+([#645 comment](https://github.com/qwts/agent-bot-identity/issues/645#issuecomment-6087959098)):
+
+1. **The ENG record:** amend ENG-0128. agent-identity owns identity; this
+   repository owns soul, harness and the `agent-bot` facade.
+2. **How the runtime consumes identity:** over the daemon. Soul, host and cli
+   call identity through the daemon routes with the binding proof. Pure format
+   helpers become a small shared contract file kept byte-identical by a test,
+   as `binding-proof.mjs` is with agent-comms today. No identity imports
+   remain outside `identity/`.
+3. **How agent-identity ships:** inside each agent-bot release, at a pinned
+   version. agent-bot already ships inside GeniusBar, so GeniusBar takes it
+   through its existing agent-bot component. There is no separate formula,
+   GeniusBar component or Linux bundle entry, and ADR-0332 decision 1 is
+   unchanged.
+4. **Harness key vocabulary:** the runtime's spelling (`claude`, `qwen`) is
+   canonical. `claude-code` and `qwen-code` distinguish the CLI from a desktop
+   app. That distinction is not part of the runtime's key, so the roster's
+   spellings resolve through the alias table.
 
 The first version's question about agent-comms deployment is answered: it stays
 standalone. Its question about one Node engine floor for a combined tree no
