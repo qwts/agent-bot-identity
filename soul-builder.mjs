@@ -45,6 +45,9 @@ export const MCP_TARGETS = Object.freeze([
   // "Format evidence"). Copilot CLI and Devin CLI read the shared `.mcp.json`.
   Object.freeze({ harness: 'cursor', path: '.cursor/mcp.json', format: 'json', key: 'mcpServers', style: 'stdio' }),
   Object.freeze({ harness: 'kiro', path: '.kiro/settings/mcp.json', format: 'json', key: 'mcpServers', style: 'stdio' }),
+  // Qwen Code's project settings file also holds the soul's other settings;
+  // only `mcpServers.agent-bot` is the builder's (#247).
+  Object.freeze({ harness: 'qwen', path: '.qwen/settings.json', format: 'json', key: 'mcpServers', style: 'stdio' }),
 ]);
 
 // The harnesses the toolkit knows, with what this builder renders for each: a
@@ -64,6 +67,9 @@ const HARNESS_FILES = Object.freeze({
   muse: Object.freeze({ instructions: null, skills: null, mcp: null }),
   // Kiro reads AGENTS.md and the shared skills; its wake lanes are #523.
   kiro: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: '.kiro/settings/mcp.json', subagents: '.kiro/agents/' }),
+  // Qwen Code reads AGENTS.md natively; its skills, agents and commands live
+  // under `.qwen/` in formats this slice does not render yet (#247).
+  qwen: Object.freeze({ instructions: null, skills: null, mcp: '.qwen/settings.json' }),
 });
 
 // Settings are defaults for native harness launches; owner-selected launch

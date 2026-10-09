@@ -10,7 +10,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildHarnessFiles, harnessReport, MCP_SERVER_NAME, MCP_TARGETS, mergeableMcpServers, soulCommsDeclared } from '../soul-builder.mjs';
 import { buildSoulDirectory } from '../soul-build.mjs';
-import { computePackageRevision, readSoulPackageEntries, PACKAGE_IGNORE_LIST, GENERATED_HARNESS_MARKER as MARKER } from '../soul-package.mjs';
+import { computePackageRevision, readSoulPackageEntries, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS, GENERATED_HARNESS_MARKER as MARKER } from '../soul-package.mjs';
+import { isGeneratedPath } from '../soul-harness-contract.mjs';
 const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
 
 const ENTRY = { command: 'agent-bot', args: ['reach-mcp'] };
@@ -63,8 +64,8 @@ test('each harness gets the reach/comms server in its own native file', () => {
     { _comment: MARKER, mcp: { [MCP_SERVER_NAME]: LOCAL } });
   assert.equal(output.get('.codex/config.toml').toString(),
     `# ${MARKER}\n[mcp_servers.agent-bot]\ncommand = "agent-bot"\nargs = ["reach-mcp"]\n`);
-  // Cursor's and Kiro's documented project files carry the same stdio entry.
-  for (const path of ['.cursor/mcp.json', '.kiro/settings/mcp.json']) {
+  // Cursor's, Kiro's and Qwen Code's documented project files carry the same stdio entry.
+  for (const path of ['.cursor/mcp.json', '.kiro/settings/mcp.json', '.qwen/settings.json']) {
     assert.deepEqual(JSON.parse(output.get(path).toString()), { _comment: MARKER, mcpServers: { [MCP_SERVER_NAME]: ENTRY } }, path);
   }
   // Portable: no absolute path, no host-specific state, only PATH's agent-bot.
@@ -74,7 +75,7 @@ test('each harness gets the reach/comms server in its own native file', () => {
     assert.equal(content.includes(process.env.HOME ?? '/'), false);
     assert.match(content, new RegExp(MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
-  for (const path of ['.mcp.json', '.gemini/settings.json', '.codex/config.toml', 'opencode.json', '.cursor/mcp.json', '.kiro/settings/mcp.json']) {
+  for (const path of ['.mcp.json', '.gemini/settings.json', '.codex/config.toml', 'opencode.json', '.cursor/mcp.json', '.kiro/settings/mcp.json', '.qwen/settings.json']) {
     assert.ok([...output.keys()].includes(path), path);
   }
 });
@@ -95,7 +96,7 @@ test('comms off renders no MCP entry anywhere, and a rebuild removes the old one
   put(root, 'soul.json', Buffer.from(readFileSync(join(root, 'soul.json'), 'utf8').replace('"parentRevision"', '"comms": false,\n  "parentRevision"')));
   reseal(root);
   const removals = buildSoulDirectory(root, { check: true }).removals;
-  assert.deepEqual(removals, ['.codex/config.toml', '.cursor/mcp.json', '.gemini/settings.json', '.kiro/settings/mcp.json', '.mcp.json', 'opencode.json']);
+  assert.deepEqual(removals, ['.codex/config.toml', '.cursor/mcp.json', '.gemini/settings.json', '.kiro/settings/mcp.json', '.mcp.json', '.qwen/settings.json', 'opencode.json']);
   buildSoulDirectory(root);
   for (const { path } of MCP_TARGETS) assert.equal(existsSync(join(root, path)), false, path);
   assert.equal(existsSync(join(root, '.kiro')), false, 'emptied generated parents are pruned');
@@ -128,7 +129,7 @@ test('a soul that ships its own MCP file keeps its servers and gains ours', (t) 
     { path: '.mcp.json', harness: 'claude', kept: ['postgres'] },
     { path: 'opencode.json', harness: 'opencode', kept: ['files'] },
   ]);
-  assert.deepEqual(checked.writes, ['.codex/config.toml', '.cursor/mcp.json', '.gemini/settings.json', '.kiro/settings/mcp.json', '.mcp.json', 'CLAUDE.md', 'GEMINI.md', 'opencode.json']);
+  assert.deepEqual(checked.writes, ['.codex/config.toml', '.cursor/mcp.json', '.gemini/settings.json', '.kiro/settings/mcp.json', '.mcp.json', '.qwen/settings.json', 'CLAUDE.md', 'GEMINI.md', 'opencode.json']);
   assert.equal(readFileSync(join(root, '.mcp.json'), 'utf8'), `${JSON.stringify({ mcpServers: { postgres: { command: 'pg-mcp' } } }, null, 2)}\n`,
     '--check never writes');
   buildSoulDirectory(root);
@@ -219,7 +220,7 @@ test('--check --json reports every harness and never leaves a primitive unreport
   assert.equal(dirty.status, 1);
   const report = JSON.parse(dirty.stdout);
   assert.deepEqual(Object.keys(report).sort(), ['drift', 'harnesses', 'merged', 'removals', 'writes']);
-  assert.deepEqual(report.drift.sort(), ['.codex/config.toml', '.cursor/mcp.json', '.gemini/settings.json', '.kiro/settings/mcp.json', '.mcp.json', 'CLAUDE.md', 'GEMINI.md', 'opencode.json']);
+  assert.deepEqual(report.drift.sort(), ['.codex/config.toml', '.cursor/mcp.json', '.gemini/settings.json', '.kiro/settings/mcp.json', '.mcp.json', '.qwen/settings.json', 'CLAUDE.md', 'GEMINI.md', 'opencode.json']);
   assert.deepEqual(report.merged, []);
   assert.deepEqual(report.harnesses.claude, {
     rendered: ['instructions', 'mcp'], files: ['.mcp.json', 'CLAUDE.md'],
@@ -231,7 +232,7 @@ test('--check --json reports every harness and never leaves a primitive unreport
   assert.deepEqual(report.harnesses.gemini.files, ['.gemini/settings.json', 'GEMINI.md']);
   assert.deepEqual(report.harnesses.opencode.files, ['opencode.json']);
   // Every harness the toolkit knows is named, so nothing is dropped in silence.
-  assert.deepEqual(Object.keys(report.harnesses).sort(), ['claude', 'codex', 'copilot', 'cursor', 'devin', 'gemini', 'kiro', 'muse', 'opencode']);
+  assert.deepEqual(Object.keys(report.harnesses).sort(), ['claude', 'codex', 'copilot', 'cursor', 'devin', 'gemini', 'kiro', 'muse', 'opencode', 'qwen']);
   assert.ok(Object.values(report.harnesses).every((entry) => entry.rendered.includes('instructions')
     && Object.values(entry.unsupported).every((names) => names.length === 0)));
   // Muse has no MCP adapter and says so by omission; Copilot CLI and Devin
@@ -307,4 +308,29 @@ test('Cursor and Kiro keep a soul\'s own servers, and an unmarked file there is 
     assert.throws(() => buildSoulDirectory(bad), /must be a JSON object/, path);
     assert.equal(readFileSync(join(bad, path), 'utf8'), '[]\n', path);
   }
+});
+
+test('Qwen Code\'s project settings keep the soul\'s own keys and servers and gain ours (#247)', (t) => {
+  const root = fixture(t);
+  const own = { model: { name: 'qwen3-coder-plus' }, mcp: { allowed: ['git'] }, mcpServers: { git: { command: 'uvx', args: ['mcp-server-git'] } } };
+  put(root, '.qwen/settings.json', `${JSON.stringify(own, null, 2)}\n`);
+  reseal(root);
+  const checked = buildSoulDirectory(root, { check: true });
+  assert.deepEqual(checked.merged.filter(({ harness }) => harness === 'qwen'),
+    [{ path: '.qwen/settings.json', harness: 'qwen', kept: ['git'] }]);
+  const result = buildSoulDirectory(root);
+  assert.deepEqual(JSON.parse(readFileSync(join(root, '.qwen/settings.json'), 'utf8')),
+    { _comment: MARKER, ...own, mcpServers: { ...own.mcpServers, [MCP_SERVER_NAME]: ENTRY } });
+  assert.deepEqual(result.harnesses.qwen.rendered, ['instructions', 'mcp']);
+  assert.deepEqual(result.harnesses.qwen.files, ['.qwen/settings.json']);
+  assert.deepEqual(buildSoulDirectory(root, { check: true }).drift, [], 'a rebuild over our own output is a no-op');
+});
+
+test('the ignore list only grows by Qwen Code\'s settings file; the list before it still validates (#247)', () => {
+  const prior = PRIOR_PACKAGE_IGNORE_LISTS[0].generatedPaths;
+  assert.deepEqual(PACKAGE_IGNORE_LIST.generatedPaths.slice(0, prior.length), prior);
+  assert.deepEqual(PACKAGE_IGNORE_LIST.generatedPaths.slice(prior.length), ['.qwen/settings.json']);
+  assert.equal(isGeneratedPath('.qwen/settings.json'), true);
+  assert.equal(isGeneratedPath('.qwen/skills/review/SKILL.md'), false, 'the rest of .qwen/ stays the soul\'s');
+  assert.equal(isGeneratedPath('.qwen/settings.local.json'), false);
 });

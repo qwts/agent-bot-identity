@@ -30,7 +30,8 @@ importing the disk/CLI layer. `.mcp.json` and `opencode.json` joined the list in
 #378; `.codex/config.toml` and `.gemini/settings.json` were already covered by
 the `.codex/` and `.gemini/` prefixes. The harness adapters slice appended
 `.github/agents/`, `.kiro/agents/` and `.kiro/settings/mcp.json` (Cursor's and
-Devin's files sit under the existing `.cursor/` and `.devin/` prefixes).
+Devin's files sit under the existing `.cursor/` and `.devin/` prefixes), and
+#247 appended `.qwen/settings.json`.
 
 ## Harness output
 
@@ -49,6 +50,7 @@ A native consumer receives no duplicate configuration folder.
 | Devin CLI | Claude-compatible consumer | Shared Claude skills; `.devin/` only for agents | Shared `.mcp.json` | `.devin/agents/<name>.md` | Shared `.claude/commands/<name>.md` (imported as skills) | Shared `.claude/settings.json` |
 | Muse | No verified definition adapter in this repo | No dedicated output; follow-up | None yet | Unsupported | Unsupported | Unsupported |
 | Kiro | Native `AGENTS.md` | Uses shared `.claude/skills/` | `.kiro/settings/mcp.json` | `.kiro/agents/<name>.md` | Unsupported (format undocumented) | Unsupported |
+| Qwen Code | Native `AGENTS.md` | None yet (`.qwen/skills/`) | `.qwen/settings.json` | None yet (`.qwen/agents/`) | None yet (`.qwen/commands/`) | Unsupported |
 
 "None yet" and "Unsupported" describe adapters in this slice, not a claim
 that a harness lacks the capability. Subagents and commands without adapters
@@ -110,6 +112,20 @@ Adapter evidence (official docs read 2026-10-07):
   are documented in `.gemini/agents/*.md`, but their only switch is
   `experimental.enableAgents`, so they are not documented as stable and stay
   unsupported here.
+
+- Qwen Code (docs read 2026-10-08 at QwenLM/qwen-code `29aef7d`):
+  [MCP](https://github.com/QwenLM/qwen-code/blob/main/docs/users/features/mcp.md) —
+  project scope `.qwen/settings.json` with `mcpServers`, the same stdio
+  `command`/`args` entry; [memory](https://github.com/QwenLM/qwen-code/blob/main/docs/users/features/memory.md) —
+  reads `QWEN.md` and an existing `AGENTS.md`. Its project skills
+  (`.qwen/skills/`), agents (`.qwen/agents/`) and commands (`.qwen/commands/`)
+  are documented but not rendered yet (#247 is MCP only). The settings file
+  also carries the soul's own Qwen settings, so only `mcpServers.agent-bot` is
+  the builder's and every other key is merged through. Checked with Qwen Code
+  0.25.0: `qwen mcp list` in a directory holding the rendered file, `_comment`
+  marker included, lists `agent-bot: agent-bot reach-mcp (stdio)` as *pending
+  approval*. Qwen asks before it starts a project-scoped server, so the first
+  session in a soul home approves it once (`qwen mcp approve agent-bot`).
 
 **Unverified:** Cursor and Kiro were not run (both CLIs need a sign-in), so
 whether they tolerate the leading `_comment` marker key in `.cursor/mcp.json` and
@@ -377,6 +393,7 @@ the same bytes on every host.
 | `opencode.json` | `"mcp": { "agent-bot": { "type": "local", "command": ["agent-bot", "reach-mcp"] } }` |
 | `.cursor/mcp.json` | `"mcpServers": { "agent-bot": { "command": "agent-bot", "args": ["reach-mcp"] } }` |
 | `.kiro/settings/mcp.json` | `"mcpServers": { "agent-bot": { "command": "agent-bot", "args": ["reach-mcp"] } }` |
+| `.qwen/settings.json` | `"mcpServers": { "agent-bot": { "command": "agent-bot", "args": ["reach-mcp"] } }` |
 
 Copilot CLI and Devin CLI read the shared `.mcp.json` natively, so they get no
 file of their own; their report lists `mcp` with `.mcp.json`.
@@ -548,10 +565,10 @@ release gains what the builder renders now; a conflict there is reported on the
 daemon's stderr and the launch proceeds. A format-2 soul carrying an ignore list
 an earlier release wrote (before `.mcp.json` and `opencode.json`, 0.10.25,
 before Copilot's soul hook file, or before the adapters slice's
-`.github/agents/`, `.kiro/agents/` and `.kiro/settings/mcp.json`) still
-validates; only an unknown list is refused. The list names only those folders,
-so a soul's other files in `.github/` or `.kiro/` (workflows, steering) stay
-its own; files it authors in `.github/agents/` or `.kiro/agents/` are kept on
+`.github/agents/`, `.kiro/agents/` and `.kiro/settings/mcp.json`, or before
+#247's `.qwen/settings.json`) still validates; only an unknown list is refused. The list names only those folders,
+so a soul's other files in `.github/`, `.kiro/` or `.qwen/` (workflows,
+steering, Qwen skills) stay its own; files it authors in `.github/agents/` or `.kiro/agents/` are kept on
 build, but, like `.claude/`, are not copied out of a template.
 
 Format 2 ignores only exact expected bytes. Editing a marked generated file
@@ -573,7 +590,8 @@ and for Gemini CLI (until `.gemini/agents/` is documented as stable); commands
 for Codex, Cursor (replaced by skills) and Kiro (`.kiro/prompts/` file format
 undocumented); hooks for Gemini CLI, OpenCode (plugins), Muse and Kiro; a
 signed-in check that Cursor and Kiro accept the `_comment` marker key; and
-mapping MCP tool names into Kiro's and Devin's subagent tool lists.
+mapping MCP tool names into Kiro's and Devin's subagent tool lists; Qwen Code
+skills, subagents and commands.
 
 The rendered entry is named `agent-bot`; the daemon's injected entry and
 `reachPolicyRules()` name the same server `agent-reach`, so a
