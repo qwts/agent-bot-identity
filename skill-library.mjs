@@ -11,6 +11,7 @@ import { skillLibraryRoot } from './skill-library-paths.mjs';
 import { acquireRemoteSkill, skillSourceUrl, REMOTE_SKILL_LIMITS } from './skill-remote.mjs';
 import { inlineMarkdownLinks } from './skill-references.mjs';
 import { mergeSkillUpdate } from './skill-update-merge.mjs';
+import { acquireGithubSkill, githubSkillSource } from './skill-github.mjs';
 
 export const SKILL_LIBRARY_LIMITS = Object.freeze({ files: 1000, entries: 4000, bytes: 32 * 1024 * 1024, fileBytes: 8 * 1024 * 1024, entryBytes: 64 * 1024, depth: 16, references: 1000 });
 function boundedLimits(limits = {}) {
@@ -171,7 +172,8 @@ async function acquireHttps(input, id, options) {
   // Validate remote overrides before applying any stricter local bounds.
   for (const [key, value] of Object.entries(remoteLimits)) if (!Object.hasOwn(REMOTE_SKILL_LIMITS, key) || !Number.isSafeInteger(value) || value < 1 || value > REMOTE_SKILL_LIMITS[key]) fail('skill-limit-invalid', 'remote limits may only lower the documented positive bounds');
   for (const key of ['files', 'bytes', 'fileBytes', 'depth', 'references']) remoteLimits[key] = Math.min(remoteLimits[key] ?? REMOTE_SKILL_LIMITS[key], local[key]);
-  const content = await acquireRemoteSkill(input, id, { ...options, remoteLimits });
+  const acquireRemote = githubSkillSource(input) ? acquireGithubSkill : acquireRemoteSkill;
+  const content = await acquireRemote(input, id, { ...options, remoteLimits });
   const entry = content.entries.find(file => file.path === 'SKILL.md');
   if (!entry || entry.bytes.length > local.entryBytes) fail('skill-entry-invalid', 'remote SKILL.md exceeds the entrypoint bound');
   let name;
@@ -293,7 +295,7 @@ function readSnapshot(root, digest) {
     || refs.some(edge => !edge || edge.owner !== metadata.owner || !Object.hasOwn(content.files, edge.from ?? '')
       || !['captured', 'external', 'unresolved'].includes(edge.status)
       || (edge.status === 'captured' && !Object.hasOwn(content.files, edge.target ?? '')))
-    || !['markdown-inline-file-links-v1', 'markdown-inline-https-instructions-v1'].includes(metadata.coverage?.boundary) || metadata.coverage.universalRetrieval !== false
+    || !['markdown-inline-file-links-v1', 'markdown-inline-https-instructions-v1', 'github-directory-and-inline-https-instructions-v1'].includes(metadata.coverage?.boundary) || metadata.coverage.universalRetrieval !== false
     || metadata.coverage.unresolved !== refs.filter(edge => edge.status === 'unresolved').length
     || metadata.coverage.external !== refs.filter(edge => edge.status === 'external').length
     || !Array.isArray(metadata.excluded) || !Array.isArray(metadata.materialized)) fail('skill-record-invalid', 'invalid skill snapshot metadata');
@@ -303,6 +305,17 @@ function readSnapshot(root, digest) {
     || metadata.hosts.some(host => typeof host !== 'string' || !validSource({ kind: 'https', url: `https://${host}/` }) || new URL(`https://${host}/`).hostname !== host)
     || new Set(metadata.hosts).size !== metadata.hosts.length
     || metadata.locations.some(item => !metadata.hosts.includes(new URL(item.url).hostname) || !metadata.hosts.includes(new URL(item.resolvedUrl).hostname)))) fail('skill-record-invalid', 'invalid remote host provenance');
+  if (metadata.coverage.boundary === 'github-directory-and-inline-https-instructions-v1') {
+    const repository = metadata.repository;
+    let selected;
+    try { selected = metadata.source.kind === 'https' && githubSkillSource(metadata.source.url); } catch { selected = null; }
+    if (!selected || !repository || repository.provider !== 'github' || !/^[a-f0-9]{40}$/.test(repository.commit ?? '') || !/^[a-f0-9]{40}$/.test(repository.tree ?? '')
+      || ['owner', 'repo', 'ref', 'path'].some(key => repository[key] !== selected[key])) fail('skill-record-invalid', 'invalid repository commit provenance');
+    for (const location of metadata.locations.filter(item => item.gitBlob !== undefined)) {
+      const entry = content.entries.find(item => item.path === location.path);
+      if (!/^[a-f0-9]{40}$/.test(location.gitBlob) || createHash('sha1').update(`blob ${entry.bytes.length}\0`).update(entry.bytes).digest('hex') !== location.gitBlob) fail('skill-record-invalid', 'retained file does not match its repository blob receipt');
+    }
+  }
   try { validateSkill(content.entries.find(entry => entry.path === 'SKILL.md')?.bytes, metadata.name); }
   catch { fail('skill-record-invalid', 'invalid snapshot skill entrypoint'); }
   return metadata;
@@ -315,7 +328,8 @@ function snapshot(root, content, id, now) {
     writePayload(path.join(temp, 'payload'), content.entries);
     writeJson(path.join(temp, 'manifest.json'), { schemaVersion: 1, owner: id, name: content.name, manifest: { files: content.files, digest: content.digest }, source: content.source,
       capturedAt: now().toISOString(), dependencies: content.dependencies, coverage: content.coverage, excluded: content.excluded, materialized: content.materialized,
-      ...(content.locations ? { locations: content.locations, hosts: content.hosts } : {}) });
+      ...(content.locations ? { locations: content.locations, hosts: content.hosts } : {}),
+      ...(content.repository ? { repository: content.repository } : {}) });
     mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
     freeze(temp);
     // macOS requires the moved directory itself to be writable at rename.
@@ -328,7 +342,7 @@ export function importSkill(input, { now = () => new Date(), ...options } = {}) 
   const id = randomUUID();
   if (remote(input)) {
     input = skillSourceUrl(input); // reject secret-bearing input before async I/O
-    return acquireHttps(input, id, options).then(content => publishImport(content, id, now, options));
+    return acquireHttps(input, id, { ...options, now }).then(content => publishImport(content, id, now, options));
   }
   return publishImport(acquire(input, id, options), id, now, options);
 }
@@ -349,7 +363,8 @@ export function showSkill(id, options = {}) {
   validateManifest(source.manifest);
   if (source.owner !== id || source.name !== record.name || source.manifest.digest !== record.accepted) fail('skill-record-invalid', 'accepted snapshot does not match the record');
   return { ...record, path: path.join(root, record.name), snapshot: snapshotPath(root, record.accepted), dependencies: source.dependencies, coverage: source.coverage, excluded: source.excluded, materialized: source.materialized,
-    ...(source.locations ? { locations: source.locations, hosts: source.hosts } : {}) };
+    ...(source.locations ? { locations: source.locations, hosts: source.hosts } : {}),
+    ...(source.repository ? { repository: source.repository } : {}) };
 }
 export function listSkills(options = {}) {
   const root = rootFor(options);
@@ -418,7 +433,7 @@ function textDiffs(root, accepted, candidate, changes) {
 }
 export function checkSkill(id, { now = () => new Date(), ...options } = {}) {
   const { root, record } = load(id, options);
-  if (record.source.kind === 'https') return acquireHttps(record.source.url, id, options).then(
+  if (record.source.kind === 'https') return acquireHttps(record.source.url, id, { ...options, now }).then(
     source => publishCheck(source), error => publishCheck(null, error));
   return publishCheck();
   function publishCheck(fetched, fetchError) {
@@ -430,12 +445,13 @@ export function checkSkill(id, { now = () => new Date(), ...options } = {}) {
     let source;
     try { if (fetchError) throw fetchError; source = fetched ?? acquire(record.source.path, id, options); }
     catch (error) {
-      return checkReceipt(root, { id, status: 'unavailable', accepted: record.accepted, reason: error.code ?? 'skill-source-unavailable', checkedAt: now().toISOString(), message: 'source could not be checked; accepted snapshot and local files are unchanged' });
+      return checkReceipt(root, { id, status: 'unavailable', accepted: record.accepted, reason: error.code ?? 'skill-source-unavailable', ...(error.retryAt ? { retryAt: error.retryAt } : {}), checkedAt: now().toISOString(), message: 'source could not be checked; accepted snapshot and local files are unchanged' });
     }
     snapshot(root, source, id, now);
     const result = { id, status: source.digest === record.accepted ? 'unchanged' : 'changed', accepted: record.accepted, candidate: source.digest,
       candidatePath: snapshotPath(root, source.digest), candidateName: source.name, changes: diffSkillManifest(accepted.manifest, source), localAdaptations: diffSkillManifest(accepted.manifest, local), localDrift: diffSkillManifest(record.localBaseline, local), coverage: source.coverage, checkedAt: now().toISOString() };
     result.textDiffs = textDiffs(root, record.accepted, source.digest, result.changes);
+    if (source.repository) result.repository = source.repository;
     if (source.locations) { result.locations = source.locations; result.hosts = source.hosts; result.dependencies = source.dependencies; }
     if (source.coverage.acquisition === 'partial') Object.assign(result, {
       status: 'unavailable', reason: 'skill-capture-incomplete',
