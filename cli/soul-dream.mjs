@@ -57,14 +57,16 @@ export function parseDreamArgs(argv) {
 }
 
 // Only this soul's rows: other souls' registrations, runs and receipts are
-// not disclosed through a per-soul command.
+// not disclosed through a per-soul command. Every `*Receipts` list is keyed
+// by run ID, so receipt kinds added by later state versions filter the same way.
 function soulStatus(status, agentId) {
   const flights = (status.flights ?? []).filter(run => run.agentId === agentId);
   const registration = (status.registrations ?? []).find(row => row.agentId === agentId) ?? null;
   const runs = new Set([...flights.map(run => run.runId), ...(registration?.lastRun ? [registration.lastRun.runId] : [])]);
+  const receipts = Object.fromEntries(Object.entries(status).filter(([key, value]) => /^[a-z][A-Za-z]*Receipts$/.test(key) && Array.isArray(value))
+    .map(([key, value]) => [key, value.filter(receipt => runs.has(receipt?.runId))]));
   return { schemaVersion: 1, agentId, available: status.available === true, executorConfigured: status.executorConfigured === true,
-    fault: status.fault ?? null, maintenanceCoverage: 'unverified', registration, flights,
-    inputReceipts: (status.inputReceipts ?? []).filter(receipt => runs.has(receipt.runId)) };
+    fault: status.fault ?? null, maintenanceCoverage: 'unverified', registration, flights, inputReceipts: [], ...receipts };
 }
 const eventSoul = event => event?.registration?.agentId ?? event?.run?.agentId ?? null;
 

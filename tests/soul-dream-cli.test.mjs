@@ -27,6 +27,7 @@ const STATUS = {
   ],
   flights: [run(ID, RUN), run(OTHER, OTHER_RUN)],
   inputReceipts: [{ runId: RUN, journalRevision: 3, startingRevision: HASH, digest: HASH }, { runId: OTHER_RUN, journalRevision: 4, startingRevision: HASH, digest: HASH }],
+  outcomeReceipts: [{ runId: OTHER_RUN, journalRevision: 5, startingRevision: HASH, digest: HASH }],
   fault: null, journal: { revision: 4 },
 };
 
@@ -75,6 +76,7 @@ test('status and history disclose only the named soul and always report unverifi
   assert.equal(status.maintenanceCoverage, 'unverified');
   assert.deepEqual(status.flights.map(item => item.runId), [RUN]);
   assert.deepEqual(status.inputReceipts.map(item => item.runId), [RUN]);
+  assert.deepEqual(status.outcomeReceipts, [], 'receipt kinds from later state versions are filtered too');
   assert.equal(status.registration.intervalHours, 24);
   assert.equal(JSON.stringify(status).includes(OTHER), false, 'other souls are not disclosed');
 
@@ -171,6 +173,12 @@ test('the CLI reaches the real owner-gated daemon routes through the daemon clie
   assert.deepEqual(requests.at(-1), ['control', 'run-now', ID]);
   assert.deepEqual(JSON.parse(out.at(-1)).result, { agentId: ID, runId: RUN, status: 'started' });
   assert.equal(gates.at(-1), `soul dream ${ID} run-now`);
+  server.dream.control = () => { throw Object.assign(new Error('Configure a dream executor first.'), { code: 'dream-executor-unconfigured', statusCode: 409 }); };
+  assert.equal(await cli(['--soul', 'bill', '--pause', '--principal-stdin', '--json']), 1);
+  assert.deepEqual(JSON.parse(out.at(-1)).error.code, 'dream-executor-unconfigured', 'dream codes reach --json through the HTTP body');
+  server.dream.control = () => { throw Object.assign(new Error('boom'), { code: 'EACCES' }); };
+  assert.equal(await cli(['--soul', 'bill', '--pause', '--principal-stdin', '--json']), 1);
+  assert.equal(JSON.parse(out.at(-1)).error.code, 'dream-failed', 'other codes are not forwarded');
   assert.equal(JSON.stringify(out).includes(principal.secret), false);
 });
 

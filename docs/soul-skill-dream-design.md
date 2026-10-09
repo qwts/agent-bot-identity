@@ -136,8 +136,11 @@ any request. Without a running daemon every action fails with
 only the named soul's registration, runs, input receipts and events, and always
 carry `maintenanceCoverage: unverified`. Output is JSON, compact with `--json`
 and indented otherwise. A deferred run-now, or a cancel that requests nothing,
-exits 1. Daemon error responses carry only `soul-paused` and owner credential
-codes; other dream failures report the daemon's message under a generic code.
+exits 1. Daemon error responses forward `dream-*` codes as well as `soul-paused`
+and owner credential codes, so `--json` failures name them. Other failures
+report the daemon's message under `dream-failed`. Status filters every
+run-keyed `*Receipts` list, so receipt kinds from later state versions stay
+per-soul without a client change.
 
 At most one dream turn per soul may be unsettled. The scheduler defers a due
 run while the soul is paused or the shared registry reports another active
