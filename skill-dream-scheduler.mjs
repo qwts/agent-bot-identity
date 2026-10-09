@@ -461,11 +461,11 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
         if (entry.outcome !== null) {
           // Preview text goes to the preview store first; the journal keeps
           // its digest. A failed write leaves the preview unavailable, not the run.
-          const { outcome, text } = detachDreamPreview(entry.outcome);
+          const { outcome, text } = detachDreamPreview(entry.outcome), journalRevision = current.revision + 1;
           if (text !== null && previews !== null) {
-            try { previews.write({ agentId, runId: run.runId, startedAt: run.startedAt, text }); } catch { /* preview unavailable */ }
+            try { previews.write({ agentId, runId: run.runId, journalRevision, text }); } catch { /* preview unavailable */ }
           }
-          const receipt = { runId: run.runId, journalRevision: current.revision + 1, startingRevision: outcome.startingRevision, digest: dreamOutcomeDigest(outcome) };
+          const receipt = { runId: run.runId, journalRevision, startingRevision: outcome.startingRevision, digest: dreamOutcomeDigest(outcome) };
           current.outcomeReceipts.push(receipt);
           events.push({ kind: 'outcome-recorded', at: endedAt, run: result, receipt, outcome });
         }

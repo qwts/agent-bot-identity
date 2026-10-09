@@ -9,7 +9,7 @@ import { detachDreamPreview, dreamPreviewDigest, validateDreamOutcome } from '..
 const A = 'agent_12345678-1234-4234-8234-123456789abc';
 const B = 'agent_22345678-1234-4234-8234-123456789abc';
 const posix = { skip: process.platform === 'win32' };
-const run = n => ({ runId: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`, startedAt: new Date(Date.UTC(2026, 9, 9, 0, n)).toISOString() });
+const run = n => ({ runId: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`, journalRevision: n });
 function fixture(t) {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'dream-previews-'))), directory = path.join(root, 'previews');
   mkdirSync(directory, { mode: 0o700 });
@@ -30,6 +30,15 @@ test('previews round-trip by digest and prune to the newest twenty per soul', po
   assert.deepEqual(store.read({ agentId: B, ...run(1), digest: dreamPreviewDigest('other soul') }), { status: 'available', text: 'other soul' });
   assert.deepEqual(store.read({ agentId: B, ...run(9), digest: dreamPreviewDigest('x') }), { status: 'unavailable', text: null });
   assert.deepEqual(store.status(), { location: 'outside-journal', retainPerSoul: 20 });
+});
+
+test('retention follows journal order, so a later run is never the one pruned', posix, t => {
+  const { store } = fixture(t);
+  // Run IDs sort opposite to journal order here; only the revision decides.
+  for (let n = 1; n <= 21; n++) store.write({ agentId: A, runId: `00000000-0000-4000-8000-${String(100 - n).padStart(12, '0')}`, journalRevision: n * 3, text: `preview ${n}` });
+  store.prune(A);
+  assert.equal(store.read({ agentId: A, runId: '00000000-0000-4000-8000-000000000079', journalRevision: 63, digest: dreamPreviewDigest('preview 21') }).status, 'available');
+  assert.equal(store.read({ agentId: A, runId: '00000000-0000-4000-8000-000000000099', journalRevision: 3, digest: dreamPreviewDigest('preview 1') }).status, 'unavailable');
 });
 
 test('edited, linked or public previews are refused, and the store directory must be private', posix, t => {

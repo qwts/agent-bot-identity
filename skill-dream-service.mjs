@@ -71,14 +71,14 @@ function dreamPrompt(run, inputs) {
 }
 
 // Old outcomes carry their preview text inline. Newer ones name a stored
-// preview by digest; it reads back as unavailable once pruned, or invalid if
-// the stored bytes no longer match.
+// preview by digest. The journal event stays exactly as recorded, so its
+// receipt still verifies; the resolved text rides in a response-only
+// `preview` field: unavailable once pruned, invalid if the bytes changed.
 function withPreview(previews, event) {
-  if (event.kind !== 'outcome-recorded' || event.outcome.schemaVersion !== 2) return event;
-  const { preview, ...report } = event.outcome.report;
-  const found = preview === null ? { status: 'none', text: null }
-    : previews.read({ agentId: event.run.agentId, runId: event.run.runId, startedAt: event.run.startedAt, digest: preview.digest });
-  return { ...event, outcome: { ...event.outcome, report: { ...report, text: found.text, preview: preview && { ...preview, status: found.status } } } };
+  if (event.kind !== 'outcome-recorded' || event.outcome.schemaVersion !== 2 || event.outcome.report.preview === null) return event;
+  const { status, text } = previews.read({ agentId: event.run.agentId, runId: event.run.runId,
+    journalRevision: event.receipt.journalRevision, digest: event.outcome.report.preview.digest });
+  return { ...event, preview: { status, text } };
 }
 
 export function createDreamService({ directory, previewDirectory = path.join(path.dirname(path.resolve(directory ?? '.')), 'dream-previews'), lookupSoul, executorFor = null, turns, approvals = null, verifyRevisionEvidence = null,

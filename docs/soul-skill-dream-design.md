@@ -343,11 +343,13 @@ From state version 8, preview text is kept outside the journal (#603). The
 preview by `{ digest, bytes }` instead of holding its text, and the receipt
 digest covers that form. The daemon writes the text to a private per-soul
 preview store (`dream-previews/<agentId>/` beside the journal directory) before
-the journal commit, then keeps only the newest 20 previews for that soul. A
+the journal commit, named by that commit's journal revision, then keeps only the
+newest 20 previews for that soul in journal order, independent of the clock. A
 failed preview write leaves the preview unavailable and does not fault the run.
-History reads the text back by digest and reports each preview as `available`,
-`unavailable` (pruned or never written) or `invalid` (the stored bytes no
-longer match). Outcomes recorded before version 8 keep their inline text in the
+History returns the journal event exactly as recorded, so its receipt still
+verifies, plus a response-only `preview: { status, text }` field read back by
+digest. The status is `available`, `unavailable` (pruned or never written) or
+`invalid` (the stored bytes no longer match). Outcomes recorded before version 8 keep their inline text in the
 journal; their records are never rewritten.
 
 State version 3 adds `outcomeReceipts` references for latest registered runs.

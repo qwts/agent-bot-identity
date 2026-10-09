@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDreamService, dreamControlRequest, DREAM_POLL_MS, prepareDreamDirectory } from '../skill-dream-service.mjs';
 import { createDreamFileStore } from '../skill-dream-store.mjs';
+import { dreamOutcomeDigest } from '../skill-dream-outcomes.mjs';
 import { createDreamScheduler } from '../skill-dream-scheduler.mjs';
 import { createTurnRegistry, acpExecutorFor } from '../wake-plane.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
@@ -161,7 +162,7 @@ test('owner run-now uses configured ACP and keeps its unverified reply separate 
   const events = f.service.history().records.flatMap(record => record.events);
   const outcome = events.find(event => event.kind === 'outcome-recorded');
   assert.equal(outcome.outcome.report.status, 'unstructured');
-  assert.ok(outcome.outcome.report.text.includes('opt-reject'));
+  assert.ok(outcome.preview.text.includes('opt-reject'));
   assert.deepEqual(outcome.outcome.items, []);
   assert.equal(JSON.stringify(events.filter(event => event.kind !== 'outcome-recorded')).includes('opt-reject'), false);
   const prepared = f.service.history().records.flatMap(record => record.events).find(event => event.kind === 'inputs-prepared');
@@ -206,15 +207,15 @@ test('report previews live outside the journal, read back by digest and refuse t
   const journal = readdirSync(f.directory).map(name => readFileSync(path.join(f.directory, name), 'utf8')).join('');
   assert.equal(journal.includes('PREVIEW_CANARY'), false);
   const recorded = () => f.service.history().records.flatMap(record => record.events).find(event => event.kind === 'outcome-recorded');
-  assert.equal(recorded().outcome.report.text, 'PREVIEW_CANARY unstructured');
-  assert.equal(recorded().outcome.report.preview.status, 'available');
+  assert.deepEqual(recorded().preview, { status: 'available', text: 'PREVIEW_CANARY unstructured' });
+  assert.equal(recorded().receipt.digest, dreamOutcomeDigest(recorded().outcome), 'the journal outcome is returned as recorded');
   assert.deepEqual(f.service.status().previews, { location: 'outside-journal', retainPerSoul: 20 });
   const dir = path.join(path.dirname(f.directory), 'dream-previews', ID), [file] = readdirSync(dir);
   assert.equal(statSync(dir).mode & 0o777, 0o700); assert.equal(statSync(path.join(dir, file)).mode & 0o777, 0o600);
   writeFileSync(path.join(dir, file), 'PREVIEW_CANARY edited');
-  assert.deepEqual([recorded().outcome.report.text, recorded().outcome.report.preview.status], [null, 'invalid']);
+  assert.deepEqual(recorded().preview, { status: 'invalid', text: null });
   rmSync(path.join(dir, file));
-  assert.deepEqual([recorded().outcome.report.text, recorded().outcome.report.preview.status], [null, 'unavailable']);
+  assert.deepEqual(recorded().preview, { status: 'unavailable', text: null });
 });
 
 test('durable preparation precedes provider resolution and survives a launch failure', posix, async t => {

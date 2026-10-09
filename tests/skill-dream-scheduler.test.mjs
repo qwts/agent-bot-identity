@@ -699,7 +699,7 @@ test('v8 journals keep only the preview digest; inline v1 outcomes stay valid fo
   assert.equal(recorded.outcome.schemaVersion, 2);
   assert.deepEqual(recorded.outcome.report.preview, { digest: dreamPreviewDigest('PREVIEW_CANARY report'), bytes: 21 });
   assert.equal(recorded.receipt.digest, dreamOutcomeDigest(recorded.outcome));
-  assert.deepEqual(writes, [{ agentId: A, runId: call.run.runId, startedAt: call.run.startedAt, text: 'PREVIEW_CANARY report' }]);
+  assert.deepEqual(writes, [{ agentId: A, runId: call.run.runId, journalRevision: recorded.receipt.journalRevision, text: 'PREVIEW_CANARY report' }]);
   assert.deepEqual(pruned, [A]);
   const state = f.state();
   assert.deepEqual(validateDreamEvents(transaction, { state }), transaction);

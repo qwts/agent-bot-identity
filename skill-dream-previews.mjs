@@ -16,10 +16,10 @@ const owned = info => info.uid === process.getuid() && (info.mode & 0o077) === 0
 
 /**
  * One private directory per soul holds that soul's latest previews, named by
- * run start time so the newest sort last. Runs of one soul never overlap, so
- * start order is run order. A preview is written before the journal commit
- * that names its digest; a commit that never lands leaves a file the next
- * prune removes in turn. Reads check the digest, so an edited file is refused.
+ * the journal revision that records them so the newest sort last, whatever
+ * the wall clock does. A preview is written before that journal commit; a
+ * commit that never lands leaves a file the next prunes remove in turn.
+ * Reads check the digest, so an edited file is refused.
  */
 export function createDreamPreviewStore({ directory, retain = DREAM_PREVIEW_RETAIN } = {}) {
   if (process.platform === 'win32') fail('dream-store-unsupported', 'dream previews require POSIX directory semantics');
@@ -50,14 +50,15 @@ export function createDreamPreviewStore({ directory, retain = DREAM_PREVIEW_RETA
     privateDirectory(target);
     return target;
   };
-  const name = ({ runId, startedAt }) => {
-    const at = Date.parse(startedAt);
-    if (typeof runId !== 'string' || !UUID.test(runId) || !Number.isSafeInteger(at) || at < 0) fail('dream-preview-invalid', 'dream preview requires a run ID and start time');
-    return `${String(at).padStart(16, '0')}-${runId}.txt`;
+  const name = ({ runId, journalRevision }) => {
+    if (typeof runId !== 'string' || !UUID.test(runId) || !Number.isSafeInteger(journalRevision) || journalRevision < 1) {
+      fail('dream-preview-invalid', 'dream preview requires a run ID and journal revision');
+    }
+    return `${String(journalRevision).padStart(16, '0')}-${runId}.txt`;
   };
-  function write({ agentId, runId, startedAt, text }) {
+  function write({ agentId, runId, journalRevision, text }) {
     if (typeof text !== 'string' || Buffer.byteLength(text) > DREAM_OUTCOME_LIMITS.textBytes) fail('dream-preview-invalid', 'dream preview text is not bounded');
-    const target = soulDirectory(agentId, true), file = path.join(target, name({ runId, startedAt }));
+    const target = soulDirectory(agentId, true), file = path.join(target, name({ runId, journalRevision }));
     const temp = path.join(target, `.${randomUUID()}.tmp`), bytes = Buffer.from(text, 'utf8');
     let fd;
     try {
@@ -79,11 +80,11 @@ export function createDreamPreviewStore({ directory, retain = DREAM_PREVIEW_RETA
   }
   // `unavailable` covers pruned and never-written previews alike; `invalid`
   // means the stored bytes no longer match the journal's digest.
-  function read({ agentId, runId, startedAt, digest }) {
+  function read({ agentId, runId, journalRevision, digest }) {
     const target = soulDirectory(agentId, false);
     if (target === null) return { status: 'unavailable', text: null };
     let fd;
-    try { fd = openSync(path.join(target, name({ runId, startedAt })), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+    try { fd = openSync(path.join(target, name({ runId, journalRevision })), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
     catch (error) {
       if (error.code === 'ENOENT') return { status: 'unavailable', text: null };
       if (error.code === 'ELOOP') return { status: 'invalid', text: null };
