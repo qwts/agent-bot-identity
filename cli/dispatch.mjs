@@ -9,7 +9,7 @@ export const MODULES = new Map([
   ['bootstrap', 'bootstrap.mjs'],
   ['setup-worktree', 'setup-worktree.mjs'],
   ['join', 'soul-join.mjs'],
-  ['mint-token', 'mint-token.mjs'],
+  ['mint-token', 'cli/mint-token.mjs'],
   ['doctor', 'doctor.mjs'],
   ['identity', 'cli/identity.mjs'],
   ['space', 'agent-space.mjs'],

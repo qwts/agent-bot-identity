@@ -29,8 +29,6 @@ import process from 'node:process';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { resolveAppCredential } from './soul-credentials.mjs';
 import { loadConfig, apiBase } from './config.mjs';
-import { formatMintGrant } from './cli/mint-output.mjs';
-import { ownerApprovalRequired, requireOwnerApproval, explicitAppArg } from './owner-approval.mjs';
 
 function b64url(input) {
   return Buffer.from(input).toString('base64url');
@@ -271,29 +269,9 @@ export async function mint({ slug, env = process.env, agentId = null, viaKeyd = 
   return { token: grant.token, expires_at: grant.expires_at, installation_id: Number(installationId) };
 }
 
-async function main() {
-  const options = parseMintArgs(process.argv.slice(2));
-  if (options.help) {
-    process.stdout.write(MINT_USAGE);
-    return;
-  }
-  // An unmarked explicit mint in the owner's account is a credential release
-  // with no stated identity — it carries the owner-approval ceremony. Stated
-  // identities (pin, GH_AGENT_APP, harness markers, agent account) mint as
-  // before.
-  if (ownerApprovalRequired({ argv: process.argv })) {
-    const slug = explicitAppArg(process.argv);
-    requireOwnerApproval({
-      prompt: `Approve a GitHub App installation token for ${slug}[bot] — mint-token was run in the owner's account with no stated agent identity.`,
-    });
-  }
-  const grant = await mint({ permissions: options.permissions });
-  process.stdout.write(formatMintGrant(grant, { json: options.json }));
-}
-
+// The command line lives in cli/mint-token.mjs; output formatting is a cli
+// concern (#645). Run directly, this file only points there and mints nothing.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((err) => {
-    console.error(`mint-token: ${err.message}`);
-    process.exit(1);
-  });
+  console.error('mint-token: run agent-bot mint-token');
+  process.exit(1);
 }

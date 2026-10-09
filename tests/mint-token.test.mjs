@@ -374,16 +374,28 @@ test('mint-token --help prints the usage and never reaches GitHub; a bad flag fa
   // A GH_API_BASE that nothing listens on: any mint attempt fails loudly, so
   // the exit code and output below prove no request was ever made.
   const env = { ...process.env, GH_AGENT_APP: undefined, GH_APP_ID: '1', GH_APP_PRIVATE_KEY: pem, GITHUB_API_URL: 'http://127.0.0.1:9', HOME: mkdtempSync(join(tmpdir(), 'mint-help-')) };
-  const help = execFileSync(process.execPath, [join(import.meta.dirname, '..', 'mint-token.mjs'), '--help'], { env, encoding: 'utf8' });
+  const help = execFileSync(process.execPath, [join(import.meta.dirname, '..', 'cli', 'mint-token.mjs'), '--help'], { env, encoding: 'utf8' });
   assert.equal(help, MINT_USAGE);
   assert.doesNotMatch(help, /ghs_|token"/);
   let failure = null;
   try {
-    execFileSync(process.execPath, [join(import.meta.dirname, '..', 'mint-token.mjs'), '--permisions', 'contents=read'], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    execFileSync(process.execPath, [join(import.meta.dirname, '..', 'cli', 'mint-token.mjs'), '--permisions', 'contents=read'], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (error) { failure = error; }
   assert.ok(failure, 'a mistyped option must fail');
   assert.equal(failure.status, 1);
   assert.match(failure.stderr, /mint-token: unknown option: --permisions/);
+  assert.equal(failure.stdout, '');
+});
+
+test('mint-token.mjs run directly points at agent-bot mint-token and mints nothing (#645)', () => {
+  const env = { ...process.env, GH_AGENT_APP: undefined, GH_APP_ID: '1', GH_APP_PRIVATE_KEY: pem, GITHUB_API_URL: 'http://127.0.0.1:9', HOME: mkdtempSync(join(tmpdir(), 'mint-direct-')) };
+  let failure = null;
+  try {
+    execFileSync(process.execPath, [join(import.meta.dirname, '..', 'mint-token.mjs'), '--json'], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (error) { failure = error; }
+  assert.ok(failure, 'the library entry must refuse');
+  assert.equal(failure.status, 1);
+  assert.match(failure.stderr, /run agent-bot mint-token/);
   assert.equal(failure.stdout, '');
 });
 
