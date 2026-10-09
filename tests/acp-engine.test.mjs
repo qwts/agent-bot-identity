@@ -917,3 +917,32 @@ test('interactive ACP turns reuse session grants from the real harness binding a
   }
   assert.deepEqual(decisions.map((row) => row.decidedBy), ['approval', 'session', 'approval']);
 });
+
+test('a failed process-ownership record stops the agent before it hears anything (#603)', async () => {
+  const methods = [], pids = [], seen = [];
+  const executor = createAcpExecutor({
+    harness: 'claude', identity: IDENTITY, policy: ALLOW_ALL, registry: FAKE_REGISTRY, cwd: scratch().root, exitGraceMs: 100,
+    spawn: (command, args, options) => {
+      const child = spawnChild(command, args, options);
+      pids.push(child.pid);
+      const write = child.stdin.write.bind(child.stdin);
+      child.stdin.write = (chunk, ...rest) => {
+        methods.push(JSON.parse(chunk).method);
+        return write(chunk, ...rest);
+      };
+      return child;
+    },
+  });
+  await assert.rejects(executor({
+    invocation: { agentId: AGENT_ID }, message: 'hello', attachments: [], signal: new AbortController().signal,
+    appendEvent: () => ({}), addArtifact: () => {}, requestApproval: async () => ({ decision: 'deny' }),
+    onProcess: ({ pid }) => {
+      seen.push(pid);
+      throw new Error('CANARY ownership record failed');
+    },
+  }), /CANARY ownership record failed/);
+  assert.equal(pids.length, 1);
+  assert.deepEqual(seen, pids, 'the hook receives the group leader PID');
+  assert.deepEqual(methods, [], 'no initialize or prompt is sent after a failed record');
+  assert.throws(() => process.kill(-pids[0], 0), /ESRCH/);
+});

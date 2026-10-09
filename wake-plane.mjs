@@ -42,7 +42,7 @@ export function wakeReporter(report) {
 export const DREAM_REPLY_MAX_BYTES = 256 * 1024;
 
 export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onEvent = () => {}, approvals = null, turns = createTurnRegistry() }) {
-  return async ({ invocation, message, attachments, env, onSession = null, signal = null, kind = 'wake', historyId = null,
+  return async ({ invocation, message, attachments, env, onSession = null, onProcess = null, signal = null, kind = 'wake', historyId = null,
     timeoutMs = turnTimeoutMs, replyByteLimit = kind === 'dream' ? DREAM_REPLY_MAX_BYTES : null }) => {
     signal?.throwIfAborted(); // do not resolve runtime/provider credentials after a caller already cancelled
     if (!['wake', 'dream'].includes(kind)) throw new Error('cold turn kind must be wake or dream');
@@ -81,6 +81,7 @@ export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onE
       message,
       attachments,
       signal,
+      ...(onProcess === null ? {} : { onProcess }),
       appendEvent: (type, data) => {
         if (type === HARNESS_SESSION_EVENT && typeof onSession === 'function') {
           try { onSession(data?.harnessSessionId ?? null); } catch { /* observation only */ }

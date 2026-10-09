@@ -54,6 +54,7 @@ import {
   validateUpdate,
 } from './executor-contract.mjs';
 import { ACP_SPAWN_REGISTRY, harnessProcessEnv, resolveSpawn, spawnCommand, whichOnPath } from './acp-registry.mjs';
+import { GROUP_EXIT_GRACE_MS, GROUP_REAP_MS, terminationLadder, waitForGroupExit } from './process-ownership.mjs';
 
 export const ACP_PROTOCOL_VERSION = 1;
 export const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000;
@@ -64,11 +65,11 @@ const STDERR_TAIL_BYTES = 2_048;
 // Claude Code buffers its session log and flushes it on exit, so a turn
 // that ended in an immediate SIGKILL left a log with no messages: no
 // transcript to resume and nothing for runtime metrics (#86).
-export const DEFAULT_EXIT_GRACE_MS = 2_000;
+export const DEFAULT_EXIT_GRACE_MS = GROUP_EXIT_GRACE_MS;
 // SIGKILL cannot be ignored, but the group lingers until the kernel and
 // libuv's SIGCHLD handler reap its members; bound that wait so a wedged
 // (uninterruptible) process cannot hang the turn.
-const KILL_REAP_MS = 2_000;
+const KILL_REAP_MS = GROUP_REAP_MS;
 
 function failEngine(message) {
   throw new Error(`acp engine: ${message}`);
@@ -375,6 +376,7 @@ export function createAcpExecutor({
   const run = async ({
     invocation, message, attachments, signal,
     appendEvent, bindHarnessSession, emitUpdate, emitStop, requestPermission,
+    onProcess = null,
   }) => {
     const unavailable = (reason) => appendEvent('continuity', { status: 'unavailable', reason });
     let prior;
@@ -438,14 +440,8 @@ export function createAcpExecutor({
         return error?.code !== 'ESRCH';
       }
     };
-    const groupGone = async (ms) => {
-      const deadline = Date.now() + ms;
-      while (groupAlive()) {
-        if (Date.now() >= deadline) return false;
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      return true;
-    };
+    const groupGone = (ms) => waitForGroupExit(groupAlive, ms);
+    // The same ladder restart recovery walks for an orphaned dream group.
     const stopTree = async () => {
       try {
         child.stdin.end();
@@ -453,14 +449,23 @@ export function createAcpExecutor({
         // Already closed.
       }
       if (await groupGone(exitGraceMs)) return;
-      try {
-        process.kill(-child.pid, 'SIGTERM');
-      } catch {
-        // Already gone.
-      }
-      if (await groupGone(exitGraceMs)) return;
-      killTree();
-      await groupGone(KILL_REAP_MS);
+      await terminationLadder({
+        alive: groupAlive,
+        signal: (name) => {
+          if (name === 'SIGKILL') {
+            killTree();
+            return true;
+          }
+          try {
+            process.kill(-child.pid, name);
+          } catch {
+            // Already gone.
+          }
+          return true;
+        },
+        graceMs: exitGraceMs,
+        reapMs: KILL_REAP_MS,
+      });
     };
     let stderrTail = '';
     child.stderr.on('data', (data) => {
@@ -541,6 +546,9 @@ export function createAcpExecutor({
     }, turnTimeoutMs);
 
     try {
+      // Ownership evidence must be durable before the agent hears anything;
+      // a failed record ends the turn here and the finally stops the group.
+      if (typeof onProcess === 'function' && child.pid !== undefined) await onProcess({ pid: child.pid });
       const initialized = await rpc.request('initialize', {
         protocolVersion: ACP_PROTOCOL_VERSION,
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },

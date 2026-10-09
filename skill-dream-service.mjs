@@ -8,6 +8,7 @@ import { createDreamScheduler, DREAM_TIMEOUT_MS, parseDreamSchedule } from './sk
 import { createDreamFileStore } from './skill-dream-store.mjs';
 import { captureDreamInputs, dreamInputMetadata } from './skill-dream-inputs.mjs';
 import { interpretDreamReport } from './skill-dream-outcomes.mjs';
+import { createProcessOwnershipPort } from './process-ownership.mjs';
 import { coldTurnExecutor } from './wake-plane.mjs';
 
 export const DREAM_POLL_MS = 30_000;
@@ -69,7 +70,7 @@ function dreamPrompt(run, inputs) {
 }
 
 export function createDreamService({ directory, lookupSoul, executorFor = null, turns, approvals = null, verifyRevisionEvidence = null,
-  isPaused = () => false, now = () => new Date(),
+  isPaused = () => false, now = () => new Date(), processOwnership = createProcessOwnershipPort(),
   setIntervalImpl = setInterval, clearIntervalImpl = clearInterval,
 } = {}) {
   let store = null, scheduler = null, fault = null, timer = null, started = false, closed = false;
@@ -102,9 +103,9 @@ export function createDreamService({ directory, lookupSoul, executorFor = null, 
     if (typeof lookupSoul !== 'function' || typeof turns?.run !== 'function' || typeof turns?.busy !== 'function') fail('dream-service-configuration', 'Dream service needs the daemon soul lookup and turn registry.');
     store = createDreamFileStore({ directory: prepareDreamDirectory(directory) });
     const executeCold = configured ? coldTurnExecutor({ executorFor, turns, approvals, turnTimeoutMs: DREAM_TIMEOUT_MS }) : null;
-    scheduler = createDreamScheduler({ store, now, isPaused, isBusy: id => turns.busy().includes(id),
+    scheduler = createDreamScheduler({ store, now, isPaused, processOwnership, isBusy: id => turns.busy().includes(id),
       soulDirectory: id => launchable(id).directory,
-      execute: async ({ run, selectionCheckpoint, signal, timeoutMs, prepareInputs, stageOutcome }) => {
+      execute: async ({ run, selectionCheckpoint, signal, timeoutMs, prepareInputs, recordProcess, stageOutcome }) => {
         signal.throwIfAborted(); requireExecutor();
         const soul = launchable(run.agentId);
         if (soul.directory !== run.soulDir) fail('dream-binding-changed', 'Soul directory changed before execution.');
@@ -125,7 +126,8 @@ export function createDreamService({ directory, lookupSoul, executorFor = null, 
         let output;
         try {
           output = await executeCold({ invocation: { agentId: run.agentId, harness: soul.harness, cwd: soul.directory },
-            message: dreamPrompt(run, inputs), attachments: [], env: {}, signal, timeoutMs, kind: 'dream', historyId: run.runId });
+            message: dreamPrompt(run, inputs), attachments: [], env: {}, signal, timeoutMs, kind: 'dream', historyId: run.runId,
+            onProcess: ({ pid }) => { recordProcess({ pid }); } });
         } catch (error) {
           stageOutcome(interpretDreamReport({ run, inputs: metadata, executionFailed: true }));
           throw error;
@@ -195,14 +197,14 @@ export function createDreamService({ directory, lookupSoul, executorFor = null, 
       if (timer !== null) { clearIntervalImpl(timer); timer = null; }
       for (const agentId of new Set([...pending.values()].map(run => run.agentId))) stopSoul(agentId, 'shutdown');
     },
-    idle: () => Promise.allSettled([...pending.values()].map(run => run.done)),
+    idle: () => Promise.allSettled([...pending.values()].map(run => run.done).concat(scheduler ? [scheduler.recovering()] : [])),
     history(query) { ensure(); return store.history(query); },
     status() {
       try {
         const state = scheduler.status();
         fault ??= state.fault;
         return { schemaVersion: 1, available: !fault, executorConfigured: configured, started, closing: closed,
-          maintenanceCoverage: 'unverified', orphanRecovery: 'quarantine-only',
+          maintenanceCoverage: 'unverified', orphanRecovery: 'process-group-or-quarantine',
           diagnostics: { scope: 'this-daemon', inputFailures: [...inputFailures.values()].map(value => ({ ...value })) },
           ...state, fault, journal: store.status() };
       } catch (error) { fault ??= errorCode(error); return { schemaVersion: 1, available: false, executorConfigured: configured, fault }; }

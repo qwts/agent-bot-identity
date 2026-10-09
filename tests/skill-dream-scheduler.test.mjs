@@ -26,10 +26,10 @@ function fixture(extra = {}) {
       state = copy(change.state); events.push(...copy(change.events)); return true;
     },
   };
-  const execute = ({ run, selectionCheckpoint, signal, timeoutMs, prepareInputs, stageOutcome }) => {
+  const execute = ({ run, selectionCheckpoint, signal, timeoutMs, prepareInputs, recordProcess, stageOutcome }) => {
     assert.equal(state.flights.find(item => item.runId === run.runId)?.status, 'running', 'the durable lease precedes the executor');
     assert.ok(events.some(event => event.kind === 'started' && event.run.runId === run.runId));
-    return new Promise((resolve, reject) => calls.push({ run, selectionCursor: selectionCheckpoint?.nextCursor ?? null, selectionCheckpoint, signal, timeoutMs, prepareInputs, stageOutcome, resolve, reject }));
+    return new Promise((resolve, reject) => calls.push({ run, selectionCursor: selectionCheckpoint?.nextCursor ?? null, selectionCheckpoint, signal, timeoutMs, prepareInputs, recordProcess, stageOutcome, resolve, reject }));
   };
   const ports = { store, execute, soulDirectory: id => dirs.get(id), isPaused: id => paused.has(id), isBusy: id => busy.has(id),
     now: () => new Date(at), setTimer: (fn, delay) => { const token = {}; timers.set(token, { fn, delay }); return token; }, clearTimer: token => timers.delete(token), ...extra };
@@ -268,9 +268,9 @@ test('restart quarantines a flight; schedule changes, unschedule and path moves 
   const run = f.scheduler.runNow(A); await Promise.resolve();
   const restarted = createDreamScheduler(f.ports);
   assert.equal(restarted.runNow(A).reason, 'recovery-required', 'must refuse even before recovery was journalled');
-  assert.deepEqual(restarted.recover(), { quarantined: 1 });
+  assert.deepEqual(restarted.recover(), { quarantined: 1, settled: 0, terminating: 0 });
   const revision = f.state().revision;
-  assert.deepEqual(restarted.recover(), { quarantined: 0 }); assert.equal(f.state().revision, revision);
+  assert.deepEqual(restarted.recover(), { quarantined: 0, settled: 0, terminating: 0 }); assert.equal(f.state().revision, revision);
   assert.equal(restarted.status().flights[0].status, 'recovery-required');
   restarted.pause(A); restarted.unschedule(A); f.dirs.set(A, path.join(tmpdir(), 'copied-soul'));
   restarted.register(A, 'PT24H');
@@ -530,7 +530,7 @@ test('a restart quarantine publishes one owner-visible recovery notice that surv
   const f = fixture(); f.scheduler.register(A, 'PT1H');
   const run = f.scheduler.runNow(A); await Promise.resolve();
   const restarted = createDreamScheduler(f.ports), before = f.events.length;
-  assert.deepEqual(restarted.recover(), { quarantined: 1 });
+  assert.deepEqual(restarted.recover(), { quarantined: 1, settled: 0, terminating: 0 });
   const tail = f.events.slice(before);
   assert.deepEqual(tail.map(event => event.kind), ['recovery-required', 'notices-updated'], 'the notice publishes in the quarantine transaction');
   const [notice] = tail[1].created;
@@ -540,7 +540,7 @@ test('a restart quarantine publishes one owner-visible recovery notice that surv
   assert.equal(f.state().noticeLedgers[0].lastRunId, null, 'a quarantine is not a terminal run');
   // Recovery is idempotent: a second pass writes nothing.
   const revision = f.state().revision;
-  assert.deepEqual(restarted.recover(), { quarantined: 0 }); assert.equal(f.state().revision, revision);
+  assert.deepEqual(restarted.recover(), { quarantined: 0, settled: 0, terminating: 0 }); assert.equal(f.state().revision, revision);
   // Unscheduling cannot clear the quarantine, so it cannot hide its notice either.
   restarted.unschedule(A);
   assert.deepEqual(f.state().noticeLedgers.map(ledger => ledger.notices.map(row => row.id)), [[notice.id]]);
@@ -560,5 +560,145 @@ test('a restart quarantine publishes one owner-visible recovery notice that surv
   ]) assert.throws(() => validateDreamEvents(events), { code: 'dream-state-invalid' });
   const old = { ...copy(state), schemaVersion: 5 };
   assert.throws(() => validateDreamState(old), { code: 'dream-state-invalid' }, 'version 5 readers never see the recovery kind');
+  f.calls[0].resolve(); await run.done;
+});
+
+// Restart recovery with process-ownership evidence (#603). The fake port
+// scripts each inspect answer; process-ownership.test.mjs maps real probes.
+const STARTED = 'Fri Oct 9 18:56:30 2026';
+function ownershipPort({ inspect = [], record = pid => ({ pgid: pid, leaderStartedAt: STARTED }), terminate = async () => true } = {}) {
+  const calls = [];
+  return { calls, port: {
+    record: pid => { calls.push('record'); return record(pid); },
+    inspect: ownership => {
+      calls.push('inspect');
+      assert.deepEqual(Object.keys(ownership).sort(), ['leaderStartedAt', 'pgid']);
+      const next = inspect.shift();
+      if (next instanceof Error) throw next;
+      return next;
+    },
+    terminate: async ownership => { calls.push('terminate'); return terminate(ownership); },
+  } };
+}
+async function orphaned(script, { record = true } = {}) {
+  const owner = ownershipPort(script), f = fixture({ processOwnership: owner.port });
+  f.scheduler.register(A, 'PT1H');
+  const run = f.scheduler.runNow(A); await Promise.resolve();
+  const ownership = record ? f.calls[0].recordProcess({ pid: 4242 }) : null;
+  owner.calls.length = 0;
+  const restarted = createDreamScheduler(f.ports), before = f.events.length;
+  // Only the fixture's original promise is left; release it after the restart.
+  const release = async () => { f.calls[0].resolve(); await run.done; };
+  return { f, run, ownership, owner, restarted, before, release };
+}
+
+test('ownership is recorded once per live run, before the first prompt, as a v7 run field', async () => {
+  const { f, ownership, owner, release } = await orphaned({});
+  assert.deepEqual(ownership, { pgid: 4242, leaderStartedAt: STARTED });
+  const event = f.events.at(-1);
+  assert.deepEqual([event.kind, event.run.status, event.run.ownership], ['ownership-recorded', 'running', ownership]);
+  assert.deepEqual(f.state().flights[0].ownership, ownership);
+  assert.throws(() => f.calls[0].recordProcess({ pid: 4242 }), { code: 'dream-ownership-refused' });
+  assert.deepEqual(owner.calls, [], 'a refused second record never reaches the port');
+  assert.deepEqual(validateDreamEvents([event], { state: f.state() }), [event]);
+  for (const forged of [{ ...event, run: { ...event.run, ownership: null } }, { ...event, run: { ...event.run, ownership: { pgid: 1, leaderStartedAt: STARTED } } }]) {
+    assert.throws(() => validateDreamEvents([forged]), { code: 'dream-state-invalid' });
+  }
+  const v6 = { ...f.state(), schemaVersion: 6 };
+  assert.throws(() => validateDreamState(v6), { code: 'dream-state-invalid' }, 'version 6 runs carry no ownership field');
+  await release();
+});
+
+test('a verified-absent group settles as interrupted, never successful, and allows dispatch', async () => {
+  const { f, restarted, owner, before, release } = await orphaned({ inspect: ['absent'] });
+  assert.deepEqual(restarted.recover(), { quarantined: 0, settled: 1, terminating: 0 });
+  assert.deepEqual(owner.calls, ['inspect'], 'an absent group is never signalled');
+  const state = f.state(), lastRun = state.registrations[0].lastRun;
+  assert.deepEqual(state.flights, []);
+  assert.deepEqual([lastRun.status, lastRun.ownership.pgid], ['interrupted', 4242]);
+  assert.equal(state.registrations[0].nextDueAt, new Date(Date.parse(lastRun.endedAt) + HOUR).toISOString());
+  assert.deepEqual(f.events.slice(before).map(event => event.kind), ['ended']);
+  assert.deepEqual(state.noticeLedgers, []);
+  assert.throws(() => validateDreamState({ ...state, schemaVersion: 6 }), { code: 'dream-state-invalid' }, 'version 6 has no interrupted status');
+  assert.equal(restarted.runNow(A).status, 'started');
+  await release();
+});
+
+test('an owned live group walks the termination ladder and settles only on verified absence', async () => {
+  let finish;
+  const { f, restarted, owner, release } = await orphaned({ inspect: ['owned', 'absent'], terminate: () => new Promise(resolve => { finish = resolve; }) });
+  assert.deepEqual(restarted.recover(), { quarantined: 0, settled: 0, terminating: 1 });
+  assert.equal(restarted.runNow(A).reason, 'recovering', 'no dispatch while the earlier group may still run');
+  await new Promise(setImmediate);
+  assert.deepEqual(owner.calls, ['inspect', 'terminate']);
+  assert.equal(f.state().flights[0].status, 'running', 'the lease is held during termination');
+  finish(true); await restarted.recovering();
+  assert.deepEqual(owner.calls, ['inspect', 'terminate', 'inspect'], 'absence is re-verified after the ladder');
+  assert.deepEqual([f.state().flights, f.state().registrations[0].lastRun.status], [[], 'interrupted']);
+  await release();
+});
+
+test('a group still live after the ladder stays recovery-required with its notice', async () => {
+  const { f, restarted, before, release } = await orphaned({ inspect: ['owned', 'owned'], terminate: async () => false });
+  restarted.recover(); await restarted.recovering();
+  assert.equal(f.state().flights[0].status, 'recovery-required');
+  assert.deepEqual(f.events.slice(before).map(event => event.kind), ['recovery-required', 'notices-updated']);
+  assert.equal(restarted.runNow(A).reason, 'recovery-required');
+  await release();
+});
+
+for (const [name, script, options] of [
+  ['a reused PID (start-time mismatch)', { inspect: ['ambiguous'] }, {}],
+  ['a permission error', { inspect: [Object.assign(new Error('EPERM'), { code: 'EPERM' })] }, {}],
+  ['an unknown port answer', { inspect: ['maybe'] }, {}],
+  ['an unsupported platform', { inspect: ['unsupported'] }, {}],
+  ['missing ownership metadata', {}, { record: false }],
+  ['an unsupported platform at record time', { record: () => null }, {}],
+]) test(`${name} quarantines exactly as before and sends no signal`, async () => {
+  const { f, restarted, owner, ownership, before, release } = await orphaned(script, options);
+  if (script.record) assert.equal(ownership, null);
+  assert.deepEqual(restarted.recover(), { quarantined: 1, settled: 0, terminating: 0 });
+  assert.equal(owner.calls.includes('terminate'), false);
+  assert.deepEqual(f.events.slice(before).map(event => event.kind), ['recovery-required', 'notices-updated']);
+  assert.equal(restarted.runNow(A).reason, 'recovery-required');
+  await release();
+});
+
+test('a crash between spawning and recording the child leaves the run recovery-required', async () => {
+  const owner = ownershipPort({ inspect: ['absent'] }), f = fixture({ processOwnership: owner.port });
+  f.scheduler.register(A, 'PT1H');
+  const run = f.scheduler.runNow(A); await Promise.resolve();
+  f.fail(change => change.events.some(event => event.kind === 'ownership-recorded'));
+  assert.throws(() => f.calls[0].recordProcess({ pid: 4242 }), { code: 'dream-store-failed' });
+  assert.equal(f.state().flights[0].ownership, null);
+  f.fail(null);
+  const restarted = createDreamScheduler(f.ports);
+  assert.deepEqual(restarted.recover(), { quarantined: 1, settled: 0, terminating: 0 });
+  assert.deepEqual(owner.calls, ['record'], 'without durable ownership the group is never inspected');
+  f.calls[0].resolve(); await run.done;
+});
+
+test('ownership recorded by this same daemon generation is never treated as an earlier orphan', async () => {
+  const { f, owner, release } = await orphaned({ inspect: ['absent'] });
+  const same = createDreamScheduler({ ...f.ports, daemonGeneration: f.state().flights[0].daemonGeneration });
+  assert.deepEqual(same.recover(), { quarantined: 1, settled: 0, terminating: 0 });
+  assert.deepEqual(owner.calls, []);
+  await release();
+});
+
+test('v6 state upgrades its runs with null ownership, and stateless v6 events still validate', async () => {
+  const f = fixture(); f.scheduler.register(A, 'PT1H');
+  const run = f.scheduler.runNow(A); await Promise.resolve();
+  const legacy = f.state();
+  delete legacy.flights[0].ownership; legacy.schemaVersion = 6;
+  assert.deepEqual(validateDreamState(legacy), legacy);
+  f.replace(legacy);
+  const upgraded = createDreamScheduler(f.ports).status();
+  assert.deepEqual([upgraded.schemaVersion, upgraded.flights[0].ownership], [7, null]);
+  const started = copy(f.events.find(event => event.kind === 'started'));
+  delete started.run.ownership;
+  assert.deepEqual(validateDreamEvents([started]), [started]);
+  assert.throws(() => validateDreamEvents([{ ...started, kind: 'ended', run: { ...started.run, status: 'interrupted', endedAt: started.at } }]),
+    { code: 'dream-state-invalid' }, 'a v6-shaped run cannot settle as interrupted');
   f.calls[0].resolve(); await run.done;
 });
