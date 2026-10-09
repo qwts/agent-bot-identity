@@ -16,12 +16,14 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { isGateEnabled, loadConfig, scopeConfigToApps } from './config.mjs';
 import { reconcileAppCredentials } from './credential-reconciler.mjs';
+import { accountName, configuredAccountIdentity } from './detect-harness.mjs';
 import { installAgentBot, installationPaths, isManagedExecutable } from './install.mjs';
 import { installGhShim } from './install-gh-shim.mjs';
 import {
   OrganizationProfileError,
   isProjectedRuntimeConfig,
   organizationProfileToConfig,
+  parseOrganizationProfile,
   readOrganizationProfile,
 } from './organization-profile.mjs';
 import {
@@ -33,6 +35,7 @@ import {
   renderReadinessReport,
   requireReadinessSchema,
 } from './readiness.mjs';
+import { SopError, readSelectedOrganizationProfile } from './sop.mjs';
 
 export { configuredAppSlugs };
 
@@ -46,7 +49,9 @@ Options:
   --config <path>   Install an explicit secret-free config file; never discovers organization policy
   --app <slug>      Restore one App credential (repeatable)
   --scope-app <slug>
-                    Scope this account's roster to the App (repeatable; with --profile)
+                    Scope this account's roster to the App (repeatable; with --profile or --repair)
+  --repair          Restore a deleted runtime config from the selected organization
+                    (~/.config/agent-sop/config.toml), then repair machine state
   --with-gh-shim    Install the managed fail-closed gh shim
   --machine-only    Install and verify machine state; do not bind this worktree
   --worktree-only   Bind and verify this linked worktree; do not mutate machine setup
@@ -99,6 +104,7 @@ export function parseBootstrapArgs(argv = process.argv.slice(2)) {
     help: false,
     json: false,
     phase: 'all',
+    repair: false,
     requireSchemaVersion: null,
     scopeApps: [],
     withGhShim: false,
@@ -136,6 +142,8 @@ export function parseBootstrapArgs(argv = process.argv.slice(2)) {
       options.withGhShim = true;
     } else if (arg === '--json') {
       options.json = true;
+    } else if (arg === '--repair') {
+      options.repair = true;
     } else if (arg === '--machine-only' || arg === '--worktree-only') {
       if (selectedPhase) throw new Error(`${arg} conflicts with ${selectedPhase}`);
       selectedPhase = arg;
@@ -149,9 +157,18 @@ export function parseBootstrapArgs(argv = process.argv.slice(2)) {
   if (options.profilePath && options.configPath) {
     throw new Error('--profile conflicts with --config');
   }
-  if (options.scopeApps.length > 0 && !options.profilePath) {
-    throw new Error('--scope-app requires --profile');
+  if (options.repair && options.configPath) {
+    throw new Error('--repair conflicts with --config');
   }
+  if (options.scopeApps.length > 0 && !options.profilePath && !options.repair) {
+    throw new Error('--scope-app requires --profile or --repair');
+  }
+  // Repair is a machine operation: it restores config, runtime, hooks and
+  // credentials, and never binds the current checkout.
+  if (options.repair && options.phase === 'worktree') {
+    throw new Error('--repair conflicts with --worktree-only');
+  }
+  if (options.repair) options.phase = 'machine';
   if (
     options.phase === 'worktree'
     && (options.profilePath || options.configPath || options.apps.length > 0 || options.withGhShim)
@@ -316,6 +333,100 @@ export function installBootstrapProfile({
   return { ...result, profile };
 }
 
+// bootstrap --repair (#190). An installed runtime config, and the profile
+// snapshot it carries, wins: nothing is fetched and the existing config path
+// runs. Only when it is gone is the organization profile read from the
+// selected organization at its resolved commit, scoped to the App this
+// account resolves (or to explicit --scope-app Apps), and published as
+// --profile would. It never guesses: no selection, an unreadable selection,
+// or an account that resolves no active App is a named refusal.
+export function repairBootstrapProfile({
+  scopeApps = [],
+  home = homedir(),
+  env = process.env,
+  readSelected = readSelectedOrganizationProfile,
+  installConfig = installBootstrapConfig,
+  installProfile = installBootstrapProfile,
+  lstat = lstatSync,
+} = {}) {
+  // The same file loadConfig reads, so a surviving config is never shadowed.
+  const destination = env.AGENT_BOT_CONFIG ?? bootstrapConfigPath(home);
+  if (optionalLstat(destination, lstat)) {
+    return { ...installConfig({ home, env }), repair: { source: 'installed' } };
+  }
+  // A profile is only ever published to the default path, so restoring it
+  // while AGENT_BOT_CONFIG names a missing file would leave the runtime
+  // reading nothing. Refuse before any read or mutation.
+  if (env.AGENT_BOT_CONFIG) {
+    throw new OrganizationProfileError('profile-config-override', 'AGENT_BOT_CONFIG names a missing runtime config');
+  }
+  let selected;
+  try {
+    selected = readSelected({ home, env });
+  } catch (error) {
+    if (error instanceof SopError) {
+      throw new OrganizationProfileError('profile-selection-unreadable', 'the selected organization could not be read');
+    }
+    throw error;
+  }
+  if (!selected) {
+    throw new OrganizationProfileError('profile-selection-missing', 'no organization is selected');
+  }
+  let scope = scopeApps;
+  if (scope.length === 0) {
+    const projected = organizationProfileToConfig(parseOrganizationProfile(selected.text));
+    const identity = configuredAccountIdentity(projected, accountName(env));
+    if (!identity) {
+      throw new OrganizationProfileError(
+        'profile-account-unresolved',
+        'this account resolves no active App in the organization profile',
+      );
+    }
+    scope = [identity.slug];
+  }
+  const result = installProfile({
+    sourcePath: `${selected.repository}@${selected.commit}:${selected.path}`,
+    read: () => selected.text,
+    scopeApps: scope,
+    home,
+    env,
+  });
+  return {
+    ...result,
+    repair: {
+      source: 'organization',
+      repository: selected.repository,
+      commit: selected.commit,
+      path: selected.path,
+      scope,
+    },
+  };
+}
+
+function repairCheck(repair, updated) {
+  if (repair.source === 'installed') {
+    return readinessCheck({
+      id: 'bootstrap.repair',
+      status: 'ready',
+      message: 'kept the installed runtime config and its organization profile snapshot',
+      evidence: { source: 'installed' },
+    });
+  }
+  return readinessCheck({
+    id: 'bootstrap.repair',
+    status: 'ready',
+    message: `${updated ? 'restored' : 'verified'} the runtime config from ${repair.repository}@${repair.commit}:${repair.path}, scoped to ${repair.scope.join(', ')}`,
+    evidence: {
+      source: 'organization',
+      repository: repair.repository,
+      commit: repair.commit,
+      path: repair.path,
+      scope: repair.scope,
+      updated,
+    },
+  });
+}
+
 export function assertInstalledRuntime({
   executable,
   entrypoint = SOURCE_ENTRYPOINT,
@@ -351,6 +462,10 @@ function safeProfileFailure(error) {
     'profile-config-conflict': 'the organization profile conflicts with the installed runtime config',
     'profile-app-retired': 'bootstrap rejected a roster scope naming an App the organization profile retires',
     'profile-app-unknown': 'bootstrap rejected a roster scope naming an App the organization profile does not list',
+    'profile-selection-missing': 'bootstrap --repair found no selected organization to restore the profile from',
+    'profile-selection-unreadable': 'bootstrap --repair could not read the organization profile from the selected organization',
+    'profile-account-unresolved': 'bootstrap --repair found no active App in the organization profile for this account',
+    'profile-config-override': 'bootstrap --repair cannot restore a runtime config that AGENT_BOT_CONFIG redirects to a missing file',
   };
   return {
     code: Object.hasOwn(messages, code) ? code : 'profile-apply-failed',
@@ -363,6 +478,7 @@ export async function bootstrap(options, {
   env = process.env,
   installConfig = installBootstrapConfig,
   installProfile = installBootstrapProfile,
+  repairProfile = repairBootstrapProfile,
   installRuntime = installAgentBot,
   installShim = installGhShim,
   reconcileCredentials = reconcileAppCredentials,
@@ -406,6 +522,7 @@ export async function bootstrap(options, {
   let operationFailure = null;
   let reachedCredentialPhase = false;
   let githubIdentityEnabled = false;
+  let repaired = null;
 
   const fail = (failureScope, id, code, message, action, evidence = {}) => {
     operationFailure = {
@@ -418,10 +535,13 @@ export async function bootstrap(options, {
     try {
       const configResult = options.profilePath
         ? installProfile({ sourcePath: options.profilePath, scopeApps: options.scopeApps, home, env })
-        : installConfig({ sourcePath: options.configPath, home, env });
+        : options.repair
+          ? repairProfile({ scopeApps: options.scopeApps, home, env, installConfig, installProfile })
+          : installConfig({ sourcePath: options.configPath, home, env });
       config = configResult.config;
+      if (configResult.repair) repaired = repairCheck(configResult.repair, configResult.updated);
     } catch (error) {
-      if (options.profilePath) {
+      if (options.profilePath || options.repair) {
         const profileFailure = safeProfileFailure(error);
         fail(
           'machine',
@@ -432,7 +552,15 @@ export async function bootstrap(options, {
             ? 'update agent-bot to a compatible runtime, then retry bootstrap'
             : profileFailure.code === 'profile-config-conflict'
               ? 'reconcile or move aside the installed runtime config, then retry bootstrap'
-              : 'obtain a complete compatible secret-free organization profile, then retry bootstrap',
+              : profileFailure.code === 'profile-selection-missing'
+                ? 'select the organization in ~/.config/agent-sop/config.toml ([repos] org), or pass --profile'
+                : profileFailure.code === 'profile-selection-unreadable'
+                  ? 'run agent-bot sop to check the organization selection and its org.json, or pass --profile'
+                  : profileFailure.code === 'profile-account-unresolved'
+                    ? 'run --repair from the agent account, pass --scope-app, or pass --profile'
+                    : profileFailure.code === 'profile-config-override'
+                      ? 'restore the file AGENT_BOT_CONFIG names, or unset AGENT_BOT_CONFIG, then retry bootstrap --repair'
+                    : 'obtain a complete compatible secret-free organization profile, then retry bootstrap',
         );
       } else {
         fail(
@@ -564,6 +692,16 @@ export async function bootstrap(options, {
         || credentialResults !== null
         || (reachedCredentialPhase && !operationFailure),
     });
+    if (repaired) {
+      return buildReadinessReport({
+        command: 'bootstrap',
+        scope,
+        machineChecks: [repaired, ...report.machine.checks],
+        apps: report.machine.apps,
+        worktreeStatus: report.worktree.status,
+        worktreeChecks: report.worktree.checks,
+      });
+    }
     if (scope !== 'machine' && report.worktree.status === 'not_applicable') {
       const check = unboundCheckoutCheck(report);
       return buildReadinessReport({

@@ -12,6 +12,7 @@ Use this reference for setup, minting, diagnostics, and identity repair.
 | Mint a short-lived App installation token | `agent-bot mint-token [--app <slug>] [--json]` |
 | Diagnose the installation and mapped identities | `agent-bot doctor [--json]` |
 | Repair and verify an installed setup | `agent-bot bootstrap [--machine-only\|--worktree-only] [--json]` |
+| Restore a deleted runtime config from the selected organization | `agent-bot bootstrap --repair [--scope-app <slug>] [--json]` |
 | Install the CLI, hooks, and identity-daemon supervisor | `agent-bot install [--with-gh-shim]` |
 | Unload the identity-daemon supervisor | `agent-bot daemon disable` |
 | Supervise an embedded host's own runtime (re-run after update or move) | `AGENT_BOT_SERVICE_LABEL=<label> agent-bot daemon install [--json]` |
@@ -76,6 +77,13 @@ The profile must validate before mutation, every active harness must have an
 active default, and retired identities must not appear in the reconciliation
 roster. `--profile -` reads JSON from stdin. Use the mutually exclusive
 `--config` option only for a legacy already-projected runtime config.
+
+If `~/.config/agent-bot` was deleted, run `agent-bot bootstrap --repair` from
+the agent account instead of hunting for a profile file. It reads the profile
+the selected organization names (`~/.config/agent-sop/config.toml`
+`[repos] org`, then `org.json` `organization.profile`) at the resolved commit,
+scopes it to the account's App, and reports that commit in `bootstrap.repair`.
+A surviving config always wins; `--profile` stays the explicit override.
 
 Confirm that every expected App row is ready and separately confirm the
 organization-owned tooling inventory. Do not report an organization install as

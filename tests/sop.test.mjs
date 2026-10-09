@@ -19,6 +19,7 @@ import {
   main as sopMain,
   parseOrgPins,
   parseTomlSubset,
+  readSelectedOrganizationProfile,
   resolveSop as sopResolve,
 } from '../sop.mjs';
 
@@ -450,6 +451,79 @@ test('git is refused for clone, checkout, global config, and any file other than
   assert.throws(() => assertSopGitCommand(['config', '--global', 'core.hooksPath', '/tmp']), /outside the temporary read/);
   assert.throws(() => assertSopGitCommand(['-C', '/tmp/x', 'cat-file', 'blob', 'FETCH_HEAD:evil.sh']), /other than org.json/);
   assert.doesNotThrow(() => assertSopGitCommand(['-c', 'core.hooksPath=/dev/null', 'ls-remote', 'https://github.com/acme/org.git', 'refs/heads/main']));
+});
+
+test('the organization profile JSON at the fetched commit is the only other readable file (#190)', () => {
+  const read = (spec) => () => assertSopGitCommand(['-C', '/tmp/x', 'cat-file', 'blob', spec]);
+  assert.doesNotThrow(read('FETCH_HEAD:governance/organization-profile.json'));
+  for (const spec of [
+    'FETCH_HEAD:governance/evil.sh',
+    'FETCH_HEAD:/etc/profile.json',
+    'FETCH_HEAD:../profile.json',
+    'FETCH_HEAD:governance/./profile.json',
+    'FETCH_HEAD:governance\\profile.json',
+    'FETCH_HEAD:pro\nfile.json',
+    'HEAD:governance/organization-profile.json',
+  ]) {
+    assert.throws(read(spec), /other than org.json/, spec);
+  }
+  assert.throws(() => assertSopGitCommand(['cat-file', 'blob', 'FETCH_HEAD:governance/organization-profile.json']), /unscoped/);
+});
+
+test('the selected organization profile is read at the resolved org commit from a local repository (#190)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agent-bot-sop-profile-'));
+  const src = join(root, 'src');
+  const bare = join(root, 'bare.git');
+  const profile = '{"schema_version":1}\n';
+  try {
+    mkdirSync(join(src, 'governance'), { recursive: true });
+    writeFileSync(join(src, 'org.json'), `${orgJson()}\n`);
+    writeFileSync(join(src, 'governance', 'organization-profile.json'), profile);
+    const git = (dir, ...args) => {
+      const result = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout.trim();
+    };
+    spawnSync('git', ['init', '-q', '-b', 'main', src], { encoding: 'utf8' });
+    git(src, 'add', '.');
+    git(src, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
+    const commit = git(src, 'rev-parse', 'HEAD');
+    spawnSync('git', ['clone', '--bare', '-q', src, bare], { encoding: 'utf8' });
+    const calls = [];
+    const options = {
+      home: join(root, 'home'),
+      readFile: () => 'schema_version = 1\n[repos]\norg = "local/org@main"\nsop = "local/never@main"\n',
+      remoteUrl: (repo) => {
+        assert.equal(repo, 'local/org');
+        return bare;
+      },
+      runGit(args) {
+        calls.push(args);
+        return localRunGit(args);
+      },
+    };
+    assert.deepEqual(readSelectedOrganizationProfile(options), {
+      repository: 'local/org',
+      ref: 'main',
+      commit,
+      path: 'governance/organization-profile.json',
+      text: profile,
+    });
+    assert.deepEqual(
+      calls.filter((args) => gitSubcommand(args) === 'cat-file').map((args) => args.at(-1)),
+      ['FETCH_HEAD:org.json', 'FETCH_HEAD:governance/organization-profile.json'],
+    );
+    assert.ok(calls.every((args) => SOP_GIT_COMMANDS.includes(gitSubcommand(args))));
+
+    // No selection is null, not an error; a selection naming a missing profile fails.
+    assert.equal(readSelectedOrganizationProfile({ ...options, readFile: () => { throw Object.assign(new Error('gone'), { code: 'ENOENT' }); } }), null);
+    git(src, 'rm', '-q', 'governance/organization-profile.json');
+    git(src, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'drop');
+    git(src, 'push', '-q', bare, 'main');
+    assert.throws(() => readSelectedOrganizationProfile(options), (error) => error.code === 'org-json-unreadable');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('a local repository resolves through git ls-remote and only org.json is read', () => {

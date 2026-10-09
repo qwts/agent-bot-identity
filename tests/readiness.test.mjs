@@ -15,6 +15,10 @@ import { organizationProfileToConfig } from '../organization-profile.mjs';
 import { displayName } from '../agent-population.mjs';
 import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
 import { ensureClaudeWorktreeAdapter } from '../sync-hooks.mjs';
+import { bootstrapConfigPath, installBootstrapProfile, repairBootstrapProfile } from '../bootstrap.mjs';
+import { loadConfig } from '../config.mjs';
+import { readSelectedOrganizationProfile } from '../sop.mjs';
+import { createOrgRepo } from './helpers/org-repo.mjs';
 import {
   READINESS_SCHEMA_VERSION,
   collectReadiness,
@@ -242,6 +246,53 @@ test('doctor reports account identity outside a repository, including machine-on
     assert.equal(report.worktree.status, scope === 'all' ? 'not_applicable' : 'not_requested');
     assert.equal(report.ready, true);
   }
+});
+
+// The #190 acceptance: an agent account whose ~/.config/agent-bot was
+// deleted fails doctor; bootstrap --repair restores the config from the
+// selected organization and doctor passes again, with no --profile anywhere.
+test('doctor passes again after bootstrap --repair restores a deleted config without --profile (#190)', async () => {
+  const home = tempRoot();
+  const slug = 'org-codex-agent';
+  const profile = {
+    schema_version: 1,
+    organization: 'org-engineering',
+    account_owner: 'org',
+    minimum_runtime_interface_version: 1,
+    defaults: { codex: slug, qwen: 'org-qwen-agent' },
+    identities: [
+      { slug, harness: 'codex', status: 'active' },
+      { slug: 'org-qwen-agent', harness: 'qwen', status: 'active' },
+    ],
+  };
+  const org = createOrgRepo(home, profile);
+  org.select(home);
+  const env = { HOME: home, AGENT_BOT_ACCOUNT: slug };
+  const doctor = () => collectReadiness({
+    ...machineDependencies(home), command: 'doctor', scope: 'machine', env, load: loadConfig,
+  });
+  installBootstrapProfile({ sourcePath: '-', scopeApps: [slug], home, env, read: () => JSON.stringify(profile) });
+  const before = await doctor();
+  assert.equal(before.ready, true, JSON.stringify(before.first_actionable_failure));
+
+  rmSync(join(home, '.config', 'agent-bot'), { recursive: true });
+  const broken = await doctor();
+  assert.equal(broken.ready, false);
+  assert.equal(broken.machine.checks.find(({ id }) => id === 'account.app').code, 'account-config-unavailable');
+
+  const repaired = repairBootstrapProfile({
+    home,
+    env,
+    readSelected: (options) => readSelectedOrganizationProfile({ ...options, ...org.sopOptions }),
+  });
+  assert.equal(repaired.repair.commit, org.commit);
+  assert.equal(existsSync(bootstrapConfigPath(home)), true);
+  const report = await doctor();
+  assert.equal(report.ready, true, JSON.stringify(report.first_actionable_failure));
+  const account = report.machine.checks.find(({ id }) => id === 'account.app');
+  assert.equal(account.status, 'ready');
+  assert.equal(account.evidence.app_slug, slug);
+  assert.deepEqual(report.machine.apps.map((app) => app.slug), [slug]);
 });
 
 test('doctor does not infer account identity from a name pattern or harness environment', async () => {
