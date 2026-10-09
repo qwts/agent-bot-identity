@@ -211,7 +211,7 @@ is created. It does not complete the remaining integrity or override contracts.
 | Archive and Python integrity | `fetchArchive`, installation stamps, uv installers | Archive checksum refusal exists; complete dependency lock/hash provenance and installed-byte verification remain open. |
 | Overrides | Helper argument in `runtimeLaunchEnv` | Owner-managed override interface, exact executable validation and policy precedence remain open. |
 | Catalog and transfer | Inspection resolves against the supplied catalog | Retained resolution and owner-visible upgrade semantics remain open. |
-| Migration / platforms | #583 lifecycle paths; deterministic runtime fixtures | Migration evidence is tracked separately; fixtures do not establish live Windows support. |
+| Migration / platforms | #583 lifecycle paths; deterministic runtime fixtures; `whichOnPath` resolves `name.exe` on Windows for every turn lane, the sign-in probe and harness defaults | Migration evidence is tracked separately. Injected-platform fixtures do not establish live Windows support. npm `.cmd` shims are not executed, because `spawn()` refuses them without a shell, so a harness installed only as a shim is reported missing. |
 
 Every failure is coded, names the runtime, and carries the command that
 fixes it (`action`); the CLI prints `{ error: { code, message, runtime,
