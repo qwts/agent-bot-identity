@@ -31,6 +31,8 @@ const STATUS = {
   selectionCheckpoints: [{ agentId: ID, runId: 'previous-successful-run', coverage: 'selection-only', processingCoverage: 'unverified' },
     { agentId: OTHER, runId: OTHER_RUN, coverage: 'selection-only', processingCoverage: 'unverified' }],
   outcomeReceipts: [{ runId: OTHER_RUN, journalRevision: 5, startingRevision: HASH, digest: HASH }],
+  noticeLedgers: [{ schemaVersion: 1, agentId: ID, lastRunId: RUN, suppressed: 0, notices: [{ id: `ntc_${'a'.repeat(24)}`, kind: 'execution' }] },
+    { schemaVersion: 1, agentId: OTHER, lastRunId: OTHER_RUN, suppressed: 2, notices: [{ id: `ntc_${'b'.repeat(24)}`, kind: 'report' }] }],
   fault: null, orphanRecovery: 'quarantine-only',
   journal: { revision: 99999, transactions: 99999, capacity: 100000, full: false, temporaryFiles: 0, automaticPruning: false, maxRecordBytes: 8388608 },
   diagnostics: { scope: 'this-daemon', inputFailures: [
@@ -38,6 +40,8 @@ const STATUS = {
     { agentId: OTHER, runId: OTHER_RUN, code: 'dream-input-limit', at: '2026-10-09T00:00:00.000Z' },
   ] },
 };
+
+const acknowledged = agentId => ({ kind: 'notice-acknowledged', at: '2026-10-09T00:00:00.000Z', agentId, noticeId: `ntc_${'a'.repeat(24)}` });
 
 function fixture(t, { available = true, markers = [], control = null } = {}) {
   const home = mkdtempSync(path.join(tmpdir(), 'soul-dream-cli-'));
@@ -54,7 +58,9 @@ function fixture(t, { available = true, markers = [], control = null } = {}) {
     dreamHistory: async query => { calls.push(['history', query]); return { records: [
       { revision: 2, events: [{ kind: 'registered', registration: { agentId: OTHER } }] },
       { revision: 3, events: [{ kind: 'started', run: run(ID, RUN) }, { kind: 'started', run: run(OTHER, OTHER_RUN) }] },
-    ], nextRevision: 3, remaining: 1 }; },
+      { revision: 4, events: [acknowledged(ID)] },
+      { revision: 5, events: [acknowledged(OTHER)] },
+    ], nextRevision: 5, remaining: 1 }; },
     dreamControl: async (action, body, options) => { calls.push(['control', action, body, options]); return { schemaVersion: 1, result: control ?? { agentId: ID, runId: RUN, status: 'started' } }; },
   };
   const invoke = (args, stdin = JSON.stringify(principal)) => soulDreamCommand(args, { env, home, cwd: home, client, markers: () => markers,
@@ -70,10 +76,14 @@ test('dream arguments are strict: one action, a soul, and only the flags that ac
     ['--soul', ID, '--schedule', 'PT0H'], ['--soul', ID, '--schedule', 'PT721H'], ['--soul', ID, '--schedule', 'P1D'], ['--soul', ID, '--schedule', '0 3 * * *'],
     ['--soul', ID, '--cancel', 'not-a-run'], ['--soul', ID, '--cancel'], ['--soul', '--status'], ['--soul', ID, '--history', '--limit', '-1'],
     ['--soul', ID, '--history', '--limit', '1.5'], ['--soul', ID, '--history', '--limit', '0'], ['--soul', ID, '--run-now', '--force'],
+    ['--soul', ID, '--ack-notice', 'ntc_short'], ['--soul', ID, '--ack-notice', RUN], ['--soul', ID, '--ack-notice'],
+    ['--soul', ID, '--ack-notice', `ntc_${'a'.repeat(24)}`, '--status'],
   ]) assert.equal(parseDreamArgs(args), null, args.join(' '));
   assert.deepEqual(parseDreamArgs(['--soul', 'bill', '--schedule', 'PT24H', '--json', '--principal-stdin']), { action: 'register', control: true,
-    soul: 'bill', schedule: 'PT24H', runId: null, afterRevision: undefined, limit: undefined, json: true, presented: true });
+    soul: 'bill', schedule: 'PT24H', runId: null, noticeId: null, afterRevision: undefined, limit: undefined, json: true, presented: true });
   assert.equal(parseDreamArgs(['--soul', ID, '--history', '--after-revision', '0', '--limit', '16']).limit, 16);
+  assert.deepEqual([parseDreamArgs(['--soul', ID, '--ack-notice', `ntc_${'a'.repeat(24)}`]).action, parseDreamArgs(['--soul', ID, '--ack-notice', `ntc_${'a'.repeat(24)}`]).control],
+    ['ack-notice', true]);
 });
 
 test('status and history disclose only the named soul and always report unverified coverage', async t => {
@@ -87,6 +97,7 @@ test('status and history disclose only the named soul and always report unverifi
   assert.deepEqual(status.outcomeReceipts, [], 'receipt kinds from later state versions are filtered too');
   assert.equal(status.registration.intervalHours, 24);
   assert.deepEqual(status.selectionCheckpoints, [STATUS.selectionCheckpoints[0]], 'checkpoints are filtered by soul, including an older successful run');
+  assert.deepEqual(status.notices, STATUS.noticeLedgers[0], "only this soul's live notices are disclosed");
   assert.deepEqual([status.started, status.closing, status.orphanRecovery], [true, false, 'quarantine-only']);
   assert.deepEqual(status.journal, STATUS.journal, 'journal budget and no-pruning facts stay visible');
   assert.deepEqual(status.diagnostics, { scope: 'this-daemon', inputFailures: [STATUS.diagnostics.inputFailures[0]] },
@@ -96,8 +107,10 @@ test('status and history disclose only the named soul and always report unverifi
   assert.equal(await f.invoke(['--soul', ID, '--history', '--after-revision', '1', '--limit', '2']), 0);
   assert.deepEqual(f.calls.at(-1), ['history', { afterRevision: 1, limit: 2 }]);
   const history = JSON.parse(f.out.at(-1));
-  assert.deepEqual(history.records.map(record => [record.revision, record.events.length]), [[3, 1]]);
-  assert.deepEqual([history.nextRevision, history.remaining, history.maintenanceCoverage], [3, 1, 'unverified']);
+  assert.deepEqual(history.records.map(record => [record.revision, record.events.length]), [[3, 1], [4, 1]],
+    "this soul's acknowledgement is kept, even as a transaction's sole event; another soul's is not");
+  assert.deepEqual(history.records[1].events[0], { kind: 'notice-acknowledged', at: '2026-10-09T00:00:00.000Z', agentId: ID, noticeId: `ntc_${'a'.repeat(24)}` });
+  assert.deepEqual([history.nextRevision, history.remaining, history.maintenanceCoverage], [5, 1, 'unverified']);
   assert.equal(JSON.stringify(history).includes(OTHER), false);
 });
 
@@ -189,6 +202,13 @@ test('the CLI reaches the real owner-gated daemon routes through the daemon clie
   assert.deepEqual(requests.at(-1), ['control', 'run-now', ID]);
   assert.deepEqual(JSON.parse(out.at(-1)).result, { agentId: ID, runId: RUN, status: 'started' });
   assert.equal(gates.at(-1), `soul dream ${ID} run-now`);
+  const NOTICE = `ntc_${'a'.repeat(24)}`;
+  server.dream.control = request => { requests.push(['control', request.action, request.agentId, request.noticeId]);
+    return { agentId: ID, notice: { id: request.noticeId, state: 'acknowledged', acknowledgedAt: '2026-10-09T00:00:00.000Z' } }; };
+  assert.equal(await cli(['--soul', 'bill', '--ack-notice', NOTICE, '--principal-stdin', '--json']), 0);
+  assert.deepEqual(requests.at(-1), ['control', 'ack-notice', ID, NOTICE]);
+  assert.equal(gates.at(-1), `soul dream ${ID} ack-notice ${NOTICE}`, 'the owner sees which notice is acknowledged');
+  assert.equal(await cli(['--soul', 'bill', '--ack-notice', NOTICE, '--json']), 1, 'acknowledgement is an owner control');
   server.dream.control = () => { throw Object.assign(new Error('Configure a dream executor first.'), { code: 'dream-executor-unconfigured', statusCode: 409 }); };
   assert.equal(await cli(['--soul', 'bill', '--pause', '--principal-stdin', '--json']), 1);
   assert.deepEqual(JSON.parse(out.at(-1)).error.code, 'dream-executor-unconfigured', 'dream codes reach --json through the HTTP body');

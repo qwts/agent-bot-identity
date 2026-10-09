@@ -3,8 +3,8 @@
 Status: staged implementation contract for #603, following
 [ADR-0603 decision 11](decisions/ADR-0603-imported-skills-keep-local-snapshots-and-upstream-provenance.md).
 The scheduler, journal, bounded inputs, daemon service, CLI, durable reported
-outcomes and selection checkpoints are implemented. Processing checkpoints and
-notices remain incomplete;
+outcomes, selection checkpoints and host-read notices are implemented. Processing
+checkpoints and notice delivery adapters remain incomplete;
 their requirements below remain proposed contracts.
 Implementation does not register a schedule or grant owner authorization.
 
@@ -78,8 +78,8 @@ This integration exposes execution status with `maintenanceCoverage: unverified`
 It captures bounded starting inputs and durably records their metadata before
 runtime/provider resolution. Bounded outcomes publish with terminal run facts.
 Raw replies are not stored as verified evidence, no processing checkpoints advance,
-and no maintenance-success notice is claimed. Notice support remains subsequent
-acceptance work.
+and no maintenance-success notice is claimed. Deduplicated failure, blocked-item and
+recorded-change notices are host-read only; nothing delivers them elsewhere.
 Input preparation failures appear as bounded, content-free codes in status
 diagnostics (for example `dream-input-limit`, `dream-input-unavailable` or
 `dream-input-drift`). These diagnostics explicitly last only for this daemon
@@ -327,7 +327,7 @@ acknowledgment. Uncertain publication retains the lease in the running process;
 restart sees either the unfinished flight or the complete terminal/outcome
 transaction. Unscheduling removes current references, not append-only history.
 All outcome records state `processingCoverage: unverified`. Selection rotation is
-implemented below; processing checkpoints and notice deduplication remain incomplete.
+implemented below, as is notice deduplication; processing checkpoints remain incomplete.
 
 ### Implemented selection checkpoints
 
@@ -369,8 +369,8 @@ Readers must be upgraded before opening a v4 journal.
 
 `skill-dream-notices.mjs` derives deduplicated notices from one terminal run
 and its validated outcome. It is pure: it holds no state, reads no clock and
-delivers nothing. It is not yet wired into the scheduler journal, daemon status
-or CLI, so no notice is produced by a running daemon.
+delivers nothing. The scheduler applies it to every terminal run of a registered
+soul and publishes the result in that run's terminal transaction (state v5, below).
 
 A fingerprint is the SHA-256 of the soul ID, notice kind and a fixed subject;
 run IDs, timestamps and agent-chosen reason codes are excluded. Kinds and their
@@ -413,6 +413,29 @@ eviction cannot cause a renotification. A new condition without room increments
 a visible `suppressed` count. Delivery is `pending-host-read` until an authorized
 host acknowledges the notice, then `host-acknowledged`; nothing is ever marked
 `delivered` without a delivery adapter.
+
+### Implemented notice journal and acknowledgement
+
+Scheduler state version 5 adds `noticeLedgers`: one ledger per registered soul
+holding only its live notices, omitted while a soul has none. A terminal
+transaction carries `ended`, any outcome and selection events, and a
+`notices-updated` event listing the notices created (full records), renewed (IDs)
+and cleared (full records with `clearedAt`), plus any suppressed count. That
+event is the append-only notice history; current state never retains cleared
+notices. A quiet run writes no notice state or event. If a staged outcome is
+inconsistent with the run's settlement, notices come from the terminal facts
+alone; if even that fails, the transaction publishes without notices, so notice
+derivation never blocks terminal publication. Recovery
+quarantine does not create notices yet.
+
+`agent-bot soul skill dream --soul ID|NAME --status` shows the soul's ledger.
+`--ack-notice NOTICE_ID` is an owner control through the same gate and audit
+receipts as other dream controls; the gate prompt names the notice. It persists
+a `notice-acknowledged` event; acknowledging again writes nothing, and a cleared
+or unknown notice is `dream-notice-not-found`. Unscheduling removes current
+notices while their events remain. Versions 1–4 remain readable without disk
+changes; the next write adds v5 state, and readers must be upgraded before
+opening a v5 journal.
 
 ### Remaining checkpoint and notice contract
 
@@ -513,9 +536,10 @@ execution. A flight records its run and daemon generation, original registration
 and directory, trigger, start time, execution bound and cancellation state.
 Strict validation refuses unknown schemas, extra fields, duplicate souls/runs,
 invalid timestamps and inconsistent states. State v2 added input receipt
-references, v3 added outcome references, and v4 adds bounded selection checkpoints.
+references, v3 added outcome references, v4 added bounded selection checkpoints,
+and v5 adds bounded live notice ledgers.
 These records belong to the dream journal; existing soul and daemon stores are
-not rewritten. Semantic processing and notice schemas remain later work.
+not rewritten. Semantic processing schemas remain later work.
 A canonical directory cannot be assigned to different souls across registrations
 and unsettled flights. The same soul may re-register at a new directory while its
 old flight remains quarantined; another soul cannot claim that old directory
@@ -551,7 +575,7 @@ unproven lease, or infers a task from imported history. Pause, unschedule and
 re-registration preserve that independent flight. An old run may record its
 actual settlement but cannot change a newer registration's due time or recreate
 a removed registration. Daemon/owner integration is implemented above; remaining
-maintenance and notice gates still need their own implementation and validation.
+maintenance gates and notice delivery adapters still need their own implementation and validation.
 
 ## POSIX journal adapter
 

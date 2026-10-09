@@ -1,0 +1,1 @@
+- Persist deduplicated dream notices atomically with terminal run facts in scheduler state v5, show each soul's live notices in `soul skill dream --status`, and add the owner-gated `--ack-notice` control. Notices are host-read only (#603).

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { createDreamScheduler, emptyDreamState, parseDreamSchedule, validateDreamState, DREAM_TIMEOUT_MS } from '../skill-dream-scheduler.mjs';
+import { createDreamScheduler, emptyDreamState, parseDreamSchedule, validateDreamEvents, validateDreamState, DREAM_TIMEOUT_MS } from '../skill-dream-scheduler.mjs';
 import { interpretDreamReport } from '../skill-dream-outcomes.mjs';
 
 const A = 'agent_12345678-1234-4234-8234-123456789abc';
@@ -434,4 +434,94 @@ test('selection checkpoint validation refuses foreign generations, duplicates an
   ]) {
     const state = f.state(); mutate(state); assert.throws(() => validateDreamState(state));
   }
+});
+
+test('notices publish with terminal run facts, deduplicate across runs and are acknowledged by the owner', async () => {
+  const f = fixture(); f.scheduler.register(A, 'PT1H');
+  const settle = async ({ reply = null, reject = false } = {}) => {
+    const started = f.scheduler.runNow(A); await Promise.resolve();
+    const call = f.calls.at(-1), inputs = metadata(); call.prepareInputs(inputs);
+    if (reply !== null) call.stageOutcome(interpretDreamReport({ run: call.run, inputs, reply: reply(call.run), executionFailed: reject }));
+    const before = f.events.length;
+    if (reject) call.reject(new Error('failure')); else call.resolve();
+    await started.done;
+    return f.events.slice(before);
+  };
+  const report = items => run => JSON.stringify({ schemaVersion: 1, runId: run.runId, startingRevision: metadata().revision, items });
+  const blocked = { path: 'AGENTS.md', digest: metadata().sources[0].digest, outcome: 'blocked', reason: 'missing-tool', evidence: null };
+  // A quiet run writes no notice state and no notice event.
+  assert.ok(!(await settle({ reply: report([]) })).some(event => event.kind === 'notices-updated'));
+  assert.deepEqual(f.state().noticeLedgers, []);
+  let tail = await settle({ reject: true, reply: () => '' });
+  const update = tail.find(event => event.kind === 'notices-updated');
+  assert.equal(update.created.length, 1); assert.equal(update.created[0].kind, 'execution');
+  assert.ok(tail.some(event => event.kind === 'ended' && event.run.runId === update.run.runId), 'notices publish in the terminal transaction');
+  const execution = update.created[0].id;
+  tail = await settle({ reject: true, reply: () => '' });
+  assert.deepEqual(tail.find(event => event.kind === 'notices-updated').renewed, [execution], 'a repeated failure renews, never renotifies');
+  // Owner acknowledgement persists once; repeating it writes nothing.
+  const revision = f.state().revision;
+  const acked = f.scheduler.acknowledgeNotice(A, execution);
+  assert.equal(acked.notice.state, 'acknowledged');
+  assert.deepEqual(f.events.at(-1), { kind: 'notice-acknowledged', at: acked.notice.acknowledgedAt, agentId: A, noticeId: execution });
+  assert.equal(f.state().revision, revision + 1);
+  assert.deepEqual(f.scheduler.acknowledgeNotice(A, execution), acked); assert.equal(f.state().revision, revision + 1);
+  assert.throws(() => f.scheduler.acknowledgeNotice(B, execution), { code: 'dream-notice-not-found' });
+  // Recovery clears the live notice into the append-only journal and out of state.
+  tail = await settle({ reply: report([blocked]) });
+  const recovered = tail.find(event => event.kind === 'notices-updated');
+  assert.deepEqual(recovered.cleared.map(notice => [notice.id, notice.acknowledgedAt !== null, typeof notice.clearedAt]), [[execution, true, 'string']]);
+  assert.deepEqual(f.state().noticeLedgers[0].notices.map(notice => notice.kind), ['item-blocked']);
+  assert.throws(() => f.scheduler.acknowledgeNotice(A, execution), { code: 'dream-notice-not-found' });
+  const state = f.state();
+  // Unscheduling removes current notices; their history stays in events.
+  f.scheduler.unschedule(A);
+  assert.deepEqual(f.state().noticeLedgers, []);
+  assert.ok(f.events.some(event => event.kind === 'notices-updated' && event.created.some(notice => notice.kind === 'item-blocked')));
+  for (const mutate of [
+    value => { value.noticeLedgers[0].agentId = B; },
+    value => { value.noticeLedgers[0].notices = []; },
+    value => { value.noticeLedgers.push(copy(value.noticeLedgers[0])); },
+    value => { value.noticeLedgers[0].notices[0].delivery = 'delivered'; },
+    value => { value.schemaVersion = 4; },
+  ]) {
+    const broken = copy(state); mutate(broken);
+    assert.throws(() => validateDreamState(broken), { code: 'dream-state-invalid' });
+  }
+});
+
+test('a failed attempt with a staged structured report still publishes its terminal facts and notices', async () => {
+  const f = fixture(); f.scheduler.register(A, 'PT1H');
+  const started = f.scheduler.runNow(A); await Promise.resolve();
+  const call = f.calls[0], inputs = metadata(); call.prepareInputs(inputs);
+  call.stageOutcome(interpretDreamReport({ run: call.run, inputs,
+    reply: JSON.stringify({ schemaVersion: 1, runId: call.run.runId, startingRevision: inputs.revision, items: [] }) }));
+  call.reject(new Error('failure'));
+  assert.equal((await started.done).status, 'failed');
+  assert.equal(f.scheduler.status().fault, null);
+  assert.deepEqual(f.state().noticeLedgers[0].notices.map(notice => notice.detail), ['execution-failed']);
+});
+
+test('a run that clears every live notice drops the ledger and still journals the cleared records', async () => {
+  const f = fixture(); f.scheduler.register(A, 'PT1H');
+  const settle = async reject => {
+    const started = f.scheduler.runNow(A); await Promise.resolve();
+    const call = f.calls.at(-1), inputs = metadata(); call.prepareInputs(inputs);
+    call.stageOutcome(interpretDreamReport({ run: call.run, inputs, executionFailed: reject,
+      reply: reject ? '' : JSON.stringify({ schemaVersion: 1, runId: call.run.runId, startingRevision: inputs.revision, items: [] }) }));
+    const before = f.events.length;
+    if (reject) call.reject(new Error('failure')); else call.resolve();
+    await started.done;
+    return f.events.slice(before);
+  };
+  const [notice] = (await settle(true)).find(event => event.kind === 'notices-updated').created;
+  const events = await settle(false);
+  assert.deepEqual(events.map(event => event.kind), ['ended', 'outcome-recorded', 'selection-advanced', 'notices-updated']);
+  const update = events.at(-1);
+  assert.deepEqual([update.created, update.renewed, update.suppressed, update.cleared.map(row => row.id)], [[], [], 0, [notice.id]]);
+  assert.deepEqual(f.state().noticeLedgers, [], 'an empty ledger is not retained');
+  assert.equal(createDreamScheduler(f.ports).status().fault, null, 'the persisted transaction reopens cleanly');
+  // A forged renewal of a notice absent from state is refused.
+  const forged = copy(update); forged.renewed = [notice.id]; forged.cleared = [];
+  assert.throws(() => validateDreamEvents([events[0], forged], { state: f.state() }), { code: 'dream-state-invalid' });
 });

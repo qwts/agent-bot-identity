@@ -184,7 +184,7 @@ test('structured and truncated replies are persisted atomically with terminal ru
     } });
     f.control('register', { schedule: 'PT1H' }); f.control('run-now'); await f.service.idle();
     const transaction = f.service.history().records.at(-1);
-    assert.deepEqual(transaction.events.map(event => event.kind), ['ended', 'outcome-recorded', ...truncated ? [] : ['selection-advanced']]);
+    assert.deepEqual(transaction.events.map(event => event.kind), ['ended', 'outcome-recorded', ...truncated ? ['notices-updated'] : ['selection-advanced']]);
     const record = transaction.events[1];
     assert.equal(record.outcome.report.status, truncated ? 'truncated' : 'structured');
     assert.equal(record.outcome.items.length, truncated ? 0 : 1);
@@ -366,4 +366,21 @@ test('post-control audit failure preserves the applied result, while pre-control
   const second = await f.call('/pause', { agentId: ID, principal });
   assert.notEqual(second.status, 200); assert.equal(calls, 1, 'a missing authorization receipt still prevents execution');
   assert.equal(f.service.status().registrations[0].paused, false);
+});
+
+test('notices survive restart in the journal, stay deduplicated and are acknowledged through the owner control', posix, async t => {
+  const f = fixture(t, { executorFor: () => async () => { throw new Error('PROVIDER_SECRET_CANARY'); } });
+  f.control('register', { schedule: 'PT1H' });
+  for (let i = 0; i < 2; i++) { f.control('run-now'); await f.service.idle(); }
+  const [notice] = f.service.status().noticeLedgers[0].notices;
+  assert.deepEqual([notice.kind, notice.detail, notice.occurrences, notice.delivery], ['execution', 'execution-failed', 2, 'pending-host-read']);
+  assert.equal(JSON.stringify(f.service.history({ afterRevision: 0, limit: 16 })).includes('PROVIDER_SECRET_CANARY'), false);
+  assert.throws(() => dreamControlRequest('ack-notice', { agentId: ID, noticeId: 'ntc_short' }), { code: 'dream-request-invalid' });
+  const acked = f.control('ack-notice', { noticeId: notice.id });
+  assert.deepEqual([acked.notice.state, acked.notice.delivery], ['acknowledged', 'host-acknowledged']);
+  f.service.shutdown();
+  const reopened = createDreamService(f.options);
+  t.after(async () => { reopened.shutdown(); await reopened.idle(); });
+  assert.deepEqual(reopened.status().noticeLedgers[0].notices, [acked.notice], 'notices are durable scheduler state');
+  assert.throws(() => reopened.control(dreamControlRequest('ack-notice', { agentId: ID, noticeId: `ntc_${'0'.repeat(24)}` })), { code: 'dream-notice-not-found' });
 });

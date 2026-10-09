@@ -38,7 +38,8 @@ export function prepareDreamDirectory(directory) {
 }
 
 export function dreamControlRequest(action, body) {
-  const actions = { register: ['agentId', 'schedule'], pause: ['agentId'], unschedule: ['agentId'], 'run-now': ['agentId'], cancel: ['runId'] };
+  const actions = { register: ['agentId', 'schedule'], pause: ['agentId'], unschedule: ['agentId'], 'run-now': ['agentId'], cancel: ['runId'],
+    'ack-notice': ['agentId', 'noticeId'] };
   const fields = Object.hasOwn(actions, action) ? actions[action] : null;
   if (!fields || !body || typeof body !== 'object' || Array.isArray(body)
     || fields.some(field => !Object.hasOwn(body, field)) || Object.keys(body).some(key => ![...fields, 'principal'].includes(key))) {
@@ -46,6 +47,7 @@ export function dreamControlRequest(action, body) {
   }
   if (fields.includes('agentId') && !isAgentId(body.agentId)) fail('dream-request-invalid', 'Select a valid soul ID.', 400);
   if (action === 'cancel' && (typeof body.runId !== 'string' || body.runId.length !== 36 || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(body.runId))) fail('dream-request-invalid', 'Select a valid dream run ID.', 400);
+  if (action === 'ack-notice' && (typeof body.noticeId !== 'string' || !/^ntc_[a-f0-9]{24}$/.test(body.noticeId))) fail('dream-request-invalid', 'Select a valid dream notice ID.', 400);
   if (action === 'register') {
     try { parseDreamSchedule(body.schedule); } catch { fail('dream-request-invalid', 'Schedule must be PT<N>H, from 1 to 720 hours.', 400); }
   }
@@ -176,7 +178,7 @@ export function createDreamService({ directory, lookupSoul, executorFor = null, 
     },
     tick,
     control(request) {
-      const { action, agentId, runId, schedule } = request;
+      const { action, agentId, runId, schedule, noticeId } = request;
       if (action === 'cancel') return cancel(runId);
       ensure();
       if (action === 'register' || action === 'run-now') requireExecutor();
@@ -184,6 +186,7 @@ export function createDreamService({ directory, lookupSoul, executorFor = null, 
       if (action === 'run-now') return track(scheduler.runNow(agentId));
       if (action === 'pause') return scheduler.pause(agentId);
       if (action === 'unschedule') return scheduler.unschedule(agentId);
+      if (action === 'ack-notice') return scheduler.acknowledgeNotice(agentId, noticeId);
       fail('dream-request-invalid', 'Unknown dream control.', 400);
     },
     stopSoul,
