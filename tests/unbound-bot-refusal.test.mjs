@@ -421,11 +421,20 @@ test('a bypass is judged by the repository it reaches, and section writes and --
     assert.match(verdict.reason, /skip the git hooks/, command);
   }
   assert.equal(run(plain.repo, `git -C ${plain.repo} commit --no-verify -m x`, DELEGATE).decision, 'allow');
+  // A --file write reaches the repository holding that file.
+  for (const file of [`${pinned.repo}/.git/config`, `${pinned.repo}/.git/config.worktree`]) {
+    const command = `git config --file ${file} core.hooksPath /dev/null`;
+    assert.equal(run(plain.repo, command, DELEGATE).decision, 'deny', command);
+  }
+  assert.equal(run(plain.repo, `git config --file ${plain.repo}/.git/config core.hooksPath /dev/null`, DELEGATE).decision, 'allow');
 
   // Removing or renaming a section that holds core.hooksPath writes it.
   for (const command of [
     'git config --remove-section core', 'git config --rename-section core saved',
     'git config rename-section include saved', 'git config --remove-section includeIf.gitdir:/x/',
+    'git config --remove-section --local core', 'git config --remove-section=core',
+    'git config --rename-section=core saved', 'git config --rename-section saved include',
+    'git config --rename-section --file .git/config saved includeIf.gitdir:/x/',
   ]) {
     assert.equal(run(pinned.repo, command, STATED).decision, 'deny', command);
     assert.equal(run(plain.repo, command, DELEGATE).decision, 'allow', command);
@@ -433,7 +442,10 @@ test('a bypass is judged by the repository it reaches, and section writes and --
   assert.equal(run(pinned.repo, 'git config --remove-section user', STATED).decision, 'allow');
 
   // A control word after `--` or as a value is a path or a message.
-  for (const command of ['git commit -m x -- --abort', 'git merge -m --abort topic', 'git rebase -- --quit']) {
+  for (const command of [
+    'git commit -m x -- --abort', 'git merge -m --abort topic', 'git rebase -- --quit',
+    'git merge --no-ff --message --abort topic', 'git merge --mes --abort topic', 'git cherry-pick -s --abort',
+  ]) {
     assert.equal(scanGitPublish(command, { cwd: plain.repo, env: {} }).publishes.length, 1, command);
     assert.equal(run(plain.repo, command, STATED).decision, 'deny', command);
   }

@@ -27,7 +27,7 @@
 // relocated global config (GIT_CONFIG_GLOBAL, HOME) and indirect git (a
 // script file, make) are not seen; the git hooks still cover the last.
 
-import { isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'yash', 'busybox']);
@@ -51,13 +51,11 @@ const COMMIT_VALUE_SHORT = 'mFCctSu';
 const VALUE_OPTS = {
   commit: new Set(['-m', '-F', '-C', '-c', '-t', '--message', '--file', '--reuse-message', '--reedit-message',
     '--template', '--author', '--date', '--fixup', '--squash', '--trailer', '--cleanup', '--pathspec-from-file']),
-  merge: new Set(['-m', '-F', '-s', '-X', '--file', '--strategy', '--strategy-option', '--cleanup', '--into-name']),
+  merge: new Set(['-m', '-F', '-s', '-X', '--message', '--file', '--strategy', '--strategy-option', '--cleanup',
+    '--into-name']),
   rebase: new Set(['-s', '-X', '-x', '--exec', '--onto', '--strategy', '--strategy-option', '--empty']),
   am: new Set(['-C', '-p', '--directory', '--exclude', '--include', '--patch-format', '--resolvemsg']),
   push: new Set(['-o', '--push-option', '--repo', '--receive-pack', '--exec']),
-  'cherry-pick': new Set(['-m', '--mainline', '-s', '-X', '--strategy', '--strategy-option', '--cleanup']),
-  revert: new Set(['-m', '--mainline', '-s', '-X', '--strategy', '--strategy-option', '--cleanup']),
-  'commit-tree': new Set(['-p', '-m', '-F']),
 };
 const HOOKS_PATH = /^core\.hookspath$/i;
 // Config keys that can set core.hooksPath by pulling in another file.
@@ -534,7 +532,14 @@ function gitInvocation(args, { cwd, env, result, depth, aliases = new Map(), nam
   if (target.gitDir === null || target.workTree === null) target.cwd = null;
   const rest = args.slice(j + 1);
   const bypass = () => { result.skipsHooks = true; result.bypasses.push(target); };
-  if (sub === 'config') { if (writesHooksPath(rest)) bypass(); return; }
+  if (sub === 'config') {
+    if (!writesHooksPath(rest)) return;
+    // `--file` writes that file's repository, not the one git runs in.
+    const file = configFile(rest);
+    if (file === undefined) bypass();
+    else { result.skipsHooks = true; result.bypasses.push({ cwd: file === null ? null : dirname(place(dir, file) ?? '') }); }
+    return;
+  }
   if (sub === 'push' || (COMMITTING.has(sub) && !controlOnly(sub, rest))) {
     if (hooksOff || skipsVerify(sub, rest)) bypass();
     if (sub === 'rebase') rebaseExecs(rest, target, env, result, depth);
@@ -564,18 +569,12 @@ function hooksPathInEnv(env, result) {
   return found;
 }
 
-// A sequencer control (`--abort`, `--quit`, …) as an option of this
-// subcommand: before `--`, and not the value of another option.
+// A sequencer control (`--abort`, `--quit`, …) on its own. Git takes these
+// alone, and reading them out of a longer command would have to know every
+// option's value (`--mes --abort` is a message), so anything more is a
+// commit-writing command.
 function controlOnly(sub, rest) {
-  const controls = NO_COMMIT[sub];
-  if (!controls) return false;
-  for (let k = 0; k < rest.length; k += 1) {
-    const arg = rest[k];
-    if (arg === '--') return false;
-    if (VALUE_OPTS[sub]?.has(arg)) { k += 1; continue; }
-    if (controls.has(arg)) return true;
-  }
-  return false;
+  return rest.length === 1 && Boolean(NO_COMMIT[sub]?.has(rest[0]));
 }
 
 // `--no-verify` in any unambiguous abbreviation (git accepts `--no-veri`),
@@ -608,15 +607,32 @@ function skipsVerify(sub, rest) {
 // change nothing.
 function writesHooksPath(rest) {
   const words = rest.filter((a) => a !== null);
-  // Renaming or removing a section that holds it drops it without naming it.
-  const section = words.findIndex((a) => /^(--)?(rename|remove)-section$/.test(a));
-  if (section >= 0 && /^(core|include|includeif\..*)$/i.test(words[section + 1] ?? '')) return true;
+  // Renaming or removing a section that holds it, or renaming another
+  // section onto one, drops or sets it without naming it. Every word after
+  // the action counts, so location flags in between change nothing.
+  const section = words.findIndex((a) => /^(--)?(rename|remove)-section(=|$)/.test(a));
+  if (section >= 0) {
+    const names = [/=(.*)$/s.exec(words[section])?.[1], ...words.slice(section + 1)];
+    if (names.some((a) => /^(core|include|includeif\..*)$/i.test(a ?? ''))) return true;
+  }
   const key = words.findIndex((a) => setsHooksPath(a));
   if (key < 0) return false;
   const writes = ['set', 'unset', '--unset', '--unset-all', '--add', '--replace-all'];
   if (words.some((a) => writes.includes(a))) return true;
   if (words.some((a) => /^(--get|--get-all|--get-regexp|--get-urlmatch|-l|--list|get|list)$/.test(a))) return false;
   return words[key + 1] !== undefined;
+}
+
+// The `-f`/`--file` a `git config` writes: undefined for none, null for one
+// the scan cannot read.
+function configFile(rest) {
+  let file;
+  for (let k = 0; k < rest.length; k += 1) {
+    const arg = rest[k];
+    if (arg === '-f' || arg === '--file') file = rest[k += 1] ?? null;
+    else if (arg?.startsWith('--file=')) file = arg.slice(7);
+  }
+  return file;
 }
 
 // `git rebase -x <cmd>` runs each command in the shell at the work tree.
