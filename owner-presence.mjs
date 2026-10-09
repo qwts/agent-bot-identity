@@ -27,7 +27,10 @@ import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { appendAuditReceipt } from './agent-principals.mjs';
+import { ANY_DEVELOPER_ID, DEFAULT_KEYD_IDENTIFIER, keydSigner } from './config.mjs';
 import { keydPaths, keydRequest, readKeydRecord } from './keyd-client.mjs';
+import { requireOwnerApproval } from './owner-approval.mjs';
 
 export const PRESENCE_AUDIENCE = 'agent-bot-owner';
 export const PRESENCE_UNAVAILABLE_RPC = -32001;
@@ -35,9 +38,17 @@ export const PRESENCE_UNAVAILABLE_RPC = -32001;
 const OWNER_TIMEOUT_MS = 150_000;
 const MAX_LIFETIME_SECONDS = 120;
 const CLOCK_SKEW_SECONDS = 30;
-// A Developer ID Application signature, checked before agent-bot runs a keyd
-// binary to learn its presence key.
-export const DEVELOPER_ID_REQUIREMENT = 'anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists';
+// The code-signing requirement checked before agent-bot runs a keyd binary
+// to learn its presence key: a Developer ID Application signature from the
+// configured team, on the configured identifier (#594). `keydSigner` in
+// config.mjs resolves both; ANY_DEVELOPER_ID drops that part of the check.
+export function developerIdRequirement({ teamId, identifier = DEFAULT_KEYD_IDENTIFIER }) {
+  let requirement = 'anchor apple generic';
+  if (identifier !== ANY_DEVELOPER_ID) requirement += ` and identifier "${identifier}"`;
+  requirement += ' and certificate leaf[field.1.2.840.113635.100.6.1.13] exists';
+  if (teamId !== ANY_DEVELOPER_ID) requirement += ` and certificate leaf[subject.OU] = "${teamId}"`;
+  return requirement;
+}
 
 function unavailable(message) {
   return Object.assign(new Error(message), { code: 'presence-unavailable' });
@@ -53,8 +64,43 @@ export function presencePinPath({ env = process.env, home = env.HOME || homedir(
   return path.join(keydPaths({ env, home }).dir, 'presence.pub');
 }
 
-function codesignVerify(bin) {
-  execFileSync('/usr/bin/codesign', ['--verify', '--strict', `-R=${DEVELOPER_ID_REQUIREMENT}`, bin],
+// The signer a pin was taken under, kept beside it so a later pin under
+// another signer is seen (#594). Pins from before #594 have none.
+export function presenceSignerPath({ env = process.env, home = env.HOME || homedir() } = {}) {
+  return path.join(keydPaths({ env, home }).dir, 'presence.signer');
+}
+
+function readPinnedSigner(file) {
+  try {
+    const signer = JSON.parse(readFileSync(file, 'utf8'));
+    return typeof signer?.teamId === 'string' && typeof signer?.identifier === 'string' ? signer : null;
+  } catch { return null; }
+}
+
+function signerWords({ teamId, identifier }) {
+  const team = teamId === ANY_DEVELOPER_ID ? 'any Developer ID team' : `Developer ID team ${teamId}`;
+  return identifier === ANY_DEVELOPER_ID ? `${team}, any identifier` : `${team} as ${identifier}`;
+}
+
+// Loosening who may sign keyd is the owner's call (#594): any Developer ID,
+// or another signer than the pin was taken under. keyd cannot vouch for
+// itself here, since its key is what is being pinned, so the owner answers
+// the administrator dialog.
+function approveSigner(signer, { previous }) {
+  const change = previous ? ` instead of ${signerWords(previous)}` : '';
+  requireOwnerApproval({
+    prompt: `agent-bot wants to trust a keyd signed by ${signerWords(signer)}${change} for owner approvals. Approve only if you asked for this.`,
+    outcome: 'no keyd key was pinned',
+  });
+}
+
+function signerUnverified(error) {
+  return Object.assign(new Error(`the keyd signer was not approved by the owner: ${error.message}`),
+    { code: 'keyd-signer-unverified', cause: error });
+}
+
+function codesignVerify(bin, requirement) {
+  execFileSync('/usr/bin/codesign', ['--verify', '--strict', `-R=${requirement}`, bin],
     { stdio: ['ignore', 'ignore', 'pipe'] });
 }
 
@@ -63,13 +109,19 @@ function runPresenceKey(bin) {
 }
 
 // keyd's presence key, base64 of the raw Ed25519 public key, or null when
-// no signed keyd is installed. Pinned on first use, from the binary.
+// no signed keyd is installed or no keyd Team ID is configured. Pinned on
+// first use, from the binary. A pin under a loosened signer needs the
+// owner's approval and leaves a receipt; without it this throws
+// `keyd-signer-unverified` and pins nothing.
 export function pinnedPresenceKey({
   env = process.env,
   home = env.HOME || homedir(),
   record = readKeydRecord({ env, home }),
   verifyBinary = codesignVerify,
   run = runPresenceKey,
+  signer = keydSigner,
+  approve = approveSigner,
+  receipt = appendAuditReceipt,
 } = {}) {
   const file = presencePinPath({ env, home });
   try {
@@ -77,7 +129,26 @@ export function pinnedPresenceKey({
     if (pinned) return pinned;
   } catch { /* not pinned yet */ }
   if (!record?.bin) return null;
-  try { verifyBinary(record.bin); } catch { return null; }
+  // A malformed signer setting pins nothing, like an unsigned binary, and so
+  // does a missing Team ID.
+  let wanted;
+  try { wanted = signer({ env, home }); } catch { return null; }
+  if (!wanted.teamId) return null;
+  try { verifyBinary(record.bin, developerIdRequirement(wanted)); } catch { return null; }
+  const signerFile = presenceSignerPath({ env, home });
+  const previous = readPinnedSigner(signerFile);
+  const changed = previous && (previous.teamId !== wanted.teamId || previous.identifier !== wanted.identifier);
+  if (wanted.teamId === ANY_DEVELOPER_ID || wanted.identifier === ANY_DEVELOPER_ID || changed) {
+    const detail = `${signerWords(wanted)}${changed ? ` (was ${signerWords(previous)})` : ''}`;
+    const record_ = (decision) => receipt({ event: 'keyd-signer', operation: 'pin-presence-key', decision, detail }, { env, home });
+    try {
+      approve(wanted, { previous: changed ? previous : null });
+    } catch (error) {
+      try { record_('refused'); } catch { /* the refusal stands without its receipt */ }
+      throw signerUnverified(error);
+    }
+    record_('approved');
+  }
   let key;
   try { key = rawKey(String(run(record.bin)).trim()); } catch { return null; }
   if (!key) return null;
@@ -85,6 +156,8 @@ export function pinnedPresenceKey({
   // `mode` only applies when the file is created; a corrupt pin being
   // replaced keeps whatever mode it had, so set it explicitly.
   chmodSync(file, 0o600);
+  writeFileSync(signerFile, `${JSON.stringify({ teamId: wanted.teamId, identifier: wanted.identifier })}\n`, { mode: 0o600 });
+  chmodSync(signerFile, 0o600);
   return key;
 }
 

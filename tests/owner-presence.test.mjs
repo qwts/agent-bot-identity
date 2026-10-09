@@ -5,15 +5,20 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { assertOwnerAction, ownerActionSummary, presenceOrConsent } from '../owner-action.mjs';
+import { ANY_DEVELOPER_ID, keydSigner } from '../config.mjs';
 import {
-  DEVELOPER_ID_REQUIREMENT, PRESENCE_AUDIENCE, PRESENCE_UNAVAILABLE_RPC, actionDigest, keydPresence, pinnedPresenceKey,
-  presencePinPath, verifyPresence,
+  ORGANIZATION_PROFILE_SCHEMA_VERSION, isProjectedRuntimeConfig, organizationProfileToConfig, validateOrganizationProfile,
+} from '../organization-profile.mjs';
+import {
+  PRESENCE_AUDIENCE, PRESENCE_UNAVAILABLE_RPC, actionDigest, developerIdRequirement, keydPresence,
+  pinnedPresenceKey, presencePinPath, presenceSignerPath, verifyPresence,
 } from '../owner-presence.mjs';
 
 const ID = 'agent_121b5b35-0000-4000-8000-000000000000';
 const NOW = Date.parse('2026-10-03T22:00:00Z');
 const SECONDS = Math.floor(NOW / 1000);
 const NONCE = 'abcdefghijklmnopqrstuvwx';
+const TEAM = 'ABCDE12345';
 
 // keyd's presence key, as the Rust side holds it.
 function presenceKey() {
@@ -31,7 +36,8 @@ function presenceKey() {
 function home(t) {
   const dir = mkdtempSync(join(tmpdir(), 'owner-presence-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const env = { HOME: dir };
+  // A configured team, as an organization profile projects it (#594).
+  const env = { HOME: dir, AGENT_BOT_KEYD_TEAM_ID: TEAM };
   mkdirSync(join(dir, '.local', 'state', 'agent-bot', 'keyd'), { recursive: true, mode: 0o700 });
   return { dir, env };
 }
@@ -83,8 +89,128 @@ test('an assertion is accepted for up to 120 s of lifetime and 30 s of skew, and
 test('the presence contract constants keyd and agent-bot share', () => {
   assert.equal(PRESENCE_AUDIENCE, 'agent-bot-owner');
   assert.equal(PRESENCE_UNAVAILABLE_RPC, -32001);
-  // Any Developer ID Application leaf; no Team ID or identifier is named.
-  assert.equal(DEVELOPER_ID_REQUIREMENT, 'anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists');
+  // A Developer ID Application leaf from the configured team, on keyd's identifier (#594).
+  assert.equal(developerIdRequirement({ teamId: TEAM }), 'anchor apple generic and identifier "agent-bot-keyd"'
+    + ` and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "${TEAM}"`);
+});
+
+test('the keyd signer comes from the environment, then the config; the Team ID has no default (#594)', (t) => {
+  const { dir } = home(t);
+  const env = { HOME: dir };
+  assert.deepEqual(keydSigner({ env }), { teamId: null, identifier: 'agent-bot-keyd' });
+  const config = join(dir, 'config.json');
+  writeFileSync(config, JSON.stringify({ settings: { keydTeamId: 'ABCDE12345', keydIdentifier: 'org.example.keyd' } }));
+  const configured = { ...env, AGENT_BOT_CONFIG: config };
+  assert.deepEqual(keydSigner({ env: configured }), { teamId: 'ABCDE12345', identifier: 'org.example.keyd' });
+  assert.deepEqual(keydSigner({ env: { ...configured, AGENT_BOT_KEYD_TEAM_ID: 'ZZZZZ99999' } }),
+    { teamId: 'ZZZZZ99999', identifier: 'org.example.keyd' });
+  // Empty means unset, never "any Developer ID".
+  assert.deepEqual(keydSigner({ env: { ...env, AGENT_BOT_KEYD_TEAM_ID: '', AGENT_BOT_KEYD_IDENTIFIER: ' ' } }),
+    { teamId: null, identifier: 'agent-bot-keyd' });
+  assert.equal(developerIdRequirement(keydSigner({ env: configured })), 'anchor apple generic and identifier "org.example.keyd"'
+    + ' and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "ABCDE12345"');
+});
+
+test('with no keyd Team ID configured nothing is verified, run or pinned', (t) => {
+  const { dir } = home(t);
+  const env = { HOME: dir };
+  assert.equal(pinnedPresenceKey({ env, record: { bin: '/x/agent-bot-keyd' },
+    verifyBinary: () => assert.fail('never verified without a team'), run: () => assert.fail('never run') }), null);
+  assert.throws(() => readFileSync(presencePinPath({ env })), { code: 'ENOENT' });
+});
+
+test('only an explicit any-developer-id brings back the requirement from before #594', (t) => {
+  const { dir, env } = home(t);
+  const config = join(dir, 'config.json');
+  writeFileSync(config, JSON.stringify({ settings: { keydTeamId: ANY_DEVELOPER_ID, keydIdentifier: ANY_DEVELOPER_ID } }));
+  assert.equal(developerIdRequirement(keydSigner({ env: { HOME: env.HOME, AGENT_BOT_CONFIG: config } })),
+    'anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists');
+  assert.equal(developerIdRequirement({ teamId: ANY_DEVELOPER_ID }),
+    'anchor apple generic and identifier "agent-bot-keyd" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists');
+});
+
+test('a malformed keyd signer is refused, so nothing reaches the code-signing requirement', (t) => {
+  const { dir, env } = home(t);
+  for (const bad of ['z5dm34qs5u', 'Z5DM34QS5', 'Z5DM34QS5U" or anchor apple', 'any']) {
+    assert.throws(() => keydSigner({ env: { ...env, AGENT_BOT_KEYD_TEAM_ID: bad } }), /invalid AGENT_BOT_KEYD_TEAM_ID/);
+  }
+  assert.throws(() => keydSigner({ env: { ...env, AGENT_BOT_KEYD_IDENTIFIER: 'keyd" or anchor apple' } }), /invalid AGENT_BOT_KEYD_IDENTIFIER/);
+  const config = join(dir, 'config.json');
+  writeFileSync(config, JSON.stringify({ settings: { keydTeamId: 42 } }));
+  const bare = { HOME: env.HOME, AGENT_BOT_CONFIG: config };
+  assert.throws(() => keydSigner({ env: bare }), /settings\.keydTeamId/);
+  // The config loads as a whole: overriding only the bad value is not enough,
+  // while overriding both never reads it.
+  assert.throws(() => keydSigner({ env: { ...bare, AGENT_BOT_KEYD_TEAM_ID: 'ABCDE12345' } }), /settings\.keydTeamId/);
+  assert.deepEqual(keydSigner({ env: { ...bare, AGENT_BOT_KEYD_TEAM_ID: 'ABCDE12345',
+    AGENT_BOT_KEYD_IDENTIFIER: 'org.example.keyd' } }), { teamId: 'ABCDE12345', identifier: 'org.example.keyd' });
+
+  // pinnedPresenceKey treats it like an unsigned binary: nothing is run or pinned.
+  assert.equal(pinnedPresenceKey({ env: { ...env, AGENT_BOT_KEYD_TEAM_ID: 'bad' }, record: { bin: '/x/agent-bot-keyd' },
+    verifyBinary: () => assert.fail('never verified against a malformed requirement'),
+    run: () => assert.fail('never run') }), null);
+  assert.throws(() => readFileSync(presencePinPath({ env })), { code: 'ENOENT' });
+});
+
+test('the binary is verified against the configured team and identifier before it is run', (t) => {
+  const { env } = home(t);
+  const key = presenceKey();
+  const checked = [];
+  assert.equal(pinnedPresenceKey({ env, record: { bin: '/x/agent-bot-keyd' },
+    verifyBinary: (bin, requirement) => checked.push([bin, requirement]), run: () => key.raw,
+    approve: () => assert.fail('a specific team is not a loosening') }), key.raw);
+  assert.deepEqual(checked, [['/x/agent-bot-keyd', 'anchor apple generic and identifier "agent-bot-keyd"'
+    + ' and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "ABCDE12345"']]);
+  assert.deepEqual(JSON.parse(readFileSync(presenceSignerPath({ env }), 'utf8')), { teamId: TEAM, identifier: 'agent-bot-keyd' });
+  assert.equal(statSync(presenceSignerPath({ env })).mode & 0o777, 0o600);
+});
+
+// Loosening who may sign keyd is the owner's call (#594).
+test('pinning under any Developer ID needs the owner and leaves a receipt', (t) => {
+  const { env } = home(t);
+  const key = presenceKey();
+  const loose = { ...env, AGENT_BOT_KEYD_TEAM_ID: ANY_DEVELOPER_ID };
+  const receipts = [];
+  const seams = { env: loose, record: { bin: '/x/agent-bot-keyd' }, verifyBinary: () => {}, run: () => key.raw,
+    receipt: (entry) => receipts.push(entry) };
+
+  assert.throws(() => pinnedPresenceKey({ ...seams, approve: () => { throw new Error('owner approval was cancelled'); },
+    run: () => assert.fail('never run without the owner') }), { code: 'keyd-signer-unverified' });
+  assert.throws(() => readFileSync(presencePinPath({ env })), { code: 'ENOENT' });
+  assert.deepEqual(receipts.map(({ decision }) => decision), ['refused']);
+
+  const asked = [];
+  assert.equal(pinnedPresenceKey({ ...seams, approve: (signer, options) => asked.push([signer, options]) }), key.raw);
+  assert.deepEqual(asked, [[{ teamId: ANY_DEVELOPER_ID, identifier: 'agent-bot-keyd' }, { previous: null }]]);
+  assert.deepEqual(receipts.map(({ event, operation, decision }) => [event, operation, decision]),
+    [['keyd-signer', 'pin-presence-key', 'refused'], ['keyd-signer', 'pin-presence-key', 'approved']]);
+  assert.match(receipts[1].detail, /any Developer ID team as agent-bot-keyd/);
+});
+
+test('pinning again under another team than the pin was taken under needs the owner', (t) => {
+  const { env } = home(t);
+  const key = presenceKey();
+  const base = { record: { bin: '/x/agent-bot-keyd' }, verifyBinary: () => {}, run: () => key.raw, receipt: () => {} };
+  assert.equal(pinnedPresenceKey({ ...base, env, approve: () => assert.fail('a first pin is not a change') }), key.raw);
+  rmSync(presencePinPath({ env }));
+  const other = { ...env, AGENT_BOT_KEYD_TEAM_ID: 'ZZZZZ99999' };
+  assert.throws(() => pinnedPresenceKey({ ...base, env: other, approve: () => { throw new Error('no'); } }),
+    { code: 'keyd-signer-unverified' });
+  const asked = [];
+  assert.equal(pinnedPresenceKey({ ...base, env: other, approve: (signer, options) => asked.push([signer, options]) }), key.raw);
+  assert.deepEqual(asked, [[{ teamId: 'ZZZZZ99999', identifier: 'agent-bot-keyd' }, { previous: { teamId: TEAM, identifier: 'agent-bot-keyd' } }]]);
+  assert.deepEqual(JSON.parse(readFileSync(presenceSignerPath({ env }), 'utf8')), { teamId: 'ZZZZZ99999', identifier: 'agent-bot-keyd' });
+  // The same team again asks nobody.
+  rmSync(presencePinPath({ env }));
+  assert.equal(pinnedPresenceKey({ ...base, env: other, approve: () => assert.fail('same signer') }), key.raw);
+});
+
+test('an unapproved signer refuses the owner action with its code, never falling back to the dialog', async (t) => {
+  const { env } = home(t);
+  const pinned = () => { throw Object.assign(new Error('the keyd signer was not approved by the owner'), { code: 'keyd-signer-unverified' }); };
+  const presence = (summary, options) => keydPresence(summary, { ...options, pinned });
+  await assert.rejects(presenceOrConsent(`soul comms ${ID} off`, { env, presence,
+    consent: () => assert.fail('a refusal never falls back'), summarize: (text) => text }), { code: 'keyd-signer-unverified' });
 });
 
 test('the presence key is pinned from the signed binary, once, and never from the socket', (t) => {
@@ -239,4 +365,29 @@ test('a long prompt is cut by code point, never inside an emoji', () => {
   assert.ok(summary.endsWith('…'));
   assert.equal(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(summary), false);
   assert.doesNotThrow(() => JSON.parse(JSON.stringify({ summary })));
+});
+
+// The Team ID is the organization's to name (#594, #752): the profile
+// projects it into config, names only a specific signer, and survives the
+// projection check that lets a newer profile replace the config.
+test('the organization profile names the keyd signer and never loosens it', () => {
+  const profile = (settings) => ({
+    schema_version: ORGANIZATION_PROFILE_SCHEMA_VERSION,
+    organization: 'example-engineering',
+    account_owner: 'example-owner',
+    minimum_runtime_interface_version: 1,
+    defaults: { claude: 'example-claude-agent' },
+    identities: [{ slug: 'example-claude-agent', harness: 'claude', status: 'active' }],
+    settings,
+  });
+  const config = organizationProfileToConfig(validateOrganizationProfile(profile({ keyd_team_id: TEAM, keyd_identifier: 'org.example.keyd' })));
+  assert.deepEqual(config.settings, { keydTeamId: TEAM, keydIdentifier: 'org.example.keyd' });
+  assert.deepEqual(keydSigner({ env: {}, config }), { teamId: TEAM, identifier: 'org.example.keyd' });
+  assert.equal(isProjectedRuntimeConfig(config), true);
+  for (const bad of [ANY_DEVELOPER_ID, 'abcde12345', 'ABCDE1234', 42]) {
+    assert.throws(() => validateOrganizationProfile(profile({ keyd_team_id: bad })), /keyd_team_id/);
+  }
+  for (const bad of [ANY_DEVELOPER_ID, 'keyd" or anchor apple', '']) {
+    assert.throws(() => validateOrganizationProfile(profile({ keyd_identifier: bad })), /keyd_identifier/);
+  }
 });

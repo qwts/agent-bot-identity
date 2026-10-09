@@ -594,8 +594,10 @@ warning instead of failing the account.
 
 Optional `api_base` must be a credential-free HTTPS URL. Optional `settings`
 may contain `spaces_root`, `daemon_preference` (`off`, `prefer`, or
-`required`) and `unmanaged_authors` (at most 64 distinct lowercase logins,
-projected to `settings.unmanagedAuthors`). Unknown fields are rejected under schema v1 instead of being
+`required`), `unmanaged_authors` (at most 64 distinct lowercase logins,
+projected to `settings.unmanagedAuthors`), and `keyd_team_id` /
+`keyd_identifier` (the specific Developer ID team and identifier that sign
+keyd, projected to `settings.keydTeamId` / `settings.keydIdentifier`). Unknown fields are rejected under schema v1 instead of being
 silently ignored.
 
 ```bash
@@ -1513,6 +1515,15 @@ use the `apps` map with the exact slugs instead. `doctor` prints the resolved
   `ai9d` until organization profiles carry the list (#675). `doctor` reports
   the source as `unmanaged_authors_source` (`env`, `config`, `default`, or
   `invalid-config`, in which case the hooks refuse).
+- `settings.keydTeamId` and `settings.keydIdentifier` — the Developer ID Team
+  ID and code-signing identifier a keyd binary must carry before agent-bot
+  pins its presence key. The Team ID has no default; an organization profile
+  sets it with `settings.keyd_team_id`, and with none set nothing is pinned
+  and owner actions use the administrator dialog. The identifier defaults to
+  `agent-bot-keyd`. `AGENT_BOT_KEYD_TEAM_ID` and `AGENT_BOT_KEYD_IDENTIFIER`
+  override them when non-empty. `any-developer-id` drops that check, and
+  pinning under it, or under another signer than the last pin, asks the
+  owner first. See [keyd protocol](docs/keyd-protocol.md#presence-key-bootstrap).
 - `features.github-identity` and `features.persona-accounts` — optional add-on
   gates, both off unless explicitly set to `true`. qwts machines keep their
   current behavior by setting both to `true` in this same config. A config

@@ -126,7 +126,9 @@ export async function presenceOrConsent(action, {
   try {
     return await presence(summary, { env });
   } catch (error) {
-    if (error.code !== 'presence-unavailable') throw new Error(`${action} was not approved: ${error.message}`);
+    if (error.code !== 'presence-unavailable') {
+      throw Object.assign(new Error(`${action} was not approved: ${error.message}`), { code: error.code, cause: error });
+    }
   }
   return consent(action, { summary });
 }

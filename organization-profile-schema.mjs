@@ -138,7 +138,7 @@ function normalizeSettings(value) {
   if (value === undefined) return null;
   const settings = requireObject(value, 'organization profile settings');
   requireExactKeys(settings, {
-    allowed: ['spaces_root', 'daemon_preference', 'unmanaged_authors'],
+    allowed: ['spaces_root', 'daemon_preference', 'unmanaged_authors', 'keyd_team_id', 'keyd_identifier'],
     required: [],
   }, 'organization profile settings');
   const normalized = {};
@@ -170,6 +170,22 @@ function normalizeSettings(value) {
       fail('profile-invalid', 'organization profile unmanaged_authors must be at most 64 distinct lowercase logins');
     }
     normalized.unmanaged_authors = [...authors];
+  }
+  // The Developer ID team and code-signing identifier keyd must carry before
+  // agent-bot pins its presence key (#594). A profile names a specific
+  // signer; it can never loosen the check to any Developer ID.
+  if (settings.keyd_team_id !== undefined) {
+    if (typeof settings.keyd_team_id !== 'string' || !/^[A-Z0-9]{10}$/.test(settings.keyd_team_id)) {
+      fail('profile-invalid', 'organization profile keyd_team_id must be a 10-character Team ID (A-Z, 0-9)');
+    }
+    normalized.keyd_team_id = settings.keyd_team_id;
+  }
+  if (settings.keyd_identifier !== undefined) {
+    if (typeof settings.keyd_identifier !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9.-]{0,254}$/.test(settings.keyd_identifier)
+      || settings.keyd_identifier === 'any-developer-id') {
+      fail('profile-invalid', 'organization profile keyd_identifier must be a specific code-signing identifier (letters, digits, . -)');
+    }
+    normalized.keyd_identifier = settings.keyd_identifier;
   }
   return normalized;
 }
@@ -352,6 +368,8 @@ export function organizationProfileToConfig(value) {
     if (profile.settings.unmanaged_authors !== undefined) {
       config.settings.unmanagedAuthors = [...profile.settings.unmanaged_authors];
     }
+    if (profile.settings.keyd_team_id !== undefined) config.settings.keydTeamId = profile.settings.keyd_team_id;
+    if (profile.settings.keyd_identifier !== undefined) config.settings.keydIdentifier = profile.settings.keyd_identifier;
   }
   return config;
 }
@@ -380,6 +398,8 @@ function profileFromRuntimeConfig(config) {
     settings.daemon_preference = config.settings.daemonPreference;
   }
   if (config.settings?.unmanagedAuthors !== undefined) settings.unmanaged_authors = config.settings.unmanagedAuthors;
+  if (config.settings?.keydTeamId !== undefined) settings.keyd_team_id = config.settings.keydTeamId;
+  if (config.settings?.keydIdentifier !== undefined) settings.keyd_identifier = config.settings.keydIdentifier;
   return validateOrganizationProfile({
     schema_version: metadata.schemaVersion,
     organization: metadata.organization,
