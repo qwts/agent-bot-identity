@@ -482,15 +482,27 @@ export function createDaemonServer({
             throw Object.assign(new Error('The owner did not authorize this dream control.'), { code: error.code ?? 'owner-credential-required', statusCode: 403 });
           }
           appendAuditReceipt({ event: 'dream-control', agentId: request.agentId ?? null, operation: dreamAction, decision: 'authorized' }, { env, home, now });
+          // Authorization audit is required before execution. Its later outcome
+          // receipt must not turn an applied control into an apparent failure.
+          const outcomeAudit = decision => {
+            try {
+              appendAuditReceipt({ event: 'dream-control-outcome', agentId: request.agentId ?? null, operation: dreamAction, decision }, { env, home, now });
+              return {};
+            } catch {
+              return { audit: { status: 'unconfirmed', code: 'dream-control-audit-unconfirmed' } };
+            }
+          };
           let result;
           try { result = server.dream.control(request); }
           catch (error) {
-            appendAuditReceipt({ event: 'dream-control-outcome', agentId: request.agentId ?? null, operation: dreamAction, decision: 'failed' }, { env, home, now });
-            throw error;
+            const audit = outcomeAudit('failed'), failure = operationError(error);
+            sendJson(res, failure.statusCode, { error: failure.message,
+              ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable'].includes(error.code)
+                || typeof error.code === 'string' && /^dream-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}), ...audit });
+            return;
           }
           // A returned control may defer a run. This is not a maintenance result.
-          appendAuditReceipt({ event: 'dream-control-outcome', agentId: request.agentId ?? null, operation: dreamAction, decision: 'returned' }, { env, home, now });
-          sendJson(res, result.status === 'started' ? 202 : 200, { schemaVersion: 1, result });
+          sendJson(res, result.status === 'started' ? 202 : 200, { schemaVersion: 1, result, ...outcomeAudit('returned') });
         } else if (route.endsWith('/history')) {
           const query = {};
           for (const [key, value] of url.searchParams) {

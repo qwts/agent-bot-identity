@@ -1,0 +1,1 @@
+- Preserve an applied dream control result when its later audit append fails, and report audit uncertainty separately through the API and CLI. A failed control retains its original error; authorization audit failure still prevents execution (#603).

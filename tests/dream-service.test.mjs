@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -345,4 +345,25 @@ test('durable selection rotates bounded pages across restart, wraps blocked item
   mismatched.control({ action: 'run-now', agentId: ID }); await mismatched.idle();
   assert.equal(seen.length, 4, 'a mismatched checkpoint never reaches the provider');
   assert.equal(mismatched.status().diagnostics.inputFailures[0].code, 'dream-selection-invalid');
+});
+
+test('post-control audit failure preserves the applied result, while pre-control audit failure prevents execution', posix, async t => {
+  const f = await serverFixture(t), file = auditFile({ env: f.env, home: f.root }), control = f.service.control;
+  let calls = 0;
+  f.server.dream = { ...f.service, control(request) {
+    calls++;
+    const result = control(request);
+    renameSync(file, `${file}.saved`); mkdirSync(file); // real outcome append fails after the control applied
+    return result;
+  } };
+  const response = await f.call('/register', { agentId: ID, schedule: 'PT1H', principal });
+  assert.equal(response.status, 200); assert.equal(response.body.result.agentId, ID);
+  assert.deepEqual(response.body.audit, { status: 'unconfirmed', code: 'dream-control-audit-unconfirmed' });
+  assert.equal(f.service.status().registrations.length, 1); assert.equal(calls, 1);
+  const receipt = JSON.parse(readFileSync(`${file}.saved`, 'utf8').trim().split('\n').at(-1));
+  assert.equal(receipt.decision, 'authorized', 'authorization receipt precedes the applied action');
+  assert.equal(JSON.stringify(response.body).includes(file), false, 'filesystem errors are not exposed');
+  const second = await f.call('/pause', { agentId: ID, principal });
+  assert.notEqual(second.status, 200); assert.equal(calls, 1, 'a missing authorization receipt still prevents execution');
+  assert.equal(f.service.status().registrations[0].paused, false);
 });

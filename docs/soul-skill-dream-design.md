@@ -52,7 +52,16 @@ verification or an explicit owner ceremony. Client paths, executor overrides and
 capability claims are rejected. `run-now` returns a run receipt immediately.
 The audit records owner authorization before executing a control, then records
 whether that control returned or failed. A returned control can defer execution;
-its audit receipt does not certify a completed maintenance run.
+its audit receipt does not certify a completed maintenance run. If the outcome
+append fails after the control executes, the API and CLI preserve the returned
+result (or original control error) and separately report
+`audit: { status: "unconfirmed", code: "dream-control-audit-unconfirmed" }`.
+A started run therefore keeps its successful control response and CLI exit 0;
+missing audit confirmation is not permission to retry it. Deferred controls keep
+their existing exit behavior. Inspect run status before retrying an uncertain
+request. Failure to append the earlier authorization receipt still prevents the
+control from executing. Raw audit filesystem exceptions are not exposed as
+outcome diagnostics.
 
 The journal is under `dream/` beside the daemon state file. Creation establishes
 private directory permissions and syncs new directory entries. Unsupported or
@@ -342,7 +351,9 @@ checkpoints require a trusted operation-specific verifier and are not implemente
 Before capture, the daemon reads the exact preparation transaction through a
 bounded one-record history query and checks its receipt and next cursor against
 the checkpoint. A mismatch refuses launch with `dream-selection-invalid` instead
-of trusting a structurally valid cursor. The bounded source reader resets to the
+of trusting a structurally valid cursor. To recover from `dream-selection-invalid`,
+the owner can unschedule and explicitly re-register the same soul and schedule;
+this resets current selection while preserving journal history. The bounded source reader resets to the
 first page if the package revision changed. Pause and schedule changes retain
 selection for the same directory and bind it to the new registration generation;
 an older generation's completion cannot advance it. Unscheduling removes current
