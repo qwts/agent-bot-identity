@@ -224,11 +224,13 @@ export function parseUnmanagedAuthorList(raw) {
 // AGENT_BOT_UNMANAGED_AUTHORS wins whenever it is set, even empty; otherwise
 // the validated config (an organization profile projects into it); otherwise
 // none. A malformed config throws: the callers refuse rather than guess.
-export function unmanagedAuthors({ env = process.env, config } = {}) {
+// The config is read only when the environment does not decide, so a
+// malformed config never overrides an explicit operator setting.
+export function unmanagedAuthors({ env = process.env, config, home } = {}) {
   if (env.AGENT_BOT_UNMANAGED_AUTHORS !== undefined) {
     return { authors: parseUnmanagedAuthorList(env.AGENT_BOT_UNMANAGED_AUTHORS), source: 'env' };
   }
-  const configured = unmanagedAuthorsSetting(config ?? loadConfig({ env }));
+  const configured = unmanagedAuthorsSetting(config ?? loadConfig(home === undefined ? { env } : { env, home }));
   return configured === null ? { authors: [], source: 'none' } : { authors: configured, source: 'config' };
 }
 

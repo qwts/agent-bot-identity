@@ -1041,6 +1041,29 @@ test('machine readiness fails when the supervisor is missing or the daemon is do
   assert.equal(unsupported.ready, true);
 });
 
+test('identity.class keeps an explicit AGENT_BOT_UNMANAGED_AUTHORS over a malformed config, as the hooks do (#675)', async () => {
+  const home = tempRoot();
+  const config = join(home, 'malformed-config.json');
+  writeFileSync(config, JSON.stringify({ settings: { unmanagedAuthors: 'not-a-list' } }));
+  const uninstalledClass = async (env) => {
+    const base = machineDependencies(home);
+    const report = await collectReadiness({
+      command: 'doctor',
+      scope: 'machine',
+      ...base,
+      env: { ...base.env, AGENT_BOT_CONFIG: config, ...env },
+      access: (path) => {
+        if (String(path).includes('agent-hook')) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      },
+    });
+    return report.machine.checks.find(({ id }) => id === 'identity.class').evidence;
+  };
+  assert.deepEqual(await uninstalledClass({ AGENT_BOT_UNMANAGED_AUTHORS: 'Zed' }), { class: 'uninstalled', unmanaged_authors: ['zed'], unmanaged_authors_source: 'env' });
+  assert.deepEqual(await uninstalledClass({ AGENT_BOT_UNMANAGED_AUTHORS: '' }), { class: 'uninstalled', unmanaged_authors: [], unmanaged_authors_source: 'env' });
+  // Without the env the malformed config decides: nothing, and the hooks refuse.
+  assert.deepEqual(await uninstalledClass({}), { class: 'uninstalled', unmanaged_authors: [], unmanaged_authors_source: 'invalid-config' });
+});
+
 test('identity.class is durable when the installed hook is executable and a warning when it is not', async () => {
   const home = tempRoot();
   const durable = await collectReadiness({

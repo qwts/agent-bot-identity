@@ -1313,7 +1313,7 @@ function orphanSoulDirsCheck({ home, env, config }) {
 // A malformed config is reported, not guessed around: the hooks refuse then.
 function unmanagedEvidence(env, home) {
   try {
-    const { authors, source } = unmanagedAuthorsWithLegacyDefault({ env, config: loadConfig({ env, home }) });
+    const { authors, source } = unmanagedAuthorsWithLegacyDefault({ env, home });
     return { unmanaged_authors: authors, unmanaged_authors_source: source };
   } catch {
     return { unmanaged_authors: [], unmanaged_authors_source: 'invalid-config' };

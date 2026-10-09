@@ -25,6 +25,15 @@ test('env wins when set, even empty; then config; then none', () => {
   assert.throws(() => unmanagedAuthors({ env: {}, config: { settings: { unmanagedAuthors: 'alice' } } }), /invalid settings\.unmanagedAuthors/);
 });
 
+test('a set env decides without reading the config, so a malformed config cannot override it', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'unmanaged-env-'));
+  const bad = join(dir, 'bad.json');
+  writeFileSync(bad, JSON.stringify(malformed));
+  assert.deepEqual(unmanagedAuthors({ env: { AGENT_BOT_CONFIG: bad, AGENT_BOT_UNMANAGED_AUTHORS: 'zed' } }), { authors: ['zed'], source: 'env' });
+  assert.deepEqual(unmanagedAuthors({ env: { AGENT_BOT_CONFIG: bad, AGENT_BOT_UNMANAGED_AUTHORS: '' } }), { authors: [], source: 'env' });
+  assert.throws(() => unmanagedAuthors({ env: { AGENT_BOT_CONFIG: bad } }), /invalid settings\.unmanagedAuthors/);
+});
+
 test('only the entry-point helper supplies the legacy default, and only when nothing is set', () => {
   assert.deepEqual(unmanagedAuthorsWithLegacyDefault({ env: {}, config: {} }), { authors: [...LEGACY_UNMANAGED_AUTHORS], source: 'default' });
   assert.deepEqual(unmanagedAuthorsWithLegacyDefault({ env: { AGENT_BOT_UNMANAGED_AUTHORS: '' }, config: {} }), { authors: [], source: 'env' });
