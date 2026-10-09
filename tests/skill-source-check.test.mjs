@@ -2,16 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { upsertSoul } from '../agent-population.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, validateSoulPackage } from '../soul-package.mjs';
-import { adoptSoulPackage, prepareRevisionEdit, proposeSoulRevision, decideSoulProposal, revisionHistory, revisionPackagePath } from '../soul-revisions.mjs';
+import { adoptSoulPackage, prepareRevisionEdit, proposeSoulRevision, decideSoulProposal, listSoulProposals, revisionHistory, revisionPackagePath } from '../soul-revisions.mjs';
 import { importSkill } from '../skill-library.mjs';
 import { proposeSkillLearning } from '../skill-learning.mjs';
-import { checkSoulSkillSource } from '../skill-source-check.mjs';
+import { checkSoulSkillSource, proposeSoulSkillCandidate } from '../skill-source-check.mjs';
 import { main } from '../cli/soul-skill.mjs';
 const put = (file, text) => { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, text); };
 const origin = 'https://skills.example.com/demo/SKILL.md', guideUrl = 'https://skills.example.com/demo/guide.md';
@@ -46,6 +46,7 @@ async function fixture(t, { local = false, legacy = false, receiptEdit = null } 
       if (receiptEdit) receiptEdit(value); put(file, JSON.stringify(value)); return proposeSoulRevision(id, tree, opts); } } : {}) });
   const approved = decideSoulProposal(id, learned.proposal.proposalId, 'approve', { ...options, reason: 'Reviewed' });
   const acceptedTree = revisionPackagePath(id, approved.revision, options);
+  cpSync(acceptedTree, directory, { recursive: true }); // live package follows the approved revision
   renameSync(path.dirname(imported.path), path.join(home, 'unavailable-library')); requests.length = 0;
   return { home, directory, id, options, imported, documents, requests, acceptedTree, revision: approved.revision,
     check: () => checkSoulSkillSource(imported.id, id, options) };
@@ -139,4 +140,73 @@ test('large text changes keep exact candidate bytes while bounding inline diffs'
   assert.deepEqual(result.comparison.changes.modified, ['guide.md']);
   assert.deepEqual(result.comparison.textDiffs, [{ path: 'guide.md', text: null, reason: 'diff-limit' }]);
   assert.equal(readFileSync(path.join(result.staging, 'payload/guide.md'), 'utf8'), replacement);
+});
+
+async function reviewedCandidate(f) {
+  f.documents.set(origin, entry.replace('[Guide](guide.md)', '[New](new.md)'));
+  f.documents.set('https://skills.example.com/demo/new.md', 'New instructions\n');
+  const checked = await f.check(), prepared = prepareRevisionEdit(f.id, f.options);
+  rmSync(path.join(prepared.staging, 'skills/demo'), { recursive: true });
+  for (const file of ['SKILL.md', 'new.md']) put(path.join(prepared.staging, 'skills/demo', file), readFileSync(path.join(checked.staging, 'payload', file)));
+  const outcome = { schemaVersion: 1, parentRevision: prepared.revision, source: { selection: 'accepted', digest: checked.candidate },
+    pieces: [{ source: 'SKILL.md', status: 'completed', destination: 'skills/demo/SKILL.md', method: 'copied', reason: 'Reviewed update' },
+      { source: 'new.md', status: 'completed', destination: 'skills/demo/new.md', method: 'copied', reason: 'Reviewed update' }], knowledge: [] };
+  f.requests.length = 0;
+  return { checked, prepared, outcome, apply: (value = outcome, extra = {}) => proposeSoulSkillCandidate(f.imported.id, f.id, prepared.staging, value, { ...f.options, reason: 'Apply reviewed source', candidate: checked.candidate, ...extra }) };
+}
+
+test('a reviewed portable candidate is refetched and proposed through the soul revision policy', async t => {
+  const f = await fixture(t), r = await reviewedCandidate(f), before = computePackageRevision(f.directory);
+  const result = await r.apply();
+  assert.equal(result.proposal.status, 'pending'); assert.equal(result.livePackageChanged, false);
+  assert.ok(f.requests.includes(origin), 'source is fetched again rather than read from soul staging');
+  assert.equal(computePackageRevision(f.directory), before); assert.equal(revisionHistory(f.id, f.options).length, 2);
+  const approved = decideSoulProposal(f.id, result.proposal.proposalId, 'approve', { ...f.options, reason: 'Reviewed' });
+  const tree = revisionPackagePath(f.id, approved.revision, f.options), receipt = JSON.parse(readFileSync(path.join(tree, result.receipt)));
+  assert.equal(receipt.schemaVersion, 2); assert.equal(receipt.source.acceptedDigest, r.checked.candidate);
+  assert.equal(receipt.source.provenance.digest, r.checked.candidate); assert.equal(receipt.source.provenance.source.url, origin);
+  assert.equal(readFileSync(path.join(tree, `provenance/skills/${f.imported.id}/sources/${r.checked.candidate.slice(7)}/new.md`), 'utf8'), 'New instructions\n');
+  assert.equal(existsSync(path.join(tree, `provenance/skills/${f.imported.id}/sources/${f.imported.accepted.slice(7)}`)), false, 'prior set stays in the prior revision');
+  assert.equal(readFileSync(path.join(f.acceptedTree, `provenance/skills/${f.imported.id}/sources/${f.imported.accepted.slice(7)}/guide.md`), 'utf8'), 'Original guide\r\n');
+  const again = await f.check();
+  assert.equal(again.status, 'unchanged'); assert.equal(again.accepted, r.checked.candidate);
+});
+
+test('candidate application refuses drift, incomplete capture and mismatched outcomes without proposing', async t => {
+  const f = await fixture(t), r = await reviewedCandidate(f);
+  await assert.rejects(r.apply({ ...r.outcome, source: { selection: 'local', digest: r.checked.candidate } }), { code: 'skill-candidate-invalid' });
+  await assert.rejects(r.apply({ ...r.outcome, source: { selection: 'accepted', digest: f.imported.accepted } }), { code: 'skill-candidate-invalid' });
+  await assert.rejects(r.apply(r.outcome, { candidate: 'sha256:short' }), { code: 'skill-candidate-invalid' });
+  assert.deepEqual(f.requests, []);
+  f.documents.set('https://skills.example.com/demo/new.md', 'Changed after review\n');
+  await assert.rejects(r.apply(), { code: 'skill-source-changed' });
+  f.documents.delete('https://skills.example.com/demo/new.md');
+  await assert.rejects(r.apply(), { code: 'skill-capture-incomplete' });
+  await assert.rejects(r.apply({ ...r.outcome, parentRevision: `sha256:${'a'.repeat(64)}` }), /stale/);
+  assert.equal(revisionHistory(f.id, f.options).length, 2);
+  assert.equal(listSoulProposals(f.id, f.options).length, 1, 'only the original learning proposal exists');
+});
+
+test('candidate application never fetches for local or legacy receipts', async t => {
+  for (const settings of [{ legacy: true }, { local: true }]) {
+    const f = await fixture(t, settings), prepared = prepareRevisionEdit(f.id, f.options), candidate = `sha256:${'b'.repeat(64)}`;
+    const outcome = { schemaVersion: 1, parentRevision: prepared.revision, source: { selection: 'accepted', digest: candidate },
+      pieces: [{ source: 'SKILL.md', status: 'skipped', reason: 'Nothing to apply' }], knowledge: [] };
+    await assert.rejects(proposeSoulSkillCandidate(f.imported.id, f.id, prepared.staging, outcome, { ...f.options, reason: 'Apply', candidate }),
+      { code: settings.legacy ? 'skill-source-provenance-missing' : 'skill-local-source-not-portable' });
+    assert.deepEqual(f.requests, []);
+  }
+});
+
+test('learn --candidate CLI authorizes before fetching and needs the recording flags', async t => {
+  const f = await fixture(t), r = await reviewedCandidate(f), outcomeFile = path.join(f.home, 'outcome.json');
+  writeFileSync(outcomeFile, JSON.stringify(r.outcome));
+  const args = ['learn', f.imported.id, '--soul', f.id, '--candidate', r.checked.candidate, '--package', r.prepared.staging, '--outcome', outcomeFile, '--reason', 'Apply reviewed source', '--json'];
+  let stdout = '', stderr = '';
+  const opts = { ...f.options, stdout: { write: text => { stdout += text; } }, stderr: { write: text => { stderr += text; } }, assertSoulTarget: () => { throw new Error('foreign soul'); } };
+  assert.equal(await main(args, opts), 1); assert.match(stdout, /foreign soul/); assert.deepEqual(f.requests, []);
+  assert.equal(await main(['learn', f.imported.id, '--soul', f.id, '--candidate', r.checked.candidate], opts), 2); assert.match(stderr, /usage:/);
+  stdout = '';
+  assert.equal(await main(args, { ...opts, assertSoulTarget: id => assert.equal(id, f.id) }), 0);
+  assert.equal(JSON.parse(stdout).proposal.status, 'pending');
 });

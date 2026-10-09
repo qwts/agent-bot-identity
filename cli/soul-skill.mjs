@@ -3,7 +3,7 @@
 import { pathToFileURL } from 'node:url';
 import { importSkill, listSkills, showSkill, verifySkill, checkSkill, planSkillUpdate, applySkillUpdate, recoverSkillUpdate } from '../skill-library.mjs';
 import { skillLearningPacket, proposeSkillLearning, readLearningOutcome } from '../skill-learning.mjs';
-import { checkSoulSkillSource } from '../skill-source-check.mjs';
+import { checkSoulSkillSource, proposeSoulSkillCandidate } from '../skill-source-check.mjs';
 import { currentAgentId } from '../agent-identity.mjs';
 import { revisionCommand } from '../soul-revisions.mjs';
 import { soulDreamCommand } from './soul-dream.mjs';
@@ -19,6 +19,7 @@ export const USAGE = `usage: agent-bot soul skill import PATH_OR_HTTPS_DOCUMENT 
        agent-bot soul skill update UUID --recover [--json]
        agent-bot soul skill learn UUID --soul AGENT_ID [--json]
        agent-bot soul skill learn UUID --soul AGENT_ID --package STAGING --outcome FILE --reason TEXT [--json]
+       agent-bot soul skill learn UUID --soul AGENT_ID --candidate DIGEST --package STAGING --outcome FILE --reason TEXT [--json]
        agent-bot soul skill dream --soul ID|NAME --schedule PT<N>H|--run-now|--pause|--unschedule|--cancel RUN_ID|--ack-notice NOTICE_ID|--status|--history [--json]
 
 Local import preserves the selected directory; HTTPS import captures a skill
@@ -29,7 +30,8 @@ check never replaces accepted snapshots or local edits. update previews a record
 check; applying requires reviewed digests and preserves prior material. learn supplies guidance;
 recording outcomes proposes reviewed adaptations through the soul revision policy.
 check --soul reads accepted portable provenance without the local library and
-stages source bytes for review; it cannot apply that candidate.
+stages source bytes for review. learn --candidate refetches that reviewed digest
+and proposes it through the soul revision policy; nothing applies it directly.
 dream manages daemon-run maintenance; see agent-bot soul skill dream --help.
 `;
 async function portableCheckMain(args, json, { stdout, stderr, assertSoulTarget = id => {
@@ -55,16 +57,17 @@ async function learningMain(args, json, { stdout, stderr, assertSoulTarget = id 
   const [id, ...rest] = args, parsed = {};
   for (let i = 0; i < rest.length; i += 2) {
     const key = rest[i];
-    if (!['--soul', '--package', '--outcome', '--reason'].includes(key) || Object.hasOwn(parsed, key) || !rest[i + 1] || rest[i + 1].startsWith('--')) { stderr.write(USAGE); return 2; }
+    if (!['--soul', '--candidate', '--package', '--outcome', '--reason'].includes(key) || Object.hasOwn(parsed, key) || !rest[i + 1] || rest[i + 1].startsWith('--')) { stderr.write(USAGE); return 2; }
     parsed[key] = rest[i + 1];
   }
   const recording = ['--package', '--outcome', '--reason'].some(key => key in parsed);
-  if (!id || !parsed['--soul'] || (recording && !['--package', '--outcome', '--reason'].every(key => key in parsed))) { stderr.write(USAGE); return 2; }
+  if (!id || !parsed['--soul'] || ((recording || '--candidate' in parsed) && !['--package', '--outcome', '--reason'].every(key => key in parsed))) { stderr.write(USAGE); return 2; }
   try {
     const agentId = parsed['--soul'];
     if (recording) await assertSoulTarget(agentId);
-    const result = recording ? await proposeSkillLearning(id, agentId, parsed['--package'], readLearningOutcome(parsed['--outcome']), {
-      ...options, reason: parsed['--reason'], propose: (id, tree, proposalOptions) => revisionCommand(['propose', id, tree, parsed['--reason']], { ...proposalOptions, assertSoulTarget }),
+    const record = '--candidate' in parsed ? proposeSoulSkillCandidate : proposeSkillLearning;
+    const result = recording ? await record(id, agentId, parsed['--package'], readLearningOutcome(parsed['--outcome']), {
+      ...options, reason: parsed['--reason'], ...('--candidate' in parsed ? { candidate: parsed['--candidate'] } : {}), propose: (id, tree, proposalOptions) => revisionCommand(['propose', id, tree, parsed['--reason']], { ...proposalOptions, assertSoulTarget }),
     }) : skillLearningPacket(id, agentId, options);
     stdout.write(`${JSON.stringify(result, null, json ? 0 : 2)}\n`);
     return result.proposal?.status === 'rejected' ? 1 : 0;
