@@ -100,8 +100,12 @@ while the launch probe below does.
 A daemon launch probes the harness's sign-in at a `sign-in` stage after
 `provider` and before `joining` (#536). The probe runs with the exact
 environment the harness turn gets: runtimes, the routed tool home and the
-provider env. So an OpenCode provider variable counts the same way it does
-for the turn. A harness with no status reader (Muse, for example) has no
+provider env, then the registry row's stripped and set variables (such as
+`CODEX_CONFIG`) applied by the same function the turn spawn uses. The
+harness's CLI runs on the first Node on that PATH, so a soul's declared Node
+wins over the host's; the host's Node is only appended last for a bare
+PATH. So an OpenCode provider variable counts the same way it does for the
+turn. A harness with no status reader (Muse, for example) has no
 stage. The launch journal keeps `signIn: { status, reason? }`; the broker
 report is unchanged.
 

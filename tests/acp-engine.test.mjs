@@ -1,6 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +24,8 @@ import {
   recordAnnouncement,
 } from '../acp-engine.mjs';
 import { REACH_SERVER_NAME, reachPolicyRules } from '../daemon-mcp.mjs';
+import { harnessAuth } from '../harness-auth.mjs';
+import { composeTurnEnv } from '../turn-env.mjs';
 import {
   HARNESS_SESSION_EVENT,
   MAX_UPDATE_BYTES,
@@ -523,6 +525,41 @@ test('a Codex spawn carries CODEX_CONFIG, so the sandbox reaches the agent-comms
   });
   const probe = JSON.parse(chunkTexts(events)[0]);
   assert.deepEqual(JSON.parse(probe.CODEX_CONFIG), { sandbox_workspace_write: { network_access: true } });
+});
+
+test('the sign-in probe runs with the env and Node the turn spawn gets (#536)', async () => {
+  // A soul that declares its own Node, ahead of the host's, and a host env
+  // carrying a conflicting CODEX_CONFIG and a nested-session variable.
+  const { root } = scratch();
+  const soulBin = path.join(root, 'soul-node', 'bin');
+  mkdirSync(soulBin, { recursive: true });
+  writeFileSync(path.join(soulBin, 'node'), '#!/bin/sh\n');
+  chmodSync(path.join(soulBin, 'node'), 0o755);
+  const home = path.join(root, 'home');
+  mkdirSync(path.join(home, 'node_modules', '@openai', 'codex', 'bin'), { recursive: true });
+  writeFileSync(path.join(home, 'node_modules', '@openai', 'codex', 'bin', 'codex.js'), '');
+  const hostBin = path.dirname(process.execPath);
+  const { harnessEnv } = composeTurnEnv({
+    agentId: 'agent_p', harness: 'codex',
+    baseEnv: { ...process.env, PATH: `${hostBin}${path.delimiter}/usr/bin`, CODEX_CONFIG: '{"sandbox_mode":"danger-full-access"}', CLAUDECODE: '1' },
+    runtimeEnvFor: ({ env }) => ({ PATH: `${soulBin}${path.delimiter}${env.PATH}` }),
+  });
+  const { codex } = ACP_SPAWN_REGISTRY;
+  const registry = { ...FAKE_REGISTRY, codex: { ...FAKE_REGISTRY.codex, stripEnv: codex.stripEnv, setEnv: codex.setEnv, signIn: codex.signIn } };
+
+  let spawned = null;
+  await turn({ message: 'env-probe', executorOptions: { harness: 'codex', registry, env: harnessEnv,
+    spawn: (command, args, options) => { spawned = options.env; return spawnChild(command, args, options); } } });
+  const probes = [];
+  await harnessAuth('status', 'codex', { home, env: harnessEnv, registry,
+    runImpl: async (command, args, options) => { probes.push({ command, env: options.env }); return { stdout: 'Logged in using ChatGPT' }; } });
+
+  assert.equal(probes.length, 1);
+  assert.equal(probes[0].command, path.join(soulBin, 'node'), 'the soul\'s declared Node, not the host\'s');
+  assert.deepEqual(probes[0].env, spawned, 'the probe env is the turn spawn env');
+  assert.equal(spawned.PATH.split(path.delimiter)[0], soulBin);
+  assert.equal('CLAUDECODE' in spawned, codex.stripEnv.includes('CLAUDECODE') ? false : true);
+  assert.deepEqual(JSON.parse(probes[0].env.CODEX_CONFIG), JSON.parse(codex.setEnv.CODEX_CONFIG));
 });
 
 test('an OpenCode MCP permission is named by its tool key; a borrowed title never is', async () => {

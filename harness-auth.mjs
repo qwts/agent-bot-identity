@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { ACP_SPAWN_REGISTRY, resolveSpawn } from './acp-registry.mjs';
+import { ACP_SPAWN_REGISTRY, harnessProcessEnv, resolveSpawn, whichOnPath } from './acp-registry.mjs';
 import { populationFile, recordHarnessAuth } from './agent-population.mjs';
 import { soulToolHomeEnv } from './soul-env-migrate.mjs';
 import { soulHomePath } from './soul-home.mjs';
@@ -31,13 +31,19 @@ export function authCommand(row, home, { node = process.execPath } = {}) {
   return { command: bin && existsSync(bin) ? bin : auth.command, args: [] };
 }
 
-export async function harnessAuth(action, harness, { home, env = process.env, node = process.execPath,
+// The probe and login run the harness as its turn would (#536): the
+// turn's env with the row's strip and set applied, the Node first on that
+// PATH (a soul's declared runtime before the host's), and the host's Node
+// only as a last PATH entry for a bare launchd PATH.
+export async function harnessAuth(action, harness, { home, env = process.env, node = null,
   registry = ACP_SPAWN_REGISTRY, runImpl = run } = {}) {
   if (!['status', 'login'].includes(action)) throw new Error('usage: agent-bot harness auth status|login HARNESS --soul AGENT_ID');
   const row = resolveSpawn(registry, harness);
-  const { command, args } = authCommand(row, home, { node });
-  const childEnv = { ...env, PATH: [path.dirname(node), env.PATH].filter(Boolean).join(path.delimiter) };
-  for (const name of row.stripEnv) delete childEnv[name];
+  const runtime = node ?? whichOnPath('node', env) ?? process.execPath;
+  const { command, args } = authCommand(row, home, { node: runtime });
+  const dirs = (env.PATH ?? '').split(path.delimiter).filter(Boolean);
+  const fallback = path.dirname(process.execPath);
+  const childEnv = harnessProcessEnv(row, { ...env, PATH: (dirs.includes(fallback) ? dirs : [...dirs, fallback]).join(path.delimiter) });
   const options = { cwd: home ?? undefined, env: childEnv };
   if (action === 'login') {
     try { await runImpl(command, [...args, ...row.signIn.login], { ...options, timeout: LOGIN_TIMEOUT_MS }); }

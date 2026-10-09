@@ -53,7 +53,7 @@ import {
   createContractExecutor,
   validateUpdate,
 } from './executor-contract.mjs';
-import { ACP_SPAWN_REGISTRY, resolveSpawn, spawnCommand } from './acp-registry.mjs';
+import { ACP_SPAWN_REGISTRY, harnessProcessEnv, resolveSpawn, spawnCommand } from './acp-registry.mjs';
 
 export const ACP_PROTOCOL_VERSION = 1;
 export const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000;
@@ -401,9 +401,7 @@ export function createAcpExecutor({
       failEngine('attachments need an injected reach-back MCP server; none is configured');
     }
 
-    const env = { ...baseEnv };
-    for (const name of row.stripEnv) delete env[name];
-    Object.assign(env, row.setEnv ?? {});
+    const env = harnessProcessEnv(row, baseEnv);
 
     // detached puts the agent in its own process group, so killTree can take
     // down the whole tree — spawn-runner rows like npx launch the actual

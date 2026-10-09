@@ -236,3 +236,10 @@ test('harness auth --soul runs with the soul turn env: a routed tool home is the
   // An unrouted soul keeps the host store.
   assert.equal(soulAuthEnv('agent_u', 'claude', { env: { PATH: '/usr/bin' }, toolHomeEnvFor: () => ({}) }).CLAUDE_CONFIG_DIR, undefined);
 });
+
+test('a bare PATH gets the host Node last, never ahead of the env\'s own (#536)', async () => {
+  const seen = [];
+  const runImpl = async (command, args, options) => { seen.push(options.env.PATH); return { stdout: JSON.stringify({ loggedIn: true }) }; };
+  await harnessAuth('status', 'claude', { home: null, env: { PATH: '/soul/bin:/usr/bin' }, runImpl });
+  assert.deepEqual(seen[0].split(path.delimiter), ['/soul/bin', '/usr/bin', path.dirname(process.execPath)]);
+});
