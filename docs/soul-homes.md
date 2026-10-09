@@ -95,6 +95,18 @@ while the launch probe below does.
 `unknown` as signed in. An `unknown` status does not clear a recorded
 `harnessAuth` failure.
 
+### Harness availability at launch
+
+Before a package launch mints a soul, the launch is refused when the daemon can't start its harness (#531). The refusal carries a stable code in the journal row's `code` and as the prefix of `detail` (#536):
+
+| Code | Cause |
+| --- | --- |
+| `harness-unknown` | The registry has no such harness. The detail adds that such a harness joins from its own session with `agent-bot join`. |
+| `harness-disabled` | The registry row is disabled. |
+| `harness-tool-missing` | The row's command isn't on the daemon's PATH and no soul install provides it. The detail lists the PATH and the row's install hint. |
+
+The agent-comms broker forwards `detail` only, so a launcher sees the code as the detail's prefix until the broker forwards `code`.
+
 ### Sign-in at launch
 
 A daemon launch probes the harness's sign-in at a `sign-in` stage after

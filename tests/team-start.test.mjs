@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
-  TEAM_DEFAULTS, createTeamStarter, defaultTeamTemplate, effectiveProvider, harnessLaunchProblem, harnessLaunchable, teamLimits,
+  TEAM_DEFAULTS, createTeamStarter, defaultTeamTemplate, effectiveProvider, harnessLaunchProblem, harnessLaunchRefusal, harnessLaunchable, teamLimits,
   templateProviderId,
 } from '../team-start.mjs';
 import { ACP_SPAWN_REGISTRY } from '../acp-registry.mjs';
@@ -146,6 +146,11 @@ test('a refusal says why: the missing CLI and how to install it, or the adapter 
   assert.equal(harnessLaunchProblem('codex', { env }), null, 'an adapter installs with the soul package');
   assert.equal(harnessLaunchProblem('opencode', { env, declared: true }), null, 'a soul.json install pin provisions it at launch (#583 slice 3)');
   assert.equal(harnessLaunchProblem('muse', { registry: { muse: { enabled: false } } }), 'it is disabled in agent-bot');
+  // The stable code beside each message (#536).
+  assert.equal(harnessLaunchRefusal('opencode', { env }).code, 'harness-tool-missing');
+  assert.equal(harnessLaunchRefusal('muse', { registry: { muse: { enabled: false } } }).code, 'harness-disabled');
+  assert.deepEqual(harnessLaunchRefusal('nope', { env }), { code: 'harness-unknown', message: 'agent-bot has no such harness' });
+  assert.equal(harnessLaunchRefusal('codex', { env }), null);
   assert.equal(ACP_SPAWN_REGISTRY.codex.installHint.includes('codex login'), true);
   const t = team({ launchable: () => 'the `opencode` command is not on this host\'s PATH' });
   await assert.rejects(t.start(LEAD, { name: 'X', harness: 'opencode' }), /not launchable on this host: the `opencode` command/);

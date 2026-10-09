@@ -90,7 +90,7 @@ const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other
   'runtime-download-failed', 'runtime-checksum-mismatch', 'runtime-unsupported-platform', 'runtime-install-failed',
   'tool-home-unwritable',
   'provider-secret-missing', 'provider-secret-unreadable', 'provider-declaration-invalid',
-  'harness-signed-out']);
+  'harness-signed-out', 'harness-unknown', 'harness-disabled', 'harness-tool-missing']);
 
 // `runtimes` (#583 slice 3): `pending({ agentId, harness })` names what the
 // soul declares and lacks; `install` provisions it into the soul folder.
@@ -218,10 +218,13 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       // spawn mints a soul and joins it to the hub (#531, GeniusBar#196): a launch
       // that fails later rolls back, and a rollback that fails part way
       // leaves a dead companion in the roster.
+      // The port answers `{ code, message }` (harnessLaunchRefusal), or a
+      // bare message from an older port, which stays uncoded.
       const problem = harnessProblem ? await harnessProblem(harness, { soul: soul ?? null, package: packagePath ?? null }) : null;
       if (problem) {
-        throw new Error(`cannot launch on harness ${harness}: ${problem}`
-          + (/no such harness/.test(problem) ? '; a harness agent-bot cannot start joins from its own session with `agent-bot join`' : ''));
+        const { code = null, message = problem } = typeof problem === 'string' ? {} : problem;
+        throw Object.assign(new Error(`cannot launch on harness ${harness}: ${message}`
+          + (code === 'harness-unknown' ? '; a harness agent-bot cannot start joins from its own session with `agent-bot join`' : '')), code ? { code } : {});
       }
       // Same bound as agent-comms' broker launch contract (lib/broker/launch.mjs).
       if (event.name !== undefined && (typeof event.name !== 'string' || !event.name.trim() || event.name.length > LAUNCH_NAME_MAX || /[\u0000-\u001f\u007f]/.test(event.name))) throw new Error('invalid launch name');

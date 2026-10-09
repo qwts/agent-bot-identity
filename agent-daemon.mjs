@@ -106,7 +106,7 @@ import { ownerGate as soulSettingOwnerGate, readColdWakeSettings, setColdWake } 
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
 import { createDaemonLogCheck, daemonLogPath, DAEMON_LOG_CHECK_INTERVAL_MS } from './daemon-log.mjs';
-import { createTeamStarter, defaultTeamTemplate, harnessLaunchProblem, teamLimits } from './team-start.mjs';
+import { createTeamStarter, defaultTeamTemplate, harnessLaunchProblem, harnessLaunchRefusal, teamLimits } from './team-start.mjs';
 import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHomePath, soulNpmHarnessDirs } from './soul-home.mjs';
 import { harnessAuth } from './harness-auth.mjs';
 import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
@@ -1603,7 +1603,7 @@ export async function runDaemon({
     onLaunched: (agentId) => setColdWake(agentId, true, { env, home, now }),
     discard: (agentId, rollback) => discardFailedLaunch(agentId, rollback, { env, home, config, now }),
     // Refused before a spawn mints: the registry row, enabled, and its command on the soul's PATH.
-    harnessProblem: (harness, target) => harnessLaunchProblem(harness, { env: harnessEnv, declared: launchDeclaresHarnessInstall(harness, target) }),
+    harnessProblem: (harness, target) => harnessLaunchRefusal(harness, { env: harnessEnv, declared: launchDeclaresHarnessInstall(harness, target) }),
     // What the soul declares and lacks is installed into its folder before
     // it joins (#583 slice 3): runtimes from the pin catalog, non-npm
     // harnesses from their pinned downloads. Nothing lands on the host.

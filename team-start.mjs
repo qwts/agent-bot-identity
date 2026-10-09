@@ -68,17 +68,25 @@ export function teamLimits(config = {}) {
  * can: an enabled registry row whose command is on PATH (or absolute), or
  * whose ACP adapter installs into the soul home (soulBin) and runs on the
  * bundled Node. A refusal names the missing command and how to install it
- * (#418).
+ * (#418), with a stable code a launcher can act on without reading the
+ * message (#536): `harness-unknown`, `harness-disabled` or
+ * `harness-tool-missing`.
  */
-export function harnessLaunchProblem(harness, { registry = ACP_SPAWN_REGISTRY, env = process.env, declared = false } = {}) {
+export function harnessLaunchRefusal(harness, { registry = ACP_SPAWN_REGISTRY, env = process.env, declared = false } = {}) {
   const row = registry[harness];
-  if (!row) return 'agent-bot has no such harness';
-  if (row.enabled !== true) return 'it is disabled in agent-bot';
+  if (!row) return { code: 'harness-unknown', message: 'agent-bot has no such harness' };
+  if (row.enabled !== true) return { code: 'harness-disabled', message: 'it is disabled in agent-bot' };
   // `declared`: the soul's soul.json pins a download for this harness (#583
   // slice 3), which the launch installs into the soul before it starts.
   if (row.soulBin || declared || onPath(row.command, env) || path.isAbsolute(row.command)) return null;
-  return `the \`${row.command}\` command is not on this host's PATH (${(env.PATH ?? '').split(path.delimiter).filter(Boolean).join(', ') || 'empty'})`
-    + (row.installHint ? `; ${row.installHint}` : '');
+  return { code: 'harness-tool-missing',
+    message: `the \`${row.command}\` command is not on this host's PATH (${(env.PATH ?? '').split(path.delimiter).filter(Boolean).join(', ') || 'empty'})`
+      + (row.installHint ? `; ${row.installHint}` : '') };
+}
+
+/** The refusal's message alone (see harnessLaunchRefusal), or null. */
+export function harnessLaunchProblem(harness, options = {}) {
+  return harnessLaunchRefusal(harness, options)?.message ?? null;
 }
 
 /** Whether the daemon can start a soul on this harness (see harnessLaunchProblem). */
