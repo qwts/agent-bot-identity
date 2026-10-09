@@ -151,7 +151,8 @@ export async function proposeSkillLearning(libraryId, agentId, staging, outcome,
     for (const capture of record.captures) {
       if (!object(capture)) fail('existing learning capture is invalid');
       relative(capture.path);
-      if (!new RegExp(`^${prefix(libraryId)}/sources/[a-f0-9]{64}/`).test(capture.path)
+      const captureRoot = `${prefix(libraryId)}/sources/`;
+      if (!capture.path.startsWith(captureRoot) || !/^[a-f0-9]{64}\/./.test(capture.path.slice(captureRoot.length))
         || !DIGEST.test(capture.sha256) || !['100644', '100755'].includes(capture.mode) || managed.has(capture.path)) fail('existing learning capture is invalid');
       const entry = files.get(capture.path);
       if (!entry || hash(entry.bytes) !== capture.sha256 || entry.mode !== capture.mode) fail('learning provenance destination contains unmanaged or changed material');
