@@ -131,7 +131,17 @@ export function allowedRoots(agentId, opts = {}) {
 }
 
 function libraryMetadata(target, opts) {
-  const root = canonicalPath(skillLibraryRoot(opts));
+  let selected;
+  try { selected = skillLibraryRoot(opts); }
+  catch (error) {
+    if (error.code !== 'skill-root-invalid') throw error;
+    // Invalid configuration cannot select a library. Preserve protection of
+    // the default metadata without breaking unrelated file tools.
+    const env = { ...(opts.env ?? process.env) };
+    delete env.AGENT_BOT_SKILLS_HOME;
+    selected = skillLibraryRoot({ ...opts, skillsRoot: undefined, env });
+  }
+  const root = canonicalPath(selected);
   if (!contains(root, target)) return false;
   const parts = path.relative(root, target).split(path.sep);
   if (target === root) return true;

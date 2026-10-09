@@ -285,3 +285,20 @@ test('skill library metadata stays outside soul write territory even with confin
   assert.equal(checkWrite(id, payload, f.opts).inside, true);
   assert.equal(confinementCheck(f.envelope(payload), f.opts).decision, 'allow');
 });
+
+
+test('invalid skill root keeps normal confinement and still protects default metadata', async t => {
+  const f = fixture(t), file = path.join(f.soul, 'notes.md');
+  const metadata = path.join(f.home, '.agent-bot/skills/11111111-1111-4111-8111-111111111111/manifest.json');
+  await setConfinementMode(id, 'off', { ...f.opts, gate: owner });
+  for (const value of ['relative/dir', '', '~/skills']) {
+    f.opts.env.AGENT_BOT_SKILLS_HOME = value;
+    assert.equal(checkWrite(id, file, f.opts).inside, true);
+    assert.equal(confinementCheck(f.envelope(file), f.opts).decision, 'allow');
+    assert.equal(checkWrite(id, metadata, f.opts).inside, false);
+    assert.equal(confinementCheck(f.envelope(metadata), f.opts).decision, 'deny');
+  }
+  await setConfinementMode(id, 'deny', { ...f.opts, gate: owner });
+  assert.equal(confinementCheck(f.envelope(file), f.opts).decision, 'allow');
+  assert.equal(confinementCheck(f.envelope(path.join(f.home, 'outside.md')), f.opts).decision, 'deny');
+});

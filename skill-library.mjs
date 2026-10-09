@@ -10,6 +10,15 @@ import { diffSkillManifest } from './skill-manifest.mjs';
 import { skillLibraryRoot } from './skill-library-paths.mjs';
 
 export const SKILL_LIBRARY_LIMITS = Object.freeze({ files: 1000, entries: 4000, bytes: 32 * 1024 * 1024, fileBytes: 8 * 1024 * 1024, entryBytes: 64 * 1024, depth: 16, references: 1000 });
+function boundedLimits(limits = {}) {
+  if (!limits || typeof limits !== 'object' || Array.isArray(limits)) fail('skill-limit-invalid', 'skill limits must be an object');
+  for (const [name, value] of Object.entries(limits)) {
+    if (!Object.hasOwn(SKILL_LIBRARY_LIMITS, name) || !Number.isSafeInteger(value) || value < 0 || value > SKILL_LIBRARY_LIMITS[name]) {
+      fail('skill-limit-invalid', 'skill limits may only lower the documented bounds');
+    }
+  }
+  return { ...SKILL_LIBRARY_LIMITS, ...limits };
+}
 const EXCLUDED = new Set(['.git', '.hg', '.svn', 'node_modules', '.DS_Store']);
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -47,7 +56,7 @@ function manifest(entries) {
 }
 function inventory(root, { limits = SKILL_LIBRARY_LIMITS, allowFileLinks = false } = {}) {
   if (!lstatSync(root).isDirectory() || lstatSync(root).isSymbolicLink()) fail('skill-path-unsafe', 'skill root must be a real directory');
-  limits = { ...SKILL_LIBRARY_LIMITS, ...limits };
+  limits = boundedLimits(limits);
   const realRoot = realpathSync(root), entries = [], excluded = [], materialized = [], names = new Set();
   let total = 0, visited = 0;
   function walk(directory, prefix, depth) {
@@ -138,7 +147,7 @@ function acquire(input, id, options = {}) {
   let name;
   try { const front = decode(entry.bytes).match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1]; name = skillField(front ?? '', 'name'); validateSkill(entry.bytes, name); }
   catch (error) { fail('skill-entry-invalid', error.message); }
-  const refs = dependencies(content.entries, id, { ...SKILL_LIBRARY_LIMITS, ...options.limits }.references);
+  const refs = dependencies(content.entries, id, boundedLimits(options.limits).references);
   return { ...content, name, source: { kind: 'local', path: realpathSync(root) }, dependencies: refs,
     coverage: { boundary: 'markdown-inline-file-links-v1', unresolved: refs.filter(edge => edge.status === 'unresolved').length, external: refs.filter(edge => edge.status === 'external').length, universalRetrieval: false } };
 }

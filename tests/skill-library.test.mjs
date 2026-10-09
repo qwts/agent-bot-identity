@@ -168,3 +168,15 @@ test('the explicit library root is isolated and snapshots publish read-only', t 
   assert.equal(checkSkill(imported.id, options).status, 'unchanged');
   for (const value of ['', 'relative', '~/skills']) assert.throws(() => listSkills({ ...options, env: { AGENT_BOT_SKILLS_HOME: value } }), error => error.code === 'skill-root-invalid');
 });
+
+
+test('API callers may lower limits but cannot publish above supported snapshot bounds', t => {
+  const f = fixture(t);
+  for (const limits of [{ references: 1001 }, { files: 1001 }, { depth: -1 }, { unknown: 1 }]) {
+    assert.throws(() => importSkill(f.source, { ...f.options, limits }), error => error.code === 'skill-limit-invalid');
+    assert.equal(existsSync(f.library), false);
+  }
+  const imported = importSkill(f.source, { ...f.options, limits: { references: 0 } });
+  assert.equal(imported.dependencies[0].reason, 'reference-limit');
+  assert.equal(showSkill(imported.id, f.options).coverage.unresolved, 1);
+});

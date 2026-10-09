@@ -26,7 +26,9 @@ These operations require neither a GitHub App nor a soul binding.
 
 The default root is `~/.agent-bot/skills`, as specified by ADR-0603.
 `AGENT_BOT_SKILLS_HOME` overrides it with an absolute directory path (empty,
-relative and literal `~` paths are refused). This deliberately retains the ADR
+relative and literal `~` paths are refused by the CLI). With an invalid override,
+the cooperative guard protects the default library metadata and applies normal
+confinement to unrelated writes. This deliberately retains the ADR
 location instead of moving skills to the identity state directory. Library
 callers can also supply `skillsRoot`; tests use isolated roots. Each import
 lives at `<root>/<uuid>/`:
@@ -37,7 +39,8 @@ lives at `<root>/<uuid>/`:
 - `.snapshots/<sha256-hex>/payload/` retains exact acquired bytes. Its sibling
   `manifest.json` records file hashes, byte sizes, executable modes, source,
   acquisition time, dependency edges, coverage, exclusions and materialized links.
-- `.checks/<uuid>.json` records each successful or unavailable source check.
+- `.checks/<uuid>.json` records each successful or unavailable source check. Receipts are append-only;
+  automatic retention/pruning is not implemented, so repeated checks grow this directory.
 
 Metadata stays outside the skill payload and its checksum. File receipts use
 SHA-256 of exact bytes and mode `100644` or `100755`; the aggregate hashes the
@@ -107,7 +110,7 @@ Markdown links in copied `.md` files. Each edge names the importing UUID and
 referring file. Local targets present in the acquired payload are captured;
 cycles are marked. Missing or escaping targets and recognizable remote
 instruction files are unresolved. Other remote references and unsupported
-schemes are explicitly external. The scan stops after 1,000 references with an
+schemes are explicitly external. API limit overrides may only lower the documented bounds. The scan stops after 1,000 references with an
 unresolved limit receipt. It is not a full Markdown parser: reference-style
 links, HTML, runtime fetches and harness retrieval are outside this boundary.
 `universalRetrieval` is always false.
