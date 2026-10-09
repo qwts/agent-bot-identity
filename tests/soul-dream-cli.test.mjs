@@ -35,6 +35,7 @@ const STATUS = {
     { schemaVersion: 1, agentId: OTHER, lastRunId: OTHER_RUN, suppressed: 2, notices: [{ id: `ntc_${'b'.repeat(24)}`, kind: 'report' }] }],
   fault: null, orphanRecovery: 'process-group-or-quarantine',
   journal: { revision: 99999, transactions: 99999, capacity: 100000, full: false, temporaryFiles: 0, automaticPruning: false, maxRecordBytes: 8388608 },
+  previews: { location: 'outside-journal', retainPerSoul: 20 },
   diagnostics: { scope: 'this-daemon', inputFailures: [
     { agentId: ID, runId: RUN, code: 'dream-input-drift', at: '2026-10-09T00:00:00.000Z' },
     { agentId: OTHER, runId: OTHER_RUN, code: 'dream-input-limit', at: '2026-10-09T00:00:00.000Z' },
@@ -100,6 +101,7 @@ test('status and history disclose only the named soul and always report unverifi
   assert.deepEqual(status.notices, STATUS.noticeLedgers[0], "only this soul's live notices are disclosed");
   assert.deepEqual([status.started, status.closing, status.orphanRecovery], [true, false, 'process-group-or-quarantine']);
   assert.deepEqual(status.journal, STATUS.journal, 'journal budget and no-pruning facts stay visible');
+  assert.deepEqual(status.previews, STATUS.previews, 'preview retention stays visible');
   assert.deepEqual(status.diagnostics, { scope: 'this-daemon', inputFailures: [STATUS.diagnostics.inputFailures[0]] },
     "this soul's capture failure is kept; another soul's is not");
   assert.equal(JSON.stringify(status).includes(OTHER), false, 'other souls are not disclosed');

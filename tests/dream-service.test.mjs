@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDreamService, dreamControlRequest, DREAM_POLL_MS, prepareDreamDirectory } from '../skill-dream-service.mjs';
 import { createDreamFileStore } from '../skill-dream-store.mjs';
+import { dreamOutcomeDigest } from '../skill-dream-outcomes.mjs';
 import { createDreamScheduler } from '../skill-dream-scheduler.mjs';
 import { createTurnRegistry, acpExecutorFor } from '../wake-plane.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
@@ -161,7 +162,7 @@ test('owner run-now uses configured ACP and keeps its unverified reply separate 
   const events = f.service.history().records.flatMap(record => record.events);
   const outcome = events.find(event => event.kind === 'outcome-recorded');
   assert.equal(outcome.outcome.report.status, 'unstructured');
-  assert.ok(outcome.outcome.report.text.includes('opt-reject'));
+  assert.ok(outcome.preview.text.includes('opt-reject'));
   assert.deepEqual(outcome.outcome.items, []);
   assert.equal(JSON.stringify(events.filter(event => event.kind !== 'outcome-recorded')).includes('opt-reject'), false);
   const prepared = f.service.history().records.flatMap(record => record.events).find(event => event.kind === 'inputs-prepared');
@@ -196,6 +197,25 @@ test('structured and truncated replies are persisted atomically with terminal ru
     assert.deepEqual(reopened.read().outcomeReceipts, [record.receipt]);
     assert.equal(reopened.read().flights.length, 0);
   });
+});
+
+test('report previews live outside the journal, read back by digest and refuse tampering', posix, async t => {
+  const f = fixture(t, { executorFor: () => async input => {
+    input.appendEvent(UPDATE_EVENT, { sessionUpdate: 'agent_message_chunk', content: { text: 'PREVIEW_CANARY unstructured' } });
+  } });
+  f.control('register', { schedule: 'PT1H' }); f.control('run-now'); await f.service.idle();
+  const journal = readdirSync(f.directory).map(name => readFileSync(path.join(f.directory, name), 'utf8')).join('');
+  assert.equal(journal.includes('PREVIEW_CANARY'), false);
+  const recorded = () => f.service.history().records.flatMap(record => record.events).find(event => event.kind === 'outcome-recorded');
+  assert.deepEqual(recorded().preview, { status: 'available', text: 'PREVIEW_CANARY unstructured' });
+  assert.equal(recorded().receipt.digest, dreamOutcomeDigest(recorded().outcome), 'the journal outcome is returned as recorded');
+  assert.deepEqual(f.service.status().previews, { location: 'outside-journal', retainPerSoul: 20 });
+  const dir = path.join(path.dirname(f.directory), 'dream-previews', ID), [file] = readdirSync(dir);
+  assert.equal(statSync(dir).mode & 0o777, 0o700); assert.equal(statSync(path.join(dir, file)).mode & 0o777, 0o600);
+  writeFileSync(path.join(dir, file), 'PREVIEW_CANARY edited');
+  assert.deepEqual(recorded().preview, { status: 'invalid', text: null });
+  rmSync(path.join(dir, file));
+  assert.deepEqual(recorded().preview, { status: 'unavailable', text: null });
 });
 
 test('durable preparation precedes provider resolution and survives a launch failure', posix, async t => {
@@ -286,7 +306,7 @@ test('startup quarantines unsettled durable work and controls cannot erase that 
   const [notice] = again.status().noticeLedgers.find(ledger => ledger.agentId === ID).notices;
   assert.deepEqual([notice.kind, notice.detail, notice.occurrences], ['recovery', 'recovery-required', 1], 'a later startup does not renotify');
   assert.equal(again.control(dreamControlRequest('ack-notice', { agentId: ID, noticeId: notice.id })).notice.state, 'acknowledged');
-  assert.equal(again.status().schemaVersion, 7);
+  assert.equal(again.status().schemaVersion, 8);
 });
 
 test('a restarted daemon terminates its predecessor\'s owned agent group and settles the run as interrupted (#603)', posix, async t => {

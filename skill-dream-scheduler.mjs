@@ -6,7 +6,7 @@ import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { isAgentId } from './agent-identity.mjs';
 import { dreamInputMetadataDigest, validateDreamInputMetadata } from './skill-dream-inputs.mjs';
-import { dreamOutcomeDigest, validateDreamOutcome } from './skill-dream-outcomes.mjs';
+import { detachDreamPreview, dreamOutcomeDigest, validateDreamOutcome } from './skill-dream-outcomes.mjs';
 import { validProcessOwnership } from './process-ownership.mjs';
 import { acknowledgeDreamNotice, applyDreamNoticeRecovery, applyDreamNoticeRun, emptyDreamNoticeLedger, validateDreamNoticeLedger, DREAM_NOTICE_LIMITS } from './skill-dream-notices.mjs';
 
@@ -45,7 +45,7 @@ export function parseDreamSchedule(value) {
 const emptyAt = schemaVersion => ({ schemaVersion, revision: 0, registrations: [], flights: [],
   ...(schemaVersion >= 2 ? { inputReceipts: [] } : {}), ...(schemaVersion >= 3 ? { outcomeReceipts: [] } : {}),
   ...(schemaVersion >= 4 ? { selectionCheckpoints: [] } : {}), ...(schemaVersion >= 5 ? { noticeLedgers: [] } : {}) });
-export const emptyDreamState = () => emptyAt(7);
+export const emptyDreamState = () => emptyAt(8);
 function inputReceipt(value) {
   keys(value, ['runId', 'journalRevision', 'startingRevision', 'digest']);
   const hash = value => typeof value === 'string' && value.length === 71 && /^sha256:[a-f0-9]{64}$/.test(value);
@@ -91,7 +91,7 @@ function runRecord(run, settled, version) {
 }
 export function validateDreamState(state) {
   keys(state, ['schemaVersion', 'revision', 'registrations', 'flights', ...(state?.schemaVersion >= 2 ? ['inputReceipts'] : []), ...(state?.schemaVersion >= 3 ? ['outcomeReceipts'] : []), ...(state?.schemaVersion >= 4 ? ['selectionCheckpoints'] : []), ...(state?.schemaVersion >= 5 ? ['noticeLedgers'] : [])]);
-  if (![1, 2, 3, 4, 5, 6, 7].includes(state.schemaVersion) || !Number.isSafeInteger(state.revision) || state.revision < 0
+  if (![1, 2, 3, 4, 5, 6, 7, 8].includes(state.schemaVersion) || !Number.isSafeInteger(state.revision) || state.revision < 0
     || !Array.isArray(state.registrations) || state.registrations.length > DREAM_REGISTRATION_LIMIT
     || !Array.isArray(state.flights) || state.flights.length > DREAM_REGISTRATION_LIMIT) invalid();
   const agents = new Set(), generations = new Set(), flying = new Set(), runs = new Set();
@@ -238,7 +238,9 @@ export function validateDreamEvents(events, { state = null } = {}) {
       runRecord(event.run, true, version(event.run)); inputReceipt(event.receipt); validateDreamOutcome(event.outcome, { runId: event.run.runId });
       if (event.receipt.runId !== event.run.runId || event.receipt.startingRevision !== event.outcome.startingRevision
         || event.receipt.digest !== dreamOutcomeDigest(event.outcome)) invalid();
-      if (state && (state.schemaVersion < 3 || event.receipt.journalRevision !== state.revision
+      // Version 8 journals record outcomes with the preview text detached.
+      if (state && (state.schemaVersion < 3 || (state.schemaVersion >= 8) !== (event.outcome.schemaVersion === 2)
+        || event.receipt.journalRevision !== state.revision
         || state.registrations.some(row => row.lastRun?.runId === event.run.runId)
         && !state.outcomeReceipts.some(receipt => isDeepStrictEqual(receipt, event.receipt)))) invalid();
       if (!events.some(ended => ended.kind === 'ended' && isDeepStrictEqual(ended.run, event.run))) invalid();
@@ -295,9 +297,11 @@ export function validateDreamEvents(events, { state = null } = {}) {
 const UNSUPPORTED_OWNERSHIP = Object.freeze({ record: () => null, inspect: () => 'unsupported', terminate: async () => false });
 export function createDreamScheduler({ store, execute, soulDirectory, isPaused = () => false, isBusy = () => false,
   now = () => new Date(), idFactory = randomUUID, daemonGeneration = randomUUID(), maxConcurrent = 1,
-  turnTimeoutMs = DREAM_TIMEOUT_MS, setTimer = setTimeout, clearTimer = clearTimeout, processOwnership = UNSUPPORTED_OWNERSHIP } = {}) {
+  turnTimeoutMs = DREAM_TIMEOUT_MS, setTimer = setTimeout, clearTimer = clearTimeout, processOwnership = UNSUPPORTED_OWNERSHIP,
+  previews = null } = {}) {
   if (typeof store?.read !== 'function' || typeof store?.commit !== 'function' || typeof execute !== 'function' || typeof soulDirectory !== 'function'
     || ['record', 'inspect', 'terminate'].some(name => typeof processOwnership?.[name] !== 'function')
+    || previews !== null && ['write', 'prune'].some(name => typeof previews[name] !== 'function')
     || !id(daemonGeneration) || !Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 16
     || !Number.isSafeInteger(turnTimeoutMs) || turnTimeoutMs < 1 || turnTimeoutMs > DREAM_TIMEOUT_MS) {
     fail('dream-configuration-invalid', 'dream scheduling requires atomic storage, execution and canonical soul-directory ports with bounded concurrency and timeout');
@@ -308,11 +312,13 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
   const read = () => {
     const observed = synchronous(store.read());
     const state = structuredClone(validateDreamState(observed === null ? emptyDreamState() : observed));
-    if (state.schemaVersion >= 7) return state;
+    if (state.schemaVersion >= 8) return state;
+    // Version 8 changes only how outcome events store preview text.
+    if (state.schemaVersion === 7) return { ...state, schemaVersion: 8 };
     // Upgrade only the next transaction, leaving historical v1 bytes intact.
     // An older run recorded no ownership, so its interruption stays ambiguous.
     const unowned = run => run === null ? null : { ...run, ownership: null };
-    return { ...state, schemaVersion: 7, inputReceipts: state.inputReceipts ?? [],
+    return { ...state, schemaVersion: 8, inputReceipts: state.inputReceipts ?? [],
       outcomeReceipts: state.outcomeReceipts ?? [], selectionCheckpoints: state.selectionCheckpoints ?? [], noticeLedgers: state.noticeLedgers ?? [],
       registrations: state.registrations.map(row => ({ ...row, lastRun: unowned(row.lastRun) })), flights: state.flights.map(unowned) };
   };
@@ -453,9 +459,15 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
         if (owner) { owner.lastRun = result; if (!owner.paused) owner.nextDueAt = later(endedAt, owner.intervalHours); }
         const events = [{ kind: 'ended', at: endedAt, run: result }];
         if (entry.outcome !== null) {
-          const receipt = { runId: run.runId, journalRevision: current.revision + 1, startingRevision: entry.outcome.startingRevision, digest: dreamOutcomeDigest(entry.outcome) };
+          // Preview text goes to the preview store first; the journal keeps
+          // its digest. A failed write leaves the preview unavailable, not the run.
+          const { outcome, text } = detachDreamPreview(entry.outcome), journalRevision = current.revision + 1;
+          if (text !== null && previews !== null) {
+            try { previews.write({ agentId, runId: run.runId, journalRevision, text }); } catch { /* preview unavailable */ }
+          }
+          const receipt = { runId: run.runId, journalRevision, startingRevision: outcome.startingRevision, digest: dreamOutcomeDigest(outcome) };
           current.outcomeReceipts.push(receipt);
-          events.push({ kind: 'outcome-recorded', at: endedAt, run: result, receipt, outcome: entry.outcome });
+          events.push({ kind: 'outcome-recorded', at: endedAt, run: result, receipt, outcome });
         }
         if (owner && status === 'completed' && result.cancelRequestedAt === null && entry.inputs !== null
           && entry.outcome?.report.status === 'structured') {
@@ -469,6 +481,9 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
         }
         noticeRun(current, events, result, entry);
         persist(current, events);
+        if (entry.outcome !== null && previews !== null) {
+          try { previews.prune(agentId); } catch { /* retried after the next outcome */ }
+        }
         live.delete(run.runId);
         return structuredClone(result);
       } catch {

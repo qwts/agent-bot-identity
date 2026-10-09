@@ -52,11 +52,11 @@ test('v1 journal state upgrades on the next transaction without rewriting histor
   assert.equal(f.store.commit(legacy), true);
   const bytes = readFileSync(path.join(f.directory, name(1)));
   const store = f.reopen(), scheduler = createDreamScheduler({ store, execute: () => {}, soulDirectory: () => f.directory });
-  assert.equal(scheduler.status().schemaVersion, 7);
+  assert.equal(scheduler.status().schemaVersion, 8);
   assert.deepEqual(scheduler.status().inputReceipts, []);
   assert.equal(store.read().schemaVersion, 1, 'read-only inspection does not migrate disk');
   scheduler.pause(A);
-  assert.equal(store.read().schemaVersion, 7);
+  assert.equal(store.read().schemaVersion, 8);
   assert.deepEqual(readFileSync(path.join(f.directory, name(1))), bytes);
   assert.equal(store.history().records.length, 2);
 });
@@ -88,7 +88,7 @@ for (const version of [2, 3, 4, 5, 6]) test(`v${version} prepared runs retain th
   const scheduler = createDreamScheduler({ store: f.reopen(), execute() {}, soulDirectory: () => f.directory });
   assert.equal(f.reopen().read().schemaVersion, version);
   assert.equal(scheduler.recover().quarantined, 1);
-  assert.equal(f.reopen().read().schemaVersion, 7);
+  assert.equal(f.reopen().read().schemaVersion, 8);
   assert.deepEqual(scheduler.status().inputReceipts, [reference]);
   assert.deepEqual(scheduler.status().noticeLedgers.map(ledger => ledger.notices.map(notice => notice.kind)), [['recovery']],
     'the migrating quarantine transaction carries its recovery notice');

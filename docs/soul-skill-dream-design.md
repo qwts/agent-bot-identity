@@ -338,6 +338,20 @@ an `execution-failed` code without provider error text. Preparation failures
 before a source revision is known still have execution facts and process-local
 diagnostics, but no fabricated outcome record.
 
+From state version 8, preview text is kept outside the journal (#603). The
+`outcome-recorded` event carries a version 2 outcome whose report names the
+preview by `{ digest, bytes }` instead of holding its text, and the receipt
+digest covers that form. The daemon writes the text to a private per-soul
+preview store (`dream-previews/<agentId>/` beside the journal directory) before
+the journal commit, named by that commit's journal revision, then keeps only the
+newest 20 previews for that soul in journal order, independent of the clock. A
+failed preview write leaves the preview unavailable and does not fault the run.
+History returns the journal event exactly as recorded, so its receipt still
+verifies, plus a response-only `preview: { status, text }` field read back by
+digest. The status is `available`, `unavailable` (pruned or never written) or
+`invalid` (the stored bytes no longer match). Outcomes recorded before version 8 keep their inline text in the
+journal; their records are never rewritten.
+
 State version 3 adds `outcomeReceipts` references for latest registered runs.
 The `outcome-recorded` event and its terminal `ended` event publish atomically
 in one journal transaction. Staging an outcome in memory is not a durability
@@ -515,8 +529,9 @@ recoverable journal. The soul's existing history mirror remains best effort and
 must not become the scheduler's recovery authority. Detailed evidence checkpoints
 need their own versioned schema; do not place free-form prompts or outputs into
 the current facts-only turn mirror. Records are append-only with bounded reads;
-automatic pruning is deferred until a retention policy exists. Status must make
-that disk-growth limitation visible.
+journal records are never pruned automatically. Report preview text is the one
+thing with a retention policy: it lives outside the journal and keeps the newest
+20 per soul. Status must make both visible.
 
 No-change runs are quiet. Meaningful changes, failures and required user action
 create a notice with a stable fingerprint of the condition and relevant source
@@ -649,7 +664,9 @@ more than 1,024 such files refuses the inventory. The directory holds at most
 100,000 transactions (an internal host parameter may lower that limit), each at
 most 8 MiB. A history page contains at most 16 transactions. At capacity, new
 commits refuse and status reports `full`; there is no automatic pruning or
-retention cleanup. An explicit archive/retention procedure remains future work.
+retention cleanup of journal records. Status reports `automaticPruning: false`
+for the journal and `previews: { location: 'outside-journal', retainPerSoul: 20 }`
+for the separate preview store. An explicit archive/retention procedure remains future work.
 The directory inventory at startup and status is bounded by those limits but
 still grows with the number of transactions.
 

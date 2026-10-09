@@ -77,7 +77,7 @@ function soulStatus(status, agentId) {
     : null;
   return { schemaVersion: 1, agentId, available: status.available === true, executorConfigured: status.executorConfigured === true,
     started: status.started ?? null, closing: status.closing ?? null, orphanRecovery: status.orphanRecovery ?? null,
-    fault: status.fault ?? null, maintenanceCoverage: 'unverified', journal: status.journal ?? null, diagnostics,
+    fault: status.fault ?? null, maintenanceCoverage: 'unverified', journal: status.journal ?? null, previews: status.previews ?? null, diagnostics,
     registration, flights, inputReceipts: [], ...receipts,
     selectionCheckpoints: (status.selectionCheckpoints ?? []).filter(checkpoint => checkpoint?.agentId === agentId),
     notices: (status.noticeLedgers ?? []).find(ledger => ledger?.agentId === agentId) ?? null };
