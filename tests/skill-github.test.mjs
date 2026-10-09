@@ -94,6 +94,41 @@ test('external nested instructions share the repository acquisition request and 
   assert.equal(full.coverage.receivedBytes, fullNet.calls.reduce((sum, call) => sum + Buffer.byteLength(map.result[call.url].body), 0));
 });
 
+test('ancestor navigation permits unrelated nonportable filenames while captured trees still refuse them', async t => {
+  const unrelated = ['aux.c', 'README', 'readme', 'trailing.', 'colon:name'].map(name => ({ path: name, mode: '100644', type: 'blob', size: 0, sha: blob(Buffer.alloc(0)) }));
+  for (const directory of ['', 'skills', 'skills/demo']) {
+    const f = fixture(t), map = routes({ 'SKILL.md': skill('root') });
+    const route = map.result[`${API}/git/trees/${map.treeIds.get(directory)}`];
+    const tree = JSON.parse(route.body); tree.tree.push(...unrelated); route.body = JSON.stringify(tree);
+    const net = transport(map.result);
+    if (directory === 'skills/demo') {
+      await assert.rejects(importSkill(SOURCE, { ...f, ...net }), error => error.code === 'skill-path-unsafe');
+      assert.equal(existsSync(path.join(f.home, '.agent-bot/skills')), false);
+    } else {
+      const imported = await importSkill(SOURCE, { ...f, ...net });
+      assert.equal(imported.coverage.acquisition, 'complete-within-boundary');
+      assert.deepEqual(readdirSync(imported.path), ['SKILL.md']);
+      assert.equal(net.calls.some(call => unrelated.some(item => call.url.endsWith(`/${item.path}`))), false);
+    }
+  }
+  // Selecting the repository root captures that tree, so portability applies.
+  const root = routes({ 'SKILL.md': skill('root') });
+  const route = root.result[`${API}/git/trees/${COMMIT}`], tree = JSON.parse(route.body);
+  tree.tree.push(...unrelated); route.body = JSON.stringify(tree);
+  await assert.rejects(acquireGithubSkill('https://github.com/example/skills/tree/main', 'owner', transport(root.result)), error => error.code === 'skill-path-unsafe');
+});
+
+test('ancestor trees still refuse malformed entries and ambiguous exact directory names', async () => {
+  for (const damage of ['duplicate', 'invalid-sha', 'invalid-type']) {
+    const map = routes({ 'SKILL.md': skill('root') }), route = map.result[`${API}/git/trees/${COMMIT}`], tree = JSON.parse(route.body);
+    if (damage === 'duplicate') tree.tree.push({ ...tree.tree[0] });
+    if (damage === 'invalid-sha') tree.tree[0].sha = 'invalid';
+    if (damage === 'invalid-type') tree.tree[0].type = 'unknown';
+    route.body = JSON.stringify(tree);
+    await assert.rejects(acquireGithubSkill(SOURCE, 'owner', transport(map.result)), error => error.code === 'skill-repository-invalid');
+  }
+});
+
 test('missing files, blob mismatch, symlinks and submodules are explicit partial outcomes without raw retry', async t => {
   const f = fixture(t), map = routes({ 'SKILL.md': skill('[Link](link.md)'), 'link.md': { bytes: Buffer.from('../elsewhere'), mode: '120000' },
     'submodule': { bytes: Buffer.from('commit'), mode: '160000' }, 'bad.bin': Buffer.from('good'), 'missing.txt': Buffer.from('missing') });
@@ -155,14 +190,37 @@ test('GitHub API and raw requests stay on their exact hosts; LFS pointers are re
 
 test('rate-limited and inaccessible rechecks have distinct bounded diagnostics without credential retries', async t => {
   const f = fixture(t), map = routes({ 'SKILL.md': skill('root') }), imported = await importSkill(SOURCE, { ...f, ...transport(map.result) });
-  for (const [status, headers, reason] of [[404, {}, 'skill-fetch-not-found'], [403, {}, 'skill-fetch-forbidden'], [403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1791526000' }, 'skill-fetch-rate-limited']]) {
+  const now = () => new Date('2026-10-09T00:00:00Z');
+  for (const [status, headers, reason, retryAt] of [
+    [404, {}, 'skill-fetch-not-found'], [403, {}, 'skill-fetch-forbidden'],
+    [403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1791526000' }, 'skill-fetch-rate-limited', new Date(1791526000000).toISOString()],
+    [403, { 'x-ratelimit-remaining': '50', 'retry-after': '120' }, 'skill-fetch-rate-limited', '2026-10-09T00:02:00.000Z'],
+    [429, { 'retry-after': 'Fri, 09 Oct 2026 01:00:00 GMT' }, 'skill-fetch-rate-limited', '2026-10-09T01:00:00.000Z'],
+    [429, { 'retry-after': '9'.repeat(1000) }, 'skill-fetch-rate-limited'],
+    [403, { 'retry-after': 'CANARY invalid' }, 'skill-fetch-forbidden'],
+  ]) {
     const net = transport({ [`${API}/commits/main`]: { status, headers, body: 'CANARY must not persist' } });
-    const check = await checkSkill(imported.id, { ...f, ...net });
+    const check = await checkSkill(imported.id, { ...f, ...net, now });
     assert.equal(check.status, 'unavailable'); assert.equal(check.reason, reason);
     assert.equal(net.calls.length, 1); assert.equal(JSON.stringify(check).includes('CANARY'), false);
-    if (reason === 'skill-fetch-rate-limited') assert.equal(check.retryAt, new Date(1791526000000).toISOString());
+    assert.equal(check.retryAt, retryAt);
     assert.equal(showSkill(imported.id, f).accepted, imported.accepted);
   }
+});
+
+test('GitHub web instruction links and redirects are unresolved rather than captured as HTML', async () => {
+  const web = `https://github.com/example/skills/blob/${COMMIT}/skills/demo/guide.md`;
+  const mutable = 'https://github.com/example/skills/blob/main/skills/demo/guide.md';
+  const redirect = 'https://docs.example.com/guide.md';
+  const map = routes({ 'SKILL.md': skill(`[Pinned](${web}) [Branch](${mutable}) [Redirect](${redirect})`) });
+  map.result[web] = map.result[mutable] = { body: '<html>not source bytes</html>' };
+  map.result[redirect] = { status: 302, headers: { location: web } };
+  const net = transport(map.result), result = await acquireGithubSkill(SOURCE, 'owner', net);
+  assert.equal(result.coverage.acquisition, 'partial');
+  assert.equal(result.dependencies.length, 3);
+  assert.ok(result.dependencies.every(edge => edge.status === 'unresolved' && edge.reason === 'skill-source-unsupported'));
+  assert.deepEqual(result.entries.map(entry => entry.path), ['SKILL.md']);
+  assert.equal(net.calls.some(call => new URL(call.url).hostname === 'github.com'), false);
 });
 
 test('directory references cannot fetch omitted entries or escape the selected repository root', async () => {

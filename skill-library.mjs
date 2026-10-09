@@ -342,7 +342,7 @@ export function importSkill(input, { now = () => new Date(), ...options } = {}) 
   const id = randomUUID();
   if (remote(input)) {
     input = skillSourceUrl(input); // reject secret-bearing input before async I/O
-    return acquireHttps(input, id, options).then(content => publishImport(content, id, now, options));
+    return acquireHttps(input, id, { ...options, now }).then(content => publishImport(content, id, now, options));
   }
   return publishImport(acquire(input, id, options), id, now, options);
 }
@@ -433,7 +433,7 @@ function textDiffs(root, accepted, candidate, changes) {
 }
 export function checkSkill(id, { now = () => new Date(), ...options } = {}) {
   const { root, record } = load(id, options);
-  if (record.source.kind === 'https') return acquireHttps(record.source.url, id, options).then(
+  if (record.source.kind === 'https') return acquireHttps(record.source.url, id, { ...options, now }).then(
     source => publishCheck(source), error => publishCheck(null, error));
   return publishCheck();
   function publishCheck(fetched, fetchError) {

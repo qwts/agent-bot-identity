@@ -39,7 +39,7 @@ export function acquireGithubSkill(input, id, options = {}) {
     if (!SHA.test(commit) || /^[a-f0-9]{40}$/i.test(source.ref) && source.ref.toLowerCase() !== commit) fail('skill-repository-invalid', 'repository ref did not resolve to a full commit SHA');
     const rawRoot = `https://raw.githubusercontent.com/${source.owner}/${source.repo}/${commit}/`;
     const base = rawRoot + (source.path ? `${source.path.split('/').map(encodeURIComponent).join('/')}/` : '');
-    async function tree(sha, exact = true) {
+    async function tree(sha, { exact = true, portable = true } = {}) {
       const response = await readRemoteSkillDocument(`${api}/git/trees/${sha}`, context, { accept: 'application/vnd.github+json', allowedHosts: ['api.github.com'] });
       let value;
       try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(response.bytes)); }
@@ -48,18 +48,23 @@ export function acquireGithubSkill(input, id, options = {}) {
         || value.tree.length > 4000 || value.truncated !== false) fail('skill-repository-invalid', 'repository tree is invalid, incomplete or exceeds the entry bound');
       const names = new Set();
       for (const item of value.tree) {
-        part(item?.path);
-        const key = item.path.normalize('NFC').toLowerCase();
+        if (typeof item?.path !== 'string' || !item.path || /[\/\x00]/.test(item.path)) fail('skill-repository-invalid', 'repository tree entry has no valid Git filename');
+        // Ancestors are navigation only: unrelated repository filenames never
+        // become local payload paths. Enforce portability inside the selected
+        // directory, while still rejecting malformed/duplicate ancestor entries.
+        if (portable) part(item.path);
+        const key = portable ? item.path.normalize('NFC').toLowerCase() : item.path;
         if (names.has(key) || !SHA.test(item.sha ?? '') || !['blob', 'tree', 'commit'].includes(item.type)) fail('skill-repository-invalid', 'repository tree contains conflicting or invalid entries');
         names.add(key);
       }
       return value;
     }
-    let selected = await tree(commit, false);
-    for (const component of source.path.split('/').filter(Boolean)) {
+    const components = source.path.split('/').filter(Boolean);
+    let selected = await tree(commit, { exact: false, portable: components.length === 0 });
+    for (const [index, component] of components.entries()) {
       const next = selected.tree.find(item => item.path === component);
       if (!next || next.type !== 'tree' || next.mode !== '040000') fail('skill-source-unsupported', 'selected repository path is not a real directory');
-      selected = await tree(next.sha);
+      selected = await tree(next.sha, { portable: index === components.length - 1 });
     }
     const rootTree = selected.sha, entries = [], locations = [], issues = [], excluded = [], names = new Set();
     const rootEntry = selected.tree.find(item => item.path === 'SKILL.md');

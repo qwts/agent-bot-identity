@@ -47,6 +47,15 @@ async function abortable(promise, signal) {
   try { return await Promise.race([promise, interrupted]); }
   finally { signal.removeEventListener('abort', onAbort); }
 }
+function rateLimitTime(headers, now) {
+  const after = headers['retry-after'];
+  const milliseconds = typeof after === 'string' && /^\d{1,10}$/.test(after)
+    ? now().getTime() + Number(after) * 1000
+    : typeof after === 'string' && /^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(after) ? Date.parse(after) : NaN;
+  const valid = value => Number.isSafeInteger(value) && value > 0 && value < 253402300800000;
+  const reset = Number(headers['x-ratelimit-reset']) * 1000;
+  return { retryAfter: valid(milliseconds), retryAt: valid(milliseconds) ? new Date(milliseconds).toISOString() : valid(reset) ? new Date(reset).toISOString() : null };
+}
 export async function readRemoteSkillDocument(input, context, { accept, allowedHosts } = {}) {
   if (accept !== undefined && !['application/vnd.github.sha', 'application/vnd.github+json'].includes(accept)) fail('skill-source-unsupported', 'unsupported acquisition media type');
   const { resolve = lookup, requestImpl = request, signal, limits } = context;
@@ -58,6 +67,7 @@ export async function readRemoteSkillDocument(input, context, { accept, allowedH
     if (signal.aborted) unavailable();
     const parsed = new URL(url);
     if (allowedHosts && !allowedHosts.includes(parsed.hostname)) fail('skill-fetch-host-refused', 'repository request left its allowed host');
+    if (parsed.hostname === 'github.com') fail('skill-source-unsupported', 'GitHub web pages are not raw instruction documents; use a raw document URL or a repository-directory import');
     let addresses;
     try { addresses = await abortable(resolve(parsed.hostname, { all: true, verbatim: true }), signal); } catch { unavailable(); }
     if (!Array.isArray(addresses) || !addresses.length || addresses.some(row => !publicSkillAddress(row.address) || row.family !== isIP(row.address))) {
@@ -85,9 +95,8 @@ export async function readRemoteSkillDocument(input, context, { accept, allowedH
     }
     if (response.statusCode !== 200) {
       response.destroy();
-      if (response.statusCode === 429 || response.statusCode === 403 && response.headers['x-ratelimit-remaining'] === '0') {
-        const seconds = Number(response.headers['x-ratelimit-reset']);
-        const retryAt = Number.isSafeInteger(seconds) && seconds > 0 && seconds < 253402300800 ? new Date(seconds * 1000).toISOString() : null;
+      const { retryAfter, retryAt } = rateLimitTime(response.headers, context.now);
+      if (response.statusCode === 429 || response.statusCode === 403 && (response.headers['x-ratelimit-remaining'] === '0' || retryAfter)) {
         throw Object.assign(new Error('remote source is rate-limited; retry after the reported reset or later'), { code: 'skill-fetch-rate-limited', ...(retryAt ? { retryAt } : {}) });
       }
       if (response.statusCode === 404) fail('skill-fetch-not-found', 'remote source was not found or is not public');
@@ -108,11 +117,11 @@ export async function readRemoteSkillDocument(input, context, { accept, allowedH
   }
 }
 const digest = value => createHash('sha256').update(value).digest('hex');
-export async function withSkillTransport({ remoteLimits, resolve, requestImpl } = {}, acquire) {
+export async function withSkillTransport({ remoteLimits, resolve, requestImpl, now = () => new Date() } = {}, acquire) {
   const limits = bounded(remoteLimits), controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), limits.milliseconds);
   const agent = new Agent({ keepAlive: false, proxyEnv: {} });
-  const context = { limits, signal: controller.signal, total: 0, documents: 0, referencesExhausted: false, resolve, requestImpl, agent, hosts: new Set() };
+  const context = { limits, signal: controller.signal, total: 0, documents: 0, referencesExhausted: false, resolve, requestImpl, now, agent, hosts: new Set() };
   try { return await acquire(context); }
   finally { clearTimeout(timer); agent.destroy(); }
 }

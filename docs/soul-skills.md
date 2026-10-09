@@ -152,9 +152,17 @@ that shared budget too. Directory depth is bounded to eight and inventories to
 4,000 entries. No phase resets the counters.
 
 API denial, not-found/private resources and rate limiting have separate codes.
-A rate limit with a valid reset timestamp includes `retryAt` in the unavailable
-check or per-entry report. Error bodies and credentials are never persisted.
-No automatic retry consumes the remaining quota.
+Primary rate limits and secondary limits reported by `Retry-After` are distinct
+from permanent access denial. A valid retry delay/date or reset timestamp includes
+`retryAt` in the unavailable check or per-entry report. Error bodies and credentials
+are never persisted. No automatic retry consumes the remaining quota.
+
+Ancestor trees are validated for navigation, but unrelated filenames outside
+the selected directory need not be portable. Every captured tree still requires
+safe, noncolliding portable names. Absolute `github.com` web links in instruction
+text, including `blob` pages and redirects to them, are unresolved rather than
+captured as HTML. Use relative links to captured files or explicit raw-document
+URLs; the adapter does not guess how a web link's ref relates to the pinned commit.
 
 ## Stored bytes and receipts
 
