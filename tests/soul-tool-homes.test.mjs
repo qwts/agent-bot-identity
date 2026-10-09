@@ -520,15 +520,18 @@ test('an unusable record fails the launch and the turn with its code, never a si
   assert.equal(result.readiness.ready, false);
 });
 
-test('only a soul born in a managed launch is stamped: an existing .soul-state, a pre-folder home or a join keeps its setup', (t) => {
+test('only a soul born in a managed launch is stamped: an existing .soul-state or an unmanaged caller (a join, a worktree) keeps its setup', (t) => {
   const existing = fixture(t, { host: false });
-  ensureSoulDirectory(ID, null, { ...existing.options, stampToolHomes: true });
-  assert.equal(readToolHomeRecord(existing.dir), null, 'the soul already had its state');
+  const kept = ensureSoulDirectory(ID, null, { ...existing.options, stampToolHomes: true });
+  assert.equal(readToolHomeRecord(kept), null, 'the soul already had its state');
+  // The folder the census resolves once its marker is gone is the one each
+  // call returns (its case follows the handle on a case-sensitive disk).
+  const joined = fixture(t, { host: false });
+  rmSync(path.join(joined.dir, '.soul-state'), { recursive: true });
+  const unmanaged = ensureSoulDirectory(ID, null, joined.options);
+  assert.equal(readToolHomeRecord(unmanaged), null, 'not a managed launch: no stamp');
   const born = fixture(t, { host: false });
   rmSync(path.join(born.dir, '.soul-state'), { recursive: true });
-  ensureSoulDirectory(ID, null, born.options);
-  assert.equal(readToolHomeRecord(born.dir), null, 'not managed (a join or a worktree): no stamp');
-  rmSync(path.join(born.dir, '.soul-state'), { recursive: true });
-  ensureSoulDirectory(ID, null, { ...born.options, stampToolHomes: true });
-  assert.deepEqual(readToolHomeRecord(born.dir), newSoulToolHomeRecord());
+  const created = ensureSoulDirectory(ID, null, { ...born.options, stampToolHomes: true });
+  assert.deepEqual(readToolHomeRecord(created), newSoulToolHomeRecord());
 });
