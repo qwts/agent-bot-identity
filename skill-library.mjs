@@ -317,6 +317,19 @@ export function verifySkill(id, options = {}) {
   const changes = diffSkillManifest(record.localBaseline, current);
   return { id, verification: current.digest === record.localBaseline.digest ? 'verified' : 'drifted', expected: record.localBaseline.digest, actual: current.digest, changes, coverage: showSkill(id, options).coverage };
 }
+
+// Materialization boundary for learning: return bounded, reverified bytes to
+// the revision workflow, never a mutable library link or an implicit selection.
+export function readSkillMaterial(id, { selection = 'accepted', expectedDigest, ...options } = {}) {
+  if (!['accepted', 'local'].includes(selection)) fail('skill-selection-invalid', 'select accepted or local skill material');
+  const record = showSkill(id, options);
+  const content = inventory(selection === 'accepted' ? path.join(record.snapshot, 'payload') : record.path, options);
+  if (selection === 'accepted' && content.digest !== record.accepted) fail('skill-record-invalid', 'accepted skill changed while being read');
+  if (expectedDigest !== undefined && expectedDigest !== content.digest) fail('skill-source-changed', 'selected skill digest changed; review it again');
+  try { validateSkill(content.entries.find(entry => entry.path === 'SKILL.md')?.bytes, record.name); }
+  catch { fail('skill-entry-invalid', 'selected material must keep a valid skill entrypoint and name'); }
+  return { record, selection, ...content, dependencies: dependencies(content.entries, id, boundedLimits(options.limits).references) };
+}
 function checkReceipt(root, result) {
   const checks = storedPath(root, '.checks');
   mkdirSync(checks, { recursive: true, mode: 0o700 });
