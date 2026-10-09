@@ -177,8 +177,9 @@ runtime that is not installed is installed at launch or fails the launch; it
 never falls through to a host copy. Every daemon ACP turn rechecks declared
 runtime readiness before creating an executor, including ACP cold wakes and
 ACP session restoration on `/v1`. The owner-selected `resume <policy>` wake lane
-(`createResumeExecutor`) does not consult the soul's runtimes yet: it runs the
-harness from the host PATH and stays open as #617 slice 3b. Missing selected installations, unsupported declarations,
+(`createResumeExecutor`) composes the same runtime and provider env and refuses
+the same way (#707); its tool-home store is not routed yet and stays open in
+#617. Missing selected installations, unsupported declarations,
 invalid runtime declarations, an unreadable existing manifest, or a runtime
 lookup error refuse the turn. A surviving install stamp and bin directory do
 not count as ready when the runtime executable is missing or has lost its
@@ -208,7 +209,7 @@ is created. It does not complete the remaining integrity or override contracts.
 | --- | --- | --- |
 | Managed launch | `daemon-launch.mjs` provisions pending runtimes, then calls `acpExecutorFor` | Existing launch tests cover installation refusal; runtime/factory fixtures cover rejection of stale or invalid readiness. |
 | ACP cold wake | `coldTurnExecutor` calls the same `acpExecutorFor` for each turn | Runtime/factory fixtures remove an executable after a successful turn and verify refusal before another executor is created. |
-| Resume wake lane (`resume <policy>`) | `createResumeExecutor` runs the harness CLI on `resumePath` | Not routed: no runtime lookup or refusal. Open as #617 slice 3b. |
+| Resume wake lane (`resume <policy>`) | `createResumeExecutor` composes the turn env through `runtimeEnvFor`/`providerEnvFor`, then resolves the harness CLI on that PATH (#707) | Fixtures run a declared runtime from the soul and refuse a removed or mismatched one with no run recorded. The tool-home store still uses the host location; the owner's choice is open in #617. |
 | Native `/v1` turns, including resumed sessions | `agent-daemon.mjs` calls the same factory before the ACP engine loads or creates a session | The same readiness check applies before session restoration or spawning. |
 | Declared environment | `soulRuntimeEnv` inspects the current manifest and selected installation | Runtime/factory fixtures cover missing/unsupported declarations, invalid manifests, missing selected harnesses and missing runtime executables; undeclared runtimes retain the host routes. |
 | npm provisioning | Both managed homes and joined adapters prepare declared runtimes through `soulInstallEnv` before npm | Fixtures verify the selected distribution's exact Node and npm CLI, reject a host npm override, and refuse missing files or failed provisioning before npm. Undeclared Node retains the host route. |
