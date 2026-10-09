@@ -55,10 +55,10 @@ const serialize = (record) => `${JSON.stringify(normalizeToolHomeRecord(record),
  * Records one harness's choice (`soul | global`), or clears it with null,
  * replacing the file atomically with a private mode. Clearing the last
  * entry of a soul that had no record before leaves an empty record, which
- * decides nothing. Returns the record written. Not locked: the only
- * writers today are a soul's birth (write-once, `stampNewSoulToolHomes`)
- * and this function, which no command calls yet; the owner command that
- * will must serialize its writes.
+ * decides nothing. Returns the record written. Not locked itself: the
+ * writers are a soul's birth (write-once, `stampNewSoulToolHomes`) and
+ * `soul tool-home` (soul-tool-home.mjs), which holds the record's lock
+ * around this call.
  */
 export function setToolHomeChoice(soulDir, harness, choice) {
   const row = toolHomeFor(harness);

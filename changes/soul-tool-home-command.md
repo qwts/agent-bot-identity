@@ -1,0 +1,1 @@
+- `agent-bot soul tool-home <harness> [soul|global] --soul ID` shows or sets where a soul's harness keeps its config, sign-in and sessions. The owner can always set it, and a soul can set its own; a soul switching to the shared `global` store asks the owner first, and every change writes a receipt (#617).

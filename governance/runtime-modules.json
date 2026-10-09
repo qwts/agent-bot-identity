@@ -227,6 +227,7 @@
     "soul-templates.mjs": "soul",
     "soul-threads.mjs": "soul",
     "soul-tool-home-record.mjs": "soul",
+    "soul-tool-home.mjs": "soul",
     "soul-tool-homes.mjs": "soul",
     "soul-worktrees.mjs": "soul",
     "souls-root.mjs": "soul",

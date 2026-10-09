@@ -95,6 +95,8 @@ export function ownerActionSummary(action, { souls = null, listSouls = null } = 
     summary = `set file confinement to ${rest[0]} for ${label(id)}`;
   } else if (first === 'soul' && second === 'revision' && rest.length === 1) {
     summary = `${id} a revision of ${label(rest[0])}`;
+  } else if (first === 'soul' && second === 'tool-home' && rest[1] === 'global' && rest.length === 2) {
+    summary = `let ${label(id)} use this Mac's shared ${rest[0]} sign-in and sessions instead of its own`;
   } else if (first === 'identity' && second === 'migrate-credentials') {
     const to = rest[0] === '--to' && rest[1] ? ` to ${rest[1] === 'keyd' ? 'agent-bot-keyd' : rest[1]}` : '';
     summary = id === '--all' ? `move every soul's GitHub App key${to}` : `move the GitHub App key of ${label(id)}${to}`;
