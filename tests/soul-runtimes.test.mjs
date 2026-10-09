@@ -788,6 +788,14 @@ test('readiness selects the platform\'s executable name: a POSIX install is not 
   put(path.join(winBin, 'node'), '#!/bin/sh\n# bare node\n');
   const bare = inspectSoulRuntimes(w.dir, { ...w.options, platform: 'win32-x64' }).runtimes[0];
   assert.deepEqual([bare.status, bare.reason], ['missing', 'the installed node.exe is missing or not executable']);
+
+  // A harness install that declares `bin: 'Tool.EXE'` is not asked for Tool.EXE.exe.
+  const toolArchive = archive({ 'Tool.EXE': '#!/bin/sh\n# tool\n' });
+  const h = fixture(t, { manifest: { harnesses: { tool: { install: { kind: 'archive', version: '1.0.0', bin: 'Tool.EXE',
+    url: 'https://example.test/tool-{platform}-{version}.zip', sha256: { 'win32-x64': sha(toolArchive) } } } } } });
+  const toolInstall = await installSoulRuntimes(h.dir, { ...h.options, platform: 'win32-x64', ...doubles({ archives: { 'https://example.test/tool-win32-x64-1.0.0.zip': toolArchive } }) });
+  assert.equal(toolInstall.harnesses[0].status, 'installed');
+  assert.equal(inspectSoulRuntimes(h.dir, { ...h.options, platform: 'win32-x64' }).harnesses[0].status, 'installed');
 });
 
 test('readiness accepts internal executable links but refuses external links and escaped installation roots (#617)', async (t) => {

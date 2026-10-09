@@ -118,8 +118,9 @@ function executableFile(file) {
 // archives carry `name.exe`, every other platform the bare name. Only that
 // one counts, so a POSIX install with just a `node.exe` is not ready (the
 // engine's PATH lookup would skip it for the daemon's own Node).
+// A declared bin that already names `tool.exe` keeps it.
 function executableName(name, platform) {
-  return platform?.startsWith('win32-') ? `${name}.exe` : name;
+  return platform?.startsWith('win32-') && !/\.exe$/i.test(name) ? `${name}.exe` : name;
 }
 
 function hasExecutable(directory, name, platform) {
