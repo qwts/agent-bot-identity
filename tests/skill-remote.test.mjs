@@ -75,14 +75,11 @@ test('redirects resolve references from final URLs and every hop revalidates des
   await assert.rejects(acquireRemoteSkill(URL, 'owner', privateHop), /non-public/); assert.equal(privateHop.calls.length, 1);
 });
 
-test('byte, reference, redirect, file and deadline limits fail without publishing an import', async t => {
+test('root byte, redirect, deadline and encoding failures publish no import', async t => {
   const f = fixture(t), cases = [
-    transport({ [URL]: { body: skill } }),
-    { ...transport({ [URL]: { body: skill }, 'https://skills.example.com/demo/refs/guide.md': { body: 'text' } }), remoteLimits: { files: 1 } },
     { ...transport({ [URL]: { body: skill } }), remoteLimits: { fileBytes: 8 } },
     { ...transport({ [URL]: { status: 302, headers: { location: URL } } }), remoteLimits: { redirects: 1 } },
     { ...transport({ [URL]: { hang: true } }), remoteLimits: { milliseconds: 10 } },
-    { ...transport({ [URL]: { body: skill.replace('[Guide](refs/guide.md)', '[A](#a)\n[B](#b)') } }), remoteLimits: { references: 1 } },
     transport({ [URL]: { body: skill, headers: { 'content-encoding': 'gzip' } } }),
   ];
   for (const net of cases) { await assert.rejects(importSkill(URL, { ...f, ...net })); assert.equal(existsSync(path.join(f.home, '.agent-bot/skills')), false); }
@@ -121,9 +118,13 @@ test('coverage is explicit and unsafe local mapping never publishes an invalid s
   for (const name of ['.git/notes.md', 'node_modules/notes.md', 'con.md', 'unsafe%2fname%3f.md', '%E0%A4%A.md']) {
     const target = `https://skills.example.com/demo/${name}`;
     const bad = transport({ [URL]: { body: skill.replace('refs/guide.md', name) }, [target]: { body: 'text' } });
-    await assert.rejects(importSkill(URL, { ...f, ...bad }), error => ['skill-path-unsafe', 'skill-source-unsupported'].includes(error.code));
+    const partial = await importSkill(URL, { ...f, ...bad });
+    assert.equal(partial.coverage.acquisition, 'partial');
+    assert.equal(partial.dependencies[0].status, 'unresolved');
+    assert.equal(verifySkill(partial.id, f).verification, 'verified');
+    assert.deepEqual(readdirSync(partial.path), ['SKILL.md']);
   }
-  assert.equal(readdirSync(path.join(f.home, '.agent-bot/skills')).filter(name => !name.startsWith('.')).length, 1);
+  assert.equal(readdirSync(path.join(f.home, '.agent-bot/skills')).filter(name => !name.startsWith('.')).length, 6);
 });
 
 test('remote captured-edge provenance survives accepted and locally adapted learning material', async t => {
@@ -180,4 +181,78 @@ test('proxy environment cannot select the HTTPS acquisition agent or add credent
   assert.deepEqual(Object.keys(headers).sort(), ['Accept-Encoding', 'User-Agent']);
   assert.deepEqual(result.hosts, ['skills.example.com']);
   assert.doesNotMatch(JSON.stringify(result), /CANARY|127\.0\.0\.1/);
+});
+
+
+test('partial import retains good instructions and reports each unavailable dependency without leaking errors', async t => {
+  const f = fixture(t), guide = 'https://skills.example.com/demo/refs/guide.md';
+  const net = transport({ [URL]: { body: skill + '[Missing](missing.md)\n[Again](missing.md)\n[Private](https://private.example.com/secret.md)\n' },
+    [guide]: { body: 'retained dependency\r\n' } }, { addresses: host => [{ address: host.startsWith('private') ? '10.0.0.1' : '93.184.216.34', family: 4 }] });
+  let output = '';
+  assert.equal(await main(['import', URL, '--json'], { ...f, ...net, stdout: { write: text => { output += text; } } }), 1);
+  const result = JSON.parse(output);
+  assert.equal(result.coverage.acquisition, 'partial');
+  assert.equal(result.coverage.unresolved, 3);
+  assert.deepEqual(result.dependencies.map(edge => edge.status), ['captured', 'unresolved', 'unresolved', 'unresolved']);
+  assert.equal(result.dependencies.at(-1).reason, 'skill-fetch-address-refused');
+  assert.equal(readFileSync(path.join(result.path, 'refs/guide.md'), 'utf8'), 'retained dependency\r\n');
+  assert.equal(net.calls.filter(call => call.url.endsWith('/missing.md')).length, 1, 'failed locators are deduplicated');
+  assert.equal(net.calls.some(call => new globalThis.URL(call.url).hostname === 'private.example.com'), false);
+  assert.doesNotMatch(output, /CANARY/);
+  assert.equal(verifySkill(result.id, f).verification, 'verified');
+});
+
+test('partial checks retain inspectable candidates but cannot claim freshness or replace accepted/local bytes', async t => {
+  const f = fixture(t), guide = 'https://skills.example.com/demo/refs/guide.md';
+  const routes = { [URL]: { body: skill }, [guide]: { body: 'original guide' } }, net = transport(routes);
+  const imported = await importSkill(URL, { ...f, ...net });
+  writeFileSync(path.join(imported.path, 'SKILL.md'), skill + 'local adaptation');
+  routes[URL].body = skill + '[Missing](missing.md)\n';
+  const checked = await checkSkill(imported.id, { ...f, ...net });
+  assert.equal(checked.status, 'unavailable'); assert.equal(checked.reason, 'skill-capture-incomplete');
+  assert.notEqual(checked.candidate, imported.accepted);
+  assert.equal(checked.dependencies.at(-1).status, 'unresolved');
+  assert.equal(readFileSync(path.join(checked.candidatePath, 'payload/SKILL.md'), 'utf8'), routes[URL].body);
+  assert.equal(showSkill(imported.id, f).accepted, imported.accepted);
+  assert.equal(readFileSync(path.join(imported.snapshot, 'payload/SKILL.md'), 'utf8'), skill);
+  assert.equal(readFileSync(path.join(imported.path, 'SKILL.md'), 'utf8'), skill + 'local adaptation');
+});
+
+test('partial capture bounds attempted documents, failed response bytes, depth and reference discovery', async t => {
+  const f = fixture(t), guide = 'https://skills.example.com/demo/refs/guide.md';
+  const body = skill + '[Second](second.md)\n[Third](third.md)\n';
+  const routes = { [URL]: { body }, [guide]: { body: 'X'.repeat(256) },
+    'https://skills.example.com/demo/second.md': { body: 'Y'.repeat(256) }, 'https://skills.example.com/demo/third.md': { body: 'third' } };
+  const limited = transport(routes);
+  const partial = await importSkill(URL, { ...f, ...limited, remoteLimits: { documents: 2 } });
+  assert.equal(limited.calls.length, 2); assert.equal(partial.coverage.documentAttempts, 2);
+  assert.equal(partial.dependencies.at(-1).reason, 'skill-document-limit');
+  const bytes = transport(routes);
+  const budget = Buffer.byteLength(body) + 255;
+  const charged = await importSkill(URL, { ...f, ...bytes, remoteLimits: { bytes: budget, fileBytes: 200 } });
+  assert.equal(bytes.calls.length, 2, 'failed body consumes the total byte budget');
+  assert.equal(charged.coverage.receivedBytes, Buffer.byteLength(body) + 256);
+  assert.equal(charged.dependencies.at(-1).reason, 'skill-byte-limit');
+  const refs = await importSkill(URL, { ...f, ...transport(routes), remoteLimits: { references: 1 } });
+  assert.equal(refs.dependencies.length, 2); assert.equal(refs.dependencies.at(-1).reason, 'skill-reference-limit');
+  assert.equal(refs.coverage.discoveryTruncated, true);
+  const depth = await importSkill(URL, { ...f, ...transport({ [URL]: { body: skill }, [guide]: { body: '[Deep](deep.md)' } }), remoteLimits: { depth: 1 } });
+  assert.equal(depth.dependencies.at(-1).reason, 'skill-depth-limit');
+  assert.equal(depth.coverage.acquisition, 'partial');
+});
+
+
+test('depth-limited diamonds capture shallow paths and expand their descendants independent of link order', async () => {
+  const base = 'https://skills.example.com/demo/';
+  for (const links of ['[A](a.md)\n[X](x.md)', '[X](x.md)\n[A](a.md)']) {
+    const net = transport({ [URL]: { body: skill.replace('[Guide](refs/guide.md)', links) },
+      [`${base}a.md`]: { body: '[B](b.md)' }, [`${base}b.md`]: { body: '[X](x.md)' },
+      [`${base}x.md`]: { body: '[Y](y.md)' }, [`${base}y.md`]: { body: 'retained within depth 2' } });
+    const result = await acquireRemoteSkill(URL, 'owner', { ...net, remoteLimits: { depth: 2 } });
+    assert.equal(result.coverage.acquisition, 'complete-within-boundary');
+    assert.equal(result.dependencies.every(edge => edge.status === 'captured'), true);
+    assert.deepEqual(result.entries.map(entry => entry.path).sort(), ['SKILL.md', 'a.md', 'b.md', 'x.md', 'y.md']);
+    assert.equal(net.calls.filter(call => call.url === `${base}x.md`).length, 1);
+    assert.equal(net.calls.filter(call => call.url === `${base}y.md`).length, 1);
+  }
 });

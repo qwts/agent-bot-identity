@@ -60,7 +60,7 @@ export function main(argv = process.argv.slice(2), { stdout = process.stdout, st
     const result = verb === 'list' ? { skills: listSkills(options) } : operations[verb](value, options);
     const finish = value => {
       stdout.write(`${JSON.stringify(value, null, flags.length ? 0 : 2)}\n`);
-      return value.verification === 'drifted' || value.status === 'unavailable' ? 1 : 0;
+      return value.verification === 'drifted' || value.status === 'unavailable' || value.coverage?.acquisition === 'partial' ? 1 : 0;
     };
     return result?.then ? result.then(finish, failed) : finish(result);
   } catch (error) { return failed(error); }
