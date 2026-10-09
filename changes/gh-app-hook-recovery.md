@@ -1,1 +1,0 @@
-- `docs/gh-app-hook.md` now states that the inbox bearer is fleet-wide rather than per-App, and adds troubleshooting: non-destructive probes that tell the two 401 causes apart, re-arming a webhook GitHub disabled, and secret rotation (#230).

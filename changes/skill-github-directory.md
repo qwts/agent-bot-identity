@@ -1,1 +1,0 @@
-- Import public GitHub skill-directory URLs at a resolved commit, preserving supporting files, modes and Git blob consistency receipts. Repository and linked-instruction acquisition share bounded transport; partial captures, LFS pointers, excluded/unsupported entries and public-API failures stay explicit (#603, #312).

@@ -1,1 +1,0 @@
-- Report locations of legacy `mcp__agent-bot__` references during soul build/check so authored rules can be reviewed after the reach server rename, without rewriting policy, exposing matching text, or failing a clean build (#378).

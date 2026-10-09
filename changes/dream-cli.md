@@ -1,1 +1,0 @@
-- Add `agent-bot soul skill dream --soul SOUL` with `--schedule PT<N>H`, `--status`, `--history`, `--run-now`, `--pause`, `--unschedule` and `--cancel RUN_ID`. It is a client of the daemon's owner-gated dream routes, refuses soul callers and never runs maintenance in process. Status and history show only the named soul and always report unverified maintenance coverage (#603).

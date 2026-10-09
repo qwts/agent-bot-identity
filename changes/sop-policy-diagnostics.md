@@ -1,1 +1,0 @@
-- Reject bidirectional formatting controls in policy denial reasons while preserving ordinary right-to-left text. Document duplicate JSON member handling and the required owner-facing diagnostics for future activation when the runtime's harness vocabulary changes (#677).

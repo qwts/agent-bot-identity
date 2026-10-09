@@ -1,1 +1,0 @@
-- Persist bounded dream selection checkpoints atomically with validated outcomes and terminal run facts. Subsequent runs rotate captured pages across restarts, verify the saved cursor against its preparation receipt, retry failed attempts, and revisit blocked or missing items after wrapping. CLI status distinguishes selection progress from unverified processing coverage (#603).

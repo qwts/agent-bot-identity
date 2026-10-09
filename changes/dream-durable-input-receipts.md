@@ -1,1 +1,0 @@
-- Persist bounded, text-free dream input metadata before harness launch, retain preparation receipts through execution failure and recovery, and read older journals without rewriting history (#603).
