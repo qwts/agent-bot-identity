@@ -114,10 +114,16 @@ function executableFile(file) {
   try { if (!statSync(file).isFile()) return false; accessSync(file, fsConstants.X_OK); return true; } catch { return false; }
 }
 
-// Windows archives carry `name.exe`; the declaration names the executable
-// without it on every platform.
-function hasExecutable(directory, name) {
-  return [name, `${name}.exe`].some((file) => executableFile(path.join(directory, file)));
+// The file a declared executable is on the inspected platform: Windows
+// archives carry `name.exe`, every other platform the bare name. Only that
+// one counts, so a POSIX install with just a `node.exe` is not ready (the
+// engine's PATH lookup would skip it for the daemon's own Node).
+function executableName(name, platform) {
+  return platform?.startsWith('win32-') ? `${name}.exe` : name;
+}
+
+function hasExecutable(directory, name, platform) {
+  return executableFile(path.join(directory, executableName(name, platform)));
 }
 
 function readStamp(directory) {
@@ -145,14 +151,12 @@ function within(root, candidate) {
   return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
-function containedExecutable(soulDir, directory, bin, executable) {
+function containedExecutable(soulDir, directory, bin, executable, platform) {
   try {
     const root = realpathSync(directory);
     if (!within(realpathSync(soulDir), root)) return false;
-    return [executable, `${executable}.exe`].some(name => {
-      try { const file = realpathSync(path.join(directory, bin, name)); return within(root, file) && executableFile(file); }
-      catch { return false; }
-    });
+    const file = realpathSync(path.join(directory, bin, executableName(executable, platform)));
+    return within(root, file) && executableFile(file);
   } catch { return false; }
 }
 
@@ -231,10 +235,10 @@ export function inspectSoulRuntimes(soulDir, { manifest = readSoulManifest(soulD
     const stamp = directory ? readStamp(directory) : null;
     const executable = row.name === 'python' ? (platform?.startsWith('win32-') ? 'python' : 'python3') : row.name;
     const problem = receiptProblem(stamp, { name: row.name, kind: row.name === 'python' ? 'uv-python' : 'archive', version: row.version, platform, archive: row.archive });
-    const installed = stamp && !problem && containedExecutable(soulDir, directory, stamp.bin, executable);
+    const installed = stamp && !problem && containedExecutable(soulDir, directory, stamp.bin, executable, platform);
     const last = lastInstall(path.join(root, row.name));
     const entry = { name: row.name, declared: row.declared, requiredBy: row.requiredBy, version: row.version, source: row.source,
-      status: row.status ?? (installed ? 'installed' : 'missing'), reason: row.reason ?? problem ?? (stamp && !installed ? `the installed ${executable} is missing or not executable` : null), path: installed ? directory : null, bin: installed ? stamp.bin : null,
+      status: row.status ?? (installed ? 'installed' : 'missing'), reason: row.reason ?? problem ?? (stamp && !installed ? `the installed ${executableName(executable, platform)} is missing or not executable` : null), path: installed ? directory : null, bin: installed ? stamp.bin : null,
       lastError: !installed && last?.status === 'failed' && last.version === row.version ? { code: last.code ?? 'runtime-install-failed', message: last.message ?? '', at: last.at ?? null } : null,
       archive: row.archive, via: row.via };
     if (entry.status !== 'installed') result.ready = false;
@@ -245,7 +249,7 @@ export function inspectSoulRuntimes(soulDir, { manifest = readSoulManifest(soulD
     const stamp = readStamp(directory);
     const archive = install.kind === 'archive' ? harnessInstallSource(install, platform) : null;
     const problem = receiptProblem(stamp, { name, kind: install.kind, version: install.version, platform, archive });
-    const installed = stamp && !problem && !existsSync(`${directory}.installing`) && containedExecutable(soulDir, directory, stamp.bin, install.bin);
+    const installed = stamp && !problem && !existsSync(`${directory}.installing`) && containedExecutable(soulDir, directory, stamp.bin, install.bin, platform);
     const last = lastInstall(path.join(root, 'harnesses', name));
     const entry = { name, kind: install.kind, package: install.kind === 'uv-tool' ? install.package : null, version: install.version, executable: install.bin,
       status: install.kind === 'archive' && !archive ? 'unsupported' : installed ? 'installed' : 'missing',
@@ -422,14 +426,14 @@ async function installArchive({ name, version, archive, kind, executable = null 
     catch (error) { fail('runtime-install-failed', `${label}: could not extract ${path.basename(archive.url)} (${String(error.stderr ?? error.message).trim().split('\n').pop()})`, { runtime: label, action }); }
     const payload = stripSingleDirectory(extract);
     const binDir = path.join(payload, archive.bin);
-    if (!existsSync(binDir) || (executable && !containedExecutable(payload, payload, archive.bin, executable))) {
+    if (!existsSync(binDir) || (executable && !containedExecutable(payload, payload, archive.bin, executable, platform))) {
       fail('runtime-install-failed', `${label}: the archive has no ${executable ? `${archive.bin === '.' ? '' : `${archive.bin}/`}${executable}` : `${archive.bin} directory`}`, { runtime: label, action });
     }
     writeFileSync(path.join(payload, INSTALL_STAMP), `${JSON.stringify({ schemaVersion: RUNTIMES_SCHEMA_VERSION, name, kind, version, platform, url: archive.url, sha256: archive.sha256, bin: archive.bin, installedAt: now().toISOString() })}\n`, { mode: 0o600 });
     const retained = publish(staging, payload, target, { usable: () => {
       const stamp = readStamp(target);
       return stamp && !receiptProblem(stamp, { name, kind, version, platform, archive })
-        && containedExecutable(target, target, stamp.bin, executable ?? name);
+        && containedExecutable(target, target, stamp.bin, executable ?? name, platform);
     } });
     if (retained) log(`retained conflicting install at ${retained}`);
   } catch (error) {
@@ -451,14 +455,14 @@ async function installPython({ version }, target, uvBin, { root, runImpl, label,
     const dirs = readdirSync(staging, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name.startsWith('cpython-'));
     if (dirs.length !== 1) fail('runtime-install-failed', `${label}: uv installed ${dirs.length} interpreters, expected one`, { runtime: label, action });
     const bin = existsSync(path.join(staging, dirs[0].name, 'bin')) ? `${dirs[0].name}/bin` : dirs[0].name;
-    if (!containedExecutable(staging, staging, bin, platform?.startsWith('win32-') ? 'python' : 'python3')) {
+    if (!containedExecutable(staging, staging, bin, platform?.startsWith('win32-') ? 'python' : 'python3', platform)) {
       fail('runtime-install-failed', `${label}: uv installed no contained Python executable`, { runtime: label, action });
     }
     writeFileSync(path.join(staging, INSTALL_STAMP), `${JSON.stringify({ schemaVersion: RUNTIMES_SCHEMA_VERSION, name: 'python', kind: 'uv-python', version, platform, url: null, sha256: null, bin, installedAt: now().toISOString() })}\n`, { mode: 0o600 });
     const retained = publish(staging, staging, target, { usable: () => {
       const stamp = readStamp(target);
       return stamp && !receiptProblem(stamp, { name: 'python', kind: 'uv-python', version, platform })
-        && containedExecutable(target, target, stamp.bin, platform?.startsWith('win32-') ? 'python' : 'python3');
+        && containedExecutable(target, target, stamp.bin, platform?.startsWith('win32-') ? 'python' : 'python3', platform);
     } });
     if (retained) log(`retained conflicting install at ${retained}`);
   } catch (error) {
@@ -481,7 +485,7 @@ async function installUvTool({ name, install }, target, uvBin, { root, pythonDir
       UV_PYTHON_INSTALL_DIR: pythonDir, UV_PYTHON_PREFERENCE: 'only-managed', UV_NO_PROGRESS: '1' };
     try { await runImpl(uvBin, ['tool', 'install', `${install.package}==${install.version}`], { env, timeout: INSTALL_TIMEOUT_MS }); }
     catch (error) { fail('runtime-install-failed', `${label}: uv could not install ${install.package}==${install.version} (${String(error.stderr ?? error.message).trim().split('\n').pop()}); check the network and retry`, { runtime: label, action }); }
-    if (!hasExecutable(path.join(target, 'bin'), install.bin)) fail('runtime-install-failed', `${label}: ${install.package} installed no ${install.bin} executable`, { runtime: label, action });
+    if (!hasExecutable(path.join(target, 'bin'), install.bin, platform)) fail('runtime-install-failed', `${label}: ${install.package} installed no ${install.bin} executable`, { runtime: label, action });
     writeFileSync(path.join(target, INSTALL_STAMP), `${JSON.stringify({ schemaVersion: RUNTIMES_SCHEMA_VERSION, name, kind: 'uv-tool', version: install.version, platform, url: null, sha256: null, bin: 'bin', installedAt: now().toISOString() })}\n`, { mode: 0o600 });
     rmSync(marker, { force: true });
   } catch (error) {

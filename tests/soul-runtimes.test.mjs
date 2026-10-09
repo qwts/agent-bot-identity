@@ -763,6 +763,33 @@ test('an installed runtime without the execute bit is not ready and refuses rath
   assert.equal(inspectSoulRuntimes(f.dir, f.options).ready, false);
 });
 
+test('readiness selects the platform\'s executable name: a POSIX install is not satisfied by a node.exe, and a Windows one needs it (#617)', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { node: '24' } }, census: true });
+  await installSoulRuntimes(f.dir, { ...f.options, ...doubles({ archives: f.archives }) });
+  const bin = path.join(f.runtimes, 'node', NODE.version, 'bin');
+  chmodSync(path.join(bin, 'node'), 0o644);
+  put(path.join(bin, 'node.exe'), '#!/bin/sh\n# a Windows-named node\n');
+  const posix = inspectSoulRuntimes(f.dir, f.options).runtimes[0];
+  assert.deepEqual([posix.status, posix.reason], ['missing', 'the installed node is missing or not executable']);
+  assert.throws(() => soulRuntimeEnv(ID, { ...f.options, node: process.execPath }), (error) => error.code === 'runtime-install-failed' && error.runtime === 'node');
+
+  // A Windows-shaped archive installs and is ready for win32 only.
+  const w = fixture(t, { manifest: { runtimes: { node: '24' } } });
+  const windows = archive({ [`node-v${NODE.version}-win-x64/bin/node.exe`]: '#!/bin/sh\n# node.exe\n', [`node-v${NODE.version}-win-x64/bin/npm`]: '#!/bin/sh\n' });
+  const source = w.catalog.node[0].sources['win32-x64'];
+  source.url = 'https://example.test/node-win.zip';
+  source.sha256 = sha(windows);
+  const installed = await installSoulRuntimes(w.dir, { ...w.options, platform: 'win32-x64', ...doubles({ archives: { [source.url]: windows } }) });
+  assert.equal(installed.ready, true);
+  assert.equal(inspectSoulRuntimes(w.dir, { ...w.options, platform: 'win32-x64' }).runtimes[0].status, 'installed');
+  // On Windows only node.exe counts: a bare executable `node` does not stand in.
+  const winBin = path.join(w.runtimes, 'node', NODE.version, 'bin');
+  rmSync(path.join(winBin, 'node.exe'));
+  put(path.join(winBin, 'node'), '#!/bin/sh\n# bare node\n');
+  const bare = inspectSoulRuntimes(w.dir, { ...w.options, platform: 'win32-x64' }).runtimes[0];
+  assert.deepEqual([bare.status, bare.reason], ['missing', 'the installed node.exe is missing or not executable']);
+});
+
 test('readiness accepts internal executable links but refuses external links and escaped installation roots (#617)', async (t) => {
   const f = fixture(t, { manifest: { runtimes: { node: '24' } } });
   const d = doubles({ archives: f.archives });
