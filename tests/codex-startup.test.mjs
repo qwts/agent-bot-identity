@@ -205,7 +205,8 @@ test('Codex startup without an installed runtime routes to bootstrap and writes 
   const bare = { ...env, PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin` };
   delete bare.AGENT_BOT_HOME;
   delete bare.PLAYBOOK_HOME;
-  assert.equal(spawnSync('/bin/sh', ['-c', 'command -v agent-bot'], { env: bare }).status, 1,
+  // dash (Linux /bin/sh) exits 127 for a missing command, bash and zsh 1.
+  assert.notEqual(spawnSync('/bin/sh', ['-c', 'command -v agent-bot'], { env: bare }).status, 0,
     'agent-bot must be absent from the sanitized PATH');
 
   const result = spawnSync('bash', [STARTUP], {
