@@ -653,8 +653,8 @@ export function worktreePinOriginCheck({ gitDir, agentId,
 // The App a checkout acts as against the App the soul's identity record names
 // (#107 rollout). For a bound soul the daemon mints the recorded App and the
 // helper refuses any other, so a mismatch is a soul that cannot use its door
-// once in-process mints close. Diagnosis only: the fix is an owner-gated App
-// assignment, never something doctor does.
+// once in-process mints close. Diagnosis only: reconciling the two belongs to
+// #107's migration contract, never to doctor or to manual owner chores.
 export function appRecordCheck({ agentId, slug, config = {}, readIdentity } = {}) {
   let recorded = null;
   try { recorded = readIdentity(agentId)?.github?.appSlug ?? null; } catch { return null; }
