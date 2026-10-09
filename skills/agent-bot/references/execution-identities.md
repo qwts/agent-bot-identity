@@ -187,13 +187,16 @@ identity setup or automatically register a maintenance schedule.
    indexing, embedding or usable retrieval.
 5. **Operate explicit maintenance.** `dream --soul ID_OR_NAME --status` and
    `--history` inspect the daemon. Owner controls are `--schedule PT<N>H` (1–720
-   hours), `--run-now`, `--pause`, `--unschedule` and `--cancel RUN_ID`.
+   hours), `--run-now`, `--pause`, `--unschedule`, `--cancel RUN_ID` and `--ack-notice NOTICE_ID`.
    Read `dream --help` for pagination and principal input. Soul callers cannot
    authorize these controls. No daemon means no in-process fallback. Inspect
    the returned run and status before retrying; requesting cancellation does
    not prove the executor stopped. Current source capture covers the definition
    and learned skills, not memories or conversations. Execution completion,
    preparation receipts and artifact changes do not certify semantic processing.
+   Status lists the soul's live notices (deduplicated failures, agent-reported
+   blocked items and recorded changes). Read them, then acknowledge one with the
+   owner control `--ack-notice NOTICE_ID`; nothing is delivered elsewhere.
 
 All commands above start with `agent-bot soul skill`; `--json` provides compact
 structured output. Import and learning never create a schedule. Managed harness

@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { isAgentId } from './agent-identity.mjs';
 import { dreamInputMetadataDigest, validateDreamInputMetadata } from './skill-dream-inputs.mjs';
 import { dreamOutcomeDigest, validateDreamOutcome } from './skill-dream-outcomes.mjs';
+import { acknowledgeDreamNotice, applyDreamNoticeRun, emptyDreamNoticeLedger, validateDreamNoticeLedger, DREAM_NOTICE_LIMITS } from './skill-dream-notices.mjs';
 
 export const DREAM_TIMEOUT_MS = 10 * 60_000;
 export const DREAM_REGISTRATION_LIMIT = 256;
@@ -38,7 +39,7 @@ export function parseDreamSchedule(value) {
   if (hours > 720) fail('dream-schedule-invalid', 'dream schedule must be PT<N>H with an integer from 1 to 720');
   return hours;
 }
-export const emptyDreamState = () => ({ schemaVersion: 4, revision: 0, registrations: [], flights: [], inputReceipts: [], outcomeReceipts: [], selectionCheckpoints: [] });
+export const emptyDreamState = () => ({ schemaVersion: 5, revision: 0, registrations: [], flights: [], inputReceipts: [], outcomeReceipts: [], selectionCheckpoints: [], noticeLedgers: [] });
 function inputReceipt(value) {
   keys(value, ['runId', 'journalRevision', 'startingRevision', 'digest']);
   const hash = value => typeof value === 'string' && value.length === 71 && /^sha256:[a-f0-9]{64}$/.test(value);
@@ -79,8 +80,8 @@ function runRecord(run, terminal) {
     || ['running', 'failed'].includes(run.status) && run.cancelReason !== null) invalid();
 }
 export function validateDreamState(state) {
-  keys(state, ['schemaVersion', 'revision', 'registrations', 'flights', ...(state?.schemaVersion >= 2 ? ['inputReceipts'] : []), ...(state?.schemaVersion >= 3 ? ['outcomeReceipts'] : []), ...(state?.schemaVersion === 4 ? ['selectionCheckpoints'] : [])]);
-  if (![1, 2, 3, 4].includes(state.schemaVersion) || !Number.isSafeInteger(state.revision) || state.revision < 0
+  keys(state, ['schemaVersion', 'revision', 'registrations', 'flights', ...(state?.schemaVersion >= 2 ? ['inputReceipts'] : []), ...(state?.schemaVersion >= 3 ? ['outcomeReceipts'] : []), ...(state?.schemaVersion >= 4 ? ['selectionCheckpoints'] : []), ...(state?.schemaVersion === 5 ? ['noticeLedgers'] : [])]);
+  if (![1, 2, 3, 4, 5].includes(state.schemaVersion) || !Number.isSafeInteger(state.revision) || state.revision < 0
     || !Array.isArray(state.registrations) || state.registrations.length > DREAM_REGISTRATION_LIMIT
     || !Array.isArray(state.flights) || state.flights.length > DREAM_REGISTRATION_LIMIT) invalid();
   const agents = new Set(), generations = new Set(), flying = new Set(), runs = new Set();
@@ -123,7 +124,7 @@ export function validateDreamState(state) {
       seen.add(receipt.runId);
     }
   }
-  if (state.schemaVersion === 4) {
+  if (state.schemaVersion >= 4) {
     if (!Array.isArray(state.selectionCheckpoints) || state.selectionCheckpoints.length > DREAM_REGISTRATION_LIMIT) invalid();
     const seen = new Set();
     for (const checkpoint of state.selectionCheckpoints) {
@@ -133,7 +134,29 @@ export function validateDreamState(state) {
       seen.add(checkpoint.agentId);
     }
   }
+  if (state.schemaVersion === 5) {
+    // Live notices only, each soul's set byte-bounded by the notice module:
+    // every transaction copies this state.
+    if (!Array.isArray(state.noticeLedgers) || state.noticeLedgers.length > DREAM_REGISTRATION_LIMIT) invalid();
+    const seen = new Set();
+    for (const ledger of state.noticeLedgers) {
+      try { validateDreamNoticeLedger(ledger); } catch { invalid(); }
+      if (seen.has(ledger.agentId) || !agents.has(ledger.agentId) || !ledger.notices.length && !ledger.suppressed) invalid();
+      seen.add(ledger.agentId);
+    }
+  }
   return state;
+}
+
+function noticeRecords(agentId, notices, cleared = false) {
+  if (!Array.isArray(notices) || notices.length > DREAM_NOTICE_LIMITS.perSoul) invalid();
+  const records = notices.map(notice => {
+    if (!cleared) return notice;
+    if (!notice || typeof notice !== 'object' || !date(notice.clearedAt)) invalid();
+    const { clearedAt: _clearedAt, ...rest } = notice;
+    return rest;
+  });
+  try { validateDreamNoticeLedger({ schemaVersion: 1, agentId, lastRunId: null, suppressed: 0, notices: records }); } catch { invalid(); }
 }
 
 // Shared with durable adapters so persisted events cannot acquire fields that
@@ -142,6 +165,34 @@ export function validateDreamState(state) {
 export function validateDreamEvents(events, { state = null } = {}) {
   if (!Array.isArray(events) || events.length < 1 || events.length > DREAM_REGISTRATION_LIMIT) invalid();
   for (const event of events) {
+    if (event?.kind === 'notices-updated') {
+      // Created and cleared notice records are the append-only history; state
+      // keeps only live ones. Must accompany the same run's terminal facts.
+      keys(event, ['kind', 'at', 'run', 'created', 'renewed', 'cleared', 'suppressed']);
+      if (!date(event.at)) invalid();
+      runRecord(event.run, true);
+      noticeRecords(event.run.agentId, event.created); noticeRecords(event.run.agentId, event.cleared, true);
+      if (!Array.isArray(event.renewed) || event.renewed.length > DREAM_NOTICE_LIMITS.perSoul
+        || event.renewed.some(value => typeof value !== 'string' || !/^ntc_[a-f0-9]{24}$/.test(value))
+        || !Number.isSafeInteger(event.suppressed) || event.suppressed < 0
+        || !event.created.length && !event.renewed.length && !event.cleared.length && !event.suppressed
+        || !events.some(row => row.kind === 'ended' && isDeepStrictEqual(row.run, event.run))) invalid();
+      if (state) {
+        const ledger = state.schemaVersion === 5 ? state.noticeLedgers.find(row => row.agentId === event.run.agentId) : undefined;
+        if (state.schemaVersion !== 5 || (event.created.length || event.renewed.length) && ledger?.lastRunId !== event.run.runId
+          || event.created.some(notice => !ledger.notices.some(row => row.id === notice.id))
+          || event.renewed.some(noticeId => !ledger.notices.some(row => row.id === noticeId))
+          || event.cleared.some(notice => ledger?.notices.some(row => row.id === notice.id))) invalid();
+      }
+      continue;
+    }
+    if (event?.kind === 'notice-acknowledged') {
+      keys(event, ['kind', 'at', 'agentId', 'noticeId']);
+      if (!date(event.at) || !isAgentId(event.agentId) || typeof event.noticeId !== 'string' || !/^ntc_[a-f0-9]{24}$/.test(event.noticeId)) invalid();
+      if (state && (state.schemaVersion !== 5 || !state.noticeLedgers.some(row => row.agentId === event.agentId
+        && row.notices.some(notice => notice.id === event.noticeId && notice.acknowledgedAt === event.at)))) invalid();
+      continue;
+    }
     if (event?.kind === 'selection-advanced') {
       keys(event, ['kind', 'at', 'run', 'checkpoint']);
       if (!date(event.at)) invalid();
@@ -152,7 +203,7 @@ export function validateDreamEvents(events, { state = null } = {}) {
         || !events.some(row => row.kind === 'outcome-recorded' && isDeepStrictEqual(row.run, event.run)
           && row.outcome?.report?.status === 'structured' && row.outcome.startingRevision === event.checkpoint.sourceRevision)
         || !events.some(row => row.kind === 'ended' && isDeepStrictEqual(row.run, event.run))) invalid();
-      if (state && (state.schemaVersion !== 4 || event.checkpoint.journalRevision !== state.revision
+      if (state && (state.schemaVersion < 4 || event.checkpoint.journalRevision !== state.revision
         || !state.selectionCheckpoints.some(row => isDeepStrictEqual(row, event.checkpoint)))) invalid();
       continue;
     }
@@ -222,8 +273,8 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
     const observed = synchronous(store.read());
     const state = structuredClone(validateDreamState(observed === null ? emptyDreamState() : observed));
     // Upgrade only the next transaction, leaving historical v1 bytes intact.
-    return state.schemaVersion < 4 ? { ...state, schemaVersion: 4, inputReceipts: state.inputReceipts ?? [],
-      outcomeReceipts: state.outcomeReceipts ?? [], selectionCheckpoints: [] } : state;
+    return state.schemaVersion < 5 ? { ...state, schemaVersion: 5, inputReceipts: state.inputReceipts ?? [],
+      outcomeReceipts: state.outcomeReceipts ?? [], selectionCheckpoints: state.selectionCheckpoints ?? [], noticeLedgers: [] } : state;
   };
   const healthy = () => { if (fault) fail(fault, 'dream scheduler state is uncertain; restart recovery is required'); };
   const time = () => { const value = now().toISOString(); if (!date(value)) invalid(); return value; };
@@ -242,6 +293,7 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
     const latest = new Set(state.registrations.flatMap(row => row.lastRun ? [row.lastRun.runId] : []));
     state.outcomeReceipts = state.outcomeReceipts.filter(receipt => latest.has(receipt.runId));
     state.selectionCheckpoints = state.selectionCheckpoints.filter(checkpoint => state.registrations.some(row => row.agentId === checkpoint.agentId));
+    state.noticeLedgers = state.noticeLedgers.filter(ledger => state.registrations.some(row => row.agentId === ledger.agentId));
     validateDreamState(state);
     validateDreamEvents(events, { state });
     try {
@@ -373,6 +425,7 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
           current.selectionCheckpoints.push(checkpoint);
           events.push({ kind: 'selection-advanced', at: endedAt, run: result, checkpoint });
         }
+        noticeRun(current, events, result, entry);
         persist(current, events);
         live.delete(run.runId);
         return structuredClone(result);
@@ -409,6 +462,41 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
     }).then(() => finish(false), () => finish(true));
     return { agentId, runId: run.runId, status: 'started', done: entry.done };
   }
+  // Notices publish with the terminal run facts they derive from. A soul
+  // without a registration keeps no notices (unscheduling removes them), and
+  // an empty ledger is not retained, so quiet souls add nothing to state.
+  function noticeRun(current, events, run, entry) {
+    if (!current.registrations.some(row => row.agentId === run.agentId)) return;
+    const before = current.noticeLedgers.find(row => row.agentId === run.agentId) ?? emptyDreamNoticeLedger(run.agentId);
+    let applied;
+    // The core accepts any staged outcome before settlement; the notice module
+    // treats only a completed attempt's report as evidence. An inconsistent pair
+    // still yields the terminal-fact notices rather than blocking publication.
+    try { applied = applyDreamNoticeRun(before, { run, outcome: entry.outcome, inputs: entry.outcome === null ? null : entry.inputs }); }
+    catch {
+      try { applied = applyDreamNoticeRun(before, { run }); } catch { return; }
+    }
+    current.noticeLedgers = current.noticeLedgers.filter(row => row.agentId !== run.agentId);
+    if (applied.ledger.notices.length || applied.ledger.suppressed) current.noticeLedgers.push(applied.ledger);
+    if (applied.created.length || applied.renewed.length || applied.cleared.length || applied.suppressed) {
+      events.push({ kind: 'notices-updated', at: run.endedAt, run,
+        created: applied.ledger.notices.filter(notice => applied.created.includes(notice.id)),
+        renewed: applied.renewed, cleared: applied.cleared, suppressed: applied.suppressed });
+    }
+  }
+  // An owner-authorized host read. Acknowledging an already acknowledged
+  // notice writes nothing; a cleared or unknown notice is not found.
+  function acknowledgeNotice(agentId, noticeId) {
+    healthy();
+    const state = read(), ledger = state.noticeLedgers.find(row => row.agentId === agentId);
+    const found = ledger?.notices.find(notice => notice.id === noticeId);
+    if (!found) fail('dream-notice-not-found', 'No live dream notice with that ID belongs to this soul.');
+    if (found.acknowledgedAt !== null) return { agentId, notice: structuredClone(found) };
+    const at = time(), next = acknowledgeDreamNotice(ledger, { noticeId, at });
+    state.noticeLedgers = state.noticeLedgers.map(row => row === ledger ? next : row);
+    persist(state, [{ kind: 'notice-acknowledged', at, agentId, noticeId }]);
+    return { agentId, notice: structuredClone(next.notices.find(notice => notice.id === noticeId)) };
+  }
   function recover() {
     healthy();
     const state = read(), events = [], at = time();
@@ -421,7 +509,7 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
     return { quarantined: events.length };
   }
   return {
-    register, pause, unschedule, recover,
+    register, pause, unschedule, recover, acknowledgeNotice,
     cancel: (runId, reason = 'owner') => {
       if (!['owner', 'shutdown'].includes(reason)) fail('dream-cancellation-invalid', 'Cancellation must identify an owner request or daemon shutdown.');
       return cancel(runId, reason);

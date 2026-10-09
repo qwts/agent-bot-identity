@@ -17,7 +17,7 @@ export const USAGE = `usage: agent-bot soul skill import PATH_OR_HTTPS_DOCUMENT 
        agent-bot soul skill update UUID --recover [--json]
        agent-bot soul skill learn UUID --soul AGENT_ID [--json]
        agent-bot soul skill learn UUID --soul AGENT_ID --package STAGING --outcome FILE --reason TEXT [--json]
-       agent-bot soul skill dream --soul ID|NAME --schedule PT<N>H|--run-now|--pause|--unschedule|--cancel RUN_ID|--status|--history [--json]
+       agent-bot soul skill dream --soul ID|NAME --schedule PT<N>H|--run-now|--pause|--unschedule|--cancel RUN_ID|--ack-notice NOTICE_ID|--status|--history [--json]
 
 Local import preserves the selected directory; HTTPS import captures a skill
 document and supported inline instruction links. Public GitHub tree URLs preserve

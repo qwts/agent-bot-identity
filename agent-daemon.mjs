@@ -436,7 +436,7 @@ export function createDaemonServer({
         appendAuditReceipt({ event: 'soul-revision', operation: revisionAction, decision: 'owner-credential-required' }, { env, home, now });
         throw ownerCredentialRequired('a soul binding cannot authorize an owner revision action');
       }
-      const dreamAction = req.method === 'POST' && /^\/v0\/soul\/dream\/(register|pause|unschedule|run-now|cancel)$/.exec(url.pathname)?.[1];
+      const dreamAction = req.method === 'POST' && /^\/v0\/soul\/dream\/(register|pause|unschedule|run-now|cancel|ack-notice)$/.exec(url.pathname)?.[1];
       if (dreamAction && ('x-agent-binding' in req.headers || PROOF_HEADER in req.headers)) {
         appendAuditReceipt({ event: 'dream-control', operation: dreamAction, decision: 'owner-credential-required' }, { env, home, now });
         throw ownerCredentialRequired('a soul binding cannot authorize dream controls');
@@ -475,7 +475,7 @@ export function createDaemonServer({
         if (!server.dream) throw Object.assign(new Error('Dream service is unavailable.'), { code: 'dream-service-unavailable', statusCode: 503 });
         if (dreamAction) {
           const request = dreamControlRequest(dreamAction, parseJsonBody(await readBody(req)));
-          const action = `soul dream ${request.agentId ?? request.runId} ${dreamAction}${request.schedule ? ` ${request.schedule}` : ''}`;
+          const action = `soul dream ${request.agentId ?? request.runId} ${dreamAction}${request.schedule ? ` ${request.schedule}` : ''}${request.noticeId ? ` ${request.noticeId}` : ''}`;
           try { await settingGate(action, { principal: request.principal }); }
           catch (error) {
             appendAuditReceipt({ event: 'dream-control', agentId: request.agentId ?? null, operation: dreamAction, decision: 'owner-refused' }, { env, home, now });

@@ -228,7 +228,7 @@ export function daemonClient({
       return request('GET', `/v0/soul/dream/history${query ? `?${query}` : ''}`);
     },
     async dreamControl(action, body, { principal = null } = {}) {
-      if (!['register', 'pause', 'unschedule', 'run-now', 'cancel'].includes(action)) throw new Error('unknown dream control');
+      if (!['register', 'pause', 'unschedule', 'run-now', 'cancel', 'ack-notice'].includes(action)) throw new Error('unknown dream control');
       return request('POST', `/v0/soul/dream/${action}`, { ...body, ...(principal ? { principal } : {}) }, {}, OWNER_DECISION_TIMEOUT_MS);
     },
     async setComputerUse(agentId, enabled, { principal = null } = {}) {

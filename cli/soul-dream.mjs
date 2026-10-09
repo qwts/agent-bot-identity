@@ -11,6 +11,7 @@ import { parseDreamSchedule } from '../skill-dream-scheduler.mjs';
 export const DREAM_USAGE = `usage: agent-bot soul skill dream --soul ID|NAME --schedule PT<N>H [--json] [--principal-stdin]
        agent-bot soul skill dream --soul ID|NAME --run-now|--pause|--unschedule [--json] [--principal-stdin]
        agent-bot soul skill dream --soul ID|NAME --cancel RUN_ID [--json] [--principal-stdin]
+       agent-bot soul skill dream --soul ID|NAME --ack-notice NOTICE_ID [--json] [--principal-stdin]
        agent-bot soul skill dream --soul ID|NAME --status [--json]
        agent-bot soul skill dream --soul ID|NAME --history [--after-revision N] [--limit N] [--json]
 
@@ -20,12 +21,14 @@ registration. Controls need the owner (presence or --principal-stdin); a soul
 cannot authorize them. Nothing is scheduled unless you register it.
 Execution status reports whether a turn ran, not what it maintained:
 maintenance coverage stays unverified, and an input receipt records only what
-was prepared for the turn.
+was prepared for the turn. Status lists the soul's live notices: deduplicated
+failures, blocked items and recorded changes, pending host read until the owner
+acknowledges them. Nothing is delivered elsewhere.
 `;
 
 const ACTIONS = { '--schedule': 'register', '--run-now': 'run-now', '--pause': 'pause', '--unschedule': 'unschedule',
-  '--cancel': 'cancel', '--status': 'status', '--history': 'history' };
-const VALUED = new Set(['--soul', '--schedule', '--cancel', '--after-revision', '--limit']);
+  '--cancel': 'cancel', '--ack-notice': 'ack-notice', '--status': 'status', '--history': 'history' };
+const VALUED = new Set(['--soul', '--schedule', '--cancel', '--ack-notice', '--after-revision', '--limit']);
 const SWITCHES = new Set(['--run-now', '--pause', '--unschedule', '--status', '--history', '--json', '--principal-stdin']);
 const RUN_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const COUNT = /^(0|[1-9]\d{0,8})$/;
@@ -47,10 +50,11 @@ export function parseDreamArgs(argv) {
   if (!control && flags['--principal-stdin']) return null;
   if (action !== 'history' && (flags['--after-revision'] !== undefined || flags['--limit'] !== undefined)) return null;
   if (action === 'cancel' && !RUN_ID.test(flags['--cancel'])) return null;
+  if (action === 'ack-notice' && !/^ntc_[a-f0-9]{24}$/.test(flags['--ack-notice'])) return null;
   if (action === 'register') { try { parseDreamSchedule(flags['--schedule']); } catch { return null; } }
   if (flags['--after-revision'] !== undefined && !COUNT.test(flags['--after-revision'])) return null;
   if (flags['--limit'] !== undefined && (!COUNT.test(flags['--limit']) || flags['--limit'] === '0')) return null;
-  return { action, control, soul: flags['--soul'], schedule: flags['--schedule'] ?? null, runId: flags['--cancel'] ?? null,
+  return { action, control, soul: flags['--soul'], schedule: flags['--schedule'] ?? null, runId: flags['--cancel'] ?? null, noticeId: flags['--ack-notice'] ?? null,
     afterRevision: flags['--after-revision'] === undefined ? undefined : Number(flags['--after-revision']),
     limit: flags['--limit'] === undefined ? undefined : Number(flags['--limit']),
     json: Boolean(flags['--json']), presented: Boolean(flags['--principal-stdin']) };
@@ -75,7 +79,8 @@ function soulStatus(status, agentId) {
     started: status.started ?? null, closing: status.closing ?? null, orphanRecovery: status.orphanRecovery ?? null,
     fault: status.fault ?? null, maintenanceCoverage: 'unverified', journal: status.journal ?? null, diagnostics,
     registration, flights, inputReceipts: [], ...receipts,
-    selectionCheckpoints: (status.selectionCheckpoints ?? []).filter(checkpoint => checkpoint?.agentId === agentId) };
+    selectionCheckpoints: (status.selectionCheckpoints ?? []).filter(checkpoint => checkpoint?.agentId === agentId),
+    notices: (status.noticeLedgers ?? []).find(ledger => ledger?.agentId === agentId) ?? null };
 }
 const eventSoul = event => event?.registration?.agentId ?? event?.run?.agentId ?? null;
 
@@ -124,6 +129,7 @@ export async function soulDreamCommand(argv, {
     } else {
       let body = { agentId: soul.id };
       if (parsed.action === 'register') body.schedule = parsed.schedule;
+      if (parsed.action === 'ack-notice') body.noticeId = parsed.noticeId;
       if (parsed.action === 'cancel') {
         // The route names only the run; confirm it is this soul's first.
         const run = soulStatus(await client.dreamStatus(), soul.id).flights.find(item => item.runId === parsed.runId);
@@ -136,6 +142,7 @@ export async function soulDreamCommand(argv, {
           ? { audit: { status: 'unconfirmed', code: 'dream-control-audit-unconfirmed' } } : {}) };
       if (parsed.action === 'run-now') ok = response.result?.status === 'started';
       if (parsed.action === 'cancel') ok = response.result?.requested === true;
+      if (parsed.action === 'ack-notice') ok = typeof response.result?.notice?.acknowledgedAt === 'string';
     }
     stdout.write(`${JSON.stringify(result, null, parsed.json ? 0 : 2)}\n`);
     return ok ? 0 : 1;
