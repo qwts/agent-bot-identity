@@ -589,3 +589,14 @@ test('appKeyStores reports keyd and platform-default declarations and Apps with 
   assert.deepEqual(appKeyStores(SLUG, { env: bare.env, home: bare.home, config: {}, platform: 'linux' }).stores.map((entry) => entry.store), ['file']);
   assert.deepEqual(appKeyStores('other-app', { env: bare.env, home: bare.home, config: {} }), { slug: 'other-app', stores: [], legacyKeyFile: false });
 });
+
+test('appKeyStores marks unreadable soul.json and unknown managed stores; lenient callers are unchanged', (t) => {
+  const f = fixture(t, { legacy: false });
+  assert.throws(() => appKeyStores(SLUG, { env: f.env, home: f.home, config: { identityApps: { [SLUG]: { store: 'clipboard' } } } }), /unknown managed App credential store/);
+  assert.throws(() => appKeyStores(SLUG, { env: f.env, home: f.home, config: { identityApps: { [SLUG]: { store: 42 } } } }), /unknown managed App credential store/);
+  writeFileSync(path.join(f.soul, 'soul.json'), '{not json');
+  assert.throws(() => appKeyStores(SLUG, { env: f.env, home: f.home, config: {} }), /soul.json is unreadable/);
+  assert.equal(soulCredentialsDeclaration(f.soul), null, 'the lenient default still reads as no declaration');
+  rmSync(path.join(f.soul, 'soul.json'));
+  assert.deepEqual(appKeyStores(SLUG, { env: f.env, home: f.home, config: {} }).stores, [], 'a missing soul.json declares nothing');
+});

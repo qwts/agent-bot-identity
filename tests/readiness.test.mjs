@@ -2485,6 +2485,7 @@ test('credential.key_store warns on a remaining legacy key file without failing 
   assert.equal(check.status, 'warning');
   assert.equal(check.code, 'legacy-key-file-present');
   assert.match(check.action, /agent-bot identity migrate-credentials/);
+  assert.match(check.message, /agent-bot identity migrate-credentials/, 'text-mode doctor shows the command');
   assert.deepEqual(check.evidence.apps, [
     { app_slug: 'org-claude-agent', stores: ['keyd'], legacy_key_file: false },
     { app_slug: 'org-codex-agent', stores: ['keychain', 'pass-cli'], legacy_key_file: true },
@@ -2524,4 +2525,24 @@ test('credential.key_store is ready without legacy files and reads a fake home b
     { app_slug: 'org-codex-agent', stores: [], legacy_key_file: null, unreadable: true },
   ]);
   assert.equal(failing.ready, true);
+});
+
+test('credential.key_store marks only the App with an unknown managed store unreadable (production resolver)', async () => {
+  const home = tempRoot();
+  const report = await collectReadiness(machineScopeOptions({
+    root: home,
+    env: { HOME: home, AGENT_BOT_POPULATION_PATH: join(home, 'population.json') },
+    load: () => ({
+      apps: { codex: 'org-codex-agent', claude: 'org-claude-agent' },
+      identityApps: { 'org-codex-agent': { store: 'clipboard' }, 'org-claude-agent': { store: 'keychain' } },
+    }),
+  }));
+  const check = report.machine.checks.find(({ id }) => id === 'credential.key_store');
+  assert.equal(check.code, 'key-store-probe-failed');
+  assert.deepEqual(check.evidence.apps, [
+    { app_slug: 'org-claude-agent', stores: ['keychain'], legacy_key_file: false },
+    { app_slug: 'org-codex-agent', stores: [], legacy_key_file: null, unreadable: true },
+  ]);
+  assert.ok(!check.message.includes('clipboard'));
+  assert.equal(report.ready, true);
 });

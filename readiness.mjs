@@ -716,7 +716,7 @@ function keyStoreCheck({ roster, home, env, config, inspect }) {
       id: 'credential.key_store',
       status: 'warning',
       code: 'legacy-key-file-present',
-      message: `App key stores (${summary}); a legacy ~/.config/<slug>/private-key.pem remains for ${legacy.join(', ')}`,
+      message: `App key stores (${summary}); a legacy ~/.config/<slug>/private-key.pem remains for ${legacy.join(', ')}; migrate with: agent-bot identity migrate-credentials --all --dry-run`,
       action: 'run: agent-bot identity migrate-credentials --all --dry-run, then without --dry-run',
       evidence: { apps },
     });
@@ -726,7 +726,7 @@ function keyStoreCheck({ roster, home, env, config, inspect }) {
       id: 'credential.key_store',
       status: 'warning',
       code: 'key-store-probe-failed',
-      message: `App key stores (${summary})`,
+      message: `App key stores (${summary}); check soul.json credentials and identityApps stores for ${unreadable.join(', ')}`,
       action: 'check the soul census and soul.json credentials for the unreadable Apps, then rerun doctor',
       evidence: { apps },
     });
