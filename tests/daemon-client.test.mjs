@@ -55,3 +55,14 @@ test('available() is false for a malformed state file', async (t) => {
   const fetchImpl = async () => assert.fail('a non-loopback state file is never dialed');
   assert.equal(await daemonClient({ env, fetchImpl }).available(), false);
 });
+
+test('agent-daemon.mjs re-exports the status, membership and environment helpers it no longer owns (#645 step 3b)', async () => {
+  const [status, membership, shellPath] = await Promise.all([
+    import('../daemon-status.mjs'), import('../comms-membership.mjs'), import('../shell-path.mjs'),
+  ]);
+  assert.equal(host.daemonStatus, status.daemonStatus);
+  assert.equal(host.joinLaunchedSoul, membership.joinLaunchedSoul);
+  assert.equal(host.leaveLaunchedSoul, membership.leaveLaunchedSoul);
+  assert.equal(host.soulEnvironment, shellPath.soulEnvironment);
+  assert.equal(host.userToolDirs, shellPath.userToolDirs);
+});

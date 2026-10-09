@@ -47,10 +47,10 @@
 // key is created once per account; `daemon vouch-key` prints its SPKI form.
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { execFile, execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { homedir, tmpdir, userInfo } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -84,11 +84,16 @@ import { createWebLayer } from './agent-web.mjs';
 import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs';
 import { PROOF_HEADER, parseBindingProof } from './binding-proof.mjs';
 import {
-  daemonBaseUrl as baseUrl, daemonClient, daemonStateFile, HEALTH_TIMEOUT_MS, LOOPBACK_HOSTS, probeDaemonHealth as probeHealth,
+  daemonClient, daemonStateFile, LOOPBACK_HOSTS, probeDaemonHealth as probeHealth,
   readDaemonState as readStateFile, SCHEMA_VERSION,
 } from './daemon-client.mjs';
 // Re-exported for importers that predate daemon-client.mjs (#645).
 export { daemonClient, daemonStateFile };
+import { joinLaunchedSoul, leaveLaunchedSoul } from './comms-membership.mjs';
+import { daemonStatus } from './daemon-status.mjs';
+import { soulEnvironment, userToolDirs } from './shell-path.mjs';
+// Re-exported for importers that predate the step-3b moves (#645).
+export { daemonStatus, joinLaunchedSoul, leaveLaunchedSoul, soulEnvironment, userToolDirs };
 import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms-client.mjs';
 import { attachWakeEndpoint } from './agent-wake.mjs';
 import { soulMode } from './soul-mode.mjs';
@@ -118,27 +123,6 @@ import { recordDeliveredAside } from './soul-asides.mjs';
 import { createResumeExecutor, createWakeSessions, resumePath, wakeSessionsFile } from './wake-resume.mjs';
 import { migratePreGateConfig } from './config-migration.mjs';
 
-/**
- * What a soul's harness inherits: the daemon's environment with the host's
- * tools (AGENT_BOT_TOOL_PATH, such as GeniusBar's agent-comms) first on
- * PATH, so a soul on a machine without them installed can still use them.
- * With `home`, the user's own tool directories follow (#418): a launchd
- * daemon gets a bare PATH, while harness CLIs such as `opencode` live where
- * the login shell (`loginPath`) or an installer put them.
- */
-export function soulEnvironment(env = process.env, { home = null, loginPath = null } = {}) {
-  const tools = env.AGENT_BOT_TOOL_PATH && path.isAbsolute(env.AGENT_BOT_TOOL_PATH) ? env.AGENT_BOT_TOOL_PATH : null;
-  if (!home) return tools ? { ...env, PATH: [tools, env.PATH].filter(Boolean).join(path.delimiter) } : env;
-  const dirs = [tools, ...(env.PATH ?? '').split(path.delimiter), ...(loginPath ?? '').split(path.delimiter),
-    ...userToolDirs(home)].filter((dir) => dir && path.isAbsolute(dir));
-  return { ...env, PATH: [...new Set(dirs)].join(path.delimiter) };
-}
-
-/** Where harness installers put their CLIs, after the login shell's PATH. */
-export function userToolDirs(home) {
-  return [path.join(home, '.local', 'bin'), path.join(home, '.opencode', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'];
-}
-
 const LOGIN_PATH_MARK = '__agent_bot_login_path__';
 
 /**
@@ -161,49 +145,6 @@ export function loginShellPath({ env = process.env, home = homedir(), run = exec
     const found = out.slice(at + LOGIN_PATH_MARK.length).trim().split(path.delimiter).filter((dir) => path.isAbsolute(dir));
     return found.length ? found.join(path.delimiter) : null;
   } catch { return null; }
-}
-
-/**
- * Joins a launched soul to agent-comms as itself, with the soul's binding and
- * the environment its harness gets, before its first turn (R4). Resolves to
- * the soul's address; a failed join fails the launch with agent-comms' own
- * message.
- */
-export function joinLaunchedSoul({ agentId, harness, name, binding, parent = null }, { env = process.env, run = execFile } = {}) {
-  const args = ['join', '--harness', harness, ...(name ? ['--name', name] : []), ...(parent ? ['--parent', parent] : [])];
-  const soulEnv = { ...soulEnvironment(env), AGENT_BOT_BINDING: binding.file, AGENT_BOT_ID: agentId, QWTS_AGENT_ID: agentId };
-  return new Promise((resolve, reject) => {
-    run('agent-comms', args, { cwd: binding.worktree, env: soulEnv, timeout: 30_000 }, (error, stdout = '', stderr = '') => {
-      let result = null;
-      try { result = JSON.parse(String(stdout)); } catch {}
-      if (!error && result?.ok === true) return resolve(result.address ?? null);
-      const detail = result?.error?.message ?? (String(stderr).trim().split('\n').pop() || error?.message || 'no result');
-      reject(new Error(`joining agent-comms failed: ${detail}`));
-    });
-  });
-}
-
-/**
- * Takes a soul out of agent-comms as itself (#419), the reverse of
- * joinLaunchedSoul. With the daemon's binding the request is vouched; without
- * one (`soul remove` from the CLI) it names the soul by ID, as an unbound
- * session would. A soul the hub never joined, or one that already left,
- * counts as left. Resolves to true, or rejects with agent-comms' message.
- */
-export function leaveLaunchedSoul({ agentId, binding = null }, { env = process.env, run = execFile, cwd = tmpdir() } = {}) {
-  const { AGENT_BOT_BINDING: _binding, ...rest } = soulEnvironment(env);
-  const soulEnv = { ...rest, ...(binding?.file ? { AGENT_BOT_BINDING: binding.file } : {}), AGENT_BOT_ID: agentId, QWTS_AGENT_ID: agentId };
-  const where = binding?.worktree && existsSync(binding.worktree) ? binding.worktree : cwd;
-  return new Promise((resolve, reject) => {
-    run('agent-comms', ['leave'], { cwd: where, env: soulEnv, timeout: 30_000 }, (error, stdout = '', stderr = '') => {
-      let result = null;
-      try { result = JSON.parse(String(stdout)); } catch {}
-      if (!error && result?.ok === true) return resolve(true);
-      if (result?.error?.code === 'not-joined') return resolve(true);
-      const detail = result?.error?.message ?? (String(stderr).trim().split('\n').pop() || error?.message || 'no result');
-      reject(new Error(`leaving agent-comms failed: ${detail}`));
-    });
-  });
 }
 
 /**
@@ -1358,58 +1299,6 @@ function populationOverride(env, home) {
     ? path.resolve(env.XDG_STATE_HOME)
     : path.join(home, '.local', 'state');
   return path.join(stateHome, 'agent-bot', 'population.json');
-}
-
-export async function daemonStatus({
-  env = process.env,
-  home = homedir(),
-  fetchImpl = fetch,
-  timeoutMs = HEALTH_TIMEOUT_MS,
-} = {}) {
-  const file = daemonStateFile({ env, home });
-  let state;
-  try {
-    state = readStateFile(file);
-  } catch (error) {
-    return { running: false, computerUse: [], reason: error.message, comms: readCommsStatus({ env, home }) };
-  }
-  if (!state) return { running: false, computerUse: [], reason: 'no daemon state file', comms: readCommsStatus({ env, home }) };
-  const health = await probeHealth(state, { fetchImpl, timeoutMs });
-  if (health) {
-    return {
-      running: true,
-      pid: state.pid,
-      port: state.port,
-      startedAt: state.startedAt,
-      warmPool: health.warmPool ?? {},
-      busy: Array.isArray(health.busy) ? health.busy : [],
-      souls: Array.isArray(health.souls) ? health.souls : [],
-      computerUse: Array.isArray(health.computerUse) ? health.computerUse : [],
-      comms: await probeComms(state, { env, home, fetchImpl, timeoutMs }),
-    };
-  }
-  return {
-    running: false,
-    computerUse: [],
-    reason: 'daemon state file is stale (health probe failed)',
-    stale: state,
-    comms: readCommsStatus({ env, home }),
-  };
-}
-
-async function probeComms(state, { env, home, fetchImpl, timeoutMs }) {
-  try {
-    const res = await fetchImpl(`${baseUrl(state)}/v0/comms/status`, {
-      headers: { authorization: `Bearer ${state.token}` },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!res.ok) return readCommsStatus({ env, home });
-    const body = await res.json().catch(() => ({}));
-    if (!body || typeof body.comms !== 'object') return readCommsStatus({ env, home });
-    return body.comms;
-  } catch {
-    return readCommsStatus({ env, home });
-  }
 }
 
 // Records a launch in the census before the first turn (#380). The principal

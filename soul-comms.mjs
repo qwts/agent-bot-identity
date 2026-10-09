@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { stateDirectory, validateAgentId } from './agent-identity.mjs';
 import { populationFile, setSoulComms, showSoul, showSoulByName, soulDirectory, soulShownName } from './agent-population.mjs';
-import { daemonStatus } from './agent-daemon.mjs';
+import { daemonStatus } from './daemon-status.mjs';
 import { assertOwnerAction } from './owner-gate.mjs';
 import { soulCommsSetting, writeSoulComms } from './soul-package.mjs';
 import { revisionHistory, editSoulRevision } from './soul-revisions.mjs';
