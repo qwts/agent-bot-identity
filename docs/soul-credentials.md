@@ -97,6 +97,27 @@ shared pass-cli runner: it restores into the App-scoped private file store
 An interrupted legacy publication is retained for owner inspection; its
 backups are not replayed or deleted.
 
+### Host credential names (#676)
+
+The names above are the defaults. A host that embeds agent-bot sets two
+variables in the daemon's own service unit (written there by `agent-bot
+daemon install`, as `AGENT_BOT_SERVICE_LABEL` is):
+
+- `AGENT_BOT_CREDENTIAL_NAMESPACE` replaces the `agent-bot` prefix, so items
+  become `<ns>.soul.<agentId>`, `<ns>.app.<slug>` and the pass-cli title
+  `<ns>.soul.<agentId>/github-app/<slug>`. Letters, digits, dots,
+  underscores and hyphens, at most 64.
+- `AGENT_BOT_CREDENTIAL_VAULT` replaces the **Agent Identities** vault for
+  soul notes and for `connect --pass-cli` imports. Letters, digits, spaces,
+  dots, underscores and hyphens, at most 64, with no space at either end.
+
+Unset or empty, every name is exactly as before. A malformed value refuses
+with `usage` when a store is built, before any store call. A store reads only
+the names its own environment resolves: a miss under a host's names never
+falls back to the defaults or to another host's names, so keys written under
+the defaults stay where they are until they are moved explicitly. keyd's
+`agent-bot.keyd.*` items are named by keyd and do not follow (#594).
+
 ### What the Keychain access list can and cannot enforce
 
 A Keychain item's trusted-application list names executables, not scripts:

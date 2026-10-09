@@ -13,7 +13,9 @@
 //
 // An embedded host (GeniusBar) sets AGENT_BOT_SERVICE_LABEL so its unit
 // cannot collide with an installed agent-bot's, and registers its bundled
-// runtime with `agent-bot daemon install` (#302).
+// runtime with `agent-bot daemon install` (#302). Its credential namespace
+// and vault (#676) are written into the unit the same way, so the daemon's
+// mint path reads them from its own launch environment, never a caller's.
 
 import { execFileSync } from 'node:child_process';
 import {
@@ -29,6 +31,7 @@ import process from 'node:process';
 
 import { daemonStateFile, daemonStatus, stopDaemon } from './agent-daemon.mjs';
 import { daemonLogMaxBytes, daemonLogPath } from './daemon-log.mjs';
+import { NAMESPACE_VARIABLE, VAULT_VARIABLE, credentialNamespace, credentialVault } from './credential-names.mjs';
 
 export const LAUNCHD_LABEL = 'dev.qwts.agent-bot.daemon';
 export const SYSTEMD_UNIT = 'agent-bot-daemon.service';
@@ -110,12 +113,18 @@ function xmlEscape(value) {
 
 export function supervisorEnvironment({ env = process.env, home = homedir() } = {}) {
   const label = hostServiceLabel(env);
+  // Validated here, so a malformed name fails the install, not a later mint.
+  credentialNamespace(env);
+  credentialVault(env);
   return {
     AGENT_BOT_DAEMON_STATE_PATH: daemonStateFile({ env, home }),
     ...(env.AGENT_BOT_DAEMON_LOG_MAX_BYTES !== undefined
       ? { AGENT_BOT_DAEMON_LOG_MAX_BYTES: String(daemonLogMaxBytes(env)) } : {}),
     // The supervised daemon resolves the same label as the host that installed it.
     ...(label ? { [SERVICE_LABEL_VARIABLE]: label } : {}),
+    // The host's credential names; unset keeps today's (#676).
+    ...(env[NAMESPACE_VARIABLE] ? { [NAMESPACE_VARIABLE]: env[NAMESPACE_VARIABLE] } : {}),
+    ...(env[VAULT_VARIABLE] ? { [VAULT_VARIABLE]: env[VAULT_VARIABLE] } : {}),
     // A host's own npm, which installs soul harnesses (ADR-0276).
     ...(env.AGENT_BOT_NPM && isAbsolute(env.AGENT_BOT_NPM) ? { AGENT_BOT_NPM: env.AGENT_BOT_NPM } : {}),
     ...(env.AGENT_BOT_EXECUTOR === '1' ? { AGENT_BOT_EXECUTOR: '1' } : {}),
@@ -197,6 +206,15 @@ ${program.map((arg) => `    <string>${xmlEscape(arg)}</string>`).join('\n')}
 `;
 }
 
+// systemd splits an unquoted Environment= line at whitespace, so a value
+// holding a space (a vault name may) is written as one
+// quoted assignment. A value with no whitespace, quote or backslash keeps
+// the line it had before.
+function systemdEnvironment(key, value) {
+  if (!/[\s"\\]/.test(value)) return `Environment=${key}=${value}`;
+  return `Environment="${key}=${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
+}
+
 export function renderSystemdUnit({ executable, programArguments, environment = {} }) {
   checkProgram({ executable, programArguments });
   // The default form is unchanged; a host's argument list is fully quoted.
@@ -204,7 +222,7 @@ export function renderSystemdUnit({ executable, programArguments, environment = 
     ? programArguments.map(systemdWord).join(' ')
     : `${executable.includes(' ') ? `"${executable.replaceAll('"', '\\"')}"` : executable} daemon run`;
   const envLines = environmentEntries(environment)
-    .map(([key, value]) => `Environment=${key}=${value.replaceAll('\n', '')}`)
+    .map(([key, value]) => systemdEnvironment(key, value.replaceAll('\n', '')))
     .join('\n');
   return `[Unit]
 Description=agent-bot identity daemon

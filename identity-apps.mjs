@@ -15,7 +15,7 @@ import { assignAgentApp, readAgentIdentity, stateDirectory, validateAgentId } fr
 import { listSouls, populationFile, showSoul, setSoulApp, soulDirectory } from './agent-population.mjs';
 import { soulCredentialsDeclaration } from './soul-package.mjs';
 import { credentialStores, defaultCredentialStore, resolveAppCredential } from './soul-credentials.mjs';
-import { itemTitle, managedAppItem } from './credential-names.mjs';
+import { credentialNamespace, itemTitle, managedAppItem } from './credential-names.mjs';
 import { createProtonPassCredentialProvider, validateIssuer, validatePrivateKey } from './ensure-private-key.mjs';
 import { buildAppJwt, pickInstallation } from './mint-token.mjs';
 import { MINT_CODES, appStoreTarget, forgetAppDoctorRow, readAppDoctorCache, readAppMetadata, updateAppConfig, validAppSlug } from './identity-app-store.mjs';
@@ -103,13 +103,13 @@ function keyInput(body, options) {
       if (typeof body.keyFile !== 'string' || !path.isAbsolute(body.keyFile)) fail('identity-app-invalid', 'keyFile must be an absolute path.', 400);
       pem = readFileSync(body.keyFile, 'utf8');
     } else {
-      // Existing provider contract: title in Agent Identities; temporary
+      // Existing provider contract: title in the host's vault; temporary
       // download is private and removed even if the provider fails.
       slug(body.passCli);
       const dir = mkdtempSync(path.join(options.home ?? tmpdir(), '.app-key-'));
       try {
         const destination = path.join(dir, 'key.pem');
-        (options.passProvider ?? createProtonPassCredentialProvider()).restore({ slug: body.passCli, privateKeyDestination: destination });
+        (options.passProvider ?? createProtonPassCredentialProvider({ env: options.env })).restore({ slug: body.passCli, privateKeyDestination: destination });
         pem = readFileSync(destination, 'utf8');
       } finally { rmSync(dir, { recursive: true, force: true }); }
     }
@@ -273,7 +273,7 @@ function assign(body, options) {
 // what was removed, never what it held.
 function storeItemName(app, kind, options) {
   const target = appStoreTarget(app, options);
-  return kind === 'keychain' ? itemTitle(managedAppItem(app))
+  return kind === 'keychain' ? itemTitle(managedAppItem(app, { namespace: credentialNamespace(options.env) }))
     : path.join(target.soulDir, '.soul-state', 'credentials', `github-app-${app}.json`);
 }
 // `remove` takes a slug or a numeric App ID; a slug record wins, since an

@@ -12,6 +12,8 @@
 //   never on a command line another process could read.
 // - pass-cli (opt-in): one note in Agent Identities, title
 //   `agent-bot.soul.<agentId>/github-app/<slug>`, created via stdin.
+//   A host may rename both: `agent-bot` and the vault come from the store's
+//   own environment through credential-names.mjs (#676).
 // - file (elsewhere, or by choice): `<soul>/.soul-state/credentials/`,
 //   directory 0700, one file per App, 0600. `.soul-state/` is never packaged,
 //   exported or hashed into a revision. On Windows the same store keeps a
@@ -57,7 +59,7 @@ import { profileAppSlugs } from './organization-profile.mjs';
 import { loadConfig } from './config.mjs';
 import { editSoulRevision, revisionHistory } from './soul-revisions.mjs';
 import { createPassCredentialStore } from './secret-providers/pass-cli-credentials.mjs';
-import { itemTitle, managedAppItem, slugOrThrow, soulAppItem, soulSecretItem } from './credential-names.mjs';
+import { credentialNamespace, itemTitle, managedAppItem, slugOrThrow, soulAppItem, soulSecretItem } from './credential-names.mjs';
 
 const SECURITY = '/usr/bin/security';
 // `security` exits 44 when no item matches.
@@ -67,23 +69,24 @@ export function defaultCredentialStore(platform = process.platform) {
   return platform === 'darwin' ? 'keychain' : 'file';
 }
 
-export function keychainItem(agentId, slug) {
-  return soulAppItem(agentId, slug);
+// `names` carries a store's resolved `{ namespace }`; see credential-names.mjs.
+export function keychainItem(agentId, slug, names) {
+  return soulAppItem(agentId, slug, names);
 }
 
 // A provider secret (#583 slice 4) sits in the same service, under
 // `secret/<name>`: one namespace per soul, one item per declared secret.
-export function secretItem(agentId, name) {
-  return soulSecretItem(agentId, secretNameOrThrow(name));
+export function secretItem(agentId, name, names) {
+  return soulSecretItem(agentId, secretNameOrThrow(name), names);
 }
 
 // Same service/account namespace as Keychain, joined into one item title.
-export function passCliItem(agentId, slug) {
-  return itemTitle(keychainItem(agentId, slug));
+export function passCliItem(agentId, slug, names) {
+  return itemTitle(keychainItem(agentId, slug, names));
 }
 
-export function passCliSecretItem(agentId, name) {
-  return itemTitle(secretItem(agentId, name));
+export function passCliSecretItem(agentId, name, names) {
+  return itemTitle(secretItem(agentId, name, names));
 }
 
 // A secret is one opaque string; base64 keeps it single-line on `security
@@ -96,14 +99,15 @@ function decodeSecret(text) {
 }
 
 export function passCliStore({ env = process.env, cwd = process.cwd(), passRun } = {}) {
+  const names = { namespace: credentialNamespace(env) };
   const provider = createPassCredentialStore({ env, run: passRun });
   const ownerOnly = () => {
     if (soulMarkers({ env, cwd }).length) {
       throw Object.assign(new Error('soul credential stores are unavailable to a soul caller'), { code: 'owner-only' });
     }
   };
-  const item = ({ agentId, slug }) => { ownerOnly(); return passCliItem(agentId, slug); };
-  const secret = ({ agentId, name }) => { ownerOnly(); return passCliSecretItem(agentId, name); };
+  const item = ({ agentId, slug }) => { ownerOnly(); return passCliItem(agentId, slug, names); };
+  const secret = ({ agentId, name }) => { ownerOnly(); return passCliSecretItem(agentId, name, names); };
   // A missing note is an absent secret, not a failure; every other
   // provider failure stays what it was (redacted).
   const absent = (error) => { if (error?.code === 'missing-item') return null; throw error; };
@@ -155,6 +159,7 @@ function securityBinary(env) {
 }
 
 export function keychainStore({ env = process.env, run = spawnSync } = {}) {
+  const names = { namespace: credentialNamespace(env) };
   const bin = securityBinary(env);
   const call = (args, input) => run(bin, args, { input, encoding: 'utf8', env, stdio: ['pipe', 'pipe', 'pipe'], timeout: 15_000 });
   // The three `security` calls over one item: the stored text, or null.
@@ -181,8 +186,8 @@ export function keychainStore({ env = process.env, run = spawnSync } = {}) {
     return true;
   };
   const appItem = ({ agentId, slug, appScoped = false }) => (appScoped
-    ? managedAppItem(slug)
-    : keychainItem(agentId, slug));
+    ? managedAppItem(slug, names)
+    : keychainItem(agentId, slug, names));
   return {
     kind: 'keychain',
     read(target) {
@@ -192,11 +197,11 @@ export function keychainStore({ env = process.env, run = spawnSync } = {}) {
     write(target, credential) { add(appItem(target), encode(credential)); },
     delete(target) { return remove(appItem(target)); },
     readSecret({ agentId, name }) {
-      const stored = find(secretItem(agentId, name));
+      const stored = find(secretItem(agentId, name, names));
       return stored === null ? null : decodeSecret(stored);
     },
-    writeSecret({ agentId, name }, value) { add(secretItem(agentId, name), encodeSecret(value)); },
-    deleteSecret({ agentId, name }) { return remove(secretItem(agentId, name)); },
+    writeSecret({ agentId, name }, value) { add(secretItem(agentId, name, names), encodeSecret(value)); },
+    deleteSecret({ agentId, name }) { return remove(secretItem(agentId, name, names)); },
   };
 }
 

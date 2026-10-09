@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CREDENTIAL_VAULT, itemTitle, managedAppItem, soulAppItem, soulSecretItem } from '../credential-names.mjs';
+import { CREDENTIAL_VAULT, credentialNamespace, credentialVault, itemTitle, managedAppItem, soulAppItem, soulSecretItem } from '../credential-names.mjs';
 import { keychainItem, passCliItem, passCliSecretItem, secretItem } from '../soul-credentials.mjs';
 import { SOUL_CREDENTIAL_VAULT } from '../secret-providers/pass-cli-credentials.mjs';
 import { AGENT_IDENTITIES_VAULT } from '../ensure-private-key.mjs';
@@ -28,6 +28,23 @@ test('soul-credentials keeps its exported names over the builders', () => {
   assert.deepEqual(secretItem(AGENT, 'openai-api-key'), soulSecretItem(AGENT, 'openai-api-key'));
   assert.equal(passCliItem(AGENT, 'you-claude-agent'), `agent-bot.soul.${AGENT}/github-app/you-claude-agent`);
   assert.equal(passCliSecretItem(AGENT, 'openai-api-key'), `agent-bot.soul.${AGENT}/secret/openai-api-key`);
+});
+
+test('an unset or empty host namespace and vault keep the default names', () => {
+  for (const env of [{}, { AGENT_BOT_CREDENTIAL_NAMESPACE: '', AGENT_BOT_CREDENTIAL_VAULT: '' }]) {
+    assert.equal(credentialNamespace(env), 'agent-bot');
+    assert.equal(credentialVault(env), 'Agent Identities');
+    assert.deepEqual(soulAppItem(AGENT, 'you-claude-agent', { namespace: credentialNamespace(env) }), soulAppItem(AGENT, 'you-claude-agent'));
+  }
+});
+
+test('a host namespace renames every soul and managed App item', () => {
+  const names = { namespace: credentialNamespace({ AGENT_BOT_CREDENTIAL_NAMESPACE: 'app.geniusbar' }) };
+  assert.deepEqual(soulAppItem(AGENT, 'you-claude-agent', names), { service: `app.geniusbar.soul.${AGENT}`, account: 'github-app/you-claude-agent' });
+  assert.deepEqual(soulSecretItem(AGENT, 'openai-api-key', names), { service: `app.geniusbar.soul.${AGENT}`, account: 'secret/openai-api-key' });
+  assert.deepEqual(managedAppItem('you-claude-agent', names), { service: 'app.geniusbar.app.you-claude-agent', account: 'github-app/you-claude-agent' });
+  assert.equal(passCliItem(AGENT, 'you-claude-agent', names), `app.geniusbar.soul.${AGENT}/github-app/you-claude-agent`);
+  assert.equal(credentialVault({ AGENT_BOT_CREDENTIAL_VAULT: 'GeniusBar Identities' }), 'GeniusBar Identities');
 });
 
 test('malformed parts refuse before a name exists', () => {

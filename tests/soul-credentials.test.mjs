@@ -20,7 +20,7 @@ import { adoptSoulPackage, editSoulRevision, revisionPackagePath } from '../soul
 import { spawnSoulTemplate } from '../soul-templates.mjs';
 import { fakePassCli } from './fixtures/fake-pass-cli.mjs';
 import { runPass } from '../secret-providers/pass-cli.mjs';
-import { ensurePrivateKey } from '../ensure-private-key.mjs';
+import { createProtonPassCredentialProvider, ensurePrivateKey } from '../ensure-private-key.mjs';
 import { inspectLocalAppCredential } from '../credential-reconciler.mjs';
 import { appKeyStores, credentialStores, passCliItem, passCliStore, fileStore, keychainItem, keychainStore, migrateCredentialsCommand,
   resolveAppCredential } from '../soul-credentials.mjs';
@@ -599,4 +599,105 @@ test('appKeyStores marks unreadable soul.json and unknown managed stores; lenien
   assert.equal(soulCredentialsDeclaration(f.soul), null, 'the lenient default still reads as no declaration');
   rmSync(path.join(f.soul, 'soul.json'));
   assert.deepEqual(appKeyStores(SLUG, { env: f.env, home: f.home, config: {} }).stores, [], 'a missing soul.json declares nothing');
+});
+
+// #676: a host's credential namespace and vault, set in the daemon's unit.
+// Every store a soul's or a managed App's key passes through reads and
+// writes only the host's names, and a miss there never falls back to the
+// defaults.
+const HOST_NAMES = { AGENT_BOT_CREDENTIAL_NAMESPACE: 'app.geniusbar', AGENT_BOT_CREDENTIAL_VAULT: 'GeniusBar Identities' };
+
+// pass-cli with both vaults present: only the host's share answers.
+function twoVaultPass() {
+  const pass = fakePassCli();
+  const calls = [];
+  const run = (args, options) => {
+    calls.push([...args]);
+    if (args[0] === 'vault' && args[1] === 'list') {
+      return JSON.stringify([{ name: 'Agent Identities', share_id: 'default-vault' }, { name: 'GeniusBar Identities', share_id: 'test-vault' }]);
+    }
+    return pass.run(args, options);
+  };
+  return { run, calls, items: pass.items };
+}
+
+test('a host credential namespace keeps every store write inside its own names', (t) => {
+  const f = fixture(t, { legacy: false });
+  const env = { ...f.env, ...HOST_NAMES };
+  const credential = { appId: '12345', privateKeyPem: PEM };
+  // A default-namespace item already in the Keychain is not the host's.
+  keychainStore({ env: f.env }).write({ agentId: id, slug: SLUG }, { appId: '999', privateKeyPem: PEM });
+  const keychain = keychainStore({ env });
+  assert.equal(keychain.read({ agentId: id, slug: SLUG }), null, 'no fallback to agent-bot.*');
+  keychain.write({ agentId: id, slug: SLUG }, credential);
+  keychain.write({ appScoped: true, slug: SLUG }, credential);
+  keychain.writeSecret({ agentId: id, name: 'openai-api-key' }, 'sk-host');
+  assert.deepEqual(keychain.read({ agentId: id, slug: SLUG }), credential);
+  assert.equal(keychain.readSecret({ agentId: id, name: 'openai-api-key' }), 'sk-host');
+  const items = Object.keys(JSON.parse(readFileSync(env.FAKE_KEYCHAIN, 'utf8'))).map((key) => key.split('\u0000')[0]);
+  assert.deepEqual(items.sort(), [`agent-bot.soul.${id}`, `app.geniusbar.app.${SLUG}`, `app.geniusbar.soul.${id}`, `app.geniusbar.soul.${id}`].sort());
+  assert.equal(keychain.deleteSecret({ agentId: id, name: 'openai-api-key' }), true);
+  assert.equal(keychain.delete({ appScoped: true, slug: SLUG }), true);
+  // Every service security was asked about, by argv or on -i, is the host's.
+  const services = readFileSync(env.FAKE_KEYCHAIN_LOG, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+    .filter((args) => args[0] !== '-i').map((args) => args[args.indexOf('-s') + 1]);
+  assert.equal(services.length, 5);
+  assert.deepEqual(services.filter((service) => !service.startsWith('app.geniusbar.')), []);
+
+  // pass-cli: the host vault only, the host's titles only.
+  const pass = twoVaultPass();
+  const store = passCliStore({ env, cwd: f.home, passRun: pass.run });
+  store.write({ agentId: id, slug: SLUG }, credential);
+  store.writeSecret({ agentId: id, name: 'openai-api-key' }, 'sk-host');
+  assert.deepEqual(store.read({ agentId: id, slug: SLUG }), credential);
+  assert.equal(store.readSecret({ agentId: id, name: 'openai-api-key' }), 'sk-host');
+  assert.deepEqual(pass.calls.filter((args) => args.includes('--share-id') && args[args.indexOf('--share-id') + 1] !== 'test-vault'), []);
+  const titles = [...pass.items.values()].map((item) => item.content.title);
+  assert.deepEqual(titles.sort(), [`app.geniusbar.soul.${id}/github-app/${SLUG}`, `app.geniusbar.soul.${id}/secret/openai-api-key`]);
+
+  // The mint path resolves the soul's key from the same names; the default
+  // item never answers for the host.
+  const minted = appConfig({ argv: ['node', 'mint-token.mjs', '--app', SLUG], env: { ...env, AGENT_BOT_ID: undefined }, home: f.home, cwd: f.home, config: {} });
+  assert.equal(minted.appId, '12345');
+  keychain.delete({ agentId: id, slug: SLUG });
+  assert.throws(() => appConfig({ argv: ['node', 'mint-token.mjs', '--app', SLUG], env: { ...env, AGENT_BOT_ID: undefined }, home: f.home, cwd: f.home, config: {} }),
+    /no soul key store holds it/);
+});
+
+test('two host namespaces sharing one Keychain read back only their own keys', (t) => {
+  const f = fixture(t, { legacy: false });
+  const a = keychainStore({ env: { ...f.env, AGENT_BOT_CREDENTIAL_NAMESPACE: 'host-a' } });
+  const b = keychainStore({ env: { ...f.env, AGENT_BOT_CREDENTIAL_NAMESPACE: 'host-b' } });
+  a.write({ agentId: id, slug: SLUG }, { appId: '1', privateKeyPem: PEM });
+  b.write({ agentId: id, slug: SLUG }, { appId: '2', privateKeyPem: PEM });
+  assert.equal(a.read({ agentId: id, slug: SLUG }).appId, '1');
+  assert.equal(b.read({ agentId: id, slug: SLUG }).appId, '2');
+  assert.equal(keychainStore({ env: f.env }).read({ agentId: id, slug: SLUG }), null);
+});
+
+test('a malformed host namespace or vault refuses before any store call', (t) => {
+  const f = fixture(t, { legacy: false });
+  const never = () => assert.fail('no store call under a malformed name');
+  for (const bad of [{ AGENT_BOT_CREDENTIAL_NAMESPACE: 'a/b' }, { AGENT_BOT_CREDENTIAL_NAMESPACE: 'x"y' },
+    { AGENT_BOT_CREDENTIAL_NAMESPACE: '.lead' }, { AGENT_BOT_CREDENTIAL_NAMESPACE: 'n'.repeat(65) },
+    { AGENT_BOT_CREDENTIAL_VAULT: 'Vault ' }, { AGENT_BOT_CREDENTIAL_VAULT: 'a"b' }, { AGENT_BOT_CREDENTIAL_VAULT: 'a/b' }]) {
+    const env = { ...f.env, ...bad };
+    const usage = { code: 'usage', message: /^usage: AGENT_BOT_CREDENTIAL_(?:NAMESPACE|VAULT)/ };
+    assert.throws(() => credentialStores({ env }), usage);
+    assert.throws(() => passCliStore({ env, cwd: f.home, passRun: never }), usage);
+    if (bad.AGENT_BOT_CREDENTIAL_VAULT) assert.throws(() => createProtonPassCredentialProvider({ env, run: never }), usage);
+    if (bad.AGENT_BOT_CREDENTIAL_NAMESPACE) assert.throws(() => keychainStore({ env, run: never }), usage);
+  }
+});
+
+test('the App-key import reads the host vault', () => {
+  const calls = [];
+  const provider = createProtonPassCredentialProvider({ env: HOST_NAMES, run: (args) => {
+    calls.push(args);
+    if (args[0] === 'item') throw Object.assign(new Error('stop'), { code: 'missing-item' });
+    return '';
+  } });
+  assert.throws(() => provider.restore({ slug: SLUG, privateKeyDestination: '/nonexistent' }));
+  const view = calls.find((args) => args[0] === 'item' && args[1] === 'view');
+  assert.equal(view[view.indexOf('--vault-name') + 1], 'GeniusBar Identities');
 });

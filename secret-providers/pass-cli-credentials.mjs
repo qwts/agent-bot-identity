@@ -1,13 +1,15 @@
 // Per-soul values use note templates on stdin. App-key imports and this store
 // share the same bounded process runner and redacted provider errors.
 import { runPass, passCliFailure } from './pass-cli.mjs';
-import { CREDENTIAL_VAULT } from '../credential-names.mjs';
+import { CREDENTIAL_VAULT, credentialVault } from '../credential-names.mjs';
 
 export const SOUL_CREDENTIAL_VAULT = CREDENTIAL_VAULT;
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 const malformed = () => fail('provider-failure', 'pass-cli returned malformed credential data');
 
 export function createPassCredentialStore({ env = process.env, run = runPass } = {}) {
+  // The host's vault, or the default; never both (#676).
+  const vaultName = credentialVault(env);
   const call = (args, input) => {
     try { return run(args, { env, input }); }
     catch (error) { throw passCliFailure(error); }
@@ -23,7 +25,7 @@ export function createPassCredentialStore({ env = process.env, run = runPass } =
   };
   const vault = () => {
     const matches = list(json(['vault', 'list', '--output', 'json']), 'vaults')
-      .filter((entry) => entry?.name === SOUL_CREDENTIAL_VAULT);
+      .filter((entry) => entry?.name === vaultName);
     if (matches.length !== 1) fail('provider-failure', 'pass-cli credential vault is missing or ambiguous');
     const id = matches[0].share_id ?? matches[0].shareId;
     if (typeof id !== 'string' || !id) malformed();
