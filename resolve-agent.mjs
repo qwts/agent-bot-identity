@@ -191,6 +191,16 @@ export function unboundBotReason(slug) {
     + 'and check `agent-bot doctor`, then retry.';
 }
 
+// For a command that would skip the git backstop (`--no-verify`, `commit -n`,
+// a `core.hooksPath` override or write): a stated bot may not, bound or not,
+// because the hooks are what hold its attribution when the pre-command scan
+// cannot see the git command (a script file, make).
+export function hookBypassReason(slug) {
+  return `agent-bot: this session stated bot identity ${slug}, and this command would skip the git hooks `
+    + '(`--no-verify`, `commit -n`, or a `core.hooksPath` override) that keep its commits and pushes attributed to the bot. '
+    + 'Run it without the bypass.';
+}
+
 // For a target the pre-command scan could not place (a variable path, a
 // shell indirection): a stated bot cannot prove it is bound there.
 export function unprovableBotReason(slug) {

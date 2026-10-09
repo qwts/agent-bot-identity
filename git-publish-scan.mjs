@@ -8,18 +8,40 @@
 // quotes and backslashes the way sh does, follows `cd`, `git -C`,
 // `--git-dir`, `--work-tree`, GIT_DIR / GIT_WORK_TREE, the common wrappers,
 // `sh -c`, `eval` and command substitutions, and reports every `git commit`
-// and `git push` with the directory it runs in. What it cannot follow it says
-// so: a target it cannot place is `cwd: null`, and a command word it cannot
-// read (a variable, a substitution, a glob) makes the scan `ambiguous`. The
-// caller fails closed on either, but only for a session that stated a bot.
-// Git aliases cannot shadow builtins, so a subcommand that is not a known
+// and `git push` with the directory it runs in. `merge`, `rebase`,
+// `cherry-pick`, `revert`, `am` and `commit-tree` write commits too, and
+// cherry-pick, revert and commit-tree run no pre-commit hook at all, so they
+// are reported the same way. What it cannot follow it says so: a target it
+// cannot place is `cwd: null`, and a command word it cannot read (a
+// variable, a substitution, a glob) makes the scan `ambiguous`. The caller
+// fails closed on either, but only for a session that stated a bot. Git
+// aliases cannot shadow builtins, so a subcommand that is not a known
 // builtin is returned as an alias candidate for the caller to look up.
+//
+// `skipsHooks` says the command would run without the git backstop:
+// `--no-verify` (or `commit -n`), a `core.hooksPath` override for the
+// invocation (`-c`, `--config-env`, GIT_CONFIG_PARAMETERS, GIT_CONFIG_KEY_n),
+// or a `git config` write of `core.hooksPath`. Values the scan cannot read
+// (`git commit $FLAGS`) and indirect git (a script file, make) are not seen;
+// the git hooks still cover those.
 
 import { isAbsolute, resolve } from 'node:path';
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'yash', 'busybox']);
-const PUBLISH = new Set(['commit', 'push']);
+// Subcommands that write commits; `push` publishes them.
+const COMMITTING = new Set(['commit', 'merge', 'rebase', 'cherry-pick', 'revert', 'am', 'commit-tree']);
+// Sequencer controls that write no commit.
+const NO_COMMIT = new Set(['--abort', '--quit', '--skip', '--show-current-patch', '--edit-todo']);
+// Subcommands whose `--no-verify` skips a hook the backstop runs in.
+const VERIFYING = new Set(['commit', 'merge', 'rebase', 'am', 'push']);
+// `git commit` short options whose value follows (attached or as the next
+// word), so a cluster stops there: `-nm x` is -n -m x, `-mn` is -m n.
+const COMMIT_VALUE_SHORT = 'mFCctSu';
+const VALUE_OPTS = new Set(['-m', '-F', '-C', '-c', '-t', '-o', '--message', '--file', '--reuse-message',
+  '--reedit-message', '--template', '--author', '--date', '--fixup', '--squash', '--trailer', '--cleanup',
+  '--pathspec-from-file', '--push-option', '--strategy', '--strategy-option', '-s', '-X', '--onto', '--repo']);
+const HOOKS_PATH = /^core\.hookspath$/i;
 const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done',
   'case', 'esac', 'select', 'function', '{', '}', '!', '[[', ']]', 'in']);
 // Builtins a git alias may not shadow. Anything else may be an alias.
@@ -284,7 +306,7 @@ const WRAPPERS = {
 };
 
 export function scanGitPublish(command, { cwd = process.cwd(), env = process.env, depth = 0 } = {}) {
-  const result = { publishes: [], aliases: [], ambiguous: false };
+  const result = { publishes: [], aliases: [], ambiguous: false, skipsHooks: false };
   if (depth > 8) { result.ambiguous = true; return result; }
   const vars = new Map(Object.entries(env ?? {}));
   const exported = new Set(Object.keys(env ?? {}));
@@ -344,6 +366,7 @@ function merge(into, from) {
   into.publishes.push(...from.publishes);
   into.aliases.push(...from.aliases);
   into.ambiguous ||= from.ambiguous;
+  into.skipsHooks ||= from.skipsHooks;
 }
 
 function evaluate(argv, ctx) {
@@ -439,8 +462,9 @@ function evaluate(argv, ctx) {
 }
 
 // Parse git's global options to the subcommand and record where it runs.
-function gitInvocation(args, { cwd, env, result, depth, aliases = new Map(), names = new Map() }) {
+function gitInvocation(args, { cwd, env, result, depth, aliases = new Map(), names = new Map(), hooksOverridden = false }) {
   let dir = cwd;
+  let hooksOff = hooksOverridden || hooksPathInEnv(env, result);
   let gitDir = env.get('GIT_DIR') ?? undefined;
   let workTree = env.get('GIT_WORK_TREE') ?? undefined;
   if (gitDir === null || workTree === null) dir = null;
@@ -456,12 +480,14 @@ function gitInvocation(args, { cwd, env, result, depth, aliases = new Map(), nam
       if (m) aliases.set(m[1].toLowerCase(), m[2]);
       const ident = /^(user|author|committer)\.name(?:=(.*))?$/is.exec(kv ?? '');
       if (ident) names.set(ident[1].toLowerCase(), ident[2] ?? '');
+      if (HOOKS_PATH.test(/^[^=]*/.exec(kv ?? '')[0])) hooksOff = true;
       continue;
     }
     if (arg === '--config-env' || arg.startsWith('--config-env=')) {
       const spec = arg === '--config-env' ? args[j += 1] : arg.slice(13);
       const ident = /^(user|author|committer)\.name=/i.exec(spec ?? '');
       if (ident || spec === null) names.set(ident ? ident[1].toLowerCase() : 'user', null);
+      if (spec === null || HOOKS_PATH.test(/^[^=]*/.exec(spec ?? '')[0])) hooksOff = true;
       continue;
     }
     if (arg === '--git-dir' || arg === '--work-tree') {
@@ -484,23 +510,100 @@ function gitInvocation(args, { cwd, env, result, depth, aliases = new Map(), nam
     workTree: workTree === undefined ? undefined : place(dir, workTree),
   };
   if (target.gitDir === null || target.workTree === null) target.cwd = null;
-  if (sub === 'push') { result.publishes.push(target); return; }
-  if (sub === 'commit') { result.publishes.push({ ...target, identity: commitIdentity(args.slice(j + 1), env, names) }); return; }
-  const alias = aliases.get(sub.toLowerCase());
-  if (alias !== undefined) {
-    expandAlias(alias, target, args.slice(j + 1), { env, result, depth, aliases, names });
+  const rest = args.slice(j + 1);
+  if (sub === 'config') { if (writesHooksPath(rest)) result.skipsHooks = true; return; }
+  if (sub === 'push' || (COMMITTING.has(sub) && !rest.some((a) => NO_COMMIT.has(a)))) {
+    if (hooksOff || skipsVerify(sub, rest)) result.skipsHooks = true;
+    if (sub === 'rebase') rebaseExecs(rest, target, env, result, depth);
+    if (sub === 'push') { result.publishes.push(target); return; }
+    // Only `commit` takes --author; the others use the configured identity.
+    result.publishes.push({ ...target, identity: commitIdentity(sub === 'commit' ? rest : [], env, names) });
     return;
   }
-  if (!GIT_BUILTINS.has(sub)) result.aliases.push({ ...target, name: sub, rest: args.slice(j + 1) });
+  const alias = aliases.get(sub.toLowerCase());
+  if (alias !== undefined) {
+    expandAlias(alias, target, rest, { env, result, depth, aliases, names, hooksOverridden: hooksOff });
+    return;
+  }
+  if (!GIT_BUILTINS.has(sub)) result.aliases.push({ ...target, name: sub, rest, hooksOverridden: hooksOff });
+}
+
+// A `core.hooksPath` override the environment hands this git: what `git -c`
+// exports to its children, or the GIT_CONFIG_COUNT/KEY_n pairs. A value the
+// scan cannot read could be one.
+function hooksPathInEnv(env, result) {
+  let found = false;
+  for (const [key, value] of env) {
+    if (key !== 'GIT_CONFIG_PARAMETERS' && !/^GIT_CONFIG_KEY_\d+$/.test(key)) continue;
+    if (value === null) { result.ambiguous = true; continue; }
+    if (key === 'GIT_CONFIG_PARAMETERS' ? /core\.hookspath/i.test(value) : HOOKS_PATH.test(value)) found = true;
+  }
+  return found;
+}
+
+// `--no-verify` in any unambiguous abbreviation (git accepts `--no-veri`),
+// and on `commit` its short `-n`, alone or in a cluster (`-anm x`). On push
+// `-n` is --dry-run and writes nothing.
+function skipsVerify(sub, rest) {
+  if (!VERIFYING.has(sub)) return false;
+  for (let k = 0; k < rest.length; k += 1) {
+    const arg = rest[k];
+    if (arg === null) continue;
+    if (arg === '--') break;
+    if (VALUE_OPTS.has(arg)) { k += 1; continue; }
+    if (arg.length >= 6 && '--no-verify'.startsWith(arg)) return true;
+    if (sub !== 'commit' || !/^-[^-]/.test(arg)) continue;
+    for (let c = 1; c < arg.length; c += 1) {
+      if (arg[c] === 'n') return true;
+      if (!COMMIT_VALUE_SHORT.includes(arg[c])) continue;
+      // The value is the rest of the cluster, or the next word for the
+      // options that require one (-S and -u only take it attached).
+      if (c === arg.length - 1 && 'mFCct'.includes(arg[c])) k += 1;
+      break;
+    }
+  }
+  return false;
+}
+
+// `git config [scope] core.hooksPath <value>`, `--unset`, `--add`,
+// `--replace-all`, or the `set`/`unset` verbs. Reads (`--get`, a bare key)
+// change nothing.
+function writesHooksPath(rest) {
+  const words = rest.filter((a) => a !== null);
+  const key = words.findIndex((a) => HOOKS_PATH.test(a));
+  if (key < 0) return false;
+  const writes = ['set', 'unset', '--unset', '--unset-all', '--add', '--replace-all'];
+  if (words.some((a) => writes.includes(a))) return true;
+  if (words.some((a) => /^(--get|--get-all|--get-regexp|--get-urlmatch|-l|--list|get|list)$/.test(a))) return false;
+  return words[key + 1] !== undefined;
+}
+
+// `git rebase -x <cmd>` runs each command in the shell at the work tree.
+function rebaseExecs(rest, target, env, result, depth) {
+  for (let k = 0; k < rest.length; k += 1) {
+    const arg = rest[k];
+    if (arg === '--') break;
+    let cmd;
+    if (arg === '-x' || arg === '--exec') cmd = rest[k += 1];
+    else if (arg?.startsWith('--exec=')) cmd = arg.slice(7);
+    else if (arg?.startsWith('-x')) cmd = arg.slice(2);
+    else continue;
+    if (cmd === null || cmd === undefined) { result.ambiguous = true; continue; }
+    merge(result, scanGitPublish(cmd, { cwd: target.cwd, env: Object.fromEntries(env), depth: depth + 1 }));
+  }
 }
 
 // An alias value: `!cmd` runs in the shell at the repository top level (the
 // target directory is close enough to place it); anything else is git
 // arguments, which may themselves name commit or push.
-export function expandAlias(value, target, rest, { env = new Map(), result, depth = 0, aliases = new Map(), names = new Map() }) {
-  const into = result ?? { publishes: [], aliases: [], ambiguous: false };
-  const envObject = env instanceof Map ? Object.fromEntries(env) : env;
+export function expandAlias(value, target, rest, {
+  env = new Map(), result, depth = 0, aliases = new Map(), names = new Map(), hooksOverridden = false,
+}) {
+  const into = result ?? { publishes: [], aliases: [], ambiguous: false, skipsHooks: false };
+  const envObject = { ...(env instanceof Map ? Object.fromEntries(env) : env) };
   if (value.startsWith('!')) {
+    // A shell alias's git inherits the outer `-c` through this variable.
+    if (hooksOverridden) envObject.GIT_CONFIG_PARAMETERS = `${envObject.GIT_CONFIG_PARAMETERS ?? ''} 'core.hookspath'=''`;
     merge(into, scanGitPublish(value.slice(1), { cwd: target.cwd, env: envObject, depth: depth + 1 }));
     return into;
   }
@@ -510,7 +613,7 @@ export function expandAlias(value, target, rest, { env = new Map(), result, dept
   if (target.gitDir !== undefined) inner.set('GIT_DIR', target.gitDir);
   if (target.workTree !== undefined) inner.set('GIT_WORK_TREE', target.workTree);
   if (depth > 8) { into.ambiguous = true; return into; }
-  gitInvocation([...words, ...rest], { cwd: target.cwd, env: inner, result: into, depth: depth + 1, aliases, names });
+  gitInvocation([...words, ...rest], { cwd: target.cwd, env: inner, result: into, depth: depth + 1, aliases, names, hooksOverridden });
   return into;
 }
 
