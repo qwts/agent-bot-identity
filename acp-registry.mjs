@@ -40,7 +40,7 @@
 //                stores, so driving them here would never surface in the
 //                desktop apps this plane exists to reach (#141 census).
 //                Revisit only if that changes.
-import { accessSync, constants, existsSync, realpathSync } from 'node:fs';
+import { accessSync, constants, existsSync, realpathSync, statSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -309,11 +309,11 @@ export function harnessProcessEnv(row, baseEnv = {}) {
   return Object.assign(env, row.setEnv ?? {});
 }
 
-/** The first executable `name` on an env's PATH, else null. */
+/** The first executable regular file `name` on an env's PATH, else null. */
 export function whichOnPath(name, env = process.env) {
   for (const dir of (env.PATH ?? '').split(delimiter).filter(Boolean)) {
     const file = join(dir, name);
-    try { accessSync(file, constants.X_OK); return file; } catch { /* next */ }
+    try { if (statSync(file).isFile()) { accessSync(file, constants.X_OK); return file; } } catch { /* next */ }
   }
   return null;
 }

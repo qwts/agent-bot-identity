@@ -53,7 +53,7 @@ import {
   createContractExecutor,
   validateUpdate,
 } from './executor-contract.mjs';
-import { ACP_SPAWN_REGISTRY, harnessProcessEnv, resolveSpawn, spawnCommand } from './acp-registry.mjs';
+import { ACP_SPAWN_REGISTRY, harnessProcessEnv, resolveSpawn, spawnCommand, whichOnPath } from './acp-registry.mjs';
 
 export const ACP_PROTOCOL_VERSION = 1;
 export const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000;
@@ -407,7 +407,9 @@ export function createAcpExecutor({
     // down the whole tree — spawn-runner rows like npx launch the actual
     // adapter as a descendant, and signaling only the direct child would leak
     // it (still holding the inherited stdio pipes) past the turn.
-    const { command, args } = spawnCommand(row, cwd, { dirs: harnessDirs });
+    // An installed adapter runs on the first Node on the turn's PATH (a
+    // soul's declared runtime, #617), as the sign-in probe does (#536).
+    const { command, args } = spawnCommand(row, cwd, { dirs: harnessDirs, node: whichOnPath('node', env) ?? process.execPath });
     const child = spawn(command, args, {
       cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: true,
     });

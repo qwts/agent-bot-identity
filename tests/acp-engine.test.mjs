@@ -1,6 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -547,9 +547,17 @@ test('the sign-in probe runs with the env and Node the turn spawn gets (#536)', 
   const { codex } = ACP_SPAWN_REGISTRY;
   const registry = { ...FAKE_REGISTRY, codex: { ...FAKE_REGISTRY.codex, stripEnv: codex.stripEnv, setEnv: codex.setEnv, signIn: codex.signIn } };
 
+  // The real adapter lookup: the row's soulBin installed in the soul home.
+  const adapter = path.join(home, 'node_modules', '.bin', codex.soulBin);
+  mkdirSync(path.dirname(adapter), { recursive: true });
+  writeFileSync(adapter, '');
+  const engineRegistry = { ...registry, codex: { ...registry.codex, soulBin: codex.soulBin, adapter: codex.adapter } };
   let spawned = null;
-  await turn({ message: 'env-probe', executorOptions: { harness: 'codex', registry, env: harnessEnv,
-    spawn: (command, args, options) => { spawned = options.env; return spawnChild(command, args, options); } } });
+  let engineCommand = null;
+  await turn({ message: 'env-probe', executorOptions: { harness: 'codex', registry: engineRegistry, env: harnessEnv, cwd: home,
+    // Record what the engine resolved, then run the fixture agent so the turn completes.
+    spawn: (command, args, options) => { spawned = options.env; engineCommand = [command, ...args]; return spawnChild(process.execPath, [FIXTURE], options); } } });
+  assert.deepEqual(engineCommand, [path.join(soulBin, 'node'), realpathSync(adapter)], 'the installed adapter runs on the soul\'s Node');
   const probes = [];
   await harnessAuth('status', 'codex', { home, env: harnessEnv, registry,
     runImpl: async (command, args, options) => { probes.push({ command, env: options.env }); return { stdout: 'Logged in using ChatGPT' }; } });

@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { authCommand, harnessAuth, LOGIN_TIMEOUT_MS } from '../harness-auth.mjs';
-import { ACP_SPAWN_REGISTRY } from '../acp-registry.mjs';
+import { ACP_SPAWN_REGISTRY, whichOnPath } from '../acp-registry.mjs';
 import { fileURLToPath } from 'node:url';
 
 const row = ACP_SPAWN_REGISTRY.claude;
@@ -242,4 +242,14 @@ test('a bare PATH gets the host Node last, never ahead of the env\'s own (#536)'
   const runImpl = async (command, args, options) => { seen.push(options.env.PATH); return { stdout: JSON.stringify({ loggedIn: true }) }; };
   await harnessAuth('status', 'claude', { home: null, env: { PATH: '/soul/bin:/usr/bin' }, runImpl });
   assert.deepEqual(seen[0].split(path.delimiter), ['/soul/bin', '/usr/bin', path.dirname(process.execPath)]);
+});
+
+test('a directory named node on PATH is not a Node (#536)', (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'which-node-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(path.join(root, 'a', 'node'), { recursive: true });
+  mkdirSync(path.join(root, 'b'));
+  writeFileSync(path.join(root, 'b', 'node'), '#!/bin/sh\n', { mode: 0o755 });
+  const PATH = [path.join(root, 'a'), path.join(root, 'b')].join(path.delimiter);
+  assert.equal(whichOnPath('node', { PATH }), path.join(root, 'b', 'node'));
 });
