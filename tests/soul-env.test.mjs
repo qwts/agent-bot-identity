@@ -137,6 +137,8 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
   assert.ok(history.external.every((row) => typeof row.present === 'boolean'));
   // The soul's own mirror (#583 slice 5): nothing written yet.
   assert.deepEqual([history.mirror, history.mirrored, history.turns, history.revisions], ['.soul-state/runs', false, 0, 0]);
+  assert.deepEqual(history.conversation, { path: '.soul-state/runs/comms-context.jsonl', present: false });
+  assert.ok(history.external.some(row => row.what === 'legacy conversation context' && row.path.endsWith(`${ID}.jsonl`)));
   assert.deepEqual(component(result, 'temp').entries, []);
   const tools = component(result, 'host-tools');
   assert.equal(tools.present, true);

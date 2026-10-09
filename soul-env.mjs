@@ -17,6 +17,7 @@ import { ENV_CONTRACT_VERSION, GENERATED_HARNESS_MARKER, GENERATED_HARNESS_PATHS
 import { credentialStores } from './soul-credentials.mjs';
 import { inspectToolHomes, readMigrationJournal } from './soul-env-migrate.mjs';
 import { REVISIONS_FILE, TURNS_FILE, runsDirectory } from './soul-history.mjs';
+import { legacyThreadJournalPath, THREAD_CONTEXT_RELATIVE } from './soul-threads.mjs';
 import { npmHarnessInstalls } from './soul-home.mjs';
 import { inspectSoulSpace, spaceMigrateCommand } from './soul-memory.mjs';
 import { STEP_FINAL_STATUSES } from './soul-migration-journal.mjs';
@@ -341,6 +342,7 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
           { what: 'wake sessions', path: path.join(base, 'agent-bot', 'wake-sessions.json') },
           { what: 'launch requests', path: path.join(base, 'agent-bot', 'launch-requests.json') },
           { what: 'task turns', path: path.join(base, 'agent-bot', 'task-turns.jsonl') },
+          { what: 'legacy conversation context', path: legacyThreadJournalPath(soul.id, options) },
         ].map((row) => ({ ...row, present: existsSync(row.path) }));
         entry.confinementLog = present(`${STATE}/confinement.log`);
         // The soul's own mirror (ADR-0583 decision 9): where it is and how
@@ -350,6 +352,7 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
         entry.turns = countLines(path.join(runs, TURNS_FILE));
         entry.revisions = countLines(path.join(runs, REVISIONS_FILE));
         entry.mirrored = (entry.turns ?? 0) > 0 || (entry.revisions ?? 0) > 0;
+        entry.conversation = { path: THREAD_CONTEXT_RELATIVE, present: present(THREAD_CONTEXT_RELATIVE) };
         break;
       }
       case 'temp': {

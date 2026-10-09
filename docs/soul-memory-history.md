@@ -122,7 +122,51 @@ revision; the daemon logs `history mirror: <what> for <id> not written
 (`createSoulHistory` is the daemon's port; `appendSoulTurn` and
 `appendSoulRevision` take the soul root).
 
-### Reading the mirror
+### Portable cold conversation context
+
+The cold-wake message journal lives at
+`.soul-state/runs/comms-context.jsonl` for a soul whose registered folder has
+a matching `.soul-state/agent-id`. Unlike the two fact-only mirrors above,
+this file contains the bounded messages used to reconstruct the next cold
+turn's context. It keeps the existing entry, journal and prompt limits; it
+is not an unlimited transcript. Principal isolation and quoted-data prompt
+formatting apply after import just as they do before export.
+
+An older journal at `<agent-bot state>/threads/<agentId>.jsonl` remains readable
+until the first contained write. That write locks the destination and source,
+copies the source into a private temporary file, verifies its bytes, and
+publishes it atomically before appending. The original is retained. Interrupted
+staging files are disposable under `.soul-state/tmp`; a subsequent write can
+retry from the original. Reads never migrate. Missing/mismatched soul markers
+or linked history paths refuse the journal read/write rather than selecting
+another soul's data. Souls without a registered folder keep the legacy path.
+
+Life export includes the contained file through the history classification.
+If the contained file is absent, export snapshots this soul's legacy journal
+directly into that same archive path without changing live storage. A life
+import restores it beneath the kept or explicitly forked soul's root. In-flight
+send claims stay in daemon state and are not carried. Recorded decisions and
+linked teammate facts can therefore reach a later cold turn after transfer,
+provided the requesting principal retains the same identity.
+
+Rollback to an engine that only reads the legacy location is a stopped-writer
+operation. Back up both journals, restore the contained journal's bytes to the
+legacy path with mode 0600, verify that copy, then move the contained file to
+the retained backup. The old engine can continue from the restored journal;
+the next upgrade will import its later writes because the contained path is
+absent. Never switch versions with two writers active or simply remove the
+new file without first preserving its newer messages. No automatic downgrade
+or live old/new-writer reconciliation is claimed.
+
+Native `/v1` sessions, jobs and events still live in the separate interaction
+store. This change does not transfer their session ownership or make imported
+native harness sessions resumable. The descriptor lists the legacy conversation
+journal and reports the contained one at `history.conversation { path, present }`.
+Native interaction inventory/transfer, full native continuity and host-view
+reconstruction remain tracked in #596; #583 is not complete merely because
+the run summaries or cold context survive export.
+
+### Reading the fact mirror
 
 ```sh
 agent-bot soul env history <agentId|name> [--json] [--limit N]

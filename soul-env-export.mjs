@@ -45,6 +45,7 @@ import { PACKAGE_IGNORE_LIST, computePackageRevision } from './soul-package.mjs'
 import { adoptSoulPackage, editSoulRevision, revisionHistory, revisionPackagePath } from './soul-revisions.mjs';
 import { TOOL_HOME_REGISTRY, toolHomeEnv, toolHomeFiles } from './soul-tool-homes.mjs';
 import { soulsHome } from './souls-root.mjs';
+import { legacyThreadJournalPath, THREAD_CONTEXT_RELATIVE } from './soul-threads.mjs';
 
 export const EXPORT_SCHEMA_VERSION = 1;
 export const EXPORT_MANIFEST = 'manifest.json';
@@ -415,6 +416,17 @@ export function planSoulExport(soulDir, { agentId, name = null, displayName = nu
     }
   };
   walk(soulDir, '');
+  // Older souls may not have written a turn since context became contained.
+  // Snapshot only this soul's legacy journal into the portable history path;
+  // planning/exporting remains read-only and never moves the live source.
+  if (stateDir && !lstat(path.join(soulDir, THREAD_CONTEXT_RELATIVE))) {
+    const legacy = legacyThreadJournalPath(agentId, { env, home, stateDir });
+    const stat = lstat(legacy);
+    if (stat?.isFile()) {
+      // The walk may already have emitted an empty runs directory.
+      fileComponent(THREAD_CONTEXT_RELATIVE, legacy, stat, 'history');
+    }
+  }
   // The revision journal (ADR-0583 decision 10): the daemon's events and
   // stored package objects for this soul, so the chain continues where it
   // left off. Locks and stagings stay.
