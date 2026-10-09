@@ -128,6 +128,11 @@ function skillReport(root, parentRevision, packagePath) {
   return skillsChanged(diff) ? { skills: diff } : {};
 }
 
+// The journal directory, for bounded read-only verifiers that must not use
+// the unbounded readers here (skill-dream-evidence.mjs).
+export function revisionJournalRoot(id, options = {}) {
+  return rootFor(id, options);
+}
 export function revisionHistory(id, options = {}) {
   return events(rootFor(id, options)).filter((event) => event.kind === 'revision');
 }
