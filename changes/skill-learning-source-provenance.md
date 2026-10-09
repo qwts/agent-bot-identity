@@ -1,0 +1,1 @@
+- Retain portable HTTPS origins, redirects, capture timestamps and repository revisions in version 2 learning receipts, bound to retained accepted bytes separately from local adaptations. Version 1 receipts remain readable without inventing missing provenance (#312, #603).

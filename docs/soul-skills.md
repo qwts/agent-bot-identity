@@ -404,6 +404,24 @@ source bytes; the agent must still review references in its adapted destination.
 Unresolved/external dependencies and the absence of universal interception stay
 explicit. No remote fetch or instruction execution occurs during learning.
 
+New learning receipts use schema version 2. `source.provenance` is a versioned,
+bounded projection of the accepted library snapshot: its digest and capture
+timestamp, the original HTTPS source URL, original and resolved URLs for each
+retained accepted file, file hashes and modes, and the repository selector,
+commit, tree and blob hashes when captured from GitHub. Only those named fields
+are copied; local paths and arbitrary library metadata are omitted. Local
+imports retain `source: {kind: "local"}` without their host directory. The
+provenance digest always names the accepted snapshot, including when
+`source.selection` chooses a local adaptation with a different digest. It does
+not attribute adapted bytes to the remote origin. Receipt readers check the
+recorded accepted file hashes and modes against the retained package bytes.
+
+Version 1 receipts remain readable with their original missing provenance;
+relearning creates a new version 2 receipt without rewriting older revisions.
+The stored origin evidence survives loss of the local library. Rechecking a
+portable soul's upstream sources without that library remains unimplemented;
+origin metadata grants no fetching or adoption authority.
+
 One current receipt/capture set per import replaces that import's prior set in
 the private candidate. Each source inventory retains the library's file/byte
 bounds; old sets remain addressable in prior soul revisions, rather than growing

@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { constants, closeSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, writeFileSync, chmodSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { readSkillMaterial } from './skill-library.mjs';
+import { projectSkillSourceProvenance, validateSkillSourceProvenance } from './skill-source-provenance.mjs';
 import { validateAgentId } from './agent-identity.mjs';
 import { soulDirectory } from './agent-population.mjs';
 import { readSoulPackageEntries } from './soul-package.mjs';
@@ -67,6 +68,16 @@ function validateOutcome(value) {
 }
 const prefix = id => `provenance/skills/${id}`;
 const receiptFile = id => `${prefix(id)}/learning.json`;
+function validatePortableReceipt(record, files) {
+  if (record.schemaVersion === 1) return; // old receipts remain readable, without invented provenance
+  const provenance = validateSkillSourceProvenance(record.source?.provenance);
+  if (provenance.digest !== record.source.acceptedDigest) fail('source provenance names another accepted snapshot');
+  for (const location of provenance.locations) {
+    const capture = files.get(`${prefix(record.libraryId)}/sources/${provenance.digest.slice(7)}/${location.path}`);
+    if (!capture || hash(capture.bytes) !== location.sha256 || capture.mode !== location.mode) fail('source provenance does not match retained accepted bytes');
+  }
+}
+
 function current(id, options) {
   validateAgentId(id);
   const history = revisionHistory(id, options);
@@ -84,7 +95,8 @@ function priorLearning(id, libraryId, history, options) {
     try {
       if (entry.bytes.length > 256 * 1024) fail('stored learning receipt exceeds the supported bound');
       const record = JSON.parse(entry.bytes.toString('utf8'));
-      if (record.schemaVersion !== 1 || record.libraryId !== libraryId || record.agentId !== id || !Array.isArray(record.pieces) || record.pieces.length > 128) fail('invalid stored learning receipt');
+      if (![1, 2].includes(record.schemaVersion) || record.libraryId !== libraryId || record.agentId !== id || !Array.isArray(record.pieces) || record.pieces.length > 128) fail('invalid stored learning receipt');
+      validatePortableReceipt(record, files);
       records.push({ ...record, revision: revision.revision, pieces: record.pieces.map(piece => {
         if (piece.status !== 'completed') return piece;
         relative(piece.destination);
@@ -103,6 +115,7 @@ export function skillLearningPacket(libraryId, agentId, options = {}) {
     accepted: { entrypoint: path.join(accepted.record.snapshot, 'payload/SKILL.md'), digest: accepted.digest, files: accepted.files, dependencies: accepted.dependencies },
     local: { entrypoint: path.join(local.record.path, 'SKILL.md'), digest: local.digest, files: local.files, dependencies: local.dependencies },
     ...(accepted.record.repository ? { repository: accepted.record.repository } : {}),
+    sourceProvenance: projectSkillSourceProvenance(accepted.captureMetadata, []),
     coverage: accepted.record.coverage, previousLearning: priorLearning(agentId, libraryId, history, options),
     knowledge: { status: 'unknown', verification: 'no-capability-adapter', provisioned: false },
     guidance: [
@@ -146,7 +159,8 @@ export async function proposeSkillLearning(libraryId, agentId, staging, outcome,
     if (!prior || prior.bytes.length > 256 * 1024) fail('learning provenance destination contains unmanaged material');
     let record;
     try { record = JSON.parse(prior.bytes.toString('utf8')); } catch { fail('existing learning receipt is invalid'); }
-    if (record?.schemaVersion !== 1 || record.libraryId !== libraryId || record.agentId !== agentId) fail('existing learning receipt belongs to another import or soul');
+    if (![1, 2].includes(record?.schemaVersion) || record.libraryId !== libraryId || record.agentId !== agentId) fail('existing learning receipt belongs to another import or soul');
+    validatePortableReceipt(record, files);
     if (!Array.isArray(record.captures)) fail('learning provenance destination contains unmanaged material');
     const managed = new Map([[receiptFile(libraryId), prior]]), directories = new Set();
     for (const capture of record.captures) {
@@ -189,8 +203,12 @@ export async function proposeSkillLearning(libraryId, agentId, staging, outcome,
     if (!captured.has(entry.path) || (material === accepted && material.digest === source.digest)) continue;
     captures.push({ ...entry, path: `${prefix(libraryId)}/sources/${material.digest.slice(7)}/${entry.path}` });
   }
-  const record = { schemaVersion: 1, libraryId, agentId, parentRevision: head.revision, recordedAt: now().toISOString(),
-    source: { ...outcome.source, acceptedDigest: accepted.digest, ...(accepted.record.repository ? { repository: accepted.record.repository } : {}) }, pieces, knowledge,
+  const acceptedPrefix = `${prefix(libraryId)}/sources/${accepted.digest.slice(7)}/`;
+  const provenance = projectSkillSourceProvenance(accepted.captureMetadata,
+    captures.filter(entry => entry.path.startsWith(acceptedPrefix)).map(entry => entry.path.slice(acceptedPrefix.length)));
+  const record = { schemaVersion: 2, libraryId, agentId, parentRevision: head.revision, recordedAt: now().toISOString(),
+    source: { ...outcome.source, acceptedDigest: accepted.digest, provenance,
+      ...(provenance.repository ? { repository: provenance.repository } : {}) }, pieces, knowledge,
     captures: captures.map(entry => ({ path: entry.path, sha256: hash(entry.bytes), mode: entry.mode })),
     dependencies: source.dependencies.filter(edge => captured.has(edge.from)), acceptedDependencies: accepted.dependencies.filter(edge => captured.has(edge.from)),
     destinationReferences: 'agent-review-required', universalRetrieval: false };
