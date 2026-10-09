@@ -65,8 +65,16 @@ function soulStatus(status, agentId) {
   const runs = new Set([...flights.map(run => run.runId), ...(registration?.lastRun ? [registration.lastRun.runId] : [])]);
   const receipts = Object.fromEntries(Object.entries(status).filter(([key, value]) => /^[a-z][A-Za-z]*Receipts$/.test(key) && Array.isArray(value))
     .map(([key, value]) => [key, value.filter(receipt => runs.has(receipt?.runId))]));
+  // Service lifecycle and journal budget identify no soul; diagnostics do, so
+  // only this soul's rows remain (a capture failure has no other record).
+  const diagnostics = status.diagnostics && typeof status.diagnostics === 'object'
+    ? { scope: status.diagnostics.scope ?? null,
+      inputFailures: (status.diagnostics.inputFailures ?? []).filter(row => row?.agentId === agentId) }
+    : null;
   return { schemaVersion: 1, agentId, available: status.available === true, executorConfigured: status.executorConfigured === true,
-    fault: status.fault ?? null, maintenanceCoverage: 'unverified', registration, flights, inputReceipts: [], ...receipts };
+    started: status.started ?? null, closing: status.closing ?? null, orphanRecovery: status.orphanRecovery ?? null,
+    fault: status.fault ?? null, maintenanceCoverage: 'unverified', journal: status.journal ?? null, diagnostics,
+    registration, flights, inputReceipts: [], ...receipts };
 }
 const eventSoul = event => event?.registration?.agentId ?? event?.run?.agentId ?? null;
 

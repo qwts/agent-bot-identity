@@ -28,7 +28,12 @@ const STATUS = {
   flights: [run(ID, RUN), run(OTHER, OTHER_RUN)],
   inputReceipts: [{ runId: RUN, journalRevision: 3, startingRevision: HASH, digest: HASH }, { runId: OTHER_RUN, journalRevision: 4, startingRevision: HASH, digest: HASH }],
   outcomeReceipts: [{ runId: OTHER_RUN, journalRevision: 5, startingRevision: HASH, digest: HASH }],
-  fault: null, journal: { revision: 4 },
+  fault: null, orphanRecovery: 'quarantine-only',
+  journal: { revision: 99999, transactions: 99999, capacity: 100000, full: false, temporaryFiles: 0, automaticPruning: false, maxRecordBytes: 8388608 },
+  diagnostics: { scope: 'this-daemon', inputFailures: [
+    { agentId: ID, runId: RUN, code: 'dream-input-drift', at: '2026-10-09T00:00:00.000Z' },
+    { agentId: OTHER, runId: OTHER_RUN, code: 'dream-input-limit', at: '2026-10-09T00:00:00.000Z' },
+  ] },
 };
 
 function fixture(t, { available = true, markers = [], control = null } = {}) {
@@ -78,6 +83,10 @@ test('status and history disclose only the named soul and always report unverifi
   assert.deepEqual(status.inputReceipts.map(item => item.runId), [RUN]);
   assert.deepEqual(status.outcomeReceipts, [], 'receipt kinds from later state versions are filtered too');
   assert.equal(status.registration.intervalHours, 24);
+  assert.deepEqual([status.started, status.closing, status.orphanRecovery], [true, false, 'quarantine-only']);
+  assert.deepEqual(status.journal, STATUS.journal, 'journal budget and no-pruning facts stay visible');
+  assert.deepEqual(status.diagnostics, { scope: 'this-daemon', inputFailures: [STATUS.diagnostics.inputFailures[0]] },
+    "this soul's capture failure is kept; another soul's is not");
   assert.equal(JSON.stringify(status).includes(OTHER), false, 'other souls are not disclosed');
 
   assert.equal(await f.invoke(['--soul', ID, '--history', '--after-revision', '1', '--limit', '2']), 0);
@@ -148,7 +157,7 @@ test('the CLI reaches the real owner-gated daemon routes through the daemon clie
       return { method: 'principal' };
     } });
   server.dream = {
-    status: () => structuredClone(STATUS),
+    status: () => ({ ...structuredClone(STATUS), closing: true }),
     history: query => { requests.push(['history', query]); return { records: [], nextRevision: 4, remaining: 0 }; },
     control: request => { requests.push(['control', request.action, request.agentId]); return { agentId: ID, runId: RUN, status: 'started' }; },
   };
@@ -162,7 +171,10 @@ test('the CLI reaches the real owner-gated daemon routes through the daemon clie
     stdout: { write: text => out.push(text) }, stderr: { write: text => err.push(text) } });
 
   assert.equal(await cli(['--soul', 'bill', '--status', '--json']), 0);
-  assert.deepEqual(JSON.parse(out.at(-1)).flights.map(item => item.runId), [RUN]);
+  const viaHttp = JSON.parse(out.at(-1));
+  assert.deepEqual(viaHttp.flights.map(item => item.runId), [RUN]);
+  assert.deepEqual([viaHttp.available, viaHttp.closing, viaHttp.journal.transactions], [true, true, 99999]);
+  assert.deepEqual(viaHttp.diagnostics.inputFailures.map(row => row.code), ['dream-input-drift']);
   assert.equal(await cli(['--soul', 'bill', '--history', '--limit', '5', '--json']), 0);
   assert.deepEqual(requests.at(-1), ['history', { limit: 5 }]);
 

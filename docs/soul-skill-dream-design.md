@@ -140,7 +140,10 @@ exits 1. Daemon error responses forward `dream-*` codes as well as `soul-paused`
 and owner credential codes, so `--json` failures name them. Other failures
 report the daemon's message under `dream-failed`. Status filters every
 run-keyed `*Receipts` list, so receipt kinds from later state versions stay
-per-soul without a client change.
+per-soul without a client change. It keeps the service lifecycle (`started`,
+`closing`, orphan recovery), the journal's capacity and no-pruning facts, and
+this soul's input-preparation diagnostics, because a capture failure has no
+other record. Other souls' diagnostic rows are dropped.
 
 At most one dream turn per soul may be unsettled. The scheduler defers a due
 run while the soul is paused or the shared registry reports another active
