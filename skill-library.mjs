@@ -8,6 +8,8 @@ import { canonicalJson } from './canonical-json.mjs';
 import { skillField, validateSkill } from './soul-package.mjs';
 import { diffSkillManifest } from './skill-manifest.mjs';
 import { skillLibraryRoot } from './skill-library-paths.mjs';
+import { acquireRemoteSkill, skillSourceUrl, REMOTE_SKILL_LIMITS } from './skill-remote.mjs';
+import { inlineMarkdownLinks } from './skill-references.mjs';
 
 export const SKILL_LIBRARY_LIMITS = Object.freeze({ files: 1000, entries: 4000, bytes: 32 * 1024 * 1024, fileBytes: 8 * 1024 * 1024, entryBytes: 64 * 1024, depth: 16, references: 1000 });
 function boundedLimits(limits = {}) {
@@ -93,17 +95,25 @@ function inventory(root, { limits = SKILL_LIBRARY_LIMITS, allowFileLinks = false
   walk(root, '', 0);
   return { entries, excluded, materialized, ...manifest(entries) };
 }
-function dependencies(entries, id, limit) {
+function dependencies(entries, id, limit, locations = []) {
   const paths = new Set(entries.map(entry => entry.path));
   const edges = [];
+  const retainedReference = (raw, from) => {
+    try {
+      const base = locations.find(item => item.path === from)?.resolvedUrl;
+      if (!base) return null;
+      const url = skillSourceUrl(new URL(raw, base).href);
+      const match = locations.find(item => [item.url, item.resolvedUrl].includes(url) && paths.has(item.path));
+      return match ? { source: url, target: match.path, status: 'captured' } : null;
+    } catch { return null; }
+  };
   for (const entry of entries.filter(entry => entry.path.toLowerCase().endsWith('.md'))) {
     let text;
     try { text = decode(entry.bytes); } catch { edges.push({ owner: id, from: entry.path, status: 'unresolved', reason: 'non-utf8-markdown' }); continue; }
-    const links = /\[[^\]\n]*\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+[^)\n]*)?\)/g;
-    for (const match of text.matchAll(links)) {
+    for (const link of inlineMarkdownLinks(text)) {
       if (edges.length >= limit) { edges.push({ owner: id, from: entry.path, status: 'unresolved', reason: 'reference-limit' }); return edges; }
-      const raw = match[1] ?? match[2];
-      const edge = { owner: id, from: entry.path, line: text.slice(0, match.index).split('\n').length };
+      const raw = link.url;
+      const edge = { owner: id, from: entry.path, line: link.line };
       if (raw.startsWith('#')) { edges.push({ ...edge, status: 'external', reason: 'document-anchor' }); continue; }
       if (raw.includes('?') || /:\/\/[^/]*@/.test(raw)) { edges.push({ ...edge, status: 'unresolved', reason: 'sensitive-locator-withheld' }); continue; }
       if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) {
@@ -111,6 +121,8 @@ function dependencies(entries, id, limit) {
         try { url = new URL(raw); } catch { edges.push({ ...edge, status: 'unresolved', reason: 'invalid-reference' }); continue; }
         if (!['https:', 'http:'].includes(url.protocol)) { edges.push({ ...edge, status: 'external', reason: 'unsupported-reference-scheme' }); continue; }
         const instruction = /\.(?:md|markdown|txt)$/i.test(url.pathname);
+        const captured = locations.find(item => [item.url, item.resolvedUrl].includes(`${url.origin}${url.pathname}`) && paths.has(item.path));
+        if (captured) { edges.push({ ...edge, source: `${url.origin}${url.pathname}`, target: captured.path, status: 'captured' }); continue; }
         edges.push({ ...edge, source: `${url.origin}${url.pathname}`, status: instruction ? 'unresolved' : 'external', reason: instruction ? 'remote-capture-unsupported' : 'unclassified-remote-reference' });
         continue;
       }
@@ -119,8 +131,9 @@ function dependencies(entries, id, limit) {
         const decoded = decodeURIComponent(raw.split('#')[0]);
         if (path.posix.isAbsolute(decoded) || decoded.includes('\\')) throw new Error('absolute reference');
         target = path.posix.normalize(path.posix.join(path.posix.dirname(entry.path), decoded)); safePath(target); }
-      catch { edges.push({ ...edge, status: 'unresolved', reason: 'unsafe-reference' }); continue; }
-      edges.push({ ...edge, target, status: paths.has(target) ? 'captured' : 'unresolved', ...(paths.has(target) ? {} : { reason: 'outside-or-missing-file' }) });
+      catch { edges.push({ ...edge, ...(retainedReference(raw, entry.path) ?? { status: 'unresolved', reason: 'unsafe-reference' }) }); continue; }
+      const retained = !paths.has(target) && retainedReference(raw, entry.path);
+      edges.push({ ...edge, ...(retained || { target, status: paths.has(target) ? 'captured' : 'unresolved', ...(paths.has(target) ? {} : { reason: 'outside-or-missing-file' }) }) });
     }
   }
   // Mark cycles without following links or claiming arbitrary fetch coverage.
@@ -150,6 +163,25 @@ function acquire(input, id, options = {}) {
   const refs = dependencies(content.entries, id, boundedLimits(options.limits).references);
   return { ...content, name, source: { kind: 'local', path: realpathSync(root) }, dependencies: refs,
     coverage: { boundary: 'markdown-inline-file-links-v1', unresolved: refs.filter(edge => edge.status === 'unresolved').length, external: refs.filter(edge => edge.status === 'external').length, universalRetrieval: false } };
+}
+function remote(input) { return typeof input === 'string' && /^https?:/i.test(input); }
+async function acquireHttps(input, id, options) {
+  const local = boundedLimits(options.limits), remoteLimits = { ...options.remoteLimits };
+  // Validate remote overrides before applying any stricter local bounds.
+  for (const [key, value] of Object.entries(remoteLimits)) if (!Object.hasOwn(REMOTE_SKILL_LIMITS, key) || !Number.isSafeInteger(value) || value < 1 || value > REMOTE_SKILL_LIMITS[key]) fail('skill-limit-invalid', 'remote limits may only lower the documented positive bounds');
+  for (const key of ['files', 'bytes', 'fileBytes', 'depth', 'references']) remoteLimits[key] = Math.min(remoteLimits[key] ?? REMOTE_SKILL_LIMITS[key], local[key]);
+  const content = await acquireRemoteSkill(input, id, { ...options, remoteLimits });
+  const entry = content.entries.find(file => file.path === 'SKILL.md');
+  if (!entry || entry.bytes.length > local.entryBytes) fail('skill-entry-invalid', 'remote SKILL.md exceeds the entrypoint bound');
+  let name;
+  try { const front = decode(entry.bytes).match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1]; name = skillField(front ?? '', 'name'); validateSkill(entry.bytes, name); }
+  catch { fail('skill-entry-invalid', 'remote source must contain a valid SKILL.md entrypoint'); }
+  return { ...content, name, ...manifest(content.entries) };
+}
+function validSource(source) {
+  if (source?.kind === 'local') return path.isAbsolute(source.path ?? '');
+  if (source?.kind === 'https') { try { return skillSourceUrl(source.url) === source.url; } catch { return false; } }
+  return false;
 }
 function rootFor(options = {}, create = false) {
   const root = skillLibraryRoot(options), pending = [];
@@ -212,11 +244,15 @@ function validateManifest(value) {
 }
 function load(id, options) {
   const root = recordRoot(id, options), record = json(path.join(root, 'manifest.json'));
-  if (record.schemaVersion !== 1 || record.id !== id || !validName(record.name) || !DIGEST.test(record.accepted ?? '') || record.source?.kind !== 'local' || !path.isAbsolute(record.source.path ?? '')) fail('skill-record-invalid', 'invalid skill library record');
+  if (record.schemaVersion !== 1 || record.id !== id || !validName(record.name) || !DIGEST.test(record.accepted ?? '') || !validSource(record.source)) fail('skill-record-invalid', 'invalid skill library record');
   validateManifest(record.localBaseline);
   return { root, record };
 }
-function writeJson(file, value) { writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx' }); }
+function writeJson(file, value) {
+  const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+  if (bytes.length > 4 * 1024 * 1024) fail('skill-limit', 'skill metadata exceeds 4 MiB');
+  writeFileSync(file, bytes, { mode: 0o600, flag: 'wx' });
+}
 function writePayload(root, entries) {
   mkdirSync(root, { recursive: true, mode: 0o700 });
   for (const entry of entries) {
@@ -246,15 +282,21 @@ function readSnapshot(root, digest) {
   if (metadata.manifest.digest !== digest || content.digest !== digest) fail('skill-record-invalid', 'snapshot bytes do not match their manifest');
   const refs = metadata.dependencies;
   if (metadata.schemaVersion !== 1 || !UUID.test(metadata.owner ?? '') || !validName(metadata.name)
-    || metadata.source?.kind !== 'local' || !path.isAbsolute(metadata.source.path ?? '')
+    || !validSource(metadata.source)
     || !Array.isArray(refs) || refs.length > SKILL_LIBRARY_LIMITS.references + 1
     || refs.some(edge => !edge || edge.owner !== metadata.owner || !Object.hasOwn(content.files, edge.from ?? '')
       || !['captured', 'external', 'unresolved'].includes(edge.status)
       || (edge.status === 'captured' && !Object.hasOwn(content.files, edge.target ?? '')))
-    || metadata.coverage?.boundary !== 'markdown-inline-file-links-v1' || metadata.coverage.universalRetrieval !== false
+    || !['markdown-inline-file-links-v1', 'markdown-inline-https-instructions-v1'].includes(metadata.coverage?.boundary) || metadata.coverage.universalRetrieval !== false
     || metadata.coverage.unresolved !== refs.filter(edge => edge.status === 'unresolved').length
     || metadata.coverage.external !== refs.filter(edge => edge.status === 'external').length
     || !Array.isArray(metadata.excluded) || !Array.isArray(metadata.materialized)) fail('skill-record-invalid', 'invalid skill snapshot metadata');
+  if (metadata.source.kind === 'https' && (!Array.isArray(metadata.locations) || metadata.locations.length > SKILL_LIBRARY_LIMITS.references + 1
+    || metadata.locations.some(item => !Object.hasOwn(content.files, item.path ?? '') || !validSource({ kind: 'https', url: item.url }) || !validSource({ kind: 'https', url: item.resolvedUrl })))) fail('skill-record-invalid', 'invalid remote source provenance');
+  if (metadata.source.kind === 'https' && (!Array.isArray(metadata.hosts) || !metadata.hosts.length || metadata.hosts.length > 6006
+    || metadata.hosts.some(host => typeof host !== 'string' || !validSource({ kind: 'https', url: `https://${host}/` }) || new URL(`https://${host}/`).hostname !== host)
+    || new Set(metadata.hosts).size !== metadata.hosts.length
+    || metadata.locations.some(item => !metadata.hosts.includes(new URL(item.url).hostname) || !metadata.hosts.includes(new URL(item.resolvedUrl).hostname)))) fail('skill-record-invalid', 'invalid remote host provenance');
   try { validateSkill(content.entries.find(entry => entry.path === 'SKILL.md')?.bytes, metadata.name); }
   catch { fail('skill-record-invalid', 'invalid snapshot skill entrypoint'); }
   return metadata;
@@ -266,7 +308,8 @@ function snapshot(root, content, id, now) {
   try {
     writePayload(path.join(temp, 'payload'), content.entries);
     writeJson(path.join(temp, 'manifest.json'), { schemaVersion: 1, owner: id, name: content.name, manifest: { files: content.files, digest: content.digest }, source: content.source,
-      capturedAt: now().toISOString(), dependencies: content.dependencies, coverage: content.coverage, excluded: content.excluded, materialized: content.materialized });
+      capturedAt: now().toISOString(), dependencies: content.dependencies, coverage: content.coverage, excluded: content.excluded, materialized: content.materialized,
+      ...(content.locations ? { locations: content.locations, hosts: content.hosts } : {}) });
     mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
     freeze(temp);
     // macOS requires the moved directory itself to be writable at rename.
@@ -276,7 +319,14 @@ function snapshot(root, content, id, now) {
   } finally { removeStaging(temp); }
 }
 export function importSkill(input, { now = () => new Date(), ...options } = {}) {
-  const id = randomUUID(), content = acquire(input, id, options);
+  const id = randomUUID();
+  if (remote(input)) {
+    input = skillSourceUrl(input); // reject secret-bearing input before async I/O
+    return acquireHttps(input, id, options).then(content => publishImport(content, id, now, options));
+  }
+  return publishImport(acquire(input, id, options), id, now, options);
+}
+function publishImport(content, id, now, options) {
   const library = rootFor(options, true), staging = path.join(library, `.import-${id}`), target = path.join(library, id);
   try {
     mkdirSync(staging, { mode: 0o700 });
@@ -292,7 +342,8 @@ export function showSkill(id, options = {}) {
   const { root, record } = load(id, options), source = readSnapshot(root, record.accepted);
   validateManifest(source.manifest);
   if (source.owner !== id || source.name !== record.name || source.manifest.digest !== record.accepted) fail('skill-record-invalid', 'accepted snapshot does not match the record');
-  return { ...record, path: path.join(root, record.name), snapshot: snapshotPath(root, record.accepted), dependencies: source.dependencies, coverage: source.coverage, excluded: source.excluded, materialized: source.materialized };
+  return { ...record, path: path.join(root, record.name), snapshot: snapshotPath(root, record.accepted), dependencies: source.dependencies, coverage: source.coverage, excluded: source.excluded, materialized: source.materialized,
+    ...(source.locations ? { locations: source.locations, hosts: source.hosts } : {}) };
 }
 export function listSkills(options = {}) {
   const root = rootFor(options);
@@ -328,7 +379,8 @@ export function readSkillMaterial(id, { selection = 'accepted', expectedDigest, 
   if (expectedDigest !== undefined && expectedDigest !== content.digest) fail('skill-source-changed', 'selected skill digest changed; review it again');
   try { validateSkill(content.entries.find(entry => entry.path === 'SKILL.md')?.bytes, record.name); }
   catch { fail('skill-entry-invalid', 'selected material must keep a valid skill entrypoint and name'); }
-  return { record, selection, ...content, dependencies: dependencies(content.entries, id, boundedLimits(options.limits).references) };
+  return { record, selection, ...content, dependencies: selection === 'accepted' ? record.dependencies
+    : dependencies(content.entries, id, boundedLimits(options.limits).references, record.locations) };
 }
 function checkReceipt(root, result) {
   const checks = storedPath(root, '.checks');
@@ -359,11 +411,17 @@ function textDiffs(root, accepted, candidate, changes) {
 }
 export function checkSkill(id, { now = () => new Date(), ...options } = {}) {
   const { root, record } = load(id, options);
+  if (record.source.kind === 'https') return acquireHttps(record.source.url, id, options).then(
+    source => publishCheck(source), error => publishCheck(null, error));
+  return publishCheck();
+  function publishCheck(fetched, fetchError) {
   return withLock(path.join(root, '.check.lock'), 'skill source check', () => {
+    const fresh = load(id, options).record;
+    if (canonicalJson(fresh) !== canonicalJson(record)) fail('skill-source-changed', 'skill record changed during source acquisition; retry');
     const accepted = readSnapshot(root, record.accepted);
     const local = inventory(path.join(root, record.name), options);
     let source;
-    try { source = acquire(record.source.path, id, options); }
+    try { if (fetchError) throw fetchError; source = fetched ?? acquire(record.source.path, id, options); }
     catch (error) {
       return checkReceipt(root, { id, status: 'unavailable', accepted: record.accepted, reason: error.code ?? 'skill-source-unavailable', checkedAt: now().toISOString(), message: 'source could not be checked; accepted snapshot and local files are unchanged' });
     }
@@ -371,6 +429,8 @@ export function checkSkill(id, { now = () => new Date(), ...options } = {}) {
     const result = { id, status: source.digest === record.accepted ? 'unchanged' : 'changed', accepted: record.accepted, candidate: source.digest,
       candidatePath: snapshotPath(root, source.digest), candidateName: source.name, changes: diffSkillManifest(accepted.manifest, source), localAdaptations: diffSkillManifest(accepted.manifest, local), localDrift: diffSkillManifest(record.localBaseline, local), coverage: source.coverage, checkedAt: now().toISOString() };
     result.textDiffs = textDiffs(root, record.accepted, source.digest, result.changes);
+    if (source.locations) { result.locations = source.locations; result.hosts = source.hosts; result.dependencies = source.dependencies; }
     return checkReceipt(root, result);
   }, { keepLiveOwners: true });
+  }
 }

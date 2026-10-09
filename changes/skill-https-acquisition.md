@@ -1,0 +1,1 @@
+- Import explicit public HTTPS skill documents and bounded inline instruction dependencies with exact-byte snapshots and original/final URL provenance. Remote source checks retain changed candidates separately and preserve accepted/local files on failure; private destinations, credential-bearing URLs and unsafe redirects refuse (#603, #312).

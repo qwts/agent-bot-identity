@@ -6,7 +6,7 @@ import { skillLearningPacket, proposeSkillLearning, readLearningOutcome } from '
 import { currentAgentId } from '../agent-identity.mjs';
 import { revisionCommand } from '../soul-revisions.mjs';
 
-export const USAGE = `usage: agent-bot soul skill import PATH [--json]
+export const USAGE = `usage: agent-bot soul skill import PATH_OR_HTTPS_DOCUMENT [--json]
        agent-bot soul skill list [--json]
        agent-bot soul skill show UUID [--json]
        agent-bot soul skill verify UUID [--json]
@@ -14,8 +14,9 @@ export const USAGE = `usage: agent-bot soul skill import PATH [--json]
        agent-bot soul skill learn UUID --soul AGENT_ID [--json]
        agent-bot soul skill learn UUID --soul AGENT_ID --package STAGING --outcome FILE --reason TEXT [--json]
 
-Local import preserves the selected skill directory and never executes it.
-Remote acquisition and harness installation are not implemented here.
+Local import preserves the selected directory; HTTPS import captures a skill
+document and supported inline instruction links. Neither executes content.
+Repository directory adapters and harness installation remain unimplemented.
 check never replaces accepted snapshots or local edits. learn supplies guidance;
 recording outcomes proposes reviewed adaptations through the soul revision policy.
 `;
@@ -57,9 +58,13 @@ export function main(argv = process.argv.slice(2), { stdout = process.stdout, st
   }
   try {
     const result = verb === 'list' ? { skills: listSkills(options) } : operations[verb](value, options);
-    stdout.write(`${JSON.stringify(result, null, flags.length ? 0 : 2)}\n`);
-    return result.verification === 'drifted' || result.status === 'unavailable' ? 1 : 0;
-  } catch (error) {
+    const finish = value => {
+      stdout.write(`${JSON.stringify(value, null, flags.length ? 0 : 2)}\n`);
+      return value.verification === 'drifted' || value.status === 'unavailable' ? 1 : 0;
+    };
+    return result?.then ? result.then(finish, failed) : finish(result);
+  } catch (error) { return failed(error); }
+  function failed(error) {
     const failure = { code: error.code ?? 'skill-library-failed', message: error.message };
     if (flags.length) stdout.write(`${JSON.stringify({ error: failure })}\n`);
     else stderr.write(`agent-bot soul skill: ${failure.code}: ${failure.message}\n`);
