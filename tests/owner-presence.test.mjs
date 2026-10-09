@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { assertOwnerAction, ownerActionSummary, presenceOrConsent } from '../owner-action.mjs';
 import { actionDigest, keydPresence, pinnedPresenceKey, presencePinPath, verifyPresence } from '../owner-presence.mjs';
 
@@ -75,6 +75,18 @@ test('no keyd, an unsigned keyd or a malformed answer pins nothing', (t) => {
     run: () => assert.fail('an unsigned binary is never run') }), null);
   assert.equal(pinnedPresenceKey({ env, record: { bin: '/x/agent-bot-keyd' }, verifyBinary: () => {}, run: () => 'not a key' }), null);
   assert.throws(() => readFileSync(presencePinPath({ env })), { code: 'ENOENT' });
+});
+
+test('a corrupt pin is replaced from the binary and left owner-only', (t) => {
+  const { env } = home(t);
+  const key = presenceKey();
+  const file = presencePinPath({ env });
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, 'not a key\n', { mode: 0o644 });
+  assert.equal(pinnedPresenceKey({ env, record: { bin: '/x/agent-bot-keyd' }, verifyBinary: () => {},
+    run: () => `${key.raw}\n` }), key.raw);
+  assert.equal(readFileSync(file, 'utf8'), `${key.raw}\n`);
+  assert.equal(statSync(file).mode & 0o777, 0o600);
 });
 
 test('keydPresence asks keyd with the action and a fresh nonce, and checks the answer', async (t) => {
