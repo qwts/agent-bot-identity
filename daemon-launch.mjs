@@ -7,7 +7,7 @@ import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { validateModelId } from './soul-model.mjs';
 import { soulCommsSetting } from './soul-package.mjs';
 import { assertSoulUnpaused, displayName, normalizeLaunchBrief } from './agent-population.mjs';
-import { createTurnRegistry } from './wake-plane.mjs';
+import { createTurnRegistry } from './turn-registry.mjs';
 import { sandboxLaunchProblem } from './sandbox.mjs';
 
 // A launch's comms setting: the soul's own soul.json (a spawned instance

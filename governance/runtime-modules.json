@@ -214,6 +214,7 @@
     "task-turns.mjs": "comms",
     "team-start.mjs": "soul",
     "telegram-adapter.mjs": "host",
+    "turn-registry.mjs": "soul",
     "uninstalled-identity-hook.mjs": "identity",
     "update.mjs": "cli",
     "vouch.mjs": "identity",
@@ -249,7 +250,6 @@
   "baseline": [
     "agent-backfill.mjs -> agent-population.mjs",
     "approval-action.mjs -> agent-population.mjs",
-    "daemon-launch.mjs -> wake-plane.mjs",
     "identity-apps.mjs -> agent-population.mjs",
     "identity-apps.mjs -> soul-package.mjs",
     "soul-credentials.mjs -> agent-population.mjs",
