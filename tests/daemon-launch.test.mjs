@@ -723,15 +723,27 @@ test('a harness the daemon cannot start is refused before a package spawn mints 
   const spawns = [];
   const f = fixture(t, {
     spawnPackage: (request) => { spawns.push(request); return { id: agentId }; },
-    harnessProblem: (harness) => (harness === 'kiro' ? 'agent-bot has no such harness' : harness === 'muse' ? 'it is disabled in agent-bot' : null),
+    harnessProblem: (harness) => (harness === 'kiro' ? { code: 'harness-unknown', message: 'agent-bot has no such harness' }
+      : harness === 'muse' ? { code: 'harness-disabled', message: 'it is disabled in agent-bot' }
+        : harness === 'codex' ? { code: 'harness-tool-missing', message: 'the `codex` command is not on this host\'s PATH (/usr/bin)' } : null),
   });
   await f.handler(event, f.ports);
   assert.equal(f.reports[0].status, 'launched', 'a harness without a problem launches as before');
   await f.handler({ ...event, requestId: 'r-kiro', soul: undefined, package: '/pkg', harness: 'kiro' }, f.ports);
-  assert.deepEqual(f.reports[1], { requestId: 'r-kiro', status: 'failed', agentId: null,
-    detail: 'cannot launch on harness kiro: agent-bot has no such harness; a harness agent-bot cannot start joins from its own session with `agent-bot join`' });
+  assert.deepEqual(f.reports[1], { requestId: 'r-kiro', status: 'failed', agentId: null, code: 'harness-unknown',
+    detail: 'harness-unknown: cannot launch on harness kiro: agent-bot has no such harness; a harness agent-bot cannot start joins from its own session with `agent-bot join`' });
   await f.handler({ ...event, requestId: 'r-muse', harness: 'muse' }, f.ports);
-  assert.deepEqual(f.reports[2], { requestId: 'r-muse', status: 'failed', agentId: null, detail: 'cannot launch on harness muse: it is disabled in agent-bot' });
+  assert.deepEqual(f.reports[2], { requestId: 'r-muse', status: 'failed', agentId: null, code: 'harness-disabled', detail: 'harness-disabled: cannot launch on harness muse: it is disabled in agent-bot' });
+  await f.handler({ ...event, requestId: 'r-codex', harness: 'codex' }, f.ports);
+  assert.equal(f.reports[3].code, 'harness-tool-missing');
+  assert.equal(f.reports[3].detail, 'harness-tool-missing: cannot launch on harness codex: the `codex` command is not on this host\'s PATH (/usr/bin)');
+  const journal = JSON.parse(readFileSync(f.options.file));
+  assert.deepEqual(['r-kiro', 'r-muse', 'r-codex'].map((id) => journal.find((row) => row.requestId === id).code),
+    ['harness-unknown', 'harness-disabled', 'harness-tool-missing'], 'the journal keeps each stable code');
+  // A port that still answers a bare message refuses uncoded, as before.
+  const legacy = fixture(t, { harnessProblem: () => 'agent-bot has no such harness' });
+  await legacy.handler({ ...event, requestId: 'r-old', harness: 'kiro' }, legacy.ports);
+  assert.deepEqual(legacy.reports[0], { requestId: 'r-old', status: 'failed', agentId: null, detail: 'cannot launch on harness kiro: agent-bot has no such harness' });
   assert.deepEqual(spawns, [], 'nothing minted');
   assert.equal(f.calls.length, 1, 'no executor for a refused launch');
 });
