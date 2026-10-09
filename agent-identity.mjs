@@ -569,6 +569,17 @@ export function assignAgentApp(id, appSlug, { stateDir = stateDirectory(), now =
   }, { afterWrite });
 }
 
+// Deliberate onboarding may complete a previously hub-only identity using
+// configured resolution. Unlike owner assignment, it can never switch Apps.
+export function initializeAgentApp(id, appSlug, { stateDir = stateDirectory(), now = () => new Date(), afterWrite } = {}) {
+  return mutateIdentity(id, stateDir, now, (record) => {
+    if (record.status === 'retired') throw new Error('cannot initialize a retired soul');
+    if (record.github && record.github.appSlug !== appSlug) throw new Error('soul already has a different GitHub App');
+    record.github ??= { appSlug, credentialProvider: 'worktree-token' };
+    return record;
+  }, { afterWrite });
+}
+
 export function bindAgentTranscript(id, transcript, {
   stateDir = stateDirectory(),
   now = () => new Date(),

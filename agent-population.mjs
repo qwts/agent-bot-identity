@@ -638,8 +638,8 @@ export function backfillManagedSouls(ids, { file = populationFile() } = {}) {
   });
 }
 
-// Computer use is durable across daemon restarts and lifecycle upserts.
-// Called by the owner-gated App API while the identity mutation holds its lock.
+// Called by owner assignment or initial onboarding while the identity
+// mutation holds its lock; synchronize the census in the same transaction.
 export function setSoulApp(id, app, { file = populationFile() } = {}) {
   const target = agentId(id), normalized = appSlug(app);
   return withLock(`${file}.lock`, 'population store', () => {

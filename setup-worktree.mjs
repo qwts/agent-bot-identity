@@ -309,7 +309,7 @@ async function configure({ identity, options, config,
     return;
   }
   const resolvedSlug = resolveAgentSlug({ explicit: options.slug ?? identity.github?.appSlug, config, detect: false });
-  if (!resolvedSlug) throw new Error('session soul has no GitHub App; disable github-identity or join a soul with an App');
+  if (!identity.github?.appSlug || !resolvedSlug) throw new Error('session soul has no GitHub App; re-run agent-bot join in this checkout to resolve its configured harness mapping');
   const slug = validateAppSlug(resolvedSlug);
   if (slug !== identity.github?.appSlug || (pinnedSlug() && pinnedSlug() !== slug)) {
     throw new Error('GitHub App does not match the session soul; use a new worktree');

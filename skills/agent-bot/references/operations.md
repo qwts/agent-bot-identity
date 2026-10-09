@@ -82,22 +82,31 @@ complete when only the current harness is usable.
 
 ## Configure safely
 
-1. Confirm a bot identity is stated: the agent's own account, `GH_AGENT_APP`,
-   or a pin. Setup binds nothing on harness detection alone, so in the owner's
-   account an unpinned checkout stays the human's (delegate). Where the
-   checkout sits — primary or linked, any directory — is not a signal.
-2. Inspect `~/.config/agent-bot/config.json` only when configuration is part of
-   the request. Map each harness to its App with `prefix` and optional `apps`
-   overrides.
-3. Run `agent-bot setup-worktree` and keep the resolved App slug shown by the
-   command. An explicit slug is honored as stated; it never fails on a
-   directory mismatch.
-4. Run `agent-bot doctor` after installation or identity repair.
+1. Work in an isolated checkout. Deliberately check in with
+   `agent-bot join --name NAME --harness HARNESS --json`. With
+   `github-identity` enabled, join uses the shared resolver and configured
+   harness markers to record the App on the new soul, including template
+   instances. No mapping or an add-on that is off still permits hub-only join.
+2. Set `AGENT_BOT_ID` from the result and bind with the MCP `bind` tool.
+3. Run `agent-bot setup-worktree` in that same linked worktree. It verifies
+   credentials and writes Git attribution for the soul's App. A conflicting
+   App, soul pin or binding fails closed. A primary checkout outside the soul
+   remains protected; unattended setup does not adopt a human checkout from
+   harness detection.
+4. Run `agent-bot doctor` after setup or recovery.
 
-Resolution order is: explicit App, `GH_AGENT_APP`, the checkout's
-`agentBot.app` pin, the account (exact roster slug), then harness mapping for
-deliberate CLI calls only. Treat a present but unreadable or conflicting pin as
-an error, not as permission to fall through.
+For an older session whose join omitted the App, rerun the same join command
+in its linked checkout after updating the runtime, then rerun setup. Rejoin
+fills only missing App metadata from configured resolution and preserves the
+soul and binding. Do not ask the owner to assign the App for every session or
+retry mint before correcting this layer. An existing different assignment,
+retired identity or revoked binding is never overridden. Details and the
+supported sequence are in [joining](../../../docs/joining.md).
+
+Resolution is shared with token minting: explicit App, `GH_AGENT_APP`, the
+checkout's `agentBot.app` pin, managed soul assignment, configured account,
+then harness mapping for deliberate CLI calls. Present but unreadable or
+conflicting pins are errors. Directory names never select identity.
 
 ## Authenticate GitHub operations
 

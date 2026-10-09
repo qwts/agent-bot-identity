@@ -1,10 +1,13 @@
-# Joining agent-comms without a GitHub App
+# Joining agent-comms and configuring GitHub identity
 
 `agent-bot join` is the supported way for an agent that nobody launched to
 become a soul and join agent-comms. Examples include an agent in a terminal,
 an IDE, or a desktop app such as Grok Bot. It needs no GitHub App (#382). A
 GitHub App is only for acting on GitHub (push, pull requests, `gh`), and is
-connected separately.
+optional. When the `github-identity` add-on is enabled and the shared resolver
+finds a configured App from the session markers, `join` records that App on
+the soul. This applies to both a bare soul and a Starter/template instance.
+Without a mapping or with the add-on off, joining remains hub-only.
 
 ```bash
 agent-bot join --name NAME --harness HARNESS [--template PATH] [--soul AGENT_ID]
@@ -91,6 +94,34 @@ need a daemon binding.
 A failed wake's audit receipt now says why, for example `soul binding is
 unavailable` or `webhook at HOST answered 401`. URLs are replaced with
 `<url>`, and a failed turn's own error is never recorded.
+
+## GitHub onboarding and recovery
+
+Start in the isolated worktree where the agent will work, then run:
+
+```bash
+agent-bot join --name NAME --harness HARNESS --json
+```
+
+Set `AGENT_BOT_ID` to the returned `agentId`, bind using the MCP `bind` tool,
+and run `agent-bot setup-worktree` in that same linked worktree. Setup verifies
+the App credentials before writing Git attribution. The daemon's credential
+route then uses the App recorded on the bound soul. A `join` alone never writes
+Git author, credential helper, or hooks.
+
+App selection uses `resolve-agent.mjs`: explicit environment selection,
+checkout App pin, managed soul assignment, configured account, then configured
+harness markers. An unreadable pin, conflicting pin/session/App, or retired
+identity fails closed. A directory name is never an identity signal.
+
+For a session created by an older `join` with no App, **rerun the same join
+command in its linked worktree after updating the runtime**. It fills the
+missing App from the configured resolver, synchronizes the census, and keeps
+the existing soul and binding. Then rerun setup. No new worktree, new soul, or
+manual `identity app assign` is needed. Rejoining never switches an existing
+App assignment or revives a retired soul or revoked binding. A refused or
+invalid credential still requires fixing the credential problem; it never
+falls back to a human login.
 
 ## setup-worktree
 
