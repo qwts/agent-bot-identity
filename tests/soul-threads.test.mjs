@@ -1,13 +1,14 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { createColdWaker } from '../cold-wake.mjs';
 import { createCommsRelay } from '../comms-relay.mjs';
 import { createReachState, handleMcpMessage, reachMcpServerEntry } from '../daemon-mcp.mjs';
+import { populationFile, upsertSoul } from '../agent-population.mjs';
 import {
   PENDING_REPLY_TTL_MS, claimSend, clip, formatThread, pendingReplies, recordThreadMessage, sentMarks, sentSince, stripNoReply, threadContext, threadsDirectory,
 } from '../soul-threads.mjs';
@@ -23,6 +24,50 @@ function scratch() {
 }
 
 const BILL = 'agent_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+test('a registered soul reads legacy context without mutation and retains it on the first contained write', () => {
+  const { root, options } = scratch();
+  const principal = 'principal_owner';
+  recordThreadMessage(BILL, { id: 'decision', dir: 'in', from: principal, body: 'Keep the amber deployment' }, options);
+  const legacy = path.join(threadsDirectory(options), `${BILL}.jsonl`);
+  const original = readFileSync(legacy);
+  const soulDir = path.join(root, 'billy.soul');
+  mkdirSync(path.join(soulDir, '.soul-state', 'tmp'), { recursive: true });
+  writeFileSync(path.join(soulDir, '.soul-state', 'agent-id'), `${BILL}\n`);
+  upsertSoul({ id: BILL, name: 'billy', soulDir, spacePath: path.join(soulDir, '.soul-state', 'space'), status: 'active' }, { file: populationFile(options) });
+  const contained = path.join(soulDir, '.soul-state', 'runs', 'comms-context.jsonl');
+  const next = { id: 'next', from: { principal } };
+  assert.equal(threadContext(BILL, next, options)[0].body, 'Keep the amber deployment');
+  assert.equal(existsSync(contained), false, 'reads never migrate');
+  // An interrupted staging write is disposable and must not be treated as
+  // published history or prevent a subsequent successful migration.
+  writeFileSync(path.join(soulDir, '.soul-state', 'tmp', 'comms-context-interrupted.tmp'), '{torn');
+  assert.equal(recordThreadMessage(BILL, { id: 'answer', dir: 'out', to: principal, body: 'Amber confirmed' }, options), true);
+  assert.deepEqual(readFileSync(legacy), original, 'the legacy journal is retained unchanged');
+  assert.equal(existsSync(contained), true);
+  assert.deepEqual(threadContext(BILL, next, options).map(x => x.id), ['decision', 'answer']);
+  rmSync(legacy);
+  assert.deepEqual(threadContext(BILL, next, options).map(x => x.id), ['decision', 'answer'], 'contained history stands alone');
+  const runs = path.dirname(contained), moved = path.join(root, 'outside-runs');
+  renameSync(runs, moved);
+  symlinkSync(moved, runs, 'dir');
+  assert.equal(recordThreadMessage(BILL, { id: 'linked', body: 'do not write' }, options), false);
+  assert.deepEqual(threadContext(BILL, next, options), [], 'a linked history directory is not contained');
+  rmSync(runs);
+  renameSync(moved, runs);
+  // The documented stopped-writer rollback restores legacy bytes and
+  // retires the contained file before the older engine can write again.
+  writeFileSync(legacy, readFileSync(contained), { mode: 0o600 });
+  renameSync(contained, path.join(root, 'contained-backup.jsonl'));
+  const oldOptions = { ...options, env: { ...options.env, AGENT_BOT_POPULATION_PATH: path.join(root, 'old-engine-population.json') } };
+  assert.equal(recordThreadMessage(BILL, { id: 'old-later', dir: 'out', to: principal, body: 'Decision after downgrade' }, oldOptions), true);
+  assert.equal(threadContext(BILL, next, options).at(-1).id, 'old-later');
+  assert.equal(recordThreadMessage(BILL, { id: 'upgraded', dir: 'out', to: principal, body: 'Upgrade resumed' }, options), true);
+  assert.deepEqual(threadContext(BILL, next, options).map(x => x.id), ['decision', 'answer', 'old-later', 'upgraded']);
+  writeFileSync(path.join(soulDir, '.soul-state', 'agent-id'), 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\n');
+  assert.equal(recordThreadMessage(BILL, { id: 'wrong', body: 'do not write' }, options), false);
+  assert.deepEqual(threadContext(BILL, next, options), [], 'a mismatched root cannot disclose history');
+});
 
 test('stripNoReply drops a final NO_REPLY line and never sends the token', () => {
   assert.equal(stripNoReply('NO_REPLY'), '');
@@ -218,8 +263,15 @@ test('clip keeps a body within its byte cap, marker included, without splitting 
 
 // The daemon's relay and each turn's reach server append to one journal from
 // different processes. A rewrite must never drop a line appended meanwhile.
-test('concurrent writers never lose an append to a rewrite', async () => {
-  const { options } = scratch();
+for (const contained of [false, true]) test(`concurrent ${contained ? 'contained' : 'legacy'} writers never lose an append to a rewrite`, async () => {
+  const { root, options } = scratch();
+  const soulDir = path.join(root, 'billy.soul');
+  if (contained) {
+    recordThreadMessage(BILL, { id: 'legacy-seed', body: 'Preserve across concurrent first writes' }, options);
+    mkdirSync(path.join(soulDir, '.soul-state'), { recursive: true });
+    writeFileSync(path.join(soulDir, '.soul-state', 'agent-id'), `${BILL}\n`);
+    upsertSoul({ id: BILL, name: 'billy', soulDir, spacePath: path.join(soulDir, '.soul-state', 'space'), status: 'active' }, { file: populationFile(options) });
+  }
   const moduleUrl = new URL('../soul-threads.mjs', import.meta.url).href;
   const writer = (n) => new Promise((resolve, reject) => {
     const script = `const { recordThreadMessage } = await import(${JSON.stringify(moduleUrl)});
@@ -234,12 +286,13 @@ test('concurrent writers never lose an append to a rewrite', async () => {
   await Promise.all([0, 1, 2, 3].map(writer));
   // `keep` is larger than everything written, so every rewrite keeps every
   // line: any id missing here was lost to a race.
-  const file = path.join(threadsDirectory(options), `${BILL}.jsonl`);
+  const file = contained ? path.join(soulDir, '.soul-state', 'runs', 'comms-context.jsonl') : path.join(threadsDirectory(options), `${BILL}.jsonl`);
   const ids = new Set(readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line).id));
   for (const n of [0, 1, 2, 3]) {
     for (let i = 0; i < 80; i += 1) assert.ok(ids.has(`w${n}_${i}`), `w${n}_${i} survived`);
   }
-  assert.equal(ids.size, 320);
+  assert.equal(ids.size, contained ? 321 : 320);
+  if (contained) assert.ok(ids.has('legacy-seed'));
 });
 
 test('the journal rewrites itself before it grows without bound', () => {

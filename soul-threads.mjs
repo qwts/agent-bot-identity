@@ -9,16 +9,18 @@
 // message's correlation, or its id when it has none) and by `replyTo`. A
 // principal composer can send neither: those follow-ups recover the bounded
 // conversation with that exact principal in this soul's journal (#596).
-// The journal is daemon state: 0700 directory, 0600 files, bounded, never read by
-// the agent itself, and its contents reach a prompt only as quoted data.
+// The journal is bounded durable history under a registered soul's root,
+// with legacy daemon storage for souls without folders. Its contents reach
+// a prompt only as quoted data, never as instructions or authority.
 
-import { createHash } from 'node:crypto';
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
 import { isAgentId, stateDirectory, validateAgentId, withLock } from './agent-identity.mjs';
+import { populationFile, showSoul } from './agent-population.mjs';
 
 export const NO_REPLY = 'NO_REPLY';
 
@@ -38,12 +40,62 @@ const SEND_CLAIM_STALE_MS = 2 * 60 * 1000;
 // Kinds of sent entry: a start_soul brief, and a cold wake's final answer.
 const ENTRY_KINDS = new Set(['brief', 'reply']);
 
-export function threadsDirectory({ env = process.env, home = homedir() } = {}) {
-  return path.join(stateDirectory({ env, home }), 'threads');
+export const THREAD_CONTEXT_RELATIVE = '.soul-state/runs/comms-context.jsonl';
+
+export function threadsDirectory({ env = process.env, home = homedir(), stateDir = stateDirectory({ env, home }) } = {}) {
+  return path.join(stateDir, 'threads');
 }
 
-function journalPath(agentId, options) {
+export function legacyThreadJournalPath(agentId, options) {
   return path.join(threadsDirectory(options), `${validateAgentId(agentId)}.jsonl`);
+}
+
+function regular(file, directory = false) {
+  try {
+    const stat = lstatSync(file);
+    if (directory ? !stat.isDirectory() : !stat.isFile()) throw new Error('thread history path is not a regular file or directory');
+    return true;
+  } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
+
+// The registry and matching marker select the soul's life, never the caller's
+// worktree or an inferred default root. A legacy soul without a registered
+// folder keeps its daemon journal until a folder is deliberately assigned.
+function journalPath(agentId, options) {
+  const legacy = legacyThreadJournalPath(agentId, options);
+  let soul;
+  try { soul = showSoul(agentId, { file: populationFile(options) }); }
+  catch (error) { if (/no population record/.test(error.message)) return legacy; throw error; }
+  if (!soul.soulDir) return legacy;
+  const state = path.join(soul.soulDir, '.soul-state');
+  if (!regular(state, true) || !regular(path.join(state, 'agent-id'))
+    || readFileSync(path.join(state, 'agent-id'), 'utf8').trim() !== agentId) {
+    throw new Error('thread history root has no matching soul marker');
+  }
+  regular(path.join(state, 'runs'), true);
+  const file = path.join(soul.soulDir, THREAD_CONTEXT_RELATIVE);
+  regular(file);
+  return file;
+}
+
+// Called only while writing, under the destination lock. Reads remain pure.
+// The source is retained; a crash before atomic publication leaves legacy
+// reads intact and only a disposable staging file for environment cleanup.
+function migrateJournal(agentId, file, options) {
+  const legacy = legacyThreadJournalPath(agentId, options);
+  if (file === legacy || regular(file) || !regular(legacy)) return;
+  withLock(`${legacy}.lock`, 'legacy thread journal', () => {
+    const bytes = readFileSync(legacy);
+    const temp = path.join(path.dirname(path.dirname(file)), 'tmp');
+    regular(temp, true);
+    mkdirSync(temp, { recursive: true, mode: 0o700 });
+    const staging = path.join(temp, `comms-context-${randomUUID()}.tmp`);
+    try {
+      writeFileSync(staging, bytes, { flag: 'wx', mode: 0o600 });
+      if (!readFileSync(staging).equals(bytes)) throw new Error('thread history staging did not verify');
+      renameSync(staging, file);
+    } finally { rmSync(staging, { force: true }); }
+  });
 }
 
 // The key a turn's sends carry so replies find their way back to the request.
@@ -104,6 +156,7 @@ export function recordThreadMessage(agentId, entry, {
     // append, the size check and the rewrite are one locked step: a rewrite
     // never drops a line another process appended meanwhile.
     withLock(`${file}.lock`, 'thread journal', () => {
+      migrateJournal(agentId, file, { env, home });
       appendFileSync(file, `${line}\n`, { mode: 0o600 });
       if (statSync(file).size > maxBytes) {
         const kept = readFileSync(file, 'utf8').split('\n').filter(Boolean).slice(-keep);
@@ -122,8 +175,9 @@ export function recordThreadMessage(agentId, entry, {
 function readJournal(agentId, options) {
   let text;
   try {
-    const file = journalPath(agentId, options);
-    if (!existsSync(file)) return [];
+    let file = journalPath(agentId, options);
+    if (!existsSync(file)) file = legacyThreadJournalPath(agentId, options);
+    if (!regular(file)) return [];
     text = readFileSync(file, 'utf8');
   } catch { return []; }
   const entries = [];
@@ -284,9 +338,11 @@ export function claimSend(agentId, { to, correlation, now = new Date(), ttlMs } 
   const check = () => pendingReplies(agentId, { correlation, now, ttlMs }, options).find((entry) => sameAddress(entry.to, to));
   try {
     const file = journalPath(agentId, options);
-    const claims = path.join(path.dirname(file), `${validateAgentId(agentId)}.sending`);
+    // In-flight sends are transient daemon state, not portable life records.
+    const claims = path.join(threadsDirectory(options), `${validateAgentId(agentId)}.sending`);
     const claim = path.join(claims, createHash('sha256').update(`${correlation}\n${peer}`).digest('hex'));
     mkdirSync(claims, { recursive: true, mode: 0o700 });
+    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     return withLock(`${file}.lock`, 'thread journal', () => {
       const waiting = check();
       if (waiting) return { waiting };

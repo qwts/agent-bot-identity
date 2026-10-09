@@ -17,6 +17,7 @@ import { readMigrationStep } from '../soul-migration-journal.mjs';
 import { PACKAGE_IGNORE_LIST, computePackageRevision } from '../soul-package.mjs';
 import { adoptSoulPackage, revisionHistory } from '../soul-revisions.mjs';
 import { INSTALL_STAMP } from '../soul-runtimes.mjs';
+import { recordThreadMessage, threadContext } from '../soul-threads.mjs';
 
 const ID = 'agent_12345678-1234-4234-8234-123456789abc';
 const SECRET = 'NEVER-IN-THE-ARCHIVE';
@@ -413,6 +414,26 @@ test('import round-trip on another host keeps the Agent ID and restores the life
   });
   assert.equal(h.gates.length, 1, 'a refused import asks nobody');
   assert.deepEqual(readdirSync(h.env.AGENT_BOT_SOULS_HOME).sort(), ['billy.soul'], 'no staging is left behind');
+});
+
+for (const legacy of [false, true]) test(`life transfer carries ${legacy ? 'legacy' : 'contained'} cold context for this soul only (#583, #596)`, async (t) => {
+  const f = fixture(t);
+  const principal = 'principal_owner';
+  const teammate = 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const options = legacy ? { ...f.options, env: { ...f.env, AGENT_BOT_POPULATION_PATH: path.join(f.home, 'unregistered-population.json') } } : f.options;
+  recordThreadMessage(ID, { id: 'decision', dir: 'in', from: principal, body: 'Choose amber deployment' }, options);
+  recordThreadMessage(ID, { id: 'fact', dir: 'in', from: `acct/${teammate}`, correlation: 'decision', body: 'Teammate measured 37 ms' }, options);
+  recordThreadMessage(teammate, { id: 'private', dir: 'in', from: principal, body: 'FOREIGN_SOUL_PRIVATE_DECISION' }, f.options);
+  const next = { id: 'next', from: { principal } };
+  assert.deepEqual(threadContext(ID, next, f.options).map(x => x.body), ['Choose amber deployment', 'Teammate measured 37 ms']);
+  await exportIt(f);
+  assert.equal(existsSync(path.join(f.dir, '.soul-state', 'runs', 'comms-context.jsonl')), !legacy, 'export never migrates the live journal');
+  assert.equal(gunzipSync(readFileSync(f.archive)).includes(Buffer.from('FOREIGN_SOUL_PRIVATE_DECISION')), false);
+  const h = host(t);
+  const { result } = await importIt(h, f.archive);
+  assert.equal(result.identity.agentId, ID);
+  assert.deepEqual(threadContext(ID, next, { env: h.env, home: h.home }).map(x => x.body), ['Choose amber deployment', 'Teammate measured 37 ms']);
+  assert.deepEqual(threadContext(teammate, next, { env: h.env, home: h.home }), []);
 });
 
 test('--replace moves the active root aside (never deletes) once the soul is stopped and the owner agreed', async (t) => {
