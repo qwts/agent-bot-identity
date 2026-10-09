@@ -33,3 +33,4 @@ supersede them instead.
 | [ADR-0332](ADR-0332-souls-are-the-agents-territory.md) | Souls are the agent's territory | Accepted |
 | [ADR-0583](ADR-0583-the-soul-root-owns-the-environment.md) | The soul root owns the environment | Accepted |
 | [ADR-0603](ADR-0603-imported-skills-keep-local-snapshots-and-upstream-provenance.md) | Soul skills have distinct import, install, learn, and dream operations | Accepted |
+| [ADR-0645](ADR-0645-one-runtime-repository-four-owned-modules.md) | One runtime repository, four owned modules, contracts before moves | Proposed |
