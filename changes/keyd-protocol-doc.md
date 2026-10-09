@@ -1,0 +1,1 @@
+- New [keyd protocol](docs/keyd-protocol.md) page records the current keyd grant, owner-presence and key-pinning behaviour with an invariant-to-test matrix, and lists the open owner decisions (#594).

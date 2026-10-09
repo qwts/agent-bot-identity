@@ -99,6 +99,20 @@ test('a grant carries exactly the fields keyd accepts, for 60 seconds, signed by
   assert.equal(statSync(vouchStateDir({ env, home })).isDirectory(), true);
 });
 
+// The bytes keyd checks (#594): the signature covers the payload segment as
+// sent, the nonce is 18 random bytes, and absent targets are explicit nulls.
+test('a grant signs its payload segment, with an 18-byte nonce and null for absent targets', () => {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const grant = signKeydGrant({ agentId: AGENT, app: SLUG, tool: 'credential', apiBase: 'https://api.github.com', installationId: '' },
+    privateKey, () => new Date('2026-10-03T12:00:00.900Z'));
+  const { segment, signature, payload } = decodeGrant(grant);
+  assert.equal(grant.split('.').length, 3);
+  assert.ok(verify(null, Buffer.from(segment), publicKey, Buffer.from(signature, 'base64url')));
+  assert.equal(Buffer.from(payload.nonce, 'base64url').length, 18);
+  assert.deepEqual([payload.v, payload.installationId, payload.owner, payload.host], [1, null, null, null]);
+  assert.equal(payload.iat, Date.parse('2026-10-03T12:00:00Z') / 1000, 'whole seconds, rounded down');
+});
+
 test('the daemon mints for a keyd soul by calling credential with its own grant', async (t) => {
   const { env, home } = fixture(t);
   const calls = [];

@@ -5,7 +5,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { assertOwnerAction, ownerActionSummary, presenceOrConsent } from '../owner-action.mjs';
-import { actionDigest, keydPresence, pinnedPresenceKey, presencePinPath, verifyPresence } from '../owner-presence.mjs';
+import {
+  DEVELOPER_ID_REQUIREMENT, PRESENCE_AUDIENCE, PRESENCE_UNAVAILABLE_RPC, actionDigest, keydPresence, pinnedPresenceKey,
+  presencePinPath, verifyPresence,
+} from '../owner-presence.mjs';
 
 const ID = 'agent_121b5b35-0000-4000-8000-000000000000';
 const NOW = Date.parse('2026-10-03T22:00:00Z');
@@ -53,6 +56,37 @@ test('an assertion verifies only for its key, action, nonce and time', () => {
   refuse(undefined);
 });
 
+// The verifier's bounds, separate from keyd's own issuing lifetime (#594): a
+// declared lifetime of at most 120 s, and 30 s of clock skew on either side.
+test('an assertion is accepted for up to 120 s of lifetime and 30 s of skew, and no more', () => {
+  const key = presenceKey();
+  const action = `turn agent comms off for Bill (${ID})`;
+  const at = (token, now) => verifyPresence(token, { key: key.raw, action, nonce: NONCE, now });
+  const accepts = (overrides, now = NOW) => assert.equal(at(key.assertion(action, overrides), now).kind, 'presence');
+  const refuses = (overrides, now = NOW) => assert.throws(() => at(key.assertion(action, overrides), now), { code: 'presence-invalid' });
+  accepts({ exp: SECONDS + 120 });
+  refuses({ exp: SECONDS + 121 });
+  refuses({ exp: SECONDS });
+  refuses({ exp: SECONDS - 1 });
+  // Through exp + 30 s, not a second later.
+  accepts({}, (SECONDS + 60 + 30) * 1000);
+  refuses({}, (SECONDS + 60 + 31) * 1000);
+  // Issued up to 30 s in the verifier's future, not a second more.
+  accepts({ iat: SECONDS + 30, exp: SECONDS + 90 });
+  refuses({ iat: SECONDS + 31, exp: SECONDS + 91 });
+  refuses({ kind: 'grant' });
+  refuses({ v: 2 });
+  refuses({ iat: SECONDS + 0.5 });
+  refuses({ exp: String(SECONDS + 60) });
+});
+
+test('the presence contract constants keyd and agent-bot share', () => {
+  assert.equal(PRESENCE_AUDIENCE, 'agent-bot-owner');
+  assert.equal(PRESENCE_UNAVAILABLE_RPC, -32001);
+  // Any Developer ID Application leaf; no Team ID or identifier is named.
+  assert.equal(DEVELOPER_ID_REQUIREMENT, 'anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists');
+});
+
 test('the presence key is pinned from the signed binary, once, and never from the socket', (t) => {
   const { env } = home(t);
   const key = presenceKey();
@@ -87,6 +121,18 @@ test('a corrupt pin is replaced from the binary and left owner-only', (t) => {
     run: () => `${key.raw}\n` }), key.raw);
   assert.equal(readFileSync(file, 'utf8'), `${key.raw}\n`);
   assert.equal(statSync(file).mode & 0o777, 0o600);
+});
+
+test('a pin that does not parse as a key is pinned again from the signed binary', (t) => {
+  const { env } = home(t);
+  const key = presenceKey();
+  const file = presencePinPath({ env });
+  writeFileSync(file, 'not a key\n', { mode: 0o600 });
+  const runs = [];
+  assert.equal(pinnedPresenceKey({ env, record: { bin: '/x/agent-bot-keyd' },
+    verifyBinary: () => runs.push('verify'), run: () => { runs.push('run'); return key.raw; } }), key.raw);
+  assert.deepEqual(runs, ['verify', 'run']);
+  assert.equal(readFileSync(file, 'utf8'), `${key.raw}\n`);
 });
 
 test('keydPresence asks keyd with the action and a fresh nonce, and checks the answer', async (t) => {
