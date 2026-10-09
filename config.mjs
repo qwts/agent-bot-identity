@@ -36,7 +36,7 @@ import {
   PROFILE_HARNESSES,
   profileStatusForSlug,
   runtimeProfileInfo,
-} from './organization-profile.mjs';
+} from './organization-profile-schema.mjs';
 
 const DAEMON_PREFERENCES = new Set(['off', 'prefer', 'required']);
 const SCOPE_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
@@ -297,8 +297,8 @@ export function appLifecycleStatus(appSlug, config = loadConfig()) {
 }
 
 // Harness keys recognised in an App slug: the profile vocabulary is the one
-// list (organization-profile.mjs has no import cycle with this module, unlike
-// detect-harness.mjs). `vscode` is retained for the pre-copilot Apps that
+// list (organization-profile-schema.mjs is a shared leaf with no import cycle
+// with this module, unlike detect-harness.mjs). `vscode` is retained for the pre-copilot Apps that
 // still carry it.
 const SLUG_HARNESSES = PROFILE_HARNESSES;
 
