@@ -446,3 +446,41 @@ These tests demonstrate process-interruption recovery, not physical power-loss
 behavior. Node's `fsync` is not macOS `F_FULLFSYNC`; sudden power loss on macOS is
 not guaranteed, and filesystem/hardware durability still depends on the host.
 The production daemon integration must preserve this limitation explicitly.
+
+## Revision evidence
+
+`skill-dream-evidence.mjs` checks one journal reference (a `proposalId` or a
+`revision`) against what a run was delivered: the starting revision and each
+delivered source's path, full-content digest and truncation flag. It is
+read-only and bounded. The newest journal index is found by probing names, not
+by listing the directory. At most 256 newest records and 2 MiB are read, each a
+regular single-link file of at most 64 KiB, opened without following links and
+unchanged across the read. Both content-addressed packages are read with the
+dream package limits and must hash to their object names.
+
+A reference older than the scan window, or behind an unreadable record, reports
+`search-incomplete`. Only a whole-journal scan reports `reference-not-found`.
+The result reports the validated record fields (never journal reasons or
+approval text), whether its parent is the starting revision, both object states,
+the recomputed change set, whether a proposal's recorded diff matches it, which
+changed paths were not delivered, how delivered digests compare with the parent
+bytes, which changed sources were delivered truncated, and whether the record
+falls inside the run window when one is given.
+
+`verified-change` requires all of the following:
+- a soul-authored record whose parent is the starting revision;
+- both objects verified;
+- a non-empty change set within the bound and no recorded-diff mismatch;
+- every changed path delivered with a digest matching the parent bytes;
+- the run window, when supplied.
+
+A proposal's reported status (pending, approved or rejected) comes from newer
+records naming it inside the scan. It is informational, those records are only
+shape-checked, and it never affects the verdict. A new file is never a delivered source, so a change that adds one is not
+verified. Revision records carry no diff, so there is no cross-check for them;
+the hash-verified objects stand alone. Truncated delivery is reported but never
+blocks the verdict. A change is not proof that the full source was reviewed.
+Attribution is always `not-established`: the journal shows a change was
+recorded, not that a particular model turn read or produced it. This evidence
+may advance review coverage only for the verified changed paths. Delivery alone
+advances only the selection cursor.
