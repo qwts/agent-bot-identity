@@ -218,8 +218,9 @@ export function acpExecutorFor({
     const executor = createExecutor({
       harness,
       identity: { app, agentId },
-      // Read once per turn: a mode change applies to the next turn.
-      mode: modeFor(agentId),
+      // Read once per turn: a mode change applies to the next turn. The turn's
+      // harness and cwd select the repo and package layers (#379).
+      mode: modeFor(agentId, { harness, cwd }),
       model: modelFor(agentId),
       identityFor,
       getHarnessSession: (invocation) => interactionHarnessSession(invocation, { agentId, harness, store: interactionStore }),

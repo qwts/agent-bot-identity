@@ -93,7 +93,7 @@ Optional fields with a meaning:
 | `templateName` | Optional nonempty string on an instance: the template's `name` when it was spawned (`soul spawn` records it). |
 | `nameSource` | Optional, `template` or `user`, on an instance: whether the owner kept the template's name at spawn or chose one. The rename migration changes a `template` name and never a `user` one. |
 
-See [builder settings](soul-builder.md#settings-379) for a declaration, native mappings, and unsupported-setting reports. The owner’s launch-time `soul model` / GeniusBar selection takes precedence over the package model. Omitting both settings objects preserves existing behavior; unrelated unknown top-level fields remain allowed.
+See [builder settings](soul-builder.md#settings-379) for a declaration, native mappings, and unsupported-setting reports. The owner’s launch-time `soul model` / `soul mode` / GeniusBar selection takes precedence over the package; the full order, and the owner's decision before a loosening, are in [settings precedence](soul-builder.md#settings-precedence). Omitting both settings objects preserves existing behavior; unrelated unknown top-level fields remain allowed.
 
 GeniusBar's Customize dialog saves appearance through the existing
 `soul revision edit … --apply` path. The whole package, including `soul.json`,

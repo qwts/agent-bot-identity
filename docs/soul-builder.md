@@ -301,11 +301,6 @@ Claude's installed 2.1.290 settings schema describes `effortLevel` as
 key; it does not create a `reasoningEffort` key in Claude settings. Support is
 an adapter capability, independent of whether a particular model honors effort.
 
-**Launch-time model selection wins.** The per-soul model selected with
-`agent-bot soul model` or GeniusBar's model picker (GeniusBar #128) overrides
-the package's model at launch. This builder writes portable defaults only;
-it does not change `soul-model.mjs`, the daemon, or launch-time model state.
-
 Settings render independently of `comms`; turning comms off does not disable
 settings. Only declared, supported keys are written. Authored settings supplied
 through `authored` retain unrelated keys, nested permission entries, and MCP
@@ -390,6 +385,61 @@ did not render, allow before deny in declared order.
 Additional sandbox controls and other native settings are later slices; hooks
 are declared as files, below. Existing authored values for those keys are
 preserved during a merge.
+
+### Settings precedence
+
+The owner's order for every harness setting, highest first:
+
+1. **What the owner picks in GeniusBar when starting the agent.** GeniusBar's
+   mode and model pickers (GeniusBar #128 for the model) set
+   `agent-bot soul mode` and `agent-bot soul model`, both per soul. This wins over everything below.
+2. **repo:** the project's own harness files in the turn's working directory
+   (for example its `.claude/settings.json` or `.codex/config.toml`).
+3. **soul:** the package's `harness` / `harnesses` declaration, rendered by
+   this builder into the soul's home.
+4. **GeniusBar defaults**, such as the `safe` mode a soul starts in.
+5. **user**, then **global** (Application Support or another host-wide
+   location). These apply only when the owner explicitly chooses a user or
+   global runtime for the soul; they are never an implicit fallback.
+
+**Permissions only tighten on their own.** A layer may make the permission
+mode stricter than the layers below it without asking. A layer that would
+make it looser (a cloned repo or a package switching an agent to autopilot)
+needs the owner's decision; a direct action in the UI, such as picking
+Auto-Pilot in GeniusBar or running `agent-bot soul mode <soul> autopilot`
+through the owner gate, is that decision.
+
+What ships today for `permissionMode` on a daemon-run turn
+(`resolveSoulMode` in `soul-mode.mjs`, read once per turn):
+
+- An owner pick in `soul-modes.json` wins, in either direction.
+- Otherwise the repo layer, then the package's `permissionMode`, then `safe`.
+  The repo layer is the turn's working directory unless that is the soul's
+  own home, whose native files are the package's rendering. Only a small
+  regular file is read (no symlinks), and only the values this builder
+  renders count: Claude's
+  `permissions.defaultMode` (`default` or `plan` is safe, `bypassPermissions`
+  is autopilot) and Codex's root `approval_policy` (`on-request` or
+  `untrusted` is safe, `never` is autopilot). Any other value, another
+  harness, or an unreadable file is a layer that declares nothing.
+- A declared autopilot that nobody picked is a loosening. The daemon has no
+  prompt of its own, so it keeps the turn in safe mode, where every tool call
+  goes to the owner's approval queue, and logs
+  `permission-mode-loosening-needs-owner` with the soul and the layer. The
+  owner answers by picking a mode. A one-time Touch ID or password prompt for
+  the loosening itself is the next slice.
+
+A harness the owner opens directly in the soul's home reads the rendered
+files as they are: the same declared mode, without the daemon's check.
+`tests/harness-settings-parity.test.mjs` checks both paths for Claude and
+Codex. Under the daemon, Codex turns also stay in the ACP session mode
+`workspace-write` (`sessionMode` in `acp-registry.mjs`) whatever the mode, so
+every Codex approval reaches the daemon.
+
+For the model, the owner's `soul model` pick is sent on every daemon turn;
+without one, the harness keeps the model in the files it reads in the turn's
+working directory. Bringing model and reasoning effort under the full order
+is a later slice.
 
 ## The soul's MCP entry (#378)
 

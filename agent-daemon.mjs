@@ -96,7 +96,7 @@ import { soulEnvironment, userToolDirs } from './shell-path.mjs';
 export { daemonStatus, joinLaunchedSoul, leaveLaunchedSoul, soulEnvironment, userToolDirs };
 import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms-client.mjs';
 import { attachWakeEndpoint } from './agent-wake.mjs';
-import { soulMode } from './soul-mode.mjs';
+import { resolveSoulMode } from './soul-mode.mjs';
 import { createIdentityAppJobs, identityAppOperation, identityAppFailure, listIdentityApps } from './identity-apps.mjs';
 import { readSoulProfile } from './soul-profile.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
@@ -1378,6 +1378,20 @@ function populationOverride(env, home) {
 // setting, recorded as an edit when the soul has a revision chain. The
 // revision history cannot be unwritten, so it is appended last; an earlier
 // failure restores soul.json and the census comms.
+// The daemon's per-turn permission mode, under the settings precedence
+// (#379): the owner's pick, then the repo, then the soul package. A loosening
+// nobody picked keeps the stricter mode; its code goes to the daemon log, and
+// safe mode asks the owner for each tool call.
+export function daemonModeFor({ env = process.env, home = homedir(), config, log = (line) => process.stderr.write(`${line}\n`) } = {}) {
+  return (agentId, { harness = null, cwd = null } = {}) => {
+    let soulDir = null;
+    try { soulDir = soulDirectory(agentId, { env, home, config, file: populationFile({ env, home }), readOnly: true }); } catch { /* no census row: no package layer */ }
+    const resolved = resolveSoulMode(agentId, { harness, cwd, soulDir, env, home });
+    if (resolved.code) log(`agent-bot daemon: ${resolved.code}: ${agentId}: the ${resolved.source} declares ${resolved.declared}; running ${resolved.mode} until the owner picks a mode (agent-bot soul mode)`);
+    return resolved.mode;
+  };
+}
+
 export async function recordLaunchComms({ agentId, package: packagePath, comms, brief, principal = null }, {
   env, home, config, revisions = { history: revisionHistory, edit: editSoulRevision },
 } = {}) {
@@ -1542,7 +1556,7 @@ export async function runDaemon({
       policy: setup?.policy ?? { version: 1, rules: [], fallback: 'deny' },
       baseEnv: harnessEnv,
       interactionStore: { env, home },
-      modeFor: (agentId) => soulMode(agentId, { env, home }),
+      modeFor: daemonModeFor({ env, home, config }),
       modelFor: (agentId) => soulModel(agentId, { env, home }).model,
       identityFor,
       onModels: (agentId, models) => recordSoulModels(agentId, models, { env, home }),
