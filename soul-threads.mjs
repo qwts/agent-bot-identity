@@ -6,8 +6,10 @@
 // message belongs to.
 //
 // Messages are linked by `correlation` (a turn's sends carry the woken
-// message's correlation, or its id when it has none) and by `replyTo`. The
-// journal is daemon state: 0700 directory, 0600 files, bounded, never read by
+// message's correlation, or its id when it has none) and by `replyTo`. A
+// principal composer can send neither: those follow-ups recover the bounded
+// conversation with that exact principal in this soul's journal (#596).
+// The journal is daemon state: 0700 directory, 0600 files, bounded, never read by
 // the agent itself, and its contents reach a prompt only as quoted data.
 
 import { createHash } from 'node:crypto';
@@ -143,8 +145,24 @@ export function threadContext(agentId, message, {
 } = {}) {
   const entries = readJournal(agentId, { env, home });
   const keys = new Set([stringOrNull(message?.correlation), stringOrNull(message?.replyTo)].filter(Boolean));
-  if (keys.size === 0) return [];
   const self = stringOrNull(message?.id);
+  // A principal's ordinary chat is one conversation with this soul even
+  // when the client supplies no thread links (GeniusBar's composer). Seed
+  // from that principal's own exchanges, then include linked teammate work.
+  // Only the broker's structured sender counts; never infer it from a body
+  // or an agent address. Explicit links keep their narrower thread scope.
+  const principal = stringOrNull(message?.from?.principal);
+  if (keys.size === 0 && principal) {
+    for (const entry of entries) {
+      if (self && entry.id === self) continue;
+      if ((entry.dir === 'in' && entry.from === principal) || (entry.dir === 'out' && entry.to === principal)) {
+        for (const key of [entry.id, entry.correlation, entry.replyTo]) {
+          if (stringOrNull(key)) keys.add(key);
+        }
+      }
+    }
+  }
+  if (keys.size === 0) return [];
   const picked = new Set();
   // Following links can widen the key set, so repeat until nothing changes.
   for (let changed = true; changed;) {

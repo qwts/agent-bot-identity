@@ -1,0 +1,1 @@
+- Recover bounded prior conversation context for unthreaded principal messages, including GeniusBar composer follow-ups, from the same soul's journal. Explicit thread links keep their scope; other principals, souls and unthreaded agent messages do not inherit the conversation (#596).
