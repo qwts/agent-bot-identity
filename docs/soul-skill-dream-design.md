@@ -247,6 +247,8 @@ route, recurring timer loop, source reader, maintenance prompt, checkpoint
 publisher or notice consumer. The proposed CLI above is still unavailable.
 Importing this module creates no job. A production adapter must authorize the
 controls and supply the existing configured turn executor before exposing them.
+The separately supplied POSIX journal below implements the storage port; the
+scheduler still does not choose or create a default store.
 
 The version-1 host-local state has a revision, at most 256 registrations and
 at most 256 unsettled flights. A registration records the soul ID, canonical
@@ -268,8 +270,9 @@ That check detects an observable bad acknowledgment, not history atomicity or
 power-loss durability; those require the actual backend's integration tests.
 No executor starts before the durable started event and
 flight commit. Losing a completion receipt retains the flight; it cannot trigger
-a retry of already executed work. The current tests use a JSON-round-tripped
-atomic port fixture and do not claim filesystem crash-durability evidence.
+a retry of already executed work. The core unit tests use a JSON-round-tripped
+atomic port fixture. The separate journal conformance tests below exercise real
+filesystem publication and process interruption.
 
 `tick()` performs one bounded pass when the daemon calls it; it does not install
 a timer. `runNow()` returns a run handle whose `done` settles only after the
@@ -285,5 +288,54 @@ journals their quarantine. Recovery never probes or kills a process, clears an
 unproven lease, or infers a task from imported history. Pause, unschedule and
 re-registration preserve that independent flight. An old run may record its
 actual settlement but cannot change a newer registration's due time or recreate
-a removed registration. Production storage, daemon/owner integration and the
-remaining maintenance gates still need their own implementation and validation.
+a removed registration. Daemon/owner integration and the remaining maintenance
+gates still need their own implementation and validation.
+
+## POSIX journal adapter
+
+`skill-dream-store.mjs` supplies the synchronous state/history port for a local
+POSIX filesystem. The host supplies an already-created, durably established,
+canonical private directory owned by the current account. The adapter creates
+no daemon state directory, grants no authority and registers no job. Windows is
+explicitly unsupported by this adapter; it never skips directory synchronization
+while claiming the same guarantees.
+
+Each numbered version-1 transaction contains the complete validated scheduler
+state, the corresponding bounded control/execution events, a previous-record
+digest and its own checksum. It contains no prompt or executor output. The writer
+creates a private unique temporary file, writes and fsyncs it, then publishes it
+with a hard link to the fixed next-revision name. That link refuses an existing
+name: concurrent writers cannot overwrite the same revision. Directory fsync
+precedes acknowledgment. State and history are in the same record, so there is
+no separate pointer or partially committed history to reconstruct.
+
+Opening the store inventories a contiguous prefix of revision names; subsequent
+reads track the head and inspect adjacent names for an unexpected writer rather
+than rescanning all history. Reads validate the head and predecessor and fsync
+the directory before using a recovered publication. An unexpected writer makes
+the existing handle refuse; reopening through daemon recovery discovers the new
+head. History validates records as they are paged, including their digest links.
+Checksums detect corruption; they are not signatures or authorization evidence.
+Status performs a fresh directory inventory. Historical bytes are validated when
+read, not scanned in full on every scheduler action.
+
+Reads refuse malformed, missing, gapped, oversized, public or symlink records.
+They never silently roll back to an older state. Recognizable unpublished
+temporary files are ignored and counted in status, not automatically removed;
+more than 1,024 such files refuses the inventory. The directory holds at most
+100,000 transactions (an internal host parameter may lower that limit), each at
+most 8 MiB. A history page contains at most 16 transactions. At capacity, new
+commits refuse and status reports `full`; there is no automatic pruning or
+retention cleanup. An explicit archive/retention procedure remains future work.
+The directory inventory at startup and status is bounded by those limits but
+still grows with the number of transactions.
+
+The reusable store conformance suite checks state/history pairing across reopen,
+stale revision refusal and bounded history pages. The POSIX adapter tests kill a
+separate writer after creation, partial/full write, file fsync, link publication
+and directory fsync, then require a complete old or new pair after reopening.
+Two competing processes also race the same revision and exactly one can publish.
+These tests demonstrate process-interruption recovery, not physical power-loss
+behavior. Node's `fsync` is not macOS `F_FULLFSYNC`; sudden power loss on macOS is
+not guaranteed, and filesystem/hardware durability still depends on the host.
+The production daemon integration must preserve this limitation explicitly.
