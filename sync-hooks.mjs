@@ -20,7 +20,7 @@ import { homedir } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { accountName, configuredAccountIdentity } from './detect-harness.mjs';
-import { loadConfig } from './config.mjs';
+import { loadConfig, unmanagedAuthorsSnapshot } from './config.mjs';
 import { pathToFileURL } from 'node:url';
 
 import { CANONICAL_EVENTS, CLAUDE_WORKTREE_CREATE_COMMAND, DIALECTS, nativeHookEntry, SOUL_HOOK_MARKER, vendorEvent } from './hook-dialects.mjs';
@@ -28,12 +28,12 @@ import { adapterFallback } from './uninstalled-identity-hook.mjs';
 
 export const MANAGED_MARKER = 'agent-bot agent-hook';
 
-function command(dialectKey, event) {
-  return `H="\${AGENT_BOT_HOOK_BIN:-\$HOME/.local/share/agent-bot/agent-hook}"; [ -x "$H" ] && exec "$H" --dialect ${dialectKey} --event ${event}; ${adapterFallback(dialectKey, event)} # ${MANAGED_MARKER}`;
+function command(dialectKey, event, snapshot) {
+  return `H="\${AGENT_BOT_HOOK_BIN:-\$HOME/.local/share/agent-bot/agent-hook}"; [ -x "$H" ] && exec "$H" --dialect ${dialectKey} --event ${event}; ${adapterFallback(dialectKey, event, snapshot)} # ${MANAGED_MARKER}`;
 }
 
-function hookEntry(row, event) {
-  return nativeHookEntry(row.key, event, command(row.key, event));
+function hookEntry(row, event, snapshot) {
+  return nativeHookEntry(row.key, event, command(row.key, event, snapshot));
 }
 
 // A soul-declared hook (#378) also runs agent-hook, but it is the soul
@@ -64,7 +64,9 @@ function parseConfig(path, text) {
   return config;
 }
 
-export function renderConfig(row, current = '{}') {
+// `snapshot` (config.mjs unmanagedAuthorsSnapshot) is what the uninstalled
+// fallback may grant; without one it grants nothing.
+export function renderConfig(row, current = '{}', snapshot = undefined) {
   const config = parseConfig(row.file, current);
   const hooks = { ...(config.hooks ?? {}) };
   for (const [event, entries] of Object.entries(hooks)) {
@@ -76,7 +78,7 @@ export function renderConfig(row, current = '{}') {
   }
   for (const event of CANONICAL_EVENTS) {
     if (!vendorEvent(row.key, event)) continue;
-    const generated = hookEntry(row, event);
+    const generated = hookEntry(row, event, snapshot);
     hooks[generated.vendorEvent] ??= [];
     hooks[generated.vendorEvent].push(generated.entry);
   }
@@ -231,11 +233,12 @@ function ensureCodexUserPolicy(home, check) {
 
 export function syncHooks({ home = homedir(), env = process.env, check = false } = {}) {
   const drift = [];
+  const snapshot = unmanagedAuthorsSnapshot({ home, env });
   for (const row of DIALECTS.filter((candidate) => candidate.homeFile)) {
     const path = hookHomePath(row, home, env);
     assertRegularHookFile(path);
     const current = existsSync(path) ? readFileSync(path, 'utf8') : '{}';
-    const desired = renderConfig(row, current);
+    const desired = renderConfig(row, current, snapshot);
     if (current === desired) continue;
     drift.push(path);
     if (!check) writeAtomic(path, desired);

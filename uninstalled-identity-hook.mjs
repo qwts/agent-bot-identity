@@ -13,9 +13,11 @@
 
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
+import { unmanagedAuthors } from './config.mjs';
 import { encodeDecision } from './hook-dialects.mjs';
 
 export const UNINSTALLED_REASON = 'uninstalled identity: refuse human-attributed commit or GitHub write; finish durable bootstrap to publish as the bot';
@@ -361,38 +363,33 @@ export function parseUnmanagedAuthors(env = {}) {
   return raw.split(",").map((part) => part.trim().toLowerCase()).filter(Boolean);
 }
 
-// The configured allowlist when the operator env does not decide (#675): the
-// file and rules config.mjs unmanagedAuthors uses (AGENT_BOT_CONFIG, else
-// $HOME/.config/agent-bot/config.json; settings.unmanagedAuthors of at most 64
-// lowercase logins). Self-contained so the generated fallback can embed it.
-// Unreadable, unparsable or malformed yields nothing, so the decision refuses.
-export function configuredUnmanagedAuthors(env = {}) {
+// The configured allowlist when the operator env does not decide (#675), as a
+// snapshot the installed runtime resolved with the shared config.mjs validator
+// when it generated these hooks: { sha256 of the config bytes, authors }. The
+// snapshot grants only while the file at the same path (AGENT_BOT_CONFIG, else
+// $HOME/.config/agent-bot/config.json) still has exactly those bytes, so the
+// fallback never re-validates config itself; an absent, unreadable or edited
+// file yields nothing and the decision refuses until hooks re-sync.
+export function snapshotUnmanagedAuthors(env = {}, snapshot = { sha256: null, authors: [] }) {
+  if (!snapshot || typeof snapshot.sha256 !== "string" || !Array.isArray(snapshot.authors)) return [];
   const file = env.AGENT_BOT_CONFIG !== undefined
     ? env.AGENT_BOT_CONFIG
     : env.HOME ? env.HOME + "/.config/agent-bot/config.json" : "";
   if (!file) return [];
-  let config;
   try {
-    config = JSON.parse(String(readFileSync(file, "utf8")).replace(/^\uFEFF/, ""));
+    return createHash("sha256").update(readFileSync(file)).digest("hex") === snapshot.sha256
+      ? [...snapshot.authors]
+      : [];
   } catch {
     return [];
   }
-  if (!config || typeof config !== "object" || Array.isArray(config)) return [];
-  const settings = config.settings;
-  if (!settings || typeof settings !== "object" || Array.isArray(settings)) return [];
-  const value = settings.unmanagedAuthors;
-  if (!Array.isArray(value) || value.length > 64
-    || !value.every((author) => typeof author === "string" && /^[a-z0-9][a-z0-9._@+-]{0,99}$/.test(author))) {
-    return [];
-  }
-  return [...new Set(value)];
 }
 
-// The operator env wins whenever it is set, even empty; otherwise the config.
-export function unmanagedAuthorList(env = {}) {
+// The operator env wins whenever it is set, even empty; otherwise the snapshot.
+export function unmanagedAuthorList(env = {}, snapshot = { sha256: null, authors: [] }) {
   return env.AGENT_BOT_UNMANAGED_AUTHORS !== undefined
     ? parseUnmanagedAuthors(env)
-    : configuredUnmanagedAuthors(env);
+    : snapshotUnmanagedAuthors(env, snapshot);
 }
 
 function identMatches(value, authors) {
@@ -591,8 +588,7 @@ export function isHumanAttributedPublish(command, depth) {
   return false;
 }
 
-export function uninstalledDecision({ event, command = "", env = {} }) {
-  const authors = unmanagedAuthorList(env);
+export function uninstalledDecision({ event, command = "", env = {}, authors = unmanagedAuthorList(env) }) {
   if (event === "pre-commit") {
     if (authors.length && isUnmanagedGitAuthor(env, authors, command)) {
       return { decision: "allow", reason: "" };
@@ -640,7 +636,7 @@ const DETECT_SOURCE = [
   gitPublishSubcommand,
   isGitPublishArgv,
   parseUnmanagedAuthors,
-  configuredUnmanagedAuthors,
+  snapshotUnmanagedAuthors,
   unmanagedAuthorList,
   identMatches,
   resolveGitAuthor,
@@ -655,9 +651,10 @@ const DETECT_SOURCE = [
   uninstalledDecision,
 ].map((fn) => fn.toString()).join('\n');
 
-function eventDecisionFallback(allow, deny, event) {
+function eventDecisionFallback(allow, deny, event, snapshot) {
   const program = `import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 const UNINSTALLED_REASON = ${JSON.stringify(UNINSTALLED_REASON)};
 ${DETECT_SOURCE}
 const allow = ${JSON.stringify(allow)};
@@ -671,6 +668,7 @@ const verdict = uninstalledDecision({
   event: ${JSON.stringify(event)},
   command: extractCommand(payload, process.env),
   env: process.env,
+  authors: unmanagedAuthorList(process.env, ${JSON.stringify(snapshot)}),
 });
 const encoded = verdict.decision === "deny" ? deny : allow;
 if (encoded.stdout) process.stdout.write(encoded.stdout);
@@ -683,7 +681,9 @@ process.exit(encoded.exitCode);
   return `node --input-type=module -e ${shQuote(program)}`;
 }
 
-export function adapterFallback(dialectKey, event) {
+// `snapshot` is unmanagedAuthorsSnapshot() from config.mjs, taken by the
+// installed runtime as it writes these hooks; without one nothing is granted.
+export function adapterFallback(dialectKey, event, snapshot = { sha256: null, authors: [] }) {
   const allow = encodeDecision({ dialectKey, event, decision: 'allow' });
   const deny = encodeDecision({
     dialectKey,
@@ -692,9 +692,22 @@ export function adapterFallback(dialectKey, event) {
     reason: UNINSTALLED_REASON,
   });
   if (event === 'pre-commit' || event === 'pre-push' || event === 'pre-command') {
-    return eventDecisionFallback(allow, deny, event);
+    return eventDecisionFallback(allow, deny, event, {
+      sha256: typeof snapshot?.sha256 === 'string' && /^[0-9a-f]{64}$/.test(snapshot.sha256) ? snapshot.sha256 : null,
+      authors: Array.isArray(snapshot?.authors) ? snapshot.authors.filter((author) => typeof author === 'string' && /^[a-z0-9][a-z0-9._@+-]{0,99}$/.test(author)) : [],
+    });
   }
   return emitShellDecision(allow);
+}
+
+// In process the shared resolver decides directly; a config it refuses grants
+// nothing.
+function sharedUnmanagedAuthors(env) {
+  try {
+    return unmanagedAuthors({ env }).authors;
+  } catch {
+    return [];
+  }
 }
 
 export function decideUninstalledHook({ dialectKey, event, payload = {}, env = process.env }) {
@@ -702,6 +715,7 @@ export function decideUninstalledHook({ dialectKey, event, payload = {}, env = p
     event,
     command: extractCommand(payload, env),
     env,
+    authors: sharedUnmanagedAuthors(env),
   });
   return encodeDecision({ dialectKey, event, decision, reason });
 }

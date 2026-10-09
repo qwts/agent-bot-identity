@@ -91,22 +91,55 @@ test('without Node the git hooks resolve nothing and refuse (#675)', { skip: ['/
   assert.equal(shellAuthors({ PATH: '/usr/bin:/bin', HOME: tmpdir(), AGENT_BOT_CONFIG: '/nonexistent' }), '');
 });
 
-test('the embedded fallback resolver agrees with the shared resolver (#675)', () => {
+// Configs the shared resolver refuses while their allowlist alone is valid:
+// the fallback must refuse them too, not grant the list (#675 review).
+const REFUSED_WITH_VALID_LIST = {
+  'invalid feature value': { ...configured, features: { 'github-identity': 'false' } },
+  'unknown feature gate': { ...configured, features: { teleport: true } },
+  'invalid daemonPreference': { settings: { ...configured.settings, daemonPreference: 'invalid' } },
+  'relative soulsRoot': { settings: { ...configured.settings, soulsRoot: 'relative/souls' } },
+  'invalid owner': { ...configured, owner: '' },
+  'invalid scope': { ...configured, scope: { apps: [] } },
+  'invalid profile': { ...configured, profile: 'not-a-profile' },
+};
+
+test('the generated fallback grants exactly what the shared resolver grants for the snapshotted bytes (#675)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'unmanaged-parity-'));
   const write = (name, value) => { const file = join(dir, name); writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value)); return file; };
-  const files = [write('good.json', configured), write('bad.json', malformed), write('empty.json', {}), write('dup.json', { settings: { unmanagedAuthors: ['a', 'a'] } }), join(dir, 'absent.json')];
-  for (const file of files) {
+  const refused = Object.entries(REFUSED_WITH_VALID_LIST).map(([name, value]) => [name, write(`${name.replaceAll(' ', '-')}.json`, value)]);
+  for (const [name, file] of refused) {
+    assert.throws(() => unmanagedAuthors({ env: { AGENT_BOT_CONFIG: file } }), undefined, `${name} must be one the shared resolver refuses`);
+  }
+  const files = [
+    ['good', write('good.json', configured)], ['bad list', write('bad.json', malformed)], ['empty', write('empty.json', {})],
+    ['duplicate', write('dup.json', { settings: { unmanagedAuthors: ['a', 'a'] } })], ['bom', write('bom.json', `\uFEFF${JSON.stringify(configured)}`)],
+    ['non-object settings', write('settings.json', { settings: ['alice'] })], ['bad JSON', write('broken.json', '{ "settings": ')],
+    ['absent', join(dir, 'absent.json')], ...refused,
+  ];
+  for (const [name, file] of files) {
+    const snapshot = configModule.unmanagedAuthorsSnapshot({ env: { AGENT_BOT_CONFIG: file } });
     for (const extra of [{}, { AGENT_BOT_UNMANAGED_AUTHORS: '' }, { AGENT_BOT_UNMANAGED_AUTHORS: 'Zed, y' }]) {
       const env = { AGENT_BOT_CONFIG: file, ...extra };
       let shared;
       try { shared = unmanagedAuthors({ env }).authors; } catch { shared = []; } // a throw makes the hooks refuse
-      assert.deepEqual(unmanagedAuthorList(env), shared, `${file} ${JSON.stringify(extra)}`);
+      assert.deepEqual(unmanagedAuthorList(env, snapshot), shared, `${name} ${JSON.stringify(extra)}`);
     }
   }
+  assert.deepEqual(configModule.unmanagedAuthorsSnapshot({ env: { AGENT_BOT_CONFIG: files[0][1] } }).authors, ['alice', 'bob@example.com']);
   // HOME locates the default config exactly as loadConfig does.
   const home = mkdtempSync(join(tmpdir(), 'unmanaged-home-'));
   mkdirSync(join(home, '.config', 'agent-bot'), { recursive: true });
-  writeFileSync(join(home, '.config', 'agent-bot', 'config.json'), JSON.stringify(configured));
-  assert.deepEqual(unmanagedAuthorList({ HOME: home }), unmanagedAuthors({ env: { HOME: home }, home }).authors);
-  assert.deepEqual(unmanagedAuthorList({}), []);
+  const homeConfig = join(home, '.config', 'agent-bot', 'config.json');
+  writeFileSync(homeConfig, JSON.stringify(configured));
+  const homeSnapshot = configModule.unmanagedAuthorsSnapshot({ env: {}, home });
+  assert.deepEqual(unmanagedAuthorList({ HOME: home }, homeSnapshot), unmanagedAuthors({ env: {}, home }).authors);
+  assert.deepEqual(unmanagedAuthorList({}, homeSnapshot), [], 'no HOME and no AGENT_BOT_CONFIG grants nothing');
+  assert.deepEqual(unmanagedAuthorList({ HOME: home }), [], 'no snapshot grants nothing');
+  // Any edit after the snapshot grants nothing until hooks re-sync, even one
+  // the shared resolver would still accept.
+  writeFileSync(homeConfig, JSON.stringify({ ...configured, owner: 'someone' }));
+  assert.deepEqual(unmanagedAuthorList({ HOME: home }, homeSnapshot), []);
+  writeFileSync(homeConfig, JSON.stringify({ ...configured, features: { 'github-identity': 'false' } }));
+  assert.deepEqual(unmanagedAuthorList({ HOME: home }, homeSnapshot), []);
+  assert.deepEqual(unmanagedAuthorList({ HOME: home, AGENT_BOT_UNMANAGED_AUTHORS: 'zed' }, homeSnapshot), ['zed'], 'env still wins');
 });

@@ -256,6 +256,25 @@ test('--check reports drift without writing and apply repairs it', () => {
   assert.equal(existsSync(join(home, '.copilot', 'hooks', 'agent-bot.json')), true);
 });
 
+// The uninstalled fallback carries the allowlist the shared resolver granted
+// for the config bytes at sync time (#675); a config edit is hook drift.
+test('sync embeds the validated allowlist snapshot and reports a config edit as drift', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-hook-snapshot-'));
+  const config = join(home, '.config', 'agent-bot', 'config.json');
+  mkdirSync(dirname(config), { recursive: true });
+  writeFileSync(config, JSON.stringify({ settings: { unmanagedAuthors: ['ai9d'] } }));
+  const env = { HOME: home };
+  syncHooks({ home, env });
+  const claude = readFileSync(hookHomePath(DIALECTS.find((row) => row.key === 'claude'), home), 'utf8');
+  assert.match(claude, /"authors\\":\[\\"ai9d\\"\]/);
+  assert.deepEqual(syncHooks({ home, env, check: true }), []);
+  writeFileSync(config, JSON.stringify({ settings: { unmanagedAuthors: ['ai9d'] }, features: { 'github-identity': 'false' } }));
+  assert.ok(syncHooks({ home, env, check: true }).includes(hookHomePath(DIALECTS.find((row) => row.key === 'claude'), home)), 'stale snapshots are reported, not silently trusted');
+  syncHooks({ home, env });
+  const refused = readFileSync(hookHomePath(DIALECTS.find((row) => row.key === 'claude'), home), 'utf8');
+  assert.match(refused, /"authors\\":\[\]/, 'a config the shared resolver refuses snapshots no authors');
+});
+
 test('user-level sync keeps a foreign WorktreeCreate hook and does not write the repo', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-hook-home-'));
   const repo = mkdtempSync(join(tmpdir(), 'agent-hook-repo-'));
