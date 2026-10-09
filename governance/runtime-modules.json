@@ -2,7 +2,7 @@
   "schema_version": 1,
   "modules": {
     "identity": {
-      "summary": "Principals, Agent IDs and execution bindings, GitHub App credential custody and token minting, authorization, owner gate, revocation and audit.",
+      "summary": "Principals, Agent IDs and execution bindings, credential custody (GitHub App keys, secret stores and providers) and token minting, authorization, owner gate, revocation and audit.",
       "may_import": [
         "harness",
         "org",
@@ -40,7 +40,7 @@
       ]
     },
     "shared": {
-      "summary": "Leaf utilities with no ownership of their own: configuration, secret stores, shell path, logging.",
+      "summary": "Non-privileged leaf utilities with no ownership of their own: configuration, shell path, logging. Nothing here reads a credential or secret.",
       "may_import": []
     },
     "host": {
@@ -51,8 +51,7 @@
         "harness",
         "comms",
         "org",
-        "shared",
-        "cli"
+        "shared"
       ]
     },
     "cli": {
@@ -128,7 +127,7 @@
     "install-gh-shim.mjs": "identity",
     "install.mjs": "cli",
     "keyd-client.mjs": "identity",
-    "metrics.mjs": "cli",
+    "metrics.mjs": "host",
     "mint-token.mjs": "identity",
     "muse-acp.mjs": "soul",
     "organization-profile.mjs": "org",
@@ -140,11 +139,11 @@
     "resolve-agent.mjs": "identity",
     "runtime-catalog.mjs": "soul",
     "sandbox.mjs": "soul",
-    "secret-providers/pass-cli-credentials.mjs": "shared",
-    "secret-providers/pass-cli.mjs": "shared",
-    "secret-providers/proton-pass.mjs": "shared",
-    "secret-store.mjs": "shared",
-    "secret.mjs": "shared",
+    "secret-providers/pass-cli-credentials.mjs": "identity",
+    "secret-providers/pass-cli.mjs": "identity",
+    "secret-providers/proton-pass.mjs": "identity",
+    "secret-store.mjs": "identity",
+    "secret.mjs": "identity",
     "session-approvals.mjs": "identity",
     "setup-worktree.mjs": "soul",
     "shell-path.mjs": "shared",
@@ -216,8 +215,11 @@
     "detect-harness.mjs": "Reads its harness vocabulary from organization-profile (PROFILE_HARNESSES); one of the duplicated harness key tables.",
     "wake-plane.mjs": "Daemon side of the agent-comms wake plane (agent-comms ADR-0008): launches souls on wakes, so it composes soul and comms.",
     "agent-hook.mjs": "Process entry point every harness hook config calls; composes binding and confinement.",
-    "daemon-log.mjs": "Logging helper used by several modules; shared, not host."
+    "daemon-log.mjs": "Logging helper used by several modules; shared, not host.",
+    "metrics.mjs": "Host: records harness sessions from the session-start hook and is read by the daemon; the `metrics` command in cli composes it. Keeps the composition roots acyclic (cli may import host, never the reverse).",
+    "secret-store.mjs": "Identity: secret stores and providers (secret.mjs, secret-store.mjs, secret-providers/*) retrieve credentials, so they are identity-owned rather than shared, and harness, org and shared cannot reach them."
   },
+  "computed_imports": {},
   "baseline": [
     "agent-approvals.mjs -> agent-daemon.mjs",
     "agent-backfill.mjs -> agent-population.mjs",
