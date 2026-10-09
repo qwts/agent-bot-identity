@@ -9,10 +9,10 @@ const AGENT = 'agent_12345678-1234-4234-8234-123456789abc';
 const HASH = `sha256:${'a'.repeat(64)}`, DIGEST = `sha256:${'b'.repeat(64)}`, OTHER = `sha256:${'c'.repeat(64)}`, REV = `sha256:${'d'.repeat(64)}`;
 let serial = 0;
 const runId = () => `12345678-1234-4234-8234-${String(++serial).padStart(12, '0')}`;
-const source = (path, digest = DIGEST) => ({ path, kind: kindOf(path), digest, size: 5, excerptBytes: 5, truncated: false });
+const source = (path, digest = DIGEST, truncated = false) => ({ path, kind: kindOf(path), digest, size: 5, excerptBytes: truncated ? 4 : 5, truncated });
 const inputsFor = sources => ({ schemaVersion: 1, revision: HASH, sources,
   coverage: { definition: 'supported', memory: 'unsupported', conversations: 'unsupported', eligible: sources.length, selected: sources.length,
-    suppliedBytes: 5 * sources.length, skippedBinary: 0, remaining: 0 }, nextCursor: null });
+    suppliedBytes: sources.reduce((sum, entry) => sum + entry.excerptBytes, 0), skippedBinary: 0, remaining: 0 }, nextCursor: null });
 const minute = n => new Date(Date.UTC(2026, 9, 9, 12, n)).toISOString();
 const item = (path, outcome = 'completed', extra = {}) => ({ path, digest: DIGEST, outcome, reason: outcome === 'blocked' ? 'needs-owner' : 'no-change', evidence: null, ...extra });
 
@@ -24,7 +24,7 @@ function step(ledger, { status = 'completed', items = [], sources = items.map(en
   const text = reply === undefined ? JSON.stringify({ schemaVersion: 1, runId: run.runId, startingRevision: HASH, items }) : reply;
   const outcome = text === null || status === 'cancelled' ? null : interpretDreamReport({ reply: text, replyTruncated: truncated, run, inputs,
     endedAt: at, executionFailed: status !== 'completed', verifyRevisionEvidence: verifier });
-  return applyDreamNoticeRun(ledger, { run, outcome });
+  return applyDreamNoticeRun(ledger, { run, outcome, inputs });
 }
 const live = ledger => ledger.notices.filter(notice => notice.state !== 'cleared');
 
@@ -80,6 +80,11 @@ test('blocked items are agent-reported, scoped to source identity, and cleared o
   assert.deepEqual(created, [], 'an agent-chosen reason code cannot mint new notices');
   let result = step(ledger, { items: [item('AGENTS.md')] });
   assert.deepEqual(result.cleared, [], 'an unreported source stays as it was');
+  result = step(result.ledger, { items: [item('skills/a.md')], sources: [source('skills/a.md', DIGEST, true)] });
+  assert.deepEqual(result.cleared, [], 'a source seen only as a truncated excerpt clears nothing');
+  assert.throws(() => applyDreamNoticeRun(result.ledger, { run: { runId: runId(), agentId: AGENT, endedAt: minute(40), status: 'completed' },
+    outcome: interpretDreamReport({ reply: '', run: { runId: '12345678-1234-4234-8234-0000000000ff', agentId: AGENT, startedAt: minute(0) },
+      inputs: inputsFor([source('AGENTS.md')]), endedAt: minute(40) }) }), { code: 'dream-notice-invalid' });
   result = step(result.ledger, { items: [{ ...item('skills/a.md', 'blocked'), digest: OTHER }] });
   assert.deepEqual([result.cleared.length, result.created.length], [1, 1], 'a changed source is a new condition');
 });

@@ -48,10 +48,14 @@ export const dreamNoticeFingerprint = (agentId, kind, subject) =>
 
 // Conditions present in this run, plus what this run could observe. A
 // condition outside the observed scope is neither renewed nor cleared: a
-// cancelled run proves nothing, and an unreported source stays as it was.
-export function dreamNoticeConditions({ run, outcome = null }) {
+// cancelled run proves nothing, and an unreported source stays as it was. An
+// outcome needs the run's prepared input metadata: a source supplied only as a
+// truncated excerpt was not fully seen, so a report on it clears nothing.
+export function dreamNoticeConditions({ run, outcome = null, inputs = null }) {
   if (!uuid(run?.runId) || !['completed', 'failed', 'cancelled', 'timed-out'].includes(run.status)) invalid();
-  if (outcome !== null) { validateDreamOutcome(outcome, { runId: run.runId }); }
+  if (outcome !== null && inputs === null) invalid();
+  if (outcome !== null) validateDreamOutcome(outcome, { runId: run.runId, inputs });
+  const partial = new Set((inputs?.sources ?? []).filter(source => source.truncated).map(source => source.path));
   const conditions = [], observes = { kinds: new Set(), paths: new Set() };
   const add = (kind, subject, detail) => conditions.push({ kind, subject, detail });
   if (run.status !== 'cancelled') observes.kinds.add('execution');
@@ -64,7 +68,7 @@ export function dreamNoticeConditions({ run, outcome = null }) {
   if (report?.status === 'structured') {
     let checkedRevision = false, unavailable = false;
     for (const { claim, verification } of outcome.items) {
-      observes.paths.add(claim.path);
+      if (!partial.has(claim.path)) observes.paths.add(claim.path);
       if (claim.outcome === 'blocked') add('item-blocked', { path: claim.path, digest: claim.digest }, claim.reason);
       if (verification.reason === 'adapter-unavailable') add('capability', {}, 'adapter-unavailable');
       if (verification.evidence === 'verified-change' || verification.evidence === 'not-verified' && verification.reason !== 'evidence-limit') {
@@ -128,11 +132,11 @@ const noticeId = (fingerprint, runId) => `ntc_${sha(`${fingerprint}\n${runId}`).
 // so a persisting condition renews its live notice instead of notifying every
 // interval; a recurrence after an observed clear creates a new notice. Runs
 // must be applied in journal order: only the latest run ID is idempotent.
-export function applyDreamNoticeRun(ledger, { run, outcome = null }) {
+export function applyDreamNoticeRun(ledger, { run, outcome = null, inputs = null }) {
   validateDreamNoticeLedger(ledger);
   if (run?.agentId !== ledger.agentId || !date(run.endedAt)) invalid();
   if (ledger.lastRunId === run.runId) return { ledger, created: [], renewed: [], cleared: [], suppressed: 0 };
-  const { conditions, observes } = dreamNoticeConditions({ run, outcome });
+  const { conditions, observes } = dreamNoticeConditions({ run, outcome, inputs });
   const at = run.endedAt, next = structuredClone(ledger), seen = new Map();
   let suppressed = 0;
   for (const condition of conditions) {

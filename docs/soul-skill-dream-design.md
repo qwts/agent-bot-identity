@@ -381,7 +381,7 @@ subjects are:
 | `execution` | none | host-observed | a later completed run (a cancelled run proves nothing) |
 | `report` | none | host-observed | a later structured report, even an empty one |
 | `evidence` | none | host-observed | a later structured report whose revision check ran |
-| `item-blocked` | path and captured digest | agent-reported | a later structured report names that path |
+| `item-blocked` | path and captured digest | agent-reported | a later structured report names that path, supplied untruncated |
 | `capability` | none (no adapter is configurable yet) | host-observed | never by a quiet run; host capability state changes it |
 | `change` | artifact revision | unattributed-change | never; one notice per verified revision |
 
