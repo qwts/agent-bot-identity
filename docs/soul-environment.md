@@ -346,6 +346,7 @@ the export carries what a template never has.
 | credentials | nothing | `.soul-state/credentials` whole: GitHub App keys, file-store secrets |
 | memory | `.soul-state/space` whole; a space still linked from the spaces root is read through its link (the census says it is the soul's) and lands inside on import | |
 | history | `.soul-state/runs`, `confinement.log`, and the daemon's revision journal for the soul (its events and stored packages, under `journal/` in the archive) | locks and stagings |
+| interaction | the soul's own rows from the daemon's interaction store (#583): `.soul-state/runs/interaction/interaction.json` `{ schemaVersion: 1, agentId, invocations[], sessions[] }`, and each of its invocations' `events/<id>.jsonl` and `payloads/<id>.json` byte for byte, all 0600 | every other soul's sessions, invocations, events and payloads; whatever the root held at `.soul-state/runs/interaction` (regenerated from the store) |
 | settings | `home-harness`, `migration.json`, `clean.json`, anything else durable directly under `.soul-state/` | `agent-id` (the import writes the marker), `*.lock`, `space.migrating-*`, `space.link-*` |
 | workspaces | a soul-owned directory under `worktrees/` whole, admin directory included; a linked one as `pointer.json` (target, repository, `HEAD`, branch, `origin`), `changes.patch` (`git diff --binary HEAD`) and each untracked file (`git ls-files --others --exclude-standard`, up to 64 MiB each) | the linked repository itself, its ignored files |
 | runtimes, cache, temp | nothing | `.soul-state/runtimes`, `.soul-state/cache`, `.soul-state/tmp`: reconstructible or disposable |
@@ -356,7 +357,10 @@ it; its first entry is `manifest.json`: `{ schemaVersion: 1, agentId,
 name, displayName, exportedAt, engineVersion, root, identity { harness,
 parentId, genesis, createdAt }, memory { location, target }, workspaces[]
 { name, location, target, head, branch, remote, patch, untracked, note },
-journal { entries }, components[], excluded[], totals { files, bytes } }`.
+journal { entries }, interaction { sessions, invocations, events, payloads }
+| null, components[], excluded[], totals { files, bytes } }`. `interaction`
+is `null` when the export ran without the interaction store at hand (the
+library called directly); `agent-bot soul env export` always carries it.
 Each component is `{ area: root | workspace | journal, entry, relative,
 classification, retention, kind: file | dir | pointer | patch, bytes,
 sha256, mode }` (plus `workspace` or `target`); entries live under `life/`
@@ -418,17 +422,34 @@ workspace comes back as `.soul-state/imports/<name>/pointer.json`,
 `worktrees/<name>` exists again. Nothing is cloned: the owner checks the
 repository out, links it, applies the patch and copies the untracked files.
 
+The interaction records are checked before anything is minted: the
+document and every session and invocation must name the exported soul
+(`import-interaction-foreign`), and every event log and payload must
+belong to a listed invocation and parse (`import-interaction-invalid`).
+A kept or replaced life then merges them into this host's store, adding
+only: a session, invocation, event log or payload already here is kept
+as it is, and a retry handle already pointing elsewhere keeps pointing
+there. The root keeps no second copy. A fork does not merge them and
+does not reassign them to its new ID: they move to
+`.soul-state/runs/interaction-history/<parent agentId>/` as the parent's
+read-only history, still naming the parent, and travel with the fork's
+life from then on.
+
 The apply is owner-gated (the action names the archive and the decision)
 and recorded as migration step `life-import` (`done`, `from` the archive,
 `to` the root, `identity { decision, agentId, importedFrom }`, `journal`,
-`replaced`, `workspaces[]`, `space: restored | created`), plus one audit
+`replaced`, `workspaces[]`, `space: restored | created`, `interaction`), plus one audit
 receipt `soul-env-import` with counts and the destination. `--plan` reads
 the manifest only, decides identity and destination, and writes nothing.
 `--json` prints `{ schemaVersion: 1, archive, applied, decision: planned |
 imported | replaced | forked, identity { decision: keep | replace | fork,
 agentId, importedFrom, existing }, soulDir, replaced, name, displayName,
 journal: restored | adopted | kept-local, restored { files, bytes,
-byClassification }, pointers[], workspaces[], migration }`. Errors are
+byClassification }, pointers[], workspaces[], migration, interaction }`,
+where `interaction` is the manifest's counts on a plan and, once applied,
+`{ decision: merged, sessions, invocations, events, payloads }` (each
+`{ added, kept }`), `{ decision: history, parentAgentId, path }` for a
+fork, or `null` when the archive carries none. Errors are
 `{ error: { code, message, action } }` with `--json`, exit 1.
 
 ## Preparing a revision edit

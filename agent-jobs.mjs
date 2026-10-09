@@ -16,8 +16,10 @@ import {
   appendFileSync,
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -998,6 +1000,170 @@ export function recoverInteractionStore(
     }
   }
   return { ...recovered, expiredProposals: orphaned };
+}
+
+// --- one soul's interaction records (#583) ---------------------------------
+// A soul's life archive carries its own sessions, invocations, event logs
+// and payloads out of this shared store, and an import merges them back.
+// Only rows whose agentId is the soul's leave; every row coming back must
+// name that same soul, or nothing is written. The merge only adds: a row or
+// file already here is kept as it is, never overwritten.
+
+export const SOUL_INTERACTION_SCHEMA_VERSION = 1;
+export const SOUL_INTERACTION_DOCUMENT = 'interaction.json';
+
+function interactionFailure(code, message) {
+  return Object.assign(new Error(message), { code });
+}
+
+function regularFile(file) {
+  try {
+    const stat = lstatSync(file);
+    return stat.isFile() ? stat : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The soul's rows from the shared store, read-only: `{ document, files }`.
+ * `document` is `{ schemaVersion, agentId, invocations[], sessions[] }`;
+ * `files` lists each invocation's event log and payload that exist, as
+ * `{ relative: 'events/<id>.jsonl' | 'payloads/<id>.json', file }`.
+ */
+export function soulInteractionExport(agentId, { env = process.env, home = homedir() } = {}) {
+  const options = { env, home };
+  const soul = agentIdOrThrow(agentId);
+  const sessions = listSessions({ agentId: soul }, options);
+  const invocations = Object.values(readJobs(options).invocations)
+    .filter((invocation) => invocation.agentId === soul)
+    .sort((left, right) => left.invocationId.localeCompare(right.invocationId));
+  const files = [];
+  for (const { invocationId } of invocations) {
+    for (const [relative, file] of [
+      [`events/${invocationId}.jsonl`, eventsFile(invocationId, options)],
+      [`payloads/${invocationId}.json`, payloadFile(invocationId, options)],
+    ]) {
+      if (regularFile(file)) files.push({ relative, file });
+    }
+  }
+  return {
+    document: { schemaVersion: SOUL_INTERACTION_SCHEMA_VERSION, agentId: soul, invocations, sessions },
+    files,
+  };
+}
+
+/**
+ * Reads and checks an exported interaction directory without writing:
+ * the document, every row naming `agentId`, and each carried event log
+ * and payload belonging to a listed invocation and parsing as one.
+ * Refuses `import-interaction-foreign` for any row or document of another
+ * soul and `import-interaction-invalid` for anything malformed.
+ */
+export function readSoulInteraction(directory, { agentId }) {
+  const soul = agentIdOrThrow(agentId);
+  const invalid = (message) => interactionFailure('import-interaction-invalid', `interaction archive: ${message}`);
+  let document;
+  try {
+    document = JSON.parse(readFileSync(path.join(directory, SOUL_INTERACTION_DOCUMENT), 'utf8'));
+  } catch {
+    throw invalid(`${SOUL_INTERACTION_DOCUMENT} cannot be read as JSON`);
+  }
+  if (!document || typeof document !== 'object' || Array.isArray(document)) throw invalid('the document is not an object');
+  if (document.schemaVersion !== SOUL_INTERACTION_SCHEMA_VERSION) throw invalid(`schemaVersion ${String(document.schemaVersion).slice(0, 16)} is not ${SOUL_INTERACTION_SCHEMA_VERSION}`);
+  if (document.agentId !== soul) throw interactionFailure('import-interaction-foreign', 'the interaction records belong to another soul');
+  if (!Array.isArray(document.invocations) || !Array.isArray(document.sessions)) throw invalid('invocations and sessions must be arrays');
+  const normalize = (normalizer, record, label) => {
+    let normalized;
+    try { normalized = normalizer(record); } catch { throw invalid(`a ${label} record is malformed`); }
+    if (normalized.agentId !== soul) throw interactionFailure('import-interaction-foreign', `a ${label} record belongs to another soul`);
+    return normalized;
+  };
+  const sessions = document.sessions.map((record) => normalize(normalizeSession, record, 'session'));
+  const invocations = document.invocations.map((record) => normalize(normalizeInvocation, record, 'invocation'));
+  const listed = new Set(invocations.map((invocation) => invocation.invocationId));
+  if (listed.size !== invocations.length || new Set(sessions.map((session) => session.sessionId)).size !== sessions.length) throw invalid('a record is listed twice');
+  const files = [];
+  for (const [kind, extension] of [['events', '.jsonl'], ['payloads', '.json']]) {
+    let names = [];
+    try { names = readdirSync(path.join(directory, kind)); } catch { continue; }
+    for (const name of names.sort()) {
+      const invocationId = name.endsWith(extension) ? name.slice(0, -extension.length) : null;
+      if (!invocationId || !listed.has(invocationId)) throw invalid(`${kind}/${name} belongs to no listed invocation`);
+      const file = path.join(directory, kind, name);
+      if (!regularFile(file)) throw invalid(`${kind}/${name} is not a regular file`);
+      const bytes = readFileSync(file);
+      try {
+        if (kind === 'events') {
+          bytes.toString('utf8').split('\n').filter((line) => line !== '').forEach(parseEventLine);
+        } else {
+          const payload = JSON.parse(bytes.toString('utf8'));
+          if (payload?.schemaVersion !== 1 || payload.invocationId !== invocationId) throw new Error('payload');
+        }
+      } catch {
+        throw invalid(`${kind}/${name} is malformed`);
+      }
+      files.push({ kind, invocationId, bytes });
+    }
+  }
+  return { agentId: soul, sessions, invocations, files };
+}
+
+/**
+ * Merges a checked interaction directory (see `readSoulInteraction`) into
+ * the shared store. Rows and files already here are kept; nothing is
+ * overwritten or reassigned. Returns `{ added, kept }` counts per kind.
+ */
+export function mergeSoulInteraction(directory, { agentId }, { env = process.env, home = homedir() } = {}) {
+  const options = { env, home };
+  const carried = readSoulInteraction(directory, { agentId });
+  const counts = {
+    sessions: { added: 0, kept: 0 },
+    invocations: { added: 0, kept: 0 },
+    events: { added: 0, kept: 0 },
+    payloads: { added: 0, kept: 0 },
+  };
+  if (carried.sessions.length > 0) {
+    withSessionsLock(options, (file) => {
+      const sessions = readSessions(options);
+      const next = { ...sessions };
+      for (const session of carried.sessions) {
+        if (next[session.sessionId]) { counts.sessions.kept += 1; continue; }
+        next[session.sessionId] = session;
+        counts.sessions.added += 1;
+      }
+      if (counts.sessions.added > 0) writeJsonDocument(file, { schemaVersion: SCHEMA_VERSION, sessions: next });
+    });
+  }
+  if (carried.invocations.length > 0) {
+    withJobsLock(options, (file) => {
+      const { invocations, idempotency } = readJobs(options);
+      const next = { ...invocations };
+      const index = { ...idempotency };
+      for (const invocation of carried.invocations) {
+        if (next[invocation.invocationId]) { counts.invocations.kept += 1; continue; }
+        next[invocation.invocationId] = invocation;
+        // A retry handle already pointing elsewhere keeps pointing there.
+        const indexKey = `${invocation.principalId} ${invocation.idempotencyKey}`;
+        if (!index[indexKey]) index[indexKey] = invocation.invocationId;
+        counts.invocations.added += 1;
+      }
+      if (counts.invocations.added > 0) writeJsonDocument(file, { schemaVersion: SCHEMA_VERSION, invocations: next, idempotency: index });
+    });
+  }
+  for (const { kind, invocationId, bytes } of carried.files) {
+    const target = kind === 'events' ? eventsFile(invocationId, options) : payloadFile(invocationId, options);
+    ensurePrivateDirectory(path.dirname(target));
+    try {
+      // `wx` refuses an existing file or link: what is here stays.
+      writeFileSync(target, bytes, { flag: 'wx', mode: 0o600 });
+      counts[kind].added += 1;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      counts[kind].kept += 1;
+    }
+  }
+  return counts;
 }
 
 async function main() {

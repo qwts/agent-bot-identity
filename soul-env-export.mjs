@@ -23,6 +23,15 @@
 // pointer, patch and untracked files under `.soul-state/imports/<name>/`;
 // nothing is cloned.
 //
+// The soul's own interaction records (#583) leave the shared store at
+// export: its sessions and invocations as one document, its event logs
+// and payloads byte for byte, under `.soul-state/runs/interaction/`. The
+// store is the host's, so the caller hands in `interaction` (the cli entry
+// does); without it the archive says `interaction: null`. A kept or
+// replaced import checks every row names the soul and merges them back,
+// adding only; a fork keeps them unmerged as the parent's read-only
+// history under `.soul-state/runs/interaction-history/<parent id>/`.
+//
 // The archive format is POSIX ustar (GNU long names) inside gzip, written
 // and read here with node's zlib and no dependency, so `tar -tzf` lists it.
 import { spawnSync } from 'node:child_process';
@@ -32,7 +41,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { createGunzip, createGzip } from 'node:zlib';
 import { isAgentId, mintAgentIdentity, readAgentIdentity, stateDirectory } from './agent-identity.mjs';
 import { populationFile, registerSoulDir, setSoulSpacePath, showSoul, showSoulByName, soulDirectory, upsertSoul } from './agent-population.mjs';
@@ -53,13 +62,15 @@ export const LIFE_IMPORT_STEP_ID = 'life-import';
 // Where a linked workspace's pointer, patch and untracked files land on
 // import, until the owner links the checkout again.
 export const IMPORTS_DIRECTORY = '.soul-state/imports';
+export const INTERACTION_RELATIVE = '.soul-state/runs/interaction';
+export const INTERACTION_HISTORY_RELATIVE = '.soul-state/runs/interaction-history';
 export const COMPONENT_KINDS = Object.freeze(['file', 'dir', 'pointer', 'patch']);
 // The archive's own prefixes: the soul root, linked workspaces' records,
 // the revision journal. Nothing else is ever an entry.
 const AREAS = Object.freeze({ life: 'root', workspaces: 'workspace', journal: 'journal' });
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const STATE = '.soul-state';
-const USAGE = 'usage: agent-bot soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin] | soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin]';
+export const TRANSFER_USAGE = 'usage: agent-bot soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin] | soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin]';
 const BLOCK = 512;
 const TAR_SIZE_MAX = 0o77777777777; // the 11-octal-digit ustar size field
 const MANIFEST_MAX_BYTES = 64 * 1024 * 1024;
@@ -347,9 +358,13 @@ function linkedWorkspace(name, link, { now }) {
  * manifest is what the archive carries as `manifest.json`; `sources` map
  * each entry to the file or bytes it is written from. Read-only.
  */
-export function planSoulExport(soulDir, { agentId, name = null, displayName = null, spacePath = null, identity = null, stateDir = null,
+export function planSoulExport(soulDir, { agentId, name = null, displayName = null, spacePath = null, identity = null, stateDir = null, interaction = null,
   env = process.env, home = env.HOME ?? homedir(), now = () => new Date() } = {}) {
-  const excludedBy = exclusionRules(soulDir, { env, home });
+  const rules = exclusionRules(soulDir, { env, home });
+  // With the store at hand, what the root holds at the generated path is
+  // stale and the store's rows are written there instead.
+  const excludedBy = (relative, classification) => (interaction && (relative === INTERACTION_RELATIVE || relative.startsWith(`${INTERACTION_RELATIVE}/`))
+    ? 'regenerated from the interaction store' : rules(relative, classification));
   const components = [];
   const excluded = [];
   const workspaces = [];
@@ -451,6 +466,25 @@ export function planSoulExport(soulDir, { agentId, name = null, displayName = nu
     };
     walkJournal(journal, '');
   }
+  // The soul's interaction records (#583): only its own rows, private.
+  let carried = null;
+  if (interaction) {
+    const { document, files } = interaction.collect(agentId, { env, home });
+    const bytes = Buffer.from(`${JSON.stringify(document, null, 2)}\n`);
+    const relative = `${INTERACTION_RELATIVE}/interaction.json`;
+    push({ area: 'root', entry: `life/${relative}`, relative, classification: 'history', retention: 'durable', kind: 'file', bytes: bytes.length,
+      sha256: sha256Bytes(bytes), mode: 0o600, source: { bytes } });
+    for (const file of files) {
+      const stat = lstat(file.file);
+      if (!stat?.isFile()) continue;
+      if (stat.size > TAR_SIZE_MAX) fail('export-file-too-large', `interaction ${file.relative} is larger than the archive format carries`);
+      const at = `${INTERACTION_RELATIVE}/${file.relative}`;
+      push({ area: 'root', entry: `life/${at}`, relative: at, classification: 'history', retention: 'durable', kind: 'file', bytes: stat.size,
+        sha256: sha256File(file.file), mode: 0o600, source: { file: file.file, mtime: stat.mtimeMs } });
+    }
+    carried = { sessions: document.sessions.length, invocations: document.invocations.length,
+      events: files.filter((f) => f.relative.startsWith('events/')).length, payloads: files.filter((f) => f.relative.startsWith('payloads/')).length };
+  }
   const sources = new Map();
   for (const component of components) {
     if (component.entry) sources.set(component.entry, component.source);
@@ -459,7 +493,7 @@ export function planSoulExport(soulDir, { agentId, name = null, displayName = nu
   const manifest = {
     schemaVersion: EXPORT_SCHEMA_VERSION, agentId, name, displayName, exportedAt: now().toISOString(), engineVersion: engineVersion(), root: soulDir,
     identity: identity ? { harness: text(identity.harness), parentId: identity.parentId ?? null, genesis: identity.genesis ?? null, createdAt: text(identity.createdAt) } : null,
-    memory, workspaces, journal: { entries: journalEntries },
+    memory, workspaces, journal: { entries: journalEntries }, interaction: carried,
     components, excluded,
     totals: { files: components.filter((c) => c.entry && c.kind !== 'dir').length, bytes: components.reduce((sum, c) => sum + c.bytes, 0) },
   };
@@ -727,8 +761,36 @@ const stamp = (date) => date.toISOString().replace(/[:.]/g, '-');
  * the folder into place, the census and the migration journal. Returns the
  * import record.
  */
-async function restoreSoul({ archive, staging, manifest, plan, env, home, file, stateDir, now, config, authorization }) {
+// The carried interaction directory, checked before anything is minted:
+// every row must name the exported soul.
+function checkInteraction(staging, manifest, interaction) {
+  const directory = path.join(staging, INTERACTION_RELATIVE);
+  if (!interaction || !lstat(directory)?.isDirectory()) return null;
+  interaction.read(directory, { agentId: manifest.agentId });
+  return directory;
+}
+
+// A kept or replaced life merges its rows into the store (adding only) and
+// the root's copy goes; a fork keeps them unmerged, as the parent's history.
+function carryInteraction(staging, directory, manifest, decision, interaction, { env, home }) {
+  if (!interaction) return lstat(path.join(staging, INTERACTION_RELATIVE)) ? { decision: 'unmerged', path: INTERACTION_RELATIVE } : null;
+  if (!directory) return null;
+  if (decision === 'fork') {
+    const relative = `${INTERACTION_HISTORY_RELATIVE}/${manifest.agentId}`;
+    const history = path.join(staging, relative);
+    if (lstat(history)) fail('import-interaction-invalid', `${relative} is already in the archive's root`);
+    mkdirSync(path.dirname(history), { recursive: true, mode: 0o700 });
+    renameSync(directory, history);
+    return { decision: 'history', parentAgentId: manifest.agentId, path: relative };
+  }
+  const counts = interaction.merge(directory, { agentId: manifest.agentId }, { env, home });
+  rmSync(directory, { recursive: true, force: true });
+  return { decision: 'merged', ...counts };
+}
+
+async function restoreSoul({ archive, staging, manifest, plan, env, home, file, stateDir, now, config, authorization, interaction = null }) {
   const options = { env, home, file, ...(config === undefined ? {} : { config }) };
+  const interactionDirectory = checkInteraction(staging, manifest, interaction);
   let agentId = plan.agentId;
   let journal = null;
   const journalStaging = path.join(staging, '.journal');
@@ -774,6 +836,7 @@ async function restoreSoul({ archive, staging, manifest, plan, env, home, file, 
       rmSync(journalStaging, { recursive: true, force: true });
     }
   }
+  const carried = carryInteraction(staging, interactionDirectory, manifest, plan.decision, interaction, { env, home });
   writeFileSync(path.join(staging, STATE, 'agent-id'), `${agentId}\n`, { mode: 0o600 });
   const space = bindSpace(staging, agentId, { now });
   // The folder into place: a replaced root is moved aside first, never deleted.
@@ -794,8 +857,8 @@ async function restoreSoul({ archive, staging, manifest, plan, env, home, file, 
   const workspaces = (manifest.workspaces ?? []).filter((row) => row.location === 'linked').map((row) => ({ ...row, imported: `${IMPORTS_DIRECTORY}/${row.name}` }));
   const step = recordMigrationStep(destination, { id: LIFE_IMPORT_STEP_ID, status: 'done', from: archive, to: destination, at: now().toISOString(),
     note: `${plan.decision}: ${manifest.components.filter((c) => c.entry && c.kind !== 'dir').length} file(s) from ${manifest.agentId}${agentId !== manifest.agentId ? ` as ${agentId}` : ''}; journal ${journal}; ${workspaces.length} workspace(s) to link again`,
-    identity: { decision: plan.decision, agentId, importedFrom: manifest.agentId }, journal, replaced, workspaces: workspaces.map((row) => row.name), space: space.created ? 'created' : 'restored' });
-  return { agentId, name: record.name, displayName: record.displayName ?? null, soulDir: destination, replaced, journal, space: step.space, workspaces, step };
+    identity: { decision: plan.decision, agentId, importedFrom: manifest.agentId }, journal, replaced, workspaces: workspaces.map((row) => row.name), space: space.created ? 'created' : 'restored', interaction: carried });
+  return { agentId, name: record.name, displayName: record.displayName ?? null, soulDir: destination, replaced, journal, space: step.space, workspaces, interaction: carried, step };
 }
 
 // ---------------------------------------------------------------------------
@@ -820,7 +883,8 @@ export function formatExport(result) {
   lines.push(`carried (${Object.values(by).reduce((s, c) => s + c.files, 0)} file(s), ${Object.values(by).reduce((s, c) => s + c.bytes, 0)} byte(s))`);
   for (const [classification, row] of Object.entries(by)) lines.push(`  ${classification}: ${row.files} file(s), ${row.bytes} byte(s)`);
   for (const pointer of m.components.filter((c) => c.kind === 'pointer' && c.area === 'root')) lines.push(`  pointer ${cleanLine(pointer.relative)} -> ${cleanLine(pointer.target)}`);
-  lines.push(`memory: ${m.memory.location ?? 'absent'}${m.memory.target ? ` (${cleanLine(m.memory.target)})` : ''}`, `revision journal: ${m.journal.entries} entr${m.journal.entries === 1 ? 'y' : 'ies'}`);
+  lines.push(`memory: ${m.memory.location ?? 'absent'}${m.memory.target ? ` (${cleanLine(m.memory.target)})` : ''}`, `revision journal: ${m.journal.entries} entr${m.journal.entries === 1 ? 'y' : 'ies'}`,
+    `interaction: ${m.interaction ? `${m.interaction.sessions} session(s), ${m.interaction.invocations} invocation(s), ${m.interaction.events} event log(s), ${m.interaction.payloads} payload(s)` : 'not carried'}`);
   if (m.workspaces.length) {
     lines.push('workspaces');
     for (const w of m.workspaces) lines.push(`  ${cleanLine(w.name)}: ${w.location}${w.location === 'linked' ? ` -> ${cleanLine(w.target)}${w.branch ? ` (${cleanLine(w.branch)}${w.head ? ` ${w.head.slice(0, 12)}` : ''})` : ''}, patch ${w.patch ? 'yes' : 'no'}, ${w.untracked} untracked` : ''}${w.note ? ` - ${cleanLine(w.note)}` : ''}`);
@@ -836,7 +900,13 @@ export function formatImport(result) {
   const lines = [`archive: ${cleanLine(result.archive)}`, `decision: ${result.decision}`, `identity: ${result.identity.decision} (${result.identity.agentId ?? 'minted on apply'} from ${result.identity.importedFrom})`,
     `soulDir: ${cleanLine(result.soulDir)}`, `name: ${cleanLine(result.displayName ?? result.name)}`];
   if (result.replaced) lines.push(`replaced: ${cleanLine(result.replaced)}`);
-  lines.push(`journal: ${result.journal ?? '-'}`, '');
+  lines.push(`journal: ${result.journal ?? '-'}`);
+  const carried = result.interaction;
+  if (carried?.decision === 'merged') lines.push(`interaction: merged (${carried.invocations.added} invocation(s) added, ${carried.invocations.kept} kept; ${carried.sessions.added} session(s) added)`);
+  else if (carried?.decision === 'history') lines.push(`interaction: ${cleanLine(carried.parentAgentId)}'s history at ${carried.path}, not merged`);
+  else if (carried?.decision === 'unmerged') lines.push(`interaction: left at ${carried.path}, not merged`);
+  else if (carried) lines.push(`interaction: ${carried.invocations} invocation(s), ${carried.sessions} session(s) in the archive`);
+  lines.push('');
   const by = result.restored.byClassification;
   lines.push(`${result.applied ? 'restored' : 'would restore'} (${result.restored.files} file(s), ${result.restored.bytes} byte(s))`);
   for (const [classification, row] of Object.entries(by)) lines.push(`  ${classification}: ${row.files} file(s), ${row.bytes} byte(s)`);
@@ -868,7 +938,7 @@ function readPrincipal(presented, readStdin) {
  * in flight or a warm harness, checked before and after the gate.
  */
 export async function soulEnvExportCommand(argv, { gate = ownerGate, readStdin = () => readFileSync(0, 'utf8'), write = (value) => process.stdout.write(value),
-  env = process.env, home = env.HOME ?? homedir(), cwd = process.cwd(), now = () => new Date(), running = soulIsRunning, ...rest } = {}) {
+  env = process.env, home = env.HOME ?? homedir(), cwd = process.cwd(), now = () => new Date(), running = soulIsRunning, interaction = null, ...rest } = {}) {
   let id = null, to = null, json = false, plan = false, presented = false;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -877,9 +947,9 @@ export async function soulEnvExportCommand(argv, { gate = ownerGate, readStdin =
     else if (arg === '--principal-stdin' && !presented) presented = true;
     else if (arg === '--to' && to === null && typeof argv[i + 1] === 'string' && argv[i + 1] !== '') { to = argv[i + 1]; i += 1; }
     else if (!arg.startsWith('-') && id === null) id = arg;
-    else throw new Error(USAGE);
+    else throw new Error(TRANSFER_USAGE);
   }
-  if (!id || (!to && !plan) || (plan && presented)) throw new Error(USAGE);
+  if (!id || (!to && !plan) || (plan && presented)) throw new Error(TRANSFER_USAGE);
   const principal = readPrincipal(presented, readStdin);
   const options = { env, home, now, ...rest };
   const file = options.file ?? populationFile(options);
@@ -895,7 +965,7 @@ export async function soulEnvExportCommand(argv, { gate = ownerGate, readStdin =
   }
   let identity = null;
   try { identity = readAgentIdentity(soul.id, { stateDir }); } catch { /* no record: the manifest says so */ }
-  const planOptions = { agentId: soul.id, name: soul.name ?? null, displayName: soul.displayName ?? null, spacePath: soul.spacePath ?? null, identity, stateDir, env, home, now };
+  const planOptions = { agentId: soul.id, name: soul.name ?? null, displayName: soul.displayName ?? null, spacePath: soul.spacePath ?? null, identity, stateDir, interaction, env, home, now };
   const planned = planSoulExport(soulDir, planOptions);
   const emit = (result) => { write(json ? `${JSON.stringify(result)}\n` : formatExport(result)); return result; };
   const base = { schemaVersion: EXPORT_SCHEMA_VERSION, agentId: soul.id, soulDir, applied: false, decision: 'planned', file: target, manifest: planned.manifest };
@@ -931,7 +1001,7 @@ export async function soulEnvExportCommand(argv, { gate = ownerGate, readStdin =
  * soul runs, checked before and after the gate.
  */
 export async function soulEnvImportCommand(argv, { gate = ownerGate, readStdin = () => readFileSync(0, 'utf8'), write = (value) => process.stdout.write(value),
-  env = process.env, home = env.HOME ?? homedir(), cwd = process.cwd(), now = () => new Date(), running = soulIsRunning, ...rest } = {}) {
+  env = process.env, home = env.HOME ?? homedir(), cwd = process.cwd(), now = () => new Date(), running = soulIsRunning, interaction = null, ...rest } = {}) {
   let archive = null, fork = false, replace = false, name = null, json = false, plan = false, presented = false;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -942,9 +1012,9 @@ export async function soulEnvImportCommand(argv, { gate = ownerGate, readStdin =
     else if (arg === '--principal-stdin' && !presented) presented = true;
     else if (arg === '--name' && name === null && typeof argv[i + 1] === 'string' && argv[i + 1] !== '' && !argv[i + 1].startsWith('-')) { name = argv[i + 1]; i += 1; }
     else if (!arg.startsWith('-') && archive === null) archive = arg;
-    else throw new Error(USAGE);
+    else throw new Error(TRANSFER_USAGE);
   }
-  if (!archive || (fork && replace) || (plan && presented)) throw new Error(USAGE);
+  if (!archive || (fork && replace) || (plan && presented)) throw new Error(TRANSFER_USAGE);
   if (name !== null && (name.length > 128 || /[\x00-\x1f\x7f]/.test(name))) throw new Error('--name must be printable text of at most 128 characters');
   const principal = readPrincipal(presented, readStdin);
   const options = { env, home, now, ...rest };
@@ -960,7 +1030,8 @@ export async function soulEnvImportCommand(argv, { gate = ownerGate, readStdin =
     identity: { decision: planned.decision, agentId: planned.agentId, importedFrom: planned.importedFrom, existing: planned.existing },
     soulDir: planned.soulDir, replaced: planned.replaced, name: planned.name, displayName: planned.displayName, journal: null,
     restored: { files: manifest.components.filter((c) => c.entry && c.kind !== 'dir').length, bytes: manifest.components.reduce((sum, c) => sum + c.bytes, 0), byClassification: counts(manifest.components) },
-    pointers, workspaces: (manifest.workspaces ?? []).filter((w) => w.location === 'linked').map((w) => ({ ...w, imported: `${IMPORTS_DIRECTORY}/${w.name}` })), migration: LIFE_IMPORT_STEP_ID };
+    pointers, workspaces: (manifest.workspaces ?? []).filter((w) => w.location === 'linked').map((w) => ({ ...w, imported: `${IMPORTS_DIRECTORY}/${w.name}` })), migration: LIFE_IMPORT_STEP_ID,
+    interaction: manifest.interaction ?? null };
   const emit = (result) => { write(json ? `${JSON.stringify(result)}\n` : formatImport(result)); return result; };
   if (plan) return emit(base);
   const refuseRunning = () => fail('soul-running', `${manifest.agentId} is running (a turn in flight or a warm harness); stop it before replacing its life`, { action: `agent-bot soul stop ${manifest.agentId}` });
@@ -977,7 +1048,7 @@ export async function soulEnvImportCommand(argv, { gate = ownerGate, readStdin =
   let restored;
   try {
     const extracted = await extractSoulExport(source, staging);
-    restored = await restoreSoul({ archive: source, staging, manifest: extracted.manifest, plan: fresh, env, home, file, stateDir, now, config: options.config, authorization });
+    restored = await restoreSoul({ archive: source, staging, manifest: extracted.manifest, plan: fresh, env, home, file, stateDir, now, config: options.config, authorization, interaction });
   } catch (error) {
     // The archive is still there: the staging is ours and goes; nothing
     // the soul root held is touched.
@@ -991,16 +1062,7 @@ export async function soulEnvImportCommand(argv, { gate = ownerGate, readStdin =
   appendAuditReceipt({ event: 'soul-env-import', agentId: restored.agentId, operation: 'import', decision,
     detail: `${base.restored.files} file(s), ${base.restored.bytes} byte(s)${restored.agentId !== manifest.agentId ? ` as a fork of ${manifest.agentId}` : ''}, journal ${restored.journal}, ${restored.workspaces.length} workspace(s) to link again${restored.replaced ? ', previous root moved aside' : ''}, into ${restored.soulDir}` }, { env, home, now });
   return emit({ ...base, applied: true, decision, identity: { ...base.identity, decision: fresh.decision, agentId: restored.agentId, existing: fresh.existing },
-    soulDir: restored.soulDir, replaced: restored.replaced, name: restored.name, displayName: restored.displayName, journal: restored.journal, workspaces: restored.workspaces });
+    soulDir: restored.soulDir, replaced: restored.replaced, name: restored.name, displayName: restored.displayName, journal: restored.journal, workspaces: restored.workspaces,
+    interaction: restored.interaction });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const [verb, ...args] = process.argv.slice(2);
-  const command = verb === 'export' ? soulEnvExportCommand : verb === 'import' ? soulEnvImportCommand : null;
-  (command ? command(args) : Promise.reject(new Error(USAGE))).catch((error) => {
-    const failure = { code: error.code ?? `soul-env-${verb === 'import' ? 'import' : 'export'}-failed`, message: error.message, action: error.action ?? null };
-    if (process.argv.includes('--json')) process.stdout.write(`${JSON.stringify({ error: failure })}\n`);
-    else process.stderr.write(`agent-bot soul env ${verb ?? 'export'}: ${failure.code}: ${failure.message}${failure.action ? `\n  -> ${failure.action}` : ''}\n`);
-    process.exitCode = 1;
-  });
-}
