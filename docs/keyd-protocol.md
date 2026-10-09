@@ -205,8 +205,8 @@ Callers ([owner-gate.mjs](../owner-gate.mjs)):
    and no identifier.
 3. Only if that passes, run `<bin> presence-key` (15-second timeout). If the
    output is a well-formed key, write it to `presence.pub` and use it. The
-   file is created with mode 0600; an existing file is overwritten in place
-   and keeps the mode it had.
+   file is left at mode 0600, whether it is new or replaces a pin that did
+   not parse (#746).
 4. Any failure along the way pins nothing and returns `null`, which
    `keydPresence` reports as `presence-unavailable`.
 
@@ -217,8 +217,6 @@ not parse as a key is treated as no pin, and step 2 runs again.
 
 Current behaviour, recorded here and not changed by this page:
 
-- Re-pinning over an existing `presence.pub` that did not parse keeps that
-  file's previous mode; only a newly created pin file gets 0600.
 - `identity migrate-credentials --to keyd --all` sends every key in one
   import, and keyd refuses more than 64, so a host with more than 64 movable
   souls cannot complete that import.
@@ -246,7 +244,7 @@ behaviour with no test in this repository.
 | keyd issues assertions for 60 s | keyd-side | — | none here |
 | Audience, unavailable RPC code and the code-signing requirement string | — | `owner-presence.mjs` constants | `tests/owner-presence.test.mjs`: "the presence contract constants keyd and agent-bot share" |
 | Each request carries a fresh agent-bot nonce; a socket without keyd's key, or an assertion for another nonce, is refused | — | `keydPresence` | `tests/owner-presence.test.mjs`: "keydPresence asks keyd with the action and a fresh nonce, and checks the answer" |
-| The presence key is pinned from the signed binary once, a new pin file 0600, never from the socket | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "the presence key is pinned from the signed binary, once, and never from the socket" |
+| The presence key is pinned from the signed binary once, the pin file 0600, never from the socket | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "the presence key is pinned from the signed binary, once, and never from the socket", "a corrupt pin is replaced from the binary and left owner-only" |
 | No record, an unsigned binary (never run) or a malformed answer pins nothing | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "no keyd, an unsigned keyd or a malformed answer pins nothing" |
 | An unparseable pin file is pinned again from the signed binary | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "a pin that does not parse as a key is pinned again from the signed binary" |
 | `presence-unavailable` vs `owner-declined` (timeout included) | — | `keydPresence` | `tests/owner-presence.test.mjs`: "keydPresence tells \"nobody can be asked\" apart from \"the owner said no\"" |
