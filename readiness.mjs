@@ -20,6 +20,7 @@ import { inspectSpacesCutover } from './spaces-cutover.mjs';
 import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness, unmanagedAuthorsWithLegacyDefault } from './config.mjs';
 import { preGateConfigStatus } from './config-migration.mjs';
 import { inspectAppCredentials } from './credential-reconciler.mjs';
+import { appKeyStores } from './soul-credentials.mjs';
 import { configuredAccountIdentity, accountName, detectHarness, HARNESSES } from './detect-harness.mjs';
 import { inspectClaudeWorktreeAdapter } from './sync-hooks.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
@@ -676,6 +677,65 @@ export function appRecordCheck({ agentId, slug, config = {}, readIdentity } = {}
     // contract, not a chore doctor hands the owner.
     action: `nothing to do yet: the explicit ${slug} keeps working until #107 closes in-process mints, and it must be reconciled with the record before then (#107 migration contract)${managed ? '' : `; ${slug} is not a managed App on this machine`}`,
     evidence: { agent_id: agentId, app_slug: slug, recorded_app_slug: recorded, managed },
+  });
+}
+
+// Which key store each App's key is recorded in, and whether a legacy
+// ~/.config/<slug>/private-key.pem remains (#110). Records and lstat only: no
+// store is read and the key file is never opened, so this names stores and
+// slugs, never key material. A remaining legacy file is a warning, not a
+// failure: migration is the owner's explicit step.
+function keyStoreCheck({ roster, home, env, config, inspect }) {
+  if (roster.length === 0) {
+    return readinessCheck({
+      id: 'credential.key_store',
+      status: 'not_applicable',
+      message: 'no configured App to report a key store for',
+    });
+  }
+  // One unreadable record (a malformed soul.json, an odd slug) reports that
+  // App alone as unreadable; the other Apps still show.
+  const apps = roster.map((slug) => {
+    try {
+      const row = inspect(slug, { home, env, config });
+      return {
+        app_slug: slug,
+        stores: [...new Set(row.stores.map((entry) => entry.store))].sort(),
+        legacy_key_file: row.legacyKeyFile === true,
+      };
+    } catch {
+      return { app_slug: slug, stores: [], legacy_key_file: null, unreadable: true };
+    }
+  });
+  const summary = apps.map((app) => `${app.app_slug}: ${app.unreadable ? 'records unreadable'
+    : app.stores.join(', ') || 'no store recorded'}`).join('; ');
+  const legacy = apps.filter((app) => app.legacy_key_file).map((app) => app.app_slug);
+  const unreadable = apps.filter((app) => app.unreadable).map((app) => app.app_slug);
+  if (legacy.length > 0) {
+    return readinessCheck({
+      id: 'credential.key_store',
+      status: 'warning',
+      code: 'legacy-key-file-present',
+      message: `App key stores (${summary}); a legacy ~/.config/<slug>/private-key.pem remains for ${legacy.join(', ')}; migrate with: agent-bot identity migrate-credentials --all --dry-run`,
+      action: 'run: agent-bot identity migrate-credentials --all --dry-run, then without --dry-run',
+      evidence: { apps },
+    });
+  }
+  if (unreadable.length > 0) {
+    return readinessCheck({
+      id: 'credential.key_store',
+      status: 'warning',
+      code: 'key-store-probe-failed',
+      message: `App key stores (${summary}); check soul.json credentials and identityApps stores for ${unreadable.join(', ')}`,
+      action: 'check the soul census and soul.json credentials for the unreadable Apps, then rerun doctor',
+      evidence: { apps },
+    });
+  }
+  return readinessCheck({
+    id: 'credential.key_store',
+    status: 'ready',
+    message: `App key stores (${summary}); no legacy key file`,
+    evidence: { apps },
   });
 }
 
@@ -2193,6 +2253,7 @@ export async function collectReadiness({
   access = accessSync,
   load = loadConfig,
   inspectCredentials = inspectAppCredentials,
+  inspectKeyStores = appKeyStores,
   inspectSpace = inspectSoulSpace,
   inspectDaemonSupervisor = inspectSupervisor,
   inspectCutover = inspectSpacesCutover,
@@ -2322,6 +2383,7 @@ export async function collectReadiness({
     machineChecks.push(...soulEnvironmentChecks({ home, env, config }));
     const bindingSummary = worktreeBindingSummaryCheck({ home, env, roster });
     if (bindingSummary) machineChecks.push(bindingSummary);
+    if (configValid) machineChecks.push(keyStoreCheck({ roster, home, env, config, inspect: inspectKeyStores }));
     machineChecks.push(secureStoreCheck({ probe: probeSecretStore }));
     machineChecks.push(secureStoreLauncherSessionCheck({
       discovery: launcherSessionContexts({ home, env, statFile }),

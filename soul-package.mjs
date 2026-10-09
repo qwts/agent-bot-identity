@@ -477,10 +477,16 @@ function publishManifestEdit(directory, file, next) {
 }
 
 // A soul directory's credentials.github declaration, or null (#383).
-export function soulCredentialsDeclaration(directory) {
+// `strict` (doctor's key-store report, #110) lets an unreadable or malformed
+// soul.json throw instead of reading as "no declaration"; a missing one is
+// still null. Every other caller keeps the lenient default.
+export function soulCredentialsDeclaration(directory, { strict = false } = {}) {
   let manifest;
   try { manifest = JSON.parse(readFileSync(join(directory, 'soul.json'), 'utf8')); }
-  catch { return null; }
+  catch (error) {
+    if (strict && error?.code !== 'ENOENT') throw new Error('soul.json is unreadable');
+    return null;
+  }
   if (!object(manifest) || manifest.credentials === undefined) return null;
   return validateCredentialsDeclaration(manifest.credentials).github ?? null;
 }

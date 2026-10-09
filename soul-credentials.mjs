@@ -405,7 +405,7 @@ export function writeSoulCredential({ agentId, soulDir, declaration }, credentia
 }
 
 // The souls whose soul.json declares this App, the caller's own soul first.
-function declaringSouls(slug, { agentId, env, home, cwd, readOnly = false }) {
+function declaringSouls(slug, { agentId, env, home, cwd, readOnly = false, strict = false }) {
   const file = populationFile({ env, home });
   const ids = [];
   const own = agentId ?? (() => { try { return currentAgentId({ env, cwd }); } catch { return null; } })();
@@ -416,7 +416,7 @@ function declaringSouls(slug, { agentId, env, home, cwd, readOnly = false }) {
   for (const id of ids) {
     let soulDir;
     try { soulDir = soulDirectory(id, { file, env, home, readOnly }); } catch { continue; }
-    const declaration = soulCredentialsDeclaration(soulDir);
+    const declaration = soulCredentialsDeclaration(soulDir, { strict });
     if (declaration?.app === slug) found.push({ agentId: id, soulDir, declaration });
   }
   return found;
@@ -497,6 +497,30 @@ export function legacyKeyRemovable(slug, { env = process.env, home = homedir(), 
     }
     return true;
   } catch { return false; }
+}
+
+// Where an App's key is recorded to live, for doctor (#110). Records only:
+// the managed App's config `store` and each declaring soul's `store` (or the
+// platform default), never a store read, so a locked store cannot change
+// the answer. An unreadable soul.json or unknown store throws, so doctor
+// marks the App unreadable. The legacy key file is checked with lstat and
+// never opened.
+export function appKeyStores(slug, { env = process.env, home = homedir(), config = loadConfig({ env, home }), platform = process.platform } = {}) {
+  const stores = [];
+  // loadConfig does not validate a managed store; an unknown one makes this
+  // App unreadable rather than a kind to print.
+  const managed = config.identityApps?.[slug]?.store;
+  if (managed !== undefined && managed !== null) {
+    if (!CREDENTIAL_STORES.includes(managed)) throw new Error('unknown managed App credential store');
+    stores.push({ source: 'managed-app', store: managed, agentId: null });
+  }
+  for (const soul of declaringSouls(slug, { env, home, cwd: home, readOnly: true, strict: true })) {
+    stores.push({ source: 'soul', store: soul.declaration.store ?? defaultCredentialStore(platform), agentId: soul.agentId });
+  }
+  let legacyKeyFile = true;
+  try { lstatSync(path.join(legacyCredentialDirectory(slug, home), 'private-key.pem')); }
+  catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') legacyKeyFile = false; }
+  return { slug, stores, legacyKeyFile };
 }
 
 // --- agent-bot identity migrate-credentials ---------------------------------

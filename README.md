@@ -259,6 +259,14 @@ refused, timeout and HTTP status apart; any answer below 500 (a 401/403 is
 expected without a bearer) is reachable. It is advisory: a failed probe is a
 warning and never makes a ready machine not ready.
 
+`credential.key_store` names, for each configured App, the key store kinds
+its records point to (`keychain`, `file`, `pass-cli`, `keyd`, from soul
+declarations and the managed App record) and whether a legacy
+`~/.config/<slug>/private-key.pem` still exists. It reads no store and only
+stats the legacy file, never opening it. A remaining legacy file is a warning
+naming `agent-bot identity migrate-credentials`, not a failure; see
+[soul credentials](docs/soul-credentials.md#migrating).
+
 Do not report the organization install complete until every expected App row
 and requested harness tool is ready. A missing organization input or tool is a
 blocking dependency, not permission to fall back to a human GitHub login or a
