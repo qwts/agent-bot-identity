@@ -76,6 +76,19 @@ a turn runs again, or once `agent-bot harness auth status|login HARNESS
 is never stored. The audit receipt reads `harness expired` or
 `harness signed-out`.
 
+`harness auth status` prints `{ harness, loggedIn, status, reason? }`.
+`status` says what the probe proved (#536):
+
+| `status` | Meaning |
+| --- | --- |
+| `signed-in` | The harness reported a sign-in. |
+| `signed-out` | The harness positively reported no sign-in: Claude's `"loggedIn": false`, Codex's `Not logged in` (a non-zero exit alone is not enough: Codex exits 1 for an unreadable `auth.json` too), or OpenCode's `0 credentials`. |
+| `unknown` | The probe proved nothing. `reason` is `status-command-missing`, `status-timeout`, `status-interrupted`, `status-failed` or `status-unreadable`. |
+
+`loggedIn` is true only for `signed-in`, so older readers never treat
+`unknown` as signed in. An `unknown` status does not clear a recorded
+`harnessAuth` failure.
+
 ## Copied soul folders
 
 Copying a soul folder (a Finder Duplicate, for example) copies its

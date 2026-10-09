@@ -38,30 +38,46 @@ test('Codex and OpenCode use the soul-installed CLI before PATH', (t) => {
   assert.deepEqual(authCommand(ACP_SPAWN_REGISTRY.opencode, home), { command: opencode, args: [] });
 });
 
+// Each case: what the probe returned, then the evidence (#536). `unknown`
+// keeps loggedIn false for older callers but is never reported signed out.
+const missing = Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' });
+const timedOut = Object.assign(new Error('timed out'), { killed: true, signal: 'SIGTERM', code: null });
 const statusCases = {
   claude: [
-    ['signed in', { stdout: '{"loggedIn":true,"account":"private"}' }, true],
-    ['signed out', { stdout: '{"loggedIn":false}' }, false],
-    ['unreadable output', { stdout: 'not json' }, false],
-    ['non-zero exit', new Error('exit 1'), false],
+    ['signed in', { stdout: '{"loggedIn":true,"account":"private"}' }, 'signed-in'],
+    ['signed out', { stdout: '{"loggedIn":false}' }, 'signed-out'],
+    ['unreadable output', { stdout: 'not json' }, 'unknown', 'status-unreadable'],
+    ['JSON without a loggedIn boolean', { stdout: '{"loggedIn":"yes"}' }, 'unknown', 'status-unreadable'],
+    ['non-zero exit without output', Object.assign(new Error('exit 1'), { code: 1 }), 'unknown', 'status-unreadable'],
+    ['missing CLI', missing, 'unknown', 'status-command-missing'],
+    ['timeout', timedOut, 'unknown', 'status-timeout'],
   ],
   codex: [
-    ['signed in', { stdout: '', stderr: 'Logged in using ChatGPT' }, true],
-    ['signed out', Object.assign(new Error('exit 1'), { code: 1, stderr: 'Not logged in' }), false],
-    // Codex promises an exit-code result, regardless of human-readable text.
-    ['unreadable output', { stdout: 'unknown output' }, true],
-    ['non-zero exit', Object.assign(new Error('exit 2'), { code: 2, stdout: 'Logged in using ChatGPT' }), false],
+    ['signed in', { stdout: '', stderr: 'Logged in using ChatGPT' }, 'signed-in'],
+    // Observed with codex-cli 0.161.0 against an empty CODEX_HOME.
+    ['signed out', Object.assign(new Error('exit 1'), { code: 1, stderr: 'Not logged in\n' }), 'signed-out'],
+    // Exit 0 is the contract, regardless of human-readable text.
+    ['unreadable output', { stdout: 'unknown output' }, 'signed-in'],
+    // The same exit 1 for an auth.json it cannot read proves nothing.
+    ['status error', Object.assign(new Error('exit 1'), { code: 1, stderr: 'Error checking login status: expected ident at line 1 column 2\n' }), 'unknown', 'status-failed'],
+    ['usage error', Object.assign(new Error('exit 2'), { code: 2, stderr: "error: unexpected argument '--bogus-flag' found\n" }), 'unknown', 'status-failed'],
+    ['non-zero exit without the sign-out line', Object.assign(new Error('exit 2'), { code: 2, stdout: 'Logged in using ChatGPT' }), 'unknown', 'status-failed'],
+    ['missing CLI', missing, 'unknown', 'status-command-missing'],
+    ['timeout', timedOut, 'unknown', 'status-timeout'],
+    ['interrupted', Object.assign(new Error('killed'), { killed: false, signal: 'SIGKILL', code: null }), 'unknown', 'status-interrupted'],
+    ['failure without an exit code', new Error('spawn EACCES'), 'unknown', 'status-failed'],
   ],
   opencode: [
-    ['signed in', { stdout: '\x1b[90m┌  Credentials\n│\n●  OpenAI oauth\n└  1 credentials\x1b[0m\n' }, true],
-    ['signed out', { stdout: '┌  Credentials\n│\n└  0 credentials\n' }, false],
-    ['unreadable output', { stdout: 'Credentials unavailable: 1 credentials' }, false],
-    ['non-zero exit', Object.assign(new Error('exit 1'), { code: 1, stdout: '└  1 credentials\n' }), false],
+    ['signed in', { stdout: '\x1b[90m┌  Credentials\n│\n●  OpenAI oauth\n└  1 credentials\x1b[0m\n' }, 'signed-in'],
+    ['signed out', { stdout: '┌  Credentials\n│\n└  0 credentials\n' }, 'signed-out'],
+    ['unreadable output', { stdout: 'Credentials unavailable: 1 credentials' }, 'unknown', 'status-unreadable'],
+    ['non-zero exit', Object.assign(new Error('exit 1'), { code: 1, stdout: '└  1 credentials\n' }), 'unknown', 'status-failed'],
+    ['missing CLI', missing, 'unknown', 'status-command-missing'],
   ],
 };
 
 for (const [harness, cases] of Object.entries(statusCases)) {
-  for (const [name, output, loggedIn] of cases) {
+  for (const [name, output, status, reason] of cases) {
     test(`${harness} status: ${name}`, async () => {
       const runImpl = async (command, args, options) => {
         assert.equal(command, harness);
@@ -70,20 +86,21 @@ for (const [harness, cases] of Object.entries(statusCases)) {
         if (output instanceof Error) throw output;
         return output;
       };
-      assert.deepEqual(await harnessAuth('status', harness, { home: null, env: {}, runImpl }), { harness, loggedIn });
+      assert.deepEqual(await harnessAuth('status', harness, { home: null, env: {}, runImpl }),
+        { harness, loggedIn: status === 'signed-in', status, ...(reason ? { reason } : {}) });
     });
   }
 }
 
 test('Claude keeps reading JSON from a non-zero status', async () => {
   const runImpl = async () => { throw Object.assign(new Error('exit 1'), { stdout: '{"loggedIn":true}' }); };
-  assert.deepEqual(await harnessAuth('status', 'claude', { env: {}, runImpl }), { harness: 'claude', loggedIn: true });
+  assert.deepEqual(await harnessAuth('status', 'claude', { env: {}, runImpl }), { harness: 'claude', loggedIn: true, status: 'signed-in' });
 });
 
 test('OpenCode recognizes provider environment variables without returning details', async () => {
   for (const count of ['1 environment variable', '2 environment variables', '12 credentials']) {
     const runImpl = async () => ({ stdout: `└  0 credentials\n\n┌  Environment\n│\n●  Provider ENV_VAR\n└  ${count}\n` });
-    assert.deepEqual(await harnessAuth('status', 'opencode', { env: {}, runImpl }), { harness: 'opencode', loggedIn: true });
+    assert.deepEqual(await harnessAuth('status', 'opencode', { env: {}, runImpl }), { harness: 'opencode', loggedIn: true, status: 'signed-in' });
   }
 });
 
@@ -97,7 +114,7 @@ for (const harness of ['codex', 'opencode']) {
       assert.equal(options.timeout, calls.length === 1 ? LOGIN_TIMEOUT_MS : 30_000);
       return { stdout: harness === 'codex' ? '' : '└  1 credentials\n' };
     };
-    assert.deepEqual(await harnessAuth('login', harness, { env: {}, runImpl }), { harness, loggedIn: true });
+    assert.deepEqual(await harnessAuth('login', harness, { env: {}, runImpl }), { harness, loggedIn: true, status: 'signed-in' });
     assert.deepEqual(calls, [login, ACP_SPAWN_REGISTRY[harness].signIn.status]);
     let attempts = 0;
     await assert.rejects(harnessAuth('login', harness, { env: {}, runImpl: async () => { attempts++; throw new Error('cancelled'); } }), /sign-in did not finish: cancelled/);
@@ -121,14 +138,17 @@ test('reports loggedIn from the harness status, and signs in before re-checking'
     return { stdout: JSON.stringify({ loggedIn: signedIn }) };
   };
   const env = { CLAUDECODE: '1', PATH: '/usr/bin' };
-  assert.deepEqual(await harnessAuth('status', 'claude', { home: null, env, runImpl }), { harness: 'claude', loggedIn: false });
-  assert.deepEqual(await harnessAuth('login', 'claude', { home: null, env, runImpl }), { harness: 'claude', loggedIn: true });
+  assert.deepEqual(await harnessAuth('status', 'claude', { home: null, env, runImpl }), { harness: 'claude', loggedIn: false, status: 'signed-out' });
+  assert.deepEqual(await harnessAuth('login', 'claude', { home: null, env, runImpl }), { harness: 'claude', loggedIn: true, status: 'signed-in' });
   assert.deepEqual(calls, ['auth status --json', 'auth login', 'auth status --json']);
 });
 
-test('an unreadable or failing status counts as signed out', async () => {
+test('an unreadable or failing status is unknown, never signed in (#536)', async () => {
   const runImpl = async () => { throw Object.assign(new Error('exit 1'), { stdout: 'not json' }); };
-  assert.equal((await harnessAuth('status', 'claude', { home: null, runImpl })).loggedIn, false);
+  const result = await harnessAuth('status', 'claude', { home: null, runImpl });
+  assert.equal(result.loggedIn, false);
+  assert.equal(result.status, 'unknown');
+  assert.equal(result.reason, 'status-unreadable');
   await assert.rejects(harnessAuth('logout', 'claude', { runImpl }), /usage/);
 });
 
@@ -149,7 +169,7 @@ test('harness auth CLI uses the registered soul home and its installed CLI', (t)
     encoding: 'utf8', env: { HOME: root, PATH: process.env.PATH, AGENT_BOT_POPULATION_PATH: file },
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), { harness: 'claude', loggedIn: true });
+  assert.deepEqual(JSON.parse(result.stdout), { harness: 'claude', loggedIn: true, status: 'signed-in' });
 });
 
 test('sign-in failures are told apart from other turn failures (#84)', async () => {
@@ -187,4 +207,17 @@ test('the census records, keeps and clears a soul\'s sign-in failure', async (t)
   assert.equal(recordHarnessAuth(agent, null, { file, only: 'codex' }).harnessAuth.status, 'signed-out');
   assert.equal('harnessAuth' in recordHarnessAuth(agent, null, { file, only: 'claude' }), false);
   assert.equal('harnessAuth' in showSoul(agent, { file }), false);
+});
+
+test('OpenCode signed-out needs its zero-credentials line; registry rows validate the optional reader', async () => {
+  const { validateSpawnRow } = await import('../acp-registry.mjs');
+  const row = ACP_SPAWN_REGISTRY.opencode;
+  assert.ok(row.signIn.read.signedOut instanceof RegExp);
+  assert.throws(() => validateSpawnRow({ ...row, signIn: { ...row.signIn, read: { loggedIn: row.signIn.read.loggedIn, signedOut: '0 credentials' } } }), /signIn/);
+  const codex = ACP_SPAWN_REGISTRY.codex;
+  assert.ok(codex.signIn.signedOut instanceof RegExp);
+  assert.throws(() => validateSpawnRow({ ...codex, signIn: { ...codex.signIn, signedOut: 'Not logged in' } }), /signIn/);
+  // Credentials at zero but a provider environment variable present is signed in.
+  const runImpl = async () => ({ stdout: '└  0 credentials\n\n┌  Environment\n│\n●  Provider ENV_VAR\n└  1 environment variable\n' });
+  assert.equal((await harnessAuth('status', 'opencode', { env: {}, runImpl })).status, 'signed-in');
 });

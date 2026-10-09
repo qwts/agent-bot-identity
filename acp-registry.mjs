@@ -148,7 +148,8 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
     // Any stored provider or provider environment variable can serve a turn.
     signIn: Object.freeze({ command: 'opencode', status: Object.freeze(['auth', 'list']),
       login: Object.freeze(['auth', 'login', '--provider', 'openai', '--method', 'ChatGPT Pro/Plus (headless)']),
-      read: Object.freeze({ loggedIn: /(?:^|\n)\s*└\s+[1-9]\d* (?:credentials|environment variables?)\s*(?:\n|$)/ }) }),
+      read: Object.freeze({ loggedIn: /(?:^|\n)\s*└\s+[1-9]\d* (?:credentials|environment variables?)\s*(?:\n|$)/,
+        signedOut: /(?:^|\n)\s*└\s+0 credentials\s*(?:\n|$)/ }) }),
     stripEnv: Object.freeze([]),
     // Set after stripEnv, so an inherited value never replaces the ruleset.
     setEnv: Object.freeze({ OPENCODE_CONFIG_CONTENT: OPENCODE_DAEMON_CONFIG }),
@@ -180,7 +181,10 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
     cli: 'codex',
     installHint: 'install Codex (https://developers.openai.com/codex) and run `codex login`',
     signIn: Object.freeze({ package: '@openai/codex', script: 'bin/codex.js', command: 'codex',
-      status: Object.freeze(['login', 'status']), login: Object.freeze(['login', '--device-auth']), read: 'exit-code' }),
+      status: Object.freeze(['login', 'status']), login: Object.freeze(['login', '--device-auth']), read: 'exit-code',
+      // Checked against codex-cli 0.161.0: "Not logged in" exits 1, and so does
+      // "Error checking login status" for an unreadable auth.json (#536).
+      signedOut: /^Not logged in\b/m }),
     stripEnv: Object.freeze([]),
     // Set after stripEnv, like the OpenCode ruleset: the sandbox must reach
     // the agent-comms socket (see CODEX_DAEMON_CONFIG).
@@ -258,7 +262,9 @@ export function validateSpawnRow(row) {
     if (!auth || typeof auth.command !== 'string' || !auth.command
       || ['status', 'login'].some((key) => !Array.isArray(auth[key]) || !auth[key].length
         || auth[key].some((arg) => typeof arg !== 'string' || !arg))
-      || !(['json', 'exit-code'].includes(auth.read) || auth.read?.loggedIn instanceof RegExp)
+      || !(['json', 'exit-code'].includes(auth.read) || (auth.read?.loggedIn instanceof RegExp
+        && (auth.read.signedOut === undefined || auth.read.signedOut instanceof RegExp)))
+      || (auth.signedOut !== undefined && !(auth.signedOut instanceof RegExp))
       || ((auth.package !== undefined || auth.script !== undefined)
         && (typeof auth.package !== 'string' || !auth.package || typeof auth.script !== 'string' || !auth.script))) {
       failRegistry(`${row.harness}: signIn requires a command, status, login, read and paired package/script`);
