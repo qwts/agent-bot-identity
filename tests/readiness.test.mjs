@@ -24,6 +24,7 @@ import {
   renderReadinessReport,
   requireReadinessSchema,
   worktreePinOriginCheck,
+  appRecordCheck,
 } from '../readiness.mjs';
 
 const roots = [];
@@ -2391,4 +2392,27 @@ test('doctor reports a worktree pin with no setup or binding state as inherited 
   const unreadable = check(() => { throw new Error('bind token could not be read'); }, none);
   assert.equal(unreadable.code, 'worktree-pin-origin-unreadable');
   assert.doesNotMatch(JSON.stringify(unreadable), /token/);
+});
+
+test('appRecordCheck flags a checkout acting as an App its soul record does not name (#107)', () => {
+  const agentId = 'agent_b3d72312-32a7-4e4f-840c-4231b172d07f';
+  const record = (appSlug) => () => ({ id: agentId, github: appSlug ? { appSlug } : null });
+  assert.equal(appRecordCheck({ agentId, slug: 'qwts-codex-agent', readIdentity: () => { throw new Error('no record'); } }), null,
+    'an unreadable record is reported by the Agent ID checks, not here');
+  assert.equal(appRecordCheck({ agentId, slug: 'qwts-codex-agent', readIdentity: record(null) }), null, 'a soul without the add-on has no App to match');
+  assert.equal(appRecordCheck({ agentId, slug: null, readIdentity: record('qwts-codex-agent') }), null);
+
+  const ready = appRecordCheck({ agentId, slug: 'qwts-codex-agent', readIdentity: record('qwts-codex-agent') });
+  assert.equal(ready.status, 'ready');
+
+  const unmanaged = appRecordCheck({ agentId, slug: 'qwts-codex-agent', readIdentity: record('qwts-grok-agent') });
+  assert.equal(unmanaged.status, 'warning');
+  assert.equal(unmanaged.code, 'soul-app-record-mismatch');
+  assert.deepEqual(unmanaged.evidence, { agent_id: agentId, app_slug: 'qwts-codex-agent', recorded_app_slug: 'qwts-grok-agent', managed: false });
+  assert.match(unmanaged.action, /identity app connect .*then runs: agent-bot identity app assign qwts-codex-agent --soul agent_b3d72312/);
+
+  const managed = appRecordCheck({ agentId, slug: 'qwts-codex-agent', readIdentity: record('qwts-grok-agent'),
+    config: { identityApps: { 'qwts-codex-agent': { store: 'keychain' } } } });
+  assert.doesNotMatch(managed.action, /identity app connect/);
+  assert.match(managed.action, /^if qwts-codex-agent is right for this soul, the owner runs: agent-bot identity app assign/);
 });
