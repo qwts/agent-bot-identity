@@ -109,6 +109,8 @@ test('fork gives a Finder copy its own identity in place; the original is untouc
   assert.equal(located.agentId, result.agentId);
   assert.equal(located.name, 'Ted');
   assert.equal(readFileSync(path.join(a.copy, '.soul-state', 'agent-id'), 'utf8'), `${result.agentId}\n`);
+  // A new soul: its own Codex home by default (#617).
+  assert.deepEqual(JSON.parse(readFileSync(path.join(a.copy, '.soul-state', 'tool-homes.json'), 'utf8')), { schemaVersion: 1, harnesses: { codex: 'soul' } });
   // Its own identity, genesis and package revision, with no GitHub App.
   const identity = readAgentIdentity(result.agentId, { stateDir: a.env.AGENT_BOT_STATE_HOME });
   assert.equal(identity.status, 'active');

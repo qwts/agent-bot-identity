@@ -91,7 +91,9 @@ for (const formatVersion of [1, 2]) test(`format ${formatVersion}: independent i
     assert.equal(readFileSync(join(soul.soulDir, '.soul-state', 'agent-id'), 'utf8').trim(), soul.id);
     // The life starts inside the folder (#583 slice 5): the Agent Space as a
     // directory the census points at, and the revisions mirrored from genesis.
-    assert.deepEqual(readdirSync(join(soul.soulDir, '.soul-state')), ['agent-id', 'runs', 'space']);
+    // Born managed, it keeps Codex's state in its own tool home (#617).
+    assert.deepEqual(readdirSync(join(soul.soulDir, '.soul-state')), ['agent-id', 'runs', 'space', 'tool-homes.json']);
+    assert.deepEqual(JSON.parse(readFileSync(join(soul.soulDir, '.soul-state', 'tool-homes.json'), 'utf8')), { schemaVersion: 1, harnesses: { codex: 'soul' } });
     assert.equal(JSON.parse(readFileSync(join(soul.soulDir, '.soul-state', 'space', 'space.json'), 'utf8')).agentId, soul.id);
     assert.equal(showSoul(soul.id, f.options).spacePath, join(soul.soulDir, '.soul-state', 'space'));
     assert.equal(existsSync(join(f.home, 'spaces')), false, 'nothing under the spaces root');

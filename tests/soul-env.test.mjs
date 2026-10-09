@@ -123,7 +123,7 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
   // Routed into the soul (#583 slice 2); no sign-in on either side here, so
   // nothing to adopt and no warning.
   assert.deepEqual(component(result, 'tool-state').entries, [{ harness: 'codex', path: '.soul-state/tools/codex', routing: ['CODEX_HOME'], containment: 'soul', reason: null,
-    hostPath: path.join(f.home, '.codex'), signIn: 'missing', hostSignIn: 'missing', note: null }]);
+    choice: null, hostPath: path.join(f.home, '.codex'), signIn: 'missing', hostSignIn: 'missing', note: null }]);
   const credentials = component(result, 'credentials');
   assert.deepEqual([credentials.present, credentials.exportable, credentials.declared], [true, false, 'billy-app']);
   assert.ok(!JSON.stringify(result).includes('NEVER-RETURN-THIS'), 'credential contents never appear');

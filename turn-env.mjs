@@ -5,6 +5,8 @@
 
 import { NEVER_ROUTED } from './soul-tool-homes.mjs';
 
+const TOOL_HOME_FAILURES = Object.freeze(['tool-home-unwritable', 'tool-home-record-invalid']);
+
 // The environment a soul's harness turn runs with, composed once so the
 // executor and anything that must see the same store (the launch's
 // sign-in probe, #536) cannot drift: `{ turnEnv, mcpEnv, harnessEnv,
@@ -21,11 +23,12 @@ export function composeTurnEnv({ agentId, harness, env = {}, baseEnv = {}, runti
   // harness-specific variables only: HOME and XDG_STATE_HOME are dropped
   // whatever the port says. A soul with no folder (a lookup that fails
   // without a code) runs on the host store as before; a tool home that
-  // cannot be made is a coded failure of the turn, never a silent fallback.
+  // cannot be made, or a tool-homes record that cannot be read (#617), is a
+  // coded failure of the turn, never a silent fallback.
   const routed = [];
   if (toolHomeEnvFor) {
     let patch = {};
-    try { patch = toolHomeEnvFor({ agentId, harness }) ?? {}; } catch (error) { if (error?.code === 'tool-home-unwritable') throw error; }
+    try { patch = toolHomeEnvFor({ agentId, harness }) ?? {}; } catch (error) { if (TOOL_HOME_FAILURES.includes(error?.code)) throw error; }
     for (const [name, value] of Object.entries(patch)) {
       if (NEVER_ROUTED.includes(name) || typeof value !== 'string') continue;
       turnEnv[name] = value;

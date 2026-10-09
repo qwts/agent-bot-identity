@@ -12,6 +12,7 @@ import { isGateEnabled, loadConfig } from './config.mjs';
 import { computePackageRevision, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST,
   readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
 import { adoptSoulPackage, discardRevisionStaging, editSoulRevision, prepareRevisionEdit, revisionPackagePath } from './soul-revisions.mjs';
+import { stampNewSoulToolHomes } from './soul-tool-home-record.mjs';
 import { soulsHome } from './souls-root.mjs';
 
 /** The Starter shipped by this install, shared by join, start_soul and listing. */
@@ -233,6 +234,8 @@ export async function spawnSoulTemplate(templatePath, { name, role = null, harne
     const state = join(directory, '.soul-state');
     mkdirSync(state, { mode: 0o700 });
     writeFileSync(join(state, 'agent-id'), `${identity.id}\n`, { flag: 'wx', mode: 0o600 });
+    // Born managed: its harness's config, sign-in and sessions in its own tool home (#617).
+    stampNewSoulToolHomes(directory);
     const space = initSoulSpace(identity.id, directory, revisionOptions);
     revisionOptions.soulDir = directory;
     adoptSoulPackage(identity.id, directory, { ...revisionOptions, reason: 'Spawn template instance' });

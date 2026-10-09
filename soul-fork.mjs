@@ -37,6 +37,7 @@ import { assertOwnerAction } from './owner-action.mjs';
 import { joinComms, joinSoul } from './soul-join.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
 import { adoptSoulPackage, editSoulRevision, revisionPackagePath } from './soul-revisions.mjs';
+import { stampNewSoulToolHomes } from './soul-tool-home-record.mjs';
 import { soulsHome } from './souls-root.mjs';
 
 const USAGE = 'usage: agent-bot soul fork <copy-path> --name NAME [--harness H] [--role ROLE] [--json] [--principal-stdin]';
@@ -179,6 +180,8 @@ export async function forkSoul({
     const state = path.join(folder, '.soul-state');
     mkdirSync(state, { mode: 0o700 });
     writeFileSync(path.join(state, 'agent-id'), `${identity.id}\n`, { flag: 'wx', mode: 0o600 });
+    // A new soul: its own tool homes by default, whatever the original chose (#617).
+    stampNewSoulToolHomes(folder);
     const space = initSoulSpace(identity.id, folder, { now });
     const revisionOptions = { stateDir, now, soulDir: folder };
     adoptSoulPackage(identity.id, folder, { ...revisionOptions, reason: `Fork of ${original}` });
