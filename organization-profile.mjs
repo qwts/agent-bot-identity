@@ -135,7 +135,7 @@ function normalizeSettings(value) {
   if (value === undefined) return null;
   const settings = requireObject(value, 'organization profile settings');
   requireExactKeys(settings, {
-    allowed: ['spaces_root', 'daemon_preference'],
+    allowed: ['spaces_root', 'daemon_preference', 'unmanaged_authors'],
     required: [],
   }, 'organization profile settings');
   const normalized = {};
@@ -158,6 +158,15 @@ function normalizeSettings(value) {
       fail('profile-invalid', 'organization profile daemon_preference is invalid');
     }
     normalized.daemon_preference = settings.daemon_preference;
+  }
+  if (settings.unmanaged_authors !== undefined) {
+    const authors = settings.unmanaged_authors;
+    if (!Array.isArray(authors) || authors.length > 64
+      || !authors.every((author) => typeof author === 'string' && /^[a-z0-9][a-z0-9._@+-]{0,99}$/.test(author))
+      || new Set(authors).size !== authors.length) {
+      fail('profile-invalid', 'organization profile unmanaged_authors must be at most 64 distinct lowercase logins');
+    }
+    normalized.unmanaged_authors = [...authors];
   }
   return normalized;
 }
@@ -354,6 +363,9 @@ export function organizationProfileToConfig(value) {
     if (profile.settings.daemon_preference !== undefined) {
       config.settings.daemonPreference = profile.settings.daemon_preference;
     }
+    if (profile.settings.unmanaged_authors !== undefined) {
+      config.settings.unmanagedAuthors = [...profile.settings.unmanaged_authors];
+    }
   }
   return config;
 }
@@ -381,6 +393,7 @@ function profileFromRuntimeConfig(config) {
   if (config.settings?.daemonPreference !== undefined) {
     settings.daemon_preference = config.settings.daemonPreference;
   }
+  if (config.settings?.unmanagedAuthors !== undefined) settings.unmanaged_authors = config.settings.unmanagedAuthors;
   return validateOrganizationProfile({
     schema_version: metadata.schemaVersion,
     organization: metadata.organization,

@@ -80,15 +80,33 @@ agent_bot_repo_reaches_github() {
   }
 }
 
+# The unmanaged-author allowlist, comma-separated, from the same resolver
+# doctor uses (config.mjs unmanagedAuthors, #675): AGENT_BOT_UNMANAGED_AUTHORS
+# when set (even empty), else the agent-bot config, which an organization
+# profile projects into. A config the resolver rejects yields nothing, so the
+# hook refuses. Without Node or the runtime the compiled `ai9d` stands, as it
+# did before the config existed.
+agent_bot_unmanaged_authors() {
+  if [ "${AGENT_BOT_UNMANAGED_AUTHORS+set}" = set ]; then
+    printf '%s' "$AGENT_BOT_UNMANAGED_AUTHORS"
+    return 0
+  fi
+  _config_module=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/../config.mjs
+  if [ ! -f "$_config_module" ] || ! command -v node >/dev/null 2>&1; then
+    printf '%s' ai9d
+    return 0
+  fi
+  node --input-type=module -e 'import(process.argv[1]).then(({ unmanagedAuthorsWithLegacyDefault }) => process.stdout.write(unmanagedAuthorsWithLegacyDefault().authors.join(","))).catch((e) => { console.error("agent-bot: unmanaged authors unavailable: " + e.message); })' "$_config_module"
+}
+
 # True when $1 (a GitHub login, git name, or email) names an unmanaged author
-# the operator allowlisted in AGENT_BOT_UNMANAGED_AUTHORS (ENG-0128): such a
-# person may publish as themselves from an agent session even in uninstalled
-# mode.
+# the operator allowlisted (ENG-0128): such a person may publish as themselves
+# from an agent session even in uninstalled mode.
 agent_bot_unmanaged_author() {
   _value=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
   [ -n "$_value" ] || return 1
   _local=${_value%%@*}
-  _authors="${AGENT_BOT_UNMANAGED_AUTHORS-ai9d}"
+  _authors=$(agent_bot_unmanaged_authors)
   _saved_ifs=$IFS
   IFS=','
   for _part in $_authors; do
