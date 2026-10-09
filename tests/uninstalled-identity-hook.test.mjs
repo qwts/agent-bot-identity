@@ -461,6 +461,29 @@ test('generated adapters apply the snapshotted allowlist with env precedence and
   }
 });
 
+// The in-process decision reads the supplied env's config, never the host's
+// (#675 review): a differing process HOME must not lend its allowlist.
+test('in-process decisions locate config from the supplied env, not the process home', () => {
+  const host = mkdtempSync(join(tmpdir(), 'uninstalled-host-'));
+  const other = mkdtempSync(join(tmpdir(), 'uninstalled-other-'));
+  const saved = process.env.HOME;
+  try {
+    mkdirSync(join(host, '.config', 'agent-bot'), { recursive: true });
+    writeFileSync(join(host, '.config', 'agent-bot', 'config.json'), JSON.stringify({ settings: { unmanagedAuthors: ['ai9d'] } }));
+    process.env.HOME = host;
+    const decide = (env) => decideUninstalledHook({ dialectKey: 'claude', event: 'pre-command', payload: { command: 'git commit -m ship' }, env: actorEnv('ai9d', { ...AI9D, ...env }) });
+    const deny = encodeDecision({ dialectKey: 'claude', event: 'pre-command', decision: 'deny', reason: UNINSTALLED_REASON });
+    const allow = encodeDecision({ dialectKey: 'claude', event: 'pre-command', decision: 'allow' });
+    assert.deepEqual(decide({ HOME: other }), deny, 'another HOME without config grants nothing');
+    assert.deepEqual(decide({}), deny, 'no HOME and no AGENT_BOT_CONFIG grants nothing');
+    assert.deepEqual(decide({ HOME: host }), allow, 'the supplied HOME config still grants');
+  } finally {
+    if (saved === undefined) delete process.env.HOME; else process.env.HOME = saved;
+    rmSync(host, { recursive: true, force: true });
+    rmSync(other, { recursive: true, force: true });
+  }
+});
+
 test('source pre-push denies an agent when the installed hook is missing', () => {
   const home = mkdtempSync(join(tmpdir(), 'uninstalled-pre-push-'));
   const repo = join(home, 'repo');
