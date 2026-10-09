@@ -18,7 +18,7 @@
 
 import { userInfo } from 'node:os';
 import { loadConfig, rosterScope, slugForHarness } from './config.mjs';
-import { PROFILE_HARNESSES, runtimeProfileInfo } from './organization-profile.mjs';
+import { PROFILE_HARNESSES, runtimeProfileInfo } from './organization-profile-schema.mjs';
 
 const HARNESSES = [
   {
