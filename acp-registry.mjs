@@ -309,19 +309,28 @@ export function harnessProcessEnv(row, baseEnv = {}) {
   return Object.assign(env, row.setEnv ?? {});
 }
 
+// Windows runs `node.exe`, never an extensionless `node`; a name that
+// already ends in .exe keeps it. Only .exe: npm's .cmd shims need a shell
+// that spawn() refuses, so finding one would pick a harness that cannot
+// start (#617). `platform` is the host's process.platform, not a catalog
+// platform like `win32-x64`.
+function commandFile(name, platform) {
+  return platform === 'win32' && !/\.exe$/i.test(name) ? `${name}.exe` : name;
+}
+
 /** The first executable regular file `name` on an env's PATH, else null. */
-export function whichOnPath(name, env = process.env) {
+export function whichOnPath(name, env = process.env, { platform = process.platform } = {}) {
   for (const dir of (env.PATH ?? '').split(delimiter).filter(Boolean)) {
-    const file = join(dir, name);
+    const file = join(dir, commandFile(name, platform));
     try { if (statSync(file).isFile()) { accessSync(file, constants.X_OK); return file; } } catch { /* next */ }
   }
   return null;
 }
 
 /** Whether a bare command name is an executable regular file on PATH (never a directory). */
-export function onPath(command, env = process.env) {
-  if (!command || command.includes('/')) return false;
-  return whichOnPath(command, env) !== null;
+export function onPath(command, env = process.env, { platform = process.platform } = {}) {
+  if (!command || command.includes('/') || (platform === 'win32' && command.includes('\\'))) return false;
+  return whichOnPath(command, env, { platform }) !== null;
 }
 
 /** Whether an absolute path is an executable regular file (#536). */

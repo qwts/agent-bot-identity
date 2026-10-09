@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { authCommand, harnessAuth, LOGIN_TIMEOUT_MS } from '../harness-auth.mjs';
-import { ACP_SPAWN_REGISTRY, whichOnPath } from '../acp-registry.mjs';
+import { ACP_SPAWN_REGISTRY, onPath, whichOnPath } from '../acp-registry.mjs';
 import { fileURLToPath } from 'node:url';
 
 const row = ACP_SPAWN_REGISTRY.claude;
@@ -252,4 +252,29 @@ test('a directory named node on PATH is not a Node (#536)', (t) => {
   writeFileSync(path.join(root, 'b', 'node'), '#!/bin/sh\n', { mode: 0o755 });
   const PATH = [path.join(root, 'a'), path.join(root, 'b')].join(path.delimiter);
   assert.equal(whichOnPath('node', { PATH }), path.join(root, 'b', 'node'));
+});
+
+// The platform is injected, so these run on any host; a live Windows run
+// stays an open #617 gate.
+test('Windows PATH lookup resolves name.exe and nothing else (#617)', (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'which-exe-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const dir of ['bare', 'exe', 'shim']) mkdirSync(path.join(root, dir));
+  writeFileSync(path.join(root, 'bare', 'node'), '#!/bin/sh\n', { mode: 0o755 });
+  writeFileSync(path.join(root, 'exe', 'node.exe'), 'MZ', { mode: 0o755 });
+  writeFileSync(path.join(root, 'shim', 'claude.cmd'), '@echo off\r\n', { mode: 0o755 });
+  const PATH = ['bare', 'shim', 'exe'].map((dir) => path.join(root, dir)).join(path.delimiter);
+  const win32 = { platform: 'win32' };
+  // An extensionless node earlier on PATH is skipped: Windows cannot run it.
+  assert.equal(whichOnPath('node', { PATH }, win32), path.join(root, 'exe', 'node.exe'));
+  // A name already ending in .exe is not doubled.
+  assert.equal(whichOnPath('node.exe', { PATH }, win32), path.join(root, 'exe', 'node.exe'));
+  // A .cmd shim needs a shell spawn() refuses, so it is not a hit.
+  assert.equal(whichOnPath('claude', { PATH }, win32), null);
+  assert.equal(onPath('claude', { PATH }, win32), false);
+  assert.equal(onPath('node', { PATH }, win32), true);
+  assert.equal(onPath(`exe\\node`, { PATH: root }, win32), false);
+  // POSIX lookup is unchanged: the bare file wins and .exe is not appended.
+  assert.equal(whichOnPath('node', { PATH }, { platform: 'linux' }), path.join(root, 'bare', 'node'));
+  assert.equal(whichOnPath('claude', { PATH: path.join(root, 'exe') }, { platform: 'darwin' }), null);
 });
