@@ -1,0 +1,1 @@
+- The runtime pin catalog now has a release identity. `catalogReleaseHash()` is the SHA-256 of every pin's version, URL, digest, `bin` and `via`, plus the catalog schema version. Nothing records it yet: putting it in install receipts with the exact resolved version, and reusing it on reinstall, comes in a later slice (#617).
