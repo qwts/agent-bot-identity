@@ -29,7 +29,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import path from 'node:path';
 import { appendAuditReceipt } from './agent-principals.mjs';
@@ -55,6 +55,27 @@ function fail(code, message, { action = null } = {}) {
 
 function lstat(file) {
   try { return lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+
+// The copied manifest is read through one descriptor: never through a link,
+// never blocking on a FIFO, and only when it is the owner's own private
+// regular file of a bounded size.
+const MANIFEST_LIMIT = 4 * 1024 * 1024;
+function readPrivateJson(file, { uid }) {
+  let fd;
+  try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+  catch { fail('sandbox-export-invalid', `${file} is missing or is a link; the copy may be incomplete`); }
+  try {
+    const info = fstatSync(fd);
+    if (!info.isFile() || info.size > MANIFEST_LIMIT) fail('sandbox-export-invalid', `${file} is not a manifest`);
+    if (uid !== null && info.uid !== uid) fail('sandbox-export-not-owned', `${file} is not owned by this account`);
+    if (info.mode & 0o077) fail('sandbox-export-not-private', `${file} can be read by other accounts`, { action: `chmod go-rwx ${quote(file)}` });
+    const bytes = Buffer.alloc(info.size);
+    let at = 0;
+    while (at < bytes.length) { const read = readSync(fd, bytes, at, bytes.length - at, null); if (read === 0) break; at += read; }
+    try { return JSON.parse(bytes.subarray(0, at).toString('utf8')); }
+    catch { fail('sandbox-export-invalid', `${file} is not valid JSON`); }
+  } finally { closeSync(fd); }
 }
 
 function sha256File(file) {
@@ -195,7 +216,15 @@ export async function runSandboxExport({ owner, skip = [], resume = null, princi
   try {
     for (const category of EXPORT_CATEGORIES) {
       const items = plan[category];
-      if (skip.includes(category)) { progress.categories[category] = { state: 'skipped', count: 0 }; continue; }
+      if (skip.includes(category)) {
+        // A resumed export already holding this category cannot also leave
+        // it out: the manifest would carry what --skip promised to omit.
+        if (progress.files.some((entry) => entry.category === category)) {
+          fail('sandbox-export-skip-recorded', `${dir} already holds ${category}; it cannot be skipped on resume`, { action: `agent-bot sandbox export --for ${owner} --skip ${category} (a new export)` });
+        }
+        progress.categories[category] = { state: 'skipped', count: 0 };
+        continue;
+      }
       if (progress.categories[category]?.state === 'exported') continue;
       if (items.length === 0) { progress.categories[category] = { state: 'empty', count: 0 }; continue; }
       const todo = items.filter((item) => !done.has(item.file));
@@ -248,6 +277,7 @@ export function copyCommands({ dir, account, owner, stamp }) {
   const into = `~/.agent-bot/exports/${account}`;
   return [
     `mkdir -p -m 700 ~/.agent-bot/exports ${into}`,
+    `chmod 700 ~/.agent-bot/exports ${into}`,
     `sudo /usr/bin/ditto ${quote(dir)} ${into}/${stamp}`,
     `sudo /usr/sbin/chown -R ${owner} ${into}/${stamp}`,
     `chmod -R go-rwx ${into}/${stamp}`,
@@ -273,7 +303,19 @@ function safeEntry(relative) {
  * Reads every file of an export in this (owner's) account back against its
  * manifest. Writes `verified.json` only when all match; changes nothing else.
  */
-export async function verifySandboxExport(account, { dir = null, env = process.env, home = homedir(), cwd = process.cwd(), owner = userInfo().username,
+export async function verifySandboxExport(account, options = {}) {
+  const { env = process.env, home = homedir(), now = () => new Date() } = options;
+  try { return await verifyExport(account, options); }
+  catch (error) {
+    // Every refusal leaves a receipt; a mismatch has already left its own.
+    if (error.code !== 'usage' && error.code !== 'sandbox-export-unverified') {
+      appendAuditReceipt({ event: 'sandbox-export', operation: 'verify', decision: 'refused', detail: `${error.code}: ${error.message}` }, { env, home, now });
+    }
+    throw error;
+  }
+}
+
+async function verifyExport(account, { dir = null, env = process.env, home = homedir(), cwd = process.cwd(), owner = userInfo().username,
   uid = process.getuid?.() ?? null, now = () => new Date() } = {}) {
   if (!ACCOUNT_NAME.test(account ?? '')) fail('usage', EXPORT_USAGE);
   const root = incomingRoot(account, { home });
@@ -288,9 +330,7 @@ export async function verifySandboxExport(account, { dir = null, env = process.e
     if (uid !== null && info.uid !== uid) fail2('sandbox-export-not-owned', `${folder} is not owned by ${owner}`, `sudo /usr/sbin/chown -R ${owner} ${quote(target)}`);
     if (info.mode & 0o077) fail2('sandbox-export-not-private', `${folder} can be read by other accounts`, `chmod go-rwx ${quote(folder)}`);
   }
-  let manifest;
-  try { manifest = JSON.parse(readFileSync(path.join(target, MANIFEST), 'utf8')); }
-  catch { fail2('sandbox-export-invalid', `${target} has no readable ${MANIFEST}; the copy may be incomplete`); }
+  const manifest = readPrivateJson(path.join(target, MANIFEST), { uid });
   if (manifest?.schemaVersion !== SANDBOX_EXPORT_SCHEMA || manifest.account !== account || !Array.isArray(manifest.files)) {
     fail2('sandbox-export-invalid', `${target}/${MANIFEST} is not an export from ${account}`);
   }
