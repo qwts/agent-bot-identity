@@ -12,6 +12,7 @@ agent-bot identity apps list --json
 agent-bot identity app create --manifest [--name NAME] [--org ORG] [--open] [--json]
 agent-bot identity app connect --id ID (--key-file PATH | --pass-cli ITEM) [--json]
 agent-bot identity app rotate-key SLUG (--key-file PATH | --pass-cli ITEM) [--json]
+agent-bot identity app migrate-key SLUG --to keyd [--dry-run] [--json]
 agent-bot identity app assign SLUG (--harness H | --soul AGENT_ID) [--json]
 agent-bot identity app remove (SLUG | APP_ID) [--json]
 agent-bot identity addon github-identity on|off [--json]
@@ -71,6 +72,36 @@ absent managed credential; a present key requires `rotate-key`. `--pass-cli ITEM
 selects an item title in the existing **Agent Identities** vault: a private-key
 attachment or Private Key field. Downloads use a private temporary directory
 that is removed on success or failure. No key is copied under `~/.config`.
+
+`migrate-key SLUG --to keyd` is the explicit owner-approved path for moving an
+existing managed App key from its file or Keychain store into keyd. It verifies
+the source key against GitHub's `/app` identity and checks its recorded App ID
+and public-key fingerprint before using the App-level keyd import. It preserves
+the source credential and other App metadata. If that source credential
+contains a webhook secret, the command keeps it in the separate webhook item;
+the keyd import contains only the private key. An existing separate webhook
+item is left untouched, and migration refuses if its value differs from the
+source. A keyd-held item with no trustworthy matching App record is never
+overwritten: migration uses `owner/app-import-new`, whose storage operation
+atomically adds only an absent item. A key created after the readiness probe
+or during consent is refused, never replaced. A keyd without this method
+returns `-32601`; migration asks for an update and never retries the replacing
+`owner/app-import`. `--dry-run` checks the source declaration and keyd availability
+without contacting GitHub or changing either store.
+
+The readiness probe requires a running keyd with App-level status support.
+An unpinned keyd can pin the daemon key in the import's same owner prompt
+(#817); an unavailable keyd refuses with its readiness reason. The actual
+migration additionally requires the create-only method described above;
+`--dry-run` does not call that mutating method. The command never falls back
+to another store or a replacing import.
+After keyd consent, migration rechecks the source App ID, fingerprint and
+embedded webhook secret before changing its config. If the source changed,
+or keyd accepts the key but config cannot record the migration,
+`identity-app-migration-partial` reports that
+split state; keep the source copy and inspect keyd and webhook-secret state
+before retrying. This is a CLI operation only; it adds no daemon migration
+route or GeniusBar UI.
 
 GitHub documents key generation in the App's **Settings → Private keys** UI,
 not a public REST key-generation endpoint. Generate and download a new key

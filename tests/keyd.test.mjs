@@ -474,6 +474,9 @@ test('keyd is verified for App keys when it runs and knows owner/app-status; an 
   assert.equal(calls[0][2].daemonKey, daemonGrantPublicKey({ env, home }));
   await removeAppFromKeyd(SLUG, { env, home, request: async (...args) => { calls.push(args); return { removed: true }; } });
   assert.deepEqual(calls[1].slice(0, 3), [keydPaths({ env, home }).ownerSocket, 'owner/app-remove', { app: SLUG }]);
+  await importAppIntoKeyd([{ app: SLUG, appId: '12345', privateKeyPem: PEM }], { env, home, createOnly: true, request: async (...args) => { calls.push(args); return { stored: 1 }; } });
+  assert.equal(calls[2][1], 'owner/app-import-new');
+  assert.equal(calls[2][2].daemonKey, daemonGrantPublicKey({ env, home }));
 });
 
 test('a soul whose App keyd holds App-level mints with an App-scope grant naming the soul', async (t) => {

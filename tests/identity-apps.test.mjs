@@ -41,7 +41,7 @@ function fixture(t, { gate = true, platform = 'linux' } = {}) {
 }
 async function github(t, f) {
   const calls = [];
-  let rejectMint = false, rejectApp = false, conversions = 0;
+  let rejectMint = false, rejectApp = false, conversions = 0, reportedSlug = 'fixture-app', reportedId = 123;
   const rows = [{ id: 7, account: { login: 'fixture-org' }, repository_selection: 'selected', permissions: { pull_requests: 'write', contents: 'write', metadata: 'read' } }];
   const server = createServer((req, res) => {
     calls.push(`${req.method} ${req.url}`);
@@ -51,7 +51,7 @@ async function github(t, f) {
     }
     if (req.url.startsWith('/app-manifests/')) {
       conversions++; res.end(JSON.stringify({ id: 123, slug: 'fixture-app', pem: KEY, webhook_secret: 'fixture-webhook-value' }));
-    } else if (req.url === '/app') res.end(JSON.stringify({ id: 123, slug: 'fixture-app' }));
+    } else if (req.url === '/app') res.end(JSON.stringify({ id: reportedId, slug: reportedSlug }));
     else if (req.url === '/users/fixture-app%5Bbot%5D') res.end(JSON.stringify({ id: 456, avatar_url: 'https://avatars.githubusercontent.com/u/456?v=4' }));
     else if (req.url.startsWith('/app/installations?')) res.end(JSON.stringify(rows));
     else if (req.url === '/app/installations/7/access_tokens') res.end(JSON.stringify({ token: 'ghs_fake_installation', expires_at: '2030-01-01T00:00:00Z' }));
@@ -61,7 +61,8 @@ async function github(t, f) {
   t.after(() => { server.closeAllConnections(); server.close(); });
   const config = loadConfig(f.options); config.apiBase = `http://127.0.0.1:${server.address().port}`;
   writeFileSync(f.env.AGENT_BOT_CONFIG, JSON.stringify(config));
-  return { calls, rejectMint: () => { rejectMint = true; }, rejectApp: () => { rejectApp = true; }, conversions: () => conversions };
+  return { calls, rejectMint: () => { rejectMint = true; }, rejectApp: () => { rejectApp = true; }, conversions: () => conversions,
+    appIdentity: (slug, id) => { reportedSlug = slug; reportedId = id; } };
 }
 const connect = (f, extra = {}) => identityAppOperation('connect', { id: '123', keyFile: f.keyFile, ...extra }, f.options);
 async function page(flow) {
@@ -534,16 +535,291 @@ test('daemon remove and addon routes need the bearer and the owner, and return p
 // owner channel: availability (status, pin, owner/app-status) and
 // owner/app-import. No test reaches a real keyd or daemon.
 function fakeKeyd({ available = true, held = false, pins = false, reason = 'agent-bot-keyd is not running', importError = null, removeError = null } = {}) {
-  const imports = [], removals = [];
+  const imports = [], removals = [], importModes = [];
   return {
-    imports, removals,
+    imports, removals, importModes,
     // Holds what it imported, or `held` before any import.
     availability: async (app) => { assert.equal(app, 'fixture-app'); return available ? { available: true, held: held || imports.length > removals.length, ...(pins && imports.length === 0 ? { pins: true } : {}) } : { available: false, reason }; },
-    importApp: async (items) => { if (importError) throw importError; const pinned = pins && imports.length === 0; imports.push(items); return { stored: items.length, pinned }; },
+    importApp: async (items, mode = {}) => { if (importError) throw importError; const pinned = pins && imports.length === 0; importModes.push(mode); imports.push(items); return { stored: items.length, pinned }; },
     removeApp: async (app) => { if (removeError) throw removeError; removals.push(app); return { removed: true }; },
   };
 }
 const fileItem = (f) => path.join(appStoreTarget('fixture-app', f.options).soulDir, '.soul-state/credentials/github-app-fixture-app.json');
+for (const platform of ['linux', 'darwin']) test(`explicit App key migration from ${platform === 'darwin' ? 'Keychain' : 'file'} preserves source, metadata and a separate webhook secret`, async (t) => {
+  const f = fixture(t, { platform }), api = await github(t, f);
+  await connect(f);
+  const record = loadConfig(f.options).identityApps['fixture-app'];
+  const sourceStore = f.options.stores[record.store];
+  sourceStore.write(appStoreTarget('fixture-app', f.options), { appId: '123', privateKeyPem: KEY, webhookSecret: 'source-webhook-value' });
+  assert.deepEqual(readManagedAppCredential('fixture-app', f.options), { appId: '123', privateKeyPem: KEY, webhookSecret: 'source-webhook-value' });
+  const webhookStore = f.options.stores[platform === 'darwin' ? 'keychain' : 'file'];
+  if (platform === 'darwin') webhookStore.writeSecret(webhookTarget(f), 'source-webhook-value');
+  const keyd = f.options.keyd = fakeKeyd();
+  const gateLabels = [];
+  f.options.gate = async (label) => { gateLabels.push(label); return { method: 'test' }; };
+  let output = '';
+  const result = await identityAppsCommand(['app', 'migrate-key', 'fixture-app', '--to', 'keyd', '--json'], { ...f.options, write: (value) => { output += value; } });
+  noSecrets(result); noSecrets(output);
+  assert.equal(output, `${JSON.stringify(result)}\n`);
+  assert.deepEqual(gateLabels, ['identity app migrate-key fixture-app']);
+  assert.equal(result.status, 'migrated');
+  assert.equal(result.from, record.store);
+  assert.equal(result.store, 'keyd');
+  assert.equal(result.webhookSecretKept, true);
+  assert.equal(api.calls.filter((call) => call === 'GET /app').length, 2, 'connect and migration each verified the App');
+  assert.equal(keyd.imports.length, 1);
+  assert.deepEqual(keyd.importModes, [{ createOnly: true }]);
+  assert.deepEqual(Object.keys(keyd.imports[0][0]), ['app', 'appId', 'privateKeyPem']);
+  assert.equal(keyd.imports[0][0].webhookSecret, undefined, 'webhook secret never enters the keyd key item');
+  assert.equal(keyd.imports[0][0].privateKeyPem, KEY);
+  assert.deepEqual(sourceStore.read(appStoreTarget('fixture-app', f.options)), { appId: '123', privateKeyPem: KEY, webhookSecret: 'source-webhook-value' });
+  assert.equal(webhookStore.readSecret(webhookTarget(f)), 'source-webhook-value');
+  if (platform === 'linux') {
+    assert.equal(existsSync(webhookFile(f)), true);
+    assert.doesNotMatch(readFileSync(webhookFile(f), 'utf8'), /BEGIN RSA PRIVATE KEY/);
+  }
+  const after = loadConfig(f.options).identityApps['fixture-app'];
+  assert.deepEqual(after, { ...record, store: 'keyd' }, 'migration changes only the store declaration');
+  assert.deepEqual(await identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options),
+    { id: '123', slug: 'fixture-app', store: 'keyd', status: 'already-migrated' });
+  assert.equal(keyd.imports.length, 1, 'idempotent invocation never replaces the held key');
+});
+test('App migration dry-run and unavailable keyd leave source and config untouched', async (t) => {
+  const f = fixture(t), api = await github(t, f);
+  await connect(f);
+  const before = readFileSync(f.env.AGENT_BOT_CONFIG, 'utf8');
+  const source = f.options.stores.file.read(appStoreTarget('fixture-app', f.options));
+  const keyd = f.options.keyd = fakeKeyd();
+  const callsBefore = api.calls.length;
+  const planned = await identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd', dryRun: true }, f.options);
+  assert.deepEqual(planned, { id: '123', slug: 'fixture-app', from: 'file', to: 'keyd', status: 'would-migrate' });
+  assert.equal(api.calls.length, callsBefore, 'dry run does not call GitHub');
+  assert.equal(keyd.imports.length, 0);
+  assert.equal(readFileSync(f.env.AGENT_BOT_CONFIG, 'utf8'), before);
+  assert.deepEqual(f.options.stores.file.read(appStoreTarget('fixture-app', f.options)), source);
+
+  f.options.keyd = fakeKeyd({ available: false, reason: 'agent-bot-keyd is not running' });
+  await assert.rejects(identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options), (error) =>
+    error.code === 'identity-app-keyd-unavailable' && /is not running/.test(error.message));
+  assert.equal(readFileSync(f.env.AGENT_BOT_CONFIG, 'utf8'), before);
+  assert.deepEqual(f.options.stores.file.read(appStoreTarget('fixture-app', f.options)), source);
+});
+test('App migration accepts an unpinned compatible keyd through its create-only first import', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  const source = f.options.stores.file.read(appStoreTarget('fixture-app', f.options));
+  const keyd = f.options.keyd = fakeKeyd({ pins: true });
+  const result = await identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options);
+  assert.equal(result.status, 'migrated');
+  assert.deepEqual(keyd.importModes, [{ createOnly: true }]);
+  assert.deepEqual(f.options.stores.file.read(appStoreTarget('fixture-app', f.options)), source);
+});
+
+test('App migration refuses conflicting existing webhook secret without replacing either copy', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  const source = f.options.stores.file;
+  source.write(appStoreTarget('fixture-app', f.options), { appId: '123', privateKeyPem: KEY, webhookSecret: 'source-webhook-value' });
+  source.writeSecret(webhookTarget(f), 'existing-webhook-value');
+  const keyd = f.options.keyd = fakeKeyd();
+  await assert.rejects(identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options), { code: 'identity-app-conflict' });
+  assert.equal(keyd.imports.length, 0);
+  assert.equal(source.readSecret(webhookTarget(f)), 'existing-webhook-value');
+  assert.equal(source.read(appStoreTarget('fixture-app', f.options)).webhookSecret, 'source-webhook-value');
+});
+test('App migration never overwrites a pre-existing unrecorded keyd key or imports a mismatched GitHub identity/fingerprint', async (t) => {
+  const f = fixture(t), api = await github(t, f);
+  await connect(f);
+  const source = f.options.stores.file.read(appStoreTarget('fixture-app', f.options));
+  const orphan = f.options.keyd = fakeKeyd({ held: true });
+  await assert.rejects(identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options), { code: 'identity-app-keyd-held' });
+  assert.equal(orphan.imports.length, 0);
+  f.options.keyd = fakeKeyd();
+  api.appIdentity('another-app', 123);
+  await assert.rejects(identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options), { code: 'identity-app-mismatch' });
+  assert.equal(f.options.keyd.imports.length, 0);
+  api.appIdentity('fixture-app', 123);
+  const config = loadConfig(f.options); config.identityApps['fixture-app'].keyFingerprint = 'SHA256:different';
+  writeFileSync(f.env.AGENT_BOT_CONFIG, JSON.stringify(config));
+  await assert.rejects(identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options), { code: 'identity-app-conflict' });
+  assert.equal(f.options.keyd.imports.length, 0);
+  assert.deepEqual(f.options.stores.file.read(appStoreTarget('fixture-app', f.options)), source);
+});
+test('App migration uses create-only import and preserves a late keyd item and the source on refusal', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  const source = f.options.stores.file.read(appStoreTarget('fixture-app', f.options));
+  let held = false;
+  const lateKey = 'a different owner client created this item';
+  let key = null;
+  f.options.keyd = {
+    availability: async () => ({ available: true, held }),
+    importApp: async (_items, mode) => {
+      assert.deepEqual(mode, { createOnly: true });
+      held = true; key = lateKey;
+      throw Object.assign(new Error('the App-level key already exists; it was not replaced'), { rpcCode: -32000 });
+    },
+  };
+  await assert.rejects(identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options), { code: 'identity-app-migration-partial' });
+  assert.equal(key, lateKey);
+  assert.equal(loadConfig(f.options).identityApps['fixture-app'].store, 'file');
+  assert.deepEqual(f.options.stores.file.read(appStoreTarget('fixture-app', f.options)), source);
+});
+
+test('App migration refuses an older keyd create-only method without retrying a replacing import', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  const source = f.options.stores.file.read(appStoreTarget('fixture-app', f.options));
+  const calls = [];
+  f.options.keyd = { availability: async () => ({ available: true, held: false }), importApp: async (items, mode) => {
+    calls.push(mode); throw Object.assign(new Error('method not found'), { rpcCode: -32601 });
+  } };
+  await assert.rejects(identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options), { code: 'identity-app-keyd-refused' });
+  assert.deepEqual(calls, [{ createOnly: true }]);
+  assert.equal(loadConfig(f.options).identityApps['fixture-app'].store, 'file');
+  assert.deepEqual(f.options.stores.file.read(appStoreTarget('fixture-app', f.options)), source);
+});
+
+for (const field of ['id', 'key', 'webhook']) test(`App migration detects a source ${field} change during keyd consent before recording migration`, async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  const target = appStoreTarget('fixture-app', f.options);
+  const changed = { appId: field === 'id' ? '999' : '123', privateKeyPem: field === 'key'
+    ? generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' }) : KEY,
+    ...(field === 'webhook' ? { webhookSecret: 'changed-source-secret' } : {}) };
+  const keyd = fakeKeyd();
+  f.options.keyd = { ...keyd, importApp: async (items, mode) => {
+    f.options.stores.file.write(target, changed);
+    return keyd.importApp(items, mode);
+  } };
+  await assert.rejects(identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options), { code: 'identity-app-migration-partial' });
+  assert.equal(loadConfig(f.options).identityApps['fixture-app'].store, 'file');
+  assert.deepEqual(f.options.stores.file.read(target), changed);
+});
+
+test('App migration reports config conflict after import as explicit partial state and preserves source', async (t) => {
+  const f = fixture(t), api = await github(t, f);
+  await connect(f);
+  const source = f.options.stores.file.read(appStoreTarget('fixture-app', f.options));
+  const keyd = fakeKeyd();
+  f.options.keyd = { ...keyd, importApp: async (items) => {
+    const config = loadConfig(f.options); config.identityApps['fixture-app'].keyFingerprint = 'SHA256:external-change';
+    writeFileSync(f.env.AGENT_BOT_CONFIG, JSON.stringify(config));
+    return keyd.importApp(items);
+  } };
+  await assert.rejects(identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options), (error) =>
+    error.code === 'identity-app-migration-partial' && /accepted App fixture-app's key/.test(error.message) && !/BEGIN|fixture-key/.test(error.message));
+  assert.equal(keyd.imports.length, 1);
+  assert.equal(loadConfig(f.options).identityApps['fixture-app'].store, 'file');
+  assert.equal(f.options.stores.file.read(appStoreTarget('fixture-app', f.options)).privateKeyPem, source.privateKeyPem);
+  assert.ok(api.calls.includes('GET /app'));
+});
+test('App migration rechecks add-on eligibility after GitHub verification and before importing', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  const source = f.options.stores.file.read(appStoreTarget('fixture-app', f.options));
+  const originalFetch = fetch;
+  f.options.fetchImpl = async (...args) => {
+    const response = await originalFetch(...args);
+    if (String(args[0]).endsWith('/app')) {
+      const config = loadConfig(f.options); config.features['github-identity'] = false;
+      writeFileSync(f.env.AGENT_BOT_CONFIG, JSON.stringify(config));
+    }
+    return response;
+  };
+  const keyd = f.options.keyd = fakeKeyd();
+  await assert.rejects(identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options), { code: 'identity-app-disabled' });
+  assert.equal(keyd.imports.length, 0);
+  assert.equal(loadConfig(f.options).identityApps['fixture-app'].store, 'file');
+  assert.deepEqual(f.options.stores.file.read(appStoreTarget('fixture-app', f.options)), source);
+});
+test('App migration holds the per-App operation lock while keyd consent is pending', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  let release, entered;
+  const waiting = new Promise((yes) => { entered = yes; });
+  const consent = new Promise((yes) => { release = yes; });
+  const keyd = fakeKeyd();
+  f.options.keyd = { ...keyd, importApp: async (items) => { entered(); await consent; return keyd.importApp(items); } };
+  const first = identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options);
+  await waiting;
+  await assert.rejects(identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options), { code: 'identity-app-busy' });
+  release(); assert.equal((await first).status, 'migrated');
+  assert.equal(keyd.imports.length, 1);
+});
+test('App keyd import refusal is redacted, fails closed, and never downgrades or changes the source', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  const before = readFileSync(f.env.AGENT_BOT_CONFIG, 'utf8');
+  const source = f.options.stores.file.read(appStoreTarget('fixture-app', f.options));
+  f.options.keyd = fakeKeyd({ importError: new Error(`refused ${KEY}`) });
+  await assert.rejects(identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options), (error) => {
+    noSecrets(error.message); return error.code === 'identity-app-keyd-refused';
+  });
+  assert.equal(readFileSync(f.env.AGENT_BOT_CONFIG, 'utf8'), before);
+  assert.deepEqual(f.options.stores.file.read(appStoreTarget('fixture-app', f.options)), source);
+});
+test('App migration treats a lost keyd import acknowledgement as partial when keyd now holds the key', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  const source = f.options.stores.file.read(appStoreTarget('fixture-app', f.options));
+  const keyd = fakeKeyd();
+  f.options.keyd = { ...keyd, importApp: async (items) => { keyd.imports.push(items); throw new Error('response lost'); } };
+  await assert.rejects(identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options), { code: 'identity-app-migration-partial' });
+  assert.equal(loadConfig(f.options).identityApps['fixture-app'].store, 'file');
+  assert.equal(f.options.stores.file.read(appStoreTarget('fixture-app', f.options)).privateKeyPem, source.privateKeyPem);
+});
+test('App migration probes a generic keyd error before calling it a clean refusal', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  const source = f.options.stores.file.read(appStoreTarget('fixture-app', f.options));
+  const keyd = fakeKeyd();
+  f.options.keyd = { ...keyd, importApp: async (items) => {
+    keyd.imports.push(items);
+    throw Object.assign(new Error('readback receipt unavailable'), { rpcCode: -32000 });
+  } };
+  await assert.rejects(identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options), (error) =>
+    error.code === 'identity-app-migration-partial' && /may hold App fixture-app's key/.test(error.message) && !/readback receipt/.test(error.message));
+  assert.equal(loadConfig(f.options).identityApps['fixture-app'].store, 'file');
+  assert.equal(f.options.stores.file.read(appStoreTarget('fixture-app', f.options)).privateKeyPem, source.privateKeyPem);
+});
+test('App migration detects a webhook secret changed during keyd consent and preserves both current copies', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  const source = f.options.stores.file;
+  source.write(appStoreTarget('fixture-app', f.options), { appId: '123', privateKeyPem: KEY, webhookSecret: 'source-webhook-value' });
+  source.writeSecret(webhookTarget(f), 'source-webhook-value');
+  const keyd = fakeKeyd();
+  f.options.keyd = { ...keyd, importApp: async (items) => {
+    source.writeSecret(webhookTarget(f), 'changed-during-consent');
+    return keyd.importApp(items);
+  } };
+  await assert.rejects(identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options), (error) =>
+    error.code === 'identity-app-migration-partial' && /accepted App fixture-app's key/.test(error.message) && !/changed-during-consent|source-webhook-value/.test(error.message));
+  assert.equal(loadConfig(f.options).identityApps['fixture-app'].store, 'file');
+  assert.equal(source.read(appStoreTarget('fixture-app', f.options)).webhookSecret, 'source-webhook-value');
+  assert.equal(source.readSecret(webhookTarget(f)), 'changed-during-consent');
+});
+test('App migration rechecks eligibility when keyd consent returns before writing config', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  const source = f.options.stores.file.read(appStoreTarget('fixture-app', f.options));
+  const keyd = fakeKeyd();
+  f.options.keyd = { ...keyd, importApp: async (items) => {
+    const config = loadConfig(f.options); config.features['github-identity'] = false;
+    writeFileSync(f.env.AGENT_BOT_CONFIG, JSON.stringify(config));
+    return keyd.importApp(items);
+  } };
+  await assert.rejects(identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options), { code: 'identity-app-migration-partial' });
+  assert.equal(loadConfig(f.options).features['github-identity'], false);
+  assert.equal(loadConfig(f.options).identityApps['fixture-app'].store, 'file');
+  assert.equal(f.options.stores.file.read(appStoreTarget('fixture-app', f.options)).privateKeyPem, source.privateKeyPem);
+});
+test('App migration config-write failure rolls back only the copied webhook item and reports keyd partial state', async (t) => {
+  const f = fixture(t); await github(t, f);
+  await connect(f);
+  const savedConfig = readFileSync(f.env.AGENT_BOT_CONFIG, 'utf8');
+  const recordBefore = loadConfig(f.options).identityApps['fixture-app'];
+  f.options.stores.file.write(appStoreTarget('fixture-app', f.options), { appId: '123', privateKeyPem: KEY, webhookSecret: 'source-webhook-value' });
+  const file = f.options.stores.file;
+  f.options.stores = { ...f.options.stores, file: { ...file, writeSecret: (target, value) => {
+    file.writeSecret(target, value); rmSync(f.env.AGENT_BOT_CONFIG); mkdirSync(f.env.AGENT_BOT_CONFIG);
+  } } };
+  const keyd = f.options.keyd = fakeKeyd();
+  await assert.rejects(identityAppOperation('migrate-key', { slug: 'fixture-app', to: 'keyd' }, f.options), { code: 'identity-app-migration-partial' });
+  rmSync(f.env.AGENT_BOT_CONFIG, { recursive: true }); writeFileSync(f.env.AGENT_BOT_CONFIG, savedConfig);
+  assert.equal(keyd.imports.length, 1);
+  assert.equal(file.readSecret(webhookTarget(f)), null, 'the newly copied webhook item was rolled back');
+  assert.deepEqual(file.read(appStoreTarget('fixture-app', f.options)), { appId: '123', privateKeyPem: KEY, webhookSecret: 'source-webhook-value' });
+});
 test('with keyd verified, connect keeps the key in keyd, records store keyd, and mints with an App-scope grant', async (t) => {
   const f = fixture(t); await github(t, f);
   const keyd = f.options.keyd = fakeKeyd();

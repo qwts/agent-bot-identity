@@ -99,6 +99,8 @@ pub fn app_item(app: &str) -> Result<(String, String), &'static str> {
 pub trait Items: Send + Sync {
     fn read(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, String>;
     fn write(&self, service: &str, account: &str, value: &[u8]) -> Result<(), String>;
+    /// Atomically adds an absent item; false means it already exists unchanged.
+    fn insert(&self, service: &str, account: &str, value: &[u8]) -> Result<bool, String>;
     fn remove(&self, service: &str, account: &str) -> Result<bool, String>;
 }
 
@@ -165,6 +167,18 @@ impl Store {
         self.write_credential(&service, &account, credential)
     }
 
+    pub fn insert_app_credential(&self, app: &str, credential: &Credential) -> Result<(), String> {
+        let (service, account) = app_item(app)?;
+        let mut value = encode(credential).into_bytes();
+        let inserted = self.items.insert(&service, &account, &value);
+        value.fill(0);
+        if inserted? {
+            Ok(())
+        } else {
+            Err("the App-level key already exists; it was not replaced".into())
+        }
+    }
+
     pub fn remove_app_credential(&self, app: &str) -> Result<bool, String> {
         let (service, account) = app_item(app)?;
         self.items.remove(&service, &account)
@@ -215,6 +229,7 @@ pub mod keychain {
     use std::path::PathBuf;
 
     const NOT_FOUND: i32 = -25300; // errSecItemNotFound
+    const DUPLICATE: i32 = -25299; // errSecDuplicateItem
 
     /// The login keychain, or (tests) a keychain file of its own.
     pub struct Keychain {
@@ -259,6 +274,20 @@ pub mod keychain {
                 })
         }
 
+        fn insert(&self, service: &str, account: &str, value: &[u8]) -> Result<bool, String> {
+            let keychain = self.open()?;
+            // SecKeychainAddGenericPassword refuses an existing item atomically.
+            // Never use set_generic_password here: that replaces a late item.
+            match keychain.add_generic_password(service, account, value) {
+                Ok(()) => Ok(true),
+                Err(error) if error.code() == DUPLICATE => Ok(false),
+                Err(error) => Err(format!(
+                    "the keychain item could not be added ({})",
+                    error.code()
+                )),
+            }
+        }
+
         fn remove(&self, service: &str, account: &str) -> Result<bool, String> {
             let keychain = self.open()?;
             match keychain.find_generic_password(service, account) {
@@ -277,10 +306,12 @@ pub mod keychain {
 pub mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
-    #[derive(Default)]
-    pub struct Memory(pub Mutex<HashMap<(String, String), Vec<u8>>>);
+    type MemoryItems = HashMap<(String, String), Vec<u8>>;
+
+    #[derive(Clone, Default)]
+    pub struct Memory(pub Arc<Mutex<MemoryItems>>);
 
     impl Items for Memory {
         fn read(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, String> {
@@ -298,6 +329,17 @@ pub mod tests {
                 .insert((service.into(), account.into()), value.to_vec());
             Ok(())
         }
+        fn insert(&self, service: &str, account: &str, value: &[u8]) -> Result<bool, String> {
+            let mut items = self.0.lock().unwrap();
+            match items.entry((service.into(), account.into())) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(value.to_vec());
+                    Ok(true)
+                }
+                std::collections::hash_map::Entry::Occupied(_) => Ok(false),
+            }
+        }
+
         fn remove(&self, service: &str, account: &str) -> Result<bool, String> {
             Ok(self
                 .0
@@ -367,6 +409,22 @@ pub mod tests {
             private_key_pem: "APP-PEM".into(),
         };
         store
+            .insert_app_credential("qwts-claude-agent", &credential)
+            .unwrap();
+        assert!(store
+            .insert_app_credential("qwts-claude-agent", &app_key)
+            .is_err());
+        assert_eq!(
+            store
+                .app_credential("qwts-claude-agent")
+                .unwrap()
+                .unwrap()
+                .private_key_pem,
+            "PEM",
+            "create-only never replaces an existing item"
+        );
+        assert!(store.remove_app_credential("qwts-claude-agent").unwrap());
+        store
             .put_app_credential("qwts-claude-agent", &app_key)
             .unwrap();
         assert_eq!(
@@ -401,6 +459,30 @@ pub mod tests {
     #[test]
     fn memory_store_round_trips() {
         exercise(&Store::new(Box::<Memory>::default()));
+    }
+
+    #[test]
+    fn simultaneous_create_only_writes_have_one_winner() {
+        let items = Memory::default();
+        let start = Arc::new(std::sync::Barrier::new(8));
+        let writers: Vec<_> = (0..8)
+            .map(|i| {
+                let items = items.clone();
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    items
+                        .insert(APP_SERVICE, "github-app/test-app", &[i])
+                        .unwrap()
+                })
+            })
+            .collect();
+        let winners = writers
+            .into_iter()
+            .map(|t| t.join().unwrap())
+            .filter(|won| *won)
+            .count();
+        assert_eq!(winners, 1);
     }
 
     #[test]

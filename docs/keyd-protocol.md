@@ -377,6 +377,7 @@ All on `owner.sock`, alongside the existing ones, which are unchanged
 | Method | Params | Result | Consent |
 | --- | --- | --- | --- |
 | `owner/app-import` | `{ app, appId, privateKeyPem, daemonKey? }`, or `{ items: [{ app, appId, privateKeyPem }], daemonKey? }` | `{ stored, pinned }` | one prompt for all items |
+| `owner/app-import-new` | same as `owner/app-import` | `{ stored, pinned }` | same consent; atomically refuses existing items instead of replacing them |
 | `owner/app-remove` | `{ app }` | `{ removed }` | yes |
 | `owner/app-status` | `{ app }` | `{ pinned, held, version }` | no |
 
@@ -388,6 +389,16 @@ written and receipted (`operation: owner/app-import item`, no `agentId`). It
 also refuses an `items` list that names the same App twice. Refusals are
 JSON-RPC error `-32000`, as for the other owner methods, and leave a
 `keyd-owner` receipt.
+
+`owner/app-import-new` has the same validation, pin, consent and readback
+rules, with create-only storage. It checks for held items before asking,
+then uses `SecKeychainAddGenericPassword` for each write; a duplicate item
+is refused even if it appeared during consent. It never calls the replacing
+`set_generic_password` path. The method is distinct so an older keyd returns
+`-32601` instead of ignoring a new flag and overwriting a key. Managed App
+migration uses this method exclusively and never retries `owner/app-import`.
+Like the existing batch import, this is not a multi-item transaction: an
+error on a later item can follow an earlier write or first daemon pin.
 
 A keyd from before #110 answers each of these with `-32601` (method not
 found); agent-bot can use that to tell whether App-level keys are available.
@@ -448,6 +459,7 @@ Tests named here are `node:test` titles, or Rust test functions under
 | keyd spends each grant nonce once, and accepts `exp > now`, `iat ≤ now + 30`, `0 ≤ exp − iat ≤ 120` | keyd-side | `grant::verify` | `keyd/src/grant.rs`: `spends_each_nonce_exactly_once`, `accepts_a_grant_only_inside_the_documented_envelope`, `accepts_a_fresh_grant_once`; `keyd/src/server.rs`: `refuses_calls_without_a_valid_grant` |
 | keyd accepts 1 to 64 import items | keyd-side | keyd `owner/import`, `owner/app-import` | `keyd/src/server.rs`: `imports_one_to_sixty_four_items_and_refuses_zero_or_sixty_five` |
 | keyd holds App-level keys under their own item, apart from souls' items, and removing one leaves the other | keyd-side | `Store` | `keyd/src/store.rs`: `memory_store_round_trips`, `keychain_store_round_trips_in_a_temporary_keychain` |
+| Managed App migration never replaces a late-created App item; create-only storage has one winner | keyd-side, `migrateKeyLocked` | `owner/app-import-new` | `keyd/src/server.rs`: `create_only_app_import_refuses_an_item_added_during_consent`, `create_only_app_import_adds_once_and_never_rotates`; `keyd/src/store.rs`: `simultaneous_create_only_writes_have_one_winner`; `tests/identity-apps.test.mjs`: "App migration uses create-only import and preserves a late keyd item and the source on refusal" |
 | `keyScope` absent or `soul` reads the soul's key, `app` the App-level key; any other value is refused | keyd-side | `grant::verify` | `keyd/src/grant.rs`: `accepts_a_grant_the_daemon_signed`, `reads_the_key_scope_and_refuses_an_unknown_one` |
 | An `app` grant mints with the App-level key for `credential` and `git_credential`; a soul grant never sees it, and an `app` grant never falls back to the soul's key | keyd-side | keyd `credential`, `git_credential` | `keyd/src/server.rs`: `imports_an_app_level_key_and_mints_with_it_only_for_an_app_grant`, `an_app_grant_never_falls_back_to_a_soul_key` |
 | `owner/app-import` needs consent, pins the daemon key if absent, and refuses a different existing pin; `owner/app-remove` needs consent but does not require a daemon-key pin; import checks every item first; `owner/app-status` returns `pinned`, `held`, and `version`; these methods are owner-channel only | keyd-side | keyd owner channel | `keyd/src/server.rs`: `app_level_owner_operations_need_consent_and_a_matching_pin`, `the_first_app_import_pins_the_daemon_key_under_its_one_consent` |

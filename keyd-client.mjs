@@ -186,8 +186,10 @@ export async function importIntoKeyd(items, { env = process.env, home = homedir(
 
 // App-level keys (#110): one key per App, shared by every soul acting as it.
 // Same single consent and daemon-key pin as importIntoKeyd.
-export async function importAppIntoKeyd(items, { env = process.env, home = homedir(), request = keydRequest } = {}) {
-  return request(keydPaths({ env, home }).ownerSocket, 'owner/app-import', {
+export async function importAppIntoKeyd(items, { env = process.env, home = homedir(), request = keydRequest, createOnly = false } = {}) {
+  // A distinct method fails closed on older keyd; an unknown optional flag
+  // on owner/app-import could be ignored and silently replace an existing key.
+  return request(keydPaths({ env, home }).ownerSocket, createOnly ? 'owner/app-import-new' : 'owner/app-import', {
     items, daemonKey: daemonGrantPublicKey({ env, home }),
   }, { timeoutMs: OWNER_TIMEOUT_MS });
 }

@@ -17,7 +17,7 @@ import { credentialNamespace, itemTitle, managedAppItem, managedAppWebhookFile, 
 import { createProtonPassCredentialProvider, validateIssuer, validatePrivateKey } from './ensure-private-key.mjs';
 import { buildAppJwt, pickInstallation } from './mint-token.mjs';
 import { KEYD_METHOD_NOT_FOUND, appKeydAvailability, importAppIntoKeyd, removeAppFromKeyd } from './keyd-client.mjs';
-import { MINT_CODES, appStoreTarget, forgetAppDoctorRow, readAppDoctorCache, readAppMetadata, updateAppConfig, validAppSlug, withAppOperationLock } from './identity-app-store.mjs';
+import { MINT_CODES, appStoreTarget, forgetAppDoctorRow, readAppDoctorCache, readAppMetadata, readManagedAppCredential, updateAppConfig, validAppSlug, withAppOperationLock } from './identity-app-store.mjs';
 
 export class IdentityAppError extends Error {
   constructor(code, message, statusCode = 409) { super(message); Object.assign(this, { code, statusCode }); }
@@ -40,7 +40,7 @@ const UNWIRED_SOULS = Object.freeze({ list: unwired, show: unwired, directory: u
 // agent-bot-keyd's App-level owner calls (#110); tests pass a fake `keyd`.
 const keydPort = ({ env, home }) => ({
   availability: (app) => appKeydAvailability(app, { env, home }),
-  importApp: (items) => importAppIntoKeyd(items, { env, home }),
+  importApp: (items, { createOnly = false } = {}) => importAppIntoKeyd(items, { env, home, createOnly }),
   removeApp: (app) => removeAppFromKeyd(app, { env, home }),
 });
 function settings(options) {
@@ -338,6 +338,170 @@ async function rotate(body, options) {
   const result = await persist(app, credential, installations(rows), options, { replace: Boolean(previous?.store), previousFingerprint: previous?.keyFingerprint ?? null, metadata: await botMetadata(app, options) });
   return { ...result, retired: oldFingerprint, action: 'Delete the retired key in the App settings on github.com.' };
 }
+function keydUnavailable(app, probe) {
+  const reason = typeof probe?.reason === 'string' && probe.reason.length <= 160
+    ? probe.reason : 'agent-bot-keyd is not ready';
+  fail('identity-app-keyd-unavailable', `Cannot migrate App ${app} to agent-bot-keyd (${reason}); the source credential was not changed.`);
+}
+function sameMigrationRecord(current, expected) {
+  return current?.store === expected.store && current?.id === expected.id
+    && (current?.keyFingerprint ?? null) === expected.keyFingerprint;
+}
+function migrationPartial(app, confirmed = false) {
+  const state = confirmed ? 'accepted' : 'may hold';
+  fail('identity-app-migration-partial', `agent-bot-keyd ${state} App ${app}'s key, but its configuration was not updated. The original source is preserved; inspect keyd and webhook-secret state before retrying.`);
+}
+async function migrateKey(body, options) {
+  const app = slug(body.slug);
+  if (body.to !== 'keyd') fail('identity-app-invalid', 'migrate-key requires --to keyd.', 400);
+  const held = await withAppOperationLock(app, options, () => migrateKeyLocked(app, body, options));
+  if (!held) fail('identity-app-busy', `Another operation on App ${app} is in progress; retry when it finishes.`);
+  return held.value;
+}
+async function migrateKeyLocked(app, body, options) {
+  options = { ...options, config: loadConfig({ env: options.env, home: options.home }) };
+  active(app, options.config);
+  const recorded = options.config.identityApps?.[app];
+  if (!recorded?.store) fail('identity-app-not-found', `App ${app} has no managed credential to migrate.`, 404);
+  if (recorded.store === 'keyd') {
+    if (!validateIssuer(recorded.id) || typeof recorded.keyFingerprint !== 'string' || !/^SHA256:[A-Za-z0-9+/]{43}=$/.test(recorded.keyFingerprint)) {
+      fail('identity-app-keyd-unavailable', `App ${app}'s keyd declaration is incomplete; no key was replaced.`);
+    }
+    let probe;
+    try { probe = await options.keyd.availability(app); }
+    catch { probe = { available: false }; }
+    if (!probe.available) keydUnavailable(app, probe);
+    if (!probe.held) fail('identity-app-keyd-unavailable', `App ${app} is declared in keyd, but keyd does not report its key as held; no key was imported.`);
+    return { id: recorded.id, slug: app, store: 'keyd', status: 'already-migrated' };
+  }
+  if (!['file', 'keychain'].includes(recorded.store)) {
+    fail('identity-app-store', `App ${app} is not in a migratable file or Keychain store.`);
+  }
+  let probe;
+  try { probe = await options.keyd.availability(app); }
+  catch { probe = { available: false, reason: 'agent-bot-keyd could not be checked' }; }
+  if (!probe.available) keydUnavailable(app, probe);
+  if (probe.held) fail('identity-app-keyd-held', `agent-bot-keyd already holds an App-level key for ${app}; it was not replaced and the source credential was not changed.`);
+
+  let credential;
+  try { credential = readManagedAppCredential(app, options); }
+  catch { fail('identity-app-store', `Could not read App ${app}'s source credential; unlock or repair its store and retry.`); }
+  if (!credential || !validateIssuer(recorded.id) || String(credential.appId) !== String(recorded.id)) {
+    fail('identity-app-conflict', `App ${app}'s credential ID does not match its managed record; nothing was imported.`);
+  }
+  let keyFingerprint;
+  try {
+    if (!validatePrivateKey(credential.privateKeyPem) || createPrivateKey(credential.privateKeyPem).asymmetricKeyType !== 'rsa') throw new Error('invalid key');
+    keyFingerprint = fingerprint(credential.privateKeyPem);
+  } catch { fail('identity-app-key-invalid', `App ${app}'s source key is invalid; nothing was imported.`); }
+  if (recorded.keyFingerprint != null && recorded.keyFingerprint !== keyFingerprint) {
+    fail('identity-app-conflict', `App ${app}'s source key does not match its recorded fingerprint; nothing was imported.`);
+  }
+  const expected = { store: recorded.store, id: recorded.id, keyFingerprint: recorded.keyFingerprint ?? null };
+  const sourceStore = recorded.store;
+  const webhookStoreKind = webhookSecretStore(options);
+  const webhookStore = options.stores[webhookStoreKind];
+  const webhookTargetForApp = webhookTarget(app, options);
+  let existingWebhook = null;
+  try { existingWebhook = webhookStore.readSecret(webhookTargetForApp); }
+  catch { fail('identity-app-store', `Could not inspect App ${app}'s separate webhook-secret item; nothing was imported.`); }
+  const sourceWebhookSecret = typeof credential.webhookSecret === 'string' && credential.webhookSecret.length > 0
+    ? credential.webhookSecret : null;
+  if (sourceWebhookSecret && existingWebhook !== null && existingWebhook !== sourceWebhookSecret) {
+    fail('identity-app-conflict', `App ${app}'s source and separate webhook secrets differ; nothing was imported.`);
+  }
+
+  if (body.dryRun) return { id: recorded.id, slug: app, from: sourceStore, to: 'keyd', status: 'would-migrate' };
+
+  // Verify that the exact source key still authenticates as this App before
+  // asking keyd to import it. GitHub's response is deliberately reduced to
+  // the public slug and issuer ID.
+  const sourceInfo = await github('GET', '/app', credential, options);
+  if (sourceInfo.slug !== app || String(sourceInfo.id) !== String(recorded.id)) {
+    fail('identity-app-mismatch', `The source credential does not authenticate as App ${app}; nothing was imported.`);
+  }
+  const reloaded = loadConfig({ env: options.env, home: options.home });
+  enabled(reloaded);
+  active(app, reloaded);
+  if (!sameMigrationRecord(reloaded.identityApps?.[app], expected)) {
+    fail('identity-app-conflict', `App ${app} changed while its key was being verified; nothing was imported.`);
+  }
+  let reread;
+  try { reread = readManagedAppCredential(app, { ...options, config: reloaded }); }
+  catch { fail('identity-app-conflict', `App ${app}'s source credential changed while it was being verified; nothing was imported.`); }
+  let rereadFingerprint;
+  try { rereadFingerprint = reread && fingerprint(reread.privateKeyPem); }
+  catch { fail('identity-app-conflict', `App ${app}'s source credential changed while it was being verified; nothing was imported.`); }
+  if (!reread || String(reread.appId) !== String(recorded.id) || rereadFingerprint !== keyFingerprint) {
+    fail('identity-app-conflict', `App ${app}'s source credential changed while it was being verified; nothing was imported.`);
+  }
+
+  try {
+    const imported = await options.keyd.importApp([{ app, appId: String(recorded.id), privateKeyPem: credential.privateKeyPem }], { createOnly: true });
+    if (imported?.stored !== 1) migrationPartial(app);
+  } catch (error) {
+    if (error instanceof IdentityAppError) throw error;
+    if (error?.rpcCode === KEYD_METHOD_NOT_FOUND) {
+      fail('identity-app-keyd-refused', `agent-bot-keyd does not support create-only App imports; update keyd before migrating App ${app}. The source credential was not changed.`);
+    }
+    // A lost response can follow a successful keyd write. Probe again so an
+    // ambiguous acknowledgement is reported as partial, never as a clean
+    // refusal that invites an unsafe retry.
+    let after;
+    try { after = await options.keyd.availability(app); } catch { /* uncertain result remains partial */ }
+    if (!after?.available || after.held) migrationPartial(app);
+    fail('identity-app-keyd-refused', `agent-bot-keyd did not import App ${app}'s key; the source credential was not changed.`);
+  }
+
+  let wroteWebhook = false;
+  const rollbackWebhook = () => {
+    if (!wroteWebhook) return;
+    try {
+      if (webhookStore.readSecret(webhookTargetForApp) === credential.webhookSecret) webhookStore.deleteSecret(webhookTargetForApp);
+    } catch { /* retain explicit partial-state report */ }
+    wroteWebhook = false;
+  };
+  try {
+    const result = updateAppConfig((config) => {
+      enabled(config);
+      active(app, config);
+      const current = config.identityApps?.[app];
+      if (!sameMigrationRecord(current, expected)) {
+        fail('identity-app-conflict', `App ${app} changed before its keyd migration could be recorded.`);
+      }
+      // The source can be changed outside our App lock while keyd asks the
+      // owner. Never declare the imported snapshot current after that change.
+      const sourceNow = readManagedAppCredential(app, { ...options, config });
+      if (!sourceNow || String(sourceNow.appId) !== String(recorded.id)
+        || fingerprint(sourceNow.privateKeyPem) !== keyFingerprint
+        || (sourceNow.webhookSecret ?? null) !== (credential.webhookSecret ?? null)) {
+        fail('identity-app-conflict', `App ${app}'s source credential changed during keyd migration.`);
+      }
+      // Re-read after the keyd owner prompt. A secret may change while that
+      // prompt is open, including when it matched before the prompt.
+      const nowStored = webhookStore.readSecret(webhookTargetForApp);
+      if (sourceWebhookSecret) {
+        if (nowStored !== null && nowStored !== sourceWebhookSecret) {
+          fail('identity-app-conflict', `App ${app}'s separate webhook secret changed during migration.`);
+        }
+        if (nowStored === null) {
+          try { webhookStore.writeSecret(webhookTargetForApp, sourceWebhookSecret); wroteWebhook = true; }
+          catch {
+            // A provider may have completed its write before reporting an
+            // error; remove only the value this migration was adding.
+            try { if (webhookStore.readSecret(webhookTargetForApp) === sourceWebhookSecret) webhookStore.deleteSecret(webhookTargetForApp); } catch { /* preserve source; report partial below */ }
+            throw new Error('webhook item could not be written');
+          }
+        }
+      } else if (existingWebhook !== null && nowStored !== existingWebhook) {
+        fail('identity-app-conflict', `App ${app}'s separate webhook secret changed during migration.`);
+      }
+      config.identityApps[app] = { ...current, store: 'keyd', keyFingerprint };
+      return { id: String(recorded.id), slug: app, from: sourceStore, store: 'keyd', status: 'migrated', ...(sourceWebhookSecret ? { webhookSecretKept: true } : {}) };
+    }, { ...options, rollback: rollbackWebhook });
+    return result;
+  } catch { rollbackWebhook(); migrationPartial(app, true); }
+}
 async function assign(body, options) {
   const app = slug(body.slug);
   // Under the App's operation lock, so nothing is assigned to an App while
@@ -577,13 +741,17 @@ export async function identityAppOperation(action, body = {}, options = {}) {
     const opts = settings(options);
     // The add-on switch is the one operation that works while it is off.
     if (action !== 'addon') enabled(opts.config);
-    const allowed = { create: ['manifest', 'name', 'org'], connect: ['id', 'keyFile', 'passCli'], 'rotate-key': ['slug', 'keyFile', 'passCli'], assign: ['slug', 'harness', 'soul'], remove: ['slug'], addon: ['name', 'enabled'] };
+    const allowed = { create: ['manifest', 'name', 'org'], connect: ['id', 'keyFile', 'passCli'], 'rotate-key': ['slug', 'keyFile', 'passCli'], 'migrate-key': ['slug', 'to', 'dryRun'], assign: ['slug', 'harness', 'soul'], remove: ['slug'], addon: ['name', 'enabled'] };
     if (!allowed[action] || !body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => ![...allowed[action], 'principal'].includes(key))) fail('identity-app-invalid', 'Invalid App operation or fields.', 400);
     if (action === 'create') {
       if (body.manifest !== true || (body.name !== undefined && (typeof body.name !== 'string' || !/^[\p{L}\p{N} ._-]{1,100}$/u.test(body.name))) || (body.org !== undefined && !validAppSlug(body.org))) fail('identity-app-invalid', 'create requires manifest: true and an optional valid name/org.', 400);
     }
     if (action === 'addon' && (!ADDONS.includes(body.name) || typeof body.enabled !== 'boolean')) fail('identity-app-invalid', `addon requires name (${ADDONS.join(', ')}) and enabled true or false.`, 400);
     if (action === 'remove') slug(body.slug);
+    if (action === 'migrate-key') {
+      slug(body.slug);
+      if (body.to !== 'keyd' || (body.dryRun !== undefined && typeof body.dryRun !== 'boolean')) fail('identity-app-invalid', 'migrate-key requires to: keyd and optional dryRun: true.', 400);
+    }
     const label = action === 'addon' ? `identity addon ${body.name} ${body.enabled ? 'on' : 'off'}`
       : `identity app ${action}${validAppSlug(body.slug) ? ` ${body.slug}` : ''}${body.harness && PROFILE_HARNESSES.includes(body.harness) ? ` --harness ${body.harness}` : ''}${body.name && action === 'create' ? ` ${body.name}` : ''}`;
     try { await (opts.gate ?? ((label, { principal }) => (opts.assertOwner ?? assertOwnerAction)(label, { env: opts.env, cwd: opts.cwd ?? opts.home, principal })))(label, { principal: body.principal ?? null }); }
@@ -591,6 +759,7 @@ export async function identityAppOperation(action, body = {}, options = {}) {
     if (action === 'create') return await startAppManifest(body, opts);
     if (action === 'connect') return await connect(body, opts);
     if (action === 'rotate-key') return await rotate(body, opts);
+    if (action === 'migrate-key') return await migrateKey(body, opts);
     if (action === 'remove') return finishRemove(await remove(body, opts), opts);
     if (action === 'addon') return setAddon(body, opts);
     return await assign(body, opts);
@@ -631,7 +800,7 @@ export function createIdentityAppJobs(options = {}) {
   };
 }
 
-const USAGE = 'identity apps list [--json] | identity app create --manifest [--name NAME] [--org ORG] [--open] | connect --id ID (--key-file PATH|--pass-cli ITEM) | rotate-key SLUG (--key-file PATH|--pass-cli ITEM) | assign SLUG (--harness H|--soul AGENT_ID) | remove SLUG|APP_ID | identity addon github-identity on|off [--json] [--principal-stdin]';
+const USAGE = 'identity apps list [--json] | identity app create --manifest [--name NAME] [--org ORG] [--open] | connect --id ID (--key-file PATH|--pass-cli ITEM) | rotate-key SLUG (--key-file PATH|--pass-cli ITEM) | migrate-key SLUG --to keyd [--dry-run] [--json] | assign SLUG (--harness H|--soul AGENT_ID) | remove SLUG|APP_ID | identity addon github-identity on|off [--json] [--principal-stdin]';
 export async function identityAppsCommand(argv, { write = (value) => process.stdout.write(value), ...options } = {}) {
   const [group, action, ...args] = argv;
   let json = false, open = false, principal = false;
@@ -641,13 +810,14 @@ export async function identityAppsCommand(argv, { write = (value) => process.std
     if (arg === '--json' && !json) json = true;
     else if (arg === '--open' && !open && action === 'create') open = true;
     else if (arg === '--principal-stdin' && !principal) principal = true;
+    else if (arg === '--dry-run' && action === 'migrate-key' && body.dryRun === undefined) body.dryRun = true;
     else if (arg === '--manifest' && body.manifest === undefined) body.manifest = true;
-    else if (['--name', '--org', '--id', '--key-file', '--pass-cli', '--harness', '--soul'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('-')) {
+    else if (['--name', '--org', '--id', '--key-file', '--pass-cli', '--harness', '--soul', '--to'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('-')) {
       const key = ({ '--key-file': 'keyFile', '--pass-cli': 'passCli' })[arg] ?? arg.slice(2);
       if (body[key] !== undefined) fail('identity-app-invalid', USAGE, 400);
       body[key] = args[++i];
       if (key === 'keyFile') body[key] = path.resolve(body[key]);
-    } else if (!arg.startsWith('-') && group === 'app' && ['rotate-key', 'assign', 'remove'].includes(action) && !body.slug) body.slug = arg;
+    } else if (!arg.startsWith('-') && group === 'app' && ['rotate-key', 'migrate-key', 'assign', 'remove'].includes(action) && !body.slug) body.slug = arg;
     else if (group === 'addon' && ['on', 'off'].includes(arg) && body.enabled === undefined) body.enabled = arg === 'on';
     else fail('identity-app-invalid', USAGE, 400);
   }
