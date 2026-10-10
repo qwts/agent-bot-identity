@@ -288,8 +288,9 @@ not approval, and the agent says so instead of acting.
 
 The owner answered the four open questions in chat on 2026-10-09. These
 answers were relayed by an agent, so under this record's own rule they are
-not themselves a verified owner statement. The record stays Proposed until
-the owner accepts it.
+not themselves a verified owner statement. The owner later accepted the
+record, also in chat on 2026-10-09 (see Status). That acceptance was relayed
+the same way, so it is not a verified owner statement either.
 
 1. **Binding:** a statement binds to its scope only: the repository and the
    issue or PR. It names no agent or session. Any agent working on that issue
