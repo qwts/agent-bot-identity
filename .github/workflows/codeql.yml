@@ -9,10 +9,13 @@ permissions:
   packages: read
   security-events: write
 
+# Runner variables may name a self-hosted runner. A pull request from a fork
+# always gets the GitHub-hosted label instead, so outside code never reaches a
+# self-hosted runner, and no job here reads a secret (#752).
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: ${{ vars.CODEQL_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.CODEQL_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
     strategy:
       fail-fast: false

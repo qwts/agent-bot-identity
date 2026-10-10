@@ -1,22 +1,58 @@
 # Contributing
 
-This repository is governed by
-[playbook-engineering](https://github.com/qwts/playbook-engineering): shared
-SOPs, decisions, and baselines there apply here by default.
+Contributions are welcome from anyone. You need a GitHub account, git and
+Node.js 20 or newer. You do not need any of the maintainers' bot Apps,
+credentials or machine setup.
 
-- **Workflow**: branch → PR → review → merge, per the shared
-  [branch, PR, and review SOP](https://github.com/qwts/playbook-engineering/blob/main/docs/sop/branch-pr-review.md).
-- **Features**: follow the
-  [feature-lifecycle SOP](https://github.com/qwts/playbook-engineering/blob/main/docs/sop/feature-lifecycle.md)
-  — open the feature issue form before the code exists.
-- **Security**: see the org
-  [security policy](https://github.com/qwts/.github/blob/main/SECURITY.md);
-  report vulnerabilities privately, never in a public issue.
-- **Changelog**: add your entry as `changes/<slug>.md`, never by editing
-  `CHANGELOG.md` (see [changes/README.md](changes/README.md)). The
-  `Changelog fragment` check enforces it; label a PR `skip-changelog` when it
-  needs no entry.
+## Outside contributors
 
+1. Fork the repository and create a branch in your fork.
+2. Make your change. The runtime has zero npm dependencies; keep it that way,
+   and match the surrounding code style.
+3. Run the tests (see below) and add or update tests for what you changed.
+4. Add a changelog fragment as `changes/<slug>.md`, never by editing
+   `CHANGELOG.md` (see [changes/README.md](changes/README.md)). The
+   `Changelog fragment` check enforces it; a maintainer labels a PR
+   `skip-changelog` when it needs no entry.
+5. Commit with your own git identity and open a pull request against `main`.
+   Ordinary commits are fine; signing is optional.
+
+A maintainer reviews every pull request. CI for a pull request from a fork
+runs only on GitHub-hosted runners and receives no secrets, and GitHub may
+hold a first-time contributor's run until a maintainer approves it.
+
+For a bug or feature, open an issue first if the change is large, so the
+approach can be agreed before you write it. Report security problems
+privately as described in [SECURITY.md](SECURITY.md), never in a public issue.
+
+### Running the tests hermetically
+
+No `npm install` is needed. From the repository root:
+
+```bash
+env -u AGENT_BOT_ID -u QWTS_AGENT_ID -u AGENT_BOT_BINDING npm test
+```
+
+The tests work in temporary directories and need no GitHub App credentials,
+no installed or configured agent-bot, and nothing under your `~/.config`; they
+pass with `HOME` pointed at an empty directory. Unsetting the variables above stops a shell
+that already runs agent-bot from leaking its identity into the tests. To run
+one file, use `node --test tests/<name>.test.mjs`.
+
+`keyd/` is a separate Rust crate. If you change it, also run
+`cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked`
+inside `keyd/`, as CI does.
+
+## Maintainers
+
+The maintainers' own workflow is not required of contributors. Maintainer
+agents commit and open pull requests as the project's GitHub App bots, use
+`agent-bot signed-commit` and the soul worktree workflow, and follow the
+[qwts/playbook-engineering](https://github.com/qwts/playbook-engineering)
+SOPs, including the
+[branch, PR, and review SOP](https://github.com/qwts/playbook-engineering/blob/main/docs/sop/branch-pr-review.md)
+and the
+[feature-lifecycle SOP](https://github.com/qwts/playbook-engineering/blob/main/docs/sop/feature-lifecycle.md).
 Repo-specific gates and deltas, if any, are listed in this repo's `AGENTS.md`.
 
 ### Homebrew formula

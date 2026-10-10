@@ -1,0 +1,1 @@
+- Outside contributors get a `SECURITY.md` with a private reporting path, a `CONTRIBUTING.md` section for plain fork-and-PR work with hermetic test instructions, and CI that always runs pull requests from forks on GitHub-hosted runners, never a self-hosted one (#752).
