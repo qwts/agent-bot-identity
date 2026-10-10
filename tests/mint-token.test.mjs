@@ -533,6 +533,38 @@ test('a failed operator mint still receipts the App, with no error text (#107)',
   }
 });
 
+// #107 slice C: the gh shim's Codex desktop path runs `worktree-token
+// --mint-app` for the configured Codex App. That UI is the owner's delegate
+// surface: it mints with no prompt, as before, and now leaves a receipt.
+test('the Codex desktop mint receipts the App with no prompt and no token (#107)', async () => {
+  const github = await installationServer([ORG]);
+  try {
+    const env = operatorEnv(github.apiBase);
+    delete env.GH_AGENT_APP;
+    const config = JSON.parse(readFileSync(env.AGENT_BOT_CONFIG, 'utf8'));
+    writeFileSync(env.AGENT_BOT_CONFIG, `${JSON.stringify({ ...config, apps: { codex: 'you-claude-agent' }, features: { 'github-identity': true } })}\n`);
+    env.CODEX_SANDBOX = 'seatbelt';
+    const cwd = mkdtempSync(join(tmpdir(), 'agent-bot-desktop-'));
+    // A non-macOS platform turns any owner dialog into a refusal, so a
+    // prompt this path must not raise would fail the test, never pop up.
+    const minted = await new Promise((resolve) => {
+      execFile(process.execPath, [
+        '--import', 'data:text/javascript,Object.defineProperty(process,"platform",{value:"linux"})',
+        join(import.meta.dirname, '..', 'worktree-token.mjs'), '--mint-app', 'you-claude-agent',
+      ], { env, cwd, encoding: 'utf8' }, (error, stdout, stderr) => resolve({ code: error ? error.code : 0, stdout, stderr }));
+    });
+    assert.equal(minted.code, 0, minted.stderr);
+    assert.equal(minted.stdout.trim(), 'fixture-token-never-logged-42');
+    const receipts = mintReceipts(env);
+    assert.deepEqual(receipts.map(({ agentId, operation, decision, appSlug, reason }) => ({ agentId, operation, decision, appSlug, reason })), [
+      { agentId: undefined, operation: 'codex-desktop-gh', decision: 'granted', appSlug: 'you-claude-agent', reason: 'owner-delegate-surface' },
+    ]);
+    assert.doesNotMatch(readFileSync(join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8'), /fixture-token|PRIVATE KEY/);
+  } finally {
+    await github.close();
+  }
+});
+
 test('an owner-approval refusal receipts the explicit App as denied and mints nothing (#107)', async () => {
   const github = await installationServer([ORG]);
   try {

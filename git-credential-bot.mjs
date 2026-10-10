@@ -81,13 +81,16 @@ export async function mintCredential({
 // checkout keeps its pins when its binding is gone): it goes through the owner gate
 // (Touch ID, else the administrator dialog), leaves a receipt either way, and
 // a decline or a headless run refuses. A caller with no marker mints as
-// before.
+// before. `delegate` marks the owner's own delegate surface, the Codex
+// desktop app's Pull Requests UI (#107): with no marker it still mints
+// locally with no gate, and leaves the secret-free receipt every mint owes.
 export async function mintForCaller({
   slug = null,
   permissions = null,
   env = process.env,
   cwd = process.cwd(),
   operation = 'mint-token',
+  delegate = false,
   selected = null,
   mintImpl = mint,
   readBindingImpl = readBinding,
@@ -117,7 +120,25 @@ export async function mintForCaller({
   } else if (!marked) {
     try { own = resolveSlugImpl({ env, cwd, detect: false }); marked = own !== null; } catch { marked = true; }
   }
-  if (!marked) return mintImpl({ slug, env, permissions, selected });
+  if (!marked && !delegate) return mintImpl({ slug, env, permissions, selected });
+  if (!marked) {
+    // Best effort, as for mint-token's operator receipt: a receipt that
+    // cannot be written warns and never changes whether a token is released.
+    const note = (decision, reason) => {
+      try {
+        receipt({ event: 'credential-mint', agentId: null, operation, decision, appSlug: slug ?? null, reason });
+      } catch (error) {
+        console.error(`agent-bot: could not write the mint receipt: ${error.message}`);
+      }
+    };
+    let grant;
+    try { grant = await mintImpl({ slug, env, permissions, selected }); } catch (error) {
+      note('failed', 'mint-failed');
+      throw error;
+    }
+    note('granted', 'owner-delegate-surface');
+    return grant;
+  }
 
   const wanted = slug ?? env.GH_AGENT_APP ?? own;
   if (!wanted) throw new Error('this soul has no GitHub App; name one with --app to ask the owner for its token');

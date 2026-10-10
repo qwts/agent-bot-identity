@@ -29,7 +29,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { isSoulBound, mintCredential } from './git-credential-bot.mjs';
+import { isSoulBound, mintCredential, mintForCaller } from './git-credential-bot.mjs';
 import { ownerApprovalRequired, requireOwnerApproval } from './owner-approval.mjs';
 import { configuredAccountIdentity, accountName, detectAgentHarness } from './detect-harness.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
@@ -109,7 +109,9 @@ async function main() {
     return;
   }
   // Desktop gh can request an App independently of its checkout. Preserve
-  // mint-token's owner approval on that explicit, uncached local path.
+  // mint-token's owner approval on that explicit, uncached local path. The
+  // Codex desktop UI is the owner's delegate surface, not an agent path
+  // (#107): its local mint goes through mintForCaller for the receipt.
   const appFlag = process.argv.indexOf('--mint-app');
   if (appFlag !== -1) {
     const slug = process.argv[appFlag + 1];
@@ -119,7 +121,9 @@ async function main() {
         prompt: `Approve a GitHub App installation token for ${slug}[bot] — mint-token was run in the owner's account with no stated agent identity.`,
       });
     }
-    const grant = await mintCredential({ slug, soulBound });
+    const grant = soulBound
+      ? await mintCredential({ slug, soulBound })
+      : await mintForCaller({ slug, operation: 'codex-desktop-gh', delegate: true });
     process.stdout.write(`${grant.token}\n`);
     return;
   }
