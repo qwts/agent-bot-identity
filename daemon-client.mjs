@@ -272,8 +272,9 @@ export function daemonClient({
     async pauseSoul(agentId, requester = {}) {
       return request('POST', '/v0/soul/pause', { ...requester, agentId });
     },
+    // The owner's resume waits for the daemon's presence prompt (#785).
     async resumeSoul(agentId, requester = {}) {
-      return request('POST', '/v0/soul/resume', { ...requester, agentId });
+      return request('POST', '/v0/soul/resume', { ...requester, agentId }, {}, OWNER_DECISION_TIMEOUT_MS);
     },
     async stopSoul(agentId, requester = {}) {
       return request('POST', '/v0/soul/stop', { ...requester, agentId });

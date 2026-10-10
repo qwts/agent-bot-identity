@@ -108,3 +108,98 @@ must not itself trigger a delivery report, or reporting would recurse. An inbox
 read alone does not prove that a session consumed the body: the explicit bound
 report supplies that assertion, and the daemon verifies mailbox membership.
 See [asides](asides.md) for retention and viewing.
+
+# Route authorization
+
+Every daemon route requires a loopback peer. The per-start bearer in
+`daemon.json` proves only that the caller is a process in this account: any
+same-account process, a soul's shell included, can read it. So the bearer alone
+never carries owner authority (#785, owner decision 2026-10-10). Each route
+belongs to one class:
+
+- **owner**: bearer plus the owner, asked by the daemon for this action. That's
+  presence through keyd (Touch ID, or the password), the admin dialog where
+  keyd can't ask, or a verified principal credential where the route accepts
+  one. A refusal changes nothing and is receipted.
+- **owner-credential**: bearer plus the owner's agent-comms principal
+  credential. Presence isn't accepted (see above).
+- **bearer**: bearer only. Reads, and infrastructure that bound sessions use.
+- **binding**: a soul's live binding (`x-agent-binding` or a proof), or a
+  single-use bind token. The binding names the caller; the bearer isn't
+  required and grants nothing.
+- **principal**: bearer plus an enrolled transport principal, authorized by the
+  owner for the soul and operation (`agent-bot principals`).
+
+A soul binding header on an owner or owner-credential route is refused with
+`owner-credential-required` before anyone is asked. `tests/daemon-route-auth.test.mjs`
+keeps this table in step with the daemon. It also checks that a bearer-only
+caller is refused on each owner route.
+
+| Route | Class | Notes |
+| --- | --- | --- |
+| `GET /v0/health` | bearer | Status, warm pool, busy souls. |
+| `POST /v0/space/ensure` | bearer | Creates a soul's space folder. |
+| `GET /v0/space/path` | bearer | |
+| `POST /v0/register` | bearer | `setup-worktree` and join record a soul's space and worktree. Open question for the owner, see below. |
+| `POST /v0/bind` | binding | Single-use bind token. An App claim that differs from the record asks the owner. |
+| `POST /v0/vouch` | binding | |
+| `POST /v0/spawn` | binding | |
+| `POST /v0/team/start` | binding | |
+| `POST /v0/binding/app` | binding | An App change asks the owner. |
+| `GET /v0/binding` | binding | |
+| `DELETE /v0/binding` | binding | |
+| `POST /v0/credential` | binding | The soul's own App token. |
+| `POST /v0/inbox/take` | binding | |
+| `POST /v0/grants/request` | binding | Approving the grant asks the owner against its digest (#108). |
+| `POST /v0/grants/spend` | binding | Spends an already approved grant once. |
+| `POST /v0/keyd/grant` | binding | |
+| `POST /v0/asides/delivered` | binding | |
+| `GET /v0/comms/status` | bearer | |
+| `GET /v0/population` | bearer | |
+| `GET /v0/soul/revisions` | bearer | |
+| `POST /v0/soul/revisions/approve` | owner-credential | |
+| `POST /v0/soul/revisions/reject` | owner-credential | |
+| `POST /v0/soul/revisions/adopt` | owner-credential | |
+| `POST /v0/soul/revisions/edit` | owner-credential | |
+| `GET /v0/sandbox` | bearer | |
+| `POST /v0/sandbox` | owner | |
+| `POST /v0/sandbox/override` | owner | |
+| `GET /v0/soul/profile` | bearer | |
+| `GET /v0/soul/env` | bearer | |
+| `POST /v0/soul/computer-use` | owner | |
+| `POST /v0/soul/pause` | bearer | Holds a soul back. An enrolled principal with `cancel` may too. Open question, see below. |
+| `POST /v0/soul/resume` | owner | Lifts the hold. An enrolled principal with `cancel` resumes without a prompt, as the owner authorized it. |
+| `POST /v0/soul/stop` | bearer | Cancels the running turn. Same as pause. |
+| `GET /v0/approvals` | bearer | |
+| `POST /v0/approvals/decide` | owner | |
+| `GET /v0/soul/dream` | bearer | |
+| `GET /v0/soul/dream/history` | bearer | |
+| `POST /v0/soul/dream/{action}` | owner | register, pause, unschedule, run-now, cancel, ack-notice. |
+| `GET /v0/identity/apps` | bearer | |
+| `GET /v0/identity/apps/jobs/{id}` | bearer | |
+| `POST /v0/identity/apps/{action}` | owner | create, connect, rotate-key, assign, remove, addon. |
+| `POST /v1/sessions` | principal | |
+| `POST /v1/sessions/{id}/messages` | principal | |
+| `GET /v1/souls/{id}/asides` | principal | |
+| `GET /v1/proposals` | principal | |
+| `POST /v1/proposals/{id}/decision` | owner | The principal must also be authorized to approve. |
+| `GET /v1/invocations/{id}` | principal | |
+| `GET /v1/invocations/{id}/events` | principal | |
+| `POST /v1/invocations/{id}/cancel` | principal | |
+| `GET /v1/invocations/{id}/artifacts` | principal | |
+
+The `/ui` pages use their own browser session and never see the bearer.
+
+**Open for the owner.** These stay bearer-only for now. Each one is a call for
+the owner:
+
+- **Pause and stop.** They only hold a soul back, and the CLI and the host app
+  use them as an emergency brake that shouldn't wait on Touch ID. Any
+  same-account process can still pause or stop a soul.
+- **`POST /v0/register`.** Agent sessions call it from `setup-worktree`, so
+  gating it would prompt on every worktree. Any same-account process can
+  record a space or worktree path for a soul.
+- **The principal routes.** A same-account process that knows an enrolled
+  principal's transport and provider ID can act as that principal: talk to a
+  soul, observe it, cancel. Owner presence on each message would break remote
+  transports.

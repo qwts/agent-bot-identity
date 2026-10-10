@@ -498,6 +498,11 @@ export function createDaemonServer({
         appendAuditReceipt({ event: 'soul-revision', operation: revisionAction, decision: 'owner-credential-required' }, { env, home, now });
         throw ownerCredentialRequired('a soul binding cannot authorize an owner revision action');
       }
+      // Resuming a soul lifts the owner's hold, so it is the owner's (#785).
+      if (req.method === 'POST' && url.pathname === '/v0/soul/resume' && ('x-agent-binding' in req.headers || PROOF_HEADER in req.headers)) {
+        appendAuditReceipt({ event: 'resume', operation: 'cancel', decision: 'owner-credential-required' }, { env, home, now });
+        throw ownerCredentialRequired('a soul binding cannot resume a soul');
+      }
       const dreamAction = req.method === 'POST' && /^\/v0\/soul\/dream\/(register|pause|unschedule|run-now|cancel|ack-notice)$/.exec(url.pathname)?.[1];
       if (dreamAction && ('x-agent-binding' in req.headers || PROOF_HEADER in req.headers)) {
         appendAuditReceipt({ event: 'dream-control', operation: dreamAction, decision: 'owner-credential-required' }, { env, home, now });
@@ -1128,7 +1133,8 @@ export function createDaemonServer({
           const agentId = requireAgentId(body.agentId);
           // Like approvals: the local owner presents the daemon token;
           // adapters additionally identify their enrolled transport principal.
-          // Stopping grants no tool permission and needs no presence dialog.
+          // Pausing and stopping grant no tool permission and need no
+          // presence dialog; the owner's resume does (below).
           let principal = null;
           const transport = body.transport ?? 'owner';
           if (body.transport !== undefined || body.providerId !== undefined) {
@@ -1146,6 +1152,16 @@ export function createDaemonServer({
           }
           try { showSoul(agentId, { file: populationFile({ env, home }) }); }
           catch { throw Object.assign(new Error('unknown soul'), { statusCode: 404 }); }
+          // The daemon bearer alone proves only a process in this account, so
+          // a resume without an enrolled transport principal asks the owner
+          // (#785). Pause and stop only hold a soul back and stay prompt-free.
+          if (action === 'resume' && !principal) {
+            try { await settingGate(`soul resume ${agentId}`, { principal: body.principal ?? null }); }
+            catch (error) {
+              appendAuditReceipt({ event: 'resume', agentId, transport, operation: 'cancel', decision: 'owner-refused' }, { env, home, now });
+              throw Object.assign(new Error('The owner did not authorize resuming this soul.'), { code: error.code ?? 'owner-credential-required', statusCode: 403 });
+            }
+          }
           const stopped = action === 'resume' ? false : (server.wakePlane?.stop?.(agentId) ?? turns.stop(agentId));
           if (action !== 'stop') setSoulPaused(agentId, action === 'pause', { file: populationFile({ env, home }) });
           appendAuditReceipt({ event: action, agentId, transport, principalId: principal?.principalId ?? null,

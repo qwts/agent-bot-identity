@@ -46,8 +46,15 @@ async function fixture(t) {
     if (data?.content?.text?.startsWith('pid:')) ready += 1;
     return input.appendEvent(type, data);
   } }), { env, home });
+  // Only the owner's resume asks (#785); pause and stop never do.
+  const asked = [];
+  let refuse = false;
   const server = createDaemonServer({ env, home, config: {}, turns, executor,
-    ownerGate: () => { assert.fail('stop must not ask for owner presence'); } });
+    ownerGate: () => { assert.fail('stop must not ask for owner presence'); },
+    settingGate: async (action) => {
+      asked.push(action);
+      if (refuse) throw Object.assign(new Error('declined'), { code: 'owner-credential-required' });
+    } });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   writeFileSync(env.AGENT_BOT_DAEMON_STATE_PATH, JSON.stringify({ schemaVersion: 1, pid: process.pid,
     host: '127.0.0.1', port: server.address().port, token: server.token, startedAt: new Date().toISOString() }));
@@ -60,7 +67,8 @@ async function fixture(t) {
     rmSync(home, { recursive: true, force: true });
   });
   const receipts = () => readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  return { home, env, turns, executor, server, url, client, receipts, ready: () => ready };
+  return { home, env, turns, executor, server, url, client, receipts, ready: () => ready, asked,
+    refuse: (value) => { refuse = value; } };
 }
 
 test('stop cold wake reaches fake ACP cancel, records cancellation, clears busy, and allows another wake', async (t) => {
@@ -230,7 +238,9 @@ test('pause cancels ACP, persists across clients, exposes health, and resume all
   const shown = spawnSync(process.execPath, [cli, 'soul', 'show', 'stop-me', '--json'], { env: f.env, cwd: f.home, encoding: 'utf8' });
   assert.equal(shown.status, 0, shown.stderr);
   assert.equal(JSON.parse(shown.stdout).paused, true);
+  assert.deepEqual(f.asked, [], 'pause and stop never ask the owner');
   assert.deepEqual(await f.client.resumeSoul(ID), { agentId: ID, paused: false });
+  assert.deepEqual(f.asked, [`soul resume ${ID}`], 'the owner resume asks the owner (#785)');
   assert.equal((await daemonStatus(f)).souls.find((r) => r.id === ID).paused, false);
   await plane(wake, ports);
   await plane.idle();
@@ -272,6 +282,7 @@ test('pause and resume routes use stop token and cancel gates, and reject intera
     await assert.rejects(f.client[`${action}Soul`](ID, requester), /not authorized/);
     setOperations(principal.principalId, ['message', 'observe', 'cancel'], options);
   }
+  assert.deepEqual(f.asked, [], 'an enrolled principal with cancel resumes without a prompt');
   const resumed = await f.client.submitMessage(session.sessionId, { ...requester, message: 'ping', idempotencyKey: 'resumed' });
   await until(async () => (await f.client.invocation(resumed.invocation.invocationId, requester)).invocation.status === 'completed');
 });
