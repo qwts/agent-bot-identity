@@ -707,8 +707,9 @@ export function harnessReport(output, { comms = true, manifest = {}, hooks = [] 
     unsupported.hooks = hooks.filter((name) => !deliveredHooks.includes(name));
     if (deliveredHooks.length) rendered.push('hooks');
     // A Codex command skill is also a skill to the other `.agents/skills/`
-    // readers, beside the native command: a known effect, reported by name.
-    const duplicates = { commands: AGENTS_SKILLS_READERS.includes(harness) && soulTargets(manifest, harness)
+    // readers, beside their native command: a known effect, reported by name
+    // whenever both are on disk (launch preference does not stop either).
+    const duplicates = { commands: AGENTS_SKILLS_READERS.includes(harness)
       ? names(HARNESS_FILES.codex.commands).filter((name) => primitives.commands.rendered.includes(name)) : [] };
     report[harness] = { rendered, files: paths, ...primitives, duplicates,
       settings: { received: settingKeys, rendered: deliveredSettings },
