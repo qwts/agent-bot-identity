@@ -342,8 +342,9 @@ agent-bot skill agent-bot --for <subcommand> [--json]
 
 `agent-bot skill <name>` prints this release's exact `SKILL.md` text for
 `agent-bot`, `agent-space`, or `thread-orders`, with no network. Any other
-name is resolved through the fleet catalog (qwts/qwts-agent-sop
-`skills/README.md`) to exactly one entry and printed from its owning
+name is resolved through the selected SOP's skill catalog (`skills/README.md`
+in the SOP repository `agent-bot sop` reports; for qwts, qwts/qwts-agent-sop)
+to exactly one entry and printed from its owning
 repository at the entry's pinned commit; an absent, ambiguous, or unpinned
 name is an error. With `--json`, it returns
 `{ name, repository, commit, path, text }`. Use
