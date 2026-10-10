@@ -328,7 +328,9 @@ impl Keyd {
             .map_err(Refusal::Declined)
             .and_then(|seed| {
                 self.consent.ask(&presence::reason(action))?;
-                Ok(presence::sign(&seed, action, nonce, now))
+                // Stamped at the owner's answer, not the request: the prompt
+                // can take up to 120 s, longer than the assertion lives.
+                Ok(presence::sign(&seed, action, nonce, (self.now)()))
             });
         let (decision, detail) = match &outcome {
             Ok(_) => ("granted", None),
@@ -1225,6 +1227,188 @@ mod tests {
             .handle_soul(&json!({ "jsonrpc": "2.0", "id": 1, "method": "owner/app-status", "params": { "app": "qwts-claude-agent" } }))
             .unwrap();
         assert_eq!(soul["error"]["code"], -32601);
+    }
+
+    fn other_daemon_key() -> String {
+        STANDARD.encode(
+            ed25519_dalek::SigningKey::from_bytes(&[2; 32])
+                .verifying_key()
+                .to_bytes(),
+        )
+    }
+
+    /// keyd-protocol.md: keyd pins `daemonKey` on the first import of either
+    /// kind, asks for it in that one consent, and from then on takes a new
+    /// key only through `owner/pin`.
+    #[test]
+    fn pins_the_daemon_key_exactly_once() {
+        let consent = Arc::new(Consenting::new(true));
+        let mut keyd = keyd(true);
+        keyd.consent = Box::new(Arc::clone(&consent));
+        let (pem, _) = test_key_pem();
+        let pinned = signing_key().verifying_key().to_bytes();
+        let item = |key: Option<String>| {
+            let mut params = json!({ "agentId": AGENT, "app": "qwts-claude-agent", "appId": "42", "privateKeyPem": pem });
+            if let Some(key) = key {
+                params["daemonKey"] = json!(key);
+            }
+            params
+        };
+        let trust = "trust this account's agent-bot daemon";
+
+        let first = owner(&keyd, "owner/import", item(Some(daemon_key())));
+        assert_eq!(first["result"], json!({ "stored": 1, "pinned": true }));
+        assert_eq!(keyd.store.pinned_key().unwrap(), Some(pinned));
+        assert!(consent.asked.lock().unwrap()[0].contains(trust));
+
+        // The same key again, or none, pins nothing and never asks to.
+        for (kind, params) in [
+            ("owner/import", item(Some(daemon_key()))),
+            ("owner/import", item(None)),
+            (
+                "owner/app-import",
+                json!({ "app": "qwts-grok-agent", "appId": "43", "privateKeyPem": pem, "daemonKey": daemon_key() }),
+            ),
+        ] {
+            assert_eq!(
+                owner(&keyd, kind, params)["result"]["pinned"],
+                false,
+                "{kind}"
+            );
+            assert!(!consent
+                .asked
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .contains(trust));
+        }
+        assert_eq!(
+            owner(&keyd, "owner/pin", json!({ "daemonKey": daemon_key() }))["result"],
+            json!({ "pinned": false })
+        );
+        assert_eq!(
+            consent.asked.lock().unwrap().len(),
+            4,
+            "no prompt to re-pin"
+        );
+
+        // A different key is refused on either import, before anyone is asked.
+        for kind in ["owner/import", "owner/app-import"] {
+            let refused = owner(
+                &keyd,
+                kind,
+                json!({ "agentId": AGENT, "app": "qwts-claude-agent", "appId": "42", "privateKeyPem": pem, "daemonKey": other_daemon_key() }),
+            );
+            assert_eq!(refused["error"]["code"], -32000, "{kind}");
+        }
+        assert_eq!(consent.asked.lock().unwrap().len(), 4);
+        assert_eq!(keyd.store.pinned_key().unwrap(), Some(pinned));
+
+        // Only owner/pin replaces it, with the owner's consent.
+        assert_eq!(
+            owner(
+                &keyd,
+                "owner/pin",
+                json!({ "daemonKey": other_daemon_key() })
+            )["result"],
+            json!({ "pinned": true })
+        );
+        assert_ne!(keyd.store.pinned_key().unwrap(), Some(pinned));
+        assert_eq!(consent.asked.lock().unwrap().len(), 5);
+        let declined = self::keyd(false);
+        import(&declined, &pem);
+        assert_eq!(
+            owner(
+                &declined,
+                "owner/pin",
+                json!({ "daemonKey": other_daemon_key() })
+            )["error"]["code"],
+            -32000
+        );
+        assert_eq!(declined.store.pinned_key().unwrap(), None);
+    }
+
+    /// keyd-protocol.md: `items` holds 1 to 64 keys, otherwise the whole
+    /// import is refused before the owner is asked, for either kind.
+    #[test]
+    fn imports_one_to_sixty_four_items_and_refuses_zero_or_sixty_five() {
+        let (pem, _) = test_key_pem();
+        let soul = |n: usize| json!({ "agentId": format!("agent_ea588a53-c6ce-430b-9d71-{n:012x}"), "app": "qwts-claude-agent", "appId": "42", "privateKeyPem": pem });
+        let app =
+            |n: usize| json!({ "app": format!("app-{n}"), "appId": "42", "privateKeyPem": pem });
+        for (kind, item) in [
+            ("owner/import", &soul as &dyn Fn(usize) -> Value),
+            ("owner/app-import", &app),
+        ] {
+            for (count, stored) in [(0, None), (1, Some(1)), (64, Some(64)), (65, None)] {
+                let consent = Arc::new(Consenting::new(true));
+                let mut keyd = keyd(true);
+                keyd.consent = Box::new(Arc::clone(&consent));
+                let items: Vec<Value> = (0..count).map(item).collect();
+                let answer = owner(
+                    &keyd,
+                    kind,
+                    json!({ "daemonKey": daemon_key(), "items": items }),
+                );
+                match stored {
+                    Some(n) => {
+                        assert_eq!(answer["result"]["stored"], n, "{kind} {count}");
+                        assert_eq!(consent.asked.lock().unwrap().len(), 1);
+                    }
+                    None => {
+                        assert_eq!(
+                            answer["error"]["message"], "items must be a list of 1 to 64 keys",
+                            "{kind} {count}"
+                        );
+                        assert!(consent.asked.lock().unwrap().is_empty());
+                        assert!(keyd.store.pinned_key().unwrap().is_none());
+                    }
+                }
+            }
+            for items in [json!("x"), json!({}), Value::Null] {
+                let answer = owner(
+                    &keyd(true),
+                    kind,
+                    json!({ "daemonKey": daemon_key(), "items": items }),
+                );
+                assert_eq!(answer["error"]["code"], -32000, "{kind} {items}");
+            }
+        }
+    }
+
+    /// The test clock for `presence_is_stamped_when_the_owner_answers`: the
+    /// owner takes 100 s to answer.
+    static PROMPT_CLOCK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(NOW);
+
+    struct SlowOwner;
+
+    impl Consent for SlowOwner {
+        fn ask(&self, _reason: &str) -> Result<(), Refusal> {
+            PROMPT_CLOCK.fetch_add(100, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// keyd waits up to 120 s for the owner. An assertion stamped when the
+    /// request arrived would be past agent-bot's `now ≤ exp + 30` by the time
+    /// a slow approval returned; its 60 s run from the approval.
+    #[test]
+    fn presence_is_stamped_when_the_owner_answers() {
+        let mut keyd = keyd(true);
+        keyd.consent = Box::new(SlowOwner);
+        keyd.now = || PROMPT_CLOCK.load(std::sync::atomic::Ordering::SeqCst);
+        let answer = presence(
+            &keyd,
+            json!({ "action": "turn agent comms off for Bill", "nonce": "abcdefghijklmnopqrstuvwx" }),
+        );
+        let seed = keyd.store.presence_seed().unwrap();
+        let payload =
+            crate::presence::tests::open(answer["result"]["assertion"].as_str().unwrap(), &seed);
+        assert_eq!(
+            (payload["iat"].as_u64(), payload["exp"].as_u64()),
+            (Some(NOW + 100), Some(NOW + 160))
+        );
     }
 
     fn presence(keyd: &Keyd, params: Value) -> Value {

@@ -1,0 +1,1 @@
+- agent-bot-keyd stamps an owner-presence assertion when the owner answers rather than when the request arrived, so a Touch ID approval slower than 90 seconds is no longer refused as expired; keyd's tests now cover the daemon-key pin, single-use grant nonces, the 1–64 import limit and the presence lifetime (#594).

@@ -119,6 +119,43 @@ pub mod tests {
         );
     }
 
+    /// keyd-protocol.md: keyd issues for 60 s, and agent-bot's verifier
+    /// takes `0 < exp − iat ≤ 120`, `iat ≤ now + 30` and `now ≤ exp + 30`.
+    /// So an assertion keyd signs at `t` is good from `t − 30` to `t + 90`
+    /// on agent-bot's clock, and no longer.
+    #[test]
+    fn issues_for_sixty_seconds_within_the_documented_skew() {
+        const SKEW: u64 = 30;
+        const MAX_LIFETIME: u64 = 120;
+        let accepted = |payload: &Value, now: u64| {
+            let (iat, exp) = (
+                payload["iat"].as_u64().unwrap(),
+                payload["exp"].as_u64().unwrap(),
+            );
+            exp > iat && exp - iat <= MAX_LIFETIME && iat <= now + SKEW && now <= exp + SKEW
+        };
+        let seed = [9u8; 32];
+        let t = 1_800_000_000;
+        let payload = open(&sign(&seed, "pin a key", "n0nce-n0nce-n0nce-0", t), &seed);
+        assert_eq!(payload["exp"].as_u64(), Some(t + LIFETIME_SECONDS));
+        assert_eq!(LIFETIME_SECONDS, 60);
+        for (now, ok) in [
+            (t - 31, false),
+            (t - 30, true),
+            (t, true),
+            (t + 60, true),
+            (t + 90, true),
+            (t + 91, false),
+        ] {
+            assert_eq!(
+                accepted(&payload, now),
+                ok,
+                "at t{:+}",
+                now as i64 - t as i64
+            );
+        }
+    }
+
     #[test]
     fn checks_actions_and_nonces() {
         assert!(action_ok("turn agent comms off for Bill (agent_1)"));

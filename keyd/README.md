@@ -140,7 +140,7 @@ payload: { v: 1, aud: "agent-bot-owner", kind: "presence",
            action: hex(sha256(action)), nonce, iat, exp }
 ```
 
-`exp` is 60 seconds after `iat`. The signing seed is keyd's own Keychain item
+`exp` is 60 seconds after `iat`, which is when the owner answered. The signing seed is keyd's own Keychain item
 (service `agent-bot.keyd`, account `presence-key`), made on first use, so
 only keyd's code reads it.
 
