@@ -7,7 +7,7 @@ import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { ensureAgentIdentity, stateDirectory } from '../agent-identity.mjs';
+import { ensureAgentIdentity, retireAgentIdentity, stateDirectory } from '../agent-identity.mjs';
 import { mintBindToken } from '../agent-binding.mjs';
 import { auditFile } from '../agent-principals.mjs';
 import { registerSoulDir, upsertSoul } from '../agent-population.mjs';
@@ -378,6 +378,57 @@ test('the daemon grants keyd calls only to a bound keyd soul, and receipts each 
     .trim().split('\n').map((line) => JSON.parse(line)).filter((receipt) => receipt.event === 'credential-grant');
   assert.deepEqual(receipts.map((receipt) => receipt.decision), ['denied', 'denied', 'granted', 'denied']);
   assert.doesNotMatch(JSON.stringify(receipts), /v1\.|ghs_/);
+});
+
+// #775: the daemon mints in its own process, which has no worktree binding,
+// with the real mint() — no fake mintImpl — so a binding check moved into
+// mint() would show here. A retired soul's binding then mints nothing.
+test('the daemon mints a bound keyd soul\'s token with the real mint(), and refuses it once retired', async (t) => {
+  const { env, home } = fixture(t);
+  const worktree = path.join(home, 'worktree');
+  mkdirSync(worktree, { recursive: true });
+  execFileSync('git', ['init', '-q', worktree]);
+  const gitDir = path.join(worktree, '.git');
+  const stateDir = stateDirectory({ env, home });
+  ensureAgentIdentity({
+    gate: () => true, appSlug: SLUG, botUid: '308462948', harness: 'codex',
+    transcript: { provider: 'codex', id: 'thread-real-mint' }, stateDir,
+    idFactory: () => AGENT, now: () => new Date('2026-10-03T08:00:00.000Z'),
+  });
+  const record = mintBindToken({ gitDir, worktree, agentId: AGENT });
+  let keydCalls = 0;
+  const server = createDaemonServer({
+    env, home, config: { features: { 'github-identity': true }, apiBase: 'https://api.github.com' },
+    keydCall: async () => {
+      keydCalls += 1;
+      return { structuredContent: { token: 'ghs_real_mint', expires_at: '2026-10-03T09:00:00Z', installation_id: 9 } };
+    },
+  });
+  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+  t.after(() => new Promise((resolve) => { server.close(resolve); }));
+  const port = server.address().port;
+  const call = (pathname, { body, headers = {}, bearer = true } = {}) => fetch(`http://127.0.0.1:${port}${pathname}`, {
+    method: 'POST',
+    headers: { ...(bearer ? { authorization: `Bearer ${server.token}` } : {}), 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body ?? {}),
+  });
+  const bound = await (await call('/v0/bind', { body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-real-mint' } } })).json();
+  const asSoul = { 'x-agent-binding': bound.secret };
+
+  const granted = await call('/v0/credential', { headers: asSoul, bearer: false });
+  assert.equal(granted.status, 200, await granted.clone().text());
+  assert.equal((await granted.json()).token, 'ghs_real_mint');
+  assert.equal(keydCalls, 1);
+
+  retireAgentIdentity(AGENT, { stateDir });
+  const retired = await call('/v0/credential', { headers: asSoul, bearer: false });
+  assert.equal(retired.status, 409);
+  assert.match((await retired.json()).error, /retired/);
+  assert.equal(keydCalls, 1, 'a retired soul reaches no key');
+  const receipts = readFileSync(auditFile({ env, home }), 'utf8')
+    .trim().split('\n').map((line) => JSON.parse(line)).filter((receipt) => receipt.event === 'credential-mint');
+  assert.deepEqual(receipts.map((receipt) => [receipt.decision, receipt.reason]), [['granted', 'bound-soul-own-app'], ['denied', 'soul-retired']]);
+  assert.doesNotMatch(JSON.stringify(receipts), /ghs_/);
 });
 
 test('agent-bot --help lists the keyd command and its actions', async () => {

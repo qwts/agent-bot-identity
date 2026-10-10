@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { apiBase, githubHost, isGateEnabled, loadConfig } from './config.mjs';
-import { mint } from './mint-token.mjs';
+import { mintForCaller } from './git-credential-bot.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 
 const MAX_BUFFER = 256 * 1024 * 1024;
@@ -134,7 +134,7 @@ function makeApi({ base, token, fetchImpl }) {
 }
 
 export async function runSignedCommit(options, {
-  cwd = process.cwd(), env = process.env, fetchImpl = fetch, mintImpl = mint,
+  cwd = process.cwd(), env = process.env, fetchImpl = fetch, mintImpl = mintForCaller,
   stdout = process.stdout, stderr = process.stderr,
 } = {}) {
   if (options.help) { stdout.write(signedCommitHelp()); return { dryRun: true, help: true }; }
@@ -160,7 +160,9 @@ export async function runSignedCommit(options, {
         'no bot identity resolves here — pass --app, set GH_AGENT_APP, pin the checkout, or run from the harness account',
       );
     }
-    const { token } = await mintImpl({ slug, env });
+    // A bound checkout gets its own App from the daemon; another App asks
+    // the owner (#775).
+    const { token } = await mintImpl({ slug, env, cwd, operation: 'signed-commit' });
     api = makeApi({ base: apiBase(config), token, fetchImpl });
     const metadata = await api(`repos/${repo}`);
     defaultBranch = metadata.default_branch;

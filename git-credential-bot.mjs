@@ -18,8 +18,10 @@ import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { mint } from './mint-token.mjs';
 import { isGateEnabled, loadConfig, githubHost } from './config.mjs';
-import { soulMarkers } from './owner-gate.mjs';
+import { presenceOrConsent, soulMarkers } from './owner-gate.mjs';
 import { readBinding } from './agent-binding.mjs';
+import { currentAgentId, readAgentIdentity, stateDirectory } from './agent-identity.mjs';
+import { appendAuditReceipt } from './agent-principals.mjs';
 
 // Harness detection alone still leaves an unpinned owner as a delegate.
 // Broken identity markers count too: they must never enable local key reads.
@@ -68,6 +70,77 @@ export async function mintCredential({
     throw new Error('daemon returned an invalid GitHub credential');
   }
   return { token: grant.token, expires_at: grant.expires_at, installation_id: grant.installation_id };
+}
+
+// The mints that still run in the caller's process — `agent-bot mint-token`,
+// signed-commit and the gist handoff (#775). In a bound checkout the soul's
+// own App comes from the daemon on its binding, never from a key this process
+// can read. Another App, a GH_AGENT_APP override or narrowed permissions is
+// the owner's call for any soul caller, bound or not (a soul checkout keeps
+// its Agent ID pin when its binding is gone): it goes through the owner gate
+// (Touch ID, else the administrator dialog), leaves a receipt either way, and
+// a decline or a headless run refuses. A caller with no Agent ID mints as
+// before.
+export async function mintForCaller({
+  slug = null,
+  permissions = null,
+  env = process.env,
+  cwd = process.cwd(),
+  operation = 'mint-token',
+  selected = null,
+  mintImpl = mint,
+  readBindingImpl = readBinding,
+  currentAgentIdImpl = currentAgentId,
+  readIdentityImpl = (agentId) => readAgentIdentity(agentId, { stateDir: stateDirectory({ env, home: env.HOME }) }),
+  approve = presenceOrConsent,
+  receipt = (fields) => appendAuditReceipt(fields, { env, home: env.HOME }),
+  clientFactory,
+} = {}) {
+  let binding;
+  try { binding = readBindingImpl({ env, cwd }); } catch {
+    throw new Error('cannot mint a GitHub token: the soul binding in this checkout is unreadable');
+  }
+  // An Agent ID marker that cannot be read is still a soul: it has no App of
+  // its own here, so every request it makes asks the owner.
+  let soul = binding?.agentId ?? null;
+  let marked = Boolean(binding);
+  if (!binding) {
+    try { soul = currentAgentIdImpl({ env, cwd }); marked = soul !== null; } catch { marked = true; }
+  }
+  if (!marked) return mintImpl({ slug, env, permissions, selected });
+
+  let own = null;
+  if (soul) {
+    try { own = readIdentityImpl(soul)?.github?.appSlug ?? null; } catch { /* no record: no App of its own */ }
+  }
+  const wanted = slug ?? env.GH_AGENT_APP ?? own;
+  if (!wanted) throw new Error('this soul has no GitHub App; name one with --app to ask the owner for its token');
+  if (wanted === own && !permissions && (!env.GH_AGENT_APP || env.GH_AGENT_APP === own)) {
+    if (!binding) return mintImpl({ slug, env, selected });
+    if (selected) selected({ appSlug: own, reason: 'bound-soul-own-app' });
+    return mintCredential({
+      slug: own, env, cwd, soulBound: true, readBindingImpl: () => binding,
+      ...(clientFactory ? { clientFactory } : {}),
+    });
+  }
+
+  const scope = permissions
+    ? ` limited to ${Object.entries(permissions).map(([name, level]) => `${name}=${level}`).join(', ')}`
+    : '';
+  const action = `mint a GitHub App token for ${wanted}[bot]${scope} from a checkout of ${soul ?? 'an unreadable soul'}`;
+  const record = (decision, reason) => receipt({
+    event: 'credential-mint', agentId: soul, operation, decision, appSlug: wanted, reason,
+  });
+  let proof;
+  try { proof = await approve(action, { env }); } catch (error) {
+    record('denied', 'owner-gate-refused');
+    throw error;
+  }
+  record('approved', `owner-${proof?.method ?? 'approved'}`);
+  return mintImpl({
+    slug: wanted, env, permissions,
+    selected: selected ? (chosen) => selected({ ...chosen, reason: 'owner-approved' }) : null,
+  });
 }
 
 export function parseCredentialRequest(text) {
