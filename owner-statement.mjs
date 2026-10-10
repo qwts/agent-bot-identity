@@ -36,11 +36,12 @@ import path from 'node:path';
 import process from 'node:process';
 import { withLock } from './agent-identity.mjs';
 import { vouchStateDir } from './vouch.mjs';
+import { MAX_TEXT_BYTES, textProblem } from './owner-text.mjs';
 
 export const STATEMENT_AUDIENCE = 'agent-bot-owner-statement';
 export const SSHSIG_NAMESPACE = 'agent-bot-owner-statement';
 export const MAX_OWNER_KEYS = 4;
-export const MAX_TEXT_BYTES = 500;
+export { MAX_TEXT_BYTES, textProblem };
 export const STATEMENT_LIFETIME = Object.freeze({ default: 7 * 86_400, max: 30 * 86_400 });
 export const CHALLENGE_LIFETIME = Object.freeze({ default: 600, max: 900 });
 const CLOCK_SKEW_SECONDS = 30;
@@ -58,7 +59,6 @@ const SK_EXTENSION_DATA = 0x80;
 // Control characters, line and paragraph separators, and bidirectional
 // marks and overrides: anything that could make the text read differently
 // from what was signed.
-const UNSAFE_TEXT = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/u;
 const REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
 const HOST = /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252})$/;
 const NONCE = /^[A-Za-z0-9_-]{16,64}$/;
@@ -187,13 +187,6 @@ export function dearmorSshsig(text) {
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-export function textProblem(text) {
-  if (typeof text !== 'string' || text.trim() === '') return 'the text is empty';
-  if (Buffer.byteLength(text, 'utf8') > MAX_TEXT_BYTES) return `the text is longer than ${MAX_TEXT_BYTES} bytes`;
-  if (UNSAFE_TEXT.test(text)) return 'the text has a control, line-break or bidirectional character';
-  return null;
 }
 
 function scopeProblem(scope, kind) {
@@ -425,7 +418,7 @@ export function newNonce() {
 // One unsigned challenge per enrolled SSH key lets an owner sign with whichever
 // key they hold on the trusted machine. The challenge itself contains no key
 // material; the signer proves that its public key matches the named pin.
-export function createOwnerChallenges(text, keys, { host = localHost(), now = Date.now() } = {}) {
+export function createOwnerChallenges(action, text, keys, { host = localHost(), now = Date.now() } = {}) {
   const textProblemResult = textProblem(text);
   if (textProblemResult) throw statementError('statement-invalid', textProblemResult);
   const iat = Math.floor(now / 1000);
@@ -439,8 +432,8 @@ export function createOwnerChallenges(text, keys, { host = localHost(), now = Da
       key: pin.fingerprint,
       text,
       scope,
-      // ADR-0753 binds this digest to the exact summary shown to the owner.
-      action: createHash('sha256').update(text, 'utf8').digest('hex'),
+      // ADR-0753 binds the raw action independently from its displayed summary.
+      action: createHash('sha256').update(action, 'utf8').digest('hex'),
       nonce: newNonce(),
       iat,
       exp: iat + CHALLENGE_LIFETIME.default,
@@ -459,9 +452,6 @@ function challengeTemplateProblem(payload, { now = Date.now() } = {}) {
   const problem = payloadProblem(payload);
   if (problem) return problem;
   if (payload.kind !== 'challenge' || payload.alg !== 'sshsig') return 'the challenge is not for the ssh store';
-  if (payload.action !== createHash('sha256').update(payload.text, 'utf8').digest('hex')) {
-    return 'the challenge action digest does not match its displayed text';
-  }
   const seconds = Math.floor(now / 1000);
   if (payload.iat > seconds + CLOCK_SKEW_SECONDS) return 'the challenge is issued in the future';
   if (seconds > payload.exp + CLOCK_SKEW_SECONDS) return 'the challenge has expired';
@@ -793,7 +783,7 @@ export async function ownerCommand(argv, {
         writeErr(`Proving you hold ${name} (${fingerprint}): touch the security key or enter its PIN if asked.\n`);
         const text = `Enrol owner key ${name} (${fingerprint}) on ${host()}`;
         const { token } = signPayload({ kind: 'challenge', text,
-          scope: { host: host() }, action: createHash('sha256').update(text, 'utf8').digest('hex'), lifetime: CHALLENGE_LIFETIME.default },
+          scope: { host: host() }, action: createHash('sha256').update(action, 'utf8').digest('hex'), lifetime: CHALLENGE_LIFETIME.default },
         { keyPath: values.key, sign, now: now() });
         verifyStatement(token, { keys: [pin], now: now() });
         mutateOwnerKeys((keys) => {

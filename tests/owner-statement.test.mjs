@@ -8,7 +8,7 @@ import { PassThrough } from 'node:stream';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  CHALLENGE_LIFETIME, MAX_INPUT_BYTES, MAX_OWNER_KEYS, SSHSIG_NAMESPACE, STATEMENT_AUDIENCE, armorStatement, createOwnerChallenges,
+  CHALLENGE_LIFETIME, MAX_INPUT_BYTES, MAX_OWNER_KEYS, MAX_TEXT_BYTES, SSHSIG_NAMESPACE, STATEMENT_AUDIENCE, armorStatement, createOwnerChallenges,
   encodePayload, ed25519KeyLine, extractToken, ownerCommand, ownerKeysPath, parseSshPublicKey, promptOwnerChallenge, readOwnerKeys,
   readStatementFile, signChallenge, sshFingerprint, verifyOwnerChallenge, verifyStatement, writeOwnerKeys,
 } from '../owner-statement.mjs';
@@ -149,15 +149,19 @@ test('a keyd pin verifies raw Ed25519 statements and nothing signed for presence
 test('an owner challenge binds the displayed action summary and can be answered once by an enrolled SSH key', () => {
   const key = securityKey();
   const pin = pinFor(key);
+  const action = 'soul revision approve agent_12345678-1234-4123-8123-123456789abc proposal_1';
   const text = 'approve the pending soul revision';
-  const challenges = createOwnerChallenges(text, [pin], { host: 'remote-host', now: NOW });
+  const challenges = createOwnerChallenges(action, text, [pin], { host: 'remote-host', now: NOW });
   assert.equal(challenges.length, 1);
   const challenge = challenges[0].payload;
-  assert.equal(challenge.action, createHash('sha256').update(text).digest('hex'));
+  assert.equal(challenge.action, createHash('sha256').update(action).digest('hex'));
   assert.equal(challenge.text, text);
   assert.deepEqual(challenge.scope, { host: 'remote-host' });
   assert.equal(challenge.exp - challenge.iat, CHALLENGE_LIFETIME.default);
-  assert.throws(() => createOwnerChallenges('😀'.repeat(126), [pin], { now: NOW }), { code: 'statement-invalid' });
+  assert.throws(() => createOwnerChallenges(action, '😀'.repeat(126), [pin], { now: NOW }), { code: 'statement-invalid' });
+  const sameSummary = createOwnerChallenges(`${action} other`, text, [pin], { host: 'remote-host', now: NOW })[0].payload;
+  assert.equal(sameSummary.text, challenge.text);
+  assert.notEqual(sameSummary.action, challenge.action, 'raw actions remain distinct even when their display summaries match');
 
   const signedPayload = { ...challenge, iat: challenge.iat + 1 };
   const segment = encodePayload(signedPayload);
@@ -166,11 +170,12 @@ test('an owner challenge binds the displayed action summary and can be answered 
     method: 'statement', via: 'ssh', key: 'yubikey', fingerprint: key.fingerprint,
   });
   assert.throws(() => verifyOwnerChallenge(reply, {
-    challenges: createOwnerChallenges(`${text} changed`, [pin], { host: 'remote-host', now: NOW }), keys: [pin], now: NOW + 1000,
+    challenges: createOwnerChallenges(action, `${text} changed`, [pin], { host: 'remote-host', now: NOW }), keys: [pin], now: NOW + 1000,
   }), { code: 'statement-scope-mismatch' });
 
   for (const changed of [
     { ...challenge, action: `${challenge.action[0] === '0' ? '1' : '0'}${challenge.action.slice(1)}` },
+    { ...challenge, text: `${challenge.text} changed` },
     { ...challenge, scope: { host: 'another-host' } },
     { ...challenge, nonce: `${challenge.nonce.slice(0, -1)}${challenge.nonce.endsWith('a') ? 'b' : 'a'}` },
   ]) {
@@ -191,17 +196,19 @@ test('a signer clock behind by less than the allowed skew can answer the origina
   const keyPath = join(ctx.dir, 'owner-key');
   writeFileSync(`${keyPath}.pub`, `${key.line}\n`);
   const pin = pinFor(key);
-  const [challenge] = createOwnerChallenges('approve revision p2', [pin], { host: 'remote-host', now: NOW });
+  const [challenge] = createOwnerChallenges('soul revision approve p2', 'approve revision p2', [pin], { host: 'remote-host', now: NOW });
   const { token, payload } = signChallenge(challenge.payload, keyPath, {
     now: NOW - 20_000,
     sign: (segment) => key.sshsig(Buffer.from(segment)),
   });
   assert.equal(payload.iat, challenge.payload.iat, 'the signer preserves the request issuance time');
   assert.deepEqual(verifyOwnerChallenge(armorStatement(token), { challenges: [challenge], keys: [pin], now: NOW + 5_000 }).via, 'ssh');
-  const mismatchedAction = `${challenge.payload.action[0] === '0' ? '1' : '0'}${challenge.payload.action.slice(1)}`;
-  assert.throws(() => signChallenge({ ...challenge.payload, action: mismatchedAction }, keyPath, {
-    now: NOW, sign: () => assert.fail('a mismatched challenge template must be rejected before signing'),
-  }), { code: 'statement-invalid' });
+  const suppliedAction = 'a'.repeat(64);
+  const signedDifferentDigest = signChallenge({ ...challenge.payload, action: suppliedAction }, keyPath, {
+    now: NOW, sign: (segment) => key.sshsig(Buffer.from(segment)),
+  });
+  assert.equal(signedDifferentDigest.payload.action, suppliedAction, 'the signer preserves the agent-supplied raw-action digest');
+  assert.equal(verifyStatement(signedDifferentDigest.token, { keys: [pin], now: NOW }).payload.action, suppliedAction);
 });
 
 test('the owner CLI signs the challenge JSON and emits only the armored reply on stdout', async (t) => {
@@ -213,7 +220,7 @@ test('the owner CLI signs the challenge JSON and emits only the armored reply on
   const key = parseSshPublicKey(line);
   const pin = { ...pinFor({ line, fingerprint: sshFingerprint(key.blob) }), softwareKey: true };
   const challengeNow = Date.now();
-  const [challenge] = createOwnerChallenges('approve the pending revision', [pin], { host: 'remote-host', now: challengeNow });
+  const [challenge] = createOwnerChallenges('soul revision approve p2', 'approve the pending revision', [pin], { host: 'remote-host', now: challengeNow });
   const result = spawnSync(process.execPath, [CLI, 'owner', 'sign', '--challenge', JSON.stringify(challenge.payload), '--key', keyPath], {
     cwd: ctx.dir, env: { HOME: ctx.dir, PATH: process.env.PATH }, encoding: 'utf8',
   });
@@ -231,7 +238,7 @@ test('the challenge gate reaches the terminal reply flow only after unavailable 
   const key = securityKey();
   const pin = pinFor(key);
   writeOwnerKeys([pin], { env: ctx.env });
-  const action = 'soul revision approve agent_12345678-1234-4123-8123-123456789abc proposal_1';
+  const action = `soul action \u0085\u202e${'😀漢'.repeat(170)} tail`;
   let asked = 0;
   let promptCount = 0;
   const now = () => NOW;
@@ -242,7 +249,9 @@ test('the challenge gate reaches the terminal reply flow only after unavailable 
       promptCount += 1;
       const summary = challenges[0].payload.text;
       assert.equal(summary, ownerActionSummary(action, { env: ctx.env }));
-      assert.equal(challenges[0].payload.action, createHash('sha256').update(summary).digest('hex'));
+      assert.equal(challenges[0].payload.action, createHash('sha256').update(action).digest('hex'));
+      assert.ok(Buffer.byteLength(summary, 'utf8') <= MAX_TEXT_BYTES);
+      assert.doesNotMatch(summary, /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/u);
       const payload = { ...challenges[0].payload, iat: SECONDS + 1 };
       const segment = encodePayload(payload);
       return armorStatement(`s1.${segment}.${key.sshsig(Buffer.from(segment)).toString('base64url')}`);
@@ -395,7 +404,7 @@ test('owner challenge prompt refuses noninteractive input and has a finite wait'
 test('the terminal prompt accepts and verifies one armored signed owner reply', async () => {
   const key = securityKey();
   const pin = pinFor(key);
-  const challenges = createOwnerChallenges('approve pending change', [pin], { host: 'remote-host', now: NOW });
+  const challenges = createOwnerChallenges('soul action approve', 'approve pending change', [pin], { host: 'remote-host', now: NOW });
   const payload = challenges[0].payload;
   const segment = encodePayload(payload);
   const reply = armorStatement(`s1.${segment}.${key.sshsig(Buffer.from(segment)).toString('base64url')}`);
@@ -458,13 +467,17 @@ function skOnDisk(dir, key = securityKey()) {
 
 test('enroll pins a security key after the gate and a proof of possession', async (t) => {
   const asked = [];
+  let signedEnrollment;
   const ctx = command(t, { gate: async (action) => { asked.push(action); return { method: 'presence' }; } });
   const disk = skOnDisk(ctx.dir);
   const run = (argv) => ownerCommand(argv, { env: ctx.env, home: ctx.dir, now: () => NOW, write: () => {}, writeErr: () => {},
-    gate: async (action) => { asked.push(action); }, receipt: (fields) => ctx.receipts.push(fields), sign: disk.sign, host: () => 'mac' });
+    gate: async (action) => { asked.push(action); }, receipt: (fields) => ctx.receipts.push(fields),
+    sign: (segment) => { signedEnrollment = JSON.parse(Buffer.from(segment, 'base64url').toString('utf8')); return disk.sign(segment); }, host: () => 'mac' });
   const pin = await run(['enroll', '--store', 'ssh', '--key', disk.file, '--name', 'yubikey']);
   assert.equal(pin.fingerprint, disk.key.fingerprint);
   assert.deepEqual(asked, [`owner enroll yubikey ${disk.key.fingerprint}`]);
+  assert.equal(signedEnrollment.action, createHash('sha256').update(asked[0], 'utf8').digest('hex'));
+  assert.notEqual(signedEnrollment.action, createHash('sha256').update(signedEnrollment.text, 'utf8').digest('hex'));
   assert.deepEqual(readOwnerKeys({ env: ctx.env }).map((p) => p.name), ['yubikey']);
   assert.deepEqual(ctx.receipts.map((r) => [r.event, r.operation, r.decision]), [['owner-key', 'enroll', 'approved']]);
   await assert.rejects(run(['enroll', '--store', 'ssh', '--key', disk.file, '--name', 'again']), { code: 'owner-key-exists' });

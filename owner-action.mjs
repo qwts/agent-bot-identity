@@ -32,7 +32,7 @@ function sharedGateOptions(options) {
     presence: options.presence,
     consent: options.fallbackConsent ?? gate.consentOwner,
     listSouls: options.listSouls ?? list,
-    challenge: allowChallenge ? async (_pendingAction, { summary }) => {
+    challenge: allowChallenge ? async (pendingAction, { summary }) => {
       const keys = readOwnerKeys({ env });
       if (keys.length === 0) return null;
       const sshKeys = keys.filter((pin) => pin.store === 'ssh');
@@ -40,7 +40,7 @@ function sharedGateOptions(options) {
         throw statementError('owner-unreachable', 'owner pins exist, but this CLI challenge flow can use only enrolled SSH keys; nothing was changed');
       }
       const now = options.challengeNow ?? Date.now;
-      const challenges = createOwnerChallenges(summary, sshKeys, {
+      const challenges = createOwnerChallenges(pendingAction, summary, sshKeys, {
         host: (options.challengeHost ?? localHost)(), now: now(),
       });
       const prompt = options.challengePrompt ?? promptOwnerChallenge;

@@ -39,8 +39,10 @@ payload: { v: 1, aud: "agent-bot-owner-statement", kind, alg, key,
   line-break or bidirectional characters.
 - `scope` is `{ repo, number }` for a statement; `{ host }` or
   `{ host, repo, number }` for a challenge.
-- `action` is `null` for a statement and a SHA-256 hex digest of the displayed
-  challenge text for a challenge.
+- `action` is `null` for a statement and a SHA-256 hex digest of the raw
+  command-shaped action for a challenge. The bounded human-readable summary
+  is carried separately in `text`; both fields are checked against the
+  pending challenge.
 - `nonce` is 16 to 64 base64url characters.
 - `iat` and `exp` are Unix seconds. A statement lasts at most 30 days
   (7 by default), a challenge at most 15 minutes (10 by default). Clocks may

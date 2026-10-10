@@ -37,9 +37,9 @@ import { currentAgentId } from './agent-identity.mjs';
 import { requireOwnerApproval } from './owner-approval.mjs';
 import { keydPresence } from './owner-presence.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
+import { boundedOwnerSummary } from './owner-text.mjs';
 
 const AGENT_ID = /agent_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
-const MAX_SUMMARY = 400;
 
 export function ownerCredentialRequired(message = 'an authenticated owner principal or explicit owner consent is required') {
   return Object.assign(new Error(message), { code: 'owner-credential-required', statusCode: 403 });
@@ -120,11 +120,7 @@ export function ownerActionSummary(action, { souls = null, listSouls = null } = 
     } else summary = id === '--all' ? `move every soul's GitHub App key${to}` : `move the GitHub App key of ${label(id)}${to}`;
   }
   summary ??= action.replace(AGENT_ID, label);
-  summary = summary.replace(/[\u0000-\u001f\u007f]/g, ' ');
-  // Truncate by code point, not UTF-16 unit, so an emoji at the boundary is
-  // never split into a lone surrogate that breaks keyd's JSON-RPC request.
-  const points = Array.from(summary);
-  return points.length > MAX_SUMMARY ? `${points.slice(0, MAX_SUMMARY - 1).join('')}…` : summary;
+  return boundedOwnerSummary(summary);
 }
 
 export async function consentOwner(action, { platform, run, summary = action } = {}) {

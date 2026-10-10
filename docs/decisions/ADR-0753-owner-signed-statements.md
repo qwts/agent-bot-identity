@@ -172,8 +172,9 @@ inbox, or on the daemon's decision routes (`POST /v0/approvals/decide`,
 The gate accepts the reply only when it verifies under an enrolled key and
 every request-bound field equals the pending challenge the gate itself
 recorded: `kind`, `text`, `scope`, `action` and `nonce`, with `exp` no
-later than the challenge's. `text` is the action summary whose digest is
-`action`, so the words the owner saw are the words of the pending request.
+later than the challenge's. `action` is the digest of the raw action string
+defined in section 1; `text` is its independently rendered, bounded summary.
+Checking both fields binds the command identity and the words the owner saw.
 The template is unsigned while it travels, so a relay that edits any field
 gets a reply the gate refuses. Who carried the reply does not matter:
 a subagent, an SSH session or a CI log can relay it, but none can forge it.
