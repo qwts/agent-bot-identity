@@ -264,11 +264,9 @@ thread boundaries. These are deterministic engine fixtures: they prove the
 input delivered to the executor, not a model's answer or a live GeniusBar
 restart. No native session-resume support is implied by this fallback.
 
-Remaining #596 acceptance includes live UI/app and daemon restarts and
-supported CLI transitions. Native `/v1` session association and the CLI
-resume-wake lane's per-soul session registry are separate paths requiring
-their own evidence. Neither is demonstrated by the cold-relay fixtures,
-and relocating Agent Space alone does not resolve those continuity requirements.
+The remaining #596 acceptance is the owner's recorded live GeniusBar check:
+chat, quit and reopen on a build bundling current agent-bot
+([owner decision](https://github.com/qwts/agent-bot-identity/issues/596#issuecomment-6088161083)).
 
 ### Storage and migration limits
 
