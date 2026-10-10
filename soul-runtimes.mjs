@@ -178,8 +178,16 @@ function syncOverrideShims(soulDir, { agentId, platform }) {
     if (!state.errors.length && state.rows.length) ensureOverrideShims(soulDir, state.overrides, { agentId });
     return state;
   };
-  let info = null;
-  try { info = lstatSync(overrideDirectory(soulDir)); } catch { /* no override store yet */ }
+  const store = () => { try { return lstatSync(overrideDirectory(soulDir)); } catch { return null; } };
+  let info = store();
+  if (!info) {
+    // No store yet: an empty read needs no lock. If a first override created
+    // the store meanwhile, its record may still be provisional, so read
+    // again under the lock instead of using it.
+    const state = inspectRuntimeOverrides(soulDir, { agentId, platform });
+    if (!state.rows.length) return state;
+    info = store();
+  }
   // Only a real directory holds the lock; anything else is refused by the read.
   if (!info?.isDirectory() || info.isSymbolicLink()) return read();
   return withLock(path.join(overrideDirectory(soulDir), OVERRIDE_LOCK), 'runtime override store', read);
