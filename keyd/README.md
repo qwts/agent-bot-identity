@@ -159,7 +159,8 @@ not ask again.
 The keys the owner signs statements with
 ([agent-bot-identity #753](https://github.com/qwts/agent-bot-identity/issues/753))
 count only as keyd records them. `owner/pins-attest {pins, nonce}` shows the
-owner every key by name and fingerprint and, only on approval, keeps the
+owner every key (name, kind, whether a PIN or biometric is required, and
+fingerprint) and, only on approval, keeps the
 key set's digest and a generation one past the last in keyd's Keychain item
 (service `agent-bot.keyd`, account `owner-pins`). `owner/pins-status {nonce}`
 reports that record with no prompt. Both answer a `k1.` record signed with

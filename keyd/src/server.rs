@@ -1729,7 +1729,7 @@ mod tests {
         assert_eq!(payload["kind"], "pins");
         assert_eq!(
             consent.asked.lock().unwrap().clone(),
-            vec![format!("agent-bot wants to trust only these keys to sign statements as you: yubikey ({FP_A})")]
+            vec![format!("agent-bot wants to trust only these keys to sign statements as you: yubikey (ssh security key, {FP_A})")]
         );
 
         let status = owner_pins(
