@@ -705,7 +705,7 @@ export async function ownerCommand(argv, {
           // anything running as the owner could have written proves nothing.
           const result = { ok: false, code: 'owner-pins-unprotected', signature: 'valid', message: PINS_UNPROTECTED, ...verified };
           if (values.json) json(result);
-          else write(`signature valid for owner ${payload.kind} (key ${pin.name}), ${describeScope(payload.scope)}, expires ${verified.expiresAt}:\n${payload.text}\nNOT owner approval: ${PINS_UNPROTECTED}\n`);
+          else write(`NOT owner approval: ${PINS_UNPROTECTED}\nsignature valid for owner ${payload.kind} (key ${pin.name}), ${describeScope(payload.scope)}, expires ${verified.expiresAt}:\n${payload.text}\n`);
           return result;
         }
         const result = { ok: true, ...verified };

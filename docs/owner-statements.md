@@ -73,8 +73,8 @@ approved.** `<state>/owner/keys.json` is writable by anything running as the
 owner, a soul included, and a security key made in software looks the same
 as hardware, so a soul could pin its own key and sign its own statement
 (#753). A statement whose signature checks out against the local pins is
-printed as `signature valid for owner statement ...` followed by `NOT owner
-approval: ...`, and exits 1 with `owner-pins-unprotected` (`--json`: `{ ok:
+printed as `NOT owner approval: ...` followed by `signature valid for owner
+statement ...` and its text, and exits 1 with `owner-pins-unprotected` (`--json`: `{ ok:
 false, code: "owner-pins-unprotected", signature: "valid", message, kind,
 text, scope, key, fingerprint, issuedAt, expiresAt }`). That is a diagnostic
 of the signature, not a decision. Once pins are protected (for example

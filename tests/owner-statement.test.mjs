@@ -606,7 +606,7 @@ test('ssh-keygen signatures from a software key verify end to end', { skip: !HAS
   await run(['sign', 'Accept the ssh store.', '--repo', SCOPE.repo, '--issue', '753', '--key', file]);
   const verified = await run(['verify', ctx.out.at(-1), '--repo', SCOPE.repo, '--issue', '753']);
   assert.deepEqual([verified.text, verified.key], ['Accept the ssh store.', 'laptop']);
-  assert.equal(ctx.out.at(-1).split('\n')[1], 'Accept the ssh store.');
+  assert.equal(ctx.out.at(-1).split('\n')[2], 'Accept the ssh store.');
 });
 
 test('the agent-bot owner command verifies offline and exits non-zero on a refusal', (t) => {
@@ -618,8 +618,8 @@ test('the agent-bot owner command verifies offline and exits non-zero on a refus
   // A valid signature exits 1 until pins are integrity-protected (#753).
   const valid = cli(['verify', token, '--repo', SCOPE.repo, '--issue', '753']);
   assert.equal(valid.status, 1, valid.stderr);
-  assert.match(valid.stdout, /^signature valid for owner statement \(key yubikey\)/);
-  assert.match(valid.stdout, /\nNOT owner approval: the owner pins on this host are not integrity-protected/);
+  assert.match(valid.stdout, /^NOT owner approval: the owner pins on this host are not integrity-protected/);
+  assert.match(valid.stdout, /\nsignature valid for owner statement \(key yubikey\)/);
   assert.doesNotMatch(valid.stdout, /^verified owner/m);
   const json = cli(['verify', token, '--repo', SCOPE.repo, '--issue', '753', '--json']);
   assert.equal(json.status, 1);
