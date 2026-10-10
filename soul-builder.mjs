@@ -798,28 +798,36 @@ function agentToolNames(fields, path) {
 // MultiEdit uses OpenCode's edit tool; other native names use lowercase.
 const opencodeTools = (names) => [...new Set(names.map((name) => name === 'MultiEdit' ? 'edit' : name.toLowerCase()))].sort(compare);
 
-// Native tool names for Claude's, where the harness documents one. Kiro's are
-// category tags (`read` is reading, listing and searching); Devin's are its
-// tool names (`read`, `edit`, `grep`, `glob`, `exec`; its `edit` covers file
-// writes, and it has no `write`). A declared tool missing here cannot be
-// spelled for that harness, so the subagent is reported unsupported there
-// rather than widened or cut.
+// Native tool names for Claude's, where the harness documents one. Kiro's
+// built-ins are category tags (`read` is reading, listing and searching);
+// Devin's are its tool names (`read`, `edit`, `grep`, `glob`, `exec`; its
+// `edit` covers file writes, and it has no `write`). A declared tool missing
+// here cannot be spelled for that harness, so its subagent is unsupported
+// there rather than widened or cut.
 const KIRO_TOOLS = Object.freeze({ Read: 'read', NotebookRead: 'read', Grep: 'read', Glob: 'read', LS: 'read',
   Edit: 'write', MultiEdit: 'write', Write: 'write', NotebookEdit: 'write', Bash: 'shell',
   WebFetch: 'web', WebSearch: 'web', Task: 'subagent', TodoWrite: 'todo_list' });
 const DEVIN_TOOLS = Object.freeze({ Read: 'read', Edit: 'edit', MultiEdit: 'edit', Write: 'edit', Grep: 'grep', Glob: 'glob', Bash: 'exec' });
-// Devin names an MCP tool `mcp__<server>__<tool>`, as Claude does, and reads
-// the shared `.mcp.json`, so a declared MCP tool keeps its exact name there.
+// Claude declarations name an MCP tool `mcp__<server>__<tool>`. Its server
+// segment ends at the first `__` (`mcp__foo__bar__baz`: server `foo`, tool
+// `bar__baz`). Kiro uses `@server/tool`; Devin keeps Claude's exact name.
 // The declaration grammar admits no `*`, so no server-wide grant is invented.
-// The server segment ends at the first `__` (as in `mcp__foo__bar__baz`:
-// server `foo`, tool `bar__baz`); passthrough keeps whatever Devin infers.
-const MCP_TOOL = /^mcp__[A-Za-z0-9-]+(?:_[A-Za-z0-9-]+)*__[A-Za-z0-9_-]+$/;
+const MCP_TOOL = /^mcp__([A-Za-z0-9-]+(?:_[A-Za-z0-9-]+)*)__([A-Za-z0-9_-]+)$/;
 // Cursor has no per-tool allowlist, only `readonly`; it is set when every
 // declared tool is one of these, so a read-only agent stays read-only.
 const READ_ONLY_TOOLS = Object.freeze(['Glob', 'Grep', 'LS', 'NotebookRead', 'Read', 'TodoWrite', 'WebFetch', 'WebSearch']);
 
 function nativeTools(map, names, { mcp = false } = {}) {
   const spelled = (name) => Object.hasOwn(map, name) ? map[name] : mcp && MCP_TOOL.test(name) ? name : null;
+  if (names.some((name) => spelled(name) === null)) return null;
+  return [...new Set(names.map(spelled))].sort(compare);
+}
+function kiroNativeTools(names) {
+  const spelled = (name) => {
+    if (Object.hasOwn(KIRO_TOOLS, name)) return KIRO_TOOLS[name];
+    const match = MCP_TOOL.exec(name);
+    return match ? `@${match[1]}/${match[2]}` : null;
+  };
   if (names.some((name) => spelled(name) === null)) return null;
   return [...new Set(names.map(spelled))].sort(compare);
 }
@@ -840,8 +848,12 @@ function translatedAgents(name, { description, model, tools }) {
   agents.push([`.github/agents/${name}.agent.md`, [...common, ...(tools ? [`tools: ${yamlList(tools)}`] : [])]]);
   // Kiro (CLI 3.0 / IDE 1.0 Markdown agents): its default for an absent
   // `tools` is not documented, so inheriting every tool is spelled `*`.
-  const kiro = tools ? nativeTools(KIRO_TOOLS, tools) : ['*'];
-  if (kiro) agents.push([`.kiro/agents/${name}.md`, [...common, `tools: ${yamlList(kiro)}`]]);
+  // includeMcpJson loads existing workspace/global MCP declarations; the
+  // exact `tools` selectors remain the allowlist, with no permission changes.
+  const kiro = tools ? kiroNativeTools(tools) : ['*'];
+  if (kiro) agents.push([`.kiro/agents/${name}.md`, [...common,
+    `tools: ${yamlList(kiro)}`,
+    ...(tools?.some((tool) => MCP_TOOL.test(tool)) ? ['includeMcpJson: true'] : [])]]);
   // Devin: an absent `allowed-tools` is every tool, as in Claude.
   const devin = tools ? nativeTools(DEVIN_TOOLS, tools, { mcp: true }) : [];
   if (devin) agents.push([`.devin/agents/${name}.md`, [...common, ...(tools ? [`allowed-tools: ${yamlList(devin)}`] : [])]]);

@@ -219,26 +219,33 @@ JSON-quoted YAML strings, then the marker and the prompt. Only `tools` differs:
 | --- | --- | --- |
 | Cursor | No per-tool allowlist: `readonly: true` when every tool is read-only (`Read`, `Grep`, `Glob`, `LS`, `NotebookRead`, `WebFetch`, `WebSearch`, `TodoWrite`) or the list is empty; otherwise Cursor's defaults apply | Omitted |
 | Copilot CLI | `tools:` the Claude names verbatim (documented aliases; unknown names are ignored, which narrows) | Omitted (all tools) |
-| Kiro | `tools:` category tags: `Read`/`Grep`/`Glob`/`LS`/`NotebookRead` → `read`, `Edit`/`MultiEdit`/`Write`/`NotebookEdit` → `write`, `Bash` → `shell`, `WebFetch`/`WebSearch` → `web`, `Task` → `subagent`, `TodoWrite` → `todo_list` | `tools: ["*"]` (the default is undocumented) |
+| Kiro | `tools:` category tags: `Read`/`Grep`/`Glob`/`LS`/`NotebookRead` → `read`, `Edit`/`MultiEdit`/`Write`/`NotebookEdit` → `write`, `Bash` → `shell`, `WebFetch`/`WebSearch` → `web`, `Task` → `subagent`, `TodoWrite` → `todo_list`; MCP `mcp__<server>__<tool>` → exact `@server/tool`, with `includeMcpJson: true` | `tools: ["*"]` (the default is undocumented) |
 | Devin CLI | `allowed-tools:` `Read` → `read`, `Edit`/`MultiEdit`/`Write` → `edit` (Devin has no `write` tool; `edit` covers file writes), `Grep` → `grep`, `Glob` → `glob`, `Bash` → `exec`; an MCP tool `mcp__<server>__<tool>` keeps its exact name | Omitted (all tools) |
 
-A declared tool Kiro or Devin has no name for (for example an MCP tool for
-Kiro, or `WebFetch` for Devin) means that subagent is not rendered for that
-harness and is listed under its `unsupported.subagents`, never widened or cut
-down. Devin spells MCP tools as Claude does and reads the shared `.mcp.json`, so
-a declared `mcp__<server>__<tool>` keeps its exact name; the declaration grammar
-admits no `*`, so no server-wide grant is produced. The name is passed through
-unchanged, so Devin interprets it exactly as Claude would; the builder only
-requires a non-empty server segment ending at the first `__` after `mcp__` and a
-non-empty tool (`mcp__foo__bar__baz` is server `foo`, tool `bar__baz`). A server
-whose own name contains `__` cannot be told apart from that form and is not
-detected; an empty server or tool stays unsupported. Devin labels custom
-subagents experimental, and none of these Devin files was verified in a live
-Devin session. Kiro's
-tags are categories, so `Read` grants Kiro's whole read category (reading,
-listing, searching). Devin's subagents default to its subagent model rather
-than the parent's when `model` is omitted. Cursor and Copilot CLI also read the
-Claude copy in `.claude/agents/`; the native file has the same name and wins.
+A declared tool Kiro or Devin cannot name (for example `WebFetch` for Devin)
+means that subagent is not rendered for that harness and is listed under its
+`unsupported.subagents`, never widened or cut down. Kiro spells a declared MCP
+tool as the exact `@server/tool` selector. When such a tool is listed, the
+generated agent sets `includeMcpJson: true` so Kiro can read the existing
+workspace/global MCP configuration; see Kiro's [tools field][kiro-tools] and
+[`includeMcpJson` field][kiro-include-mcp]. `tools` still limits the agent to
+the declared selectors. No MCP server configuration or secrets are copied
+into the agent file, and the declaration grammar admits no wildcard or
+server-wide grant. Devin reads the shared `.mcp.json` and keeps Claude's exact
+`mcp__<server>__<tool>` name. Both adapters use the first `__` after `mcp__` to
+separate the server (`mcp__foo__bar__baz` means server `foo`, tool `bar__baz`).
+A server name intended to contain `__` cannot be distinguished from this form;
+empty servers and empty tools stay unsupported.
+Kiro's built-in tags are categories, so `Read` grants Kiro's whole read
+category (reading, listing, searching). Devin labels custom subagents
+experimental, and none of these Devin files was verified in a live Devin
+session. Kiro marker tolerance also remains unverified in a signed-in session.
+Devin's subagents default to its subagent model rather than the parent's when
+`model` is omitted. Cursor and Copilot CLI also read the Claude copy in
+`.claude/agents/`; the native file has the same name and wins.
+
+[kiro-tools]: https://kiro.dev/docs/custom-agents/configuration-reference/#tools-field
+[kiro-include-mcp]: https://kiro.dev/docs/custom-agents/configuration-reference/#includemcpjson-field
 
 Each harness report adds `subagents` and `commands`, each containing
 `{received: [names], rendered: [names]}`. The existing `rendered` primitive
@@ -705,10 +712,9 @@ close that gap.
 Not yet covered: Muse (MCP, subagents, commands, hooks); subagents for Codex
 and for Gemini CLI (until `.gemini/agents/` is documented as stable); commands
 for Codex, Cursor (replaced by skills) and Kiro (`.kiro/prompts/` file format
-undocumented); hooks for Gemini CLI, OpenCode (plugins), Muse and Kiro; a
-signed-in check that Cursor and Kiro accept the `_comment` marker key; and
-mapping MCP tool names into Kiro's subagent tool lists (Devin's shipped in
-#719); Qwen Code skills, subagents and commands.
+undocumented); hooks for Gemini CLI, OpenCode (plugins), Muse and Kiro; and a
+signed-in check that Cursor and Kiro accept the `_comment` marker key. Qwen Code
+skills, subagents and commands also remain unsupported.
 
 The renderer, injected entry and `reachPolicyRules()` now share the
 `agent-reach` name through `reach-contract.mjs`. Rebuilds remove the old

@@ -61,26 +61,47 @@ test('tool translation: inherit, read-only, empty, and names a harness cannot sp
   assert.doesNotMatch(output.get('.github/agents/open.agent.md').toString(), /tools/);
   assert.doesNotMatch(output.get('.devin/agents/open.md').toString(), /tools/);
   assert.match(output.get('.kiro/agents/open.md').toString(), /\ntools: \["\*"\]\n/);
+  assert.doesNotMatch(output.get('.kiro/agents/open.md').toString(), /includeMcpJson/);
   // Only read-only tools: Cursor's `readonly` keeps the agent read-only.
   assert.match(output.get('.cursor/agents/reader.md').toString(), /\nreadonly: true\n/);
   assert.match(output.get('.kiro/agents/reader.md').toString(), /\ntools: \["read", "web"\]\n/);
+  assert.doesNotMatch(output.get('.kiro/agents/reader.md').toString(), /includeMcpJson/);
   assert.equal(output.has('.devin/agents/reader.md'), false, 'Devin documents no web tool name');
   // An empty allowlist stays empty.
   assert.match(output.get('.cursor/agents/none.md').toString(), /\nreadonly: true\n/);
   assert.match(output.get('.github/agents/none.agent.md').toString(), /\ntools: \[\]\n/);
   assert.match(output.get('.kiro/agents/none.md').toString(), /\ntools: \[\]\n/);
+  assert.doesNotMatch(output.get('.kiro/agents/none.md').toString(), /includeMcpJson/);
   assert.match(output.get('.devin/agents/none.md').toString(), /\nallowed-tools: \[\]\n/);
-  // An MCP tool: Kiro cannot name it, so it is not rendered there and is
-  // reported; Devin spells MCP tools as Claude does and keeps the exact name.
-  assert.equal(output.has('.kiro/agents/mcp.md'), false);
+  // An MCP tool is an exact Kiro selector and opts into configured MCP JSON;
+  // Devin spells MCP tools as Claude does and keeps the exact source name.
+  assert.match(output.get('.kiro/agents/mcp.md').toString(), /\ntools: \["@db\/query", "read"\]\nincludeMcpJson: true\n/);
   assert.match(output.get('.devin/agents/mcp.md').toString(), /\nallowed-tools: \["mcp__db__query", "read"\]\n/);
   assert.match(output.get('.github/agents/mcp.agent.md').toString(), /\ntools: \["Read", "mcp__db__query"\]\n/);
   const report = harnessReport(output);
-  assert.deepEqual(report.kiro.subagents, { received: ['mcp', 'none', 'open', 'reader'], rendered: ['none', 'open', 'reader'] });
-  assert.deepEqual(report.kiro.unsupported.subagents, ['mcp']);
+  assert.deepEqual(report.kiro.subagents, { received: ['mcp', 'none', 'open', 'reader'], rendered: ['mcp', 'none', 'open', 'reader'] });
+  assert.deepEqual(report.kiro.unsupported.subagents, []);
   assert.deepEqual(report.devin.unsupported.subagents, ['reader']);
   assert.deepEqual(report.copilot.subagents.rendered, ['mcp', 'none', 'open', 'reader'], '`.agent.md` is not part of the name');
   assert.deepEqual(report.cursor.unsupported.subagents, []);
+});
+
+test('Kiro MCP selectors stay exact, preserve first-delimiter parsing, and rebuild deterministically', () => {
+  const entries = source({
+    reach: 'Read, mcp__agent-reach__fleet, mcp__agent-reach__send_message',
+    nested: 'mcp__foo_bar__tool__tail',
+    unsupported: 'Read, mcp__agent-reach__fleet, ToolSearch',
+  });
+  const output = buildHarnessFiles(entries);
+  const reach = output.get('.kiro/agents/reach.md').toString();
+  assert.match(reach, /\ntools: \["@agent-reach\/fleet", "@agent-reach\/send_message", "read"\]\nincludeMcpJson: true\n/);
+  assert.doesNotMatch(reach, /@agent-reach"|"\*"|mcpServers:/, 'no server-wide grant or copied server configuration');
+  assert.match(output.get('.kiro/agents/nested.md').toString(), /\ntools: \["@foo_bar\/tool__tail"\]\nincludeMcpJson: true\n/);
+  assert.equal(output.has('.kiro/agents/unsupported.md'), false, 'a valid MCP selector does not permit partial rendering');
+  assert.deepEqual(output, buildHarnessFiles([...entries].reverse()));
+  const report = harnessReport(output);
+  assert.deepEqual(report.kiro.subagents, { received: ['nested', 'reach', 'unsupported'], rendered: ['nested', 'reach'] });
+  assert.deepEqual(report.kiro.unsupported.subagents, ['unsupported']);
 });
 
 // Devin's documented tool names are read, edit, grep, glob and exec; `edit`
@@ -103,8 +124,14 @@ test('Devin subagents spell Write as edit and keep exact MCP tool names', () => 
   assert.doesNotMatch(devinFiles, /"write"/, 'Devin has no write tool name');
   const report = harnessReport(output);
   assert.deepEqual(report.devin.unsupported.subagents, ['empty', 'fetcher', 'nameless', 'underscored']);
-  // Kiro is unchanged: an MCP tool still has no Kiro spelling.
-  assert.deepEqual(report.kiro.unsupported.subagents, ['empty', 'fetcher', 'messenger', 'mixed', 'nameless', 'nested', 'underscored']);
+  // Kiro spells MCP tools exactly; malformed or unspellable declarations
+  // still refuse the entire native agent.
+  assert.match(output.get('.kiro/agents/messenger.md').toString(), /\ntools: \["@agent-reach\/send_message", "read"\]\nincludeMcpJson: true\n/);
+  assert.match(output.get('.kiro/agents/mixed.md').toString(), /\ntools: \["@agent-reach\/fleet", "@agent-reach\/send_message", "shell"\]\nincludeMcpJson: true\n/);
+  assert.match(output.get('.kiro/agents/nested.md').toString(), /\ntools: \["@foo\/bar__baz"\]\nincludeMcpJson: true\n/);
+  assert.match(output.get('.kiro/agents/fetcher.md').toString(), /\ntools: \["@agent-reach\/fleet", "web"\]\nincludeMcpJson: true\n/);
+  for (const name of ['empty', 'nameless', 'underscored']) assert.equal(output.has(`.kiro/agents/${name}.md`), false, name);
+  assert.deepEqual(report.kiro.unsupported.subagents, ['empty', 'nameless', 'underscored']);
   assert.match(output.get('.kiro/agents/writer.md').toString(), /\ntools: \["read", "write"\]\n/, 'Kiro keeps its write category');
 });
 
