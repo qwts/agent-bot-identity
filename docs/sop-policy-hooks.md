@@ -1,9 +1,13 @@
 # Selected-pack policy hooks: proposed execution contract
 
-Status: proposed for peer review under #677. This document separates the six
-required boundaries from the first implementation. The pure parser/evaluator
-in `sop-policy.mjs` is implemented behind fixtures, with no runtime callers.
-No enforcing hook or activation command is shipped by this first PR. ADR-0274 keeps product authorization authoritative; ADR-0645
+Status: approved by the owner on 2026-10-09 (#677). This document separates
+the six required boundaries from the implementation. Shipped: the pure
+parser/evaluator in `sop-policy.mjs`; `agent-bot sop policy
+show|activate|deactivate` with the `sop-policy/` state in `sop.mjs`; and
+before-launch enforcement in `createLaunchHandler`, wired by the daemon,
+with the owner override below. Not yet shipped: confinement protection of
+the state directory, readiness/doctor reporting, and every other boundary.
+ADR-0274 keeps product authorization authoritative; ADR-0645
 keeps policy parsing independent of process hosts. Existing installed hooks and
 persona enforcement continue to use their current contracts.
 
@@ -183,6 +187,23 @@ to send a notification cannot change a denied operation into an executed one.
 An audit-write failure still denies, with `policy-denied-audit-failed` or
 `policy-unavailable-audit-failed`; it cannot turn into an allow or an automatic
 retry loop.
+
+## Owner override
+
+The owner's declaration is final (owner decision, 2026-10-09). A deny rule,
+or an active policy that is unavailable, refuses an agent-initiated launch
+(a soul starting its team) with no prompt. A principal's launch is the
+owner's: instead of refusing, the daemon asks the owner to verify through
+the existing owner gate (Touch ID or the login password through
+agent-bot-keyd, else the administrator dialog). On approval the launch
+continues; on a decline nothing is minted, bound or run, and the launch
+fails with the policy code. Every outcome writes a `sop-policy` audit
+receipt with the decision (`denied`, `override-approved`,
+`override-declined`), rule ID, repository, commit, digest prefix and
+harness. A receipt that cannot be written refuses the launch with the
+`-audit-failed` code, even after an approval, so no override runs
+unrecorded. The journal row keeps the policy code, rule, commit, decision
+and the gate's method.
 
 ## Initial implementation acceptance
 

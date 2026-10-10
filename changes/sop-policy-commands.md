@@ -1,0 +1,1 @@
+- `agent-bot sop policy show|activate|deactivate` lets the owner pin the SOP pack's `policy-hooks.json` at its resolved commit, and the daemon now applies its deny rules to launches: a soul starting its team is refused, while an owner's launch that a rule denies asks for Touch ID or a password and goes ahead on approval, with an audit receipt either way (#677).
