@@ -453,10 +453,30 @@ Codex. Under the daemon, Codex turns also stay in the ACP session mode
 `workspace-write` (`sessionMode` in `acp-registry.mjs`) whatever the mode, so
 every Codex approval reaches the daemon.
 
-For the model, the owner's `soul model` pick is sent on every daemon turn;
-without one, the harness keeps the model in the files it reads in the turn's
-working directory. Bringing model and reasoning effort under the full order
-is a later slice.
+For the model on a daemon-run turn (`resolveSoulModel` in `soul-model.mjs`,
+read once per turn):
+
+- The owner's `soul model` pick (GeniusBar's model picker) is sent as
+  `session/set_model` and wins over every layer below.
+- Otherwise, if the repo's own file names a model, nothing is sent and the
+  harness keeps it: Claude's `model` in `.claude/settings.local.json`, then
+  `.claude/settings.json`; Codex's root `model` in `.codex/config.toml`. The
+  repo files are read the same guarded way as for the mode.
+- Otherwise the package's declared `model` for that harness is sent, so a
+  soul working in a repo keeps its own model. In the soul's own home nothing
+  is sent: the harness reads the package's rendering there, as a direct open
+  does.
+- Otherwise the harness uses its own default.
+
+The model is not a permission, so no layer needs the owner's decision to
+change it. A model id the harness does not offer is logged and the turn
+continues on the harness's model, as for a pick.
+
+Reasoning effort follows the files the harness reads in the turn's working
+directory: the repo's, or in the soul's home the package's rendering. The
+pinned adapters take no effort setting over ACP, so a soul working in a repo
+that sets no effort gets the harness default rather than the package's
+`reasoningEffort`. Carrying it there is a later slice.
 
 ## The soul's MCP entry (#378)
 

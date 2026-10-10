@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -8,6 +8,8 @@ import { pathToFileURL } from 'node:url';
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { validateAgentId, withLock } from './agent-identity.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
+import { harnessSettings } from './soul-builder.mjs';
+import { readSettingsText } from './soul-mode.mjs';
 
 export function validateModelId(value) {
   if (typeof value !== 'string' || !value.trim() || value.length > 120 || /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(value)) {
@@ -66,6 +68,53 @@ function updateSoulModel(agentId, update, { env, home }) {
     finally { rmSync(temp, { force: true }); }
     return settings[id];
   });
+}
+
+// The model a repo's own native harness file declares, or null. Claude reads
+// settings.local.json over settings.json; Codex the root `model` key. The
+// repo may be an untrusted clone, so files are read as soul-mode reads them.
+export function repoModel(directory, harness) {
+  const valid = (value) => { try { return validateModelId(value); } catch { return null; } };
+  if (harness === 'claude') {
+    for (const name of ['settings.local.json', 'settings.json']) {
+      let model = null;
+      try { model = JSON.parse(readSettingsText(path.join(directory, '.claude', name)))?.model ?? null; } catch { /* declares nothing */ }
+      if (valid(model)) return model;
+    }
+    return null;
+  }
+  if (harness === 'codex') {
+    // Root keys only: everything before the first table header.
+    const root = (readSettingsText(path.join(directory, '.codex', 'config.toml')) ?? '').split(/^\s*\[/m)[0];
+    return valid(root.match(/^\s*model\s*=\s*"([^"]*)"\s*(?:#.*)?$/m)?.[1]);
+  }
+  return null;
+}
+
+// The model a soul package declares for this harness, or null.
+export function packageModel(directory, harness) {
+  let manifest = null;
+  try { manifest = JSON.parse(readSettingsText(path.join(directory, 'soul.json'))); } catch { return null; }
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) return null;
+  const model = (harness ? harnessSettings(manifest, harness) : manifest.harness ?? {})?.model;
+  try { return validateModelId(model); } catch { return null; }
+}
+
+// `{ model, source }` for one daemon turn, in the owner's settings order
+// (docs/soul-builder.md): the owner's pick, then the repo's own harness file,
+// then the soul package, then the harness's default. `model` is what the
+// daemon sends as session/set_model, or null to leave the harness on the
+// model it reads itself: the repo's file from the turn's working directory,
+// or the package's rendering when the turn runs in the soul's own home.
+export function resolveSoulModel(agentId, { harness = null, cwd = null, soulDir = null, env = process.env, home = homedir() } = {}) {
+  const pick = soulModel(agentId, { env, home }).model;
+  if (pick !== null) return { model: pick, source: 'pick' };
+  const real = (dir) => { try { return realpathSync(dir); } catch { return path.resolve(dir); } };
+  const sameDir = Boolean(cwd && soulDir && real(cwd) === real(soulDir));
+  if (cwd && path.isAbsolute(cwd) && !sameDir && repoModel(cwd, harness) !== null) return { model: null, source: 'repo' };
+  const declared = soulDir && path.isAbsolute(soulDir) ? packageModel(soulDir, harness) : null;
+  if (declared !== null) return { model: sameDir ? null : declared, source: 'soul' };
+  return { model: null, source: 'default' };
 }
 
 export function setSoulModel(agentId, modelId, { env = process.env, home = homedir(), now = () => new Date() } = {}) {

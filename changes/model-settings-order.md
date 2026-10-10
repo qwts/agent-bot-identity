@@ -1,0 +1,1 @@
+- A daemon-run turn now picks its model in the settings order: the owner's `soul model` pick, then a model named in the repo's own harness file, then the soul package's declared `model`, so a soul working in a repo keeps its package's model when the repo names none (#379).

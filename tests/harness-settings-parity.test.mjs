@@ -1,4 +1,4 @@
-// permissionMode parity between a directly opened harness and a daemon-run
+// permissionMode and model parity between a directly opened harness and a daemon-run
 // turn (#379). A soul's declared mode is rendered into its home, which a
 // direct open reads; the daemon resolves the same declaration through the
 // settings precedence (docs/soul-builder.md): the owner's pick, then the
@@ -15,11 +15,12 @@ import { fileURLToPath } from 'node:url';
 
 import { ACP_SPAWN_REGISTRY } from '../acp-registry.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
-import { daemonModeFor, LOOSENING_TOOL } from '../agent-daemon.mjs';
+import { daemonModeFor, daemonModelFor, LOOSENING_TOOL } from '../agent-daemon.mjs';
 import { listProposals } from '../agent-jobs.mjs';
 import { auditFile } from '../agent-principals.mjs';
 import { populationFile, upsertSoul } from '../agent-population.mjs';
 import { buildSoulDirectory } from '../soul-build.mjs';
+import { packageModel, repoModel, resolveSoulModel, setSoulModel } from '../soul-model.mjs';
 import { LOOSENING_NEEDS_OWNER, packagePermissionMode, repoPermissionMode, resolveSoulMode, setSoulMode } from '../soul-mode.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
 import { acpExecutorFor } from '../wake-plane.mjs';
@@ -35,7 +36,7 @@ const REGISTRY = {
     sessionMode: ACP_SPAWN_REGISTRY.codex.sessionMode, setEnv: ACP_SPAWN_REGISTRY.codex.setEnv },
 };
 
-function fixture(t, permissionMode) {
+function fixture(t, permissionMode, settings = {}) {
   const root = mkdtempSync(path.join(tmpdir(), 'settings-parity-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const env = { HOME: root, XDG_STATE_HOME: path.join(root, 'state'), AGENT_BOT_SOULS_HOME: path.join(root, 'souls'),
@@ -44,7 +45,7 @@ function fixture(t, permissionMode) {
   const soulDir = path.join(env.AGENT_BOT_SOULS_HOME, 'parity.soul');
   mkdirSync(soulDir, { recursive: true });
   const manifest = { formatVersion: 2, name: 'Parity', description: 'Settings parity', displaySeed: 'parity', preferredHarnesses: [],
-    revision: `sha256:${'0'.repeat(64)}`, parentRevision: null, ignore: PACKAGE_IGNORE_LIST, harness: { permissionMode } };
+    revision: `sha256:${'0'.repeat(64)}`, parentRevision: null, ignore: PACKAGE_IGNORE_LIST, harness: { permissionMode, ...settings } };
   writeFileSync(path.join(soulDir, 'AGENTS.md'), '# Parity\n');
   writeFileSync(path.join(soulDir, 'soul.json'), JSON.stringify(manifest));
   manifest.revision = computePackageRevision(soulDir);
@@ -168,6 +169,83 @@ test('unrecognised or unreadable layers declare nothing; a soul with no census r
   const other = 'agent_77777777-7777-4777-8777-777777777777';
   assert.deepEqual(resolveSoulMode(other, { harness: 'claude', cwd: repo, env, home }), { mode: 'safe', source: 'default', declared: 'safe', code: null });
   assert.equal(daemonModeFor({ env, home, config: {}, log: () => assert.fail('no code') })(other, { harness: 'claude', cwd: repo }), 'safe');
+});
+
+// What a direct open reads: the model rendered into the soul's native files.
+function directModel(soulDir, harness) {
+  if (harness === 'claude') return JSON.parse(readFileSync(path.join(soulDir, '.claude/settings.json'), 'utf8')).model;
+  return readFileSync(path.join(soulDir, '.codex/config.toml'), 'utf8').match(/^model = "(.*)"$/m)[1];
+}
+
+// One daemon turn with the daemon's own modelFor: the model it sends, and the
+// model the fixture agent then reports running (null when nothing was sent).
+async function modelTurn({ harness, cwd, env, home }) {
+  let sent;
+  const chunks = [];
+  const executor = acpExecutorFor({
+    identities: () => ({}), baseEnv: { ...process.env, HOME: home }, policy: { version: 1, rules: [], fallback: 'approval' },
+    modeFor: () => 'safe', modelFor: daemonModelFor({ env, home, config: {} }),
+    createExecutor: (options) => { sent = options.model; return createAcpExecutor({ ...options, registry: REGISTRY }); },
+  })({ agentId: ID, harness, cwd, env: {} });
+  await executor({ invocation: { agentId: ID }, message: 'model-probe', attachments: [],
+    appendEvent: (_type, data) => { if (data?.content?.text) chunks.push(data.content.text); return {}; },
+    addArtifact: () => ({}), signal: new AbortController().signal, requestApproval: async () => ({ decision: 'deny' }) });
+  return { sent, running: JSON.parse(chunks.at(-1)).model };
+}
+
+for (const harness of ['claude', 'codex']) {
+  test(`${harness}: the model follows the settings order on both paths`, async (t) => {
+    const { root, env, home, soulDir } = fixture(t, 'safe', { model: 'soul-model' });
+    // In the soul's home both paths read the rendering; the daemon sends nothing.
+    assert.equal(directModel(soulDir, harness), 'soul-model');
+    assert.equal(packageModel(soulDir, harness), 'soul-model');
+    assert.deepEqual(resolveSoulModel(ID, { harness, cwd: soulDir, soulDir, env, home }), { model: null, source: 'soul' });
+    assert.deepEqual(await modelTurn({ harness, cwd: soulDir, env, home }), { sent: null, running: null });
+    // In a repo that names no model, the package's model still applies.
+    const repo = path.join(root, 'repo');
+    mkdirSync(repo);
+    assert.deepEqual(await modelTurn({ harness, cwd: repo, env, home }), { sent: 'soul-model', running: 'soul-model' });
+    // A repo that names one outranks the package: the harness reads it itself.
+    if (harness === 'claude') {
+      mkdirSync(path.join(repo, '.claude'));
+      writeFileSync(path.join(repo, '.claude/settings.json'), JSON.stringify({ model: 'repo-model' }));
+    } else {
+      mkdirSync(path.join(repo, '.codex'));
+      writeFileSync(path.join(repo, '.codex/config.toml'), 'model = "repo-model"\n');
+    }
+    assert.equal(repoModel(repo, harness), 'repo-model');
+    assert.deepEqual(resolveSoulModel(ID, { harness, cwd: repo, soulDir, env, home }), { model: null, source: 'repo' });
+    assert.deepEqual(await modelTurn({ harness, cwd: repo, env, home }), { sent: null, running: null });
+    // The owner's pick (`soul model`, GeniusBar's picker) wins over the repo.
+    setSoulModel(ID, 'owner-model', { env, home });
+    assert.deepEqual(await modelTurn({ harness, cwd: repo, env, home }), { sent: 'owner-model', running: 'owner-model' });
+  });
+}
+
+test('a repo model is read only from the files and keys the harness uses for it', (t) => {
+  const { root, env, home } = fixture(t, 'safe');
+  const repo = path.join(root, 'repo');
+  mkdirSync(path.join(repo, '.claude'), { recursive: true });
+  writeFileSync(path.join(repo, '.claude/settings.json'), JSON.stringify({ model: 'shared' }));
+  writeFileSync(path.join(repo, '.claude/settings.local.json'), JSON.stringify({ model: 'local' }));
+  assert.equal(repoModel(repo, 'claude'), 'local');
+  writeFileSync(path.join(repo, '.claude/settings.local.json'), '{ not json');
+  assert.equal(repoModel(repo, 'claude'), 'shared');
+  // A symlinked file is not read.
+  writeFileSync(path.join(root, 'linked.json'), JSON.stringify({ model: 'linked' }));
+  rmSync(path.join(repo, '.claude/settings.json'));
+  rmSync(path.join(repo, '.claude/settings.local.json'));
+  symlinkSync(path.join(root, 'linked.json'), path.join(repo, '.claude/settings.json'));
+  assert.equal(repoModel(repo, 'claude'), null);
+  // Codex: root keys only, so a profile's model is not the repo's.
+  mkdirSync(path.join(repo, '.codex'));
+  writeFileSync(path.join(repo, '.codex/config.toml'), '[profiles.x]\nmodel = "profile"\n');
+  assert.equal(repoModel(repo, 'codex'), null);
+  assert.equal(repoModel(repo, 'gemini'), null);
+  // No census row: no package layer, so nothing is sent.
+  const other = 'agent_77777777-7777-4777-8777-777777777777';
+  assert.deepEqual(resolveSoulModel(other, { harness: 'codex', cwd: repo, env, home }), { model: null, source: 'default' });
+  assert.equal(daemonModelFor({ env, home, config: {} })(other, { harness: 'codex', cwd: repo }), null);
 });
 
 // The owner's answers kept for a soul, and its loosening receipts.

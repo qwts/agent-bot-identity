@@ -52,7 +52,7 @@ export const LOOSENING_NEEDS_OWNER = 'permission-mode-loosening-needs-owner';
 // The repo may be an untrusted clone: only a small regular file is read, never
 // a symlink (a link to /dev/zero would stall the daemon).
 const SETTINGS_FILE_MAX = 64 * 1024;
-const readText = (file) => {
+export const readSettingsText = (file) => {
   try {
     const stat = lstatSync(file);
     return stat.isFile() && stat.size <= SETTINGS_FILE_MAX ? readFileSync(file, 'utf8') : null;
@@ -66,14 +66,14 @@ const layer = (file, text, mode) => ({ mode, file, digest: text === null ? null 
 function repoLayer(directory, harness) {
   if (harness === 'claude') {
     const file = path.join(directory, '.claude', 'settings.json');
-    const text = readText(file);
+    const text = readSettingsText(file);
     let mode = null;
     try { mode = JSON.parse(text)?.permissions?.defaultMode; } catch { /* declares nothing */ }
     return layer(file, text, { default: 'safe', plan: 'safe', bypassPermissions: 'autopilot' }[mode] ?? null);
   }
   if (harness === 'codex') {
     const file = path.join(directory, '.codex', 'config.toml');
-    const text = readText(file);
+    const text = readSettingsText(file);
     // Root keys only: everything before the first table header.
     const root = (text ?? '').split(/^\s*\[/m)[0];
     const policy = root.match(/^\s*approval_policy\s*=\s*"([^"]*)"\s*(?:#.*)?$/m)?.[1];
@@ -84,7 +84,7 @@ function repoLayer(directory, harness) {
 
 function packageLayer(directory, harness) {
   const file = path.join(directory, 'soul.json');
-  const text = readText(file);
+  const text = readSettingsText(file);
   let manifest = null;
   try { manifest = JSON.parse(text); } catch { /* declares nothing */ }
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) return layer(file, text, null);
