@@ -204,7 +204,7 @@ export function createColdWaker({ isPaused = () => false, executor, settings, lo
       noticed.set(agentId, told);
       if (told.has(message.id) || message.kind === 'task-event') return;
       told.add(message.id);
-      await reply(message, senderAddress(message.from), harnessAuthNotice(identity.harness, signedOut), threadKey(message));
+      await reply(message, senderAddress(message.from), harnessAuthNotice(identity.harness, signedOut, agentId), threadKey(message));
     };
     const relayed = async () => {
       for (let messages = await relay.read(soul); messages.length; messages = await relay.read(soul)) {

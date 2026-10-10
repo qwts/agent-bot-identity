@@ -11,6 +11,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { isAgentId } from './agent-identity.mjs';
 import { ACP_SPAWN_REGISTRY, harnessProcessEnv, resolveSpawn, whichOnPath } from './acp-registry.mjs';
 import { populationFile, recordHarnessAuth } from './agent-population.mjs';
 import { soulToolHomeEnv } from './soul-env-migrate.mjs';
@@ -116,9 +117,11 @@ const HARNESS_NAMES = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', 
 
 // The short reply a sender gets instead of silence (like #408's policy
 // notice): which sign-in, never the harness's own error text.
-export function harnessAuthNotice(harness, status) {
+export function harnessAuthNotice(harness, status, agentId = null) {
   const name = HARNESS_NAMES[harness] ?? 'harness';
-  return `I couldn't answer this: my ${name} sign-in ${status === 'expired' ? 'has expired' : 'is missing'}. My owner needs to sign me in again before I can work on it.`;
+  const message = `I couldn't answer this: my ${name} sign-in ${status === 'expired' ? 'has expired' : 'is missing'}. My owner needs to sign me in again before I can work on it.`;
+  if (!isAgentId(agentId) || !ACP_SPAWN_REGISTRY[harness]?.signIn) return message;
+  return `${message} They can sign in with \`agent-bot harness auth login ${harness} --soul ${agentId}\`.`;
 }
 
 function clearRecorded(agentId, harness) {
