@@ -326,6 +326,110 @@ pub mod tests {
         );
     }
 
+    /// keyd-protocol.md's envelope: `exp > now`, `iat ≤ now + 30`,
+    /// `0 ≤ exp − iat ≤ 120`, each at its edge.
+    #[test]
+    fn accepts_a_grant_only_inside_the_documented_envelope() {
+        let key = signing_key();
+        let pinned = key.verifying_key();
+        let mut replay = Replay::default();
+        let now = 1000;
+        for (n, (iat, exp, accepted)) in [
+            (now - 60, now, false),
+            (now - 59, now + 1, true),
+            (now + 30, now + 90, true),
+            (now + 31, now + 91, false),
+            (now + 1, now + 1, true),
+            (now, now + 120, true),
+            (now, now + 121, false),
+            (now + 2, now + 1, false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut p = payload("credential", now);
+            p["iat"] = json!(iat);
+            p["exp"] = json!(exp);
+            p["nonce"] = json!(format!("envelope-{n}-0123456789"));
+            let outcome = verify(&sign(&key, &p), "credential", &pinned, now, &mut replay);
+            if accepted {
+                assert!(outcome.is_ok(), "iat {iat}, exp {exp} at {now}");
+            } else {
+                assert_eq!(outcome, Err("grant has expired"), "iat {iat}, exp {exp}");
+            }
+        }
+    }
+
+    /// A nonce is spent by the one grant that passes every check: never by
+    /// one that fails, never twice, whatever the tool, while it could
+    /// still verify.
+    #[test]
+    fn spends_each_nonce_exactly_once() {
+        let key = signing_key();
+        let pinned = key.verifying_key();
+        let mut replay = Replay::default();
+        let nonce = "spent-once-0123456789";
+        let grant = |tool: &str, host: Value| {
+            let mut p = payload(tool, 1000);
+            p["nonce"] = json!(nonce);
+            p["host"] = host;
+            sign(&key, &p)
+        };
+
+        // Refused before the nonce is reached, so it stays unspent.
+        assert_eq!(
+            verify(
+                &grant("git_credential", Value::Null),
+                "git_credential",
+                &pinned,
+                1000,
+                &mut replay
+            ),
+            Err("grant names no GitHub host")
+        );
+        assert_eq!(
+            verify(
+                &grant("credential", json!("github.com")),
+                "git_credential",
+                &pinned,
+                1000,
+                &mut replay
+            ),
+            Err("grant is for another tool")
+        );
+        assert!(replay.seen.is_empty());
+
+        let first = grant("credential", json!("github.com"));
+        assert!(verify(&first, "credential", &pinned, 1000, &mut replay).is_ok());
+        assert_eq!(replay.seen.len(), 1);
+        // The same grant again, and another grant with its nonce for the
+        // other tool, up to the last second before it expires.
+        for (token, tool, now) in [
+            (&first, "credential", 1001),
+            (
+                &grant("git_credential", json!("github.com")),
+                "git_credential",
+                1030,
+            ),
+            (&first, "credential", 1059),
+        ] {
+            assert_eq!(
+                verify(token, tool, &pinned, now, &mut replay),
+                Err("grant was already used"),
+                "{tool} at {now}"
+            );
+        }
+        assert_eq!(replay.seen.len(), 1, "a refused replay spends nothing");
+        // Once exp has passed the grant fails as expired, and the cache
+        // lets the nonce go.
+        assert_eq!(
+            verify(&first, "credential", &pinned, 1060, &mut replay),
+            Err("grant has expired")
+        );
+        let _ = replay.spend("another-nonce-0123456789", 1100, 1060);
+        assert!(!replay.seen.contains_key(nonce));
+    }
+
     #[test]
     fn refuses_a_tampered_payload() {
         let key = signing_key();

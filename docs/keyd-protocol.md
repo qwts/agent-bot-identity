@@ -148,7 +148,8 @@ the call, `--all` with more than 64 movable souls fails for all of them.
 keyd asks the owner (Touch ID or the login password), pins `daemonKey` on the
 first import and refuses a different one until the owner pins it with
 `owner/pin`. `agent-bot keyd status` reports keyd's `pinned` flag.
-agent-bot's tests prove the key is sent, not that keyd pins it.
+agent-bot's tests prove the key is sent; keyd's tests under `keyd/` prove
+it pins it once.
 
 ## Owner presence (keyd → agent-bot)
 
@@ -185,7 +186,9 @@ payload: { v: 1, aud: "agent-bot-owner", kind: "presence",
 These are the verifier's bounds. **keyd-side:** keyd issues assertions with a
 60-second lifetime
 ([presence.rs](https://github.com/qwts/GeniusBar/blob/363f52c590efe5df8cb75490ca81667e74425cf8/keyd/src/presence.rs#L25))
-and gives up on the prompt at 120 s. agent-bot keeps no record of used
+and gives up on the prompt at 120 s. `iat` is the time the owner answered,
+not the time the request arrived (#594): stamped at arrival, an approval
+slower than 90 s came back already past `exp + 30`. agent-bot keeps no record of used
 nonces; an assertion answers one request because the nonce is generated per
 request and must match.
 
@@ -386,8 +389,7 @@ since unknown payload fields are refused.
 ## Conformance matrix
 
 Tests named here are `node:test` titles, or Rust test functions under
-`keyd/` (`cargo test`) where the path is a `.rs` file. "keyd-side" rows with
-"none here" have no test in this repository yet.
+`keyd/` (`cargo test`) where the path is a `.rs` file.
 
 | Invariant | Issuer | Verifier / entry point | Test |
 | --- | --- | --- | --- |
@@ -397,9 +399,9 @@ Tests named here are `node:test` titles, or Rust test functions under
 | `/v0/keyd/grant` refuses no binding (401), an unknown tool (400) and a soul whose key is not in keyd (409); signs for the bound soul; receipts each answer without the grant | daemon | `POST /v0/keyd/grant` | `tests/keyd.test.mjs`: "the daemon grants keyd calls only to a bound keyd soul, and receipts each answer" |
 | Outside the daemon a keyd soul's token comes only through `/v0/credential` on its binding | daemon | `mintThroughDaemon` | `tests/keyd.test.mjs`: "a keyd soul resolves to keyd with no key, and mint goes through keyd"; "a bound keyd soul's mint through the daemon keeps the installation id" |
 | The import sends every key in one owner call, with the daemon key to pin | `importIntoKeyd` | keyd `owner/import` | `tests/keyd.test.mjs`: "the owner import sends every key at once with the daemon key to pin" |
-| keyd pins the daemon key on first import and refuses another | keyd-side | keyd | none here |
-| keyd spends each grant nonce once, and accepts `exp > now`, `iat ≤ now + 30`, `0 ≤ exp − iat ≤ 120` | keyd-side | keyd | none here |
-| keyd accepts 1 to 64 import items | keyd-side | keyd | none here |
+| keyd pins the daemon key on first import and refuses another | keyd-side | keyd `owner/import`, `owner/app-import`, `owner/pin` | `keyd/src/server.rs`: `pins_the_daemon_key_exactly_once`, `owner_operations_need_consent_and_a_matching_pin` |
+| keyd spends each grant nonce once, and accepts `exp > now`, `iat ≤ now + 30`, `0 ≤ exp − iat ≤ 120` | keyd-side | `grant::verify` | `keyd/src/grant.rs`: `spends_each_nonce_exactly_once`, `accepts_a_grant_only_inside_the_documented_envelope`, `accepts_a_fresh_grant_once`; `keyd/src/server.rs`: `refuses_calls_without_a_valid_grant` |
+| keyd accepts 1 to 64 import items | keyd-side | keyd `owner/import`, `owner/app-import` | `keyd/src/server.rs`: `imports_one_to_sixty_four_items_and_refuses_zero_or_sixty_five` |
 | keyd holds App-level keys under their own item, apart from souls' items, and removing one leaves the other | keyd-side | `Store` | `keyd/src/store.rs`: `memory_store_round_trips`, `keychain_store_round_trips_in_a_temporary_keychain` |
 | `keyScope` absent or `soul` reads the soul's key, `app` the App-level key; any other value is refused | keyd-side | `grant::verify` | `keyd/src/grant.rs`: `accepts_a_grant_the_daemon_signed`, `reads_the_key_scope_and_refuses_an_unknown_one` |
 | An `app` grant mints with the App-level key for `credential` and `git_credential`; a soul grant never sees it, and an `app` grant never falls back to the soul's key | keyd-side | keyd `credential`, `git_credential` | `keyd/src/server.rs`: `imports_an_app_level_key_and_mints_with_it_only_for_an_app_grant`, `an_app_grant_never_falls_back_to_a_soul_key` |
@@ -413,7 +415,7 @@ Tests named here are `node:test` titles, or Rust test functions under
 | `action` in an assertion is SHA-256 hex, matching keyd | keyd | `actionDigest` | `tests/owner-presence.test.mjs`: "the action digest matches keyd (sha256 hex)" |
 | An assertion verifies only for its key, action, nonce, audience and prefix | keyd | `verifyPresence` | `tests/owner-presence.test.mjs`: "an assertion verifies only for its key, action, nonce and time" |
 | Lifetime `0 < exp − iat ≤ 120`; skew 30 s on both sides; integer times; `kind: presence`; `v: 1` | keyd | `verifyPresence` | `tests/owner-presence.test.mjs`: "an assertion is accepted for up to 120 s of lifetime and 30 s of skew, and no more" |
-| keyd issues assertions for 60 s | keyd-side | — | none here |
+| keyd issues assertions for 60 s from the owner's answer, good on agent-bot's clock from 30 s before to 90 s after | keyd-side | keyd `owner/presence` | `keyd/src/presence.rs`: `issues_for_sixty_seconds_within_the_documented_skew`; `keyd/src/server.rs`: `presence_is_stamped_when_the_owner_answers` |
 | Audience, unavailable RPC code and the code-signing requirement (Team ID and identifier) | — | `owner-presence.mjs` constants, `developerIdRequirement` | `tests/owner-presence.test.mjs`: "the presence contract constants keyd and agent-bot share" |
 | The signer comes from the environment, then the config; the Team ID has no default and empty is unset | — | `keydSigner` | `tests/owner-presence.test.mjs`: "the keyd signer comes from the environment, then the config; the Team ID has no default (#594)" |
 | With no Team ID configured nothing is verified, run or pinned | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "with no keyd Team ID configured nothing is verified, run or pinned" |
