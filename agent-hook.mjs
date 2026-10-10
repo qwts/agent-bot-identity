@@ -251,6 +251,13 @@ export function combine(results, event) {
 // A stated bot is also refused a command that skips the hooks themselves
 // (`--no-verify`, `commit -n`, a `core.hooksPath` override), bound or not:
 // they are the backstop for git this scan cannot see.
+function opaqueUnboundReason(slug) {
+  return `agent-bot: this session stated bot identity ${slug}, but this checkout is not bound to it, `
+    + 'and this command runs a script, interpreter or task runner that could commit or push as the human. '
+    + 'Run `agent-bot setup-worktree` in a linked worktree (a primary checkout is refused) '
+    + 'and check `agent-bot doctor`, then retry.';
+}
+
 function targetGit(target, env) {
   const prefix = [];
   if (target.gitDir) prefix.push(`--git-dir=${target.gitDir}`);
@@ -265,13 +272,14 @@ export function unboundIdentityCheck(envelope, { env = process.env, cwd = proces
   if (envelope.event !== 'pre-command' || !envelope.command) return allow;
   const command = envelope.command;
   const scan = scanGitPublish(command, { cwd, env });
-  if (!scan.publishes.length && !scan.aliases.length && !scan.ambiguous && !scan.skipsHooks) return allow;
+  if (!scan.publishes.length && !scan.aliases.length && !scan.ambiguous && !scan.opaqueExecution && !scan.skipsHooks) return allow;
   // A command word the scan cannot read only matters when git could be in it.
   let uncertain = scan.ambiguous && /git|commit|push/i.test(command.replace(/[\\'"]/g, ''));
   const publishes = [...scan.publishes];
   let skipsHooks = scan.skipsHooks;
   const bypasses = [...scan.bypasses];
   const aliases = [...scan.aliases];
+  const opaque = [...scan.opaque];
   for (let n = 0; aliases.length && n < 16; n += 1) {
     const alias = aliases.shift();
     if (!alias.cwd || !existsSync(alias.cwd)) { uncertain = true; continue; }
@@ -290,6 +298,7 @@ export function unboundIdentityCheck(envelope, { env = process.env, cwd = proces
     uncertain ||= inner.ambiguous;
     skipsHooks ||= inner.skipsHooks;
     bypasses.push(...inner.bypasses);
+    opaque.push(...inner.opaque);
   }
   if (aliases.length) uncertain = true;
   if (skipsHooks) {
@@ -315,6 +324,28 @@ export function unboundIdentityCheck(envelope, { env = process.env, cwd = proces
       if (slug) return { decision: 'deny', reason: unboundBotReason(slug) };
     } catch {
       uncertain = true;
+    }
+  }
+  // A script, interpreter or task runner may run git the scan cannot read.
+  // A stated bot is refused it in a checkout it is not bound to (setup
+  // failed or never ran), where that git would be attributed to the human.
+  // A bound bot keeps its prior behaviour, so `node --test` or
+  // `python3 build.py` still run; this is not a sandbox, since opaque code
+  // can override `core.hooksPath` too. Each runs where the scan placed it; a
+  // directory it cannot place, or one outside any repository, is judged by
+  // the session's own checkout.
+  if (opaque.length) {
+    const inRepo = (dir) => {
+      try { targetGit({}, env)(['rev-parse', '--git-dir'], { cwd: dir }); return true; } catch { return false; }
+    };
+    const dirs = new Set(opaque.map(({ cwd: dir }) => (dir && existsSync(dir) && inRepo(dir) ? dir : cwd)));
+    for (const dir of dirs) {
+      try {
+        const slug = unboundBotSlug({ env, cwd: dir, git: targetGit({}, env) });
+        if (slug) return { decision: 'deny', reason: opaqueUnboundReason(slug) };
+      } catch (error) {
+        return { decision: 'deny', reason: `cannot verify the stated bot identity: ${error.message}` };
+      }
     }
   }
   if (!uncertain) return allow;

@@ -23,14 +23,26 @@
 // `--no-verify` (or `commit -n`), a `core.hooksPath` override for the
 // invocation (`-c`, `--config-env`, GIT_CONFIG_PARAMETERS, GIT_CONFIG_KEY_n,
 // or an `include.path` that could set it), or a `git config` write of
-// `core.hooksPath`. Values the scan cannot read (`git commit $FLAGS`),
-// relocated global config (GIT_CONFIG_GLOBAL, HOME) and indirect git (a
-// script file, make) are not seen; the git hooks still cover the last.
+// `core.hooksPath`. Values the scan cannot read (`git commit $FLAGS`) and
+// relocated global config (GIT_CONFIG_GLOBAL, HOME) are not seen.
+// `opaqueExecution` marks a script file, stdin-fed shell, interpreter or
+// task runner whose git the scan cannot read (or a command word, `eval`
+// string or `env -S` it cannot expand), and `opaque` lists the
+// directory each runs in (null when the scan cannot place it). The caller
+// refuses it only for a stated bot that is not bound there; a bound bot
+// keeps its prior behaviour, and since opaque code can override
+// `core.hooksPath` the git hooks are not a guaranteed backstop for it.
 
 import { dirname, isAbsolute, resolve } from 'node:path';
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'yash', 'busybox']);
+const SHELL_OPERAND_OPTIONS = new Set(['--rcfile', '--init-file', '-o', '+o', '-O', '+O']);
+// Code loaded through a script, stdin, or task runner is not visible to this
+// lexical scanner. Treat it as opaque, never as evidence that no Git ran.
+const OPAQUE_EXECUTORS = new Set(['node', 'nodejs', 'python', 'python2', 'python3',
+  'perl', 'ruby', 'php', 'lua', 'make', 'gmake', 'just', 'npm', 'npx', 'pnpm',
+  'yarn', 'bun', 'deno', 'tsx', 'ts-node', 'gradle', 'mvn', 'ant', 'rake']);
 // Subcommands that write commits; `push` publishes them.
 const COMMITTING = new Set(['commit', 'merge', 'rebase', 'cherry-pick', 'revert', 'am', 'commit-tree']);
 // Sequencer controls that write no commit, per subcommand.
@@ -325,7 +337,7 @@ const WRAPPERS = {
 };
 
 export function scanGitPublish(command, { cwd = process.cwd(), env = process.env, depth = 0 } = {}) {
-  const result = { publishes: [], aliases: [], ambiguous: false, skipsHooks: false, bypasses: [] };
+  const result = { publishes: [], aliases: [], ambiguous: false, opaqueExecution: false, opaque: [], skipsHooks: false, bypasses: [] };
   if (depth > 8) { result.ambiguous = true; return result; }
   const vars = new Map(Object.entries(env ?? {}));
   const exported = new Set(Object.keys(env ?? {}));
@@ -385,6 +397,8 @@ function merge(into, from) {
   into.publishes.push(...from.publishes);
   into.aliases.push(...from.aliases);
   into.ambiguous ||= from.ambiguous;
+  into.opaqueExecution ||= from.opaqueExecution;
+  into.opaque.push(...from.opaque);
   into.skipsHooks ||= from.skipsHooks;
   into.bypasses.push(...from.bypasses);
 }
@@ -396,7 +410,7 @@ function evaluate(argv, ctx) {
   // Wrappers that run the rest of argv as a command.
   for (;;) {
     const word = argv[i];
-    if (word === null) { result.ambiguous = true; return {}; }
+    if (word === null) { result.ambiguous = true; result.opaqueExecution = true; result.opaque.push({ cwd }); return {}; }
     const base = word?.split('/').pop();
     if (!(base in WRAPPERS)) break;
     if ((base === 'command' && /^-[vV]/.test(argv[i + 1] ?? '')) || (base === 'builtin' && argv[i + 1] === undefined)) return {};
@@ -411,7 +425,7 @@ function evaluate(argv, ctx) {
       if (opt === '--') { i += 1; break; }
       if (base === 'env' && (opt === '-C' || opt === '--chdir')) { cwd = place(cwd, argv[i + 1]); i += 2; continue; }
       if (base === 'env' && opt.startsWith('--chdir=')) { cwd = place(cwd, opt.slice(8)); i += 1; continue; }
-      if (base === 'env' && (opt === '-S' || opt.startsWith('--split-string'))) { result.ambiguous = true; return {}; }
+      if (base === 'env' && (opt === '-S' || opt.startsWith('--split-string'))) { result.ambiguous = true; result.opaqueExecution = true; result.opaque.push({ cwd }); return {}; }
       if ((base === 'sudo' || base === 'doas') && (opt === '-D' || opt === '--chdir')) { cwd = place(cwd, argv[i + 1]); i += 2; continue; }
       i += WRAPPERS[base].has(opt) ? 2 : 1;
     }
@@ -425,7 +439,7 @@ function evaluate(argv, ctx) {
   }
   const word = argv[i];
   if (word === undefined) return {};
-  if (word === null) { result.ambiguous = true; return {}; }
+  if (word === null) { result.ambiguous = true; result.opaqueExecution = true; result.opaque.push({ cwd }); return {}; }
   const base = word.split('/').pop();
   const args = argv.slice(i + 1);
   // Only an unconditional cd, run by the shell itself (not behind a wrapper,
@@ -459,25 +473,52 @@ function evaluate(argv, ctx) {
     return {};
   }
   if (base === 'eval') {
-    if (args.includes(null)) { result.ambiguous = true; return {}; }
+    if (args.includes(null)) { result.ambiguous = true; result.opaqueExecution = true; result.opaque.push({ cwd }); return {}; }
     merge(result, scanGitPublish(args.join(' '), { cwd, env: Object.fromEntries(env), depth: depth + 1 }));
+    return {};
+  }
+  // Sourcing executes a file in the current shell; its contents are just as
+  // opaque as a script passed to an interpreter.
+  if (base === 'source' || base === '.') {
+    result.opaqueExecution = true;
+    result.opaque.push({ cwd });
     return {};
   }
   if (SHELLS.has(base)) {
     for (let j = 0; j < args.length; j += 1) {
       const arg = args[j];
-      if (arg === null) { result.ambiguous = true; return {}; }
+      if (arg === null) { result.ambiguous = true; break; }
+      if (arg === '--') break;
+      // An option that takes the next word, so `bash --rcfile -c x.sh`
+      // runs x.sh rather than a `-c` payload.
+      if (SHELL_OPERAND_OPTIONS.has(arg)) { j += 1; continue; }
       if (/^-[A-Za-z]*c[A-Za-z]*$/.test(arg)) {
         const payload = args[j + 1];
-        if (payload === null || payload === undefined) { result.ambiguous = true; return {}; }
+        if (payload === null || payload === undefined) { result.ambiguous = true; break; }
         merge(result, scanGitPublish(payload, { cwd, env: Object.fromEntries(env), depth: depth + 1 }));
         return {};
       }
       if (!arg.startsWith('-') && !arg.startsWith('+')) break;
     }
+    // No readable -c payload: unknown arguments, -s, redirected stdin, or a script
+    // can execute arbitrary Git commands with per-invocation hook overrides.
+    result.opaqueExecution = true;
+    result.opaque.push({ cwd });
     return {};
   }
-  if (base === 'git') gitInvocation(args, { cwd, env, result, depth });
+  if (OPAQUE_EXECUTORS.has(base) || /^python\d+(?:\.\d+)?$/.test(base)) {
+    result.opaqueExecution = true;
+    result.opaque.push({ cwd });
+    return {};
+  }
+  if (base === 'git') { gitInvocation(args, { cwd, env, result, depth }); return {}; }
+  // An explicit executable path can be a shell script or any other program
+  // that runs Git with its hooks disabled. The file contents are opaque here.
+  // Only git and known shells/interpreters above have their own handling.
+  if (word.includes('/')) {
+    result.opaqueExecution = true;
+    result.opaque.push({ cwd });
+  }
   return {};
 }
 
@@ -656,7 +697,7 @@ function rebaseExecs(rest, target, env, result, depth) {
 export function expandAlias(value, target, rest, {
   env = new Map(), result, depth = 0, aliases = new Map(), names = new Map(), hooksOverridden = false,
 }) {
-  const into = result ?? { publishes: [], aliases: [], ambiguous: false, skipsHooks: false, bypasses: [] };
+  const into = result ?? { publishes: [], aliases: [], ambiguous: false, opaqueExecution: false, opaque: [], skipsHooks: false, bypasses: [] };
   const envObject = { ...(env instanceof Map ? Object.fromEntries(env) : env) };
   if (value.startsWith('!')) {
     // A shell alias's git inherits the outer `-c` through this variable.

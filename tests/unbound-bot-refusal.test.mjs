@@ -505,3 +505,56 @@ test('unboundBotSlug: stated identities without a bot committer, and nothing els
   // With github-identity off there is no bot to bind.
   assert.equal(slug(human.repo, { GH_AGENT_APP: SLUG, AGENT_BOT_CONFIG: gateOff }), null);
 });
+
+// Codex Security finding csf_24654e6b474d70516cd36875: a script,
+// interpreter or task runner can run git the scan cannot read. A stated bot
+// whose checkout is not bound is refused them; a bound bot keeps running its
+// tests and scripts, and the delegate and a human are unaffected.
+test('opaque execution is refused only for a stated bot that is not bound', () => {
+  const unbound = primaryCheckout();
+  const bound = primaryCheckout(`${SLUG}[bot]`);
+  const empty = join(root, 'no-hooks');
+  mkdirSync(empty, { recursive: true });
+  const run = (cwd, command, extra) => runHooks({
+    dialectKey: 'claude', event: 'pre-command', dir: empty, env: baseEnv(extra),
+    payload: { cwd, tool_name: 'Bash', tool_input: { command } },
+  });
+  for (const command of [
+    'node --test', 'npm test', 'python3 build.py', `python3 -c "import os; os.system('git push')"`,
+    'node -e "1"', 'bash ./build.sh', 'sh < bootstrap.sh', 'make publish',
+    './release.sh', './release', '../tools/publish', 'env ./release.sh',
+    'source release.sh', '. ./release.sh', 'builtin source release.sh',
+    'sh $UNSEEN_SCRIPT', 'sh -c "$UNSEEN_CMD"', 'bash -lc "$UNSEEN_CMD"',
+    'env sh $UNSEEN_SCRIPT', 'sh -c', 'bash -- -c payload.sh',
+  ]) {
+    const verdict = run(unbound.repo, command, STATED);
+    assert.equal(verdict.decision, 'deny', command);
+    assert.match(verdict.reason, new RegExp(`stated bot identity ${SLUG}.*not bound`), command);
+    assert.equal(run(bound.repo, command, STATED).decision, 'allow', command);
+    assert.equal(run(unbound.repo, command, DELEGATE).decision, 'allow', command);
+    assert.equal(run(unbound.repo, command, {}).decision, 'allow', command);
+  }
+  // Commands the scan can read are judged as before.
+  for (const command of ['git status', 'echo hello', 'sh -c "git status"']) {
+    assert.equal(run(unbound.repo, command, STATED).decision, 'allow', command);
+  }
+
+  // Copilot review on #777: judged where the script runs, not where the
+  // session started, and through a git alias too.
+  const u = unbound.repo;
+  unbound.git('config', 'alias.run', '!node hidden.mjs');
+  for (const command of [
+    `cd ${u} && node hidden.mjs`, `env -C ${u} python3 x.py`, `git -C ${u} run`,
+    `cd ${u} && source release.sh`, `cd ${u} && . ./release.sh`,
+    `env -C ${u} sh $UNSEEN_SCRIPT`, `cd ${u} && sh -c "$UNSEEN_CMD"`,
+  ]) {
+    assert.equal(run(bound.repo, command, STATED).decision, 'deny', command);
+    assert.equal(run(bound.repo, command, DELEGATE).decision, 'allow', command);
+  }
+  // A directory outside any repository, or one the scan cannot place, is
+  // judged by the session's checkout, so a bound bot is not refused there.
+  for (const command of [`cd ${root} && node x.mjs`, 'cd "$UNSEEN_DIR" && npm test']) {
+    assert.equal(run(bound.repo, command, STATED).decision, 'allow', command);
+    assert.equal(run(u, command, STATED).decision, 'deny', command);
+  }
+});
