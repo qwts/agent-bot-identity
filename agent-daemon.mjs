@@ -831,7 +831,7 @@ export function createDaemonServer({
         }
         // take_inbox (#229): the next GitHub event for the App and repository
         // the caller's binding is. The fleet-wide inbox bearer stays in the
-        // daemon, read from pass-cli; the App comes from the bound soul's own
+        // daemon, from its own GH_APP_HOOK_INBOX_TOKEN if set, else pass-cli; the App comes from the bound soul's own
         // record and the repository from the bound worktree, never from the
         // request.
         case 'POST /v0/inbox/take': {
@@ -856,10 +856,16 @@ export function createDaemonServer({
             const repo = boundRepository(binding.worktree);
             result = await inboxTake({ app: appSlug, repo });
           } catch (error) {
-            receipt('failed', { agentId, appSlug, reason: typeof error.code === 'string' ? error.code : 'take-failed' });
+            receipt('failed', {
+              agentId, appSlug, reason: typeof error.code === 'string' ? error.code : 'take-failed',
+              ...(error.bearerSource ? { bearerSource: error.bearerSource } : {}),
+            });
             throw error;
           }
-          receipt('taken', { agentId, appSlug, reason: result.event ? 'event' : 'empty' });
+          receipt('taken', {
+            agentId, appSlug, reason: result.event ? 'event' : 'empty',
+            ...(result.bearerSource ? { bearerSource: result.bearerSource } : {}),
+          });
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, event: result.event ?? null });
           return;
         }

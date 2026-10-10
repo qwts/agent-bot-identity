@@ -2,7 +2,8 @@
 // fleet-wide value that can take any App's records, so no caller holds it:
 // the daemon reads it from pass-cli for each take and presents it to the
 // broker's existing `POST /inbox`, for the App and repository the caller's
-// binding already is.
+// binding already is. An explicit GH_APP_HOOK_INBOX_TOKEN in the daemon's own
+// environment wins over the note: the owner's declaration is final.
 //
 // Secret-free by construction on the way out: every message is built from
 // the host, the status and a cause scrubbed of the bearer, never from the
@@ -81,6 +82,19 @@ export function readInboxBearer({ env = process.env, store = createPassCredentia
   return token;
 }
 
+// The bearer and where it came from. An explicit GH_APP_HOOK_INBOX_TOKEN in
+// the daemon's own environment wins; otherwise the pass-cli note. Only the
+// source ('env' or 'pass-cli') is ever recorded, never the value.
+export function resolveInboxBearer({ env = process.env, readNote = () => readInboxBearer({ env }) } = {}) {
+  const explicit = typeof env.GH_APP_HOOK_INBOX_TOKEN === 'string' ? env.GH_APP_HOOK_INBOX_TOKEN.trim() : '';
+  if (explicit !== '') return { token: explicit, source: 'env' };
+  return { token: readNote(), source: 'pass-cli' };
+}
+
+function bearerOf(value) {
+  return typeof value === 'string' ? { token: value, source: 'pass-cli' } : value;
+}
+
 // One take against the broker. The App and repository come from the caller's
 // binding, never from a request parameter.
 function requireInboxUrl(inboxUrl) {
@@ -94,7 +108,7 @@ function requireInboxUrl(inboxUrl) {
   return inboxUrl;
 }
 
-export async function takeFromBroker({ inboxUrl, token, app, repo, fetchImpl = globalThis.fetch, timeoutMs = INBOX_TIMEOUT_MS }) {
+export async function takeFromBroker({ inboxUrl, token, bearerSource = 'pass-cli', app, repo, fetchImpl = globalThis.fetch, timeoutMs = INBOX_TIMEOUT_MS }) {
   requireInboxUrl(inboxUrl);
   const host = inboxHost(inboxUrl);
   let url;
@@ -133,7 +147,9 @@ export async function takeFromBroker({ inboxUrl, token, app, repo, fetchImpl = g
   if (response.status === 401) {
     throw inboxError(
       'inbox-auth-expired',
-      `take_inbox failed: inbox at ${host} rejected the bearer (HTTP 401); update the pass-cli note ${INBOX_BEARER_TITLE} to the current INBOX_TOKEN, then retry`,
+      bearerSource === 'env'
+        ? `take_inbox failed: inbox at ${host} rejected the bearer (HTTP 401); update GH_APP_HOOK_INBOX_TOKEN in the daemon's environment to the current INBOX_TOKEN, or unset it to use the pass-cli note, then retry`
+        : `take_inbox failed: inbox at ${host} rejected the bearer (HTTP 401); update the pass-cli note ${INBOX_BEARER_TITLE} to the current INBOX_TOKEN, then retry`,
     );
   }
   if (response.status === 400) {
@@ -162,15 +178,21 @@ export async function takeFromBroker({ inboxUrl, token, app, repo, fetchImpl = g
 // Takes for one App and repository run one at a time in this daemon, so two
 // sessions on the same worktree can never be handed the same record even by
 // a broker that does not serialize its own takes.
-export function createInboxTaker({ env = process.env, readBearer = () => readInboxBearer({ env }), fetchImpl = globalThis.fetch } = {}) {
+export function createInboxTaker({ env = process.env, readBearer = () => resolveInboxBearer({ env }), fetchImpl = globalThis.fetch } = {}) {
   const queues = new Map();
   return function take({ app, repo }) {
     const key = `${app}\n${repo}`;
     const previous = queues.get(key) ?? Promise.resolve();
     // An unconfigured URL is refused before the bearer is ever read.
-    const run = previous.catch(() => {}).then(() => {
+    const run = previous.catch(() => {}).then(async () => {
       const inboxUrl = requireInboxUrl(env.GH_APP_HOOK_INBOX_URL);
-      return takeFromBroker({ inboxUrl, token: readBearer(), app, repo, fetchImpl });
+      const { token, source } = bearerOf(readBearer());
+      try {
+        const result = await takeFromBroker({ inboxUrl, token, bearerSource: source, app, repo, fetchImpl });
+        return { ...result, bearerSource: source };
+      } catch (error) {
+        throw Object.assign(error, { bearerSource: source });
+      }
     });
     const settled = run.catch(() => {});
     queues.set(key, settled);
