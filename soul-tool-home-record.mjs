@@ -26,6 +26,12 @@ const invalid = (why) => Object.assign(new Error(`the soul's tool-homes record i
  * read as absent.
  */
 export function readToolHomeRecord(soulDir) {
+  return readRecord(soulDir)?.value ?? null;
+}
+
+// The checked record with the exact bytes it was read from, from one
+// no-follow descriptor, or null when there is none.
+function readRecord(soulDir) {
   let fd;
   try { fd = openSync(toolHomeRecordPath(soulDir), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch (error) {
@@ -41,7 +47,7 @@ export function readToolHomeRecord(soulDir) {
   } finally { closeSync(fd); }
   let value;
   try { value = JSON.parse(raw); } catch { throw invalid('not JSON'); }
-  return normalizeToolHomeRecord(value);
+  return { raw, value: normalizeToolHomeRecord(value) };
 }
 
 /** The recorded choice for one harness, `soul | global`, or null when none is recorded. */
@@ -72,7 +78,10 @@ export function prepareToolHomeChoice(soulDir, harness, choice) {
   const row = toolHomeFor(harness);
   if (!row.routable) throw Object.assign(new Error(`${row.harness} has no tool home to choose: ${row.reason}`), { code: 'tool-home-unsupported' });
   if (choice !== null && !TOOL_HOME_CHOICES.includes(choice)) throw Object.assign(new Error(`choice must be one of ${TOOL_HOME_CHOICES.join(', ')}, or null to clear it`), { code: 'tool-home-record-invalid' });
-  const original = readToolHomeRecord(soulDir);
+  // The backup holds the bytes that were checked, never a second read of
+  // the path, which could have been swapped for a link since.
+  const read = readRecord(soulDir);
+  const original = read?.value ?? null;
   const current = original ?? { schemaVersion: TOOL_HOMES_SCHEMA_VERSION, harnesses: {} };
   const harnesses = { ...current.harnesses };
   if (choice === null) delete harnesses[row.harness];
@@ -87,7 +96,7 @@ export function prepareToolHomeChoice(soulDir, harness, choice) {
   const cleanup = () => { rmSync(pending, { force: true }); if (!stranded) rmSync(backup, { force: true }); };
   try {
     writeFileSync(pending, serialize(record), { flag: 'wx', mode: 0o600 });
-    if (original !== null) writeFileSync(backup, readFileSync(file), { flag: 'wx', mode: 0o600 });
+    if (original !== null) writeFileSync(backup, read.raw, { flag: 'wx', mode: 0o600 });
   } catch (error) { cleanup(); throw error; }
   return {
     file,

@@ -284,6 +284,27 @@ for (const existing of [false, true]) test(`a failed rollback keeps the ${existi
   assert.ok(error.message.includes(choiceFile));
 });
 
+test('a partial update still reports its backup when the receipt cannot be written', async (t) => {
+  const f = fixture(t);
+  const choiceFile = toolHomeRecordPath(f.soulDir);
+  setToolHomeChoice(f.soulDir, 'codex', 'soul');
+  const before = readFileSync(choiceFile, 'utf8');
+  const file = wakeSessionsFile({ env: f.env, home: f.home });
+  createWakeSessions({ file }).set(ID, 'codex', 'thread-kept', 'workspace', 'soul');
+  mkdirSync(auditFile({ env: f.env, home: f.home }), { recursive: true });
+  const sessions = createWakeSessions({ file, rename: () => {
+    rmSync(choiceFile);
+    mkdirSync(choiceFile);
+    writeFileSync(path.join(choiceFile, 'in-the-way'), '');
+    throw Object.assign(new Error('session commit refused'), { code: 'EACCES' });
+  } });
+  const error = await f.run(['codex', 'global', '--soul', ID, '--fresh-session'], { sessions }).then(() => assert.fail('expected a partial update'), (e) => e);
+  assert.equal(error.code, 'tool-home-update-partial');
+  assert.ok(error.message.includes(error.backup) && /audit receipt could not be written/.test(error.message));
+  assert.ok(error.audit);
+  assert.equal(readFileSync(error.backup, 'utf8'), before);
+});
+
 test('a combined choice and reset with no recorded session still commits the choice once', async (t) => {
   const f = fixture(t);
   const done = await f.run(['codex', 'global', '--soul', ID, '--fresh-session']);
