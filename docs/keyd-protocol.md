@@ -319,16 +319,19 @@ Both go on `owner.sock` only; `soul.sock` refuses them. `nonce` is agent-bot's,
 - `owner/pins-attest { pins, nonce }`: `pins` is the full key set, 0 to 4
   records as `keys.json` holds them. keyd refuses a malformed set with
   `-32602` without asking. Otherwise, one prompt at a time, it shows the
-  owner every key by name and fingerprint ("agent-bot wants to trust only
-  these keys to sign statements as you: …", or that every key is being
-  removed). Only on approval does it record `{digest, generation}` with the
+  owner every key with every field the digest covers: name, kind (ssh
+  security key, ssh software key or keyd key), whether a PIN or biometric is
+  required, and fingerprint ("agent-bot wants to trust only these keys to
+  sign statements as you: yubikey (ssh security key, PIN or biometric
+  required, SHA256:…); …", or that every key is being removed). Only on approval does it record `{digest, generation}` with the
   generation one past the last, in its Keychain item (service
   `agent-bot.keyd`, account `owner-pins`), and answer
   `{ attestation }`. A cancel is `-32000`; nobody to ask is `-32001`. Every
   attempt leaves a `keyd-owner` receipt naming the digest.
 - `owner/pins-status { nonce }`: no prompt. Answers `{ attestation }` for the
   record keyd holds: `digest: null` at generation 0 before any approval. A
-  record keyd cannot read is `-32000`, never "no keys".
+  record keyd cannot read, generation 0 in a stored record included, is
+  `-32000`, never "no keys".
 
 ### Record format
 

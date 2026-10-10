@@ -233,8 +233,10 @@ impl Store {
         };
         serde_json::from_slice::<OwnerPins>(&value)
             .ok()
+            // Generation 0 means "never approved", which has no record.
             .filter(|record| {
-                record.digest.len() == 64
+                record.generation > 0
+                    && record.digest.len() == 64
                     && record
                         .digest
                         .bytes()
@@ -450,6 +452,16 @@ pub mod tests {
         assert!(
             store.owner_pins().is_err(),
             "a bad record is an error, not none"
+        );
+        store
+            .put_owner_pins(&OwnerPins {
+                digest: "a".repeat(64),
+                generation: 0,
+            })
+            .unwrap();
+        assert!(
+            store.owner_pins().is_err(),
+            "a stored record is an approval"
         );
         assert!(store.credential("agent_../x", "qwts-claude-agent").is_err());
 

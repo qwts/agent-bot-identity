@@ -127,8 +127,10 @@ pub fn digest(pins: &[Pin]) -> String {
         .collect()
 }
 
-/// The words keyd puts in the prompt: every key the owner is trusting, so
-/// a key slipped into the set is in front of them.
+/// The words keyd puts in the prompt: every key the owner is trusting, with
+/// every field the digest covers (the alg follows from the store), so a key
+/// slipped into the set, or a policy weakened on a key already there, is in
+/// front of them.
 pub fn reason(pins: &[Pin]) -> String {
     if pins.is_empty() {
         return "agent-bot wants to remove every owner statement key, so no signed statement counts as yours".into();
@@ -136,17 +138,22 @@ pub fn reason(pins: &[Pin]) -> String {
     let keys: Vec<String> = pins
         .iter()
         .map(|pin| {
-            let kind = if pin.software_key {
-                ", software key"
+            let kind = match (pin.store.as_str(), pin.software_key) {
+                ("keyd", _) => "keyd key",
+                (_, true) => "ssh software key",
+                (_, false) => "ssh security key",
+            };
+            let verify = if pin.verify_required {
+                ", PIN or biometric required"
             } else {
                 ""
             };
-            format!("{} ({}{kind})", pin.name, pin.fingerprint)
+            format!("{} ({kind}{verify}, {})", pin.name, pin.fingerprint)
         })
         .collect();
     format!(
         "agent-bot wants to trust only these keys to sign statements as you: {}",
-        keys.join(", ")
+        keys.join("; ")
     )
 }
 
@@ -269,11 +276,21 @@ pub mod tests {
     fn names_every_key_in_the_prompt() {
         let mut software = pin("laptop", FP_B);
         software["softwareKey"] = json!(true);
-        let pins = parse(&json!([pin("yubikey", FP_A), software])).unwrap();
+        let mut verified = pin("yubikey", FP_A);
+        verified["verifyRequired"] = json!(true);
+        let pins = parse(&json!([verified, software])).unwrap();
         assert_eq!(
             reason(&pins),
-            format!("agent-bot wants to trust only these keys to sign statements as you: yubikey ({FP_A}), laptop ({FP_B}, software key)")
+            format!("agent-bot wants to trust only these keys to sign statements as you: yubikey (ssh security key, PIN or biometric required, {FP_A}); laptop (ssh software key, {FP_B})")
         );
+        // The same key without its verification requirement reads differently.
+        let weaker = parse(&json!([pin("yubikey", FP_A)])).unwrap();
+        assert_eq!(
+            reason(&weaker),
+            format!("agent-bot wants to trust only these keys to sign statements as you: yubikey (ssh security key, {FP_A})")
+        );
+        let keyd = parse(&json!([{ "name": "mac", "store": "keyd", "alg": "ed25519", "fingerprint": FP_B, "verifyRequired": false, "softwareKey": false }])).unwrap();
+        assert!(reason(&keyd).ends_with(&format!("mac (keyd key, {FP_B})")));
         assert!(reason(&[]).contains("remove every owner statement key"));
     }
 }
