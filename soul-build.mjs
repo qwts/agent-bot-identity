@@ -127,7 +127,7 @@ export function buildSoulDirectory(directory, { check = false } = {}) {
     if (!bytes || hasMarker(bytes) || !expected.has(target.path)) continue;
     merged.push({ path: target.path, harness: target.harness, kept: comms && MCP_TARGETS.some(({ path }) => path === target.path) ? mergeableMcpServers(target.path, bytes) : [] });
   }
-  const executable = new Set(source.filter((entry) => entry.mode === '100755').flatMap((entry) => [`.claude/${entry.path}`, `.gemini/${entry.path}`]));
+  const executable = new Set(source.filter((entry) => entry.mode === '100755').flatMap((entry) => [`.claude/${entry.path}`, `.gemini/${entry.path}`, `.qwen/${entry.path}`]));
   const writes = [], removals = [], conflicts = [];
   for (const [path, bytes] of expected) {
     regularPath(root, path);

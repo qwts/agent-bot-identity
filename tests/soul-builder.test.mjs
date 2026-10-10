@@ -104,16 +104,41 @@ test('skills retain front matter first, copy text/scripts, preserve executable m
   buildSoulDirectory(root);
   const skill = readFileSync(join(root, '.claude/skills/hello/SKILL.md'), 'utf8');
   assert.ok(skill.startsWith(`---\nname: hello\ndescription: Say hello\n---\n${MARKER}\nHello\n`));
-  assert.equal(readFileSync(join(root, '.gemini/skills/hello/SKILL.md'), 'utf8'), skill);
+  for (const folder of ['.gemini', '.qwen']) assert.equal(readFileSync(join(root, `${folder}/skills/hello/SKILL.md`), 'utf8'), skill);
   assert.match(skill, /\.\.\/\.\.\/\.\.\/skills\/hello\/assets\/blob.bin/);
   assert.equal(readFileSync(join(root, '.claude/skills/hello/references/help.md'), 'utf8'), `${MARKER}\nHelp\n`);
   assert.equal(readFileSync(join(root, '.claude/skills/hello/scripts/run.sh'), 'utf8'), `#!/bin/sh\n# ${MARKER}\necho hello\n`);
-  assert.equal(statSync(join(root, '.claude/skills/hello/scripts/run.sh')).mode & 0o111, 0o111);
+  for (const folder of ['.claude', '.gemini', '.qwen']) assert.equal(statSync(join(root, `${folder}/skills/hello/scripts/run.sh`)).mode & 0o111, 0o111, folder);
   assert.equal(existsSync(join(root, '.claude/skills/hello/config.json')), false);
   assert.equal(computePackageRevision(root), revision);
   rmSync(join(root, 'skills/hello'), { recursive: true });
   buildSoulDirectory(root);
-  assert.equal(existsSync(join(root, '.claude/skills/hello')), false);
+  for (const folder of ['.claude', '.gemini', '.qwen']) assert.equal(existsSync(join(root, `${folder}/skills/hello`)), false, folder);
+});
+
+test('Qwen Code skills touch only marked files: its own skills stay, and one at a rendered path is a conflict (#378)', (t) => {
+  const root = fixture(t);
+  put(root, 'skills/hello/SKILL.md', '---\nname: hello\ndescription: Say hello\n---\nHello\n');
+  // Qwen installs, curates and archives skills of its own beside ours.
+  const curated = '---\nname: curated\ndescription: Learned\nsource: auto-skill\n---\nCurated\n';
+  const own = ['.qwen/skills/curated/SKILL.md', '.qwen/skills/curated/notes.md', '.qwen/archived-skills/old/SKILL.md', '.qwen/pending-skills/t1/new/SKILL.md'];
+  for (const path of own) put(root, path, curated);
+  const revision = computePackageRevision(root);
+  buildSoulDirectory(root);
+  assert.equal(readFileSync(join(root, '.qwen/skills/hello/SKILL.md'), 'utf8'), readFileSync(join(root, '.claude/skills/hello/SKILL.md'), 'utf8'));
+  assert.equal(computePackageRevision(root), revision);
+  const rebuilt = buildSoulDirectory(root);
+  assert.deepEqual([rebuilt.writes, rebuilt.removals], [[], []]);
+  assert.ok(rebuilt.harnesses.qwen.rendered.includes('skills'));
+  // Removing the soul's skill removes only its marked copy.
+  rmSync(join(root, 'skills/hello'), { recursive: true });
+  buildSoulDirectory(root);
+  assert.equal(existsSync(join(root, '.qwen/skills/hello')), false);
+  for (const path of own) assert.equal(readFileSync(join(root, path), 'utf8'), curated, path);
+  // An unmarked skill where a soul skill would render is never overwritten.
+  put(root, 'skills/curated/SKILL.md', '---\nname: curated\ndescription: Ours\n---\nOurs\n');
+  for (const check of [true, false]) assert.throws(() => buildSoulDirectory(root, { check }), /unmarked generated path conflict: .*\.qwen\/skills\/curated\/SKILL\.md/);
+  for (const path of own) assert.equal(readFileSync(join(root, path), 'utf8'), curated, path);
 });
 
 test('a disabled skill renders nothing for any harness while its source directory and the other skills stay', (t) => {
@@ -129,13 +154,13 @@ test('a disabled skill renders nothing for any harness while its source director
   declare(['hello']);
   const { entries } = readSoulPackageEntries(root);
   const output = buildHarnessFiles(entries);
-  assert.deepEqual([...output.keys()].filter((path) => /skills\//.test(path)), ['.claude/skills/other/SKILL.md', '.gemini/skills/other/SKILL.md']);
+  assert.deepEqual([...output.keys()].filter((path) => /skills\//.test(path)), ['.claude/skills/other/SKILL.md', '.gemini/skills/other/SKILL.md', '.qwen/skills/other/SKILL.md']);
   assert.equal(harnessReport(output).claude.rendered.includes('skills'), true);
   const sourcePaths = entries.map((entry) => entry.path);
   for (const path of ['skills/hello/SKILL.md', 'skills/hello/references/help.md', 'skills/hello/scripts/run.sh']) assert.ok(sourcePaths.includes(path), path);
   // A rebuild removes the stale copies and leaves `skills/hello/` alone.
   buildSoulDirectory(root);
-  for (const path of ['.claude/skills/hello', '.gemini/skills/hello']) assert.equal(existsSync(join(root, path)), false, path);
+  for (const path of ['.claude/skills/hello', '.gemini/skills/hello', '.qwen/skills/hello']) assert.equal(existsSync(join(root, path)), false, path);
   assert.ok(existsSync(join(root, '.claude/skills/other/SKILL.md')) && existsSync(join(root, '.gemini/skills/other/SKILL.md')));
   assert.equal(readFileSync(join(root, 'skills/hello/references/help.md'), 'utf8'), 'Help\n');
   const revision = computePackageRevision(root);
@@ -146,7 +171,7 @@ test('a disabled skill renders nothing for any harness while its source director
   // With every skill off there is no skills directory and no `skills` in the report.
   declare(['hello', 'other']);
   const report = buildSoulDirectory(root);
-  for (const path of ['.claude/skills', '.gemini/skills']) assert.equal(existsSync(join(root, path)), false, path);
+  for (const path of ['.claude/skills', '.gemini/skills', '.qwen/skills']) assert.equal(existsSync(join(root, path)), false, path);
   for (const harness of Object.values(report.harnesses)) assert.equal(harness.rendered.includes('skills'), false);
   assert.ok(report.harnesses.claude.rendered.includes('instructions'));
   assert.ok(existsSync(join(root, 'skills/hello/SKILL.md')) && existsSync(join(root, 'skills/other/SKILL.md')));

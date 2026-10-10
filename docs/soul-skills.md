@@ -395,8 +395,8 @@ them for the soul's harnesses like an authored skill.
 the top of a git checkout) at the harness's skills folder:
 `.claude/skills/<name>/` by default, which Claude Code, Cursor, Copilot, Devin
 and Kiro read, or the folder `--harness` names (`gemini` reads
-`.gemini/skills/`). A harness with no skills folder (`codex`, `opencode`,
-`qwen`, `muse`) is refused. The agent loads a skill while the work needs it and
+`.gemini/skills/`, `qwen` reads `.qwen/skills/`). A harness with no skills
+folder (`codex`, `opencode`, `muse`) is refused. The agent loads a skill while the work needs it and
 unloads it after, rather than keeping every skill in the workspace (owner
 direction on #603, 2026-10-09).
 
