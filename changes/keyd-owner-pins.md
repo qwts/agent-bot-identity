@@ -1,0 +1,1 @@
+- agent-bot-keyd records the owner's statement keys: `owner/pins-attest` shows the owner every key and, only on their approval, keeps the key set's digest under a new generation in keyd's Keychain; `owner/pins-status` reports it, signed with the presence key, for agent-bot to check `keys.json` against. Nothing uses it yet (#753).
