@@ -21,6 +21,7 @@ const LAUNCH_PATHS = {
   'wake-resume.mjs': [1, 'filtered: harness turn env from composeTurnEnv'],
   'agent-hook.mjs': [4, 'filtered: spawn hooks and their agent-comms join get minimalChildEnv; policy hooks run in the harness\'s own hook process and env; git'],
   'soul-env-export.mjs': [1, 'filtered: git under minimalChildEnv'],
+  'sandbox-export.mjs': [1, 'filtered: tar under minimalChildEnv'],
   'soul-home.mjs': [1, 'filtered: git init with PATH only'],
   'skill-workspace.mjs': [2, 'filtered: git with PATH only'],
   'readiness.mjs': [2, 'filtered: zsh probe with HOME and a fixed PATH; git'],
