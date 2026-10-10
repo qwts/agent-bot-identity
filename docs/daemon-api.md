@@ -130,10 +130,14 @@ belongs to one class:
 - **principal**: bearer plus an enrolled transport principal, authorized by the
   owner for the soul and operation (`agent-bot principals`).
 
-A soul binding header on an owner or owner-credential route is refused with
-`owner-credential-required` before anyone is asked. `tests/daemon-route-auth.test.mjs`
-keeps this table in step with the daemon. It also checks that a bearer-only
-caller is refused on each owner route.
+A soul binding header (`x-agent-binding` or `x-agent-binding-proof`, even an
+invalid one) on any owner or owner-credential route is refused with
+`owner-credential-required` before anyone is asked. It is receipted as
+`owner-route`, or as `soul-revision` or `dream-control` on those routes.
+
+`tests/daemon-route-auth.test.mjs` checks this table and the daemon's
+handlers match in both directions. It also checks that a bearer-only caller,
+and a soul binding, are refused on each owner route.
 
 | Route | Class | Notes |
 | --- | --- | --- |

@@ -250,6 +250,20 @@ function writeStateFile(file, state) {
   }
 }
 
+// Routes that need the owner, not just the bearer (#785, docs/daemon-api.md).
+// Revision writes and dream controls refuse a binding earlier, with their own
+// receipts; these are the rest. Returns the route's table name or null.
+const OWNER_ROUTES = new Set(['POST /v0/sandbox', 'POST /v0/sandbox/override', 'POST /v0/soul/computer-use',
+  'POST /v0/soul/resume', 'POST /v0/approvals/decide']);
+export function ownerRouteName(method, pathname) {
+  const route = `${method} ${pathname}`;
+  if (OWNER_ROUTES.has(route)) return route;
+  if (method !== 'POST') return null;
+  if (/^\/v0\/identity\/apps\/[a-z-]+$/.test(pathname)) return 'POST /v0/identity/apps/{action}';
+  if (/^\/v1\/proposals\/[^/]+\/decision$/.test(pathname)) return 'POST /v1/proposals/{id}/decision';
+  return null;
+}
+
 function tokensMatch(expected, presented) {
   const left = Buffer.from(expected, 'utf8');
   const right = Buffer.from(presented ?? '', 'utf8');
@@ -498,15 +512,16 @@ export function createDaemonServer({
         appendAuditReceipt({ event: 'soul-revision', operation: revisionAction, decision: 'owner-credential-required' }, { env, home, now });
         throw ownerCredentialRequired('a soul binding cannot authorize an owner revision action');
       }
-      // Resuming a soul lifts the owner's hold, so it is the owner's (#785).
-      if (req.method === 'POST' && url.pathname === '/v0/soul/resume' && ('x-agent-binding' in req.headers || PROOF_HEADER in req.headers)) {
-        appendAuditReceipt({ event: 'resume', operation: 'cancel', decision: 'owner-credential-required' }, { env, home, now });
-        throw ownerCredentialRequired('a soul binding cannot resume a soul');
-      }
       const dreamAction = req.method === 'POST' && /^\/v0\/soul\/dream\/(register|pause|unschedule|run-now|cancel|ack-notice)$/.exec(url.pathname)?.[1];
       if (dreamAction && ('x-agent-binding' in req.headers || PROOF_HEADER in req.headers)) {
         appendAuditReceipt({ event: 'dream-control', operation: dreamAction, decision: 'owner-credential-required' }, { env, home, now });
         throw ownerCredentialRequired('a soul binding cannot authorize dream controls');
+      }
+      // Every other owner route (#785): a soul binding never reaches the owner.
+      const ownerRoute = ownerRouteName(req.method, url.pathname);
+      if (ownerRoute && ('x-agent-binding' in req.headers || PROOF_HEADER in req.headers)) {
+        appendAuditReceipt({ event: 'owner-route', operation: ownerRoute, decision: 'owner-credential-required' }, { env, home, now });
+        throw ownerCredentialRequired(`a soul binding cannot authorize ${ownerRoute}`);
       }
       if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/binding/app', 'POST /v0/credential', 'POST /v0/inbox/take', 'POST /v0/grants/request', 'POST /v0/grants/spend', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start', 'POST /v0/asides/delivered'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
         sendJson(res, 401, { error: 'missing or invalid daemon token' });

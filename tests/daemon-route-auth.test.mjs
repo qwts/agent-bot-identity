@@ -26,18 +26,39 @@ function routeTable() {
   return rows;
 }
 
-test('every daemon route is classified in docs/daemon-api.md (#785)', () => {
+// Every route the daemon handles, as the table names it: the switch's literal
+// cases, plus the handlers matched before it, read from their conditions. A
+// regex segment becomes {id} or, for a list of actions, {action}.
+function daemonRoutes() {
   const source = readFileSync(path.join(root, 'agent-daemon.mjs'), 'utf8');
-  const cases = [...source.matchAll(/case '((?:GET|POST|DELETE) \/v0\/[^']+)'/g)].map((match) => match[1]);
-  const table = routeTable();
-  assert.ok(cases.length > 30, 'the route switch was found');
-  for (const route of cases) assert.ok(table.has(route), `${route} is missing from the route authorization table`);
-  for (const route of table.keys()) {
-    // Routes dispatched before the switch: vouch, the App and dream families, and /v1.
-    if (route.includes('{') || route.includes(' /v1/') || ['POST /v0/vouch', 'GET /v0/identity/apps',
-      'GET /v0/soul/dream', 'GET /v0/soul/dream/history'].includes(route)) continue;
-    assert.ok(cases.includes(route), `${route} in the table is not a daemon route`);
+  const cases = new Set([...source.matchAll(/case '((?:GET|POST|DELETE) \/v[01]\/[^']+)'/g)].map((match) => match[1]));
+  const routes = new Set(cases);
+  for (const match of source.matchAll(/route === '((?:GET|POST|DELETE) \/v[01]\/[^']+)'/g)) routes.add(match[1]);
+  for (const line of source.split('\n')) {
+    const method = /req\.method === '(GET|POST|DELETE)'/.exec(line)?.[1];
+    if (!method) continue;
+    const literal = /url\.pathname === '(\/v[01]\/[^']+)'/.exec(line)?.[1];
+    const pattern = /\/\^(\\\/v[01][^$]*)\$\//.exec(line)?.[1];
+    if (literal) routes.add(`${method} ${literal}`);
+    if (!pattern) continue;
+    const template = pattern.replaceAll('\\/', '/')
+      .replace(/\(\[\^\/\]\+\)|\[a-f0-9-\]\+/g, '{id}')
+      .replace(/\(([a-z-]+(?:\|[a-z-]+)+)\)/g, '{action}');
+    // A family whose every action is also a literal case is listed by action.
+    const actions = /\(([a-z-]+(?:\|[a-z-]+)+)\)/.exec(pattern.replaceAll('\\/', '/'))?.[1].split('|') ?? [];
+    if (actions.length && actions.every((action) => cases.has(`${method} ${template.replace('{action}', action)}`))) continue;
+    routes.add(`${method} ${template}`);
   }
+  return { cases, routes };
+}
+
+test('the route authorization table in docs/daemon-api.md matches the daemon exactly (#785)', () => {
+  const { cases, routes } = daemonRoutes();
+  const table = routeTable();
+  assert.ok(cases.size > 30, 'the route switch was found');
+  assert.ok([...routes].some((route) => route.startsWith('POST /v1/')), 'the /v1 handlers were found');
+  for (const route of routes) assert.ok(table.has(route), `${route} is missing from the route authorization table`);
+  for (const route of table.keys()) assert.ok(routes.has(route), `${route} in the table is not a daemon route`);
   const classes = new Set(table.values());
   assert.deepEqual([...classes].filter((value) => !['owner', 'owner-credential', 'bearer', 'binding', 'principal'].includes(value)), []);
 });
@@ -120,6 +141,27 @@ test('a bearer-only caller is refused on every owner route and nothing changes (
   }
 });
 
+test('a soul binding is refused on every owner route before the owner is asked (#785)', async (t) => {
+  const f = await daemon(t);
+  const table = routeTable();
+  const concrete = (route) => route.replace('{action}', 'addon').replace('{id}', 'prop_x').replace('/dream/addon', '/dream/pause')
+    .replace('/revisions/addon', '/revisions/approve');
+  const owner = [...table].filter(([, value]) => value === 'owner' || value === 'owner-credential').map(([route]) => route);
+  assert.ok(owner.length >= 10);
+  for (const route of owner) {
+    const [method, pathname] = concrete(route).split(' ');
+    for (const header of ['x-agent-binding', 'x-agent-binding-proof']) {
+      const res = await fetch(`http://127.0.0.1:${f.server.address().port}${pathname}`, { method,
+        headers: { authorization: `Bearer ${f.server.token}`, 'content-type': 'application/json', [header]: 'anything' },
+        body: JSON.stringify({ agentId: ID, transport: 'web', providerId: 'x', decision: 'approve' }) });
+      assert.equal(res.status, 403, `${route} with ${header}`);
+      assert.equal((await res.json()).code, 'owner-credential-required', `${route} with ${header}`);
+    }
+  }
+  assert.deepEqual(f.asked, [], 'no binding reached the owner prompt');
+  assert.equal(f.controls.length, 0);
+});
+
 test('the owner resume asks for presence; a soul binding is refused before it is asked (#785)', async (t) => {
   const f = await daemon(t);
   setSoulPaused(ID, true, { file: f.env.AGENT_BOT_POPULATION_PATH });
@@ -131,7 +173,9 @@ test('the owner resume asks for presence; a soul binding is refused before it is
   assert.equal(refused.status, 403);
   assert.deepEqual(f.asked, [`soul resume ${ID}`]);
   const receipts = readFileSync(path.join(f.env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.deepEqual(receipts.filter((row) => row.event === 'resume').map((row) => row.decision), ['owner-credential-required', 'owner-refused']);
+  assert.deepEqual(receipts.filter((row) => row.event === 'owner-route').map((row) => [row.operation, row.decision]),
+    [['POST /v0/soul/resume', 'owner-credential-required']]);
+  assert.deepEqual(receipts.filter((row) => row.event === 'resume').map((row) => row.decision), ['owner-refused']);
   // Pause and stop only hold a soul back: no prompt.
   for (const action of ['pause', 'stop']) {
     assert.equal((await f.post(`/v0/soul/${action}`, { agentId: ID })).status, 200);
