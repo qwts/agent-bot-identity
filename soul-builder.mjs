@@ -71,9 +71,9 @@ const HARNESS_FILES = Object.freeze({
   muse: Object.freeze({ instructions: null, skills: null, mcp: null }),
   // Kiro reads AGENTS.md and the shared skills; its wake lanes are #523.
   kiro: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: '.kiro/settings/mcp.json', subagents: '.kiro/agents/' }),
-  // Qwen Code reads AGENTS.md natively; its skills live under `.qwen/` in a
-  // folder not rendered yet (#247). Commands and agents are Markdown (#378).
-  qwen: Object.freeze({ instructions: null, skills: null, mcp: '.qwen/settings.json', subagents: '.qwen/agents/', commands: '.qwen/commands/' }),
+  // Qwen Code reads AGENTS.md natively. Commands, agents and skills are
+  // Markdown under `.qwen/` (#378), checked against Qwen Code 0.25.0.
+  qwen: Object.freeze({ instructions: null, skills: '.qwen/skills/', mcp: '.qwen/settings.json', subagents: '.qwen/agents/', commands: '.qwen/commands/' }),
 });
 
 // The workspace-relative folder a harness reads skills from, or null when it
@@ -978,10 +978,12 @@ export function buildHarnessFiles(packageEntries, { authored = new Map() } = {})
     const appendix = pointers.length ? `\n\nSupporting files retained in the source skill directory:\n${pointers.join('\n')}\n` : '';
     output.set(`.claude/${path}`, Buffer.from(`${front.replace(/\n?$/, '\n')}${MARKER}\n${content.slice(front.length)}${appendix}`));
   }
-  // Gemini does not discover Claude-compatible skills; its native skill
-  // directory is within the existing, fixed v2 generated-path contract.
+  // Gemini and Qwen Code do not discover Claude-compatible skills; each gets
+  // the same marked copy in its native skill directory. Qwen also keeps its
+  // own skills in `.qwen/skills/`; those are unmarked, so they stay its own.
   for (const [path, bytes] of [...output]) {
-    if (path.startsWith('.claude/skills/')) output.set(path.replace(/^\.claude\//, '.gemini/'), Buffer.from(bytes));
+    if (!path.startsWith('.claude/skills/')) continue;
+    for (const folder of ['.gemini/', '.qwen/']) output.set(path.replace(/^\.claude\//, folder), Buffer.from(bytes));
   }
   renderPrimitives(source, output);
   // The soul's MCP entry (#378), unless its soul.json turned comms off. A soul

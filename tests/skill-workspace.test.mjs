@@ -119,6 +119,12 @@ test('the harness picks the skills folder; one without skills is refused', t => 
   assert.throws(() => loadSkill('demo', f.id, { ...f.options, workspace: 'repo', harness: 'nope' }), { code: 'skill-harness-invalid' });
 });
 
+test('Qwen Code loads into its own project skills folder (#378)', t => {
+  const f = fixture(t);
+  assert.equal(loadSkill('demo', f.id, { ...f.options, workspace: 'repo', harness: 'qwen' }).destination, '.qwen/skills/demo');
+  assert.ok(existsSync(path.join(f.repo, '.qwen/skills/demo/SKILL.md')));
+});
+
 test('load refuses unsafe workspaces, linked folders and missing skills', t => {
   const f = fixture(t);
   assert.throws(() => loadSkill('demo', f.id, { ...f.options, workspace: '..' }), { code: 'skill-workspace-invalid' });
