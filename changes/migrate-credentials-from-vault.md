@@ -1,1 +1,0 @@
-- `agent-bot identity migrate-credentials --from-vault OLD` copies pass-cli notes from a host's old `AGENT_BOT_CREDENTIAL_VAULT` into the vault it uses now, alone or together with `--from-namespace`; it is owner only, reads each copy back, never overwrites a different value and never deletes the old notes (#676).

@@ -1,1 +1,0 @@
-- `take_inbox` reads its shared bearer from the configured vault's named password field through the audited Proton Pass path, while preserving the daemon-only environment override (#229).
