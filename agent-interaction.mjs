@@ -438,6 +438,8 @@ export function createInteractionService({
     catch (error) { log(`task invocation ${invocation.invocationId} ${phase} report failed: ${error?.message ?? String(error)}`); }
   }
 
+  const POLICY_UNCHECKED_ACTION = 'fix the runtime config or SOP record (see `agent-bot doctor`), then retry';
+
   // The persona policy is checked at the start of every interactive turn
   // (#613), as the turn registry checks every turn it runs. A principal
   // drives this turn, so one refused only because the persona record is
@@ -451,9 +453,20 @@ export function createInteractionService({
   async function admitTurn(invocation) {
     if (typeof turns?.check !== 'function') return;
     const { invocationId: id, agentId, principalId } = invocation;
+    // A policy that cannot be evaluated at all (the runtime config turned
+    // unreadable after startup, say) throws without a code. It is still a
+    // refusal, so it is recorded as one with its repair. Only the checks are
+    // normalized; any other failure here propagates as it is.
+    const check = async (options) => {
+      try { await turns.check({ agentId, kind: 'interactive', ...options }); } catch (error) {
+        if (typeof error?.code === 'string') throw error;
+        throw Object.assign(new Error(`the persona policy could not be checked (${String(error?.message ?? error).slice(0, 160)}); ${POLICY_UNCHECKED_ACTION}`),
+          { code: 'persona-policy-unavailable', action: POLICY_UNCHECKED_ACTION, cause: error });
+      }
+    };
     try {
       try {
-        await turns.check({ agentId, kind: 'interactive' });
+        await check({});
       } catch (refused) {
         if (refused?.code !== 'persona-policy-stale' || typeof refused.digest !== 'string' || !verifyOwner) throw refused;
         const source = refused.source ? `${refused.source.repository}@${refused.source.commit}` : null;
@@ -467,7 +480,7 @@ export function createInteractionService({
         }
         appendEvent(id, 'owner-verified', { code: refused.code, method: typeof proof?.method === 'string' ? proof.method : 'owner',
           source: refused.source ?? null, digest: refused.digest }, storeOptions);
-        await turns.check({ agentId, kind: 'interactive', ownerVerified: refused.digest });
+        await check({ ownerVerified: refused.digest });
       }
     } catch (error) {
       if (typeof error?.code === 'string') {

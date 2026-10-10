@@ -68,3 +68,15 @@ test('doctor hints agent-bot sop persona for a legacy, stale or missing persona 
   assert.equal(broken.code, 'sop-persona-unavailable');
   assert.match(broken.action, /agent-bot sop persona/);
 });
+
+test('doctor reports a recorded but invalid persona.toml as unavailable, as launches refuse it (#613)', (t) => {
+  const f = fixture(t);
+  f.select('local/sop@main');
+  f.write({ selection: { org: 'local/org@main', sop: 'local/sop@main' }, persona: 'schema_version = 1\n[persona]\nsandbox = "bogus"\n' });
+  const invalid = sopPersonaCheck({ home: f.home, env: f.env });
+  assert.equal(invalid.status, 'warning');
+  assert.equal(invalid.code, 'sop-persona-unavailable');
+  assert.match(invalid.message, /persona\.toml.*invalid/);
+  assert.equal(invalid.action, 'fix persona.toml in the SOP, then run: agent-bot sop persona');
+  assert.equal(invalid.evidence.state, 'recorded');
+});

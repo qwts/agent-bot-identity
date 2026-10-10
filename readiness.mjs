@@ -16,6 +16,7 @@ import { resolveSpacesHome } from './agent-space.mjs';
 import { inspectSoulSpace } from './soul-memory.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
 import { readSopPersonaRecord } from './sop.mjs';
+import { parsePersonaMapping } from './sandbox.mjs';
 import { duplicateSoulDirs, listSouls, orphanSoulDirs, populationFile, PRESENCE_WINDOW_MS, soulPresence } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
 import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness, unmanagedAuthorsWithLegacyDefault } from './config.mjs';
@@ -145,6 +146,20 @@ export function sopPersonaCheck({ home, env, read = readSopPersonaRecord }) {
   const evidence = { state: record.state, repository: record.repository ?? null, commit: record.commit ?? null, recorded_at: record.recordedAt ?? null };
   if (record.state === 'none') {
     return readinessCheck({ id: 'sop.persona', status: 'not_applicable', message: 'no SOP is selected, so there is no persona mapping to record', evidence });
+  }
+  // A recorded mapping launches parse as `loadPersona` parses it, so one
+  // they would refuse as invalid is not reported ready.
+  if (record.state === 'recorded') {
+    try { parsePersonaMapping(record.text); } catch (error) {
+      return readinessCheck({
+        id: 'sop.persona',
+        status: 'warning',
+        code: 'sop-persona-unavailable',
+        message: `the recorded persona.toml from ${record.repository}@${record.commit} is invalid (${error.message}), so launches and turns are refused`,
+        action: 'fix persona.toml in the SOP, then run: agent-bot sop persona',
+        evidence,
+      });
+    }
   }
   if (record.state === 'recorded' || record.state === 'absent') {
     return readinessCheck({
