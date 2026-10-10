@@ -1,12 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { recordSoulSighting, setSoulSandbox, upsertSoul } from '../agent-population.mjs';
 import { auditFile } from '../agent-principals.mjs';
 import { sandboxCommand, sandboxRemovalInventory } from '../sandbox.mjs';
 import { runSandboxRemoval } from '../sandbox-remove.mjs';
+import { incomingRoot } from '../sandbox-export.mjs';
 
 const JOINED = 'agent_12345678-1234-4234-8234-123456789abc';
 const LOCAL = 'agent_12345678-1234-4234-8234-123456789def';
@@ -194,4 +197,48 @@ test('the persona\'s completedAt is capped by when the copy reached the owner, a
   const g = fixture(t);
   await g.remove({ ...g.exported, completedAt: '2026-10-10T18:20:00.000Z' });
   assert.match(g.gates[0], /\(finished 50 minute\(s\) ago\)/);
+});
+
+// A copied export as the printed commands leave it in the owner's account,
+// with a soul archive for each soul: real files, so the real verify reads
+// the manifest's ctime.
+function copiedExport(f, completedAt) {
+  const dir = path.join(incomingRoot('geniusbar-agent', { home: f.home }), '2026-10-10T17-00-00Z');
+  mkdirSync(path.join(dir, 'souls'), { recursive: true });
+  const files = [JOINED, LOCAL].map((agentId) => {
+    const scratch = mkdtempSync(path.join(f.home, 'archive-'));
+    writeFileSync(path.join(scratch, 'manifest.json'), JSON.stringify({ schemaVersion: 1, agentId, name: null, displayName: null, components: [], excluded: [] }));
+    const relative = `souls/${agentId}.soul.tgz`;
+    execFileSync('tar', ['--format=ustar', '-czf', path.join(dir, relative), '-C', scratch, 'manifest.json']);
+    const bytes = readFileSync(path.join(dir, relative));
+    return { path: relative, category: 'souls', agentId, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+  });
+  writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ schemaVersion: 1, account: 'geniusbar-agent', for: 'owner', completedAt, files, unexported: [],
+    categories: { souls: { state: 'exported', count: 2 }, workspaces: { state: 'empty', count: 0 }, transcripts: { state: 'empty', count: 0 } } }));
+  execFileSync('chmod', ['-R', 'go-rwx', path.join(f.home, '.agent-bot')]);
+  return dir;
+}
+
+test('a later verify does not move the copy time: a run after the copy, hidden by a later claim, is still stale', async (t) => {
+  const f = fixture(t, { absentHome: true });
+  const sleep = () => new Promise((resolve) => setTimeout(resolve, 30));
+  // The persona claims the export finished a little after the copy landed.
+  const dir = copiedExport(f, new Date(Date.now() + 300).toISOString());
+  const landed = statSync(path.join(dir, 'manifest.json')).ctimeMs;
+  // A soul runs after the copy landed but before the claimed finish.
+  recordSoulSighting(LOCAL, { file: f.file, now: () => new Date(landed + 5) });
+  await sleep();
+  // Verify, then verify again later: each writes verified.json into the
+  // folder, moving its ctime past the run.
+  const { verifySandboxExport } = await import('../sandbox-export.mjs');
+  const owner = { env: f.env, home: f.home, cwd: f.home, owner: 'owner' };
+  await verifySandboxExport('geniusbar-agent', owner);
+  await sleep();
+  await verifySandboxExport('geniusbar-agent', owner);
+  assert.ok(statSync(dir).ctimeMs > landed + 5, 'the folder\'s ctime alone would have hidden the run');
+  await new Promise((resolve) => setTimeout(resolve, 300)); // the claim is in the past by now
+  const options = { ...f.options, now: () => new Date() };
+  await assert.rejects(runSandboxRemoval(sandboxRemovalInventory('geniusbar-agent', options), options),
+    (error) => error.code === 'sandbox-remove-export-stale' && error.message.includes(LOCAL));
+  assert.deepEqual(f.revokes(), []);
 });

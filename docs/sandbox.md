@@ -158,8 +158,9 @@ owner's side can see. Before anything is changed it:
 - refuses a stale export (`sandbox-remove-export-stale`): a soul of the
   account running now, or sighted after the export finished. The export's
   time is the earlier of the manifest's `completedAt`, which the persona
-  account wrote, and when the copy reached the owner's side (the copied
-  folder's ctime). A `completedAt` later than now is refused
+  account wrote, and when the copy reached the owner's side: the copied
+  `manifest.json`'s ctime, which verify never rewrites, kept from the first
+  verify in `verified.json`. A `completedAt` later than now is refused
   (`sandbox-remove-export-future`). The gate prompt gives the export's age.
   The broker's census carries no activity times, so a soul known only to
   the broker is checked by whether it is running now;
