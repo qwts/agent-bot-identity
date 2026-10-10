@@ -652,6 +652,14 @@ function verifyInput(source, { readStdin, readFile }) {
 // verify needs nothing but the pins. sign refuses a soul or an agent process.
 // enroll and remove go through `gate` (owner-action.mjs's assertOwnerAction,
 // wired by cli/owner.mjs) and leave an `owner-key` receipt either way.
+// Owner pins live in a file anything running as the owner can write, a soul
+// included, and a software-made security key looks like hardware, so a soul
+// could pin its own key and sign its own "owner statement" (#753). Until the
+// pins are integrity-protected (for example MAC'd or signed by keyd), `owner
+// verify` reports a valid signature but never says the owner approved.
+export const OWNER_PINS_PROTECTED = false;
+const PINS_UNPROTECTED = 'the owner pins on this host are not integrity-protected, so anything running as the owner could have pinned this key; do not act on this statement';
+
 export async function ownerCommand(argv, {
   env = process.env,
   home = env.HOME || homedir(),
@@ -666,6 +674,9 @@ export async function ownerCommand(argv, {
   receipt = () => {},
   sign = sshSign,
   host = localHost,
+  // Whether this host's owner pins are integrity-protected (#753). Nothing
+  // protects them yet, and the command line never passes this.
+  pinsProtected = OWNER_PINS_PROTECTED,
 } = {}) {
   const [command, ...rest] = argv;
   const { parseArgs } = await import('node:util');
@@ -687,8 +698,17 @@ export async function ownerCommand(argv, {
         const { payload, pin } = verifyStatement(verifyInput(positionals[0], { readStdin, readFile }), {
           keys: readOwnerKeys(store), now: now(), repo: scope?.repo ?? null, issue: scope?.number ?? null,
         });
-        const result = { ok: true, kind: payload.kind, text: payload.text, scope: payload.scope, key: pin.name,
+        const verified = { kind: payload.kind, text: payload.text, scope: payload.scope, key: pin.name,
           fingerprint: pin.fingerprint, issuedAt: new Date(payload.iat * 1000).toISOString(), expiresAt: new Date(payload.exp * 1000).toISOString() };
+        if (!pinsProtected) {
+          // The signature math still runs, as a diagnostic, but a pin that
+          // anything running as the owner could have written proves nothing.
+          const result = { ok: false, code: 'owner-pins-unprotected', signature: 'valid', message: PINS_UNPROTECTED, ...verified };
+          if (values.json) json(result);
+          else write(`signature valid for owner ${payload.kind} (key ${pin.name}), ${describeScope(payload.scope)}, expires ${verified.expiresAt}:\n${payload.text}\nNOT owner approval: ${PINS_UNPROTECTED}\n`);
+          return result;
+        }
+        const result = { ok: true, ...verified };
         if (values.json) json(result);
         else write(`verified owner ${payload.kind} (key ${pin.name}), ${describeScope(payload.scope)}, expires ${result.expiresAt}:\n${payload.text}\n`);
         return result;

@@ -577,9 +577,17 @@ test('verify reads a token, a file or stdin and answers in JSON', async (t) => {
   const block = armorStatement(skToken(key));
   const file = join(ctx.dir, 'comment.md');
   writeFileSync(file, `See below.\n${block}`);
+  // A valid signature against unprotected pins is reported, never approval (#753).
   const result = await ctx.run(['verify', file, '--repo', SCOPE.repo, '--issue', '753', '--json']);
-  assert.equal(result.ok, true);
-  assert.equal(JSON.parse(ctx.out.at(-1)).text, 'Ship the owner sign slice.');
+  assert.deepEqual([result.ok, result.code, result.signature], [false, 'owner-pins-unprotected', 'valid']);
+  const printed = JSON.parse(ctx.out.at(-1));
+  assert.equal(printed.text, 'Ship the owner sign slice.');
+  assert.match(printed.message, /not integrity-protected.*do not act on this statement/);
+  // Once pins are protected, the same check is the owner's approval.
+  const protectedResult = await ownerCommand(['verify', file, '--repo', SCOPE.repo, '--issue', '753'], {
+    env: ctx.env, home: ctx.dir, now: () => NOW, write: (text) => ctx.out.push(text), pinsProtected: true });
+  assert.equal(protectedResult.ok, true);
+  assert.match(ctx.out.at(-1), /^verified owner statement \(key yubikey\)/);
   const stdin = await ownerCommand(['verify', '-'], { env: ctx.env, home: ctx.dir, now: () => NOW, write: () => {}, readStdin: () => block });
   assert.equal(stdin.key, 'yubikey');
   const refused = await ctx.run(['verify', block, '--repo', SCOPE.repo, '--issue', '1', '--json']);
@@ -607,9 +615,15 @@ test('the agent-bot owner command verifies offline and exits non-zero on a refus
   writeOwnerKeys([pinFor(key)], { env });
   const token = skToken(key, { iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600 });
   const cli = (args) => spawnSync(process.execPath, [CLI, 'owner', ...args], { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir } });
-  const ok = cli(['verify', token, '--repo', SCOPE.repo, '--issue', '753']);
-  assert.equal(ok.status, 0, ok.stderr);
-  assert.match(ok.stdout, /^verified owner statement \(key yubikey\)/);
+  // A valid signature exits 1 until pins are integrity-protected (#753).
+  const valid = cli(['verify', token, '--repo', SCOPE.repo, '--issue', '753']);
+  assert.equal(valid.status, 1, valid.stderr);
+  assert.match(valid.stdout, /^signature valid for owner statement \(key yubikey\)/);
+  assert.match(valid.stdout, /\nNOT owner approval: the owner pins on this host are not integrity-protected/);
+  assert.doesNotMatch(valid.stdout, /^verified owner/m);
+  const json = cli(['verify', token, '--repo', SCOPE.repo, '--issue', '753', '--json']);
+  assert.equal(json.status, 1);
+  assert.deepEqual([JSON.parse(json.stdout).ok, JSON.parse(json.stdout).code], [false, 'owner-pins-unprotected']);
   const wrong = cli(['verify', token, '--repo', SCOPE.repo, '--issue', '9']);
   assert.equal(wrong.status, 1);
   assert.match(wrong.stderr, /^agent-bot owner: statement-scope-mismatch: /);
