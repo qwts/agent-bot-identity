@@ -51,6 +51,29 @@ function beforeDeadline(promise, message) {
   ]).finally(() => clearTimeout(timer));
 }
 
+async function nextMarkerBeforeProof(serverOutput, pendingRequest, description, message) {
+  const event = await beforeDeadline(Promise.race([
+    serverOutput().then((line) => ({ type: 'marker', line })),
+    pendingRequest.then(
+      () => ({ type: 'request-complete' }),
+      (error) => ({ type: 'request-error', code: error?.code }),
+    ),
+  ]), message);
+  if (event.type === 'request-error') {
+    const code = typeof event.code === 'string' && /^[a-z0-9-]{1,48}$/i.test(event.code)
+      ? ` (${event.code})`
+      : '';
+    throw new Error(`CommsClient request failed before ${description}${code}`);
+  }
+  assert.equal(event.type, 'marker', `CommsClient request completed before ${description}`);
+  return event.line;
+}
+
+async function expectMarkerBeforeProof(serverOutput, pendingRequest, expected, message) {
+  const actual = await nextMarkerBeforeProof(serverOutput, pendingRequest, expected, message);
+  assert.equal(actual, expected, `native server expected ${expected}`);
+}
+
 test('Windows native custody and named-pipe preflight uses disposable state', {
   skip: process.platform !== 'win32',
   timeout: 60_000,
@@ -122,6 +145,7 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       "  [Console]::Out.WriteLine('READY')",
       "  $phase = 'connect'",
       '  $server.WaitForConnection()',
+      "  [Console]::Out.WriteLine('CONNECTED')",
       "  $phase = 'stream-setup'",
       '  $reader = [System.IO.StreamReader]::new($server, [System.Text.Encoding]::UTF8, $false, 1024, $true)',
       '  $writer = [System.IO.StreamWriter]::new($server, [System.Text.UTF8Encoding]::new($false), 1024, $true)',
@@ -129,6 +153,7 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       "  $phase = 'hello'",
       '  $hello = ConvertFrom-Json -InputObject $reader.ReadLine()',
       "  if ($hello.v -ne 1 -or $hello.hello -notmatch '^[0-9a-f]{64}$') { throw 'invalid hello' }",
+      "  [Console]::Out.WriteLine('HELLO')",
       "  $phase = 'impersonation-level'",
       '  $worker = [System.IO.Pipes.PipeStreamImpersonationWorker] { [Console]::Out.WriteLine((\'LEVEL=\' + [System.Security.Principal.WindowsIdentity]::GetCurrent().ImpersonationLevel.ToString())) }',
       '  $server.RunAsClient($worker)',
@@ -178,9 +203,15 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       handshakeTimeoutMs: 10_000,
     });
     const pendingRequest = client.request({ op: 'preflight' });
-    pendingRequest.catch(() => {});
-    const observedLevel = await beforeDeadline(serverOutput(), 'native named-pipe server did not report client impersonation level');
-    assert.ok(['LEVEL=Anonymous', 'LEVEL=Identification'].includes(observedLevel), 'native named-pipe server may not impersonate the client');
+    await expectMarkerBeforeProof(serverOutput, pendingRequest, 'CONNECTED', 'native server did not accept the pipe connection');
+    await expectMarkerBeforeProof(serverOutput, pendingRequest, 'HELLO', 'native server did not read the client hello');
+    const levelMarker = await nextMarkerBeforeProof(
+      serverOutput,
+      pendingRequest,
+      'impersonation-level marker',
+      'native named-pipe server did not report client impersonation level',
+    );
+    assert.ok(['LEVEL=Anonymous', 'LEVEL=Identification'].includes(levelMarker), 'native named-pipe server may not impersonate the client');
     const challenge = await beforeDeadline(serverOutput(), 'native named-pipe server did not report a handshake challenge');
     const challengeMatch = /^CHALLENGE=([0-9a-f]{64})$/.exec(challenge);
     assert.ok(challengeMatch, 'native named-pipe server returned an invalid challenge marker');
