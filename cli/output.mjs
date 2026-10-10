@@ -20,7 +20,7 @@ Commands:
                      confinement AGENT_ID off|warn|deny (owner only); confinement-report AGENT_ID [--json]
   daemon             Run, supervise, or disable the loopback daemon; vouch-key prints the soul public key
   keyd               Supervise agent-bot-keyd, the signed key holder the host app ships: install --bin PATH | uninstall | status [--json]
-  owner              Owner-signed statements (ADR-0753): verify <token|file|-> [--repo R --issue N] [--json] checks one offline against the pinned keys (while pins are unprotected it answers NOT owner approval, owner-pins-unprotected, exit 1); sign "<text>" --repo R --issue N --key PATH [--expires 7d]; enroll --store ssh --key PATH [--name N] and remove NAME (owner only); keys [--json]
+  owner              Owner-signed statements (ADR-0753): verify <token|file|-> [--repo R --issue N] [--json] checks one offline against the pinned keys (while pins are unprotected it answers NOT owner approval, owner-pins-unprotected, exit 1); sign "<text>" --repo R --issue N --key PATH [--expires 7d]; enroll --store ssh --key PATH [--name N] and remove NAME (owner only, through agent-bot-keyd); keys [--json]
   approvals          Tool-permission requests souls are waiting on: list [--json] | approve PROPOSAL_ID [--scope once|session] [--json] [--principal-stdin] | deny PROPOSAL_ID [--json] [--principal-stdin]
   audit              Read audit receipts: list [--json] [--since ISO-8601|-P1D] [--agent ID] [--event KIND] [--limit N] | tail [--json] [--agent ID]
   mcp                Serve the agent-bot MCP tools (bind, whoami, population, space_path, credential, take_inbox)

@@ -29,7 +29,7 @@ connect them, one in each direction:
 | Key | Held by | Signs | Verified by | How the verifier learns it |
 | --- | --- | --- | --- | --- |
 | Vouch key (`<state>/vouch-key.pem`, PKCS#8, 0600) | the agent-bot daemon | grants (`v1.`) | keyd | sent with every `owner/import`; keyd-side, keyd pins it on the first one |
-| Presence key | keyd, seed in its Keychain | presence assertions (`p1.`) | agent-bot | pinned in `<state>/keyd/presence.pub` from the code-signed keyd binary |
+| Presence key | keyd, seed in its Keychain | presence assertions (`p1.`), owner key records (`k1.`) | agent-bot | pinned in `<state>/keyd/presence.pub` from the code-signed keyd binary |
 
 `<state>` is `$XDG_STATE_HOME/agent-bot` or `~/.local/state/agent-bot`.
 
@@ -208,8 +208,7 @@ interactive terminal offers a fresh signed challenge. A verified reply returns
 enrolled, the administrator dialog remains available. Enrolled keys that this
 CLI path cannot use, a noninteractive caller, cancellation or an invalid reply
 refuse the action without administrator fallback. Enrollment and removal
-explicitly disable challenges and retain their local presence or administrator
-gate. See [owner statements](owner-statements.md) for the built CLI contract;
+never use a challenge; they go through `owner/pins-attest` (below). See [owner statements](owner-statements.md) for the built CLI contract;
 daemon decision-route statement fields and inbox delivery remain unimplemented.
 
 Callers ([owner-gate.mjs](../owner-gate.mjs)):
@@ -300,6 +299,70 @@ Current behaviour, recorded here and not changed by this page:
 - `identity migrate-credentials --to keyd --all` sends every key in one
   import, and keyd refuses more than 64, so a host with more than 64 movable
   souls cannot complete that import.
+
+## Owner statement keys (keyd → agent-bot, #753)
+
+The owner chose "keyd signs pins" on
+[#753](https://github.com/qwts/agent-bot-identity/issues/753): the keys in
+`<state>/owner/keys.json` count only as keyd records them, because anything
+running as the owner can write that file. This section is the keyd primitive
+and agent-bot's verifier. `owner enroll` and `owner remove` write the pins
+only through `owner/pins-attest` (`keydAttestPins`); the readers move onto
+`owner/pins-status` in a later slice, and until then the signed-challenge
+guards stay off.
+
+### Requests
+
+Both go on `owner.sock` only; `soul.sock` refuses them. `nonce` is agent-bot's,
+16 to 64 base64url characters.
+
+- `owner/pins-attest { pins, nonce }`: `pins` is the full key set, 0 to 4
+  records as `keys.json` holds them. keyd refuses a malformed set with
+  `-32602` without asking. Otherwise, one prompt at a time, it shows the
+  owner every key with every field the digest covers: name, kind (ssh
+  security key, ssh software key or keyd key), whether a PIN or biometric is
+  required, and fingerprint ("agent-bot wants to trust only these keys to
+  sign statements as you: yubikey (ssh security key, PIN or biometric
+  required, SHA256:…); …", or that every key is being removed). Only on approval does it record `{digest, generation}` with the
+  generation one past the last, in its Keychain item (service
+  `agent-bot.keyd`, account `owner-pins`), and answer
+  `{ attestation }`. A cancel is `-32000`; nobody to ask is `-32001`. Every
+  attempt leaves a `keyd-owner` receipt naming the digest.
+- `owner/pins-status { nonce }`: no prompt. Answers `{ attestation }` for the
+  record keyd holds: `digest: null` at generation 0 before any approval. A
+  record keyd cannot read, generation 0 in a stored record included, is
+  `-32000`, never "no keys".
+
+### Record format
+
+```text
+k1.<base64url(payload JSON)>.<base64url(Ed25519 signature of the payload segment)>
+
+payload: { v: 1, aud: "agent-bot-owner", kind: "pins",
+           digest: hex(sha256(canonical key set)) or null, generation, nonce, iat, exp }
+
+canonical key set:
+  agent-bot owner pins v1\n
+  <store> <alg> <fingerprint> <verifyRequired 0|1> <softwareKey 0|1> <name>\n   (one per pin, in order)
+```
+
+It is signed with the presence key, under its own prefix and `kind`, so a
+record never passes as a presence assertion and an assertion never passes as
+a record. keyd stamps `exp` 60 s after `iat`.
+
+### Verification
+
+`verifyPinsAttestation` in [owner-presence.mjs](../owner-presence.mjs) applies
+the presence rules (prefix `k1`, `kind: pins`, signature under the pinned
+presence key, `v`, `aud`, this request's nonce, `0 < exp − iat ≤ 120`, 30 s of
+skew) and requires `generation` to be a non-negative integer, with
+`digest: null` exactly at generation 0 and 64 lowercase hex characters
+otherwise. It returns `{ digest, generation }`. A reader compares `digest`
+with `pinSetDigest` of the file it read. The nonce makes the answer fresh,
+so neither an older record nor a file restored from before a change matches.
+
+The trust root is the presence key, so this inherits its bootstrap,
+including `presence.pub` being writable by the owner's account.
 
 ## App-level keys (#110)
 
@@ -475,6 +538,11 @@ Tests named here are `node:test` titles, or Rust test functions under
 | An assertion verifies only for its key, action, nonce, audience and prefix | keyd | `verifyPresence` | `tests/owner-presence.test.mjs`: "an assertion verifies only for its key, action, nonce and time" |
 | Lifetime `0 < exp − iat ≤ 120`; skew 30 s on both sides; integer times; `kind: presence`; `v: 1` | keyd | `verifyPresence` | `tests/owner-presence.test.mjs`: "an assertion is accepted for up to 120 s of lifetime and 30 s of skew, and no more" |
 | keyd issues assertions for 60 s from the owner's answer, good on agent-bot's clock from 30 s before to 90 s after | keyd-side | keyd `owner/presence` | `keyd/src/presence.rs`: `issues_for_sixty_seconds_within_the_documented_skew`; `keyd/src/server.rs`: `presence_is_stamped_when_the_owner_answers` |
+| The owner key set digest is the same in keyd and agent-bot | keyd | `pinSetDigest` | `keyd/src/pins.rs`: `digests_the_canonical_key_set`; `tests/owner-presence.test.mjs`: "the owner key set digest matches keyd" |
+| An owner key record verifies only for its key, nonce and time; `k1`/`pins` and `p1`/`presence` never pass for each other | keyd | `verifyPinsAttestation`, `verifyPresence` | `keyd/src/pins.rs`: `signs_under_its_own_prefix_and_kind`; `tests/owner-presence.test.mjs`: "an owner key record verifies only for its key, nonce and time, and is never a presence assertion" |
+| `owner/pins-attest` records the key set only on the owner's approval, naming every key, one generation up each time; a decline or nobody to ask changes nothing; `owner/pins-status` signs the record without a prompt | keyd-side | keyd `owner/pins-attest`, `owner/pins-status` | `keyd/src/server.rs`: `records_the_owner_keys_only_when_the_owner_approves`; `keyd/src/pins.rs`: `names_every_key_in_the_prompt` |
+| A malformed set or nonce is refused without asking; an unreadable record is an error, not "no keys"; both methods are owner-channel only | keyd-side | keyd `owner/pins-attest`, `owner/pins-status` | `keyd/src/server.rs`: `refuses_malformed_owner_key_requests_without_asking`; `keyd/src/pins.rs`: `refuses_malformed_key_sets`; `keyd/src/store.rs`: `memory_store_round_trips` |
+| `owner enroll` and `owner remove` write the pins only after keyd records the whole new set for a fresh nonce; no keyd, an older keyd (`-32601`), a decline, or a record of another set changes nothing; a change while the owner was asked refuses with `owner-keys-changed`; a soul caller is refused before keyd is asked | — | `keydAttestPins`, `ownerCommand` | `tests/owner-presence.test.mjs`: "keydAttestPins asks keyd to record the whole key set and checks the record is that set"; `tests/owner-statement.test.mjs`: "enroll pins a security key after a proof of possession and keyd recording the whole new key set", "enroll and remove change no pins when keyd cannot ask, the owner declines, or the key cannot prove possession", "pins are written under a lock, only if they are still the set keyd was shown", "a soul cannot enrol or remove an owner key, and keyd is never asked" |
 | Audience, unavailable RPC code and the code-signing requirement (Team ID and identifier) | — | `owner-presence.mjs` constants, `developerIdRequirement` | `tests/owner-presence.test.mjs`: "the presence contract constants keyd and agent-bot share" |
 | The signer comes from the environment, then the config; the Team ID has no default and empty is unset | — | `keydSigner` | `tests/owner-presence.test.mjs`: "the keyd signer comes from the environment, then the config; the Team ID has no default (#594)" |
 | With no Team ID configured nothing is verified, run or pinned | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "with no keyd Team ID configured nothing is verified, run or pinned" |

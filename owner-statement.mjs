@@ -14,9 +14,10 @@
 // fingerprinted as the ssh-ed25519 blob it encodes to.
 //
 // Pins live in <state>/owner/keys.json (0600). Enrolling and removing a pin
-// needs the owner gate (keyd presence or the administrator dialog) and a
-// signature from the new key; a statement never changes the pins, so the
-// fallback cannot bootstrap itself. Verification reads only those pins: no
+// goes through keyd (#753): keyd shows the owner the whole new key set and,
+// only on approval, records it, and enrolling also needs a signature from the
+// new key. With no keyd to ask, the pins do not change. A statement never
+// changes the pins, so the fallback cannot bootstrap itself. Verification reads only those pins: no
 // network, no daemon, no secret.
 //
 // This slice ships the format, the verifier (Ed25519 and SSHSIG, including
@@ -310,6 +311,20 @@ export function writeOwnerKeys(keys, { env = process.env, home = env.HOME || hom
   }
 }
 
+// Writes `next`, the key set keyd recorded on the owner's approval, only if
+// the file still holds `current`, the set it was made from: the owner saw
+// every key in `next`, so nothing written meanwhile may be dropped or kept
+// unseen. On a change keyd's record and the file differ, which readers treat
+// as unprotected; running the command again asks the owner afresh.
+function writeAttestedKeys(current, next, store) {
+  mutateOwnerKeys((keys) => {
+    if (JSON.stringify(keys) !== JSON.stringify(current)) {
+      throw statementError('owner-keys-changed', 'the owner keys changed while you were asked; run the command again');
+    }
+    return next;
+  }, store);
+}
+
 // Re-reads the pins under the store's lock, applies `mutation` (which
 // returns the new list or throws) and writes the result. Callers ask the
 // owner before this, never while holding the lock.
@@ -584,8 +599,16 @@ export const OWNER_USAGE = 'usage: agent-bot owner verify <token|file|-> [--repo
 
 const usage = (message) => statementError('owner-usage', `${message}\n${OWNER_USAGE}`);
 
-function noGate() {
-  throw statementError('owner-credential-required', 'no owner gate is wired for this command');
+// Enrolment and removal are the owner's: a caller carrying a soul's Agent ID,
+// binding or App identity is refused before keyd is asked, as the owner gate
+// refuses it, so a soul cannot put the owner key prompt in front of them.
+function soulRefusal(markers, action, { env, cwd }) {
+  const found = markers({ env, cwd });
+  return found.length ? statementError('owner-credential-required', `${action} is owner only; this caller has a soul's ${found.join(', ')}`) : null;
+}
+
+function noAttest() {
+  throw statementError('owner-credential-required', 'no agent-bot-keyd is wired to record owner keys for this command');
 }
 
 function scopeFlags(values, { required }) {
@@ -650,8 +673,10 @@ function verifyInput(source, { readStdin, readFile }) {
 
 // `agent-bot owner`: verify, sign, enroll, keys, remove (ADR-0753).
 // verify needs nothing but the pins. sign refuses a soul or an agent process.
-// enroll and remove go through `gate` (owner-action.mjs's assertOwnerAction,
-// wired by cli/owner.mjs) and leave an `owner-key` receipt either way.
+// enroll and remove go through `attest` (owner-presence.mjs's keydAttestPins,
+// wired by cli/owner.mjs): keyd asks the owner to trust the whole new key set
+// and records it before the file changes. Either way they leave an
+// `owner-key` receipt.
 // Owner pins live in a file anything running as the owner can write, a soul
 // included, and a software-made security key looks like hardware, so a soul
 // could pin its own key and sign its own "owner statement" (#753). Until the
@@ -669,7 +694,7 @@ export async function ownerCommand(argv, {
   writeErr = (text) => process.stderr.write(text),
   readStdin = () => readBounded(0),
   readFile = readStatementFile,
-  gate = noGate,
+  attest = noAttest,
   markers = () => [],
   receipt = () => {},
   sign = sshSign,
@@ -780,6 +805,8 @@ export async function ownerCommand(argv, {
         record('refused', `${name} ${fingerprint}: ${error.code}`);
         throw error;
       };
+      const soul = soulRefusal(markers, `owner enroll ${name} ${fingerprint}`, { env, cwd });
+      if (soul) refuse(soul);
       if (softwareKey && !values['allow-software-key']) {
         refuse(statementError('owner-key-software',
           `${values.key} is a plain ssh-ed25519 key, readable by any agent in your account. Use a security key (sk-ssh-ed25519), or pass --allow-software-key to pin it anyway.`));
@@ -787,30 +814,33 @@ export async function ownerCommand(argv, {
       if (softwareKey && values['verify-required']) refuse(usage('--verify-required applies only to a security key'));
       // Checked now so a doomed enrolment asks nobody, and again under the
       // lock when the pin is written.
-      const early = enrolmentConflict(readOwnerKeys(store), name, fingerprint);
+      const current = readOwnerKeys(store);
+      const early = enrolmentConflict(current, name, fingerprint);
       if (early) refuse(early);
-      try {
-        await gate(action, { env, cwd });
-      } catch (error) {
-        record('refused', `${name} ${fingerprint}: ${error.code ?? 'owner-not-verified'}`);
-        throw error;
-      }
       const pin = { name, store: 'ssh', alg: 'sshsig', publicKey: key.line, fingerprint, verifyRequired: Boolean(values['verify-required']),
         softwareKey, pinnedAt: new Date(now()).toISOString() };
       try {
         // Possession: the new key signs a challenge for this enrolment, and
-        // the pin is written only if that verifies under the pin itself.
+        // keyd is asked only if that verifies under the pin itself.
         writeErr(`Proving you hold ${name} (${fingerprint}): touch the security key or enter its PIN if asked.\n`);
         const text = `Enrol owner key ${name} (${fingerprint}) on ${host()}`;
         const { token } = signPayload({ kind: 'challenge', text,
           scope: { host: host() }, action: createHash('sha256').update(action, 'utf8').digest('hex'), lifetime: CHALLENGE_LIFETIME.default },
         { keyPath: values.key, sign, now: now() });
         verifyStatement(token, { keys: [pin], now: now() });
-        mutateOwnerKeys((keys) => {
-          const conflict = enrolmentConflict(keys, name, fingerprint);
-          if (conflict) throw conflict;
-          return [...keys, pin];
-        }, store);
+      } catch (error) {
+        record('failed', `${name} ${fingerprint}: ${error.code ?? 'error'}`);
+        throw error;
+      }
+      const next = [...current, pin];
+      try {
+        await attest(next, { env, home });
+      } catch (error) {
+        record('refused', `${name} ${fingerprint}: ${error.code ?? 'owner-not-verified'}`);
+        throw error;
+      }
+      try {
+        writeAttestedKeys(current, next, store);
       } catch (error) {
         record('failed', `${name} ${fingerprint}: ${error.code ?? 'error'}`);
         throw error;
@@ -836,24 +866,26 @@ export async function ownerCommand(argv, {
         try { receipt({ event: 'owner-key', operation: 'remove', decision, detail }, { env, home }); } catch { /* the outcome stands without its receipt */ }
       };
       const missing = () => statementError('owner-key-missing', `no owner key named ${positionals[0]} is pinned`);
-      const pin = KEY_NAME.test(positionals[0]) ? readOwnerKeys(store).find((candidate) => candidate.name === positionals[0]) : null;
+      const soul = soulRefusal(markers, `owner remove ${positionals[0].slice(0, 32)}`, { env, cwd });
+      if (soul) {
+        record('refused', `${positionals[0].slice(0, 32)}: ${soul.code}`);
+        throw soul;
+      }
+      const current = readOwnerKeys(store);
+      const pin = KEY_NAME.test(positionals[0]) ? current.find((candidate) => candidate.name === positionals[0]) : null;
       if (!pin) {
         record('refused', `${positionals[0].slice(0, 32)}: owner-key-missing`);
         throw missing();
       }
+      const next = current.filter((candidate) => candidate.fingerprint !== pin.fingerprint);
       try {
-        await gate(`owner remove ${pin.name} ${pin.fingerprint}`, { env, cwd });
+        await attest(next, { env, home });
       } catch (error) {
         record('refused', `${pin.name} ${pin.fingerprint}: ${error.code ?? 'owner-not-verified'}`);
         throw error;
       }
       try {
-        // The owner approved removing this key, by fingerprint: a key
-        // re-pinned under the same name meanwhile is not it.
-        mutateOwnerKeys((keys) => {
-          if (!keys.some((candidate) => candidate.fingerprint === pin.fingerprint)) throw missing();
-          return keys.filter((candidate) => candidate.fingerprint !== pin.fingerprint);
-        }, store);
+        writeAttestedKeys(current, next, store);
       } catch (error) {
         record('failed', `${pin.name} ${pin.fingerprint}: ${error.code ?? 'error'}`);
         throw error;

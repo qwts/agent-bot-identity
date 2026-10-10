@@ -165,22 +165,51 @@ export function actionDigest(action) {
   return createHash('sha256').update(action, 'utf8').digest('hex');
 }
 
-// Throws unless `token` is keyd's signature of this action and nonce, fresh.
-export function verifyPresence(token, { key, action, nonce, now = Date.now() }) {
-  const invalid = () => Object.assign(new Error('agent-bot-keyd answered with an assertion that does not verify'), { code: 'presence-invalid' });
+// The payload of a `<prefix>.<payload>.<signature>` token keyd signed with
+// `key`, fresh at `now`; throws `invalid()` otherwise.
+function openSigned(token, { prefix, kind, key, nonce, now, invalid }) {
   const parts = typeof token === 'string' ? token.split('.') : [];
-  if (parts.length !== 3 || parts[0] !== 'p1') throw invalid();
+  if (parts.length !== 3 || parts[0] !== prefix) throw invalid();
   const publicKey = createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: Buffer.from(key, 'base64').toString('base64url') }, format: 'jwk' });
   if (!verify(null, Buffer.from(parts[1]), publicKey, Buffer.from(parts[2], 'base64url'))) throw invalid();
   let payload;
   try { payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')); } catch { throw invalid(); }
   const seconds = Math.floor(now / 1000);
-  if (payload?.v !== 1 || payload.aud !== PRESENCE_AUDIENCE || payload.kind !== 'presence'
-    || payload.action !== actionDigest(action) || payload.nonce !== nonce
+  if (payload?.v !== 1 || payload.aud !== PRESENCE_AUDIENCE || payload.kind !== kind || payload.nonce !== nonce
     || !Number.isInteger(payload.iat) || !Number.isInteger(payload.exp)
     || payload.exp <= payload.iat || payload.exp - payload.iat > MAX_LIFETIME_SECONDS
     || seconds + CLOCK_SKEW_SECONDS < payload.iat || seconds > payload.exp + CLOCK_SKEW_SECONDS) throw invalid();
   return payload;
+}
+
+// Throws unless `token` is keyd's signature of this action and nonce, fresh.
+export function verifyPresence(token, { key, action, nonce, now = Date.now() }) {
+  const invalid = () => Object.assign(new Error('agent-bot-keyd answered with an assertion that does not verify'), { code: 'presence-invalid' });
+  const payload = openSigned(token, { prefix: 'p1', kind: 'presence', key, nonce, now, invalid });
+  if (payload.action !== actionDigest(action)) throw invalid();
+  return payload;
+}
+
+// The digest keyd records for the owner's statement keys (#753): sha256 of
+// one line per pin, in order, as keyd/src/pins.rs writes it. The fingerprint
+// stands for the key; owner-statement.mjs refuses a pin whose fingerprint
+// does not match its key.
+export function pinSetDigest(pins) {
+  const lines = pins.map((pin) => `${pin.store} ${pin.alg} ${pin.fingerprint} ${pin.verifyRequired ? 1 : 0} ${pin.softwareKey ? 1 : 0} ${pin.name}\n`);
+  return createHash('sha256').update(`agent-bot owner pins v1\n${lines.join('')}`, 'utf8').digest('hex');
+}
+
+// Throws unless `token` is keyd's signed record of the owner's keys for this
+// nonce, fresh: `owner/pins-attest` or `owner/pins-status`. Returns
+// { digest, generation }; digest is null, at generation 0, before the owner
+// has approved any key set through keyd.
+export function verifyPinsAttestation(token, { key, nonce, now = Date.now() }) {
+  const invalid = () => Object.assign(new Error('agent-bot-keyd answered with an owner key record that does not verify'), { code: 'pins-invalid' });
+  const payload = openSigned(token, { prefix: 'k1', kind: 'pins', key, nonce, now, invalid });
+  const { digest, generation } = payload;
+  if (!Number.isSafeInteger(generation) || generation < 0) throw invalid();
+  if (digest === null ? generation !== 0 : (typeof digest !== 'string' || !/^[0-9a-f]{64}$/.test(digest) || generation === 0)) throw invalid();
+  return { digest, generation };
 }
 
 // Asks the owner through keyd to approve `action`, one line naming the soul
@@ -205,4 +234,35 @@ export async function keydPresence(action, {
   }
   verifyPresence(result?.assertion, { key, action, nonce: sent, now: now() });
   return { method: 'presence', via: 'agent-bot-keyd' };
+}
+
+// Asks the owner through keyd to trust exactly `pins` as their statement keys
+// (#753): keyd shows every key and, only on approval, records the set. Returns
+// keyd's { digest, generation } for this set. The owner key store is written
+// only through this, so with no keyd to ask, `presence-unavailable` refuses
+// the change rather than falling back.
+export async function keydAttestPins(pins, {
+  env = process.env,
+  home = env.HOME || homedir(),
+  pinned = pinnedPresenceKey,
+  request = keydRequest,
+  now = () => Date.now(),
+  nonce = () => randomBytes(18).toString('base64url'),
+} = {}) {
+  const key = pinned({ env, home });
+  if (!key) throw unavailable('agent-bot-keyd is not set up to record owner keys here');
+  const sent = nonce();
+  let result;
+  try {
+    result = await request(keydPaths({ env, home }).ownerSocket, 'owner/pins-attest', { pins, nonce: sent }, { timeoutMs: OWNER_TIMEOUT_MS });
+  } catch (error) {
+    if (error.rpcCode === -32601) throw unavailable('this agent-bot-keyd cannot record owner keys; update it');
+    if (error.code === 'keyd-unavailable' || error.rpcCode === PRESENCE_UNAVAILABLE_RPC) throw unavailable(error.message);
+    throw Object.assign(new Error(`the owner did not approve (${error.message})`), { code: 'owner-declined' });
+  }
+  const record = verifyPinsAttestation(result?.attestation, { key, nonce: sent, now: now() });
+  if (record.digest !== pinSetDigest(pins)) {
+    throw Object.assign(new Error('agent-bot-keyd recorded other owner keys than were asked'), { code: 'pins-invalid' });
+  }
+  return record;
 }
