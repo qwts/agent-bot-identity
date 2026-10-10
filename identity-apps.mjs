@@ -132,7 +132,8 @@ function keyInput(body, options) {
   }
 }
 // Where a new App key goes (#110): agent-bot-keyd when it is verified (it
-// answers, has pinned this daemon's key and knows App-level keys), else the
+// answers and knows App-level keys; the first App import pins this daemon's
+// key when none is pinned yet), else the
 // file or Keychain store, with the reason in the result. An App that already
 // has a record keeps its store: existing keys are not moved, and a keyd-held
 // App's rotation stays in keyd or fails. A `oneTime` key (create: GitHub
@@ -162,8 +163,8 @@ async function keyPlacement(app, previous, options, { oneTime }) {
 // keyd asks the owner itself before storing, and reads the item back.
 async function importIntoKeydStore(app, credential, placement, options, { oneTime, replace }) {
   try {
-    await options.keyd.importApp([{ app, appId: String(credential.appId), privateKeyPem: credential.privateKeyPem }]);
-    return { store: 'keyd' };
+    const stored = await options.keyd.importApp([{ app, appId: String(credential.appId), privateKeyPem: credential.privateKeyPem }]);
+    return { store: 'keyd', ...(stored?.pinned === true ? { daemonKeyPinned: true } : {}) };
   } catch (error) {
     // keyd's refusals are its own secret-free sentences (keydRequest), shown
     // so the owner sees why, e.g. that they declined.
@@ -240,7 +241,7 @@ async function persistLocked(app, credential, cachedInstallations, options, { re
     config.identityApps ??= {};
     const keyUpdatedAt = (options.now ?? (() => new Date()))().toISOString();
     config.identityApps[app] = { ...previous, ...metadata, id: String(credential.appId), store: kind, keyFingerprint, keyUpdatedAt, installations: cachedInstallations };
-    return { id: String(credential.appId), slug: app, installUrl: installUrl(app), store: kind, ...(placement.reason ? { storeReason: placement.reason } : {}), ...(webhookKept ? { webhookSecretKept: true } : {}) };
+    return { id: String(credential.appId), slug: app, installUrl: installUrl(app), store: kind, ...(placement.reason ? { storeReason: placement.reason } : {}), ...(placement.daemonKeyPinned ? { daemonKeyPinned: true } : {}), ...(webhookKept ? { webhookSecretKept: true } : {}) };
   }, { ...options, rollback: () => rollback?.() });
 }
 // Harness → App mappings as list reports them: explicit `apps` overrides and

@@ -445,7 +445,7 @@ test('an App-scope grant adds keyScope app; a soul grant keeps its 12 keys; anot
   assert.throws(() => signKeydGrant({ ...base, keyScope: 'org' }, privateKey), /unknown keyd key scope/);
 });
 
-test('keyd is verified for App keys only when it runs, is pinned and knows owner/app-status', async (t) => {
+test('keyd is verified for App keys when it runs and knows owner/app-status; an unpinned keyd pins on the import', async (t) => {
   const { env, home } = fixture(t);
   const keyd = (answers) => async (socket, method, params) => {
     assert.equal(socket, keydPaths({ env, home }).ownerSocket);
@@ -461,8 +461,10 @@ test('keyd is verified for App keys only when it runs, is pinned and knows owner
     { available: true, held: true });
   assert.deepEqual(await appKeydAvailability(SLUG, { env, home, request: keyd({ 'owner/status': new Error('down') }) }),
     { available: false, reason: 'agent-bot-keyd is not installed' });
-  assert.deepEqual(await appKeydAvailability(SLUG, { env, home, request: keyd({ 'owner/status': { pinned: false } }) }),
-    { available: false, reason: "agent-bot-keyd has not pinned this daemon's key yet" });
+  assert.deepEqual(await appKeydAvailability(SLUG, { env, home, request: keyd({ 'owner/status': { pinned: false }, 'owner/app-status': { pinned: false, held: false } }) }),
+    { available: true, held: false, pins: true });
+  assert.deepEqual(await appKeydAvailability(SLUG, { env, home, request: keyd({ 'owner/status': { pinned: true }, 'owner/app-status': { held: false } }) }),
+    { available: false, reason: 'agent-bot-keyd gave no App-level key status' });
   const older = await appKeydAvailability(SLUG, { env, home, request: keyd({ 'owner/status': { pinned: true }, 'owner/app-status': refused(-32601) }) });
   assert.equal(older.available, false); assert.match(older.reason, /predates App-level keys \(#110\)/);
   assert.equal((await appKeydAvailability(SLUG, { env, home, request: keyd({ 'owner/status': { pinned: true }, 'owner/app-status': refused(-32000) }) })).available, false);

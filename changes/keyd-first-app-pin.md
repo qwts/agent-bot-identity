@@ -1,0 +1,1 @@
+- A new App key goes to agent-bot-keyd even when keyd has no daemon key pinned yet: the first App import pins this daemon's key in the same keyd owner prompt, and the result says `daemonKeyPinned: true`. Declining stores and pins nothing (#110).

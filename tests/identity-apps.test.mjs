@@ -533,13 +533,13 @@ test('daemon remove and addon routes need the bearer and the owner, and return p
 // App-level keys in agent-bot-keyd (#110 slice 2). `keyd` is a fake of the
 // owner channel: availability (status, pin, owner/app-status) and
 // owner/app-import. No test reaches a real keyd or daemon.
-function fakeKeyd({ available = true, held = false, reason = 'agent-bot-keyd is not running', importError = null, removeError = null } = {}) {
+function fakeKeyd({ available = true, held = false, pins = false, reason = 'agent-bot-keyd is not running', importError = null, removeError = null } = {}) {
   const imports = [], removals = [];
   return {
     imports, removals,
     // Holds what it imported, or `held` before any import.
-    availability: async (app) => { assert.equal(app, 'fixture-app'); return available ? { available: true, held: held || imports.length > removals.length } : { available: false, reason }; },
-    importApp: async (items) => { if (importError) throw importError; imports.push(items); return { stored: items.length, pinned: false }; },
+    availability: async (app) => { assert.equal(app, 'fixture-app'); return available ? { available: true, held: held || imports.length > removals.length, ...(pins && imports.length === 0 ? { pins: true } : {}) } : { available: false, reason }; },
+    importApp: async (items) => { if (importError) throw importError; const pinned = pins && imports.length === 0; imports.push(items); return { stored: items.length, pinned }; },
     removeApp: async (app) => { if (removeError) throw removeError; removals.push(app); return { removed: true }; },
   };
 }
@@ -565,8 +565,26 @@ test('with keyd verified, connect keeps the key in keyd, records store keyd, and
   await assert.rejects(connect(f), { code: 'identity-app-exists' });
   assert.equal(keyd.imports.length, 1, 'a second connect never writes over the keyd key');
 });
+test('a keyd with no daemon key pinned takes the first App key and pins the daemon key in the same owner prompt', async (t) => {
+  const f = fixture(t); await github(t, f);
+  const keyd = f.options.keyd = fakeKeyd({ pins: true });
+  const result = await connect(f); noSecrets(result);
+  assert.equal(result.store, 'keyd');
+  assert.equal(result.daemonKeyPinned, true, 'the result says the import pinned this daemon');
+  assert.equal(Object.hasOwn(result, 'storeReason'), false, 'no fallback');
+  assert.equal(keyd.imports.length, 1);
+  assert.equal(loadConfig(f.options).identityApps['fixture-app'].store, 'keyd');
+  assert.equal(existsSync(fileItem(f)), false, 'no readable copy is written');
+
+  // Declining keyd's prompt (which names the pin) stores nothing and pins nothing.
+  const declined = fixture(t); await github(t, declined);
+  declined.options.keyd = fakeKeyd({ pins: true, importError: Object.assign(new Error('the owner declined'), { code: 'keyd-refused', rpcCode: -32000 }) });
+  await assert.rejects(connect(declined), { code: 'identity-app-keyd-refused' });
+  assert.equal(loadConfig(declined.options).identityApps?.['fixture-app']?.store, undefined);
+  assert.equal(existsSync(fileItem(declined)), false);
+});
 test('with keyd not verified, connect uses the file or Keychain store and says why', async (t) => {
-  for (const reason of ['agent-bot-keyd is not running', "agent-bot-keyd has not pinned this daemon's key yet"]) {
+  for (const reason of ['agent-bot-keyd is not running', 'agent-bot-keyd is not installed']) {
     const f = fixture(t); await github(t, f);
     const keyd = f.options.keyd = fakeKeyd({ available: false, reason });
     const result = await connect(f);

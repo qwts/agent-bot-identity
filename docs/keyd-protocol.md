@@ -301,14 +301,17 @@ messages and grant format.
 `agent-bot identity app create`, `connect` and `rotate-key`
 ([identity-apps.mjs](../identity-apps.mjs)), after the owner gate:
 
-- **Verified keyd.** `owner/status` answers with `pinned: true`, and
-  `owner/app-status` answers (`appKeydAvailability`,
+- **Verified keyd.** `owner/status` answers and `owner/app-status` answers
+  with `pinned` and `held` (`appKeydAvailability`,
   [keyd-client.mjs](../keyd-client.mjs)). The key is sent with
   `owner/app-import` (keyd asks the owner again and reads it back), and only
   then does the App's config record say `store: keyd`, with its App ID and
-  key fingerprint. No readable copy is written.
-- **Not verified, or `-32601`.** keyd not installed, not running, not
-  pinned, or from before #110: the key goes to the file or Keychain store as
+  key fingerprint. No readable copy is written. When no daemon key is pinned
+  yet, that import carries `daemonKey` and pins it, as a soul's first
+  `owner/import` does: keyd's one owner prompt names the pin, and the result
+  says `daemonKeyPinned: true`.
+- **Not verified, or `-32601`.** keyd not installed, not running, or from
+  before #110: the key goes to the file or Keychain store as
   before, and the result's `storeReason` says why. Any other keyd refusal
   (the owner declined, a pin mismatch) fails the operation and stores
   nothing, except `create`, whose key GitHub hands over once: it is kept in

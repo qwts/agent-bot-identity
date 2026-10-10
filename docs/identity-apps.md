@@ -102,12 +102,14 @@ single App metadata record. macOS uses Keychain service
 `agent-bot.app.SLUG`; other platforms use private files below identity state
 `identity-apps/SLUG/.soul-state/credentials/`.
 
-When agent-bot-keyd is verified (it answers, has pinned this daemon's key and
-knows App-level keys), create, connect and rotate-key keep a new key there
+When agent-bot-keyd is verified (it answers and knows App-level keys),
+create, connect and rotate-key keep a new key there
 instead, as an App-level key (#110), and the record says `store: keyd`; no
 readable copy is written, and souls acting as the App mint through keyd. When
 keyd is not verified, or is older than #110, the key goes to Keychain or the
-file store and `storeReason` says why. Any other keyd refusal fails the
+file store and `storeReason` says why. A keyd with no daemon key pinned yet
+pins this daemon's key with that first App import: keyd's own owner prompt
+names both, and the result says `daemonKeyPinned: true`. Any other keyd refusal fails the
 operation and stores nothing, except create's one-time key, which falls back
 with the reason. An App already in Keychain or the file store keeps it,
 rotation included; a key keyd already holds for an App with no record here is
