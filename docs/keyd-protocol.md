@@ -337,7 +337,7 @@ A grant may carry one more payload field, `keyScope`:
 - `"app"`: keyd mints with the App-level item for `app`. `agentId` is still
   required and checked, and it is named in keyd's receipt (`detail:
   App-level key`).
-- any other value: the grant is refused as malformed.
+- any other value, `null` included: the grant is refused as malformed.
 
 keyd never falls back from one scope to the other: an `app` grant with no
 App-level item fails with `agent-bot-keyd holds no App-level key for <app>`,

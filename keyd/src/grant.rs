@@ -48,22 +48,24 @@ pub struct Grant {
     /// Which key to mint with (agent-bot-identity #110): `soul`, the soul's
     /// own item, or `app`, the App-level item every soul acting as `app`
     /// shares. Absent means `soul`, so a grant signed before #110 reads
-    /// exactly as it did. The daemon chooses; keyd never falls back from one
-    /// to the other.
+    /// exactly as it did. An explicit `null`, like any other value, is
+    /// refused. The daemon chooses; keyd never falls back from one to the
+    /// other.
     #[serde(default)]
-    pub key_scope: Option<KeyScope>,
+    pub key_scope: KeyScope,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum KeyScope {
+    #[default]
     Soul,
     App,
 }
 
 impl Grant {
     pub fn scope(&self) -> KeyScope {
-        self.key_scope.unwrap_or(KeyScope::Soul)
+        self.key_scope
     }
 }
 
@@ -218,18 +220,20 @@ pub mod tests {
             let grant = verify(&sign(&key, &p), "credential", &pinned, 1000, &mut replay).unwrap();
             assert_eq!(grant.scope(), expected);
         }
-        let mut other = payload("credential", 1000);
-        other["keyScope"] = json!("org");
-        assert_eq!(
-            verify(
-                &sign(&key, &other),
-                "credential",
-                &pinned,
-                1000,
-                &mut replay
-            ),
-            Err("grant is malformed")
-        );
+        for value in [json!("org"), json!(null), json!("App"), json!(1)] {
+            let mut other = payload("credential", 1000);
+            other["keyScope"] = value;
+            assert_eq!(
+                verify(
+                    &sign(&key, &other),
+                    "credential",
+                    &pinned,
+                    1000,
+                    &mut replay
+                ),
+                Err("grant is malformed")
+            );
+        }
     }
 
     #[test]
