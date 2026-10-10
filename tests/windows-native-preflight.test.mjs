@@ -160,8 +160,24 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       '  $reader = [System.IO.StreamReader]::new($server, [System.Text.Encoding]::UTF8, $false, 1024, $true)',
       '  $writer = [System.IO.StreamWriter]::new($server, [System.Text.UTF8Encoding]::new($false), 1024, $true)',
       '  $writer.AutoFlush = $true',
-      "  $phase = 'hello'",
-      '  $hello = ConvertFrom-Json -InputObject $reader.ReadLine()',
+      "  [Console]::Out.WriteLine('STREAMS_READY')",
+      "  $phase = 'hello-read'",
+      "  [Console]::Out.WriteLine('READING_HELLO')",
+      '  $helloBytes = [System.IO.MemoryStream]::new()',
+      '  $firstHelloByte = $true',
+      '  $helloLineEnded = $false',
+      '  while ($helloBytes.Length -lt 131072) {',
+      '    $helloByte = $server.ReadByte()',
+      '    if ($helloByte -lt 0) { throw \'unexpected end of hello\' }',
+      '    if ($helloByte -eq 10) { $helloLineEnded = $true; break }',
+      "    if ($firstHelloByte) { [Console]::Out.WriteLine('FIRST_HELLO_BYTE'); $firstHelloByte = $false }",
+      '    $helloBytes.WriteByte([byte]$helloByte)',
+      '  }',
+      "  if (-not $helloLineEnded) { throw 'hello line too long' }",
+      "  [Console]::Out.WriteLine('HELLO_LF')",
+      '  $helloText = [System.Text.UTF8Encoding]::new($false, $true).GetString($helloBytes.ToArray())',
+      '  if ($helloText.EndsWith("`r")) { $helloText = $helloText.Substring(0, $helloText.Length - 1) }',
+      '  $hello = ConvertFrom-Json -InputObject $helloText',
       "  if ($hello.v -ne 1 -or $hello.hello -notmatch '^[0-9a-f]{64}$') { throw 'invalid hello' }",
       "  [Console]::Out.WriteLine('HELLO')",
       "  $phase = 'impersonation-level'",
@@ -215,6 +231,10 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
     process.env.AGENT_BOT_WINDOWS_RELAY_DIAGNOSTICS = '1';
     const pendingRequest = client.request({ op: 'preflight' });
     await expectMarkerBeforeProof(serverOutput, pendingRequest, 'CONNECTED', 'native server did not accept the pipe connection');
+    await expectMarkerBeforeProof(serverOutput, pendingRequest, 'STREAMS_READY', 'native server did not prepare its streams');
+    await expectMarkerBeforeProof(serverOutput, pendingRequest, 'READING_HELLO', 'native server did not begin reading the client hello');
+    await expectMarkerBeforeProof(serverOutput, pendingRequest, 'FIRST_HELLO_BYTE', 'native server received no hello byte');
+    await expectMarkerBeforeProof(serverOutput, pendingRequest, 'HELLO_LF', 'native server received no hello line feed');
     await expectMarkerBeforeProof(serverOutput, pendingRequest, 'HELLO', 'native server did not read the client hello');
     const levelMarker = await nextMarkerBeforeProof(
       serverOutput,
