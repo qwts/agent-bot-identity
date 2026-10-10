@@ -134,5 +134,7 @@ current harness:
 - Do not hard-code a playbook-engineering checkout path. Installed consumers
   call `~/.local/bin/agent-bot`; `AGENT_BOT_HOME` exists only for harness
   startup discovery fallback.
-- Legacy `qwts.*`, `QWTS_AGENT_*`, `PLAYBOOK_HOME`, and `playbook-home` values
-  are read-only migration aliases through `0.x` and are removed in `1.0`.
+- `QWTS_*` environment aliases are read-only compatibility names and remain
+  recognised indefinitely (#752); new writes use `AGENT_BOT_*`.
+- Legacy `qwts.*`, `PLAYBOOK_HOME`, and `playbook-home` values are read-only
+  migration aliases through `0.x` and are removed in `1.0`.

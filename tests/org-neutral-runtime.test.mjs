@@ -17,6 +17,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 // and hooks every install runs (not their READMEs).
 const NOT_RUNTIME = /^(?:tests|scripts|tools|skills|docs|web)\/|\.md$/u;
 const SHELL_ENTRY_POINTS = ['agent-bot', 'claude-worktree-create', 'hooks', 'agent-hooks'];
+const HOST_APP_NAME = /geniusbar|dudles/giu;
 
 const ORGANIZATION_VALUES = [
   { name: 'the qwts owner account', pattern: /\bai9d\b/gu },
@@ -27,7 +28,10 @@ const ORGANIZATION_VALUES = [
   { name: 'a qwts App slug', pattern: /\bqwts-[a-z0-9][a-z0-9-]*-agent\b/gu },
   // The owner's own host app, private once it moves to truline. New code and
   // text say "the host app"; installed names stay recognised (#752).
-  { name: 'the GeniusBar or Dudles host app', pattern: /\b(?:geniusbar|dudles)\b/giu },
+  // Match the complete brand stem even when it is joined to an identifier
+  // suffix (GeniusBarClient, GENIUSBAR_PATH, DudlesApp). Keep ordinary
+  // longer words such as `geniusberry` outside the guard.
+  { name: 'the GeniusBar or Dudles host app', pattern: HOST_APP_NAME },
 ];
 
 // Values still compiled in, each the exact expression the removing change
@@ -47,9 +51,10 @@ const STILL_COMPILED = [
 ];
 
 function runtimeFiles() {
-  return execFileSync('git', ['ls-files', '-z', '--', '*.mjs', ...SHELL_ENTRY_POINTS], { cwd: ROOT, encoding: 'utf8' })
+  return execFileSync('git', ['ls-files', '-z', '--', '*.mjs', '*.rs', 'keyd/Cargo.toml', ...SHELL_ENTRY_POINTS], { cwd: ROOT, encoding: 'utf8' })
     .split('\0')
-    .filter((file) => file && !NOT_RUNTIME.test(file))
+    .filter((file) => file && !NOT_RUNTIME.test(file)
+      && (!file.endsWith('.rs') || file.startsWith('keyd/src/')))
     .sort();
 }
 
@@ -109,8 +114,156 @@ function shellCode(source) {
   }).join('\n');
 }
 
+// Rust comments nest. Keep literal contents so compiled strings are scanned,
+// but mask comments; a structural mode also masks literals while locating
+// #[cfg(test)] modules, whose examples are not present in the shipped binary.
+function rustMask(source, maskLiterals) {
+  const out = source.split('');
+  const blank = (index) => { if (source[index] !== '\n') out[index] = ' '; };
+  let state = 'code';
+  let blockDepth = 0;
+  let rawHashes = 0;
+  const rawStart = (index) => {
+    const r = source[index] === 'r' ? index
+      : ((source[index] === 'b' || source[index] === 'c') && source[index + 1] === 'r' ? index + 1 : -1);
+    if (r < 0) return null;
+    let quote = r + 1;
+    while (source[quote] === '#') quote += 1;
+    return source[quote] === '"' ? { quote, hashes: quote - r - 1 } : null;
+  };
+  const charEnd = (start) => {
+    let index = start + 1;
+    if (index >= source.length || source[index] === '\n' || source[index] === '\r') return -1;
+    if (source[index] === '\\') {
+      index += 1;
+      const escape = source[index];
+      if (['n', 'r', 't', '\\', "'", '"', '0'].includes(escape)) index += 1;
+      else if (escape === 'x' && /^[\da-fA-F]{2}$/u.test(source.slice(index + 1, index + 3))) index += 3;
+      else if (escape === 'u' && source[index + 1] === '{') {
+        const close = source.indexOf('}', index + 2);
+        if (close < 0 || !/^[\da-fA-F_]+$/u.test(source.slice(index + 2, close))) return -1;
+        index = close + 1;
+      } else return -1;
+    } else {
+      const codePoint = source.codePointAt(index);
+      const scalar = String.fromCodePoint(codePoint);
+      if (scalar === "'" || scalar === '\\' || /[\r\n]/u.test(scalar)) return -1;
+      index += scalar.length;
+    }
+    return source[index] === "'" ? index : -1; // otherwise this is a Rust lifetime
+  };
+
+  for (let i = 0; i < source.length; i += 1) {
+    const c = source[i];
+    const next = source[i + 1];
+    if (state === 'line-comment') {
+      if (c === '\n') state = 'code'; else blank(i);
+      continue;
+    }
+    if (state === 'block-comment') {
+      if (c === '/' && next === '*') { blank(i); blank(i + 1); blockDepth += 1; i += 1; }
+      else if (c === '*' && next === '/') { blank(i); blank(i + 1); blockDepth -= 1; i += 1; if (blockDepth === 0) state = 'code'; }
+      else blank(i);
+      continue;
+    }
+    if (state === 'string') {
+      if (maskLiterals) blank(i);
+      if (c === '\\' && next !== undefined) { if (maskLiterals) blank(i + 1); i += 1; }
+      else if (c === '"') state = 'code';
+      continue;
+    }
+    if (state === 'raw-string') {
+      if (c === '"' && source.slice(i + 1, i + 1 + rawHashes) === '#'.repeat(rawHashes)) {
+        if (maskLiterals) for (let j = i; j <= i + rawHashes; j += 1) blank(j);
+        i += rawHashes;
+        state = 'code';
+      } else if (maskLiterals) blank(i);
+      continue;
+    }
+    if (c === '/' && next === '/') { blank(i); blank(i + 1); i += 1; state = 'line-comment'; continue; }
+    if (c === '/' && next === '*') { blank(i); blank(i + 1); i += 1; state = 'block-comment'; blockDepth = 1; continue; }
+    const raw = rawStart(i);
+    if (raw) {
+      rawHashes = raw.hashes;
+      if (maskLiterals) for (let j = i; j <= raw.quote; j += 1) blank(j);
+      i = raw.quote;
+      state = 'raw-string';
+      continue;
+    }
+    if ((c === 'b' || c === 'c') && next === '"') {
+      if (maskLiterals) { blank(i); blank(i + 1); }
+      i += 1;
+      state = 'string';
+      continue;
+    }
+    if (c === '"') { if (maskLiterals) blank(i); state = 'string'; continue; }
+    if (c === "'") {
+      const end = charEnd(i);
+      if (end >= 0) { if (maskLiterals) for (let j = i; j <= end; j += 1) blank(j); i = end; }
+    }
+  }
+  return out.join('');
+}
+
+function rustCode(source) {
+  const code = rustMask(source, false).split('');
+  const structure = rustMask(source, true);
+  const testsModule = /#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_][A-Za-z0-9_]*\s*\{/gu;
+  for (let match; (match = testsModule.exec(structure));) {
+    const open = match.index + match[0].lastIndexOf('{');
+    let depth = 0;
+    let close = -1;
+    for (let i = open; i < structure.length; i += 1) {
+      if (structure[i] === '{') depth += 1;
+      else if (structure[i] === '}' && --depth === 0) { close = i; break; }
+    }
+    if (close < 0) continue;
+    for (let i = match.index; i <= close; i += 1) if (code[i] !== '\n') code[i] = ' ';
+    testsModule.lastIndex = close + 1;
+  }
+  return code.join('');
+}
+
+// Cargo metadata is TOML: a # outside a quoted (possibly multiline) string
+// starts a comment. Metadata strings remain visible to the same value scan.
+function tomlCode(source) {
+  let out = '';
+  let quote = null;
+  let triple = false;
+  let comment = false;
+  for (let i = 0; i < source.length; i += 1) {
+    const c = source[i];
+    if (comment) {
+      if (c === '\n') { comment = false; out += c; } else out += ' ';
+      continue;
+    }
+    if (quote) {
+      out += c;
+      if (quote === '"' && c === '\\') { out += source[++i] ?? ''; continue; }
+      if (c === quote) {
+        if (triple && source.slice(i, i + 3) === quote.repeat(3)) {
+          out += source.slice(i + 1, i + 3);
+          i += 2;
+          quote = null;
+          triple = false;
+        } else if (!triple) quote = null;
+      }
+      continue;
+    }
+    if (c === '#') { comment = true; out += ' '; continue; }
+    if ((c === '"' || c === "'") && source.slice(i, i + 3) === c.repeat(3)) {
+      quote = c; triple = true; out += c.repeat(3); i += 2; continue;
+    }
+    if (c === '"' || c === "'") quote = c;
+    out += c;
+  }
+  return out;
+}
+
 function organizationValues(file, source) {
-  const code = file.endsWith('.mjs') ? javascriptCode(source) : shellCode(source);
+  const code = file.endsWith('.mjs') ? javascriptCode(source)
+    : file.endsWith('.rs') ? rustCode(source)
+      : file.endsWith('.toml') ? tomlCode(source) : shellCode(source);
   const found = [];
   code.split('\n').forEach((line, index) => {
     for (const { name, pattern } of ORGANIZATION_VALUES) {
@@ -126,7 +279,8 @@ function organizationValues(file, source) {
 
 test('shipped runtime code compiles in no organization-specific values (#752)', () => {
   const files = runtimeFiles();
-  for (const file of ['config.mjs', 'hooks/agent-context', 'agent-bot', 'claude-worktree-create']) {
+  for (const file of ['config.mjs', 'hooks/agent-context', 'agent-bot', 'claude-worktree-create',
+    'keyd/src/main.rs', 'keyd/Cargo.toml']) {
     assert.ok(files.includes(file), `runtime file listing misses ${file}`);
   }
   const unexpected = files.flatMap((file) => organizationValues(file, readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')));
@@ -151,6 +305,40 @@ test('the scan reads code and skips comments', () => {
   assert.deepEqual(organizationValues('hooks/x', '# ai9d\nprintf ai9d'), owner('hooks/x', 2));
   assert.deepEqual(organizationValues('hooks/x', 'echo "# ai9d"  # ai9d'), owner('hooks/x', 1));
   assert.deepEqual(organizationValues('hooks/x', 'echo ok # ai9d'), []);
+});
+
+test('the host-app guard catches brand stems joined to identifiers without partial-word noise', () => {
+  const host = (line) => [{ file: 'x.mjs', line, name: 'the GeniusBar or Dudles host app' }];
+  assert.deepEqual(organizationValues('x.mjs', 'const path = GENIUSBAR_PATH;'), host(1));
+  assert.deepEqual(organizationValues('x.mjs', 'class GeniusBarClient {}'), host(1));
+  assert.deepEqual(organizationValues('x.mjs', 'const path = AGENT_GENIUSBAR_PATH;'), host(1));
+  assert.deepEqual(organizationValues('x.mjs', 'class myGeniusBarClient {}'), host(1));
+  assert.deepEqual(organizationValues('x.mjs', 'const path = GENIUSBARCLIENT;'), host(1));
+  assert.deepEqual(organizationValues('x.mjs', 'const app = DudlesApp;'), host(1));
+  assert.deepEqual(organizationValues('x.mjs', 'const word = geniusberry;'), []);
+});
+
+test('the guard scans keyd Rust source and Cargo metadata while ignoring their comments and Rust test modules', () => {
+  const host = (file, line) => [{ file, line, name: 'the GeniusBar or Dudles host app' }];
+  const rust = [
+    '//! GeniusBar is mentioned in module documentation only.',
+    '#[cfg(test)]',
+    'mod tests { const APP: &str = "qwts-claude-agent"; }',
+    'fn main() { let path = "GENIUSBAR_PATH"; }',
+  ].join('\n');
+  assert.deepEqual(organizationValues('keyd/src/main.rs', rust), host('keyd/src/main.rs', 4));
+  assert.deepEqual(organizationValues('keyd/src/main.rs', '/* DudlesApp in a block comment */\nfn main() {}'), []);
+  assert.deepEqual(organizationValues('keyd/src/main.rs', '/* outer /* GeniusBar */ still a comment */\nfn main() {}'), []);
+  assert.deepEqual(organizationValues('keyd/src/main.rs', 'fn main() { let s = r#"/* GeniusBar */"#; }'), host('keyd/src/main.rs', 1));
+  assert.deepEqual(organizationValues('keyd/src/main.rs', "fn f<'a, GeniusBar, 'b>() {}"), host('keyd/src/main.rs', 1));
+  assert.deepEqual(organizationValues('keyd/src/main.rs', "fn f<'a, /* GeniusBar comment */ 'b>() {}"), []);
+  const rustBraces = [
+    '#[cfg(test)]', 'mod tests {', 'const RAW: &str = r###"} qwts-claude-agent {"###;', "const BRACE: char = '}';", '}',
+    'fn main() {}',
+  ].join('\n');
+  assert.deepEqual(organizationValues('keyd/src/main.rs', rustBraces), []);
+  assert.deepEqual(organizationValues('keyd/Cargo.toml', '# DudlesApp in a TOML comment\n[package]\nname = "agent-bot-keyd"'), []);
+  assert.deepEqual(organizationValues('keyd/Cargo.toml', '[package]\ndescription = "GeniusBarClient key custody"'), host('keyd/Cargo.toml', 2));
 });
 
 test('a still-compiled value is exempt only as its exact expression', () => {
