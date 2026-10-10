@@ -26,7 +26,8 @@
 // `core.hooksPath`. Values the scan cannot read (`git commit $FLAGS`) and
 // relocated global config (GIT_CONFIG_GLOBAL, HOME) are not seen.
 // `opaqueExecution` marks a script file, stdin-fed shell, interpreter or
-// task runner whose git the scan cannot read, and `opaque` lists the
+// task runner whose git the scan cannot read (or a command word, `eval`
+// string or `env -S` it cannot expand), and `opaque` lists the
 // directory each runs in (null when the scan cannot place it). The caller
 // refuses it only for a stated bot that is not bound there; a bound bot
 // keeps its prior behaviour, and since opaque code can override
@@ -409,7 +410,7 @@ function evaluate(argv, ctx) {
   // Wrappers that run the rest of argv as a command.
   for (;;) {
     const word = argv[i];
-    if (word === null) { result.ambiguous = true; return {}; }
+    if (word === null) { result.ambiguous = true; result.opaqueExecution = true; result.opaque.push({ cwd }); return {}; }
     const base = word?.split('/').pop();
     if (!(base in WRAPPERS)) break;
     if ((base === 'command' && /^-[vV]/.test(argv[i + 1] ?? '')) || (base === 'builtin' && argv[i + 1] === undefined)) return {};
@@ -424,7 +425,7 @@ function evaluate(argv, ctx) {
       if (opt === '--') { i += 1; break; }
       if (base === 'env' && (opt === '-C' || opt === '--chdir')) { cwd = place(cwd, argv[i + 1]); i += 2; continue; }
       if (base === 'env' && opt.startsWith('--chdir=')) { cwd = place(cwd, opt.slice(8)); i += 1; continue; }
-      if (base === 'env' && (opt === '-S' || opt.startsWith('--split-string'))) { result.ambiguous = true; return {}; }
+      if (base === 'env' && (opt === '-S' || opt.startsWith('--split-string'))) { result.ambiguous = true; result.opaqueExecution = true; result.opaque.push({ cwd }); return {}; }
       if ((base === 'sudo' || base === 'doas') && (opt === '-D' || opt === '--chdir')) { cwd = place(cwd, argv[i + 1]); i += 2; continue; }
       i += WRAPPERS[base].has(opt) ? 2 : 1;
     }
@@ -438,7 +439,7 @@ function evaluate(argv, ctx) {
   }
   const word = argv[i];
   if (word === undefined) return {};
-  if (word === null) { result.ambiguous = true; return {}; }
+  if (word === null) { result.ambiguous = true; result.opaqueExecution = true; result.opaque.push({ cwd }); return {}; }
   const base = word.split('/').pop();
   const args = argv.slice(i + 1);
   // Only an unconditional cd, run by the shell itself (not behind a wrapper,
@@ -472,7 +473,7 @@ function evaluate(argv, ctx) {
     return {};
   }
   if (base === 'eval') {
-    if (args.includes(null)) { result.ambiguous = true; return {}; }
+    if (args.includes(null)) { result.ambiguous = true; result.opaqueExecution = true; result.opaque.push({ cwd }); return {}; }
     merge(result, scanGitPublish(args.join(' '), { cwd, env: Object.fromEntries(env), depth: depth + 1 }));
     return {};
   }
