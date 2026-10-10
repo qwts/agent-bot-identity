@@ -4,6 +4,7 @@
 // lifecycle; wake-plane.mjs re-exports it for the daemon host.
 
 import { NEVER_ROUTED } from './soul-tool-homes.mjs';
+import { minimalChildEnv } from './child-env.mjs';
 
 const TOOL_HOME_FAILURES = Object.freeze(['tool-home-unwritable', 'tool-home-record-invalid']);
 
@@ -12,7 +13,7 @@ const TOOL_HOME_FAILURES = Object.freeze(['tool-home-unwritable', 'tool-home-rec
 // sign-in probe, #536) cannot drift: `{ turnEnv, mcpEnv, harnessEnv,
 // routed, stripped }`.
 export function composeTurnEnv({ agentId, harness, env = {}, baseEnv = {}, runtimeEnvFor = null, toolHomeEnvFor = null, providerEnvFor = null }) {
-  const turnEnv = { ...baseEnv, ...env, QWTS_AGENT_ID: agentId, AGENT_BOT_ID: agentId };
+  const turnEnv = { ...minimalChildEnv(baseEnv), ...minimalChildEnv(env), QWTS_AGENT_ID: agentId, AGENT_BOT_ID: agentId };
   // The soul's own runtimes and harness installs first on PATH, with
   // their env (GOROOT, UV_*), never HOME (#583 slice 3). A soul with no
   // folder yet runs with the host's PATH as before.
