@@ -77,13 +77,17 @@ previous setup that kept the bearer as note content must move it into the
 `password` field. Convert the existing item in place if possible. If Proton
 Pass requires a replacement item, remove or rename the old note before
 activating the replacement: the daemon requires exactly one active item with
-this title. Verify the new field with a bound `take_inbox` call. The daemon
-never prints the bearer. Then install the daemon with the URL set, which writes
-it into the daemon's unit:
+this title. The daemon never prints the bearer. Install the daemon with the URL
+set, which writes it into the daemon's unit:
 
 ```bash
 GH_APP_HOOK_INBOX_URL=https://<worker host> agent-bot daemon install
 ```
+
+After installation, use the non-consuming probes in [Verify](#5-verify) and
+[Troubleshooting and recovery](#6-troubleshooting-and-recovery) to check wiring
+and credential retrieval. A bound `take_inbox` call consumes the oldest pending
+event, so it is not a setup verification step.
 
 Only a plain `http(s)://host[:port][/path]` goes into the unit; a URL with
 userinfo, a query or a fragment is left out. The harness needs the MCP
