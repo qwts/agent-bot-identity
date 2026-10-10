@@ -1,1 +1,0 @@
-- The launch-path test now finds every module that imports `child_process`. It counts each reference to what the module imports, aliases, wrappers and default runners included. Any other way of naming `child_process` fails the test. Before, it matched only call shapes, so an aliased or promisified launch could slip past it (#785).
