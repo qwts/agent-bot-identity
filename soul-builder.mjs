@@ -58,12 +58,15 @@ export const MCP_TARGETS = Object.freeze([
 // adapter in this slice; a later slice adds one rather than leaving a declared
 // primitive silently dropped. A path another harness owns (`.mcp.json`,
 // `.claude/commands/`) is one this harness documents reading natively.
+const CODEX_COMMAND_SKILL = 'source-command-';
 const HARNESS_FILES = Object.freeze({
   claude: Object.freeze({ instructions: 'CLAUDE.md', skills: '.claude/skills/', mcp: '.mcp.json', subagents: '.claude/agents/', commands: '.claude/commands/' }),
   gemini: Object.freeze({ instructions: 'GEMINI.md', skills: '.gemini/skills/', mcp: '.gemini/settings.json', commands: '.gemini/commands/' }),
   // Codex agent roles (#378) are TOML in the project layer's `.codex/agents/`,
   // checked against openai/codex `rust-v0.157.0`, where `multi_agent` is stable.
-  codex: Object.freeze({ instructions: null, skills: null, mcp: '.codex/config.toml', subagents: '.codex/agents/' }),
+  // Codex has no project commands; a command becomes the skill its own
+  // command importer writes, `.agents/skills/source-command-<name>/SKILL.md`.
+  codex: Object.freeze({ instructions: null, skills: null, mcp: '.codex/config.toml', subagents: '.codex/agents/', commands: `.agents/skills/${CODEX_COMMAND_SKILL}` }),
   opencode: Object.freeze({ instructions: null, skills: null, mcp: 'opencode.json', subagents: '.opencode/agent/', commands: '.opencode/command/' }),
   cursor: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: '.cursor/mcp.json', subagents: '.cursor/agents/' }),
   copilot: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: '.mcp.json', subagents: '.github/agents/', commands: '.claude/commands/' }),
@@ -646,7 +649,7 @@ function renderHooks(events, output, authored) {
 export function harnessReport(output, { comms = true, manifest = {}, hooks = [] } = {}) {
   const skills = [...output.keys()].some((path) => Object.values(HARNESS_FILES).some((files) => files.skills && path.startsWith(files.skills)));
   const names = (prefix) => prefix ? [...output.keys()].filter((path) => path.startsWith(prefix))
-    .map((path) => path.slice(prefix.length).replace(/(?:\.agent)?\.(md|toml)$/, '')).sort(compare) : [];
+    .map((path) => path.slice(prefix.length).replace(/(?:\/SKILL\.md|(?:\.agent)?\.(md|toml))$/, '')).sort(compare) : [];
   const received = { subagents: names(HARNESS_FILES.claude.subagents), commands: names(HARNESS_FILES.claude.commands) };
   const report = {};
   for (const [harness, files] of Object.entries(HARNESS_FILES)) {
@@ -908,6 +911,22 @@ const mappedDeclaration = (header, body) => `---\n${header.join('\n')}\n---\n${M
 // explicit escape for TOML. Escaping newlines avoids triple-quote collisions.
 const quotedString = (value) => JSON.stringify(value).replace(/\x7f/g, '\\u007f');
 
+// The skill Codex's own command importer renders (openai/codex
+// `rust-v0.157.0`, core-plugins command_migration.rs), plus the marker, or
+// null where the importer skips the command: a skill has no arguments, shell
+// or file-include syntax, so `$ARGUMENTS`, `$1`, `{{…}}`, `!\``/`! \`` and
+// `@path` templates stay unsupported, as does a name over 64 characters.
+// Unlike the importer, the text is not rewritten from Claude's terms.
+function codexCommandSkill(name, description, body) {
+  const skill = `${CODEX_COMMAND_SKILL}${name}`;
+  if (skill.length > 64 || /\$ARGUMENTS|\$\d|!`|! `/.test(body) || (body.includes('{{') && body.includes('}}'))
+    || body.split(/\s+/).some((token) => token.length > 1 && token.startsWith('@'))) return null;
+  const header = [`name: ${quotedString(skill)}`, `description: ${quotedString(description ?? `Migrated source command \`${name}\``)}`];
+  return [`.agents/skills/${skill}/SKILL.md`, mappedDeclaration(header, `\n# ${skill}\n\n`
+    + `Use this skill when the user asks to run the migrated source command \`${name}\`.\n\n`
+    + `## Command Template\n\n${body.trim() || 'No command template body was found.'}\n`)];
+}
+
 function renderPrimitives(source, output) {
   for (const [path, bytes] of source) {
     if (!/^(agents|commands)\/.*\.md$/.test(path)) continue;
@@ -938,6 +957,8 @@ function renderPrimitives(source, output) {
       // Gemini it injects arguments at `{{args}}`, not `$ARGUMENTS`.
       const qwenBody = parsed.body.replaceAll('$ARGUMENTS', '{{args}}');
       output.set(`.qwen/commands/${name}.md`, Buffer.from(header.length ? mappedDeclaration(header, qwenBody) : `${MARKER}\n${qwenBody}`));
+      const codex = codexCommandSkill(name, description, parsed.body);
+      if (codex) output.set(codex[0], Buffer.from(codex[1]));
     }
     output.set(`.claude/${directory}/${name}.md`, Buffer.from(markedDeclaration(parsed)));
   }

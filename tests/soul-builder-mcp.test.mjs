@@ -384,8 +384,8 @@ test('Qwen Code\'s project settings keep the soul\'s own keys and servers and ga
 });
 
 test('the ignore list only grows by Qwen Code\'s settings file; the list before it still validates (#247)', () => {
-  const withSettings = PRIOR_PACKAGE_IGNORE_LISTS[1].generatedPaths;
-  const prior = PRIOR_PACKAGE_IGNORE_LISTS[2].generatedPaths;
+  const withSettings = PRIOR_PACKAGE_IGNORE_LISTS[2].generatedPaths;
+  const prior = PRIOR_PACKAGE_IGNORE_LISTS[3].generatedPaths;
   assert.deepEqual(PACKAGE_IGNORE_LIST.generatedPaths.slice(0, withSettings.length), withSettings);
   assert.deepEqual(withSettings.slice(0, prior.length), prior);
   assert.deepEqual(withSettings.slice(prior.length), ['.qwen/settings.json']);
@@ -395,8 +395,8 @@ test('the ignore list only grows by Qwen Code\'s settings file; the list before 
 });
 
 test('the ignore list then grows only by Qwen Code\'s commands folder; the settings list still validates (#378)', () => {
-  const withCommands = PRIOR_PACKAGE_IGNORE_LISTS[0].generatedPaths;
-  const prior = PRIOR_PACKAGE_IGNORE_LISTS[1].generatedPaths;
+  const withCommands = PRIOR_PACKAGE_IGNORE_LISTS[1].generatedPaths;
+  const prior = PRIOR_PACKAGE_IGNORE_LISTS[2].generatedPaths;
   assert.deepEqual(withCommands.slice(0, prior.length), prior);
   assert.deepEqual(withCommands.slice(prior.length), ['.qwen/commands/']);
   assert.equal(isGeneratedPath('.qwen/commands/review.md'), true);
@@ -405,12 +405,21 @@ test('the ignore list then grows only by Qwen Code\'s commands folder; the setti
 });
 
 test('the ignore list then grows only by Qwen Code\'s agents folder; the commands list still validates (#378)', () => {
-  const prior = PRIOR_PACKAGE_IGNORE_LISTS[0].generatedPaths;
-  assert.deepEqual(PACKAGE_IGNORE_LIST.generatedPaths.slice(0, prior.length), prior);
-  assert.deepEqual(PACKAGE_IGNORE_LIST.generatedPaths.slice(prior.length), ['.qwen/agents/']);
+  const withAgents = PRIOR_PACKAGE_IGNORE_LISTS[0].generatedPaths;
+  const prior = PRIOR_PACKAGE_IGNORE_LISTS[1].generatedPaths;
+  assert.deepEqual(withAgents.slice(0, prior.length), prior);
+  assert.deepEqual(withAgents.slice(prior.length), ['.qwen/agents/']);
   assert.equal(isGeneratedPath('.qwen/agents/review.md'), true);
   assert.equal(isGeneratedPath('.qwen/skills/review/SKILL.md'), false, 'the rest of .qwen/ stays the soul\'s');
   assert.equal(isGeneratedPath('.qwen/settings.local.json'), false);
+});
+
+test('the ignore list then grows only by the shared .agents/skills/ folder; the agents list still validates (#378)', () => {
+  const prior = PRIOR_PACKAGE_IGNORE_LISTS[0].generatedPaths;
+  assert.deepEqual(PACKAGE_IGNORE_LIST.generatedPaths.slice(0, prior.length), prior);
+  assert.deepEqual(PACKAGE_IGNORE_LIST.generatedPaths.slice(prior.length), ['.agents/skills/']);
+  assert.equal(isGeneratedPath('.agents/skills/source-command-review/SKILL.md'), true);
+  assert.equal(isGeneratedPath('.agents/other.md'), false, 'the rest of .agents/ stays the soul\'s');
 });
 
 test('legacy reach references report locations without rewriting policy or exposing line contents', (t) => {
