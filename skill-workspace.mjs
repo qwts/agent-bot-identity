@@ -255,8 +255,9 @@ const REASON_MAX = 200;
 // The account's home, not $HOME: the caller's environment does not choose
 // which folders a global load writes or removes.
 const accountHome = () => userInfo().homedir;
-// Global records and receipts ignore the variables that relocate the owner's
-// state, whoever calls: the caller's environment does not choose where they go.
+// Global records ignore the variables that relocate the owner's state,
+// whoever calls: the caller's environment does not choose which record unload
+// trusts. Receipts go to the audit log as every other receipt does.
 const ownerStateEnv = env => Object.fromEntries(Object.entries(env).filter(([key]) => key !== 'AGENT_BOT_INTERACTION_HOME' && key !== 'XDG_STATE_HOME'));
 // Global load records are the owner's, beside the audit log, never in the
 // soul's own state: unload deletes from a folder every session reads, so it
@@ -351,7 +352,7 @@ export async function loadGlobalSkill(name, agentId, { harness = 'claude', reaso
       mkdirSync(path.dirname(recordFile), { recursive: true, mode: 0o700 });
       writeAtomic(recordFile, `${JSON.stringify(record, null, 2)}\n`, 0o600);
       appendAuditReceipt({ event: 'skill-global', agentId, operation: 'load', decision: harness,
-        detail: `${name} -> ${target.destination} (${method}): ${why}` }, { env: state, home, now });
+        detail: `${name} -> ${target.destination} (${method}): ${why}` }, { env, home, now });
       return { name, harness, global: true, destination: target.destination, files: files.length, reason: why, authorization: method };
     } catch (error) {
       rmSync(target.destination, { recursive: true, force: true });
@@ -396,7 +397,7 @@ export async function unloadGlobalSkill(name, agentId, { harness = 'claude', aut
   try { method = (await authorize(`soul skill unload ${name} --soul ${agentId} --global (removes ${target.destination})`))?.method ?? 'none'; }
   catch (error) {
     appendAuditReceipt({ event: 'skill-global', agentId, operation: 'unload', decision: 'refused',
-      detail: `${harness} ${name} <- ${target.destination} kept (${error.code ?? 'not approved'})` }, { env: state, home, now });
+      detail: `${harness} ${name} <- ${target.destination} kept (${error.code ?? 'not approved'})` }, { env, home, now });
     throw error;
   }
   mkdirSync(path.dirname(recordFile), { recursive: true, mode: 0o700 });
@@ -408,7 +409,7 @@ export async function unloadGlobalSkill(name, agentId, { harness = 'claude', aut
     if (stat) rmSync(target.destination, { recursive: true });
     rmSync(recordFile);
     appendAuditReceipt({ event: 'skill-global', agentId, operation: 'unload', decision: harness,
-      detail: `${name} <- ${target.destination}${stat ? '' : ' (already gone)'} (${method})` }, { env: state, home, now });
+      detail: `${name} <- ${target.destination}${stat ? '' : ' (already gone)'} (${method})` }, { env, home, now });
     return { name, harness, global: true, destination: target.destination, removed: Boolean(stat), authorization: method };
   });
 }

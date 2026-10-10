@@ -247,13 +247,13 @@ test('global unload needs the owner gate from every caller of the library', asyn
   assert.deepEqual(f.receipts().map(r => r.operation), ['load']);
 });
 
-test('global records and receipts ignore relocated state for the owner too', async t => {
+test('global records ignore relocated state for the owner too', async t => {
   const f = fixture(t);
   const elsewhere = path.join(f.home, 'elsewhere');
   const extraEnv = { AGENT_BOT_INTERACTION_HOME: elsewhere, XDG_STATE_HOME: elsewhere };
   assert.equal((await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON], { extraEnv })).code, 0);
   assert.equal(existsSync(globalRecordPath('claude', 'demo', { env: f.env, home: f.home })), true, 'the record is in the owner\'s state');
-  assert.equal(existsSync(elsewhere), false, 'nothing went to the relocated folder');
+  assert.equal(existsSync(path.join(elsewhere, 'skill-globals')), false, 'no record went to the relocated folder');
   // A record forged in the relocated folder is never read, so an owner's unload of it finds nothing.
   const owned = path.join(f.home, '.claude/skills/owners-skill');
   put(path.join(owned, 'SKILL.md'), 'owner wrote this\n');
@@ -262,9 +262,23 @@ test('global records and receipts ignore relocated state for the owner too', asy
   assert.equal(forged.json.error.code, 'skill-not-loaded');
   assert.equal(existsSync(owned), true);
   assert.equal((await f.run(['unload', 'demo', '--soul', f.id, '--global'], { extraEnv })).code, 0);
-  assert.deepEqual(f.receipts().map(r => r.operation), ['load', 'unload']);
   // The library applies it too, not only the CLI.
   await loadGlobalSkill('demo', f.id, { env: { ...f.env, ...extraEnv }, home: f.home, file: f.env.AGENT_BOT_POPULATION_PATH, reason: REASON, authorize: async () => ({ method: 'presence' }) });
   assert.equal(existsSync(globalRecordPath('claude', 'demo', { env: f.env, home: f.home })), true);
   assert.equal(existsSync(path.join(elsewhere, 'skill-globals/claude/demo.json')), false);
+});
+
+test('global receipts follow XDG_STATE_HOME into the usual audit log while the record stays in the OS home', async t => {
+  const f = fixture(t);
+  const xdg = path.join(f.home, 'xdg-state');
+  const extraEnv = { XDG_STATE_HOME: xdg };
+  assert.equal((await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON], { extraEnv })).code, 0);
+  assert.equal(existsSync(path.join(f.home, '.local/state/agent-bot/interaction/skill-globals/claude/demo.json')), true, 'the record is in the OS home');
+  assert.equal(existsSync(path.join(xdg, 'agent-bot/interaction/skill-globals')), false);
+  assert.equal((await f.run(['unload', 'demo', '--soul', f.id, '--global'], { extraEnv })).code, 0);
+  const log = path.join(xdg, 'agent-bot/interaction/audit.jsonl');
+  assert.equal(log, auditFile({ env: { ...f.env, ...extraEnv }, home: f.home }));
+  const receipts = readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(r => r.event === 'skill-global');
+  assert.deepEqual(receipts.map(r => r.operation), ['load', 'unload']);
+  assert.deepEqual(f.receipts(), [], 'nothing in the default audit log');
 });
