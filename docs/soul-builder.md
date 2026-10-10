@@ -165,11 +165,11 @@ Adapter evidence (official docs read 2026-10-07):
   a command skill would sit beside the native command. So command skills
   render only when the soul targets Codex: its `preferredHarnesses` names
   `codex` or is empty (no preference, so every harness). Otherwise Codex
-  lists the commands under `unsupported.commands`. When the soul also
-  targets Qwen Code or OpenCode (named, or by an empty list), each command
-  then appears there twice, as its native command and as a
-  `source-command-<name>` skill; this is a known effect, and the build report
-  names those commands under that harness's `duplicates.commands`.
+  lists the commands under `unsupported.commands`. When command skills
+  render, Qwen Code and OpenCode see each one twice if launched in that
+  home, as its native command and as a `source-command-<name>` skill
+  (`preferredHarnesses` does not stop them): a known effect, and the build
+  report names those commands under that harness's `duplicates.commands`.
 - Gemini CLI: [subagents](https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md)
   are documented in `.gemini/agents/*.md`, but their only switch is
   `experimental.enableAgents`, so they are not documented as stable and stay

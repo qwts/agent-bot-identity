@@ -322,14 +322,15 @@ test('Codex command skills render only for a soul that targets Codex, and their 
   assert.equal([...other.output.keys()].some((path) => path.startsWith('.agents/')), false);
   assert.deepEqual(other.report.codex.unsupported.commands, ['review', 'ship']);
   assert.deepEqual(duplicates(other.report), {});
-  // Codex alone: rendered, and no other `.agents/skills/` reader is targeted.
-  const codex = build(['codex']);
-  assert.ok(codex.output.has('.agents/skills/source-command-ship/SKILL.md'));
-  assert.deepEqual(codex.report.codex.commands.rendered, ['ship']);
-  assert.deepEqual(duplicates(codex.report), {});
-  // Codex with Qwen Code, or no preference (every harness): the duplicates are named.
-  assert.deepEqual(duplicates(build(['codex', 'qwen']).report), { qwen: ['ship'] });
-  assert.deepEqual(duplicates(build([]).report), { qwen: ['ship'], opencode: ['ship'] });
+  // With Codex targeted, or no preference (every harness), the skill renders.
+  // Qwen Code and OpenCode still get their native command, and a launch
+  // preference does not stop them reading the skill, so both name it.
+  for (const preferred of [['codex'], ['codex', 'qwen'], []]) {
+    const { output, report } = build(preferred);
+    assert.ok(output.has('.agents/skills/source-command-ship/SKILL.md'), String(preferred));
+    assert.deepEqual(report.codex.commands.rendered, ['ship']);
+    assert.deepEqual(duplicates(report), { qwen: ['ship'], opencode: ['ship'] }, String(preferred));
+  }
 });
 
 test('dropping Codex from the targets removes only the marked command skills (#378)', (t) => {
