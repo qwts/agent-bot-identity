@@ -340,6 +340,11 @@ test('prompts name the soul by name and Agent ID, and the change', () => {
   assert.equal(say('identity migrate-credentials --all'), "move every soul's GitHub App key");
   assert.equal(say(`soul remove ${ID}`), `remove ${bill} from this Mac (its folders are archived, not deleted)`);
   assert.equal(say(`soul remove ${ID} --scope team`), `remove ${bill} and every soul it leads from this Mac (their folders are archived, not deleted)`);
+  const digest = 'ab'.repeat(32);
+  assert.equal(say(`soul mode ${ID} autopilot repo sha256:${digest} /work/my repo/.claude/settings.json`),
+    `let ${bill} run in Auto-Pilot, as its repo asks (/work/my repo/.claude/settings.json, sha256:abababababab)`);
+  assert.equal(say(`soul mode ${ID} autopilot soul sha256:${digest} /souls/bill.soul/soul.json`),
+    `let ${bill} run in Auto-Pilot, as its soul package asks (/souls/bill.soul/soul.json, sha256:abababababab)`);
   // Anything else keeps its words, with each soul named.
   assert.equal(say(`soul spawn ${ID}`), `soul spawn ${bill}`);
   // The name a launch or join gave the soul wins over its handle (#429).

@@ -85,6 +85,10 @@ export function ownerActionSummary(action, { souls = null, listSouls = null } = 
     summary = `turn waking on new messages ${rest[0]} for ${label(id)}`;
   } else if (first === 'soul' && second === 'cold-wake' && rest[0] === 'resume' && rest.length === 2) {
     summary = `let ${label(id)} wake on new messages by resuming its session (${rest[1]})`;
+  } else if (first === 'soul' && second === 'mode' && rest[0] === 'autopilot' && ['repo', 'soul'].includes(rest[1])
+    && /^sha256:[0-9a-f]{64}$/.test(rest[2] ?? '') && rest.length > 3) {
+    // A repo or soul package asks for autopilot that nobody picked (#379).
+    summary = `let ${label(id)} run in Auto-Pilot, as its ${rest[1] === 'repo' ? 'repo' : 'soul package'} asks (${rest.slice(3).join(' ')}, ${rest[2].slice(0, 19)})`;
   } else if (first === 'soul' && second === 'remove' && rest.length === 0) {
     summary = `remove ${label(id)} from this Mac (its folders are archived, not deleted)`;
   } else if (first === 'soul' && second === 'remove' && rest[0] === '--scope' && rest[1] === 'team' && rest.length === 2) {
