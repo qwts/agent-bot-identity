@@ -202,19 +202,18 @@ export async function removeAppFromKeyd(app, { env = process.env, home = homedir
 export const KEYD_METHOD_NOT_FOUND = -32601;
 
 // Whether keyd can take a new App-level key for `app`, asking nothing of the
-// owner: keyd answers (`running`), the owner has pinned this daemon's key
-// (`pinned`), and it knows `owner/app-status`. `{ available: true, held }`,
-// or `{ available: false, reason }` in words the owner reads in the App
-// command's output.
+// owner: keyd answers (`running`) and knows `owner/app-status`.
+// `{ available: true, held }`, plus `pins: true` when no daemon key is
+// pinned yet: the import then pins this daemon's key, and keyd's own owner
+// prompt says so. Otherwise `{ available: false, reason }` in words the owner
+// reads in the App command's output.
 export async function appKeydAvailability(app, { env = process.env, home = homedir(), request = keydRequest } = {}) {
   const status = await keydStatus({ env, home, request });
   if (!status.running) return { available: false, reason: status.bin ? 'agent-bot-keyd is not running' : 'agent-bot-keyd is not installed' };
-  if (!status.pinned) return { available: false, reason: "agent-bot-keyd has not pinned this daemon's key yet" };
   try {
     const held = await request(keydPaths({ env, home }).ownerSocket, 'owner/app-status', { app }, { timeoutMs: 5_000 });
-    if (typeof held?.held !== 'boolean') return { available: false, reason: 'agent-bot-keyd gave no App-level key status' };
-    if (held.pinned !== true) return { available: false, reason: "agent-bot-keyd has not pinned this daemon's key yet" };
-    return { available: true, held: held.held };
+    if (typeof held?.held !== 'boolean' || typeof held?.pinned !== 'boolean') return { available: false, reason: 'agent-bot-keyd gave no App-level key status' };
+    return { available: true, held: held.held, ...(held.pinned ? {} : { pins: true }) };
   } catch (error) {
     if (error?.rpcCode === KEYD_METHOD_NOT_FOUND) return { available: false, reason: 'this agent-bot-keyd predates App-level keys (#110); update the host app that ships agent-bot-keyd to keep App keys in keyd' };
     return { available: false, reason: 'agent-bot-keyd could not report App-level key status' };

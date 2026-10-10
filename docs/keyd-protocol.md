@@ -313,18 +313,24 @@ messages and grant format.
 `agent-bot identity app create`, `connect` and `rotate-key`
 ([identity-apps.mjs](../identity-apps.mjs)), after the owner gate:
 
-- **Verified keyd.** `owner/status` answers with `pinned: true`, and
-  `owner/app-status` answers (`appKeydAvailability`,
+- **Verified keyd.** `owner/status` answers and `owner/app-status` answers
+  with `pinned` and `held` (`appKeydAvailability`,
   [keyd-client.mjs](../keyd-client.mjs)). The key is sent with
   `owner/app-import` (keyd asks the owner again and reads it back), and only
   then does the App's config record say `store: keyd`, with its App ID and
-  key fingerprint. No readable copy is written.
-- **Not verified, or `-32601`.** keyd not installed, not running, not
-  pinned, or from before #110: the key goes to the file or Keychain store as
-  before, and the result's `storeReason` says why. Any other keyd refusal
-  (the owner declined, a pin mismatch) fails the operation and stores
-  nothing, except `create`, whose key GitHub hands over once: it is kept in
-  the file or Keychain store with the reason.
+  key fingerprint. No readable copy is written. When no daemon key is pinned
+  yet, that import carries `daemonKey` and pins it, as a soul's first
+  `owner/import` does: keyd's one owner prompt names the pin, and the result
+  says `daemonKeyPinned: true`.
+- **Not verified, or `-32601`.** keyd not installed, not running, or from
+  before #110: the key goes to the file or Keychain store as
+  before, and the result's `storeReason` says why. Validation and pin
+  mismatch are refused before consent; an owner decline also occurs before
+  keyd writes a pin or App item. After consent, keyd pins first when needed,
+  then writes and reads back the App key, so a later RPC or storage error can
+  leave a pin or App item behind. `connect` does not locally fall back on a
+  non-version import error; `create` keeps GitHub's one-time key in file or
+  Keychain with the reason.
 - **Existing keys.** An App with a file or Keychain record keeps its store,
   rotation included (`storeReason` says so); moving one is a later, verified
   migration. A key keyd already holds for an App this machine has no record
@@ -438,17 +444,17 @@ Tests named here are `node:test` titles, or Rust test functions under
 | `/v0/keyd/grant` refuses no binding (401), an unknown tool (400) and a soul whose key is not in keyd (409); signs for the bound soul; receipts each answer without the grant | daemon | `POST /v0/keyd/grant` | `tests/keyd.test.mjs`: "the daemon grants keyd calls only to a bound keyd soul, and receipts each answer" |
 | Outside the daemon a keyd soul's token comes only through `/v0/credential` on its binding | daemon | `mintThroughDaemon` | `tests/keyd.test.mjs`: "a keyd soul resolves to keyd with no key, and mint goes through keyd"; "a bound keyd soul's mint through the daemon keeps the installation id" |
 | The import sends every key in one owner call, with the daemon key to pin | `importIntoKeyd` | keyd `owner/import` | `tests/keyd.test.mjs`: "the owner import sends every key at once with the daemon key to pin" |
-| keyd pins the daemon key on first import and refuses another | keyd-side | keyd `owner/import`, `owner/app-import`, `owner/pin` | `keyd/src/server.rs`: `pins_the_daemon_key_exactly_once`, `owner_operations_need_consent_and_a_matching_pin` |
+| The first `owner/import` or `owner/app-import` pins `daemonKey` in that owner's consent; later imports reuse it, and a different key requires `owner/pin` | keyd-side | keyd `owner/import`, `owner/app-import`, `owner/pin` | `keyd/src/server.rs`: `pins_the_daemon_key_exactly_once`, `owner_operations_need_consent_and_a_matching_pin`, `app_level_owner_operations_need_consent_and_a_matching_pin`, `the_first_app_import_pins_the_daemon_key_under_its_one_consent` |
 | keyd spends each grant nonce once, and accepts `exp > now`, `iat ≤ now + 30`, `0 ≤ exp − iat ≤ 120` | keyd-side | `grant::verify` | `keyd/src/grant.rs`: `spends_each_nonce_exactly_once`, `accepts_a_grant_only_inside_the_documented_envelope`, `accepts_a_fresh_grant_once`; `keyd/src/server.rs`: `refuses_calls_without_a_valid_grant` |
 | keyd accepts 1 to 64 import items | keyd-side | keyd `owner/import`, `owner/app-import` | `keyd/src/server.rs`: `imports_one_to_sixty_four_items_and_refuses_zero_or_sixty_five` |
 | keyd holds App-level keys under their own item, apart from souls' items, and removing one leaves the other | keyd-side | `Store` | `keyd/src/store.rs`: `memory_store_round_trips`, `keychain_store_round_trips_in_a_temporary_keychain` |
 | `keyScope` absent or `soul` reads the soul's key, `app` the App-level key; any other value is refused | keyd-side | `grant::verify` | `keyd/src/grant.rs`: `accepts_a_grant_the_daemon_signed`, `reads_the_key_scope_and_refuses_an_unknown_one` |
 | An `app` grant mints with the App-level key for `credential` and `git_credential`; a soul grant never sees it, and an `app` grant never falls back to the soul's key | keyd-side | keyd `credential`, `git_credential` | `keyd/src/server.rs`: `imports_an_app_level_key_and_mints_with_it_only_for_an_app_grant`, `an_app_grant_never_falls_back_to_a_soul_key` |
-| `owner/app-import`, `owner/app-remove` need consent and a matching pin; import checks every item first; `owner/app-status` says only whether the key is held; none is on the soul channel | keyd-side | keyd owner channel | `keyd/src/server.rs`: `app_level_owner_operations_need_consent_and_a_matching_pin` |
+| `owner/app-import` needs consent, pins the daemon key if absent, and refuses a different existing pin; `owner/app-remove` needs consent but does not require a daemon-key pin; import checks every item first; `owner/app-status` returns `pinned`, `held`, and `version`; these methods are owner-channel only | keyd-side | keyd owner channel | `keyd/src/server.rs`: `app_level_owner_operations_need_consent_and_a_matching_pin`, `the_first_app_import_pins_the_daemon_key_under_its_one_consent` |
 | An App-scope grant adds `keyScope: "app"`; a soul grant keeps its 12 keys; another scope is refused | `signKeydGrant` | keyd | `tests/keyd.test.mjs`: "an App-scope grant adds keyScope app; a soul grant keeps its 12 keys; another scope is refused" |
-| keyd is verified for App keys only when it answers, is pinned and knows `owner/app-status`; `-32601` reads as an older keyd | `appKeydAvailability` | keyd owner channel | `tests/keyd.test.mjs`: "keyd is verified for App keys only when it runs, is pinned and knows owner/app-status" |
+| App-key availability requires a running keyd that returns boolean `pinned` and `held` from `owner/app-status`; an unpinned keyd returns `pins: true` as a hint that the import will pin this daemon key; `-32601` identifies an older keyd | `appKeydAvailability` | keyd owner channel | `tests/keyd.test.mjs`: "keyd is verified for App keys when it runs and knows owner/app-status; an unpinned keyd pins on the import" |
 | A `store: keyd` App mints through the daemon with an App-scope grant naming the bound soul | `resolveAppCredential`, `mint`, `mintViaKeyd` | keyd `credential` | `tests/keyd.test.mjs`: "a soul whose App keyd holds App-level mints with an App-scope grant naming the soul" |
-| create, connect and rotate-key use keyd when verified, fall back with a stated reason when not or on `-32601`, fail on any other refusal, and never move or replace an existing key | `identityAppOperation` | keyd `owner/app-import` | `tests/identity-apps.test.mjs`: "with keyd verified, connect keeps the key in keyd, …", "with keyd not verified, …", "an older keyd (-32601) falls back …", "existing App keys are untouched: …", "a keyd-held App rotates in keyd, …", "create keeps the one-time key in keyd …" |
+| New App keys use verified keyd. For a new App, create/connect fall back with a reason when keyd is unavailable or predates #110. An owner decline occurs before pin or App-key writes; later import errors may follow a pin or key write. Connect does not locally fall back on non-version import errors, while create keeps GitHub's one-time key in file/Keychain with a reason. A keyd-held App rotates only in keyd and fails if keyd cannot take it; existing file/Keychain keys never move, and an unrecorded held key is never replaced | `identityAppOperation` | keyd `owner/app-import` | `tests/identity-apps.test.mjs`: "with keyd verified, connect keeps the key in keyd, records store keyd, and mints with an App-scope grant", "with keyd not verified, connect uses the file or Keychain store and says why", "an older keyd (-32601) falls back with its reason; any other keyd refusal stores nothing" (mocked import error; no keyd side effect exercised), "existing App keys are untouched: a file-store App rotates in its store, and a key keyd holds unrecorded is never replaced", "a keyd-held App rotates in keyd, and fails rather than leaving keyd when it cannot", "create keeps the one-time key in keyd when verified, and never loses it to a keyd refusal" |
 | create into keyd keeps the webhook secret in its own `.webhook` file or Keychain item, and writes no key item | `persist`, `managedAppWebhookItem` | — | `tests/identity-apps.test.mjs`: "create into keyd keeps the webhook secret in its own file, and no key item is written", "… own Keychain item, …" |
 | remove of a keyd-held App sends `owner/app-remove` and removes nothing when keyd is unavailable, older or refuses; an orphaned keyd key is removed only when named, after the owner gate | `remove`, `removeAppFromKeyd` | keyd `owner/app-remove` | `tests/identity-apps.test.mjs`: "remove sends owner/app-remove for a keyd-held App, …", "removing a keyd-held App removes nothing …", "an orphaned keyd key is removed only when named, …" |
 | One App operation at a time; readers that cannot mint through keyd fail closed on a keyd record | `withAppOperationLock`, `readManagedAppCredential` | — | `tests/identity-apps.test.mjs`: "one operation per App at a time: …", "readers that cannot mint through keyd fail closed on a keyd-held App" |
