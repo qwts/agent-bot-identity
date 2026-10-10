@@ -107,14 +107,19 @@ export function daemonGrantPublicKey({ env = process.env, home = homedir(), key 
   return Buffer.from(x, 'base64url').toString('base64');
 }
 
-export function signKeydGrant({ agentId, app, tool, apiBase, installationId = null, owner = null, host = null }, privateKey, now = () => new Date()) {
+// `keyScope: 'app'` (#110) asks keyd to mint with the App-level key for
+// `app` instead of the soul's own. A soul grant leaves the field out, so its
+// 12 payload keys are what every keyd, old or new, accepts.
+export function signKeydGrant({ agentId, app, tool, apiBase, installationId = null, owner = null, host = null, keyScope = null }, privateKey, now = () => new Date()) {
   if (!KEYD_TOOL_NAMES.includes(tool)) throw new Error(`unknown keyd tool: ${tool}`);
+  if (keyScope !== null && keyScope !== 'soul' && keyScope !== 'app') throw new Error(`unknown keyd key scope: ${keyScope}`);
   const iat = Math.floor(now().getTime() / 1000);
   const payload = {
     v: 1, aud: KEYD_AUDIENCE, agentId, app, tool, iat, exp: iat + GRANT_TTL_SECONDS,
     nonce: randomBytes(18).toString('base64url'), apiBase,
     installationId: installationId === null || installationId === undefined || installationId === '' ? null : Number(installationId),
     owner: owner ?? null, host: host ?? null,
+    ...(keyScope === 'app' ? { keyScope } : {}),
   };
   const segment = Buffer.from(JSON.stringify(payload)).toString('base64url');
   return `v1.${segment}.${sign(null, Buffer.from(segment), privateKey).toString('base64url')}`;
@@ -132,9 +137,11 @@ export async function grantTarget({ env = process.env, config } = {}) {
   };
 }
 
-// The daemon's own mint for a keyd soul: sign a grant, call `credential`.
-export async function mintViaKeyd({ agentId, app, env = process.env, home = homedir(), config, now = () => new Date(), request = keydRequest } = {}) {
-  const grant = signKeydGrant({ agentId, app, tool: 'credential', ...(await grantTarget({ env, config })) }, vouchKey({ env, home }).privateKey, now);
+// The daemon's own mint for a keyd soul, or for a soul whose App keyd holds
+// App-level (`keyScope: 'app'`, #110): sign a grant, call `credential`.
+export async function mintViaKeyd({ agentId, app, keyScope = null, env = process.env, home = homedir(), config, now = () => new Date(), request = keydRequest } = {}) {
+  if (!agentId) throw new Error(`the ${app} key is held by agent-bot-keyd; only a bound soul can get a token for it, through the daemon`);
+  const grant = signKeydGrant({ agentId, app, tool: 'credential', keyScope, ...(await grantTarget({ env, config })) }, vouchKey({ env, home }).privateKey, now);
   const result = await request(keydPaths({ env, home }).socket, 'tools/call', { name: 'credential', arguments: {}, _meta: { [KEYD_GRANT_META]: grant } });
   if (result?.isError || !result?.structuredContent?.token) {
     const reason = result?.content?.[0]?.text ?? 'agent-bot-keyd gave no token';
@@ -171,6 +178,37 @@ export async function importIntoKeyd(items, { env = process.env, home = homedir(
   return request(keydPaths({ env, home }).ownerSocket, 'owner/import', {
     items, daemonKey: daemonGrantPublicKey({ env, home }),
   }, { timeoutMs: OWNER_TIMEOUT_MS });
+}
+
+// App-level keys (#110): one key per App, shared by every soul acting as it.
+// Same single consent and daemon-key pin as importIntoKeyd.
+export async function importAppIntoKeyd(items, { env = process.env, home = homedir(), request = keydRequest } = {}) {
+  return request(keydPaths({ env, home }).ownerSocket, 'owner/app-import', {
+    items, daemonKey: daemonGrantPublicKey({ env, home }),
+  }, { timeoutMs: OWNER_TIMEOUT_MS });
+}
+
+// A keyd from before #110 answers the App-level methods with this.
+export const KEYD_METHOD_NOT_FOUND = -32601;
+
+// Whether keyd can take a new App-level key for `app`, asking nothing of the
+// owner: keyd answers (`running`), the owner has pinned this daemon's key
+// (`pinned`), and it knows `owner/app-status`. `{ available: true, held }`,
+// or `{ available: false, reason }` in words the owner reads in the App
+// command's output.
+export async function appKeydAvailability(app, { env = process.env, home = homedir(), request = keydRequest } = {}) {
+  const status = await keydStatus({ env, home, request });
+  if (!status.running) return { available: false, reason: status.bin ? 'agent-bot-keyd is not running' : 'agent-bot-keyd is not installed' };
+  if (!status.pinned) return { available: false, reason: "agent-bot-keyd has not pinned this daemon's key yet" };
+  try {
+    const held = await request(keydPaths({ env, home }).ownerSocket, 'owner/app-status', { app }, { timeoutMs: 5_000 });
+    if (typeof held?.held !== 'boolean') return { available: false, reason: 'agent-bot-keyd gave no App-level key status' };
+    if (held.pinned !== true) return { available: false, reason: "agent-bot-keyd has not pinned this daemon's key yet" };
+    return { available: true, held: held.held };
+  } catch (error) {
+    if (error?.rpcCode === KEYD_METHOD_NOT_FOUND) return { available: false, reason: 'this agent-bot-keyd predates App-level keys (#110); update GeniusBar to keep App keys in keyd' };
+    return { available: false, reason: 'agent-bot-keyd could not report App-level key status' };
+  }
 }
 
 export function readKeydRecord({ env = process.env, home = homedir() } = {}) {

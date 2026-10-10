@@ -159,9 +159,10 @@ export function appConfig({
   if (slug) {
     // The declaring soul's own key store first, then the legacy
     // ~/.config/<slug> folder with a one-time notice (#383).
-    const { appId, privateKeyPem, source, agentId: owner } = resolveCredential(slug, { agentId, env, home, cwd, config });
-    // agent-bot-keyd holds this soul's key and never returns it (#397).
-    if (source === 'keyd') return { slug, appId: null, privateKeyPem: null, keyd: { agentId: owner } };
+    const { appId, privateKeyPem, source, agentId: owner, keyScope } = resolveCredential(slug, { agentId, env, home, cwd, config });
+    // agent-bot-keyd holds this soul's key, or the App's (#110), and never
+    // returns it (#397).
+    if (source === 'keyd') return { slug, appId: null, privateKeyPem: null, keyd: { agentId: owner, ...(keyScope === 'app' ? { keyScope } : {}) } };
     return { slug, appId, privateKeyPem };
   }
   throw new Error(
@@ -235,7 +236,8 @@ export function pickInstallation(installations, owner) {
 // `agentId` names the soul the daemon is minting for, so its store is read
 // first; without one the caller's own Agent ID (if any) is used.
 //
-// A soul whose key agent-bot-keyd holds mints through keyd: `viaKeyd` is
+// A soul whose key agent-bot-keyd holds, or whose App keyd holds App-level
+// (#110, a `keyScope: 'app'` grant), mints through keyd: `viaKeyd` is
 // the daemon's in-process grant (keyd-client.mjs mintViaKeyd); anywhere
 // else the caller asks the daemon on its own binding.
 //
@@ -256,7 +258,7 @@ export async function mint({ slug, env = process.env, agentId = null, viaKeyd = 
   if (selected) selected({ appSlug: resolved.slug, reason: selectionReason({ argv, env }) });
   if (resolved.keyd) {
     if (permissions) throw new Error(`the ${resolved.slug} key is held by agent-bot-keyd, which mints the soul's full grant through the daemon; --permissions is not available for it`);
-    if (viaKeyd) return viaKeyd({ agentId: resolved.keyd.agentId, app: resolved.slug, config });
+    if (viaKeyd) return viaKeyd({ ...resolved.keyd, agentId: resolved.keyd.agentId ?? agentId, app: resolved.slug, config });
     const { mintThroughDaemon } = await import('./keyd-client.mjs');
     return mintThroughDaemon({ slug: resolved.slug, env });
   }

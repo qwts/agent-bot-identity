@@ -44,8 +44,10 @@ and `<slug>[bot]` has permission `none` unless it is added as a collaborator,
 however wide the grant. A wider token does not change that.
 Doctor caches only actual live results, never skipped checks. `liveMint` is
 `{status:"unknown"}` until then, or `{status:"ready"|"failed", code, checkedAt}`.
-A locked/unreadable or keyd-only store reports false presence; this does not
-prove deletion (a keyd declaration alone does not prove a key exists).
+A locked/unreadable store or a soul's keyd declaration reports false presence;
+this does not prove deletion (a keyd declaration alone does not prove a key
+exists). An App whose record says `store: keyd` (#110) reports its key
+present: the record is written only after keyd read the key back.
 No key, issuer value, webhook secret, JWT, or installation token appears in a
 list row. The envelope is `{schemaVersion:1, addons:{"github-identity":true|false}, apps:[...]}`;
 `addons` reports whether each add-on this command manages is on, and is present
@@ -57,7 +59,8 @@ and approve on GitHub. The manifest requests Contents, Pull requests and
 Issues write permissions, disables webhooks, and requests no user OAuth.
 The listener checks the host and state nonce, exchanges the code, and closes.
 JSON CLI output is newline-delimited: a pending `{status,localUrl}` followed by
-`{id,slug,installUrl}` or an error. The install URL is the next owner action;
+`{id,slug,installUrl,store}` (plus `storeReason` when the key is not in
+agent-bot-keyd; see below) or an error. The install URL is the next owner action;
 creating an App does not install it. If the bot profile lookup is temporarily
 unavailable, the result adds `metadataPending: true`: the one-time App key
 and ID are still saved, and setup-worktree backfills UID/avatar on lookup. Cancellation and timeout close the listener.
@@ -74,7 +77,7 @@ not a public REST key-generation endpoint. Generate and download a new key
 there, then run `rotate-key`. It verifies the App and mints an installation
 token before replacing the stored key. Failure leaves the old key in place.
 Existing readable legacy/per-soul keys can also rotate into the managed store;
-old copies are retained. Success returns `{id,slug,installUrl,retired,action}`; `retired` is the old
+old copies are retained. Success returns `{id,slug,installUrl,store,retired,action}`; `retired` is the old
 SHA-256 SPKI public-key fingerprint. **Delete that old key on github.com**;
 local retirement does not revoke it. With multiple installations, config
 `owner` selects the account for the verification mint.
@@ -97,7 +100,20 @@ different identifiers. Metadata-only records created by migration have no
 `store` until an App-scoped key is connected. Several souls can share this
 single App metadata record. macOS uses Keychain service
 `agent-bot.app.SLUG`; other platforms use private files below identity state
-`identity-apps/SLUG/.soul-state/credentials/`. Managed credentials precede
+`identity-apps/SLUG/.soul-state/credentials/`.
+
+When agent-bot-keyd is verified (it answers, has pinned this daemon's key and
+knows App-level keys), create, connect and rotate-key keep a new key there
+instead, as an App-level key (#110), and the record says `store: keyd`; no
+readable copy is written, and souls acting as the App mint through keyd. When
+keyd is not verified, or is older than #110, the key goes to Keychain or the
+file store and `storeReason` says why. Any other keyd refusal fails the
+operation and stores nothing, except create's one-time key, which falls back
+with the reason. An App already in Keychain or the file store keeps it,
+rotation included; a key keyd already holds for an App with no record here is
+not replaced. `remove` refuses a keyd-held App for now. One create, connect or
+rotate-key runs per App at a time; another refuses with `identity-app-busy`. Details are in
+[keyd-protocol.md](keyd-protocol.md#app-level-keys-110). Managed credentials precede
 legacy readable stores. A soul's existing `keyd` declaration remains
 helper-owned: connecting/rotating over it or assigning that soul through this
 API refuses with `identity-app-keyd-held`. Use the keyd owner workflow.
@@ -153,7 +169,7 @@ CLI failures are `{error:{code,message}}` with exit 1. Daemon failures are
 404 unknown App/job, 429 full job queue, otherwise 409. Codes start with
 `identity-app-`; common suffixes are `disabled`, `invalid`, `owner-required`,
 `exists`, `not-found`, `assigned`, `store`, `key-unavailable`, `key-invalid`, `key-unchanged`,
-`keyd-held`, `github`, `installation`, `conflict`, `timeout`, and `cancelled`.
+`keyd-held`, `keyd-unavailable`, `keyd-refused`, `busy`, `github`, `installation`, `conflict`, `timeout`, and `cancelled`.
 Upstream error bodies and provider output are never reflected.
 
 References: [GitHub manifest flow](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest),

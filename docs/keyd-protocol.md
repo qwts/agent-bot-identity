@@ -291,10 +291,47 @@ Current behaviour, recorded here and not changed by this page:
 The owner chose (#110, 2026-10-09) to let keyd hold **App-level keys**: one
 key per GitHub App, keyed by the App's slug, shared by every soul that acts as
 that App. They sit alongside the per-soul keys, which keep their item names,
-messages and grant format. This slice is **keyd-side only**: agent-bot does
-not yet send any of the messages below. Recording `store: keyd` for an App,
-minting through keyd by App, and falling back to the file or Keychain store
-with a stated reason when keyd is not verified are slice 2 of #110.
+messages and grant format.
+
+### agent-bot's side
+
+`agent-bot identity app create`, `connect` and `rotate-key`
+([identity-apps.mjs](../identity-apps.mjs)), after the owner gate:
+
+- **Verified keyd.** `owner/status` answers with `pinned: true`, and
+  `owner/app-status` answers (`appKeydAvailability`,
+  [keyd-client.mjs](../keyd-client.mjs)). The key is sent with
+  `owner/app-import` (keyd asks the owner again and reads it back), and only
+  then does the App's config record say `store: keyd`, with its App ID and
+  key fingerprint. No readable copy is written.
+- **Not verified, or `-32601`.** keyd not installed, not running, not
+  pinned, or from before #110: the key goes to the file or Keychain store as
+  before, and the result's `storeReason` says why. Any other keyd refusal
+  (the owner declined, a pin mismatch) fails the operation and stores
+  nothing, except `create`, whose key GitHub hands over once: it is kept in
+  the file or Keychain store with the reason.
+- **Existing keys.** An App with a file or Keychain record keeps its store,
+  rotation included (`storeReason` says so); moving one is a later, verified
+  migration. A key keyd already holds for an App this machine has no record
+  of is never imported over. A `store: keyd` App rotates through
+  `owner/app-import` (after GitHub accepted the new key) or fails; it never
+  leaves keyd. `remove` refuses a keyd-held App for now. Each operation holds
+  a per-App lock from the keyd probe to the config record, so two never race
+  keyd's import; a second refuses (`identity-app-busy`), and the record is
+  re-read under the lock.
+- **Readers without keyd.** `readManagedAppCredential` refuses a keyd record
+  with `managed-app-keyd-held`, so `ensurePrivateKey` and migration fail
+  closed instead of reaching an older key.
+- **Minting.** `resolveAppCredential` resolves a `store: keyd` App to
+  `source: 'keyd'`, `keyScope: 'app'` and the minting soul's Agent ID,
+  unless the soul's own soul.json declares keyd (its own key wins). The
+  daemon's mint then signs a `keyScope: "app"` grant; outside the daemon the
+  token comes from `/v0/credential` on the soul's binding, as for a keyd
+  soul.
+
+keyd keeps an App ID and key only, so a manifest's webhook secret is not
+kept with a keyd-held App (`webhookSecretKept: false`); `create` makes the
+webhook inactive.
 
 ### Item
 
@@ -367,6 +404,11 @@ Tests named here are `node:test` titles, or Rust test functions under
 | `keyScope` absent or `soul` reads the soul's key, `app` the App-level key; any other value is refused | keyd-side | `grant::verify` | `keyd/src/grant.rs`: `accepts_a_grant_the_daemon_signed`, `reads_the_key_scope_and_refuses_an_unknown_one` |
 | An `app` grant mints with the App-level key for `credential` and `git_credential`; a soul grant never sees it, and an `app` grant never falls back to the soul's key | keyd-side | keyd `credential`, `git_credential` | `keyd/src/server.rs`: `imports_an_app_level_key_and_mints_with_it_only_for_an_app_grant`, `an_app_grant_never_falls_back_to_a_soul_key` |
 | `owner/app-import`, `owner/app-remove` need consent and a matching pin; import checks every item first; `owner/app-status` says only whether the key is held; none is on the soul channel | keyd-side | keyd owner channel | `keyd/src/server.rs`: `app_level_owner_operations_need_consent_and_a_matching_pin` |
+| An App-scope grant adds `keyScope: "app"`; a soul grant keeps its 12 keys; another scope is refused | `signKeydGrant` | keyd | `tests/keyd.test.mjs`: "an App-scope grant adds keyScope app; a soul grant keeps its 12 keys; another scope is refused" |
+| keyd is verified for App keys only when it answers, is pinned and knows `owner/app-status`; `-32601` reads as an older keyd | `appKeydAvailability` | keyd owner channel | `tests/keyd.test.mjs`: "keyd is verified for App keys only when it runs, is pinned and knows owner/app-status" |
+| A `store: keyd` App mints through the daemon with an App-scope grant naming the bound soul | `resolveAppCredential`, `mint`, `mintViaKeyd` | keyd `credential` | `tests/keyd.test.mjs`: "a soul whose App keyd holds App-level mints with an App-scope grant naming the soul" |
+| create, connect and rotate-key use keyd when verified, fall back with a stated reason when not or on `-32601`, fail on any other refusal, and never move or replace an existing key | `identityAppOperation` | keyd `owner/app-import` | `tests/identity-apps.test.mjs`: "with keyd verified, connect keeps the key in keyd, …", "with keyd not verified, …", "an older keyd (-32601) falls back …", "existing App keys are untouched: …", "a keyd-held App rotates in keyd, …", "create keeps the one-time key in keyd …" |
+| One App operation at a time; readers that cannot mint through keyd fail closed on a keyd record | `withAppOperationLock`, `readManagedAppCredential` | — | `tests/identity-apps.test.mjs`: "one operation per App at a time: …", "readers that cannot mint through keyd fail closed on a keyd-held App" |
 | Souls are denied `vouch-key.pem` and keyd's sockets in every tool | — | confinement hook | `tests/soul-credentials.test.mjs`: "confinement denies a soul its key store, the legacy folder and secret-store CLIs in every tool" |
 | `action` in an assertion is SHA-256 hex, matching keyd | keyd | `actionDigest` | `tests/owner-presence.test.mjs`: "the action digest matches keyd (sha256 hex)" |
 | An assertion verifies only for its key, action, nonce, audience and prefix | keyd | `verifyPresence` | `tests/owner-presence.test.mjs`: "an assertion verifies only for its key, action, nonce and time" |

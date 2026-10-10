@@ -16,7 +16,8 @@ import { credentialStores, defaultCredentialStore, resolveAppCredential } from '
 import { credentialNamespace, itemTitle, managedAppItem } from './credential-names.mjs';
 import { createProtonPassCredentialProvider, validateIssuer, validatePrivateKey } from './ensure-private-key.mjs';
 import { buildAppJwt, pickInstallation } from './mint-token.mjs';
-import { MINT_CODES, appStoreTarget, forgetAppDoctorRow, readAppDoctorCache, readAppMetadata, updateAppConfig, validAppSlug } from './identity-app-store.mjs';
+import { KEYD_METHOD_NOT_FOUND, appKeydAvailability, importAppIntoKeyd } from './keyd-client.mjs';
+import { MINT_CODES, appStoreTarget, forgetAppDoctorRow, readAppDoctorCache, readAppMetadata, updateAppConfig, validAppSlug, withAppOperationLock } from './identity-app-store.mjs';
 
 export class IdentityAppError extends Error {
   constructor(code, message, statusCode = 409) { super(message); Object.assign(this, { code, statusCode }); }
@@ -36,9 +37,14 @@ function slug(value) {
 // a soul, never answered as if there were none.
 const unwired = () => fail('identity-app-census', 'App management needs the soul census; run it through agent-bot identity apps or the daemon.');
 const UNWIRED_SOULS = Object.freeze({ list: unwired, show: unwired, directory: unwired, declaration: unwired, assignApp: unwired });
+// agent-bot-keyd's App-level owner calls (#110); tests pass a fake `keyd`.
+const keydPort = ({ env, home }) => ({
+  availability: (app) => appKeydAvailability(app, { env, home }),
+  importApp: (items) => importAppIntoKeyd(items, { env, home }),
+});
 function settings(options) {
   const env = options.env ?? process.env, home = options.home ?? homedir();
-  return { ...options, env, home, config: loadConfig({ env, home }), stores: options.stores ?? credentialStores({ env }), platform: options.platform ?? process.platform, souls: options.souls ?? UNWIRED_SOULS };
+  return { ...options, env, home, config: loadConfig({ env, home }), stores: options.stores ?? credentialStores({ env }), platform: options.platform ?? process.platform, souls: options.souls ?? UNWIRED_SOULS, keyd: options.keyd ?? keydPort({ env, home }) };
 }
 function enabled(config) {
   if (!isGateEnabled('github-identity', { config })) fail('identity-app-disabled', 'Enable the github-identity add-on before managing Apps.');
@@ -124,39 +130,103 @@ function keyInput(body, options) {
     fail('identity-app-key-unavailable', 'Could not read the replacement key; check the file or unlock the selected pass-cli item.');
   }
 }
-function persist(app, credential, cachedInstallations, options, { replace = false, previousFingerprint = null, metadata = {} } = {}) {
+// Where a new App key goes (#110): agent-bot-keyd when it is verified (it
+// answers, has pinned this daemon's key and knows App-level keys), else the
+// file or Keychain store, with the reason in the result. An App that already
+// has a record keeps its store: existing keys are not moved, and a keyd-held
+// App's rotation stays in keyd or fails. A `oneTime` key (create: GitHub
+// hands it over once) is never lost to a keyd refusal; it falls back instead.
+async function keyPlacement(app, previous, options, { oneTime }) {
+  if (previous?.store && previous.store !== 'keyd') {
+    return { store: previous.store, reason: `App ${app}'s key is already kept in the ${previous.store} store; existing App keys are not moved to agent-bot-keyd.` };
+  }
+  let probe;
+  try { probe = await options.keyd.availability(app); }
+  catch { probe = { available: false, reason: 'agent-bot-keyd could not be checked' }; }
+  if (previous?.store === 'keyd') {
+    if (!probe.available) fail('identity-app-keyd-unavailable', `App ${app}'s key is held by agent-bot-keyd, which cannot take a new one now (${probe.reason}); nothing was changed.`);
+    return { store: 'keyd' };
+  }
+  const fallback = defaultCredentialStore(options.platform);
+  if (!probe.available) return { store: fallback, reason: `${probe.reason}; the key is kept in the ${fallback} store instead.` };
+  if (probe.held) {
+    // keyd's import replaces an item, so a key it holds without a record
+    // here is never written over.
+    const held = `agent-bot-keyd already holds an App-level key for ${app} that this machine has no record of, and it is not replaced`;
+    if (!oneTime) fail('identity-app-exists', `${held}; nothing was stored.`);
+    return { store: fallback, reason: `${held}; the key is kept in the ${fallback} store instead.` };
+  }
+  return { store: 'keyd', fallback };
+}
+// keyd asks the owner itself before storing, and reads the item back.
+async function importIntoKeydStore(app, credential, placement, options, { oneTime, replace }) {
+  try {
+    await options.keyd.importApp([{ app, appId: String(credential.appId), privateKeyPem: credential.privateKeyPem }]);
+    return { store: 'keyd' };
+  } catch (error) {
+    // keyd's refusals are its own secret-free sentences (keydRequest), shown
+    // so the owner sees why, e.g. that they declined.
+    const older = error?.rpcCode === KEYD_METHOD_NOT_FOUND;
+    const why = older ? 'this agent-bot-keyd predates App-level keys (#110)' : `agent-bot-keyd did not store the key (${typeof error?.message === 'string' ? error.message : 'refused'})`;
+    if (!replace && (older || oneTime)) return { store: placement.fallback, reason: `${why}; the key is kept in the ${placement.fallback} store instead.` };
+    fail('identity-app-keyd-refused', `${why}; nothing was changed.`);
+  }
+}
+async function persist(app, credential, cachedInstallations, options, settings = {}) {
+  // The keyd probe, import and record are one step per App (#110).
+  const held = await withAppOperationLock(app, options, () => persistLocked(app, credential, cachedInstallations, options, settings));
+  if (!held) fail('identity-app-busy', `Another create, connect or rotate-key for App ${app} is in progress; retry when it finishes.`);
+  return held.value;
+}
+async function persistLocked(app, credential, cachedInstallations, options, { replace = false, previousFingerprint = null, metadata = {}, oneTime = false } = {}) {
+  // Re-read under the operation lock: a finished rotation changed the record.
+  options = { ...options, config: loadConfig({ env: options.env, home: options.home }) };
   active(app, options.config);
-  const kind = options.config.identityApps?.[app]?.store ?? defaultCredentialStore(options.platform);
-  if (!['file', 'keychain'].includes(kind)) fail('identity-app-store', 'This App requires a supported file or Keychain store.');
   const keyFingerprint = fingerprint(credential.privateKeyPem);
-  let rollback = null;
-  return updateAppConfig((config) => {
+  // Checked before keyd is asked, and again under the config lock.
+  const check = (config) => {
     active(app, config);
     const previous = config.identityApps?.[app];
+    if (previous?.store && !['file', 'keychain', 'keyd'].includes(previous.store)) fail('identity-app-store', 'This App requires a supported file or Keychain store.');
+    if (previous?.store === 'keyd' && !replace) fail('identity-app-exists', `App ${app} is already connected and agent-bot-keyd holds its key; use rotate-key.`);
     if (previous?.store && !replace) {
       // A verified connect can repair an absent item, but cannot silently
       // rotate a present key or treat a locked store as empty.
-      const stored = options.stores[kind].read(appStoreTarget(app, options));
+      const stored = options.stores[previous.store].read(appStoreTarget(app, options));
       if (stored || previous.id !== String(credential.appId)) fail('identity-app-exists', `App ${app} is already connected; use rotate-key.`);
     }
     if (replace && previous?.keyFingerprint !== previousFingerprint) fail('identity-app-conflict', `App ${app} changed; retry rotation.`);
-    // A managed App must not shadow a signed-helper credential. The keyd
-    // owner/import lifecycle remains with migrate-credentials.
+    // A managed App must not shadow a signed-helper credential. A soul's
+    // own keyd key stays with migrate-credentials.
     for (const soul of options.souls.list(options)) {
       let directory;
       try { directory = options.souls.directory(soul.id, { ...options, readOnly: true }); } catch { fail('identity-app-store', 'Could not inspect soul credential declarations; repair the census before managing Apps.'); }
       const declaration = options.souls.declaration(directory);
       if (declaration?.app === app && declaration.store === 'keyd') fail('identity-app-keyd-held', `App ${app} is held by keyd; manage its keys through the keyd owner workflow.`);
     }
-    if (previous?.store) {
-      const before = options.stores[kind].read(appStoreTarget(app, options));
-      if (before) rollback = () => options.stores[kind].write(appStoreTarget(app, options), before);
+    return previous;
+  };
+  const recorded = check(options.config);
+  let placement = await keyPlacement(app, recorded, options, { oneTime });
+  if (placement.store === 'keyd') placement = await importIntoKeydStore(app, credential, placement, options, { oneTime, replace });
+  const kind = placement.store;
+  let rollback = null;
+  return updateAppConfig((config) => {
+    const previous = check(config);
+    if (kind !== 'keyd') {
+      if (previous?.store) {
+        const before = options.stores[kind].read(appStoreTarget(app, options));
+        if (before) rollback = () => options.stores[kind].write(appStoreTarget(app, options), before);
+      }
+      options.stores[kind].write(appStoreTarget(app, options), credential);
     }
-    options.stores[kind].write(appStoreTarget(app, options), credential);
     config.identityApps ??= {};
     const keyUpdatedAt = (options.now ?? (() => new Date()))().toISOString();
     config.identityApps[app] = { ...previous, ...metadata, id: String(credential.appId), store: kind, keyFingerprint, keyUpdatedAt, installations: cachedInstallations };
-    return { id: String(credential.appId), slug: app, installUrl: installUrl(app) };
+    // keyd keeps an App ID and key only (#110), so a manifest's webhook
+    // secret is not kept with it; create makes the App's webhook inactive.
+    const dropped = kind === 'keyd' && credential.webhookSecret ? { webhookSecretKept: false } : {};
+    return { id: String(credential.appId), slug: app, installUrl: installUrl(app), store: kind, ...(placement.reason ? { storeReason: placement.reason } : {}), ...dropped };
   }, { ...options, rollback: () => rollback?.() });
 }
 // Harness → App mappings as list reports them: explicit `apps` overrides and
@@ -183,7 +253,8 @@ export function listIdentityApps(options = {}) {
     try {
       const credential = resolveAppCredential(app, { ...opts, cwd: home, readOnly: true, warn: () => {} });
       issuerPresent = Boolean(credential.appId);
-      keyPresent = Boolean(credential.privateKeyPem);
+      // An App-level keyd key is recorded only after keyd read it back.
+      keyPresent = Boolean(credential.privateKeyPem) || credential.keyScope === 'app';
     } catch {
       // Report independent presence for incomplete legacy installations.
       if (!config.identityApps?.[app]?.store) {
@@ -224,7 +295,7 @@ async function connect(body, options) {
   const app = slug(info.slug);
   if (String(info.id) !== body.id) fail('identity-app-mismatch', 'GitHub returned a different App ID.');
   const rows = await appInstallations(credential, options);
-  return persist(app, credential, installations(rows), options, { metadata: await botMetadata(app, options) });
+  return await persist(app, credential, installations(rows), options, { metadata: await botMetadata(app, options) });
 }
 async function rotate(body, options) {
   const app = slug(body.slug), previous = options.config.identityApps?.[app];
@@ -232,9 +303,15 @@ async function rotate(body, options) {
   let old;
   try { old = resolveAppCredential(app, { ...options, warn: () => {} }); }
   catch { fail('identity-app-not-found', `App ${app} has no readable credential; connect it first.`, 404); }
-  if (old.source === 'keyd') fail('identity-app-keyd-held', `App ${app} is held by keyd; use the keyd owner workflow.`);
+  // An App-level keyd key (#110) is never read back: the record's App ID and
+  // fingerprint stand in for it. A soul's own keyd key stays with keyd's
+  // owner workflow.
+  const appLevel = old.source === 'keyd' && old.keyScope === 'app';
+  if (old.source === 'keyd' && !appLevel) fail('identity-app-keyd-held', `App ${app} is held by keyd; use the keyd owner workflow.`);
+  if (appLevel && (!old.appId || !previous?.keyFingerprint)) fail('identity-app-not-found', `App ${app}'s keyd record is incomplete; connect it again.`, 404);
+  const oldFingerprint = appLevel ? previous.keyFingerprint : fingerprint(old.privateKeyPem);
   const credential = { appId: old.appId, privateKeyPem: keyInput(body, options), ...(old.webhookSecret ? { webhookSecret: old.webhookSecret } : {}) };
-  if (fingerprint(old.privateKeyPem) === fingerprint(credential.privateKeyPem)) fail('identity-app-key-unchanged', `App ${app} needs a new key file or pass-cli item.`);
+  if (oldFingerprint === fingerprint(credential.privateKeyPem)) fail('identity-app-key-unchanged', `App ${app} needs a new key file or pass-cli item.`);
   const info = await github('GET', '/app', credential, options);
   if (info.slug !== app || String(info.id) !== String(old.appId)) fail('identity-app-mismatch', `The replacement key does not belong to App ${app}.`);
   const rows = await appInstallations(credential, options);
@@ -243,8 +320,8 @@ async function rotate(body, options) {
   catch { fail('identity-app-installation', `Install App ${app}, or configure owner to select an installation, then retry.`); }
   const grant = await github('POST', `/app/installations/${installation.id}/access_tokens`, credential, options);
   if (typeof grant.token !== 'string' || !grant.token) fail('identity-app-mint-failed', `App ${app} returned no installation token; the stored key was not changed.`);
-  const result = persist(app, credential, installations(rows), options, { replace: Boolean(previous?.store), previousFingerprint: previous?.keyFingerprint ?? null, metadata: await botMetadata(app, options) });
-  return { ...result, retired: fingerprint(old.privateKeyPem), action: 'Delete the retired key in the App settings on github.com.' };
+  const result = await persist(app, credential, installations(rows), options, { replace: Boolean(previous?.store), previousFingerprint: previous?.keyFingerprint ?? null, metadata: await botMetadata(app, options) });
+  return { ...result, retired: oldFingerprint, action: 'Delete the retired key in the App settings on github.com.' };
 }
 function assign(body, options) {
   const app = slug(body.slug);
@@ -308,6 +385,7 @@ function remove(body, options) {
     const kind = record.store ?? null;
     let item = null;
     if (kind) {
+      if (kind === 'keyd') fail('identity-app-keyd-held', `App ${app}'s key is held by agent-bot-keyd; removing an App-level keyd key is not available yet. Nothing was removed.`);
       if (!['file', 'keychain'].includes(kind)) fail('identity-app-store', 'This App uses an unsupported store; nothing was removed.');
       const target = appStoreTarget(app, options);
       let before;
@@ -397,7 +475,7 @@ export async function startAppManifest(body, options) {
       // not discard that credential; setup can backfill the public profile.
       const metadata = await botMetadata(app, options).catch(() => ({}));
       if (settled) return;
-      const result = persist(app, credential, [], options, { metadata });
+      const result = await persist(app, credential, [], options, { metadata, oneTime: true });
       finish(null, metadata.botUid ? result : { ...result, metadataPending: true });
     } catch (error) {
       if (!res.headersSent) reply(400, 'App operation failed.');

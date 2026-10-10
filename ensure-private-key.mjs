@@ -382,6 +382,8 @@ export function ensurePrivateKey({
   const idPath = env.AGENT_BOT_CONFIG ?? join(home, '.config', 'agent-bot', 'config.json');
   const legacyPath = privateKeyPath(slug, home);
   recoverCredentialTransaction({ slug, directory: dirname(legacyPath), exists });
+  // An App-level keyd key (#110) has nothing to prepare here.
+  if (config.identityApps?.[slug]?.store === 'keyd') throw preparationError('keyd-held', slug, 'this App key is held by keyd');
   let stored = readManagedAppCredential(slug, { env, home, config, stores });
   if (!stored) {
     try {
