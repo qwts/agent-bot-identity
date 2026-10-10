@@ -450,10 +450,13 @@ The placement is recorded in the owner's state, beside the audit log, not in
 the soul's: `skill-globals/<harness>/<name>.json` under the interaction home
 (the soul, destination, reason, file modes, sizes and SHA-256, and how it was
 authorized). Each load and unload appends a `skill-global` audit receipt.
-`unload NAME --soul AGENT_ID --global` narrows, so it asks no one; the owner
-can run it for any soul, a soul only for its own. It removes nothing without
-the owner-side record naming that soul, so a record a soul writes for itself
-cannot point it at the owner's own skills. It resolves the destination again
+`unload NAME --soul AGENT_ID --global` removes nothing without the owner-side
+record naming that soul. The owner can run it for any soul without a prompt.
+A soul runs it only for its own Agent ID, and because a soul shares the
+owner's account and could write that record itself, its unload asks the owner
+through keyd like its load does; a refusal removes nothing. For a soul caller
+the record and receipt paths also ignore `AGENT_BOT_INTERACTION_HOME` and
+`XDG_STATE_HOME`, so it cannot relocate the owner's state to a folder it owns. It resolves the destination again
 rather than trusting the record, and removes the copy only while it matches
 the record, so an edited copy is kept (`skill-load-modified`). Nothing here changes the soul package or any
 repository's exclude list.

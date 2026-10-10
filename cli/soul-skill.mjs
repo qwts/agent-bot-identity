@@ -9,7 +9,7 @@ import { NOT_CAPTURED } from '../skill-references.mjs';
 import { currentAgentId } from '../agent-identity.mjs';
 import { discardRevisionStaging, revisionCommand, revisionOwnerGate } from '../soul-revisions.mjs';
 import { stageSkillInstall, stageSkillUninstall, trashSoulSkill } from '../skill-install.mjs';
-import { loadGlobalSkill, loadSkill, unloadGlobalSkill, unloadSkill } from '../skill-workspace.mjs';
+import { loadGlobalSkill, loadSkill, ownerStateEnv, unloadGlobalSkill, unloadSkill } from '../skill-workspace.mjs';
 import { assertOwnerAction, presenceOrConsent, soulMarkers } from '../owner-action.mjs';
 import { soulDreamCommand } from './soul-dream.mjs';
 
@@ -49,7 +49,8 @@ load --global places it in the harness's user-level skills folder
 (~/.claude/skills/<name>/, or $CLAUDE_CONFIG_DIR/skills/), where every session
 sees it: opt-in, with a recorded --reason, and only after the owner approves
 (the owner gate; Touch ID through keyd when a soul asks for itself). unload
---global removes it when unchanged, only for the soul the owner's record names.
+--global removes it when unchanged, only for the soul the owner's record names;
+a soul's own unload asks the owner the same way.
 Other repository adapters remain unimplemented.
 check never replaces accepted snapshots or local edits. update previews a recorded
 check; applying requires reviewed digests and preserves prior material. learn supplies guidance;
@@ -165,7 +166,6 @@ async function loadMain(verb, args, json, { stdout, stderr, markers = soulMarker
     const harness = values.harness ? { harness: values.harness } : {};
     let result;
     if (!global) result = (verb === 'load' ? loadSkill : unloadSkill)(name, values.agentId, { ...options, workspace: values.workspace, ...harness });
-    else if (verb === 'unload') result = unloadGlobalSkill(name, values.agentId, { ...options, ...harness });
     else {
       const authorize = async action => {
         let principal = null;
@@ -182,7 +182,13 @@ async function loadMain(verb, args, json, { stdout, stderr, markers = soulMarker
             { code: error.code === 'owner-credential-required' ? error.code : 'skill-global-owner-not-approved', cause: error });
         }
       };
-      result = await loadGlobalSkill(name, values.agentId, { ...options, ...harness, reason: values.reason, authorize });
+      // A soul shares the owner's account, so it could write the owner-side
+      // record itself: its unload needs the owner too, and its record paths
+      // ignore the variables that relocate the owner's state.
+      const recordEnv = caller === 'soul' ? ownerStateEnv(options.env ?? process.env) : null;
+      result = verb === 'unload'
+        ? await unloadGlobalSkill(name, values.agentId, { ...options, ...harness, recordEnv, authorize: caller === 'soul' ? authorize : null })
+        : await loadGlobalSkill(name, values.agentId, { ...options, ...harness, reason: values.reason, recordEnv, authorize });
     }
     stdout.write(report(result, json));
     return 0;

@@ -66,7 +66,7 @@ test('the owner loads a skill globally after the gate, with the reason recorded,
   assert.equal(unloaded.json.removed, true);
   assert.equal(existsSync(f.destination), false);
   assert.equal(existsSync(globalRecordPath('claude', 'demo', { env: f.env, home: f.home })), false);
-  assert.equal(f.gates.length, 1, 'narrowing asks no one');
+  assert.equal(f.gates.length, 1, 'the owner\'s own unload is not gated');
   assert.deepEqual(f.receipts().map(r => r.operation), ['load', 'unload']);
 });
 
@@ -88,8 +88,11 @@ test('a soul asking for itself still needs the owner, and cannot present the pri
   assert.equal(f.asks.length, 1, 'the owner was asked');
   assert.equal(f.gates.length, 0);
   assert.equal((await f.run(['unload', 'demo', '--soul', f.id, '--global', '--json'], soul)).code, 0);
+  assert.equal(f.asks.length, 2, 'a soul\'s unload asks the owner too');
+  assert.match(f.asks[1], /soul skill unload demo .* --global \(removes /);
 
   const refused = await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON, '--json'], { ...soul, approve: false });
+  assert.equal(f.asks.length, 3);
   assert.equal(refused.json.error.code, 'skill-global-owner-not-approved');
   assert.equal(existsSync(f.destination), false);
 
@@ -97,7 +100,7 @@ test('a soul asking for itself still needs the owner, and cannot present the pri
   assert.equal(principal.json.error.code, 'skill-global-principal-not-accepted');
   const other = await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON, '--json'], { ...soul, self: 'agent_00000000-0000-4000-8000-000000000000' });
   assert.equal(other.code, 1);
-  assert.equal(f.asks.length, 2, 'no prompt for a refused request');
+  assert.equal(f.asks.length, 3, 'no prompt for a refused request');
 });
 
 test('global load refuses before asking: no reason, an unsupported harness, or something already there', async t => {
@@ -182,4 +185,33 @@ test('a soul\'s own global load asks through keyd only: no signed challenge, no 
   const approved = await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON, '--json'],
     { markers: ['AGENT_BOT_ID'], gate: { askOwner: undefined, presence: async () => ({ method: 'presence' }) } });
   assert.equal(approved.code, 0, approved.err);
+});
+
+// A soul shares the owner's account: it can relocate the owner's state through
+// the environment, or write the owner-side record itself. Either way its
+// unload reaches the owner first, and a refusal deletes nothing.
+test('a soul\'s global unload needs the owner even with a record it forged', async t => {
+  const f = fixture(t);
+  const owned = path.join(f.home, '.claude/skills/owners-skill');
+  put(path.join(owned, 'SKILL.md'), 'owner wrote this\n');
+  const bytes = readFileSync(path.join(owned, 'SKILL.md'));
+  const forge = file => put(file, JSON.stringify({ schemaVersion: 1, name: 'owners-skill', harness: 'claude', agentId: f.id, destination: owned, reason: 'x',
+    files: { 'SKILL.md': { mode: '100644', size: bytes.length, sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}` } } }));
+  const soul = { markers: ['AGENT_BOT_ID'], approve: false };
+
+  // The environment points the owner's state at a folder the soul owns: ignored.
+  const mine = path.join(f.home, 'soul-tmp');
+  forge(path.join(mine, 'skill-globals/claude/owners-skill.json'));
+  const steered = await f.run(['unload', 'owners-skill', '--soul', f.id, '--global', '--json'], { ...soul, extraEnv: { AGENT_BOT_INTERACTION_HOME: mine, XDG_STATE_HOME: mine } });
+  assert.equal(steered.json.error.code, 'skill-not-loaded');
+  assert.equal(existsSync(owned), true);
+
+  // The record written straight into the owner's state: the owner is asked, says no.
+  forge(globalRecordPath('claude', 'owners-skill', { env: f.env, home: f.home }));
+  const direct = await f.run(['unload', 'owners-skill', '--soul', f.id, '--global', '--json'], soul);
+  assert.equal(direct.json.error.code, 'skill-global-owner-not-approved');
+  assert.equal(f.asks.length, 1, 'the owner was asked');
+  assert.equal(readFileSync(path.join(owned, 'SKILL.md'), 'utf8'), 'owner wrote this\n');
+  assert.equal(existsSync(globalRecordPath('claude', 'owners-skill', { env: f.env, home: f.home })), true);
+  assert.deepEqual(f.receipts(), []);
 });

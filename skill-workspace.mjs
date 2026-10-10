@@ -299,8 +299,9 @@ function globalReason(reason) {
  * reason, the copied hashes and modes, and how it was authorized in the
  * owner's state (not the soul's), and appends an audit receipt.
  */
-export async function loadGlobalSkill(name, agentId, { harness = 'claude', reason, authorize, env = process.env, home = homedir(), now = () => new Date(), ...options } = {}) {
+export async function loadGlobalSkill(name, agentId, { harness = 'claude', reason, authorize, recordEnv = null, env = process.env, home = homedir(), now = () => new Date(), ...options } = {}) {
   validateAgentId(agentId);
+  const state = recordEnv ?? env;
   const why = globalReason(reason);
   const target = globalSkillTarget(name, harness, { env, home });
   if (typeof authorize !== 'function') fail('skill-global-owner-required', 'a global load needs the owner gate');
@@ -310,7 +311,7 @@ export async function loadGlobalSkill(name, agentId, { harness = 'claude', reaso
   if (!stat.isDirectory() || stat.isSymbolicLink()) fail('skill-path-unsafe', `skills/${name} is not a real folder`);
   const files = readSkill(source);
   if (!files.some(file => file.path === 'SKILL.md')) fail('skill-entrypoint-missing', `skills/${name} has no SKILL.md`);
-  const recordFile = globalRecordPath(harness, name, { env, home });
+  const recordFile = globalRecordPath(harness, name, { env: state, home });
   const conflicts = () => {
     if (exists(recordFile)) fail('skill-load-exists', `${name} is already loaded globally for ${harness}; unload it with the soul that loaded it first`);
     if (exists(target.destination)) fail('skill-load-exists', `${target.destination} already exists; another soul or the owner placed it there`);
@@ -344,7 +345,7 @@ export async function loadGlobalSkill(name, agentId, { harness = 'claude', reaso
       mkdirSync(path.dirname(recordFile), { recursive: true, mode: 0o700 });
       writeAtomic(recordFile, `${JSON.stringify(record, null, 2)}\n`, 0o600);
       appendAuditReceipt({ event: 'skill-global', agentId, operation: 'load', decision: harness,
-        detail: `${name} -> ${target.destination} (${method}): ${why}` }, { env, home, now });
+        detail: `${name} -> ${target.destination} (${method}): ${why}` }, { env: state, home, now });
       return { name, harness, global: true, destination: target.destination, files: files.length, reason: why, authorization: method };
     } catch (error) {
       rmSync(target.destination, { recursive: true, force: true });
@@ -354,23 +355,28 @@ export async function loadGlobalSkill(name, agentId, { harness = 'claude', reaso
   });
 }
 
+// The record and receipt paths for a soul caller ignore the variables that
+// relocate the owner's state, so a soul cannot point them at a folder it owns.
+export const ownerStateEnv = env => Object.fromEntries(Object.entries(env).filter(([key]) => key !== 'AGENT_BOT_INTERACTION_HOME' && key !== 'XDG_STATE_HOME'));
+
 /**
- * Removes a skill `load --global` placed for this soul. Narrowing, so no
- * owner prompt; the caller decides who may ask. Only the soul an owner-side
+ * Removes a skill `load --global` placed for this soul. Narrowing, but a soul
+ * shares the owner's account and can write the owner-side record, so when
+ * the caller passes `authorize` (a soul asking) the owner approves before
+ * anything is removed, and a refusal removes nothing. Only the soul the
  * record names may unload, the destination is resolved again rather than
  * taken from the record, and the copy goes only when it still matches what
- * load placed (bytes and executable bit). Without such a record nothing is
- * removed.
+ * load placed (bytes and executable bit). Without a record nothing is removed.
  */
-export function unloadGlobalSkill(name, agentId, { harness = 'claude', env = process.env, home = homedir(), now = () => new Date(), ...options } = {}) {
+export async function unloadGlobalSkill(name, agentId, { harness = 'claude', authorize = null, recordEnv = null, env = process.env, home = homedir(), now = () => new Date(), ...options } = {}) {
   validateAgentId(agentId);
+  const state = recordEnv ?? env;
   const target = globalSkillTarget(name, harness, { env, home });
   soulDirectory(agentId, { ...options, env, home, readOnly: true });
-  const recordFile = globalRecordPath(harness, name, { env, home });
-  mkdirSync(path.dirname(recordFile), { recursive: true, mode: 0o700 });
-  return withLock(`${recordFile}.lock`, 'the global skill record', () => {
+  const recordFile = globalRecordPath(harness, name, { env: state, home });
+  const check = () => {
     if (!exists(recordFile)) fail('skill-not-loaded', `${name} was not loaded globally for ${harness}`);
-    const record = JSON.parse(readFileSync(recordFile, 'utf8'));
+    const text = readFileSync(recordFile, 'utf8'), record = JSON.parse(text);
     if (record.agentId !== agentId) fail('skill-not-loaded', `${name} was loaded globally for ${harness} by another soul, not ${agentId}`);
     if (record.destination !== target.destination) fail('skill-global-moved', `${name} was loaded at ${record.destination}, but ${harness}'s folder now resolves to ${target.destination}; unload it with the same configuration`);
     const stat = exists(target.destination);
@@ -378,11 +384,22 @@ export function unloadGlobalSkill(name, agentId, { harness = 'claude', env = pro
       if (!stat.isDirectory() || stat.isSymbolicLink()) fail('skill-path-unsafe', `${target.destination} is not a real folder`);
       const changed = changedFiles(target.destination, record.files ?? {});
       if (changed.length) fail('skill-load-modified', `${target.destination} was changed (${changed.slice(0, 5).join(', ')}${changed.length > 5 ? ', ...' : ''}); move the folder aside, then unload`);
-      rmSync(target.destination, { recursive: true });
     }
+    return { text, stat };
+  };
+  const before = check();
+  let method = 'none';
+  if (authorize) method = (await authorize(`soul skill unload ${name} --soul ${agentId} --global (removes ${target.destination})`))?.method ?? 'none';
+  mkdirSync(path.dirname(recordFile), { recursive: true, mode: 0o700 });
+  return withLock(`${recordFile}.lock`, 'the global skill record', () => {
+    // Checked again: the owner prompt may have waited while the record or
+    // the copy changed.
+    const { text, stat } = check();
+    if (text !== before.text) fail('skill-global-moved', `the record for ${name} changed while the owner was asked`);
+    if (stat) rmSync(target.destination, { recursive: true });
     rmSync(recordFile);
     appendAuditReceipt({ event: 'skill-global', agentId, operation: 'unload', decision: harness,
-      detail: `${name} <- ${target.destination}${stat ? '' : ' (already gone)'}` }, { env, home, now });
-    return { name, harness, global: true, destination: target.destination, removed: Boolean(stat) };
+      detail: `${name} <- ${target.destination}${stat ? '' : ' (already gone)'} (${method})` }, { env: state, home, now });
+    return { name, harness, global: true, destination: target.destination, removed: Boolean(stat), authorization: method };
   });
 }
