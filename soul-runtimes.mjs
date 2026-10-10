@@ -47,6 +47,7 @@ const OVERRIDE_RUNTIME_ENV = Object.freeze({
   uv: ['UV_CACHE_DIR', 'UV_TOOL_DIR', 'UV_TOOL_BIN_DIR'], uvx: ['UV_CACHE_DIR', 'UV_TOOL_DIR', 'UV_TOOL_BIN_DIR'],
 });
 const OVERRIDES_DIR = 'overrides';
+const OVERRIDE_LOCK = '.lock';
 const OVERRIDE_SCHEMA_VERSION = 1;
 const OVERRIDE_RECORD_MAX_BYTES = 16 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
@@ -92,8 +93,10 @@ function validateOverrideStore(soulDir, agentId, { create = false } = {}) {
         if (error.code === 'ENOENT') return;
         throw unsafeOverrideState(agentId, 'override state cannot be inspected');
       }
-      try { mkdirSync(directory, { mode: 0o700 }); info = lstatSync(directory); }
-      catch { throw unsafeOverrideState(agentId, 'override state could not be created'); }
+      // A concurrent first override may create it between the lstat and the
+      // mkdir; the entry it left is validated below like any other.
+      try { mkdirSync(directory, { mode: 0o700 }); } catch (mkdirError) { if (mkdirError.code !== 'EEXIST') throw unsafeOverrideState(agentId, 'override state could not be created'); }
+      try { info = lstatSync(directory); } catch { throw unsafeOverrideState(agentId, 'override state could not be created'); }
     }
     if (!info.isDirectory() || info.isSymbolicLink()) throw unsafeOverrideState(agentId, 'override state must use real directories inside the soul');
     try { if (!within(soulRoot, realpathSync(directory))) throw new Error('outside'); }
@@ -165,6 +168,31 @@ function ensureOverrideShims(soulDir, overrides, { agentId } = {}) {
   }
 }
 
+// Reads the override records and brings their shims in line under the same
+// store lock as `soul runtimes override`, so a launch working from an older
+// read can never undo a set or clear that has already succeeded. With any
+// invalid record the shims are left alone and the caller refuses.
+function syncOverrideShims(soulDir, { agentId, platform }) {
+  const read = () => {
+    const state = inspectRuntimeOverrides(soulDir, { agentId, platform });
+    if (!state.errors.length && state.rows.length) ensureOverrideShims(soulDir, state.overrides, { agentId });
+    return state;
+  };
+  const store = () => { try { return lstatSync(overrideDirectory(soulDir)); } catch { return null; } };
+  let info = store();
+  if (!info) {
+    // No store yet: an empty read needs no lock. If a first override created
+    // the store meanwhile, its record may still be provisional, so read
+    // again under the lock instead of using it.
+    const state = inspectRuntimeOverrides(soulDir, { agentId, platform });
+    if (!state.rows.length) return state;
+    info = store();
+  }
+  // Only a real directory holds the lock; anything else is refused by the read.
+  if (!info?.isDirectory() || info.isSymbolicLink()) return read();
+  return withLock(path.join(overrideDirectory(soulDir), OVERRIDE_LOCK), 'runtime override store', read);
+}
+
 function prepareOverrideShims(soulDir, overrides, { agentId } = {}) {
   const directory = overrideDirectory(soulDir), bin = overrideShimDirectory(soulDir);
   validateOverrideStore(soulDir, agentId, { create: true });
@@ -202,6 +230,24 @@ function writeOverrideRecord(soulDir, agentId, name, executable) {
   validateOverrideStore(soulDir, agentId, { create: true });
   const file = overrideRecordFile(soulDir, name), temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try { writeFileSync(temporary, `${JSON.stringify({ schemaVersion: OVERRIDE_SCHEMA_VERSION, executable })}\n`, { flag: 'wx', mode: 0o600 }); renameSync(temporary, file); }
+  finally { rmSync(temporary, { force: true }); }
+}
+
+// The record as it was before a set, so a failure after the write can put
+// it back. A record that is not a small regular file is already broken, and
+// a set refuses it; `--clear` moves any entry aside instead.
+function readPreviousOverrideRecord(file) {
+  let info;
+  try { info = lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return { absent: true }; throw error; }
+  if (!info.isFile() || info.size > OVERRIDE_RECORD_MAX_BYTES) return { unrestorable: true };
+  return { bytes: readFileSync(file) };
+}
+
+function restoreOverrideRecord(soulDir, agentId, file, previous) {
+  if (previous.absent) { rmSync(file, { recursive: true, force: true }); return; }
+  validateOverrideStore(soulDir, agentId, { create: true });
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try { writeFileSync(temporary, previous.bytes, { flag: 'wx', mode: 0o600 }); renameSync(temporary, file); }
   finally { rmSync(temporary, { force: true }); }
 }
 
@@ -685,12 +731,11 @@ export async function installSoulRuntimes(soulDir, { only = null, agentId = null
   const inspect = () => inspectSoulRuntimes(soulDir, { platform, catalog, env, home, registry });
   let state = inspect();
   const who = agentId ?? path.basename(soulDir);
-  const overrideState = inspectRuntimeOverrides(soulDir, { agentId: who, platform });
+  const overrideState = syncOverrideShims(soulDir, { agentId: who, platform });
   if (overrideState.errors.length) {
     const error = overrideState.errors[0];
     throw Object.assign(new Error(error.reason), { code: error.code, runtime: error.name, action: error.action });
   }
-  if (overrideState.rows.length) ensureOverrideShims(soulDir, overrideState.overrides, { agentId: who });
   const overriddenRuntimes = new Set(overrideState.rows.filter((row) => row.status === 'selected' && row.runtime).map((row) => row.runtime));
   const invalid = state.invalid.find((entry) => !only || entry.path.includes(only));
   if (invalid) fail('runtime-install-failed', `${who}: ${invalid.message}`, { runtime: invalid.path, action: `fix soul.json ${invalid.path} in a revision` });
@@ -833,12 +878,11 @@ export function soulRuntimeEnv(id, { env = process.env, home = env.HOME ?? homed
   const inspection = inspectSoulRuntimes(soulDir, { ...rest, env, home, manifest });
   const invalid = inspection.invalid[0];
   if (invalid) fail('runtime-install-failed', `${soul.id}: ${invalid.message}`, { runtime: invalid.path, action: `fix soul.json ${invalid.path} in a revision` });
-  const overrideState = inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: inspection.platform ?? process.platform });
+  const overrideState = syncOverrideShims(soulDir, { agentId: soul.id, platform: inspection.platform ?? process.platform });
   if (overrideState.errors.length) {
     const error = overrideState.errors[0];
     throw Object.assign(new Error(error.reason ?? error.message), { code: error.code, runtime: error.name, action: error.action });
   }
-  if (overrideState.rows.length) ensureOverrideShims(soulDir, overrideState.overrides, { agentId: soul.id });
   const routed = runtimeLaunchEnv(inspection, { env, overrides: overrideState.overrides, harness, node });
   for (const name of routed.missing) {
     const isHarness = name.startsWith('harness:');
@@ -931,16 +975,44 @@ async function soulRuntimeOverrideCommand(argv, { gate, readStdin, write, env, h
   const soul = resolveSoul(id, options);
   await gate(`${clear ? 'clear' : 'set'} ${soul.id}'s ${name} executable override`, { principal, env, cwd });
   const soulDir = soulRoot(soul, options);
-  if (clear) validateOverrideStore(soulDir, soul.id);
-  const file = overrideRecordFile(soulDir, name);
-  if (clear) rmSync(file, { recursive: true, force: true });
-  else writeOverrideRecord(soulDir, soul.id, name, executable);
-  const status = inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host });
-  ensureOverrideShims(soulDir, status.overrides, { agentId: soul.id });
-  const selected = status.rows.find((row) => row.name === name);
-  if (!clear && selected?.status !== 'selected') throw Object.assign(new Error(selected?.reason ?? `could not select ${name} override`), { code: selected?.code ?? 'runtime-override-invalid', runtime: name, action: selected?.action });
-  appendAuditReceipt({ event: 'soul-runtimes', agentId: soul.id, operation: clear ? 'override-clear' : 'override', decision: clear ? 'cleared' : 'selected',
-    detail: clear ? `${name} override cleared` : `${name} override selected at ${executable}; verification: unverified-external` }, { env, home, now });
+  validateOverrideStore(soulDir, soul.id, { create: true });
+  // One writer at a time: the check, the record change, the shims and the
+  // receipt succeed together, or the previous record is put back.
+  withLock(path.join(overrideDirectory(soulDir), OVERRIDE_LOCK), 'runtime override store', () => {
+    // An unsafe shim directory refuses before the record changes.
+    ensureOverrideShims(soulDir, inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host }).overrides, { agentId: soul.id });
+    const file = overrideRecordFile(soulDir, name);
+    // A clear moves the entry aside, whatever it is, and a set keeps its
+    // bytes; either way a failure below puts the previous entry back.
+    const previous = clear ? null : readPreviousOverrideRecord(file);
+    // A broken record could not be put back if this set failed, so it is
+    // cleared on its own first.
+    if (!clear && previous.unrestorable) throw invalidOverride(soul.id, name, `override record for ${name} is not a small regular file; clear it first`, `agent-bot soul runtimes override ${soul.id} ${name} --clear`);
+    let aside = null;
+    if (clear) {
+      aside = `${file}.${process.pid}.${randomUUID()}.rollback`;
+      try { renameSync(file, aside); } catch (error) { if (error.code !== 'ENOENT') throw error; aside = null; }
+    } else writeOverrideRecord(soulDir, soul.id, name, executable);
+    try {
+      const status = inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host });
+      (rest.prepareShims ?? ensureOverrideShims)(soulDir, status.overrides, { agentId: soul.id });
+      const selected = status.rows.find((row) => row.name === name);
+      if (!clear && selected?.status !== 'selected') throw Object.assign(new Error(selected?.reason ?? `could not select ${name} override`), { code: selected?.code ?? 'runtime-override-invalid', runtime: name, action: selected?.action });
+      appendAuditReceipt({ event: 'soul-runtimes', agentId: soul.id, operation: clear ? 'override-clear' : 'override', decision: clear ? 'cleared' : 'selected',
+        detail: clear ? `${name} override cleared` : `${name} override selected at ${executable}; verification: unverified-external` }, { env, home, now });
+    } catch (error) {
+      if (!clear) restoreOverrideRecord(soulDir, soul.id, file, previous);
+      else if (aside) { rmSync(file, { recursive: true, force: true }); renameSync(aside, file); }
+      // Best effort: bring the shims back in line with the restored record.
+      // Launch revalidates them anyway, and the original error is the one to report.
+      try { ensureOverrideShims(soulDir, inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host }).overrides, { agentId: soul.id }); }
+      catch { /* launch refuses unsafe shims on its own */ }
+      throw error;
+    }
+    // The clear is committed and receipted; a set-aside copy that will not
+    // delete is left as an inert `.rollback` entry rather than failing it.
+    if (aside) { try { rmSync(aside, { recursive: true, force: true }); } catch { /* inert leftover */ } }
+  });
   const result = { schemaVersion: RUNTIMES_SCHEMA_VERSION, agentId: soul.id, name, status: clear ? 'cleared' : 'selected', executable, verification: clear ? null : 'unverified-external' };
   write(json ? `${JSON.stringify(result)}\n` : `${soul.id}: ${name} override ${clear ? 'cleared' : `selected at ${executable} (unverified external)`}\n`);
   return result;

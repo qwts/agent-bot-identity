@@ -197,6 +197,17 @@ test('the read-only environment descriptor identifies an external override witho
   assert.ok(!result.readiness.problems.some((entry) => entry.code === 'runtime-missing'), 'an active override prevents a false next-launch-install warning');
 });
 
+test('an invalid override does not report PATH as routed through soul runtimes', (t) => {
+  const f = fixture(t);
+  const overrideDir = path.join(f.dir, '.soul-state', 'runtimes', 'overrides');
+  put(path.join(overrideDir, 'node.json'), `${JSON.stringify({ schemaVersion: 1, executable: path.join(f.home, 'gone', 'node') })}\n`, 0o600);
+  const result = readSoulEnvironment(ID, f.options);
+  assert.equal(result.runtimes.overrides[0].status, 'invalid');
+  assert.equal(result.launch.routing.runtimes.node.source, 'override');
+  assert.equal(result.launch.routing.runtimes.node.bin, null);
+  assert.notEqual(result.launch.routing.PATH, 'soul-runtimes', 'a refused override adds no shim to PATH');
+});
+
 test('a Python override keeps managed status visible without claiming unused implicit uv work', (t) => {
   const f = fixture(t);
   const manifest = JSON.parse(readFileSync(path.join(f.dir, 'soul.json'), 'utf8'));
