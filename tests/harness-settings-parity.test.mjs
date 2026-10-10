@@ -228,11 +228,6 @@ test('a declined loosening runs safe and is remembered; a changed file asks agai
   seen = await daemonTurn({ harness: 'claude', cwd: repo, env, home, ask: async () => ({ method: 'consent' }) });
   assert.equal(seen.mode, 'autopilot');
   assert.deepEqual(answers(env, home).map(({ status }) => status), ['denied', 'approved']);
-  // The administrator dialog's Cancel is a decline too.
-  writeFileSync(path.join(repo, '.claude/settings.json'), JSON.stringify({ permissions: { defaultMode: 'bypassPermissions' }, env: { A: '1' } }));
-  seen = await daemonTurn({ harness: 'claude', cwd: repo, env, home, ask: async () => { throw new Error('owner approval was cancelled — nothing was changed'); } });
-  assert.equal(seen.mode, 'safe');
-  assert.deepEqual(answers(env, home).map(({ status }) => status), ['denied', 'approved', 'denied']);
 });
 
 test('with nobody to ask the turn runs safe, nothing is kept, and the next turn asks again', async (t) => {
@@ -259,4 +254,28 @@ test('turns that start together share one question', async (t) => {
   release();
   assert.deepEqual(await Promise.all(turns), ['autopilot', 'autopilot']);
   assert.equal(calls, 1);
+});
+
+test('the daemon asks through keyd alone: no administrator dialog, so nothing blocks it', async (t) => {
+  const { env, home, soulDir } = fixture(t, 'autopilot');
+  const log = [];
+  // keyd cannot ask: the turn runs safe and nothing is kept, with no dialog fallback.
+  let modeFor = daemonModeFor({ env, home, config: {}, log: (line) => log.push(line),
+    presence: async () => { throw Object.assign(new Error('no GeniusBar'), { code: 'presence-unavailable' }); } });
+  assert.equal(await modeFor(ID, { harness: 'claude', cwd: soulDir }), 'safe');
+  assert.match(log[0], new RegExp(`${LOOSENING_NEEDS_OWNER}: .*no administrator-dialog fallback`));
+  assert.deepEqual(answers(env, home), []);
+  // keyd's refusal is kept as a decline.
+  modeFor = daemonModeFor({ env, home, config: {}, log: () => {},
+    presence: async () => { throw Object.assign(new Error('the owner did not approve'), { code: 'owner-declined' }); } });
+  assert.equal(await modeFor(ID, { harness: 'claude', cwd: soulDir }), 'safe');
+  assert.deepEqual(answers(env, home).map(({ status }) => status), ['denied']);
+  // keyd's approval is the answer, with the prompt naming the soul and file.
+  writeFileSync(path.join(soulDir, 'soul.json'), `${readFileSync(path.join(soulDir, 'soul.json'), 'utf8')}\n`);
+  const prompts = [];
+  modeFor = daemonModeFor({ env, home, config: {}, log: () => {},
+    presence: async (summary) => { prompts.push(summary); return { method: 'presence', via: 'agent-bot-keyd' }; } });
+  assert.equal(await modeFor(ID, { harness: 'claude', cwd: soulDir }), 'autopilot');
+  assert.match(prompts[0], /run in Auto-Pilot, as its soul package asks \(.*soul\.json, sha256:[0-9a-f]{12}\)$/);
+  assert.deepEqual(answers(env, home).map(({ status }) => status), ['denied', 'approved']);
 });

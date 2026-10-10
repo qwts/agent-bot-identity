@@ -79,7 +79,7 @@ import { isComputerUse } from './permission-risk.mjs';
 import { appendAuditReceipt, assertAuthorized, principalsFile, resolvePrincipal } from './agent-principals.mjs';
 import { validateApprovalScope } from './session-approvals.mjs';
 import { approvalAction, shown } from './approval-action.mjs';
-import { confirmOwnerPresence, ownerCredentialRequired, verifyPrincipalOwner } from './owner-action.mjs';
+import { confirmOwnerPresence, ownerCredentialRequired, presenceOrConsent, verifyPrincipalOwner } from './owner-action.mjs';
 import { runSpawnHooks } from './agent-hook.mjs';
 import { createWebLayer } from './agent-web.mjs';
 import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs';
@@ -1428,15 +1428,16 @@ function populationOverride(env, home) {
 
 // The daemon's per-turn permission mode, under the settings precedence
 // (#379): the owner's pick, then the repo, then the soul package. A loosening
-// nobody picked asks the owner through the daemon's gate (keyd's Touch ID or
-// password prompt, else the administrator dialog), once per soul and
-// declaring file: the action line carries the file's sha256, so a changed
+// nobody picked asks the owner through keyd's Touch ID or password prompt,
+// once per soul and declaring file: the action line carries the file's sha256, so a changed
 // file is a new question. The answer is kept as an ordinary owner-decided
 // proposal (agent-jobs.mjs) for the soul with that digest, and gets a
 // `soul-mode` receipt. Approved runs the turn in autopilot; declined runs it
-// in safe. When nobody can be asked (headless, no keyd and no dialog), the
-// turn runs safe, nothing is remembered, and the next turn asks again. An
-// owner pick still wins over a remembered answer in either direction.
+// in safe. There is no administrator-dialog fallback, as with delegation
+// grants (#108): osascript runs synchronously and would stall every turn of
+// the daemon while it waits. When keyd cannot ask (headless, no GeniusBar),
+// the turn runs safe, nothing is remembered, and the next turn asks again.
+// An owner pick still wins over a remembered answer in either direction.
 export const LOOSENING_TOOL = 'permission-mode:autopilot';
 
 const loosenedOperation = (agentId, { source, file, digest }) => operationDigest({ change: 'permission-mode', mode: 'autopilot', agentId, source, file, sha256: digest });
@@ -1448,12 +1449,16 @@ function rememberedLoosening(agentId, operation, { env, home }) {
   return answers.at(-1)?.status ?? null;
 }
 
-// A person's no: keyd's refusal, or the administrator dialog's Cancel.
-const ownerDeclined = (error) => error?.code === 'owner-declined' || /owner approval was cancelled/.test(error?.message ?? '');
+// Where keyd cannot ask, a loosening gets no administrator dialog.
+const noLooseningDialog = async () => { throw Object.assign(new Error('agent-bot-keyd could not ask, and a loosening has no administrator-dialog fallback'), { code: 'presence-unavailable' }); };
+
+// A person's no through keyd.
+const ownerDeclined = (error) => error?.code === 'owner-declined';
 
 export function daemonModeFor({
   env = process.env, home = homedir(), config, now = () => new Date(),
-  ask = (action) => confirmOwnerPresence(action, { env }),
+  presence = undefined,
+  ask = (action) => confirmOwnerPresence(action, { env, consent: (act, options) => presenceOrConsent(act, { ...options, presence, consent: noLooseningDialog }) }),
   log = (line) => process.stderr.write(`${line}\n`),
 } = {}) {
   // One question per soul and digest at a time, however many turns start.

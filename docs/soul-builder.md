@@ -423,12 +423,13 @@ What ships today for `permissionMode` on a daemon-run turn
   `untrusted` is safe, `never` is autopilot). Any other value, another
   harness, or an unreadable file is a layer that declares nothing.
 - A declared autopilot that nobody picked is a loosening. The daemon asks the
-  owner through its owner gate (keyd's Touch ID or login password, else the
-  macOS administrator dialog), naming the soul, the layer, the declaring file
-  and the sha256 of its text. The turn waits for the answer; turns of the same
+  owner through keyd's Touch ID or login password prompt, naming the soul, the
+  layer, the declaring file and the sha256 of its text. There is no macOS
+  administrator-dialog fallback, as with delegation grants: that dialog runs
+  synchronously and would stall the whole daemon while it waits. The turn waits for the answer; turns of the same
   soul that start meanwhile share the one question.
   - **Approved:** the turn runs in autopilot.
-  - **Declined** (keyd's refusal or the dialog's Cancel): the turn runs in
+  - **Declined** (keyd's refusal): the turn runs in
     safe, where every tool call goes to the owner's approval queue.
   - Either answer is kept as an owner-decided proposal in the interaction
     store (`proposals.json`, tool `permission-mode:autopilot`) whose digest
@@ -437,7 +438,7 @@ What ships today for `permissionMode` on a daemon-run turn
     `declined`). Later turns, including after a daemon restart, use the kept
     answer without asking. Any change to the file is a new digest, so the
     owner is asked again.
-  - **Nobody can be asked** (headless, no keyd and no dialog): the turn runs
+  - **keyd cannot ask** (headless, no GeniusBar, an unsigned keyd): the turn runs
     in safe, nothing is kept, the daemon logs
     `permission-mode-loosening-needs-owner` with the soul and the layer, and
     the next turn asks again.
