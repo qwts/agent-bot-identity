@@ -82,7 +82,7 @@ import { isComputerUse } from './permission-risk.mjs';
 import { appendAuditReceipt, assertAuthorized, principalsFile, resolvePrincipal } from './agent-principals.mjs';
 import { validateApprovalScope } from './session-approvals.mjs';
 import { approvalAction, shown } from './approval-action.mjs';
-import { confirmOwnerPresence, ownerCredentialRequired, presenceOrConsent, verifyPrincipalOwner } from './owner-action.mjs';
+import { confirmOwnerPresence, createChallengeLedger, ownerCredentialRequired, presenceOrConsent, verifyPrincipalOwner } from './owner-action.mjs';
 import { runSpawnHooks } from './agent-hook.mjs';
 import { createWebLayer } from './agent-web.mjs';
 import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs';
@@ -403,9 +403,15 @@ export function createDaemonServer({
   // runDaemon wires it to the launch handler; null refuses the route.
   teamStarter = null,
   // Deciding a soul's tool request asks for the owner's presence (#438):
-  // (action, { principal }) => proof, throwing when the owner does not
-  // confirm. Tests pass a fake; the default asks keyd, then the dialog.
-  ownerGate = (action, { principal }) => confirmOwnerPresence(action, { env, principal }),
+  // (action, { principal, request, statement }) => proof, throwing when the
+  // owner does not confirm. Tests pass a fake; the default asks keyd, then,
+  // with an SSH owner key pinned, a signed challenge answered on the decision
+  // route itself (#753), else the dialog.
+  challenges = createChallengeLedger({ env }),
+  // Only a decision route names its request; other callers keep the default.
+  ownerGate = (action, { principal, request = null, statement = null }) => confirmOwnerPresence(action, {
+    env, principal, ...(request === null ? {} : { challenge: challenges.hook({ request, statement }) }),
+  }),
   // Settings accept a verified principal instead of presence, like soul mode.
   settingGate = (action, { principal }) => soulSettingOwnerGate(action, { principal, env, cwd: home }),
   revisionPrincipal = (credential) => verifyPrincipalOwner(credential, { env }),
@@ -421,7 +427,7 @@ export function createDaemonServer({
   // first (#438): the daemon token proves only a process in this account, and
   // a transport principal only its provider login. The owner is asked about
   // the open proposal by soul and tool; a refusal decides nothing.
-  async function confirmDecision({ proposalId, decision, scope = 'once', principal = null, transport = null, credential = null }) {
+  async function confirmDecision({ proposalId, decision, scope = 'once', principal = null, transport = null, credential = null, statement = null }) {
     if (decision !== 'approve' && decision !== 'deny') {
       throw Object.assign(new Error('decision must be approve or deny'), { statusCode: 400 });
     }
@@ -434,15 +440,18 @@ export function createDaemonServer({
       try { assertAuthorized({ principal, agentId: proposal.agentId, operation: 'approve' }); } catch { return; }
     }
     try {
-      await ownerGate(approvalAction(shown(proposal, { env, home }), decision, scope), { principal: credential });
+      await ownerGate(approvalAction(shown(proposal, { env, home }), decision, scope), { principal: credential, request: proposalId, statement });
     } catch (error) {
+      const challenged = error.code === 'owner-challenge-required';
       appendAuditReceipt({
         event: 'approval-decision',
         agentId: proposal.agentId,
         operation: 'approve',
-        decision: 'owner-refused',
+        decision: challenged ? 'owner-challenged' : 'owner-refused',
         ...(principal ? { principalId: principal.principalId, transport } : {}),
       }, { env, home, now });
+      // Nothing is decided yet: the caller gets the challenges to have signed.
+      if (challenged) throw Object.assign(new Error(error.message), { statusCode: 409, code: error.code, challenges: error.challenges });
       throw Object.assign(new Error(`the owner did not confirm this decision: ${error.message}`), { statusCode: 403 });
     }
   }
@@ -1193,7 +1202,7 @@ export function createDaemonServer({
         }
         case 'POST /v0/approvals/decide': {
           const body = parseJsonBody(await readBody(req));
-          await confirmDecision({ proposalId: body.proposalId, decision: body.decision, scope: body.scope, credential: body.principal ?? null });
+          await confirmDecision({ proposalId: body.proposalId, decision: body.decision, scope: body.scope, credential: body.principal ?? null, statement: body.statement ?? null });
           sendJson(res, 200, interaction.decideProposalAsOwner({
             proposalId: body.proposalId,
             decision: body.decision, scope: body.scope,
@@ -1208,8 +1217,10 @@ export function createDaemonServer({
       const failure = operationError(error);
       // Dream, inbox and grant codes are fixed identifiers, so clients can act on them.
       sendJson(res, failure.statusCode, { error: failure.message,
-        ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable', ...GRANT_PRESENCE_CODES].includes(error.code)
-          || typeof error.code === 'string' && /^(dream|inbox|grant|human)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}) });
+        ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable', 'owner-challenge-required', ...GRANT_PRESENCE_CODES].includes(error.code)
+          || typeof error.code === 'string' && /^(dream|inbox|grant|human)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}),
+        // The unsigned challenges a decision route asks the owner to sign (#753).
+        ...(error.code === 'owner-challenge-required' && Array.isArray(error.challenges) ? { challenges: error.challenges } : {}) });
     }
   });
   server.once('close', () => appJobs.close());
@@ -1603,7 +1614,7 @@ async function handleInteractionRequest({ req, res, url, interaction, env, home,
     return;
   }
   if (req.method === 'POST' && (match = url.pathname.match(/^\/v1\/proposals\/([^/]+)\/decision$/))) {
-    await confirmDecision({ proposalId: match[1], decision: body.decision, scope: body.scope, principal, transport });
+    await confirmDecision({ proposalId: match[1], decision: body.decision, scope: body.scope, principal, transport, statement: body.statement ?? null });
     sendJson(res, 200, interaction.decideProposal({
       principal,
       transport,

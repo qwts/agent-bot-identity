@@ -19,8 +19,9 @@ import { pathToFileURL } from 'node:url';
 import { daemonClient } from './daemon-client.mjs';
 import { shown } from './approval-action.mjs';
 import { soulMarkers } from './owner-gate.mjs';
+import { extractToken } from './owner-statement.mjs';
 
-const USAGE = 'usage: agent-bot approvals list [--json] | approvals approve <proposalId> [--scope once|session] [--json] [--principal-stdin] | approvals deny <proposalId> [--json] [--principal-stdin]';
+const USAGE = 'usage: agent-bot approvals list [--json] | approvals approve <proposalId> [--scope once|session] [--statement TOKEN] [--json] [--principal-stdin] | approvals deny <proposalId> [--statement TOKEN] [--json] [--principal-stdin]';
 
 // Wording from README.md, “Approving a soul's tool call”.
 const HELP = `${USAGE}
@@ -34,6 +35,13 @@ keyd's Touch ID or login-password prompt naming the soul and tool, or the
 administrator dialog when keyd cannot ask. The daemon token alone never
 decides, and a --principal-stdin credential is checked as well, not instead.
 
+Where keyd cannot ask and an SSH owner key is enrolled (agent-bot owner
+enroll), the daemon answers with signed challenges instead of the dialog.
+Sign one with \`agent-bot owner sign --challenge '<JSON>' --key PATH\` on a
+trusted machine within ten minutes, then repeat the same decision with
+--statement and the signed statement. A challenge answers only that decision,
+once, and a daemon restart drops it.
+
 Approval scope defaults to once, which also allows the same tool for the
 rest of the current turn. --scope session allows the exact tool for that
 soul across turns in the same harness session. Grants live only in daemon
@@ -42,6 +50,9 @@ restart. Policy deny and computer-use off still win.
 
 See README.md, “Approving a soul's tool call”.
 `;
+
+// One single-quoted shell word, so a challenge whose text has a quote still pastes.
+const shellQuote = (text) => `'${text.replaceAll("'", "'\\''")}'`;
 
 function refuseSoul({ env, cwd }) {
   const markers = soulMarkers({ env, cwd });
@@ -66,6 +77,13 @@ export async function approvalsCommand(argv, {
   const json = argv.includes('--json');
   const presented = argv.includes('--principal-stdin');
   const args = argv.filter((arg) => arg !== '--json' && arg !== '--principal-stdin');
+  let statement = null;
+  const statementIndex = args.indexOf('--statement');
+  if (statementIndex !== -1) {
+    // The bare token or the armored block `owner sign` prints.
+    try { statement = extractToken(args[statementIndex + 1]); } catch { throw new Error(USAGE); }
+    args.splice(statementIndex, 2);
+  }
   const scopeIndex = args.indexOf('--scope');
   let scope = 'once';
   if (scopeIndex !== -1) {
@@ -76,7 +94,7 @@ export async function approvalsCommand(argv, {
   const [action, target, ...rest] = args;
   const opts = { env, home };
   if (action === 'list') {
-    if (target !== undefined || presented) throw new Error(USAGE);
+    if (target !== undefined || presented || statement) throw new Error(USAGE);
     refuseSoul({ env, cwd });
     const { proposals } = await client.approvals();
     const rows = proposals.map((proposal) => ({ ...shown(proposal, opts), invocationId: proposal.invocationId ?? null, risk: proposal.risk ?? 'external' }));
@@ -97,16 +115,36 @@ export async function approvalsCommand(argv, {
   const { proposals } = await client.approvals();
   const proposal = proposals.find((row) => row.proposalId === target);
   if (!proposal) throw Object.assign(new Error(`${target} is not waiting on a decision`), { code: 'not-open' });
-  const result = await client.decideApproval({
-    proposalId: target, decision: action, ...(scopeIndex !== -1 ? { scope } : {}), digest: proposal.operationDigest, ...(principal ? { principal } : {}),
-  });
+  let result;
+  try {
+    result = await client.decideApproval({
+      proposalId: target, decision: action, ...(scopeIndex !== -1 ? { scope } : {}), digest: proposal.operationDigest,
+      ...(principal ? { principal } : {}), ...(statement ? { statement } : {}),
+    });
+  } catch (error) {
+    if (error.code !== 'owner-challenge-required' || !Array.isArray(error.challenges)) throw error;
+    // Nothing was decided: show what to sign and how to answer.
+    const again = `agent-bot approvals ${action} ${target}${scopeIndex !== -1 ? ` --scope ${scope}` : ''} --statement <signed token>`;
+    if (json) write(`${JSON.stringify({ proposalId: target, status: 'owner-challenge-required', challenges: error.challenges, answer: again })}\n`);
+    else {
+      write(`${target}: owner presence is unavailable. Sign one challenge on a trusted machine within ten minutes:\n`);
+      for (const { name, fingerprint, payload } of error.challenges) {
+        write(`  key ${name} (${fingerprint}):\n    agent-bot owner sign --challenge ${shellQuote(JSON.stringify(payload))} --key PATH\n`);
+      }
+      write(`then answer with:\n  ${again}\n`);
+    }
+    return { proposalId: target, status: 'owner-challenge-required', challenges: error.challenges };
+  }
   const decided = { ...shown(result.proposal, opts), invocationId: result.proposal.invocationId ?? null, risk: result.proposal.risk ?? 'external' };
   write(json ? `${JSON.stringify(decided)}\n` : `${decided.proposalId} ${decided.status}\n`);
   return decided;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  approvalsCommand(process.argv.slice(2)).catch((error) => {
+  approvalsCommand(process.argv.slice(2)).then((result) => {
+    // A challenge decided nothing, so it is not a success.
+    if (result?.status === 'owner-challenge-required') process.exitCode = 2;
+  }, (error) => {
     if (process.argv.includes('--json')) {
       process.stdout.write(`${JSON.stringify({ error: { code: error.code ?? 'approvals-failed', message: error.message } })}\n`);
     }

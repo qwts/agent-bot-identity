@@ -11,8 +11,9 @@ contract as built.
 the ssh store, and a CLI-only signed-challenge fallback for existing local SSH
 pins. When local presence is unavailable, an interactive owner gate can show a
 fresh challenge; the owner signs it on a trusted terminal and pastes the reply
-back. There is no automatic challenge transport, daemon decision-route
-statement field or inbox-delivery implementation in this slice. **Not yet:**
+back. The daemon's decision routes answer the same way: the challenge comes
+back in the refusal and the signed reply goes in the decision's `statement`
+field (see below). There is no inbox delivery yet. **Not yet:**
 the keyd store (keyd's `owner/sign` RPC) and pins from the organization
 profile. Until then `owner enroll --store keyd` answers
 `owner-store-unavailable`.
@@ -98,6 +99,23 @@ of falling back to administrator consent. The older administrator fallback
 remains for those actions on hosts with no enrolled owner keys. Enrolment and
 removal always continue through local presence or administrator consent and
 cannot use a signed challenge.
+
+**On a decision route.** Deciding a soul's waiting tool request through
+`POST /v0/approvals/decide` (`agent-bot approvals approve|deny`) or
+`POST /v1/proposals/<id>/decision` never prompts on the daemon's terminal.
+When keyd cannot ask and an SSH owner key is pinned, the route decides
+nothing and answers 409 with `code: "owner-challenge-required"` and
+`challenges: [{ name, fingerprint, payload }]`, one per SSH pin; the audit
+log records `owner-challenged`. The owner signs one payload with
+`owner sign --challenge` and the caller repeats the same decision with
+`statement` set to the signed token or armored block
+(`agent-bot approvals approve <id> --statement '<signed>'`). The daemon keeps
+the challenges in memory for that proposal and that exact decision (approve
+or deny, and the scope). Any reply spends them, verified or not; a new
+request without a statement replaces them; a restart drops them. A reply for
+another proposal or decision, a replay, an expired challenge or a key no
+longer pinned is refused with 403. With no owner key pinned the route still
+uses the administrator dialog.
 
 **enroll** pins a public key in `<state>/owner/keys.json` (0600, in a 0700
 directory; `<state>` is `$XDG_STATE_HOME/agent-bot` or

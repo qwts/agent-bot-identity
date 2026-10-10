@@ -133,6 +133,9 @@ export function daemonClient({
       typeof payload.code === 'string' && (/^(grant|human)-[a-z][a-z-]{0,63}$/.test(payload.code)
         || ['owner-declined', 'presence-required', 'presence-invalid', 'keyd-signer-unverified'].includes(payload.code))
         ? { code: payload.code, detail: String(payload.error ?? '') } : {},
+      // The unsigned owner challenges a decision route wants signed (#753).
+      payload.code === 'owner-challenge-required' && Array.isArray(payload.challenges)
+        ? { code: payload.code, detail: String(payload.error ?? ''), challenges: payload.challenges } : {},
       method === 'POST' && pathname.startsWith('/v0/soul/dream/') && payload.audit?.status === 'unconfirmed'
         && payload.audit?.code === 'dream-control-audit-unconfirmed'
         ? { audit: { status: 'unconfirmed', code: 'dream-control-audit-unconfirmed' } } : {});
@@ -280,9 +283,10 @@ export function daemonClient({
       return request('POST', '/v0/soul/stop', { ...requester, agentId });
     },
     // Waits while the daemon asks the owner (#438): Touch ID or a password.
-    async decideApproval({ proposalId, decision, digest, scope = 'once', principal = null }) {
+    // `statement` answers a signed owner challenge the daemon issued (#753).
+    async decideApproval({ proposalId, decision, digest, scope = 'once', principal = null, statement = null }) {
       return request('POST', '/v0/approvals/decide', {
-        proposalId, decision, digest, scope, ...(principal ? { principal } : {}),
+        proposalId, decision, digest, scope, ...(principal ? { principal } : {}), ...(statement ? { statement } : {}),
       }, {}, OWNER_DECISION_TIMEOUT_MS);
     },
     async artifacts(invocationId, { transport, providerId }) {

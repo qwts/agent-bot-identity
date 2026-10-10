@@ -66,3 +66,20 @@ test('agent-daemon.mjs re-exports the status, membership and environment helpers
   assert.equal(host.soulEnvironment, shellPath.soulEnvironment);
   assert.equal(host.userToolDirs, shellPath.userToolDirs);
 });
+
+test('decideApproval sends a signed statement and surfaces a route challenge (#753)', async (t) => {
+  const env = stateEnv(t);
+  writeState(env);
+  const challenges = [{ name: 'laptop', fingerprint: 'SHA256:abc', payload: { kind: 'challenge' } }];
+  const sent = [];
+  const fetchImpl = async (url, init) => {
+    sent.push(JSON.parse(init.body));
+    return new Response(JSON.stringify({ error: 'owner presence is unavailable', code: 'owner-challenge-required', challenges }), { status: 409 });
+  };
+  const client = daemonClient({ env, fetchImpl });
+  await assert.rejects(client.decideApproval({ proposalId: 'p1', decision: 'approve', digest: 'a'.repeat(64) }),
+    (error) => error.code === 'owner-challenge-required' && JSON.stringify(error.challenges) === JSON.stringify(challenges));
+  assert.equal('statement' in sent[0], false);
+  await assert.rejects(client.decideApproval({ proposalId: 'p1', decision: 'approve', digest: 'a'.repeat(64), statement: 's1.a.b' }));
+  assert.equal(sent[1].statement, 's1.a.b');
+});
