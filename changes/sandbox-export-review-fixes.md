@@ -1,0 +1,1 @@
+- `agent-bot sandbox export --verify` now refuses a copied manifest that is a link, not a regular file, too large, or readable by others, and leaves an audit receipt for every refusal. `--skip` is refused on `--resume` for a category the drop already holds, and the printed copy now runs `chmod 700` on both exports folders (#750).
