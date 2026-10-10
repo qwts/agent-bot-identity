@@ -519,7 +519,7 @@ export async function reportCommsWake(
 
 // Launch results use a fresh connection authenticated with the daemon pair.
 export async function reportCommsLaunch(
-  { requestId, status, agentId = null, detail },
+  { requestId, status, agentId = null, detail, code },
   { credential = null, env = process.env, home = homedir(), paths = commsPaths({ env }),
     clientFactory = (options) => new CommsClient(options) } = {},
 ) {
@@ -527,11 +527,12 @@ export async function reportCommsLaunch(
     || !['launched', 'failed'].includes(status)
     || (status === 'launched' && (typeof agentId !== 'string' || !agentId))
     || (status === 'failed' && agentId !== null)
-    || (detail !== undefined && typeof detail !== 'string')) fail('usage', 'invalid launch result');
+    || (detail !== undefined && typeof detail !== 'string')
+    || (code !== undefined && (typeof code !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(code)))) fail('usage', 'invalid launch result');
   const pair = resolvePairCredential(credential, { env, home });
   const client = clientFactory({ socketPath: paths.socket, brokerUid: pair.brokerUid, mode: pair.mode ?? 'group' });
   return client.request({ op: 'launch-result', auth: { daemon: pair.account, secret: pair.secret },
-    requestId, status, agentId, ...(detail === undefined ? {} : { detail }) }, { paths });
+    requestId, status, agentId, ...(detail === undefined ? {} : { detail }), ...(code === undefined ? {} : { code }) }, { paths });
 }
 
 // Progress on a pending launch (`launch-progress`, agent-comms 0.3.12,
@@ -539,7 +540,9 @@ export async function reportCommsLaunch(
 // the order it passes them. The broker keeps the latest and shows it in
 // `launch-status`; a broker without the op refuses, and callers treat that
 // as best effort.
-export const LAUNCH_STAGES = Object.freeze(['checking', 'account', 'joining', 'harness', 'session']);
+export const LAUNCH_STAGES = Object.freeze([
+  'checking', 'account', 'runtimes', 'tool-home', 'provider', 'sign-in', 'joining', 'harness', 'session',
+]);
 export async function reportCommsLaunchProgress(
   { requestId, stage },
   { credential = null, env = process.env, home = homedir(), paths = commsPaths({ env }),
