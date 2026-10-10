@@ -561,7 +561,7 @@ test('Windows relay forwards only grammar-validated fixed failure metadata', asy
   });
   const invalid = await new Promise((resolve) => rejected.once('error', resolve));
   assert.equal(invalid.code, 'broker-unreachable');
-  assert.equal(invalid.relayFailure, undefined);
+  assert.deepEqual(invalid.relayFailure, { stage: 'host-stderr', format: 'other', reason: 'unexpected' });
   assert.equal(invalid.message.includes('private'), false);
   assert.equal(isWindowsRelayFailure({ stage: 'pipe-connect', exception: 'IOException', hresult: 'not-hex' }), false);
   assert.equal(isWindowsRelayFailure({ stage: 'compile', code: ['CS0246'] }), false);
@@ -584,6 +584,97 @@ test('Windows relay forwards only grammar-validated fixed failure metadata', asy
   assert.equal(compileError.code, 'broker-unreachable');
   assert.deepEqual(compileError.relayFailure, { stage: 'compile', code: 'CS0246' });
   assert.equal(compileError.message, 'cannot reach the broker: broker-unreachable');
+});
+
+test('Windows relay bounds and redacts unknown host stderr and process failures', async () => {
+  const w = world();
+  const k = keys();
+  writeIdentity(w, k.brokerKey);
+  const cases = [
+    {
+      name: 'CLIXML preamble',
+      emit(child) { child.stderr.end('#< CLIXML\r\n<Objs>private secret</Objs>\n'); },
+      failure: { stage: 'host-stderr', format: 'clixml', reason: 'unexpected' },
+    },
+    {
+      name: 'other unexpected stderr',
+      emit(child) { child.stderr.end('C:\\\\private\\\\secrets.txt token=hidden\n'); },
+      failure: { stage: 'host-stderr', format: 'other', reason: 'unexpected' },
+    },
+    {
+      name: 'oversized CLIXML stderr',
+      emit(child) { child.stderr.end(`#< CLIXML${'x'.repeat(1024)}`); },
+      failure: { stage: 'host-stderr', format: 'clixml', reason: 'limit' },
+    },
+    {
+      name: 'process spawn failure',
+      emit(child) { child.emit('error', new Error('private spawn path')); },
+      failure: { stage: 'host-process', event: 'spawn-error' },
+    },
+    {
+      name: 'stdin failure',
+      emit(child) { child.stdin.emit('error', new Error('private stdin path')); },
+      failure: { stage: 'host-process', event: 'stdin-error' },
+    },
+    {
+      name: 'stdout failure',
+      emit(child) { child.stdout.emit('error', new Error('private stdout path')); },
+      failure: { stage: 'host-process', event: 'stdout-error' },
+    },
+    {
+      name: 'stderr failure',
+      emit(child) { child.stderr.emit('error', new Error('private stderr path')); },
+      failure: { stage: 'host-process', event: 'stderr-error' },
+    },
+    {
+      name: 'stderr ended before ready',
+      emit(child) { child.stderr.end(); },
+      failure: { stage: 'host-process', event: 'stderr-end' },
+    },
+    {
+      name: 'process exited before ready',
+      emit(child) { child.exitCode = 1; child.emit('exit', 1, null); child.stderr.end(); },
+      failure: { stage: 'host-process', event: 'exit' },
+    },
+  ];
+
+  for (const scenario of cases) {
+    const child = new EventEmitter();
+    child.stdin = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = () => true;
+    const channel = createWindowsCommsTransport({
+      label: w.paths.serviceLabel, brokerStateDir: w.brokerState, brokerUid: SID, brokerKey: k.brokerKey,
+      custody: fakeCustody(), spawnProcess: () => {
+        process.nextTick(() => scenario.emit(child));
+        return child;
+      },
+    });
+    const error = await new Promise((resolve) => channel.once('error', resolve));
+    assert.equal(error.code, 'broker-unreachable', scenario.name);
+    assert.deepEqual(error.relayFailure, scenario.failure, scenario.name);
+    assert.equal(isWindowsRelayFailure(error.relayFailure), true, scenario.name);
+    assert.equal(Object.keys(error).includes('relayFailure'), false, scenario.name);
+    assert.equal(error.message, 'cannot reach the broker: broker-unreachable', scenario.name);
+    assert.doesNotMatch(JSON.stringify(error), /private|secret|hidden|secrets\.txt/i, scenario.name);
+  }
+
+  assert.throws(() => createWindowsCommsTransport({
+    label: w.paths.serviceLabel, brokerStateDir: w.brokerState, brokerUid: SID, brokerKey: k.brokerKey,
+    custody: fakeCustody(), spawnProcess() { throw new Error('private executable path'); },
+  }), (error) => {
+    assert.equal(error.code, 'broker-unreachable');
+    assert.equal(error.message, 'cannot reach the broker: broker-unreachable');
+    assert.deepEqual(error.relayFailure, { stage: 'host-process', event: 'spawn-error' });
+    assert.equal(error.message.includes('private'), false);
+    return true;
+  });
+
+  assert.equal(isWindowsRelayFailure({ stage: 'host-stderr', format: 'clixml', reason: 'unexpected', raw: 'secret' }), false);
+  assert.equal(isWindowsRelayFailure({ stage: 'host-process', event: 'other' }), false);
 });
 
 test('CommsClient preserves validated Windows relay diagnostics without changing its public error', async () => {

@@ -66,7 +66,11 @@ async function nextMarkerBeforeProof(serverOutput, pendingRequest, description, 
     const relayFailure = isWindowsRelayFailure(event.relayFailure)
       ? event.relayFailure.stage === 'compile'
         ? ` [relay=${event.relayFailure.stage}/${event.relayFailure.code}]`
-        : ` [relay=${event.relayFailure.stage}/${event.relayFailure.exception}/${event.relayFailure.hresult}]`
+        : event.relayFailure.stage === 'host-stderr'
+          ? ` [relay=${event.relayFailure.stage}/${event.relayFailure.format}/${event.relayFailure.reason}]`
+          : event.relayFailure.stage === 'host-process'
+            ? ` [relay=${event.relayFailure.stage}/${event.relayFailure.event}]`
+            : ` [relay=${event.relayFailure.stage}/${event.relayFailure.exception}/${event.relayFailure.hresult}]`
       : '';
     throw new Error(`CommsClient request failed before ${description}${code}${relayFailure}`);
   }

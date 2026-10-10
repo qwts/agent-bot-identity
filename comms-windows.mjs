@@ -21,6 +21,9 @@ const RELAY_FAILURE_STAGES = new Set([
 ]);
 const RELAY_EXCEPTION = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
 const RELAY_HRESULT = /^[0-9A-F]{8}$/;
+const HOST_PROCESS_EVENTS = new Set([
+  'spawn-error', 'stdin-error', 'stdout-error', 'stderr-error', 'stderr-end', 'exit',
+]);
 
 export function isWindowsRelayFailure(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -28,6 +31,14 @@ export function isWindowsRelayFailure(value) {
   if (value.stage === 'compile') {
     return keys === 'code,stage' && typeof value.code === 'string'
       && (value.code === 'unknown' || /^CS[0-9]{4}$/.test(value.code));
+  }
+  if (value.stage === 'host-stderr') {
+    return keys === 'format,reason,stage'
+      && (value.format === 'clixml' || value.format === 'other')
+      && (value.reason === 'unexpected' || value.reason === 'limit');
+  }
+  if (value.stage === 'host-process') {
+    return keys === 'event,stage' && HOST_PROCESS_EVENTS.has(value.event);
   }
   return keys === 'exception,hresult,stage'
     && RELAY_FAILURE_STAGES.has(value.stage)
@@ -40,6 +51,18 @@ function withRelayFailure(error, failure) {
     Object.defineProperty(error, 'relayFailure', { value: Object.freeze({ ...failure }), enumerable: false });
   }
   return error;
+}
+
+function hostStderrFailure(bytes, reason) {
+  return {
+    stage: 'host-stderr',
+    format: bytes.subarray(0, 9).equals(Buffer.from('#< CLIXML', 'ascii')) ? 'clixml' : 'other',
+    reason,
+  };
+}
+
+function hostProcessFailure(event) {
+  return { stage: 'host-process', event };
 }
 
 function parseRelayFailure(line) {
@@ -257,11 +280,17 @@ function createPowerShellPipeConnection(pipe, {
   connectTimeoutMs = WINDOWS_HANDSHAKE_TIMEOUT_MS,
 } = {}) {
   const script = powershellRelayScript(pipe, connectTimeoutMs);
-  const child = spawnProcess('powershell.exe', [
-    '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShell(script),
-  ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: legacyPowerShellEnv(env) });
+  let child;
+  try {
+    child = spawnProcess('powershell.exe', [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShell(script),
+    ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: legacyPowerShellEnv(env) });
+  } catch {
+    throw withRelayFailure(new Error('Windows pipe relay process could not start'), hostProcessFailure('spawn-error'));
+  }
   let ready = false;
   let done = false;
+  let childExited = false;
   let stdoutEnded = false;
   let stderr = Buffer.alloc(0);
   let pendingRelayFailure = null;
@@ -311,10 +340,11 @@ function createPowerShellPipeConnection(pipe, {
   child.stderr.on('data', (chunk) => {
     if (done || ready) return;
     stderr = Buffer.concat([stderr, chunk]);
-    if (stderr.length > 1024) return fail('broker-unreachable');
+    if (stderr.length > 1024) return fail('broker-unreachable', pendingRelayFailure ?? hostStderrFailure(stderr, 'limit'));
     let newline;
     while ((newline = stderr.indexOf(0x0a)) !== -1) {
-      const marker = stderr.subarray(0, newline).toString('ascii').replace(/\r$/, '');
+      const rawMarker = stderr.subarray(0, newline);
+      const marker = rawMarker.toString('ascii').replace(/\r$/, '');
       stderr = stderr.subarray(newline + 1);
       const relayFailure = parseRelayFailure(marker);
       if (relayFailure) {
@@ -342,20 +372,26 @@ function createPowerShellPipeConnection(pipe, {
       } else if (marker === FAILED_MARKER) {
         fail('broker-unreachable', pendingRelayFailure);
       } else {
-        fail('broker-unreachable');
+        fail('broker-unreachable', pendingRelayFailure ?? hostStderrFailure(rawMarker, 'unexpected'));
       }
       return;
     }
   });
   child.stderr.once('end', () => {
-    if (!done && !ready) fail(child.exitCode === 2 ? 'broker-timeout' : 'broker-unreachable', pendingRelayFailure);
+    if (!done && !ready) fail(
+      child.exitCode === 2 ? 'broker-timeout' : 'broker-unreachable',
+      pendingRelayFailure ?? hostProcessFailure(childExited ? 'exit' : 'stderr-end'),
+    );
   });
-  child.once('error', () => fail('broker-unreachable'));
-  child.stdin.on('error', () => fail('broker-unreachable'));
-  child.stdout.on('error', () => fail('broker-unreachable'));
-  child.stderr.on('error', () => fail('broker-unreachable'));
+  child.once('error', () => fail('broker-unreachable', pendingRelayFailure ?? hostProcessFailure('spawn-error')));
+  child.stdin.on('error', () => fail('broker-unreachable', pendingRelayFailure ?? hostProcessFailure('stdin-error')));
+  child.stdout.on('error', () => fail('broker-unreachable', pendingRelayFailure ?? hostProcessFailure('stdout-error')));
+  child.stderr.on('error', () => fail('broker-unreachable', pendingRelayFailure ?? hostProcessFailure('stderr-error')));
   child.once('exit', () => {
-    if (!done && !ready && child.stderr.readableEnded) fail('broker-unreachable');
+    childExited = true;
+    if (!done && !ready && child.stderr.readableEnded) {
+      fail('broker-unreachable', pendingRelayFailure ?? hostProcessFailure('exit'));
+    }
   });
   return relay;
 }
@@ -409,9 +445,12 @@ export function createWindowsCommsTransport({
       ? createConnection(pipe)
       : createPowerShellPipeConnection(pipe, { spawnProcess, env, connectTimeoutMs: handshakeTimeoutMs });
   } catch (error) {
-    throw Object.assign(new Error(`cannot reach the broker: ${error?.code ?? error?.message ?? 'pipe connection failed'}`), {
+    const reason = typeof error?.code === 'string' && /^[a-z0-9-]{1,48}$/i.test(error.code)
+      ? error.code
+      : 'broker-unreachable';
+    throw withRelayFailure(Object.assign(new Error(`cannot reach the broker: ${reason}`), {
       code: 'broker-unreachable',
-    });
+    }), error?.relayFailure);
   }
   let channel;
   let timer;
