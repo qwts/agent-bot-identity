@@ -8,7 +8,7 @@ import { checkSoulSkillSource, proposeSoulSkillCandidate } from '../skill-source
 import { NOT_CAPTURED } from '../skill-references.mjs';
 import { currentAgentId } from '../agent-identity.mjs';
 import { discardRevisionStaging, revisionCommand, revisionOwnerGate } from '../soul-revisions.mjs';
-import { liveSkillDirectory, moveToTrash, stageSkillInstall, stageSkillUninstall } from '../skill-install.mjs';
+import { stageSkillInstall, stageSkillUninstall, trashSoulSkill } from '../skill-install.mjs';
 import { soulMarkers } from '../owner-action.mjs';
 import { soulDreamCommand } from './soul-dream.mjs';
 
@@ -121,7 +121,7 @@ function updateMain(args, json, { stdout, stderr, ...options }) {
 // owner (no soul marker) applies an owner-gated edit; a soul proposes.
 async function installMain(verb, args, json, { stdout, stderr, markers = soulMarkers, readStdin = () => readFileSync(0, 'utf8'),
   assertSoulTarget = id => { if (currentAgentId() !== id) throw new Error('a soul may change only its own skills; bind an Agent ID first'); },
-  assertUser, trashOptions = {}, ...options }) {
+  assertUser, trashOptions = {}, trash: trashMove, recordArchive, runRevision = revisionCommand, ...options }) {
   const [target, ...rest] = args, flags = new Set();
   let agentId;
   for (let i = 0; i < rest.length; i++) {
@@ -142,22 +142,23 @@ async function installMain(verb, args, json, { stdout, stderr, markers = soulMar
     const stage = verb === 'install' ? stageSkillInstall(target, agentId, options) : stageSkillUninstall(target, agentId, { ...options, trash });
     staging = stage.staging;
     const reason = verb === 'install' ? `Install skill ${stage.name}` : `${trash ? 'Trash' : 'Archive'} skill ${stage.name}`;
-    const live = trash ? liveSkillDirectory(stage.name, agentId, options) : null;
-    let trashed = null;
     const gate = assertUser ?? ((action, context) => revisionOwnerGate(action, { ...context, presence: options.presence, env: options.env, cwd: options.cwd }));
-    // The trash move happens only once the owner gate has passed, and before
-    // the edit is applied, so the applied edit never deletes the skill's bytes.
-    const ownerGate = async (action, context) => {
-      const authorization = await gate(action, context);
-      if (live) trashed = moveToTrash(live, { now: options.now, ...trashOptions });
-      return authorization;
-    };
-    const revision = owner
-      ? await revisionCommand(['edit', agentId, staging, reason, '--apply'], { ...options, principal, assertUser: ownerGate })
-      : await revisionCommand(['propose', agentId, staging, reason], { ...options, assertSoulTarget });
-    const { staging: _, parentRevision: __, ...summary } = stage;
-    const result = { ...summary, ...(trashed ? { trashedTo: trashed } : {}), outcome: owner ? 'applied' : revision.status,
-      ...(owner ? { revision: revision.revision, changed: revision.changed } : { proposal: { proposalId: revision.proposalId, status: revision.status, revision: revision.revision } }) };
+    let result;
+    if (trash) {
+      // Commit the edit first; the skill reaches the OS trash only after it is
+      // out of the revision (see trashSoulSkill).
+      const trashed = await trashSoulSkill(stage.name, agentId, { ...options, trashOptions, ...(trashMove ? { trash: trashMove } : {}), ...(recordArchive ? { recordArchive } : {}),
+        commit: onAuthorized => runRevision(['edit', agentId, staging, reason, '--apply'], { ...options, principal,
+          assertUser: async (action, context) => { const authorization = await gate(action, context); onAuthorized(authorization); return authorization; } }) });
+      result = { ...trashed, outcome: 'applied' };
+    } else {
+      const revision = owner
+        ? await runRevision(['edit', agentId, staging, reason, '--apply'], { ...options, principal, assertUser: gate })
+        : await runRevision(['propose', agentId, staging, reason], { ...options, assertSoulTarget });
+      const { staging: _, parentRevision: __, ...summary } = stage;
+      result = { ...summary, outcome: owner ? 'applied' : revision.status,
+        ...(owner ? { revision: revision.revision, changed: revision.changed } : { proposal: { proposalId: revision.proposalId, status: revision.status, revision: revision.revision } }) };
+    }
     stdout.write(report(result, json));
     return result.outcome === 'rejected' ? 1 : 0;
   } catch (error) {

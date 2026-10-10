@@ -3,14 +3,15 @@
 // inside the soul. Both only stage a candidate package: the caller records it
 // through the existing revision path (an owner edit, or a soul proposal), so
 // no new authority is introduced here. Global harness targets are not written.
-import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { lstatSync, mkdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { listSkills, readSkillMaterial } from './skill-library.mjs';
 import { projectSkillSourceProvenance } from './skill-source-provenance.mjs';
 import { validateAgentId } from './agent-identity.mjs';
 import { soulDirectory } from './agent-population.mjs';
-import { discardRevisionStaging, prepareRevisionEdit } from './soul-revisions.mjs';
+import { discardRevisionStaging, editSoulRevision, prepareRevisionEdit, revisionHistory } from './soul-revisions.mjs';
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -114,10 +115,11 @@ export function liveSkillDirectory(name, agentId, options = {}) {
  * Moves `file` to the user's trash: `~/.Trash` on macOS, the freedesktop.org
  * trash (`$XDG_DATA_HOME/Trash`) elsewhere on POSIX. It never deletes; a move
  * across volumes (EXDEV) or an unsupported platform refuses instead.
+ * `originalPath` is where a freedesktop restore puts it back.
  */
-export function moveToTrash(file, { platform = process.platform, env = process.env, home = env.HOME ?? homedir(), now = () => new Date() } = {}) {
+export function moveToTrash(file, { platform = process.platform, env = process.env, home = env.HOME ?? homedir(), now = () => new Date(), originalPath = file } = {}) {
   if (platform === 'win32') fail('skill-trash-unsupported', 'moving to the Recycle Bin is not supported yet; archive the skill instead');
-  const base = path.basename(file), when = stamp(now);
+  const base = path.basename(originalPath), when = stamp(now);
   const unique = (directory, suffix = '') => {
     for (let i = 0; i < 100; i++) {
       const name = `${base} ${when}${i ? ` ${i}` : ''}`;
@@ -138,7 +140,7 @@ export function moveToTrash(file, { platform = process.platform, env = process.e
     mkdirSync(path.join(trash, 'info'), { recursive: true, mode: 0o700 });
     const name = unique(path.join(trash, 'files')), info = path.join(trash, 'info', `${name}.trashinfo`);
     const date = now().toISOString().replace(/\.\d{3}Z$/, '');
-    writeFileSync(info, `[Trash Info]\nPath=${encodeURI(path.resolve(file))}\nDeletionDate=${date}\n`, { flag: 'wx', mode: 0o600 });
+    writeFileSync(info, `[Trash Info]\nPath=${encodeURI(path.resolve(originalPath))}\nDeletionDate=${date}\n`, { flag: 'wx', mode: 0o600 });
     try { renameSync(file, path.join(trash, 'files', name)); }
     catch (error) { rmSync(info, { force: true }); throw error; }
     return path.join(trash, 'files', name);
@@ -148,3 +150,66 @@ export function moveToTrash(file, { platform = process.platform, env = process.e
   }
 }
 
+
+/**
+ * `uninstall --trash` in an order that never leaves the revision pointing at
+ * trashed bytes and never deletes them:
+ *
+ * 1. `commit(onAuthorized)` records and applies the owner edit that drops the
+ *    skill. Once the owner gate passes, `onAuthorized` moves the live folder
+ *    into a holding directory under `.soul-state/tmp` (a same-volume rename
+ *    inside the soul), so applying the edit has nothing to delete.
+ * 2. If the edit is not recorded, the folder moves back; nothing changed.
+ *    If it was recorded but publication failed, the skill is already out of
+ *    the revision, so the trash step still runs and the result says so.
+ * 3. Only then does the folder move to the OS trash. If that fails, it is
+ *    archived to `archive/skills/<name>/<stamp>/` and recorded as a second
+ *    owner edit under the same authorization; the result says the trash
+ *    failed. If even that record fails, the files stay in the archive folder
+ *    and the error names it.
+ */
+export async function trashSoulSkill(name, agentId, { commit, trash = moveToTrash, trashOptions = {}, recordArchive = editSoulRevision, now = () => new Date(), ...options } = {}) {
+  const live = liveSkillDirectory(name, agentId, options), soul = path.dirname(path.dirname(live));
+  const before = revisionHistory(agentId, options).at(-1)?.revision;
+  let record = null;
+  try { record = readFileSync(path.join(soul, installRecordPath(name))); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  let holding = null, authorization = null, revision = null, warning;
+  const held = () => path.join(holding, name);
+  try {
+    revision = await commit(granted => {
+      authorization = granted;
+      const directory = path.join(soul, '.soul-state', 'tmp', `skill-trash-${randomUUID()}`);
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      try { renameSync(live, path.join(directory, name)); }
+      catch (error) { rmdirSync(directory); throw error; }
+      holding = directory;
+    });
+  } catch (error) {
+    if (!holding) throw error; // refused before anything moved
+    if (revisionHistory(agentId, options).at(-1)?.revision === before) {
+      renameSync(held(), live); rmdirSync(holding);
+      throw Object.assign(error, { message: `${error.message}; the edit was not recorded and skills/${name} was put back` });
+    }
+    warning = `the edit was recorded but publication failed (${error.message}); the skill is out of the revision and was still moved`;
+  }
+  const result = { name, removed: `skills/${name}`, trash: true, revision: revision?.revision ?? revisionHistory(agentId, options).at(-1).revision,
+    changed: revision?.changed, ...(warning ? { warning } : {}) };
+  let trashError;
+  try { result.trashedTo = trash(held(), { now, ...trashOptions, originalPath: live }); rmdirSync(holding); return result; }
+  catch (error) { trashError = error; }
+  // Fallback: archive inside the soul, then record it like any archive.
+  const archive = `${archiveRoot(name)}/${stamp(now)}`, target = path.join(soul, archive);
+  if (exists(target)) fail('skill-archive-exists', `trash failed and ${archive} already exists; the skill is held at ${held()}`);
+  mkdirSync(target, { recursive: true, mode: 0o700 });
+  renameSync(held(), path.join(target, 'skill'));
+  if (record) writeFileSync(path.join(target, 'install.json'), record, { flag: 'wx', mode: 0o644 });
+  rmdirSync(holding);
+  Object.assign(result, { trash: false, trashFailed: { code: trashError.code ?? 'skill-trash-failed', message: trashError.message }, archive });
+  try {
+    const archived = await recordArchive(agentId, soul, { ...options, apply: true, reason: `Archive skill ${name} (the move to the trash failed)`,
+      ...(authorization?.method ? { authorization } : {}) });
+    return { ...result, archiveRevision: archived.revision };
+  } catch (error) {
+    fail('skill-archive-unrecorded', `the move to the trash failed, so skills/${name} was archived to ${archive} in the soul, but recording that revision failed (${error.message}); the files are there and the next revision edit records them`);
+  }
+}

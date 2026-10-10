@@ -6,7 +6,7 @@ import path from 'node:path';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { upsertSoul } from '../agent-population.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, validateSoulPackage } from '../soul-package.mjs';
-import { adoptSoulPackage, revisionHistory, revisionPackagePath } from '../soul-revisions.mjs';
+import { adoptSoulPackage, revisionCommand, revisionHistory, revisionPackagePath } from '../soul-revisions.mjs';
 import { importSkill, verifySkill } from '../skill-library.mjs';
 import { installRecordPath, moveToTrash } from '../skill-install.mjs';
 import { main } from '../cli/soul-skill.mjs';
@@ -119,6 +119,7 @@ test('--trash moves the live skill to the OS trash after the owner gate, and onl
   const denied = await f.run(['uninstall', 'demo', '--soul', f.id, '--trash', '--json'], { ...f.owner, assertUser: () => { throw Object.assign(new Error('no'), { code: 'owner-credential-required' }); } });
   assert.equal(denied.code, 1);
   assert.ok(existsSync(path.join(f.directory, 'skills/demo/SKILL.md')), 'a refused gate trashes nothing');
+  assert.deepEqual(f.tmpEntries(), [], 'a refused gate holds nothing');
   const xdg = path.join(f.home, 'xdg');
   const result = await f.run(['uninstall', 'demo', '--soul', f.id, '--trash', '--json'], { ...f.owner, trashOptions: { platform: 'linux', env: { XDG_DATA_HOME: xdg }, home: f.home } });
   assert.equal(result.code, 0, result.err);
@@ -129,6 +130,82 @@ test('--trash moves the live skill to the OS trash after the owner gate, and onl
   assert.equal(existsSync(path.join(f.directory, 'archive')), false);
   assert.equal(existsSync(path.join(f.directory, installRecordPath('demo'))), false);
   assert.equal(revisionHistory(f.id, f.options).length, 3);
+});
+
+// Each failure point of --trash: the revision is committed before the trash
+// move, and a failed step either undoes cleanly or archives inside the soul.
+async function trashFixture(t) {
+  const f = fixture(t);
+  await f.run(['install', f.imported.id, '--soul', f.id]);
+  const xdg = path.join(f.home, 'xdg'), trashOptions = { platform: 'linux', env: { XDG_DATA_HOME: xdg }, home: f.home };
+  const trashed = () => existsSync(path.join(xdg, 'Trash/files')) ? readdirSync(path.join(xdg, 'Trash/files')) : [];
+  return { ...f, xdg, trashOptions, trashed, head: () => revisionHistory(f.id, f.options).at(-1).revision };
+}
+
+test('--trash: an edit that is not recorded puts the skill back and trashes nothing', async t => {
+  const f = await trashFixture(t), before = f.head();
+  const result = await f.run(['uninstall', 'demo', '--soul', f.id, '--trash', '--json'], { ...f.owner, trashOptions: f.trashOptions,
+    runRevision: async (args, options) => { await options.assertUser(`soul revision edit ${f.id}`, {}); throw new Error('disk full'); } });
+  assert.equal(result.code, 1);
+  assert.match(result.json.error.message, /disk full; the edit was not recorded and skills\/demo was put back/);
+  assert.equal(readFileSync(path.join(f.directory, 'skills/demo/SKILL.md'), 'utf8'), skill);
+  assert.equal(f.head(), before);
+  assert.deepEqual(f.trashed(), []);
+  assert.deepEqual(f.tmpEntries(), []);
+});
+
+test('--trash: an edit recorded but not fully published still trashes, with a warning', async t => {
+  const f = await trashFixture(t), before = f.head();
+  const result = await f.run(['uninstall', 'demo', '--soul', f.id, '--trash', '--json'], { ...f.owner, trashOptions: f.trashOptions,
+    runRevision: async (args, options) => { await revisionCommand(args, options); throw new Error('publish interrupted'); } });
+  assert.equal(result.code, 0, result.err);
+  assert.match(result.json.warning, /recorded but publication failed \(publish interrupted\)/);
+  assert.notEqual(f.head(), before);
+  assert.equal(result.json.revision, f.head());
+  assert.deepEqual(f.trashed(), ['demo 20261009T123456Z']);
+  assert.equal(existsSync(path.join(f.directory, 'skills/demo')), false);
+  assert.deepEqual(f.tmpEntries(), []);
+});
+
+test('--trash: the revision is committed before the trash move', async t => {
+  const f = await trashFixture(t), before = f.head();
+  let headAtMove;
+  const result = await f.run(['uninstall', 'demo', '--soul', f.id, '--trash', '--json'], { ...f.owner,
+    trash: (file, options) => { headAtMove = f.head(); return moveToTrash(file, { ...options, ...f.trashOptions }); } });
+  assert.equal(result.code, 0, result.err);
+  assert.notEqual(headAtMove, before, 'the edit was recorded first');
+  const tree = revisionPackagePath(f.id, headAtMove, f.options);
+  assert.equal(existsSync(path.join(tree, 'skills/demo')), false);
+});
+
+test('--trash: a failed trash move archives in the soul and records it', async t => {
+  const f = await trashFixture(t), before = revisionHistory(f.id, f.options).length;
+  const result = await f.run(['uninstall', 'demo', '--soul', f.id, '--trash', '--json'], { ...f.owner,
+    trash: () => { throw Object.assign(new Error('cross-device'), { code: 'skill-trash-failed' }); } });
+  assert.equal(result.code, 0, result.err);
+  assert.equal(result.json.trash, false);
+  assert.equal(result.json.trashFailed.code, 'skill-trash-failed');
+  assert.equal(result.json.archive, 'archive/skills/demo/20261009T123456Z');
+  const archived = path.join(f.directory, result.json.archive);
+  assert.equal(readFileSync(path.join(archived, 'skill/SKILL.md'), 'utf8'), skill);
+  assert.equal(JSON.parse(readFileSync(path.join(archived, 'install.json'), 'utf8')).name, 'demo');
+  assert.equal(revisionHistory(f.id, f.options).length, before + 2);
+  assert.equal(result.json.archiveRevision, f.head());
+  const tree = revisionPackagePath(f.id, f.head(), f.options);
+  assert.equal(readFileSync(path.join(tree, result.json.archive, 'skill/SKILL.md'), 'utf8'), skill, 'the archive is in the revision');
+  assert.equal(existsSync(path.join(f.directory, 'skills/demo')), false);
+  assert.deepEqual(f.tmpEntries(), []);
+});
+
+test('--trash: if recording the fallback archive fails, the files stay in the archive and the error says where', async t => {
+  const f = await trashFixture(t);
+  const result = await f.run(['uninstall', 'demo', '--soul', f.id, '--trash', '--json'], { ...f.owner,
+    trash: () => { throw new Error('no trash'); }, recordArchive: async () => { throw new Error('journal locked'); } });
+  assert.equal(result.code, 1);
+  assert.equal(result.json.error.code, 'skill-archive-unrecorded');
+  assert.match(result.json.error.message, /archived to archive\/skills\/demo\/20261009T123456Z .*journal locked/);
+  assert.equal(readFileSync(path.join(f.directory, 'archive/skills/demo/20261009T123456Z/skill/SKILL.md'), 'utf8'), skill);
+  assert.deepEqual(f.tmpEntries(), []);
 });
 
 test('moveToTrash uses ~/.Trash on macOS, picks a free name, and refuses Windows', t => {
