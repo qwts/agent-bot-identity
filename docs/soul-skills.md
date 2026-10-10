@@ -431,9 +431,9 @@ clear reason the skill must always be loaded, and the default is not to put
 it there. So a global load is never implied by install or load, `--reason`
 (one line, at most 200 characters) is required, and the owner approves every
 one: through the owner gate (`--principal-stdin`, or Touch ID / consent) when
-the owner runs it, and through a Touch ID or consent prompt that shows the
-reason when a soul asks for its own Agent ID, as with a global tool home
-(#617). A soul cannot present the owner's principal or ask for another soul.
+the owner runs it, and when a soul asks for its own Agent ID, through keyd's
+Touch ID or login-password prompt showing the reason, with no signed-challenge
+or administrator-dialog fallback, as for the daemon's other loosenings. A soul cannot present the owner's principal or ask for another soul.
 Every check (reason, harness, installed skill, nothing at the destination)
 runs before the prompt, and a refusal writes nothing.
 
@@ -446,14 +446,16 @@ anything already at the destination is refused. Other harnesses are refused
 documented here; the shared `~/.agent/skills` location is not written yet,
 because no supported harness is known to read it.
 
-The soul records the placement in
-`.soul-state/skill-globals/<harness>/<name>.json` (destination, reason, file
-modes, sizes and SHA-256, how it was authorized) and each load and unload
-appends a `skill-global` audit receipt. `unload NAME --soul AGENT_ID --global`
-narrows, so it asks no one; the owner can run it for any soul, a soul only for
-its own. It resolves the destination again rather than trusting the record,
-and removes the copy only while it matches the record, so an edited copy is
-kept (`skill-load-modified`). Nothing here changes the soul package or any
+The placement is recorded in the owner's state, beside the audit log, not in
+the soul's: `skill-globals/<harness>/<name>.json` under the interaction home
+(the soul, destination, reason, file modes, sizes and SHA-256, and how it was
+authorized). Each load and unload appends a `skill-global` audit receipt.
+`unload NAME --soul AGENT_ID --global` narrows, so it asks no one; the owner
+can run it for any soul, a soul only for its own. It removes nothing without
+the owner-side record naming that soul, so a record a soul writes for itself
+cannot point it at the owner's own skills. It resolves the destination again
+rather than trusting the record, and removes the copy only while it matches
+the record, so an edited copy is kept (`skill-load-modified`). Nothing here changes the soul package or any
 repository's exclude list.
 
 ## What is not captured

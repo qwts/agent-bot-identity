@@ -48,8 +48,8 @@ info/exclude; unload removes that copy, refusing if it was edited there.
 load --global places it in the harness's user-level skills folder
 (~/.claude/skills/<name>/, or $CLAUDE_CONFIG_DIR/skills/), where every session
 sees it: opt-in, with a recorded --reason, and only after the owner approves
-(Touch ID or consent, even when a soul asks for itself). unload --global
-removes it when unchanged.
+(the owner gate; Touch ID through keyd when a soul asks for itself). unload
+--global removes it when unchanged, only for the soul the owner's record names.
 Other repository adapters remain unimplemented.
 check never replaces accepted snapshots or local edits. update previews a recorded
 check; applying requires reviewed digests and preserves prior material. learn supplies guidance;
@@ -131,6 +131,11 @@ function updateMain(args, json, { stdout, stderr, ...options }) {
     return 1;
   }
 }
+// A soul's own request to loosen reaches the owner the way the daemon's
+// loosening does (agent-daemon.mjs): keyd's Touch ID or login password only,
+// no signed challenge and no administrator dialog, since the soul runs it.
+const noLooseningDialog = async () => { throw Object.assign(new Error('agent-bot-keyd could not ask, and a soul\'s global load has no administrator-dialog fallback'), { code: 'presence-unavailable' }); };
+const askOwnerForSoul = (action, { env, presence }) => presenceOrConsent(action, { env, presence, allowChallenge: false, consent: noLooseningDialog });
 // load/unload (#603) place an installed skill in one of the soul's own
 // worktrees and take it out again. The package is unchanged, so there is no
 // revision; a soul may do this only for itself. --global reaches every
@@ -138,7 +143,7 @@ function updateMain(args, json, { stdout, stderr, ...options }) {
 // touches: like a global tool home (#617), the owner approves it even when
 // the soul asks for itself, and a soul cannot present the owner's principal.
 async function loadMain(verb, args, json, { stdout, stderr, markers = soulMarkers, readStdin = () => readFileSync(0, 'utf8'),
-  ownerGate = (action, options) => assertOwnerAction(action, { ...options, detect: false }), askOwner = presenceOrConsent,
+  ownerGate = (action, options) => assertOwnerAction(action, { ...options, detect: false }), askOwner = askOwnerForSoul,
   assertSoulTarget = id => { if (currentAgentId() !== id) throw new Error('a soul may load skills only into its own worktrees; bind an Agent ID first'); }, ...options }) {
   const [name, ...rest] = args, values = {}, flags = new Set();
   for (let i = 0; i < rest.length; i++) {
@@ -171,7 +176,7 @@ async function loadMain(verb, args, json, { stdout, stderr, markers = soulMarker
         try {
           return caller === 'owner'
             ? await ownerGate(action, { principal, env: options.env ?? process.env, cwd: options.cwd ?? process.cwd() })
-            : await askOwner(action, { env: options.env ?? process.env });
+            : await askOwner(action, { env: options.env ?? process.env, presence: options.presence });
         } catch (error) {
           throw Object.assign(new Error(`${action} needs the owner and was not approved: ${error.message}`),
             { code: error.code === 'owner-credential-required' ? error.code : 'skill-global-owner-not-approved', cause: error });
