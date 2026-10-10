@@ -13,6 +13,8 @@ test('stdin and script-based shells are opaque', () => {
     'env bash ./build.sh',
     'bash',
     'sh -c "sh ./hidden-script"',
+    'bash --rcfile -c payload.sh',
+    'bash -o -c payload.sh',
   ]) {
     assert.equal(scanGitPublish(command).opaqueExecution, true, command);
   }

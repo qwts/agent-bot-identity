@@ -279,6 +279,7 @@ export function unboundIdentityCheck(envelope, { env = process.env, cwd = proces
   let skipsHooks = scan.skipsHooks;
   const bypasses = [...scan.bypasses];
   const aliases = [...scan.aliases];
+  const opaque = [...scan.opaque];
   for (let n = 0; aliases.length && n < 16; n += 1) {
     const alias = aliases.shift();
     if (!alias.cwd || !existsSync(alias.cwd)) { uncertain = true; continue; }
@@ -297,6 +298,7 @@ export function unboundIdentityCheck(envelope, { env = process.env, cwd = proces
     uncertain ||= inner.ambiguous;
     skipsHooks ||= inner.skipsHooks;
     bypasses.push(...inner.bypasses);
+    opaque.push(...inner.opaque);
   }
   if (aliases.length) uncertain = true;
   if (skipsHooks) {
@@ -325,16 +327,25 @@ export function unboundIdentityCheck(envelope, { env = process.env, cwd = proces
     }
   }
   // A script, interpreter or task runner may run git the scan cannot read.
-  // In a bound worktree the git hooks still hold that git, so a bound bot
-  // runs `node --test` or `python3 build.py` as before; only a stated bot
-  // whose session checkout is not bound (setup failed or never ran) is
-  // refused, since anything it commits would be attributed to the human.
-  if (scan.opaqueExecution) {
-    try {
-      const slug = unboundBotSlug({ env, cwd, git: targetGit({}, env) });
-      if (slug) return { decision: 'deny', reason: opaqueUnboundReason(slug) };
-    } catch (error) {
-      return { decision: 'deny', reason: `cannot verify the stated bot identity: ${error.message}` };
+  // A stated bot is refused it in a checkout it is not bound to (setup
+  // failed or never ran), where that git would be attributed to the human.
+  // A bound bot keeps its prior behaviour, so `node --test` or
+  // `python3 build.py` still run; this is not a sandbox, since opaque code
+  // can override `core.hooksPath` too. Each runs where the scan placed it; a
+  // directory it cannot place, or one outside any repository, is judged by
+  // the session's own checkout.
+  if (opaque.length) {
+    const inRepo = (dir) => {
+      try { targetGit({}, env)(['rev-parse', '--git-dir'], { cwd: dir }); return true; } catch { return false; }
+    };
+    const dirs = new Set(opaque.map(({ cwd: dir }) => (dir && existsSync(dir) && inRepo(dir) ? dir : cwd)));
+    for (const dir of dirs) {
+      try {
+        const slug = unboundBotSlug({ env, cwd: dir, git: targetGit({}, env) });
+        if (slug) return { decision: 'deny', reason: opaqueUnboundReason(slug) };
+      } catch (error) {
+        return { decision: 'deny', reason: `cannot verify the stated bot identity: ${error.message}` };
+      }
     }
   }
   if (!uncertain) return allow;

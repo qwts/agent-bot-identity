@@ -26,13 +26,17 @@
 // `core.hooksPath`. Values the scan cannot read (`git commit $FLAGS`) and
 // relocated global config (GIT_CONFIG_GLOBAL, HOME) are not seen.
 // `opaqueExecution` marks a script file, stdin-fed shell, interpreter or
-// task runner whose git the scan cannot read; the caller refuses it only
-// for a stated bot that is not bound, and the git hooks cover a bound one.
+// task runner whose git the scan cannot read, and `opaque` lists the
+// directory each runs in (null when the scan cannot place it). The caller
+// refuses it only for a stated bot that is not bound there; a bound bot
+// keeps its prior behaviour, and since opaque code can override
+// `core.hooksPath` the git hooks are not a guaranteed backstop for it.
 
 import { dirname, isAbsolute, resolve } from 'node:path';
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'yash', 'busybox']);
+const SHELL_OPERAND_OPTIONS = new Set(['--rcfile', '--init-file', '-o', '+o', '-O', '+O']);
 // Code loaded through a script, stdin, or task runner is not visible to this
 // lexical scanner. Treat it as opaque, never as evidence that no Git ran.
 const OPAQUE_EXECUTORS = new Set(['node', 'nodejs', 'python', 'python2', 'python3',
@@ -332,7 +336,7 @@ const WRAPPERS = {
 };
 
 export function scanGitPublish(command, { cwd = process.cwd(), env = process.env, depth = 0 } = {}) {
-  const result = { publishes: [], aliases: [], ambiguous: false, opaqueExecution: false, skipsHooks: false, bypasses: [] };
+  const result = { publishes: [], aliases: [], ambiguous: false, opaqueExecution: false, opaque: [], skipsHooks: false, bypasses: [] };
   if (depth > 8) { result.ambiguous = true; return result; }
   const vars = new Map(Object.entries(env ?? {}));
   const exported = new Set(Object.keys(env ?? {}));
@@ -393,6 +397,7 @@ function merge(into, from) {
   into.aliases.push(...from.aliases);
   into.ambiguous ||= from.ambiguous;
   into.opaqueExecution ||= from.opaqueExecution;
+  into.opaque.push(...from.opaque);
   into.skipsHooks ||= from.skipsHooks;
   into.bypasses.push(...from.bypasses);
 }
@@ -475,6 +480,9 @@ function evaluate(argv, ctx) {
     for (let j = 0; j < args.length; j += 1) {
       const arg = args[j];
       if (arg === null) { result.ambiguous = true; return {}; }
+      // An option that takes the next word, so `bash --rcfile -c x.sh`
+      // runs x.sh rather than a `-c` payload.
+      if (SHELL_OPERAND_OPTIONS.has(arg)) { j += 1; continue; }
       if (/^-[A-Za-z]*c[A-Za-z]*$/.test(arg)) {
         const payload = args[j + 1];
         if (payload === null || payload === undefined) { result.ambiguous = true; return {}; }
@@ -486,10 +494,12 @@ function evaluate(argv, ctx) {
     // No -c payload: -s, a redirected stdin stream, or a script on disk
     // can execute arbitrary Git commands with per-invocation hook overrides.
     result.opaqueExecution = true;
+    result.opaque.push({ cwd });
     return {};
   }
   if (OPAQUE_EXECUTORS.has(base) || /^python\d+(?:\.\d+)?$/.test(base)) {
     result.opaqueExecution = true;
+    result.opaque.push({ cwd });
     return {};
   }
   if (base === 'git') gitInvocation(args, { cwd, env, result, depth });
@@ -671,7 +681,7 @@ function rebaseExecs(rest, target, env, result, depth) {
 export function expandAlias(value, target, rest, {
   env = new Map(), result, depth = 0, aliases = new Map(), names = new Map(), hooksOverridden = false,
 }) {
-  const into = result ?? { publishes: [], aliases: [], ambiguous: false, skipsHooks: false, bypasses: [] };
+  const into = result ?? { publishes: [], aliases: [], ambiguous: false, opaqueExecution: false, opaque: [], skipsHooks: false, bypasses: [] };
   const envObject = { ...(env instanceof Map ? Object.fromEntries(env) : env) };
   if (value.startsWith('!')) {
     // A shell alias's git inherits the outer `-c` through this variable.

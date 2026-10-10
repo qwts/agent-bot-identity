@@ -534,4 +534,19 @@ test('opaque execution is refused only for a stated bot that is not bound', () =
   for (const command of ['git status', 'echo hello', 'sh -c "git status"']) {
     assert.equal(run(unbound.repo, command, STATED).decision, 'allow', command);
   }
+
+  // Copilot review on #777: judged where the script runs, not where the
+  // session started, and through a git alias too.
+  const u = unbound.repo;
+  unbound.git('config', 'alias.run', '!node hidden.mjs');
+  for (const command of [`cd ${u} && node hidden.mjs`, `env -C ${u} python3 x.py`, `git -C ${u} run`]) {
+    assert.equal(run(bound.repo, command, STATED).decision, 'deny', command);
+    assert.equal(run(bound.repo, command, DELEGATE).decision, 'allow', command);
+  }
+  // A directory outside any repository, or one the scan cannot place, is
+  // judged by the session's checkout, so a bound bot is not refused there.
+  for (const command of [`cd ${root} && node x.mjs`, 'cd "$UNSEEN_DIR" && npm test']) {
+    assert.equal(run(bound.repo, command, STATED).decision, 'allow', command);
+    assert.equal(run(u, command, STATED).decision, 'deny', command);
+  }
 });
