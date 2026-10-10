@@ -106,7 +106,7 @@ when the user explicitly requests it and the destination is appropriate.
 ## Resolve the Agent Space
 
 Agent Space lifecycle, path policy, territory, and ownership are defined by
-[ENG-0172](https://github.com/qwts/playbook-engineering/blob/main/docs/decisions/ENG-0172-agent-space-is-durable-per-soul-storage.md).
+[ENG-0172](https://github.com/qwts/agent-sop/blob/main/docs/decisions/ENG-0172-agent-space-is-durable-per-soul-storage.md).
 Do not store secrets or credentials there or treat its path as bot territory.
 Keep this skill focused on the installed runtime operation.
 
