@@ -172,6 +172,8 @@ test('unrecognised or unreadable layers declare nothing; a soul with no census r
 
 // The owner's answers kept for a soul, and its loosening receipts.
 const answers = (env, home) => listProposals({}, { env, home }).filter((proposal) => proposal.tool === LOOSENING_TOOL);
+// Proposals made in the same millisecond list in any order: compare as a set.
+const statuses = (env, home) => answers(env, home).map(({ status }) => status).sort();
 const receipts = (env, home) => {
   try { return readFileSync(auditFile({ env, home }), 'utf8').trim().split('\n').map((line) => JSON.parse(line)).filter((row) => row.operation === 'loosen'); }
   catch { return []; }
@@ -218,7 +220,7 @@ test('a declined loosening runs safe and is remembered; a changed file asks agai
   assert.deepEqual(seen.approvals, ['Bash']);
   assert.equal(asked.length, 1);
   assert.match(asked[0], new RegExp(`^soul mode ${ID} autopilot repo sha256:[0-9a-f]{64} `));
-  assert.deepEqual(answers(env, home).map(({ status }) => status), ['denied']);
+  assert.deepEqual(statuses(env, home), ['denied']);
   assert.deepEqual(receipts(env, home).map(({ decision }) => decision), ['declined']);
   seen = await daemonTurn({ harness: 'claude', cwd: repo, env, home, modeFor });
   assert.equal(seen.mode, 'safe');
@@ -227,7 +229,7 @@ test('a declined loosening runs safe and is remembered; a changed file asks agai
   writeFileSync(path.join(repo, '.claude/settings.json'), JSON.stringify({ permissions: { defaultMode: 'bypassPermissions' }, env: {} }));
   seen = await daemonTurn({ harness: 'claude', cwd: repo, env, home, ask: async () => ({ method: 'consent' }) });
   assert.equal(seen.mode, 'autopilot');
-  assert.deepEqual(answers(env, home).map(({ status }) => status), ['denied', 'approved']);
+  assert.deepEqual(statuses(env, home), ['approved', 'denied']);
 });
 
 test('with nobody to ask the turn runs safe, nothing is kept, and the next turn asks again', async (t) => {
@@ -269,7 +271,7 @@ test('the daemon asks through keyd alone: no administrator dialog, so nothing bl
   modeFor = daemonModeFor({ env, home, config: {}, log: () => {},
     presence: async () => { throw Object.assign(new Error('the owner did not approve'), { code: 'owner-declined' }); } });
   assert.equal(await modeFor(ID, { harness: 'claude', cwd: soulDir }), 'safe');
-  assert.deepEqual(answers(env, home).map(({ status }) => status), ['denied']);
+  assert.deepEqual(statuses(env, home), ['denied']);
   // keyd's approval is the answer, with the prompt naming the soul and file.
   writeFileSync(path.join(soulDir, 'soul.json'), `${readFileSync(path.join(soulDir, 'soul.json'), 'utf8')}\n`);
   const prompts = [];
@@ -277,7 +279,7 @@ test('the daemon asks through keyd alone: no administrator dialog, so nothing bl
     presence: async (summary) => { prompts.push(summary); return { method: 'presence', via: 'agent-bot-keyd' }; } });
   assert.equal(await modeFor(ID, { harness: 'claude', cwd: soulDir }), 'autopilot');
   assert.match(prompts[0], /run in Auto-Pilot, as its soul package asks \(.*soul\.json, sha256:[0-9a-f]{12}\)$/);
-  assert.deepEqual(answers(env, home).map(({ status }) => status), ['denied', 'approved']);
+  assert.deepEqual(statuses(env, home), ['approved', 'denied']);
 });
 
 test('an answer that cannot be receipted is neither applied nor kept', async (t) => {
