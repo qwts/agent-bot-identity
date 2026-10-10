@@ -150,6 +150,10 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       "$ErrorActionPreference = 'Stop'",
       "$phase = 'server-create'",
       'try {',
+      "  $phase = 'json-preflight'",
+      "  $jsonProbe = ConvertFrom-Json -InputObject '{\"v\":1,\"hello\":\"0000000000000000000000000000000000000000000000000000000000000000\"}'",
+      "  if ($jsonProbe.v -ne 1 -or $jsonProbe.hello -notmatch '^[0-9a-f]{64}$') { throw 'invalid JSON preflight' }",
+      "  $phase = 'server-create'",
       `  $pipeName = '${nativePipeName}'`,
       '  $server = [System.IO.Pipes.NamedPipeServerStream]::new($pipeName, [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::None)',
       "  [Console]::Out.WriteLine('READY')",
@@ -176,8 +180,11 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       "  if (-not $helloLineEnded) { throw 'hello line too long' }",
       "  [Console]::Out.WriteLine('HELLO_LF')",
       '  $helloText = [System.Text.UTF8Encoding]::new($false, $true).GetString($helloBytes.ToArray())',
+      "  [Console]::Out.WriteLine('HELLO_DECODED')",
       '  if ($helloText.EndsWith("`r")) { $helloText = $helloText.Substring(0, $helloText.Length - 1) }',
+      "  [Console]::Out.WriteLine('HELLO_TRIMMED')",
       '  $hello = ConvertFrom-Json -InputObject $helloText',
+      "  [Console]::Out.WriteLine('HELLO_PARSED')",
       "  if ($hello.v -ne 1 -or $hello.hello -notmatch '^[0-9a-f]{64}$') { throw 'invalid hello' }",
       "  [Console]::Out.WriteLine('HELLO')",
       "  $phase = 'impersonation-level'",
@@ -235,6 +242,9 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
     await expectMarkerBeforeProof(serverOutput, pendingRequest, 'READING_HELLO', 'native server did not begin reading the client hello');
     await expectMarkerBeforeProof(serverOutput, pendingRequest, 'FIRST_HELLO_BYTE', 'native server received no hello byte');
     await expectMarkerBeforeProof(serverOutput, pendingRequest, 'HELLO_LF', 'native server received no hello line feed');
+    await expectMarkerBeforeProof(serverOutput, pendingRequest, 'HELLO_DECODED', 'native server did not decode the hello line');
+    await expectMarkerBeforeProof(serverOutput, pendingRequest, 'HELLO_TRIMMED', 'native server did not trim the hello line');
+    await expectMarkerBeforeProof(serverOutput, pendingRequest, 'HELLO_PARSED', 'native server did not parse the hello JSON');
     await expectMarkerBeforeProof(serverOutput, pendingRequest, 'HELLO', 'native server did not read the client hello');
     const levelMarker = await nextMarkerBeforeProof(
       serverOutput,
