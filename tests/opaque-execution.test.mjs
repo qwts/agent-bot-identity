@@ -34,6 +34,21 @@ test('interpreters and task runners are opaque', () => {
   }
 });
 
+test('directly executed scripts and executable paths are opaque', () => {
+  for (const command of [
+    './release.sh',
+    './release',
+    '../tools/publish',
+    '/opt/tools/publish',
+    'env ./release.sh',
+    'cd scripts && ./release.sh',
+  ]) {
+    const scan = scanGitPublish(command);
+    assert.equal(scan.opaqueExecution, true, command);
+    assert.equal(scan.opaque.length, 1, command);
+  }
+});
+
 test('direct read-only Git and analyzable shell payloads remain transparent', () => {
   for (const command of ['git status', 'git log -1', 'sh -c "git status"', 'echo hello']) {
     const result = scanGitPublish(command);
