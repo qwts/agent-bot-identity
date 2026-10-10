@@ -194,6 +194,11 @@ export function daemonClient({
       });
       return binding;
     },
+    // The App a session on an existing binding was run as (#107); the
+    // daemon may ask the owner, so this waits as long as a bind with one.
+    async reconcileApp(secret, app) {
+      return request('POST', '/v0/binding/app', { app }, { 'x-agent-binding': secret }, OWNER_DECISION_TIMEOUT_MS);
+    },
     async releaseBinding(secret) {
       return request('DELETE', '/v0/binding', undefined, { 'x-agent-binding': secret });
     },

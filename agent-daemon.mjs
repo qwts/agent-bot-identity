@@ -102,6 +102,7 @@ import { resolveSoulMode } from './soul-mode.mjs';
 import { createIdentityAppJobs, identityAppOperation, identityAppFailure, listIdentityApps } from './identity-apps.mjs';
 import { identityAppSouls } from './identity-app-souls.mjs';
 import { validAppSlug } from './identity-app-store.mjs';
+import { runtimeProfileInfo } from './organization-profile.mjs';
 import { readSoulProfile } from './soul-profile.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
 import { launchSandbox, readSandboxStatus, turnSandboxProblem, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount } from './sandbox.mjs';
@@ -449,7 +450,7 @@ export function createDaemonServer({
         appendAuditReceipt({ event: 'dream-control', operation: dreamAction, decision: 'owner-credential-required' }, { env, home, now });
         throw ownerCredentialRequired('a soul binding cannot authorize dream controls');
       }
-      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/credential', 'POST /v0/inbox/take', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start', 'POST /v0/asides/delivered'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
+      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/binding/app', 'POST /v0/credential', 'POST /v0/inbox/take', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start', 'POST /v0/asides/delivered'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
         sendJson(res, 401, { error: 'missing or invalid daemon token' });
         return;
       }
@@ -682,6 +683,17 @@ export function createDaemonServer({
           if (!teamStarter) throw Object.assign(new Error('this daemon cannot start souls'), { statusCode: 503 });
           const body = parseJsonBody(await readBody(req));
           sendJson(res, 200, await teamStarter(source.agentId, body));
+          return;
+        }
+        // A session resuming on a binding that outlived its last one (#107)
+        // states the App it was run as, like a first bind does. The binding
+        // names the soul; the App is a claim reconcileSoulApp decides on.
+        case 'POST /v0/binding/app': {
+          const binding = requireBinding(req, bindings);
+          const body = parseJsonBody(await readBody(req));
+          if (!validAppSlug(body.app)) throw Object.assign(new Error('app must be a GitHub App slug'), { statusCode: 400 });
+          const app = await reconcileSoulApp({ agentId: binding.agentId, claimed: body.app, env, home, config, now, ownerGate });
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, agentId: binding.agentId, ...(app ? { app } : {}) });
           return;
         }
         case 'GET /v0/binding': {
@@ -1112,6 +1124,19 @@ export function createDaemonServer({
 // Every change and every unverified claim writes a receipt. A soul without a
 // GitHub App is never given one this way, and a soul whose key agent-bot-keyd
 // holds changes App only through the keyd owner workflow.
+// Whether the organization profile itself maps this harness to the App: the
+// validated profile snapshot embedded in the runtime config must name it as
+// the harness default and as an active identity of that harness. A
+// hand-written `apps` entry with no profile behind it is not the org's word,
+// so it never stands in for the owner (#107).
+function orgMapsHarnessTo(config, harness, app) {
+  if (!harness) return false;
+  let info;
+  try { info = runtimeProfileInfo(config); } catch { return false; }
+  return info?.defaults?.[harness] === app
+    && info.active.some((identity) => identity.slug === app && identity.harness === harness);
+}
+
 async function reconcileSoulApp({ agentId, claimed, env, home, config, now, ownerGate }) {
   if (!isGateEnabled('github-identity', { env, home, config })) return null;
   const stateDir = stateDirectory({ env, home });
@@ -1129,7 +1154,7 @@ async function reconcileSoulApp({ agentId, claimed, env, home, config, now, owne
     return { status: 'unchanged', recorded, claimed, reason: 'keyd-held' };
   }
   let reason = 'org-mapping-agrees';
-  if (!identity.harness || (config ?? loadConfig({ env, home })).apps?.[identity.harness] !== claimed) {
+  if (!orgMapsHarnessTo(config ?? loadConfig({ env, home }), identity.harness, claimed)) {
     try {
       await ownerGate(`soul app ${agentId} ${claimed}`, { principal: null });
       reason = 'owner-verified';

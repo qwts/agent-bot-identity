@@ -270,11 +270,16 @@ the checkout's pin). When it differs from the App the soul's record names, the
 daemon reconciles the record:
 
 - If the organization profile maps the soul's harness to that App, the record
-  is updated.
+  is updated. The mapping must come from the validated profile in the runtime
+  config, and the App must be one of its active identities for that harness.
+  A hand-written `apps` entry doesn't count, so the owner is asked.
 - Otherwise the owner's selection wins once the owner verifies it with Touch
   ID through agent-bot-keyd, or the macOS dialog where keyd can't ask. If
   nobody verifies, the record stays as it was and the daemon keeps minting the
   recorded App. The bind still succeeds.
+
+A session that resumes on a binding left by an earlier one states its App
+through that binding (`POST /v0/binding/app`), with the same rules.
 
 The bind result's `app` field says what happened. After a reconcile, the MCP
 `bind` tool repins the checkout. Run `agent-bot setup-worktree` in that
