@@ -265,9 +265,9 @@ export function unboundIdentityCheck(envelope, { env = process.env, cwd = proces
   if (envelope.event !== 'pre-command' || !envelope.command) return allow;
   const command = envelope.command;
   const scan = scanGitPublish(command, { cwd, env });
-  if (!scan.publishes.length && !scan.aliases.length && !scan.ambiguous && !scan.skipsHooks) return allow;
+  if (!scan.publishes.length && !scan.aliases.length && !scan.ambiguous && !scan.opaqueExecution && !scan.skipsHooks) return allow;
   // A command word the scan cannot read only matters when git could be in it.
-  let uncertain = scan.ambiguous && /git|commit|push/i.test(command.replace(/[\\'"]/g, ''));
+  let uncertain = scan.opaqueExecution || (scan.ambiguous && /git|commit|push/i.test(command.replace(/[\\'"]/g, '')));
   const publishes = [...scan.publishes];
   let skipsHooks = scan.skipsHooks;
   const bypasses = [...scan.bypasses];
