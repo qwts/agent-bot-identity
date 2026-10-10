@@ -157,6 +157,22 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       '  $serializer.RecursionLimit = 16',
       "  $jsonProbe = $serializer.DeserializeObject('{\"v\":1,\"hello\":\"0000000000000000000000000000000000000000000000000000000000000000\"}')",
       "  if ($jsonProbe['v'] -ne 1 -or $jsonProbe['hello'] -notmatch '^[0-9a-f]{64}$') { throw 'invalid JSON preflight' }",
+      "  $phase = 'impersonation-preflight'",
+      "  $probeSource = @'",
+      'using System;',
+      'using System.IO.Pipes;',
+      'using System.Security.Principal;',
+      'public static class AgentBotNativePipeImpersonationProbe {',
+      '    public static PipeStreamImpersonationWorker Create() {',
+      '        return delegate {',
+      '            using (var identity = WindowsIdentity.GetCurrent()) {',
+      '                Console.Out.WriteLine("LEVEL=" + identity.ImpersonationLevel.ToString());',
+      '            }',
+      '        };',
+      '    }',
+      '}',
+      "'@",
+      "  [void](Add-Type -TypeDefinition $probeSource -Language CSharp -ReferencedAssemblies @('System.dll', 'System.Core.dll'))",
       "  $phase = 'server-create'",
       `  $pipeName = '${nativePipeName}'`,
       '  $server = [System.IO.Pipes.NamedPipeServerStream]::new($pipeName, [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::None)',
@@ -192,8 +208,7 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       "  if ($hello['v'] -ne 1 -or $hello['hello'] -notmatch '^[0-9a-f]{64}$') { throw 'invalid hello' }",
       "  [Console]::Out.WriteLine('HELLO')",
       "  $phase = 'impersonation-level'",
-      '  $worker = [System.IO.Pipes.PipeStreamImpersonationWorker] { [Console]::Out.WriteLine((\'LEVEL=\' + [System.Security.Principal.WindowsIdentity]::GetCurrent().ImpersonationLevel.ToString())) }',
-      '  $server.RunAsClient($worker)',
+      '  $server.RunAsClient([AgentBotNativePipeImpersonationProbe]::Create())',
       "  [Console]::Out.WriteLine(('CHALLENGE=' + $hello['hello']))",
       "  $phase = 'broker-proof'",
       '  $proof = [Console]::In.ReadLine()',
@@ -257,7 +272,7 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       'native named-pipe server did not report client impersonation level',
     );
     const levelMatch = /^LEVEL=(Anonymous|Identification|Impersonation|Delegation|None)$/.exec(levelMarker);
-    const failureMatch = /^FAILED=(json-preflight|server-create|connect|stream-setup|hello-read|impersonation-level|broker-proof|request)$/.exec(levelMarker);
+    const failureMatch = /^FAILED=(json-preflight|server-create|connect|stream-setup|hello-read|impersonation-preflight|impersonation-level|broker-proof|request)$/.exec(levelMarker);
     if (failureMatch) throw new Error(`native named-pipe fixture failed during ${failureMatch[1]}`);
     assert.ok(levelMatch, 'native named-pipe fixture returned an unexpected impersonation marker');
     assert.ok(
