@@ -20,6 +20,7 @@ export const MODULES = new Map([
   ['harness', 'harness-auth.mjs'],
   ['daemon', 'agent-daemon.mjs'],
   ['keyd', 'keyd-supervisor.mjs'],
+  ['owner', 'cli/owner.mjs'],
   ['approvals', 'agent-approvals.mjs'],
   ['audit', 'agent-audit.mjs'],
   ['mcp', 'agent-mcp.mjs'],
