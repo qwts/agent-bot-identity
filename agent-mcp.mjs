@@ -29,6 +29,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readBinding, readBindToken } from './agent-binding.mjs';
 import { daemonClient } from './daemon-client.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
+import { resolveAgentSlug } from './resolve-agent.mjs';
 
 const PROTOCOL_VERSION = '2025-06-18';
 
@@ -237,6 +238,13 @@ async function takeInbox(state) {
   return { event: result?.event ?? null };
 }
 
+// The App this session was explicitly run as (GH_AGENT_APP, else the
+// checkout's pin), sent with a first bind so the daemon can reconcile the
+// soul's record with it (#107). A claim the resolver rejects is not sent.
+function claimedApp(state) {
+  try { return resolveAgentSlug({ env: state.env, cwd: state.cwd, detect: false }); } catch { return null; }
+}
+
 async function callTool(state, name, args = {}) {
   switch (name) {
     case 'bind': {
@@ -283,6 +291,7 @@ async function callTool(state, name, args = {}) {
           id: args.transcript_id,
         },
         parentId: args.parent_agent_id ?? null,
+        app: claimedApp(state),
       });
       state.secret = result.secret;
       state.agentId = result.agentId;
@@ -292,6 +301,14 @@ async function callTool(state, name, args = {}) {
       if (result.repinRequired) {
         git(state.cwd, 'config', 'extensions.worktreeConfig', 'true');
         git(state.cwd, 'config', '--worktree', 'agentBot.agentId', result.agentId);
+      }
+      // The daemon reconciled the soul's App with the one this session was
+      // run as (#107): the pin follows, so the credential helper and commit
+      // attribution can be refreshed by setup-worktree in this checkout.
+      if (result.app?.status === 'reconciled') {
+        git(state.cwd, 'config', 'extensions.worktreeConfig', 'true');
+        git(state.cwd, 'config', '--worktree', 'agentBot.app', result.app.claimed);
+        result.app.next = 'run agent-bot setup-worktree in this checkout to commit as the reconciled App';
       }
       const { secret, ...safe } = result;
       return safe;

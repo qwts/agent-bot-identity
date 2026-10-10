@@ -59,9 +59,10 @@ import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingR
 import { spacePath } from './agent-space.mjs';
 import { createSoulHistory } from './soul-history.mjs';
 import { ensureSoulSpace, soulSpacePath } from './soul-memory.mjs';
-import { archiveSoulDirs, backfillManagedSouls, displayName, listSouls, locateSoulDir, populationFile, recordHarnessAuth, recordSoulSighting, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, setSoulComputerUse, soulComputerUse, setSoulPaused, soulPaused, showSoul, soulDirectory, upsertIdentitySoul, withRoles } from './agent-population.mjs';
+import { archiveSoulDirs, backfillManagedSouls, displayName, listSouls, locateSoulDir, populationFile, recordHarnessAuth, recordSoulSighting, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulApp, setSoulComms, setSoulComputerUse, soulComputerUse, setSoulPaused, soulPaused, showSoul, soulDirectory, upsertIdentitySoul, withRoles } from './agent-population.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
 import {
+  assignAgentApp,
   bindAgentLineage,
   ensureAgentIdentity,
   mintAgentIdentity,
@@ -100,6 +101,7 @@ import { attachWakeEndpoint } from './agent-wake.mjs';
 import { resolveSoulMode } from './soul-mode.mjs';
 import { createIdentityAppJobs, identityAppOperation, identityAppFailure, listIdentityApps } from './identity-apps.mjs';
 import { identityAppSouls } from './identity-app-souls.mjs';
+import { validAppSlug } from './identity-app-store.mjs';
 import { readSoulProfile } from './soul-profile.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
 import { launchSandbox, readSandboxStatus, turnSandboxProblem, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount } from './sandbox.mjs';
@@ -616,7 +618,16 @@ export function createDaemonServer({
         }
         case 'POST /v0/bind': {
           const body = parseJsonBody(await readBody(req));
-          sendJson(res, 200, bindWorktreeConversation({ body, bindings, env, home, config, now, presented: presentedCredential(req) }));
+          // The App the session was explicitly run as (#107), checked before
+          // the bind consumes anything so a malformed claim leaves the
+          // single-use token in place. It is a claim, never authority: the
+          // record changes only as reconcileSoulApp decides.
+          if (body.app !== undefined && body.app !== null && !validAppSlug(body.app)) {
+            throw Object.assign(new Error('app must be a GitHub App slug'), { statusCode: 400 });
+          }
+          const bound = bindWorktreeConversation({ body, bindings, env, home, config, now, presented: presentedCredential(req) });
+          const app = body.app ? await reconcileSoulApp({ agentId: bound.agentId, claimed: body.app, env, home, config, now, ownerGate }) : null;
+          sendJson(res, 200, app ? { ...bound, app } : bound);
           return;
         }
         case 'POST /v0/spawn': {
@@ -739,6 +750,20 @@ export function createDaemonServer({
               reason: 'soul-retired',
             }, { env, home, now });
             throw Object.assign(new Error('this soul is retired'), { statusCode: 409 });
+          }
+          // The agent path mints only for a conversation (ENG-0081 amendment
+          // decision 2): the binding's transcript locator, or the one the
+          // soul's record already carries. A still-pending soul cannot mint.
+          if (!binding.transcript && !identity.transcript) {
+            appendAuditReceipt({
+              event: 'credential-mint',
+              agentId: binding.agentId,
+              operation: 'tier1-app-token',
+              decision: 'denied',
+              ...(identity.github?.appSlug ? { appSlug: identity.github.appSlug } : {}),
+              reason: 'no-transcript-locator',
+            }, { env, home, now });
+            throw Object.assign(new Error('this soul has no transcript locator yet; bind it to its conversation first'), { statusCode: 409 });
           }
           // The add-on gate decides, not the record: a soul that carries a
           // github field gets no App token while github-identity is off.
@@ -1071,6 +1096,58 @@ export function createDaemonServer({
   server.bindings = bindings;
   server.interaction = interaction;
   return server;
+}
+
+// The App a soul's record names, reconciled at bind with the App the session
+// was explicitly run as (#107; owner decision 2026-10-09). The claim comes
+// from the caller and is only ever a request:
+//   - it matches the record: nothing to do;
+//   - the organization profile maps the soul's harness to it: the record is
+//     updated, since the owner's selection and the org agree;
+//   - otherwise the owner's selection wins once the owner verifies it (Touch
+//     ID through agent-bot-keyd, else the dialog). An agent cannot produce
+//     that proof, so an unverified claim leaves the record as it was and the
+//     daemon keeps minting the recorded App.
+// The bind itself is never refused here: the session stays bound either way.
+// Every change and every unverified claim writes a receipt. A soul without a
+// GitHub App is never given one this way, and a soul whose key agent-bot-keyd
+// holds changes App only through the keyd owner workflow.
+async function reconcileSoulApp({ agentId, claimed, env, home, config, now, ownerGate }) {
+  if (!isGateEnabled('github-identity', { env, home, config })) return null;
+  const stateDir = stateDirectory({ env, home });
+  const identity = readAgentIdentity(agentId, { stateDir });
+  const recorded = identity.github?.appSlug ?? null;
+  if (!recorded || recorded === claimed) return null;
+  const receipt = (decision, reason) => appendAuditReceipt({
+    event: 'app-record-reconcile', agentId, operation: 'bind', decision, appSlug: claimed, reason, detail: `recorded ${recorded}`,
+  }, { env, home, now });
+  const file = populationOverride(env, home);
+  let directory = null;
+  try { directory = soulDirectory(agentId, { env, home, file }); } catch { /* census-only soul */ }
+  if (directory && soulCredentialsDeclaration(directory)?.store === 'keyd') {
+    receipt('denied', 'keyd-held');
+    return { status: 'unchanged', recorded, claimed, reason: 'keyd-held' };
+  }
+  let reason = 'org-mapping-agrees';
+  if (!identity.harness || (config ?? loadConfig({ env, home })).apps?.[identity.harness] !== claimed) {
+    try {
+      await ownerGate(`soul app ${agentId} ${claimed}`, { principal: null });
+      reason = 'owner-verified';
+    } catch {
+      receipt('denied', 'owner-not-verified');
+      return { status: 'unchanged', recorded, claimed, reason: 'owner-not-verified' };
+    }
+  }
+  try {
+    assignAgentApp(agentId, claimed, { stateDir, now, afterWrite: () => setSoulApp(agentId, claimed, { file }) });
+  } catch {
+    // A record that cannot take the change (a retired soul, a locked store)
+    // leaves the session bound as before; the receipt accounts for it.
+    receipt('failed', 'record-write-failed');
+    return { status: 'unchanged', recorded, claimed, reason: 'record-write-failed' };
+  }
+  receipt('granted', reason);
+  return { status: 'reconciled', recorded, claimed, reason };
 }
 
 // Surrender-and-enforce (#94): the caller presents the bind token that

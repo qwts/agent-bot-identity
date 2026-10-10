@@ -22,7 +22,7 @@ import {
 import { displayName, recordSoulDisplayName, showSoul, upsertSoul } from '../agent-population.mjs';
 import { initSoulSpace } from '../agent-space.mjs';
 import { verifySoulToken, vouchKeyPath, vouchStateDir } from '../vouch.mjs';
-import { ensureAgentIdentity, stateDirectory } from '../agent-identity.mjs';
+import { ensureAgentIdentity, readAgentIdentity, stateDirectory } from '../agent-identity.mjs';
 import { mintBindToken, readBinding } from '../agent-binding.mjs';
 import { PROOF_HEADER, signBindingProof } from '../binding-proof.mjs';
 import {
@@ -950,6 +950,144 @@ test('a refusal by the github-identity gate receipts its reason and mints nothin
   } finally {
     await new Promise((resolve) => { server.close(resolve); });
   }
+});
+
+// --- App reconcile at bind (#107; owner decision 2026-10-09) ---
+
+function reconcileFixture({ recorded = 'you-grok-agent' } = {}) {
+  const { root, env } = scratchEnv();
+  const id = AGENT_ID;
+  ensureAgentIdentity({
+    gate: () => true, appSlug: recorded, botUid: '308462948', harness: 'codex',
+    transcript: { provider: 'codex', id: 'thread-daemon' },
+    stateDir: stateDirectory({ env, home: '/nonexistent' }), idFactory: () => id,
+    now: () => new Date('2026-08-12T08:00:00.000Z'),
+  });
+  const worktree = path.join(root, 'worktree');
+  mkdirSync(worktree, { recursive: true });
+  execFileSync('git', ['init', '-q', worktree]);
+  const gitDir = path.join(worktree, '.git');
+  const record = mintBindToken({ gitDir, worktree, agentId: id });
+  const recordedApp = () => readAgentIdentity(id, { stateDir: stateDirectory({ env, home: '/nonexistent' }) }).github?.appSlug;
+  const receipts = (event) => {
+    const file = path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl');
+    if (!existsSync(file)) return [];
+    return readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line)).filter((row) => row.event === event);
+  };
+  return { env, gitDir, record, recordedApp, receipts };
+}
+
+function reconcileServer(env, { ownerGate, minted = [] } = {}) {
+  return {
+    config: { features: { 'github-identity': true }, apps: { codex: 'you-codex-agent' } },
+    ownerGate,
+    mintImpl: async ({ slug }) => { minted.push(slug); return { token: 'ghs_reconciled', expires_at: '2026-08-12T09:00:00.000Z' }; },
+  };
+}
+
+test('a bind run as the App the org maps to the soul\'s harness reconciles the record without asking (#107)', async () => {
+  const { env, gitDir, record, recordedApp, receipts } = reconcileFixture();
+  const minted = [];
+  const asked = [];
+  await withServer(env, async ({ call }) => {
+    const res = await call('/v0/bind', { method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' }, app: 'you-codex-agent' } });
+    assert.equal(res.status, 200);
+    const bound = await res.json();
+    assert.deepEqual(bound.app, { status: 'reconciled', recorded: 'you-grok-agent', claimed: 'you-codex-agent', reason: 'org-mapping-agrees' });
+    assert.deepEqual(asked, [], 'the org agrees, so the owner is not asked');
+    assert.equal(recordedApp(), 'you-codex-agent');
+    assert.equal(showSoul(AGENT_ID, { file: env.AGENT_BOT_POPULATION_PATH }).appSlug, 'you-codex-agent');
+    // The daemon now mints the reconciled App for this binding.
+    const grant = await (await call('/v0/credential', { method: 'POST', body: {}, headers: { 'x-agent-binding': bound.secret } })).json();
+    assert.equal(grant.appSlug, 'you-codex-agent');
+    assert.deepEqual(minted, ['you-codex-agent']);
+  }, reconcileServer(env, { minted, ownerGate: async (action) => { asked.push(action); } }));
+  assert.deepEqual(receipts('app-record-reconcile').map(({ agentId, operation, decision, appSlug, reason, detail }) => ({ agentId, operation, decision, appSlug, reason, detail })), [
+    { agentId: AGENT_ID, operation: 'bind', decision: 'granted', appSlug: 'you-codex-agent', reason: 'org-mapping-agrees', detail: 'recorded you-grok-agent' },
+  ]);
+});
+
+test('the owner\'s pick wins over the org mapping once the owner verifies it (#107)', async () => {
+  const { env, gitDir, record, recordedApp, receipts } = reconcileFixture();
+  const asked = [];
+  await withServer(env, async ({ call }) => {
+    const bound = await (await call('/v0/bind', { method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' }, app: 'you-pick-agent' } })).json();
+    assert.equal(bound.app.status, 'reconciled');
+    assert.equal(bound.app.reason, 'owner-verified');
+  }, reconcileServer(env, { ownerGate: async (action, { principal }) => { asked.push({ action, principal }); return { method: 'presence', via: 'agent-bot-keyd' }; } }));
+  // Asked once, through the owner gate (Touch ID first), about this soul and App.
+  assert.deepEqual(asked, [{ action: `soul app ${AGENT_ID} you-pick-agent`, principal: null }]);
+  assert.equal(recordedApp(), 'you-pick-agent');
+  assert.deepEqual(receipts('app-record-reconcile').map(({ decision, appSlug, reason }) => ({ decision, appSlug, reason })), [
+    { decision: 'granted', appSlug: 'you-pick-agent', reason: 'owner-verified' },
+  ]);
+});
+
+test('an unverified App claim leaves the record alone and still binds (#107)', async () => {
+  const { env, gitDir, record, recordedApp, receipts } = reconcileFixture();
+  const minted = [];
+  await withServer(env, async ({ call }) => {
+    const res = await call('/v0/bind', { method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' }, app: 'you-pick-agent' } });
+    // The bind is never refused for it; the record just does not move.
+    assert.equal(res.status, 200);
+    const bound = await res.json();
+    assert.deepEqual(bound.app, { status: 'unchanged', recorded: 'you-grok-agent', claimed: 'you-pick-agent', reason: 'owner-not-verified' });
+    assert.equal(recordedApp(), 'you-grok-agent');
+    const grant = await (await call('/v0/credential', { method: 'POST', body: {}, headers: { 'x-agent-binding': bound.secret } })).json();
+    assert.equal(grant.appSlug, 'you-grok-agent');
+    assert.deepEqual(minted, ['you-grok-agent']);
+  }, reconcileServer(env, { minted, ownerGate: async () => { throw new Error('the person declined'); } }));
+  const rows = receipts('app-record-reconcile');
+  assert.deepEqual(rows.map(({ decision, appSlug, reason }) => ({ decision, appSlug, reason })), [
+    { decision: 'denied', appSlug: 'you-pick-agent', reason: 'owner-not-verified' },
+  ]);
+  assert.doesNotMatch(JSON.stringify(rows), /declined/, 'the gate\'s error text stays out of the receipt');
+});
+
+test('a bind claiming the recorded App, or a malformed one, changes nothing and asks no one (#107)', async () => {
+  const { env, gitDir, record, recordedApp, receipts } = reconcileFixture({ recorded: 'you-codex-agent' });
+  const asked = [];
+  await withServer(env, async ({ call }) => {
+    const malformed = await call('/v0/bind', { method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' }, app: '../you-codex-agent' } });
+    assert.equal(malformed.status, 400);
+    assert.equal(existsSync(path.join(gitDir, 'agent-bind-token.json')), true, 'a rejected claim leaves the token for a retry');
+    const bound = await (await call('/v0/bind', { method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' }, app: 'you-codex-agent' } })).json();
+    assert.equal(bound.app, undefined);
+  }, reconcileServer(env, { ownerGate: async (action) => { asked.push(action); } }));
+  assert.deepEqual(asked, []);
+  assert.equal(recordedApp(), 'you-codex-agent');
+  assert.deepEqual(receipts('app-record-reconcile'), []);
+});
+
+test('the daemon mints no agent-path token for a soul with no transcript locator (#107)', async () => {
+  const { root, env } = scratchEnv();
+  ensureAgentIdentity({
+    gate: () => true, appSlug: 'you-codex-agent', botUid: '308462948', harness: 'codex', transcript: null,
+    stateDir: stateDirectory({ env, home: '/nonexistent' }), idFactory: () => AGENT_ID,
+    now: () => new Date('2026-08-12T08:00:00.000Z'),
+  });
+  const worktree = path.join(root, 'worktree');
+  mkdirSync(worktree, { recursive: true });
+  execFileSync('git', ['init', '-q', worktree]);
+  let minted = 0;
+  await withServer(env, async ({ call, server }) => {
+    // A binding made without a conversation, as a daemon-launched home is.
+    const secret = server.bindings.bind({ agentId: AGENT_ID, worktree, gitDir: path.join(worktree, '.git'), harness: 'codex' });
+    const refused = await call('/v0/credential', { method: 'POST', body: {}, headers: { 'x-agent-binding': secret } });
+    assert.equal(refused.status, 409);
+    assert.match((await refused.json()).error, /no transcript locator/);
+  }, { mintImpl: async () => { minted += 1; return { token: 'ghs_pending', expires_at: '2026-08-12T09:00:00.000Z' }; } });
+  assert.equal(minted, 0);
+  const receipts = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8')
+    .trim().split('\n').map((line) => JSON.parse(line)).filter((row) => row.event === 'credential-mint');
+  assert.deepEqual(receipts.map(({ decision, appSlug, reason }) => ({ decision, appSlug, reason })), [
+    { decision: 'denied', appSlug: 'you-codex-agent', reason: 'no-transcript-locator' },
+  ]);
 });
 
 test('a daemon restart preserves binding authentication without a bearer', async () => {

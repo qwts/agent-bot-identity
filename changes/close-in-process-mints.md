@@ -1,0 +1,1 @@
+- A bind run as another App updates the soul's record when the organization profile maps its harness to that App, or once you verify the change with Touch ID; an unverified claim leaves the record alone and the bind still succeeds. The daemon also mints only for a soul with a transcript locator. Each outcome leaves a receipt (#107).

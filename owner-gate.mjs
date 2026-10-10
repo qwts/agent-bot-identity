@@ -91,6 +91,8 @@ export function ownerActionSummary(action, { souls = null, listSouls = null } = 
     summary = `remove ${label(id)} and every soul it leads from this Mac (their folders are archived, not deleted)`;
   } else if (first === 'soul' && second === 'fork' && rest.length > 0) {
     summary = `make a copy of ${label(id)} a new soul named ${rest.join(' ')}`;
+  } else if (first === 'soul' && second === 'app' && rest.length === 1) {
+    summary = `let ${label(id)} act as the GitHub App ${rest[0]} from now on`;
   } else if (first === 'soul' && second === 'confinement' && rest.length === 1) {
     summary = `set file confinement to ${rest[0]} for ${label(id)}`;
   } else if (first === 'soul' && second === 'revision' && rest.length === 1) {
