@@ -91,8 +91,9 @@ Adapter evidence (official docs read 2026-10-07):
   (`.agent.md`); [tool aliases](https://docs.github.com/en/copilot/reference/custom-agents-configuration)
   accept Claude's tool names case-insensitively and ignore unknown names.
   Checked with Copilot CLI 1.0.90 in a trusted scratch folder: `copilot mcp list --json`
-  showed the rendered, marked `.mcp.json` as one `agent-bot` workspace server, and
-  `copilot skill list --json` listed a rendered `.claude/commands/` file.
+  showed the rendered, marked `.mcp.json` as one `agent-bot` workspace server,
+  and `copilot skill list --json` listed a rendered `.claude/commands/` file.
+  The current builder-generated server key is `agent-reach` (table below).
 - Kiro: [MCP configuration](https://kiro.dev/docs/mcp/configuration/) — workspace
   `.kiro/settings/mcp.json` with `mcpServers` (IDE and CLI);
   [custom agents](https://kiro.dev/docs/custom-agents/) and the
@@ -105,7 +106,7 @@ Adapter evidence (official docs read 2026-10-07):
 - Devin CLI: [configuration import](https://docs.devin.ai/cli/reference/configuration/read-config-from) —
   imports Claude's `.mcp.json` MCP servers and `.claude/commands/**/*.md` as skills
   (it also imports `.cursor/mcp.json` and `opencode.json`, which carry the same
-  `agent-bot` entry); [subagents](https://docs.devin.ai/cli/subagents) — project
+  `agent-reach` entry); [subagents](https://docs.devin.ai/cli/subagents) — project
   `.devin/agents/<name>.md` with `name`, `description`, `model`, `allowed-tools`
   (a restriction on a subagent profile); tool names `read`, `edit`, `grep`,
   `glob`, `exec` and MCP tools as `mcp__<server>__<tool>`, from
@@ -124,12 +125,13 @@ Adapter evidence (official docs read 2026-10-07):
   reads `QWEN.md` and an existing `AGENTS.md`. Its project skills
   (`.qwen/skills/`), agents (`.qwen/agents/`) and commands (`.qwen/commands/`)
   are documented but not rendered yet (#247 is MCP only). The settings file
-  also carries the soul's own Qwen settings, so only `mcpServers.agent-bot` is
+  also carries the soul's own Qwen settings, so only `mcpServers.agent-reach` is
   the builder's and every other key is merged through. Checked with Qwen Code
   0.25.0: `qwen mcp list` in a directory holding the rendered file, `_comment`
-  marker included, lists `agent-bot: agent-bot reach-mcp (stdio)` as *pending
-  approval*. Qwen asks before it starts a project-scoped server, so the first
-  session in a soul home approves it once (`qwen mcp approve agent-bot`).
+  marker included, listed the then-generated `agent-bot: agent-bot reach-mcp
+  (stdio)` as *pending approval*. The current builder-generated server key is
+  `agent-reach` (table below). Qwen asks before it starts a project-scoped
+  server, so the first session in a soul home approves it once.
 
 **Unverified:** Cursor and Kiro were not run (both CLIs need a sign-in), so
 whether they tolerate the leading `_comment` marker key in `.cursor/mcp.json` and
