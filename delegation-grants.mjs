@@ -145,10 +145,11 @@ export function createGrantLedger({
     try {
       shaped = grantOperation(operation);
     } catch (error) {
-      record({ agentId: soul, operation: 'request', decision: 'refused', detail: error.message });
+      record({ agentId: soul, operation: 'request', decision: 'refused', reason: error.code });
       throw error;
     }
     if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0 || ttlMs > MAX_TTL_MS) {
+      record({ agentId: soul, operation: 'request', decision: 'refused', reason: 'grant-ttl' });
       throw failure('grant-refused', `a grant expires within ${MAX_TTL_MS / 60_000} minutes`);
     }
     const grant = createProposal({
@@ -168,7 +169,7 @@ export function createGrantLedger({
     const grant = grantOf(getProposal(validateProposalId(proposalId), storeOptions));
     if (!grant) throw failure('grant-unknown', `${proposalId} is not a grant`);
     const refuse = (code, message, decision = 'refused') => {
-      record({ agentId: grant.agentId, operation: 'approve', decision, detail: `${grant.proposalId} ${message}` });
+      record({ agentId: grant.agentId, operation: 'approve', decision, detail: grant.proposalId, reason: code });
       return failure(code, message);
     };
     if (grant.status !== 'open') throw refuse('grant-closed', 'grant is no longer open');
@@ -181,7 +182,10 @@ export function createGrantLedger({
       await presence(grantPresenceAction(grant), { env, home });
     } catch (error) {
       // keyd unavailable is a refusal here too: no other ceremony stands in.
-      throw refuse(error.code === 'presence-unavailable' ? 'presence-required' : (error.code ?? 'owner-declined'),
+      // Only known codes reach the receipt.
+      const code = error.code === 'presence-unavailable' ? 'presence-required'
+        : (['presence-invalid', 'keyd-signer-unverified'].includes(error.code) ? error.code : 'owner-declined');
+      throw refuse(code,
         `owner presence was not given: ${error.message}`);
     }
     let decided;
@@ -200,8 +204,10 @@ export function createGrantLedger({
   async function spend(proposalId, { agentId, operation }, perform) {
     const soul = validateAgentId(agentId);
     const id = validateProposalId(proposalId);
+    // Receipts carry the refusal's code, never its message: messages can
+    // quote what the caller sent.
     const refuse = (code, message) => {
-      record({ agentId: soul, operation: 'spend', decision: 'refused', detail: `${id} ${message}` });
+      record({ agentId: soul, operation: 'spend', decision: 'refused', detail: id, reason: code });
       return failure(code, message);
     };
     const grant = grantOf(getProposal(id, storeOptions));
@@ -221,10 +227,10 @@ export function createGrantLedger({
     try {
       await perform(shaped);
     } catch (error) {
-      // The act's error stays with the caller's log: it may quote what the
-      // agent must not see, so the receipt says only that it failed.
+      // The act's error may quote what the agent must not see, so neither
+      // the receipt nor the error returned carries it; \`perform\` logs its own.
       record({ agentId: soul, operation: 'spend', decision: 'failed', detail: `${id} ${grant.tool}` });
-      throw Object.assign(new Error(`the granted ${shaped.operation} failed; the grant is spent`), { code: 'grant-act-failed', cause: error });
+      throw Object.assign(new Error(`the granted ${shaped.operation} failed; the grant is spent`), { code: 'grant-act-failed' });
     }
     const spent = record({ agentId: soul, operation: 'spend', decision: 'spent', detail: `${id} ${grant.tool} ${grant.operationDigest}` });
     return { proposalId: id, status: 'spent', receipt: spent };

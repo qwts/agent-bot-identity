@@ -71,6 +71,20 @@ test('a grant is an ordinary proposal: one operation, its digest and an expiry',
   assert.deepEqual(getProposal(grant.proposalId, { env, home: '/nonexistent' }), grant);
   assert.match(receipts().at(-1).detail, new RegExp(grant.operationDigest));
   assert.throws(() => ledger.request({ agentId: SOUL, operation: COMMENT, ttlMs: 60 * 60_000 }), { code: 'grant-refused' });
+  assert.deepEqual([receipts().at(-1).decision, receipts().at(-1).reason], ['refused', 'grant-ttl']);
+});
+
+test('refusal receipts carry a fixed reason, never what the caller sent', async () => {
+  const { ledger, receipts } = scratch();
+  const secret = 'ghp_notarealtokenbutlooksone';
+  assert.throws(() => ledger.request({ agentId: SOUL, operation: { ...COMMENT, operation: secret } }), { code: 'grant-refused' });
+  assert.throws(() => ledger.request({ agentId: SOUL, operation: { ...COMMENT, [secret]: 1 } }), { code: 'grant-refused' });
+  const grant = ledger.request({ agentId: SOUL, operation: COMMENT });
+  await ledger.approve(grant.proposalId, { digest: grant.operationDigest });
+  await assert.rejects(ledger.spend(grant.proposalId, { agentId: SOUL, operation: { ...COMMENT, [secret]: 1 } }, async () => {}), { code: 'grant-refused' });
+  const rows = receipts();
+  assert.ok(!JSON.stringify(rows).includes(secret));
+  assert.deepEqual(rows.filter((row) => row.decision === 'refused').map((row) => row.reason), ['grant-refused', 'grant-refused', 'grant-refused']);
 });
 
 test('an approved grant is spent exactly once, with a receipt', async () => {
@@ -107,7 +121,12 @@ test('a failed act still spends the grant, and its error stays out of the receip
   const grant = ledger.request({ agentId: SOUL, operation: COMMENT });
   await ledger.approve(grant.proposalId, { digest: grant.operationDigest });
   await assert.rejects(ledger.spend(grant.proposalId, { agentId: SOUL, operation: COMMENT },
-    async () => { throw new Error('token ghs_secret rejected'); }), { code: 'grant-act-failed' });
+    async () => { throw new Error('token ghs_secret rejected'); }), (error) => {
+    assert.equal(error.code, 'grant-act-failed');
+    assert.equal(error.cause, undefined);
+    assert.ok(!error.message.includes('ghs_secret'));
+    return true;
+  });
   await assert.rejects(ledger.spend(grant.proposalId, { agentId: SOUL, operation: COMMENT }, async () => {}), { code: 'grant-unavailable' });
   assert.ok(!JSON.stringify(receipts()).includes('ghs_secret'));
 });
