@@ -480,8 +480,10 @@ read once per turn), the first layer that names one is sent as
 
 Sending the resolved model on every turn, not only the pick, means a resumed
 native session follows the order too: clearing a pick returns it to the repo's
-or the package's model. Where no layer names a model, a resumed session keeps
-the model it last ran until a new session starts.
+or the package's model. Where clearing leaves no layer naming a model, a `/v1`
+interaction turn starts a new native session on the harness default and says
+so; the old session is kept, not deleted (see `interaction-continuity.md`).
+Clearing the last reasoning effort works the same way.
 
 The model is not a permission, so no layer needs the owner's decision to
 change it. A model id the harness does not offer is logged and the turn

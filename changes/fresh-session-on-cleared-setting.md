@@ -1,0 +1,1 @@
+- Clearing the last model or reasoning-effort setting on a resumed `/v1` conversation now starts the next turn in a new harness session on the harness default, and the turn says so; the old session is kept, not deleted (#379).

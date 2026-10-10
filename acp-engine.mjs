@@ -325,11 +325,18 @@ function pickOption(options, allowed) {
 
 // --- the executor -----------------------------------------------------------
 
+// The model and reasoning effort a turn ran with, recorded next to its
+// harness-session binding (#379). A later turn in the same interaction
+// session compares them with its own, so clearing the last setting can be
+// seen even though a loaded native session remembers what it last ran.
+export const HARNESS_SETTINGS_EVENT = 'harness-settings';
+
 // createAcpExecutor returns a contract executor whose run drives one ACP turn.
 // `registry` defaults to the shipped spawn registry; tests and future planes
 // substitute rows without touching engine code. `getHarnessSession` lets the
 // daemon resume an existing harness session: it receives the invocation and
-// returns { harnessSessionId } (or null for a fresh session).
+// returns { harnessSessionId, settings } (or null for a fresh session), where
+// settings is the prior turn's recorded { model, effort } or null if unknown.
 export function createAcpExecutor({
   harness,
   identity,
@@ -571,7 +578,21 @@ export function createAcpExecutor({
           : {}),
       };
       let promptMessage = message;
-      if (prior && typeof prior.harnessSessionId === 'string') {
+      // A loaded session keeps the model and effort it last ran. When the
+      // owner clears the last setting that named one, there is nothing to send
+      // that returns it to the harness default, so this turn starts a new
+      // session instead (#379). The prior session is kept, not resumed, and
+      // the turn says so in a continuity event and in the prompt.
+      const cleared = Boolean(prior?.settings) && (
+        (prior.settings.model !== null && model === null)
+        || (prior.settings.effort !== null && effortValue === null));
+      if (cleared && typeof prior.harnessSessionId === 'string') {
+        appendEvent('continuity', { status: 'fresh', reason: 'setting-cleared', previousHarnessSessionId: prior.harnessSessionId });
+        promptMessage = '[agent-bot] Your previous session in this conversation was kept but not resumed: '
+          + 'its model or reasoning-effort setting was cleared, so this session starts on the harness default.'
+          + `\n\n${message}`;
+      }
+      if (!cleared && prior && typeof prior.harnessSessionId === 'string') {
         if (initialized?.agentCapabilities?.loadSession !== true) {
           unavailable('native-resume-unsupported');
           failEngine('native resume is unsupported; start a new interaction session explicitly');
@@ -607,7 +628,7 @@ export function createAcpExecutor({
           const plain = (value, max) => String(value).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').slice(0, max);
           const named = (record) => `${plain(record.name, 128)} (agent id ${plain(record.agentId, 64)})`;
           const parent = soul.parent ? `Your parent is ${named(soul.parent)}.` : 'You have no parent agent.';
-          promptMessage = `[agent-bot] You are ${named(soul)}. ${parent}\n\n${message}`;
+          promptMessage = `[agent-bot] You are ${named(soul)}. ${parent}\n\n${promptMessage}`;
         }
       }
       if (sessionModels && onModels) {
@@ -651,6 +672,7 @@ export function createAcpExecutor({
           log('acp engine: explicit reasoning effort is unsupported by fresh advertised options; continuing with the harness setting');
         }
       }
+      appendEvent(HARNESS_SETTINGS_EVENT, { model, effort: effortValue });
       // A row whose adapter defaults to approving calls itself names the ACP
       // session mode that routes approvals to this client (#384), so the
       // daemon policy stays the authority on every turn, resumed or new.
