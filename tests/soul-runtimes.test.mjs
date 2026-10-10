@@ -786,6 +786,56 @@ test('owner-managed executable overrides use one-name shims, satisfy only the se
 });
 
 
+test('override clear recovers a malformed directory without following links or removing other selections', async (t) => {
+  const f = fixture(t, { census: true });
+  const options = { ...f.options, file: f.env.AGENT_BOT_POPULATION_PATH, cwd: f.home, gate: async () => {}, write: () => {} };
+  const external = path.join(f.home, 'external-npm');
+  put(external, '#!/bin/sh\nexit 0\n');
+  await soulRuntimesCommand(['override', ID, 'npm', external], options);
+  const directory = path.join(f.runtimes, 'overrides');
+  const malformed = path.join(directory, 'node.json');
+  const sentinel = path.join(f.home, 'outside-record', 'sentinel');
+  put(sentinel, 'keep outside data');
+  put(path.join(malformed, 'nested', 'bad-record'), 'malformed');
+  symlinkSync(path.dirname(sentinel), path.join(malformed, 'outside-link'));
+  const npmBefore = readFileSync(path.join(directory, 'npm.json'), 'utf8');
+  const invalid = inspectRuntimeOverrides(f.dir, { agentId: ID, platform: PLATFORM }).errors[0];
+  assert.equal(invalid.code, 'runtime-override-invalid');
+  assert.equal(invalid.action, `agent-bot soul runtimes override ${ID} node --clear`);
+
+  const result = await soulRuntimesCommand(['override', ID, 'node', '--clear'], options);
+  assert.equal(result.status, 'cleared');
+  assert.equal(existsSync(malformed), false);
+  assert.equal(readFileSync(sentinel, 'utf8'), 'keep outside data');
+  assert.equal(readFileSync(path.join(directory, 'npm.json'), 'utf8'), npmBefore);
+  assert.equal(realpathSync(path.join(directory, 'bin', 'npm')), realpathSync(external));
+  assert.equal(inspectRuntimeOverrides(f.dir, { agentId: ID, platform: PLATFORM }).errors.length, 0);
+
+  symlinkSync(path.dirname(sentinel), malformed);
+  await soulRuntimesCommand(['override', ID, 'node', '--clear'], options);
+  assert.ok(!readdirSync(directory).includes('node.json'));
+  assert.equal(readFileSync(sentinel, 'utf8'), 'keep outside data');
+});
+
+test('setting an override identifies the soul when its store is unsafe', async (t) => {
+  const f = fixture(t, { census: true });
+  const external = path.join(f.home, 'external-node');
+  put(external, '#!/bin/sh\nexit 0\n');
+  const outside = path.join(f.home, 'outside-store');
+  put(path.join(outside, 'sentinel'), 'keep outside data');
+  mkdirSync(f.runtimes, { recursive: true });
+  symlinkSync(outside, path.join(f.runtimes, 'overrides'));
+  const options = { ...f.options, file: f.env.AGENT_BOT_POPULATION_PATH, cwd: f.home, gate: async () => {}, write: () => {} };
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'node', external], options), (error) => {
+    assert.equal(error.code, 'runtime-override-invalid');
+    assert.ok(error.message.startsWith(`${ID}: `), error.message);
+    return true;
+  });
+  assert.deepEqual(readdirSync(outside), ['sentinel']);
+  assert.equal(readFileSync(path.join(outside, 'sentinel'), 'utf8'), 'keep outside data');
+  assert.equal(existsSync(auditFile({ env: f.env, home: f.home })), false);
+});
+
 test('external runtime overrides preserve exact PATH identity and clear variables in the spawned environment', (t) => {
   const f = fixture(t, { manifest: { runtimes: { node: '24', python: '3.12', go: '1.x' } } });
   const inspection = inspectSoulRuntimes(f.dir, f.options);

@@ -197,9 +197,9 @@ function prepareOverrideShims(soulDir, overrides, { agentId } = {}) {
   return bin;
 }
 
-function writeOverrideRecord(soulDir, name, executable) {
+function writeOverrideRecord(soulDir, agentId, name, executable) {
   const directory = overrideDirectory(soulDir);
-  validateOverrideStore(soulDir, name, { create: true });
+  validateOverrideStore(soulDir, agentId, { create: true });
   const file = overrideRecordFile(soulDir, name), temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try { writeFileSync(temporary, `${JSON.stringify({ schemaVersion: OVERRIDE_SCHEMA_VERSION, executable })}\n`, { flag: 'wx', mode: 0o600 }); renameSync(temporary, file); }
   finally { rmSync(temporary, { force: true }); }
@@ -933,8 +933,8 @@ async function soulRuntimeOverrideCommand(argv, { gate, readStdin, write, env, h
   const soulDir = soulRoot(soul, options);
   if (clear) validateOverrideStore(soulDir, soul.id);
   const file = overrideRecordFile(soulDir, name);
-  if (clear) rmSync(file, { force: true });
-  else writeOverrideRecord(soulDir, name, executable);
+  if (clear) rmSync(file, { recursive: true, force: true });
+  else writeOverrideRecord(soulDir, soul.id, name, executable);
   const status = inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host });
   ensureOverrideShims(soulDir, status.overrides, { agentId: soul.id });
   const selected = status.rows.find((row) => row.name === name);
