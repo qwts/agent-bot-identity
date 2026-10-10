@@ -37,11 +37,15 @@ function setup(t) {
     return setOperations(p.principalId, ['message', 'observe', 'cancel'], principalOptions);
   };
   const owner = principal();
-  const makeFactory = ({ patch = {}, model = null } = {}) =>
-    acpExecutorFor({ identities: () => ({}), baseEnv: { ...env, ...patch }, interactionStore: store,
+  // The fake agent's switches are not host variables a turn inherits, so
+  // they ride the turn's own env, as the daemon's binding does.
+  const makeFactory = ({ patch = {}, model = null } = {}) => {
+    const factory = acpExecutorFor({ identities: () => ({}), baseEnv: env, interactionStore: store,
       policy: { version: 1, rules: [], fallback: 'deny' }, modelFor: () => model,
       createExecutor: (opts) => createAcpExecutor({ ...opts, registry }),
     });
+    return (request) => factory({ ...request, env: { FAKE_ACP_HISTORY_DIR: history, ...patch, ...request.env } });
+  };
   const makeService = ({ harness = 'claude', ...options } = {}) => {
     const factory = makeFactory(options);
     return createInteractionService({ ...store, config: {}, log: () => {}, executor: (input) =>
