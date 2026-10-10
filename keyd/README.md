@@ -20,6 +20,12 @@ Security framework:
 - account `github-app/<slug>`
 - value: base64 of `{appId, privateKeyPem}`
 
+An App-level key (agent-bot-identity #110), shared by every soul that acts
+as that App, is its own item: service `agent-bot.keyd.app`, account
+`github-app/<slug>`, the same value. A grant mints with it only when it says
+`keyScope: "app"`; otherwise keyd uses the soul's item, and it never falls
+back from one to the other.
+
 An item created this way trusts only its creator's designated requirement:
 keyd's Team ID and identifier. Any other reader, including `security`, `node`
 and every script, gets the system's allow/deny prompt instead of a silent
@@ -35,7 +41,7 @@ sockets are 0600, and keyd checks each peer's user ID.
 | socket | speaks | for |
 | --- | --- | --- |
 | `keyd.sock` | MCP (newline-delimited JSON-RPC) | `credential`, `git_credential` |
-| `owner.sock` | JSON-RPC | `owner/status`, `owner/import`, `owner/remove`, `owner/pin`, `owner/presence` |
+| `owner.sock` | JSON-RPC | `owner/status`, `owner/import`, `owner/remove`, `owner/pin`, `owner/presence`, `owner/app-status`, `owner/app-import`, `owner/app-remove` |
 
 Each call leaves a receipt in `keyd/audit.jsonl` (0600). Receipts never hold a
 secret.
@@ -48,7 +54,7 @@ signs with its account Ed25519 key (the vouch key):
 ```
 v1.<base64url(payload)>.<base64url(Ed25519 signature of the payload segment)>
 payload: { v: 1, aud: "agent-bot-keyd", agentId, app, tool, iat, exp, nonce,
-           apiBase, installationId?, owner?, host? }
+           apiBase, installationId?, owner?, host?, keyScope? }
 ```
 
 Before minting, keyd checks the grant:
@@ -100,13 +106,17 @@ host. Otherwise it returns nothing.
 
 ## Owner operations
 
-`owner/import`, `owner/remove` and `owner/pin` need the owner's consent. keyd
+`owner/import`, `owner/remove`, `owner/pin`, `owner/app-import` and
+`owner/app-remove` need the owner's consent. keyd
 asks for it itself through LocalAuthentication (Touch ID or the login
 password).
 
 `owner/import` accepts one key, or up to 64 keys under `items`, for one
 prompt. A key keyd cannot sign with is refused before the owner is asked.
 The first import must carry `daemonKey`, which keyd pins.
+`owner/app-import` does the same for App-level keys, by `app` with no
+`agentId`; `owner/app-status` says whether one is held. See
+[docs/keyd-protocol.md](../docs/keyd-protocol.md#app-level-keys-110).
 
 agent-bot's `identity migrate-credentials --to keyd` drives this.
 

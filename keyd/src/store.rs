@@ -11,6 +11,10 @@
 //!   encoding soul-credentials.mjs uses). The service differs from the
 //!   `agent-bot.soul.<agentId>` items `security` created (#395), so keyd never
 //!   needs access to an item it did not create.
+//! - an App-level key (agent-bot-identity #110), shared by every soul that
+//!   acts as that App: service `agent-bot.keyd.app`, account
+//!   `github-app/<slug>`, the same value encoding. An Agent ID always starts
+//!   `agent_`, so this service never meets a soul's.
 //! - the daemon's grant key the owner pinned: service `agent-bot.keyd`,
 //!   account `daemon-grant-key`, value base64 of the raw Ed25519 public key.
 //! - keyd's own presence key (agent-bot-identity #416), which signs the
@@ -72,6 +76,7 @@ pub fn decode(text: &[u8]) -> Result<Credential, &'static str> {
 pub const PIN_SERVICE: &str = "agent-bot.keyd";
 pub const PIN_ACCOUNT: &str = "daemon-grant-key";
 pub const PRESENCE_ACCOUNT: &str = "presence-key";
+pub const APP_SERVICE: &str = "agent-bot.keyd.app";
 
 pub fn item(agent_id: &str, app: &str) -> Result<(String, String), &'static str> {
     if !is_agent_id(agent_id) || !is_app_slug(app) {
@@ -81,6 +86,13 @@ pub fn item(agent_id: &str, app: &str) -> Result<(String, String), &'static str>
         format!("agent-bot.keyd.{agent_id}"),
         format!("github-app/{app}"),
     ))
+}
+
+pub fn app_item(app: &str) -> Result<(String, String), &'static str> {
+    if !is_app_slug(app) {
+        return Err("invalid App");
+    }
+    Ok((APP_SERVICE.to_owned(), format!("github-app/{app}")))
 }
 
 /// Raw generic-password access; everything above it is shared.
@@ -101,7 +113,11 @@ impl Store {
 
     pub fn credential(&self, agent_id: &str, app: &str) -> Result<Option<Credential>, String> {
         let (service, account) = item(agent_id, app)?;
-        match self.items.read(&service, &account)? {
+        self.read_credential(&service, &account)
+    }
+
+    fn read_credential(&self, service: &str, account: &str) -> Result<Option<Credential>, String> {
+        match self.items.read(service, account)? {
             None => Ok(None),
             Some(mut bytes) => {
                 let decoded = decode(&bytes).map(Some).map_err(str::to_owned);
@@ -118,14 +134,39 @@ impl Store {
         credential: &Credential,
     ) -> Result<(), String> {
         let (service, account) = item(agent_id, app)?;
+        self.write_credential(&service, &account, credential)
+    }
+
+    fn write_credential(
+        &self,
+        service: &str,
+        account: &str,
+        credential: &Credential,
+    ) -> Result<(), String> {
         let mut value = encode(credential).into_bytes();
-        let written = self.items.write(&service, &account, &value);
+        let written = self.items.write(service, account, &value);
         value.fill(0);
         written
     }
 
     pub fn remove_credential(&self, agent_id: &str, app: &str) -> Result<bool, String> {
         let (service, account) = item(agent_id, app)?;
+        self.items.remove(&service, &account)
+    }
+
+    /// The App-level key for `app`, whichever soul acts as it.
+    pub fn app_credential(&self, app: &str) -> Result<Option<Credential>, String> {
+        let (service, account) = app_item(app)?;
+        self.read_credential(&service, &account)
+    }
+
+    pub fn put_app_credential(&self, app: &str, credential: &Credential) -> Result<(), String> {
+        let (service, account) = app_item(app)?;
+        self.write_credential(&service, &account, credential)
+    }
+
+    pub fn remove_app_credential(&self, app: &str) -> Result<bool, String> {
+        let (service, account) = app_item(app)?;
         self.items.remove(&service, &account)
     }
 
@@ -314,6 +355,47 @@ pub mod tests {
         assert_eq!(store.presence_seed().unwrap(), seed, "made once, then kept");
         assert_ne!(seed, [0u8; 32]);
         assert!(store.credential("agent_../x", "qwts-claude-agent").is_err());
+
+        // An App-level key is its own item: a soul's key never answers for
+        // it, and it never answers for a soul.
+        store
+            .put_credential(AGENT, "qwts-claude-agent", &credential)
+            .unwrap();
+        assert!(store.app_credential("qwts-claude-agent").unwrap().is_none());
+        let app_key = Credential {
+            app_id: "123".into(),
+            private_key_pem: "APP-PEM".into(),
+        };
+        store
+            .put_app_credential("qwts-claude-agent", &app_key)
+            .unwrap();
+        assert_eq!(
+            store
+                .app_credential("qwts-claude-agent")
+                .unwrap()
+                .unwrap()
+                .private_key_pem,
+            "APP-PEM"
+        );
+        assert_eq!(
+            store
+                .credential(AGENT, "qwts-claude-agent")
+                .unwrap()
+                .unwrap()
+                .private_key_pem,
+            "PEM"
+        );
+        assert!(store.remove_app_credential("qwts-claude-agent").unwrap());
+        assert!(!store.remove_app_credential("qwts-claude-agent").unwrap());
+        assert!(
+            store
+                .credential(AGENT, "qwts-claude-agent")
+                .unwrap()
+                .is_some(),
+            "removing the App key leaves the soul's"
+        );
+        assert!(store.remove_credential(AGENT, "qwts-claude-agent").unwrap());
+        assert!(store.app_credential("../x").is_err());
     }
 
     #[test]

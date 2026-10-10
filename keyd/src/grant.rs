@@ -45,6 +45,26 @@ pub struct Grant {
     /// git_credential only: the GitHub host git may send this token to.
     #[serde(default)]
     pub host: Option<String>,
+    /// Which key to mint with (agent-bot-identity #110): `soul`, the soul's
+    /// own item, or `app`, the App-level item every soul acting as `app`
+    /// shares. Absent means `soul`, so a grant signed before #110 reads
+    /// exactly as it did. The daemon chooses; keyd never falls back from one
+    /// to the other.
+    #[serde(default)]
+    pub key_scope: Option<KeyScope>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyScope {
+    Soul,
+    App,
+}
+
+impl Grant {
+    pub fn scope(&self) -> KeyScope {
+        self.key_scope.unwrap_or(KeyScope::Soul)
+    }
 }
 
 /// Nonces already spent, kept until their grant would have expired anyway.
@@ -176,6 +196,40 @@ pub mod tests {
         assert_eq!(grant.installation_id, Some(42));
         assert_eq!(grant.owner.as_deref(), Some("qwts"));
         assert_eq!(grant.host.as_deref(), Some("github.com"));
+        assert_eq!(
+            grant.scope(),
+            KeyScope::Soul,
+            "no keyScope is the soul's key"
+        );
+    }
+
+    #[test]
+    fn reads_the_key_scope_and_refuses_an_unknown_one() {
+        let key = signing_key();
+        let pinned = key.verifying_key();
+        let mut replay = Replay::default();
+        for (scope, nonce, expected) in [
+            ("app", "scope-app-0123456789", KeyScope::App),
+            ("soul", "scope-soul-0123456789", KeyScope::Soul),
+        ] {
+            let mut p = payload("credential", 1000);
+            p["keyScope"] = json!(scope);
+            p["nonce"] = json!(nonce);
+            let grant = verify(&sign(&key, &p), "credential", &pinned, 1000, &mut replay).unwrap();
+            assert_eq!(grant.scope(), expected);
+        }
+        let mut other = payload("credential", 1000);
+        other["keyScope"] = json!("org");
+        assert_eq!(
+            verify(
+                &sign(&key, &other),
+                "credential",
+                &pinned,
+                1000,
+                &mut replay
+            ),
+            Err("grant is malformed")
+        );
     }
 
     #[test]
