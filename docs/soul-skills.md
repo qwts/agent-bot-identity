@@ -457,9 +457,9 @@ the folder: through the owner gate when the owner runs it (for any soul), and
 through keyd like a load when a soul runs it for its own Agent ID. A soul
 shares the owner's account, so it could write that record itself and clear the
 markers that tell it from the owner; the prompt is what stops it. A refusal,
-or keyd unable to ask, removes nothing and appends a `refused` receipt. For a soul caller
-the record and receipt paths also ignore `AGENT_BOT_INTERACTION_HOME` and
-`XDG_STATE_HOME`, so it cannot relocate the owner's state to a folder it owns. It resolves the destination again
+or keyd unable to ask, removes nothing and appends a `refused` receipt. Whoever calls,
+the record and receipt paths ignore `AGENT_BOT_INTERACTION_HOME` and
+`XDG_STATE_HOME`, so the caller's environment cannot relocate the owner's state. It resolves the destination again
 rather than trusting the record, and removes the copy only while it matches
 the record, so an edited copy is kept (`skill-load-modified`). Nothing here changes the soul package or any
 repository's exclude list.

@@ -9,7 +9,7 @@ import { NOT_CAPTURED } from '../skill-references.mjs';
 import { currentAgentId } from '../agent-identity.mjs';
 import { discardRevisionStaging, revisionCommand, revisionOwnerGate } from '../soul-revisions.mjs';
 import { stageSkillInstall, stageSkillUninstall, trashSoulSkill } from '../skill-install.mjs';
-import { loadGlobalSkill, loadSkill, ownerStateEnv, unloadGlobalSkill, unloadSkill } from '../skill-workspace.mjs';
+import { loadGlobalSkill, loadSkill, unloadGlobalSkill, unloadSkill } from '../skill-workspace.mjs';
 import { assertOwnerAction, presenceOrConsent, soulMarkers } from '../owner-action.mjs';
 import { soulDreamCommand } from './soul-dream.mjs';
 
@@ -184,12 +184,10 @@ async function loadMain(verb, args, json, { stdout, stderr, markers = soulMarker
       };
       // A soul shares the owner's account: it could write the owner-side
       // record and clear the markers that tell it from the owner. So unload
-      // needs the owner too, whoever runs it, and a soul's record paths
-      // ignore the variables that relocate the owner's state.
-      const recordEnv = caller === 'soul' ? ownerStateEnv(options.env ?? process.env) : null;
+      // needs the owner too, whoever runs it.
       result = verb === 'unload'
-        ? await unloadGlobalSkill(name, values.agentId, { ...options, ...harness, recordEnv, authorize })
-        : await loadGlobalSkill(name, values.agentId, { ...options, ...harness, reason: values.reason, recordEnv, authorize });
+        ? await unloadGlobalSkill(name, values.agentId, { ...options, ...harness, authorize })
+        : await loadGlobalSkill(name, values.agentId, { ...options, ...harness, reason: values.reason, authorize });
     }
     stdout.write(report(result, json));
     return 0;

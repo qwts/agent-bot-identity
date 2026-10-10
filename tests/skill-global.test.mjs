@@ -7,7 +7,7 @@ import path from 'node:path';
 import { auditFile } from '../agent-principals.mjs';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { upsertSoul } from '../agent-population.mjs';
-import { globalRecordPath, globalSkillTarget } from '../skill-workspace.mjs';
+import { globalRecordPath, globalSkillTarget, loadGlobalSkill, unloadGlobalSkill } from '../skill-workspace.mjs';
 import { main } from '../cli/soul-skill.mjs';
 
 const put = (file, bytes, mode) => { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, bytes); if (mode) chmodSync(file, mode); };
@@ -235,4 +235,36 @@ test('an unload that looks like the owner\'s still needs the owner: a no keeps t
   assert.equal(readFileSync(path.join(owned, 'SKILL.md'), 'utf8'), 'owner wrote this\n');
   assert.equal(existsSync(record), true);
   assert.deepEqual(f.receipts().map(r => [r.operation, r.decision]), [['unload', 'refused']]);
+});
+
+test('global unload needs the owner gate from every caller of the library', async t => {
+  const f = fixture(t);
+  assert.equal((await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON])).code, 0);
+  for (const authorize of [undefined, null, 'yes']) {
+    await assert.rejects(unloadGlobalSkill('demo', f.id, { env: f.env, home: f.home, file: f.env.AGENT_BOT_POPULATION_PATH, authorize }), { code: 'skill-global-owner-required' });
+  }
+  assert.equal(existsSync(f.destination), true);
+  assert.deepEqual(f.receipts().map(r => r.operation), ['load']);
+});
+
+test('global records and receipts ignore relocated state for the owner too', async t => {
+  const f = fixture(t);
+  const elsewhere = path.join(f.home, 'elsewhere');
+  const extraEnv = { AGENT_BOT_INTERACTION_HOME: elsewhere, XDG_STATE_HOME: elsewhere };
+  assert.equal((await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON], { extraEnv })).code, 0);
+  assert.equal(existsSync(globalRecordPath('claude', 'demo', { env: f.env, home: f.home })), true, 'the record is in the owner\'s state');
+  assert.equal(existsSync(elsewhere), false, 'nothing went to the relocated folder');
+  // A record forged in the relocated folder is never read, so an owner's unload of it finds nothing.
+  const owned = path.join(f.home, '.claude/skills/owners-skill');
+  put(path.join(owned, 'SKILL.md'), 'owner wrote this\n');
+  put(path.join(elsewhere, 'skill-globals/claude/owners-skill.json'), JSON.stringify({ name: 'owners-skill', harness: 'claude', agentId: f.id, destination: owned, files: {} }));
+  const forged = await f.run(['unload', 'owners-skill', '--soul', f.id, '--global', '--json'], { extraEnv });
+  assert.equal(forged.json.error.code, 'skill-not-loaded');
+  assert.equal(existsSync(owned), true);
+  assert.equal((await f.run(['unload', 'demo', '--soul', f.id, '--global'], { extraEnv })).code, 0);
+  assert.deepEqual(f.receipts().map(r => r.operation), ['load', 'unload']);
+  // The library applies it too, not only the CLI.
+  await loadGlobalSkill('demo', f.id, { env: { ...f.env, ...extraEnv }, home: f.home, file: f.env.AGENT_BOT_POPULATION_PATH, reason: REASON, authorize: async () => ({ method: 'presence' }) });
+  assert.equal(existsSync(globalRecordPath('claude', 'demo', { env: f.env, home: f.home })), true);
+  assert.equal(existsSync(path.join(elsewhere, 'skill-globals/claude/demo.json')), false);
 });
