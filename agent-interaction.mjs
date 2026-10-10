@@ -361,7 +361,7 @@ export function createInteractionService({
     return { proposal, invocation };
   }
 
-  function settleProposal({ proposal, invocation, decision, scope, digest, decidedBy, onMismatch = () => {} }) {
+  function settleProposal({ proposal, invocation, decision, scope, digest, decidedBy, authorization = null, onMismatch = () => {} }) {
     const waiting = invocation
       ? invocation.status === 'waiting-approval'
       : approvalWaiters.has(proposal.proposalId);
@@ -414,7 +414,7 @@ export function createInteractionService({
         scope: decided.scope,
         operationDigest: decided.operationDigest,
         decidedBy: decided.decidedBy,
-        detail: `risk: ${decided.risk}`,
+        detail: `risk: ${decided.risk}${authorization ? `; ${authorization}` : ''}`,
       }, storeOptions);
     } else {
       appendAuditReceipt({
@@ -423,7 +423,7 @@ export function createInteractionService({
         operation: 'approve',
         decision: decided.decision,
         scope: decided.scope,
-        detail: `risk: ${decided.risk}`,
+        detail: `risk: ${decided.risk}${authorization ? `; ${authorization}` : ''}`,
         ...(decidedBy === OWNER_DECIDER ? {} : { principalId: decidedBy }),
       }, storeOptions);
     }
@@ -828,7 +828,7 @@ export function createInteractionService({
     // reserved 'approve' operation for the soul, and must echo the exact
     // operation digest; a mismatched or stale digest is refused. Consuming the
     // proposal is atomic in the store, so a decision can never land twice.
-    decideProposal({ principal, transport, proposalId, decision, digest, scope = 'once' }) {
+    decideProposal({ principal, transport, proposalId, decision, digest, scope = 'once', authorization = null }) {
       validateApprovalScope(scope, decision);
       const wantedTransport = validated(() => validateTransport(transport));
       const { proposal, invocation } = proposalForDecision(proposalId, decision);
@@ -845,6 +845,7 @@ export function createInteractionService({
         scope,
         digest,
         decidedBy: principal.principalId,
+        authorization,
         onMismatch: () => audit('denied', {
           principal,
           transport: wantedTransport,
@@ -855,10 +856,11 @@ export function createInteractionService({
     },
 
     // The owner's decision (#85), already past the owner gate in the caller.
-    decideProposalAsOwner({ proposalId, decision, digest, scope = 'once' }) {
+    // `authorization` says how the gate was passed, for the receipt.
+    decideProposalAsOwner({ proposalId, decision, digest, scope = 'once', authorization = null }) {
       validateApprovalScope(scope, decision);
       const { proposal, invocation } = proposalForDecision(proposalId, decision);
-      return settleProposal({ proposal, invocation, decision, scope, digest, decidedBy: OWNER_DECIDER });
+      return settleProposal({ proposal, invocation, decision, scope, digest, decidedBy: OWNER_DECIDER, authorization });
     },
 
     // A daemon turn with no invocation record (a cold wake, #85) asks here.

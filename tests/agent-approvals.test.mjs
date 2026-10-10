@@ -387,7 +387,8 @@ test('daemon approval routes and receipts retain all three risk levels', async (
     }
     const receipts = readFileSync(path.join(interactionHome({ env }), 'audit.jsonl'), 'utf8')
       .trim().split('\n').map((line) => JSON.parse(line)).filter((row) => row.event === 'approval-decision');
-    assert.deepEqual(receipts.map((row) => row.detail), ['risk: safe', 'risk: destructive', 'risk: external']);
+    // Each receipt also says how the owner authorized it (#753).
+    assert.deepEqual(receipts.map((row) => row.detail), ['risk: safe', 'risk: destructive', 'risk: external'].map((risk) => `${risk}; authorized: presence`));
     assert.ok(receipts.every((row) => row.detail.length <= 200));
   } finally { await close(); }
 });

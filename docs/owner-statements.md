@@ -8,11 +8,11 @@ any agent, CI job or subagent can check offline. The design is
 contract as built.
 
 **Built so far:** the `s1.` format, `agent-bot owner verify`, pinned keys,
-the ssh store, and a CLI-only signed-challenge fallback for existing local SSH
-pins. When local presence is unavailable, an interactive owner gate can show a
-fresh challenge; the owner signs it on a trusted terminal and pastes the reply
-back. There is no automatic challenge transport, daemon decision-route
-statement field or inbox-delivery implementation in this slice. **Not yet:**
+the ssh store, and signed-challenge fallbacks for the owner gate: a terminal
+prompt (#822) and the daemon's decision routes. Both are built and switched
+off until owner pins are integrity-protected (see below), so today the owner
+gate is answered only by keyd presence or the administrator dialog. There is
+no inbox delivery yet. **Not yet:**
 the keyd store (keyd's `owner/sign` RPC) and pins from the organization
 profile. Until then `owner enroll --store keyd` answers
 `owner-store-unavailable`.
@@ -86,6 +86,20 @@ key at `--key` (its public half is read from `PATH.pub`). It refuses a caller
 with soul markers or an agent harness's environment (`CLAUDECODE`,
 `CODEX_*`, `CURSOR_AGENT`, and the others `detect-harness.mjs` keys on).
 
+**Why the challenge fallbacks are off.** `<state>/owner/keys.json` is
+writable by anything running as the owner, a soul included, and a security
+key made in software (`sk-ssh-ed25519` carries no attestation) looks the
+same as hardware. A soul that clears its markers could pin its own key and
+sign its own challenge. So until the pins are integrity-protected (for
+example MAC'd or signed by keyd), no owner gate trusts the pin file: the
+terminal fallback needs the gate option `signedChallenges: true` and the
+daemon routes need `signedChallengeRoutes`, and nothing sets either. With
+them off the gate never reads the pins, so a missing or malformed pin file
+never blocks the owner. This closes a gap in the terminal fallback as
+merged in #822. `owner enroll`, `sign` and `verify` are unchanged.
+
+When the terminal fallback is on, it works as follows.
+
 **sign --challenge** accepts the JSON challenge shown by the waiting owner gate.
 Run it on a trusted terminal with the matching SSH key, inspect the displayed
 summary and host scope, then paste its armored output into the waiting prompt.
@@ -98,6 +112,43 @@ of falling back to administrator consent. The older administrator fallback
 remains for those actions on hosts with no enrolled owner keys. Enrolment and
 removal always continue through local presence or administrator consent and
 cannot use a signed challenge.
+
+**On a decision route.** Deciding a soul's waiting tool request through
+`POST /v0/approvals/decide` (`agent-bot approvals approve|deny`) or
+`POST /v1/proposals/<id>/decision` never prompts on the daemon's terminal,
+and today it is answered only by keyd presence or the administrator dialog.
+The receipt of each decision records how it was authorized (`authorized:
+presence`, `consent`, or `statement <key>`). The daemon does not read the
+owner pins for these routes at all, so a missing or malformed pin file never
+blocks a decision.
+
+Signed challenges on these routes are built but off (`createDaemonServer`'s
+`signedChallengeRoutes`, default false, with no flag or environment switch).
+They stay off until the pins are integrity-protected, for example MAC'd or
+signed by keyd: `<state>/owner/keys.json` is writable by anything running as
+the owner, a soul included, and a security key made in software
+(`sk-ssh-ed25519` carries no attestation) looks the same as hardware, so a
+soul could pin its own key and sign its own approval. When the guard is on:
+when keyd cannot ask and an SSH security key (`sk-ssh-ed25519` or
+`sk-ecdsa`) is pinned, the route decides nothing and answers 409 with
+`code: "owner-challenge-required"` and `challenges: [{ name, fingerprint,
+payload }]`, one per security-key pin; the audit log records
+`owner-challenged`. The owner signs one payload with `owner sign --challenge`
+and the caller repeats the same decision with `statement` set to the signed
+token or armored block (`agent-bot approvals approve <id> --statement
+'<signed>'`). The daemon keeps one set of challenges per open proposal, in
+memory, for that exact decision (approve or deny, and the scope). Any reply
+spends them, verified or not; a new request without a statement replaces
+them; a restart drops them. A reply for another proposal or decision, a
+replay, an expired challenge or a key no longer pinned is refused with 403.
+A software key pinned with `--allow-software-key` never answers a decision
+route: a soul runs in the owner's account and could read it. With no
+security key pinned, the route uses the administrator dialog, as it does
+with no owner key at all, and so does a pin file that cannot be read.
+Anything holding the daemon token can ask for a
+fresh challenge or send a bad reply, which replaces or spends the pending
+one for that proposal; that can only make the owner sign again, never
+decide.
 
 **enroll** pins a public key in `<state>/owner/keys.json` (0600, in a 0700
 directory; `<state>` is `$XDG_STATE_HOME/agent-bot` or

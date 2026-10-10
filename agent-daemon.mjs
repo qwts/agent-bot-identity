@@ -82,7 +82,7 @@ import { isComputerUse } from './permission-risk.mjs';
 import { appendAuditReceipt, assertAuthorized, principalsFile, resolvePrincipal } from './agent-principals.mjs';
 import { validateApprovalScope } from './session-approvals.mjs';
 import { approvalAction, shown } from './approval-action.mjs';
-import { confirmOwnerPresence, ownerCredentialRequired, presenceOrConsent, verifyPrincipalOwner } from './owner-action.mjs';
+import { confirmOwnerPresence, createChallengeLedger, decisionOwnerGate, ownerCredentialRequired, presenceOrConsent, verifyPrincipalOwner } from './owner-action.mjs';
 import { runSpawnHooks } from './agent-hook.mjs';
 import { createWebLayer } from './agent-web.mjs';
 import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs';
@@ -369,6 +369,14 @@ function operationError(error) {
   return Object.assign(new Error(error.message), { statusCode: 409 });
 }
 
+// How an owner decision passed the gate, for its receipt (#753): keyd
+// presence, the administrator dialog, or a signed statement and its key.
+function authorizedBy(proof) {
+  if (!proof || typeof proof.method !== 'string') return null;
+  const key = proof.method === 'statement' && typeof proof.key === 'string' ? ` ${proof.key}` : '';
+  return `authorized: ${proof.method}${key}`;
+}
+
 export function createDaemonServer({
   env = process.env,
   home = homedir(),
@@ -403,9 +411,14 @@ export function createDaemonServer({
   // runDaemon wires it to the launch handler; null refuses the route.
   teamStarter = null,
   // Deciding a soul's tool request asks for the owner's presence (#438):
-  // (action, { principal }) => proof, throwing when the owner does not
-  // confirm. Tests pass a fake; the default asks keyd, then the dialog.
-  ownerGate = (action, { principal }) => confirmOwnerPresence(action, { env, principal }),
+  // (action, { principal, request, statement }) => proof, throwing when the
+  // owner does not confirm. Tests pass a fake; the default asks keyd, then
+  // the dialog. Signed challenges on the decision routes (#753) stay off
+  // until owner pins are integrity-protected: today a soul running as the
+  // owner can write the pin file and pin a key it made itself. Leave
+  // `signedChallengeRoutes` false until then.
+  signedChallengeRoutes = false,
+  ownerGate = decisionOwnerGate({ env, challenges: signedChallengeRoutes ? createChallengeLedger({ env }) : null }),
   // Settings accept a verified principal instead of presence, like soul mode.
   settingGate = (action, { principal }) => soulSettingOwnerGate(action, { principal, env, cwd: home }),
   revisionPrincipal = (credential) => verifyPrincipalOwner(credential, { env }),
@@ -421,7 +434,7 @@ export function createDaemonServer({
   // first (#438): the daemon token proves only a process in this account, and
   // a transport principal only its provider login. The owner is asked about
   // the open proposal by soul and tool; a refusal decides nothing.
-  async function confirmDecision({ proposalId, decision, scope = 'once', principal = null, transport = null, credential = null }) {
+  async function confirmDecision({ proposalId, decision, scope = 'once', principal = null, transport = null, credential = null, statement = null }) {
     if (decision !== 'approve' && decision !== 'deny') {
       throw Object.assign(new Error('decision must be approve or deny'), { statusCode: 400 });
     }
@@ -433,18 +446,23 @@ export function createDaemonServer({
       // by the decision itself; it never gets to raise a prompt.
       try { assertAuthorized({ principal, agentId: proposal.agentId, operation: 'approve' }); } catch { return; }
     }
+    let proof;
     try {
-      await ownerGate(approvalAction(shown(proposal, { env, home }), decision, scope), { principal: credential });
+      proof = await ownerGate(approvalAction(shown(proposal, { env, home }), decision, scope), { principal: credential, request: proposalId, statement });
     } catch (error) {
+      const challenged = error.code === 'owner-challenge-required';
       appendAuditReceipt({
         event: 'approval-decision',
         agentId: proposal.agentId,
         operation: 'approve',
-        decision: 'owner-refused',
+        decision: challenged ? 'owner-challenged' : 'owner-refused',
         ...(principal ? { principalId: principal.principalId, transport } : {}),
       }, { env, home, now });
+      // Nothing is decided yet: the caller gets the challenges to have signed.
+      if (challenged) throw Object.assign(new Error(error.message), { statusCode: 409, code: error.code, challenges: error.challenges });
       throw Object.assign(new Error(`the owner did not confirm this decision: ${error.message}`), { statusCode: 403 });
     }
+    return authorizedBy(proof);
   }
   const bindings = createBindingRegistry({ now, file: path.join(vouchStateDir({ env, home }), 'bindings.json'), account: env.USER ?? process.env.USER ?? 'unknown' });
   const findBinding = lookupBindingOverride
@@ -1193,11 +1211,11 @@ export function createDaemonServer({
         }
         case 'POST /v0/approvals/decide': {
           const body = parseJsonBody(await readBody(req));
-          await confirmDecision({ proposalId: body.proposalId, decision: body.decision, scope: body.scope, credential: body.principal ?? null });
+          const authorization = await confirmDecision({ proposalId: body.proposalId, decision: body.decision, scope: body.scope, credential: body.principal ?? null, statement: body.statement ?? null });
           sendJson(res, 200, interaction.decideProposalAsOwner({
             proposalId: body.proposalId,
             decision: body.decision, scope: body.scope,
-            digest: body.digest,
+            digest: body.digest, authorization,
           }));
           return;
         }
@@ -1208,8 +1226,10 @@ export function createDaemonServer({
       const failure = operationError(error);
       // Dream, inbox and grant codes are fixed identifiers, so clients can act on them.
       sendJson(res, failure.statusCode, { error: failure.message,
-        ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable', ...GRANT_PRESENCE_CODES].includes(error.code)
-          || typeof error.code === 'string' && /^(dream|inbox|grant|human)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}) });
+        ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable', 'owner-challenge-required', ...GRANT_PRESENCE_CODES].includes(error.code)
+          || typeof error.code === 'string' && /^(dream|inbox|grant|human)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}),
+        // The unsigned challenges a decision route asks the owner to sign (#753).
+        ...(error.code === 'owner-challenge-required' && Array.isArray(error.challenges) ? { challenges: error.challenges } : {}) });
     }
   });
   server.once('close', () => appJobs.close());
@@ -1603,13 +1623,13 @@ async function handleInteractionRequest({ req, res, url, interaction, env, home,
     return;
   }
   if (req.method === 'POST' && (match = url.pathname.match(/^\/v1\/proposals\/([^/]+)\/decision$/))) {
-    await confirmDecision({ proposalId: match[1], decision: body.decision, scope: body.scope, principal, transport });
+    const authorization = await confirmDecision({ proposalId: match[1], decision: body.decision, scope: body.scope, principal, transport, statement: body.statement ?? null });
     sendJson(res, 200, interaction.decideProposal({
       principal,
       transport,
       proposalId: match[1],
       decision: body.decision, scope: body.scope,
-      digest: body.digest,
+      digest: body.digest, authorization,
     }));
     return;
   }

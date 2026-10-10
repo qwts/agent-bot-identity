@@ -1060,6 +1060,8 @@ operation it names, and refuse a caller with a soul marker. Before any
 decision lands, the daemon asks for the owner's presence (#438): keyd's
 Touch ID or login-password prompt naming the soul and tool, or the
 administrator dialog when keyd cannot ask ([keyd protocol](docs/keyd-protocol.md)).
+Signed owner challenges for these decisions are built but stay off until
+owner pins are integrity-protected ([owner statements](docs/owner-statements.md)).
 The daemon token alone never
 decides, and a `--principal-stdin` credential is checked as well, not
 instead. An expired proposal, or a turn that ends or times out first, is a
