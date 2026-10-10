@@ -16,6 +16,7 @@ import {
   enrollPrincipal,
   getPrincipal,
   listPrincipals,
+  principalCommand,
   principalsFile,
   resolvePrincipal,
   revokePrincipal,
@@ -305,16 +306,52 @@ test('authorization changes are all-or-nothing: a partially invalid request muta
   assert.equal(narrowed.defaultSoul, null);
 });
 
-test('principal mutations refuse soul callers before touching the store', () => {
-  const { root, options } = scratch();
-  const principal = enrolled(options);
-  const before = readFileSync(options.file, 'utf8');
+// The CLI runs hermetically: a scratch HOME and state, an unbound cwd, and no
+// inherited environment, so nothing reaches the live daemon, keyd or the
+// owner's principals. Only soul-marked callers are spawned: the gate refuses
+// them before any presence prompt or broker round trip.
+function soulCli(root, options) {
   const env = {
-    ...process.env,
+    PATH: process.env.PATH,
+    HOME: root,
+    XDG_STATE_HOME: path.join(root, 'state'),
+    XDG_CONFIG_HOME: path.join(root, 'config'),
     AGENT_BOT_ID: SOUL_A,
     AGENT_BOT_PRINCIPALS_PATH: options.file,
     AGENT_BOT_INTERACTION_HOME: path.join(root, 'interaction'),
   };
+  return (args, input) => spawnSync(process.execPath, [CLI, 'principal', ...args], { encoding: 'utf8', env, cwd: root, input });
+}
+
+// In-process owner runs: the gate is a recording stub, never Touch ID or the
+// administrator dialog.
+function ownerCli(root, options, { refuse = null, stdin = '' } = {}) {
+  const calls = [];
+  const out = [];
+  const env = {
+    AGENT_BOT_PRINCIPALS_PATH: options.file,
+    AGENT_BOT_INTERACTION_HOME: path.join(root, 'interaction'),
+  };
+  const run = (...argv) => principalCommand(argv, {
+    env,
+    home: root,
+    cwd: root,
+    readStdin: () => stdin,
+    write: (text) => out.push(text),
+    gate: async (action, { principal }) => {
+      calls.push({ action, principal });
+      if (refuse) throw refuse;
+      return { method: 'presence', via: 'test' };
+    },
+  });
+  return { run, calls, out };
+}
+
+test('principal mutations refuse soul callers before touching the store', () => {
+  const { root, options } = scratch();
+  const principal = enrolled(options);
+  const before = readFileSync(options.file, 'utf8');
+  const run = soulCli(root, options);
   const commands = [
     ['enroll', '--label', 'attacker'],
     ['bind', principal.principalId, '--transport', 'telegram', '--provider-id', '42'],
@@ -322,37 +359,87 @@ test('principal mutations refuse soul callers before touching the store', () => 
     ['revoke', principal.principalId],
   ];
   for (const args of commands) {
-    const result = spawnSync(process.execPath, [CLI, 'principal', ...args], { encoding: 'utf8', env });
+    const result = run(args);
     assert.equal(result.status, 1, result.stderr);
     assert.match(result.stderr, /owner only/);
     assert.equal(readFileSync(options.file, 'utf8'), before);
   }
-  const show = spawnSync(process.execPath, [CLI, 'principal', 'show', principal.principalId], { encoding: 'utf8', env });
+  // A presented credential does not lift the soul refusal.
+  const presented = run(['revoke', principal.principalId, '--principal-stdin'],
+    JSON.stringify({ principal: 'principal_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', secret: 'fake' }));
+  assert.equal(presented.status, 1);
+  assert.match(presented.stderr, /owner only/);
+  assert.equal(readFileSync(options.file, 'utf8'), before);
+  // Reading is not an owner action.
+  const show = run(['show', principal.principalId]);
   assert.equal(show.status, 0, show.stderr);
   assert.equal(JSON.parse(show.stdout).status, 'active');
 });
 
-test('principal mutations refuse malformed stdin proof and never modify ACLs', () => {
+test('the owner enrolls, binds, allows, lists, and revokes through the owner gate', async () => {
+  const { root, options } = scratch();
+  const { run, calls, out } = ownerCli(root, options);
+
+  const principal = await run('enroll', '--label', 'owner');
+  const id = principal.principalId;
+  await run('bind', id, '--transport', 'telegram', '--provider-id', '42');
+  const allowed = await run('allow', id, '--soul', SOUL_A, '--operation', 'message');
+  assert.deepEqual(allowed.authorizations, { souls: [SOUL_A], operations: ['message'] });
+  await run('list');
+  assert.match(out.at(-1), new RegExp(id));
+  assert.equal((await run('show', id)).label, 'owner');
+  assert.equal((await run('revoke', id)).status, 'revoked');
+
+  // One command-shaped approval per mutation, naming the principal and the
+  // change; list and show ask for none.
+  assert.deepEqual(calls.map((call) => call.action), [
+    'principal enroll --label owner',
+    `principal bind ${id} --transport telegram --provider-id 42`,
+    `principal allow ${id} --soul ${SOUL_A} --operation message`,
+    `principal revoke ${id}`,
+  ]);
+  assert.ok(calls.every((call) => call.principal === null));
+  await assert.rejects(run('allow', id), /at least one authorization change/);
+  assert.equal(calls.length, 4);
+});
+
+test('the principal allow CLI is atomic and validates before asking the owner', async () => {
+  const { root, options } = scratch();
+  const principal = enrolled(options);
+  const { run, calls } = ownerCli(root, options);
+  await run('allow', principal.principalId, '--soul', SOUL_A, '--operation', 'message');
+  const before = readFileSync(options.file, 'utf8');
+
+  await assert.rejects(
+    run('allow', principal.principalId, '--soul', SOUL_B, '--operation', 'message', '--operation', 'bogus-operation'),
+    /subset of the interaction operations/,
+  );
+  assert.equal(readFileSync(options.file, 'utf8'), before);
+  assert.equal(calls.length, 1);
+});
+
+test('an owner refusal or a malformed stdin credential leaves the ACLs unchanged', async () => {
   const { root, options } = scratch();
   const principal = enrolled(options);
   const before = readFileSync(options.file, 'utf8');
-  const env = {
-    ...process.env,
-    AGENT_BOT_ID: SOUL_A,
-    AGENT_BOT_PRINCIPALS_PATH: options.file,
-    AGENT_BOT_INTERACTION_HOME: path.join(root, 'interaction'),
-  };
-  const invalid = spawnSync(process.execPath,
-    [CLI, 'principal', 'allow', principal.principalId, '--all-souls', '--principal-stdin'],
-    { encoding: 'utf8', env, input: '{invalid' });
-  assert.equal(invalid.status, 1);
-  assert.match(invalid.stderr, /principal credential as JSON on stdin/);
-  const soul = spawnSync(process.execPath,
-    [CLI, 'principal', 'revoke', principal.principalId, '--principal-stdin'],
-    { encoding: 'utf8', env, input: JSON.stringify({ principal: 'principal_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', secret: 'fake', brokerUid: 0 }) });
-  assert.equal(soul.status, 1);
-  assert.match(soul.stderr, /owner only/);
+
+  const declined = ownerCli(root, options, { refuse: new Error('the owner did not approve') });
+  await assert.rejects(declined.run('allow', principal.principalId, '--all-souls', '--operation', 'approve'), /did not approve/);
+  await assert.rejects(declined.run('revoke', principal.principalId), /did not approve/);
   assert.equal(readFileSync(options.file, 'utf8'), before);
+
+  const malformed = ownerCli(root, options, { stdin: '{invalid' });
+  await assert.rejects(malformed.run('allow', principal.principalId, '--all-souls', '--principal-stdin'),
+    /principal credential as JSON on stdin/);
+  assert.equal(malformed.calls.length, 0);
+  await assert.rejects(malformed.run('list', '--principal-stdin'), /only valid for principal mutations/);
+  assert.equal(readFileSync(options.file, 'utf8'), before);
+
+  // A presented credential reaches the gate as the principal to verify.
+  const credential = { principal: 'principal_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', secret: 'fake' };
+  const presented = ownerCli(root, options, { stdin: JSON.stringify(credential) });
+  assert.equal((await presented.run('revoke', principal.principalId, '--principal-stdin')).status, 'revoked');
+  assert.deepEqual(presented.calls, [{ action: `principal revoke ${principal.principalId}`, principal: credential }]);
 });
 
 test('getPrincipal answers unknown IDs with a stable error', () => {

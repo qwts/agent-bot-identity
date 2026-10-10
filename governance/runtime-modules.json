@@ -101,6 +101,7 @@
     "cli/mint-token.mjs": "cli",
     "cli/output.mjs": "cli",
     "cli/parse.mjs": "cli",
+    "cli/principal.mjs": "cli",
     "cli/skill-references.mjs": "cli",
     "cli/soul-dream.mjs": "cli",
     "cli/soul-env-transfer.mjs": "cli",
