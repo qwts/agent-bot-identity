@@ -67,7 +67,21 @@ it against the pinned keys, and prints the verified text, scope, key and
 expiry. With `--repo` and `--issue` it also checks the scope. It needs no
 secret, no network and no daemon. A file must be a regular file, not a
 symbolic link, FIFO or device, and a file or stdin is read up to 1 MiB.
-A refusal exits 1 with one code:
+
+**Until pins are integrity-protected, verify never says the owner
+approved.** `<state>/owner/keys.json` is writable by anything running as the
+owner, a soul included, and a security key made in software looks the same
+as hardware, so a soul could pin its own key and sign its own statement
+(#753). A statement whose signature checks out against the local pins is
+printed as `NOT owner approval: ...` followed by `signature valid for owner
+statement ...` and its text, and exits 1 with `owner-pins-unprotected` (`--json`: `{ ok:
+false, code: "owner-pins-unprotected", signature: "valid", message, kind,
+text, scope, key, fingerprint, issuedAt, expiresAt }`). That is a diagnostic
+of the signature, not a decision. Once pins are protected (for example
+MAC'd or signed by keyd), a valid statement prints `verified owner
+statement ...` and exits 0.
+
+Any other refusal exits 1 with one code:
 
 | Code | Meaning |
 |---|---|
@@ -75,6 +89,7 @@ A refusal exits 1 with one code:
 | `statement-unknown-key` | signed by a key not pinned here |
 | `statement-expired` | authentic, but past its `exp` |
 | `statement-scope-mismatch` | authentic, but scoped to another repository or issue |
+| `owner-pins-unprotected` | the signature is valid against the local pins, which are not integrity-protected yet; not approval |
 
 The signature is checked first, so `statement-expired` and
 `statement-scope-mismatch` are only ever said about an authentic statement.
@@ -186,8 +201,14 @@ enrols, rotates or removes a key.
 
 ## How agents use a statement
 
-An agent treats a statement as owner approval only when `owner verify`
-accepts it with `--repo` and `--issue` set to the work at hand, it is a
+**Today no statement is owner approval.** Until owner pins are
+integrity-protected, `owner verify` answers `owner-pins-unprotected` for
+every valid signature, and an agent does not act on a statement: it asks
+the owner directly, as it would without one.
+
+Once pins are protected, an agent treats a statement as owner approval only
+when `owner verify` accepts it (exit 0) with `--repo` and `--issue` set to the
+work at hand, it is a
 `statement` (or a challenge the agent itself issued), and its verified text
 covers the change. The agent quotes that text, as the verifier printed it,
 in the PR or comment that acts on it. A statement is approval for what

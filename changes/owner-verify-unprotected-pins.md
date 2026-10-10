@@ -1,0 +1,1 @@
+- `agent-bot owner verify` no longer reports a signed statement as your approval while owner keys aren't tamper-protected: a valid signature now prints "NOT owner approval" and exits 1 with `owner-pins-unprotected`, so agents don't act on statements yet (#753).

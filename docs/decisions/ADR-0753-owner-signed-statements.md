@@ -217,6 +217,13 @@ A phone store (passkey) can be added later on the same interface.
 
 ### 6. How agents treat a verified statement
 
+> **While pins are unprotected (#753):** the owner pin file is writable by
+> anything running as the owner, a soul included, so `agent-bot owner verify`
+> never accepts a statement yet. A valid signature answers
+> `owner-pins-unprotected` (exit 1, "NOT owner approval"). Until pins are
+> integrity-protected, no statement is approval: agents ask the owner
+> directly.
+
 An agent treats a statement as owner approval only when all of these hold:
 
 - `agent-bot owner verify` accepts it, with `--repo` and `--issue` set to the
