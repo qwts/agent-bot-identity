@@ -169,10 +169,13 @@ every downloaded dependency byte. Python acquisition is delegated to uv. A uv
 tool without a `lock` installs `package==version` with no dependency hashes. A
 locked tool installs into its own `venv/` with `uv pip install --require-hashes
 -r requirements.lock.txt`, so uv refuses any artifact or dependency the lock
-does not hash, and only its `bin` is linked into the install's `bin/`. Locked
+does not hash, and only its `bin` is linked into the install's `bin/`. A
+uv-tool stamp records `lockSha256`, the SHA-256 of the requirements text it
+was filled from (`null` when unlocked). Readiness requires it to match the
+declaration, so adding or changing a lock rebuilds that version. Locked
 tools are unsupported on Windows until a launcher for the linked executable
-is verified. Recording that evidence in the stamp, and refusing unlocked
-installs under an integrity policy, are tracked in #617. The stamp is what
+is verified. Refusing unlocked installs under an integrity policy is tracked
+in #617. The stamp is what
 `soul runtimes` and `soul env` inspect; absence or an incomplete-install marker
 must not be presented as a completed installation. Readiness compares the
 receipt's schema, runtime/harness name, kind, exact version and platform with

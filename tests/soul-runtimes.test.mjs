@@ -475,9 +475,26 @@ test('a locked uv tool installs into its own venv with uv pip --require-hashes a
     assert.match(error.message, message);
     assert.ok(!existsSync(path.join(f.runtimes, 'harnesses', 'muse', '2.0.0')), name);
   }
+  // The lock is part of readiness: an unlocked install of the same version, or one built from another lock, is rebuilt.
+  const C = 'c'.repeat(64);
+  f.writeManifest((m) => { m.harnesses.muse.install = { kind: 'uv-tool', package: 'goose-ai', version: '3.0.0', bin: 'goose' }; });
+  await installSoulRuntimes(f.dir, { ...f.options, only: 'muse', fetchFn: d.fetchFn, runImpl: d.runImpl });
+  const unlocked = path.join(f.runtimes, 'harnesses', 'muse', '3.0.0');
+  assert.equal(JSON.parse(readFileSync(path.join(unlocked, '.agent-bot-install.json'), 'utf8')).lockSha256, null);
+  for (const digest of [A, C]) {
+    f.writeManifest((m) => { m.harnesses.muse.install.lock = [{ name: 'goose-ai', version: '3.0.0', sha256: [digest] }]; });
+    const stale = inspectSoulRuntimes(f.dir, f.options).harnesses.find((h) => h.name === 'muse');
+    assert.deepEqual([stale.status, stale.reason], ['missing', 'install receipt does not match the declared lock; reinstall to rebuild it from the lock'], digest);
+    const pips = d.commands.filter((c) => c.args[0] === 'pip').length;
+    const rebuilt = (await installSoulRuntimes(f.dir, { ...f.options, only: 'muse', fetchFn: d.fetchFn, runImpl: d.runImpl })).harnesses.find((h) => h.name === 'muse');
+    assert.equal(rebuilt.status, 'installed');
+    assert.equal(d.commands.filter((c) => c.args[0] === 'pip').length, pips + 1, 'the rebuild runs the hash-checked install');
+    assert.ok(!existsSync(path.join(unlocked, 'tools')), 'nothing from the unlocked install is left in the rebuilt one');
+    assert.equal(readFileSync(path.join(unlocked, 'requirements.lock.txt'), 'utf8'), `goose-ai==3.0.0 --hash=sha256:${digest}\n`);
+  }
   // Windows has no verified launcher for a linked venv executable yet, so a locked tool is unsupported there, never installed unlocked.
   const win = inspectSoulRuntimes(f.dir, { ...f.options, platform: 'win32-x64' }).harnesses.find((h) => h.name === 'muse');
-  assert.deepEqual([win.status, win.reason], ['unsupported', 'muse 2.0.0 is a locked uv tool, which is not supported on Windows yet']);
+  assert.deepEqual([win.status, win.reason], ['unsupported', 'muse 3.0.0 is a locked uv tool, which is not supported on Windows yet']);
 });
 
 test('the launch env follows the override order: per-agent option, the soul install, the host-bundled node, then PATH', async (t) => {

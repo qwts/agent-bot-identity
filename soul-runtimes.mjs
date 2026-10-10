@@ -335,13 +335,22 @@ function readStamp(directory) {
 // install from another platform, a changed source digest, or a path escaping
 // the install must not become a ready runtime. This checks receipt metadata
 // and containment, not a rehash of extracted bytes or Python dependencies.
-function receiptProblem(stamp, { name, kind, version, platform, archive = null }) {
+// The identity of the lock a uv tool was installed from: the SHA-256 of the
+// requirements text it was filled from, or null for an unlocked tool.
+function uvToolLockDigest(install) {
+  const requirements = uvToolRequirements(install);
+  return requirements === null ? null : createHash('sha256').update(requirements).digest('hex');
+}
+
+function receiptProblem(stamp, { name, kind, version, platform, archive = null, lockSha256 = null }) {
   if (!stamp) return null;
   if (stamp.schemaVersion !== RUNTIMES_SCHEMA_VERSION || stamp.name !== name || stamp.kind !== kind
     || stamp.version !== version || stamp.platform !== platform) return 'install receipt does not match the selected runtime, version, kind or platform';
   if (!stamp.bin || path.isAbsolute(stamp.bin) || /^[A-Za-z]:/.test(stamp.bin) || stamp.bin.includes('\\')
     || stamp.bin.split('/').some(part => !part || part === '..') || /[\x00-\x1f\x7f]/.test(stamp.bin)) return 'install receipt has an unsafe executable directory';
   if (archive && (stamp.sha256 !== archive.sha256 || stamp.bin !== archive.bin)) return 'install receipt does not match the selected archive digest or executable directory';
+  // A receipt from before locks has no lockSha256 and stands for an unlocked install.
+  if (kind === 'uv-tool' && (stamp.lockSha256 ?? null) !== lockSha256) return 'install receipt does not match the declared lock; reinstall to rebuild it from the lock';
   return null;
 }
 
@@ -452,7 +461,7 @@ export function inspectSoulRuntimes(soulDir, { manifest = readSoulManifest(soulD
     // launcher for that which isn't specified or verified yet (#617).
     const unsupported = install.kind === 'archive' && !archive ? `${name} ${install.version} has no sha256 for ${platform ?? 'this platform'}`
       : lock && platform?.startsWith('win32-') ? `${name} ${install.version} is a locked uv tool, which is not supported on Windows yet` : null;
-    const problem = receiptProblem(stamp, { name, kind: install.kind, version: install.version, platform, archive });
+    const problem = receiptProblem(stamp, { name, kind: install.kind, version: install.version, platform, archive, lockSha256: install.kind === 'uv-tool' ? uvToolLockDigest(install) : null });
     const installed = stamp && !problem && !existsSync(`${directory}.installing`) && containedExecutable(soulDir, directory, stamp.bin, install.bin, platform);
     const last = lastInstall(path.join(root, 'harnesses', name));
     const entry = { name, kind: install.kind, package: install.kind === 'uv-tool' ? install.package : null, version: install.version, executable: install.bin,
@@ -704,9 +713,11 @@ async function installPython({ version }, target, uvBin, { root, runImpl, label,
 async function installUvTool({ name, install }, target, uvBin, { root, pythonDir, pythonExecutable = null, runImpl, label, action, now, platform }) {
   mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   const marker = `${target}.installing`;
-  if (existsSync(marker)) rmSync(target, { recursive: true, force: true });
   writeFileSync(marker, `${now().toISOString()}\n`, { mode: 0o600 });
   try {
+    // This version is not usable as declared (unfinished, or built from
+    // another lock), so it is rebuilt from scratch under the marker.
+    rmSync(target, { recursive: true, force: true });
     mkdirSync(target, { recursive: true, mode: 0o700 });
     const env = { ...minimalChildEnv(process.env), UV_CACHE_DIR: path.join(root, 'uv', 'cache'), UV_TOOL_DIR: path.join(target, 'tools'), UV_TOOL_BIN_DIR: path.join(target, 'bin'),
       UV_PYTHON_INSTALL_DIR: pythonDir, UV_PYTHON_PREFERENCE: 'only-managed', UV_NO_PROGRESS: '1' };
@@ -718,7 +729,8 @@ async function installUvTool({ name, install }, target, uvBin, { root, pythonDir
       catch (error) { uvFailed(error); }
     }
     if (!hasExecutable(path.join(target, 'bin'), install.bin, platform)) fail('runtime-install-failed', `${label}: ${install.package} installed no ${install.bin} executable`, { runtime: label, action });
-    writeFileSync(path.join(target, INSTALL_STAMP), `${JSON.stringify({ schemaVersion: RUNTIMES_SCHEMA_VERSION, name, kind: 'uv-tool', version: install.version, platform, url: null, sha256: null, bin: 'bin', installedAt: now().toISOString() })}\n`, { mode: 0o600 });
+    writeFileSync(path.join(target, INSTALL_STAMP), `${JSON.stringify({ schemaVersion: RUNTIMES_SCHEMA_VERSION, name, kind: 'uv-tool', version: install.version, platform, url: null, sha256: null, bin: 'bin',
+      lockSha256: uvToolLockDigest(install), installedAt: now().toISOString() })}\n`, { mode: 0o600 });
     rmSync(marker, { force: true });
   } catch (error) {
     rmSync(target, { recursive: true, force: true });
