@@ -139,7 +139,9 @@ export function inspectLocalAppCredential({
   validateKey = validatePrivateKey,
   env = process.env, config = loadConfig({ env, home }), stores,
 } = {}) {
-  if (config?.identityApps?.[slug]?.store) {
+  // A keyd-held App (#110) has no readable key; resolveAppCredential below
+  // answers for it, as for a keyd soul.
+  if (config?.identityApps?.[slug]?.store && config.identityApps[slug].store !== 'keyd') {
     try {
       const credential = readManagedAppCredential(slug, { env, home, config, stores });
       if (!validateIssuer(credential.appId) || !validateKey(credential.privateKeyPem)) throw new Error();

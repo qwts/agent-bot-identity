@@ -434,7 +434,9 @@ export function readLegacyCredential(slug, home, env = process.env, config) {
 // ~/.config/<slug> folder with a one-time notice. A store that holds a
 // credential but cannot be read is an error, not a reason to fall back. A
 // keyd soul resolves to `source: 'keyd'` with no key: its mint goes through
-// keyd (mint-token.mjs).
+// keyd (mint-token.mjs). So does a managed App whose record says keyd holds
+// its App-level key (#110), with `keyScope: 'app'` and the minting soul's
+// Agent ID, which keyd still requires and names in its receipt.
 export function resolveAppCredential(slug, {
   agentId = null,
   env = process.env,
@@ -452,6 +454,8 @@ export function resolveAppCredential(slug, {
   const own = agentId ?? (() => { try { return currentAgentId({ env, cwd }); } catch { return null; } })();
   const held = declared.find((soul) => soul.agentId === own && soul.declaration.store === 'keyd');
   if (held) return { slug, appId: null, privateKeyPem: null, source: 'keyd', agentId: held.agentId };
+  const record = config.identityApps?.[slug];
+  if (record?.store === 'keyd') return { slug, appId: typeof record.id === 'string' ? record.id : null, privateKeyPem: null, source: 'keyd', keyScope: 'app', agentId: own };
   const managed = readManagedAppCredential(slug, { env, home, config, stores: stores ?? credentialStores({ env }) });
   if (managed) return { slug, ...managed, source: 'managed-app', agentId: null };
   const storeOptions = { stores: stores ?? credentialStores({ env }), platform };

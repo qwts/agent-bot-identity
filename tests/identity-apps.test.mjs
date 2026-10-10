@@ -17,7 +17,7 @@ import { main as doctorMain } from '../doctor.mjs';
 import { assignAgentApp, mintAgentIdentity, readAgentIdentity, stateDirectory } from '../agent-identity.mjs';
 import { populationFile, upsertSoul } from '../agent-population.mjs';
 import { configuredAppSlugs, buildReadinessReport, renderReadinessJson, readinessCheck } from '../readiness.mjs';
-import { inspectAppCredentials } from '../credential-reconciler.mjs';
+import { inspectAppCredentials, inspectLocalAppCredential } from '../credential-reconciler.mjs';
 import { loadConfig, slugForHarness } from '../config.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -33,7 +33,9 @@ function fixture(t, { gate = true, platform = 'linux' } = {}) {
   writeFileSync(env.AGENT_BOT_CONFIG, JSON.stringify({ features: { 'github-identity': gate } }));
   const keyFile = path.join(home, 'incoming.pem'); writeFileSync(keyFile, KEY, { mode: 0o600 });
   const newKeyFile = path.join(home, 'new.pem'); writeFileSync(newKeyFile, NEW_KEY, { mode: 0o600 });
-  const options = { env, home, cwd: home, platform, gate: async () => ({ method: 'test' }), stores: credentialStores({ env }), souls: identityAppSouls };
+  // A fake keyd (#110) that is not there: no test here reaches a socket.
+  const keyd = { availability: async () => ({ available: false, reason: 'agent-bot-keyd is not installed' }), importApp: async () => assert.fail('keyd is not there') };
+  const options = { env, home, cwd: home, platform, gate: async () => ({ method: 'test' }), stores: credentialStores({ env }), souls: identityAppSouls, keyd };
   t.after(() => rmSync(home, { recursive: true, force: true }));
   return { env, home, keyFile, newKeyFile, options };
 }
@@ -88,7 +90,9 @@ test('gate off lists nothing without touching store or network; mutations fail c
 for (const platform of ['linux', 'darwin']) test(`connect uses ${platform === 'darwin' ? 'fake Keychain' : 'private file'} store and list is offline`, async (t) => {
   const f = fixture(t, { platform }), api = await github(t, f);
   const result = await connect(f); noSecrets(result);
-  assert.deepEqual(result, { id: '123', slug: 'fixture-app', installUrl: 'https://github.com/apps/fixture-app/installations/new' });
+  const kind = platform === 'darwin' ? 'keychain' : 'file';
+  assert.deepEqual(result, { id: '123', slug: 'fixture-app', installUrl: 'https://github.com/apps/fixture-app/installations/new',
+    store: kind, storeReason: `agent-bot-keyd is not installed; the key is kept in the ${kind} store instead.` });
   assert.equal(loadConfig(f.options).identityApps['fixture-app'].botUid, '456');
   assert.equal(loadConfig(f.options).identityApps['fixture-app'].botAvatarUrl, 'https://avatars.githubusercontent.com/u/456?v=4');
   const before = api.calls.length;
@@ -130,7 +134,7 @@ test('manifest has expected permissions, one state-bound callback, stored webhoo
   assert.equal(api.conversions(), 0);
   assert.equal((await callback(manifest, state)).status, 200);
   const result = await flow.completion; noSecrets(result);
-  assert.deepEqual(Object.keys(result), ['id', 'slug', 'installUrl']);
+  assert.deepEqual(Object.keys(result), ['id', 'slug', 'installUrl', 'store', 'storeReason']);
   assert.equal(api.conversions(), 1);
   assert.ok(Boolean(readManagedAppCredential('fixture-app', f.options).webhookSecret));
   await assert.rejects(fetch(manifest.redirect_url));
@@ -524,4 +528,112 @@ test('daemon remove and addon routes need the bearer and the owner, and return p
   const on = await post('addon', { name: 'github-identity', enabled: true });
   assert.deepEqual(on.result, { addon: 'github-identity', enabled: true, changed: true });
   assert.equal((await post('addon', { name: 'github-identity' })).status, 400);
+});
+
+// App-level keys in agent-bot-keyd (#110 slice 2). `keyd` is a fake of the
+// owner channel: availability (status, pin, owner/app-status) and
+// owner/app-import. No test reaches a real keyd or daemon.
+function fakeKeyd({ available = true, held = false, reason = 'agent-bot-keyd is not running', importError = null } = {}) {
+  const imports = [];
+  return {
+    imports,
+    availability: async (app) => { assert.equal(app, 'fixture-app'); return available ? { available: true, held } : { available: false, reason }; },
+    importApp: async (items) => { if (importError) throw importError; imports.push(items); return { stored: items.length, pinned: false }; },
+  };
+}
+const fileItem = (f) => path.join(appStoreTarget('fixture-app', f.options).soulDir, '.soul-state/credentials/github-app-fixture-app.json');
+test('with keyd verified, connect keeps the key in keyd, records store keyd, and mints with an App-scope grant', async (t) => {
+  const f = fixture(t); await github(t, f);
+  const keyd = f.options.keyd = fakeKeyd();
+  const result = await connect(f); noSecrets(result);
+  assert.deepEqual(result, { id: '123', slug: 'fixture-app', installUrl: 'https://github.com/apps/fixture-app/installations/new', store: 'keyd' });
+  assert.equal(keyd.imports.length, 1);
+  assert.deepEqual(Object.keys(keyd.imports[0][0]), ['app', 'appId', 'privateKeyPem']);
+  assert.deepEqual([keyd.imports[0][0].app, keyd.imports[0][0].appId], ['fixture-app', '123']);
+  assert.ok(keyd.imports[0][0].privateKeyPem === KEY, 'keyd was given the connected key');
+  const record = loadConfig(f.options).identityApps['fixture-app'];
+  assert.equal(record.store, 'keyd'); assert.match(record.keyFingerprint, /^SHA256:/);
+  assert.equal(existsSync(fileItem(f)), false, 'no readable copy is written');
+  const resolved = resolveAppCredential('fixture-app', { ...f.options, agentId: ID });
+  assert.deepEqual(resolved, { slug: 'fixture-app', appId: '123', privateKeyPem: null, source: 'keyd', keyScope: 'app', agentId: ID });
+  const row = listIdentityApps(f.options).apps[0];
+  assert.deepEqual([row.issuerPresent, row.keyPresent], [true, true]);
+  assert.equal(inspectLocalAppCredential({ slug: 'fixture-app', home: f.home, env: f.env, config: loadConfig(f.options), stores: f.options.stores }).status, 'ready',
+    'doctor does not call a keyd-held App unreadable');
+  await assert.rejects(connect(f), { code: 'identity-app-exists' });
+  assert.equal(keyd.imports.length, 1, 'a second connect never writes over the keyd key');
+  await assert.rejects(identityAppOperation('remove', { slug: 'fixture-app' }, f.options), { code: 'identity-app-keyd-held' });
+  assert.equal(loadConfig(f.options).identityApps['fixture-app'].store, 'keyd');
+});
+test('with keyd not verified, connect uses the file or Keychain store and says why', async (t) => {
+  for (const reason of ['agent-bot-keyd is not running', "agent-bot-keyd has not pinned this daemon's key yet"]) {
+    const f = fixture(t); await github(t, f);
+    const keyd = f.options.keyd = fakeKeyd({ available: false, reason });
+    const result = await connect(f);
+    assert.equal(result.store, 'file');
+    assert.equal(result.storeReason, `${reason}; the key is kept in the file store instead.`);
+    assert.equal(keyd.imports.length, 0);
+    assert.ok(readManagedAppCredential('fixture-app', f.options).privateKeyPem === KEY);
+  }
+});
+test('an older keyd (-32601) falls back with its reason; any other keyd refusal stores nothing', async (t) => {
+  const older = fixture(t); await github(t, older);
+  older.options.keyd = fakeKeyd({ importError: Object.assign(new Error('method not found'), { code: 'keyd-refused', rpcCode: -32601 }) });
+  const result = await connect(older);
+  assert.equal(result.store, 'file');
+  assert.match(result.storeReason, /predates App-level keys \(#110\); the key is kept in the file store instead/);
+  assert.equal(loadConfig(older.options).identityApps['fixture-app'].store, 'file');
+
+  const declined = fixture(t); await github(t, declined);
+  declined.options.keyd = fakeKeyd({ importError: Object.assign(new Error('the owner declined'), { code: 'keyd-refused', rpcCode: -32000 }) });
+  await assert.rejects(connect(declined), (error) => error.code === 'identity-app-keyd-refused' && /owner declined\); nothing was changed/.test(error.message));
+  assert.equal(loadConfig(declined.options).identityApps?.['fixture-app']?.store, undefined);
+  assert.equal(existsSync(fileItem(declined)), false, 'a keyd refusal is never a silent downgrade');
+});
+test('existing App keys are untouched: a file-store App rotates in its store, and a key keyd holds unrecorded is never replaced', async (t) => {
+  const f = fixture(t); await github(t, f); await connect(f);
+  const keyd = f.options.keyd = fakeKeyd();
+  const rotated = await identityAppOperation('rotate-key', { slug: 'fixture-app', keyFile: f.newKeyFile }, f.options);
+  assert.equal(rotated.store, 'file');
+  assert.match(rotated.storeReason, /already kept in the file store; existing App keys are not moved to agent-bot-keyd/);
+  assert.equal(keyd.imports.length, 0);
+  assert.equal(loadConfig(f.options).identityApps['fixture-app'].store, 'file');
+
+  const fresh = fixture(t); await github(t, fresh);
+  const holding = fresh.options.keyd = fakeKeyd({ held: true });
+  await assert.rejects(connect(fresh), (error) => error.code === 'identity-app-exists' && /not replaced; nothing was stored/.test(error.message));
+  assert.equal(holding.imports.length, 0);
+  assert.equal(existsSync(fileItem(fresh)), false);
+});
+test('a keyd-held App rotates in keyd, and fails rather than leaving keyd when it cannot', async (t) => {
+  const f = fixture(t); const api = await github(t, f);
+  const keyd = f.options.keyd = fakeKeyd(); await connect(f);
+  const oldFingerprint = loadConfig(f.options).identityApps['fixture-app'].keyFingerprint;
+  await assert.rejects(identityAppOperation('rotate-key', { slug: 'fixture-app', keyFile: f.keyFile }, f.options), { code: 'identity-app-key-unchanged' });
+  f.options.keyd = fakeKeyd({ available: false });
+  await assert.rejects(identityAppOperation('rotate-key', { slug: 'fixture-app', keyFile: f.newKeyFile }, f.options), { code: 'identity-app-keyd-unavailable' });
+  assert.equal(loadConfig(f.options).identityApps['fixture-app'].keyFingerprint, oldFingerprint);
+  f.options.keyd = keyd;
+  const result = await identityAppOperation('rotate-key', { slug: 'fixture-app', keyFile: f.newKeyFile }, f.options); noSecrets(result);
+  assert.equal(result.store, 'keyd'); assert.equal(result.retired, oldFingerprint);
+  assert.ok(keyd.imports[1][0].privateKeyPem === NEW_KEY);
+  assert.ok(api.calls.includes('POST /app/installations/7/access_tokens'), 'the new key minted before keyd was asked');
+  assert.notEqual(loadConfig(f.options).identityApps['fixture-app'].keyFingerprint, oldFingerprint);
+});
+test('create keeps the one-time key in keyd when verified, and never loses it to a keyd refusal', async (t) => {
+  const run = async (keyd) => {
+    const f = fixture(t); await github(t, f);
+    f.options.keyd = keyd;
+    const flow = await identityAppOperation('create', { manifest: true }, f.options);
+    t.after(flow.cancel);
+    const { manifest, state } = await page(flow);
+    assert.equal((await callback(manifest, state)).status, 200);
+    return { f, result: await flow.completion };
+  };
+  const kept = await run(fakeKeyd()); noSecrets(kept.result);
+  assert.equal(kept.result.store, 'keyd'); assert.equal(kept.result.webhookSecretKept, false);
+  const refused = await run(fakeKeyd({ importError: Object.assign(new Error('the owner declined'), { rpcCode: -32000 }) }));
+  assert.equal(refused.result.store, 'file');
+  assert.match(refused.result.storeReason, /owner declined\); the key is kept in the file store instead/);
+  assert.ok(readManagedAppCredential('fixture-app', refused.f.options).privateKeyPem === KEY);
 });

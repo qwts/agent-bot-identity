@@ -13,7 +13,7 @@ import { auditFile } from '../agent-principals.mjs';
 import { registerSoulDir, upsertSoul } from '../agent-population.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
 import {
-  KEYD_GRANT_META, daemonGrantPublicKey, importIntoKeyd, keydMcpServerEntry, keydPaths, keydPolicyRules,
+  KEYD_GRANT_META, appKeydAvailability, daemonGrantPublicKey, importAppIntoKeyd, importIntoKeyd, keydMcpServerEntry, keydPaths, keydPolicyRules,
   keydRequest, keydStatus, mintViaKeyd, readKeydRecord, signKeydGrant,
 } from '../keyd-client.mjs';
 import { installKeyd, uninstallKeyd } from '../keyd-supervisor.mjs';
@@ -430,6 +430,93 @@ test('the daemon mints a bound keyd soul\'s token with the real mint(), and refu
     .trim().split('\n').map((line) => JSON.parse(line)).filter((receipt) => receipt.event === 'credential-mint');
   assert.deepEqual(receipts.map((receipt) => [receipt.decision, receipt.reason]), [['granted', 'bound-soul-own-app'], ['denied', 'soul-retired']]);
   assert.doesNotMatch(JSON.stringify(receipts), /ghs_/);
+});
+
+// App-level keys (#110 slice 2).
+test('an App-scope grant adds keyScope app; a soul grant keeps its 12 keys; another scope is refused', () => {
+  const { privateKey } = generateKeyPairSync('ed25519');
+  const base = { agentId: AGENT, app: SLUG, tool: 'credential', apiBase: 'https://api.github.com' };
+  const app = decodeGrant(signKeydGrant({ ...base, keyScope: 'app' }, privateKey)).payload;
+  assert.equal(app.keyScope, 'app');
+  assert.equal(Object.keys(app).length, 13);
+  for (const keyScope of [undefined, null, 'soul']) {
+    assert.equal(Object.hasOwn(decodeGrant(signKeydGrant({ ...base, keyScope }, privateKey)).payload, 'keyScope'), false);
+  }
+  assert.throws(() => signKeydGrant({ ...base, keyScope: 'org' }, privateKey), /unknown keyd key scope/);
+});
+
+test('keyd is verified for App keys only when it runs, is pinned and knows owner/app-status', async (t) => {
+  const { env, home } = fixture(t);
+  const keyd = (answers) => async (socket, method, params) => {
+    assert.equal(socket, keydPaths({ env, home }).ownerSocket);
+    const answer = answers[method];
+    if (answer instanceof Error) throw answer;
+    if (method === 'owner/app-status') assert.deepEqual(params, { app: SLUG });
+    return answer;
+  };
+  const refused = (rpcCode) => Object.assign(new Error('refused'), { code: 'keyd-refused', rpcCode });
+  assert.deepEqual(await appKeydAvailability(SLUG, { env, home, request: keyd({ 'owner/status': { pinned: true }, 'owner/app-status': { pinned: true, held: false } }) }),
+    { available: true, held: false });
+  assert.deepEqual(await appKeydAvailability(SLUG, { env, home, request: keyd({ 'owner/status': { pinned: true }, 'owner/app-status': { pinned: true, held: true } }) }),
+    { available: true, held: true });
+  assert.deepEqual(await appKeydAvailability(SLUG, { env, home, request: keyd({ 'owner/status': new Error('down') }) }),
+    { available: false, reason: 'agent-bot-keyd is not installed' });
+  assert.deepEqual(await appKeydAvailability(SLUG, { env, home, request: keyd({ 'owner/status': { pinned: false } }) }),
+    { available: false, reason: "agent-bot-keyd has not pinned this daemon's key yet" });
+  const older = await appKeydAvailability(SLUG, { env, home, request: keyd({ 'owner/status': { pinned: true }, 'owner/app-status': refused(-32601) }) });
+  assert.equal(older.available, false); assert.match(older.reason, /predates App-level keys \(#110\)/);
+  assert.equal((await appKeydAvailability(SLUG, { env, home, request: keyd({ 'owner/status': { pinned: true }, 'owner/app-status': refused(-32000) }) })).available, false);
+  const calls = [];
+  await importAppIntoKeyd([{ app: SLUG, appId: '12345', privateKeyPem: PEM }], { env, home, request: async (...args) => { calls.push(args); return { stored: 1 }; } });
+  assert.deepEqual([calls[0][0], calls[0][1]], [keydPaths({ env, home }).ownerSocket, 'owner/app-import']);
+  assert.equal(calls[0][2].daemonKey, daemonGrantPublicKey({ env, home }));
+});
+
+test('a soul whose App keyd holds App-level mints with an App-scope grant naming the soul', async (t) => {
+  const { env, home } = fixture(t, { store: 'file' });
+  writeFileSync(env.AGENT_BOT_CONFIG, JSON.stringify({ features: { 'github-identity': true }, apiBase: 'https://api.github.com',
+    identityApps: { [SLUG]: { id: '12345', store: 'keyd', keyFingerprint: 'SHA256:x' } } }));
+  const resolved = resolveAppCredential(SLUG, { agentId: AGENT, env, home, cwd: home, warn: () => assert.fail('no legacy notice') });
+  assert.deepEqual(resolved, { slug: SLUG, appId: '12345', privateKeyPem: null, source: 'keyd', keyScope: 'app', agentId: AGENT });
+  assert.deepEqual(appConfig({ argv: ['node', 'mint-token.mjs', '--app', SLUG], env, home, cwd: home, agentId: AGENT }).keyd, { agentId: AGENT, keyScope: 'app' });
+  // A soul whose own soul.json says keyd still mints with its own key.
+  const own = fixture(t);
+  writeFileSync(own.env.AGENT_BOT_CONFIG, JSON.stringify({ identityApps: { [SLUG]: { id: '12345', store: 'keyd' } } }));
+  assert.equal(resolveAppCredential(SLUG, { agentId: AGENT, env: own.env, home: own.home, cwd: own.home }).keyScope, undefined);
+
+  // The daemon's /v0/credential, through the real mint(), with a fake keyd.
+  const worktree = path.join(home, 'worktree');
+  mkdirSync(worktree, { recursive: true });
+  execFileSync('git', ['init', '-q', worktree]);
+  const gitDir = path.join(worktree, '.git');
+  ensureAgentIdentity({
+    gate: () => true, appSlug: SLUG, botUid: '308462948', harness: 'codex',
+    transcript: { provider: 'codex', id: 'thread-app-key' }, stateDir: stateDirectory({ env, home }),
+    idFactory: () => AGENT, now: () => new Date('2026-10-09T08:00:00.000Z'),
+  });
+  const record = mintBindToken({ gitDir, worktree, agentId: AGENT });
+  const grants = [];
+  const server = createDaemonServer({
+    env, home, config: { features: { 'github-identity': true }, apiBase: 'https://api.github.com' },
+    keydCall: async (socket, method, params) => {
+      grants.push(assertDaemonSigned(params._meta[KEYD_GRANT_META], env, home));
+      return { structuredContent: { token: 'ghs_app_level', expires_at: '2026-10-09T09:00:00Z', installation_id: 9 } };
+    },
+  });
+  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+  t.after(() => new Promise((resolve) => { server.close(resolve); }));
+  const port = server.address().port;
+  const call = (pathname, { body, headers = {}, bearer = true } = {}) => fetch(`http://127.0.0.1:${port}${pathname}`, {
+    method: 'POST',
+    headers: { ...(bearer ? { authorization: `Bearer ${server.token}` } : {}), 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body ?? {}),
+  });
+  const bound = await (await call('/v0/bind', { body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-app-key' } } })).json();
+  const granted = await call('/v0/credential', { headers: { 'x-agent-binding': bound.secret }, bearer: false });
+  assert.equal(granted.status, 200, await granted.clone().text());
+  assert.equal((await granted.json()).token, 'ghs_app_level');
+  assert.equal(grants.length, 1);
+  assert.deepEqual([grants[0].keyScope, grants[0].agentId, grants[0].app, grants[0].tool], ['app', AGENT, SLUG, 'credential']);
 });
 
 test('agent-bot --help lists the keyd command and its actions', async () => {
