@@ -1,0 +1,1 @@
+- keyd's Keychain tests now run only when `KEYD_KEYCHAIN_TESTS=1` is set, which CI sets, so `cargo test` on a developer's Mac never opens a keychain or shows a keychain prompt (#753).

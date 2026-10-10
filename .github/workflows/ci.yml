@@ -272,6 +272,10 @@ jobs:
       - name: Rust toolchain
         run: rustup show active-toolchain || rustup toolchain install
       - name: Format, lint and test
+        # Keychain tests open a scratch keychain, so they run only where this
+        # flag is set: here, never on someone's own Mac by default (#753).
+        env:
+          KEYD_KEYCHAIN_TESTS: "1"
         run: cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
       - name: Build the unsigned binary
         run: cargo build --release --locked
