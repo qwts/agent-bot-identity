@@ -166,9 +166,9 @@ fork keeps them as the parent's read-only history (#583, see
 record, not continuity: imported native harness sessions are not made
 resumable. The descriptor lists the legacy conversation
 journal and reports the contained one at `history.conversation { path, present }`.
-Native interaction inventory/transfer, full native continuity and host-view
-reconstruction remain tracked in #596; #583 is not complete merely because
-the run summaries or cold context survive export.
+The remaining acceptance under #596 is a live GeniusBar check: chat, quit and
+reopen on a build bundling current agent-bot. Moving these records does not
+make imported native harness sessions resumable.
 
 ### Reading the fact mirror
 
