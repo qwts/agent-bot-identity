@@ -132,10 +132,10 @@ function updateMain(args, json, { stdout, stderr, ...options }) {
     return 1;
   }
 }
-// A soul's own request to loosen reaches the owner the way the daemon's
+// A soul's own global load or unload reaches the owner the way the daemon's
 // loosening does (agent-daemon.mjs): keyd's Touch ID or login password only,
 // no signed challenge and no administrator dialog, since the soul runs it.
-const noLooseningDialog = async () => { throw Object.assign(new Error('agent-bot-keyd could not ask, and a soul\'s global load has no administrator-dialog fallback'), { code: 'presence-unavailable' }); };
+const noLooseningDialog = async () => { throw Object.assign(new Error('agent-bot-keyd could not ask, and a soul\'s global skill change has no administrator-dialog fallback'), { code: 'presence-unavailable' }); };
 const askOwnerForSoul = (action, { env, presence }) => presenceOrConsent(action, { env, presence, allowChallenge: false, consent: noLooseningDialog });
 // load/unload (#603) place an installed skill in one of the soul's own
 // worktrees and take it out again. The package is unchanged, so there is no

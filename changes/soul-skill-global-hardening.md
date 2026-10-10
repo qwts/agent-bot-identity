@@ -1,1 +1,0 @@
-- `agent-bot soul skill unload --global` now always requires the owner gate, the same way a global load does, and global skill records and receipts ignore `AGENT_BOT_INTERACTION_HOME` and `XDG_STATE_HOME` for every caller, not only souls (#603).
