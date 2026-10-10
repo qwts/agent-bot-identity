@@ -45,3 +45,10 @@ test('any change to a pin, URL, digest, pin order or the schema version changes 
   }
   assert.notEqual(catalogReleaseHash({ version: RUNTIME_CATALOG_VERSION + 1 }), base);
 });
+
+test('the catalog release hash tells value types apart (#617)', () => {
+  const pin = (extra) => ({ python: [{ version: '3.12.15', via: 'uv', ...extra }] });
+  assert.notEqual(catalogReleaseHash({ catalog: pin({ sources: null }) }), catalogReleaseHash({ catalog: pin({}) }), 'null vs a missing sources');
+  assert.notEqual(catalogReleaseHash({ catalog: pin({ sources: null }), version: 1 }), catalogReleaseHash({ catalog: pin({ sources: null }), version: '1' }), '1 vs "1"');
+  assert.notEqual(catalogReleaseHash({ catalog: pin({ via: 'uv' }) }), catalogReleaseHash({ catalog: pin({ via: null }) }), 'via');
+});
