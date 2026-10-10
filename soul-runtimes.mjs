@@ -93,8 +93,10 @@ function validateOverrideStore(soulDir, agentId, { create = false } = {}) {
         if (error.code === 'ENOENT') return;
         throw unsafeOverrideState(agentId, 'override state cannot be inspected');
       }
-      try { mkdirSync(directory, { mode: 0o700 }); info = lstatSync(directory); }
-      catch { throw unsafeOverrideState(agentId, 'override state could not be created'); }
+      // A concurrent first override may create it between the lstat and the
+      // mkdir; the entry it left is validated below like any other.
+      try { mkdirSync(directory, { mode: 0o700 }); } catch (mkdirError) { if (mkdirError.code !== 'EEXIST') throw unsafeOverrideState(agentId, 'override state could not be created'); }
+      try { info = lstatSync(directory); } catch { throw unsafeOverrideState(agentId, 'override state could not be created'); }
     }
     if (!info.isDirectory() || info.isSymbolicLink()) throw unsafeOverrideState(agentId, 'override state must use real directories inside the soul');
     try { if (!within(soulRoot, realpathSync(directory))) throw new Error('outside'); }
