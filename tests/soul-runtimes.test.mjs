@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn as spawnChild, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -830,6 +830,14 @@ test('an unsafe override shim directory refuses set and clear before the record 
   chmodSync(audit, 0o600);
   assert.ok(!existsSync(path.join(overrides, 'node.json')), 'an unwritable receipt rolls the selection back');
 
+  await soulRuntimesCommand(['override', ID, 'npm', '--clear'], { ...options, gate, write });
+  assert.ok(!existsSync(path.join(overrides, 'npm.json')));
+
+  // A broken record cannot be restored, so a set over it refuses and names --clear.
+  symlinkSync(otherNpm, path.join(overrides, 'npm.json'));
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'npm', externalNpm], { ...options, gate, write }),
+    (error) => error.code === 'runtime-override-invalid' && /clear it first/.test(error.message) && /--clear/.test(error.action));
+  assert.ok(lstatSync(path.join(overrides, 'npm.json')).isSymbolicLink(), 'the refused set leaves the entry for --clear');
   await soulRuntimesCommand(['override', ID, 'npm', '--clear'], { ...options, gate, write });
   assert.ok(!existsSync(path.join(overrides, 'npm.json')));
 });

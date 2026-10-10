@@ -207,7 +207,7 @@ function writeOverrideRecord(soulDir, agentId, name, executable) {
 
 // The record as it was before a set or clear, so a failure after the write
 // can put it back. A record that is not a small regular file is already
-// broken; only `--clear` gets that far, and it stays removed.
+// broken: a set refuses it, and a failed `--clear` leaves it removed.
 function readPreviousOverrideRecord(file) {
   let info;
   try { info = lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return { absent: true }; throw error; }
@@ -958,6 +958,9 @@ async function soulRuntimeOverrideCommand(argv, { gate, readStdin, write, env, h
     ensureOverrideShims(soulDir, inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host }).overrides, { agentId: soul.id });
     const file = overrideRecordFile(soulDir, name);
     const previous = readPreviousOverrideRecord(file);
+    // A broken record could not be put back if this set failed, so it is
+    // cleared on its own first.
+    if (!clear && previous.unrestorable) throw invalidOverride(soul.id, name, `override record for ${name} is not a small regular file; clear it first`, `agent-bot soul runtimes override ${soul.id} ${name} --clear`);
     if (clear) rmSync(file, { recursive: true, force: true });
     else writeOverrideRecord(soulDir, soul.id, name, executable);
     try {
