@@ -282,8 +282,12 @@ function createPowerShellPipeConnection(pipe, {
   const script = powershellRelayScript(pipe, connectTimeoutMs);
   let child;
   try {
+    // -EncodedCommand selects CLIXML for redirected host errors in Windows
+    // PowerShell, so startup progress can precede and invalidate our markers.
+    // Keep stdin for binary traffic and decode only this generated public script.
+    const command = `$ProgressPreference = 'SilentlyContinue'; & ([ScriptBlock]::Create([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encodePowerShell(script)}'))))`;
     child = spawnProcess('powershell.exe', [
-      '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShell(script),
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-Command', command,
     ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: legacyPowerShellEnv(env) });
   } catch {
     throw withRelayFailure(new Error('Windows pipe relay process could not start'), hostProcessFailure('spawn-error'));

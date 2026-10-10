@@ -508,7 +508,11 @@ test('default Windows relay explicitly limits pipe-server impersonation and rela
     assert.equal(spawnCall.options.env.PSModulePath, undefined);
     assert.equal(Object.keys(spawnCall.options.env).some((name) => name.toLowerCase() === 'psmodulepath'), false);
     assert.deepEqual(env, originalEnv);
-    const script = Buffer.from(spawnCall.args.at(-1), 'base64').toString('utf16le');
+    assert.equal(spawnCall.args.at(-2), '-Command');
+    assert.equal(spawnCall.args.includes('-EncodedCommand'), false);
+    const encodedScript = /FromBase64String\('([A-Za-z0-9+/=]+)'\)/.exec(spawnCall.args.at(-1));
+    assert.ok(encodedScript, 'only a base64 script can enter the fixed command expression');
+    const script = Buffer.from(encodedScript[1], 'base64').toString('utf16le');
     assert.match(script, /NamedPipeClientStream/);
     assert.match(script, /TokenImpersonationLevel\.Identification/);
     assert.doesNotMatch(script, /TokenImpersonationLevel\.(None|Impersonation)/);
