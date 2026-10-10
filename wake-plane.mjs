@@ -221,7 +221,7 @@ export function acpExecutorFor({
         harness,
         identity: { app, agentId },
         mode,
-        model: modelFor(agentId),
+        model: modelFor(agentId, { harness, cwd }),
         identityFor,
         getHarnessSession: (invocation) => interactionHarnessSession(invocation, { agentId, harness, store: interactionStore }),
         onModels: (models) => onModels?.(agentId, models),

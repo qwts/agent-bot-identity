@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -50,13 +50,18 @@ export function soulMode(agentId, options = {}) {
 export const LOOSENING_NEEDS_OWNER = 'permission-mode-loosening-needs-owner';
 
 // The repo may be an untrusted clone: only a small regular file is read, never
-// a symlink (a link to /dev/zero would stall the daemon).
+// a symlink (a link to /dev/zero would stall the daemon). The file is opened
+// once without following a link or blocking, and checked and read through
+// that descriptor, so it cannot be swapped between the check and the read.
 const SETTINGS_FILE_MAX = 64 * 1024;
-const readText = (file) => {
+export const readSettingsText = (file) => {
+  let fd;
+  try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+  catch { return null; }
   try {
-    const stat = lstatSync(file);
-    return stat.isFile() && stat.size <= SETTINGS_FILE_MAX ? readFileSync(file, 'utf8') : null;
-  } catch { return null; }
+    const stat = fstatSync(fd);
+    return stat.isFile() && stat.size <= SETTINGS_FILE_MAX ? readFileSync(fd, 'utf8') : null;
+  } catch { return null; } finally { closeSync(fd); }
 };
 
 // A layer's declaration: its mode (or null), the file it was read from, and
@@ -66,14 +71,14 @@ const layer = (file, text, mode) => ({ mode, file, digest: text === null ? null 
 function repoLayer(directory, harness) {
   if (harness === 'claude') {
     const file = path.join(directory, '.claude', 'settings.json');
-    const text = readText(file);
+    const text = readSettingsText(file);
     let mode = null;
     try { mode = JSON.parse(text)?.permissions?.defaultMode; } catch { /* declares nothing */ }
     return layer(file, text, { default: 'safe', plan: 'safe', bypassPermissions: 'autopilot' }[mode] ?? null);
   }
   if (harness === 'codex') {
     const file = path.join(directory, '.codex', 'config.toml');
-    const text = readText(file);
+    const text = readSettingsText(file);
     // Root keys only: everything before the first table header.
     const root = (text ?? '').split(/^\s*\[/m)[0];
     const policy = root.match(/^\s*approval_policy\s*=\s*"([^"]*)"\s*(?:#.*)?$/m)?.[1];
@@ -84,7 +89,7 @@ function repoLayer(directory, harness) {
 
 function packageLayer(directory, harness) {
   const file = path.join(directory, 'soul.json');
-  const text = readText(file);
+  const text = readSettingsText(file);
   let manifest = null;
   try { manifest = JSON.parse(text); } catch { /* declares nothing */ }
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) return layer(file, text, null);

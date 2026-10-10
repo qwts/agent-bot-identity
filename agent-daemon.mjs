@@ -109,7 +109,7 @@ import { readSoulProfile } from './soul-profile.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
 import { launchSandbox, readSandboxStatus, turnSandboxProblem, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount } from './sandbox.mjs';
 import { checkSopLaunchPolicy } from './sop.mjs';
-import { soulModel, setSoulModel, recordSoulModels } from './soul-model.mjs';
+import { resolveSoulModel, soulModel, setSoulModel, recordSoulModels } from './soul-model.mjs';
 import { ownerGate as soulSettingOwnerGate, readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
@@ -1697,6 +1697,17 @@ export function daemonModeFor({
   };
 }
 
+// The model a daemon turn sends, in the owner's settings order (#379): the
+// owner's pick, else the repo's own file's model, else the soul package's
+// declared model. Read once per turn.
+export function daemonModelFor({ env = process.env, home = homedir(), config } = {}) {
+  return (agentId, { harness = null, cwd = null } = {}) => {
+    let soulDir = null;
+    try { soulDir = soulDirectory(agentId, { env, home, config, file: populationFile({ env, home }), readOnly: true }); } catch { /* no census row: no package layer */ }
+    return resolveSoulModel(agentId, { harness, cwd, soulDir, env, home }).model;
+  };
+}
+
 // Records a launch in the census before the first turn (#380). The principal
 // may have chosen comms before start (#381): it becomes the soul's own
 // setting, recorded as an edit when the soul has a revision chain. The
@@ -1867,7 +1878,7 @@ export async function runDaemon({
       baseEnv: harnessEnv,
       interactionStore: { env, home },
       modeFor: daemonModeFor({ env, home, config }),
-      modelFor: (agentId) => soulModel(agentId, { env, home }).model,
+      modelFor: daemonModelFor({ env, home, config }),
       identityFor,
       onModels: (agentId, models) => recordSoulModels(agentId, models, { env, home }),
       // A daemon-run soul's home is not a git worktree, so the session-start

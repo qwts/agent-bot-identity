@@ -453,10 +453,36 @@ Codex. Under the daemon, Codex turns also stay in the ACP session mode
 `workspace-write` (`sessionMode` in `acp-registry.mjs`) whatever the mode, so
 every Codex approval reaches the daemon.
 
-For the model, the owner's `soul model` pick is sent on every daemon turn;
-without one, the harness keeps the model in the files it reads in the turn's
-working directory. Bringing model and reasoning effort under the full order
-is a later slice.
+For the model on a daemon-run turn (`resolveSoulModel` in `soul-model.mjs`,
+read once per turn), the first layer that names one is sent as
+`session/set_model`:
+
+- The owner's `soul model` pick (GeniusBar's model picker).
+- The repo's own file in the turn's working directory: Claude's `model` in
+  `.claude/settings.local.json`, then `.claude/settings.json`; Codex's root
+  `model` in `.codex/config.toml` (bare or quoted key, basic or literal
+  string); Gemini's in `.gemini/settings.json`; OpenCode's in
+  `opencode.json`. They are read the same guarded way as for the mode, opened
+  once without following a link or blocking.
+- The package's declared `model` for that harness, so a soul working in a
+  repo keeps its own model. In the soul's own home it is also what a direct
+  open reads from the rendering.
+- Otherwise nothing is sent and the harness uses its own default.
+
+Sending the resolved model on every turn, not only the pick, means a resumed
+native session follows the order too: clearing a pick returns it to the repo's
+or the package's model. Where no layer names a model, a resumed session keeps
+the model it last ran until a new session starts.
+
+The model is not a permission, so no layer needs the owner's decision to
+change it. A model id the harness does not offer is logged and the turn
+continues on the harness's model, as for a pick.
+
+Reasoning effort follows the files the harness reads in the turn's working
+directory: the repo's, or in the soul's home the package's rendering. The
+pinned adapters take no effort setting over ACP, so a soul working in a repo
+that sets no effort gets the harness default rather than the package's
+`reasoningEffort`. Carrying it there is a later slice.
 
 ## The soul's MCP entry (#378)
 
