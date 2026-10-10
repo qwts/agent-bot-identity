@@ -181,7 +181,8 @@ test('the human output is one line per record, newest first, and strips control 
 
 test('the capability env-history is listed by soul env, and the CLI routes the verb with coded errors and help', (t) => {
   const f = fixture(t);
-  assert.equal(ENV_CAPABILITIES.at(-1), 'env-history');
+  assert.ok(ENV_CAPABILITIES.includes('env-history'));
+  assert.deepEqual(ENV_CAPABILITIES.slice(-2), ['dream-status', 'dream-ack-notice']);
   assert.ok(readSoulEnvironment(ID, f.options).engine.capabilities.includes('env-history'));
   const run = (...args) => spawnSync(process.execPath, [path.join(ROOT, 'agent-bot.mjs'), 'soul', 'env', ...args], { cwd: f.home, env: f.env, encoding: 'utf8', timeout: 20000 });
   const env = run('billy', '--json');
