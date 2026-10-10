@@ -1,0 +1,1 @@
+- `agent-bot soul build` now renders a soul's `commands/*.md` as Qwen Code project commands in `.qwen/commands/<name>.md`, with `$ARGUMENTS` mapped to Qwen's `{{args}}`. The format-2 ignore list appends `.qwen/commands/`, and souls carrying an earlier list still validate (#378).

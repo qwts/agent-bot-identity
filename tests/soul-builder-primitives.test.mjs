@@ -16,13 +16,13 @@ const entry = (path, content) => ({ path, mode: '100644', bytes: Buffer.from(con
 const entries = () => [entry('AGENTS.md', '# Soul\n'), entry('agents/review.md', agent), entry('commands/review.md', command)];
 const primitivePaths = ['.claude/agents/review.md', '.claude/commands/review.md', '.cursor/agents/review.md',
   '.devin/agents/review.md', '.gemini/commands/review.toml', '.github/agents/review.agent.md', '.kiro/agents/review.md',
-  '.opencode/agent/review.md', '.opencode/command/review.md'];
+  '.opencode/agent/review.md', '.opencode/command/review.md', '.qwen/commands/review.md'];
 // The primitive files each harness reads; Copilot CLI and Devin CLI read
 // Claude's commands natively.
 const harnessPrimitives = { claude: ['.claude/agents/review.md', '.claude/commands/review.md'], gemini: ['.gemini/commands/review.toml'],
   codex: [], opencode: ['.opencode/agent/review.md', '.opencode/command/review.md'], cursor: ['.cursor/agents/review.md'],
   copilot: ['.claude/commands/review.md', '.github/agents/review.agent.md'], devin: ['.claude/commands/review.md', '.devin/agents/review.md'],
-  muse: [], kiro: ['.kiro/agents/review.md'] };
+  muse: [], kiro: ['.kiro/agents/review.md'], qwen: ['.qwen/commands/review.md'] };
 function put(root, path, content) {
   mkdirSync(dirname(join(root, path)), { recursive: true });
   writeFileSync(join(root, path), content);
@@ -49,16 +49,18 @@ test('agents and commands map to native formats and retain Claude source bytes a
     `---\ndescription: "Review: code"\n---\n${MARKER}\nReview $ARGUMENTS.\nThen summarize $ARGUMENTS.\n`);
   assert.equal(output.get('.gemini/commands/review.toml').toString(),
     `# ${MARKER}\ndescription = "Review: code"\nprompt = "Review {{args}}.\\nThen summarize {{args}}.\\n"\n`);
+  assert.equal(output.get('.qwen/commands/review.md').toString(),
+    `---\ndescription: "Review: code"\n---\n${MARKER}\nReview {{args}}.\nThen summarize {{args}}.\n`);
   assert.deepEqual([...output.keys()].filter((path) => /\/(agents?|commands?)\//.test(path)), primitivePaths);
   for (const path of primitivePaths) assert.ok(isGeneratedPath(path), path);
 });
 
-for (const harness of ['claude', 'gemini', 'codex', 'opencode', 'cursor', 'copilot', 'devin', 'muse', 'kiro']) {
+for (const harness of ['claude', 'gemini', 'codex', 'opencode', 'cursor', 'copilot', 'devin', 'muse', 'kiro', 'qwen']) {
   test(`${harness} reports every received, rendered and unsupported primitive`, () => {
     const output = buildHarnessFiles(entries());
     const report = harnessReport(new Map(output))[harness];
     for (const [kind, supported] of [['subagents', ['claude', 'opencode', 'cursor', 'copilot', 'devin', 'kiro']],
-      ['commands', ['claude', 'gemini', 'opencode', 'copilot', 'devin']]]) {
+      ['commands', ['claude', 'gemini', 'opencode', 'copilot', 'devin', 'qwen']]]) {
       const renders = supported.includes(harness);
       assert.deepEqual(report[kind], { received: ['review'], rendered: renders ? ['review'] : [] });
       assert.deepEqual(report.unsupported[kind], renders ? [] : ['review']);
@@ -75,6 +77,7 @@ test('optional command front matter and optional agent tools/model can be absent
   assert.equal(output.get('.claude/commands/review.md').toString(), `${MARKER}\nRun $ARGUMENTS`);
   assert.equal(output.get('.opencode/command/review.md').toString(), `${MARKER}\nRun $ARGUMENTS`);
   assert.equal(output.get('.gemini/commands/review.toml').toString(), `# ${MARKER}\nprompt = "Run {{args}}"\n`);
+  assert.equal(output.get('.qwen/commands/review.md').toString(), `${MARKER}\nRun {{args}}`);
   assert.equal(output.get('.opencode/agent/review.md').toString(), `---\ndescription: "Review"\nmode: subagent\n---\n${MARKER}\nPrompt`);
 });
 
@@ -188,4 +191,12 @@ test('--check --json includes primitive and unsupported names before and after b
     else assert.deepEqual(report.drift, []);
     buildSoulDirectory(root);
   }
+});
+
+test('Qwen Code reads the rendered command front matter and prompt (#378)', () => {
+  // The front-matter pattern of Qwen Code 0.25.0's Markdown command loader.
+  const qwenFrontMatter = /^---\n(?:([\s\S]*?)\n)?---(?:\n|$)([\s\S]*)$/;
+  const [, yaml, prompt] = buildHarnessFiles(entries()).get('.qwen/commands/review.md').toString().match(qwenFrontMatter);
+  assert.equal(yaml, 'description: "Review: code"');
+  assert.equal(prompt, `${MARKER}\nReview {{args}}.\nThen summarize {{args}}.\n`);
 });

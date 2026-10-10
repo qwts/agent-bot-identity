@@ -69,9 +69,9 @@ const HARNESS_FILES = Object.freeze({
   muse: Object.freeze({ instructions: null, skills: null, mcp: null }),
   // Kiro reads AGENTS.md and the shared skills; its wake lanes are #523.
   kiro: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: '.kiro/settings/mcp.json', subagents: '.kiro/agents/' }),
-  // Qwen Code reads AGENTS.md natively; its skills, agents and commands live
-  // under `.qwen/` in formats this slice does not render yet (#247).
-  qwen: Object.freeze({ instructions: null, skills: null, mcp: '.qwen/settings.json' }),
+  // Qwen Code reads AGENTS.md natively; its skills and agents live under
+  // `.qwen/` in formats not rendered yet (#247). Commands are Markdown (#378).
+  qwen: Object.freeze({ instructions: null, skills: null, mcp: '.qwen/settings.json', commands: '.qwen/commands/' }),
 });
 
 // The workspace-relative folder a harness reads skills from, or null when it
@@ -894,6 +894,10 @@ function renderPrimitives(source, output) {
       const toml = [`# ${MARKER}`, ...(description === undefined ? [] : [`description = ${quotedString(description)}`]),
         `prompt = ${quotedString(parsed.body.replaceAll('$ARGUMENTS', '{{args}}'))}`];
       output.set(`.gemini/commands/${name}.toml`, Buffer.from(`${toml.join('\n')}\n`));
+      // Qwen Code: Markdown with optional `description` front matter; like
+      // Gemini it injects arguments at `{{args}}`, not `$ARGUMENTS`.
+      const qwenBody = parsed.body.replaceAll('$ARGUMENTS', '{{args}}');
+      output.set(`.qwen/commands/${name}.md`, Buffer.from(header.length ? mappedDeclaration(header, qwenBody) : `${MARKER}\n${qwenBody}`));
     }
     output.set(`.claude/${directory}/${name}.md`, Buffer.from(markedDeclaration(parsed)));
   }
