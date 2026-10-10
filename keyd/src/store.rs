@@ -499,12 +499,28 @@ pub mod tests {
         .is_err());
     }
 
+    /// Tests that open a real keychain run only with KEYD_KEYCHAIN_TESTS=1,
+    /// which CI's macOS job sets (agent-bot-identity #753). A run on someone's
+    /// Mac without it never touches a keychain, so it can never put a
+    /// keychain prompt in front of them.
+    #[cfg(target_os = "macos")]
+    fn keychain_tests_enabled() -> bool {
+        let enabled = std::env::var("KEYD_KEYCHAIN_TESTS").as_deref() == Ok("1");
+        if !enabled {
+            eprintln!("skipped: set KEYD_KEYCHAIN_TESTS=1 to run keychain tests");
+        }
+        enabled
+    }
+
     /// A real keychain, in a file of its own under a temporary directory: the
     /// login keychain is never opened. Creating a keychain adds it to this
     /// user's search list, and deleting it removes it again.
     #[cfg(target_os = "macos")]
     #[test]
     fn keychain_store_round_trips_in_a_temporary_keychain() {
+        if !keychain_tests_enabled() {
+            return;
+        }
         use security_framework::os::macos::keychain::CreateOptions;
         let dir = crate::paths::tests::short_temp_dir("kc");
         let path = dir.join("keyd-test.keychain-db");
