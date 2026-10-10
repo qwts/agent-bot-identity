@@ -34,7 +34,12 @@ before #617 are `host`. A recorded session in the other store than this turn's
 would not be found there, so the turn is refused before any process with
 `resume-session-store-moved`. The error's `action` is the
 `agent-bot soul tool-home <harness> global|soul --soul <id>` command that
-switches the soul back, and the recorded session is kept.
+switches the soul back, and the recorded session is kept. The store is
+checked whatever the session's policy, so a policy change cannot start fresh
+over it. A recorded store that is neither `host` nor `soul` is a damaged
+record, refused with `wake-session-record-invalid` and no guessed fix. Both
+refusals leave the message unacked, task events included, so the wake runs
+again once it is fixed.
 
 The harness name is the row's key, so it must name the client that answers.
 `grok` is Grok Build, the `grok` CLI. Grok Bot, the desktop app, has no

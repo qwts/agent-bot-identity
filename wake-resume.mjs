@@ -175,11 +175,16 @@ export function createWakeSessions({ file }) {
   // `store` is where the harness keeps it (#617): 'host' for the host's own
   // store, 'soul' for the soul's tool home. Entries from before #617 were
   // all made on the host store.
+  // A store that is neither is a damaged record: refused
+  // (`wake-session-record-invalid`), never read as one or the other.
   const recorded = (agentId, harness, policy) => {
     const entry = read()[validateAgentId(agentId)];
     if (entry?.harness !== harness || typeof entry.sessionId !== 'string') return null;
+    if (entry.store !== undefined && !SESSION_STORES.includes(entry.store)) {
+      throw Object.assign(new Error(`wake sessions: ${agentId}'s recorded ${harness} session names an unknown store`), { code: 'wake-session-record-invalid' });
+    }
     if (policy !== undefined && entry.policy !== policy) return null;
-    return { sessionId: entry.sessionId, store: entry.store ?? 'host' };
+    return { sessionId: entry.sessionId, store: entry.store ?? 'host', ...(entry.policy ? { policy: entry.policy } : {}) };
   };
   return {
     recorded,
@@ -233,6 +238,11 @@ export function resumePath(env, home) {
   return [...new Set(dirs.filter(Boolean))].join(path.delimiter);
 }
 
+// Refusals made before any harness process, about the recorded session
+// itself: the message stays unacked, task events included, so the wake
+// runs again once the owner or the soul has fixed it.
+export const RESUME_KEPT_REFUSALS = Object.freeze(['resume-session-store-moved', 'wake-session-record-invalid']);
+
 // `resume-session-store-moved`: the soul's recorded session lives in the
 // store its tool home no longer routes to. Switching the tool home back
 // reaches it again; the session itself is left where it is.
@@ -281,10 +291,12 @@ export function createResumeExecutor({ sessions, baseEnv = process.env, home = h
     // one is routed, the host's otherwise. A recorded session in the other
     // store would not be found there, so it is refused with the fix rather
     // than started fresh or resumed against the wrong store.
+    // The store is checked on the record whatever its policy, so a policy
+    // change cannot start a fresh session over one in the other store.
     const store = routed.length ? 'soul' : 'host';
-    const prior = sessions.recorded(agentId, harness, row.policyFixedAtStart ? policy : undefined);
+    const prior = sessions.recorded(agentId, harness);
     if (prior && prior.store !== store) throw storeMoved({ agentId, harness, prior: prior.store, store });
-    const sessionId = prior?.sessionId ?? null;
+    const sessionId = prior && (!row.policyFixedAtStart || prior.policy === policy) ? prior.sessionId : null;
     const plan = row.plan({ sessionId, prompt: message, policy });
     // A relayed turn's thread key (#392) reaches the harness's own reach
     // server through its environment, so send_message and start_soul's brief
