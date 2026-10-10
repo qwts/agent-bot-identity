@@ -208,8 +208,7 @@ interactive terminal offers a fresh signed challenge. A verified reply returns
 enrolled, the administrator dialog remains available. Enrolled keys that this
 CLI path cannot use, a noninteractive caller, cancellation or an invalid reply
 refuse the action without administrator fallback. Enrollment and removal
-explicitly disable challenges and retain their local presence or administrator
-gate. See [owner statements](owner-statements.md) for the built CLI contract;
+never use a challenge; they go through `owner/pins-attest` (below). See [owner statements](owner-statements.md) for the built CLI contract;
 daemon decision-route statement fields and inbox delivery remain unimplemented.
 
 Callers ([owner-gate.mjs](../owner-gate.mjs)):
@@ -307,8 +306,9 @@ The owner chose "keyd signs pins" on
 [#753](https://github.com/qwts/agent-bot-identity/issues/753): the keys in
 `<state>/owner/keys.json` count only as keyd records them, because anything
 running as the owner can write that file. This section is the keyd primitive
-and agent-bot's verifier. Nothing calls them yet: `owner enroll` and the
-readers move onto them in later slices, and until then the signed-challenge
+and agent-bot's verifier. `owner enroll` and `owner remove` write the pins
+only through `owner/pins-attest` (`keydAttestPins`); the readers move onto
+`owner/pins-status` in a later slice, and until then the signed-challenge
 guards stay off.
 
 ### Requests
@@ -542,6 +542,7 @@ Tests named here are `node:test` titles, or Rust test functions under
 | An owner key record verifies only for its key, nonce and time; `k1`/`pins` and `p1`/`presence` never pass for each other | keyd | `verifyPinsAttestation`, `verifyPresence` | `keyd/src/pins.rs`: `signs_under_its_own_prefix_and_kind`; `tests/owner-presence.test.mjs`: "an owner key record verifies only for its key, nonce and time, and is never a presence assertion" |
 | `owner/pins-attest` records the key set only on the owner's approval, naming every key, one generation up each time; a decline or nobody to ask changes nothing; `owner/pins-status` signs the record without a prompt | keyd-side | keyd `owner/pins-attest`, `owner/pins-status` | `keyd/src/server.rs`: `records_the_owner_keys_only_when_the_owner_approves`; `keyd/src/pins.rs`: `names_every_key_in_the_prompt` |
 | A malformed set or nonce is refused without asking; an unreadable record is an error, not "no keys"; both methods are owner-channel only | keyd-side | keyd `owner/pins-attest`, `owner/pins-status` | `keyd/src/server.rs`: `refuses_malformed_owner_key_requests_without_asking`; `keyd/src/pins.rs`: `refuses_malformed_key_sets`; `keyd/src/store.rs`: `memory_store_round_trips` |
+| `owner enroll` and `owner remove` write the pins only after keyd records the whole new set for a fresh nonce; no keyd, an older keyd (`-32601`), a decline, or a record of another set changes nothing; a change while the owner was asked refuses with `owner-keys-changed` | — | `keydAttestPins`, `ownerCommand` | `tests/owner-presence.test.mjs`: "keydAttestPins asks keyd to record the whole key set and checks the record is that set"; `tests/owner-statement.test.mjs`: "enroll pins a security key after a proof of possession and keyd recording the whole new key set", "enroll and remove change no pins when keyd cannot ask, the owner declines, or the key cannot prove possession", "pins are written under a lock, only if they are still the set keyd was shown" |
 | Audience, unavailable RPC code and the code-signing requirement (Team ID and identifier) | — | `owner-presence.mjs` constants, `developerIdRequirement` | `tests/owner-presence.test.mjs`: "the presence contract constants keyd and agent-bot share" |
 | The signer comes from the environment, then the config; the Team ID has no default and empty is unset | — | `keydSigner` | `tests/owner-presence.test.mjs`: "the keyd signer comes from the environment, then the config; the Team ID has no default (#594)" |
 | With no Team ID configured nothing is verified, run or pinned | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "with no keyd Team ID configured nothing is verified, run or pinned" |

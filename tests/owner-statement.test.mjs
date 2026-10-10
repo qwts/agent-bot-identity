@@ -476,13 +476,17 @@ test('the pin file is private, bounded and refused when damaged', (t) => {
   assert.throws(() => readOwnerKeys({ env }), /does not match its key/);
 });
 
-function command(t, { gate = async () => ({ method: 'presence' }), sign: signer, markers = () => [], env: extra = {} } = {}) {
+// keyd's owner key record, standing in for keydAttestPins: it records the set
+// the owner was shown.
+const attestAll = async () => ({ digest: 'd'.repeat(64), generation: 1 });
+
+function command(t, { attest = attestAll, sign: signer, markers = () => [], env: extra = {} } = {}) {
   const { dir, env } = home(t);
   const out = [];
   const receipts = [];
   const run = (argv) => ownerCommand(argv, {
     env: { ...env, ...extra }, home: dir, now: () => NOW, write: (text) => out.push(text), writeErr: () => {},
-    gate, markers, receipt: (fields) => receipts.push(fields), sign: signer, host: () => 'mac',
+    attest, markers, receipt: (fields) => receipts.push(fields), sign: signer, host: () => 'mac',
   });
   return { dir, env, out, receipts, run };
 }
@@ -495,49 +499,59 @@ function skOnDisk(dir, key = securityKey()) {
   return { file, key, sign: (segment) => key.sshsig(Buffer.from(segment)) };
 }
 
-test('enroll pins a security key after the gate and a proof of possession', async (t) => {
-  const asked = [];
+test('enroll pins a security key after a proof of possession and keyd recording the whole new key set', async (t) => {
+  const attested = [];
   let signedEnrollment;
-  const ctx = command(t, { gate: async (action) => { asked.push(action); return { method: 'presence' }; } });
+  const ctx = command(t);
   const disk = skOnDisk(ctx.dir);
+  const other = pinFor(securityKey(), { name: 'phone' });
+  writeOwnerKeys([other], { env: ctx.env });
   const run = (argv) => ownerCommand(argv, { env: ctx.env, home: ctx.dir, now: () => NOW, write: () => {}, writeErr: () => {},
-    gate: async (action) => { asked.push(action); }, receipt: (fields) => ctx.receipts.push(fields),
+    attest: async (pins) => { attested.push(pins.map((p) => p.name)); return attestAll(); }, receipt: (fields) => ctx.receipts.push(fields),
     sign: (segment) => { signedEnrollment = JSON.parse(Buffer.from(segment, 'base64url').toString('utf8')); return disk.sign(segment); }, host: () => 'mac' });
   const pin = await run(['enroll', '--store', 'ssh', '--key', disk.file, '--name', 'yubikey']);
   assert.equal(pin.fingerprint, disk.key.fingerprint);
-  assert.deepEqual(asked, [`owner enroll yubikey ${disk.key.fingerprint}`]);
-  assert.equal(signedEnrollment.action, createHash('sha256').update(asked[0], 'utf8').digest('hex'));
+  // keyd is shown every key the owner will trust, the ones already pinned included.
+  assert.deepEqual(attested, [['phone', 'yubikey']]);
+  assert.equal(signedEnrollment.action, createHash('sha256').update(`owner enroll yubikey ${disk.key.fingerprint}`, 'utf8').digest('hex'));
   assert.notEqual(signedEnrollment.action, createHash('sha256').update(signedEnrollment.text, 'utf8').digest('hex'));
-  assert.deepEqual(readOwnerKeys({ env: ctx.env }).map((p) => p.name), ['yubikey']);
+  assert.deepEqual(readOwnerKeys({ env: ctx.env }).map((p) => p.name), ['phone', 'yubikey']);
   assert.deepEqual(ctx.receipts.map((r) => [r.event, r.operation, r.decision]), [['owner-key', 'enroll', 'approved']]);
   await assert.rejects(run(['enroll', '--store', 'ssh', '--key', disk.file, '--name', 'again']), { code: 'owner-key-exists' });
   assert.equal(ctx.receipts.at(-1).decision, 'refused');
-  // Removal asks the gate too, and the statement it signed no longer verifies.
+  assert.equal(attested.length, 1, 'a doomed enrolment asks nobody');
+  // Removal records the remaining set through keyd too, and the statement
+  // the removed key signed no longer verifies.
   const statement = skToken(disk.key);
   await run(['remove', 'yubikey']);
-  assert.equal(asked.at(-1), `owner remove yubikey ${disk.key.fingerprint}`);
+  assert.deepEqual(attested.at(-1), ['phone']);
   assert.throws(() => verifyStatement(statement, { keys: readOwnerKeys({ env: ctx.env }), now: NOW }), { code: 'statement-unknown-key' });
 });
 
-test('enroll pins nothing when the gate refuses or the key cannot prove possession', async (t) => {
-  const refused = command(t, { gate: async () => { throw Object.assign(new Error('declined'), { code: 'owner-declined' }); } });
-  const disk = skOnDisk(refused.dir);
-  await assert.rejects(ownerCommand(['enroll', '--store', 'ssh', '--key', disk.file], {
-    env: refused.env, home: refused.dir, now: () => NOW, write: () => {}, writeErr: () => {},
-    gate: async () => { throw Object.assign(new Error('declined'), { code: 'owner-declined' }); },
-    receipt: (fields) => refused.receipts.push(fields), sign: disk.sign, host: () => 'mac',
-  }), { code: 'owner-declined' });
-  assert.deepEqual(readOwnerKeys({ env: refused.env }), []);
-  assert.equal(refused.receipts[0].decision, 'refused');
+test('enroll and remove change no pins when keyd cannot ask, the owner declines, or the key cannot prove possession', async (t) => {
+  const disk = skOnDisk(home(t).dir);
+  for (const code of ['presence-unavailable', 'owner-declined', 'pins-invalid', 'owner-credential-required']) {
+    const refused = command(t, { attest: async () => { throw Object.assign(new Error(code), { code }); }, sign: disk.sign });
+    await assert.rejects(refused.run(['enroll', '--store', 'ssh', '--key', disk.file]), { code });
+    assert.deepEqual(readOwnerKeys({ env: refused.env }), [], code);
+    writeOwnerKeys([pinFor(disk.key)], { env: refused.env });
+    await assert.rejects(refused.run(['remove', 'yubikey']), { code });
+    assert.deepEqual(readOwnerKeys({ env: refused.env }).map((p) => p.name), ['yubikey'], code);
+    assert.deepEqual(refused.receipts.map((r) => [r.operation, r.decision]), [['enroll', 'refused'], ['remove', 'refused']], code);
+  }
+  // Nothing wired: no keyd, no change.
+  const { dir, env } = home(t);
+  await assert.rejects(ownerCommand(['enroll', '--store', 'ssh', '--key', disk.file], { env, home: dir, now: () => NOW,
+    write: () => {}, writeErr: () => {}, sign: disk.sign, host: () => 'mac' }), { code: 'owner-credential-required' });
+  assert.deepEqual(readOwnerKeys({ env }), []);
 
   // The key file names one key; whoever answers ssh-keygen signs with another.
-  const swapped = command(t);
-  const claimed = skOnDisk(swapped.dir);
+  // keyd is never asked.
   const impostor = securityKey();
-  await assert.rejects(ownerCommand(['enroll', '--store', 'ssh', '--key', claimed.file], {
-    env: swapped.env, home: swapped.dir, now: () => NOW, write: () => {}, writeErr: () => {}, gate: async () => {},
-    receipt: (fields) => swapped.receipts.push(fields), sign: (segment) => impostor.sshsig(Buffer.from(segment)), host: () => 'mac',
-  }), { code: 'statement-invalid' });
+  const swapped = command(t, { attest: async () => assert.fail('keyd is asked only after possession is proven'),
+    sign: (segment) => impostor.sshsig(Buffer.from(segment)) });
+  const claimed = skOnDisk(swapped.dir);
+  await assert.rejects(swapped.run(['enroll', '--store', 'ssh', '--key', claimed.file]), { code: 'statement-invalid' });
   assert.deepEqual(readOwnerKeys({ env: swapped.env }), []);
   assert.equal(swapped.receipts[0].decision, 'failed');
 });
@@ -600,7 +614,7 @@ test('ssh-keygen signatures from a software key verify end to end', { skip: !HAS
   const file = join(ctx.dir, 'id_ed25519');
   execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', 'owner', '-f', file]);
   const run = (argv) => ownerCommand(argv, { env: ctx.env, home: ctx.dir, now: () => Date.now(), write: (text) => ctx.out.push(text),
-    writeErr: () => {}, gate: async () => {}, receipt: () => {}, host: () => 'mac' });
+    writeErr: () => {}, attest: attestAll, receipt: () => {}, host: () => 'mac' });
   await run(['enroll', '--store', 'ssh', '--key', file, '--name', 'laptop', '--allow-software-key']);
   assert.equal(readOwnerKeys({ env: ctx.env })[0].softwareKey, true);
   await run(['sign', 'Accept the ssh store.', '--repo', SCOPE.repo, '--issue', '753', '--key', file]);
@@ -633,32 +647,31 @@ test('the agent-bot owner command verifies offline and exits non-zero on a refus
   assert.equal(readFileSync(ownerKeysPath({ env }), 'utf8').includes(key.fingerprint), true);
 });
 
-test('pins are changed under a lock, re-read after the owner answers', async (t) => {
+test('pins are written under a lock, only if they are still the set keyd was shown', async (t) => {
   const ctx = command(t);
   const disk = skOnDisk(ctx.dir);
   const other = pinFor(securityKey(), { name: 'phone' });
-  const enroll = (name, gate) => ownerCommand(['enroll', '--store', 'ssh', '--key', disk.file, '--name', name], {
-    env: ctx.env, home: ctx.dir, now: () => NOW, write: () => {}, writeErr: () => {}, gate,
+  const enroll = (name, attest) => ownerCommand(['enroll', '--store', 'ssh', '--key', disk.file, '--name', name], {
+    env: ctx.env, home: ctx.dir, now: () => NOW, write: () => {}, writeErr: () => {}, attest,
     receipt: (fields) => ctx.receipts.push(fields), sign: disk.sign, host: () => 'mac' });
-  // Another command pins a key while this one waits on the owner: both stay.
-  await enroll('yubikey', async () => { writeOwnerKeys([other], { env: ctx.env }); });
+  // Another command pins a key while this one waits on the owner: the owner
+  // never saw it, so nothing this command asked for is written over it.
+  await assert.rejects(enroll('yubikey', async () => { writeOwnerKeys([other], { env: ctx.env }); return attestAll(); }),
+    { code: 'owner-keys-changed' });
+  assert.deepEqual(readOwnerKeys({ env: ctx.env }).map((p) => p.name), ['phone']);
+  assert.equal(ctx.receipts.at(-1).decision, 'failed');
+  await enroll('yubikey', attestAll);
   assert.deepEqual(readOwnerKeys({ env: ctx.env }).map((p) => p.name), ['phone', 'yubikey']);
   assert.deepEqual(readdirSync(dirname(ownerKeysPath({ env: ctx.env }))).sort(), ['keys.json']);
 
-  // The same key pinned meanwhile under another name: refused under the lock.
-  writeOwnerKeys([other], { env: ctx.env });
-  await assert.rejects(enroll('laptop', async () => {
-    writeOwnerKeys([other, pinFor(disk.key, { name: 'sneaky' })], { env: ctx.env });
-  }), { code: 'owner-key-exists' });
-  assert.equal(ctx.receipts.at(-1).decision, 'failed');
-
-  // A removal keeps a key added while it waited, and does not resurrect.
-  writeOwnerKeys([pinFor(disk.key)], { env: ctx.env });
-  await ownerCommand(['remove', 'yubikey'], { env: ctx.env, home: ctx.dir, write: () => {}, receipt: () => {},
-    gate: async () => { writeOwnerKeys([pinFor(disk.key), other], { env: ctx.env }); } });
-  assert.deepEqual(readOwnerKeys({ env: ctx.env }).map((p) => p.name), ['phone']);
-  await assert.rejects(ownerCommand(['remove', 'phone'], { env: ctx.env, home: ctx.dir, write: () => {}, receipt: () => {},
-    gate: async () => { writeOwnerKeys([], { env: ctx.env }); } }), { code: 'owner-key-missing' });
+  // A removal that raced another change neither drops nor resurrects a key.
+  const remove = (name, attest) => ownerCommand(['remove', name], { env: ctx.env, home: ctx.dir, write: () => {}, receipt: () => {}, attest });
+  await assert.rejects(remove('yubikey', async () => { writeOwnerKeys([pinFor(disk.key)], { env: ctx.env }); return attestAll(); }),
+    { code: 'owner-keys-changed' });
+  assert.deepEqual(readOwnerKeys({ env: ctx.env }).map((p) => p.name), ['yubikey']);
+  await assert.rejects(remove('yubikey', async () => { writeOwnerKeys([], { env: ctx.env }); return attestAll(); }),
+    { code: 'owner-keys-changed' });
+  assert.deepEqual(readOwnerKeys({ env: ctx.env }), []);
 });
 
 test('every enrolment refusal leaves a receipt, a policy refusal included', async (t) => {
