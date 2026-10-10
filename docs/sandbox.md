@@ -206,8 +206,21 @@ the policy cannot be evaluated, the record is stale, or the pack now puts
 the soul in an account this daemon is not (`sandbox-other-account`). Only a
 launch the owner verified runs its own first turn past a stale record; the
 soul's next wake is refused until `agent-bot sop persona` records the
-current selection. Interactive turns a principal drives are not checked
-here yet.
+current selection.
+
+Interactive turns a principal drives (a `/v1` message) are checked the same
+way before their harness runs. A principal's turn refused only because the
+record is stale asks the owner to verify, by Touch ID or the dialog, as a
+principal's launch does. Approved, the turn runs on the stale record's own
+mapping and the invocation keeps an `owner-verified` event (`code`, `method`,
+`source`, `digest`); declined, or with no one to ask, it fails. Any refusal
+leaves a `turn-refused` event with its code and repair action.
+
+`agent-bot doctor` reports the record under `sop.persona`: ready when it
+matches the selection, and a warning with `run: agent-bot sop persona` when
+it is legacy (`sop-persona-legacy`, from before selections were kept), stale
+(`sop-persona-stale`), not recorded (`sop-persona-unrecorded`) or unreadable
+(`sop-persona-unavailable`).
 
 ### Recording the mapping
 

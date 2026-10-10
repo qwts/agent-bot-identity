@@ -356,7 +356,9 @@ export function createDaemonServer({
   const appJobs = createIdentityAppJobs(appOptions);
   // One interaction service per server so in-flight executions and their
   // cancellation controllers live exactly as long as the daemon.
-  const interaction = createInteractionService({ env, home, config, executor, taskReporter, now, turns });
+  const interaction = createInteractionService({ env, home, config, executor, taskReporter, now, turns,
+    // A principal's turn past a stale persona record asks the owner (#613).
+    verifyOwner: (action) => ownerGate(action, { principal: null }) });
   // A decision lets a soul's tool run, so both decide routes ask the owner
   // first (#438): the daemon token proves only a process in this account, and
   // a transport principal only its provider login. The owner is asked about
