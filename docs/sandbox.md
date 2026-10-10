@@ -124,7 +124,12 @@ it could be read (`known`), its `items` and a note:
 | `macos-account` | `manual` | the account and its home, when it exists |
 
 Another account's home is usually unreadable from the owner's, so each path
-is reported as `present`, `absent` or `unreadable`, never guessed at. Off
+is reported as `present`, `absent` or `unreadable`, never guessed at. The
+paths are the default locations: the account may set `AGENT_BOT_SOULS_HOME`,
+`CLAUDE_CONFIG_DIR` or `CODEX_HOME` elsewhere, which cannot be read from here,
+so `workspaces`, `transcripts` and `harness-sign-ins` are always `known:
+false`. `souls` is `known` only when both the local census and the broker's
+were read. Off
 macOS there is nothing to list. The export and the gated removal steps come
 in later slices.
 

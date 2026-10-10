@@ -114,3 +114,21 @@ test('sandbox remove needs --dry-run, takes no principal, and defaults to the co
   assert.ok(!out.includes(SENTINEL));
   assert.deepEqual(gated, [], 'a dry run asks no owner gate');
 });
+
+test('a category read only in part, or only at default locations, says it may be incomplete', (t) => {
+  const f = fixture(t);
+  const m = machine();
+  const options = { ...f.options, platform: 'darwin', owner: 'owner', exec: m.exec, inspect: m.inspect, fileExists: m.fileExists };
+  const known = (result) => Object.fromEntries(result.categories.map((category) => [category.id, category.known]));
+  assert.deepEqual(known(sandboxRemovalInventory('geniusbar-agent', options)), {
+    souls: true, workspaces: false, transcripts: false, pairings: true, census: true, 'harness-sign-ins': false, 'macos-account': true,
+  });
+  // An unreadable local census is not an empty one, even when the broker's reads.
+  writeFileSync(f.file, '{not json');
+  assert.equal(known(sandboxRemovalInventory('geniusbar-agent', options)).souls, false);
+  // Nor is an unreadable broker census, with the local one readable.
+  const g = fixture(t);
+  const broken = (file, args) => (file === 'agent-comms' && args.join(' ') === 'census' ? 'not json' : m.exec(file, args));
+  const result = sandboxRemovalInventory('geniusbar-agent', { ...options, ...g.options, exec: broken });
+  assert.deepEqual({ souls: known(result).souls, census: known(result).census }, { souls: false, census: false });
+});

@@ -558,6 +558,10 @@ export function formatSandboxPlan(steps) {
 // usually unreadable from here, so a path is reported present, absent or
 // unreadable, never guessed at.
 
+// The account's own environment cannot be read from here, so the paths in its
+// home are the defaults, and a category built from them is never complete.
+const ELSEWHERE = 'the account may set AGENT_BOT_SOULS_HOME, CLAUDE_CONFIG_DIR or CODEX_HOME elsewhere, which cannot be read from here';
+
 export const REMOVAL_CATEGORIES = Object.freeze(['souls', 'workspaces', 'transcripts', 'pairings', 'census', 'harness-sign-ins', 'macos-account']);
 
 function inspectPath(path) {
@@ -603,17 +607,17 @@ export function sandboxRemovalInventory(account, { env = process.env, home = hom
     ...base,
     categories: [
       category('souls', 'export', [...souls.values()],
-        'exported to your account and verified before anything that depends on it is removed', local !== null || censusRows !== null),
+        'exported to your account and verified before anything that depends on it is removed', local !== null && censusRows !== null),
       category('workspaces', 'export', checks.home ? [at(under('.agent-bot', 'souls'))] : [],
-        'the souls\' folders, worktrees and state in the account\'s home'),
+        `the souls' folders, worktrees and state at the default location; ${ELSEWHERE}`, false),
       category('transcripts', 'export', checks.home ? [at(under('.claude', 'projects')), at(under('.codex', 'sessions'))] : [],
-        'harness session stores in the account\'s home'),
+        `harness session stores at the default locations; ${ELSEWHERE}`, false),
       category('pairings', 'remove-after-export', pairingRows ?? [],
         'removed from the broker only after the export is verified', pairingRows !== null),
       category('census', 'mark-retired', censusRows ?? [],
         'each retained soul keeps its row, marked retired, so it stays identifiable and recoverable', censusRows !== null),
       category('harness-sign-ins', 'list-only', checks.home ? [at(under('.claude')), at(under('.codex'))] : [],
-        'listed only: agent-bot never removes a harness sign-in'),
+        `listed only: agent-bot never removes a harness sign-in. Default locations; ${ELSEWHERE}`, false),
       category('macos-account', 'manual', checks.exists ? [{ account, home: checks.home?.path ?? null }] : [],
         'deleting the account is a guided step you do by hand after the export; agent-bot never runs it'),
     ],
@@ -625,7 +629,7 @@ export function formatSandboxRemoval(result) {
   if (!result.supported) return `${lines[0]}\npersona accounts need macOS; there is nothing to list\n`;
   if (!result.exists) lines.push(`${result.account} does not exist on this Mac`);
   for (const category of result.categories) {
-    lines.push(`${category.id}: ${category.action}${category.known ? '' : ' (could not be read)'}`);
+    lines.push(`${category.id}: ${category.action}${category.known ? '' : ' (may be incomplete)'}`);
     for (const item of category.items) {
       if (item.path) lines.push(`  ${item.path} (${item.state})`);
       else if (item.agentId) lines.push(`  ${item.agentId}${item.name ? ` ${item.name}` : ''}${item.presence ? ` (${item.presence})` : ''}`);
