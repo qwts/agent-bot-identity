@@ -30,6 +30,13 @@ const CHILD_KEYS = new Set([
 const OWN_PREFIX = /^(AGENT_BOT|QWTS)_/;
 const SECRET_NAME = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE_KEY|API_KEY|APIKEY|CREDENTIALS?|AUTH)(?:_|$)|KEY$/;
 const OWN_NAMES = new Set(['AGENT_BOT_CREDENTIAL_NAMESPACE', 'AGENT_BOT_CREDENTIAL_VAULT']);
+// Names under the namespace that never cross, secret-shaped or not. The
+// daemon state path names the file holding the daemon's owner bearer
+// (#785). Nothing a harness runs reads it: the reach server, keyd's relay,
+// agent-comms and the git credential helper reach the daemon on the soul's
+// binding, and a CLI without one finds the default state file from HOME
+// and XDG_STATE_HOME as before.
+const WITHHELD = new Set(['AGENT_BOT_DAEMON_STATE_PATH']);
 
 // Windows names are case-insensitive and enumerate as `Path`, `SystemRoot`,
 // `windir`: there a kept name is matched without case and written in the
@@ -44,6 +51,7 @@ export function minimalChildEnv(source = {}, { platform = process.platform } = {
     const own = platform === 'win32' ? upper : name;
     if (CHILD_KEYS.has(name)) kept[name] = value;
     else if (platform === 'win32' && BY_UPPER.has(upper)) kept[BY_UPPER.get(upper)] = value;
+    else if (WITHHELD.has(own)) continue;
     else if (OWN_NAMES.has(own) || (OWN_PREFIX.test(own) && !SECRET_NAME.test(own))) kept[platform === 'win32' ? upper : name] = value;
   }
   return kept;

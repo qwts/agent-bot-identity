@@ -14,6 +14,7 @@ import { populationFile, recordSoulSighting, registerSoulDir, setSoulSpacePath, 
 import { initSoulSpace } from './agent-space.mjs';
 
 import { buildSoulDirectory } from './soul-build.mjs';
+import { minimalChildEnv } from './child-env.mjs';
 import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { stampNewSoulToolHomes } from './soul-tool-home-record.mjs';
 import { INSTALL_STAMP, RUNTIMES_SCHEMA_VERSION, inspectSoulRuntimes, installSoulRuntimes, publishInstall, readInstallStamp, soulRuntimeEnv, runtimesRoot } from './soul-runtimes.mjs';
@@ -152,6 +153,9 @@ export async function installSoulHarnesses(agentId, source, { install = installH
 // override must not substitute different code while using the soul's Node.
 async function soulInstallEnv(agentId, harness, options) {
   const env = options.env ?? process.env;
+  // npm is a third-party installer: it gets the child boundary (#785), and
+  // the soul's runtime env (GOROOT, UV_*) goes on after it.
+  const childEnv = minimalChildEnv(env);
   const directory = soulDirectory(agentId, options);
   const provision = options.provisionRuntimes ?? installSoulRuntimes;
   await provision(directory, { ...options, agentId, env });
@@ -160,7 +164,7 @@ async function soulInstallEnv(agentId, harness, options) {
   const patch = soulRuntimeEnv(agentId, { ...options, env, harness });
   const state = inspectSoulRuntimes(directory, { ...options, env, home: options.home ?? env.HOME });
   const selected = state.runtimes.find(row => row.name === 'node');
-  if (!selected) return { env: { ...env, ...patch }, node: process.execPath };
+  if (!selected) return { env: { ...childEnv, ...patch }, node: process.execPath };
   const windows = state.platform?.startsWith('win32-');
   const node = path.join(selected.path, selected.bin, windows ? 'node.exe' : 'node');
   const npm = path.join(selected.path, ...(windows ? [] : ['lib']), 'node_modules', 'npm', 'bin', 'npm-cli.js');
@@ -169,7 +173,7 @@ async function soulInstallEnv(agentId, harness, options) {
   if (!npmPresent) throw Object.assign(new Error(`declared Node ${selected.version} has no bundled npm CLI at ${npm}; refusing host npm`), {
     code: 'runtime-install-failed', runtime: 'node', action: `repair the npm files in ${selected.path}, or select a complete Node distribution in a soul revision`,
   });
-  return { env: { ...env, ...patch, AGENT_BOT_NPM: npm }, node };
+  return { env: { ...childEnv, ...patch, AGENT_BOT_NPM: npm }, node };
 }
 
 function recordedHarness(agentId, options) {

@@ -47,6 +47,7 @@ import { isAgentId, mintAgentIdentity, readAgentIdentity, stateDirectory } from 
 import { populationFile, registerSoulDir, setSoulSpacePath, showSoul, showSoulByName, soulDirectory, upsertSoul } from './agent-population.mjs';
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { initSoulSpace } from './agent-space.mjs';
+import { minimalChildEnv } from './child-env.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
 import { CLASSIFICATIONS, classifyPath, retentionOf } from './soul-env-contract.mjs';
 import { recordMigrationStep } from './soul-migration-journal.mjs';
@@ -303,8 +304,10 @@ function exclusionRules(soulDir, { env, home }) {
   };
 }
 
+// The workspace is the soul's, so its git config can start its own code
+// (core.fsmonitor, diff.external): git gets the child boundary (#785).
 function git(args, cwd) {
-  const result = spawnSync('git', args, { cwd, encoding: 'buffer', maxBuffer: 256 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+  const result = spawnSync('git', args, { cwd, encoding: 'buffer', maxBuffer: 256 * 1024 * 1024, env: { ...minimalChildEnv(process.env), GIT_TERMINAL_PROMPT: '0' } });
   if (result.error || result.status !== 0) return null;
   return result.stdout;
 }
