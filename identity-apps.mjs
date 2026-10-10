@@ -230,7 +230,13 @@ async function persistLocked(app, credential, cachedInstallations, options, { re
     // (`agent-bot.app.SLUG.webhook`). A keyd rotation has no webhook secret
     // in hand and leaves that item alone.
     const webhookKept = kind === 'keyd' && Boolean(credential.webhookSecret);
-    if (webhookKept) options.stores[webhookSecretStore(options)].writeSecret(webhookTarget(app, options), credential.webhookSecret);
+    if (webhookKept) {
+      // A config that cannot be written puts the item back as it was.
+      const store = options.stores[webhookSecretStore(options)], target = webhookTarget(app, options);
+      const before = store.readSecret(target);
+      store.writeSecret(target, credential.webhookSecret);
+      rollback = () => (before === null ? store.deleteSecret(target) : store.writeSecret(target, before));
+    }
     config.identityApps ??= {};
     const keyUpdatedAt = (options.now ?? (() => new Date()))().toISOString();
     config.identityApps[app] = { ...previous, ...metadata, id: String(credential.appId), store: kind, keyFingerprint, keyUpdatedAt, installations: cachedInstallations };
@@ -331,8 +337,17 @@ async function rotate(body, options) {
   const result = await persist(app, credential, installations(rows), options, { replace: Boolean(previous?.store), previousFingerprint: previous?.keyFingerprint ?? null, metadata: await botMetadata(app, options) });
   return { ...result, retired: oldFingerprint, action: 'Delete the retired key in the App settings on github.com.' };
 }
-function assign(body, options) {
+async function assign(body, options) {
   const app = slug(body.slug);
+  // Under the App's operation lock, so nothing is assigned to an App while
+  // its removal waits for keyd's owner prompt (#110).
+  const held = await withAppOperationLock(app, options, () => assignLocked(app, body, options));
+  if (!held) fail('identity-app-busy', `Another operation on App ${app} is in progress; retry when it finishes.`);
+  return held.value;
+}
+function assignLocked(app, body, options) {
+  // Re-read under the operation lock: a finished removal dropped the record.
+  options = { ...options, config: loadConfig({ env: options.env, home: options.home }) };
   active(app, options.config);
   if (!options.config.identityApps?.[app]?.store) fail('identity-app-not-found', `App ${app} is not managed; connect it first.`, 404);
   if (Boolean(body.harness) === Boolean(body.soul)) fail('identity-app-invalid', 'Supply exactly one harness or soul.', 400);
@@ -360,14 +375,16 @@ function assign(body, options) {
 // itself and its keys on github.com are untouched, as is any legacy
 // ~/.config/<slug> folder (agent-bot never deletes those). The result names
 // what was removed, never what it held.
+// The file store keeps DPAPI-protected `.dpapi` files on Windows.
+const fileExtension = (options) => (options.platform === 'win32' ? 'dpapi' : 'json');
 function webhookItemName(app, kind, options) {
   return kind === 'keychain' ? itemTitle(managedAppWebhookItem(app, { namespace: credentialNamespace(options.env) }))
-    : path.join(appStoreTarget(app, options).soulDir, '.soul-state', 'credentials', managedAppWebhookFile(app));
+    : path.join(appStoreTarget(app, options).soulDir, '.soul-state', 'credentials', managedAppWebhookFile(app, fileExtension(options)));
 }
 function storeItemName(app, kind, options) {
   const target = appStoreTarget(app, options);
   return kind === 'keychain' ? itemTitle(managedAppItem(app, { namespace: credentialNamespace(options.env) }))
-    : path.join(target.soulDir, '.soul-state', 'credentials', `github-app-${app}.json`);
+    : path.join(target.soulDir, '.soul-state', 'credentials', `github-app-${app}.${fileExtension(options)}`);
 }
 // `remove` takes a slug or a numeric App ID; a slug record wins, since an
 // all-digit slug is valid.
@@ -575,7 +592,7 @@ export async function identityAppOperation(action, body = {}, options = {}) {
     if (action === 'rotate-key') return await rotate(body, opts);
     if (action === 'remove') return finishRemove(await remove(body, opts), opts);
     if (action === 'addon') return setAddon(body, opts);
-    return assign(body, opts);
+    return await assign(body, opts);
   } catch (error) {
     if (error instanceof IdentityAppError) throw error;
     const safe = identityAppFailure(error);

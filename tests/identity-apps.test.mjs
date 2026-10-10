@@ -741,3 +741,46 @@ test('an orphaned keyd key is removed only when named, after the owner gate and 
     assert.equal(fake.removals.length, 0);
   }
 });
+test('assign refuses while a removal waits for keyd, so the removed key leaves no identity behind', async (t) => {
+  const keyd = fakeKeyd();
+  const { f } = await createInto(t, keyd);
+  let release, entered;
+  const inside = new Promise((yes) => { entered = yes; });
+  const gate = new Promise((yes) => { release = yes; });
+  f.options.keyd = { ...keyd, removeApp: async (app) => { entered(); await gate; return keyd.removeApp(app); } };
+  const removal = identityAppOperation('remove', { slug: 'fixture-app' }, f.options);
+  await inside;
+  await assert.rejects(identityAppOperation('assign', { slug: 'fixture-app', harness: 'codex' }, f.options), { code: 'identity-app-busy' });
+  release(); assert.equal((await removal).removed.keydKey, true);
+  assert.equal(loadConfig(f.options).apps?.codex, undefined);
+  await assert.rejects(identityAppOperation('assign', { slug: 'fixture-app', harness: 'codex' }, f.options), { code: 'identity-app-not-found' });
+});
+test('a keyd create whose config write fails puts the webhook-secret item back as it was', async (t) => {
+  const f = fixture(t); await github(t, f);
+  const saved = readFileSync(f.env.AGENT_BOT_CONFIG, 'utf8');
+  const file = f.options.stores.file;
+  // The stub writes for real, then turns the config path into a directory so
+  // the atomic rename fails.
+  const blocked = { ...f.options, stores: { ...f.options.stores, file: { ...file, writeSecret: (target, value) => {
+    file.writeSecret(target, value); rmSync(f.env.AGENT_BOT_CONFIG); mkdirSync(f.env.AGENT_BOT_CONFIG);
+  } } } };
+  const create = async () => {
+    const flow = await identityAppOperation('create', { manifest: true }, { ...blocked, keyd: fakeKeyd() });
+    t.after(flow.cancel);
+    const { manifest, state } = await page(flow);
+    await callback(manifest, state);
+    await assert.rejects(flow.completion);
+    rmSync(f.env.AGENT_BOT_CONFIG, { recursive: true }); writeFileSync(f.env.AGENT_BOT_CONFIG, saved);
+  };
+  await create();
+  assert.equal(file.readSecret(webhookTarget(f)), null, 'a new item is deleted');
+  file.writeSecret(webhookTarget(f), 'older-webhook-value');
+  await create();
+  assert.equal(file.readSecret(webhookTarget(f)), 'older-webhook-value', 'an older item is restored');
+});
+test('remove names the Windows .dpapi webhook file', async (t) => {
+  const keyd = fakeKeyd();
+  const { f } = await createInto(t, keyd);
+  const result = await identityAppOperation('remove', { slug: 'fixture-app' }, { ...f.options, platform: 'win32' });
+  assert.match(result.removed.webhookSecretItem.name, /github-app-fixture-app\.webhook\.dpapi$/);
+});

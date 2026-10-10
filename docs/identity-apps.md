@@ -112,10 +112,12 @@ operation and stores nothing, except create's one-time key, which falls back
 with the reason. An App already in Keychain or the file store keeps it,
 rotation included; a key keyd already holds for an App with no record here is
 not replaced. A manifest's webhook secret for a keyd-held App is kept in its
-own item beside the key's usual one: Keychain service `agent-bot.app.SLUG.webhook`
-(account `github-app/SLUG`), pass-cli note `agent-bot.app.SLUG.webhook/github-app/SLUG`,
-or the file `github-app-SLUG.webhook.json` (`webhookSecretKept: true`). The key
-item always holds a key. One create, connect, rotate-key or remove
+own item in the store a new key would fall back to: Keychain service
+`agent-bot.app.SLUG.webhook` (account `github-app/SLUG`) on macOS, or the file
+`github-app-SLUG.webhook.json` (`.webhook.dpapi` on Windows) elsewhere
+(`webhookSecretKept: true`). A config that cannot be written puts that item
+back as it was. The key
+item always holds a key. One create, connect, rotate-key, assign or remove
 runs per App at a time; another refuses with `identity-app-busy`. Details are in
 [keyd-protocol.md](keyd-protocol.md#app-level-keys-110). Managed credentials precede
 legacy readable stores. A soul's existing `keyd` declaration remains
