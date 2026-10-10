@@ -871,7 +871,8 @@ export function readSopPersonaRecord(options = {}) {
     const pinned = { repository: record.sop.repository, commit: record.sop.commit, recordedAt: record.recordedAt };
     const stale = personaRecordMismatch(record, config, configPath);
     if (stale) {
-      return { state: 'stale', ...pinned, text: record.persona, digest: createHash('sha256').update(raw).digest('hex'),
+      // `legacy`: the record predates kept selections (doctor's hint, #613).
+      return { state: 'stale', ...pinned, legacy: record.selection === undefined, text: record.persona, digest: createHash('sha256').update(raw).digest('hex'),
         message: `the recorded persona mapping ${stale}; run \`agent-bot sop persona\` to record the selected SOP's mapping` };
     }
     if (record.persona === null) return { state: 'absent', ...pinned, message: `${record.sop.repository}@${record.sop.commit} has no ${PERSONA_FILE}` };

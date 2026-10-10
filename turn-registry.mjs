@@ -14,7 +14,8 @@ import { assertSoulUnpaused } from './agent-population.mjs';
 // the executor, with `{ agentId, kind, ownerVerified }`; it throws to refuse
 // the turn. `ownerVerified` is a launch's own turn after the owner verified
 // it: the digest of the stale record the owner approved, else null.
-// Interactive turns only `track`, so they are not asked here.
+// Interactive turns only `track`, so the interaction service asks the same
+// policy through `check` before it starts one.
 export function createTurnRegistry({ isPaused = () => false, policy = null, history = null, now = () => new Date(), onStop = () => false } = {}) {
   const active = new Map();
   const sessionGrants = createSessionGrants();
@@ -27,8 +28,12 @@ export function createTurnRegistry({ isPaused = () => false, policy = null, hist
       if (!turns.size) active.delete(agentId);
     };
   };
+  const check = async ({ agentId, kind = 'turn', ownerVerified = null }) => {
+    if (policy) await policy({ agentId, kind, ownerVerified: typeof ownerVerified === 'string' ? ownerVerified : null });
+  };
   return {
     track,
+    check,
     sessionGrants,
     busy: () => [...active.keys()],
     stop(agentId) {
@@ -44,7 +49,8 @@ export function createTurnRegistry({ isPaused = () => false, policy = null, hist
     },
     async run(input, executor, { turnTimeoutMs = 30 * 60_000, ownerVerified = null } = {}) {
       assertSoulUnpaused(isPaused(input.invocation.agentId));
-      if (policy) await policy({ agentId: input.invocation.agentId, kind: input.kind ?? 'turn', ownerVerified: typeof ownerVerified === 'string' ? ownerVerified : null });
+      // Only awaited when wired: without a policy the turn is tracked at once.
+      if (policy) await check({ agentId: input.invocation.agentId, kind: input.kind ?? 'turn', ownerVerified });
       const controller = new AbortController();
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(turnTimeoutMs), ...(input.signal ? [input.signal] : [])]);
       const release = track(input.invocation.agentId, controller);

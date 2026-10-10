@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveSpacesHome } from './agent-space.mjs';
 import { inspectSoulSpace } from './soul-memory.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
+import { readSopPersonaRecord } from './sop.mjs';
 import { duplicateSoulDirs, listSouls, orphanSoulDirs, populationFile, PRESENCE_WINDOW_MS, soulPresence } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
 import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness, unmanagedAuthorsWithLegacyDefault } from './config.mjs';
@@ -129,6 +130,52 @@ function featureGatesCheck({ home, env, config }) {
     status: 'ready',
     message: 'feature gates resolved from user config or default off',
     evidence: { gates: gateStatus(config) },
+  });
+}
+
+// The SOP section (#613): whether the selected SOP's persona mapping is
+// recorded for the selection in effect. A legacy record (from before the
+// selection was kept), a stale one or a missing one makes agent-initiated
+// turns refuse and the owner's own launches ask, so doctor names the repair.
+// It reads the local record only; nothing is fetched or written.
+export function sopPersonaCheck({ home, env, read = readSopPersonaRecord }) {
+  const record = read({ home, env });
+  const evidence = { state: record.state, repository: record.repository ?? null, commit: record.commit ?? null, recorded_at: record.recordedAt ?? null };
+  if (record.state === 'none') {
+    return readinessCheck({ id: 'sop.persona', status: 'not_applicable', message: 'no SOP is selected, so there is no persona mapping to record', evidence });
+  }
+  if (record.state === 'recorded' || record.state === 'absent') {
+    return readinessCheck({
+      id: 'sop.persona',
+      status: 'ready',
+      message: record.state === 'recorded'
+        ? `persona mapping recorded from ${record.repository}@${record.commit} for the selected SOP`
+        : `${record.repository}@${record.commit} has no persona mapping; recorded for the selected SOP`,
+      evidence,
+    });
+  }
+  const action = 'run: agent-bot sop persona';
+  if (record.state === 'stale') {
+    return readinessCheck({
+      id: 'sop.persona',
+      status: 'warning',
+      code: record.legacy ? 'sop-persona-legacy' : 'sop-persona-stale',
+      message: record.legacy
+        ? 'the SOP persona record predates kept selections, so agent-initiated turns are refused and your own launches and turns ask you to verify'
+        : 'the SOP persona record is for another selection, so agent-initiated turns are refused and your own launches and turns ask you to verify',
+      action,
+      evidence,
+    });
+  }
+  return readinessCheck({
+    id: 'sop.persona',
+    status: 'warning',
+    code: record.state === 'unrecorded' ? 'sop-persona-unrecorded' : 'sop-persona-unavailable',
+    message: record.state === 'unrecorded'
+      ? 'an SOP is selected but its persona mapping is not recorded, so launches and turns are refused'
+      : 'the SOP config or persona record cannot be read, so launches and turns are refused',
+    action: record.state === 'unrecorded' ? action : 'fix the SOP config or record, then run: agent-bot sop persona',
+    evidence,
   });
 }
 
@@ -2298,6 +2345,7 @@ export async function collectReadiness({
   // Off unless doctor --probe-inbox passes a probe: the default run makes no
   // network call to the inbox.
   probeInbox = null,
+  inspectSopPersona = sopPersonaCheck,
   embeddingApp = embeddingAppBundle(ROOT),
 } = {}) {
   const machineChecks = [];
@@ -2411,6 +2459,7 @@ export async function collectReadiness({
     const orphanFolders = orphanSoulDirsCheck({ home, env, config });
     if (orphanFolders) machineChecks.push(orphanFolders);
     machineChecks.push(...soulEnvironmentChecks({ home, env, config }));
+    machineChecks.push(inspectSopPersona({ home, env }));
     const bindingSummary = worktreeBindingSummaryCheck({ home, env, roster });
     if (bindingSummary) machineChecks.push(bindingSummary);
     if (configValid) machineChecks.push(keyStoreCheck({ roster, home, env, config, inspect: inspectKeyStores }));

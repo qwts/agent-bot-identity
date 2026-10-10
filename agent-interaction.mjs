@@ -201,6 +201,10 @@ export function createInteractionService({
   executor = unconfiguredExecutor,
   taskReporter = null,
   turns = null,
+  // A principal's turn on a stale persona record asks the owner (#613):
+  // (action, { agentId, principalId, source }) => proof, throwing when the
+  // owner declines or cannot be asked. Null refuses that turn.
+  verifyOwner = null,
   now = () => new Date(),
   // Server-side diagnostics only: whatever this writes never reaches the job
   // store, events, or clients.
@@ -434,6 +438,46 @@ export function createInteractionService({
     catch (error) { log(`task invocation ${invocation.invocationId} ${phase} report failed: ${error?.message ?? String(error)}`); }
   }
 
+  // The persona policy is checked at the start of every interactive turn
+  // (#613), as the turn registry checks every turn it runs. A principal
+  // drives this turn, so one refused only because the persona record is
+  // stale (`persona-policy-stale`) asks the owner to verify, by Touch ID or
+  // the dialog, as a principal's launch does (daemon-launch.mjs). Approved,
+  // the turn runs on the stale record's own mapping, bound to the digest of
+  // the record the owner was shown, and the invocation keeps an
+  // `owner-verified` event: `{ code, method, source, digest }`. Declined, or
+  // no one to ask, the turn is refused. Any refusal leaves a `turn-refused`
+  // event with its code and repair action before the invocation fails.
+  async function admitTurn(invocation) {
+    if (typeof turns?.check !== 'function') return;
+    const { invocationId: id, agentId, principalId } = invocation;
+    try {
+      try {
+        await turns.check({ agentId, kind: 'interactive' });
+      } catch (refused) {
+        if (refused?.code !== 'persona-policy-stale' || typeof refused.digest !== 'string' || !verifyOwner) throw refused;
+        const source = refused.source ? `${refused.source.repository}@${refused.source.commit}` : null;
+        let proof;
+        try {
+          proof = await verifyOwner(`run a turn of ${agentId} for ${principalId} although its SOP persona record is stale${source ? ` (${source})` : ''}`,
+            { agentId, principalId, source: refused.source ?? null });
+        } catch (error) {
+          const why = String(error?.message ?? error).slice(0, 160);
+          throw Object.assign(new Error(`the owner did not verify a turn on a stale persona policy (${why}); ${refused.action}`), { code: refused.code, action: refused.action });
+        }
+        appendEvent(id, 'owner-verified', { code: refused.code, method: typeof proof?.method === 'string' ? proof.method : 'owner',
+          source: refused.source ?? null, digest: refused.digest }, storeOptions);
+        await turns.check({ agentId, kind: 'interactive', ownerVerified: refused.digest });
+      }
+    } catch (error) {
+      if (typeof error?.code === 'string') {
+        try { appendEvent(id, 'turn-refused', { code: error.code, action: typeof error.action === 'string' ? error.action : null }, storeOptions); }
+        catch { /* the failure below still records the outcome */ }
+      }
+      throw error;
+    }
+  }
+
   async function runInvocation(invocation, message, attachments, controller) {
     const id = invocation.invocationId;
     // Cancellation can land between submission and dispatch.
@@ -458,6 +502,8 @@ export function createInteractionService({
       if (invocation.taskId) await reportTask('started', invocation);
       controller.signal.throwIfAborted();
       assertSoulUnpaused(resolveSoul(invocation.agentId).paused);
+      if (typeof turns?.check === 'function') await admitTurn(invocation);
+      controller.signal.throwIfAborted();
       await executor({
         invocation: publicInvocation(invocation),
         message,
