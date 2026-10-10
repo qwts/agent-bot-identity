@@ -102,6 +102,7 @@ import { createIdentityAppJobs, identityAppOperation, identityAppFailure, listId
 import { readSoulProfile } from './soul-profile.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
 import { launchSandbox, readSandboxStatus, turnSandboxProblem, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount } from './sandbox.mjs';
+import { checkSopLaunchPolicy } from './sop.mjs';
 import { soulModel, setSoulModel, recordSoulModels } from './soul-model.mjs';
 import { ownerGate as soulSettingOwnerGate, readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
@@ -1784,6 +1785,16 @@ export async function runDaemon({
     // team start leaves, on the parent, with the operation telling them apart.
     souls: () => listSouls({ status: 'active', file: populationFile({ env, home }) }),
     receipt: ({ parent, decision }) => appendAuditReceipt({ event: 'team-start', agentId: parent, operation: 'launch', decision }, { env, home, now }),
+    // The owner-activated SOP launch policy (#677), read offline each launch.
+    // An owner's launch it refuses asks the owner to verify and override;
+    // every outcome leaves a `sop-policy` audit receipt.
+    policy: {
+      check: ({ harness }) => checkSopLaunchPolicy(harness, { env, home }),
+      override: (refusal, { harness }) => confirmOwnerPresence(refusal.ruleId
+        ? `launch on ${harness} although SOP policy rule ${refusal.ruleId} denies it`
+        : `launch on ${harness} although the active SOP policy is unavailable`, { env }),
+      receipt: ({ agentId, decision, detail }) => appendAuditReceipt({ event: 'sop-policy', agentId, operation: 'launch', decision, detail }, { env, home, now }),
+    },
     executorFor,
   });
   // Souls launched before 0.10.9 read as unmanaged until marked from the

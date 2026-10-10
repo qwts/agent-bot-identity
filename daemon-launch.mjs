@@ -90,7 +90,24 @@ const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other
   'runtime-download-failed', 'runtime-checksum-mismatch', 'runtime-unsupported-platform', 'runtime-install-failed',
   'tool-home-unwritable', 'tool-home-record-invalid',
   'provider-secret-missing', 'provider-secret-unreadable', 'provider-declaration-invalid',
-  'harness-signed-out', 'harness-unknown', 'harness-disabled', 'harness-tool-missing']);
+  'harness-signed-out', 'harness-unknown', 'harness-disabled', 'harness-tool-missing',
+  'policy-denied', 'policy-unavailable', 'policy-denied-audit-failed', 'policy-unavailable-audit-failed']);
+// The broker's launch-result detail budget, code prefix included.
+const DETAIL_MAX = 512;
+
+// `policy` (#677): the owner-activated SOP launch policy, composed by the
+// host so this module never parses one. `check({ harness, soul, package })`
+// answers null to continue, or the refusal `{ code, message, ... }`
+// (`policy-denied` or `policy-unavailable`). It runs after every product
+// check and the persona refusal, before anything is minted, bound or run.
+// A soul starting its team is refused outright. A principal's launch is the
+// owner's (the owner's declaration is final): `override(refusal, { harness })`
+// asks the owner to verify, by Touch ID, the login password or the
+// administrator dialog, and continues only when they approve; a decline is
+// the refusal, with nothing changed. `receipt({ agentId, decision, detail })`
+// records every outcome (`denied`, `override-approved`, `override-declined`);
+// a receipt that cannot be written refuses with the `-audit-failed` code,
+// even after an approval, so no override runs unrecorded.
 
 // `runtimes` (#583 slice 3): `pending({ agentId, harness })` names what the
 // soul declares and lacks; `install` provisions it into the soul folder.
@@ -150,7 +167,7 @@ const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other
 
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
   isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, sandboxFor = null, runtimes = null, toolHomes = null, providers = null, signIn = null,
-  souls = null, receipt = () => {}, verifyOwner = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
+  souls = null, receipt = () => {}, verifyOwner = null, policy = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -290,6 +307,35 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         row.sandbox = { resolution: sandbox.resolution, account: sandbox.account };
         if (refused) { await step('account'); throw refused; }
       }
+      if (policy) {
+        let refusal;
+        try { refusal = await policy.check({ harness, soul: soul ?? null, package: packagePath ?? null }); }
+        catch (error) { refusal = { code: 'policy-unavailable', message: `the SOP policy could not be checked: ${error.message}` }; }
+        if (refusal) {
+          await step('policy');
+          const code = refusal.code === 'policy-denied' ? 'policy-denied' : 'policy-unavailable';
+          row.policy = { code, ...(refusal.ruleId ? { ruleId: refusal.ruleId } : {}), ...(refusal.sop ? { commit: refusal.sop.commit } : {}) };
+          let decision = 'denied';
+          let declined = null;
+          let proof = null;
+          if (callerParent === null) {
+            try { proof = await policy.override(refusal, { harness, soul: soul ?? null, package: packagePath ?? null }); decision = 'override-approved'; }
+            catch (error) { decision = 'override-declined'; declined = error.message; }
+          }
+          const detail = [refusal.ruleId ? `rule ${refusal.ruleId}` : code, refusal.sop ? `${refusal.sop.repository}@${refusal.sop.commit}` : null,
+            refusal.digest ? `digest ${refusal.digest.slice(0, 12)}` : null, `harness ${harness}`].filter(Boolean).join(', ');
+          try { await policy.receipt({ agentId: soul ?? null, decision, detail }); }
+          catch {
+            throw Object.assign(new Error(`${refusal.message}; the policy receipt could not be written, so the launch was refused`), { code: `${code}-audit-failed` });
+          }
+          row.policy.decision = decision;
+          if (decision !== 'override-approved') {
+            const why = decision === 'override-declined' ? `; the owner override was not approved (${declined}), so nothing was launched` : '';
+            throw Object.assign(new Error(`${refusal.message}${why}`), { code });
+          }
+          row.policy.override = { method: proof?.method ?? 'owner' };
+        }
+      }
       const request = { ...withoutParent(event), harness, ...(event.role === undefined ? {} : { role: event.role.trim() }), ...(parent ? { parent } : {}) };
       const identity = soul ? await identities(soul) : copied ? await forkCopy(request) : await spawnPackage(request);
       if (!soul) spawned = identity?.id ?? null;
@@ -375,8 +421,10 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       // The broker's launch-result wire carries detail, so retain the code
       // there too; local callers and the journal also get a structured code.
       const coded = LAUNCH_CODES.has(error.code);
-      Object.assign(row, { status: 'failed', agentId: null, detail: coded ? `${error.code}: ${error.message}` : error.message,
-        ...(coded ? { code: error.code } : {}) });
+      let detail = coded ? `${error.code}: ${error.message}` : error.message;
+      // Policy text is pack-supplied; keep the whole diagnostic within the broker's budget.
+      if (row.policy && [...detail].length > DETAIL_MAX) detail = `${[...detail].slice(0, DETAIL_MAX - 1).join('')}…`;
+      Object.assign(row, { status: 'failed', agentId: null, detail, ...(coded ? { code: error.code } : {}) });
       // The launch failure is what the principal sees; a rollback that fails
       // part way is named beside it, so a companion that stays has a reason.
       if (spawned) { try { await discard(spawned, rollback); } catch (rollbackError) { row.detail = `${row.detail} (rollback failed: ${rollbackError.message})`; } }

@@ -101,6 +101,16 @@ writes `<state>/sop-persona.json` (0600); `agent-bot sandbox` and the
 daemon's launch path read that record offline. A soul's own selection never
 decides personas. See [docs/sandbox.md](docs/sandbox.md#the-sop-packs-persona-mapping).
 
+`agent-bot sop policy activate|deactivate [--principal-stdin] [--json]` is
+the owner's: activation reads `policy-hooks.json` at the user's SOP commit,
+validates it and pins it under `<state>/sop-policy/`; `agent-bot sop policy
+show [--json]` reports what is active and what it covers. The daemon applies
+its deny rules to launches offline. A soul starting its team is refused; an
+owner's launch that a rule denies asks the owner to verify (Touch ID, the
+login password or the administrator dialog) and goes ahead on approval, with
+an audit receipt either way. Wake/resume and processes started outside
+agent-bot are not covered. See [docs/sop-policy-hooks.md](docs/sop-policy-hooks.md).
+
 ## Machine install (headless Linux)
 
 This repository publishes a CLI bundle for headless Linux — a cloud agent's

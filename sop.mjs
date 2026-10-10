@@ -18,7 +18,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
+import { tmpdir, homedir, userInfo } from 'node:os';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { currentAgentId, stateDirectory, withLock } from './agent-identity.mjs';
 import { soulDirectory } from './agent-population.mjs';
@@ -26,6 +26,8 @@ import { readBinding } from './agent-binding.mjs';
 import process from 'node:process';
 import { assertOwnerAction } from './owner-action.mjs';
 import { pathToFileURL } from 'node:url';
+import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
+import { evaluateSopPolicy, parseSopPolicy } from './sop-policy.mjs';
 
 const SCHEMA_VERSION = 1;
 const ORG_JSON_LIMIT = 1024 * 1024;
@@ -59,6 +61,8 @@ export const USAGE = `usage: agent-bot sop [--json] [--config <path>] [--soul ID
        agent-bot sop show PATH [--soul ID] [--workflow NAME]
        agent-bot sop trust REPO [--soul ID]
        agent-bot sop persona [--json]
+       agent-bot sop policy show [--json]
+       agent-bot sop policy activate|deactivate [--principal-stdin] [--json]
 
 Resolve the soul's agent-sop.toml, then ~/.config/agent-sop/config.toml
 (ENG-0355), then no SOP. The soul's sop/ documents override repository
@@ -70,6 +74,9 @@ With no config file, report that no SOP is in effect and exit 0.
 persona resolves the user's SOP, reads persona.toml at its commit (the
 pack's persona mapping: which souls run in their own macOS account) and
 records it for offline use by agent-bot sandbox and the daemon's launch.
+policy activate (owner only) reads policy-hooks.json at the user's SOP
+commit, validates it and pins it; the daemon's launches then apply its
+deny rules offline. show reports what is active and what it covers.
 `;
 
 export class SopError extends Error {
@@ -302,10 +309,10 @@ export function assertSopGitCommand(args) {
     // A JSON file beside org.json at the fetched commit is the organization
     // profile org.json names (organization.profile, #190).
     const profile = fetched !== undefined && isRelativePath(fetched) && !/[\u0000-\u001f\u007f]/.test(fetched) && fetched.endsWith('.json');
-    const permitted = (mode === 'blob' && (spec === 'FETCH_HEAD:org.json' || spec === `FETCH_HEAD:${PERSONA_FILE}` || profile))
+    const permitted = (mode === 'blob' && (spec === 'FETCH_HEAD:org.json' || spec === `FETCH_HEAD:${PERSONA_FILE}` || spec === `FETCH_HEAD:${POLICY_FILE}` || profile))
       || (mode === '-p' && pinned && !doc)
       || (mode === 'blob' && pinned && doc && isRelativePath(doc) && !/[\u0000-\u001f\u007f]/.test(doc) && doc.endsWith('.md'));
-    if (!permitted) fail('git-refused', 'refusing to read any file other than org.json, persona.toml, the organization profile JSON or pinned SOP Markdown/trees');
+    if (!permitted) fail('git-refused', 'refusing to read any file other than org.json, persona.toml, policy-hooks.json, the organization profile JSON or pinned SOP Markdown/trees');
   }
 }
 
@@ -874,6 +881,188 @@ export function readSopPersonaRecord(options = {}) {
   }
 }
 
+// --- selected-pack launch policy (#677) ----------------------------------------
+// The owner activates the user's SOP's policy-hooks.json at its resolved
+// commit (docs/sop-policy-hooks.md). The exact bytes are kept in
+// sop-policy/records/<sha256>.json; sop-policy/state.json is the marker that
+// names the active digest and the pinned selection, or records an explicit
+// deactivation. The record is written before the marker is swapped, under a
+// lock, so a partial write leaves the previous marker in force. Launch reads
+// both offline, without the lock, and re-validates on every use.
+
+export const POLICY_FILE = 'policy-hooks.json';
+// Every route through the daemon's launch handler, and what it does not reach.
+export const POLICY_COVERAGE = Object.freeze({
+  covered: Object.freeze(['before-launch: package launch, relaunch, team start']),
+  notCovered: 'wake/resume, bind, spawn, send, commit, push, and processes started outside agent-bot',
+});
+const POLICY_STATE_FIELDS = ['schemaVersion', 'active', 'digest', 'org', 'sop', 'selection', 'account', 'changedAt', 'authorization'];
+const POLICY_REPAIR = 'reactivate with `agent-bot sop policy activate`, or turn it off with `agent-bot sop policy deactivate`';
+const DIGEST = /^[0-9a-f]{64}$/;
+
+function policyDir(options) { return join(sopState(options), 'sop-policy'); }
+export function policyStateFile(options = {}) { return join(policyDir(options), 'state.json'); }
+function policyRecordFile(options, digest) { return join(policyDir(options), 'records', `${digest}.json`); }
+function sha256(text) { return createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex'); }
+// The local selection the activation was made under: the user's [repos]
+// table as written. Editing it requires an explicit reactivation.
+function selectionFingerprint(config) { return sha256(JSON.stringify(config.repos)); }
+function canonicalHarnesses(options) { return options.canonicalHarnesses ?? Object.keys(ACP_SPAWN_REGISTRY); }
+function currentAccount(options) { return options.account ?? userInfo().username; }
+
+function writeAtomic(dir, file, text) {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const temp = mkdtempSync(join(dir, '.sop-policy-'));
+  try {
+    const pending = join(temp, 'record');
+    writeFileSync(pending, text, { mode: 0o600, flag: 'wx' });
+    chmodSync(pending, 0o600);
+    renameSync(pending, file);
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+}
+
+function readPrivateJson(file, what) {
+  if (lstatSync(file).isSymbolicLink()) fail('policy-unavailable', `${what} must not be a symlink`);
+  return JSON.parse(readFileSync(file, 'utf8'));
+}
+
+// Online: resolve the user's SOP (never a soul's), read policy-hooks.json at
+// the SOP commit and validate it completely. Nothing is written. A commit
+// without the file is an error: asking to activate is not deactivating.
+// `readPolicyText(repo, commit)` is injectable for tests.
+export function prepareSopPolicy(options = {}) {
+  const home = options.home ?? homedir();
+  const configPath = options.configPath ?? configPathFor(home);
+  const readFile = options.readFile ?? ((path) => readFileSync(path, 'utf8'));
+  const userText = Object.hasOwn(options, 'configText') ? options.configText : readConfigText(configPath, readFile);
+  if (userText === null) fail('policy-unavailable', `no SOP is selected at ${configPath}; select one before activating its policy`);
+  const report = resolveSelection({ ...options, configText: userText, configPath, missingConfig: 'error' });
+  const { repository, commit } = report.repositories.sop;
+  const text = options.readPolicyText
+    ? options.readPolicyText(repository, commit)
+    : readRepoFile(repository, commit, POLICY_FILE, { runGit: options.runGit ?? defaultRunGit,
+      remoteUrl: options.remoteUrl ?? githubRemote, makeTemp: options.makeTemp, required: false });
+  if (text === null) fail('policy-unavailable', `${repository}@${commit} has no ${POLICY_FILE}; nothing was activated`);
+  const policy = parseSopPolicy(text, { canonicalHarnesses: canonicalHarnesses(options) });
+  return {
+    text, policy, digest: sha256(text),
+    org: { repository: report.repositories.org.repository, commit: report.repositories.org.commit },
+    sop: { repository, commit },
+    selection: selectionFingerprint(loadSopConfig(userText)),
+  };
+}
+
+function swapPolicyState(options, state, record = null) {
+  const dir = policyDir(options);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  withLock(join(dir, 'state.lock'), 'SOP policy', () => {
+    if (record) {
+      const file = policyRecordFile(options, record.digest);
+      writeAtomic(dirname(file), file, `${JSON.stringify({ schemaVersion: SCHEMA_VERSION, digest: record.digest, policy: record.text })}\n`);
+    }
+    writeAtomic(dir, policyStateFile(options), `${JSON.stringify(state)}\n`);
+  });
+  return state;
+}
+
+// `authorization` is the owner gate's proof method, never a credential.
+export function activateSopPolicy(prepared, authorization, options = {}) {
+  return swapPolicyState(options, {
+    schemaVersion: SCHEMA_VERSION, active: true, digest: prepared.digest, org: prepared.org, sop: prepared.sop,
+    selection: prepared.selection, account: currentAccount(options),
+    changedAt: (options.now ?? (() => new Date()))().toISOString(), authorization,
+  }, prepared);
+}
+
+// The marker stays, inactive, as the receipt of an explicit deactivation.
+export function deactivateSopPolicy(authorization, options = {}) {
+  return swapPolicyState(options, {
+    schemaVersion: SCHEMA_VERSION, active: false, digest: null, org: null, sop: null, selection: null,
+    account: currentAccount(options), changedAt: (options.now ?? (() => new Date()))().toISOString(), authorization,
+  });
+}
+
+// Offline and never throws: no git, no network, no lock. `state` is one of
+//   none         never configured: no marker
+//   inactive     the owner deactivated it
+//   active       `policy` is the validated policy pinned at `sop.commit`
+//   unavailable  a marker that cannot be honoured: missing, corrupt or
+//                mismatched record, a changed selection, another account,
+//                or a rule this runtime no longer understands
+export function readSopPolicyState(options = {}) {
+  const home = options.home ?? homedir();
+  const configPath = options.configPath ?? configPathFor(home);
+  const readFile = options.readFile ?? ((path) => readFileSync(path, 'utf8'));
+  const unavailable = (why) => ({ state: 'unavailable', message: `the active SOP policy is unavailable: ${why}; ${POLICY_REPAIR}` });
+  let marker;
+  try { marker = readPrivateJson(policyStateFile(options), 'the SOP policy marker'); }
+  catch (error) {
+    if (error.code === 'ENOENT') return { state: 'none', message: 'No SOP policy is active.' };
+    return unavailable('its marker is unreadable');
+  }
+  try {
+    const sane = isObject(marker) && marker.schemaVersion === SCHEMA_VERSION && typeof marker.active === 'boolean'
+      && Object.keys(marker).every((key) => POLICY_STATE_FIELDS.includes(key)) && typeof marker.changedAt === 'string';
+    if (!sane) return unavailable('its marker is invalid');
+    if (!marker.active) return { state: 'inactive', changedAt: marker.changedAt, message: 'The SOP policy was deactivated by the owner.' };
+    const pinned = isObject(marker.org) && isObject(marker.sop) && DIGEST.test(marker.digest ?? '') && DIGEST.test(marker.selection ?? '')
+      && OWNER_NAME.test(marker.sop.repository ?? '') && COMMIT_SHA.test(marker.sop.commit ?? '')
+      && OWNER_NAME.test(marker.org.repository ?? '') && COMMIT_SHA.test(marker.org.commit ?? '');
+    if (!pinned) return unavailable('its marker is invalid');
+    const where = { digest: marker.digest, org: marker.org, sop: marker.sop, changedAt: marker.changedAt };
+    if (marker.account !== currentAccount(options)) return { ...unavailable('it was activated for another account'), ...where };
+    let record;
+    try { record = readPrivateJson(policyRecordFile(options, marker.digest), 'the SOP policy record'); }
+    catch { return { ...unavailable('its record is missing or unreadable'), ...where }; }
+    if (!isObject(record) || record.digest !== marker.digest || typeof record.policy !== 'string' || sha256(record.policy) !== marker.digest) {
+      return { ...unavailable('its record does not match the activated digest'), ...where };
+    }
+    const userText = readConfigText(configPath, readFile);
+    if (userText === null || selectionFingerprint(loadSopConfig(userText)) !== marker.selection) {
+      return { ...unavailable('the SOP selection changed since it was activated'), ...where };
+    }
+    let policy;
+    try { policy = parseSopPolicy(record.policy, { canonicalHarnesses: canonicalHarnesses(options) }); }
+    catch (error) { return { ...unavailable(`this runtime cannot apply it (${error.message})`), ...where }; }
+    return { state: 'active', ...where, policy };
+  } catch (error) {
+    return unavailable(error instanceof Error ? error.message : String(error));
+  }
+}
+
+const shortCommit = (commit) => commit.slice(0, 12);
+
+// The launch check the daemon wires into its handler. Null lets the launch
+// continue to its own checks; otherwise `{ code, message, ... }` is the
+// refusal: `policy-denied` for a matching rule, `policy-unavailable` for an
+// active marker that cannot be honoured. `harness` is the resolved key.
+export function checkSopLaunchPolicy(harness, options = {}) {
+  const current = readSopPolicyState(options);
+  if (current.state === 'none' || current.state === 'inactive') return null;
+  if (current.state !== 'active') return { code: 'policy-unavailable', message: current.message, ...(current.sop ? { sop: current.sop, digest: current.digest } : {}) };
+  let verdict;
+  try { verdict = evaluateSopPolicy(current.policy, { event: 'before-launch', harness }, { canonicalHarnesses: canonicalHarnesses(options) }); }
+  catch (error) { return { code: 'policy-unavailable', message: `the SOP policy cannot evaluate this launch: ${error.message}`, sop: current.sop, digest: current.digest }; }
+  if (verdict.decision !== 'deny') return null;
+  return { code: 'policy-denied', ruleId: verdict.ruleId, reason: verdict.reason, sop: current.sop, digest: current.digest,
+    message: `SOP policy rule ${verdict.ruleId} (${current.sop.repository}@${shortCommit(current.sop.commit)}) denies launching on ${harness}: ${verdict.reason}` };
+}
+
+export function formatSopPolicyState(result) {
+  const lines = [];
+  if (result.state === 'active') {
+    const { rules } = result.policy;
+    lines.push(`SOP policy active: ${result.sop.repository}@${result.sop.commit}`, `digest: ${result.digest}`, `activated: ${result.changedAt}`,
+      `rules: ${rules.length ? rules.length : 'none (no additional policy)'}`);
+    for (const rule of rules) lines.push(`  ${rule.id}: ${rule.event} deny ${rule.when.harnesses ? rule.when.harnesses.join(', ') : 'every harness'}: ${oneLine(rule.reason)}`);
+  } else {
+    lines.push(oneLine(result.message));
+  }
+  lines.push(`Covers ${POLICY_COVERAGE.covered.join('; ')}.`, `Not covered: ${POLICY_COVERAGE.notCovered}.`,
+    'A soul starting its team is refused by a deny rule; an owner launch it denies asks for Touch ID or a password to override, and is recorded.');
+  return `${lines.join('\n')}\n`;
+}
+
 function trustNotice(report) {
   if (!report.trust?.required) return '';
   const { repo, accepted, reason } = report.trust;
@@ -1151,6 +1340,16 @@ export function formatPersonaRecord(result) {
 export function parseSopArgs(argv) {
   const parsed = { help: false, json: false, configPath: null, soul: null, workflow: null, command: 'report', target: null };
   if (argv.length === 1 && ['--help', '-h'].includes(argv[0])) return { ...parsed, help: true };
+  if (argv[0] === 'policy') {
+    // The user's selection only: no --soul or --config, so a soul cannot
+    // pick the policy its account runs under.
+    const verb = argv[1];
+    if (!['show', 'activate', 'deactivate'].includes(verb)) fail('usage', 'policy requires show, activate or deactivate');
+    const flags = argv.slice(2);
+    const allowed = verb === 'show' ? ['--json'] : ['--json', '--principal-stdin'];
+    if (flags.some((flag) => !allowed.includes(flag)) || new Set(flags).size !== flags.length) fail('usage', `unexpected arguments: ${flags.join(' ')}`);
+    return { ...parsed, command: 'policy', target: verb, json: flags.includes('--json'), principal: flags.includes('--principal-stdin') };
+  }
   let i = 0;
   if (['list', 'show', 'trust', 'persona'].includes(argv[0])) {
     parsed.command = argv[i++];
@@ -1175,6 +1374,40 @@ export function parseSopArgs(argv) {
   return parsed;
 }
 
+// `sop policy` (#677). Activation and deactivation are the owner's: the
+// existing owner gate (Touch ID or the login password through keyd, the
+// administrator dialog, or a principal on stdin), never a soul's binding.
+// Activation resolves and validates first, so the owner approves a concrete
+// repository and commit; nothing is written until the gate passes.
+async function policyCommand(parsed, deps, writeOut, writeErr) {
+  const assertOwner = deps.assertOwner ?? ((action, { principal }) => assertOwnerAction(action, { principal }));
+  const readStdin = deps.readStdin ?? (() => readFileSync(0, 'utf8'));
+  const show = (result) => {
+    writeOut(parsed.json ? `${JSON.stringify({ ...result, coverage: POLICY_COVERAGE })}\n` : formatSopPolicyState(result));
+    return result.state === 'unavailable' ? 1 : 0;
+  };
+  try {
+    if (parsed.target === 'show') return show(readSopPolicyState(deps));
+    let principal = null;
+    if (parsed.principal) {
+      try { principal = JSON.parse(readStdin()); }
+      catch { fail('usage', '--principal-stdin needs the principal credential as JSON on stdin'); }
+    }
+    if (parsed.target === 'activate') {
+      const prepared = prepareSopPolicy(deps);
+      const proof = await assertOwner(`sop policy activate ${prepared.sop.repository}@${prepared.sop.commit}`, { principal });
+      activateSopPolicy(prepared, proof?.method ?? 'owner', deps);
+    } else {
+      const proof = await assertOwner('sop policy deactivate', { principal });
+      deactivateSopPolicy(proof?.method ?? 'owner', deps);
+    }
+    return show(readSopPolicyState(deps));
+  } catch (error) {
+    writeErr(`agent-bot sop: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+}
+
 export function main(argv = process.argv.slice(2), deps = {}) {
   const writeOut = deps.writeStdout ?? ((text) => { process.stdout.write(text); });
   const writeErr = deps.writeStderr ?? ((text) => { process.stderr.write(text); });
@@ -1189,6 +1422,7 @@ export function main(argv = process.argv.slice(2), deps = {}) {
     writeOut(USAGE);
     return 0;
   }
+  if (parsed.command === 'policy') return policyCommand(parsed, deps, writeOut, writeErr);
   if (parsed.command === 'persona') {
     // The pack's persona mapping, read online and recorded for the sandbox
     // (ADR-0274 decision 3). The parser lives beside the sandbox, which

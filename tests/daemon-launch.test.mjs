@@ -1090,3 +1090,90 @@ test('a new soul that probes signed out still launches: its ID would not survive
   assert.equal(discarded, 0);
   assert.deepEqual(JSON.parse(readFileSync(f.options.file)).find((row) => row.requestId === 'r9').signIn, { status: 'signed-out' });
 });
+
+// --- SOP launch policy (#677) -------------------------------------------------
+// A deny refuses a soul's team start outright. A principal's launch is the
+// owner's: they are asked to verify and may override, with a receipt.
+const denial = { code: 'policy-denied', ruleId: 'no-codex', reason: 'No Codex here.', digest: 'd'.repeat(64),
+  sop: { repository: 'local/sop', commit: 'c'.repeat(40) }, message: 'SOP policy rule no-codex (local/sop@cccccccccccc) denies launching on codex: No Codex here.' };
+function policyFixture(t, { check = () => denial, override = async () => ({ method: 'presence', via: 'agent-bot-keyd' }), receipt = null } = {}) {
+  const side = { identities: 0, spawn: 0, lookup: 0, provision: 0, overrides: [], receipts: [] };
+  const f = fixture(t, {
+    identities: () => { side.identities++; return { id: agentId, harness: 'codex' }; },
+    spawnPackage: () => { side.spawn++; return { id: agentId }; },
+    lookupBinding: () => { side.lookup++; return { worktree: '/work', file: '/private/binding' }; },
+    provisionHome: () => { side.provision++; return null; },
+    policy: {
+      check,
+      override: async (refusal, context) => { side.overrides.push({ refusal, context }); return override(refusal, context); },
+      receipt: receipt ?? ((entry) => { side.receipts.push(entry); }),
+    },
+  });
+  return { ...f, side };
+}
+const untouched = (f) => {
+  assert.deepEqual({ identities: f.side.identities, spawn: f.side.spawn, lookup: f.side.lookup, provision: f.side.provision, executor: f.calls.length },
+    { identities: 0, spawn: 0, lookup: 0, provision: 0, executor: 0 });
+};
+
+test('an agent-initiated launch that the SOP policy denies is refused without asking the owner', async (t) => {
+  const f = policyFixture(t);
+  const parent = 'agent_22222222-2222-4222-8222-222222222222';
+  await f.handler({ event: 'launch', requestId: 'team', account: 'worker', package: '/pkg', harness: 'codex', name: 'Teammate' }, { ...f.ports, parent });
+  untouched(f);
+  assert.deepEqual(f.side.overrides, [], 'an agent cannot override the owner\'s policy');
+  assert.deepEqual(f.side.receipts, [{ agentId: null, decision: 'denied', detail: `rule no-codex, local/sop@${'c'.repeat(40)}, digest dddddddddddd, harness codex` }]);
+  assert.equal(f.reports[0].status, 'failed');
+  assert.equal(f.reports[0].code, 'policy-denied');
+  assert.equal(f.reports[0].detail, `policy-denied: ${denial.message}`);
+  const row = JSON.parse(readFileSync(f.options.file, 'utf8'))[0];
+  assert.deepEqual(row.policy, { code: 'policy-denied', ruleId: 'no-codex', commit: 'c'.repeat(40), decision: 'denied' });
+  assert.equal(row.stage, 'policy');
+});
+
+test('the owner overrides a denied launch after verifying, and the override is recorded', async (t) => {
+  const checks = [];
+  const f = policyFixture(t, { check: (context) => { checks.push(context); return denial; } });
+  await f.handler({ ...event, harness: 'codex' }, f.ports);
+  assert.deepEqual(checks, [{ harness: 'codex', soul: agentId, package: null }], 'the resolved harness is checked');
+  assert.equal(f.side.overrides.length, 1);
+  assert.equal(f.side.overrides[0].refusal, denial);
+  assert.deepEqual(f.side.receipts, [{ agentId, decision: 'override-approved', detail: `rule no-codex, local/sop@${'c'.repeat(40)}, digest dddddddddddd, harness codex` }]);
+  assert.deepEqual(f.reports[0], { requestId: 'r1', status: 'launched', agentId });
+  assert.equal(f.calls.length, 1, 'the launch went ahead');
+  const row = JSON.parse(readFileSync(f.options.file, 'utf8'))[0];
+  assert.deepEqual(row.policy, { code: 'policy-denied', ruleId: 'no-codex', commit: 'c'.repeat(40), decision: 'override-approved', override: { method: 'presence' } });
+});
+
+test('a declined owner override changes nothing and is recorded', async (t) => {
+  const f = policyFixture(t, { override: async () => { throw new Error('the owner declined at Touch ID'); } });
+  await f.handler({ ...event, harness: 'codex' }, f.ports);
+  untouched(f);
+  assert.equal(f.side.overrides.length, 1);
+  assert.equal(f.side.receipts[0].decision, 'override-declined');
+  assert.equal(f.reports[0].code, 'policy-denied');
+  assert.match(f.reports[0].detail, /owner override was not approved \(the owner declined at Touch ID\), so nothing was launched/);
+});
+
+test('an unrecorded or unavailable policy outcome never becomes an allow', async (t) => {
+  // An approved override whose receipt cannot be written still refuses.
+  const unrecorded = policyFixture(t, { receipt: () => { throw new Error('disk full'); } });
+  await unrecorded.handler({ ...event, harness: 'codex' }, unrecorded.ports);
+  untouched(unrecorded);
+  assert.equal(unrecorded.reports[0].code, 'policy-denied-audit-failed');
+  // A policy check that fails is unavailable: refused for an agent, and the owner is asked.
+  const broken = policyFixture(t, { check: () => { throw new Error('marker unreadable'); }, override: async () => { throw new Error('cancelled'); } });
+  await broken.handler({ ...event, harness: 'codex' }, broken.ports);
+  untouched(broken);
+  assert.equal(broken.reports[0].code, 'policy-unavailable');
+  assert.equal(broken.side.receipts[0].decision, 'override-declined');
+  // No match continues to the launch, without a prompt or a receipt.
+  const clear = policyFixture(t, { check: () => null });
+  await clear.handler({ ...event, harness: 'codex' }, clear.ports);
+  assert.equal(clear.reports[0].status, 'launched');
+  assert.deepEqual([clear.side.overrides, clear.side.receipts], [[], []]);
+  // Pack text is bounded: the whole diagnostic fits the broker's detail budget.
+  const long = policyFixture(t, { check: () => ({ ...denial, message: 'x'.repeat(2000) }) , override: async () => { throw new Error('no'); } });
+  await long.handler({ ...event, harness: 'codex' }, long.ports);
+  assert.ok([...long.reports[0].detail].length <= 512);
+});
