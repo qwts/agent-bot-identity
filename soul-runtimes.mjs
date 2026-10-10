@@ -14,6 +14,7 @@
 //   installs from the package's pins (#583 slice 8)
 //   .soul-state/runtimes/uv/cache, go/gopath, node/npm-cache: the caches
 //   a routed launch keeps out of the host's HOME
+import { minimalChildEnv } from './child-env.mjs';
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { accessSync, constants as fsConstants, createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -450,7 +451,7 @@ async function installPython({ version }, target, uvBin, { root, runImpl, label,
   const staging = path.join(path.dirname(target), `.installing-${randomUUID()}`);
   mkdirSync(staging, { recursive: true, mode: 0o700 });
   try {
-    const env = { ...process.env, UV_CACHE_DIR: path.join(root, 'uv', 'cache'), UV_PYTHON_INSTALL_DIR: staging, UV_NO_PROGRESS: '1' };
+    const env = { ...minimalChildEnv(process.env), UV_CACHE_DIR: path.join(root, 'uv', 'cache'), UV_PYTHON_INSTALL_DIR: staging, UV_NO_PROGRESS: '1' };
     try { await runImpl(uvBin, ['python', 'install', version, '--install-dir', staging, '--no-bin'], { env, timeout: INSTALL_TIMEOUT_MS }); }
     catch (error) { fail('runtime-install-failed', `${label}: uv could not install python ${version} (${String(error.stderr ?? error.message).trim().split('\n').pop()}); check the network and retry`, { runtime: label, action }); }
     const dirs = readdirSync(staging, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name.startsWith('cpython-'));
@@ -482,7 +483,7 @@ async function installUvTool({ name, install }, target, uvBin, { root, pythonDir
   writeFileSync(marker, `${now().toISOString()}\n`, { mode: 0o600 });
   try {
     mkdirSync(target, { recursive: true, mode: 0o700 });
-    const env = { ...process.env, UV_CACHE_DIR: path.join(root, 'uv', 'cache'), UV_TOOL_DIR: path.join(target, 'tools'), UV_TOOL_BIN_DIR: path.join(target, 'bin'),
+    const env = { ...minimalChildEnv(process.env), UV_CACHE_DIR: path.join(root, 'uv', 'cache'), UV_TOOL_DIR: path.join(target, 'tools'), UV_TOOL_BIN_DIR: path.join(target, 'bin'),
       UV_PYTHON_INSTALL_DIR: pythonDir, UV_PYTHON_PREFERENCE: 'only-managed', UV_NO_PROGRESS: '1' };
     try { await runImpl(uvBin, ['tool', 'install', `${install.package}==${install.version}`], { env, timeout: INSTALL_TIMEOUT_MS }); }
     catch (error) { fail('runtime-install-failed', `${label}: uv could not install ${install.package}==${install.version} (${String(error.stderr ?? error.message).trim().split('\n').pop()}); check the network and retry`, { runtime: label, action }); }
