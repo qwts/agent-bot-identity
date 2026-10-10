@@ -498,6 +498,9 @@ test('migrate-credentials --from-vault refuses a bad, same or combined vault bef
   await assert.rejects(run(['--all', '--from-vault', '']), /needs the old/);
   await assert.rejects(run(['--all', '--from-vault', 'Agent Identities']), /already this host's credential vault/);
   await assert.rejects(run(['--all', '--from-vault', 'Old Vault', '--to', 'pass-cli']), /^Error: usage/);
+  // The usage line offers --from-vault only as a source, never beside --to.
+  await assert.rejects(run(['--all', '--to', 'keyd', '--from-vault', 'Old Vault']),
+    (error) => error.message.includes('[--to keyd|pass-cli | --from-namespace OLD [--from-vault OLD] | --from-vault OLD]'));
   await assert.rejects(run(['--all', '--from-vault', 'Old Vault', '--from-vault', 'Other']), /^Error: usage/);
   await assert.rejects(run(['--all', '--from-vault', 'Old Vault'], { env: { ...env, AGENT_BOT_ID: id }, markers: undefined }), /owner only/);
   assert.equal(pass.calls.length, calls, 'pass-cli was not called');

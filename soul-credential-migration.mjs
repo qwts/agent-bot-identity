@@ -36,7 +36,7 @@ import { readSoulManifest } from './soul-runtimes.mjs';
 import { soulCredentialsDeclaration, writeSoulCredentialsDeclaration } from './soul-package.mjs';
 import { editSoulRevision, revisionHistory } from './soul-revisions.mjs';
 
-const USAGE = 'usage: agent-bot identity migrate-credentials [--soul AGENT_ID|NAME | --all] [--to keyd|pass-cli | --from-namespace OLD] [--from-vault OLD] [--dry-run] [--json] [--principal-stdin]';
+const USAGE = 'usage: agent-bot identity migrate-credentials [--soul AGENT_ID|NAME | --all] [--to keyd|pass-cli | --from-namespace OLD [--from-vault OLD] | --from-vault OLD] [--dry-run] [--json] [--principal-stdin]';
 
 function parseArgs(argv) {
   const options = { soul: null, all: false, dryRun: false, json: false, principal: false, to: null, fromNamespace: null, fromVault: null };
