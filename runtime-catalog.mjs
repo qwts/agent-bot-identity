@@ -205,7 +205,8 @@ const BIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
  * A uv tool's `lock` (#617, owner decision "venv + pip --require-hashes") is
  * every distribution the tool installs, the tool itself included:
  * `[{ name, version, sha256: [hex, ...] }]`, one entry per package, each
- * with every artifact hash pip may pick (wheels per platform, sdist). It is
+ * with every artifact hash pip may pick (wheels per platform, sdist), sorted
+ * ascending. It is
  * part of the package definition, so the revision covers it. A tool without
  * one has no `lock` key: it has no dependency evidence, so it can't be
  * reported as verified.
@@ -274,7 +275,11 @@ function normalizeUvToolLock(value, label, toolPackage, toolVersion) {
     for (const digest of entry.sha256) {
       if (typeof digest !== 'string' || !SHA256_HEX.test(digest)) throw new Error(`${where}.sha256 must hold 64 lowercase hex digits each`);
     }
-    if (new Set(entry.sha256).size !== entry.sha256.length) throw new Error(`${where}.sha256 lists a digest twice`);
+    // Sorted, so the same lock has one spelling and one package revision.
+    for (let i = 1; i < entry.sha256.length; i += 1) {
+      if (entry.sha256[i - 1] === entry.sha256[i]) throw new Error(`${where}.sha256 lists a digest twice`);
+      if (entry.sha256[i - 1] > entry.sha256[i]) throw new Error(`${where}.sha256 must be sorted ascending`);
+    }
     const key = pypiName(entry.name);
     if (seen.has(key)) throw new Error(`${where}.name ${entry.name} is locked twice`);
     seen.add(key);
