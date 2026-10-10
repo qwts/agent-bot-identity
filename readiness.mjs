@@ -1883,14 +1883,29 @@ function runtimeSkillCheck({ home, lstat, readlink, access, embeddedRoot = null,
   const executable = installationPaths(home).executable;
   // An app-embedded runtime carries its skill bundle in place (#428).
   let runtimeRoot = embeddedRoot;
+  // A plain file (another app's wrapper) names no runtime, so there is no
+  // bundle to probe; runtime.installed_cli reports that entrypoint.
+  let foreign = false;
   try {
     const stat = runtimeRoot ? null : optionalLstat(executable, lstat);
     if (stat?.isSymbolicLink()) {
       const target = resolve(dirname(executable), readlink(executable));
       runtimeRoot = homebrewRuntimeRoot(target) ?? dirname(target);
+    } else if (stat) {
+      foreign = true;
     }
   } catch {
     /* reported as an incomplete installed bundle below */
+  }
+  if (!runtimeRoot && foreign) {
+    return readinessCheck({
+      id: 'skill.runtime',
+      status: 'failed',
+      code: 'runtime-skill-incomplete',
+      message: 'the installed agent-bot entrypoint is not a link to a runtime, so its skill bundle cannot be checked',
+      action: 'see runtime.installed_cli: install this runtime as the machine\'s agent-bot, then rerun doctor',
+      evidence: { path: executable, entrypoint: 'unlinked' },
+    });
   }
   try {
     if (!runtimeRoot) throw new Error('installed runtime root unavailable');

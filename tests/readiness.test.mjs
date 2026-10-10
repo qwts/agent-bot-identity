@@ -588,6 +588,32 @@ test('skill readiness probes the Homebrew libexec bundle behind the stable bin w
   }
 });
 
+test('skill readiness names an unlinked entrypoint instead of calling a bundle incomplete', async () => {
+  const home = tempRoot();
+  const probed = [];
+  const report = await collectReadiness({
+    command: 'doctor',
+    scope: 'machine',
+    ...machineDependencies(home),
+    // Another app's shell wrapper at ~/.local/bin/agent-bot: a plain file.
+    lstat: () => ({ isSymbolicLink: () => false }),
+    access: (path) => {
+      if (path.includes('/skills/agent-bot/')) probed.push(path);
+    },
+  });
+  const check = report.machine.checks.find(({ id }) => id === 'skill.runtime');
+  assert.equal(check.status, 'failed');
+  assert.equal(check.code, 'runtime-skill-incomplete');
+  assert.match(check.message, /not a link to a runtime/);
+  assert.match(check.action, /runtime\.installed_cli/);
+  assert.equal(check.evidence.entrypoint, 'unlinked');
+  assert.deepEqual(probed, []);
+  assert.equal(
+    report.machine.checks.find(({ id }) => id === 'runtime.installed_cli').code,
+    'installed-cli-unmanaged',
+  );
+});
+
 test('skipped bootstrap verification passes a null verifier and preserves the operation failure', async () => {
   const home = tempRoot();
   let verifier = 'unobserved';
