@@ -1,0 +1,1 @@
+- Kiro subagents can use explicitly declared MCP tools through exact per-tool selectors, keeping them supported without granting every tool from a server (#378).
