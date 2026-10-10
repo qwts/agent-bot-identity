@@ -476,22 +476,30 @@ function evaluate(argv, ctx) {
     merge(result, scanGitPublish(args.join(' '), { cwd, env: Object.fromEntries(env), depth: depth + 1 }));
     return {};
   }
+  // Sourcing executes a file in the current shell; its contents are just as
+  // opaque as a script passed to an interpreter.
+  if (base === 'source' || base === '.') {
+    result.opaqueExecution = true;
+    result.opaque.push({ cwd });
+    return {};
+  }
   if (SHELLS.has(base)) {
     for (let j = 0; j < args.length; j += 1) {
       const arg = args[j];
-      if (arg === null) { result.ambiguous = true; return {}; }
+      if (arg === null) { result.ambiguous = true; break; }
+      if (arg === '--') break;
       // An option that takes the next word, so `bash --rcfile -c x.sh`
       // runs x.sh rather than a `-c` payload.
       if (SHELL_OPERAND_OPTIONS.has(arg)) { j += 1; continue; }
       if (/^-[A-Za-z]*c[A-Za-z]*$/.test(arg)) {
         const payload = args[j + 1];
-        if (payload === null || payload === undefined) { result.ambiguous = true; return {}; }
+        if (payload === null || payload === undefined) { result.ambiguous = true; break; }
         merge(result, scanGitPublish(payload, { cwd, env: Object.fromEntries(env), depth: depth + 1 }));
         return {};
       }
       if (!arg.startsWith('-') && !arg.startsWith('+')) break;
     }
-    // No -c payload: -s, a redirected stdin stream, or a script on disk
+    // No readable -c payload: unknown arguments, -s, redirected stdin, or a script
     // can execute arbitrary Git commands with per-invocation hook overrides.
     result.opaqueExecution = true;
     result.opaque.push({ cwd });

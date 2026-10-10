@@ -34,6 +34,25 @@ test('interpreters and task runners are opaque', () => {
   }
 });
 
+test('sourced scripts and unreadable shell inputs are opaque at their target cwd', () => {
+  for (const command of [
+    'source release.sh', '. ./release.sh', 'builtin source release.sh',
+    'source "$SCRIPT"', 'sh $SCRIPT', 'sh -c "$CMD"', 'bash -lc "$CMD"',
+    'env sh $SCRIPT', 'sh -c', 'bash -- -c payload.sh',
+  ]) {
+    const scan = scanGitPublish(`cd /target && ${command}`, { cwd: '/session', env: {} });
+    assert.equal(scan.opaqueExecution, true, command);
+    assert.deepEqual(scan.opaque, [{ cwd: '/target' }], command);
+    assert.equal(scan.publishes.length, 0, command);
+  }
+  for (const command of ['sh $SCRIPT', 'sh -c "$CMD"', 'bash -lc "$CMD"']) {
+    assert.equal(scanGitPublish(command, { env: {} }).ambiguous, true, command);
+  }
+  const known = scanGitPublish('CMD="git status"; sh -c "$CMD"', { env: {} });
+  assert.equal(known.opaqueExecution, false);
+  assert.equal(known.ambiguous, false);
+});
+
 test('directly executed scripts and executable paths are opaque', () => {
   for (const command of [
     './release.sh',

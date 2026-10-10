@@ -523,6 +523,9 @@ test('opaque execution is refused only for a stated bot that is not bound', () =
     'node --test', 'npm test', 'python3 build.py', `python3 -c "import os; os.system('git push')"`,
     'node -e "1"', 'bash ./build.sh', 'sh < bootstrap.sh', 'make publish',
     './release.sh', './release', '../tools/publish', 'env ./release.sh',
+    'source release.sh', '. ./release.sh', 'builtin source release.sh',
+    'sh $UNSEEN_SCRIPT', 'sh -c "$UNSEEN_CMD"', 'bash -lc "$UNSEEN_CMD"',
+    'env sh $UNSEEN_SCRIPT', 'sh -c', 'bash -- -c payload.sh',
   ]) {
     const verdict = run(unbound.repo, command, STATED);
     assert.equal(verdict.decision, 'deny', command);
@@ -540,7 +543,11 @@ test('opaque execution is refused only for a stated bot that is not bound', () =
   // session started, and through a git alias too.
   const u = unbound.repo;
   unbound.git('config', 'alias.run', '!node hidden.mjs');
-  for (const command of [`cd ${u} && node hidden.mjs`, `env -C ${u} python3 x.py`, `git -C ${u} run`]) {
+  for (const command of [
+    `cd ${u} && node hidden.mjs`, `env -C ${u} python3 x.py`, `git -C ${u} run`,
+    `cd ${u} && source release.sh`, `cd ${u} && . ./release.sh`,
+    `env -C ${u} sh $UNSEEN_SCRIPT`, `cd ${u} && sh -c "$UNSEEN_CMD"`,
+  ]) {
     assert.equal(run(bound.repo, command, STATED).decision, 'deny', command);
     assert.equal(run(bound.repo, command, DELEGATE).decision, 'allow', command);
   }
