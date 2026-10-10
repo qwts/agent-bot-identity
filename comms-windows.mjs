@@ -14,6 +14,43 @@ const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$
 const READY_MARKER = 'AGENT_COMMS_PIPE_READY';
 const FAILED_MARKER = 'AGENT_COMMS_PIPE_FAILED';
 const TIMEOUT_MARKER = 'AGENT_COMMS_PIPE_TIMEOUT';
+const RELAY_FAILURE_PREFIX = 'AGENT_COMMS_PIPE_FAILURE';
+const COMPILE_FAILURE_PREFIX = 'AGENT_COMMS_PIPE_COMPILE_FAILURE';
+const RELAY_FAILURE_STAGES = new Set([
+  'pipe-construction', 'pipe-connect', 'stdin-open', 'stdout-open', 'worker-start',
+]);
+const RELAY_EXCEPTION = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
+const RELAY_HRESULT = /^[0-9A-F]{8}$/;
+
+export function isWindowsRelayFailure(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const keys = Object.keys(value).sort().join(',');
+  if (value.stage === 'compile') {
+    return keys === 'code,stage' && typeof value.code === 'string'
+      && (value.code === 'unknown' || /^CS[0-9]{4}$/.test(value.code));
+  }
+  return keys === 'exception,hresult,stage'
+    && RELAY_FAILURE_STAGES.has(value.stage)
+    && typeof value.exception === 'string' && RELAY_EXCEPTION.test(value.exception)
+    && typeof value.hresult === 'string' && RELAY_HRESULT.test(value.hresult);
+}
+
+function withRelayFailure(error, failure) {
+  if (isWindowsRelayFailure(failure)) {
+    Object.defineProperty(error, 'relayFailure', { value: Object.freeze({ ...failure }), enumerable: false });
+  }
+  return error;
+}
+
+function parseRelayFailure(line) {
+  const runtime = /^AGENT_COMMS_PIPE_FAILURE:([a-z-]+):([A-Za-z][A-Za-z0-9]{0,63}):([0-9A-F]{8})$/.exec(line);
+  if (runtime) {
+    const failure = { stage: runtime[1], exception: runtime[2], hresult: runtime[3] };
+    return isWindowsRelayFailure(failure) ? failure : null;
+  }
+  const compile = /^AGENT_COMMS_PIPE_COMPILE_FAILURE:(CS[0-9]{4}|unknown)$/.exec(line);
+  return compile ? { stage: 'compile', code: compile[1] } : null;
+}
 
 export const windowsPipeName = (label, sid) => `${WINDOWS_PIPE_PREFIX}${label}.${sid}`;
 export const windowsHandshakeMessage = (pipe, nonce) => Buffer.from(
@@ -91,8 +128,22 @@ function powershellRelayScript(pipe, connectTimeoutMs) {
     `  private const string READY = "${READY_MARKER}";`,
     `  private const string FAILED = "${FAILED_MARKER}";`,
     `  private const string TIMEOUT = "${TIMEOUT_MARKER}";`,
+    `  private const string FAILURE = "${RELAY_FAILURE_PREFIX}";`,
     '  [DllImport("kernel32.dll", SetLastError = true)]',
     '  private static extern IntPtr GetStdHandle(int nStdHandle);',
+    '  private static string ExceptionTypeName(Exception error) {',
+    '    string name = error.GetType().Name;',
+    '    if (name.Length == 0 || name.Length > 64) return "Exception";',
+    '    for (int i = 0; i < name.Length; i++) {',
+    '      char c = name[i];',
+    "      if (!(c >= 'A' && c <= 'Z') && !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9')) return \"Exception\";",
+    '    }',
+    '    return name;',
+    '  }',
+    '  private static void WriteFailure(string stage, Exception error) {',
+    '    uint hresult = unchecked((uint)error.HResult);',
+    '    Console.Error.WriteLine(FAILURE + ":" + stage + ":" + ExceptionTypeName(error) + ":" + hresult.ToString("X8"));',
+    '  }',
     '  private sealed class CopyState {',
     '    public Stream Source;',
     '    public Stream Destination;',
@@ -133,13 +184,18 @@ function powershellRelayScript(pipe, connectTimeoutMs) {
     '    NamedPipeClientStream pipe = null;',
     '    Stream input = null;',
     '    Stream output = null;',
+    '    string stage = "pipe-construction";',
     '    try {',
     '      pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Identification);',
+    '      stage = "pipe-connect";',
     '      pipe.Connect(timeout);',
+    '      stage = "stdin-open";',
     '      input = OpenStandardStream(STD_INPUT_HANDLE, FileAccess.Read);',
+    '      stage = "stdout-open";',
     '      output = OpenStandardStream(STD_OUTPUT_HANDLE, FileAccess.Write);',
     '      CopyState inputState;',
     '      CopyState outputState;',
+    '      stage = "worker-start";',
     '      StartCopy(input, pipe, out inputState);',
     '      StartCopy(pipe, output, out outputState);',
     '      Console.Error.WriteLine(READY);',
@@ -147,10 +203,12 @@ function powershellRelayScript(pipe, connectTimeoutMs) {
     '      pipe.Dispose();',
     '      if (inputState.Failed != 0 || outputState.Failed != 0) Console.Error.WriteLine(FAILED);',
     '      return 0;',
-    '    } catch (TimeoutException) {',
+    '    } catch (TimeoutException error) {',
+    '      WriteFailure(stage, error);',
     '      Console.Error.WriteLine(TIMEOUT);',
     '      return 2;',
-    '    } catch {',
+    '    } catch (Exception error) {',
+    '      WriteFailure(stage, error);',
     '      Console.Error.WriteLine(FAILED);',
     '      return 1;',
     '    } finally {',
@@ -167,9 +225,16 @@ function powershellRelayScript(pipe, connectTimeoutMs) {
     "'@",
     'try {',
     "  Add-Type -TypeDefinition $relaySource -ReferencedAssemblies 'System.Core.dll'",
+    '} catch {',
+    `  $compilerCode = [regex]::Match([string]$_.Exception.Message, 'CS[0-9]{4}').Value`,
+    `  if ($compilerCode) { [Console]::Error.WriteLine('${COMPILE_FAILURE_PREFIX}:' + $compilerCode) } else { [Console]::Error.WriteLine('${COMPILE_FAILURE_PREFIX}:unknown') }`,
+    '  exit 1',
+    '}',
+    'try {',
     `  $relayExitCode = [AgentCommsPipeRelay]::Run('${pipeName}', ${timeout})`,
     '  exit $relayExitCode',
     '} catch {',
+    `  [Console]::Error.WriteLine('${RELAY_FAILURE_PREFIX}:worker-start:Exception:00000000')`,
     `  [Console]::Error.WriteLine('${FAILED_MARKER}')`,
     '  exit 1',
     '}',
@@ -199,6 +264,7 @@ function createPowerShellPipeConnection(pipe, {
   let done = false;
   let stdoutEnded = false;
   let stderr = Buffer.alloc(0);
+  let pendingRelayFailure = null;
   let pendingOutput = [];
   let pendingOutputBytes = 0;
   const relay = new Duplex({
@@ -222,11 +288,11 @@ function createPowerShellPipeConnection(pipe, {
       callback(error);
     },
   });
-  const fail = (code) => {
+  const fail = (code, relayFailure = null) => {
     if (done) return;
-    relay.destroy(Object.assign(new Error(
+    relay.destroy(withRelayFailure(Object.assign(new Error(
       code === 'broker-timeout' ? 'Windows broker pipe connection timed out' : 'Windows broker pipe connection failed',
-    ), { code }));
+    ), { code }), relayFailure));
   };
   child.stdout.on('data', (chunk) => {
     if (done) return;
@@ -246,29 +312,43 @@ function createPowerShellPipeConnection(pipe, {
     if (done || ready) return;
     stderr = Buffer.concat([stderr, chunk]);
     if (stderr.length > 1024) return fail('broker-unreachable');
-    const newline = stderr.indexOf(0x0a);
-    if (newline === -1) return;
-    const marker = stderr.subarray(0, newline).toString('ascii').replace(/\r$/, '');
-    if (marker === READY_MARKER) {
-      ready = true;
-      stderr = Buffer.alloc(0);
-      relay.emit('connect');
-      let backpressured = false;
-      for (const output of pendingOutput) {
-        if (!relay.push(output)) backpressured = true;
+    let newline;
+    while ((newline = stderr.indexOf(0x0a)) !== -1) {
+      const marker = stderr.subarray(0, newline).toString('ascii').replace(/\r$/, '');
+      stderr = stderr.subarray(newline + 1);
+      const relayFailure = parseRelayFailure(marker);
+      if (relayFailure) {
+        if (relayFailure.stage === 'compile') {
+          fail('broker-unreachable', relayFailure);
+          return;
+        }
+        pendingRelayFailure = relayFailure;
+        continue;
       }
-      if (backpressured) child.stdout.pause();
-      pendingOutput = [];
-      pendingOutputBytes = 0;
-      if (stdoutEnded) relay.push(null);
-    } else if (marker === TIMEOUT_MARKER) {
-      fail('broker-timeout');
-    } else {
-      fail('broker-unreachable');
+      if (marker === READY_MARKER) {
+        ready = true;
+        stderr = Buffer.alloc(0);
+        relay.emit('connect');
+        let backpressured = false;
+        for (const output of pendingOutput) {
+          if (!relay.push(output)) backpressured = true;
+        }
+        if (backpressured) child.stdout.pause();
+        pendingOutput = [];
+        pendingOutputBytes = 0;
+        if (stdoutEnded) relay.push(null);
+      } else if (marker === TIMEOUT_MARKER) {
+        fail('broker-timeout', pendingRelayFailure);
+      } else if (marker === FAILED_MARKER) {
+        fail('broker-unreachable', pendingRelayFailure);
+      } else {
+        fail('broker-unreachable');
+      }
+      return;
     }
   });
   child.stderr.once('end', () => {
-    if (!done && !ready) fail(child.exitCode === 2 ? 'broker-timeout' : 'broker-unreachable');
+    if (!done && !ready) fail(child.exitCode === 2 ? 'broker-timeout' : 'broker-unreachable', pendingRelayFailure);
   });
   child.once('error', () => fail('broker-unreachable'));
   child.stdin.on('error', () => fail('broker-unreachable'));
@@ -410,11 +490,11 @@ export function createWindowsCommsTransport({
   timer = setTimeout(() => reject(Object.assign(new Error('broker handshake timed out'), { code: 'broker-timeout' })), handshakeTimeoutMs);
   raw.on('connect', () => raw.write(frameLine({ v: 1, hello: nonce })));
   raw.on('data', onProof);
-  raw.on('error', (error) => reject(Object.assign(new Error(
+  raw.on('error', (error) => reject(withRelayFailure(Object.assign(new Error(
     error.code === 'broker-timeout'
       ? 'broker handshake timed out'
       : `cannot reach the broker: ${error.code ?? error.message}`,
-  ), { code: ['broker-timeout', 'broker-untrusted', 'bad-response'].includes(error.code) ? error.code : 'broker-unreachable' })));
+  ), { code: ['broker-timeout', 'broker-untrusted', 'bad-response'].includes(error.code) ? error.code : 'broker-unreachable' }), error.relayFailure)));
   raw.on('end', ended);
   raw.on('close', ended);
   return channel;

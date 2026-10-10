@@ -14,7 +14,7 @@ import {
   reportCommsLaunch, reportCommsLaunchProgress, reportCommsWake, saveCommsCredential,
 } from '../comms-client.mjs';
 import {
-  createWindowsCommsTransport, readWindowsBrokerPin, windowsHandshakeMessage, windowsPipeName,
+  createWindowsCommsTransport, isWindowsRelayFailure, readWindowsBrokerPin, windowsHandshakeMessage, windowsPipeName,
 } from '../comms-windows.mjs';
 
 const SID = 'S-1-5-21-111-222-333-1001';
@@ -517,6 +517,101 @@ test('default Windows relay explicitly limits pipe-server impersonation and rela
     channel.destroy();
     assert.equal(child.exitCode, 0);
   }
+});
+
+test('Windows relay forwards only grammar-validated fixed failure metadata', async () => {
+  const w = world();
+  const k = keys();
+  writeIdentity(w, k.brokerKey);
+  const child = new EventEmitter();
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = () => { child.signalCode = 'SIGTERM'; return true; };
+  const channel = createWindowsCommsTransport({
+    label: w.paths.serviceLabel, brokerStateDir: w.brokerState, brokerUid: SID, brokerKey: k.brokerKey,
+    custody: fakeCustody(), spawnProcess: () => {
+      process.nextTick(() => child.stderr.end('AGENT_COMMS_PIPE_FAILURE:stdin-open:IOException:80070006\nAGENT_COMMS_PIPE_FAILED\n'));
+      return child;
+    },
+  });
+  const error = await new Promise((resolve) => channel.once('error', resolve));
+  assert.equal(error.code, 'broker-unreachable');
+  assert.equal(error.message, 'cannot reach the broker: broker-unreachable');
+  assert.deepEqual(error.relayFailure, { stage: 'stdin-open', exception: 'IOException', hresult: '80070006' });
+  assert.equal(Object.keys(error).includes('relayFailure'), false);
+  assert.equal(JSON.stringify(error).includes('80070006'), false);
+  assert.equal(isWindowsRelayFailure(error.relayFailure), true);
+
+  const malformed = new EventEmitter();
+  malformed.stdin = new PassThrough();
+  malformed.stdout = new PassThrough();
+  malformed.stderr = new PassThrough();
+  malformed.exitCode = null;
+  malformed.signalCode = null;
+  malformed.kill = () => true;
+  const rejected = createWindowsCommsTransport({
+    label: w.paths.serviceLabel, brokerStateDir: w.brokerState, brokerUid: SID, brokerKey: k.brokerKey,
+    custody: fakeCustody(), spawnProcess: () => {
+      process.nextTick(() => malformed.stderr.end('AGENT_COMMS_PIPE_FAILURE:stdin-open:secret C:\\\\private:80070006\n'));
+      return malformed;
+    },
+  });
+  const invalid = await new Promise((resolve) => rejected.once('error', resolve));
+  assert.equal(invalid.code, 'broker-unreachable');
+  assert.equal(invalid.relayFailure, undefined);
+  assert.equal(invalid.message.includes('private'), false);
+  assert.equal(isWindowsRelayFailure({ stage: 'pipe-connect', exception: 'IOException', hresult: 'not-hex' }), false);
+  assert.equal(isWindowsRelayFailure({ stage: 'compile', code: ['CS0246'] }), false);
+
+  const compile = new EventEmitter();
+  compile.stdin = new PassThrough();
+  compile.stdout = new PassThrough();
+  compile.stderr = new PassThrough();
+  compile.exitCode = null;
+  compile.signalCode = null;
+  compile.kill = () => true;
+  const compileChannel = createWindowsCommsTransport({
+    label: w.paths.serviceLabel, brokerStateDir: w.brokerState, brokerUid: SID, brokerKey: k.brokerKey,
+    custody: fakeCustody(), spawnProcess: () => {
+      process.nextTick(() => compile.stderr.end('AGENT_COMMS_PIPE_COMPILE_FAILURE:CS0246\n'));
+      return compile;
+    },
+  });
+  const compileError = await new Promise((resolve) => compileChannel.once('error', resolve));
+  assert.equal(compileError.code, 'broker-unreachable');
+  assert.deepEqual(compileError.relayFailure, { stage: 'compile', code: 'CS0246' });
+  assert.equal(compileError.message, 'cannot reach the broker: broker-unreachable');
+});
+
+test('CommsClient preserves validated Windows relay diagnostics without changing its public error', async () => {
+  const w = world();
+  const k = keys();
+  writeIdentity(w, k.brokerKey);
+  const raw = new PassThrough();
+  const relayFailure = { stage: 'compile', code: 'CS0246' };
+  Object.defineProperty(raw, 'relayFailure', { value: relayFailure, enumerable: false });
+  const client = new CommsClient({
+    socketPath: windowsPipeName(w.paths.serviceLabel, SID), brokerUid: SID, brokerKey: k.brokerKey,
+    brokerStateDir: w.brokerState, mode: 'single-account', platform: 'win32', windowsCustody: fakeCustody(),
+    windowsCreateConnection: () => {
+      process.nextTick(() => raw.emit('error', Object.assign(new Error('private raw error'), {
+        code: 'broker-unreachable', relayFailure,
+      })));
+      return raw;
+    },
+  });
+  await assert.rejects(client.request({ op: 'ping' }, { paths: w.paths }), (error) => {
+    assert.equal(error.code, 'broker-unreachable');
+    assert.equal(error.message, 'cannot reach the broker: broker-unreachable');
+    assert.deepEqual(error.relayFailure, relayFailure);
+    assert.equal(Object.keys(error).includes('relayFailure'), false);
+    assert.equal(JSON.stringify(error).includes('CS0246'), false);
+    assert.equal(error.message.includes('private'), false);
+    return true;
+  });
 });
 
 test('silent Windows relay startup is bounded and kills its child', async () => {

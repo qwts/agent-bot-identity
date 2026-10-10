@@ -49,6 +49,7 @@ import {
   createWindowsTransportCustody,
   assertWindowsBrokerCustody,
   isWindowsBrokerKey,
+  isWindowsRelayFailure,
   isWindowsSid,
   readWindowsBrokerPin,
 } from './comms-windows.mjs';
@@ -455,9 +456,15 @@ function openCommsConnection(socketPath, fields, { onEvent, signal, timeoutMs = 
       const code = ['broker-untrusted', 'broker-timeout', 'bad-response'].includes(error?.code)
         ? error.code
         : 'broker-unreachable';
-      finish(new CommsError(code, code === 'broker-unreachable'
+      const wrapped = new CommsError(code, code === 'broker-unreachable'
         ? `cannot reach the broker: ${error.code ?? error.message}`
-        : error.message));
+        : error.message);
+      if (isWindowsRelayFailure(error?.relayFailure)) {
+        Object.defineProperty(wrapped, 'relayFailure', {
+          value: Object.freeze({ ...error.relayFailure }), enumerable: false,
+        });
+      }
+      finish(wrapped);
     });
     socket.on('close', () => finish(new CommsError('broker-unreachable', 'the broker closed the connection')));
     commsLineReader(socket, (line) => {

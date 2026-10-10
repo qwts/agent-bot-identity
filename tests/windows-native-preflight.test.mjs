@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { CommsClient } from '../comms-client.mjs';
-import { readWindowsBrokerPin } from '../comms-windows.mjs';
+import { isWindowsRelayFailure, readWindowsBrokerPin } from '../comms-windows.mjs';
 import { createWindowsAccountCustody } from '../windows-account-custody.mjs';
 import { loadOrCreateVouchKey } from '../vouch.mjs';
 
@@ -56,14 +56,19 @@ async function nextMarkerBeforeProof(serverOutput, pendingRequest, description, 
     serverOutput().then((line) => ({ type: 'marker', line })),
     pendingRequest.then(
       () => ({ type: 'request-complete' }),
-      (error) => ({ type: 'request-error', code: error?.code }),
+      (error) => ({ type: 'request-error', code: error?.code, relayFailure: error?.relayFailure }),
     ),
   ]), message);
   if (event.type === 'request-error') {
     const code = typeof event.code === 'string' && /^[a-z0-9-]{1,48}$/i.test(event.code)
       ? ` (${event.code})`
       : '';
-    throw new Error(`CommsClient request failed before ${description}${code}`);
+    const relayFailure = isWindowsRelayFailure(event.relayFailure)
+      ? event.relayFailure.stage === 'compile'
+        ? ` [relay=${event.relayFailure.stage}/${event.relayFailure.code}]`
+        : ` [relay=${event.relayFailure.stage}/${event.relayFailure.exception}/${event.relayFailure.hresult}]`
+      : '';
+    throw new Error(`CommsClient request failed before ${description}${code}${relayFailure}`);
   }
   assert.equal(event.type, 'marker', `CommsClient request completed before ${description}`);
   return event.line;
