@@ -1,0 +1,1 @@
+- Daemon turns apply declared repo or soul reasoning effort through the pinned adapter's supported ACP options, while preserving Codex composite owner model picks (#379).

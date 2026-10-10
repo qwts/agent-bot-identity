@@ -115,6 +115,70 @@ export function packageModel(directory, harness) {
   return declaredModel((harness ? harnessSettings(manifest, harness) : manifest.harness ?? {})?.model);
 }
 
+// Native harness effort names are short identifiers, not arbitrary text. Repo
+// settings are untrusted, and Codex validates the value against the pinned
+// adapter's advertised choices before sending it over ACP.
+const declaredEffort = (value) => (typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(value) ? value : null);
+const JSON_EFFORT_FILES = Object.freeze({
+  claude: Object.freeze(['.claude/settings.local.json', '.claude/settings.json']),
+});
+
+function codexRootEffort(text) {
+  let statements;
+  try { statements = tomlStatements(text); } catch { return null; }
+  for (const statement of statements) {
+    if (/^\s*\[/.test(statement)) return null;
+    const match = statement.match(/^\s*(?:model_reasoning_effort|"model_reasoning_effort"|'model_reasoning_effort')\s*=\s*(?:"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)')\s*(?:#.*)?\s*$/);
+    if (!match) continue;
+    if (match[2] !== undefined) return declaredEffort(match[2]);
+    try { return declaredEffort(JSON.parse(`"${match[1]}"`)); } catch { return null; }
+  }
+  return null;
+}
+
+// The repo's native effort declaration, or null. Preserve bounded native
+// values such as Codex `xhigh` so a higher repo declaration cannot silently
+// fall through to a lower package value; the pinned adapter remains authority
+// on whether it supports that value for the selected model.
+export function repoReasoningEffort(directory, harness) {
+  if (harness === 'codex') return codexRootEffort(readSettingsText(path.join(directory, '.codex', 'config.toml')) ?? '');
+  for (const name of JSON_EFFORT_FILES[harness] ?? []) {
+    try {
+      const effort = declaredEffort(JSON.parse(readSettingsText(path.join(directory, name)))?.effortLevel);
+      if (effort !== null) return effort;
+    } catch { /* declares nothing */ }
+  }
+  return null;
+}
+
+export function packageReasoningEffort(directory, harness) {
+  let manifest = null;
+  try { manifest = JSON.parse(readSettingsText(path.join(directory, 'soul.json'))); } catch { return null; }
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) return null;
+  const value = (harness ? harnessSettings(manifest, harness) : manifest.harness ?? {})?.reasoningEffort;
+  return ['low', 'medium', 'high'].includes(value) ? value : null;
+}
+
+// Effort precedence is the Codex composite owner model pick, then repo, then
+// package. There is no separate owner effort picker or stored effort choice.
+// No declaration means no ACP mutation, leaving current/default state alone.
+export function resolveSoulReasoningEffort({ harness = null, cwd = null, soulDir = null, ownerModel = null } = {}) {
+  // The pinned Codex adapter's ModelId format is `base[effort]`; the model
+  // picker stores the full advertised ID. Its effort is part of the owner's
+  // higher-priority model choice, so a repo/package effort must not overwrite it.
+  if (harness === 'codex' && typeof ownerModel === 'string') {
+    const match = ownerModel.match(/^[^\[\]\r\n]+\[([A-Za-z][A-Za-z0-9_-]{0,31})\]$/);
+    if (match) return { effort: match[1], source: 'pick' };
+  }
+  const real = (dir) => { try { return realpathSync(dir); } catch { return path.resolve(dir); } };
+  const sameDir = Boolean(cwd && soulDir && real(cwd) === real(soulDir));
+  const repo = cwd && path.isAbsolute(cwd) && !sameDir ? repoReasoningEffort(cwd, harness) : null;
+  if (repo !== null) return { effort: repo, source: 'repo' };
+  const declared = soulDir && path.isAbsolute(soulDir) ? packageReasoningEffort(soulDir, harness) : null;
+  if (declared !== null) return { effort: declared, source: 'soul' };
+  return { effort: null, source: 'default' };
+}
+
 // `{ model, source }` for one daemon turn, in the owner's settings order
 // (docs/soul-builder.md): the owner's pick, then the repo's own harness file,
 // then the soul package, then the harness's default. The repo layer is the
