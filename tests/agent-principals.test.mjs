@@ -305,63 +305,54 @@ test('authorization changes are all-or-nothing: a partially invalid request muta
   assert.equal(narrowed.defaultSoul, null);
 });
 
-test('the principal allow CLI is atomic: a rejected request leaves the store unchanged', () => {
+test('principal mutations refuse soul callers before touching the store', () => {
   const { root, options } = scratch();
+  const principal = enrolled(options);
+  const before = readFileSync(options.file, 'utf8');
   const env = {
     ...process.env,
+    AGENT_BOT_ID: SOUL_A,
     AGENT_BOT_PRINCIPALS_PATH: options.file,
     AGENT_BOT_INTERACTION_HOME: path.join(root, 'interaction'),
   };
-  const run = (...args) => spawnSync(process.execPath, [CLI, 'principal', ...args], { encoding: 'utf8', env });
-  const principal = JSON.parse(run('enroll', '--label', 'owner').stdout);
-  assert.equal(run('allow', principal.principalId, '--soul', SOUL_A, '--operation', 'message').status, 0);
-  const before = readFileSync(options.file, 'utf8');
-
-  const rejected = run(
-    'allow', principal.principalId,
-    '--soul', SOUL_B, '--operation', 'message', '--operation', 'bogus-operation',
-  );
-  assert.equal(rejected.status, 1);
-  assert.match(rejected.stderr, /subset of the interaction operations/);
-  assert.equal(readFileSync(options.file, 'utf8'), before);
+  const commands = [
+    ['enroll', '--label', 'attacker'],
+    ['bind', principal.principalId, '--transport', 'telegram', '--provider-id', '42'],
+    ['allow', principal.principalId, '--all-souls', '--operation', 'approve'],
+    ['revoke', principal.principalId],
+  ];
+  for (const args of commands) {
+    const result = spawnSync(process.execPath, [CLI, 'principal', ...args], { encoding: 'utf8', env });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /owner only/);
+    assert.equal(readFileSync(options.file, 'utf8'), before);
+  }
+  const show = spawnSync(process.execPath, [CLI, 'principal', 'show', principal.principalId], { encoding: 'utf8', env });
+  assert.equal(show.status, 0, show.stderr);
+  assert.equal(JSON.parse(show.stdout).status, 'active');
 });
 
-test('the principal CLI enrolls, binds, allows, and lists without tokens', () => {
+test('principal mutations refuse malformed stdin proof and never modify ACLs', () => {
   const { root, options } = scratch();
+  const principal = enrolled(options);
+  const before = readFileSync(options.file, 'utf8');
   const env = {
     ...process.env,
+    AGENT_BOT_ID: SOUL_A,
     AGENT_BOT_PRINCIPALS_PATH: options.file,
     AGENT_BOT_INTERACTION_HOME: path.join(root, 'interaction'),
   };
-  const run = (...args) => spawnSync(process.execPath, [CLI, 'principal', ...args], { encoding: 'utf8', env });
-
-  const enroll = run('enroll', '--label', 'owner');
-  assert.equal(enroll.status, 0, enroll.stderr);
-  const principal = JSON.parse(enroll.stdout);
-
-  const bind = run('bind', principal.principalId, '--transport', 'telegram', '--provider-id', '42');
-  assert.equal(bind.status, 0, bind.stderr);
-
-  const allow = run('allow', principal.principalId, '--soul', SOUL_A, '--operation', 'message');
-  assert.equal(allow.status, 0, allow.stderr);
-  const allowed = JSON.parse(allow.stdout);
-  assert.deepEqual(allowed.authorizations, { souls: [SOUL_A], operations: ['message'] });
-
-  const list = run('list');
-  assert.equal(list.status, 0, list.stderr);
-  assert.match(list.stdout, new RegExp(principal.principalId));
-
-  const show = run('show', principal.principalId);
-  assert.equal(show.status, 0, show.stderr);
-  assert.equal(JSON.parse(show.stdout).label, 'owner');
-
-  const revoke = run('revoke', principal.principalId);
-  assert.equal(revoke.status, 0, revoke.stderr);
-  assert.equal(JSON.parse(revoke.stdout).status, 'revoked');
-
-  const empty = run('allow', principal.principalId);
-  assert.equal(empty.status, 1);
-  assert.match(empty.stderr, /at least one authorization change/);
+  const invalid = spawnSync(process.execPath,
+    [CLI, 'principal', 'allow', principal.principalId, '--all-souls', '--principal-stdin'],
+    { encoding: 'utf8', env, input: '{invalid' });
+  assert.equal(invalid.status, 1);
+  assert.match(invalid.stderr, /principal credential as JSON on stdin/);
+  const soul = spawnSync(process.execPath,
+    [CLI, 'principal', 'revoke', principal.principalId, '--principal-stdin'],
+    { encoding: 'utf8', env, input: JSON.stringify({ principal: 'principal_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', secret: 'fake', brokerUid: 0 }) });
+  assert.equal(soul.status, 1);
+  assert.match(soul.stderr, /owner only/);
+  assert.equal(readFileSync(options.file, 'utf8'), before);
 });
 
 test('getPrincipal answers unknown IDs with a stable error', () => {
