@@ -1,8 +1,12 @@
 # ADR-0753: Owner-signed statements
 
-**Status:** Proposed
+**Status:** Accepted (2026-10-09, by the owner, relayed in chat)
 **Date:** 2026-10-09
 **Issue:** [qwts/agent-bot-identity#753](https://github.com/qwts/agent-bot-identity/issues/753)
+
+This acceptance predates `agent-bot owner sign`, so it is not itself a verified
+owner statement under this record's own rule. That rule applies to owner
+decisions once `owner sign` and `owner verify` exist.
 
 ## Context
 
