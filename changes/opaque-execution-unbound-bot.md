@@ -1,0 +1,1 @@
+- A session that stated a bot identity but whose checkout is not bound is now refused scripts, interpreters and task runners (`node`, `python3`, `npm`, `make`, a stdin-fed shell), which could run git the pre-command check cannot see and commit as the human; a bound bot, the delegate and a human shell run them as before (#777).

@@ -251,6 +251,13 @@ export function combine(results, event) {
 // A stated bot is also refused a command that skips the hooks themselves
 // (`--no-verify`, `commit -n`, a `core.hooksPath` override), bound or not:
 // they are the backstop for git this scan cannot see.
+function opaqueUnboundReason(slug) {
+  return `agent-bot: this session stated bot identity ${slug}, but this checkout is not bound to it, `
+    + 'and this command runs a script, interpreter or task runner that could commit or push as the human. '
+    + 'Run `agent-bot setup-worktree` in a linked worktree (a primary checkout is refused) '
+    + 'and check `agent-bot doctor`, then retry.';
+}
+
 function targetGit(target, env) {
   const prefix = [];
   if (target.gitDir) prefix.push(`--git-dir=${target.gitDir}`);
@@ -267,7 +274,7 @@ export function unboundIdentityCheck(envelope, { env = process.env, cwd = proces
   const scan = scanGitPublish(command, { cwd, env });
   if (!scan.publishes.length && !scan.aliases.length && !scan.ambiguous && !scan.opaqueExecution && !scan.skipsHooks) return allow;
   // A command word the scan cannot read only matters when git could be in it.
-  let uncertain = scan.opaqueExecution || (scan.ambiguous && /git|commit|push/i.test(command.replace(/[\\'"]/g, '')));
+  let uncertain = scan.ambiguous && /git|commit|push/i.test(command.replace(/[\\'"]/g, ''));
   const publishes = [...scan.publishes];
   let skipsHooks = scan.skipsHooks;
   const bypasses = [...scan.bypasses];
@@ -315,6 +322,19 @@ export function unboundIdentityCheck(envelope, { env = process.env, cwd = proces
       if (slug) return { decision: 'deny', reason: unboundBotReason(slug) };
     } catch {
       uncertain = true;
+    }
+  }
+  // A script, interpreter or task runner may run git the scan cannot read.
+  // In a bound worktree the git hooks still hold that git, so a bound bot
+  // runs `node --test` or `python3 build.py` as before; only a stated bot
+  // whose session checkout is not bound (setup failed or never ran) is
+  // refused, since anything it commits would be attributed to the human.
+  if (scan.opaqueExecution) {
+    try {
+      const slug = unboundBotSlug({ env, cwd, git: targetGit({}, env) });
+      if (slug) return { decision: 'deny', reason: opaqueUnboundReason(slug) };
+    } catch (error) {
+      return { decision: 'deny', reason: `cannot verify the stated bot identity: ${error.message}` };
     }
   }
   if (!uncertain) return allow;

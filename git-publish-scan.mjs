@@ -23,9 +23,11 @@
 // `--no-verify` (or `commit -n`), a `core.hooksPath` override for the
 // invocation (`-c`, `--config-env`, GIT_CONFIG_PARAMETERS, GIT_CONFIG_KEY_n,
 // or an `include.path` that could set it), or a `git config` write of
-// `core.hooksPath`. Values the scan cannot read (`git commit $FLAGS`),
-// relocated global config (GIT_CONFIG_GLOBAL, HOME) remain additional
-// deployment concerns. Opaque interpreters are rejected for stated bots.
+// `core.hooksPath`. Values the scan cannot read (`git commit $FLAGS`) and
+// relocated global config (GIT_CONFIG_GLOBAL, HOME) are not seen.
+// `opaqueExecution` marks a script file, stdin-fed shell, interpreter or
+// task runner whose git the scan cannot read; the caller refuses it only
+// for a stated bot that is not bound, and the git hooks cover a bound one.
 
 import { dirname, isAbsolute, resolve } from 'node:path';
 
