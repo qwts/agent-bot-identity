@@ -1,0 +1,1 @@
+- `agent-bot` forwards expanded launch progress stages and stable failure codes so callers can track setup and branch on causes (qwts/agent-comms#129).

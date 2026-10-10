@@ -563,17 +563,29 @@ test('launch-result rejects invalid correlation, status, and identity fields bef
     { requestId: 'r', status: 'launched' },
     { requestId: 'r', status: 'failed', agentId: 'a' },
     { requestId: 'r', status: 'failed', detail: 42 },
+    { requestId: 'r', status: 'failed', code: 'bad_code' },
+    { requestId: 'r', status: 'failed', code: 'a'.repeat(65) },
   ]) await assert.rejects(reportCommsLaunch(fields, {
     clientFactory: () => { throw new Error('must not connect'); },
   }), /invalid launch result/);
+
+  const requests = [];
+  const credential = { account: 'worker', secret: 'secret', brokerUid: 1, pairedAt: '2026-10-09T00:00:00.000Z' };
+  await reportCommsLaunch({ requestId: 'r', status: 'failed', agentId: null, detail: 'failed', code: 'runtime-checksum-mismatch' }, {
+    credential, paths: { socket: '/unused' },
+    clientFactory: () => ({ request: (request) => { requests.push(request); return { ok: true }; } }),
+  });
+  assert.deepEqual(requests[0], { op: 'launch-result', auth: { daemon: 'worker', secret: 'secret' },
+    requestId: 'r', status: 'failed', agentId: null, detail: 'failed', code: 'runtime-checksum-mismatch' });
 });
 
 test('launch-progress rejects a bad correlation or an unknown stage before connecting (#536)', async () => {
   const { reportCommsLaunchProgress, LAUNCH_STAGES } = await import('../comms-client.mjs');
-  assert.deepEqual([...LAUNCH_STAGES], ['checking', 'account', 'joining', 'harness', 'session']);
+  assert.deepEqual([...LAUNCH_STAGES], ['checking', 'account', 'runtimes', 'tool-home', 'provider', 'sign-in', 'joining', 'harness', 'session']);
   for (const fields of [
     { requestId: '', stage: 'account' },
     { requestId: 'r', stage: 'done' },
+    { requestId: 'r', stage: 'unknown-stage' },
     { requestId: 'r' },
   ]) await assert.rejects(reportCommsLaunchProgress(fields, {
     clientFactory: () => { throw new Error('must not connect'); },
