@@ -146,6 +146,11 @@ export async function soulToolHomeCommand(argv, {
     // or a partial update whose rollback failed too.
     try {
       withLock(`${toolHomeRecordPath(soul.soulDir)}.lock`, 'soul tool-homes record', () => {
+        // What to change was decided, and authorized, from a read before the
+        // lock; another command may have changed the choice since.
+        if ((readToolHomeRecord(soul.soulDir)?.harnesses[row.harness] ?? null) !== current) {
+          fail('tool-home-changed', `${row.harness}'s tool-home choice changed while this command waited; nothing was changed, run it again`, 409);
+        }
         if (setting && fresh) {
           staged = prepareToolHomeChoice(soul.soulDir, row.harness, choice);
           try {

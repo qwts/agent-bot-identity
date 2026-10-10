@@ -152,7 +152,9 @@ without that flag does not establish setter support.
   records. This is rollback for reported write failures,
   not a crash-atomic transaction across two files.
 - An unroutable harness is `tool-home-unsupported`; an unknown soul is
-  `soul-not-found`.
+  `soul-not-found`. If another command changes the choice while this one
+  waits for the owner or the lock, it is `tool-home-changed` and nothing is
+  changed.
 
 **Slice 1 scope:** only Codex (`CODEX_HOME`) is stamped by default
 (`SOUL_DEFAULT_HARNESSES`). The resolver honours an entry for any routable

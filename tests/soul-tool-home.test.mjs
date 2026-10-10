@@ -325,6 +325,46 @@ test('a partial update still reports its backup when the receipt cannot be writt
   assert.equal(readFileSync(error.backup, 'utf8'), before);
 });
 
+test('a cleanup failure never hides the partial update', async (t) => {
+  const f = fixture(t);
+  const choiceFile = toolHomeRecordPath(f.soulDir);
+  setToolHomeChoice(f.soulDir, 'codex', 'soul');
+  const file = wakeSessionsFile({ env: f.env, home: f.home });
+  createWakeSessions({ file }).set(ID, 'codex', 'thread-kept', 'workspace', 'soul');
+  const sessions = createWakeSessions({ file, rename: (temp) => {
+    rmSync(choiceFile);
+    mkdirSync(choiceFile);
+    writeFileSync(path.join(choiceFile, 'in-the-way'), '');
+    // A folder at the staged session file makes its cleanup fail as well.
+    rmSync(temp);
+    mkdirSync(temp);
+    writeFileSync(path.join(temp, 'in-the-way'), '');
+    throw Object.assign(new Error('session commit refused'), { code: 'EACCES' });
+  } });
+  const error = await f.run(['codex', 'global', '--soul', ID, '--fresh-session'], { sessions }).then(() => assert.fail('expected a partial update'), (e) => e);
+  assert.equal(error.code, 'tool-home-update-partial');
+  assert.ok(error.cleanup, 'the cleanup failure is attached');
+  assert.ok(error.message.includes(error.backup));
+  assert.equal(f.receipts()[0].decision, 'partial');
+});
+
+test('a choice changed by another command while this one waited changes nothing', async (t) => {
+  const f = fixture(t);
+  setToolHomeChoice(f.soulDir, 'codex', 'soul');
+  const file = wakeSessionsFile({ env: f.env, home: f.home });
+  createWakeSessions({ file }).set(ID, 'codex', 'thread-kept', 'workspace', 'soul');
+  const sessionBefore = readFileSync(file, 'utf8');
+  const run = soulToolHomeCommand(['codex', 'soul', '--soul', ID, '--fresh-session'], {
+    env: f.env, home: f.home, cwd: f.home, now: () => new Date(AT), write: () => {}, markers: () => [],
+    readStdin: () => '', provenSoul: async () => null, client: {}, askOwner: async () => assert.fail('no ask'),
+    ownerGate: async () => { setToolHomeChoice(f.soulDir, 'codex', 'global'); return { method: 'presence' }; },
+  });
+  await assert.rejects(run, { code: 'tool-home-changed' });
+  assert.equal(readToolHomeRecord(f.soulDir).harnesses.codex, 'global');
+  assert.equal(readFileSync(file, 'utf8'), sessionBefore);
+  assert.deepEqual(f.receipts(), []);
+});
+
 test('a combined choice and reset with no recorded session still commits the choice once', async (t) => {
   const f = fixture(t);
   const done = await f.run(['codex', 'global', '--soul', ID, '--fresh-session']);

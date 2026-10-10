@@ -194,6 +194,7 @@ export function createWakeSessions({ file, rename = renameSync }) {
       const result = change(sessions);
       if (result === undefined) { beforeCommit(); return null; }
       const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+      let failed = null;
       try {
         writeFileSync(temp, `${JSON.stringify({ schemaVersion: 1, sessions }, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
         const rollback = beforeCommit();
@@ -206,8 +207,12 @@ export function createWakeSessions({ file, rename = renameSync }) {
           }
           throw error;
         }
+      } catch (error) { failed = error; throw error; }
+      finally {
+        // A failed cleanup never hides the failure that came first.
+        try { rmSync(temp, { force: true }); }
+        catch (cleanup) { if (failed === null) throw cleanup; failed.cleanup = cleanup; }
       }
-      finally { rmSync(temp, { force: true }); }
       return result;
     });
   };
