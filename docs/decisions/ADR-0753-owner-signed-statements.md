@@ -133,8 +133,14 @@ public key in `<state>/owner/keys.json` (mode 0600), with its name, store,
   presence verifies with the presence key, which is pinned from the signed
   binary.
 
-Hosts with no GUI cannot show presence, so they cannot enrol locally. Where
-they get their pin is open question 3.
+Hosts with no GUI cannot show presence, so they cannot enrol locally. They
+get their pins from the organization profile: the profile carries the owner's
+enrolled public keys (name, store, `alg`, fingerprint), and `bootstrap` installs
+them into `<state>/owner/keys.json`. A key reaches the profile only after it
+was enrolled with presence on a trusted machine. Verification then reads only
+the local pins, so it works offline. Nothing is fetched from GitHub or any
+other service at verify time, as the runtime must not depend on reaching
+GitHub.
 
 ### 4. The challenge fallback
 
@@ -247,10 +253,12 @@ not approval, and the agent says so instead of acting.
   and, if it matters more than that, removes the key.
 - **Removing a key is local.** `owner remove` changes only that host's pins,
   and offline verification never asks anyone else. A lost key must be removed
-  on every host that pinned it. Hosts and CI that pin from one shared source
-  (open question 3) re-read it at least daily and drop keys that are gone
-  from it without asking, since dropping a key only tightens; adding a key
-  still needs presence. There is no per-statement revocation list.
+  on every host that pinned it. Hosts and CI that pin from the organization
+  profile drop keys that are gone from it on their next profile refresh
+  (bootstrap or repair), without asking, since dropping a key only tightens;
+  adding a key still needs presence. That refresh is the only network step,
+  and verification itself stays offline. There is no per-statement
+  revocation list.
 
 ## Consequences
 
@@ -272,23 +280,24 @@ not approval, and the agent says so instead of acting.
 - A software ssh key is weaker than the owner's direction asks for. It is
   allowed only by an explicit flag.
 
-## Open questions for the owner
+## Answers (owner, 2026-10-09)
 
-1. **Should a statement name an agent or session, or bind to the scope
-   only?** Recommended: scope only (repo and issue or PR). Any agent working
-   on that issue may act on the owner's decision; a challenge already binds
-   to one request through its nonce.
-2. **Should a statement expire, or stay valid once its gated change has
-   merged?** Recommended: always expire (7 days by default, 30 at most). The
-   merged PR that quotes the statement is the lasting record; a new decision
-   gets a new statement.
-3. **Where do hosts without a GUI, and CI, get the owner's key?**
-   Recommended: from the owner's GitHub account's SSH signing keys, for the
-   login the organization profile names, re-read at least daily. A key dropped
-   there is dropped from the pins; a new key is pinned only after presence on
-   a trusted machine. Agents cannot add keys to the owner's
-   GitHub account. Macs enrol locally through presence.
-4. **One owner key or several?** Recommended: several named keys (for
-   example a Mac's keyd and a hardware key), at most four, each enrolled by
-   presence. Any one of them can sign, and losing a device means removing
-   one key, not re-enrolling everything.
+The owner answered the four open questions in chat on 2026-10-09. These
+answers were relayed by an agent, so under this record's own rule they are
+not themselves a verified owner statement. The record stays Proposed until
+the owner accepts it.
+
+1. **Binding:** a statement binds to its scope only: the repository and the
+   issue or PR. It names no agent or session. Any agent working on that issue
+   may act on it, and a challenge already binds to one request through its
+   nonce.
+2. **Expiry:** every statement expires, 7 days by default and 30 at most.
+   The merged PR that quotes the statement is the lasting record, and a new
+   decision gets a new statement.
+3. **Key source:** the owner's keys are enrolled locally with presence and
+   distributed through the organization profile, and verification is
+   offline (section 3). They are not read from the owner's GitHub account's
+   SSH signing keys, because the runtime must not depend on reaching GitHub.
+4. **Number of keys:** several named keys, at most four, each enrolled with
+   presence (for example a Mac's keyd, a phone and a hardware key). Any one of
+   them can sign, and losing a device means removing that one key.
