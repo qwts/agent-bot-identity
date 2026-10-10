@@ -13,7 +13,7 @@ import { PROFILE_HARNESSES, profileAppSlugs } from './organization-profile.mjs';
 import { assertOwnerAction } from './owner-gate.mjs';
 import { assignAgentApp, readAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
 import { credentialStores, defaultCredentialStore, resolveAppCredential } from './soul-credentials.mjs';
-import { credentialNamespace, itemTitle, managedAppItem } from './credential-names.mjs';
+import { credentialNamespace, itemTitle, managedAppItem, managedAppWebhookFile, managedAppWebhookItem } from './credential-names.mjs';
 import { createProtonPassCredentialProvider, validateIssuer, validatePrivateKey } from './ensure-private-key.mjs';
 import { buildAppJwt, pickInstallation } from './mint-token.mjs';
 import { KEYD_METHOD_NOT_FOUND, appKeydAvailability, importAppIntoKeyd, removeAppFromKeyd } from './keyd-client.mjs';
@@ -176,6 +176,7 @@ async function importIntoKeydStore(app, credential, placement, options, { oneTim
 // Where a keyd-held App's webhook secret is kept: the store a new key would
 // fall back to on this platform.
 const webhookSecretStore = (options) => defaultCredentialStore(options.platform);
+const webhookTarget = (app, options) => ({ ...appStoreTarget(app, options), name: 'webhook' });
 async function persist(app, credential, cachedInstallations, options, settings = {}) {
   // The keyd probe, import and record are one step per App (#110).
   const held = await withAppOperationLock(app, options, () => persistLocked(app, credential, cachedInstallations, options, settings));
@@ -217,22 +218,23 @@ async function persistLocked(app, credential, cachedInstallations, options, { re
   let rollback = null;
   return updateAppConfig((config) => {
     const previous = check(config);
-    // keyd keeps an App ID and key only (#110), so a manifest's webhook
-    // secret stays in the file or Keychain item the App would otherwise use,
-    // under the same name, without the key. A keyd rotation has no webhook
-    // secret in hand and leaves that item alone.
-    const keyless = kind === 'keyd' && credential.webhookSecret;
-    const itemStore = keyless ? webhookSecretStore(options) : kind;
-    if (kind !== 'keyd' || keyless) {
-      const target = appStoreTarget(app, options);
-      const before = previous?.store || keyless ? options.stores[itemStore].read(target) : null;
-      if (before) rollback = () => options.stores[itemStore].write(target, before);
-      options.stores[itemStore].write(target, keyless ? { appId: String(credential.appId), webhookSecret: credential.webhookSecret } : credential);
+    if (kind !== 'keyd') {
+      if (previous?.store) {
+        const before = options.stores[kind].read(appStoreTarget(app, options));
+        if (before) rollback = () => options.stores[kind].write(appStoreTarget(app, options), before);
+      }
+      options.stores[kind].write(appStoreTarget(app, options), credential);
     }
+    // keyd keeps an App ID and key only (#110), so a manifest's webhook
+    // secret goes to its own item in the file or Keychain store
+    // (`agent-bot.app.SLUG.webhook`). A keyd rotation has no webhook secret
+    // in hand and leaves that item alone.
+    const webhookKept = kind === 'keyd' && Boolean(credential.webhookSecret);
+    if (webhookKept) options.stores[webhookSecretStore(options)].writeSecret(webhookTarget(app, options), credential.webhookSecret);
     config.identityApps ??= {};
     const keyUpdatedAt = (options.now ?? (() => new Date()))().toISOString();
     config.identityApps[app] = { ...previous, ...metadata, id: String(credential.appId), store: kind, keyFingerprint, keyUpdatedAt, installations: cachedInstallations };
-    return { id: String(credential.appId), slug: app, installUrl: installUrl(app), store: kind, ...(placement.reason ? { storeReason: placement.reason } : {}), ...(keyless ? { webhookSecretKept: true } : {}) };
+    return { id: String(credential.appId), slug: app, installUrl: installUrl(app), store: kind, ...(placement.reason ? { storeReason: placement.reason } : {}), ...(webhookKept ? { webhookSecretKept: true } : {}) };
   }, { ...options, rollback: () => rollback?.() });
 }
 // Harness → App mappings as list reports them: explicit `apps` overrides and
@@ -358,6 +360,10 @@ function assign(body, options) {
 // itself and its keys on github.com are untouched, as is any legacy
 // ~/.config/<slug> folder (agent-bot never deletes those). The result names
 // what was removed, never what it held.
+function webhookItemName(app, kind, options) {
+  return kind === 'keychain' ? itemTitle(managedAppWebhookItem(app, { namespace: credentialNamespace(options.env) }))
+    : path.join(appStoreTarget(app, options).soulDir, '.soul-state', 'credentials', managedAppWebhookFile(app));
+}
 function storeItemName(app, kind, options) {
   const target = appStoreTarget(app, options);
   return kind === 'keychain' ? itemTitle(managedAppItem(app, { namespace: credentialNamespace(options.env) }))
@@ -430,23 +436,34 @@ async function removeLocked(app, options) {
     if (!record) fail('identity-app-not-found', `App ${app} is not managed on this machine.`, 404);
     if (record.store !== recorded.store) fail('identity-app-conflict', `App ${app} changed; retry removal.`);
     blockers(config);
-    // A keyd-held App's item holds only its webhook secret (#110).
-    const kind = record.store === 'keyd' ? webhookSecretStore(options) : record.store ?? null;
+    // A keyd-held App has no key item here, only its webhook secret's (#110).
+    let webhook = null;
+    if (record.store === 'keyd') {
+      const store = webhookSecretStore(options), target = webhookTarget(app, options);
+      let before;
+      try { before = options.stores[store].readSecret(target); }
+      catch { fail('identity-app-store', `Could not read App ${app}'s webhook secret; unlock the store and retry. Nothing ${keydKey ? 'else ' : ''}was removed.`); }
+      try { options.stores[store].deleteSecret(target); }
+      catch { fail('identity-app-store', `Could not remove App ${app}'s webhook secret; nothing ${keydKey ? 'else ' : ''}was removed.`); }
+      if (before !== null) rollback = () => options.stores[store].writeSecret(target, before);
+      webhook = { store, name: webhookItemName(app, store, options), existed: before !== null };
+    }
+    const kind = record.store === 'keyd' ? null : record.store ?? null;
     let item = null;
     if (kind) {
       if (!['file', 'keychain'].includes(kind)) fail('identity-app-store', 'This App uses an unsupported store; nothing was removed.');
       const target = appStoreTarget(app, options);
       let before;
       try { before = options.stores[kind].read(target); }
-      catch { fail('identity-app-store', `Could not read App ${app}'s store; unlock it and retry. Nothing ${keydKey ? 'else ' : ''}was removed.`); }
+      catch { fail('identity-app-store', `Could not read App ${app}'s store; unlock it and retry. Nothing was removed.`); }
       try { options.stores[kind].delete(target); }
-      catch { fail('identity-app-store', `Could not remove App ${app}'s stored ${record.store === 'keyd' ? 'webhook secret' : 'key'}; nothing ${keydKey ? 'else ' : ''}was removed.`); }
+      catch { fail('identity-app-store', `Could not remove App ${app}'s stored key; nothing was removed.`); }
       if (before) rollback = () => options.stores[kind].write(target, before);
       item = { store: kind, name: storeItemName(app, kind, options), existed: Boolean(before) };
     }
     delete config.identityApps[app];
     if (!Object.keys(config.identityApps).length) delete config.identityApps;
-    return { slug: app, id: typeof record.id === 'string' ? record.id : null, removed: { storeItem: item, configRecord: true, ...(keydKey === null ? {} : { keydKey }) } };
+    return { slug: app, id: typeof record.id === 'string' ? record.id : null, removed: { storeItem: item, configRecord: true, ...(keydKey === null ? {} : { keydKey, webhookSecretItem: webhook }) } };
   }, { ...options, rollback: () => rollback?.() });
 }
 function finishRemove(result, options) {

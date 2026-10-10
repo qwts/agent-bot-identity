@@ -23,8 +23,7 @@ export function readManagedAppCredential(slug, { env = process.env, home = homed
   if (declaration.store === 'keyd') throw Object.assign(new Error(`the ${slug} App key is held by agent-bot-keyd`), { code: 'managed-app-keyd-held' });
   if (!['file', 'keychain'].includes(declaration.store)) throw new Error('unsupported App credential store');
   const credential = stores[declaration.store].read(appStoreTarget(slug, { env, home }));
-  // A keyless item (a keyd App's webhook secret, #110) is no credential here.
-  if (!credential?.privateKeyPem) throw new Error('managed App credential is missing; reconnect the App');
+  if (!credential) throw new Error('managed App credential is missing; reconnect the App');
   if (declaration.id && declaration.id !== credential.appId) throw new Error('managed App issuer does not match its record');
   return credential;
 }

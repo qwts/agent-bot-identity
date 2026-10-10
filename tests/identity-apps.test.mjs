@@ -672,31 +672,35 @@ async function createInto(t, keyd, platform = 'linux') {
   assert.equal((await callback(manifest, state)).status, 200);
   return { f, result: await flow.completion };
 }
-for (const platform of ['linux', 'darwin']) test(`create into keyd keeps the webhook secret in the App's ${platform === 'darwin' ? 'Keychain item' : 'file'}, with no key`, async (t) => {
+const webhookFile = (f) => path.join(appStoreTarget('fixture-app', f.options).soulDir, '.soul-state/credentials/github-app-fixture-app.webhook.json');
+const webhookTarget = (f) => ({ ...appStoreTarget('fixture-app', f.options), name: 'webhook' });
+for (const platform of ['linux', 'darwin']) test(`create into keyd keeps the webhook secret in its own ${platform === 'darwin' ? 'Keychain item' : 'file'}, and no key item is written`, async (t) => {
   const keyd = fakeKeyd();
   const { f, result } = await createInto(t, keyd, platform); noSecrets(result);
   assert.deepEqual([result.store, result.webhookSecretKept], ['keyd', true]);
   assert.equal(keyd.imports.length, 1);
   const kind = platform === 'darwin' ? 'keychain' : 'file';
-  // The same item a file or Keychain App uses, holding the App ID and the secret only.
-  assert.deepEqual(f.options.stores[kind].read(appStoreTarget('fixture-app', f.options)), { appId: '123', webhookSecret: 'fixture-webhook-value' });
+  const store = f.options.stores[kind];
+  assert.equal(store.readSecret(webhookTarget(f)), 'fixture-webhook-value');
+  assert.equal(store.read(appStoreTarget('fixture-app', f.options)), null, 'no key item: keyd holds the key');
+  if (platform === 'darwin') {
+    const services = JSON.stringify(JSON.parse(readFileSync(f.env.FAKE_KEYCHAIN, 'utf8')));
+    assert.match(services, /agent-bot\.app\.fixture-app\.webhook/);
+  } else assert.equal(existsSync(webhookFile(f)), true);
   assert.equal(loadConfig(f.options).identityApps['fixture-app'].store, 'keyd');
   assert.throws(() => readManagedAppCredential('fixture-app', f.options), { code: 'managed-app-keyd-held' });
-  // Only an App-scoped item may hold no key: a soul's is still malformed.
-  const soulDir = path.join(f.home, 'soul');
-  f.options.stores.file.write({ soulDir, slug: 'fixture-app' }, { appId: '123', webhookSecret: 'x' });
-  assert.throws(() => f.options.stores.file.read({ soulDir, slug: 'fixture-app' }), /malformed/);
   // Rotating in keyd leaves the webhook secret where it is.
   await identityAppOperation('rotate-key', { slug: 'fixture-app', keyFile: f.newKeyFile }, f.options);
-  assert.deepEqual(f.options.stores[kind].read(appStoreTarget('fixture-app', f.options)), { appId: '123', webhookSecret: 'fixture-webhook-value' });
+  assert.equal(store.readSecret(webhookTarget(f)), 'fixture-webhook-value');
 });
 test('remove sends owner/app-remove for a keyd-held App, then drops its webhook secret and record', async (t) => {
   const keyd = fakeKeyd();
   const { f } = await createInto(t, keyd);
   const result = await identityAppOperation('remove', { slug: 'fixture-app' }, f.options); noSecrets(result);
-  assert.deepEqual(result, { slug: 'fixture-app', id: '123', removed: { storeItem: { store: 'file', name: fileItem(f), existed: true }, configRecord: true, keydKey: true } });
+  assert.deepEqual(result, { slug: 'fixture-app', id: '123', removed: { storeItem: null, configRecord: true, keydKey: true, webhookSecretItem: { store: 'file', name: webhookFile(f), existed: true } } });
   assert.deepEqual(keyd.removals, ['fixture-app']);
-  assert.equal(existsSync(fileItem(f)), false);
+  assert.equal(existsSync(webhookFile(f)), false);
+  assert.equal(existsSync(appStoreTarget('fixture-app', f.options).soulDir), false, 'empty App store directories are removed');
   assert.equal(loadConfig(f.options).identityApps, undefined);
   // A key keyd no longer holds leaves only the record to drop.
   const gone = fixture(t); await github(t, gone);
@@ -704,6 +708,7 @@ test('remove sends owner/app-remove for a keyd-held App, then drops its webhook 
   lost.removals.push('fixture-app');
   const dropped = await identityAppOperation('remove', { slug: 'fixture-app' }, gone.options);
   assert.equal(dropped.removed.keydKey, false); assert.equal(dropped.removed.configRecord, true);
+  assert.equal(dropped.removed.webhookSecretItem.existed, false);
   assert.equal(lost.removals.length, 1, 'keyd was not asked to remove a key it does not hold');
 });
 test('removing a keyd-held App removes nothing when keyd is unavailable, older than #110 or refuses', async (t) => {

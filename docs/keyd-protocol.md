@@ -336,9 +336,9 @@ messages and grant format.
   soul.
 
 keyd keeps an App ID and key only, so a manifest's webhook secret is kept
-in the file or Keychain item a non-keyd App would use, under the same name,
-holding the App ID and the secret and no key (`webhookSecretKept: true`).
-Readers of a managed key refuse that item; `remove` deletes it.
+in its own file or Keychain item, `agent-bot.app.<slug>.webhook`
+([credential-names.mjs](../credential-names.mjs)), never in a key item
+(`webhookSecretKept: true`); `remove` deletes it.
 
 ### Item
 
@@ -415,7 +415,7 @@ Tests named here are `node:test` titles, or Rust test functions under
 | keyd is verified for App keys only when it answers, is pinned and knows `owner/app-status`; `-32601` reads as an older keyd | `appKeydAvailability` | keyd owner channel | `tests/keyd.test.mjs`: "keyd is verified for App keys only when it runs, is pinned and knows owner/app-status" |
 | A `store: keyd` App mints through the daemon with an App-scope grant naming the bound soul | `resolveAppCredential`, `mint`, `mintViaKeyd` | keyd `credential` | `tests/keyd.test.mjs`: "a soul whose App keyd holds App-level mints with an App-scope grant naming the soul" |
 | create, connect and rotate-key use keyd when verified, fall back with a stated reason when not or on `-32601`, fail on any other refusal, and never move or replace an existing key | `identityAppOperation` | keyd `owner/app-import` | `tests/identity-apps.test.mjs`: "with keyd verified, connect keeps the key in keyd, …", "with keyd not verified, …", "an older keyd (-32601) falls back …", "existing App keys are untouched: …", "a keyd-held App rotates in keyd, …", "create keeps the one-time key in keyd …" |
-| create into keyd keeps the webhook secret in the App's own file or Keychain item with no key; a soul's item may not be keyless | `persist`, `decode` | — | `tests/identity-apps.test.mjs`: "create into keyd keeps the webhook secret in the App's file, with no key", "… Keychain item, with no key" |
+| create into keyd keeps the webhook secret in its own `.webhook` file or Keychain item, and writes no key item | `persist`, `managedAppWebhookItem` | — | `tests/identity-apps.test.mjs`: "create into keyd keeps the webhook secret in its own file, and no key item is written", "… own Keychain item, …" |
 | remove of a keyd-held App sends `owner/app-remove` and removes nothing when keyd is unavailable, older or refuses; an orphaned keyd key is removed only when named, after the owner gate | `remove`, `removeAppFromKeyd` | keyd `owner/app-remove` | `tests/identity-apps.test.mjs`: "remove sends owner/app-remove for a keyd-held App, …", "removing a keyd-held App removes nothing …", "an orphaned keyd key is removed only when named, …" |
 | One App operation at a time; readers that cannot mint through keyd fail closed on a keyd record | `withAppOperationLock`, `readManagedAppCredential` | — | `tests/identity-apps.test.mjs`: "one operation per App at a time: …", "readers that cannot mint through keyd fail closed on a keyd-held App" |
 | Souls are denied `vouch-key.pem` and keyd's sockets in every tool | — | confinement hook | `tests/soul-credentials.test.mjs`: "confinement denies a soul its key store, the legacy folder and secret-store CLIs in every tool" |

@@ -111,9 +111,11 @@ file store and `storeReason` says why. Any other keyd refusal fails the
 operation and stores nothing, except create's one-time key, which falls back
 with the reason. An App already in Keychain or the file store keeps it,
 rotation included; a key keyd already holds for an App with no record here is
-not replaced. A manifest's webhook secret is kept for a keyd-held App in the
-same Keychain item or file a non-keyd App uses, holding only the App ID and the
-secret (`webhookSecretKept: true`). One create, connect, rotate-key or remove
+not replaced. A manifest's webhook secret for a keyd-held App is kept in its
+own item beside the key's usual one: Keychain service `agent-bot.app.SLUG.webhook`
+(account `github-app/SLUG`), pass-cli note `agent-bot.app.SLUG.webhook/github-app/SLUG`,
+or the file `github-app-SLUG.webhook.json` (`webhookSecretKept: true`). The key
+item always holds a key. One create, connect, rotate-key or remove
 runs per App at a time; another refuses with `identity-app-busy`. Details are in
 [keyd-protocol.md](keyd-protocol.md#app-level-keys-110). Managed credentials precede
 legacy readable stores. A soul's existing `keyd` declaration remains
@@ -146,7 +148,8 @@ already gone.
 
 For a keyd-held App (#110), `remove` sends `owner/app-remove`, so keyd asks
 the owner again, then deletes the webhook-secret item and the record;
-`removed.keydKey` says whether keyd held the key. keyd not running, older than
+`removed.keydKey` says whether keyd held the key, `storeItem` is `null` and
+`webhookSecretItem` names the webhook item as `storeItem` would. keyd not running, older than
 #110, or refusing (the owner declined) fails with `identity-app-keyd-unavailable`
 or `identity-app-keyd-refused` and removes nothing. A key keyd holds for a
 slug with no record here (a create whose record was never written) is removed
