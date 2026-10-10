@@ -88,7 +88,7 @@ test('cold turns share daemon grants, write session receipts, and stop/pause cle
   const env = { HOME: home, AGENT_BOT_INTERACTION_HOME: path.join(home, 'interaction'), AGENT_BOT_POPULATION_PATH: path.join(home, 'population.json') };
   upsertSoul({ id: ID, name: 'session-soul', status: 'active', spacePath: home }, { file: env.AGENT_BOT_POPULATION_PATH });
   const turns = createTurnRegistry();
-  const server = createDaemonServer({ env, home, config: {}, turns, ownerGate: async () => {} });
+  const server = createDaemonServer({ env, home, config: {}, turns, ownerGate: async () => {}, settingGate: async () => {} });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await new Promise((resolve) => server.close(resolve)); rmSync(home, { recursive: true, force: true }); });
   const call = async (route, body) => {

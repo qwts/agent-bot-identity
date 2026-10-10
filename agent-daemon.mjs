@@ -250,6 +250,20 @@ function writeStateFile(file, state) {
   }
 }
 
+// Routes that need the owner, not just the bearer (#785, docs/daemon-api.md).
+// Revision writes and dream controls refuse a binding earlier, with their own
+// receipts; these are the rest. Returns the route's table name or null.
+const OWNER_ROUTES = new Set(['POST /v0/sandbox', 'POST /v0/sandbox/override', 'POST /v0/soul/computer-use',
+  'POST /v0/soul/resume', 'POST /v0/approvals/decide']);
+export function ownerRouteName(method, pathname) {
+  const route = `${method} ${pathname}`;
+  if (OWNER_ROUTES.has(route)) return route;
+  if (method !== 'POST') return null;
+  if (/^\/v0\/identity\/apps\/[a-z-]+$/.test(pathname)) return 'POST /v0/identity/apps/{action}';
+  if (/^\/v1\/proposals\/[^/]+\/decision$/.test(pathname)) return 'POST /v1/proposals/{id}/decision';
+  return null;
+}
+
 function tokensMatch(expected, presented) {
   const left = Buffer.from(expected, 'utf8');
   const right = Buffer.from(presented ?? '', 'utf8');
@@ -502,6 +516,12 @@ export function createDaemonServer({
       if (dreamAction && ('x-agent-binding' in req.headers || PROOF_HEADER in req.headers)) {
         appendAuditReceipt({ event: 'dream-control', operation: dreamAction, decision: 'owner-credential-required' }, { env, home, now });
         throw ownerCredentialRequired('a soul binding cannot authorize dream controls');
+      }
+      // Every other owner route (#785): a soul binding never reaches the owner.
+      const ownerRoute = ownerRouteName(req.method, url.pathname);
+      if (ownerRoute && ('x-agent-binding' in req.headers || PROOF_HEADER in req.headers)) {
+        appendAuditReceipt({ event: 'owner-route', operation: ownerRoute, decision: 'owner-credential-required' }, { env, home, now });
+        throw ownerCredentialRequired(`a soul binding cannot authorize ${ownerRoute}`);
       }
       if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/binding/app', 'POST /v0/credential', 'POST /v0/inbox/take', 'POST /v0/grants/request', 'POST /v0/grants/spend', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start', 'POST /v0/asides/delivered'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
         sendJson(res, 401, { error: 'missing or invalid daemon token' });
@@ -1128,7 +1148,8 @@ export function createDaemonServer({
           const agentId = requireAgentId(body.agentId);
           // Like approvals: the local owner presents the daemon token;
           // adapters additionally identify their enrolled transport principal.
-          // Stopping grants no tool permission and needs no presence dialog.
+          // Pausing and stopping grant no tool permission and need no
+          // presence dialog; the owner's resume does (below).
           let principal = null;
           const transport = body.transport ?? 'owner';
           if (body.transport !== undefined || body.providerId !== undefined) {
@@ -1146,6 +1167,16 @@ export function createDaemonServer({
           }
           try { showSoul(agentId, { file: populationFile({ env, home }) }); }
           catch { throw Object.assign(new Error('unknown soul'), { statusCode: 404 }); }
+          // The daemon bearer alone proves only a process in this account, so
+          // a resume without an enrolled transport principal asks the owner
+          // (#785). Pause and stop only hold a soul back and stay prompt-free.
+          if (action === 'resume' && !principal) {
+            try { await settingGate(`soul resume ${agentId}`, { principal: body.principal ?? null }); }
+            catch (error) {
+              appendAuditReceipt({ event: 'resume', agentId, transport, operation: 'cancel', decision: 'owner-refused' }, { env, home, now });
+              throw Object.assign(new Error('The owner did not authorize resuming this soul.'), { code: error.code ?? 'owner-credential-required', statusCode: 403 });
+            }
+          }
           const stopped = action === 'resume' ? false : (server.wakePlane?.stop?.(agentId) ?? turns.stop(agentId));
           if (action !== 'stop') setSoulPaused(agentId, action === 'pause', { file: populationFile({ env, home }) });
           appendAuditReceipt({ event: action, agentId, transport, principalId: principal?.principalId ?? null,

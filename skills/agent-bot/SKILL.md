@@ -193,6 +193,8 @@ launches and interactive turns are refused with `soul-paused`. JSON is
 `agent-bot soul resume <agentId|name> [--json]` clears the flag, returning
 `{agentId, paused: false}`; the next inbox poll can wake the soul normally.
 Both use the same caller gate as stop and record `pause` or `resume` receipts.
+Resume lifts the owner's hold, so the daemon also asks the owner (Touch ID or
+the password) before it applies; pause never prompts (#785).
 `agent-bot soul show <agentId|name> --json`, population JSON, and daemon health
 and status soul lists expose `paused` (false by default).
 
