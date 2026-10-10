@@ -164,12 +164,14 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       'using System.IO.Pipes;',
       'using System.Security.Principal;',
       'public static class AgentBotNativePipeImpersonationProbe {',
-      '    public static PipeStreamImpersonationWorker Create() {',
-      '        return delegate {',
+      '    public static string ReadLevel(NamedPipeServerStream server) {',
+      '        string level = null;',
+      '        server.RunAsClient(delegate {',
       '            using (var identity = WindowsIdentity.GetCurrent()) {',
-      '                Console.Out.WriteLine("LEVEL=" + identity.ImpersonationLevel.ToString());',
+      '                level = identity.ImpersonationLevel.ToString();',
       '            }',
-      '        };',
+      '        });',
+      '        return level;',
       '    }',
       '}',
       "'@",
@@ -182,7 +184,7 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       '  $compilerResults = $provider.CompileAssemblyFromSource($compilerParameters, [string[]]@($probeSource))',
       "  if ($compilerResults.Errors.HasErrors) { throw 'native impersonation probe compilation failed' }",
       "  $probeType = $compilerResults.CompiledAssembly.GetType('AgentBotNativePipeImpersonationProbe', $true)",
-      "  $worker = $probeType.GetMethod('Create').Invoke($null, [object[]]@())",
+      "  $readLevel = $probeType.GetMethod('ReadLevel')",
       '  $provider.Dispose()',
       '  $provider = $null',
       "  [Console]::Out.WriteLine('COMPILER_READY')",
@@ -221,7 +223,8 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       "  if ($hello['v'] -ne 1 -or $hello['hello'] -notmatch '^[0-9a-f]{64}$') { throw 'invalid hello' }",
       "  [Console]::Out.WriteLine('HELLO')",
       "  $phase = 'impersonation-level'",
-      '  $server.RunAsClient($worker)',
+      '  $level = $readLevel.Invoke($null, [object[]]@($server))',
+      "  [Console]::Out.WriteLine(('LEVEL=' + $level))",
       "  [Console]::Out.WriteLine(('CHALLENGE=' + $hello['hello']))",
       "  $phase = 'broker-proof'",
       '  $proof = [Console]::In.ReadLine()',
@@ -234,7 +237,14 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       '  $writer.WriteLine($response)',
       "  [Console]::Out.WriteLine('REQUEST_OK')",
       '} catch {',
-      "  [Console]::Out.WriteLine(('FAILED=' + $phase))",
+      '  $exception = $_.Exception',
+      '  for ($depth = 0; $depth -lt 8 -and $null -ne $exception.InnerException; $depth++) { $exception = $exception.InnerException }',
+      "  $exceptionType = $exception.GetType().Name",
+      "  if ($exceptionType -notmatch '^(Win32Exception|IOException|SecurityException|UnauthorizedAccessException|ArgumentException|InvalidOperationException|MethodInvocationException|TargetInvocationException)$') { $exceptionType = 'Other' }",
+      "  $hresult = $exception.HResult.ToString('X8')",
+      "  $nativeErrorCode = 'none'",
+      '  if ($exception -is [System.ComponentModel.Win32Exception]) { $nativeErrorCode = $exception.NativeErrorCode.ToString(\'X8\') }',
+      "  [Console]::Out.WriteLine(('FAILED=' + $phase + '/' + $exceptionType + '/' + $hresult + '/' + $nativeErrorCode))",
       '  exit 1',
       '} finally {',
       '  if ($null -ne $provider) { $provider.Dispose() }',
@@ -288,8 +298,10 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       'native named-pipe server did not report client impersonation level',
     );
     const levelMatch = /^LEVEL=(Anonymous|Identification|Impersonation|Delegation|None)$/.exec(levelMarker);
-    const failureMatch = /^FAILED=(json-preflight|server-create|connect|stream-setup|hello-read|impersonation-preflight|impersonation-level|broker-proof|request)$/.exec(levelMarker);
-    if (failureMatch) throw new Error(`native named-pipe fixture failed during ${failureMatch[1]}`);
+    const failureMatch = /^FAILED=(json-preflight|server-create|connect|stream-setup|hello-read|impersonation-preflight|impersonation-level|broker-proof|request)\/(Win32Exception|IOException|SecurityException|UnauthorizedAccessException|ArgumentException|InvalidOperationException|MethodInvocationException|TargetInvocationException|Other)\/([0-9A-F]{8})\/(none|[0-9A-F]{8})$/.exec(levelMarker);
+    if (failureMatch) {
+      throw new Error(`native named-pipe fixture failed during ${failureMatch[1]} (${failureMatch[2]}, HRESULT ${failureMatch[3]}, native ${failureMatch[4]})`);
+    }
     assert.ok(levelMatch, 'native named-pipe fixture returned an unexpected impersonation marker');
     assert.ok(
       ['Anonymous', 'Identification'].includes(levelMatch[1]),
