@@ -9,6 +9,8 @@
 // python-build-standalone's own checksums, so the python pins carry only the
 // version and uv is pinned here like any other binary.
 
+import { createHash } from 'node:crypto';
+
 export const RUNTIME_CATALOG_VERSION = 1;
 export const RUNTIME_PLATFORMS = Object.freeze(['darwin-arm64', 'darwin-x64', 'linux-x64', 'linux-arm64', 'win32-x64']);
 // What soul.json may declare under `runtimes`.
@@ -78,6 +80,28 @@ export const RUNTIME_CATALOG = Object.freeze({
 });
 
 export const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+// JSON with object keys sorted at every depth and arrays kept in order, so
+// the same pins hash the same however the literal above is written.
+const canonical = (value) => {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+};
+
+/**
+ * The catalog release (#617, owner decision "Pin per install"): the SHA-256
+ * of `{ version, catalog }` in canonical JSON. Any change to a pin, URL,
+ * digest or the schema version changes it; key order does not. Nothing
+ * records it yet: install receipts will carry it beside the exact version
+ * resolved in a later #617 slice, and until then no catalog provenance is
+ * checked or enforced.
+ */
+export function catalogReleaseHash({ catalog = RUNTIME_CATALOG, version = RUNTIME_CATALOG_VERSION } = {}) {
+  return createHash('sha256').update(canonical({ version, catalog })).digest('hex');
+}
 // A declared version: a major (`24`, `3.12`, `1`), a range of one (`24.x`),
 // or an exact version (`24.21.0`). No comparators: the catalog's pin is the
 // only thing a range can resolve to, so `>=` would promise what it cannot keep.
