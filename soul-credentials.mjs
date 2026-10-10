@@ -49,9 +49,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { currentAgentId, stateDirectory } from './agent-identity.mjs';
-import { listSouls, populationFile, soulDirectory } from './agent-population.mjs';
 import { soulMarkers } from './owner-gate.mjs';
-import { soulCredentialsDeclaration } from './soul-package.mjs';
+import { appDeclarations, appUsers } from './soul-app-declarations.mjs';
 import { readManagedAppCredential, readAppMetadata } from './identity-app-store.mjs';
 import { loadConfig } from './config.mjs';
 import { createPassCredentialStore } from './secret-providers/pass-cli-credentials.mjs';
@@ -407,20 +406,8 @@ export function writeSoulCredential({ agentId, soulDir, declaration }, credentia
 
 // The souls whose soul.json declares this App, the caller's own soul first.
 function declaringSouls(slug, { agentId, env, home, cwd, readOnly = false, strict = false }) {
-  const file = populationFile({ env, home });
-  const ids = [];
   const own = agentId ?? (() => { try { return currentAgentId({ env, cwd }); } catch { return null; } })();
-  if (own) ids.push(own);
-  try { for (const record of listSouls({ file })) if (!ids.includes(record.id)) ids.push(record.id); }
-  catch { /* No census: only the caller's own soul can declare. */ }
-  const found = [];
-  for (const id of ids) {
-    let soulDir;
-    try { soulDir = soulDirectory(id, { file, env, home, readOnly }); } catch { continue; }
-    const declaration = soulCredentialsDeclaration(soulDir, { strict });
-    if (declaration?.app === slug) found.push({ agentId: id, soulDir, declaration });
-  }
-  return found;
+  return appDeclarations(slug, { own, env, home, readOnly, strict });
 }
 
 // One deprecation notice per App, on stderr (stdout carries tokens).
@@ -489,8 +476,8 @@ export function legacyKeyRemovable(slug, { env = process.env, home = homedir(), 
   try {
     const managed = readManagedAppCredential(slug, { env, home, config, stores });
     const declared = declaringSouls(slug, { env, home, cwd: home, readOnly: true });
-    const users = listSouls({ file: populationFile({ env, home }) }).filter((soul) => soul.appSlug === slug && soul.status !== 'retired');
-    if (!managed && users.some((soul) => !declared.some((entry) => entry.agentId === soul.id))) return false;
+    const users = appUsers(slug, { env, home });
+    if (!managed && users.some((id) => !declared.some((entry) => entry.agentId === id))) return false;
     if (!managed && !declared.length) return false;
     for (const soul of declared) {
       // keyd declarations are published only after owner/import readback.

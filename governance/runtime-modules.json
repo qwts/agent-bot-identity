@@ -193,6 +193,7 @@
     "skill.mjs": "cli",
     "sop-policy.mjs": "org",
     "sop.mjs": "soul",
+    "soul-app-declarations.mjs": "soul",
     "soul-asides.mjs": "soul",
     "soul-build.mjs": "soul",
     "soul-builder.mjs": "soul",
@@ -274,14 +275,24 @@
     "sop.mjs": "Per-soul SOP selection is soul policy (ADR-0332). Its pinned-source resolution is the org resolver to extract into org.",
     "soul-builder.mjs": "Generation stays in soul; its per-harness file tables are harness knowledge to be read from agent-harness.",
     "soul-credential-migration.mjs": "`identity migrate-credentials`: copies keys through identity's stores, then records the store in soul.json as a revision edit, which is soul state (#645).",
-    "soul-credentials.mjs": "Named for souls but holds GitHub App credential custody (resolveAppCredential); identity-owned. Rename only with a compatibility plan. Its two baseline crossings are declaringSouls: finding which soul declares an App needs the census and soul.json, and the git credential helper and signed-commit mint in-process with no composition root to wire them, so removing them waits on the identity contract (ADR-0645 §5).",
+    "soul-credentials.mjs": "Named for souls but holds GitHub App credential custody (resolveAppCredential); identity-owned. Rename only with a compatibility plan. It learns which soul declares an App through soul's read-only contract soul-app-declarations.mjs (#645).",
     "soul-genesis.mjs": "Derives a soul's Agent ID from its genesis (revision, parent, nonce); identity owns ID minting, so it is identity even though the revision it hashes comes from soul.",
     "soul-tool-homes.mjs": "Tool-home routes are generated per soul (ADR-0583). Routability facts are harness knowledge.",
     "wake-plane.mjs": "Daemon side of the agent-comms wake plane (agent-comms ADR-0008): launches souls on wakes, so it composes soul and comms."
   },
   "computed_imports": {},
-  "baseline": [
-    "soul-credentials.mjs -> agent-population.mjs",
-    "soul-credentials.mjs -> soul-package.mjs"
-  ]
+  "contracts": {
+    "soul-app-declarations.mjs": {
+      "importable_by": [
+        "identity"
+      ],
+      "exports": [
+        "APP_DECLARATIONS_CONTRACT_VERSION",
+        "appDeclarations",
+        "appUsers"
+      ],
+      "reason": "Owner decision on #645 (2026-10-09): identity's in-process minters (git credential helper, signed-commit) learn which soul declares an App, and which census souls use it, through this read-only soul contract rather than soul internals, so minting works without the daemon."
+    }
+  },
+  "baseline": []
 }

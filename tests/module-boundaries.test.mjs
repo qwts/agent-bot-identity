@@ -14,6 +14,7 @@ import {
   computedImports,
   crossingEdges,
   edgeKey,
+  exportedNames,
   importSpecifiers,
   moduleEdges,
   resolveSpecifier,
@@ -110,6 +111,21 @@ test('no import crosses a module boundary beyond the recorded baseline', () => {
   assert.deepEqual(added, [], 'new cross-module imports: route them through an allowed module, or record a decision superseding ADR-0645 before widening may_import');
   assert.deepEqual(stale, [], 'these crossings are gone: remove them from the baseline in governance/runtime-modules.json');
   assert.deepEqual(duplicates, []);
+});
+
+// ADR-0645 step 2 is done: every crossing was routed through an allowed
+// module or a listed contract, so the ratchet now holds at zero.
+test('the baseline is empty', () => {
+  assert.deepEqual(MAP.baseline, []);
+});
+
+// A contract is a narrow, reviewed exception to may_import: its surface is
+// exactly the exports the map lists, so widening it is a map change too.
+test('each contract exports exactly the names the map lists', () => {
+  for (const [file, contract] of Object.entries(MAP.contracts ?? {})) {
+    const source = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
+    assert.deepEqual(exportedNames(source), [...contract.exports].sort(), `${file}: exports differ from the map's contract`);
+  }
 });
 
 test('the baseline is sorted so reviews see exactly which crossings changed', () => {
@@ -273,6 +289,47 @@ test('crossingEdges flags only imports the importing module does not allow', () 
     { from: 'c.mjs', to: 'a.mjs' }, // shared -> identity: crossing
   ];
   assert.deepEqual(crossingEdges(map, edges).map(edgeKey), ['a.mjs -> b.mjs', 'c.mjs -> a.mjs']);
+});
+
+test('a contract admits only the modules it names, and only into that file', () => {
+  const map = sampleMap({
+    files: { 'a.mjs': 'identity', 'b.mjs': 'soul', 'c.mjs': 'shared', 'd.mjs': 'soul' },
+    contracts: { 'd.mjs': { importable_by: ['identity'], exports: ['x'], reason: 'narrow' } },
+  });
+  const edges = [
+    { from: 'a.mjs', to: 'd.mjs' }, // identity -> soul contract: allowed
+    { from: 'a.mjs', to: 'b.mjs' }, // identity -> soul internals: crossing
+    { from: 'c.mjs', to: 'd.mjs' }, // shared is not named: crossing
+  ];
+  assert.deepEqual(crossingEdges(map, edges).map(edgeKey), ['a.mjs -> b.mjs', 'c.mjs -> d.mjs']);
+});
+
+test('a contract entry is validated', () => {
+  const map = sampleMap({
+    contracts: {
+      'b.mjs': { importable_by: ['soul', 'nope'], exports: [], reason: ' ' },
+      'z.mjs': { importable_by: ['identity'], exports: ['x'], reason: 'r' },
+    },
+  });
+  assert.deepEqual(validateModuleMap(map, ['a.mjs', 'b.mjs', 'c.mjs']), [
+    'b.mjs: contract must not list its own module',
+    'b.mjs: contract names unknown module nope',
+    'b.mjs: contract needs its exports listed',
+    'b.mjs: contract needs a reason',
+    'z.mjs: contract listed for an unassigned file',
+  ]);
+});
+
+test('exportedNames reads declarations and export lists, not comments', () => {
+  const source = [
+    '// export function hidden() {}',
+    'export const A = 1;',
+    'export function b() {}',
+    'export async function c() {}',
+    'const d = 1; const e = 2;',
+    'export { d, e as f };',
+  ].join('\n');
+  assert.deepEqual(exportedNames(source), ['A', 'b', 'c', 'd', 'f']);
 });
 
 test('compareToBaseline fails new crossings and stale baseline entries', () => {

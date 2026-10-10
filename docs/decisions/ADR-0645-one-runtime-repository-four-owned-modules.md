@@ -145,7 +145,7 @@ Consequences of these rules:
 - **The policy graph is acyclic.** `cli` may import `host`; `host` never
   imports `cli`.
 - **The crossings that existed when the map landed form the test's `baseline`.**
-  There were 31 at `a339a31`; 6 remain at `0aae907`.
+  There were 31 at `a339a31` and 6 at `0aae907`; step 2 emptied it (#645).
   - A new crossing fails the test.
   - A removed crossing must also be removed from the baseline, so the baseline
     only shrinks.
@@ -155,6 +155,14 @@ Consequences of these rules:
   - An `import()` whose specifier is computed hides its target from the check.
     The test fails on one unless the map lists that file, with a reason, under
     `computed_imports`. Today there are none.
+- **A contract is a narrow, listed exception.** The map's `contracts` names a
+  file, the modules that may import it (`importable_by`), its exact `exports`
+  and a reason. An edge into that file from a named module is not a crossing;
+  any other edge still is. The test checks that the file exports exactly the
+  listed names, so widening a contract is a reviewed map change. The one
+  contract is soul's read-only `soul-app-declarations.mjs`, through which
+  identity's in-process minters learn which soul declares an App (owner
+  decision on #645, 2026-10-09).
 
 ### 3. Authority and data ownership
 
@@ -288,12 +296,12 @@ behavior, and shrinks the baseline or adds a contract:
      by passing the package revision in. Done.
    - The owner gate gets its soul census and comms dependencies through
      parameters. Done.
-   - App credential custody moves out of `soul-credentials.mjs` behind a
-     re-export shim. This removes the last 6 crossings (`identity-apps.mjs` and
-     `soul-credentials.mjs` into `agent-population`, `soul-package`,
-     `soul-providers` and `soul-revisions`). It overlaps
-     [#676](https://github.com/qwts/agent-bot-identity/issues/676) and the
-     [#104](https://github.com/qwts/agent-bot-identity/issues/104) epic.
+   - The last 6 crossings are gone. Done (#781 and this change). A re-export
+     shim at `soul-credentials.mjs` could not work, because four identity
+     files import it. Instead `identity-apps.mjs` takes the soul census as
+     parameters, secret names and store kinds moved to `credential-names.mjs`,
+     `migrate-credentials` moved to soul, and `soul-credentials.mjs` reads App
+     declarations through the `soul-app-declarations.mjs` contract.
 3. **Daemon client contract.** `daemonClient` moved out of `agent-daemon.mjs`,
    so soul modules no longer import the process host. Done.
 4. **Harness descriptor schema** in harness-docs plus a validator and bundled
@@ -381,7 +389,7 @@ longer applies.
 
 - Reviewers see ownership and every crossing a PR adds or removes. The cost is
   maintaining the map: a new runtime file must be assigned before its PR passes.
-- The baseline makes today's debt explicit. It went from 31 crossings to 6.
+- The baseline made the debt explicit. It went from 31 crossings to none.
 - Identity becomes a small codebase with its own review and release. The cost
   is one more repository and pin to keep current, and a contract that changes
   more slowly than the code behind it.

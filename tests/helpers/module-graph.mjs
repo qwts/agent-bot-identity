@@ -237,6 +237,19 @@ export function validateModuleMap(map, files) {
   for (const file of Object.keys(map.notes ?? {})) {
     if (!Object.hasOwn(assigned, file)) errors.push(`${file}: note for an unassigned file`);
   }
+  for (const [file, contract] of Object.entries(map.contracts ?? {})) {
+    if (!Object.hasOwn(assigned, file)) errors.push(`${file}: contract listed for an unassigned file`);
+    if (!Array.isArray(contract?.importable_by) || !contract.importable_by.length) {
+      errors.push(`${file}: contract needs importable_by`);
+    } else {
+      for (const name of contract.importable_by) {
+        if (!Object.hasOwn(modules, name)) errors.push(`${file}: contract names unknown module ${name}`);
+        if (name === assigned[file]) errors.push(`${file}: contract must not list its own module`);
+      }
+    }
+    if (!Array.isArray(contract?.exports) || !contract.exports.length) errors.push(`${file}: contract needs its exports listed`);
+    if (typeof contract?.reason !== 'string' || !contract.reason.trim()) errors.push(`${file}: contract needs a reason`);
+  }
   return errors;
 }
 
@@ -246,8 +259,26 @@ export function crossingEdges(map, edges) {
     const source = map.files[from];
     const target = map.files[to];
     if (source === target) return false;
+    if (map.contracts?.[to]?.importable_by?.includes(source)) return false;
     return !map.modules[source].may_import.includes(target);
   });
+}
+
+// The names a module exports, for checking a contract's surface. Covers the
+// declaration forms this repository uses; a contract that needs another form
+// adds it here.
+export function exportedNames(source) {
+  const masked = maskSource(source).code;
+  const names = new Set();
+  for (const match of masked.matchAll(/\bexport\s+(?:async\s+)?(?:function\*?|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gu)) names.add(match[1]);
+  for (const match of masked.matchAll(/\bexport\s*\{([^}]*)\}/gu)) {
+    for (const part of match[1].split(',')) {
+      const name = part.trim().split(/\s+as\s+/u).pop();
+      if (name) names.add(name);
+    }
+  }
+  if (/\bexport\s+default\b/u.test(masked)) names.add('default');
+  return [...names].sort();
 }
 
 // The ratchet: a crossing not in the baseline is new and fails; a baseline
