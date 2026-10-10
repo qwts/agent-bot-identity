@@ -69,9 +69,9 @@ const HARNESS_FILES = Object.freeze({
   muse: Object.freeze({ instructions: null, skills: null, mcp: null }),
   // Kiro reads AGENTS.md and the shared skills; its wake lanes are #523.
   kiro: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: '.kiro/settings/mcp.json', subagents: '.kiro/agents/' }),
-  // Qwen Code reads AGENTS.md natively; its skills and agents live under
-  // `.qwen/` in formats not rendered yet (#247). Commands are Markdown (#378).
-  qwen: Object.freeze({ instructions: null, skills: null, mcp: '.qwen/settings.json', commands: '.qwen/commands/' }),
+  // Qwen Code reads AGENTS.md natively; its skills live under `.qwen/` in a
+  // folder not rendered yet (#247). Commands and agents are Markdown (#378).
+  qwen: Object.freeze({ instructions: null, skills: null, mcp: '.qwen/settings.json', subagents: '.qwen/agents/', commands: '.qwen/commands/' }),
 });
 
 // The workspace-relative folder a harness reads skills from, or null when it
@@ -808,6 +808,18 @@ const KIRO_TOOLS = Object.freeze({ Read: 'read', NotebookRead: 'read', Grep: 're
   Edit: 'write', MultiEdit: 'write', Write: 'write', NotebookEdit: 'write', Bash: 'shell',
   WebFetch: 'web', WebSearch: 'web', Task: 'subagent', TodoWrite: 'todo_list' });
 const DEVIN_TOOLS = Object.freeze({ Read: 'read', Edit: 'edit', MultiEdit: 'edit', Write: 'edit', Grep: 'grep', Glob: 'glob', Bash: 'exec' });
+// Qwen Code 0.25.0's canonical tool names, from its own converter for Claude
+// agents (which drops BashOutput and KillShell; here they make the agent
+// unsupported instead). MultiEdit uses its `edit`, as for Devin and Kiro.
+const QWEN_TOOLS = Object.freeze({ Read: 'read_file', Write: 'write_file', Edit: 'edit', MultiEdit: 'edit',
+  Grep: 'grep_search', Glob: 'glob', LS: 'list_directory', Bash: 'run_shell_command', WebFetch: 'web_fetch',
+  WebSearch: 'web_search', TodoWrite: 'todo_write', Task: 'agent', NotebookEdit: 'notebook_edit', Skill: 'skill',
+  AskUserQuestion: 'ask_user_question', ExitPlanMode: 'exit_plan_mode' });
+// Qwen keeps an MCP tool's `mcp__<server>__<tool>` name only up to 63
+// characters (longer ones get a hashed suffix), and refuses agent names
+// shorter than 2 or longer than 50 characters, or reserved ones.
+const QWEN_MCP_TOOL_MAX = 63;
+const QWEN_RESERVED_AGENTS = Object.freeze(['self', 'system', 'user', 'model', 'tool', 'config', 'default', 'main']);
 // Claude declarations name an MCP tool `mcp__<server>__<tool>`. Its server
 // segment ends at the first `__` (`mcp__foo__bar__baz`: server `foo`, tool
 // `bar__baz`). Kiro uses `@server/tool`; Devin keeps Claude's exact name.
@@ -819,6 +831,12 @@ const READ_ONLY_TOOLS = Object.freeze(['Glob', 'Grep', 'LS', 'NotebookRead', 'Re
 
 function nativeTools(map, names, { mcp = false } = {}) {
   const spelled = (name) => Object.hasOwn(map, name) ? map[name] : mcp && MCP_TOOL.test(name) ? name : null;
+  if (names.some((name) => spelled(name) === null)) return null;
+  return [...new Set(names.map(spelled))].sort(compare);
+}
+function qwenNativeTools(names) {
+  const spelled = (name) => Object.hasOwn(QWEN_TOOLS, name) ? QWEN_TOOLS[name]
+    : MCP_TOOL.test(name) && name.length <= QWEN_MCP_TOOL_MAX ? name : null;
   if (names.some((name) => spelled(name) === null)) return null;
   return [...new Set(names.map(spelled))].sort(compare);
 }
@@ -857,6 +875,11 @@ function translatedAgents(name, { description, model, tools }) {
   // Devin: an absent `allowed-tools` is every tool, as in Claude.
   const devin = tools ? nativeTools(DEVIN_TOOLS, tools, { mcp: true }) : [];
   if (devin) agents.push([`.devin/agents/${name}.md`, [...common, ...(tools ? [`allowed-tools: ${yamlList(devin)}`] : [])]]);
+  // Qwen Code: an absent `tools` inherits every tool, as in Claude.
+  const qwen = tools ? qwenNativeTools(tools) : [];
+  if (qwen && name.length >= 2 && name.length <= 50 && !QWEN_RESERVED_AGENTS.includes(name)) {
+    agents.push([`.qwen/agents/${name}.md`, [...common, ...(tools ? [`tools: ${yamlList(qwen)}`] : [])]]);
+  }
   return agents;
 }
 

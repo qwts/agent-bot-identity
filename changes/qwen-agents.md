@@ -1,0 +1,1 @@
+- `agent-bot soul build` now renders a soul's `agents/*.md` as Qwen Code project subagents in `.qwen/agents/<name>.md`, with Claude tool names mapped to Qwen's; a subagent with a tool, name or MCP tool Qwen cannot spell is reported under `unsupported.subagents` instead. The format-2 ignore list appends `.qwen/agents/`, and souls carrying an earlier list still validate (#378).

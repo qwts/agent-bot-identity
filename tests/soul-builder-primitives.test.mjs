@@ -16,13 +16,13 @@ const entry = (path, content) => ({ path, mode: '100644', bytes: Buffer.from(con
 const entries = () => [entry('AGENTS.md', '# Soul\n'), entry('agents/review.md', agent), entry('commands/review.md', command)];
 const primitivePaths = ['.claude/agents/review.md', '.claude/commands/review.md', '.cursor/agents/review.md',
   '.devin/agents/review.md', '.gemini/commands/review.toml', '.github/agents/review.agent.md', '.kiro/agents/review.md',
-  '.opencode/agent/review.md', '.opencode/command/review.md', '.qwen/commands/review.md'];
+  '.opencode/agent/review.md', '.opencode/command/review.md', '.qwen/agents/review.md', '.qwen/commands/review.md'];
 // The primitive files each harness reads; Copilot CLI and Devin CLI read
 // Claude's commands natively.
 const harnessPrimitives = { claude: ['.claude/agents/review.md', '.claude/commands/review.md'], gemini: ['.gemini/commands/review.toml'],
   codex: [], opencode: ['.opencode/agent/review.md', '.opencode/command/review.md'], cursor: ['.cursor/agents/review.md'],
   copilot: ['.claude/commands/review.md', '.github/agents/review.agent.md'], devin: ['.claude/commands/review.md', '.devin/agents/review.md'],
-  muse: [], kiro: ['.kiro/agents/review.md'], qwen: ['.qwen/commands/review.md'] };
+  muse: [], kiro: ['.kiro/agents/review.md'], qwen: ['.qwen/agents/review.md', '.qwen/commands/review.md'] };
 function put(root, path, content) {
   mkdirSync(dirname(join(root, path)), { recursive: true });
   writeFileSync(join(root, path), content);
@@ -51,6 +51,8 @@ test('agents and commands map to native formats and retain Claude source bytes a
     `# ${MARKER}\ndescription = "Review: code"\nprompt = "Review {{args}}.\\nThen summarize {{args}}.\\n"\n`);
   assert.equal(output.get('.qwen/commands/review.md').toString(),
     `---\ndescription: "Review: code"\n---\n${MARKER}\nReview {{args}}.\nThen summarize {{args}}.\n`);
+  assert.equal(output.get('.qwen/agents/review.md').toString(),
+    `---\nname: "review"\ndescription: "Review code"\nmodel: "provider/model"\ntools: ["grep_search", "read_file", "run_shell_command"]\n---\n${MARKER}\nReview the code.\n`);
   assert.deepEqual([...output.keys()].filter((path) => /\/(agents?|commands?)\//.test(path)), primitivePaths);
   for (const path of primitivePaths) assert.ok(isGeneratedPath(path), path);
 });
@@ -59,7 +61,7 @@ for (const harness of ['claude', 'gemini', 'codex', 'opencode', 'cursor', 'copil
   test(`${harness} reports every received, rendered and unsupported primitive`, () => {
     const output = buildHarnessFiles(entries());
     const report = harnessReport(new Map(output))[harness];
-    for (const [kind, supported] of [['subagents', ['claude', 'opencode', 'cursor', 'copilot', 'devin', 'kiro']],
+    for (const [kind, supported] of [['subagents', ['claude', 'opencode', 'cursor', 'copilot', 'devin', 'kiro', 'qwen']],
       ['commands', ['claude', 'gemini', 'opencode', 'copilot', 'devin', 'qwen']]]) {
       const renders = supported.includes(harness);
       assert.deepEqual(report[kind], { received: ['review'], rendered: renders ? ['review'] : [] });
@@ -199,4 +201,32 @@ test('Qwen Code reads the rendered command front matter and prompt (#378)', () =
   const [, yaml, prompt] = buildHarnessFiles(entries()).get('.qwen/commands/review.md').toString().match(qwenFrontMatter);
   assert.equal(yaml, 'description: "Review: code"');
   assert.equal(prompt, `${MARKER}\nReview {{args}}.\nThen summarize {{args}}.\n`);
+});
+
+test('Qwen Code agents spell its tool names, or are unsupported where it cannot (#378)', () => {
+  const build = (name, tools) => buildHarnessFiles([entry('AGENTS.md', '# Soul'),
+    entry(`agents/${name}.md`, `---\nname: ${name}\ndescription: D\n${tools === undefined ? '' : `tools: ${tools}\n`}---\nP\n`)]);
+  // An absent `tools` inherits every tool there, as in Claude.
+  assert.equal(build('review').get('.qwen/agents/review.md').toString(), `---\nname: "review"\ndescription: "D"\n---\n${MARKER}\nP\n`);
+  assert.match(build('review', 'Edit, MultiEdit, Task, mcp__docs__search').get('.qwen/agents/review.md').toString(),
+    /\ntools: \["agent", "edit", "mcp__docs__search"\]\n/);
+  // A tool Qwen has no name for, an MCP name it would hash, or an agent name
+  // it refuses leaves the agent unsupported there rather than cut down.
+  const long = `mcp__docs__${'x'.repeat(60)}`;
+  for (const [name, tools] of [['review', 'Read, BashOutput'], ['review', long], ['x', 'Read'], ['main', 'Read'],
+    ['a'.repeat(51), 'Read']]) {
+    const output = build(name, tools);
+    assert.equal(output.has(`.qwen/agents/${name}.md`), false, `${name}: ${tools}`);
+    assert.ok(output.has(`.claude/agents/${name}.md`));
+    assert.deepEqual(harnessReport(new Map(output)).qwen.unsupported.subagents, [name]);
+  }
+});
+
+test('Qwen Code parses the rendered agent front matter and system prompt (#378)', () => {
+  // The front-matter pattern of Qwen Code 0.25.0's subagent loader.
+  const qwenAgent = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
+  const [, yaml, prompt] = buildHarnessFiles(entries()).get('.qwen/agents/review.md').toString().match(qwenAgent);
+  assert.deepEqual(yaml.split('\n'), ['name: "review"', 'description: "Review code"', 'model: "provider/model"',
+    'tools: ["grep_search", "read_file", "run_shell_command"]']);
+  assert.equal(prompt, `${MARKER}\nReview the code.\n`);
 });
