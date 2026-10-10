@@ -15,7 +15,7 @@
 
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { validateAgentId, withLock } from './agent-identity.mjs';
@@ -164,7 +164,7 @@ export function wakeSessionsFile({ env = process.env, home = homedir() } = {}) {
 
 const SESSION_STORES = Object.freeze(['host', 'soul']);
 
-export function createWakeSessions({ file }) {
+export function createWakeSessions({ file, rename = renameSync }) {
   const read = () => {
     try { return JSON.parse(readFileSync(file, 'utf8'))?.sessions ?? {}; }
     catch (error) { if (error.code === 'ENOENT') return {}; throw new Error('wake sessions could not be read'); }
@@ -187,14 +187,26 @@ export function createWakeSessions({ file }) {
     return { sessionId: entry.sessionId, store: entry.store ?? 'host', ...(entry.policy ? { policy: entry.policy } : {}) };
   };
   // Every write is a read-modify-write under the one lock.
-  const update = (change) => {
+  const update = (change, beforeCommit = () => null) => {
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     return withLock(`${file}.lock`, 'wake sessions', () => {
       const sessions = read();
       const result = change(sessions);
-      if (result === undefined) return null;
+      if (result === undefined) { beforeCommit(); return null; }
       const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
-      try { writeFileSync(temp, `${JSON.stringify({ schemaVersion: 1, sessions }, null, 2)}\n`, { flag: 'wx', mode: 0o600 }); renameSync(temp, file); chmodSync(file, 0o600); }
+      try {
+        writeFileSync(temp, `${JSON.stringify({ schemaVersion: 1, sessions }, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+        const rollback = beforeCommit();
+        try { rename(temp, file); }
+        catch (error) {
+          try { rollback?.(); }
+          catch (cause) {
+            throw Object.assign(new Error('The resume session was not reset and the tool-home choice could not be restored; inspect both records before retrying.'),
+              { code: 'tool-home-update-partial', cause });
+          }
+          throw error;
+        }
+      }
       finally { rmSync(temp, { force: true }); }
       return result;
     });
@@ -217,7 +229,7 @@ export function createWakeSessions({ file }) {
     // list with the store it lives in, so its id is kept and its transcript
     // stays in that store, never deleted. A damaged store, null included,
     // is retired as written; only a missing one (before #617) is the host's. Returns the retired session, or null when none was recorded.
-    retire(agentId, harness, { now = () => new Date() } = {}) {
+    retire(agentId, harness, { now = () => new Date(), beforeCommit } = {}) {
       const id = validateAgentId(agentId);
       return update((sessions) => {
         const entry = sessions[id];
@@ -226,7 +238,7 @@ export function createWakeSessions({ file }) {
           store: entry.store === undefined ? 'host' : entry.store, retiredAt: now().toISOString() };
         sessions[id] = { retired: [...(keptRetired(entry).retired ?? []), retired] };
         return retired;
-      });
+      }, beforeCommit);
     },
   };
 }

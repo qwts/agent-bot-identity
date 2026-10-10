@@ -142,6 +142,12 @@ without that flag does not establish setter support.
   the owner gate. With `global` it is one prompt for both. With no recorded
   session it changes nothing and writes no receipt; otherwise it writes a
   `tool-home` receipt with operation `fresh-session` and the store.
+  A combined choice and reset stages both records under their writer locks.
+  If the session commit fails, the original choice is restored (including
+  an absent record), and neither success receipt is written. If restoration
+  itself fails, `tool-home-update-partial` asks the caller to inspect both
+  records before retrying. This is rollback for reported write failures,
+  not a crash-atomic transaction across two files.
 - An unroutable harness is `tool-home-unsupported`; an unknown soul is
   `soul-not-found`.
 
