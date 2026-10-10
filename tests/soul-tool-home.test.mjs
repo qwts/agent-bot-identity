@@ -348,6 +348,30 @@ test('a cleanup failure never hides the partial update', async (t) => {
   assert.equal(f.receipts()[0].decision, 'partial');
 });
 
+test('a failed tool-home cleanup never hides the partial update', async (t) => {
+  const f = fixture(t);
+  const choiceFile = toolHomeRecordPath(f.soulDir);
+  const stateDir = path.dirname(choiceFile);
+  setToolHomeChoice(f.soulDir, 'codex', 'soul');
+  const file = wakeSessionsFile({ env: f.env, home: f.home });
+  createWakeSessions({ file }).set(ID, 'codex', 'thread-kept', 'workspace', 'soul');
+  const sessions = createWakeSessions({ file, rename: () => {
+    rmSync(choiceFile);
+    mkdirSync(choiceFile);
+    writeFileSync(path.join(choiceFile, 'in-the-way'), '');
+    // A folder at the staged choice's path makes its cleanup fail as well.
+    const pending = readdirSync(stateDir).find((name) => name.endsWith('.rollback')).replace(/\.rollback$/, '');
+    mkdirSync(path.join(stateDir, pending));
+    writeFileSync(path.join(stateDir, pending, 'in-the-way'), '');
+    throw Object.assign(new Error('session commit refused'), { code: 'EACCES' });
+  } });
+  const error = await f.run(['codex', 'global', '--soul', ID, '--fresh-session'], { sessions }).then(() => assert.fail('expected a partial update'), (e) => e);
+  assert.equal(error.code, 'tool-home-update-partial');
+  assert.ok(error.cleanup, 'the cleanup failure is attached');
+  assert.ok(error.message.includes(error.backup));
+  assert.equal(f.receipts()[0].decision, 'partial');
+});
+
 test('a choice changed by another command while this one waited changes nothing', async (t) => {
   const f = fixture(t);
   setToolHomeChoice(f.soulDir, 'codex', 'soul');

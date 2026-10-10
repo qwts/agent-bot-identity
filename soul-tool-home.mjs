@@ -153,10 +153,16 @@ export async function soulToolHomeCommand(argv, {
         }
         if (setting && fresh) {
           staged = prepareToolHomeChoice(soul.soulDir, row.harness, choice);
+          let failed = null;
           try {
             retired = sessions.retire(soul.id, row.harness, { now,
               beforeCommit: () => { staged.commit(); return () => staged.rollback(); } });
-          } finally { staged.cleanup(); }
+          } catch (error) { failed = error; throw error; }
+          finally {
+            // A failed cleanup never hides the failure that came first.
+            try { staged.cleanup(); }
+            catch (cleanup) { if (failed === null) throw cleanup; failed.cleanup ??= cleanup; }
+          }
         } else if (setting) setToolHomeChoice(soul.soulDir, row.harness, choice);
         else if (fresh) retired = sessions.retire(soul.id, row.harness, { now });
       });
