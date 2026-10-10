@@ -36,7 +36,7 @@ test('a malformed uv tool lock is refused with its path (#617)', () => {
     [[{ name: 'goose-ai', version: '1.9.0', sha256: ['A'.repeat(64)] }], /64 lowercase hex/],
     [[{ name: 'goose-ai', version: '1.9.0', sha256: [A, A] }], /digest twice/],
     [[{ name: 'goose-ai', version: '1.9.0', sha256: [A] }, { name: 'goose.ai', version: '1.9.0', sha256: [B] }], /locked twice/],
-    [[{ name: 'goose-ai', version: '>=1.9', sha256: [A] }], /exact version/],
+    ...['>=1.9', '1..0', '1!', '1+foo+bar', '1.0+', 'v1.0', '1.0 ', '1.*', '1.0a1a2', ''].map((version) => [[{ name: 'goose-ai', version: '1.9.0', sha256: [A] }, { name: 'dep', version, sha256: [B] }], /exact PEP 440 version/]),
     [[{ name: 'goose ai', version: '1.9.0', sha256: [A] }], /PyPI package name/],
     [[{ name: 'goose-ai', version: '1.9.0', sha256: [A], url: 'https://x' }], /\[0\]\.url is unknown/],
     [['goose-ai'], /must be an object/],
@@ -45,4 +45,11 @@ test('a malformed uv tool lock is refused with its path (#617)', () => {
 
 test('an archive install still refuses a lock key (#617)', () => {
   assert.throws(() => normalizeHarnessInstall({ kind: 'archive', version: '1.2.3', url: 'https://e.test/x.zip', sha256: { 'linux-x64': A }, lock: LOCK }, 'x'), /x\.lock is unknown/);
+});
+
+test('a uv tool lock accepts every exact PEP 440 form (#617)', () => {
+  for (const version of ['2.32.3', '1!2.0', '1.0a1', '1.0rc2', '1.0.post1', '1.0-1', '1.0.dev3', '1.0a1.post2.dev3', '1.0+local.7', '2024.10.1', '1.0B2']) {
+    const install = normalizeHarnessInstall(tool([{ name: 'goose-ai', version: '1.9.0', sha256: [A] }, { name: 'dep', version, sha256: [B] }]), 'x');
+    assert.equal(install.lock[1].version, version);
+  }
 });

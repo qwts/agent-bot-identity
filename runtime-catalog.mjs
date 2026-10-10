@@ -254,7 +254,10 @@ export function normalizeHarnessInstall(value, label, { defaultBin = null } = {}
 
 // PEP 503: names compare lowercase with runs of `-`, `_` and `.` as one `-`.
 const pypiName = (name) => name.toLowerCase().replace(/[-_.]+/g, '-');
-const LOCK_VERSION = /^[0-9][0-9A-Za-z.+!-]{0,63}$/;
+// One exact PEP 440 version (epoch, release, pre, post, dev, local), as
+// PyPA's `packaging` spells it, without the optional leading `v`.
+const PEP440 = /^(?:[0-9]+!)?[0-9]+(?:\.[0-9]+)*(?:[-_.]?(?:a|b|c|rc|alpha|beta|pre|preview)[-_.]?[0-9]*)?(?:-[0-9]+|[-_.]?(?:post|rev|r)[-_.]?[0-9]*)?(?:[-_.]?dev[-_.]?[0-9]*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
+const lockVersion = (value) => typeof value === 'string' && value.length <= 64 && PEP440.test(value);
 
 function normalizeUvToolLock(value, label, toolPackage, toolVersion) {
   if (!Array.isArray(value) || !value.length) throw new Error(`${label} must list every package the tool installs as { name, version, sha256 }`);
@@ -266,7 +269,7 @@ function normalizeUvToolLock(value, label, toolPackage, toolVersion) {
       if (!['name', 'version', 'sha256'].includes(key)) throw new Error(`${where}.${key} is unknown (use name, version, sha256)`);
     }
     if (typeof entry.name !== 'string' || !PACKAGE_NAME.test(entry.name)) throw new Error(`${where}.name must be a PyPI package name`);
-    if (typeof entry.version !== 'string' || !LOCK_VERSION.test(entry.version)) throw new Error(`${where}.version must be an exact version`);
+    if (!lockVersion(entry.version)) throw new Error(`${where}.version must be an exact PEP 440 version`);
     if (!Array.isArray(entry.sha256) || !entry.sha256.length) throw new Error(`${where}.sha256 must list the artifact digests pip may install`);
     for (const digest of entry.sha256) {
       if (typeof digest !== 'string' || !SHA256_HEX.test(digest)) throw new Error(`${where}.sha256 must hold 64 lowercase hex digits each`);
