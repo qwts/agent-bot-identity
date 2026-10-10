@@ -520,7 +520,7 @@ test('a signed-out harness is recorded once per outage and each sender is told o
   await wake.idle();
   // One harness attempt; the rest of the batch is told without running.
   assert.equal(turns, 1);
-  const notice = "I couldn't answer this: my Claude sign-in has expired. My owner needs to sign me in again before I can work on it.";
+  const notice = `I couldn't answer this: my Claude sign-in has expired. My owner needs to sign me in again before I can work on it. They can sign in with \`agent-bot harness auth login claude --soul ${id}\`.`;
   assert.deepEqual(relay.sent.map((m) => [m.replyTo, m.body]), [['n84a', notice], ['n84b', notice]]);
   assert.deepEqual(relay.acked, []);
   assert.deepEqual(statuses, [['failed', id, { status: 'expired', harness: 'claude' }]]);

@@ -186,6 +186,15 @@ test('sign-in failures are told apart from other turn failures (#84)', async () 
   assert.equal(harnessAuthFailure({ harnessAuth: 'expired' }), 'expired');
   assert.equal(harnessAuthFailure(null), null);
   assert.match(harnessAuthNotice('codex', 'signed-out'), /my Codex sign-in is missing/);
+  assert.equal(harnessAuthNotice('codex', 'signed-out', 'agent_12345678-1234-4123-8123-123456789abc'),
+    "I couldn't answer this: my Codex sign-in is missing. My owner needs to sign me in again before I can work on it. They can sign in with `agent-bot harness auth login codex --soul agent_12345678-1234-4123-8123-123456789abc`.");
+  for (const [harness, agentId] of [
+    ['codex', '../../outside'],
+    ['unknown', 'agent_12345678-1234-4123-8123-123456789abc'],
+    ['muse', 'agent_12345678-1234-4123-8123-123456789abc'],
+  ]) {
+    assert.doesNotMatch(harnessAuthNotice(harness, 'expired', agentId), /agent-bot harness auth login/);
+  }
   assert.match(harnessAuthNotice('unknown', 'expired'), /my harness sign-in has expired/);
 });
 

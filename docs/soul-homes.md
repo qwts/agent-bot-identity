@@ -69,7 +69,8 @@ recorded as `expired`:
 `agent-bot population list|show --json` carries it, so GeniusBar can show a
 sign-in banner. Each sender waiting on the soul gets one short reply naming
 the sign-in, for example "I couldn't answer this: my Claude sign-in has
-expired. My owner needs to sign me in again before I can work on it." Their
+expired. My owner needs to sign me in again before I can work on it. They can
+sign in with `agent-bot harness auth login claude --soul AGENT_ID`." Their
 messages stay unread and are answered on a later wake. The field is gone once
 a turn runs again, or once `agent-bot harness auth status|login HARNESS
 --soul AGENT_ID` reports that harness signed in. The harness's own error text
