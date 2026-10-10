@@ -1,0 +1,1 @@
+- `agent-bot keyd status` now says “unknown version” when a running key holder does not report one, while keeping the JSON status and version-mismatch result unchanged (#809).
