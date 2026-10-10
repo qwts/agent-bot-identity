@@ -121,7 +121,7 @@ function updateMain(args, json, { stdout, stderr, ...options }) {
 // owner (no soul marker) applies an owner-gated edit; a soul proposes.
 async function installMain(verb, args, json, { stdout, stderr, markers = soulMarkers, readStdin = () => readFileSync(0, 'utf8'),
   assertSoulTarget = id => { if (currentAgentId() !== id) throw new Error('a soul may change only its own skills; bind an Agent ID first'); },
-  assertUser, trashOptions = {}, trash: trashMove, recordArchive, runRevision = revisionCommand, ...options }) {
+  assertUser, trashOptions = {}, trash: trashMove, recordRemoval, runRevision = revisionCommand, ...options }) {
   const [target, ...rest] = args, flags = new Set();
   let agentId;
   for (let i = 0; i < rest.length; i++) {
@@ -139,15 +139,15 @@ async function installMain(verb, args, json, { stdout, stderr, markers = soulMar
       try { return JSON.parse(readStdin()); }
       catch { throw Object.assign(new Error('--principal-stdin needs the principal credential as JSON on stdin'), { code: 'skill-principal-invalid' }); }
     })() : null;
-    const stage = verb === 'install' ? stageSkillInstall(target, agentId, options) : stageSkillUninstall(target, agentId, { ...options, trash });
+    const stage = verb === 'install' ? stageSkillInstall(target, agentId, options) : stageSkillUninstall(target, agentId, options);
     staging = stage.staging;
-    const reason = verb === 'install' ? `Install skill ${stage.name}` : `${trash ? 'Trash' : 'Archive'} skill ${stage.name}`;
+    const reason = verb === 'install' ? `Install skill ${stage.name}` : `Archive skill ${stage.name}${trash ? ' before moving it to the trash' : ''}`;
     const gate = assertUser ?? ((action, context) => revisionOwnerGate(action, { ...context, presence: options.presence, env: options.env, cwd: options.cwd }));
     let result;
     if (trash) {
-      // Commit the edit first; the skill reaches the OS trash only after it is
-      // out of the revision (see trashSoulSkill).
-      const trashed = await trashSoulSkill(stage.name, agentId, { ...options, trashOptions, ...(trashMove ? { trash: trashMove } : {}), ...(recordArchive ? { recordArchive } : {}),
+      // Archive first (a recorded revision), then trash, then record the
+      // removal; see trashSoulSkill.
+      const trashed = await trashSoulSkill(stage, agentId, { ...options, trashOptions, ...(trashMove ? { trash: trashMove } : {}), ...(recordRemoval ? { recordRemoval } : {}),
         commit: onAuthorized => runRevision(['edit', agentId, staging, reason, '--apply'], { ...options, principal,
           assertUser: async (action, context) => { const authorization = await gate(action, context); onAuthorized(authorization); return authorization; } }) });
       result = { ...trashed, outcome: 'applied' };
@@ -155,7 +155,7 @@ async function installMain(verb, args, json, { stdout, stderr, markers = soulMar
       const revision = owner
         ? await runRevision(['edit', agentId, staging, reason, '--apply'], { ...options, principal, assertUser: gate })
         : await runRevision(['propose', agentId, staging, reason], { ...options, assertSoulTarget });
-      const { staging: _, parentRevision: __, ...summary } = stage;
+      const { staging: _, parentRevision: __, hasRecord: ___, ...summary } = stage;
       result = { ...summary, outcome: owner ? 'applied' : revision.status,
         ...(owner ? { revision: revision.revision, changed: revision.changed } : { proposal: { proposalId: revision.proposalId, status: revision.status, revision: revision.revision } }) };
     }

@@ -360,17 +360,19 @@ renders nothing for them, and nothing is deleted. Any skill directory can be
 archived, installed or authored. `--trash` instead moves the live
 `skills/<name>/` to the OS trash (`~/.Trash` on macOS, the freedesktop.org
 trash elsewhere; refused on Windows and across volumes) and removes the
-record. It is owner only. The revision is committed first: once the owner
-gate passes, the folder is held under `.soul-state/tmp` (a rename inside the
-soul) so applying the edit deletes nothing, and only after the edit is
-recorded does it move to the OS trash, restorable to its original
-`skills/<name>` path. If the edit is not recorded, the folder is put back. If
-it was recorded but publication failed, the trash move still runs and the
-result carries a `warning`. If the trash move fails, the skill is archived as
-above and that archive is recorded as a second owner edit under the same
-approval; the result has `trash: false`, `trashFailed` and `archive`. If
-recording the archive fails too, the files stay in the archive folder and the
-error (`skill-archive-unrecorded`) names it.
+record. It is owner only, and it never holds the skill in a temporary folder:
+
+1. Once the owner gate passes, the skill and its record move to the archive
+   folder above and that archive is applied as an owner edit, so the apply
+   deletes nothing. If the edit is not recorded, they move back. A crash from
+   here on leaves the skill archived, which `soul env clean` never touches.
+2. The archive folder then moves to the OS trash as `<name> <stamp>`,
+   restorable to its archive path. If that fails, the skill stays archived
+   and recorded; the result has `trash: false` and `trashFailed`.
+3. An in-place owner edit (the soul folder itself) records the removal. If
+   that fails, the error (`skill-trash-unrecorded`) says where the trash
+   holds the skill; the archived revision still has its bytes, and the next
+   revision edit records the removal.
 
 Both commands stage a `soul revision prepare` copy and record it through the
 existing revision path; the soul needs an adopted revision. A caller with no

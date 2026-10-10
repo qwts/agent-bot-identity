@@ -72,30 +72,24 @@ export function stageSkillInstall(skill, agentId, { now = () => new Date(), ...o
 }
 
 /**
- * Stages the removal of `skills/<name>/`. By default the skill and its install
- * record move to `archive/skills/<name>/<UTC stamp>/` inside the soul, so
- * nothing is deleted. With `trash`, the candidate simply lacks them: the
- * caller must move the live folder to the OS trash (owner only) before the
- * edit is applied, so the bytes leave through the trash, not a deletion.
+ * Stages the removal of `skills/<name>/`: the skill and its install record
+ * move to `archive/skills/<name>/<UTC stamp>/` inside the soul, so nothing is
+ * deleted. `uninstall --trash` applies this same archive first (see
+ * trashSoulSkill).
  */
-export function stageSkillUninstall(name, agentId, { trash = false, now = () => new Date(), ...options } = {}) {
+export function stageSkillUninstall(name, agentId, { now = () => new Date(), ...options } = {}) {
   if (!validName(name)) fail('skill-name-invalid', 'select an installed skill by its name');
   return staged(agentId, options, staging => {
     const source = path.join(staging, 'skills', name), stat = exists(source);
     if (!stat) fail('skill-not-installed', `skills/${name} is not in this soul`);
     if (!stat.isDirectory() || stat.isSymbolicLink()) fail('skill-path-unsafe', `skills/${name} is not a real directory`);
     const record = path.join(staging, installRecordPath(name)), hasRecord = Boolean(exists(record));
-    if (trash) {
-      rmSync(source, { recursive: true });
-      if (hasRecord) rmSync(record);
-      return { name, removed: `skills/${name}`, trash: true };
-    }
     const archive = `${archiveRoot(name)}/${stamp(now)}`;
     if (exists(path.join(staging, archive))) fail('skill-archive-exists', `${archive} already exists; retry`);
     mkdirSync(path.join(staging, archive), { recursive: true, mode: 0o700 });
     renameSync(source, path.join(staging, archive, 'skill'));
     if (hasRecord) renameSync(record, path.join(staging, archive, 'install.json'));
-    return { name, removed: `skills/${name}`, archive, trash: false };
+    return { name, removed: `skills/${name}`, archive, hasRecord };
   });
 }
 
@@ -115,14 +109,15 @@ export function liveSkillDirectory(name, agentId, options = {}) {
  * Moves `file` to the user's trash: `~/.Trash` on macOS, the freedesktop.org
  * trash (`$XDG_DATA_HOME/Trash`) elsewhere on POSIX. It never deletes; a move
  * across volumes (EXDEV) or an unsupported platform refuses instead.
- * `originalPath` is where a freedesktop restore puts it back.
+ * `originalPath` is where a freedesktop restore puts it back; `label` names
+ * the trash entry (default: that path's basename).
  */
-export function moveToTrash(file, { platform = process.platform, env = process.env, home = env.HOME ?? homedir(), now = () => new Date(), originalPath = file } = {}) {
+export function moveToTrash(file, { platform = process.platform, env = process.env, home = env.HOME ?? homedir(), now = () => new Date(), originalPath = file, label } = {}) {
   if (platform === 'win32') fail('skill-trash-unsupported', 'moving to the Recycle Bin is not supported yet; archive the skill instead');
-  const base = path.basename(originalPath), when = stamp(now);
+  const base = label ?? path.basename(originalPath), when = stamp(now);
   const unique = (directory, suffix = '') => {
     for (let i = 0; i < 100; i++) {
-      const name = `${base} ${when}${i ? ` ${i}` : ''}`;
+      const name = label ? `${base}${i ? ` ${i}` : ''}` : `${base} ${when}${i ? ` ${i}` : ''}`;
       if (!exists(path.join(directory, name)) && !exists(path.join(directory, `${name}${suffix}`))) return name;
     }
     fail('skill-trash-failed', 'no free name in the trash');
@@ -152,64 +147,62 @@ export function moveToTrash(file, { platform = process.platform, env = process.e
 
 
 /**
- * `uninstall --trash` in an order that never leaves the revision pointing at
- * trashed bytes and never deletes them:
+ * `uninstall --trash`, in an order where a crash or failure never loses the
+ * skill and never leaves it only in a temporary folder:
  *
- * 1. `commit(onAuthorized)` records and applies the owner edit that drops the
- *    skill. Once the owner gate passes, `onAuthorized` moves the live folder
- *    into a holding directory under `.soul-state/tmp` (a same-volume rename
- *    inside the soul), so applying the edit has nothing to delete.
- * 2. If the edit is not recorded, the folder moves back; nothing changed.
- *    If it was recorded but publication failed, the skill is already out of
- *    the revision, so the trash step still runs and the result says so.
- * 3. Only then does the folder move to the OS trash. If that fails, it is
- *    archived to `archive/skills/<name>/<stamp>/` and recorded as a second
- *    owner edit under the same authorization; the result says the trash
- *    failed. If even that record fails, the files stay in the archive folder
- *    and the error names it.
+ * 1. `commit(onAuthorized)` applies the staged archive edit (`stage` from
+ *    stageSkillUninstall). Once the owner gate passes, `onAuthorized` renames
+ *    the live skill and record into that `archive/skills/<name>/<stamp>/`
+ *    folder, so applying the edit deletes nothing. If the edit is not
+ *    recorded, they move back. If it was recorded but publication failed,
+ *    the result carries a warning and the steps below still run.
+ * 2. The archive folder then moves to the OS trash. If that fails, the skill
+ *    simply stays archived, which the revision already records.
+ * 3. An in-place owner edit (the soul folder itself) records the archive's
+ *    removal; it deletes nothing because the folder is already gone. If that
+ *    record fails, the error says where the trash holds it and that the next
+ *    revision edit records the removal.
  */
-export async function trashSoulSkill(name, agentId, { commit, trash = moveToTrash, trashOptions = {}, recordArchive = editSoulRevision, now = () => new Date(), ...options } = {}) {
+export async function trashSoulSkill(stage, agentId, { commit, trash = moveToTrash, trashOptions = {}, recordRemoval = editSoulRevision, now = () => new Date(), ...options } = {}) {
+  const { name, archive, hasRecord } = stage;
   const live = liveSkillDirectory(name, agentId, options), soul = path.dirname(path.dirname(live));
+  const target = path.join(soul, archive), record = path.join(soul, installRecordPath(name));
   const before = revisionHistory(agentId, options).at(-1)?.revision;
-  let record = null;
-  try { record = readFileSync(path.join(soul, installRecordPath(name))); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  let holding = null, authorization = null, revision = null, warning;
-  const held = () => path.join(holding, name);
+  let moved = false, authorization = null, revision = null, warning;
+  const created = [];
   try {
     revision = await commit(granted => {
       authorization = granted;
-      const directory = path.join(soul, '.soul-state', 'tmp', `skill-trash-${randomUUID()}`);
-      mkdirSync(directory, { recursive: true, mode: 0o700 });
-      try { renameSync(live, path.join(directory, name)); }
-      catch (error) { rmdirSync(directory); throw error; }
-      holding = directory;
+      if (exists(target)) fail('skill-archive-exists', `${archive} already exists; retry`);
+      for (let dir = target; !exists(dir); dir = path.dirname(dir)) created.unshift(dir);
+      mkdirSync(target, { recursive: true, mode: 0o700 });
+      renameSync(live, path.join(target, 'skill'));
+      moved = true;
+      if (hasRecord && exists(record)) renameSync(record, path.join(target, 'install.json'));
     });
   } catch (error) {
-    if (!holding) throw error; // refused before anything moved
+    if (!moved) { for (const dir of created.reverse()) try { rmdirSync(dir); } catch { /* not empty or gone */ } throw error; }
     if (revisionHistory(agentId, options).at(-1)?.revision === before) {
-      renameSync(held(), live); rmdirSync(holding);
+      if (exists(path.join(target, 'install.json'))) renameSync(path.join(target, 'install.json'), record);
+      renameSync(path.join(target, 'skill'), live);
+      for (const dir of created.reverse()) try { rmdirSync(dir); } catch { /* not empty or gone */ }
       throw Object.assign(error, { message: `${error.message}; the edit was not recorded and skills/${name} was put back` });
     }
-    warning = `the edit was recorded but publication failed (${error.message}); the skill is out of the revision and was still moved`;
+    warning = `the archive edit was recorded but publication failed (${error.message}); continuing`;
   }
-  const result = { name, removed: `skills/${name}`, trash: true, revision: revision?.revision ?? revisionHistory(agentId, options).at(-1).revision,
-    changed: revision?.changed, ...(warning ? { warning } : {}) };
-  let trashError;
-  try { result.trashedTo = trash(held(), { now, ...trashOptions, originalPath: live }); rmdirSync(holding); return result; }
-  catch (error) { trashError = error; }
-  // Fallback: archive inside the soul, then record it like any archive.
-  const archive = `${archiveRoot(name)}/${stamp(now)}`, target = path.join(soul, archive);
-  if (exists(target)) fail('skill-archive-exists', `trash failed and ${archive} already exists; the skill is held at ${held()}`);
-  mkdirSync(target, { recursive: true, mode: 0o700 });
-  renameSync(held(), path.join(target, 'skill'));
-  if (record) writeFileSync(path.join(target, 'install.json'), record, { flag: 'wx', mode: 0o644 });
-  rmdirSync(holding);
-  Object.assign(result, { trash: false, trashFailed: { code: trashError.code ?? 'skill-trash-failed', message: trashError.message }, archive });
+  const result = { name, removed: `skills/${name}`, archive, archiveRevision: revision?.revision ?? revisionHistory(agentId, options).at(-1).revision,
+    ...(warning ? { warning } : {}) };
+  try { result.trashedTo = trash(target, { now, ...trashOptions, originalPath: target, label: `${name} ${path.basename(target)}` }); }
+  catch (error) {
+    return { ...result, trash: false, trashFailed: { code: error.code ?? 'skill-trash-failed', message: error.message } };
+  }
+  // Drop the now-empty archive parents this command created, so the package
+  // keeps no empty folders; rmdir never removes content.
+  for (let dir = path.dirname(target); dir !== soul && created.includes(dir); dir = path.dirname(dir)) try { rmdirSync(dir); } catch { break; }
   try {
-    const archived = await recordArchive(agentId, soul, { ...options, apply: true, reason: `Archive skill ${name} (the move to the trash failed)`,
-      ...(authorization?.method ? { authorization } : {}) });
-    return { ...result, archiveRevision: archived.revision };
+    const removal = await recordRemoval(agentId, soul, { ...options, apply: true, reason: `Trash skill ${name}`, ...(authorization?.method ? { authorization } : {}) });
+    return { ...result, trash: true, revision: removal.revision };
   } catch (error) {
-    fail('skill-archive-unrecorded', `the move to the trash failed, so skills/${name} was archived to ${archive} in the soul, but recording that revision failed (${error.message}); the files are there and the next revision edit records them`);
+    fail('skill-trash-unrecorded', `skills/${name} is in the trash at ${result.trashedTo}, but recording its removal from ${archive} failed (${error.message}); the next revision edit records it, and restoring from the trash puts it back in ${archive}`);
   }
 }
