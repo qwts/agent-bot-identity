@@ -1,6 +1,6 @@
 # ADR-0645: Owned modules and contracts first, then identity becomes its own repository
 
-**Status:** Proposed (revised 2026-10-09)
+**Status:** Accepted (2026-10-09, by the owner, relayed in chat)
 **Date:** 2026-10-08
 **Issue:** [qwts/agent-bot-identity#645](https://github.com/qwts/agent-bot-identity/issues/645)
 
