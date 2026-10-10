@@ -1,0 +1,1 @@
+- `agent-bot soul build` no longer renders a Codex agent role for a subagent whose `description` is only whitespace, which Codex refuses; it is reported under `unsupported.subagents` for Codex instead (#378).

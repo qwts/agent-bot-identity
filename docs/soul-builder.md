@@ -121,12 +121,17 @@ Adapter evidence (official docs read 2026-10-07):
   config layer's `agents/` folder (the project layer's is `.codex/agents/`,
   which Codex reads only for a trusted project), with `name`, a required
   nonblank `description` and `developer_instructions`, and the rest of the
-  table as that role's config layer (`model` among it); unknown keys are
-  refused. The `multi_agent` feature is `Stable` and on by default there.
+  table as that role's config layer (`model` among it). The role struct is
+  marked `deny_unknown_fields` but flattens the whole config table, so which
+  extra keys are refused was not verified; the builder writes only the keys
+  above. The `multi_agent` feature is `Stable` and on by default there.
   Codex's own Claude-subagent importer (`external-agent-migration`) writes
-  the same shape to `.codex/agents/<name>.toml` and drops `tools`, because a
-  role has no per-tool allowlist. So the builder renders only a subagent
-  without `tools`: a declared list (even empty), a blank prompt, or the name
+  `.codex/agents/<name>.toml` with `name`, `description` and
+  `developer_instructions`, plus `model_reasoning_effort` and `sandbox_mode`
+  mapped from Claude's `effort` and `permissionMode`; it drops `tools`
+  (a role has no per-tool allowlist) and does not carry `model` over. So the
+  builder renders only a subagent without `tools`: a declared list (even
+  empty), a blank description or prompt, or the name
   of a built-in role (`default`, `explorer`, `worker`, which a project role
   would replace) is unsupported for Codex. The file starts with a `#` marker
   comment, then JSON-quoted TOML basic strings; `model` is passed verbatim, so

@@ -251,13 +251,14 @@ test('Codex agent roles: a subagent without tools renders as TOML, rebuilds byte
   assert.equal(readFileSync(join(conflicted, path), 'utf8'), 'name = "mine"\n');
 });
 
-test('Codex agent roles: declared tools, a blank prompt or a built-in role name stay unsupported there (#378)', () => {
+test('Codex agent roles: declared tools, a blank description or prompt, or a built-in role name stay unsupported there (#378)', () => {
   const blank = entry('agents/blank.md', '---\nname: blank\ndescription: Blank\n---\n \n');
+  const spaces = entry('agents/spaces.md', '---\nname: spaces\ndescription: "  "\n---\nPrompt.\n');
   const output = buildHarnessFiles([...source({ open: undefined, reader: 'Read', none: '[]', default: undefined,
-    explorer: undefined, worker: undefined }), blank]);
+    explorer: undefined, worker: undefined }), blank, spaces]);
   assert.deepEqual([...output.keys()].filter((path) => path.startsWith('.codex/agents/')), ['.codex/agents/open.toml']);
   const codex = harnessReport(new Map(output)).codex;
   assert.deepEqual(codex.subagents.rendered, ['open']);
-  assert.deepEqual(codex.unsupported.subagents, ['blank', 'default', 'explorer', 'none', 'reader', 'worker']);
+  assert.deepEqual(codex.unsupported.subagents, ['blank', 'default', 'explorer', 'none', 'reader', 'spaces', 'worker']);
   assert.ok(codex.rendered.includes('subagents'));
 });
