@@ -1009,7 +1009,9 @@ async function soulRuntimeOverrideCommand(argv, { gate, readStdin, write, env, h
       catch { /* launch refuses unsafe shims on its own */ }
       throw error;
     }
-    if (aside) rmSync(aside, { recursive: true, force: true });
+    // The clear is committed and receipted; a set-aside copy that will not
+    // delete is left as an inert `.rollback` entry rather than failing it.
+    if (aside) { try { rmSync(aside, { recursive: true, force: true }); } catch { /* inert leftover */ } }
   });
   const result = { schemaVersion: RUNTIMES_SCHEMA_VERSION, agentId: soul.id, name, status: clear ? 'cleared' : 'selected', executable, verification: clear ? null : 'unverified-external' };
   write(json ? `${JSON.stringify(result)}\n` : `${soul.id}: ${name} override ${clear ? 'cleared' : `selected at ${executable} (unverified external)`}\n`);
