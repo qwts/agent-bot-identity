@@ -240,6 +240,7 @@ export function dispatchAgentBot(parsed) {
     return run(process.execPath, [join(ROOT, 'soul-fork.mjs'), ...parsed.args.slice(1)]);
   }
   if (parsed.command === 'soul' && parsed.args[0] === 'skill') return run(process.execPath, [join(ROOT, 'cli/soul-skill.mjs'), ...parsed.args.slice(1)]);
+  if (parsed.command === 'sandbox' && parsed.args[0] === 'export') return run(process.execPath, [join(ROOT, 'cli/sandbox-export.mjs'), ...parsed.args.slice(1)]);
   if (parsed.command === 'soul' && parsed.args[0] === 'revision') {
     return run(process.execPath, [join(ROOT, 'soul-revisions.mjs'), ...parsed.args.slice(1)]);
   }

@@ -21,6 +21,7 @@
 //   agent-bot sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin]
 //   agent-bot sandbox resolve <agentId|name> [--json]
 //   agent-bot sandbox remove [ACCOUNT] --dry-run [--json]
+//   agent-bot sandbox export ...  (sandbox-export.mjs, #750)
 //
 // Everything printed is secret-free: account names, booleans and commands.
 
@@ -42,7 +43,7 @@ export const PERSONA_SANDBOX = Object.freeze(['sandboxed', 'unrestricted']);
 export const PERSONA_MATCHERS = Object.freeze(['soul', 'role']);
 export const PERSONA_STATES = Object.freeze(['none', 'unrecorded', 'stale', 'absent', 'error', 'invalid', 'ok']);
 const GATE = 'persona-accounts';
-const USAGE = 'usage: agent-bot sandbox status [--json] | sandbox plan [--json] | sandbox on|off [--json] [--principal-stdin] | sandbox account NAME [--json] [--principal-stdin] | sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin] | sandbox resolve <agentId|name> [--json] | sandbox remove [ACCOUNT] --dry-run [--json]';
+const USAGE = 'usage: agent-bot sandbox status [--json] | sandbox plan [--json] | sandbox on|off [--json] [--principal-stdin] | sandbox account NAME [--json] [--principal-stdin] | sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin] | sandbox resolve <agentId|name> [--json] | sandbox remove [ACCOUNT] --dry-run [--json] | sandbox export --for OWNER [--skip CATEGORY]... [--resume DIR] [--json] [--principal-stdin] | sandbox export --verify ACCOUNT [--dir DIR] [--json]';
 // What sysadminctl and dscl accept as a short name; it lands in argv, never a shell.
 const ACCOUNT_NAME = /^[a-z_][a-z0-9_-]{0,30}$/;
 
