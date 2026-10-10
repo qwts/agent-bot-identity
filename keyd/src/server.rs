@@ -1101,6 +1101,51 @@ mod tests {
     }
 
     #[test]
+    fn the_first_app_import_pins_the_daemon_key_under_its_one_consent() {
+        let consent = Arc::new(Consenting::new(true));
+        let mut keyd = keyd(true);
+        keyd.consent = Box::new(Arc::clone(&consent));
+        let (pem, _) = test_key_pem();
+        let before = owner(
+            &keyd,
+            "owner/app-status",
+            json!({ "app": "qwts-claude-agent" }),
+        );
+        assert_eq!(
+            (
+                before["result"]["pinned"].as_bool(),
+                before["result"]["held"].as_bool()
+            ),
+            (Some(false), Some(false))
+        );
+        let first = owner(
+            &keyd,
+            "owner/app-import",
+            json!({ "app": "qwts-claude-agent", "appId": "42", "privateKeyPem": pem, "daemonKey": daemon_key() }),
+        );
+        assert_eq!(first["result"], json!({ "stored": 1, "pinned": true }));
+        let asked = consent.asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 1);
+        assert!(asked[0].contains("trust this account's agent-bot daemon"));
+        assert_eq!(
+            keyd.store.pinned_key().unwrap().map(|k| STANDARD.encode(k)),
+            Some(daemon_key())
+        );
+        let after = owner(
+            &keyd,
+            "owner/app-status",
+            json!({ "app": "qwts-claude-agent" }),
+        );
+        assert_eq!(
+            (
+                after["result"]["pinned"].as_bool(),
+                after["result"]["held"].as_bool()
+            ),
+            (Some(true), Some(true))
+        );
+    }
+
+    #[test]
     fn app_level_owner_operations_need_consent_and_a_matching_pin() {
         let (pem, _) = test_key_pem();
         let refusing = keyd(false);
