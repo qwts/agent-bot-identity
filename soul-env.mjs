@@ -31,7 +31,7 @@ export const ENV_SCHEMA_VERSION = 1;
 // What this engine can do for a host, so a client gates each later slice
 // on the engine interface it talks to rather than on a version number or
 // whether a runtime service happens to be healthy right now.
-export const ENV_CAPABILITIES = Object.freeze(['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes', 'memory', 'history', 'template-name', 'template-refresh', 'launch-parent', 'migrate-complete', 'env-clean', 'env-export', 'env-import', 'harnesses-into-runtimes', 'env-history', 'dream-status', 'dream-ack-notice']);
+export const ENV_CAPABILITIES = Object.freeze(['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes', 'tool-home-set', 'memory', 'history', 'template-name', 'template-refresh', 'launch-parent', 'migrate-complete', 'env-clean', 'env-export', 'env-import', 'harnesses-into-runtimes', 'env-history', 'dream-status', 'dream-ack-notice']);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const USAGE = 'usage: agent-bot soul env <agentId|name> [--json] | soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul | --template-name [--plan] | --harnesses-into-runtimes [--plan] | --complete [--plan] [--json] [--principal-stdin] | soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin] | soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin] | soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin] | soul env history <agentId|name> [--json] [--limit N]';
 const LINE_COUNT_MAX_BYTES = 256 * 1024 * 1024;
