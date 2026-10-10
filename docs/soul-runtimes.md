@@ -133,6 +133,14 @@ unsupported on Windows, where a carried selection can still be cleared.
 They live below `.soul-state/runtimes`, which is
 host-local runtime state and is excluded from export/import.
 
+Override records and their one-name shim directory are owner-managed state.
+Recognized soul file-write tools cannot edit them in any confinement mode,
+including `off`; direct shell commands naming the state are refused too. Set
+or clear selections with the owner-gated command above. This is a cooperative
+hook guardrail: records are not signed, and it does not stop arbitrary code
+running as the same OS user from bypassing the hooks. It adds no OS-level
+custody boundary or different record format/location.
+
 ## Layout
 
 ```
@@ -201,22 +209,20 @@ uv-tool marker recovery is not an atomic directory swap.
 
 ## Launch routing
 
-The runtime environment helper routes the soul's installs in this order per
-runtime ([ADR-0322](decisions/ADR-0322-souls-carry-their-runtimes-and-non-npm-harnesses.md)
-decision 4): a supplied override, the soul's install, the node bundled with
-the host (GeniusBar's, for an undeclared node only), then the host PATH. The
-managed daemon turn path supplies the soul environment, but does not wire a
-per-agent override request into this helper. A durable per-soul override CLI,
-exact override executable validation and remaining resume evidence stay in #617; the helper
-argument is not evidence that these user-facing paths exist.
+At launch, an owner-managed per-soul selection takes precedence for that exact
+executable name, then harness bins, managed runtime bins, GeniusBar's bundled
+Node for an undeclared Node, and the host PATH. Selecting `node` does not
+select `npm` or `npx`. The owner CLI and exact executable validation are
+implemented above; a per-launch override request remains deferred and is not
+wired through the daemon. Remaining resume evidence stays in #617.
 The harness installs come before the runtimes on PATH, and a declared
-runtime that is not installed is installed at launch or fails the launch; it
-never falls through to a host copy. Every daemon ACP turn rechecks declared
-runtime readiness before creating an executor, including ACP cold wakes and
-ACP session restoration on `/v1`. The owner-selected `resume <policy>` wake lane
+runtime without a matching valid per-soul override is installed at launch or
+fails the launch; it never falls through to a host copy. Every daemon ACP turn
+rechecks declared runtime readiness before creating an executor, including ACP
+cold wakes and session restoration on `/v1`. The owner-selected `resume <policy>` wake lane
 (`createResumeExecutor`) composes the same runtime and provider env and refuses
-the same way (#707); its tool-home store is not routed yet and stays open in
-#617. Missing selected installations, unsupported declarations,
+the same way (#707). Tool-home routing and recorded session-store checks are
+implemented separately by #818. Missing selected installations, unsupported declarations,
 invalid runtime declarations, an unreadable existing manifest, or a runtime
 lookup error refuse the turn. A surviving install stamp and bin directory do
 not count as ready when the runtime executable is missing or has lost its
@@ -281,13 +287,17 @@ once `node_modules/.bin/<adapter>` exists, so an interrupted one is a
 `soul env clean` candidate and a finished one never is; when two installs of
 one version race, the first to land stands. Both joined adapters and managed
 homes provision declared runtimes before invoking npm. With `runtimes.node`,
-the selected distribution supplies Node and its bundled npm CLI
+an exact owner-selected `node` or `npm` is used for that executable only;
+otherwise the managed Node distribution supplies Node and its bundled npm CLI
 (`lib/node_modules/npm/bin/npm-cli.js` on Unix, `node_modules/npm/bin/npm-cli.js`
-on Windows); a host `AGENT_BOT_NPM` cannot override it. Missing files or failed
-provisioning refuse installation. Without a Node declaration, the host route
-and its npm override remain available. The soul's npm cache stays contained.
+on Windows). A host `AGENT_BOT_NPM` cannot replace this declared-runtime
+route, and selecting `node` never selects `npm` or `npx` by implication.
+Missing files or failed provisioning refuse installation. Without a Node
+declaration, the host route and its npm override remain available. The soul's
+npm cache stays contained.
 Windows layout fixtures verify selection; they do not establish live Windows
-execution. Installed-byte integrity and owner-managed overrides remain in #617.
+execution. Installed-byte integrity and deferred per-launch override requests
+remain in #617.
 
 A launch resolves the adapter in order: the checkout's own `node_modules`,
 the runtimes installs newest version first, then the legacy
