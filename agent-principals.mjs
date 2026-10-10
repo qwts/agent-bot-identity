@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 // Local principal and ACL store for the daemon interaction plane (#57). A
 // transport account (Telegram user, web client, CLI caller) is never an Agent
 // ID: adapters authenticate the provider identity and submit only a normalized
@@ -22,9 +20,9 @@ import {
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
 
 import { validateAgentId, withLock } from './agent-identity.mjs';
+import { assertOwnerAction } from './owner-gate.mjs';
 import { interactionHome } from './state-paths.mjs';
 
 const SCHEMA_VERSION = 1;
@@ -550,7 +548,7 @@ export function listPrincipals({ file = principalsFile() } = {}) {
 }
 
 function parseCli(argv) {
-  const [command = 'list', ...tokens] = argv.slice(2);
+  const [command = 'list', ...tokens] = argv;
   const positional = [];
   const flags = new Map();
   const multi = new Map([['soul', []], ['operation', []]]);
@@ -561,6 +559,7 @@ function parseCli(argv) {
       continue;
     }
     if (token === '--json') { flags.set('json', true); continue; }
+    if (token === '--principal-stdin') { if (flags.has('principal-stdin')) throw new Error('duplicate --principal-stdin'); flags.set('principal-stdin', true); continue; }
     if (token === '--all-souls') { flags.set('all-souls', true); continue; }
     if (token === '--clear-default') { flags.set('clear-default', true); continue; }
     if (['--soul', '--operation'].includes(token)) {
@@ -601,72 +600,115 @@ const USAGE = 'usage: agent-bot principal list [--json]\n'
   + '       agent-bot principal bind <principal-id> --transport <slug> --provider-id <id>\n'
   + '       agent-bot principal allow <principal-id> [--soul <agent-id>]... [--all-souls]\n'
   + '                                 [--operation <op>]... [--default-soul <agent-id>] [--clear-default]\n'
-  + '       agent-bot principal revoke <principal-id>\n';
+  + '       agent-bot principal revoke <principal-id>\n'
+  + '       mutating commands accept --principal-stdin for explicit owner credential JSON\n';
 
-async function main() {
-  const args = parseCli(process.argv);
+// The `principal` command (#779). Every mutation passes the owner gate after
+// its request is validated and before the store is touched: a soul is
+// refused, and the owner approves with Touch ID, the login password or the
+// administrator dialog, or presents a principal credential on stdin
+// (--principal-stdin). Owner secrets are never discovered in the environment
+// or on disk. The action is command-shaped, naming the principal and the
+// change, so the prompt says what is approved. The process entry,
+// cli/principal.mjs, wires owner-action.mjs so a presented credential is
+// checked by the broker; unwired, owner-gate.mjs refuses one (#645).
+export async function principalCommand(argv, {
+  env = process.env,
+  home = homedir(),
+  cwd = process.cwd(),
+  readStdin = () => readFileSync(0, 'utf8'),
+  write = (text) => process.stdout.write(text),
+  gate = (action, { principal }) => assertOwnerAction(action, { principal, env, cwd }),
+} = {}) {
+  const args = parseCli(argv);
+  const store = { file: principalsFile({ env, home }), env, home };
+  const json = (value) => write(`${JSON.stringify(value, null, 2)}\n`);
+  const mutating = ['enroll', 'bind', 'allow', 'revoke'].includes(args.command);
+  if (args.flags.has('principal-stdin') && !mutating) {
+    throw new Error('--principal-stdin is only valid for principal mutations');
+  }
+  const ownerApproves = async (action) => {
+    let principal = null;
+    if (args.flags.has('principal-stdin')) {
+      try { principal = JSON.parse(readStdin()); }
+      catch { throw new Error('--principal-stdin needs the principal credential as JSON on stdin'); }
+    }
+    await gate(action, { principal });
+  };
   switch (args.command) {
     case 'list': {
       if (args.positional.length > 0) throw new Error('principal list does not accept arguments');
-      const records = listPrincipals();
-      if (args.flags.has('json')) process.stdout.write(`${JSON.stringify(records, null, 2)}\n`);
-      else process.stdout.write(formatPrincipals(records));
-      break;
+      const records = listPrincipals(store);
+      if (args.flags.has('json')) json(records);
+      else write(formatPrincipals(records));
+      return records;
     }
     case 'show': {
       if (args.positional.length !== 1) throw new Error('principal show requires one principal ID');
-      process.stdout.write(`${JSON.stringify(getPrincipal(args.positional[0]), null, 2)}\n`);
-      break;
+      const principal = getPrincipal(args.positional[0], store);
+      json(principal);
+      return principal;
     }
     case 'enroll': {
       if (args.positional.length > 0) throw new Error('principal enroll does not accept arguments');
-      const principal = enrollPrincipal({ label: args.flags.get('label') });
-      process.stdout.write(`${JSON.stringify(principal, null, 2)}\n`);
-      break;
+      const label = printableText('label', args.flags.get('label'), { max: 80 });
+      await ownerApproves(`principal enroll --label ${label}`);
+      const principal = enrollPrincipal({ label }, store);
+      json(principal);
+      return principal;
     }
     case 'bind': {
       if (args.positional.length !== 1) throw new Error('principal bind requires one principal ID');
-      const principal = bindTransport(args.positional[0], {
-        transport: args.flags.get('transport'),
-        providerId: args.flags.get('provider-id'),
-      });
-      process.stdout.write(`${JSON.stringify(principal, null, 2)}\n`);
-      break;
+      const principalId = validatePrincipalId(args.positional[0]);
+      const transport = validateTransport(args.flags.get('transport'));
+      const providerId = validateProviderId(args.flags.get('provider-id'));
+      await ownerApproves(`principal bind ${principalId} --transport ${transport} --provider-id ${providerId}`);
+      const principal = bindTransport(principalId, { transport, providerId }, store);
+      json(principal);
+      return principal;
     }
     case 'allow': {
       if (args.positional.length !== 1) throw new Error('principal allow requires one principal ID');
+      const principalId = validatePrincipalId(args.positional[0]);
       const souls = args.multi.get('soul');
       if (args.flags.has('all-souls') && souls.length > 0) {
         throw new Error('--all-souls cannot be combined with --soul');
       }
       const operations = args.multi.get('operation');
-      // All requested facets are validated together and applied as one store
-      // mutation; a request that is invalid anywhere changes nothing.
-      const principal = applyAuthorizationChanges(args.positional[0], {
+      const changes = {
         ...(args.flags.has('all-souls') ? { souls: ['*'] } : {}),
-        ...(!args.flags.has('all-souls') && souls.length > 0 ? { souls } : {}),
-        ...(operations.length > 0 ? { operations } : {}),
+        ...(!args.flags.has('all-souls') && souls.length > 0 ? { souls: normalizeSouls(souls) } : {}),
+        ...(operations.length > 0 ? { operations: normalizeOperations(operations) } : {}),
         ...(args.flags.has('clear-default') ? { defaultSoul: null } : {}),
         ...(!args.flags.has('clear-default') && args.flags.has('default-soul')
-          ? { defaultSoul: args.flags.get('default-soul') }
+          ? { defaultSoul: agentIdOrThrow(args.flags.get('default-soul'), 'defaultSoul') }
           : {}),
-      });
-      process.stdout.write(`${JSON.stringify(principal, null, 2)}\n`);
-      break;
+      };
+      if (Object.keys(changes).length === 0) {
+        throw new Error('principal allow requires at least one authorization change');
+      }
+      const words = [
+        ...(changes.souls?.includes('*') ? ['--all-souls'] : (changes.souls ?? []).flatMap((soul) => ['--soul', soul])),
+        ...(changes.operations ?? []).flatMap((operation) => ['--operation', operation]),
+        ...(changes.defaultSoul === null ? ['--clear-default'] : []),
+        ...(changes.defaultSoul ? ['--default-soul', changes.defaultSoul] : []),
+      ];
+      await ownerApproves(`principal allow ${principalId} ${words.join(' ')}`);
+      // All requested facets are validated together and applied as one store
+      // mutation; a request that is invalid anywhere changes nothing.
+      const principal = applyAuthorizationChanges(principalId, changes, store);
+      json(principal);
+      return principal;
     }
     case 'revoke': {
       if (args.positional.length !== 1) throw new Error('principal revoke requires one principal ID');
-      process.stdout.write(`${JSON.stringify(revokePrincipal(args.positional[0]), null, 2)}\n`);
-      break;
+      const principalId = validatePrincipalId(args.positional[0]);
+      await ownerApproves(`principal revoke ${principalId}`);
+      const principal = revokePrincipal(principalId, store);
+      json(principal);
+      return principal;
     }
     default:
       throw new Error(USAGE);
   }
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((error) => {
-    process.stderr.write(`agent-principals: ${error.message}\n`);
-    process.exit(1);
-  });
 }

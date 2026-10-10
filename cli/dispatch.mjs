@@ -14,7 +14,7 @@ export const MODULES = new Map([
   ['identity', 'cli/identity.mjs'],
   ['space', 'agent-space.mjs'],
   ['population', 'agent-population.mjs'],
-  ['principal', 'agent-principals.mjs'],
+  ['principal', 'cli/principal.mjs'],
   ['binding', 'agent-binding.mjs'],
   ['soul', 'cold-wake-settings.mjs'],
   ['harness', 'harness-auth.mjs'],
