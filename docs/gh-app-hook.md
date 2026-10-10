@@ -63,16 +63,23 @@ dedupes instead of being stored twice.
 
 `take_inbox` goes through the daemon (#229). The daemon holds the bearer and
 the URL; the session's MCP server holds neither and presents only its
-binding. Store `INBOX_TOKEN` as a pass-cli note, in the `Agent Identities`
-vault, titled exactly:
+binding. Store `INBOX_TOKEN` in the `password` field of an active pass-cli
+item in the daemon's configured credential vault (the `AGENT_BOT_CREDENTIAL_VAULT`
+setting, default: `Agent Identities`), titled exactly:
 
 ```text
 agent-bot.inbox/gh-app-hook-inbox-token
 ```
 
-with the bearer as the note's only content. The daemon reads it for each
-take, so a rotated value takes effect without a restart. Then install the
-daemon with the URL set, which writes it into the daemon's unit:
+The daemon reads that field through the audited Proton Pass secret-retrieval
+path for each take, so a rotated value takes effect without a restart. A
+previous setup that kept the bearer as note content must move it into the
+`password` field. Convert the existing item in place if possible. If Proton
+Pass requires a replacement item, remove or rename the old note before
+activating the replacement: the daemon requires exactly one active item with
+this title. Verify the new field with a bound `take_inbox` call. The daemon
+never prints the bearer. Then install the daemon with the URL set, which writes
+it into the daemon's unit:
 
 ```bash
 GH_APP_HOOK_INBOX_URL=https://<worker host> agent-bot daemon install
@@ -98,16 +105,16 @@ receipt in the audit log naming the soul, App and outcome, never the bearer.
 
 | take_inbox code | Meaning |
 | --- | --- |
-| `inbox-credential-missing` | The pass-cli note is missing or empty. |
-| `inbox-credential-unavailable` | pass-cli could not be read (no session, locked). |
+| `inbox-credential-missing` | The pass-cli item or its `password` field is missing or empty. |
+| `inbox-credential-unavailable` | Proton Pass could not be read (no session, locked, or provider unavailable). |
 | `inbox-not-configured` | The daemon has no valid `GH_APP_HOOK_INBOX_URL`. |
 | `inbox-no-app` | The bound soul has no GitHub App. |
-| `inbox-auth-expired` | The Worker refused the bearer; update the note (or the daemon's `GH_APP_HOOK_INBOX_TOKEN`, if set). |
+| `inbox-auth-expired` | The Worker refused the bearer; update the `password` field (or the daemon's `GH_APP_HOOK_INBOX_TOKEN`, if set). |
 | `inbox-broker-unreachable`, `inbox-unavailable`, `inbox-bad-request` | The broker failed, timed out or refused the request. |
 | `inbox-not-bound`, `inbox-wrong-worktree`, `inbox-daemon-unreachable` | The session's own binding or daemon connection. |
 
 `GH_APP_HOOK_INBOX_TOKEN` in a session's environment is not read. If you set
-it in the daemon's own environment, it wins over the pass-cli note: your
+it in the daemon's own environment, it wins over the pass-cli password field: your
 explicit choice is final. The daemon unit never stores it (`daemon install`
 strips it), and harnesses never inherit it, so after changing or unsetting it
 restart the daemon from that environment; a running daemon keeps the value it
@@ -168,7 +175,7 @@ successful take deletes the record it returns, so probing a real repository
 can consume a pending event. A nonexistent `owner/name` matches nothing:
 
 ```sh
-INBOX_TOKEN='<the value of the pass-cli note>'
+INBOX_TOKEN='<the value of the pass-cli password field>'
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
   -H "Authorization: Bearer $INBOX_TOKEN" \
   "https://<worker host>/inbox?app=<app slug>&repo=<owner>/nonexistent-probe-repo"
@@ -187,6 +194,6 @@ reuse the delivery GUID, so they dedupe.
 entry in `WEBHOOK_SECRETS` (`wrangler secret put` replaces the whole JSON
 object, so paste every entry), then set the same value on the App and save.
 Deliveries in between fail and can be redelivered afterwards. For
-`INBOX_TOKEN`: put the new value, then update the
-`agent-bot.inbox/gh-app-hook-inbox-token` note; until it is updated,
+`INBOX_TOKEN`: put the new value, then update the `password` field on
+`agent-bot.inbox/gh-app-hook-inbox-token`; until it is updated,
 `take_inbox` calls get `inbox-auth-expired`. Re-run the probes above after either rotation.

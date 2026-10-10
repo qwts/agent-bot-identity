@@ -12,7 +12,11 @@ import { createDaemonServer } from '../agent-daemon.mjs';
 import { daemonClient } from '../daemon-client.mjs';
 import { ensureAgentIdentity, stateDirectory } from '../agent-identity.mjs';
 import { mintBindToken } from '../agent-binding.mjs';
+import { createProtonPassAdapter } from '../secret-providers/proton-pass.mjs';
+import { createSecretProviderRegistry } from '../secret-store.mjs';
 import {
+  INBOX_BEARER_ACCESS_REASON,
+  INBOX_BEARER_FIELD,
   INBOX_BEARER_TITLE,
   createInboxTaker,
   readInboxBearer,
@@ -117,61 +121,126 @@ function racyBroker(records) {
   return { fetchImpl, seen };
 }
 
-function bearerStore(value) {
-  const reads = [];
+function inboxSecretRegistry({ selectedVault = 'Agent Identities', value = BEARER, itemExists = true, duplicateItems = false, passwordField = true, duplicatePasswordFields = false, failure = null, env = {} } = {}) {
+  const calls = [];
+  const shareId = selectedVault === 'Agent Identities' ? 'default-share' : 'configured-share';
+  const run = (args, invocation = {}) => {
+    calls.push({ args: [...args], env: invocation.env });
+    if (failure) throw failure;
+    if (args[0] === 'vault' && args[1] === 'list') {
+      return JSON.stringify({ vaults: [
+        { name: 'Agent Identities', share_id: 'default-share' },
+        { name: 'Configured Inbox Vault', share_id: 'configured-share' },
+      ] });
+    }
+    if (args[0] === 'item' && args[1] === 'list') {
+      const requestedShare = args[args.indexOf('--share-id') + 1];
+      const items = itemExists && requestedShare === shareId
+        ? [
+          { id: 'inbox-item', share_id: shareId, title: INBOX_BEARER_TITLE, state: 'active' },
+          ...(duplicateItems ? [{ id: 'duplicate-inbox-item', share_id: shareId, title: INBOX_BEARER_TITLE, state: 'active' }] : []),
+        ]
+        : [];
+      return JSON.stringify({ items });
+    }
+    if (args[0] === 'item' && args[1] === 'view') {
+      return JSON.stringify({ item: {
+        id: 'inbox-item', share_id: shareId, state: 'active',
+        content: {
+          title: INBOX_BEARER_TITLE,
+          content: passwordField ? {
+            Login: { password: value },
+            ...(duplicatePasswordFields ? { Wifi: { password: `second-${value}` } } : {}),
+          } : { Note: { note: value } },
+        },
+      } });
+    }
+    throw new Error('unexpected pass-cli operation');
+  };
   return {
-    reads,
-    read(title) {
-      reads.push(title);
-      if (value instanceof Error) throw value;
-      return value;
-    },
+    calls,
+    registry: createSecretProviderRegistry([createProtonPassAdapter({ env, run })]),
   };
 }
 
-test('the inbox bearer is one named pass-cli note (#229)', () => {
+test('the inbox bearer uses the exact password field and a concrete Proton Pass audit reason (#229)', () => {
   assert.equal(INBOX_BEARER_TITLE, 'agent-bot.inbox/gh-app-hook-inbox-token');
-  const store = bearerStore(`${BEARER}\n`);
-  assert.equal(readInboxBearer({ store }), BEARER);
-  assert.deepEqual(store.reads, [INBOX_BEARER_TITLE]);
+  assert.equal(INBOX_BEARER_FIELD, 'password');
+  const env = {
+    AGENT_BOT_CREDENTIAL_VAULT: 'Configured Inbox Vault',
+    PROTON_PASS_SESSION_DIR: '/disposable/pass-session',
+  };
+  const mock = inboxSecretRegistry({ selectedVault: 'Configured Inbox Vault', value: `${BEARER}\n`, env });
+  assert.equal(readInboxBearer({ env, registry: mock.registry }), BEARER);
+  const itemView = mock.calls.find(({ args }) => args[0] === 'item' && args[1] === 'view');
+  assert.ok(itemView);
+  assert.equal(itemView.env.AGENT_BOT_CREDENTIAL_VAULT, 'Configured Inbox Vault');
+  assert.equal(itemView.env.PROTON_PASS_SESSION_DIR, '/disposable/pass-session');
+  assert.equal(itemView.env.PROTON_PASS_AGENT_REASON, INBOX_BEARER_ACCESS_REASON);
+  assert.equal(mock.calls.some(({ args }) => args.includes(BEARER)), false, 'the bearer must never be passed in argv');
 });
 
-test('a missing, empty or unreadable bearer is refused with a stable code and no secret', () => {
-  const missing = Object.assign(new Error('pass-cli item not found'), { code: 'missing-item' });
-  assert.throws(() => readInboxBearer({ store: bearerStore(missing) }), (error) => {
+test('a missing item or password field is refused with a stable code and no secret', () => {
+  const missingItem = inboxSecretRegistry({ itemExists: false });
+  assert.throws(() => readInboxBearer({ registry: missingItem.registry }), (error) => {
     assert.equal(error.code, 'inbox-credential-missing');
     assert.match(error.message, /agent-bot\.inbox\/gh-app-hook-inbox-token/);
+    assert.doesNotMatch(error.message, new RegExp(BEARER));
     return true;
   });
-  assert.throws(() => readInboxBearer({ store: bearerStore('  \n') }), { code: 'inbox-credential-missing' });
-  const locked = Object.assign(new Error('pass-cli has no session'), { code: 'provider-session-required' });
-  assert.throws(() => readInboxBearer({ store: bearerStore(locked) }), (error) => {
+  const noteOnly = inboxSecretRegistry({ passwordField: false });
+  assert.throws(() => readInboxBearer({ registry: noteOnly.registry }), (error) => {
+    assert.equal(error.code, 'inbox-credential-missing');
+    assert.match(error.message, /password field/);
+    assert.doesNotMatch(error.message, new RegExp(BEARER));
+    return true;
+  });
+  const empty = inboxSecretRegistry({ value: '  \n' });
+  assert.throws(() => readInboxBearer({ registry: empty.registry }), { code: 'inbox-credential-missing' });
+  const unavailable = inboxSecretRegistry({ failure: new Error(`secret provider failed with ${BEARER}`) });
+  assert.throws(() => readInboxBearer({ registry: unavailable.registry }), (error) => {
     assert.equal(error.code, 'inbox-credential-unavailable');
-    assert.match(error.message, /no session/);
+    assert.match(error.message, /pass-cli session/);
+    assert.doesNotMatch(error.message, new RegExp(BEARER));
     return true;
   });
 });
 
-test('an explicit GH_APP_HOOK_INBOX_TOKEN in the daemon env wins over the pass-cli note (#229)', () => {
-  let noteReads = 0;
-  const readNote = () => { noteReads += 1; return 'from-the-note'; };
-  assert.deepEqual(resolveInboxBearer({ env: { GH_APP_HOOK_INBOX_TOKEN: ` ${BEARER}\n` }, readNote }),
+test('ambiguous item and password-field selections fail closed without exposing credential data', () => {
+  for (const mock of [
+    inboxSecretRegistry({ duplicateItems: true }),
+    inboxSecretRegistry({ duplicatePasswordFields: true }),
+  ]) {
+    assert.throws(() => readInboxBearer({ registry: mock.registry }), (error) => {
+      assert.equal(error.code, 'inbox-credential-unavailable');
+      assert.match(error.message, /could not read the inbox bearer/);
+      assert.doesNotMatch(error.message, /secret provider|ambiguous|second-/i);
+      assert.doesNotMatch(error.message, new RegExp(BEARER));
+      return true;
+    });
+  }
+});
+
+test('an explicit GH_APP_HOOK_INBOX_TOKEN in the daemon env wins over the audited pass-cli field (#229)', () => {
+  let secretReads = 0;
+  const readSecret = () => { secretReads += 1; return 'from-the-password-field'; };
+  assert.deepEqual(resolveInboxBearer({ env: { GH_APP_HOOK_INBOX_TOKEN: ` ${BEARER}\n` }, readSecret }),
     { token: BEARER, source: 'env' });
-  assert.equal(noteReads, 0);
-  // Unset or blank falls through to the note.
-  assert.deepEqual(resolveInboxBearer({ env: {}, readNote }), { token: 'from-the-note', source: 'pass-cli' });
-  assert.deepEqual(resolveInboxBearer({ env: { GH_APP_HOOK_INBOX_TOKEN: '  ' }, readNote }), { token: 'from-the-note', source: 'pass-cli' });
-  assert.equal(noteReads, 2);
+  assert.equal(secretReads, 0);
+  // Unset or blank falls through to the audited password field.
+  assert.deepEqual(resolveInboxBearer({ env: {}, readSecret }), { token: 'from-the-password-field', source: 'pass-cli' });
+  assert.deepEqual(resolveInboxBearer({ env: { GH_APP_HOOK_INBOX_TOKEN: '  ' }, readSecret }), { token: 'from-the-password-field', source: 'pass-cli' });
+  assert.equal(secretReads, 2);
 });
 
 test('/v0/inbox/take uses the env bearer, receipts its source and never the value', async () => {
   const fixture = scratch();
   const env = { ...fixture.env, GH_APP_HOOK_INBOX_TOKEN: BEARER };
   const broker = racyBroker([{ app: 'you-codex-agent', repo: 'qwts/example1', kind: 'mention' }]);
-  const missing = Object.assign(new Error('pass-cli item not found'), { code: 'missing-item' });
+  const missing = inboxSecretRegistry({ itemExists: false, env });
   const inboxTake = createInboxTaker({
     env,
-    readBearer: () => resolveInboxBearer({ env, readNote: () => readInboxBearer({ store: bearerStore(missing) }) }),
+    readBearer: () => resolveInboxBearer({ env, readSecret: () => readInboxBearer({ env, registry: missing.registry }) }),
     fetchImpl: broker.fetchImpl,
   });
   await withServer(env, { inboxTake }, async ({ call }) => {
@@ -188,7 +257,7 @@ test('/v0/inbox/take uses the env bearer, receipts its source and never the valu
   assert.doesNotMatch(readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8'), new RegExp(BEARER));
 });
 
-test('a rejected env bearer names the env variable, not the note, and receipts the source', async () => {
+test('a rejected env bearer names the env variable, not the password field, and receipts the source', async () => {
   const take = createInboxTaker({
     env: { GH_APP_HOOK_INBOX_URL: 'https://gh-app-hook.example.invalid', GH_APP_HOOK_INBOX_TOKEN: BEARER },
     fetchImpl: async () => new Response('{}', { status: 401 }),
@@ -206,13 +275,14 @@ test('a rejected env bearer names the env variable, not the note, and receipts t
 test('a failed pass-cli bearer read is receipted with its source (#229)', async () => {
   const fixture = scratch();
   const env = { ...fixture.env, GH_APP_HOOK_INBOX_URL: 'https://gh-app-hook.example.invalid' };
-  const locked = Object.assign(new Error('pass-cli has no session'), { code: 'provider-session-required' });
-  assert.throws(() => resolveInboxBearer({ env: {}, readNote: () => readInboxBearer({ store: bearerStore(locked) }) }),
+  const unavailable = inboxSecretRegistry({ failure: new Error('pass-cli has no session'), env });
+  const readSecret = () => readInboxBearer({ env, registry: unavailable.registry });
+  assert.throws(() => resolveInboxBearer({ env, readSecret }),
     (error) => error.code === 'inbox-credential-unavailable' && error.bearerSource === 'pass-cli');
   let fetches = 0;
   const inboxTake = createInboxTaker({
     env,
-    readBearer: () => resolveInboxBearer({ env, readNote: () => readInboxBearer({ store: bearerStore(locked) }) }),
+    readBearer: () => resolveInboxBearer({ env, readSecret }),
     fetchImpl: async () => { fetches += 1; return new Response(null, { status: 204 }); },
   });
   await withServer(env, { inboxTake }, async ({ call }) => {
@@ -280,9 +350,9 @@ test('a missing bearer is refused with inbox-credential-missing before the broke
   const fixture = scratch();
   const { env } = fixture;
   const broker = racyBroker([{ kind: 'mention' }]);
-  const missing = Object.assign(new Error('pass-cli item not found'), { code: 'missing-item' });
+  const missing = inboxSecretRegistry({ itemExists: false, env });
   const inboxTake = createInboxTaker({
-    env, readBearer: () => readInboxBearer({ store: bearerStore(missing) }), fetchImpl: broker.fetchImpl,
+    env, readBearer: () => readInboxBearer({ env, registry: missing.registry }), fetchImpl: broker.fetchImpl,
   });
   await withServer(env, { inboxTake }, async ({ call }) => {
     const bound = await bind(call, fixture);

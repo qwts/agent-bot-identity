@@ -60,7 +60,7 @@ function boundClient(root, takeInbox) {
 // take_inbox shows the daemon's sentence and code as is.
 test('#299: take_inbox shows the daemon\'s inbox code and sentence, never the bearer', async () => {
   const { root, secret } = boundFixture();
-  const sentence = 'take_inbox failed: inbox at gh-app-hook.example.invalid rejected the bearer (HTTP 401); update the pass-cli note agent-bot.inbox/gh-app-hook-inbox-token to the current INBOX_TOKEN, then retry';
+  const sentence = 'take_inbox failed: inbox at gh-app-hook.example.invalid rejected the bearer (HTTP 401); update the pass-cli password field agent-bot.inbox/gh-app-hook-inbox-token to the current INBOX_TOKEN, then retry';
   const state = createMcpState({
     client: boundClient(root, async () => {
       throw Object.assign(new Error(`daemon POST /v0/inbox/take failed: ${sentence}`), { code: 'inbox-auth-expired', detail: sentence });
