@@ -161,7 +161,8 @@ with each file's path, bytes and SHA-256.
 A failure, or a declined gate, stops there and leaves the drop as it is,
 with no manifest. Its error names the resume: `--resume DIR` hashes again
 what was already written, refuses if any of it changed
-(`sandbox-export-changed`), and carries on. Nothing in the account is
+(`sandbox-export-changed`), and carries on. A category that already has
+files cannot be skipped on resume (`sandbox-export-skip-recorded`). Nothing in the account is
 removed.
 
 The command then prints the copy for the owner to run from their own
@@ -169,6 +170,7 @@ account:
 
 ```
 mkdir -p -m 700 ~/.agent-bot/exports ~/.agent-bot/exports/<account>
+chmod 700 ~/.agent-bot/exports ~/.agent-bot/exports/<account>
 sudo /usr/bin/ditto '<drop>' ~/.agent-bot/exports/<account>/<timestamp>
 sudo /usr/sbin/chown -R <owner> ~/.agent-bot/exports/<account>/<timestamp>
 chmod -R go-rwx ~/.agent-bot/exports/<account>/<timestamp>
@@ -176,8 +178,9 @@ agent-bot sandbox export --verify <account> --dir ~/.agent-bot/exports/<account>
 ```
 
 In the owner's account, `sandbox export --verify ACCOUNT` (the newest export
-for ACCOUNT, or `--dir`) refuses a folder the owner does not own or that
-others can read, a manifest made for someone else, and any file that is
+for ACCOUNT, or `--dir`) refuses a folder or manifest the owner does not own
+or that others can read, a manifest that is a link, not a regular file or
+over 4 MiB, a manifest made for someone else, and any file that is
 missing, extra to its path, not private, or whose size or SHA-256 differs.
 Every file is read back; only when all match does it write `verified.json`
 and report success. Both halves leave an audit receipt.
