@@ -12,7 +12,8 @@
 //!   agent-bot-keyd presence-key [--keychain FILE]
 //!       Prints the public half of keyd's presence key (made on first use),
 //!       which agent-bot pins from this code-signed binary before trusting
-//!       an `owner/presence` assertion (agent-bot-identity #416).
+//!       an `owner/presence` assertion (agent-bot-identity #416) or a record
+//!       of the owner's statement keys (#753).
 //!   agent-bot-keyd --version
 //!
 //! Keys live only in Keychain items keyd created, so their access lists
@@ -26,6 +27,7 @@ mod github;
 mod grant;
 mod ids;
 mod paths;
+mod pins;
 mod presence;
 mod relay;
 mod server;

@@ -42,7 +42,7 @@ sockets are 0600, and keyd checks each peer's user ID.
 | socket | speaks | for |
 | --- | --- | --- |
 | `keyd.sock` | MCP (newline-delimited JSON-RPC) | `credential`, `git_credential` |
-| `owner.sock` | JSON-RPC | `owner/status`, `owner/import`, `owner/remove`, `owner/pin`, `owner/presence`, `owner/app-status`, `owner/app-import`, `owner/app-remove` |
+| `owner.sock` | JSON-RPC | `owner/status`, `owner/import`, `owner/remove`, `owner/pin`, `owner/presence`, `owner/pins-attest`, `owner/pins-status`, `owner/app-status`, `owner/app-import`, `owner/app-remove` |
 
 Each call leaves a receipt in `keyd/audit.jsonl` (0600). Receipts never hold a
 secret.
@@ -153,6 +153,19 @@ When nobody can be asked here (no GUI session, or no login password), keyd
 answers error `-32001`, and agent-bot falls back to its administrator dialog.
 A person's cancel, failure or timeout is error `-32000`, and agent-bot does
 not ask again.
+
+## The owner's statement keys
+
+The keys the owner signs statements with
+([agent-bot-identity #753](https://github.com/qwts/agent-bot-identity/issues/753))
+count only as keyd records them. `owner/pins-attest {pins, nonce}` shows the
+owner every key by name and fingerprint and, only on approval, keeps the
+key set's digest and a generation one past the last in keyd's Keychain item
+(service `agent-bot.keyd`, account `owner-pins`). `owner/pins-status {nonce}`
+reports that record with no prompt. Both answer a `k1.` record signed with
+the presence key, `kind: "pins"`, so it never passes as a presence assertion.
+The format is in
+[docs/keyd-protocol.md](../docs/keyd-protocol.md#owner-statement-keys-keyd--agent-bot-753).
 
 ## Build and test
 

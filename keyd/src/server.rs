@@ -33,8 +33,9 @@ use crate::github::{self, Http};
 use crate::grant::{self, KeyScope, Replay};
 use crate::ids::{is_agent_id, is_app_slug};
 use crate::paths::Paths;
+use crate::pins;
 use crate::presence;
-use crate::store::{Credential, Store};
+use crate::store::{Credential, OwnerPins, Store};
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 pub const GRANT_META: &str = "agent-bot/grant";
@@ -264,6 +265,8 @@ impl Keyd {
         let now = (self.now)();
         let outcome = match method {
             "owner/presence" => return Some(self.owner_presence(&id, &params, now)),
+            "owner/pins-attest" => return Some(self.owner_pins_attest(&id, &params, now)),
+            "owner/pins-status" => return Some(self.owner_pins_status(&id, &params, now)),
             "owner/status" => self.owner_status(&params),
             "owner/app-status" => self.owner_app_status(&params),
             "owner/import"
@@ -364,6 +367,97 @@ impl Keyd {
             Ok(assertion) => reply(id, json!({ "assertion": assertion })),
             Err(Refusal::Unavailable(message)) => failure(id, PRESENCE_UNAVAILABLE, &message),
             Err(Refusal::Declined(message)) => failure(id, -32000, &message),
+        }
+    }
+
+    /// The owner approves the whole set of statement keys; keyd records its
+    /// digest under the next generation and signs that record.
+    fn owner_pins_attest(&self, id: &Value, params: &Value, now: u64) -> Value {
+        let nonce = params.get("nonce").and_then(Value::as_str);
+        let Some(nonce) = nonce.filter(|v| presence::nonce_ok(v)) else {
+            return failure(id, -32602, "the nonce is not 16 to 64 base64url characters");
+        };
+        let keys = match pins::parse(params.get("pins").unwrap_or(&Value::Null)) {
+            Ok(keys) => keys,
+            Err(message) => return failure(id, -32602, &message),
+        };
+        let digest = pins::digest(&keys);
+        let _one_prompt_at_a_time = self.owner_lock.lock().unwrap();
+        let outcome = self
+            .store
+            .owner_pins()
+            .and_then(|last| {
+                let generation = last.map_or(0, |record| record.generation);
+                let next = generation
+                    .checked_add(1)
+                    .ok_or("the owner key generation is exhausted")?;
+                Ok((self.store.presence_seed()?, next))
+            })
+            .map_err(Refusal::Declined)
+            .and_then(|(seed, generation)| {
+                self.consent.ask(&pins::reason(&keys))?;
+                let record = OwnerPins {
+                    digest: digest.clone(),
+                    generation,
+                };
+                self.store
+                    .put_owner_pins(&record)
+                    .map_err(Refusal::Declined)?;
+                Ok((
+                    pins::sign(&seed, Some(&digest), generation, nonce, (self.now)()),
+                    generation,
+                ))
+            });
+        let detail = match &outcome {
+            Ok((_, generation)) => format!("pins {digest} generation {generation}"),
+            Err(Refusal::Unavailable(message) | Refusal::Declined(message)) => {
+                format!("pins {digest}: {message}")
+            }
+        };
+        let decision = match &outcome {
+            Ok(_) => "granted",
+            Err(Refusal::Unavailable(_)) => "unavailable",
+            Err(Refusal::Declined(_)) => "refused",
+        };
+        self.audit.record(
+            Receipt {
+                event: "keyd-owner",
+                agent_id: None,
+                app: None,
+                operation: "owner/pins-attest",
+                decision,
+                detail: Some(&detail),
+            },
+            now,
+        );
+        match outcome {
+            Ok((attestation, _)) => reply(id, json!({ "attestation": attestation })),
+            Err(Refusal::Unavailable(message)) => failure(id, PRESENCE_UNAVAILABLE, &message),
+            Err(Refusal::Declined(message)) => failure(id, -32000, &message),
+        }
+    }
+
+    /// The key set the owner last approved, signed for agent-bot's nonce;
+    /// no prompt. Before any approval the digest is null at generation 0.
+    /// It takes no `owner_lock`: the record is one Keychain item, written
+    /// whole, so a status read during an approval sees either generation.
+    fn owner_pins_status(&self, id: &Value, params: &Value, now: u64) -> Value {
+        let nonce = params.get("nonce").and_then(Value::as_str);
+        let Some(nonce) = nonce.filter(|v| presence::nonce_ok(v)) else {
+            return failure(id, -32602, "the nonce is not 16 to 64 base64url characters");
+        };
+        let signed = self.store.owner_pins().and_then(|record| {
+            let seed = self.store.presence_seed()?;
+            Ok(match record {
+                Some(record) => {
+                    pins::sign(&seed, Some(&record.digest), record.generation, nonce, now)
+                }
+                None => pins::sign(&seed, None, 0, nonce, now),
+            })
+        });
+        match signed {
+            Ok(attestation) => reply(id, json!({ "attestation": attestation })),
+            Err(message) => failure(id, -32000, &message),
         }
     }
 
@@ -1592,5 +1686,155 @@ mod tests {
             .handle_soul(&json!({ "jsonrpc": "2.0", "id": 1, "method": "owner/presence", "params": { "action": "ok", "nonce": "abcdefghijklmnopqrstuvwx" } }))
             .unwrap();
         assert!(soul.get("result").is_none());
+    }
+
+    fn owner_pins(keyd: &Keyd, method: &str, params: Value) -> Value {
+        keyd.handle_owner(
+            &json!({ "jsonrpc": "2.0", "id": 10, "method": method, "params": params }),
+        )
+        .unwrap()
+    }
+
+    fn pins_payload(keyd: &Keyd, answer: &Value) -> Value {
+        let seed = keyd.store.presence_seed().unwrap();
+        crate::pins::tests::open(answer["result"]["attestation"].as_str().unwrap(), &seed)
+    }
+
+    #[test]
+    fn records_the_owner_keys_only_when_the_owner_approves() {
+        use crate::pins::tests::{pin, FP_A, FP_B};
+        let consent = Arc::new(Consenting::new(true));
+        let mut keyd = keyd(true);
+        keyd.consent = Box::new(Arc::clone(&consent));
+        let nonce = "abcdefghijklmnopqrstuvwx";
+
+        let before = owner_pins(&keyd, "owner/pins-status", json!({ "nonce": nonce }));
+        let payload = pins_payload(&keyd, &before);
+        assert!(payload["digest"].is_null());
+        assert_eq!(
+            (payload["generation"].as_u64(), payload["nonce"].as_str()),
+            (Some(0), Some(nonce))
+        );
+
+        let one = json!([pin("yubikey", FP_A)]);
+        let attested = owner_pins(
+            &keyd,
+            "owner/pins-attest",
+            json!({ "pins": one, "nonce": nonce }),
+        );
+        let payload = pins_payload(&keyd, &attested);
+        let digest = crate::pins::digest(&crate::pins::parse(&one).unwrap());
+        assert_eq!(payload["digest"], digest);
+        assert_eq!(payload["generation"], 1);
+        assert_eq!(payload["kind"], "pins");
+        assert_eq!(
+            consent.asked.lock().unwrap().clone(),
+            vec![format!("agent-bot wants to trust only these keys to sign statements as you: yubikey ({FP_A})")]
+        );
+
+        let status = owner_pins(
+            &keyd,
+            "owner/pins-status",
+            json!({ "nonce": "zyxwvutsrqponmlkjihgfedc" }),
+        );
+        let payload = pins_payload(&keyd, &status);
+        assert_eq!(
+            (payload["digest"].as_str(), payload["generation"].as_u64()),
+            (Some(digest.as_str()), Some(1))
+        );
+        assert_eq!(payload["nonce"], "zyxwvutsrqponmlkjihgfedc");
+
+        // Every approval is a new generation, removing every key included.
+        let two = json!([pin("yubikey", FP_A), pin("spare", FP_B)]);
+        let again = owner_pins(
+            &keyd,
+            "owner/pins-attest",
+            json!({ "pins": two, "nonce": nonce }),
+        );
+        assert_eq!(pins_payload(&keyd, &again)["generation"], 2);
+        let none = owner_pins(
+            &keyd,
+            "owner/pins-attest",
+            json!({ "pins": [], "nonce": nonce }),
+        );
+        let payload = pins_payload(&keyd, &none);
+        assert_eq!(payload["generation"], 3);
+        assert_eq!(payload["digest"], crate::pins::digest(&[]));
+
+        // A declined or unanswered prompt changes nothing.
+        keyd.consent = Box::new(Consenting::new(false));
+        let declined = owner_pins(
+            &keyd,
+            "owner/pins-attest",
+            json!({ "pins": one, "nonce": nonce }),
+        );
+        assert_eq!(declined["error"]["code"], -32000);
+        keyd.consent = Box::new(Consenting::unavailable());
+        let unavailable = owner_pins(
+            &keyd,
+            "owner/pins-attest",
+            json!({ "pins": one, "nonce": nonce }),
+        );
+        assert_eq!(unavailable["error"]["code"], PRESENCE_UNAVAILABLE);
+        let status = owner_pins(&keyd, "owner/pins-status", json!({ "nonce": nonce }));
+        assert_eq!(pins_payload(&keyd, &status)["generation"], 3);
+        assert_eq!(
+            pins_payload(&keyd, &status)["digest"],
+            crate::pins::digest(&[])
+        );
+    }
+
+    #[test]
+    fn refuses_malformed_owner_key_requests_without_asking() {
+        use crate::pins::tests::{pin, FP_A};
+        let consent = Arc::new(Consenting::new(true));
+        let mut keyd = keyd(true);
+        keyd.consent = Box::new(Arc::clone(&consent));
+        let nonce = "abcdefghijklmnopqrstuvwx";
+        for params in [
+            json!({ "pins": [pin("yubikey", FP_A)] }),
+            json!({ "pins": [pin("yubikey", FP_A)], "nonce": "short" }),
+            json!({ "nonce": nonce }),
+            json!({ "pins": [pin("Bad Name", FP_A)], "nonce": nonce }),
+        ] {
+            assert_eq!(
+                owner_pins(&keyd, "owner/pins-attest", params)["error"]["code"],
+                -32602
+            );
+        }
+        assert_eq!(
+            owner_pins(&keyd, "owner/pins-status", json!({}))["error"]["code"],
+            -32602
+        );
+        assert!(consent.asked.lock().unwrap().is_empty());
+
+        // A record keyd cannot read is refused, not taken as no keys.
+        keyd.store
+            .put_owner_pins(&OwnerPins {
+                digest: "nope".into(),
+                generation: 4,
+            })
+            .unwrap();
+        assert_eq!(
+            owner_pins(&keyd, "owner/pins-status", json!({ "nonce": nonce }))["error"]["code"],
+            -32000
+        );
+        assert_eq!(
+            owner_pins(
+                &keyd,
+                "owner/pins-attest",
+                json!({ "pins": [], "nonce": nonce })
+            )["error"]["code"],
+            -32000
+        );
+        assert!(consent.asked.lock().unwrap().is_empty());
+
+        // The owner's keys are for the owner channel only.
+        for method in ["owner/pins-attest", "owner/pins-status"] {
+            let soul = keyd
+                .handle_soul(&json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": { "pins": [], "nonce": nonce } }))
+                .unwrap();
+            assert!(soul.get("result").is_none(), "{method}");
+        }
     }
 }

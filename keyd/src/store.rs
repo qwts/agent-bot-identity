@@ -21,6 +21,10 @@
 //!   owner's presence for agent-bot: service `agent-bot.keyd`, account
 //!   `presence-key`, value base64 of the 32-byte Ed25519 seed. keyd makes it
 //!   on first use; only keyd's code can read it.
+//! - the owner's statement keys as the owner last approved them
+//!   (agent-bot-identity #753): service `agent-bot.keyd`, account
+//!   `owner-pins`, value JSON `{digest, generation}`, the digest of the key
+//!   set (pins.rs) and a count keyd raises on every approval.
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -76,6 +80,7 @@ pub fn decode(text: &[u8]) -> Result<Credential, &'static str> {
 pub const PIN_SERVICE: &str = "agent-bot.keyd";
 pub const PIN_ACCOUNT: &str = "daemon-grant-key";
 pub const PRESENCE_ACCOUNT: &str = "presence-key";
+pub const OWNER_PINS_ACCOUNT: &str = "owner-pins";
 pub const APP_SERVICE: &str = "agent-bot.keyd.app";
 
 pub fn item(agent_id: &str, app: &str) -> Result<(String, String), &'static str> {
@@ -219,6 +224,37 @@ impl Store {
         written?;
         Ok(seed)
     }
+
+    /// The digest and generation of the key set the owner last approved;
+    /// None before the first approval.
+    pub fn owner_pins(&self) -> Result<Option<OwnerPins>, String> {
+        let Some(value) = self.items.read(PIN_SERVICE, OWNER_PINS_ACCOUNT)? else {
+            return Ok(None);
+        };
+        serde_json::from_slice::<OwnerPins>(&value)
+            .ok()
+            .filter(|record| {
+                record.digest.len() == 64
+                    && record
+                        .digest
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
+            .map(Some)
+            .ok_or_else(|| "the owner key record is malformed".to_owned())
+    }
+
+    pub fn put_owner_pins(&self, record: &OwnerPins) -> Result<(), String> {
+        let value = serde_json::to_vec(record).map_err(|e| e.to_string())?;
+        self.items.write(PIN_SERVICE, OWNER_PINS_ACCOUNT, &value)
+    }
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwnerPins {
+    pub digest: String,
+    pub generation: u64,
 }
 
 #[cfg(target_os = "macos")]
@@ -396,6 +432,25 @@ pub mod tests {
         let seed = store.presence_seed().unwrap();
         assert_eq!(store.presence_seed().unwrap(), seed, "made once, then kept");
         assert_ne!(seed, [0u8; 32]);
+        assert!(store.owner_pins().unwrap().is_none());
+        let record = OwnerPins {
+            digest: "a".repeat(64),
+            generation: 2,
+        };
+        store.put_owner_pins(&record).unwrap();
+        assert_eq!(store.owner_pins().unwrap(), Some(record));
+        store
+            .items
+            .write(
+                PIN_SERVICE,
+                OWNER_PINS_ACCOUNT,
+                br#"{"digest":"zz","generation":1}"#,
+            )
+            .unwrap();
+        assert!(
+            store.owner_pins().is_err(),
+            "a bad record is an error, not none"
+        );
         assert!(store.credential("agent_../x", "qwts-claude-agent").is_err());
 
         // An App-level key is its own item: a soul's key never answers for
