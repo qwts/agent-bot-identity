@@ -235,3 +235,34 @@ export async function keydPresence(action, {
   verifyPresence(result?.assertion, { key, action, nonce: sent, now: now() });
   return { method: 'presence', via: 'agent-bot-keyd' };
 }
+
+// Asks the owner through keyd to trust exactly `pins` as their statement keys
+// (#753): keyd shows every key and, only on approval, records the set. Returns
+// keyd's { digest, generation } for this set. The owner key store is written
+// only through this, so with no keyd to ask, `presence-unavailable` refuses
+// the change rather than falling back.
+export async function keydAttestPins(pins, {
+  env = process.env,
+  home = env.HOME || homedir(),
+  pinned = pinnedPresenceKey,
+  request = keydRequest,
+  now = () => Date.now(),
+  nonce = () => randomBytes(18).toString('base64url'),
+} = {}) {
+  const key = pinned({ env, home });
+  if (!key) throw unavailable('agent-bot-keyd is not set up to record owner keys here');
+  const sent = nonce();
+  let result;
+  try {
+    result = await request(keydPaths({ env, home }).ownerSocket, 'owner/pins-attest', { pins, nonce: sent }, { timeoutMs: OWNER_TIMEOUT_MS });
+  } catch (error) {
+    if (error.rpcCode === -32601) throw unavailable('this agent-bot-keyd cannot record owner keys; update it');
+    if (error.code === 'keyd-unavailable' || error.rpcCode === PRESENCE_UNAVAILABLE_RPC) throw unavailable(error.message);
+    throw Object.assign(new Error(`the owner did not approve (${error.message})`), { code: 'owner-declined' });
+  }
+  const record = verifyPinsAttestation(result?.attestation, { key, nonce: sent, now: now() });
+  if (record.digest !== pinSetDigest(pins)) {
+    throw Object.assign(new Error('agent-bot-keyd recorded other owner keys than were asked'), { code: 'pins-invalid' });
+  }
+  return record;
+}
