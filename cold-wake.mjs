@@ -44,6 +44,7 @@ import { FINAL_REPLY_ERRORS, senderAddress } from './comms-relay.mjs';
 import { NO_REPLY, formatThread, pendingReplies, recordThreadMessage, sameAddress, sentMarks, sentSince, stripNoReply, threadContext, threadKey } from './soul-threads.mjs';
 import { bindTurnSession, recordAside } from './soul-asides.mjs';
 import { harnessAuthFailure, harnessAuthNotice } from './harness-auth.mjs';
+import { RESUME_KEPT_REFUSALS } from './wake-resume.mjs';
 
 // The final answer a soul gives when a teammate's message needs no answer
 // back. Every relayed turn's answer is otherwise a reply, so two souls would
@@ -229,7 +230,9 @@ export function createColdWaker({ isPaused = () => false, executor, settings, lo
                 await report('ended', result?.cancelled ? 'cancelled' : 'completed');
               } catch (error) {
                 await report('ended', error?.name === 'AbortError' ? 'cancelled' : 'failed');
-                if (error?.name !== 'AbortError' && error?.code !== 'soul-paused') {
+                // A refusal about the recorded resume session leaves the
+                // event unacked, to run once it is fixed (#617).
+                if (error?.name !== 'AbortError' && error?.code !== 'soul-paused' && !RESUME_KEPT_REFUSALS.includes(error?.code)) {
                   log(`task ${brief.taskId} turn for ${agentId} failed: ${describeError(error)}`);
                   await relay.ack(soul, [message.id]);
                 }

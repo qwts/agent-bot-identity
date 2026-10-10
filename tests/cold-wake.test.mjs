@@ -291,6 +291,28 @@ test('failed task turns report failure and acknowledge without replying', async 
   ]);
 });
 
+// #617: a refusal about the recorded resume session is fixed by the owner
+// or the soul, so its task event stays unacked to run again.
+test('a task turn refused for its recorded resume session leaves the event unacked', async () => {
+  for (const code of ['resume-session-store-moved', 'wake-session-record-invalid']) {
+    const reports = [];
+    let acked = false;
+    const relay = {
+      read: async () => [{ id: 'task-message', kind: 'task-event' }],
+      brief: async () => ({ turn: true, linked: true, taskId: 'task_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', prompt: 'work' }),
+      ack: async () => { acked = true; },
+      reply: async () => assert.fail('task events never receive replies'),
+    };
+    const wake = createColdWaker({ executor: async () => { throw Object.assign(new Error('refused'), { code }); }, settings: { [id]: true }, lookupBinding: async () => binding, identities: async () => githubIdentity, receipt() {}, relay,
+      taskReporter: { started() { reports.push('started'); }, ended(invocation, outcome) { reports.push(outcome); } }, log() {},
+    });
+    await wake({ agentId: id });
+    await wake.idle();
+    assert.equal(acked, false, code);
+    assert.deepEqual(reports, ['started', 'failed'], code);
+  }
+});
+
 test('task reporting errors do not fail a cold turn; cancellation is reported without a reply', async () => {
   for (const cancelled of [false, true]) {
     let pending = true;

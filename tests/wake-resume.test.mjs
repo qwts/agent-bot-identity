@@ -1,7 +1,7 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -225,6 +225,87 @@ test('devin records only the one session its fresh turn created in the worktree'
   assert.equal(sessions.get(ID, 'devin'), null);
   await turn(make(['human-session', 'visual-continent']));
   assert.equal(sessions.get(ID, 'devin'), 'visual-continent');
+}));
+
+// #617: the resume lane routes the soul's tool home, and records which
+// store each session was made in. A session recorded in the other store is
+// refused with the switch-back command, before any harness process.
+test('a resume session records its store, and one in the other store is refused with the fix', () => withState(async ({ env, root }) => {
+  const sessions = createWakeSessions({ file: wakeSessionsFile({ env }) });
+  const codexHome = path.join(root, 'soul', 'tool-homes', 'codex');
+  let routed = true;
+  const calls = [];
+  const run = async (command, args, options) => { calls.push({ args, env: options.env }); return { code: 0, stdout: CODEX_OUTPUT, stderr: '' }; };
+  const execute = createResumeExecutor({ sessions, baseEnv: stubbed({}), home: root, run,
+    toolHomeEnvFor: () => (routed ? { CODEX_HOME: codexHome } : {}) });
+  const turn = () => execute({ invocation: { agentId: ID, harness: 'codex', cwd: root }, message: 'm', env: {}, policy: 'read-only' });
+  await turn();
+  assert.equal(calls[0].env.CODEX_HOME, codexHome, 'the soul\'s tool home reaches the harness');
+  assert.deepEqual(sessions.recorded(ID, 'codex'), { sessionId: '01a0fe81-0f35-73a2-9d5f-d48c92029d1c', store: 'soul', policy: 'read-only' });
+  await turn();
+  assert.deepEqual(calls[1].args.slice(0, 3), ['exec', 'resume', '01a0fe81-0f35-73a2-9d5f-d48c92029d1c']);
+  // Switched to the host store: refused, nothing runs, the session is kept.
+  routed = false;
+  await assert.rejects(turn(), (error) => error.code === 'resume-session-store-moved'
+    && error.action === `agent-bot soul tool-home codex soul --soul ${ID}` && /the soul's own tool home/.test(error.message));
+  assert.equal(calls.length, 2);
+  assert.deepEqual(sessions.recorded(ID, 'codex'), { sessionId: '01a0fe81-0f35-73a2-9d5f-d48c92029d1c', store: 'soul', policy: 'read-only' });
+}));
+
+test('a session recorded before #617 is the host store\'s: kept on the host, refused once the soul routes its own', () => withState(async ({ env, root }) => {
+  const file = wakeSessionsFile({ env });
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ schemaVersion: 1, sessions: { [ID]: { harness: 'opencode', sessionId: 'ses_old', policy: 'read-only' } } }));
+  const sessions = createWakeSessions({ file });
+  assert.deepEqual(sessions.recorded(ID, 'opencode'), { sessionId: 'ses_old', store: 'host', policy: 'read-only' });
+  const calls = [];
+  const run = async (_command, args) => { calls.push(args); return { code: 0, stdout: OPENCODE_OUTPUT, stderr: '' }; };
+  const turn = (patch) => createResumeExecutor({ sessions, baseEnv: stubbed({}), home: root, run, toolHomeEnvFor: () => patch })(
+    { invocation: { agentId: ID, harness: 'opencode', cwd: root }, message: 'm', env: {}, policy: 'read-only' });
+  await turn({});
+  assert.ok(calls[0].includes('ses_old'), 'the host store still resumes it');
+  await assert.rejects(turn({ XDG_DATA_HOME: path.join(root, 'soul', 'data') }),
+    (error) => error.code === 'resume-session-store-moved' && error.action === `agent-bot soul tool-home opencode global --soul ${ID}`);
+  assert.equal(calls.length, 1, 'no process for the refused turn');
+  assert.throws(() => sessions.set(ID, 'opencode', 'x', 'read-only', 'elsewhere'), /must be one of host, soul/);
+}));
+
+test('a recorded store that is neither host nor soul is refused as damaged, with no guessed fix and no process', () => withState(async ({ env, root }) => {
+  const file = wakeSessionsFile({ env });
+  mkdirSync(path.dirname(file), { recursive: true });
+  const sessions = createWakeSessions({ file });
+  const calls = [];
+  const run = async (_command, args) => { calls.push(args); return { code: 0, stdout: CODEX_OUTPUT, stderr: '' }; };
+  const turn = () => createResumeExecutor({ sessions, baseEnv: stubbed({}), home: root, run, toolHomeEnvFor: () => ({}) })(
+    { invocation: { agentId: ID, harness: 'codex', cwd: root }, message: 'm', env: {}, policy: 'read-only' });
+  for (const store of ['other', null, 7, '']) {
+    const before = JSON.stringify({ schemaVersion: 1, sessions: { [ID]: { harness: 'codex', sessionId: 'kept', store } } });
+    writeFileSync(file, before);
+    await assert.rejects(turn(), (error) => error.code === 'wake-session-record-invalid' && !('action' in error), JSON.stringify(store));
+    assert.equal(readFileSync(file, 'utf8'), before, 'the record is left as it was');
+  }
+  assert.deepEqual(calls, []);
+  // Valid and legacy records still resume.
+  for (const store of ['host', undefined]) {
+    writeFileSync(file, JSON.stringify({ schemaVersion: 1, sessions: { [ID]: { harness: 'codex', sessionId: 'kept', ...(store ? { store } : {}) } } }));
+    await turn();
+    assert.deepEqual(calls.at(-1).slice(0, 3), ['exec', 'resume', 'kept']);
+  }
+}));
+
+test('grok: a policy change does not bypass the moved-store refusal', () => withState(async ({ env, root }) => {
+  const sessions = createWakeSessions({ file: wakeSessionsFile({ env }) });
+  sessions.set(ID, 'grok', 'g-host', 'read-only', 'host');
+  const calls = [];
+  const run = async (_command, args) => { calls.push(args); return { code: 0, stdout: JSON.stringify({ text: 'pong', sessionId: 'g-new' }), stderr: '' }; };
+  const turn = (patch, policy) => createResumeExecutor({ sessions, baseEnv: stubbed({}), home: root, run, toolHomeEnvFor: () => patch })(
+    { invocation: { agentId: ID, harness: 'grok', cwd: root }, message: 'm', env: {}, policy });
+  await assert.rejects(turn({ GROK_HOME: path.join(root, 'soul') }, 'workspace'), (error) => error.code === 'resume-session-store-moved');
+  assert.deepEqual(calls, []);
+  assert.equal(sessions.get(ID, 'grok'), 'g-host', 'the host session is not overwritten');
+  // Same store, other policy: a fresh session, as before.
+  await turn({}, 'workspace');
+  assert.ok(!calls[0].includes('--resume'));
 }));
 
 test('runProcess feeds stdin, captures output, and reports the exit code', async () => {

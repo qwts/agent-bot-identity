@@ -587,7 +587,7 @@ function resumeRig(t, f, { session = null } = {}) {
   for (const name of ['opencode', 'devin']) { put(path.join(hostBin, name), '#!/bin/sh\n'); chmodSync(path.join(hostBin, name), 0o755); }
   const runs = [];
   const recorded = [];
-  const sessions = { get: () => session, set: (...args) => recorded.push(args) };
+  const sessions = { recorded: () => (session ? { sessionId: session, store: 'host' } : null), set: (...args) => recorded.push(args) };
   const execute = createResumeExecutor({ sessions, home: f.home, baseEnv: { ...f.env, PATH: `${hostBin}${path.delimiter}${f.env.PATH}` },
     runtimeEnvFor: ({ agentId, harness, env }) => soulRuntimeEnv(agentId, { ...f.options, env, harness }),
     run: async (command, args, options) => { runs.push({ command, env: options.env }); return { code: 0, stdout: '[]', stderr: '' }; } });
