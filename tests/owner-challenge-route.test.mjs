@@ -173,7 +173,11 @@ test('a failed reply spends the challenge, and a fresh challenge replaces an old
   assert.equal(await code(ledger.hook({ request: 'p1', statement: fresh })(action, { summary: 'x' })), 'statement-scope-mismatch');
 
   assert.equal(await code(ledger.hook({ request: 'p1', statement: 'not a token' })(action, { summary: 'x' })), 'statement-scope-mismatch');
+  // A reply that is not even a token spends the challenge too.
+  await challengesFrom(ledger.hook({ request: 'p1' }), action);
+  assert.equal(ledger.size, 1);
   assert.equal(await code(ledger.hook({ request: 'p1', statement: 7 })(action, { summary: 'x' })), 'statement-invalid');
+  assert.equal(ledger.size, 0);
 });
 
 test('a reply is checked against the pins as they are now, and challenges expire', async () => {

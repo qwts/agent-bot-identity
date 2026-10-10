@@ -163,9 +163,9 @@ export function createChallengeLedger({ env = process.env, now = Date.now, host 
             'owner presence is unavailable: sign one of these challenges with `agent-bot owner sign --challenge`, then repeat this decision with the signed statement'),
           { challenges: challenges.map(({ name, fingerprint, payload }) => ({ name, fingerprint, payload })) });
         }
-        if (typeof statement !== 'string') throw statementError('statement-invalid', 'the statement is not a token');
         const entry = pending.get(request);
         pending.delete(request);
+        if (typeof statement !== 'string') throw statementError('statement-invalid', 'the statement is not a token');
         if (!entry || entry.action !== action) {
           throw statementError('statement-scope-mismatch', 'no owner challenge is pending for this decision; repeat it without a statement for a new one');
         }
