@@ -46,7 +46,11 @@ implemented slice and its limits.
   install without integrity evidence is refused: a uv tool without a `lock`
   is `unsupported` (`runtime-install-failed`, action: add the lock), and a
   Python installed before the catalog pinned its digest is reinstalled.
-  Without it (the default) those installs are allowed and reported
+  An executable override is `unverified-external`, so the soul refuses it
+  too (ADR-0322 decision 4: an override cannot bypass a required policy):
+  its row is `invalid` with `runtime-override-invalid`, launch and install
+  refuse, and setting a new one is refused; clearing it, or removing the
+  policy in a revision, is the way out. Without it (the default) those installs are allowed and reported
   `verification: "unverified"`. Any other value is invalid. Like every
   declaration it is part of the revision.
 - Validation is strict: unknown keys, bad digests, non-https URLs and

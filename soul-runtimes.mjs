@@ -135,7 +135,10 @@ function readOverrideRecord(soulDir, name, { agentId, platform = process.platfor
   return { executable, verification: 'unverified-external' };
 }
 
-export function inspectRuntimeOverrides(soulDir, { agentId, platform = process.platform } = {}) {
+// A soul that requires integrity (#617) refuses every override: an external
+// executable has no evidence, and ADR-0322 decision 4 says an override cannot
+// bypass a required policy. Clearing one, or the policy, is the owner's way out.
+export function inspectRuntimeOverrides(soulDir, { agentId, platform = process.platform, integrity = declaredRuntimes(readSoulManifest(soulDir)).integrity } = {}) {
   const overrides = {}, rows = [], errors = [];
   for (const name of Object.keys(OVERRIDE_NAMES)) {
     let present = false;
@@ -148,6 +151,14 @@ export function inspectRuntimeOverrides(soulDir, { agentId, platform = process.p
     if (!present) continue;
     try {
       const record = readOverrideRecord(soulDir, name, { agentId, platform });
+      if (integrity === 'required') {
+        const row = { name, runtime: OVERRIDE_RUNTIME_NAMES[name], status: 'invalid', executable: record.executable, verification: record.verification, code: 'runtime-override-invalid',
+          reason: `soul.json requires runtime integrity, and the ${name} override at ${safeOverridePath(record.executable)} is unverified-external; clear it, or remove runtimes.integrity in a revision`,
+          action: `agent-bot soul runtimes override ${agentId} ${name} --clear` };
+        rows.push(row);
+        errors.push(row);
+        continue;
+      }
       overrides[name] = record;
       rows.push({ name, runtime: OVERRIDE_RUNTIME_NAMES[name], status: 'selected', executable: record.executable, verification: record.verification, code: null, action: null });
     } catch (error) {

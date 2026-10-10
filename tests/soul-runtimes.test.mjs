@@ -853,6 +853,19 @@ test('owner-managed executable overrides use one-name shims, satisfy only the se
   assert.ok(!launch.PATH.split(path.delimiter).includes(external));
   assert.equal(launch.npm_config_cache, undefined);
   assert.equal(launch.NODE_PATH, undefined);
+  // A soul that requires integrity refuses the override at launch and install,
+  // and refuses setting another; clearing stays the owner's way out (#617).
+  f.writeManifest((m) => { m.runtimes.integrity = 'required'; });
+  const refused = inspectRuntimeOverrides(f.dir, { agentId: ID, platform: 'darwin' });
+  assert.deepEqual(refused.overrides, {});
+  assert.deepEqual(refused.rows.map((row) => [row.name, row.status, row.code, row.action]), [['node', 'invalid', 'runtime-override-invalid', `agent-bot soul runtimes override ${ID} node --clear`]]);
+  assert.match(refused.rows[0].reason, /requires runtime integrity, and the node override at .* is unverified-external/);
+  assert.throws(() => soulRuntimeEnv(ID, options), (error) => error.code === 'runtime-override-invalid' && /requires runtime integrity/.test(error.message));
+  await assert.rejects(installSoulRuntimes(f.dir, { ...f.options, fetchFn: async () => assert.fail('refused'), runImpl: async () => assert.fail('refused') }), (error) => error.code === 'runtime-override-invalid');
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'npm', externalNpm, '--principal-stdin'], { ...options, gate: async () => {}, write: () => {}, readStdin: () => '{"principalId":"p1"}' }),
+    (error) => error.code === 'runtime-override-invalid');
+  f.writeManifest((m) => { delete m.runtimes.integrity; });
+  assert.deepEqual(inspectRuntimeOverrides(f.dir, { agentId: ID, platform: 'darwin' }).rows.map((row) => [row.name, row.status]), [['node', 'selected']], 'the refused set left no npm record');
   const unexpected = path.join(shim, 'claude');
   symlinkSync(externalNode, unexpected);
   assert.throws(() => soulRuntimeEnv(ID, { ...options, env: { PATH: '/host/bin' } }), (error) => error.code === 'runtime-override-invalid' && /remove that host-local entry/.test(error.message));
