@@ -197,9 +197,35 @@ test('a rejected env bearer names the env variable, not the note, and receipts t
     assert.equal(error.code, 'inbox-auth-expired');
     assert.equal(error.bearerSource, 'env');
     assert.match(error.message, /GH_APP_HOOK_INBOX_TOKEN/);
+    assert.match(error.message, /restart the daemon/);
     assert.doesNotMatch(error.message, new RegExp(BEARER));
     return true;
   });
+});
+
+test('a failed pass-cli bearer read is receipted with its source (#229)', async () => {
+  const fixture = scratch();
+  const env = { ...fixture.env, GH_APP_HOOK_INBOX_URL: 'https://gh-app-hook.example.invalid' };
+  const locked = Object.assign(new Error('pass-cli has no session'), { code: 'provider-session-required' });
+  assert.throws(() => resolveInboxBearer({ env: {}, readNote: () => readInboxBearer({ store: bearerStore(locked) }) }),
+    (error) => error.code === 'inbox-credential-unavailable' && error.bearerSource === 'pass-cli');
+  let fetches = 0;
+  const inboxTake = createInboxTaker({
+    env,
+    readBearer: () => resolveInboxBearer({ env, readNote: () => readInboxBearer({ store: bearerStore(locked) }) }),
+    fetchImpl: async () => { fetches += 1; return new Response(null, { status: 204 }); },
+  });
+  await withServer(env, { inboxTake }, async ({ call }) => {
+    const bound = await bind(call, { ...fixture, env });
+    const res = await call('/v0/inbox/take', {
+      method: 'POST', token: null, body: {}, headers: { 'x-agent-binding': bound.secret },
+    });
+    assert.equal(res.status, 503);
+  });
+  assert.equal(fetches, 0);
+  const [receipt] = receipts(env);
+  assert.deepEqual([receipt.decision, receipt.reason, receipt.bearerSource],
+    ['failed', 'inbox-credential-unavailable', 'pass-cli']);
 });
 
 test('/v0/inbox/take refuses a caller with no live binding and receipts it', async () => {
