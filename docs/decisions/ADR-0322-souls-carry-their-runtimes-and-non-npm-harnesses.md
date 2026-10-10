@@ -113,7 +113,18 @@ The `soul runtimes` inspection/install commands and `soul env` descriptor exist.
 
 Archive stamps record the verified digest. uv-Python and uv-tool stamps instead
 have `sha256: null`; uv-tool installation currently uses `package==version`
-without a package dependency lock. The override helper currently routes through
+without a package dependency lock.
+
+The owner chose the lock contract on 2026-10-10 (#617, "venv + pip
+--require-hashes"). The pinned uv's `uv tool install` has no
+`--require-hashes`, so a locked uv tool will install into a per-soul venv
+with `uv pip install --require-hashes -r <lock>`, and agent-bot links its
+executable. The declaration comes first: `harnesses.<name>.install.lock` on a
+`uv-tool` lists every package the tool installs, the tool included, as
+`{ name, version, sha256: [hex, ...] }`, and it is part of the package
+revision. The installer that uses it, the receipt evidence and the
+integrity-policy refusal follow in later slices. Until then a lock is
+validated but not yet enforced at install. The override helper currently routes through
 PATH directories; exact executable validation and the real launch consumers
 need review. The core daemon path passes runtime environment per turn; #322's
 closeout leaves resume parity unproved. These distinctions remain in #617.
