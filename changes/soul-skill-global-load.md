@@ -1,0 +1,1 @@
+- `agent-bot soul skill load NAME --soul AGENT_ID --global --reason TEXT` places a soul's installed skill in Claude Code's user-level skills folder only after the owner approves (owner gate, or a Touch ID or consent prompt when a soul asks for itself), records the reason, hashes and an audit receipt, and `unload --global` removes it while unchanged (#603).

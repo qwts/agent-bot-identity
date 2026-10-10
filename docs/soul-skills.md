@@ -344,9 +344,9 @@ import (`<root>/<uuid>/<name>/`) into the soul's own `skills/<name>/`. A name
 selects the import only when exactly one import has it. The soul's skill
 folder, not a global harness folder, is the default home (owner direction on
 #603, 2026-10-09): the agent discloses it progressively and should place it in
-a workspace only while it is needed. Global targets (`~/.agent/skills`,
-`~/.<harness>/.../skills`) are opt-in and not implemented yet; a skill belongs
-there only with a clear reason it must always load.
+a workspace only while it is needed. Global targets are opt-in, and a skill
+belongs there only with a clear reason it must always load; see
+[Load globally](#load-globally).
 
 Install also writes `provenance/skill-installs/<name>.json` in the package. It
 records the import UUID, the installed `files` manifest (path to `mode`,
@@ -386,8 +386,7 @@ live package changes only when that revision is applied. The staging is
 discarded either way. Prior bytes also stay in the revision history.
 
 Installed skills are ordinary package skills, so `soul build` still renders
-them for the soul's harnesses like an authored skill. Global opt-in targets
-are a later slice of #603.
+them for the soul's harnesses like an authored skill.
 
 ## Load into a workspace
 
@@ -421,6 +420,41 @@ through a rename, so concurrent ones keep each other's lines. A load that fails
 after placing the copy takes the copy and its line back out. Load and unload do not change the soul
 package, so they record no revision. The owner can run them for any soul; a
 soul only for its own Agent ID.
+
+## Load globally
+
+`load NAME --soul AGENT_ID --global --reason TEXT` copies the soul's installed
+`skills/<name>/` into the harness's user-level skills folder, which every
+session of that harness on this host loads (at least its name and
+description). Owner direction on #603 (2026-10-09): such a location needs a
+clear reason the skill must always be loaded, and the default is not to put
+it there. So a global load is never implied by install or load, `--reason`
+(one line, at most 200 characters) is required, and the owner approves every
+one: through the owner gate (`--principal-stdin`, or Touch ID / consent) when
+the owner runs it, and through a Touch ID or consent prompt that shows the
+reason when a soul asks for its own Agent ID, as with a global tool home
+(#617). A soul cannot present the owner's principal or ask for another soul.
+Every check (reason, harness, installed skill, nothing at the destination)
+runs before the prompt, and a refusal writes nothing.
+
+Only Claude Code is supported: `$CLAUDE_CONFIG_DIR/skills/<name>/` when that
+variable is an absolute path, else `~/.claude/skills/<name>/`. A relative
+`CLAUDE_CONFIG_DIR` and a missing config folder are refused rather than
+guessed. A linked config folder (dotfiles) is followed; a link at `skills/` or
+anything already at the destination is refused. Other harnesses are refused
+(`skill-global-unsupported`) until their user-level skills folder is
+documented here; the shared `~/.agent/skills` location is not written yet,
+because no supported harness is known to read it.
+
+The soul records the placement in
+`.soul-state/skill-globals/<harness>/<name>.json` (destination, reason, file
+modes, sizes and SHA-256, how it was authorized) and each load and unload
+appends a `skill-global` audit receipt. `unload NAME --soul AGENT_ID --global`
+narrows, so it asks no one; the owner can run it for any soul, a soul only for
+its own. It resolves the destination again rather than trusting the record,
+and removes the copy only while it matches the record, so an edited copy is
+kept (`skill-load-modified`). Nothing here changes the soul package or any
+repository's exclude list.
 
 ## What is not captured
 

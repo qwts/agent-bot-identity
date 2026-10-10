@@ -1,0 +1,145 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { auditFile } from '../agent-principals.mjs';
+import { mintAgentIdentity } from '../agent-identity.mjs';
+import { upsertSoul } from '../agent-population.mjs';
+import { globalRecordPath, globalSkillTarget } from '../skill-workspace.mjs';
+import { main } from '../cli/soul-skill.mjs';
+
+const put = (file, bytes, mode) => { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, bytes); if (mode) chmodSync(file, mode); };
+const skill = '---\nname: demo\ndescription: A global load fixture\n---\nAlways here.\n';
+const REASON = 'every session on this host signs commits through it';
+
+function fixture(t) {
+  const home = mkdtempSync(path.join(realpathSync(tmpdir()), 'skill-global-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = { HOME: home, AGENT_BOT_STATE_HOME: path.join(home, 'state'), AGENT_BOT_SOULS_HOME: path.join(home, 'souls'), AGENT_BOT_POPULATION_PATH: path.join(home, 'population.json') };
+  const options = { home, env, stateDir: env.AGENT_BOT_STATE_HOME, file: env.AGENT_BOT_POPULATION_PATH, now: () => new Date('2026-10-10T01:02:03.004Z') };
+  const soul = path.join(home, 'souls/example.soul');
+  const { id } = mintAgentIdentity({ ...options, appSlug: 'test-agent' });
+  put(path.join(soul, '.soul-state/agent-id'), `${id}\n`);
+  upsertSoul({ id, name: 'example', status: 'active', soulDir: soul, spacePath: path.join(home, 'space'), roles: ['test'], harness: 'claude', app: 'test-agent' }, { file: options.file });
+  put(path.join(soul, 'skills/demo/SKILL.md'), skill);
+  put(path.join(soul, 'skills/demo/scripts/run'), '#!/bin/sh\nexit 0\n', 0o755);
+  mkdirSync(path.join(home, '.claude'));
+  const destination = path.join(home, '.claude/skills/demo');
+  const gates = [], asks = [];
+  const run = async (argv, { markers = [], approve = true, stdin = '{}', self = id, extraEnv = {} } = {}) => {
+    const out = [], err = [];
+    const code = await main(argv, { ...options, env: { ...env, ...extraEnv },
+      markers: () => markers, readStdin: () => stdin,
+      assertSoulTarget: target => { if (target !== self) throw new Error('a soul may load skills only for itself'); },
+      ownerGate: async (action, input) => { gates.push({ action, principal: input.principal }); if (!approve) throw new Error('the owner said no'); return { method: 'presence' }; },
+      askOwner: async action => { asks.push(action); if (!approve) throw new Error('the owner said no'); return { method: 'presence' }; },
+      stdout: { write: text => out.push(text) }, stderr: { write: text => err.push(text) } });
+    const text = out.join('');
+    return { code, err: err.join(''), json: text ? JSON.parse(text) : null };
+  };
+  const receipts = () => { try { return readFileSync(auditFile({ env, home }), 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(r => r.event === 'skill-global'); } catch { return []; } };
+  return { home, env, soul, id, destination, gates, asks, run, receipts };
+}
+
+test('the owner loads a skill globally after the gate, with the reason recorded, and unloads it', async t => {
+  const f = fixture(t);
+  const loaded = await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON, '--json']);
+  assert.equal(loaded.code, 0, loaded.err);
+  assert.equal(f.gates.length, 1);
+  assert.match(f.gates[0].action, new RegExp(`soul skill load demo --soul ${f.id} --global .* because: ${REASON}`));
+  assert.deepEqual(f.asks, []);
+  assert.deepEqual({ ...loaded.json, notCaptured: undefined }, { name: 'demo', harness: 'claude', global: true, destination: f.destination, files: 2, reason: REASON, authorization: 'presence', notCaptured: undefined });
+  assert.equal(readFileSync(path.join(f.destination, 'SKILL.md'), 'utf8'), skill);
+  assert.ok(lstatSync(path.join(f.destination, 'scripts/run')).mode & 0o100, 'executable bit kept');
+  const record = JSON.parse(readFileSync(globalRecordPath(f.soul, 'claude', 'demo'), 'utf8'));
+  assert.equal(record.reason, REASON);
+  assert.equal(record.destination, f.destination);
+  assert.deepEqual(Object.keys(record.files).sort(), ['SKILL.md', 'scripts/run']);
+  assert.deepEqual(f.receipts().map(r => [r.operation, r.agentId]), [['load', f.id]]);
+
+  const unloaded = await f.run(['unload', 'demo', '--soul', f.id, '--global', '--json']);
+  assert.equal(unloaded.code, 0, unloaded.err);
+  assert.equal(unloaded.json.removed, true);
+  assert.equal(existsSync(f.destination), false);
+  assert.equal(existsSync(globalRecordPath(f.soul, 'claude', 'demo')), false);
+  assert.equal(f.gates.length, 1, 'narrowing asks no one');
+  assert.deepEqual(f.receipts().map(r => r.operation), ['load', 'unload']);
+});
+
+test('a refused owner gate writes nothing', async t => {
+  const f = fixture(t);
+  const result = await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON, '--json'], { approve: false });
+  assert.equal(result.code, 1);
+  assert.equal(result.json.error.code, 'skill-global-owner-not-approved');
+  assert.equal(existsSync(path.join(f.home, '.claude/skills')), false);
+  assert.equal(existsSync(globalRecordPath(f.soul, 'claude', 'demo')), false);
+  assert.deepEqual(f.receipts(), []);
+});
+
+test('a soul asking for itself still needs the owner, and cannot present the principal or target another soul', async t => {
+  const f = fixture(t);
+  const soul = { markers: ['Agent ID'] };
+  const own = await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON, '--json'], soul);
+  assert.equal(own.code, 0, own.err);
+  assert.equal(f.asks.length, 1, 'the owner was asked');
+  assert.equal(f.gates.length, 0);
+  assert.equal((await f.run(['unload', 'demo', '--soul', f.id, '--global', '--json'], soul)).code, 0);
+
+  const refused = await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON, '--json'], { ...soul, approve: false });
+  assert.equal(refused.json.error.code, 'skill-global-owner-not-approved');
+  assert.equal(existsSync(f.destination), false);
+
+  const principal = await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON, '--principal-stdin', '--json'], soul);
+  assert.equal(principal.json.error.code, 'skill-global-principal-not-accepted');
+  const other = await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON, '--json'], { ...soul, self: 'agent_00000000-0000-4000-8000-000000000000' });
+  assert.equal(other.code, 1);
+  assert.equal(f.asks.length, 2, 'no prompt for a refused request');
+});
+
+test('global load refuses before asking: no reason, an unsupported harness, or something already there', async t => {
+  const f = fixture(t);
+  assert.equal((await f.run(['load', 'demo', '--soul', f.id, '--global', '--json'])).json.error.code, 'skill-global-reason-required');
+  assert.equal((await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', 'two\u0007lines', '--json'])).json.error.code, 'skill-global-reason-invalid');
+  for (const harness of ['gemini', 'codex']) {
+    assert.equal((await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON, '--harness', harness, '--json'])).json.error.code, 'skill-global-unsupported');
+  }
+  put(path.join(f.destination, 'SKILL.md'), 'the owner\'s own skill\n');
+  assert.equal((await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON, '--json'])).json.error.code, 'skill-load-exists');
+  assert.equal(readFileSync(path.join(f.destination, 'SKILL.md'), 'utf8'), 'the owner\'s own skill\n');
+  assert.equal((await f.run(['unload', 'demo', '--soul', f.id, '--global', '--json'])).json.error.code, 'skill-not-loaded');
+  assert.equal(existsSync(f.destination), true, 'a folder this soul did not place stays');
+  assert.equal(f.gates.length, 0);
+  // --global takes no --workspace, and only load takes --reason.
+  assert.equal((await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON, '--workspace', 'repo'])).code, 2);
+  assert.equal((await f.run(['unload', 'demo', '--soul', f.id, '--global', '--reason', REASON])).code, 2);
+  assert.equal((await f.run(['load', 'demo', '--soul', f.id, '--workspace', 'repo', '--reason', REASON])).code, 2);
+});
+
+test('global unload keeps a copy that was changed', async t => {
+  const f = fixture(t);
+  assert.equal((await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON])).code, 0);
+  chmodSync(path.join(f.destination, 'scripts/run'), 0o644);
+  const result = await f.run(['unload', 'demo', '--soul', f.id, '--global', '--json']);
+  assert.equal(result.json.error.code, 'skill-load-modified');
+  assert.equal(existsSync(f.destination), true);
+  assert.equal(existsSync(globalRecordPath(f.soul, 'claude', 'demo')), true);
+});
+
+test('the Claude target follows an absolute CLAUDE_CONFIG_DIR and refuses unsafe or missing folders', async t => {
+  const f = fixture(t);
+  const config = path.join(f.home, 'claude-config');
+  mkdirSync(config);
+  assert.equal(globalSkillTarget('demo', 'claude', { env: { CLAUDE_CONFIG_DIR: config }, home: f.home }).destination, path.join(config, 'skills/demo'));
+  assert.throws(() => globalSkillTarget('demo', 'claude', { env: { CLAUDE_CONFIG_DIR: 'relative' }, home: f.home }), { code: 'skill-global-config-invalid' });
+  assert.throws(() => globalSkillTarget('demo', 'claude', { env: { CLAUDE_CONFIG_DIR: path.join(f.home, 'absent') }, home: f.home }), { code: 'skill-global-harness-missing' });
+  // A linked config folder (dotfiles) is followed; a linked skills folder is not.
+  const linked = path.join(f.home, 'linked-config');
+  symlinkSync(config, linked);
+  assert.equal(globalSkillTarget('demo', 'claude', { env: { CLAUDE_CONFIG_DIR: linked }, home: f.home }).destination, path.join(config, 'skills/demo'));
+  symlinkSync(path.join(f.home, 'elsewhere'), path.join(config, 'skills'));
+  assert.throws(() => globalSkillTarget('demo', 'claude', { env: { CLAUDE_CONFIG_DIR: config }, home: f.home }), { code: 'skill-path-unsafe' });
+  const loaded = await f.run(['load', 'demo', '--soul', f.id, '--global', '--reason', REASON, '--json'], { extraEnv: { CLAUDE_CONFIG_DIR: config } });
+  assert.equal(loaded.json.error.code, 'skill-path-unsafe');
+  assert.equal(f.gates.length, 0);
+});
