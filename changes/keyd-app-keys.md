@@ -1,0 +1,1 @@
+- agent-bot-keyd can hold App-level keys, one per GitHub App shared by every soul acting as it: new `owner/app-import`, `owner/app-remove` and `owner/app-status` messages, and a grant's optional `keyScope: "app"` mints with that key. Per-soul keys and messages are unchanged; agent-bot starts using App-level keys in the next slice (#110).

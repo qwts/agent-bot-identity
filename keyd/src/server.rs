@@ -8,7 +8,10 @@
 //!   A call returns an installation token, never key material.
 //! - `owner.sock`, the owner's channel: `owner/import`, `owner/remove` and
 //!   `owner/pin` each need the owner's consent, asked by keyd itself;
-//!   `owner/status` says only whether an item exists. `owner/presence`
+//!   `owner/status` says only whether an item exists. `owner/app-import`,
+//!   `owner/app-remove` and `owner/app-status` do the same for App-level
+//!   keys, held by App slug rather than by soul (agent-bot-identity #110);
+//!   a grant names `keyScope: "app"` to mint with one. `owner/presence`
 //!   asks the owner to approve one agent-bot action and returns keyd's
 //!   signed assertion of it (presence.rs, agent-bot-identity #416); when no
 //!   one can be asked here it fails with PRESENCE_UNAVAILABLE, so agent-bot
@@ -27,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use crate::audit::{Audit, Receipt};
 use crate::consent::{Consent, Refusal};
 use crate::github::{self, Http};
-use crate::grant::{self, Replay};
+use crate::grant::{self, KeyScope, Replay};
 use crate::ids::{is_agent_id, is_app_slug};
 use crate::paths::Paths;
 use crate::presence;
@@ -196,14 +199,31 @@ impl Keyd {
                 return tool_text(String::new(), false);
             }
         }
-        let credential = match self.store.credential(&grant.agent_id, &grant.app) {
+        // The grant says which item; keyd never falls back to the other.
+        let scope = grant.scope();
+        let (held, missing, granted) = match scope {
+            KeyScope::Soul => (
+                self.store.credential(&grant.agent_id, &grant.app),
+                format!("agent-bot-keyd holds no key for {} in this soul", grant.app),
+                None,
+            ),
+            KeyScope::App => (
+                self.store.app_credential(&grant.app),
+                format!("agent-bot-keyd holds no App-level key for {}", grant.app),
+                Some("App-level key"),
+            ),
+        };
+        let credential = match held {
             Ok(Some(credential)) => credential,
             Ok(None) => {
-                receipt("failed", Some("no key held"));
-                return tool_text(
-                    format!("agent-bot-keyd holds no key for {} in this soul", grant.app),
-                    true,
+                receipt(
+                    "failed",
+                    Some(match scope {
+                        KeyScope::Soul => "no key held",
+                        KeyScope::App => "no App-level key held",
+                    }),
                 );
+                return tool_text(missing, true);
             }
             Err(error) => {
                 receipt("failed", Some(&error));
@@ -212,7 +232,7 @@ impl Keyd {
         };
         match github::mint(self.http.as_ref(), &credential, &grant, now) {
             Ok(minted) => {
-                receipt("granted", None);
+                receipt("granted", granted);
                 if name == "git_credential" {
                     return tool_text(
                         format!("username=x-access-token\npassword={}\n", minted.token),
@@ -245,11 +265,15 @@ impl Keyd {
         let outcome = match method {
             "owner/presence" => return Some(self.owner_presence(&id, &params, now)),
             "owner/status" => self.owner_status(&params),
-            "owner/import" | "owner/remove" | "owner/pin" => {
+            "owner/app-status" => self.owner_app_status(&params),
+            "owner/import" | "owner/remove" | "owner/pin" | "owner/app-import"
+            | "owner/app-remove" => {
                 let _one_prompt_at_a_time = self.owner_lock.lock().unwrap();
                 let result = match method {
                     "owner/import" => self.owner_import(&params),
                     "owner/remove" => self.owner_remove(&params),
+                    "owner/app-import" => self.owner_app_import(&params),
+                    "owner/app-remove" => self.owner_app_remove(&params),
                     _ => self.owner_pin(&params),
                 };
                 let decision = if result.is_ok() { "granted" } else { "refused" };
@@ -350,6 +374,93 @@ impl Keyd {
         Ok((agent.to_owned(), app.to_owned()))
     }
 
+    fn app_of(params: &Value) -> Result<String, String> {
+        params
+            .get("app")
+            .and_then(Value::as_str)
+            .filter(|v| is_app_slug(v))
+            .map(str::to_owned)
+            .ok_or_else(|| "app is not a GitHub App slug".to_owned())
+    }
+
+    /// `items`, 1 to 64 of them, or the params as one item.
+    fn import_entries(params: &Value) -> Result<Vec<Value>, String> {
+        match params.get("items") {
+            Some(Value::Array(items)) if !items.is_empty() && items.len() <= 64 => {
+                Ok(items.clone())
+            }
+            Some(_) => Err("items must be a list of 1 to 64 keys".into()),
+            None => Ok(vec![params.clone()]),
+        }
+    }
+
+    /// An entry's key, refused before anyone is asked if keyd cannot sign
+    /// with it.
+    fn import_credential(&self, entry: &Value) -> Result<Credential, String> {
+        let app_id = entry
+            .get("appId")
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+            .ok_or("appId is not a GitHub App ID")?;
+        let pem = entry
+            .get("privateKeyPem")
+            .and_then(Value::as_str)
+            .ok_or("privateKeyPem is missing")?;
+        let credential = Credential {
+            app_id: app_id.to_owned(),
+            private_key_pem: pem.to_owned(),
+        };
+        github::app_jwt(&credential, (self.now)())?;
+        Ok(credential)
+    }
+
+    /// The daemon key an import would pin: the offered one on the first
+    /// import, none when it matches the pin, refused when it differs.
+    fn import_pin(&self, params: &Value) -> Result<Option<[u8; 32]>, String> {
+        let offered = Self::daemon_key(params)?;
+        let pinned = self.store.pinned_key()?;
+        match (pinned, offered) {
+            (None, None) => {
+                Err("no daemon key is pinned; pass daemonKey with the first import".into())
+            }
+            (None, Some(key)) => Ok(Some(key)),
+            (Some(current), Some(key)) if current != key => {
+                Err("a different daemon key is pinned; pin the new one with owner/pin first".into())
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn named(names: Vec<String>) -> String {
+        let mut named: Vec<String> = names.iter().take(4).cloned().collect();
+        if names.len() > 4 {
+            named.push(format!("{} more", names.len() - 4));
+        }
+        named.join(", ")
+    }
+
+    fn pin_clause(pin: &Option<[u8; 32]>) -> &'static str {
+        if pin.is_some() {
+            "; and trust this account's agent-bot daemon to request tokens"
+        } else {
+            ""
+        }
+    }
+
+    /// Writes `credential` through `put`, then reads it back through `get`.
+    fn store_verified(
+        credential: &Credential,
+        put: impl FnOnce() -> Result<(), String>,
+        get: impl FnOnce() -> Result<Option<Credential>, String>,
+    ) -> Result<(), String> {
+        put()?;
+        let back = get()?.ok_or("the keychain did not return what was written")?;
+        if back.app_id != credential.app_id || back.private_key_pem != credential.private_key_pem {
+            return Err("the keychain did not return what was written".into());
+        }
+        Ok(())
+    }
+
     fn daemon_key(params: &Value) -> Result<Option<[u8; 32]>, String> {
         let Some(text) = params.get("daemonKey") else {
             return Ok(None);
@@ -377,76 +488,32 @@ impl Keyd {
 
     /// One key, or several under `items` with one consent for all of them.
     fn owner_import(&self, params: &Value) -> Result<Value, String> {
-        let entries: Vec<Value> = match params.get("items") {
-            Some(Value::Array(items)) if !items.is_empty() && items.len() <= 64 => items.clone(),
-            Some(_) => return Err("items must be a list of 1 to 64 keys".into()),
-            None => vec![params.clone()],
-        };
+        let entries = Self::import_entries(params)?;
         let mut keys = Vec::with_capacity(entries.len());
         for entry in &entries {
             let (agent, app) = Self::soul_and_app(entry)?;
-            let app_id = entry
-                .get("appId")
-                .and_then(Value::as_str)
-                .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
-                .ok_or("appId is not a GitHub App ID")?;
-            let pem = entry
-                .get("privateKeyPem")
-                .and_then(Value::as_str)
-                .ok_or("privateKeyPem is missing")?;
-            let credential = Credential {
-                app_id: app_id.to_owned(),
-                private_key_pem: pem.to_owned(),
-            };
-            // A key keyd cannot sign with is refused before anyone is asked.
-            github::app_jwt(&credential, (self.now)())?;
+            let credential = self.import_credential(entry)?;
             keys.push((agent, app, credential));
         }
-        let offered = Self::daemon_key(params)?;
-        let pinned = self.store.pinned_key()?;
-        let pin = match (pinned, offered) {
-            (None, None) => {
-                return Err("no daemon key is pinned; pass daemonKey with the first import".into())
-            }
-            (None, Some(key)) => Some(key),
-            (Some(current), Some(key)) if current != key => {
-                return Err(
-                    "a different daemon key is pinned; pin the new one with owner/pin first".into(),
-                );
-            }
-            _ => None,
-        };
-        let mut named: Vec<String> = keys
-            .iter()
-            .take(4)
-            .map(|(agent, app, _)| format!("{app} (soul {agent})"))
-            .collect();
-        if keys.len() > 4 {
-            named.push(format!("{} more", keys.len() - 4));
-        }
+        let pin = self.import_pin(params)?;
         self.consent.ask(&format!(
             "keep GitHub App keys in agent-bot-keyd: {}{}",
-            named.join(", "),
-            if pin.is_some() {
-                "; and trust this account's agent-bot daemon to request tokens"
-            } else {
-                ""
-            }
+            Self::named(
+                keys.iter()
+                    .map(|(agent, app, _)| format!("{app} (soul {agent})"))
+                    .collect()
+            ),
+            Self::pin_clause(&pin)
         ))?;
         if let Some(key) = pin {
             self.store.pin_key(&key)?;
         }
         for (agent, app, credential) in &keys {
-            self.store.put_credential(agent, app, credential)?;
-            let back = self
-                .store
-                .credential(agent, app)?
-                .ok_or("the keychain did not return what was written")?;
-            if back.app_id != credential.app_id
-                || back.private_key_pem != credential.private_key_pem
-            {
-                return Err("the keychain did not return what was written".into());
-            }
+            Self::store_verified(
+                credential,
+                || self.store.put_credential(agent, app, credential),
+                || self.store.credential(agent, app),
+            )?;
             self.audit.record(
                 Receipt {
                     event: "keyd-owner",
@@ -460,6 +527,64 @@ impl Keyd {
             );
         }
         Ok(json!({ "stored": keys.len(), "pinned": pin.is_some() }))
+    }
+
+    /// App-level keys (#110): one key per App slug, for every soul that acts
+    /// as it. Same limits, checks, pin and single consent as `owner/import`.
+    fn owner_app_import(&self, params: &Value) -> Result<Value, String> {
+        let entries = Self::import_entries(params)?;
+        let mut keys: Vec<(String, Credential)> = Vec::with_capacity(entries.len());
+        for entry in &entries {
+            let app = Self::app_of(entry)?;
+            if keys.iter().any(|(seen, _)| *seen == app) {
+                return Err("an App appears more than once".into());
+            }
+            let credential = self.import_credential(entry)?;
+            keys.push((app, credential));
+        }
+        let pin = self.import_pin(params)?;
+        self.consent.ask(&format!(
+            "keep GitHub App keys in agent-bot-keyd for every soul acting as: {}{}",
+            Self::named(keys.iter().map(|(app, _)| app.clone()).collect()),
+            Self::pin_clause(&pin)
+        ))?;
+        if let Some(key) = pin {
+            self.store.pin_key(&key)?;
+        }
+        for (app, credential) in &keys {
+            Self::store_verified(
+                credential,
+                || self.store.put_app_credential(app, credential),
+                || self.store.app_credential(app),
+            )?;
+            self.audit.record(
+                Receipt {
+                    event: "keyd-owner",
+                    agent_id: None,
+                    app: Some(app),
+                    operation: "owner/app-import item",
+                    decision: "stored",
+                    detail: None,
+                },
+                (self.now)(),
+            );
+        }
+        Ok(json!({ "stored": keys.len(), "pinned": pin.is_some() }))
+    }
+
+    fn owner_app_remove(&self, params: &Value) -> Result<Value, String> {
+        let app = Self::app_of(params)?;
+        self.consent.ask(&format!(
+            "delete the App-level {app} GitHub App key from agent-bot-keyd"
+        ))?;
+        Ok(json!({ "removed": self.store.remove_app_credential(&app)? }))
+    }
+
+    fn owner_app_status(&self, params: &Value) -> Result<Value, String> {
+        let pinned = self.store.pinned_key()?.is_some();
+        let app = Self::app_of(params)?;
+        let held = self.store.app_credential(&app)?.is_some();
+        Ok(json!({ "pinned": pinned, "held": held, "version": env!("CARGO_PKG_VERSION") }))
     }
 
     fn owner_remove(&self, params: &Value) -> Result<Value, String> {
@@ -883,6 +1008,223 @@ mod tests {
             .credential(second, "qwts-grok-agent")
             .unwrap()
             .is_some());
+    }
+
+    fn owner(keyd: &Keyd, method: &str, params: Value) -> Value {
+        keyd.handle_owner(&json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }))
+            .unwrap()
+    }
+
+    fn app_grant(tool: &str, nonce: &str) -> String {
+        let mut p = payload(tool, NOW);
+        p["keyScope"] = json!("app");
+        p["nonce"] = json!(nonce);
+        sign(&signing_key(), &p)
+    }
+
+    #[test]
+    fn imports_an_app_level_key_and_mints_with_it_only_for_an_app_grant() {
+        let consent = Arc::new(Consenting::new(true));
+        let mut keyd = keyd(true);
+        keyd.consent = Box::new(Arc::clone(&consent));
+        let (pem, _) = test_key_pem();
+        let imported = owner(
+            &keyd,
+            "owner/app-import",
+            json!({ "app": "qwts-claude-agent", "appId": "42", "privateKeyPem": pem, "daemonKey": daemon_key() }),
+        );
+        assert_eq!(imported["result"], json!({ "stored": 1, "pinned": true }));
+        assert_eq!(
+            consent.asked.lock().unwrap().clone(),
+            vec!["keep GitHub App keys in agent-bot-keyd for every soul acting as: qwts-claude-agent; and trust this account's agent-bot daemon to request tokens".to_owned()]
+        );
+        assert!(
+            keyd.store
+                .credential(AGENT, "qwts-claude-agent")
+                .unwrap()
+                .is_none(),
+            "an App-level import writes no soul's item"
+        );
+
+        // A grant without keyScope still reads only the soul's item.
+        let soul = call(
+            &keyd,
+            "credential",
+            json!({}),
+            Some(sign(&signing_key(), &payload("credential", NOW))),
+        );
+        assert_eq!(
+            soul["content"][0]["text"],
+            "agent-bot-keyd holds no key for qwts-claude-agent in this soul"
+        );
+
+        let minted = call(
+            &keyd,
+            "credential",
+            json!({}),
+            Some(app_grant("credential", "app-credential-0123456789")),
+        );
+        assert_eq!(minted["isError"], false);
+        assert_eq!(minted["structuredContent"]["token"], "ghs_test");
+        assert_eq!(minted["structuredContent"]["app"], "qwts-claude-agent");
+        assert!(!minted.to_string().contains("PRIVATE KEY"));
+        let git = call(
+            &keyd,
+            "git_credential",
+            json!({ "protocol": "https", "host": "github.com" }),
+            Some(app_grant("git_credential", "app-git-credential-0123456789")),
+        );
+        assert_eq!(
+            git["content"][0]["text"],
+            "username=x-access-token\npassword=ghs_test\n"
+        );
+    }
+
+    #[test]
+    fn an_app_grant_never_falls_back_to_a_soul_key() {
+        let keyd = keyd(true);
+        let (pem, _) = test_key_pem();
+        import(&keyd, &pem);
+        let result = call(
+            &keyd,
+            "credential",
+            json!({}),
+            Some(app_grant("credential", "app-no-fallback-0123456789")),
+        );
+        assert_eq!(
+            result["content"][0]["text"],
+            "agent-bot-keyd holds no App-level key for qwts-claude-agent"
+        );
+        assert_eq!(result["isError"], true);
+    }
+
+    #[test]
+    fn app_level_owner_operations_need_consent_and_a_matching_pin() {
+        let (pem, _) = test_key_pem();
+        let refusing = keyd(false);
+        let refused = owner(
+            &refusing,
+            "owner/app-import",
+            json!({ "app": "qwts-claude-agent", "appId": "42", "privateKeyPem": pem, "daemonKey": daemon_key() }),
+        );
+        assert_eq!(refused["error"]["code"], -32000);
+        assert!(refusing.store.pinned_key().unwrap().is_none());
+        assert!(refusing
+            .store
+            .app_credential("qwts-claude-agent")
+            .unwrap()
+            .is_none());
+
+        let keyd = keyd(true);
+        let first = owner(
+            &keyd,
+            "owner/app-import",
+            json!({ "app": "qwts-claude-agent", "appId": "42", "privateKeyPem": pem }),
+        );
+        assert_eq!(
+            first["error"]["message"],
+            "no daemon key is pinned; pass daemonKey with the first import"
+        );
+        import(&keyd, &pem);
+        let other = STANDARD.encode(
+            ed25519_dalek::SigningKey::from_bytes(&[2; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        let mismatch = owner(
+            &keyd,
+            "owner/app-import",
+            json!({ "app": "qwts-claude-agent", "appId": "42", "privateKeyPem": pem, "daemonKey": other }),
+        );
+        assert!(mismatch["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("different daemon key"));
+        for params in [
+            json!({ "app": "qwts-claude-agent", "appId": "42", "privateKeyPem": "nope" }),
+            json!({ "app": "../x", "appId": "42", "privateKeyPem": pem }),
+            json!({ "app": "qwts-claude-agent", "appId": "x", "privateKeyPem": pem }),
+            json!({ "items": [] }),
+            json!({ "items": [
+                { "app": "qwts-claude-agent", "appId": "42", "privateKeyPem": pem },
+                { "app": "qwts-claude-agent", "appId": "42", "privateKeyPem": pem },
+            ] }),
+        ] {
+            assert_eq!(
+                owner(&keyd, "owner/app-import", params)["error"]["code"],
+                -32000
+            );
+        }
+        // The soul's pin carries over: no daemonKey needed after the first.
+        let several = owner(
+            &keyd,
+            "owner/app-import",
+            json!({ "items": [
+                { "app": "qwts-claude-agent", "appId": "42", "privateKeyPem": pem },
+                { "app": "qwts-grok-agent", "appId": "43", "privateKeyPem": pem },
+            ] }),
+        );
+        assert_eq!(several["result"], json!({ "stored": 2, "pinned": false }));
+
+        let status = owner(
+            &keyd,
+            "owner/app-status",
+            json!({ "app": "qwts-grok-agent" }),
+        );
+        assert_eq!(
+            (
+                status["result"]["pinned"].as_bool(),
+                status["result"]["held"].as_bool()
+            ),
+            (Some(true), Some(true))
+        );
+        assert!(!status.to_string().contains("PRIVATE"));
+        assert_eq!(
+            owner(&keyd, "owner/app-status", json!({}))["error"]["message"],
+            "app is not a GitHub App slug"
+        );
+        // The soul's own item and status are untouched by App-level keys.
+        let soul_status = owner(
+            &keyd,
+            "owner/status",
+            json!({ "agentId": AGENT, "app": "qwts-claude-agent" }),
+        );
+        assert_eq!(soul_status["result"]["held"], true);
+
+        assert_eq!(
+            owner(
+                &refusing,
+                "owner/app-remove",
+                json!({ "app": "qwts-grok-agent" })
+            )["error"]["code"],
+            -32000
+        );
+        let removed = owner(
+            &keyd,
+            "owner/app-remove",
+            json!({ "app": "qwts-grok-agent" }),
+        );
+        assert_eq!(removed["result"]["removed"], true);
+        assert!(keyd
+            .store
+            .app_credential("qwts-grok-agent")
+            .unwrap()
+            .is_none());
+        assert!(keyd
+            .store
+            .app_credential("qwts-claude-agent")
+            .unwrap()
+            .is_some());
+        assert!(keyd
+            .store
+            .credential(AGENT, "qwts-claude-agent")
+            .unwrap()
+            .is_some());
+        // App-level owner methods are for the owner channel only.
+        let soul = keyd
+            .handle_soul(&json!({ "jsonrpc": "2.0", "id": 1, "method": "owner/app-status", "params": { "app": "qwts-claude-agent" } }))
+            .unwrap();
+        assert_eq!(soul["error"]["code"], -32601);
     }
 
     fn presence(keyd: &Keyd, params: Value) -> Value {

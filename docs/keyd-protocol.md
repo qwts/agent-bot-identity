@@ -286,10 +286,71 @@ Current behaviour, recorded here and not changed by this page:
   import, and keyd refuses more than 64, so a host with more than 64 movable
   souls cannot complete that import.
 
+## App-level keys (#110)
+
+The owner chose (#110, 2026-10-09) to let keyd hold **App-level keys**: one
+key per GitHub App, keyed by the App's slug, shared by every soul that acts as
+that App. They sit alongside the per-soul keys, which keep their item names,
+messages and grant format. This slice is **keyd-side only**: agent-bot does
+not yet send any of the messages below. Recording `store: keyd` for an App,
+minting through keyd by App, and falling back to the file or Keychain store
+with a stated reason when keyd is not verified are slice 2 of #110.
+
+### Item
+
+[store.rs](../keyd/src/store.rs): a login-keychain generic password keyd
+creates, service `agent-bot.keyd.app`, account `github-app/<slug>`, value
+base64 of `{appId, privateKeyPem}`, the same encoding as a soul's item. A
+soul's service is `agent-bot.keyd.<agentId>` and every Agent ID starts
+`agent_`, so the two never meet. Removing one never touches the other.
+
+### Owner messages
+
+All on `owner.sock`, alongside the existing ones, which are unchanged
+([server.rs](../keyd/src/server.rs)):
+
+| Method | Params | Result | Consent |
+| --- | --- | --- | --- |
+| `owner/app-import` | `{ app, appId, privateKeyPem, daemonKey? }`, or `{ items: [{ app, appId, privateKeyPem }], daemonKey? }` | `{ stored, pinned }` | one prompt for all items |
+| `owner/app-remove` | `{ app }` | `{ removed }` | yes |
+| `owner/app-status` | `{ app }` | `{ pinned, held, version }` | no |
+
+`owner/app-import` follows `owner/import`'s rules: 1 to 64 items; each slug
+and App ID checked, and a key keyd cannot sign with refused, before the owner
+is asked; `daemonKey` pinned on the first import of either kind and a
+different one refused until `owner/pin`; each item read back after it is
+written and receipted (`operation: owner/app-import item`, no `agentId`). It
+also refuses an `items` list that names the same App twice. Refusals are
+JSON-RPC error `-32000`, as for the other owner methods, and leave a
+`keyd-owner` receipt.
+
+A keyd from before #110 answers each of these with `-32601` (method not
+found); agent-bot can use that to tell whether App-level keys are available.
+
+### Grants
+
+A grant may carry one more payload field, `keyScope`:
+
+- absent or `"soul"`: keyd mints with the soul's item for `agentId` and `app`,
+  exactly as before. agent-bot's grants today never send it, so their 12
+  payload keys and keyd's answers are unchanged.
+- `"app"`: keyd mints with the App-level item for `app`. `agentId` is still
+  required and checked, and it is named in keyd's receipt (`detail:
+  App-level key`).
+- any other value, `null` included: the grant is refused as malformed.
+
+keyd never falls back from one scope to the other: an `app` grant with no
+App-level item fails with `agent-bot-keyd holds no App-level key for <app>`,
+even when the soul's own item exists, and a soul grant never reads the App
+item. Choosing the scope is policy, so it stays with the daemon that signs
+the grant. A keyd from before #110 refuses a grant that names `keyScope`,
+since unknown payload fields are refused.
+
 ## Conformance matrix
 
-Tests named here are `node:test` titles. "keyd-side" rows are GeniusBar
-behaviour with no test in this repository.
+Tests named here are `node:test` titles, or Rust test functions under
+`keyd/` (`cargo test`) where the path is a `.rs` file. "keyd-side" rows with
+"none here" have no test in this repository yet.
 
 | Invariant | Issuer | Verifier / entry point | Test |
 | --- | --- | --- | --- |
@@ -302,6 +363,10 @@ behaviour with no test in this repository.
 | keyd pins the daemon key on first import and refuses another | keyd-side | keyd | none here |
 | keyd spends each grant nonce once, and accepts `exp > now`, `iat ≤ now + 30`, `0 ≤ exp − iat ≤ 120` | keyd-side | keyd | none here |
 | keyd accepts 1 to 64 import items | keyd-side | keyd | none here |
+| keyd holds App-level keys under their own item, apart from souls' items, and removing one leaves the other | keyd-side | `Store` | `keyd/src/store.rs`: `memory_store_round_trips`, `keychain_store_round_trips_in_a_temporary_keychain` |
+| `keyScope` absent or `soul` reads the soul's key, `app` the App-level key; any other value is refused | keyd-side | `grant::verify` | `keyd/src/grant.rs`: `accepts_a_grant_the_daemon_signed`, `reads_the_key_scope_and_refuses_an_unknown_one` |
+| An `app` grant mints with the App-level key for `credential` and `git_credential`; a soul grant never sees it, and an `app` grant never falls back to the soul's key | keyd-side | keyd `credential`, `git_credential` | `keyd/src/server.rs`: `imports_an_app_level_key_and_mints_with_it_only_for_an_app_grant`, `an_app_grant_never_falls_back_to_a_soul_key` |
+| `owner/app-import`, `owner/app-remove` need consent and a matching pin; import checks every item first; `owner/app-status` says only whether the key is held; none is on the soul channel | keyd-side | keyd owner channel | `keyd/src/server.rs`: `app_level_owner_operations_need_consent_and_a_matching_pin` |
 | Souls are denied `vouch-key.pem` and keyd's sockets in every tool | — | confinement hook | `tests/soul-credentials.test.mjs`: "confinement denies a soul its key store, the legacy folder and secret-store CLIs in every tool" |
 | `action` in an assertion is SHA-256 hex, matching keyd | keyd | `actionDigest` | `tests/owner-presence.test.mjs`: "the action digest matches keyd (sha256 hex)" |
 | An assertion verifies only for its key, action, nonce, audience and prefix | keyd | `verifyPresence` | `tests/owner-presence.test.mjs`: "an assertion verifies only for its key, action, nonce and time" |
