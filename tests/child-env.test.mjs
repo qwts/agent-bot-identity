@@ -41,6 +41,19 @@ test('child boundary keeps the network, locale and agent-bot host configuration'
   assert.equal(harness.PATH.split(':')[0], '/tmp/tools');
 });
 
+test('on Windows the boundary matches names without case and keeps the profile', () => {
+  const source = {
+    Path: 'C:\\Windows\\system32', SystemRoot: 'C:\\Windows', windir: 'C:\\Windows', ComSpec: 'C:\\Windows\\system32\\cmd.exe',
+    USERPROFILE: 'C:\\Users\\owner', LocalAppData: 'C:\\Users\\owner\\AppData\\Local', Agent_Bot_Tool_Path: 'C:\\tools',
+    Github_Token: 'owner-token', Agent_Bot_Telegram_Token: 'bot-token',
+  };
+  assert.deepEqual(minimalChildEnv(source, { platform: 'win32' }), {
+    PATH: 'C:\\Windows\\system32', SYSTEMROOT: 'C:\\Windows', WINDIR: 'C:\\Windows', COMSPEC: 'C:\\Windows\\system32\\cmd.exe',
+    USERPROFILE: 'C:\\Users\\owner', LOCALAPPDATA: 'C:\\Users\\owner\\AppData\\Local', AGENT_BOT_TOOL_PATH: 'C:\\tools',
+  });
+  assert.deepEqual(minimalChildEnv({ Path: '/x', path: '/y' }, { platform: 'darwin' }), {}, 'POSIX names stay exact');
+});
+
 test('turn keeps the daemon-composed binding and only the explicitly routed soul secret', () => {
   const turn = composeTurnEnv({
     agentId: 'test-soul', harness: 'codex',
