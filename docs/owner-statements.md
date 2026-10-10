@@ -7,11 +7,14 @@ any agent, CI job or subagent can check offline. The design is
 [ADR-0753](decisions/ADR-0753-owner-signed-statements.md); this page is the
 contract as built.
 
-**Built so far:** the `s1.` format, `agent-bot owner verify`, the pinned keys,
-and the ssh store (`owner enroll --store ssh`, `owner sign`, `owner remove`).
-**Not yet:** the keyd store (keyd's `owner/sign` RPC), the signed-challenge
-fallback in the owner gate (`owner sign --challenge`), and pins from the
-organization profile. Until then `owner enroll --store keyd` answers
+**Built so far:** the `s1.` format, `agent-bot owner verify`, pinned keys,
+the ssh store, and a CLI-only signed-challenge fallback for existing local SSH
+pins. When local presence is unavailable, an interactive owner gate can show a
+fresh challenge; the owner signs it on a trusted terminal and pastes the reply
+back. There is no automatic challenge transport, daemon decision-route
+statement field or inbox-delivery implementation in this slice. **Not yet:**
+the keyd store (keyd's `owner/sign` RPC) and pins from the organization
+profile. Until then `owner enroll --store keyd` answers
 `owner-store-unavailable`.
 
 ## The statement
@@ -36,7 +39,10 @@ payload: { v: 1, aud: "agent-bot-owner-statement", kind, alg, key,
   line-break or bidirectional characters.
 - `scope` is `{ repo, number }` for a statement; `{ host }` or
   `{ host, repo, number }` for a challenge.
-- `action` is `null` for a statement and a SHA-256 hex digest for a challenge.
+- `action` is `null` for a statement and a SHA-256 hex digest of the raw
+  command-shaped action for a challenge. The bounded human-readable summary
+  is carried separately in `text`; both fields are checked against the
+  pending challenge.
 - `nonce` is 16 to 64 base64url characters.
 - `iat` and `exp` are Unix seconds. A statement lasts at most 30 days
   (7 by default), a challenge at most 15 minutes (10 by default). Clocks may
@@ -50,6 +56,7 @@ shape not listed here.
 ```text
 agent-bot owner verify <token|file|-> [--repo OWNER/NAME --issue N] [--json]
 agent-bot owner sign "<text>" --repo OWNER/NAME --issue N --key PATH [--expires 7d]
+agent-bot owner sign --challenge <JSON> --key PATH
 agent-bot owner enroll --store ssh --key PATH [--name NAME] [--verify-required] [--allow-software-key]
 agent-bot owner keys [--json]
 agent-bot owner remove NAME
@@ -78,6 +85,19 @@ its text, scope and expiry, and asks `ssh-keygen -Y sign` to sign it with the
 key at `--key` (its public half is read from `PATH.pub`). It refuses a caller
 with soul markers or an agent harness's environment (`CLAUDECODE`,
 `CODEX_*`, `CURSOR_AGENT`, and the others `detect-harness.mjs` keys on).
+
+**sign --challenge** accepts the JSON challenge shown by the waiting owner gate.
+Run it on a trusted terminal with the matching SSH key, inspect the displayed
+summary and host scope, then paste its armored output into the waiting prompt.
+The gate accepts one reply only while that request is pending and the signing
+key remains pinned. The prompt requires a TTY, reads at most 1 MiB, and waits
+for at most ten minutes; EOF, blank input, cancellation, timeout, malformed
+input or a bad signature refuses the action. If any owner key is enrolled but
+no enrolled SSH key can answer, a challenge-eligible action refuses instead
+of falling back to administrator consent. The older administrator fallback
+remains for those actions on hosts with no enrolled owner keys. Enrolment and
+removal always continue through local presence or administrator consent and
+cannot use a signed challenge.
 
 **enroll** pins a public key in `<state>/owner/keys.json` (0600, in a 0700
 directory; `<state>` is `$XDG_STATE_HOME/agent-bot` or
@@ -108,9 +128,10 @@ enrols, rotates or removes a key.
   owner's account, so it is pinned only with `--allow-software-key`, and
   enrolment says it is weaker.
 - **The ssh store has no trusted display.** A security key proves a touch or
-  a PIN, not what was signed. Run `owner sign` only on a machine or terminal
-  where no agent runs in your account. Where a trusted display is needed on
-  an agent host, the keyd store (not yet built) is the one to use.
+  a PIN, not what was signed. Run `owner sign` and `owner sign --challenge`
+  only on a machine or terminal where no agent runs in your account. The
+  challenge flow is a user-mediated CLI path; a trusted display on an agent
+  host and keyd signing remain future work.
 
 ## How agents use a statement
 

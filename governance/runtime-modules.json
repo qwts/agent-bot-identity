@@ -160,6 +160,7 @@
     "owner-presence.mjs": "identity",
     "owner-principal.mjs": "comms",
     "owner-statement.mjs": "identity",
+    "owner-text.mjs": "identity",
     "permission-risk.mjs": "identity",
     "process-ownership.mjs": "soul",
     "reach-contract.mjs": "comms",

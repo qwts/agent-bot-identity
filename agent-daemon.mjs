@@ -1650,7 +1650,7 @@ const ownerDeclined = (error) => error?.code === 'owner-declined';
 export function daemonModeFor({
   env = process.env, home = homedir(), config, now = () => new Date(),
   presence = undefined,
-  ask = (action) => confirmOwnerPresence(action, { env, consent: (act, options) => presenceOrConsent(act, { ...options, presence, consent: noLooseningDialog }) }),
+  ask = (action) => confirmOwnerPresence(action, { env, consent: (act, options) => presenceOrConsent(act, { ...options, presence, allowChallenge: false, consent: noLooseningDialog }) }),
   log = (line) => process.stderr.write(`${line}\n`),
 } = {}) {
   // One question per soul and digest at a time, however many turns start.

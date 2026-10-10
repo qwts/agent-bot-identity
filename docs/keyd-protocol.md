@@ -197,9 +197,20 @@ request and must match.
 | Result | When | Gate behaviour |
 | --- | --- | --- |
 | `{ method: 'presence', via: 'agent-bot-keyd' }` | the assertion verifies | approved |
-| `presence-unavailable` | no pinned key and none can be pinned; `keyd-unavailable` (no socket, connection closed); keyd answers RPC error `-32001` | `presenceOrConsent` falls back to the administrator dialog |
+| `presence-unavailable` | no pinned key and none can be pinned; `keyd-unavailable` (no socket, connection closed); keyd answers RPC error `-32001` | the wired owner gate follows the signed-challenge fallback order below |
 | `owner-declined` | any other keyd refusal, including `keyd-timeout` | refused, nobody else is asked |
 | `presence-invalid` | the assertion does not verify | refused, nobody else is asked |
+
+ADR-0753 extends the fallback in [owner-action.mjs](../owner-action.mjs).
+When presence is unavailable and a local SSH owner key is enrolled, an
+interactive terminal offers a fresh signed challenge. A verified reply returns
+`{ method: 'statement', via: 'ssh', key, fingerprint }`. With no owner keys
+enrolled, the administrator dialog remains available. Enrolled keys that this
+CLI path cannot use, a noninteractive caller, cancellation or an invalid reply
+refuse the action without administrator fallback. Enrollment and removal
+explicitly disable challenges and retain their local presence or administrator
+gate. See [owner statements](owner-statements.md) for the built CLI contract;
+daemon decision-route statement fields and inbox delivery remain unimplemented.
 
 Callers ([owner-gate.mjs](../owner-gate.mjs)):
 
@@ -244,7 +255,8 @@ Callers ([owner-gate.mjs](../owner-gate.mjs)):
    and the organization profile, projected into the config by `bootstrap`,
    is where an organization names the team that signs its keyd. With no
    Team ID configured nothing is pinned, so `keydPresence` reports
-   `presence-unavailable` and the owner gate uses the administrator dialog.
+   `presence-unavailable` and the owner gate follows the
+   [fallback order above](#outcomes).
 
    A Team ID is ten characters `A-Z0-9`; an identifier is letters, digits,
    `.` and `-`. In the environment or the config, either may instead be the
@@ -457,7 +469,8 @@ Tests named here are `node:test` titles, or Rust test functions under
 | No record, an unsigned binary (never run) or a malformed answer pins nothing | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "no keyd, an unsigned keyd or a malformed answer pins nothing" |
 | An unparseable pin file is pinned again from the signed binary | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "a pin that does not parse as a key is pinned again from the signed binary" |
 | `presence-unavailable` vs `owner-declined` (timeout included) | — | `keydPresence` | `tests/owner-presence.test.mjs`: "keydPresence tells \"nobody can be asked\" apart from \"the owner said no\"" |
-| The administrator dialog only when keyd cannot ask; a refusal is final | — | `presenceOrConsent` | `tests/owner-presence.test.mjs`: "the gate asks keyd first and falls back to the administrator dialog only when keyd cannot ask"; "with no keyd installed the gate uses the administrator dialog, as before"; `tests/owner-gate.test.mjs`: "revision edit treats keyd refusal as final, without reaching the terminal-only dialog fallback" |
+| The administrator dialog only when keyd cannot ask and no owner keys are enrolled, or the trust-root command disables challenges; a refusal is final | — | wired `presenceOrConsent`, `assertOwnerAction` | `tests/owner-statement.test.mjs`: "hosts with no enrolled owner keys retain the existing administrator fallback", "challenge refusal, cancellation, and disabled challenge paths never approve or fall through"; `tests/owner-gate.test.mjs`: "revision edit treats keyd refusal as final, without reaching the terminal-only dialog fallback" |
+| An SSH reply answers one pending CLI challenge, binding the raw-action digest and separately rendered summary, host, key, nonce and expiry; current pins are rechecked after waiting | owner SSH signer | `verifyOwnerChallenge`, wired owner gate | `tests/owner-statement.test.mjs`: "an owner challenge binds the displayed action summary and can be answered once by an enrolled SSH key", "the owner-action presence wrapper checks presence once before the challenge flow", "owner challenge refuses keyd-only pins and rechecks SSH pins after waiting" |
 | A decision on a soul's tool request always asks presence; a principal is checked as well, never instead | — | `confirmOwnerPresence`, `/v0/approvals/decide`, `/v1/proposals/<id>/decision` | `tests/owner-gate.test.mjs`: "a decision on a soul tool request asks for presence even when a principal verifies (#438)"; `tests/agent-approvals.test.mjs`: "the daemon token alone cannot decide: a refused owner gate decides nothing on either route (#438)" |
 
 ## Owner decisions (#594)
@@ -477,8 +490,9 @@ The owner decided these on 2026-10-09
    [presence-key bootstrap](#presence-key-bootstrap). Pin corruption is
    handled as before (step 2 runs again); an existing pin is not re-checked.
 4. **Where the Team ID lives.** The organization profile names it; the
-   runtime has no built-in Team ID (#752). With none configured, the owner
-   gate uses the administrator dialog.
+   runtime has no built-in Team ID (#752). With none configured, presence is
+   unavailable; ADR-0753 extends the gate's [fallback order](#outcomes) with
+   signed challenges for enrolled SSH keys.
 5. **Loosening.** The environment and config may name a specific signer
    freely. Accepting any Developer ID, or pinning under another signer than
    the last pin, needs the owner's verification and leaves a receipt.

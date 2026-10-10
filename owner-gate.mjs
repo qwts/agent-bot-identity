@@ -19,10 +19,13 @@
 //      owner's account. The broker must run under another account, because
 //      a same-account process can stand up a socket that passes custody
 //      checks and answers ok; or
+//    - an SSH-signed reply to the one-time CLI challenge (`owner-action.mjs`,
+//      #753) when presence is unavailable and a local SSH pin is enrolled.
+//      This is a user-mediated terminal path, not a daemon decision route; or
 //    - the macOS authorization dialog (owner-approval.mjs, #204), which needs
-//      a person to authenticate as an administrator. It is the fallback when
-//      keyd cannot ask: no GeniusBar, an unsigned keyd, or no GUI session
-//      (ssh, headless). A person's "no" through keyd never falls back to it.
+//      a person to authenticate as an administrator. It remains the fallback
+//      for enrollment/removal and actions with no enrolled owner keys. A
+//      person's "no" through keyd never falls back to it.
 //
 // Same-account isolation is cooperative (agent-comms ADR-0003): a process
 // that can write the owner's state files can skip this gate entirely. The
@@ -34,9 +37,9 @@ import { currentAgentId } from './agent-identity.mjs';
 import { requireOwnerApproval } from './owner-approval.mjs';
 import { keydPresence } from './owner-presence.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
+import { boundedOwnerSummary } from './owner-text.mjs';
 
 const AGENT_ID = /agent_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
-const MAX_SUMMARY = 400;
 
 export function ownerCredentialRequired(message = 'an authenticated owner principal or explicit owner consent is required') {
   return Object.assign(new Error(message), { code: 'owner-credential-required', statusCode: 403 });
@@ -121,11 +124,7 @@ export function ownerActionSummary(action, { souls = null, listSouls = null } = 
     } else summary = id === '--all' ? `move every soul's GitHub App key${to}` : `move the GitHub App key of ${label(id)}${to}`;
   }
   summary ??= action.replace(AGENT_ID, label);
-  summary = summary.replace(/[\u0000-\u001f\u007f]/g, ' ');
-  // Truncate by code point, not UTF-16 unit, so an emoji at the boundary is
-  // never split into a lone surrogate that breaks keyd's JSON-RPC request.
-  const points = Array.from(summary);
-  return points.length > MAX_SUMMARY ? `${points.slice(0, MAX_SUMMARY - 1).join('')}…` : summary;
+  return boundedOwnerSummary(summary);
 }
 
 export async function consentOwner(action, { platform, run, summary = action } = {}) {
@@ -134,14 +133,16 @@ export async function consentOwner(action, { platform, run, summary = action } =
   return { method: 'consent' };
 }
 
-// keyd first (Touch ID or the login password); the administrator dialog only
-// when keyd cannot ask anyone here. A person's refusal is final.
+// keyd first (Touch ID or the login password). Only an unavailable presence
+// check may continue to the signed challenge hook or administrator dialog;
+// refusal and invalid challenge replies are final.
 export async function presenceOrConsent(action, {
   env = process.env,
   presence = keydPresence,
   consent = consentOwner,
   summarize = ownerActionSummary,
   listSouls = null,
+  challenge = null,
 } = {}) {
   const summary = summarize(action, { env, listSouls });
   try {
@@ -150,6 +151,10 @@ export async function presenceOrConsent(action, {
     if (error.code !== 'presence-unavailable') {
       throw Object.assign(new Error(`${action} was not approved: ${error.message}`), { code: error.code, cause: error });
     }
+  }
+  if (challenge) {
+    const proof = await challenge(action, { summary, env });
+    if (proof) return proof;
   }
   return consent(action, { summary });
 }
@@ -172,9 +177,9 @@ export async function confirmOwnerPresence(action, {
   return vouched ? { ...proof, principal: vouched.principal } : proof;
 }
 
-// Returns the authorization to record: `{ method: 'principal', principal }`,
-// `{ method: 'presence', via: 'agent-bot-keyd' }` or `{ method: 'consent' }`.
-// Throws when the caller is a soul or unproven.
+// Returns the authorization to record: principal or keyd presence, `{ method:
+// 'statement', via: 'ssh', key, fingerprint }` from the wired CLI challenge,
+// or `{ method: 'consent' }`. Throws when the caller is a soul or unproven.
 export async function assertOwnerAction(action, {
   env = process.env,
   cwd = process.cwd(),

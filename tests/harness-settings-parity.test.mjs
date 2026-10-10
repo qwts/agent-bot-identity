@@ -7,7 +7,7 @@
 // mode with LOOSENING_NEEDS_OWNER when nobody can be asked.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,10 +25,12 @@ import { packageModel, packageReasoningEffort, repoModel, repoReasoningEffort, r
 import { LOOSENING_NEEDS_OWNER, packagePermissionMode, repoPermissionMode, resolveSoulMode, setSoulMode } from '../soul-mode.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
 import { acpExecutorFor } from '../wake-plane.mjs';
+import { parseSshPublicKey, sshFingerprint, writeOwnerKeys } from '../owner-statement.mjs';
 
 const ID = 'agent_37937937-9379-4379-8379-379379379379';
 const sha256 = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
 const FIXTURE = fileURLToPath(new URL('./fixtures/fake-acp-agent.mjs', import.meta.url));
+const HAS_SSH_KEYGEN = spawnSync('ssh-keygen', ['-?'], { stdio: 'ignore' }).error === undefined;
 // The scripted fixture agent stands in for each adapter; the Codex row keeps
 // the shipped row's session mode and env, which is what the daemon sends.
 const REGISTRY = {
@@ -546,6 +548,23 @@ test('the daemon asks through keyd alone: no administrator dialog, so nothing bl
   assert.equal(await modeFor(ID, { harness: 'claude', cwd: soulDir }), 'autopilot');
   assert.match(prompts[0], /run in Auto-Pilot, as its soul package asks \(.*soul\.json, sha256:[0-9a-f]{12}\)$/);
   assert.deepEqual(statuses(env, home), ['approved', 'denied']);
+});
+
+test('the daemon does not open the interactive SSH challenge fallback', async (t) => {
+  if (!HAS_SSH_KEYGEN) return t.skip('ssh-keygen is not installed');
+  const { env, home, soulDir, root } = fixture(t, 'autopilot');
+  const keyPath = path.join(root, 'owner-key');
+  execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', keyPath], { stdio: 'ignore' });
+  const publicKey = readFileSync(`${keyPath}.pub`, 'utf8').trim();
+  const parsed = parseSshPublicKey(publicKey);
+  writeOwnerKeys([{ name: 'test-key', store: 'ssh', alg: 'sshsig', publicKey, fingerprint: sshFingerprint(parsed.blob),
+    verifyRequired: false, softwareKey: true, pinnedAt: '2026-10-09T00:00:00.000Z' }], { env });
+
+  const log = [];
+  const modeFor = daemonModeFor({ env, home, config: {}, presence: headless, log: (line) => log.push(line) });
+  assert.equal(await modeFor(ID, { harness: 'claude', cwd: soulDir }), 'safe');
+  assert.match(log[0], /no administrator-dialog fallback/);
+  assert.doesNotMatch(log[0], /interactive terminal/);
 });
 
 test('an answer that cannot be receipted is neither applied nor kept', async (t) => {
