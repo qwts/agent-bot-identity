@@ -139,7 +139,7 @@ export function codeOnly(source) {
   return out;
 }
 
-const escape = (name) => name.replace(/[$]/g, '\\$');
+const escape = (name) => name.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
 
 // References to the module's child_process bindings, aliases included, in
 // code outside the import. null when child_process is named any other way
