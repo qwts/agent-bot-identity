@@ -1426,11 +1426,6 @@ function populationOverride(env, home) {
   return path.join(stateHome, 'agent-bot', 'population.json');
 }
 
-// Records a launch in the census before the first turn (#380). The principal
-// may have chosen comms before start (#381): it becomes the soul's own
-// setting, recorded as an edit when the soul has a revision chain. The
-// revision history cannot be unwritten, so it is appended last; an earlier
-// failure restores soul.json and the census comms.
 // The daemon's per-turn permission mode, under the settings precedence
 // (#379): the owner's pick, then the repo, then the soul package. A loosening
 // nobody picked asks the owner through the daemon's gate (keyd's Touch ID or
@@ -1500,6 +1495,11 @@ export function daemonModeFor({
   };
 }
 
+// Records a launch in the census before the first turn (#380). The principal
+// may have chosen comms before start (#381): it becomes the soul's own
+// setting, recorded as an edit when the soul has a revision chain. The
+// revision history cannot be unwritten, so it is appended last; an earlier
+// failure restores soul.json and the census comms.
 export async function recordLaunchComms({ agentId, package: packagePath, comms, brief, principal = null }, {
   env, home, config, revisions = { history: revisionHistory, edit: editSoulRevision },
 } = {}) {
