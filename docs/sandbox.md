@@ -107,8 +107,16 @@ only what is named.
 - Harness sign-ins are listed only; agent-bot never removes one.
 - Deleting the macOS account is a guided step the owner does by hand.
   agent-bot never runs privileged deletion.
-- Each category has its own owner-gated confirm. A partial failure stops,
-  leaves everything in place, and can be resumed.
+- Each step that changes something has its own owner-gated confirm: the
+  export, once per category, in the persona account; then, in the owner's
+  account, the revoke, which is the only removal. Census rows, harness
+  sign-ins and the macOS account change nothing in agent-bot, so they ask no
+  gate. Removal is owner only: a caller with a soul's markers is refused
+  before anything is read.
+- A failure stops and can be resumed. Before the revoke nothing has
+  changed; if the broker cannot confirm the pairing is gone after the
+  revoke, it may already be removed, and running the command again reads
+  the broker afresh and reports it `already-removed`.
 
 `sandbox remove [ACCOUNT] --dry-run` lists what the account has and what
 would happen to each category, and changes nothing: it runs only the reads
@@ -144,7 +152,8 @@ wrote that export's manifest, so its claims are checked against what the
 owner's side can see. Before anything is changed it:
 
 - verifies the newest export for ACCOUNT again, reading every file back
-  (`sandbox export --verify`), and refuses if none is verified;
+  (`sandbox export --verify`, which also requires each category's state and
+  count to match the files it read), and refuses if none is verified;
 - requires `souls`, `workspaces` and `transcripts` each to be `exported` or
   `empty` (`sandbox-remove-export-incomplete`). `souls` may be empty only
   when no soul runs as ACCOUNT. An empty `workspaces` or `transcripts` that
@@ -165,6 +174,10 @@ owner's side can see. Before anything is changed it:
   The broker's census carries no activity times, so a soul known only to
   the broker is checked by whether it is running now;
 - refuses if the local or broker census cannot be read.
+
+After the owner confirms, the censuses and pairings are read again and
+these checks repeated right before the revoke, so a soul started or newly
+assigned while the owner was asked stops it.
 
 Then, category by category:
 

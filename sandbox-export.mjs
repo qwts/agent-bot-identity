@@ -369,6 +369,21 @@ async function verifyExport(account, { dir = null, env = process.env, home = hom
     }
     bytes += read.bytes;
   }
+  // The persona account wrote each category's state and count: they must
+  // match the files read back here (a soul that never ran counts with no file).
+  const read = Object.fromEntries(EXPORT_CATEGORIES.map((name) => [name, manifest.files.filter((entry) => safeEntry(entry?.path) && entry.path.startsWith(`${name}/`)).length]));
+  for (const entry of manifest.files) {
+    if (safeEntry(entry?.path) && entry.category !== entry.path.split('/')[0]) problems.push({ path: entry.path, problem: 'wrong-category' });
+  }
+  const neverRan = Array.isArray(manifest.unexported) ? manifest.unexported.length : 0;
+  for (const name of EXPORT_CATEGORIES) {
+    const claim = manifest.categories?.[name];
+    const expected = name === 'souls' ? read[name] + neverRan : read[name];
+    const fits = claim?.state === 'exported' ? claim.count === expected && read[name] > 0
+      : ['empty', 'skipped'].includes(claim?.state) ? claim.count === 0 && read[name] === 0 && (name !== 'souls' || neverRan === 0)
+        : false;
+    if (!fits) problems.push({ path: name, problem: `category ${claim?.state ?? 'missing'} ${claim?.count ?? '?'} but ${read[name]} file(s) read` });
+  }
   const souls = manifest.files.filter((entry) => entry?.category === 'souls' && typeof entry.agentId === 'string').map((entry) => entry.agentId);
   const unexported = Array.isArray(manifest.unexported) ? manifest.unexported.map((row) => row?.agentId).filter((id) => typeof id === 'string') : [];
   const result = { account, dir: target, files: manifest.files.length, bytes, categories: manifest.categories ?? {}, completedAt: typeof manifest.completedAt === 'string' ? manifest.completedAt : null,

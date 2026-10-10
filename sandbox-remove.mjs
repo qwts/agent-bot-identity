@@ -16,6 +16,7 @@
 // gone is not revoked twice.
 import { homedir } from 'node:os';
 import { appendAuditReceipt } from './agent-principals.mjs';
+import { ownerCredentialRequired, soulMarkers } from './owner-action.mjs';
 import { populationFile, showSoul } from './agent-population.mjs';
 import { verifySandboxExport } from './sandbox-export.mjs';
 
@@ -51,11 +52,24 @@ export async function runSandboxRemoval(inventory, options = {}) {
 
 const EXPORTED = ['souls', 'workspaces', 'transcripts'];
 
-async function removal(inventory, { gate, exec, principal = null, env = process.env, home = homedir(), cwd = process.cwd(),
-  now = () => new Date(), verify = verifySandboxExport } = {}) {
+/**
+ * Removal is owner only. A caller carrying a soul's markers is refused here,
+ * before the broker is read or the export verified (verify writes
+ * verified.json), and on a rerun with nothing left to revoke too.
+ */
+export function refuseSoulCaller(account, { env = process.env, home = homedir(), cwd = process.cwd(), now = () => new Date(), markers = soulMarkers } = {}) {
+  const found = markers({ env, cwd });
+  if (!found.length) return;
+  const error = ownerCredentialRequired(`sandbox remove ${account} is owner only; this caller has a soul's ${found.join(', ')}`);
+  appendAuditReceipt({ event: 'sandbox-remove', operation: 'remove', decision: 'refused', detail: `${account}: ${error.code}: ${error.message}` }, { env, home, now });
+  throw error;
+}
+
+// The persona account wrote the manifest, so its claims are checked against
+// what the owner's side can see, never taken as proof. Run once before the
+// gate and again, on a fresh read, right before the revoke.
+function checkExport(inventory, verified, { env, home, now }) {
   const { account, owner } = inventory;
-  const rerun = `agent-bot sandbox remove ${account}`;
-  const receipt = (decision, detail) => appendAuditReceipt({ event: 'sandbox-remove', operation: 'remove', decision, detail }, { env, home, now });
   const again = `in ${account}, run agent-bot sandbox export --for ${owner}, copy it over and verify it`;
   if (!inventory.supported) fail('sandbox-remove-unsupported', 'persona accounts need macOS; there is nothing to remove');
   const category = (id) => inventory.categories.find((entry) => entry.id === id);
@@ -64,10 +78,6 @@ async function removal(inventory, { gate, exec, principal = null, env = process.
   // The souls to account for come from this (owner's) side: the local census
   // rows that run as the account, and the broker's rows joined from it.
   if (!census?.known || !souls?.known) fail('sandbox-remove-census-unreadable', 'the local or broker census could not be read, so the export cannot be checked against it', 'start the broker, then run this again');
-
-  // The persona account wrote the manifest, so its claims are checked here
-  // against what the owner's side can see, never taken as proof.
-  const verified = await verify(account, { env, home, cwd, owner, now });
   const required = souls.items.map((row) => row.agentId).filter(Boolean);
   const broker = new Map(census.items.filter((row) => row.agentId).map((row) => [row.agentId, row]));
   const file = populationFile({ env, home });
@@ -108,6 +118,17 @@ async function removal(inventory, { gate, exec, principal = null, env = process.
   if (live.length) fail('sandbox-remove-export-stale', `${live.join(', ')} ${live.length === 1 ? 'is' : 'are'} running as ${account} now`, `stop ${live.length === 1 ? 'it' : 'them'}, then ${again}`);
   const later = required.filter((id) => Date.parse(local(id)?.lastSightedAt ?? '') > completed);
   if (later.length) fail('sandbox-remove-export-stale', `${later.join(', ')} ran after the export finished at ${new Date(completed).toISOString()}`, again);
+  return { completed, unconfirmed, census, category };
+}
+
+async function removal(inventory, { gate, exec, principal = null, env = process.env, home = homedir(), cwd = process.cwd(),
+  now = () => new Date(), verify = verifySandboxExport, reread = () => inventory } = {}) {
+  const { account, owner } = inventory;
+  const rerun = `agent-bot sandbox remove ${account}`;
+  const receipt = (decision, detail) => appendAuditReceipt({ event: 'sandbox-remove', operation: 'remove', decision, detail }, { env, home, now });
+  if (!inventory.supported) fail('sandbox-remove-unsupported', 'persona accounts need macOS; there is nothing to remove');
+  const verified = await verify(account, { env, home, cwd, owner, now });
+  const { completed, unconfirmed, census, category } = checkExport(inventory, verified, { env, home, now });
 
   const result = { account, owner, export: verified.dir, completedAt: verified.completedAt, categories: [] };
   const done = (id, state, extra = {}) => result.categories.push({ id, state, ...extra });
@@ -123,6 +144,12 @@ async function removal(inventory, { gate, exec, principal = null, env = process.
       + (unconfirmed.length ? `; the export says ${unconfirmed.join(' and ')} ${unconfirmed.length === 1 ? 'is' : 'are'} empty, which cannot be checked from this account` : '');
     try { await gate(action, { principal, env, cwd }); }
     catch (error) { throw Object.assign(error, { stage: 'gate' }); }
+    // The verify and the prompt take time: the censuses and the pairings are
+    // read again, and the checks repeated, right before the revoke.
+    const fresh = reread();
+    if (fresh?.account !== account) fail('sandbox-remove-census-unreadable', 'the account could not be read again before the revoke');
+    checkExport(fresh, verified, { env, home, now });
+    if (pairingsOf(exec, account).length === 0) fail('sandbox-remove-pairing-changed', `${account}'s pairing went away while you were asked; nothing was revoked`, `run ${rerun} again`);
     try {
       // `account revoke` drops the account pairing and its daemon pairing together.
       if (pairings.some((row) => row.kind === 'account')) exec('agent-comms', ['account', 'revoke', account]);

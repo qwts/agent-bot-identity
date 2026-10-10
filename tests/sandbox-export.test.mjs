@@ -134,6 +134,20 @@ test('verify reads every copied file back against the manifest and records it on
   chmodSync(path.join(copied, 'souls', `${A}.soul.tgz`), 0o600);
   await assert.rejects(verifySandboxExport('geniusbar-agent', { ...f.ownerOptions, dir: copied }), (error) => error.code === 'sandbox-export-unverified' && error.message.includes('(changed)'));
   assert.ok(!existsSync(path.join(copied, 'verified.json')));
+  // Categories the manifest claims must match what is read back.
+  writeFileSync(path.join(copied, 'souls', `${A}.soul.tgz`), readFileSync(path.join(dropFolder, 'souls', `${A}.soul.tgz`)));
+  const manifestFile = path.join(copied, 'manifest.json');
+  const honest = readFileSync(manifestFile, 'utf8');
+  const claim = (categories) => { writeFileSync(manifestFile, JSON.stringify({ ...JSON.parse(honest), categories: { ...JSON.parse(honest).categories, ...categories } })); chmodSync(manifestFile, 0o600); };
+  claim({ workspaces: { state: 'exported', count: 2 } });
+  await assert.rejects(verifySandboxExport('geniusbar-agent', { ...f.ownerOptions, dir: copied }), (error) => error.code === 'sandbox-export-unverified' && /workspaces \(category exported 2 but 1 file\(s\) read\)/.test(error.message));
+  claim({ transcripts: { state: 'empty', count: 0 } });
+  await assert.rejects(verifySandboxExport('geniusbar-agent', { ...f.ownerOptions, dir: copied }), (error) => /transcripts \(category empty 0 but 1 file\(s\) read\)/.test(error.message));
+  const noArchive = JSON.parse(honest);
+  noArchive.files = noArchive.files.filter((entry) => !entry.path.startsWith('workspaces/'));
+  writeFileSync(manifestFile, JSON.stringify(noArchive));
+  await assert.rejects(verifySandboxExport('geniusbar-agent', { ...f.ownerOptions, dir: copied }), (error) => /workspaces \(category exported 1 but 0 file\(s\) read\)/.test(error.message));
+  writeFileSync(manifestFile, honest);
   rmSync(path.join(copied, 'transcripts', 'claude-projects.tgz'));
   await assert.rejects(verifySandboxExport('geniusbar-agent', { ...f.ownerOptions, dir: copied }), (error) => /\(missing\)/.test(error.message));
 });

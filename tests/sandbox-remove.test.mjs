@@ -171,10 +171,20 @@ test('sandbox remove without --dry-run is owner only: a caller with a soul\'s ma
   let out = '';
   const write = (text) => { out += text; };
   const { gate, ...ungated } = f.options;
-  const soul = { ...ungated, env: { ...f.env, AGENT_BOT_ID: JOINED }, write, verifyExport: async () => f.exported };
+  let verified = 0;
+  const soul = { ...ungated, env: { ...f.env, AGENT_BOT_ID: JOINED }, write, verifyExport: async () => { verified += 1; return f.exported; } };
   await assert.rejects(sandboxCommand(['remove', 'geniusbar-agent'], soul), { code: 'owner-credential-required' });
-  assert.deepEqual(f.revokes(), []);
-  assert.equal(f.receipts().at(-1).decision, 'declined');
+  // Refused before the broker is read or the export verified (verify writes verified.json).
+  assert.deepEqual(f.calls, []);
+  assert.equal(verified, 0);
+  assert.equal(f.receipts().at(-1).decision, 'refused');
+  // A rerun with the pairing already gone is refused too, not waved through.
+  await f.remove();
+  assert.equal(f.revokes().length, 1);
+  f.calls.length = 0;
+  await assert.rejects(sandboxCommand(['remove', 'geniusbar-agent'], soul), { code: 'owner-credential-required' });
+  assert.deepEqual(f.calls, []);
+  f.calls.length = 0;
   // The real verify finds no export here, so the command refuses before the broker.
   await assert.rejects(sandboxCommand(['remove', 'geniusbar-agent'], { ...f.options, write }), { code: 'sandbox-export-not-found' });
   await assert.rejects(sandboxCommand(['remove', '--dry-run', '--principal-stdin'], { ...f.options, write }), /usage: agent-bot sandbox/);
@@ -241,4 +251,25 @@ test('a later verify does not move the copy time: a run after the copy, hidden b
   await assert.rejects(runSandboxRemoval(sandboxRemovalInventory('geniusbar-agent', options), options),
     (error) => error.code === 'sandbox-remove-export-stale' && error.message.includes(LOCAL));
   assert.deepEqual(f.revokes(), []);
+});
+
+test('the censuses are read again after the prompt: a soul started or newly assigned meanwhile stops the revoke', async (t) => {
+  const f = fixture(t);
+  const started = () => {
+    const fresh = sandboxRemovalInventory('geniusbar-agent', f.options);
+    const census = fresh.categories.find((entry) => entry.id === 'census');
+    census.items = census.items.map((row) => ({ ...row, presence: 'watching' }));
+    return fresh;
+  };
+  await assert.rejects(f.remove(f.exported, { reread: started }), (error) => error.code === 'sandbox-remove-export-stale' && /running as geniusbar-agent now/.test(error.message));
+  const NEW = 'agent_12345678-1234-4234-8234-1234567890cc';
+  const assigned = () => {
+    const fresh = sandboxRemovalInventory('geniusbar-agent', f.options);
+    fresh.categories.find((entry) => entry.id === 'souls').items.push({ agentId: NEW, name: null, presence: null });
+    return fresh;
+  };
+  await assert.rejects(f.remove(f.exported, { reread: assigned }), (error) => error.code === 'sandbox-remove-soul-not-exported' && error.message.includes(NEW));
+  assert.equal(f.gates.length, 2, 'both were asked, then stopped before the revoke');
+  assert.deepEqual(f.revokes(), []);
+  assert.deepEqual(f.receipts().map((row) => row.decision), ['refused', 'refused']);
 });

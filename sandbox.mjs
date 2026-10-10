@@ -35,7 +35,7 @@ import { validateAgentId } from './agent-identity.mjs';
 import { SANDBOX_OVERRIDES, listSouls, populationFile, setSoulSandbox, showSoul, showSoulByName, soulShownName } from './agent-population.mjs';
 import { assertOwnerAction } from './owner-action.mjs';
 import { PERSONA_FILE, parseTomlSubset, readSopPersonaRecord } from './sop.mjs';
-import { formatSandboxRemovalResult, runSandboxRemoval } from './sandbox-remove.mjs';
+import { formatSandboxRemovalResult, refuseSoulCaller, runSandboxRemoval } from './sandbox-remove.mjs';
 
 export const SANDBOX_PROVIDER = 'standard_macos_account';
 export const DEFAULT_SANDBOX_ACCOUNT = 'geniusbar-agent';
@@ -770,14 +770,16 @@ export async function sandboxCommand(argv, {
     const named = rest.filter((arg) => arg !== '--dry-run');
     if ((dryRun && presented) || named.length > 1 || named.some((arg) => arg.startsWith('-'))) throw new Error(USAGE);
     const account = named[0] ?? sandboxSettings(loadConfig({ env, home })).account;
-    const inventory = sandboxRemovalInventory(account, { env, home, platform, exec, owner });
+    if (!dryRun) refuseSoulCaller(account, { env, home, cwd });
+    const read = () => sandboxRemovalInventory(account, { env, home, platform, exec, owner });
+    const inventory = read();
     if (dryRun) return out(inventory, formatSandboxRemoval(inventory));
     let principal = null;
     if (presented) {
       try { principal = JSON.parse(readStdin()); }
       catch { throw new Error('--principal-stdin needs the principal credential as JSON on stdin'); }
     }
-    const result = await runSandboxRemoval(inventory, { gate, exec, principal, env, home, cwd, verify: verifyExport });
+    const result = await runSandboxRemoval(inventory, { gate, exec, principal, env, home, cwd, verify: verifyExport, reread: read });
     return out(result, formatSandboxRemovalResult(result));
   }
   if (verb === 'resolve' && rest.length === 1) {
