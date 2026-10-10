@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createCommsRelay, senderAddress } from '../comms-relay.mjs';
+import { agentCommsAsSoul, createCommsRelay, senderAddress } from '../comms-relay.mjs';
 
 const soul = { agentId: 'agent_1', binding: { worktree: '/home/soul', file: '/state/bindings/agent_1.json' } };
 
@@ -75,4 +75,21 @@ test('task commands use the soul port; only an unavailable brief falls back', as
     done(new Error('exit 1'), JSON.stringify({ ok: false, error: { code: 'forbidden', message: 'forbidden' } }));
   } });
   await assert.rejects(refused.brief(soul, 'm1'), { code: 'forbidden' });
+});
+
+test('agent-comms gets the child-env boundary, whatever env the caller had (#785)', async () => {
+  const calls = [];
+  const run = (command, args, options, done) => { calls.push(options); done(null, JSON.stringify({ ok: true }), ''); };
+  const env = {
+    PATH: '/tools', HOME: '/home/owner', SSH_AUTH_SOCK: '/tmp/agent.sock', OPENAI_API_KEY: 'sk-x',
+    AGENT_BOT_TELEGRAM_TOKEN: 't', AGENT_BOT_DAEMON_STATE_PATH: '/state/daemon.json',
+    AGENT_BOT_BINDING: '/desktop/own/binding.json', AGENT_BOT_TOOL_PATH: '/tools',
+    AGENT_COMMS_SHARED_DIR: 'C:\\Shared\\agent-comms',
+  };
+  await agentCommsAsSoul({ env, run })(soul, ['inbox', 'read']);
+  assert.deepEqual(calls[0].env, {
+    PATH: '/tools', HOME: '/home/owner', AGENT_BOT_TOOL_PATH: '/tools', AGENT_COMMS_SHARED_DIR: 'C:\\Shared\\agent-comms',
+    AGENT_BOT_BINDING: '/state/bindings/agent_1.json', AGENT_BOT_ID: 'agent_1', QWTS_AGENT_ID: 'agent_1',
+    AGENT_COMMS_NO_DELIVERY_REPORT: '1',
+  });
 });
