@@ -31,6 +31,11 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'yash', 'busybox']);
+ // Code loaded through a script, stdin, or task runner is not visible to this
+ // lexical scanner. Treat it as opaque, never as evidence that no Git ran.
+const OPAQUE_EXECUTORS = new Set(['node', 'nodejs', 'python', 'python2', 'python3',
+  'perl', 'ruby', 'php', 'lua', 'make', 'gmake', 'just', 'npm', 'npx', 'pnpm',
+  'yarn', 'bun', 'deno', 'tsx', 'ts-node', 'gradle', 'mvn', 'ant', 'rake']);
 // Subcommands that write commits; `push` publishes them.
 const COMMITTING = new Set(['commit', 'merge', 'rebase', 'cherry-pick', 'revert', 'am', 'commit-tree']);
 // Sequencer controls that write no commit, per subcommand.
@@ -325,7 +330,7 @@ const WRAPPERS = {
 };
 
 export function scanGitPublish(command, { cwd = process.cwd(), env = process.env, depth = 0 } = {}) {
-  const result = { publishes: [], aliases: [], ambiguous: false, skipsHooks: false, bypasses: [] };
+  const result = { publishes: [], aliases: [], ambiguous: false, opaqueExecution: false, skipsHooks: false, bypasses: [] };
   if (depth > 8) { result.ambiguous = true; return result; }
   const vars = new Map(Object.entries(env ?? {}));
   const exported = new Set(Object.keys(env ?? {}));
@@ -385,6 +390,7 @@ function merge(into, from) {
   into.publishes.push(...from.publishes);
   into.aliases.push(...from.aliases);
   into.ambiguous ||= from.ambiguous;
+  into.opaqueExecution ||= from.opaqueExecution;
   into.skipsHooks ||= from.skipsHooks;
   into.bypasses.push(...from.bypasses);
 }
@@ -475,6 +481,13 @@ function evaluate(argv, ctx) {
       }
       if (!arg.startsWith('-') && !arg.startsWith('+')) break;
     }
+    // No -c payload: -s, a redirected stdin stream, or a script on disk
+    // can execute arbitrary Git commands with per-invocation hook overrides.
+    result.opaqueExecution = true;
+    return {};
+  }
+  if (OPAQUE_EXECUTORS.has(base) || /^python\d+(?:\.\d+)?$/.test(base)) {
+    result.opaqueExecution = true;
     return {};
   }
   if (base === 'git') gitInvocation(args, { cwd, env, result, depth });
