@@ -522,6 +522,7 @@ test('opaque execution is refused only for a stated bot that is not bound', () =
   for (const command of [
     'node --test', 'npm test', 'python3 build.py', `python3 -c "import os; os.system('git push')"`,
     'node -e "1"', 'bash ./build.sh', 'sh < bootstrap.sh', 'make publish',
+    './release.sh', './release', '../tools/publish', 'env ./release.sh',
   ]) {
     const verdict = run(unbound.repo, command, STATED);
     assert.equal(verdict.decision, 'deny', command);
