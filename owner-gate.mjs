@@ -105,7 +105,11 @@ export function ownerActionSummary(action, { souls = null, listSouls = null } = 
     summary = `let ${label(id)} use this Mac's shared ${rest[0]} sign-in and sessions instead of its own`;
   } else if (first === 'identity' && second === 'migrate-credentials') {
     const to = rest[0] === '--to' && rest[1] ? ` to ${rest[1] === 'keyd' ? 'agent-bot-keyd' : rest[1]}` : '';
-    summary = id === '--all' ? `move every soul's GitHub App key${to}` : `move the GitHub App key of ${label(id)}${to}`;
+    if (rest[0] === '--from-namespace' && rest[1] && rest.length === 2) {
+      // #676: a copy under this host's credential names; nothing is moved.
+      summary = id === '--all' ? `copy every soul's credentials from the ${rest[1]} credential names to this host's`
+        : `copy the credentials of ${label(id)} from the ${rest[1]} credential names to this host's`;
+    } else summary = id === '--all' ? `move every soul's GitHub App key${to}` : `move the GitHub App key of ${label(id)}${to}`;
   }
   summary ??= action.replace(AGENT_ID, label);
   summary = summary.replace(/[\u0000-\u001f\u007f]/g, ' ');

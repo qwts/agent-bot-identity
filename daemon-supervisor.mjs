@@ -410,6 +410,46 @@ function launchdDomain() {
   return `gui/${process.getuid?.() ?? '501'}`;
 }
 
+const xmlUnescape = (value) => value.replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&quot;', '"')
+  .replaceAll('&amp;', '&');
+const UNIT_NAME_VARIABLES = [NAMESPACE_VARIABLE, VAULT_VARIABLE];
+
+/**
+ * The credential names (#676) the installed unit pins for the daemon, read
+ * back from the unit file: `{ AGENT_BOT_CREDENTIAL_NAMESPACE?,
+ * AGENT_BOT_CREDENTIAL_VAULT? }`, an unset one absent. Null when no unit is
+ * installed. Only these two keys are read; the inverse of the renderers.
+ */
+export function supervisorUnitCredentialNames({
+  home = homedir(),
+  env = process.env,
+  platform = process.platform,
+  read = readFileSync,
+} = {}) {
+  const paths = supervisorPaths(home, platform, env);
+  if (!paths.kind) return null;
+  let text;
+  try { text = paths.kind === 'schtasks' ? scheduledTaskText(read(paths.unitPath)) : read(paths.unitPath, 'utf8'); }
+  catch { return null; }
+  const names = {};
+  for (const key of UNIT_NAME_VARIABLES) {
+    let value;
+    if (paths.kind === 'launchd') {
+      value = new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`).exec(text)?.[1];
+      if (value !== undefined) value = xmlUnescape(value);
+    } else if (paths.kind === 'systemd') {
+      const quoted = new RegExp(`^Environment="${key}=((?:[^"\\\\]|\\\\.)*)"$`, 'm').exec(text)?.[1];
+      value = quoted !== undefined ? quoted.replace(/\\(.)/g, '$1')
+        : new RegExp(`^Environment=${key}=(\\S*)$`, 'm').exec(text)?.[1];
+    } else {
+      value = new RegExp(`set &quot;${key}=([^&]*(?:&(?!quot;)[^&]*)*)&quot; &amp;&amp;`).exec(text)?.[1];
+      if (value !== undefined) value = xmlUnescape(value);
+    }
+    if (value) names[key] = value;
+  }
+  return names;
+}
+
 export function inspectSupervisor({
   home = homedir(),
   env = process.env,

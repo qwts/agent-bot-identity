@@ -338,6 +338,10 @@ test('prompts name the soul by name and Agent ID, and the change', () => {
   assert.equal(say(`soul revision approve ${ID}`), `approve a revision of ${bill}`);
   assert.equal(say(`identity migrate-credentials ${ID} --to keyd`), `move the GitHub App key of ${bill} to agent-bot-keyd`);
   assert.equal(say('identity migrate-credentials --all'), "move every soul's GitHub App key");
+  assert.equal(say('identity migrate-credentials --all --from-namespace agent-bot'),
+    "copy every soul's credentials from the agent-bot credential names to this host's");
+  assert.equal(say(`identity migrate-credentials ${ID} --from-namespace agent-bot`),
+    `copy the credentials of ${bill} from the agent-bot credential names to this host's`);
   assert.equal(say(`soul remove ${ID}`), `remove ${bill} from this Mac (its folders are archived, not deleted)`);
   assert.equal(say(`soul remove ${ID} --scope team`), `remove ${bill} and every soul it leads from this Mac (their folders are archived, not deleted)`);
   const digest = 'ab'.repeat(32);

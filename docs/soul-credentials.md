@@ -118,6 +118,22 @@ falls back to the defaults or to another host's names, so keys written under
 the defaults stay where they are until they are moved explicitly. keyd's
 `agent-bot.keyd.*` items are named by keyd and do not follow (#594).
 
+Two things help a host that changes its names:
+
+- `agent-bot doctor` reports `credential.names`: a warning when this shell's
+  `AGENT_BOT_CREDENTIAL_NAMESPACE` or `AGENT_BOT_CREDENTIAL_VAULT` resolves
+  to a different name than the installed daemon unit's, since the CLI and the
+  daemon would then look under different names. Unset and the default agree.
+- `agent-bot identity migrate-credentials --all --from-namespace OLD` (or
+  `--soul ID`) copies, as the owner, each soul's App key and declared provider
+  secrets, and with `--all` each managed App key, from the `OLD` names to the
+  ones this environment resolves. Each copy is read back from its new name and
+  compared; a different value already under the new name is reported, never
+  overwritten; the old items are never deleted. Only Keychain and pass-cli
+  items are named by namespace; file and keyd stores are skipped. The pass-cli
+  vault is the one this environment resolves. `--dry-run` lists what would be
+  copied, and the output names items, never values.
+
 ### What the Keychain access list can and cannot enforce
 
 A Keychain item's trusted-application list names executables, not scripts:
