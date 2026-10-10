@@ -12,6 +12,7 @@ agent-bot identity apps list --json
 agent-bot identity app create --manifest [--name NAME] [--org ORG] [--open] [--json]
 agent-bot identity app connect --id ID (--key-file PATH | --pass-cli ITEM) [--json]
 agent-bot identity app rotate-key SLUG (--key-file PATH | --pass-cli ITEM) [--json]
+agent-bot identity app migrate-key SLUG --to keyd [--dry-run] [--json]
 agent-bot identity app assign SLUG (--harness H | --soul AGENT_ID) [--json]
 agent-bot identity app remove (SLUG | APP_ID) [--json]
 agent-bot identity addon github-identity on|off [--json]
@@ -71,6 +72,29 @@ absent managed credential; a present key requires `rotate-key`. `--pass-cli ITEM
 selects an item title in the existing **Agent Identities** vault: a private-key
 attachment or Private Key field. Downloads use a private temporary directory
 that is removed on success or failure. No key is copied under `~/.config`.
+
+`migrate-key SLUG --to keyd` is the explicit owner-approved path for moving an
+existing managed App key from its file or Keychain store into keyd. It verifies
+the source key against GitHub's `/app` identity and checks its recorded App ID
+and public-key fingerprint before using the App-level keyd import. It preserves
+the source credential and other App metadata. If that source credential
+contains a webhook secret, the command keeps it in the separate webhook item;
+the keyd import contains only the private key. An existing separate webhook
+item is left untouched, and migration refuses if its value differs from the
+source. A keyd-held item with no trustworthy matching App record is never
+overwritten. `--dry-run` checks the source declaration and keyd availability
+without contacting GitHub or changing either store.
+
+The current readiness probe requires a running keyd, a pinned daemon key and
+App-level status support. An unavailable or unpinned keyd refuses migration
+with its readiness reason; the command does not fall back to another store.
+Migration requires an already-pinned compatible keyd; first-App-import
+pinning is tracked in [#817](https://github.com/qwts/agent-bot-identity/pull/817).
+If keyd accepts the key but config cannot record the migration,
+`identity-app-migration-partial` reports that
+split state; keep the source copy and inspect keyd and webhook-secret state
+before retrying. This is a CLI operation only; it adds no daemon migration
+route or GeniusBar UI.
 
 GitHub documents key generation in the App's **Settings → Private keys** UI,
 not a public REST key-generation endpoint. Generate and download a new key

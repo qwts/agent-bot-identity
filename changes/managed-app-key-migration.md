@@ -1,0 +1,1 @@
+- Owners can explicitly migrate a managed App's file or Keychain key into keyd with source verification, preserved source copies, and a separate webhook-secret item (#110).

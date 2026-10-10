@@ -1851,7 +1851,7 @@ agent-bot identity ensure
 ```
 
 Manage GitHub Apps with `identity apps list` and `identity app create`,
-`connect`, `rotate-key`, `assign`, or `remove`, and switch the add-on with
+`connect`, `rotate-key`, `migrate-key`, `assign`, or `remove`, and switch the add-on with
 `identity addon github-identity on|off`; see [commands and daemon API](docs/identity-apps.md).
 
 `setup-worktree` is idempotent for the session's existing soul in its allowed
