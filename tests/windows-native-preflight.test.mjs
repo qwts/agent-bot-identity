@@ -149,6 +149,7 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
     const serverScript = [
       "$ErrorActionPreference = 'Stop'",
       "$phase = 'server-create'",
+      '$provider = $null',
       'try {',
       "  $phase = 'json-preflight'",
       "  $null = [Reflection.Assembly]::Load('System.Web.Extensions, Version=4.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35')",
@@ -172,7 +173,19 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       '    }',
       '}',
       "'@",
-      "  [void](Add-Type -TypeDefinition $probeSource -Language CSharp -ReferencedAssemblies @('System.dll', 'System.Core.dll'))",
+      "  [Console]::Out.WriteLine('COMPILER_START')",
+      "  $provider = [System.CodeDom.Compiler.CodeDomProvider]::CreateProvider('CSharp')",
+      '  $compilerParameters = [System.CodeDom.Compiler.CompilerParameters]::new()',
+      '  $compilerParameters.GenerateInMemory = $true',
+      "  [void]$compilerParameters.ReferencedAssemblies.Add('System.dll')",
+      "  [void]$compilerParameters.ReferencedAssemblies.Add('System.Core.dll')",
+      '  $compilerResults = $provider.CompileAssemblyFromSource($compilerParameters, [string[]]@($probeSource))',
+      "  if ($compilerResults.Errors.HasErrors) { throw 'native impersonation probe compilation failed' }",
+      "  $probeType = $compilerResults.CompiledAssembly.GetType('AgentBotNativePipeImpersonationProbe', $true)",
+      "  $worker = $probeType.GetMethod('Create').Invoke($null, [object[]]@())",
+      '  $provider.Dispose()',
+      '  $provider = $null',
+      "  [Console]::Out.WriteLine('COMPILER_READY')",
       "  $phase = 'server-create'",
       `  $pipeName = '${nativePipeName}'`,
       '  $server = [System.IO.Pipes.NamedPipeServerStream]::new($pipeName, [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::None)',
@@ -208,7 +221,7 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       "  if ($hello['v'] -ne 1 -or $hello['hello'] -notmatch '^[0-9a-f]{64}$') { throw 'invalid hello' }",
       "  [Console]::Out.WriteLine('HELLO')",
       "  $phase = 'impersonation-level'",
-      '  $server.RunAsClient([AgentBotNativePipeImpersonationProbe]::Create())',
+      '  $server.RunAsClient($worker)',
       "  [Console]::Out.WriteLine(('CHALLENGE=' + $hello['hello']))",
       "  $phase = 'broker-proof'",
       '  $proof = [Console]::In.ReadLine()',
@@ -224,6 +237,7 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       "  [Console]::Out.WriteLine(('FAILED=' + $phase))",
       '  exit 1',
       '} finally {',
+      '  if ($null -ne $provider) { $provider.Dispose() }',
       '  if ($null -ne $reader) { $reader.Dispose() }',
       '  if ($null -ne $writer) { $writer.Dispose() }',
       '  if ($null -ne $server) { $server.Dispose() }',
@@ -240,6 +254,8 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
     serverClosePromise = new Promise((resolve) => pipeServer.once('close', resolve));
     serverOutput = lineReader(pipeServer.stdout);
     pipeServer.once('error', () => serverOutput.fail());
+    assert.equal(await beforeDeadline(serverOutput(), 'native fixture did not enter impersonation probe compilation'), 'COMPILER_START');
+    assert.equal(await beforeDeadline(serverOutput(), 'native fixture did not finish impersonation probe compilation'), 'COMPILER_READY');
     assert.equal(await beforeDeadline(serverOutput(), 'native named-pipe fixture did not become ready'), 'READY');
 
     const client = new CommsClient({
