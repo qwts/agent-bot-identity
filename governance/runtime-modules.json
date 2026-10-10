@@ -91,6 +91,7 @@
     "binding-proof.mjs": "identity",
     "bootstrap.mjs": "cli",
     "canonical-json.mjs": "shared",
+    "child-env.mjs": "shared",
     "claude-worktree-create.mjs": "soul",
     "cli/dispatch.mjs": "cli",
     "cli/identity-apps.mjs": "cli",

@@ -25,6 +25,7 @@ import {
   rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import path, { basename, dirname, join } from 'node:path';
+import { minimalChildEnv } from './child-env.mjs';
 
 // Where zsh actually reads its startup files. With ZDOTDIR exported — the
 // XDG-style `~/.config/zsh` layout is common — zsh reads `$ZDOTDIR/.zshenv` and
@@ -250,11 +251,12 @@ export function ensureBlock({
  * the login shell (`loginPath`) or an installer put them.
  */
 export function soulEnvironment(env = process.env, { home = null, loginPath = null } = {}) {
+  const safeEnv = minimalChildEnv(env);
   const tools = env.AGENT_BOT_TOOL_PATH && path.isAbsolute(env.AGENT_BOT_TOOL_PATH) ? env.AGENT_BOT_TOOL_PATH : null;
-  if (!home) return tools ? { ...env, PATH: [tools, env.PATH].filter(Boolean).join(path.delimiter) } : env;
+  if (!home) return tools ? { ...safeEnv, PATH: [tools, safeEnv.PATH].filter(Boolean).join(path.delimiter) } : safeEnv;
   const dirs = [tools, ...(env.PATH ?? '').split(path.delimiter), ...(loginPath ?? '').split(path.delimiter),
     ...userToolDirs(home)].filter((dir) => dir && path.isAbsolute(dir));
-  return { ...env, PATH: [...new Set(dirs)].join(path.delimiter) };
+  return { ...safeEnv, PATH: [...new Set(dirs)].join(path.delimiter) };
 }
 
 /** Where harness installers put their CLIs, after the login shell's PATH. */

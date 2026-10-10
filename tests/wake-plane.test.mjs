@@ -354,7 +354,7 @@ test('ACP model selection is captured per turn and discovery is cached for the c
   const home = mkdtempSync(path.join(tmpdir(), 'wake-model-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const models = { availableModels: [{ modelId: 'default', name: 'Default' }], currentModelId: 'default' };
-  const env = { HOME: home, XDG_STATE_HOME: path.join(home, 'state'), AGENT_BOT_INTERACTION_HOME: path.join(home, 'interaction'), FAKE_ACP_MODELS: JSON.stringify(models) };
+  const env = { HOME: home, XDG_STATE_HOME: path.join(home, 'state'), AGENT_BOT_INTERACTION_HOME: path.join(home, 'interaction') };
   const registry = { claude: { harness: 'claude', enabled: true, command: process.execPath,
     args: [fileURLToPath(new URL('./fixtures/fake-acp-agent.mjs', import.meta.url))], stripEnv: [] } };
   const selected = [];
@@ -363,7 +363,7 @@ test('ACP model selection is captured per turn and discovery is cached for the c
     modelFor: (id) => soulModel(id, { env, home }).model,
     onModels: (id, block) => { discovered.push([id, block]); recordSoulModels(id, block, { env, home }); },
     createExecutor: (options) => { selected.push(options.model); return createAcpExecutor({ ...options, registry }); } });
-  const request = { agentId: ID, harness: 'claude', cwd: home, env: {} };
+  const request = { agentId: ID, harness: 'claude', cwd: home, env: { FAKE_ACP_MODELS: JSON.stringify(models) } };
   const observed = [];
   const port = (id = ID) => ({ invocation: { agentId: id }, message: 'model-probe', attachments: [],
     appendEvent: (type, data) => { if (data.content?.text) observed.push(JSON.parse(data.content.text).model); return {}; },

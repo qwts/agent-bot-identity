@@ -566,7 +566,7 @@ test('the sign-in probe runs with the env and Node the turn spawn gets (#536)', 
   assert.equal(probes[0].command, path.join(soulBin, 'node'), 'the soul\'s declared Node, not the host\'s');
   assert.deepEqual(probes[0].env, spawned, 'the probe env is the turn spawn env');
   assert.equal(spawned.PATH.split(path.delimiter)[0], soulBin);
-  assert.equal('CLAUDECODE' in spawned, codex.stripEnv.includes('CLAUDECODE') ? false : true);
+  assert.equal('CLAUDECODE' in spawned, false, 'a host session marker does not pass the child boundary');
   assert.deepEqual(JSON.parse(probes[0].env.CODEX_CONFIG), JSON.parse(codex.setEnv.CODEX_CONFIG));
 });
 
