@@ -1,0 +1,1 @@
+- A `uv-tool` harness install can now declare `lock`: every package the tool installs, itself included, as `{ name, version, sha256: [...] }`. The lock is validated and covered by the package revision. Installing from it with `uv pip install --require-hashes` comes in a later slice; until then it isn't enforced (#617).

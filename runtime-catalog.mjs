@@ -200,12 +200,21 @@ const BIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
  * A `harnesses.<name>.install` declaration (ADR-0322 decision 3), normalized:
  * `{ kind: 'archive', version, url, sha256: { platform }, bin }` where `url`
  * is one template (`{version}`, `{platform}`) or a map per platform, or
- * `{ kind: 'uv-tool', package, version, bin }`. Throws with the path.
+ * `{ kind: 'uv-tool', package, version, bin[, lock] }`. Throws with the path.
+ *
+ * A uv tool's `lock` (#617, owner decision "venv + pip --require-hashes") is
+ * every distribution the tool installs, the tool itself included:
+ * `[{ name, version, sha256: [hex, ...] }]`, one entry per package, each
+ * with every artifact hash pip may pick (wheels per platform, sdist), sorted
+ * ascending. It is
+ * part of the package definition, so the revision covers it. A tool without
+ * one has no `lock` key: it has no dependency evidence, so it can't be
+ * reported as verified.
  */
 export function normalizeHarnessInstall(value, label, { defaultBin = null } = {}) {
   if (!object(value)) throw new Error(`${label} must be an object with kind`);
   if (!['archive', 'uv-tool'].includes(value.kind)) throw new Error(`${label}.kind must be archive or uv-tool`);
-  const allowed = value.kind === 'archive' ? ['kind', 'version', 'url', 'sha256', 'bin'] : ['kind', 'package', 'version', 'bin'];
+  const allowed = value.kind === 'archive' ? ['kind', 'version', 'url', 'sha256', 'bin'] : ['kind', 'package', 'version', 'bin', 'lock'];
   for (const key of Object.keys(value)) {
     if (!allowed.includes(key)) throw new Error(`${label}.${key} is unknown (use ${allowed.join(', ')})`);
   }
@@ -215,7 +224,9 @@ export function normalizeHarnessInstall(value, label, { defaultBin = null } = {}
   if (!bin) throw new Error(`${label}.bin must name the executable inside the install`);
   if (value.kind === 'uv-tool') {
     if (typeof value.package !== 'string' || !PACKAGE_NAME.test(value.package)) throw new Error(`${label}.package must be a PyPI package name`);
-    return { kind: 'uv-tool', package: value.package, version: value.version, bin };
+    const normalized = { kind: 'uv-tool', package: value.package, version: value.version, bin };
+    if (value.lock !== undefined) normalized.lock = normalizeUvToolLock(value.lock, `${label}.lock`, value.package, value.version);
+    return normalized;
   }
   if (!object(value.sha256) || !Object.keys(value.sha256).length) throw new Error(`${label}.sha256 must map platforms to 64 lowercase hex digits`);
   const sha256 = {};
@@ -240,6 +251,54 @@ export function normalizeHarnessInstall(value, label, { defaultBin = null } = {}
     url = httpsUrl(value.url, `${label}.url`);
   }
   return { kind: 'archive', version: value.version, url, sha256, bin };
+}
+
+// PEP 503: names compare lowercase with runs of `-`, `_` and `.` as one `-`.
+const pypiName = (name) => name.toLowerCase().replace(/[-_.]+/g, '-');
+// One exact PEP 440 version (epoch, release, pre, post, dev, local), as
+// PyPA's `packaging` spells it, without the optional leading `v`.
+const PEP440 = /^(?:[0-9]+!)?[0-9]+(?:\.[0-9]+)*(?:[-_.]?(?:a|b|c|rc|alpha|beta|pre|preview)[-_.]?[0-9]*)?(?:-[0-9]+|[-_.]?(?:post|rev|r)[-_.]?[0-9]*)?(?:[-_.]?dev[-_.]?[0-9]*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
+const lockVersion = (value) => typeof value === 'string' && value.length <= 64 && PEP440.test(value);
+
+function normalizeUvToolLock(value, label, toolPackage, toolVersion) {
+  if (!Array.isArray(value) || !value.length) throw new Error(`${label} must list every package the tool installs as { name, version, sha256 }`);
+  const seen = new Set();
+  const lock = value.map((entry, index) => {
+    const where = `${label}[${index}]`;
+    if (!object(entry)) throw new Error(`${where} must be an object with name, version and sha256`);
+    for (const key of Object.keys(entry)) {
+      if (!['name', 'version', 'sha256'].includes(key)) throw new Error(`${where}.${key} is unknown (use name, version, sha256)`);
+    }
+    if (typeof entry.name !== 'string' || !PACKAGE_NAME.test(entry.name)) throw new Error(`${where}.name must be a PyPI package name`);
+    if (!lockVersion(entry.version)) throw new Error(`${where}.version must be an exact PEP 440 version`);
+    if (!Array.isArray(entry.sha256) || !entry.sha256.length) throw new Error(`${where}.sha256 must list the artifact digests pip may install`);
+    for (const digest of entry.sha256) {
+      if (typeof digest !== 'string' || !SHA256_HEX.test(digest)) throw new Error(`${where}.sha256 must hold 64 lowercase hex digits each`);
+    }
+    // Sorted, so the same lock has one spelling and one package revision.
+    for (let i = 1; i < entry.sha256.length; i += 1) {
+      if (entry.sha256[i - 1] === entry.sha256[i]) throw new Error(`${where}.sha256 lists a digest twice`);
+      if (entry.sha256[i - 1] > entry.sha256[i]) throw new Error(`${where}.sha256 must be sorted ascending`);
+    }
+    const key = pypiName(entry.name);
+    if (seen.has(key)) throw new Error(`${where}.name ${entry.name} is locked twice`);
+    seen.add(key);
+    return { name: entry.name, version: entry.version, sha256: [...entry.sha256] };
+  });
+  const tool = lock.find((entry) => pypiName(entry.name) === pypiName(toolPackage));
+  if (!tool) throw new Error(`${label} must include the tool package ${toolPackage} itself`);
+  if (tool.version !== toolVersion) throw new Error(`${label} locks ${toolPackage} at ${tool.version}, but the install pins ${toolVersion}`);
+  return lock;
+}
+
+/**
+ * The requirements text a locked uv tool installs from with
+ * `uv pip install --require-hashes -r`: one `name==version` line per lock
+ * entry, each with every `--hash=sha256:` it allows. Null with no lock.
+ */
+export function uvToolRequirements(install) {
+  if (install?.kind !== 'uv-tool' || !install.lock) return null;
+  return install.lock.map((entry) => [`${entry.name}==${entry.version}`, ...entry.sha256.map((digest) => `--hash=sha256:${digest}`)].join(' ')).join('\n') + '\n';
 }
 
 /** The archive source of a normalized harness install for one platform, or null. */
