@@ -74,6 +74,12 @@ const HARNESS_FILES = Object.freeze({
   qwen: Object.freeze({ instructions: null, skills: null, mcp: '.qwen/settings.json' }),
 });
 
+// The workspace-relative folder a harness reads skills from, or null when it
+// has none (#603: `soul skill load` places one skill there).
+export function harnessSkillsDirectory(harness) {
+  return Object.hasOwn(HARNESS_FILES, harness) ? HARNESS_FILES[harness].skills : undefined;
+}
+
 // Settings are defaults for native harness launches; owner-selected launch
 // models remain outside the package and take precedence at launch.
 // `provider` (#583 slice 4) renders the non-secret parts of a per-harness
