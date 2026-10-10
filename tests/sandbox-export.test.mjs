@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, symlinkSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { mintAgentIdentity, stateDirectory } from '../agent-identity.mjs';
@@ -104,6 +104,7 @@ test('an export writes each confirmed category privately with a manifest of hash
   // agent-bot prints sudo, never runs it; the copy ends with the verify.
   assert.ok(result.copy.some((command) => command.startsWith('sudo /usr/bin/ditto ')));
   assert.equal(result.copy[0], 'mkdir -p -m 700 ~/.agent-bot/exports ~/.agent-bot/exports/geniusbar-agent');
+  assert.equal(result.copy[1], 'chmod 700 ~/.agent-bot/exports ~/.agent-bot/exports/geniusbar-agent', 'mkdir -m does not fix an existing folder');
   assert.equal(result.copy.at(-1), `agent-bot sandbox export --verify geniusbar-agent --dir ~/.agent-bot/exports/geniusbar-agent/${STAMP}`);
   assert.equal(f.receipts().at(-1).decision, 'exported');
   // Nothing in the persona account was removed.
@@ -139,6 +140,19 @@ test('verify refuses a copy others can read, one made for someone else, and one 
   await assert.rejects(verifySandboxExport('geniusbar-agent', f.ownerOptions), (error) => error.code === 'sandbox-export-not-private' && /chmod go-rwx/.test(error.action));
   chmodSync(copied, 0o700);
   await assert.rejects(verifySandboxExport('geniusbar-agent', { ...f.ownerOptions, owner: 'someone-else' }), { code: 'sandbox-export-wrong-owner' });
+  // The manifest itself must be the owner's private regular file, never a link.
+  const manifest = path.join(copied, 'manifest.json');
+  chmodSync(manifest, 0o644);
+  await assert.rejects(verifySandboxExport('geniusbar-agent', f.ownerOptions), { code: 'sandbox-export-not-private' });
+  const real = path.join(f.ownerHome, 'elsewhere.json');
+  cpSync(manifest, real);
+  chmodSync(real, 0o600);
+  rmSync(manifest);
+  symlinkSync(real, manifest);
+  await assert.rejects(verifySandboxExport('geniusbar-agent', { ...f.ownerOptions, dir: copied }), { code: 'sandbox-export-invalid' });
+  // Every refusal past usage leaves a receipt.
+  const refused = f.receipts(f.ownerHome).filter((receipt) => receipt.decision === 'refused').map((receipt) => receipt.detail.split(':')[0]);
+  assert.deepEqual(refused, ['sandbox-export-not-private', 'sandbox-export-wrong-owner', 'sandbox-export-not-private', 'sandbox-export-invalid']);
   await assert.rejects(verifySandboxExport('geniusbar-agent', { ...f.ownerOptions, dir: dropFolder }), { code: 'usage' });
   await assert.rejects(verifySandboxExport('other-account', f.ownerOptions), { code: 'sandbox-export-not-found' });
   await assert.rejects(verifySandboxExport('../etc', f.ownerOptions), { code: 'usage' });
@@ -163,6 +177,8 @@ test('a failure stops where it is, leaves everything in place, and --resume carr
   f.gates.length = 0;
   f.exported.length = 0;
   const later = { ...f.options, now: () => new Date('2026-10-10T18:00:00Z') };
+  // A category already in the drop cannot be skipped on resume.
+  await assert.rejects(runSandboxExport({ ...later, owner: 'owner', resume: drop, skip: ['souls'] }), { code: 'sandbox-export-skip-recorded' });
   const resumed = await runSandboxExport({ ...later, owner: 'owner', resume: drop });
   assert.equal(resumed.dropFolder, drop);
   assert.deepEqual(f.exported, [B], 'A is not exported twice');
