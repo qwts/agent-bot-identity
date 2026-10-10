@@ -31,7 +31,7 @@ export const SKILL_REFERENCES = Object.freeze({
 // sandbox), docs/, or the command's own --help is the guidance; internal
 // commands are run by hooks and harness configs, not by an agent.
 export const NO_SKILL_REFERENCE = Object.freeze([
-  'join', 'principal', 'harness', 'keyd', 'approvals', 'audit', 'mcp',
+  'join', 'principal', 'harness', 'keyd', 'owner', 'approvals', 'audit', 'mcp',
   'reach-mcp', 'web', 'telegram', 'update', 'skill', 'sop', 'sandbox', 'metrics',
   'credential', 'worktree-token', 'gh-inbox-query', 'gh-pr-view-json',
   'claude-worktree-create', 'agent-hook', 'hook',
