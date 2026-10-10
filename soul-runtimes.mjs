@@ -233,9 +233,9 @@ function writeOverrideRecord(soulDir, agentId, name, executable) {
   finally { rmSync(temporary, { force: true }); }
 }
 
-// The record as it was before a set or clear, so a failure after the write
-// can put it back. A record that is not a small regular file is already
-// broken: a set refuses it, and a failed `--clear` leaves it removed.
+// The record as it was before a set, so a failure after the write can put
+// it back. A record that is not a small regular file is already broken, and
+// a set refuses it; `--clear` moves any entry aside instead.
 function readPreviousOverrideRecord(file) {
   let info;
   try { info = lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return { absent: true }; throw error; }
@@ -244,7 +244,6 @@ function readPreviousOverrideRecord(file) {
 }
 
 function restoreOverrideRecord(soulDir, agentId, file, previous) {
-  if (previous.unrestorable) return;
   if (previous.absent) { rmSync(file, { recursive: true, force: true }); return; }
   validateOverrideStore(soulDir, agentId, { create: true });
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
@@ -983,12 +982,17 @@ async function soulRuntimeOverrideCommand(argv, { gate, readStdin, write, env, h
     // An unsafe shim directory refuses before the record changes.
     ensureOverrideShims(soulDir, inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host }).overrides, { agentId: soul.id });
     const file = overrideRecordFile(soulDir, name);
-    const previous = readPreviousOverrideRecord(file);
+    // A clear moves the entry aside, whatever it is, and a set keeps its
+    // bytes; either way a failure below puts the previous entry back.
+    const previous = clear ? null : readPreviousOverrideRecord(file);
     // A broken record could not be put back if this set failed, so it is
     // cleared on its own first.
     if (!clear && previous.unrestorable) throw invalidOverride(soul.id, name, `override record for ${name} is not a small regular file; clear it first`, `agent-bot soul runtimes override ${soul.id} ${name} --clear`);
-    if (clear) rmSync(file, { recursive: true, force: true });
-    else writeOverrideRecord(soulDir, soul.id, name, executable);
+    let aside = null;
+    if (clear) {
+      aside = `${file}.${process.pid}.${randomUUID()}.rollback`;
+      try { renameSync(file, aside); } catch (error) { if (error.code !== 'ENOENT') throw error; aside = null; }
+    } else writeOverrideRecord(soulDir, soul.id, name, executable);
     try {
       const status = inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host });
       (rest.prepareShims ?? ensureOverrideShims)(soulDir, status.overrides, { agentId: soul.id });
@@ -997,13 +1001,15 @@ async function soulRuntimeOverrideCommand(argv, { gate, readStdin, write, env, h
       appendAuditReceipt({ event: 'soul-runtimes', agentId: soul.id, operation: clear ? 'override-clear' : 'override', decision: clear ? 'cleared' : 'selected',
         detail: clear ? `${name} override cleared` : `${name} override selected at ${executable}; verification: unverified-external` }, { env, home, now });
     } catch (error) {
-      restoreOverrideRecord(soulDir, soul.id, file, previous);
+      if (!clear) restoreOverrideRecord(soulDir, soul.id, file, previous);
+      else if (aside) { rmSync(file, { recursive: true, force: true }); renameSync(aside, file); }
       // Best effort: bring the shims back in line with the restored record.
       // Launch revalidates them anyway, and the original error is the one to report.
       try { ensureOverrideShims(soulDir, inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host }).overrides, { agentId: soul.id }); }
       catch { /* launch refuses unsafe shims on its own */ }
       throw error;
     }
+    if (aside) rmSync(aside, { recursive: true, force: true });
   });
   const result = { schemaVersion: RUNTIMES_SCHEMA_VERSION, agentId: soul.id, name, status: clear ? 'cleared' : 'selected', executable, verification: clear ? null : 'unverified-external' };
   write(json ? `${JSON.stringify(result)}\n` : `${soul.id}: ${name} override ${clear ? 'cleared' : `selected at ${executable} (unverified external)`}\n`);

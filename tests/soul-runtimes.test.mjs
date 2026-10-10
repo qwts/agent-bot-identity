@@ -838,7 +838,11 @@ test('an unsafe override shim directory refuses set and clear before the record 
   await assert.rejects(soulRuntimesCommand(['override', ID, 'npm', externalNpm], { ...options, gate, write }),
     (error) => error.code === 'runtime-override-invalid' && /clear it first/.test(error.message) && /--clear/.test(error.action));
   assert.ok(lstatSync(path.join(overrides, 'npm.json')).isSymbolicLink(), 'the refused set leaves the entry for --clear');
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'npm', '--clear'], { ...options, gate, write, prepareShims: failing }), /shim preparation failed/);
+  assert.ok(lstatSync(path.join(overrides, 'npm.json')).isSymbolicLink(), 'a failed clear puts even a broken entry back');
+  assert.deepEqual(readdirSync(overrides).filter((entry) => entry.endsWith('.rollback')), [], 'no set-aside copy is left behind');
   await soulRuntimesCommand(['override', ID, 'npm', '--clear'], { ...options, gate, write });
+  assert.deepEqual(readdirSync(overrides).filter((entry) => entry.endsWith('.rollback')), []);
   assert.ok(!existsSync(path.join(overrides, 'npm.json')));
 
   // Launch reconciles the shims under the same store lock as set and clear.
