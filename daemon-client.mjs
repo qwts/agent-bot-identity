@@ -181,14 +181,23 @@ export function daemonClient({
     },
     // The daemon writes the shared secret in the private git dir. Callers
     // must never log it or return it to the conversation.
-    async bind({ gitDir, token, transcript, parentId = null, harness = null }) {
-      return request('POST', '/v0/bind', { gitDir, token, transcript, parentId, harness });
+    // `app` (#107) is the App the session was explicitly run as. The daemon
+    // may ask the owner to verify it, so a bind that names one waits as long
+    // as an owner decision does.
+    async bind({ gitDir, token, transcript, parentId = null, harness = null, app = null }) {
+      if (!app) return request('POST', '/v0/bind', { gitDir, token, transcript, parentId, harness });
+      return request('POST', '/v0/bind', { gitDir, token, transcript, parentId, harness, app }, {}, OWNER_DECISION_TIMEOUT_MS);
     },
     async binding(secret) {
       const { binding } = await request('GET', '/v0/binding', undefined, {
         'x-agent-binding': secret,
       });
       return binding;
+    },
+    // The App a session on an existing binding was run as (#107); the
+    // daemon may ask the owner, so this waits as long as a bind with one.
+    async reconcileApp(secret, app) {
+      return request('POST', '/v0/binding/app', { app }, { 'x-agent-binding': secret }, OWNER_DECISION_TIMEOUT_MS);
     },
     async releaseBinding(secret) {
       return request('DELETE', '/v0/binding', undefined, { 'x-agent-binding': secret });

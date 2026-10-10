@@ -239,7 +239,7 @@ error text. Besides `at`, `event`, `agentId` (daemon only), `operation` and
 | `operation` | `decision` | `reason` |
 | --- | --- | --- |
 | `tier1-app-token` | `granted` | `bound-soul-own-app` |
-| `tier1-app-token` | `denied` | `no-live-binding`, `soul-retired`, `github-identity-off`, `no-github-app` |
+| `tier1-app-token` | `denied` | `no-live-binding`, `soul-retired`, `no-transcript-locator`, `github-identity-off`, `no-github-app` |
 | `tier1-app-token` | `failed` | `identity-unreadable`, `mint-failed` |
 | `mint-token` | `granted` | `owner-approved`, `bound-soul-own-app` (a bound checkout's own App, through the daemon), or the selector: `explicit-app`, `env-app`, `env-credential`, `ambient-app` (checkout pin, the soul's managed App from `AGENT_BOT_ID` or the worktree's Agent ID, account, or harness) |
 | `mint-token` | `denied` | `owner-approval-refused` |
@@ -259,6 +259,41 @@ always comes from the daemon.
 A `mint-token` receipt is best effort: if it can't be written, the command
 warns on stderr and the mint goes ahead as before. A `mint-token` run for a
 keyd-held key also leaves the daemon's own `tier1-app-token` receipt.
+
+`/v0/credential` mints only for a soul with a transcript locator, on its
+binding or its record (#107).
+
+## App reconcile at bind (#107)
+
+A bind can name the App the session was explicitly run as (`GH_AGENT_APP`, or
+the checkout's pin). When it differs from the App the soul's record names, the
+daemon reconciles the record:
+
+- If the organization profile maps the soul's harness to that App, the record
+  is updated. The mapping must come from the validated profile in the runtime
+  config, and the App must be one of its active identities for that harness.
+  A hand-written `apps` entry doesn't count, so the owner is asked.
+- Otherwise the owner's selection wins once the owner verifies it with Touch
+  ID through agent-bot-keyd, or the macOS dialog where keyd can't ask. If
+  nobody verifies, the record stays as it was and the daemon keeps minting the
+  recorded App. The bind still succeeds.
+
+A session that resumes on a binding left by an earlier one states its App
+through that binding (`POST /v0/binding/app`), with the same rules.
+
+The bind result's `app` field says what happened. After a reconcile, the MCP
+`bind` tool repins the checkout. Run `agent-bot setup-worktree` in that
+checkout to refresh its commit identity and credential helper. A soul whose
+key agent-bot-keyd holds changes App only through the keyd owner workflow.
+
+Each outcome appends an `app-record-reconcile` receipt with `operation`
+`bind`, the claimed App as `appSlug`, and the recorded App in `detail`:
+
+| `decision` | `reason` |
+| --- | --- |
+| `granted` | `org-mapping-agrees`, `owner-verified` |
+| `denied` | `owner-not-verified`, `keyd-held` |
+| `failed` | `record-write-failed` |
 
 ## Migrating
 

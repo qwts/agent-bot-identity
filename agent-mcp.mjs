@@ -29,6 +29,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readBinding, readBindToken } from './agent-binding.mjs';
 import { daemonClient } from './daemon-client.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
+import { resolveAgentSlug } from './resolve-agent.mjs';
 
 const PROTOCOL_VERSION = '2025-06-18';
 
@@ -237,6 +238,23 @@ async function takeInbox(state) {
   return { event: result?.event ?? null };
 }
 
+// The App this session was explicitly run as (GH_AGENT_APP, else the
+// checkout's pin), sent with a first bind so the daemon can reconcile the
+// soul's record with it (#107). A claim the resolver rejects is not sent.
+function claimedApp(state) {
+  try { return resolveAgentSlug({ env: state.env, cwd: state.cwd, detect: false }); } catch { return null; }
+}
+
+// The daemon reconciled the soul's App with the one this session was run as
+// (#107): the pin follows, so setup-worktree in this checkout can refresh the
+// credential helper and commit attribution.
+function repinApp(state, app) {
+  if (app.status !== 'reconciled') return app;
+  git(state.cwd, 'config', 'extensions.worktreeConfig', 'true');
+  git(state.cwd, 'config', '--worktree', 'agentBot.app', app.claimed);
+  return { ...app, next: 'run agent-bot setup-worktree in this checkout to commit as the reconciled App' };
+}
+
 async function callTool(state, name, args = {}) {
   switch (name) {
     case 'bind': {
@@ -255,7 +273,14 @@ async function callTool(state, name, args = {}) {
           const binding = await state.client.binding(existing.secret);
           state.secret = existing.secret;
           state.agentId = binding.agentId;
-          return binding;
+          // A binding outlives its session, so a new session run as another
+          // App reconciles here as a first bind would (#107). The binding is
+          // live either way: a daemon that cannot reconcile leaves it as is.
+          const claimed = claimedApp(state);
+          if (!claimed) return binding;
+          let app = null;
+          try { ({ app = null } = await state.client.reconcileApp(existing.secret, claimed)); } catch { /* record unchanged */ }
+          return app ? { ...binding, app: repinApp(state, app) } : binding;
         } catch (error) {
           const cause = describeFetchCause(error);
           const safeMessage = sanitizeInboxDetail(cause.message ?? error?.message ?? 'unknown error');
@@ -283,6 +308,7 @@ async function callTool(state, name, args = {}) {
           id: args.transcript_id,
         },
         parentId: args.parent_agent_id ?? null,
+        app: claimedApp(state),
       });
       state.secret = result.secret;
       state.agentId = result.agentId;
@@ -293,6 +319,7 @@ async function callTool(state, name, args = {}) {
         git(state.cwd, 'config', 'extensions.worktreeConfig', 'true');
         git(state.cwd, 'config', '--worktree', 'agentBot.agentId', result.agentId);
       }
+      if (result.app) result.app = repinApp(state, result.app);
       const { secret, ...safe } = result;
       return safe;
     }

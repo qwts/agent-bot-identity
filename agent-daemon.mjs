@@ -59,9 +59,10 @@ import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingR
 import { spacePath } from './agent-space.mjs';
 import { createSoulHistory } from './soul-history.mjs';
 import { ensureSoulSpace, soulSpacePath } from './soul-memory.mjs';
-import { archiveSoulDirs, backfillManagedSouls, displayName, listSouls, locateSoulDir, populationFile, recordHarnessAuth, recordSoulSighting, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulComms, setSoulComputerUse, soulComputerUse, setSoulPaused, soulPaused, showSoul, soulDirectory, upsertIdentitySoul, withRoles } from './agent-population.mjs';
+import { archiveSoulDirs, backfillManagedSouls, displayName, listSouls, locateSoulDir, populationFile, recordHarnessAuth, recordSoulSighting, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulApp, setSoulComms, setSoulComputerUse, soulComputerUse, setSoulPaused, soulPaused, showSoul, soulDirectory, upsertIdentitySoul, withRoles } from './agent-population.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
 import {
+  assignAgentApp,
   bindAgentLineage,
   ensureAgentIdentity,
   mintAgentIdentity,
@@ -100,6 +101,8 @@ import { attachWakeEndpoint } from './agent-wake.mjs';
 import { resolveSoulMode } from './soul-mode.mjs';
 import { createIdentityAppJobs, identityAppOperation, identityAppFailure, listIdentityApps } from './identity-apps.mjs';
 import { identityAppSouls } from './identity-app-souls.mjs';
+import { validAppSlug } from './identity-app-store.mjs';
+import { runtimeProfileInfo } from './organization-profile.mjs';
 import { readSoulProfile } from './soul-profile.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
 import { launchSandbox, readSandboxStatus, turnSandboxProblem, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount } from './sandbox.mjs';
@@ -447,7 +450,7 @@ export function createDaemonServer({
         appendAuditReceipt({ event: 'dream-control', operation: dreamAction, decision: 'owner-credential-required' }, { env, home, now });
         throw ownerCredentialRequired('a soul binding cannot authorize dream controls');
       }
-      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/credential', 'POST /v0/inbox/take', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start', 'POST /v0/asides/delivered'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
+      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/binding/app', 'POST /v0/credential', 'POST /v0/inbox/take', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start', 'POST /v0/asides/delivered'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
         sendJson(res, 401, { error: 'missing or invalid daemon token' });
         return;
       }
@@ -616,7 +619,16 @@ export function createDaemonServer({
         }
         case 'POST /v0/bind': {
           const body = parseJsonBody(await readBody(req));
-          sendJson(res, 200, bindWorktreeConversation({ body, bindings, env, home, config, now, presented: presentedCredential(req) }));
+          // The App the session was explicitly run as (#107), checked before
+          // the bind consumes anything so a malformed claim leaves the
+          // single-use token in place. It is a claim, never authority: the
+          // record changes only as reconcileSoulApp decides.
+          if (body.app !== undefined && body.app !== null && !validAppSlug(body.app)) {
+            throw Object.assign(new Error('app must be a GitHub App slug'), { statusCode: 400 });
+          }
+          const bound = bindWorktreeConversation({ body, bindings, env, home, config, now, presented: presentedCredential(req) });
+          const app = body.app ? await reconcileSoulApp({ agentId: bound.agentId, claimed: body.app, env, home, config, now, ownerGate }) : null;
+          sendJson(res, 200, app ? { ...bound, app } : bound);
           return;
         }
         case 'POST /v0/spawn': {
@@ -671,6 +683,17 @@ export function createDaemonServer({
           if (!teamStarter) throw Object.assign(new Error('this daemon cannot start souls'), { statusCode: 503 });
           const body = parseJsonBody(await readBody(req));
           sendJson(res, 200, await teamStarter(source.agentId, body));
+          return;
+        }
+        // A session resuming on a binding that outlived its last one (#107)
+        // states the App it was run as, like a first bind does. The binding
+        // names the soul; the App is a claim reconcileSoulApp decides on.
+        case 'POST /v0/binding/app': {
+          const binding = requireBinding(req, bindings);
+          const body = parseJsonBody(await readBody(req));
+          if (!validAppSlug(body.app)) throw Object.assign(new Error('app must be a GitHub App slug'), { statusCode: 400 });
+          const app = await reconcileSoulApp({ agentId: binding.agentId, claimed: body.app, env, home, config, now, ownerGate });
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, agentId: binding.agentId, ...(app ? { app } : {}) });
           return;
         }
         case 'GET /v0/binding': {
@@ -739,6 +762,20 @@ export function createDaemonServer({
               reason: 'soul-retired',
             }, { env, home, now });
             throw Object.assign(new Error('this soul is retired'), { statusCode: 409 });
+          }
+          // The agent path mints only for a conversation (ENG-0081 amendment
+          // decision 2): the binding's transcript locator, or the one the
+          // soul's record already carries. A still-pending soul cannot mint.
+          if (!binding.transcript && !identity.transcript) {
+            appendAuditReceipt({
+              event: 'credential-mint',
+              agentId: binding.agentId,
+              operation: 'tier1-app-token',
+              decision: 'denied',
+              ...(identity.github?.appSlug ? { appSlug: identity.github.appSlug } : {}),
+              reason: 'no-transcript-locator',
+            }, { env, home, now });
+            throw Object.assign(new Error('this soul has no transcript locator yet; bind it to its conversation first'), { statusCode: 409 });
           }
           // The add-on gate decides, not the record: a soul that carries a
           // github field gets no App token while github-identity is off.
@@ -1071,6 +1108,71 @@ export function createDaemonServer({
   server.bindings = bindings;
   server.interaction = interaction;
   return server;
+}
+
+// The App a soul's record names, reconciled at bind with the App the session
+// was explicitly run as (#107; owner decision 2026-10-09). The claim comes
+// from the caller and is only ever a request:
+//   - it matches the record: nothing to do;
+//   - the organization profile maps the soul's harness to it: the record is
+//     updated, since the owner's selection and the org agree;
+//   - otherwise the owner's selection wins once the owner verifies it (Touch
+//     ID through agent-bot-keyd, else the dialog). An agent cannot produce
+//     that proof, so an unverified claim leaves the record as it was and the
+//     daemon keeps minting the recorded App.
+// The bind itself is never refused here: the session stays bound either way.
+// Every change and every unverified claim writes a receipt. A soul without a
+// GitHub App is never given one this way, and a soul whose key agent-bot-keyd
+// holds changes App only through the keyd owner workflow.
+// Whether the organization profile itself maps this harness to the App: the
+// validated profile snapshot embedded in the runtime config must name it as
+// the harness default and as an active identity of that harness. A
+// hand-written `apps` entry with no profile behind it is not the org's word,
+// so it never stands in for the owner (#107).
+function orgMapsHarnessTo(config, harness, app) {
+  if (!harness) return false;
+  let info;
+  try { info = runtimeProfileInfo(config); } catch { return false; }
+  return info?.defaults?.[harness] === app
+    && info.active.some((identity) => identity.slug === app && identity.harness === harness);
+}
+
+async function reconcileSoulApp({ agentId, claimed, env, home, config, now, ownerGate }) {
+  if (!isGateEnabled('github-identity', { env, home, config })) return null;
+  const stateDir = stateDirectory({ env, home });
+  const identity = readAgentIdentity(agentId, { stateDir });
+  const recorded = identity.github?.appSlug ?? null;
+  if (!recorded || recorded === claimed) return null;
+  const receipt = (decision, reason) => appendAuditReceipt({
+    event: 'app-record-reconcile', agentId, operation: 'bind', decision, appSlug: claimed, reason, detail: `recorded ${recorded}`,
+  }, { env, home, now });
+  const file = populationOverride(env, home);
+  let directory = null;
+  try { directory = soulDirectory(agentId, { env, home, file }); } catch { /* census-only soul */ }
+  if (directory && soulCredentialsDeclaration(directory)?.store === 'keyd') {
+    receipt('denied', 'keyd-held');
+    return { status: 'unchanged', recorded, claimed, reason: 'keyd-held' };
+  }
+  let reason = 'org-mapping-agrees';
+  if (!orgMapsHarnessTo(config ?? loadConfig({ env, home }), identity.harness, claimed)) {
+    try {
+      await ownerGate(`soul app ${agentId} ${claimed}`, { principal: null });
+      reason = 'owner-verified';
+    } catch {
+      receipt('denied', 'owner-not-verified');
+      return { status: 'unchanged', recorded, claimed, reason: 'owner-not-verified' };
+    }
+  }
+  try {
+    assignAgentApp(agentId, claimed, { stateDir, now, afterWrite: () => setSoulApp(agentId, claimed, { file }) });
+  } catch {
+    // A record that cannot take the change (a retired soul, a locked store)
+    // leaves the session bound as before; the receipt accounts for it.
+    receipt('failed', 'record-write-failed');
+    return { status: 'unchanged', recorded, claimed, reason: 'record-write-failed' };
+  }
+  receipt('granted', reason);
+  return { status: 'reconciled', recorded, claimed, reason };
 }
 
 // Surrender-and-enforce (#94): the caller presents the bind token that

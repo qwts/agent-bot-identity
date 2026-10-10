@@ -651,10 +651,9 @@ export function worktreePinOriginCheck({ gitDir, agentId,
 }
 
 // The App a checkout acts as against the App the soul's identity record names
-// (#107 rollout). For a bound soul the daemon mints the recorded App and the
-// helper refuses any other, so a mismatch is a soul that cannot use its door
-// once in-process mints close. Diagnosis only: reconciling the two belongs to
-// #107's migration contract, never to doctor or to manual owner chores.
+// (#107). For a bound soul the daemon mints the recorded App and the helper
+// refuses any other. Diagnosis only: the daemon reconciles the two at bind,
+// never doctor or a manual owner chore.
 export function appRecordCheck({ agentId, slug, config = {}, readIdentity } = {}) {
   let recorded = null;
   try { recorded = readIdentity(agentId)?.github?.appSlug ?? null; } catch { return null; }
@@ -673,9 +672,9 @@ export function appRecordCheck({ agentId, slug, config = {}, readIdentity } = {}
     status: 'warning',
     code: 'soul-app-record-mismatch',
     message: `this checkout acts as ${slug}, but the identity record of ${agentId} names ${recorded}; the daemon mints the recorded App for a bound soul and refuses any other`,
-    // Diagnosis only: how such a record is reconciled is #107's migration
-    // contract, not a chore doctor hands the owner.
-    action: `nothing to do yet: the explicit ${slug} keeps working until #107 closes in-process mints, and it must be reconciled with the record before then (#107 migration contract)${managed ? '' : `; ${slug} is not a managed App on this machine`}`,
+    // Diagnosis only: the daemon reconciles the record at bind, not a chore
+    // doctor hands the owner.
+    action: `bind a new session run as ${slug}: the daemon updates the record when the organization profile maps this soul's harness to ${slug}, and otherwise asks you to verify with Touch ID${managed ? '' : `; ${slug} is not a managed App on this machine`}`,
     evidence: { agent_id: agentId, app_slug: slug, recorded_app_slug: recorded, managed },
   });
 }

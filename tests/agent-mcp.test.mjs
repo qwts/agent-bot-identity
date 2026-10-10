@@ -1,7 +1,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -281,4 +281,47 @@ test('the surrendered token is consumed by the daemon, not the MCP server', asyn
   const state = createMcpState({ client: fakeClient(), cwd: root, env: {} });
   await callTool(state, 'bind', { transcript_id: 'session-4' });
   assert.notEqual(readBindToken(gitDir), null);
+});
+
+// #107: the session's stated App (GH_AGENT_APP) is sent as a claim, and a
+// reconcile the daemon reports moves the checkout's App pin with it.
+function claimEnv(root) {
+  const config = path.join(root, 'config.json');
+  writeFileSync(config, '{}\n');
+  return { HOME: root, AGENT_BOT_CONFIG: config, GH_AGENT_APP: 'you-codex-agent' };
+}
+
+const RECONCILED = { status: 'reconciled', recorded: 'you-grok-agent', claimed: 'you-codex-agent', reason: 'org-mapping-agrees' };
+
+test('a first bind sends the stated App and repins after a reconcile (#107)', async () => {
+  const { root, gitDir } = scratchRepo();
+  mintBindToken({ gitDir, worktree: root, agentId: AGENT_ID });
+  const client = fakeClient({ bindResult: { app: RECONCILED } });
+  const state = createMcpState({ client, cwd: root, env: claimEnv(root) });
+  const { text, isError } = await callTool(state, 'bind', { transcript_id: 'session-app' });
+  assert.equal(isError, false);
+  const [, args] = client.calls.find(([name]) => name === 'bind');
+  assert.equal(args.app, 'you-codex-agent');
+  assert.equal(git(root, 'config', '--worktree', 'agentBot.app'), 'you-codex-agent');
+  assert.match(text, /setup-worktree/);
+});
+
+test('a session on an existing binding states its App too, and repins after a reconcile (#107)', async () => {
+  const { root, gitDir } = scratchRepo();
+  const secret = 'b'.repeat(43);
+  writeFileSync(path.join(gitDir, 'agent-binding.json'), JSON.stringify({
+    v: 1, agentId: AGENT_ID, parent: null, account: 'you', daemon: 'http://127.0.0.1:1/', secret,
+  }), { mode: 0o600 });
+  const client = fakeClient();
+  client.reconcileApp = async (presented, app) => { client.calls.push(['reconcileApp', presented, app]); return { agentId: AGENT_ID, app: RECONCILED }; };
+  const state = createMcpState({ client, cwd: root, env: claimEnv(root) });
+  const { isError } = await callTool(state, 'bind', { transcript_id: 'session-later' });
+  assert.equal(isError, false);
+  assert.deepEqual(client.calls.find(([name]) => name === 'reconcileApp'), ['reconcileApp', secret, 'you-codex-agent']);
+  assert.equal(git(root, 'config', '--worktree', 'agentBot.app'), 'you-codex-agent');
+
+  // A daemon that cannot reconcile leaves the live binding usable.
+  client.reconcileApp = async () => { throw new Error('daemon POST /v0/binding/app failed: HTTP 404'); };
+  const again = await callTool(createMcpState({ client, cwd: root, env: claimEnv(root) }), 'bind', { transcript_id: 'session-later' });
+  assert.equal(again.isError, false);
 });
