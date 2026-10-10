@@ -316,9 +316,14 @@ leaves a `turn-refused` event with its code and repair action.
 
 `agent-bot doctor` reports the record under `sop.persona`: ready when it
 matches the selection, and a warning with `run: agent-bot sop persona` when
-it is legacy (`sop-persona-legacy`, from before selections were kept), stale
-(`sop-persona-stale`), not recorded (`sop-persona-unrecorded`) or unreadable
-(`sop-persona-unavailable`).
+it is legacy (`sop-persona-legacy`, from before selections were kept) or
+stale (`sop-persona-stale`), since the owner's own launches still ask. A
+record that is not recorded (`sop-persona-unrecorded`), unreadable or
+invalid (`sop-persona-unavailable`) refuses every launch and turn, so the
+check fails, doctor and bootstrap exit non-zero, and the repair leads
+`first_actionable_failure`. The daemon prints the same notice when it starts
+(`agent-bot daemon run` or `start`), and so do `agent-bot install` and
+`agent-bot update`.
 
 ### Recording the mapping
 

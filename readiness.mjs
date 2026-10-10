@@ -138,10 +138,12 @@ function featureGatesCheck({ home, env, config }) {
 }
 
 // The SOP section (#613): whether the selected SOP's persona mapping is
-// recorded for the selection in effect. A legacy record (from before the
-// selection was kept), a stale one or a missing one makes agent-initiated
-// turns refuse and the owner's own launches ask, so doctor names the repair.
-// It reads the local record only; nothing is fetched or written.
+// recorded for the selection in effect. A legacy or stale record makes
+// agent-initiated turns refuse and the owner's own launches ask: a warning.
+// A missing, unreadable or invalid one refuses every launch and turn, the
+// owner's too, so it fails doctor (and bootstrap's verification) rather
+// than hide among the warnings. It reads the local record only; nothing is
+// fetched or written.
 export function sopPersonaCheck({ home, env, read = readSopPersonaRecord }) {
   const record = read({ home, env });
   const evidence = { state: record.state, repository: record.repository ?? null, commit: record.commit ?? null, recorded_at: record.recordedAt ?? null };
@@ -154,9 +156,9 @@ export function sopPersonaCheck({ home, env, read = readSopPersonaRecord }) {
     try { parsePersonaMapping(record.text); } catch (error) {
       return readinessCheck({
         id: 'sop.persona',
-        status: 'warning',
+        status: 'failed',
         code: 'sop-persona-unavailable',
-        message: `the recorded persona.toml from ${record.repository}@${record.commit} is invalid (${error.message}), so launches and turns are refused`,
+        message: `the recorded persona.toml from ${record.repository}@${record.commit} is invalid (${error.message}), so every soul launch, wake, task and turn is refused`,
         action: 'fix persona.toml in the SOP, then run: agent-bot sop persona',
         evidence,
       });
@@ -187,11 +189,11 @@ export function sopPersonaCheck({ home, env, read = readSopPersonaRecord }) {
   }
   return readinessCheck({
     id: 'sop.persona',
-    status: 'warning',
+    status: 'failed',
     code: record.state === 'unrecorded' ? 'sop-persona-unrecorded' : 'sop-persona-unavailable',
     message: record.state === 'unrecorded'
-      ? 'an SOP is selected but its persona mapping is not recorded, so launches and turns are refused'
-      : 'the SOP config or persona record cannot be read, so launches and turns are refused',
+      ? 'an SOP is selected but its persona mapping is not recorded, so every soul launch, wake, task and turn is refused'
+      : 'the SOP config or persona record cannot be read, so every soul launch, wake, task and turn is refused',
     action: record.state === 'unrecorded' ? action : 'fix the SOP config or record, then run: agent-bot sop persona',
     evidence,
   });

@@ -107,7 +107,7 @@ import { validAppSlug } from './identity-app-store.mjs';
 import { runtimeProfileInfo } from './organization-profile.mjs';
 import { readSoulProfile } from './soul-profile.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
-import { launchSandbox, readSandboxStatus, turnSandboxProblem, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount } from './sandbox.mjs';
+import { launchSandbox, personaBlockNotice, readSandboxStatus, turnSandboxProblem, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount } from './sandbox.mjs';
 import { checkSopLaunchPolicy } from './sop.mjs';
 import { resolveSoulModel, resolveSoulReasoningEffort, soulModel, setSoulModel, recordSoulModels } from './soul-model.mjs';
 import { ownerGate as soulSettingOwnerGate, readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
@@ -2352,12 +2352,20 @@ function reportPreGateMigration() {
   }
 }
 
+// An SOP whose persona policy cannot be read refuses every launch and turn
+// (#613); say so where the daemon starts, not only on the first refusal.
+function reportPersonaBlock() {
+  const notice = personaBlockNotice();
+  if (notice) process.stderr.write(`${notice}\n`);
+}
+
 async function main() {
   const [command = 'status', ...rest] = process.argv.slice(2);
   const json = rest.includes('--json');
   switch (command) {
     case 'run': {
       reportPreGateMigration();
+      reportPersonaBlock();
       await runDaemon({
         onListening: (state) => {
           process.stderr.write(`agent-bot daemon listening on 127.0.0.1:${state.port} (pid ${state.pid})\n`);
@@ -2372,6 +2380,7 @@ async function main() {
           ? `daemon already running (pid ${status.pid}, port ${status.port})\n`
           : `daemon started (pid ${status.pid}, port ${status.port})\n`,
       );
+      reportPersonaBlock();
       break;
     }
     case 'status': {

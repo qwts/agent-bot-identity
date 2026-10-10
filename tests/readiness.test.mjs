@@ -23,6 +23,7 @@ import {
   READINESS_SCHEMA_VERSION,
   collectReadiness,
   harnessMcpWiring,
+  readinessCheck,
   credentialHelperSequenceReady,
   renderReadinessJson,
   renderReadinessReport,
@@ -268,8 +269,12 @@ test('doctor passes again after bootstrap --repair restores a deleted config wit
   const org = createOrgRepo(home, profile);
   org.select(home);
   const env = { HOME: home, AGENT_BOT_ACCOUNT: slug };
+  // Selecting the org makes an SOP selection whose persona mapping this
+  // test never records; that fails doctor on its own (#613), so it is
+  // reported recorded here to keep the check on the config repair.
   const doctor = () => collectReadiness({
     ...machineDependencies(home), command: 'doctor', scope: 'machine', env, load: loadConfig,
+    inspectSopPersona: () => readinessCheck({ id: 'sop.persona', status: 'ready', message: 'persona mapping recorded' }),
   });
   installBootstrapProfile({ sourcePath: '-', scopeApps: [slug], home, env, read: () => JSON.stringify(profile) });
   const before = await doctor();
