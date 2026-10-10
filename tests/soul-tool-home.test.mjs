@@ -11,6 +11,7 @@ import { auditFile } from '../agent-principals.mjs';
 import { ownerActionSummary } from '../owner-gate.mjs';
 import { readToolHomeRecord, setToolHomeChoice } from '../soul-tool-home-record.mjs';
 import { soulToolHomeCommand } from '../soul-tool-home.mjs';
+import { createWakeSessions, wakeSessionsFile } from '../wake-resume.mjs';
 
 const ID = 'agent_11111111-1111-4111-8111-111111111111';
 const OTHER = 'agent_22222222-2222-4222-8222-222222222222';
@@ -150,6 +151,7 @@ test('bad input is refused with a code before anything is asked or written', asy
   await assert.rejects(f.run(['codex', 'sometimes', '--soul', ID]), { code: 'usage' });
   await assert.rejects(f.run(['codex', 'soul']), { code: 'usage' });
   await assert.rejects(f.run(['codex', '--soul', ID, '--principal-stdin']), { code: 'usage' });
+  await assert.rejects(f.run(['codex', '--soul', ID, '--fresh-session', '--fresh-session']), { code: 'usage' });
   await assert.rejects(f.run(['kiro', 'soul', '--soul', ID]), { code: 'tool-home-unsupported' });
   await assert.rejects(f.run(['nope', 'soul', '--soul', ID]), { code: 'tool-home-unsupported' });
   await assert.rejects(f.run(['codex', 'soul', '--soul', 'nobody']), { code: 'soul-not-found' });
@@ -161,6 +163,66 @@ test('the owner prompt names the soul and what global gives it', () => {
   const souls = [{ id: ID, displayName: 'Bill - Starter' }];
   assert.equal(ownerActionSummary(`soul tool-home ${ID} codex global`, { souls }),
     `let Bill - Starter (${ID}) use this Mac's shared codex sign-in and sessions instead of its own`);
+});
+
+// #617: after a tool-home move, --fresh-session sets the recorded resume
+// session aside, kept with its store, so the next wake starts a new one.
+test('--fresh-session sets the recorded resume session aside, kept, for the soul itself or the owner', async (t) => {
+  const f = fixture(t);
+  const file = wakeSessionsFile({ env: f.env, home: f.home });
+  const sessions = createWakeSessions({ file });
+  sessions.set(ID, 'codex', 'thread-old', 'read-only', 'host');
+  const soul = { markers: ['Agent ID', 'agent binding'], proven: ID };
+  const done = await f.run(['codex', '--soul', ID, '--fresh-session', '--json'], soul);
+  assert.deepEqual(done.freshSession, { retired: true, store: 'host' });
+  assert.equal(done.authorization, 'binding');
+  assert.deepEqual([...f.gates, ...f.asks], [], 'a soul\'s binding is enough for its own soul');
+  // Nothing to resume, and the old session is kept with its store.
+  assert.equal(sessions.recorded(ID, 'codex'), null);
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).sessions[ID], { retired: [
+    { harness: 'codex', sessionId: 'thread-old', policy: 'read-only', store: 'host', retiredAt: AT }] });
+  // A new session recorded later keeps the retired one beside it.
+  sessions.set(ID, 'codex', 'thread-new', 'read-only', 'soul');
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).sessions[ID].retired.length, 1);
+  // The owner, through the gate; another soul may not.
+  await assert.rejects(f.run(['codex', '--soul', ID, '--fresh-session'], { markers: ['agent binding'], proven: OTHER }), { code: 'tool-home-not-own-soul' });
+  assert.equal(sessions.get(ID, 'codex'), 'thread-new');
+  await f.run(['codex', '--soul', ID, '--fresh-session']);
+  assert.deepEqual(f.gates.map((gate) => gate.action), [`soul tool-home ${ID} codex --fresh-session`]);
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).sessions[ID].retired.map((entry) => entry.sessionId).join(), 'thread-old,thread-new');
+  assert.equal(f.out.at(-1), 'codex: unset (current setup)\ncodex: the next resume wake starts a new session; the old one is kept in the soul store\n');
+  assert.deepEqual(f.receipts().map(({ operation, decision, detail }) => ({ operation, decision, detail })), [
+    { operation: 'fresh-session', decision: 'fresh-session', detail: 'codex: resume session in the host store set aside by soul (binding)' },
+    { operation: 'fresh-session', decision: 'fresh-session', detail: 'codex: resume session in the soul store set aside by owner (presence)' },
+  ]);
+  // None recorded: nothing changes and no receipt.
+  assert.deepEqual((await f.run(['codex', '--soul', ID, '--fresh-session', '--json'])).freshSession, { retired: false });
+  assert.equal(f.receipts().length, 2);
+});
+
+test('--fresh-session with global is one owner prompt for both; a refusal changes neither', async (t) => {
+  const f = fixture(t);
+  const sessions = createWakeSessions({ file: wakeSessionsFile({ env: f.env, home: f.home }) });
+  sessions.set(ID, 'codex', 'thread-soul', 'workspace', 'soul');
+  const soul = { markers: ['Agent ID', 'agent binding'], proven: ID };
+  await assert.rejects(f.run(['codex', 'global', '--soul', ID, '--fresh-session'], { ...soul, approve: false }), { code: 'tool-home-owner-not-approved' });
+  assert.equal(sessions.get(ID, 'codex'), 'thread-soul');
+  assert.equal(readToolHomeRecord(f.soulDir), null);
+  const done = await f.run(['codex', 'global', '--soul', ID, '--fresh-session'], soul);
+  assert.equal(done.choice, 'global');
+  assert.deepEqual(done.freshSession, { retired: true, store: 'soul' });
+  assert.deepEqual(f.asks, Array(2).fill(`soul tool-home ${ID} codex global --fresh-session`));
+  assert.equal(sessions.get(ID, 'codex'), null);
+});
+
+test('the owner prompt for --fresh-session says the old session is kept', () => {
+  const souls = [{ id: ID, displayName: 'Bill - Starter' }];
+  const bill = `Bill - Starter (${ID})`;
+  assert.equal(ownerActionSummary(`soul tool-home ${ID} codex --fresh-session`, { souls }), `start a new codex session for ${bill} (the old one is kept)`);
+  assert.equal(ownerActionSummary(`soul tool-home ${ID} codex soul --fresh-session`, { souls }),
+    `keep ${bill}'s codex in its own tool home and start a new codex session for ${bill} (the old one is kept)`);
+  assert.equal(ownerActionSummary(`soul tool-home ${ID} codex global --fresh-session`, { souls }),
+    `let ${bill} use this Mac's shared codex sign-in and sessions instead of its own, and start a new codex session there (the old one is kept)`);
 });
 
 test('agent-bot soul tool-home is wired through the CLI', async (t) => {

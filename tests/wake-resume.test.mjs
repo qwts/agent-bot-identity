@@ -308,6 +308,28 @@ test('grok: a policy change does not bypass the moved-store refusal', () => with
   assert.ok(!calls[0].includes('--resume'));
 }));
 
+test('a fresh session after a store move starts in the new store; a damaged record is set aside the same way', () => withState(async ({ env, root }) => {
+  const file = wakeSessionsFile({ env });
+  const sessions = createWakeSessions({ file });
+  sessions.set(ID, 'codex', 'thread-host', 'read-only', 'host');
+  const calls = [];
+  const run = async (_command, args) => { calls.push(args); return { code: 0, stdout: CODEX_OUTPUT, stderr: '' }; };
+  const turn = () => createResumeExecutor({ sessions, baseEnv: stubbed({}), home: root, run, toolHomeEnvFor: () => ({ CODEX_HOME: path.join(root, 'soul') }) })(
+    { invocation: { agentId: ID, harness: 'codex', cwd: root }, message: 'm', env: {}, policy: 'read-only' });
+  await assert.rejects(turn(), (error) => error.code === 'resume-session-store-moved' && /--fresh-session/.test(error.message));
+  assert.equal(sessions.retire(ID, 'codex', { now: () => new Date('2026-10-10T00:00:00Z') }).store, 'host');
+  await turn();
+  assert.ok(!calls[0].includes('resume'), 'a new session, not the host one');
+  assert.deepEqual(sessions.recorded(ID, 'codex'), { sessionId: '01a0fe81-0f35-73a2-9d5f-d48c92029d1c', store: 'soul', policy: 'read-only' });
+  const entry = JSON.parse(readFileSync(file, 'utf8')).sessions[ID];
+  assert.deepEqual(entry.retired, [{ harness: 'codex', sessionId: 'thread-host', policy: 'read-only', store: 'host', retiredAt: '2026-10-10T00:00:00.000Z' }]);
+  assert.equal(sessions.retire(ID, 'opencode'), null, 'another harness has nothing to set aside');
+  writeFileSync(file, JSON.stringify({ schemaVersion: 1, sessions: { [ID]: { harness: 'codex', sessionId: 'damaged', store: 'other' } } }));
+  await assert.rejects(turn(), (error) => error.code === 'wake-session-record-invalid' && /--fresh-session/.test(error.message));
+  assert.equal(sessions.retire(ID, 'codex').store, 'other', 'kept as written');
+  await turn();
+}));
+
 test('runProcess feeds stdin, captures output, and reports the exit code', async () => {
   const result = await runProcess(process.execPath, ['-e', 'process.stdin.pipe(process.stdout); process.stdin.on("end", () => process.exit(3))'], { cwd: tmpdir(), env: process.env, stdin: 'hello', timeoutMs: 10_000 });
   assert.deepEqual({ code: result.code, stdout: result.stdout }, { code: 3, stdout: 'hello' });

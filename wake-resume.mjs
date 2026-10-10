@@ -181,24 +181,51 @@ export function createWakeSessions({ file }) {
     const entry = read()[validateAgentId(agentId)];
     if (entry?.harness !== harness || typeof entry.sessionId !== 'string') return null;
     if (entry.store !== undefined && !SESSION_STORES.includes(entry.store)) {
-      throw Object.assign(new Error(`wake sessions: ${agentId}'s recorded ${harness} session names an unknown store`), { code: 'wake-session-record-invalid' });
+      throw Object.assign(new Error(`wake sessions: ${agentId}'s recorded ${harness} session names an unknown store; \`agent-bot soul tool-home ${harness} --soul ${agentId} --fresh-session\` sets it aside and starts a new one`), { code: 'wake-session-record-invalid' });
     }
     if (policy !== undefined && entry.policy !== policy) return null;
     return { sessionId: entry.sessionId, store: entry.store ?? 'host', ...(entry.policy ? { policy: entry.policy } : {}) };
   };
+  // Every write is a read-modify-write under the one lock.
+  const update = (change) => {
+    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    return withLock(`${file}.lock`, 'wake sessions', () => {
+      const sessions = read();
+      const result = change(sessions);
+      if (result === undefined) return null;
+      const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+      try { writeFileSync(temp, `${JSON.stringify({ schemaVersion: 1, sessions }, null, 2)}\n`, { flag: 'wx', mode: 0o600 }); renameSync(temp, file); chmodSync(file, 0o600); }
+      finally { rmSync(temp, { force: true }); }
+      return result;
+    });
+  };
+  // Sessions retired by `soul tool-home --fresh-session` stay on the entry.
+  const keptRetired = (entry) => (Array.isArray(entry?.retired) && entry.retired.length ? { retired: entry.retired } : {});
   return {
     recorded,
     get: (agentId, harness, policy) => recorded(agentId, harness, policy)?.sessionId ?? null,
     set(agentId, harness, sessionId, policy, store = 'host') {
       const id = validateAgentId(agentId);
       if (!SESSION_STORES.includes(store)) throw new Error(`wake session store must be one of ${SESSION_STORES.join(', ')}`);
-      mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-      withLock(`${file}.lock`, 'wake sessions', () => {
-        const sessions = read();
-        sessions[id] = { harness, sessionId, ...(policy ? { policy } : {}), store };
-        const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
-        try { writeFileSync(temp, `${JSON.stringify({ schemaVersion: 1, sessions }, null, 2)}\n`, { flag: 'wx', mode: 0o600 }); renameSync(temp, file); chmodSync(file, 0o600); }
-        finally { rmSync(temp, { force: true }); }
+      update((sessions) => {
+        sessions[id] = { harness, sessionId, ...(policy ? { policy } : {}), store, ...keptRetired(sessions[id]) };
+        return true;
+      });
+    },
+    // The next resume turn starts a new session (#617, `soul tool-home
+    // --fresh-session`): the recorded one moves to the entry's `retired`
+    // list with the store it lives in, so its id is kept and its transcript
+    // stays in that store, never deleted. A damaged store is retired as
+    // written. Returns the retired session, or null when none was recorded.
+    retire(agentId, harness, { now = () => new Date() } = {}) {
+      const id = validateAgentId(agentId);
+      return update((sessions) => {
+        const entry = sessions[id];
+        if (entry?.harness !== harness || typeof entry.sessionId !== 'string') return undefined;
+        const retired = { harness, sessionId: entry.sessionId, ...(entry.policy ? { policy: entry.policy } : {}),
+          store: entry.store ?? 'host', retiredAt: now().toISOString() };
+        sessions[id] = { retired: [...(keptRetired(entry).retired ?? []), retired] };
+        return retired;
       });
     },
   };
@@ -250,7 +277,7 @@ function storeMoved({ agentId, harness, prior, store }) {
   const back = prior === 'host' ? 'global' : 'soul';
   const where = (name) => (name === 'host' ? 'the host\'s store' : 'the soul\'s own tool home');
   const action = `agent-bot soul tool-home ${harness} ${back} --soul ${agentId}`;
-  return Object.assign(new Error(`resume wake: ${agentId}'s recorded ${harness} session is in ${where(prior)}, but its ${harness} now uses ${where(store)}; switch it back with \`${action}\``),
+  return Object.assign(new Error(`resume wake: ${agentId}'s recorded ${harness} session is in ${where(prior)}, but its ${harness} now uses ${where(store)}; switch it back with \`${action}\`, or start a new session there with \`agent-bot soul tool-home ${harness} --soul ${agentId} --fresh-session\``),
     { code: 'resume-session-store-moved', action });
 }
 
