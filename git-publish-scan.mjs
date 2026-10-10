@@ -502,7 +502,14 @@ function evaluate(argv, ctx) {
     result.opaque.push({ cwd });
     return {};
   }
-  if (base === 'git') gitInvocation(args, { cwd, env, result, depth });
+  if (base === 'git') { gitInvocation(args, { cwd, env, result, depth }); return {}; }
+  // An explicit executable path can be a shell script or any other program
+  // that runs Git with its hooks disabled. The file contents are opaque here.
+  // Only git and known shells/interpreters above have their own handling.
+  if (word.includes('/')) {
+    result.opaqueExecution = true;
+    result.opaque.push({ cwd });
+  }
   return {};
 }
 
