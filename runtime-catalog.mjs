@@ -5,9 +5,11 @@
 // verified by downloading the archive once and hashing it; a bump replaces
 // the whole pin, never one digest.
 //
-// Python is not an archive: uv provides it (`uv python install`), verifying
-// python-build-standalone's own checksums, so the python pins carry only the
-// version and uv is pinned here like any other binary.
+// Python is installed by uv (`uv python install`) from python-build-standalone
+// (#617, owner decision "Hash-locked installs"): each python pin carries the
+// URL and SHA-256 of the archive per platform, the provisioner hands uv
+// exactly that one download, and uv refuses an archive that does not hash
+// to it. uv is pinned here like any other binary.
 
 import { createHash } from 'node:crypto';
 
@@ -54,7 +56,19 @@ const uv = (version, sums) => Object.freeze({
     'win32-x64': Object.freeze({ url: `https://github.com/astral-sh/uv/releases/download/${version}/uv-x86_64-pc-windows-msvc.zip`, sha256: sums[4], bin: '.' }),
   }),
 });
-const python = (version) => Object.freeze({ version, via: 'uv', sources: null });
+// No `bin`: uv lays the interpreter out and the provisioner finds it.
+const PBS = 'https://github.com/astral-sh/python-build-standalone/releases/download';
+const python = (version, build, sums) => Object.freeze({
+  version,
+  via: 'uv',
+  sources: Object.freeze({
+    'darwin-arm64': Object.freeze({ url: `${PBS}/${build}/cpython-${version}%2B${build}-aarch64-apple-darwin-install_only_stripped.tar.gz`, sha256: sums[0] }),
+    'darwin-x64': Object.freeze({ url: `${PBS}/${build}/cpython-${version}%2B${build}-x86_64-apple-darwin-install_only_stripped.tar.gz`, sha256: sums[1] }),
+    'linux-x64': Object.freeze({ url: `${PBS}/${build}/cpython-${version}%2B${build}-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz`, sha256: sums[2] }),
+    'linux-arm64': Object.freeze({ url: `${PBS}/${build}/cpython-${version}%2B${build}-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz`, sha256: sums[3] }),
+    'win32-x64': Object.freeze({ url: `${PBS}/${build}/cpython-${version}%2B${build}-x86_64-pc-windows-msvc-install_only_stripped.tar.gz`, sha256: sums[4] }),
+  }),
+});
 
 // Digests in platform order: darwin-arm64, darwin-x64, linux-x64, linux-arm64, win32-x64.
 export const RUNTIME_CATALOG = Object.freeze({
@@ -66,7 +80,15 @@ export const RUNTIME_CATALOG = Object.freeze({
       '6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff', '724282c3b43aec998aa9527380465b45d229e021b58035f5f4f63095eabfe5d5',
       '158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541']),
   ]),
-  python: Object.freeze([python('3.12.15'), python('3.13.16')]),
+  // The python-build-standalone 20261003 builds uv 0.12.23 itself selects.
+  python: Object.freeze([
+    python('3.12.15', '20261003', ['ad8d0c637c0a36b967b310e2c07254f4d2ca8cabaa7699e55ed6290aceb481a2', '562c30864ece2cb1d3e0ad66a1acd498611a47e5a10ce81b99158bef1ccbd355',
+      '731af898886c5f821890dc901eca3c651cca8e51fa7308c159d12a1194aeac91', '6541297dd1798dec8b98c3ad7492808a5b9d1c126801ceb2011e7754cd20d1ce',
+      '6fba7f2ae506facf41d457ea8293c7497910a675c69a4e954875169410a50402']),
+    python('3.13.16', '20261003', ['9e01f63bbb08576cd9c8bc2d0564d098cb30c8453a0cd4bcf6aef458f6d2a147', 'b4dad38ba6a344555ccb71a1b08caad0a6c0dda88c5803658bc95bd7f04e9f5c',
+      '4595c5589fff7bf0cb158d9a88a797e0d791fa33830770fcb7bf3f4b104feeae', '6e9641400f8debd9b7924b27b5ff0662c372852382e291a76c450c7b67414cf6',
+      'ec43f1a85c29f147d7ae2d13218c52c70b24a983a82ab22d6c607c0593060e10']),
+  ]),
   go: Object.freeze([
     go('1.27.1', ['ee215d57e0ec269c60cc9ceca68e6bda321ba9ee5afe24f4b0988703c2d87d12', '8f8f52c6649542cf027bbc9b9c68d1ec042f9f34808a40413f0b8b3f66f3caa4',
       '63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445', '3450b45a3f9ee8568792736a5c5e70a1f2e9b36c35a8f74958c03e51d7d92bec',
@@ -214,6 +236,18 @@ export function normalizeRuntimeDeclaration(name, value, label = `runtimes.${nam
     }
   }
   return { version: value.version, via, sources };
+}
+
+/**
+ * `runtimes.integrity` (#617, owner decision "Per soul in soul.json"): the
+ * soul's install policy, not a runtime. `"required"` refuses an install
+ * without integrity evidence (an archive digest, or a uv tool's lock);
+ * absent, such installs are allowed and reported as unverified. It is part
+ * of soul.json, so the package revision covers it.
+ */
+export function normalizeRuntimeIntegrity(value, label = 'runtimes.integrity') {
+  if (value !== 'required') throw new Error(`${label} must be "required" (leave it out to allow unverified installs)`);
+  return value;
 }
 
 const PACKAGE_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$/;

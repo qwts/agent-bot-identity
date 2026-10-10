@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
 import { canonicalJson } from './canonical-json.mjs';
 import { CREDENTIAL_STORES } from './credential-names.mjs';
-import { RUNTIME_NAMES, normalizeHarnessInstall, normalizeRuntimeDeclaration } from './runtime-catalog.mjs';
+import { RUNTIME_NAMES, normalizeHarnessInstall, normalizeRuntimeDeclaration, normalizeRuntimeIntegrity } from './runtime-catalog.mjs';
 import { buildHarnessFiles, envProblem, PERMISSION_RULE } from './soul-builder.mjs';
 import { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS, isGeneratedPath } from './soul-harness-contract.mjs';
 import { normalizeProvider, validateSecretsDeclaration } from './soul-providers.mjs';
@@ -59,11 +59,13 @@ export function validateCredentialsDeclaration(credentials) {
 // What a soul needs provisioned per soul (#583 slice 3, ADR-0583 decision 6;
 // ADR-0322): `runtimes.node|python|go`, each a version or range resolved
 // through the pin catalog, or an object pinning exact `sources` per platform
-// (definition: they change the revision and are reviewed with it). Any
-// other key or shape fails, so a typo never silently drops a pin.
+// (definition: they change the revision and are reviewed with it), plus
+// `integrity: "required"` (#617). Any other key or shape fails, so a typo
+// never silently drops a pin.
 export function validateRuntimesDeclaration(runtimes) {
   if (!object(runtimes)) throw new Error('soul.json runtimes must be an object');
   for (const [name, value] of Object.entries(runtimes)) {
+    if (name === 'integrity') { normalizeRuntimeIntegrity(value, 'soul.json runtimes.integrity'); continue; }
     if (!RUNTIME_NAMES.includes(name)) throw new Error(`soul.json runtimes.${name} is not a runtime agent-bot provisions (${RUNTIME_NAMES.join(', ')})`);
     normalizeRuntimeDeclaration(name, value, `soul.json runtimes.${name}`);
   }

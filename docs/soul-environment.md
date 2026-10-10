@@ -135,11 +135,14 @@ scalars `null`, collections `[]`), in this order:
   `.soul-state/runtimes/harnesses/<name>/<version>`: an npm adapter listed
   from its stamp as `kind: "npm"` with its `package`, the archive and uv
   tool installs as before; each with `version`, `bin`, `location`,
-  `status`), `launchable` (true when any listed install has its binary,
+  `status`, and for the archive and uv tool installs `verification`
+  `verified | unverified`, an unlocked uv tool being `unverified`), `launchable` (true when any listed install has its binary,
   the runtimes location alone included).
-- `runtimes`: `declared` from `soul.json` (`{}` when absent), `installed[]`
-  `{ name, version, declared, requiredBy, source, path, bin }` read from
-  each install's stamp, `missing[]` (reason `not provisioned` or `last
+- `runtimes`: `declared` from `soul.json` (`{}` when absent; the
+  `integrity` policy is not listed as a runtime), `installed[]`
+  `{ name, version, declared, requiredBy, source, path, bin, verification }`
+  read from each install's stamp (`unverified` for a Python installed
+  before its archive digest was pinned; the text marks it `[unverified]`), `missing[]` (reason `not provisioned` or `last
   install failed: <code>`), `unsupported[]` (no download for this host).
   See [soul-runtimes.md](soul-runtimes.md).
 - `providers`: `declared[]` one row per harness with a provider

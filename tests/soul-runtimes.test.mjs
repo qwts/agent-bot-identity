@@ -12,7 +12,7 @@ import { upsertSoul } from '../agent-population.mjs';
 import { initAgentSpace } from '../agent-space.mjs';
 import { RUNTIME_CATALOG, RUNTIME_NAMES, RUNTIME_PLATFORMS, SHA256_HEX, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, resolveCatalogPin, versionMatches } from '../runtime-catalog.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, validateRuntimesDeclaration, validateSoulPackage } from '../soul-package.mjs';
-import { INSTALL_STAMP, RUNTIME_ERROR_CODES, downloadCacheDir, fetchArchive, inspectRuntimeOverrides, inspectSoulRuntimes, installSoulRuntimes, pendingSoulRuntimes, runtimeLaunchEnv, soulRuntimeEnv, soulRuntimesCommand } from '../soul-runtimes.mjs';
+import { INSTALL_STAMP, RUNTIME_ERROR_CODES, downloadCacheDir, fetchArchive, formatRuntimes, inspectRuntimeOverrides, inspectSoulRuntimes, installSoulRuntimes, pendingSoulRuntimes, runtimeLaunchEnv, soulRuntimeEnv, soulRuntimesCommand, uvPythonDownloads } from '../soul-runtimes.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
 import { createLaunchHandler } from '../daemon-launch.mjs';
 import { acpExecutorFor, coldTurnExecutor } from '../wake-plane.mjs';
@@ -35,6 +35,8 @@ const NODE_ARCHIVE = archive({ [`node-v${NODE.version}-darwin-arm64/bin/node`]: 
 const GO_ARCHIVE = archive({ 'go/bin/go': '#!/bin/sh\n', 'go/VERSION': `go${GO.version}` });
 const UV_ARCHIVE = archive({ [`uv-aarch64-apple-darwin/uv`]: '#!/bin/sh\n', [`uv-aarch64-apple-darwin/uvx`]: '#!/bin/sh\n' });
 const OPENCODE_ARCHIVE = archive({ opencode: '#!/bin/sh\n' });
+// uv downloads python itself; the double only checks it was handed this digest.
+const PYTHON_SHA = sha('cpython');
 
 // A catalog shaped like the real one, with digests of the fake archives, so
 // a test never downloads and the real pins stay what the catalog says.
@@ -44,7 +46,7 @@ function fakeCatalog() {
     node: [{ version: NODE.version, sources: source(NODE_ARCHIVE, 'bin') }],
     go: [{ version: GO.version, sources: source(GO_ARCHIVE, 'bin') }],
     uv: [{ version: UV.version, sources: source(UV_ARCHIVE, '.') }],
-    python: [{ version: PYTHON.version, via: 'uv', sources: null }],
+    python: [{ version: PYTHON.version, via: 'uv', sources: Object.fromEntries(RUNTIME_PLATFORMS.map((platform) => [platform, { url: `https://example.test/${platform}/cpython.tar.gz`, sha256: PYTHON_SHA }])) }],
   };
 }
 
@@ -71,6 +73,10 @@ function doubles({ archives, fail = {} } = {}) {
     if (args[0] === 'python' && args[1] === 'install') {
       const dir = args[args.indexOf('--install-dir') + 1];
       if (options.env?.UV_FAIL) throw Object.assign(new Error('uv failed'), { stderr: 'error: No download found for request' });
+      // uv knows only the listed download and refuses bytes with another digest.
+      const list = JSON.parse(readFileSync(args[args.indexOf('--python-downloads-json-url') + 1], 'utf8'));
+      const entries = Object.values(list);
+      if (entries.length !== 1 || entries[0].sha256 !== PYTHON_SHA) throw Object.assign(new Error('uv failed'), { stderr: 'error: Hash mismatch for cpython' });
       put(path.join(dir, `cpython-${args[2]}-macos-aarch64-none`, 'bin', 'python3'), '#!/bin/sh\n');
       return { stdout: '', stderr: '' };
     }
@@ -136,19 +142,20 @@ test('the catalog pins one version per supported major with an https URL and a 6
       const major = name === 'python' ? pin.version.split('.').slice(0, 2).join('.') : pin.version.split('.')[0];
       assert.ok(!majors.has(major), `${name} pins ${major} once`);
       majors.add(major);
-      if (name === 'python') { assert.equal(pin.via, 'uv'); assert.equal(pin.sources, null); continue; }
+      if (name === 'python') assert.equal(pin.via, 'uv');
       assert.deepEqual(Object.keys(pin.sources).sort(), [...RUNTIME_PLATFORMS].sort(), `${name} ${pin.version} covers every platform`);
       for (const [platform, source] of Object.entries(pin.sources)) {
         assert.match(source.url, /^https:\/\/(nodejs\.org|go\.dev|github\.com\/astral-sh)\//, `${name} ${platform}`);
         assert.match(source.sha256, SHA256_HEX, `${name} ${platform}`);
-        assert.ok(['bin', '.'].includes(source.bin));
+        // uv lays python out itself, so its sources name no bin.
+        assert.ok(name === 'python' ? source.bin === undefined : ['bin', '.'].includes(source.bin));
         assert.ok(source.url.includes(pin.version), `${name} ${platform} names its version`);
       }
     }
   }
   assert.deepEqual(RUNTIME_CATALOG.node.map((pin) => pin.version.split('.')[0]), ['22', '24']);
   assert.deepEqual(RUNTIME_CATALOG.python.map((pin) => pin.version.split('.').slice(0, 2).join('.')), ['3.12', '3.13']);
-  assert.ok(new Set(Object.values(RUNTIME_CATALOG).flat().flatMap((pin) => Object.values(pin.sources ?? {}).map((s) => s.sha256))).size === 20, 'twenty distinct digests');
+  assert.ok(new Set(Object.values(RUNTIME_CATALOG).flat().flatMap((pin) => Object.values(pin.sources ?? {}).map((s) => s.sha256))).size === 30, 'thirty distinct digests');
   assert.equal(hostPlatform({ platform: 'darwin', arch: 'arm64' }), 'darwin-arm64');
   assert.equal(hostPlatform({ platform: 'freebsd', arch: 'x64' }), null);
   assert.equal(hostPlatform({ platform: 'win32', arch: 'x64' }), 'win32-x64');
@@ -497,6 +504,74 @@ test('a locked uv tool installs into its own venv with uv pip --require-hashes a
   assert.deepEqual([win.status, win.reason], ['unsupported', 'muse 3.0.0 is a locked uv tool, which is not supported on Windows yet']);
 });
 
+test('python installs from the one archive the catalog pins and records its digest; runtimes.integrity "required" refuses installs without evidence, others are labelled unverified (#617)', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { python: '3.12' } } });
+  const d = doubles({ archives: f.archives });
+  const result = await installSoulRuntimes(f.dir, { ...f.options, fetchFn: d.fetchFn, runImpl: d.runImpl });
+  const python = result.runtimes.find((r) => r.name === 'python');
+  assert.deepEqual([python.status, python.verification], ['installed', 'verified']);
+  const source = f.catalog.python[0].sources[PLATFORM];
+  const stamp = JSON.parse(readFileSync(path.join(python.path, INSTALL_STAMP), 'utf8'));
+  assert.deepEqual([stamp.url, stamp.sha256], [source.url, PYTHON_SHA], 'the receipt records the archive uv was held to');
+  const install = d.commands.find((c) => c.args[0] === 'python');
+  const list = install.args[install.args.indexOf('--python-downloads-json-url') + 1];
+  assert.ok(!existsSync(list), 'the downloads list is removed with the staging');
+  assert.deepEqual(readdirSync(path.join(f.runtimes, 'python')).sort(), [PYTHON.version, 'last-install.json']);
+  // uv's key and fields for each platform, from the one archive.
+  assert.deepEqual(uvPythonDownloads('3.12.15', source, 'linux-x64'), { 'cpython-3.12.15-linux-x86_64-gnu': { name: 'cpython', arch: { family: 'x86_64', variant: null }, os: 'linux', libc: 'gnu',
+    major: 3, minor: 12, patch: 15, prerelease: '', url: source.url, sha256: PYTHON_SHA, variant: null, build: null } });
+  assert.deepEqual(Object.keys(uvPythonDownloads('3.13.16', source, 'darwin-arm64')), ['cpython-3.13.16-darwin-aarch64-none']);
+  assert.deepEqual(Object.keys(uvPythonDownloads('3.13.16', source, 'win32-x64')), ['cpython-3.13.16-windows-x86_64-none']);
+  assert.equal(uvPythonDownloads('3.13.16', source, null), null);
+  // A catalog digest uv cannot match fails the install and keeps the current one.
+  const bumped = structuredClone(f.catalog);
+  bumped.python[0].sources[PLATFORM].sha256 = 'e'.repeat(64);
+  rmSync(python.path, { recursive: true });
+  const mismatch = await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: d.fetchFn, runImpl: d.runImpl }).then(() => null, (e) => e);
+  assert.equal(mismatch?.code, 'runtime-install-failed');
+  assert.match(mismatch.message, /Hash mismatch/);
+  await installSoulRuntimes(f.dir, { ...f.options, fetchFn: d.fetchFn, runImpl: d.runImpl });
+  // A receipt for another digest is not the pinned python.
+  assert.match(inspectSoulRuntimes(f.dir, { ...f.options, catalog: bumped }).runtimes.find((r) => r.name === 'python').reason, /pinned Python archive digest/);
+  // A receipt from before the pin has no digest: it still runs, unverified.
+  writeFileSync(path.join(python.path, INSTALL_STAMP), JSON.stringify({ ...stamp, url: null, sha256: null }));
+  const legacy = inspectSoulRuntimes(f.dir, f.options).runtimes.find((r) => r.name === 'python');
+  assert.deepEqual([legacy.status, legacy.verification], ['installed', 'unverified']);
+  const text = formatRuntimes({ agentId: ID, soulDir: f.dir, platform: PLATFORM, integrity: null, ready: true, runtimes: inspectSoulRuntimes(f.dir, f.options).runtimes, harnesses: [], overrides: [], invalid: [] });
+  assert.match(text, /\nintegrity: not required\n/);
+  assert.match(text, new RegExp(`\\npython: installed ${PYTHON.version.replaceAll('.', '\\.')} \\(declared 3\\.12, catalog\\) \\[unverified\\] `));
+  // Required: that python is reinstalled with its evidence, and an unlocked uv tool is refused.
+  f.writeManifest((m) => { m.runtimes.integrity = 'required'; m.harnesses = { muse: { install: { kind: 'uv-tool', package: 'goose-ai', version: '1.9.0', bin: 'goose' } } }; });
+  const required = inspectSoulRuntimes(f.dir, f.options);
+  assert.equal(required.integrity, 'required');
+  const pending = required.runtimes.find((r) => r.name === 'python');
+  assert.deepEqual([pending.status, pending.path, pending.verification], ['missing', null, null]);
+  assert.match(pending.reason, /without its archive digest, and soul\.json requires integrity; reinstall it/);
+  const muse = required.harnesses.find((h) => h.name === 'muse');
+  assert.deepEqual([muse.status, muse.code, muse.action], ['unsupported', 'runtime-install-failed', 'add harnesses.muse.install.lock in a revision']);
+  assert.equal(muse.reason, 'muse 1.9.0 is a uv tool without a lock, and soul.json requires integrity');
+  assert.equal(required.ready, false);
+  const refused = await installSoulRuntimes(f.dir, { ...f.options, fetchFn: d.fetchFn, runImpl: d.runImpl }).then(() => null, (e) => e);
+  assert.equal(refused?.code, 'runtime-install-failed');
+  assert.equal(refused.action, 'add harnesses.muse.install.lock in a revision');
+  assert.ok(!existsSync(path.join(f.runtimes, 'harnesses', 'muse')), 'nothing of the refused tool is written');
+  assert.equal(d.commands.some((c) => c.args[0] === 'tool'), false);
+  const reinstalled = inspectSoulRuntimes(f.dir, f.options).runtimes.find((r) => r.name === 'python');
+  assert.deepEqual([reinstalled.status, reinstalled.verification], ['installed', 'verified'], 'the runtimes ahead of the refusal were reinstalled with evidence');
+  assert.equal(JSON.parse(readFileSync(path.join(reinstalled.path, INSTALL_STAMP), 'utf8')).sha256, PYTHON_SHA);
+  // Without the policy the same unlocked tool installs, unverified.
+  f.writeManifest((m) => { delete m.runtimes.integrity; });
+  const open = await installSoulRuntimes(f.dir, { ...f.options, fetchFn: d.fetchFn, runImpl: d.runImpl });
+  assert.deepEqual(['status', 'verification', 'code', 'action'].map((key) => open.harnesses.find((h) => h.name === 'muse')[key]), ['installed', 'unverified', null, null]);
+  // The policy is "required" or absent; anything else keeps the soul from being ready.
+  f.writeManifest((m) => { m.runtimes.integrity = 'optional'; });
+  const invalid = inspectSoulRuntimes(f.dir, f.options);
+  assert.deepEqual(invalid.invalid, [{ path: 'runtimes.integrity', message: 'soul.json runtimes.integrity must be "required" (leave it out to allow unverified installs)' }]);
+  assert.equal(invalid.ready, false);
+  assert.deepEqual(validateRuntimesDeclaration({ python: '3.12', integrity: 'required' }), { python: '3.12', integrity: 'required' });
+  assert.throws(() => validateRuntimesDeclaration({ integrity: true }), /runtimes\.integrity must be "required"/);
+});
+
 test('the launch env follows the override order: per-agent option, the soul install, the host-bundled node, then PATH', async (t) => {
   const f = fixture(t, { manifest: { runtimes: { node: '24', go: '1' } } });
   const d = doubles({ archives: f.archives });
@@ -710,8 +785,8 @@ test('soul runtimes and soul runtimes install report by Agent ID or name with --
   const write = (value) => { out += value; };
   const status = await soulRuntimesCommand(['billy', '--json'], { ...options, write });
   assert.deepEqual(JSON.parse(out), status);
-  assert.deepEqual(Object.keys(status), ['schemaVersion', 'agentId', 'soulDir', 'platform', 'root', 'cache', 'runtimes', 'harnesses', 'overrides', 'invalid', 'ready']);
-  assert.deepEqual(status.runtimes, [{ name: 'node', declared: '24', requiredBy: [], version: NODE.version, source: 'catalog', status: 'missing', reason: null, path: null, bin: null, lastError: null, via: null }]);
+  assert.deepEqual(Object.keys(status), ['schemaVersion', 'agentId', 'soulDir', 'platform', 'root', 'cache', 'integrity', 'runtimes', 'harnesses', 'overrides', 'invalid', 'ready']);
+  assert.deepEqual(status.runtimes, [{ name: 'node', declared: '24', requiredBy: [], version: NODE.version, source: 'catalog', status: 'missing', reason: null, path: null, bin: null, verification: null, lastError: null, code: null, action: null, via: null }]);
   assert.deepEqual([status.agentId, status.soulDir, status.platform, status.root, status.cache, status.ready], [ID, f.dir, PLATFORM, f.runtimes, f.cache, false]);
   assert.deepEqual(status.overrides, []);
   assert.deepEqual(gates, [], 'reading is not an owner action');

@@ -41,6 +41,14 @@ implemented slice and its limits.
   `{ "name", "version", "sha256": ["<hex>", ...] }` with each entry's
   digests sorted ascending (#617). The adapter harnesses
   (`claude`, `codex`) are pinned in `package.json` and refuse `install`.
+- `runtimes.integrity: "required"` (#617, owner decision "Per soul in
+  soul.json") is the soul's install policy, not a runtime. With it, an
+  install without integrity evidence is refused: a uv tool without a `lock`
+  is `unsupported` (`runtime-install-failed`, action: add the lock), and a
+  Python installed before the catalog pinned its digest is reinstalled.
+  Without it (the default) those installs are allowed and reported
+  `verification: "unverified"`. Any other value is invalid. Like every
+  declaration it is part of the revision.
 - Validation is strict: unknown keys, bad digests, non-https URLs and
   unknown platforms are refused by every package reader, and a declaration
   is definition, so adding or changing one (including a digest) changes the
@@ -55,7 +63,7 @@ the archive once and checking it against the publisher's checksum file.
 | Runtime | Pins | Source |
 | --- | --- | --- |
 | node | 22.23.3, 24.21.0 | nodejs.org tarballs (zip on Windows); npm comes with it |
-| python | 3.12.15, 3.13.16 | `uv python install` (python-build-standalone), via uv |
+| python | 3.12.15, 3.13.16 | python-build-standalone 20261003 archives, installed by uv held to the pinned digest |
 | go | 1.27.1 | go.dev tarballs (zip on Windows) |
 | uv | 0.12.23 | github.com/astral-sh/uv release archives |
 
@@ -91,15 +99,22 @@ instead of starting the harness.
 
 - `schemaVersion` 1, `agentId`, `soulDir`, `platform` (`null` when the host
   is not one the catalog knows), `root` (`.soul-state/runtimes`), `cache`
-  (the shared download cache), `ready`.
+  (the shared download cache), `integrity` (`"required"` or `null`), `ready`.
 - `runtimes[]`: `{ name, declared, requiredBy, version, source
   ("catalog" | "package"), status ("installed" | "missing" |
-  "unsupported"), reason, path, bin, lastError, via }`. `uv` appears as a
+  "unsupported"), reason, path, bin, verification, lastError, code, action,
+  via }`. `verification` is `"verified"` when the receipt carries the digest
+  the declaration pins, `"unverified"` when it has none (only a Python
+  installed before #617), and `null` when not installed; the text output
+  marks the latter `[unverified]`. `code` and `action` are `null` unless the
+  integrity policy refuses the row. `uv` appears as a
   row when python or a uv tool needs it, with `requiredBy` naming them.
   `lastError` is `{ code, message, at }` from the last failed install of
   that version, `null` otherwise.
 - `harnesses[]`: `{ name, kind, package, version, executable, status,
-  reason, path, bin, lastError }` for each `harnesses.<name>.install`.
+  reason, path, bin, verification, lastError, code, action, archive, lock }`
+  for each `harnesses.<name>.install`. An archive or a locked uv tool is
+  `verified`; an unlocked uv tool is `unverified`.
 - `overrides[]`: `{ name, runtime, status, executable, verification, code,
   action, reason }` for each owner-selected executable. A selected external
   path is reported as `verification: "unverified-external"`; its bytes and
@@ -163,9 +178,15 @@ custody boundary or different record format/location.
 
 Every completed install directory carries `.agent-bot-install.json`: the name,
 kind, version, platform, URL, `sha256`, `bin` and `installedAt`. Archive stamps
-record the digest verified by agent-bot. `uv-python` and `uv-tool` stamps instead
-record `url: null` and `sha256: null`; they do not attest that agent-bot verified
-every downloaded dependency byte. Python acquisition is delegated to uv. A uv
+record the digest verified by agent-bot. A `uv-python` stamp records the
+python-build-standalone archive's URL and `sha256` from the catalog: uv is
+given a one-entry downloads list (`--python-downloads-json-url`) naming only
+that archive, so it can install nothing else and refuses bytes that do not
+hash to it. A Python stamp from before #617 has `sha256: null`; it stays
+usable and `unverified` unless the soul requires integrity, which reinstalls
+it. A receipt with another digest is `missing`. `uv-tool` stamps record
+`url: null` and `sha256: null`; they do not attest that agent-bot verified
+every downloaded dependency byte. A uv
 tool without a `lock` installs `package==version` with no dependency hashes. A
 locked tool installs into its own `venv/` with `uv pip install --require-hashes
 -r requirements.lock.txt`, so uv refuses any artifact or dependency the lock
@@ -174,8 +195,8 @@ uv-tool stamp records `lockSha256`, the SHA-256 of the requirements text it
 was filled from (`null` when unlocked). Readiness requires it to match the
 declaration, so adding or changing a lock rebuilds that version. Locked
 tools are unsupported on Windows until a launcher for the linked executable
-is verified. Refusing unlocked installs under an integrity policy is tracked
-in #617. The stamp is what
+is verified. Under `runtimes.integrity: "required"` an unlocked tool is
+refused before anything is written. The stamp is what
 `soul runtimes` and `soul env` inspect; absence or an incomplete-install marker
 must not be presented as a completed installation. Readiness compares the
 receipt's schema, runtime/harness name, kind, exact version and platform with
@@ -267,7 +288,7 @@ is created. It does not complete the remaining integrity or override contracts.
 | Native `/v1` turns, including resumed sessions | `agent-daemon.mjs` calls the same factory before the ACP engine loads or creates a session | The same readiness check applies before session restoration or spawning. |
 | Declared environment | `soulRuntimeEnv` inspects the current manifest and selected installation | Runtime/factory fixtures cover missing/unsupported declarations, invalid manifests, missing selected harnesses and missing runtime executables; undeclared runtimes retain the host routes. |
 | npm provisioning | Both managed homes and joined adapters prepare declared runtimes through `soulInstallEnv` before npm | Fixtures verify the selected distribution's exact Node and npm CLI, reject a host npm override, and refuse missing files or failed provisioning before npm. Undeclared Node retains the host route. |
-| Archive and Python integrity | `fetchArchive`, installation stamps, uv installers | Archive checksum refusal exists; complete dependency lock/hash provenance and installed-byte verification remain open. |
+| Archive and Python integrity | `fetchArchive`, installation stamps, uv installers, `runtimes.integrity` | Archive checksum refusal exists; the Python archive is pinned per platform and uv is held to it; locked uv tools install with `--require-hashes`; a soul requiring integrity refuses unlocked tools and digestless Python receipts, others are labelled unverified. Installed-byte verification remains open. |
 | Per-soul executable overrides | `soulRuntimesCommand` owner-gates set/clear; `inspectRuntimeOverrides` and `ensureOverrideShims` feed `runtimeLaunchEnv` | Set/clear selects one exact executable name, revalidates its absolute executable path at use, and routes it through a one-name shim ahead of managed and host paths without inferring sibling tools. Managed companion bins remain available when installed. External paths are marked `unverified-external`; overrides are unsupported on Windows. Per-launch wire overrides remain deferred. |
 | Catalog and transfer | Inspection resolves against the supplied catalog | Retained resolution and owner-visible upgrade semantics remain open. |
 | Migration / platforms | #583 lifecycle paths; deterministic runtime fixtures; `whichOnPath` resolves `name.exe` on Windows for every turn lane, the sign-in probe and harness defaults | Migration evidence is tracked separately. Injected-platform fixtures do not establish live Windows support. npm `.cmd` shims are not executed, because `spawn()` refuses them without a shell, so a harness installed only as a shim is reported missing. |

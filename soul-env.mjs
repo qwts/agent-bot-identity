@@ -232,7 +232,8 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
     result.identity.parentRevision = text(manifest.parentRevision);
     result.identity.template = typeof manifest.template === 'boolean' ? manifest.template : null;
     result.identity.formatVersion = Number.isInteger(manifest.formatVersion) ? manifest.formatVersion : null;
-    if (object(manifest.runtimes)) result.runtimes.declared = manifest.runtimes;
+    // `integrity` is the soul's install policy (#617), not a runtime.
+    if (object(manifest.runtimes)) { const { integrity: _integrity, ...declared } = manifest.runtimes; result.runtimes.declared = declared; }
   } else if (rootStat?.isDirectory()) errors.push({ area: 'manifest', message: 'Package manifest unavailable or invalid.' });
 
   const present = (relative) => lstat(path.join(root, relative)) !== null;
@@ -422,10 +423,10 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
   catch (error) { errors.push({ area: 'runtimes', message: `Runtimes could not be inspected: ${error.message}` }); }
   for (const row of provisioned?.runtimes ?? []) {
     const entry = { name: row.name, version: row.version, declared: row.declared, requiredBy: row.requiredBy };
-    if (row.status === 'installed') result.runtimes.installed.push({ ...entry, source: row.source, path: row.path, bin: path.join(row.path, row.bin) });
+    if (row.status === 'installed') result.runtimes.installed.push({ ...entry, source: row.source, path: row.path, bin: path.join(row.path, row.bin), verification: row.verification });
     else if (row.status === 'unsupported') {
       result.runtimes.unsupported.push({ ...entry, reason: row.reason });
-      problem('runtime-unsupported-platform', 'error', 'runtimes', `${row.name}: ${row.reason}`, `declare runtimes.${row.name} sources for ${provisioned.platform ?? 'this platform'} in a revision`);
+      problem(row.code ?? 'runtime-unsupported-platform', 'error', 'runtimes', `${row.name}: ${row.reason}`, row.action ?? `declare runtimes.${row.name} sources for ${provisioned.platform ?? 'this platform'} in a revision`);
     } else {
       result.runtimes.missing.push({ ...entry, reason: row.reason ?? (row.lastError ? `last install failed: ${row.lastError.code}` : 'not provisioned') });
       if (row.lastError) problem(row.lastError.code, 'error', 'runtimes', row.lastError.message, install);
@@ -436,9 +437,9 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
     result.harnesses.declared.push({ name: entry.name, kind: entry.kind, package: entry.package, version: entry.version, source: 'soul.json' });
     if (entry.status === 'installed') {
       result.harnesses.installed.push({ name: entry.name, kind: entry.kind, package: entry.package, version: entry.version, location: `${STATE}/runtimes/harnesses`,
-        bin: path.join(entry.path, entry.bin, entry.executable), status: 'ok' });
+        bin: path.join(entry.path, entry.bin, entry.executable), status: 'ok', verification: entry.verification });
     } else if (entry.status === 'unsupported') {
-      problem('runtime-unsupported-platform', 'error', 'runtimes', `${entry.name}: ${entry.reason}`, `declare harnesses.${entry.name}.install.sha256 for ${provisioned.platform ?? 'this platform'} in a revision`);
+      problem(entry.code ?? 'runtime-unsupported-platform', 'error', 'runtimes', `${entry.name}: ${entry.reason}`, entry.action ?? `declare harnesses.${entry.name}.install.sha256 for ${provisioned.platform ?? 'this platform'} in a revision`);
     } else if (entry.lastError) problem(entry.lastError.code, 'error', 'runtimes', entry.lastError.message, install);
   }
   for (const entry of provisioned?.invalid ?? []) problem('runtime-declaration-invalid', 'error', 'manifest', entry.message);
@@ -555,9 +556,9 @@ export function formatSoulEnvironment(result) {
     '', `components (${result.components.length})`,
     ...result.components.map((component) => `${component.id}: ${component.present ? 'present' : 'absent'} (${component.classification}, ${component.retention ?? 'n/a'})${component.path ? ` ${cleanLine(component.path)}` : ''}`),
     '', `harnesses declared: ${result.harnesses.declared.map((h) => `${h.name}@${h.version}`).join(', ') || '-'}`,
-    `harnesses installed: ${result.harnesses.installed.map((h) => `${h.name}@${h.version ?? '?'} (${h.location})`).join(', ') || '-'}`,
+    `harnesses installed: ${result.harnesses.installed.map((h) => `${h.name}@${h.version ?? '?'} (${h.location})${h.verification === 'unverified' ? ' [unverified]' : ''}`).join(', ') || '-'}`,
     `runtimes declared: ${Object.keys(result.runtimes.declared).join(', ') || '-'}`,
-    `runtimes installed: ${result.runtimes.installed.map((r) => `${r.name}@${r.version}`).join(', ') || '-'}`,
+    `runtimes installed: ${result.runtimes.installed.map((r) => `${r.name}@${r.version}${r.verification === 'unverified' ? ' [unverified]' : ''}`).join(', ') || '-'}`,
     `runtime overrides: ${result.runtimes.overrides.map((r) => `${r.name}=${cleanLine(r.executable ?? r.status)} (${r.verification})`).join(', ') || '-'}`,
     `providers: ${result.providers.declared.map((p) => `${p.harness}=${p.id} (${p.status})`).join(', ') || '-'}`,
     `secrets: ${result.providers.secrets.map((s) => `${s.name} ${s.status} (${s.store})`).join(', ') || '-'}`,

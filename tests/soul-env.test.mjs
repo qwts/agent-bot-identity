@@ -370,11 +370,11 @@ test('an installed runtime and a declared non-npm harness install are reported f
   const result = readSoulEnvironment(ID, f.options);
   assert.deepEqual(snapshot(f.home), before, 'reporting installs nothing');
   assert.deepEqual(result.runtimes.installed, [{ name: 'node', version: NODE_PIN, declared: '24', requiredBy: [], source: 'catalog',
-    path: path.join(runtimes, 'node', NODE_PIN), bin: path.join(runtimes, 'node', NODE_PIN, 'bin') }]);
+    path: path.join(runtimes, 'node', NODE_PIN), bin: path.join(runtimes, 'node', NODE_PIN, 'bin'), verification: 'verified' }]);
   assert.deepEqual(result.runtimes.missing, [{ name: 'go', version: goPin, declared: '1', requiredBy: [], reason: 'last install failed: runtime-download-failed' }]);
   assert.deepEqual(result.harnesses.declared.map((h) => [h.name, h.kind, h.version, h.source]), [['codex', 'npm', '2.1.1', 'package.json'], ['opencode', 'archive', '1.2.3', 'soul.json']]);
   assert.deepEqual(result.harnesses.installed.find((h) => h.name === 'opencode'), { name: 'opencode', kind: 'archive', package: null, version: '1.2.3',
-    location: '.soul-state/runtimes/harnesses', bin: path.join(runtimes, 'harnesses', 'opencode', '1.2.3', 'opencode'), status: 'ok' });
+    location: '.soul-state/runtimes/harnesses', bin: path.join(runtimes, 'harnesses', 'opencode', '1.2.3', 'opencode'), status: 'ok', verification: 'verified' });
   assert.equal(result.launch.routing.PATH, 'soul-runtimes');
   assert.deepEqual(result.launch.routing.env, ['CODEX_HOME', 'npm_config_cache'], 'the tool home beside the runtime routing');
   assert.deepEqual(result.launch.routing.runtimes.node, { source: 'soul', version: NODE_PIN, bin: path.join(runtimes, 'node', NODE_PIN, 'bin') });
