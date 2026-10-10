@@ -1821,6 +1821,21 @@ export function withPermissionReceipts(executor, {
   };
 }
 
+// The owner-activated SOP launch policy (#677) as the launch handler's
+// `policy` port, read offline each launch. An owner's launch it refuses asks
+// the owner to verify and override; every outcome leaves a `sop-policy`
+// audit receipt. runDaemon composes every launch route (principal launch,
+// relaunch, team start) through the one handler that holds this port.
+export function sopLaunchPolicy({ env = process.env, home = homedir(), now = () => new Date(), confirm = confirmOwnerPresence } = {}) {
+  return {
+    check: ({ harness }) => checkSopLaunchPolicy(harness, { env, home }),
+    override: (refusal, { harness }) => confirm(refusal.ruleId
+      ? `launch on ${harness} although SOP policy rule ${refusal.ruleId} denies it`
+      : `launch on ${harness} although the active SOP policy is unavailable`, { env }),
+    receipt: ({ agentId, decision, detail }) => appendAuditReceipt({ event: 'sop-policy', agentId, operation: 'launch', decision, detail }, { env, home, now }),
+  };
+}
+
 export async function runDaemon({
   env = process.env,
   home = homedir(),
@@ -2067,16 +2082,7 @@ export async function runDaemon({
     // team start leaves, on the parent, with the operation telling them apart.
     souls: () => listSouls({ status: 'active', file: populationFile({ env, home }) }),
     receipt: ({ parent, decision }) => appendAuditReceipt({ event: 'team-start', agentId: parent, operation: 'launch', decision }, { env, home, now }),
-    // The owner-activated SOP launch policy (#677), read offline each launch.
-    // An owner's launch it refuses asks the owner to verify and override;
-    // every outcome leaves a `sop-policy` audit receipt.
-    policy: {
-      check: ({ harness }) => checkSopLaunchPolicy(harness, { env, home }),
-      override: (refusal, { harness }) => confirmOwnerPresence(refusal.ruleId
-        ? `launch on ${harness} although SOP policy rule ${refusal.ruleId} denies it`
-        : `launch on ${harness} although the active SOP policy is unavailable`, { env }),
-      receipt: ({ agentId, decision, detail }) => appendAuditReceipt({ event: 'sop-policy', agentId, operation: 'launch', decision, detail }, { env, home, now }),
-    },
+    policy: sopLaunchPolicy({ env, home, now }),
     executorFor,
   });
   // Souls launched before 0.10.9 read as unmanaged until marked from the

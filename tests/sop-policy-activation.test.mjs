@@ -4,10 +4,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { assertSopGitCommand, checkSopLaunchPolicy, createRunGit, main, policyStateFile, readSopPolicyState } from '../sop.mjs';
 import { sopPolicyCheck } from '../readiness.mjs';
+import { sopLaunchPolicy } from '../agent-daemon.mjs';
+import { createLaunchHandler } from '../daemon-launch.mjs';
 
 const runLocal = createRunGit({ allowProtocols: 'file' });
 const rule = (id, harnesses) => ({ id, event: 'before-launch', decision: 'deny', when: { harnesses }, reason: `No ${harnesses.join(', ')} launches here.` });
@@ -254,4 +256,60 @@ test('doctor reports the SOP policy state read-only: none, active at its pinned 
   const inactive = doctor();
   assert.deepEqual([inactive.status, inactive.evidence.state], ['ready', 'inactive']);
   assert.match(inactive.message, /deactivated by the owner at 2026-10-09T12:00:00\.000Z/);
+});
+
+// The port runDaemon hands its launch handler, over the real state the owner
+// activated: the daemon's own env and home, no git, and real audit receipts.
+test('the daemon\'s launch policy port reads the activated policy, asks the owner to override and receipts each outcome', async (t) => {
+  const f = fixture(t);
+  const env = { AGENT_BOT_STATE_HOME: join(f.home, 'state'), AGENT_BOT_INTERACTION_HOME: join(f.home, 'interaction') };
+  const options = { ...f.options, env, account: userInfo().username };
+  const asked = [];
+  const port = sopLaunchPolicy({ env, home: f.home, now: () => new Date('2026-10-09T13:00:00.000Z'),
+    confirm: async (action, context) => { asked.push({ action, env: context.env }); throw new Error('declined'); } });
+  assert.equal(port.check({ harness: 'codex' }), null, 'never configured: no policy work');
+
+  assert.equal((await cli(['policy', 'activate'], { ...options, assertOwner: approve([]) })).code, 0);
+  const denied = port.check({ harness: 'codex' });
+  assert.equal(denied.code, 'policy-denied');
+  assert.equal(denied.ruleId, 'no-codex');
+  assert.equal(port.check({ harness: 'claude' }), null);
+  await assert.rejects(port.override(denied, { harness: 'codex' }), /declined/);
+  assert.deepEqual(asked, [{ action: 'launch on codex although SOP policy rule no-codex denies it', env }]);
+  port.receipt({ agentId: null, decision: 'override-declined', detail: 'rule no-codex' });
+  const audit = readFileSync(join(f.home, 'interaction', 'audit.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.deepEqual(audit.map(({ event, operation, decision }) => ({ event, operation, decision })),
+    [{ event: 'sop-policy', operation: 'launch', decision: 'override-declined' }]);
+
+  // The real handler with this port: a declined override launches nothing.
+  const side = { identities: 0, spawn: 0, provision: 0, executor: 0 };
+  const reports = [];
+  const handler = createLaunchHandler({ file: join(f.home, 'launch-requests.json'),
+    identities: () => { side.identities++; return { id: 'agent_11111111-1111-4111-8111-111111111111', harness: 'codex' }; },
+    spawnPackage: () => { side.spawn++; return null; }, lookupBinding: () => null,
+    provisionHome: () => { side.provision++; return null; }, executorFor: () => { side.executor++; return async () => {}; }, policy: port });
+  await handler({ event: 'launch', requestId: 'r1', principal: 'p1', account: 'worker', package: '/pkg', harness: 'codex', name: 'Helper' },
+    { account: 'worker', report: async (row) => { reports.push(row); } });
+  assert.deepEqual(side, { identities: 0, spawn: 0, provision: 0, executor: 0 });
+  assert.equal(reports[0].code, 'policy-denied');
+  assert.equal(asked.length, 2);
+
+  // A marker it cannot honour is unavailable, and the owner is asked about that instead.
+  rmSync(policyStateFile(options));
+  const unavailable = port.check({ harness: 'claude' });
+  assert.equal(unavailable.code, 'policy-unavailable');
+  await assert.rejects(port.override(unavailable, { harness: 'claude' }), /declined/);
+  assert.equal(asked.at(-1).action, 'launch on claude although the active SOP policy is unavailable');
+});
+
+// runDaemon builds one launch handler, and every launch route reaches it:
+// the broker's principal launches and relaunches (comms) and a soul's team
+// start (teamStarter -> onLaunch). That handler holds the policy port.
+test('runDaemon composes its only launch handler with the SOP launch policy port', () => {
+  const source = readFileSync(new URL('../agent-daemon.mjs', import.meta.url), 'utf8');
+  const handlers = [...source.matchAll(/createLaunchHandler\(\{/g)];
+  assert.equal(handlers.length, 1, 'one launch handler');
+  const body = source.slice(handlers[0].index, source.indexOf('\n  });', handlers[0].index));
+  assert.match(body, /\n    policy: sopLaunchPolicy\(\{ env, home, now \}\),\n/);
+  assert.match(source, /onLaunch\(request, \{ account, parent,/, 'a team start goes through the same handler');
 });
