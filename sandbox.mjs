@@ -180,7 +180,7 @@ export function sandboxPlan({ account, owner = userInfo().username, checks }) {
       `agent-comms account pair --broker ${owner}`,
       'agent-comms broker approve CODE',
     ], unsupported ? null : checks.paired,
-    `Log in as ${account} (fast user switching) for the first command; approve the code it prints from your own account or in GeniusBar.`),
+    `Log in as ${account} (fast user switching) for the first command; approve the code it prints from your own account or in the host app.`),
     step('harness-sign-in', `Sign the harnesses in as ${account}`, 'account', [
       'claude', 'codex login',
     ], null,

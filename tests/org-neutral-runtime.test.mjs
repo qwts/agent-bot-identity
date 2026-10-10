@@ -25,6 +25,9 @@ const ORGANIZATION_VALUES = [
   { name: 'a qwts host', pattern: /\bqwts\.org\b/gu },
   // The App slug alphabet executor-contract.mjs accepts.
   { name: 'a qwts App slug', pattern: /\bqwts-[a-z0-9][a-z0-9-]*-agent\b/gu },
+  // The owner's own host app, private once it moves to truline. New code and
+  // text say "the host app"; installed names stay recognised (#752).
+  { name: 'the GeniusBar or Dudles host app', pattern: /\b(?:geniusbar|dudles)\b/giu },
 ];
 
 // Values still compiled in, each the exact expression the removing change
@@ -37,6 +40,10 @@ const STILL_COMPILED = [
   { file: 'config.mjs', name: 'the qwts owner account', expression: "LEGACY_UNMANAGED_AUTHORS = Object.freeze(['ai9d']);" },
   { file: 'sync-hooks.mjs', name: 'the qwts owner account', expression: '${AGENT_BOT_UNMANAGED_AUTHORS-ai9d}' },
   { file: 'hooks/agent-context', name: 'the qwts owner account', expression: "printf '%s' ai9d" },
+  // The sandbox account already created on machines, and the display name
+  // that creates it, stay as they are (#752).
+  { file: 'sandbox.mjs', name: 'the GeniusBar or Dudles host app', expression: "DEFAULT_SANDBOX_ACCOUNT = 'geniusbar-agent';" },
+  { file: 'sandbox.mjs', name: 'the GeniusBar or Dudles host app', expression: '-fullName "GeniusBar Agent"' },
 ];
 
 function runtimeFiles() {
@@ -134,7 +141,7 @@ test('the scan reads code and skips comments', () => {
   assert.deepEqual(organizationValues('x.mjs', "const url = 'https://x.test/'; const app = 'qwts-claude-agent'; // note"), app(1));
   assert.deepEqual(organizationValues('x.mjs', "const s = '/* not a comment'; const app = 'qwts-claude-agent';"), app(1));
   assert.deepEqual(organizationValues('x.mjs', 'const t = `a\n// not a comment qwts-claude-agent`;'), app(2));
-  assert.deepEqual(organizationValues('x.mjs', "const url = 'https://gh-app-hook.qwts.org/x';"),
+  assert.deepEqual(organizationValues('x.mjs', "const host = 'qwts.org';"),
     [{ file: 'x.mjs', line: 1, name: 'a qwts host' }]);
   assert.deepEqual(organizationValues('x.mjs', '/**\n * Z5DM34QS5U\n */\nconst team = "Z5DM34QS5U";'),
     [{ file: 'x.mjs', line: 4, name: "GeniusBar's Developer ID team" }]);
@@ -153,6 +160,10 @@ test('a still-compiled value is exempt only as its exact expression', () => {
   assert.deepEqual(organizationValues('hooks/agent-context', "[ \"$USER\" = ai9d ] && exit 0"), owner('hooks/agent-context', 1));
   assert.deepEqual(organizationValues('config.mjs', "if (login === 'ai9d') return true;"), owner('config.mjs', 1));
   assert.deepEqual(organizationValues('hooks/agent-context', "printf '%s' ai9d; echo ai9d"), owner('hooks/agent-context', 1));
+  assert.deepEqual(organizationValues('x.mjs', "const help = 'update Dudles or GeniusBar';"),
+    [{ file: 'x.mjs', line: 1, name: 'the GeniusBar or Dudles host app' }]);
+  assert.deepEqual(organizationValues('sandbox.mjs', "const hint = 'approve it in GeniusBar';"),
+    [{ file: 'sandbox.mjs', line: 1, name: 'the GeniusBar or Dudles host app' }]);
   assert.deepEqual(organizationValues('sync-hooks.mjs', "const a = 'qwts-claude-agent';"),
     [{ file: 'sync-hooks.mjs', line: 1, name: 'a qwts App slug' }]);
 });
