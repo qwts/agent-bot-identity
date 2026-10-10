@@ -307,3 +307,41 @@ test('Codex command skills touch only marked files in the shared .agents/skills/
   }
   for (const path of own) assert.equal(readFileSync(join(root, path), 'utf8'), 'authored\n', path);
 });
+
+test('Codex command skills render only for a soul that targets Codex, and their duplicates are reported (#378)', () => {
+  const build = (preferredHarnesses) => {
+    const manifest = { preferredHarnesses };
+    const output = buildHarnessFiles([entry('AGENTS.md', '# Soul'), entry('soul.json', JSON.stringify(manifest)),
+      entry('commands/ship.md', 'Run the release.\n'), entry('commands/review.md', 'Review $ARGUMENTS')]);
+    return { output, report: harnessReport(output, { manifest }) };
+  };
+  const duplicates = (report) => Object.fromEntries(Object.entries(report).map(([harness, { duplicates }]) => [harness, duplicates.commands])
+    .filter(([, names]) => names.length));
+  // No Codex target: nothing in `.agents/skills/`, and Codex lists the command as unsupported.
+  const other = build(['claude', 'qwen', 'opencode']);
+  assert.equal([...other.output.keys()].some((path) => path.startsWith('.agents/')), false);
+  assert.deepEqual(other.report.codex.unsupported.commands, ['review', 'ship']);
+  assert.deepEqual(duplicates(other.report), {});
+  // Codex alone: rendered, and no other `.agents/skills/` reader is targeted.
+  const codex = build(['codex']);
+  assert.ok(codex.output.has('.agents/skills/source-command-ship/SKILL.md'));
+  assert.deepEqual(codex.report.codex.commands.rendered, ['ship']);
+  assert.deepEqual(duplicates(codex.report), {});
+  // Codex with Qwen Code, or no preference (every harness): the duplicates are named.
+  assert.deepEqual(duplicates(build(['codex', 'qwen']).report), { qwen: ['ship'] });
+  assert.deepEqual(duplicates(build([]).report), { qwen: ['ship'], opencode: ['ship'] });
+});
+
+test('dropping Codex from the targets removes only the marked command skills (#378)', (t) => {
+  const root = fixture(t);
+  put(root, 'commands/ship.md', 'Run the release.\n');
+  put(root, '.agents/skills/mine/SKILL.md', 'authored\n');
+  buildSoulDirectory(root);
+  assert.ok(existsSync(join(root, '.agents/skills/source-command-ship/SKILL.md')));
+  const manifest = JSON.parse(readFileSync(join(root, 'soul.json'), 'utf8'));
+  put(root, 'soul.json', JSON.stringify({ ...manifest, preferredHarnesses: ['claude'] }));
+  const report = buildSoulDirectory(root);
+  assert.equal(existsSync(join(root, '.agents/skills/source-command-ship')), false);
+  assert.equal(readFileSync(join(root, '.agents/skills/mine/SKILL.md'), 'utf8'), 'authored\n');
+  assert.ok(report.harnesses.codex.unsupported.commands.includes('ship'));
+});

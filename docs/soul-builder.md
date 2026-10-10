@@ -38,14 +38,16 @@ commands slice the shared `.agents/skills/`.
 ## Harness output
 
 Outputs are built for all supported consumers, independently of
-`preferredHarnesses` (which is launch preference, not a build allowlist).
+`preferredHarnesses` (which is launch preference, not a build allowlist),
+with one exception: Codex command skills, below, which other harnesses would
+also read.
 A native consumer receives no duplicate configuration folder.
 
 | Harness | Instructions | Skills / generated folder | MCP (#378) | Subagents | Commands | Hooks |
 | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code | Marked `CLAUDE.md` with `@AGENTS.md` | `.claude/skills/<name>/` | `.mcp.json` | `.claude/agents/<name>.md` | `.claude/commands/<name>.md` | `.claude/settings.json` `hooks` |
 | Gemini CLI | Marked `GEMINI.md` with `@AGENTS.md` | `.gemini/skills/<name>/` | `.gemini/settings.json` | Unsupported | `.gemini/commands/<name>.toml` | Unsupported |
-| Codex | Native `AGENTS.md` | Native skills; no duplicate output | `.codex/config.toml` | `.codex/agents/<name>.toml` (agents without `tools`) | `.agents/skills/source-command-<name>/SKILL.md` (commands without arguments, shell or `@` includes) | `.codex/hooks.json` |
+| Codex | Native `AGENTS.md` | None yet (Codex reads `.codex/skills/` and `.agents/skills/`, not `.claude/skills/`) | `.codex/config.toml` | `.codex/agents/<name>.toml` (agents without `tools`) | `.agents/skills/source-command-<name>/SKILL.md` (commands without arguments, shell or `@` includes; only when the soul targets Codex) | `.codex/hooks.json` |
 | OpenCode | Native `AGENTS.md` | Uses shared `.claude/skills/` | `opencode.json` | `.opencode/agent/<name>.md` | `.opencode/command/<name>.md` | Unsupported |
 | Cursor | Native `AGENTS.md` | Uses shared `.claude/skills/`; no duplicate skills | `.cursor/mcp.json` | `.cursor/agents/<name>.md` | Unsupported (replaced by skills) | `.cursor/hooks.json` |
 | Copilot CLI | Native instruction support | Uses shared `.claude/skills/`; `.github/` only for hooks and agents | Shared `.mcp.json` | `.github/agents/<name>.agent.md` | Shared `.claude/commands/<name>.md` | `.github/hooks/agent-bot-soul.json` |
@@ -158,10 +160,16 @@ Adapter evidence (official docs read 2026-10-07):
   nonblank `description`, and folds it to one line. By owner decision on
   #378, the builder touches only marked files in `.agents/skills/`: another
   tool's or person's skill there is never changed or removed, and an
-  unmarked file where a command skill would render is a conflict. Other
-  harnesses read `.agents/skills/` too (Qwen Code 0.25.0 and OpenCode
-  `v1.18.32` do), so there a command also appears as a
-  `source-command-<name>` skill beside its native command.
+  unmarked file where a command skill would render is a conflict.
+  Qwen Code 0.25.0 and OpenCode `v1.18.32` read `.agents/skills/` too, where
+  a command skill would sit beside the native command. So command skills
+  render only when the soul targets Codex: its `preferredHarnesses` names
+  `codex` or is empty (no preference, so every harness). Otherwise Codex
+  lists the commands under `unsupported.commands`. When the soul also
+  targets Qwen Code or OpenCode (named, or by an empty list), each command
+  then appears there twice, as its native command and as a
+  `source-command-<name>` skill; this is a known effect, and the build report
+  names those commands under that harness's `duplicates.commands`.
 - Gemini CLI: [subagents](https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md)
   are documented in `.gemini/agents/*.md`, but their only switch is
   `experimental.enableAgents`, so they are not documented as stable and stay
@@ -758,7 +766,7 @@ package validation. `--check` never writes and exits 1 for drift/conflicts;
 clean checks exit 0. Without `--json` the command prints a short human summary
 (counts, each merge, and the primitives every harness received); `--json`
 prints `{drift, writes, removals, merged, warnings, harnesses}`, where `harnesses` maps
-each known harness to `{rendered, files, subagents, commands, settings, hooks, unsupported}`
+each known harness to `{rendered, files, subagents, commands, duplicates, settings, hooks, unsupported}`
 as described above. New package homes build after copying, before dependency
 installation and git initialization; a failed build removes the half-created home.
 An existing home is rebuilt before each launch, so a soul made by an earlier
@@ -794,10 +802,8 @@ arguments, run shell or include files; commands for Cursor (replaced by
 skills) and Kiro (`.kiro/prompts/` file format
 undocumented); hooks for Gemini CLI, OpenCode (plugins), Muse and Kiro; and a
 signed-in check that Cursor and Kiro accept the `_comment` marker key. Qwen Code
-skills also remain unsupported. Codex reads skills from `.codex/skills/` and
-`.agents/skills/` but not `.claude/skills/`, so soul skills are not
-written anywhere Codex reads them yet, and the table's "Native skills" cell
-for Codex needs revisiting.
+skills also remain unsupported. Soul skills do not reach Codex yet: it reads
+`.codex/skills/` and `.agents/skills/`, not `.claude/skills/`.
 
 The renderer, injected entry and `reachPolicyRules()` now share the
 `agent-reach` name through `reach-contract.mjs`. Rebuilds remove the old

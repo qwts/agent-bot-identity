@@ -73,7 +73,7 @@ All these fields are required; unknown fields are allowed and retained:
 | `name` | Nonempty string, human-readable package name |
 | `description` | Nonempty string |
 | `displaySeed` | Nonempty string; an opaque stable display seed, not an identity |
-| `preferredHarnesses` | Array of unique nonempty strings; `[]` means no preference; no registry lookup |
+| `preferredHarnesses` | Array of unique nonempty strings; `[]` means no preference; no registry lookup. The builder renders Codex command skills only when this names `codex` or is empty ([soul-builder.md](soul-builder.md#harness-output)) |
 | `revision` | `sha256:` followed by exactly 64 lowercase hexadecimal digits |
 | `parentRevision` | Same hash syntax, or `null` for the first revision |
 | `ignore` | Required only in format 2: the exact ignore contract below |
