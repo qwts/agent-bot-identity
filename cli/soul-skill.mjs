@@ -9,8 +9,8 @@ import { NOT_CAPTURED } from '../skill-references.mjs';
 import { currentAgentId } from '../agent-identity.mjs';
 import { discardRevisionStaging, revisionCommand, revisionOwnerGate } from '../soul-revisions.mjs';
 import { stageSkillInstall, stageSkillUninstall, trashSoulSkill } from '../skill-install.mjs';
-import { loadSkill, unloadSkill } from '../skill-workspace.mjs';
-import { soulMarkers } from '../owner-action.mjs';
+import { loadGlobalSkill, loadSkill, unloadGlobalSkill, unloadSkill } from '../skill-workspace.mjs';
+import { assertOwnerAction, presenceOrConsent, soulMarkers } from '../owner-action.mjs';
 import { soulDreamCommand } from './soul-dream.mjs';
 
 export const USAGE = `usage: agent-bot soul skill import PATH_OR_HTTPS_DOCUMENT [--json]
@@ -29,6 +29,8 @@ export const USAGE = `usage: agent-bot soul skill import PATH_OR_HTTPS_DOCUMENT 
        agent-bot soul skill uninstall NAME --soul AGENT_ID [--trash] [--json] [--principal-stdin]
        agent-bot soul skill load NAME --soul AGENT_ID --workspace WORKTREE [--harness HARNESS] [--json]
        agent-bot soul skill unload NAME --soul AGENT_ID --workspace WORKTREE [--harness HARNESS] [--json]
+       agent-bot soul skill load NAME --soul AGENT_ID --global --reason TEXT [--harness claude] [--json] [--principal-stdin]
+       agent-bot soul skill unload NAME --soul AGENT_ID --global [--harness claude] [--json]
        agent-bot soul skill dream --soul ID|NAME --schedule PT<N>H|--run-now|--pause|--unschedule|--cancel RUN_ID|--ack-notice NOTICE_ID|--status|--history [--json]
 
 Local import preserves the selected directory; HTTPS import captures a skill
@@ -38,11 +40,17 @@ install copies the library's editable copy into the soul's skills/<name>/ with
 a file-hash record; uninstall archives it to archive/skills/<name>/ in the soul,
 or with --trash (owner only) moves it to the OS trash. The owner's install or
 uninstall applies as an owner-approved revision edit; a soul's is a proposal
-under its revision policy. Global harness skill folders are never written.
+under its revision policy.
 load copies an installed skill into one of the soul's worktrees at the
 harness's skills folder (.claude/skills/<name>/ by default) while the work
 needs it, keeping it out of commits through the repository's local
 info/exclude; unload removes that copy, refusing if it was edited there.
+load --global places it in the harness's user-level skills folder
+(~/.claude/skills/<name>/, or $CLAUDE_CONFIG_DIR/skills/), where every session
+sees it: opt-in, with a recorded --reason, and only after the owner approves
+(the owner gate; Touch ID through keyd when a soul asks for itself). unload
+--global removes it when unchanged, only for the soul the owner's record names,
+after the owner approves the same way.
 Other repository adapters remain unimplemented.
 check never replaces accepted snapshots or local edits. update previews a recorded
 check; applying requires reviewed digests and preserves prior material. learn supplies guidance;
@@ -124,22 +132,63 @@ function updateMain(args, json, { stdout, stderr, ...options }) {
     return 1;
   }
 }
+// A soul's own global load or unload reaches the owner the way the daemon's
+// loosening does (agent-daemon.mjs): keyd's Touch ID or login password only,
+// no signed challenge and no administrator dialog, since the soul runs it.
+const noLooseningDialog = async () => { throw Object.assign(new Error('agent-bot-keyd could not ask, and a soul\'s global skill change has no administrator-dialog fallback'), { code: 'presence-unavailable' }); };
+const askOwnerForSoul = (action, { env, presence }) => presenceOrConsent(action, { env, presence, allowChallenge: false, consent: noLooseningDialog });
 // load/unload (#603) place an installed skill in one of the soul's own
 // worktrees and take it out again. The package is unchanged, so there is no
-// revision; a soul may do this only for itself.
-function loadMain(verb, args, json, { stdout, stderr, markers = soulMarkers,
+// revision; a soul may do this only for itself. --global reaches every
+// session of the harness instead, which loosens what the soul's skill
+// touches: like a global tool home (#617), the owner approves it even when
+// the soul asks for itself, and a soul cannot present the owner's principal.
+async function loadMain(verb, args, json, { stdout, stderr, markers = soulMarkers, readStdin = () => readFileSync(0, 'utf8'),
+  ownerGate = (action, options) => assertOwnerAction(action, { ...options, detect: false }), askOwner = askOwnerForSoul,
   assertSoulTarget = id => { if (currentAgentId() !== id) throw new Error('a soul may load skills only into its own worktrees; bind an Agent ID first'); }, ...options }) {
-  const [name, ...rest] = args, values = {};
+  const [name, ...rest] = args, values = {}, flags = new Set();
   for (let i = 0; i < rest.length; i++) {
-    const key = { '--soul': 'agentId', '--workspace': 'workspace', '--harness': 'harness' }[rest[i]];
+    const key = { '--soul': 'agentId', '--workspace': 'workspace', '--harness': 'harness', '--reason': 'reason' }[rest[i]];
     if (key && values[key] === undefined && rest[i + 1] && !rest[i + 1].startsWith('--')) values[key] = rest[++i];
+    else if ((rest[i] === '--global' || rest[i] === '--principal-stdin') && !flags.has(rest[i])) flags.add(rest[i]);
     else { stderr.write(USAGE); return 2; }
   }
-  if (!name || name.startsWith('--') || !values.agentId || !values.workspace) { stderr.write(USAGE); return 2; }
+  const global = flags.has('--global'), presented = flags.has('--principal-stdin');
+  if (!name || name.startsWith('--') || !values.agentId) { stderr.write(USAGE); return 2; }
+  if (global ? values.workspace !== undefined || (verb === 'unload' && (values.reason !== undefined || presented))
+    : !values.workspace || values.reason !== undefined || presented) { stderr.write(USAGE); return 2; }
   try {
-    if (markers({ env: options.env, cwd: options.cwd }).length) assertSoulTarget(values.agentId);
-    const operation = verb === 'load' ? loadSkill : unloadSkill;
-    const result = operation(name, values.agentId, { ...options, workspace: values.workspace, ...(values.harness ? { harness: values.harness } : {}) });
+    const caller = markers({ env: options.env, cwd: options.cwd }).length ? 'soul' : 'owner';
+    if (caller === 'soul') {
+      assertSoulTarget(values.agentId);
+      if (presented) throw Object.assign(new Error('--principal-stdin is the owner\'s; a soul asks the owner instead'), { code: 'skill-global-principal-not-accepted' });
+    }
+    const harness = values.harness ? { harness: values.harness } : {};
+    let result;
+    if (!global) result = (verb === 'load' ? loadSkill : unloadSkill)(name, values.agentId, { ...options, workspace: values.workspace, ...harness });
+    else {
+      const authorize = async action => {
+        let principal = null;
+        if (presented) {
+          try { principal = JSON.parse(readStdin()); }
+          catch { throw Object.assign(new Error('--principal-stdin needs the principal credential as JSON on stdin'), { code: 'skill-global-principal-invalid' }); }
+        }
+        try {
+          return caller === 'owner'
+            ? await ownerGate(action, { principal, env: options.env ?? process.env, cwd: options.cwd ?? process.cwd() })
+            : await askOwner(action, { env: options.env ?? process.env, presence: options.presence });
+        } catch (error) {
+          throw Object.assign(new Error(`${action} needs the owner and was not approved: ${error.message}`),
+            { code: error.code === 'owner-credential-required' ? error.code : 'skill-global-owner-not-approved', cause: error });
+        }
+      };
+      // A soul shares the owner's account: it could write the owner-side
+      // record and clear the markers that tell it from the owner. So unload
+      // needs the owner too, whoever runs it.
+      result = verb === 'unload'
+        ? await unloadGlobalSkill(name, values.agentId, { ...options, ...harness, authorize })
+        : await loadGlobalSkill(name, values.agentId, { ...options, ...harness, reason: values.reason, authorize });
+    }
     stdout.write(report(result, json));
     return 0;
   } catch (error) {
