@@ -137,14 +137,17 @@ export function legacyCredentialDirectory(slug, home = homedir()) {
 function encode({ appId, privateKeyPem, webhookSecret }) {
   return Buffer.from(JSON.stringify({ appId: String(appId), privateKeyPem, ...(webhookSecret ? { webhookSecret } : {}) })).toString('base64');
 }
-function decode(text) {
+// A managed App whose key agent-bot-keyd holds (#110) keeps only its
+// webhook secret in its item, with no key; only an App-scoped item may.
+function decode(text, target = {}) {
   let value;
   try { value = JSON.parse(Buffer.from(text.trim(), 'base64').toString('utf8')); }
   catch { throw new Error('stored credential is malformed'); }
-  if (!value || typeof value.appId !== 'string' || !/^(?:[0-9]+|Iv[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)?)$/.test(value.appId) || typeof value.privateKeyPem !== 'string') {
+  const keyless = target?.appScoped === true && value?.privateKeyPem === undefined && typeof value?.webhookSecret === 'string';
+  if (!value || typeof value.appId !== 'string' || !/^(?:[0-9]+|Iv[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)?)$/.test(value.appId) || (typeof value.privateKeyPem !== 'string' && !keyless)) {
     throw new Error('stored credential is malformed');
   }
-  return { appId: value.appId, privateKeyPem: value.privateKeyPem, ...(typeof value.webhookSecret === 'string' ? { webhookSecret: value.webhookSecret } : {}) };
+  return { appId: value.appId, ...(keyless ? {} : { privateKeyPem: value.privateKeyPem }), ...(typeof value.webhookSecret === 'string' ? { webhookSecret: value.webhookSecret } : {}) };
 }
 
 // `security` is injectable (tests use a fake): AGENT_BOT_SECURITY_BIN is read
@@ -187,7 +190,7 @@ export function keychainStore({ env = process.env, run = spawnSync } = {}) {
     kind: 'keychain',
     read(target) {
       const stored = find(appItem(target));
-      return stored === null ? null : decode(stored);
+      return stored === null ? null : decode(stored, target);
     },
     write(target, credential) { add(appItem(target), encode(credential)); },
     delete(target) { return remove(appItem(target)); },
@@ -253,9 +256,10 @@ export function fileStore({ platform = process.platform, uid, run = spawnSync } 
   };
   return {
     kind: 'file',
-    read({ soulDir, slug }) {
+    read(target) {
+      const { soulDir, slug } = target;
       const text = readPrivate(soulDir, fileFor(soulDir, slug));
-      return text === null ? null : decode(text);
+      return text === null ? null : decode(text, target);
     },
     write({ soulDir, slug }, credential) { writePrivate(soulDir, fileFor(soulDir, slug), encode(credential)); },
     delete({ soulDir, slug }) { return unlink(fileFor(soulDir, slug)); },
@@ -340,9 +344,10 @@ function dpapiFileStore({ run }) {
   };
   return {
     kind: 'file',
-    read({ soulDir, slug }) {
+    read(target) {
+      const { soulDir, slug } = target;
       const base64 = readProtected(fileFor(soulDir, slug));
-      return base64 === null ? null : decode(base64);
+      return base64 === null ? null : decode(base64, target);
     },
     write({ soulDir, slug }, credential) { writeProtected(soulDir, fileFor(soulDir, slug), encode(credential)); },
     delete({ soulDir, slug }) { return unlink(fileFor(soulDir, slug)); },

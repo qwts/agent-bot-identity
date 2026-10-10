@@ -111,8 +111,10 @@ file store and `storeReason` says why. Any other keyd refusal fails the
 operation and stores nothing, except create's one-time key, which falls back
 with the reason. An App already in Keychain or the file store keeps it,
 rotation included; a key keyd already holds for an App with no record here is
-not replaced. `remove` refuses a keyd-held App for now. One create, connect or
-rotate-key runs per App at a time; another refuses with `identity-app-busy`. Details are in
+not replaced. A manifest's webhook secret is kept for a keyd-held App in the
+same Keychain item or file a non-keyd App uses, holding only the App ID and the
+secret (`webhookSecretKept: true`). One create, connect, rotate-key or remove
+runs per App at a time; another refuses with `identity-app-busy`. Details are in
 [keyd-protocol.md](keyd-protocol.md#app-level-keys-110). Managed credentials precede
 legacy readable stores. A soul's existing `keyd` declaration remains
 helper-owned: connecting/rotating over it or assigning that soul through this
@@ -141,6 +143,16 @@ Success returns names, never contents:
 `storeItem` is `null` for a metadata-only record; `name` is the file path for
 the file store; `existed:false` means the record named a store item that was
 already gone.
+
+For a keyd-held App (#110), `remove` sends `owner/app-remove`, so keyd asks
+the owner again, then deletes the webhook-secret item and the record;
+`removed.keydKey` says whether keyd held the key. keyd not running, older than
+#110, or refusing (the owner declined) fails with `identity-app-keyd-unavailable`
+or `identity-app-keyd-refused` and removes nothing. A key keyd holds for a
+slug with no record here (a create whose record was never written) is removed
+only when that slug is named, after the owner gate and keyd's own prompt; the
+result says so with `configRecord: false` and `orphan: true`. A slug that is
+neither recorded nor held by keyd is `identity-app-not-found`.
 
 ## Daemon contract
 
