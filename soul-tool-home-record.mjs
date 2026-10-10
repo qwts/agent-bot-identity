@@ -61,19 +61,42 @@ const serialize = (record) => `${JSON.stringify(normalizeToolHomeRecord(record),
  * around this call.
  */
 export function setToolHomeChoice(soulDir, harness, choice) {
+  const staged = prepareToolHomeChoice(soulDir, harness, choice);
+  try { return staged.commit(); }
+  finally { staged.cleanup(); }
+}
+
+// Called under the tool-home lock. Stage both the replacement and its
+// rollback before changing either record in a combined fresh-session command.
+export function prepareToolHomeChoice(soulDir, harness, choice) {
   const row = toolHomeFor(harness);
   if (!row.routable) throw Object.assign(new Error(`${row.harness} has no tool home to choose: ${row.reason}`), { code: 'tool-home-unsupported' });
   if (choice !== null && !TOOL_HOME_CHOICES.includes(choice)) throw Object.assign(new Error(`choice must be one of ${TOOL_HOME_CHOICES.join(', ')}, or null to clear it`), { code: 'tool-home-record-invalid' });
-  const current = readToolHomeRecord(soulDir) ?? { schemaVersion: TOOL_HOMES_SCHEMA_VERSION, harnesses: {} };
+  const original = readToolHomeRecord(soulDir);
+  const current = original ?? { schemaVersion: TOOL_HOMES_SCHEMA_VERSION, harnesses: {} };
   const harnesses = { ...current.harnesses };
   if (choice === null) delete harnesses[row.harness];
   else harnesses[row.harness] = choice;
   const record = { schemaVersion: TOOL_HOMES_SCHEMA_VERSION, harnesses };
   const file = toolHomeRecordPath(soulDir);
   const pending = `${file}.${process.pid}.${randomUUID()}`;
-  writeFileSync(pending, serialize(record), { flag: 'wx', mode: 0o600 });
-  try { renameSync(pending, file); } catch (error) { rmSync(pending, { force: true }); throw error; }
-  return normalizeToolHomeRecord(record);
+  const backup = `${pending}.rollback`;
+  const cleanup = () => { rmSync(pending, { force: true }); rmSync(backup, { force: true }); };
+  try {
+    writeFileSync(pending, serialize(record), { flag: 'wx', mode: 0o600 });
+    if (original !== null) writeFileSync(backup, readFileSync(file), { flag: 'wx', mode: 0o600 });
+  } catch (error) { cleanup(); throw error; }
+  let committed = false;
+  return {
+    commit() { renameSync(pending, file); committed = true; return normalizeToolHomeRecord(record); },
+    rollback() {
+      if (!committed) return;
+      if (original === null) rmSync(file);
+      else renameSync(backup, file);
+      committed = false;
+    },
+    cleanup,
+  };
 }
 
 /**

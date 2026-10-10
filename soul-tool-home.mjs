@@ -31,7 +31,7 @@ import { readBinding } from './agent-binding.mjs';
 import { validateAgentId, withLock } from './agent-identity.mjs';
 import { daemonClient } from './daemon-client.mjs';
 import { assertOwnerAction, presenceOrConsent, soulMarkers } from './owner-action.mjs';
-import { readToolHomeRecord, setToolHomeChoice, toolHomeRecordPath } from './soul-tool-home-record.mjs';
+import { prepareToolHomeChoice, readToolHomeRecord, setToolHomeChoice, toolHomeRecordPath } from './soul-tool-home-record.mjs';
 import { TOOL_HOME_CHOICES, toolHomeFor } from './soul-tool-homes.mjs';
 import { createWakeSessions, wakeSessionsFile } from './wake-resume.mjs';
 
@@ -138,17 +138,26 @@ export async function soulToolHomeCommand(argv, {
       }
     }
     const method = authorization?.method ?? 'none';
+    let retired = null;
+    // Hold both writers' locks through the combined operation. Both files
+    // are staged before the choice changes; a failed session commit restores
+    // the exact old choice (including an absent record). Receipts follow success.
+    withLock(`${toolHomeRecordPath(soul.soulDir)}.lock`, 'soul tool-homes record', () => {
+      if (setting && fresh) {
+        const staged = prepareToolHomeChoice(soul.soulDir, row.harness, choice);
+        try {
+          retired = sessions.retire(soul.id, row.harness, { now,
+            beforeCommit: () => { staged.commit(); return () => staged.rollback(); } });
+        } finally { staged.cleanup(); }
+      } else if (setting) setToolHomeChoice(soul.soulDir, row.harness, choice);
+      else if (fresh) retired = sessions.retire(soul.id, row.harness, { now });
+    });
     if (setting) {
-      // The record has no other writer after a soul's birth, but two of these
-      // commands may race; the read-modify-write stays under one lock.
-      withLock(`${toolHomeRecordPath(soul.soulDir)}.lock`, 'soul tool-homes record',
-        () => setToolHomeChoice(soul.soulDir, row.harness, choice));
       appendAuditReceipt({ event: 'tool-home', agentId: soul.id, operation: 'set', decision: choice,
         detail: `${row.harness}: ${current ?? 'unset'} -> ${choice} by ${caller} (${method})` }, { env, home, now });
       Object.assign(result, { choice, changed: true, previous: current });
     }
     if (fresh) {
-      const retired = sessions.retire(soul.id, row.harness, { now });
       result.freshSession = retired ? { retired: true, store: retired.store } : { retired: false };
       if (retired) {
         appendAuditReceipt({ event: 'tool-home', agentId: soul.id, operation: 'fresh-session', decision: 'fresh-session',
