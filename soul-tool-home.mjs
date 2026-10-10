@@ -166,7 +166,7 @@ export async function soulToolHomeCommand(argv, {
       let unrecorded = '';
       try {
         appendAuditReceipt({ event: 'tool-home', agentId: soul.id, operation: 'set', decision: 'partial',
-          detail: `${row.harness}: ${current ?? 'unset'} -> ${choice} in ${path.basename(staged.file)}; ${path.basename(error.sessions)} not reset; rollback failed; ${kept} (${caller}, ${method})` }, { env, home, now });
+          detail: `${row.harness}: ${staged.previous ?? 'unset'} -> ${choice} in ${path.basename(staged.file)}; ${path.basename(error.sessions)} not reset; rollback failed; ${kept} (${caller}, ${method})` }, { env, home, now });
       } catch (audit) { unrecorded = ` Its audit receipt could not be written either: ${audit.message}.`; error.audit = audit; }
       throw Object.assign(error, { message: `${error.message} ${restore[0].toUpperCase()}${restore.slice(1)}.${unrecorded}`, backup: staged.backup });
     }

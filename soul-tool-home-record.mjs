@@ -29,7 +29,7 @@ export function readToolHomeRecord(soulDir) {
   return readRecord(soulDir)?.value ?? null;
 }
 
-// The checked record with the exact bytes it was read from, from one
+// The checked record with the exact bytes (a Buffer) it was read from, from one
 // no-follow descriptor, or null when there is none.
 function readRecord(soulDir) {
   let fd;
@@ -43,10 +43,10 @@ function readRecord(soulDir) {
     const stat = fstatSync(fd);
     if (!stat.isFile()) throw invalid('not a regular file');
     if (stat.size > RECORD_MAX_BYTES) throw invalid(`larger than ${RECORD_MAX_BYTES} bytes`);
-    raw = readFileSync(fd, 'utf8');
+    raw = readFileSync(fd);
   } finally { closeSync(fd); }
   let value;
-  try { value = JSON.parse(raw); } catch { throw invalid('not JSON'); }
+  try { value = JSON.parse(raw.toString('utf8')); } catch { throw invalid('not JSON'); }
   return { raw, value: normalizeToolHomeRecord(value) };
 }
 
@@ -101,6 +101,7 @@ export function prepareToolHomeChoice(soulDir, harness, choice) {
   return {
     file,
     backup: original === null ? null : backup,
+    previous: original?.harnesses[row.harness] ?? null,
     commit() { renameSync(pending, file); committed = true; return normalizeToolHomeRecord(record); },
     rollback() {
       if (!committed) return;
