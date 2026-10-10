@@ -91,20 +91,25 @@ export function ownerActionSummary(action, options = {}) {
 }
 
 // Signed challenges for the daemon's decision routes (ADR-0753 section 4,
-// #753). Where presence is unavailable and an SSH owner key is pinned, a
-// decision without a reply is refused with `owner-challenge-required` and
+// #753). Where presence is unavailable and a security-key owner pin exists,
+// a decision without a reply is refused with `owner-challenge-required` and
 // the unsigned challenges, which the gate records here. The owner signs one
 // with `owner sign --challenge` wherever the key is, and the caller repeats
-// the same decision with the signed `statement`. A reply answers only the
-// challenges recorded for that request and that exact action, and checking
-// it spends them whether it verifies or not, so each nonce is used once.
-// Pending challenges live only in daemon memory: a restart drops them.
+// the same decision with the signed `statement`. A software SSH key never
+// answers here: a soul in the owner's account could read it and sign its own
+// approval, so those hosts keep the administrator dialog. One set of
+// challenges is pending per request (a proposal), for one exact action; a new
+// request replaces it, and checking a reply spends it whether it verifies or
+// not, so each nonce is used once. Pending challenges live only in daemon
+// memory: a restart drops them.
+const securityKeyPin = (pin) => pin.store === 'ssh' && pin.softwareKey !== true && /^sk-/.test(pin.publicKey);
+
 export function createChallengeLedger({ env = process.env, now = Date.now, host = localHost, limit = 64 } = {}) {
   const pending = new Map();
   const prune = () => {
     const seconds = Math.floor(now() / 1000);
-    for (const [key, challenges] of pending) {
-      if (challenges.every(({ payload }) => payload.exp < seconds)) pending.delete(key);
+    for (const [request, { challenges }] of pending) {
+      if (challenges.every(({ payload }) => payload.exp < seconds)) pending.delete(request);
     }
   };
   return {
@@ -115,33 +120,34 @@ export function createChallengeLedger({ env = process.env, now = Date.now, host 
       return async (action, { summary }) => {
         const keys = readOwnerKeys({ env });
         if (keys.length === 0) return null;
-        const sshKeys = keys.filter((pin) => pin.store === 'ssh');
-        if (sshKeys.length === 0) {
-          throw statementError('owner-unreachable', 'owner pins exist, but a signed challenge can use only enrolled SSH keys; nothing was changed');
+        const securityKeys = keys.filter(securityKeyPin);
+        if (securityKeys.length === 0) {
+          // Software SSH keys alone fall back to the dialog, as with no pins.
+          if (keys.some((pin) => pin.store === 'ssh')) return null;
+          throw statementError('owner-unreachable', 'owner pins exist, but a signed challenge can use only enrolled SSH security keys; nothing was changed');
         }
         prune();
-        const key = `${request}\0${action}`;
         if (statement === null || statement === undefined || statement === '') {
-          const challenges = createOwnerChallenges(action, summary, sshKeys, { host: host(), now: now() });
-          pending.delete(key);
+          const challenges = createOwnerChallenges(action, summary, securityKeys, { host: host(), now: now() });
+          pending.delete(request);
           while (pending.size >= limit) pending.delete(pending.keys().next().value);
-          pending.set(key, challenges);
+          pending.set(request, { action, challenges });
           throw Object.assign(statementError('owner-challenge-required',
             'owner presence is unavailable: sign one of these challenges with `agent-bot owner sign --challenge`, then repeat this decision with the signed statement'),
           { challenges: challenges.map(({ name, fingerprint, payload }) => ({ name, fingerprint, payload })) });
         }
         if (typeof statement !== 'string') throw statementError('statement-invalid', 'the statement is not a token');
-        const challenges = pending.get(key);
-        if (!challenges) {
+        const entry = pending.get(request);
+        pending.delete(request);
+        if (!entry || entry.action !== action) {
           throw statementError('statement-scope-mismatch', 'no owner challenge is pending for this decision; repeat it without a statement for a new one');
         }
-        pending.delete(key);
         // Checked against the pins as they are now, not when the challenge was made.
-        const currentKeys = readOwnerKeys({ env });
-        if (!currentKeys.some((pin) => pin.store === 'ssh' && challenges.some(({ fingerprint }) => fingerprint === pin.fingerprint))) {
+        const currentKeys = readOwnerKeys({ env }).filter(securityKeyPin);
+        if (!currentKeys.some((pin) => entry.challenges.some(({ fingerprint }) => fingerprint === pin.fingerprint))) {
           throw statementError('owner-unreachable', 'the challenged owner key is no longer enrolled; nothing was changed');
         }
-        return verifyOwnerChallenge(statement, { challenges, keys: currentKeys, now: now() });
+        return verifyOwnerChallenge(statement, { challenges: entry.challenges, keys: currentKeys, now: now() });
       };
     },
   };

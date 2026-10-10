@@ -1,11 +1,13 @@
 // A decision route answered with a signed owner challenge (ADR-0753 section
-// 4, #753): where presence is unavailable and an SSH owner key is pinned,
+// 4, #753): where presence is unavailable and an SSH security key is pinned,
 // the daemon issues challenges, records them, and accepts each signed reply
-// once, for that decision only.
+// once, for that decision only. A software SSH key, which a soul in the
+// owner's account could read, never answers a decision route.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -14,7 +16,9 @@ import { createDaemonServer } from '../agent-daemon.mjs';
 import { confirmOwnerPresence, createChallengeLedger } from '../owner-action.mjs';
 import { authorizeSouls, bindTransport, enrollPrincipal, setOperations } from '../agent-principals.mjs';
 import { upsertSoul } from '../agent-population.mjs';
-import { armorStatement, parseSshPublicKey, signChallenge, sshFingerprint, writeOwnerKeys } from '../owner-statement.mjs';
+import {
+  SSHSIG_NAMESPACE, armorStatement, createOwnerChallenges, parseSshPublicKey, signChallenge, sshFingerprint, writeOwnerKeys,
+} from '../owner-statement.mjs';
 
 const AGENT_ID = 'agent_11111111-1111-4111-8111-111111111111';
 const OPERATION = { permission: { toolName: 'Bash', input: { command: 'git push' } } };
@@ -42,17 +46,46 @@ function scratch() {
   return { root, env };
 }
 
-// A software ed25519 key from ssh-keygen, pinned as the owner's.
-function ownerKey(root, env, name = 'laptop') {
+const u32 = (n) => { const b = Buffer.alloc(4); b.writeUInt32BE(n); return b; };
+const str = (value) => { const b = Buffer.isBuffer(value) ? value : Buffer.from(value); return Buffer.concat([u32(b.length), b]); };
+const pinOf = (name, line, softwareKey) => ({
+  name, store: 'ssh', alg: 'sshsig', publicKey: line, fingerprint: sshFingerprint(parseSshPublicKey(line).blob),
+  verifyRequired: false, softwareKey, pinnedAt: '2026-10-09T21:00:00.000Z',
+});
+
+// A FIDO sk-ssh-ed25519 key pinned as the owner's: its `.pub` on disk, as
+// `ssh-keygen -t ed25519-sk` leaves it, and a signer standing in for the
+// hardware the way OpenSSH's ssh-sk signs (PROTOCOL.u2f).
+function ownerKey(root, env, name = 'yubikey') {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const raw = Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url');
+  const type = 'sk-ssh-ed25519@openssh.com';
+  const application = 'ssh:';
+  const blob = Buffer.concat([str(type), str(raw), str(application)]);
+  const line = `${type} ${blob.toString('base64')}`;
+  const keyPath = path.join(root, `id_${name}_sk`);
+  writeFileSync(`${keyPath}.pub`, `${line} ${name}\n`);
+  const sshsig = (segment) => {
+    const hash = 'sha512';
+    const signed = Buffer.concat([Buffer.from('SSHSIG'), str(SSHSIG_NAMESPACE), str(''), str(hash), str(createHash(hash).update(segment).digest())]);
+    const flags = 0x01;
+    const counter = u32(7);
+    const data = Buffer.concat([createHash('sha256').update(application).digest(), Buffer.from([flags]), counter, createHash('sha256').update(signed).digest()]);
+    const signature = Buffer.concat([str(type), str(sign(null, data, privateKey)), Buffer.from([flags]), counter]);
+    return Buffer.concat([Buffer.from('SSHSIG'), u32(1), str(blob), str(SSHSIG_NAMESPACE), str(''), str(hash), str(signature)]);
+  };
+  return { keyPath, pin: pinOf(name, line, false), sign: (segment) => sshsig(Buffer.from(segment)) };
+}
+
+// A software ed25519 key from ssh-keygen, pinned with --allow-software-key:
+// anything running as the owner can read it.
+function softwareKey(root, name = 'laptop') {
   const keyPath = path.join(root, `id_${name}`);
   execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', name, '-f', keyPath], { stdio: 'ignore' });
-  const line = readFileSync(`${keyPath}.pub`, 'utf8').trim();
-  const pin = {
-    name, store: 'ssh', alg: 'sshsig', publicKey: line, fingerprint: sshFingerprint(parseSshPublicKey(line).blob),
-    verifyRequired: false, softwareKey: true, pinnedAt: '2026-10-09T21:00:00.000Z',
-  };
-  return { keyPath, pin };
+  return { keyPath, pin: pinOf(name, readFileSync(`${keyPath}.pub`, 'utf8').trim(), true) };
 }
+
+const signed = (payload, key, options = {}) => signChallenge(payload, key.keyPath, { sign: key.sign, ...options }).token;
 
 const code = async (promise) => {
   try { await promise; } catch (error) { return error.code; }
@@ -66,7 +99,7 @@ async function challengesFrom(hook, action, summary = 'approve Bash for the soul
   return error.challenges;
 }
 
-test('a ledger hook is silent without pins and unreachable with only keyd pins', async () => {
+test('a ledger hook is silent without pins or with only software keys, and unreachable with only keyd pins', { skip: NO_KEYGEN }, async () => {
   const { env } = scratch();
   const ledger = createChallengeLedger({ env });
   assert.equal(await ledger.hook({ request: 'p1' })('approve x', { summary: 'approve x' }), null);
@@ -76,37 +109,52 @@ test('a ledger hook is silent without pins and unreachable with only keyd pins',
     verifyRequired: false, softwareKey: false, pinnedAt: '2026-10-09T21:00:00.000Z',
   }], { env });
   assert.equal(await code(ledger.hook({ request: 'p1' })('approve x', { summary: 'approve x' })), 'owner-unreachable');
+  // A software key falls back to the dialog, statement or not.
+  const { root } = scratch();
+  const software = softwareKey(root);
+  writeOwnerKeys([software.pin], { env });
+  assert.equal(await ledger.hook({ request: 'p1' })('approve x', { summary: 'approve x' }), null);
+  const [forged] = createOwnerChallenges('approve x', 'approve x', [software.pin]);
+  const token = signChallenge(forged.payload, software.keyPath).token;
+  assert.equal(await ledger.hook({ request: 'p1', statement: token })('approve x', { summary: 'approve x' }), null);
   assert.equal(ledger.size, 0);
 });
 
-test('a signed reply answers its own challenge once, for that request and action only', { skip: NO_KEYGEN }, async () => {
+test('a signed reply answers its own challenge once, for that request and action only', async () => {
   const { root, env } = scratch();
-  const { keyPath, pin } = ownerKey(root, env);
+  const owner = ownerKey(root, env);
+  const { pin } = owner;
   writeOwnerKeys([pin], { env });
   const ledger = createChallengeLedger({ env });
   const action = 'approve Bash for soul once: push';
 
   const [challenge] = await challengesFrom(ledger.hook({ request: 'p1' }), action);
-  assert.deepEqual([challenge.name, challenge.fingerprint, challenge.payload.kind], ['laptop', pin.fingerprint, 'challenge']);
+  assert.deepEqual([challenge.name, challenge.fingerprint, challenge.payload.kind], ['yubikey', pin.fingerprint, 'challenge']);
   assert.equal(ledger.size, 1);
-  const { token } = signChallenge(challenge.payload, keyPath);
+  const token = signed(challenge.payload, owner);
 
-  // Another request or another action is not what was challenged.
+  // Another request is not what was challenged, and leaves this one pending.
   assert.equal(await code(ledger.hook({ request: 'p2', statement: token })(action, { summary: 'x' })), 'statement-scope-mismatch');
-  assert.equal(await code(ledger.hook({ request: 'p1', statement: token })(`deny${action.slice(7)}`, { summary: 'x' })), 'statement-scope-mismatch');
   assert.equal(ledger.size, 1);
 
   // The armored block is accepted as well as the bare token.
   const proof = await ledger.hook({ request: 'p1', statement: armorStatement(token) })(action, { summary: 'x' });
-  assert.deepEqual(proof, { method: 'statement', via: 'ssh', key: 'laptop', fingerprint: pin.fingerprint });
+  assert.deepEqual(proof, { method: 'statement', via: 'ssh', key: 'yubikey', fingerprint: pin.fingerprint });
   assert.equal(ledger.size, 0);
   // Replaying the same reply finds nothing pending.
   assert.equal(await code(ledger.hook({ request: 'p1', statement: token })(action, { summary: 'x' })), 'statement-scope-mismatch');
+
+  // Another action on the same request is refused and spends the challenge.
+  const [again] = await challengesFrom(ledger.hook({ request: 'p1' }), action);
+  const answer = signed(again.payload, owner);
+  assert.equal(await code(ledger.hook({ request: 'p1', statement: answer })(`deny${action.slice(7)}`, { summary: 'x' })), 'statement-scope-mismatch');
+  assert.equal(await code(ledger.hook({ request: 'p1', statement: answer })(action, { summary: 'x' })), 'statement-scope-mismatch');
 });
 
-test('a failed reply spends the challenge, and a fresh challenge replaces an older one', { skip: NO_KEYGEN }, async () => {
+test('a failed reply spends the challenge, and a fresh challenge replaces an older one', async () => {
   const { root, env } = scratch();
-  const { keyPath, pin } = ownerKey(root, env);
+  const owner = ownerKey(root, env);
+  const { pin } = owner;
   writeOwnerKeys([pin], { env });
   const ledger = createChallengeLedger({ env });
   const action = 'approve Bash for soul once: push';
@@ -116,38 +164,39 @@ test('a failed reply spends the challenge, and a fresh challenge replaces an old
   assert.notEqual(first.payload.nonce, second.payload.nonce);
   assert.equal(ledger.size, 1);
   // The superseded challenge's reply is refused, and that spends the new one too.
-  const stale = signChallenge(first.payload, keyPath).token;
+  const stale = signed(first.payload, owner);
   assert.equal(await code(ledger.hook({ request: 'p1', statement: stale })(action, { summary: 'x' })), 'statement-scope-mismatch');
-  const fresh = signChallenge(second.payload, keyPath).token;
+  const fresh = signed(second.payload, owner);
   assert.equal(await code(ledger.hook({ request: 'p1', statement: fresh })(action, { summary: 'x' })), 'statement-scope-mismatch');
 
   assert.equal(await code(ledger.hook({ request: 'p1', statement: 'not a token' })(action, { summary: 'x' })), 'statement-scope-mismatch');
   assert.equal(await code(ledger.hook({ request: 'p1', statement: 7 })(action, { summary: 'x' })), 'statement-invalid');
 });
 
-test('a reply is checked against the pins as they are now, and challenges expire', { skip: NO_KEYGEN }, async () => {
+test('a reply is checked against the pins as they are now, and challenges expire', async () => {
   const { root, env } = scratch();
-  const { keyPath, pin } = ownerKey(root, env);
+  const owner = ownerKey(root, env);
+  const { pin } = owner;
   writeOwnerKeys([pin], { env });
   let clock = Date.now();
   const ledger = createChallengeLedger({ env, now: () => clock });
   const action = 'approve Bash for soul once: push';
 
   const [challenge] = await challengesFrom(ledger.hook({ request: 'p1' }), action);
-  const { token } = signChallenge(challenge.payload, keyPath, { now: clock });
+  const token = signed(challenge.payload, owner, { now: clock });
   const other = ownerKey(root, env, 'other');
   writeOwnerKeys([other.pin], { env });
   assert.equal(await code(ledger.hook({ request: 'p1', statement: token })(action, { summary: 'x' })), 'owner-unreachable');
 
   writeOwnerKeys([pin], { env });
   const [late] = await challengesFrom(ledger.hook({ request: 'p1' }), action);
-  const lateToken = signChallenge(late.payload, keyPath, { now: clock }).token;
+  const lateToken = signed(late.payload, owner, { now: clock });
   clock += 16 * 60 * 1000;
   assert.equal(ledger.size, 0);
   assert.equal(await code(ledger.hook({ request: 'p1', statement: lateToken })(action, { summary: 'x' })), 'statement-scope-mismatch');
 });
 
-test('the ledger holds a bounded number of pending decisions', { skip: NO_KEYGEN }, async () => {
+test('the ledger holds a bounded number of pending decisions', async () => {
   const { root, env } = scratch();
   writeOwnerKeys([ownerKey(root, env).pin], { env });
   const ledger = createChallengeLedger({ env, limit: 3 });
@@ -189,9 +238,10 @@ function audits(env) {
   }
 }
 
-test('both decision routes answer with challenges and accept each signed reply once', { skip: NO_KEYGEN }, async () => {
+test('both decision routes answer with challenges and accept each signed reply once', async () => {
   const { root, env } = scratch();
-  const { keyPath, pin } = ownerKey(root, env);
+  const owner = ownerKey(root, env);
+  const { pin } = owner;
   writeOwnerKeys([pin], { env });
   const options = { file: env.AGENT_BOT_PRINCIPALS_PATH, env, home: '/nonexistent' };
   const principal = enrollPrincipal({ label: 'phone' }, options);
@@ -216,16 +266,21 @@ test('both decision routes answer with challenges and accept each signed reply o
     assert.deepEqual((await (await call('/v0/approvals')).json()).proposals.map((p) => p.status), ['open']);
     assert.equal(audits(env).filter((receipt) => receipt.decision === 'owner-challenged').length, 1);
 
-    const { token } = signChallenge(body.challenges[0].payload, keyPath);
-    // The reply to an approval cannot deny.
+    const token = signed(body.challenges[0].payload, owner);
+    // The reply to an approval cannot deny, and trying spends it.
     const crossed = await call('/v0/approvals/decide', {
       method: 'POST', body: { proposalId: row.proposalId, decision: 'deny', digest: row.operationDigest, statement: token },
     });
     assert.equal(crossed.status, 403);
-    const approved = await decide({ statement: token });
+    assert.equal((await decide({ statement: token })).status, 403);
+    const renewed = await (await decide()).json();
+    const approved = await decide({ statement: signed(renewed.challenges[0].payload, owner) });
     assert.equal(approved.status, 200);
     assert.equal((await approved.json()).proposal.status, 'approved');
     assert.deepEqual(await waiting, { decision: 'approve' });
+    // The receipt says how the owner authorized it.
+    const [receipt] = audits(env).filter((entry) => entry.event === 'approval-decision' && entry.decision === 'approved');
+    assert.equal(receipt.detail, 'risk: external; authorized: statement yubikey');
 
     // /v1, a principal's route.
     const second = server.interaction.requestTurnApproval({ agentId: AGENT_ID, operation: OPERATION, summary: 'push again', tool: 'Bash' });
@@ -238,13 +293,57 @@ test('both decision routes answer with challenges and accept each signed reply o
     const [nextChallenge] = (await challenged.json()).challenges;
     // The first decision's reply cannot answer this one, and trying spends it.
     assert.equal((await viaPrincipal({ statement: token })).status, 403);
-    const spent = signChallenge(nextChallenge.payload, keyPath).token;
+    const spent = signed(nextChallenge.payload, owner);
     assert.equal((await viaPrincipal({ statement: spent })).status, 403);
     const fresh = await (await viaPrincipal()).json();
-    const answer = signChallenge(fresh.challenges[0].payload, keyPath).token;
+    const answer = signed(fresh.challenges[0].payload, owner);
     assert.equal((await viaPrincipal({ statement: answer })).status, 200);
     assert.deepEqual(await second, { decision: 'approve' });
-    assert.equal(audits(env).filter((receipt) => receipt.decision === 'owner-challenged').length, 3);
+    assert.equal(audits(env).filter((receipt) => receipt.decision === 'owner-challenged').length, 4);
+  } finally {
+    await close();
+  }
+});
+
+// A soul runs in the owner's account, so it holds the daemon token and can
+// read a software key. With only a software key pinned the routes ask the
+// dialog, which a soul cannot answer; with a security key pinned, the soul
+// can fetch a challenge but cannot sign it.
+test('a soul holding the daemon token and a software key cannot approve its own proposal', { skip: NO_KEYGEN }, async () => {
+  const { root, env } = scratch();
+  const software = softwareKey(root);
+  writeOwnerKeys([software.pin], { env });
+  const { server, call, close } = await daemonFor(env);
+  try {
+    const waiting = server.interaction.requestTurnApproval({ agentId: AGENT_ID, operation: OPERATION, summary: 'push', tool: 'Bash' });
+    const [row] = (await (await call('/v0/approvals')).json()).proposals;
+    const decide = (extra = {}) => call('/v0/approvals/decide', {
+      method: 'POST', body: { proposalId: row.proposalId, decision: 'approve', digest: row.operationDigest, ...extra },
+    });
+    const asked = await decide();
+    assert.equal(asked.status, 403);
+    const refusal = await asked.json();
+    assert.match(refusal.error, /the dialog was reached/);
+    assert.equal(refusal.challenges, undefined);
+    // A challenge the soul made up and signed with the software key.
+    const action = `approve Bash for ${AGENT_ID}: push`;
+    const [forged] = createOwnerChallenges(action, action, [software.pin]);
+    const viaStatement = await decide({ statement: signChallenge(forged.payload, software.keyPath).token });
+    assert.equal(viaStatement.status, 403);
+    assert.match((await viaStatement.json()).error, /the dialog was reached/);
+
+    // With a security key pinned as well, the soul's key still cannot answer.
+    writeOwnerKeys([software.pin, ownerKey(root, env).pin], { env });
+    const challenged = await decide();
+    assert.equal(challenged.status, 409);
+    const { challenges } = await challenged.json();
+    assert.equal(challenges.length, 1);
+    assert.equal(challenges[0].name, 'yubikey');
+    assert.throws(() => signChallenge(challenges[0].payload, software.keyPath), { code: 'owner-key-mismatch' });
+    const resigned = signChallenge({ ...challenges[0].payload, key: software.pin.fingerprint }, software.keyPath).token;
+    assert.equal((await decide({ statement: resigned })).status, 403);
+    assert.deepEqual((await (await call('/v0/approvals')).json()).proposals.map((p) => p.status), ['open']);
+    await assert.rejects(Promise.race([waiting, new Promise((_, reject) => { setTimeout(() => reject(new Error('not settled')), 50); })]), /not settled/);
   } finally {
     await close();
   }

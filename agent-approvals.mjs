@@ -35,8 +35,9 @@ keyd's Touch ID or login-password prompt naming the soul and tool, or the
 administrator dialog when keyd cannot ask. The daemon token alone never
 decides, and a --principal-stdin credential is checked as well, not instead.
 
-Where keyd cannot ask and an SSH owner key is enrolled (agent-bot owner
-enroll), the daemon answers with signed challenges instead of the dialog.
+Where keyd cannot ask and an SSH security key is enrolled (agent-bot owner
+enroll), the daemon answers with signed challenges instead of the dialog;
+a software key never answers.
 Sign one with \`agent-bot owner sign --challenge '<JSON>' --key PATH\` on a
 trusted machine within ten minutes, then repeat the same decision with
 --statement and the signed statement. A challenge answers only that decision,

@@ -103,19 +103,28 @@ cannot use a signed challenge.
 **On a decision route.** Deciding a soul's waiting tool request through
 `POST /v0/approvals/decide` (`agent-bot approvals approve|deny`) or
 `POST /v1/proposals/<id>/decision` never prompts on the daemon's terminal.
-When keyd cannot ask and an SSH owner key is pinned, the route decides
-nothing and answers 409 with `code: "owner-challenge-required"` and
-`challenges: [{ name, fingerprint, payload }]`, one per SSH pin; the audit
-log records `owner-challenged`. The owner signs one payload with
-`owner sign --challenge` and the caller repeats the same decision with
-`statement` set to the signed token or armored block
-(`agent-bot approvals approve <id> --statement '<signed>'`). The daemon keeps
-the challenges in memory for that proposal and that exact decision (approve
-or deny, and the scope). Any reply spends them, verified or not; a new
-request without a statement replaces them; a restart drops them. A reply for
-another proposal or decision, a replay, an expired challenge or a key no
-longer pinned is refused with 403. With no owner key pinned the route still
-uses the administrator dialog.
+When keyd cannot ask and an SSH security key (`sk-ssh-ed25519` or
+`sk-ecdsa`) is pinned, the route decides nothing and answers 409 with
+`code: "owner-challenge-required"` and `challenges: [{ name, fingerprint,
+payload }]`, one per security-key pin; the audit log records
+`owner-challenged`. The owner signs one payload with `owner sign --challenge`
+and the caller repeats the same decision with `statement` set to the signed
+token or armored block (`agent-bot approvals approve <id> --statement
+'<signed>'`). The daemon keeps one set of challenges per open proposal, in
+memory, for that exact decision (approve or deny, and the scope). Any reply
+spends them, verified or not; a new request without a statement replaces
+them; a restart drops them. A reply for another proposal or decision, a
+replay, an expired challenge or a key no longer pinned is refused with 403.
+The receipt of a decision records how it was authorized (`authorized:
+statement <key>`, `presence` or `consent`).
+
+A software key pinned with `--allow-software-key` never answers a decision
+route: a soul runs in the owner's account and could read it. With no
+security key pinned, the route uses the administrator dialog, as it does
+with no owner key at all. Anything holding the daemon token can ask for a
+fresh challenge or send a bad reply, which replaces or spends the pending
+one for that proposal; that can only make the owner sign again, never
+decide.
 
 **enroll** pins a public key in `<state>/owner/keys.json` (0600, in a 0700
 directory; `<state>` is `$XDG_STATE_HOME/agent-bot` or

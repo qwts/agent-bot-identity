@@ -1060,8 +1060,8 @@ operation it names, and refuse a caller with a soul marker. Before any
 decision lands, the daemon asks for the owner's presence (#438): keyd's
 Touch ID or login-password prompt naming the soul and tool, or the
 administrator dialog when keyd cannot ask ([keyd protocol](docs/keyd-protocol.md)).
-With an SSH owner key enrolled, a decision keyd cannot confirm instead comes
-back with signed challenges: sign one with `agent-bot owner sign --challenge`
+With an SSH security key enrolled as an owner key, a decision keyd cannot
+confirm instead comes back with signed challenges: sign one with `agent-bot owner sign --challenge`
 and repeat the decision with `--statement`
 ([owner statements](docs/owner-statements.md)). The daemon token alone never
 decides, and a `--principal-stdin` credential is checked as well, not

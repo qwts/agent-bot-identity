@@ -369,6 +369,14 @@ function operationError(error) {
   return Object.assign(new Error(error.message), { statusCode: 409 });
 }
 
+// How an owner decision passed the gate, for its receipt (#753): keyd
+// presence, the administrator dialog, or a signed statement and its key.
+function authorizedBy(proof) {
+  if (!proof || typeof proof.method !== 'string') return null;
+  const key = proof.method === 'statement' && typeof proof.key === 'string' ? ` ${proof.key}` : '';
+  return `authorized: ${proof.method}${key}`;
+}
+
 export function createDaemonServer({
   env = process.env,
   home = homedir(),
@@ -439,8 +447,9 @@ export function createDaemonServer({
       // by the decision itself; it never gets to raise a prompt.
       try { assertAuthorized({ principal, agentId: proposal.agentId, operation: 'approve' }); } catch { return; }
     }
+    let proof;
     try {
-      await ownerGate(approvalAction(shown(proposal, { env, home }), decision, scope), { principal: credential, request: proposalId, statement });
+      proof = await ownerGate(approvalAction(shown(proposal, { env, home }), decision, scope), { principal: credential, request: proposalId, statement });
     } catch (error) {
       const challenged = error.code === 'owner-challenge-required';
       appendAuditReceipt({
@@ -454,6 +463,7 @@ export function createDaemonServer({
       if (challenged) throw Object.assign(new Error(error.message), { statusCode: 409, code: error.code, challenges: error.challenges });
       throw Object.assign(new Error(`the owner did not confirm this decision: ${error.message}`), { statusCode: 403 });
     }
+    return authorizedBy(proof);
   }
   const bindings = createBindingRegistry({ now, file: path.join(vouchStateDir({ env, home }), 'bindings.json'), account: env.USER ?? process.env.USER ?? 'unknown' });
   const findBinding = lookupBindingOverride
@@ -1202,11 +1212,11 @@ export function createDaemonServer({
         }
         case 'POST /v0/approvals/decide': {
           const body = parseJsonBody(await readBody(req));
-          await confirmDecision({ proposalId: body.proposalId, decision: body.decision, scope: body.scope, credential: body.principal ?? null, statement: body.statement ?? null });
+          const authorization = await confirmDecision({ proposalId: body.proposalId, decision: body.decision, scope: body.scope, credential: body.principal ?? null, statement: body.statement ?? null });
           sendJson(res, 200, interaction.decideProposalAsOwner({
             proposalId: body.proposalId,
             decision: body.decision, scope: body.scope,
-            digest: body.digest,
+            digest: body.digest, authorization,
           }));
           return;
         }
@@ -1614,13 +1624,13 @@ async function handleInteractionRequest({ req, res, url, interaction, env, home,
     return;
   }
   if (req.method === 'POST' && (match = url.pathname.match(/^\/v1\/proposals\/([^/]+)\/decision$/))) {
-    await confirmDecision({ proposalId: match[1], decision: body.decision, scope: body.scope, principal, transport, statement: body.statement ?? null });
+    const authorization = await confirmDecision({ proposalId: match[1], decision: body.decision, scope: body.scope, principal, transport, statement: body.statement ?? null });
     sendJson(res, 200, interaction.decideProposal({
       principal,
       transport,
       proposalId: match[1],
       decision: body.decision, scope: body.scope,
-      digest: body.digest,
+      digest: body.digest, authorization,
     }));
     return;
   }
