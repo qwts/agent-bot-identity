@@ -1096,9 +1096,10 @@ test('a new soul that probes signed out still launches: its ID would not survive
 // owner's: they are asked to verify and may override, with a receipt.
 const denial = { code: 'policy-denied', ruleId: 'no-codex', reason: 'No Codex here.', digest: 'd'.repeat(64),
   sop: { repository: 'local/sop', commit: 'c'.repeat(40) }, message: 'SOP policy rule no-codex (local/sop@cccccccccccc) denies launching on codex: No Codex here.' };
-function policyFixture(t, { check = () => denial, override = async () => ({ method: 'presence', via: 'agent-bot-keyd' }), receipt = null } = {}) {
-  const side = { identities: 0, spawn: 0, lookup: 0, provision: 0, overrides: [], receipts: [] };
+function policyFixture(t, { check = () => denial, override = async () => ({ method: 'presence', via: 'agent-bot-keyd' }), receipt = null, extra = {} } = {}) {
+  const side = { identities: 0, spawn: 0, lookup: 0, provision: 0, forks: 0, overrides: [], receipts: [] };
   const f = fixture(t, {
+    forkCopy: () => { side.forks++; return { id: spawnedId }; },
     identities: () => { side.identities++; return { id: agentId, harness: 'codex' }; },
     spawnPackage: () => { side.spawn++; return { id: agentId }; },
     lookupBinding: () => { side.lookup++; return { worktree: '/work', file: '/private/binding' }; },
@@ -1108,12 +1109,13 @@ function policyFixture(t, { check = () => denial, override = async () => ({ meth
       override: async (refusal, context) => { side.overrides.push({ refusal, context }); return override(refusal, context); },
       receipt: receipt ?? ((entry) => { side.receipts.push(entry); }),
     },
+    ...extra,
   });
   return { ...f, side };
 }
 const untouched = (f) => {
-  assert.deepEqual({ identities: f.side.identities, spawn: f.side.spawn, lookup: f.side.lookup, provision: f.side.provision, executor: f.calls.length },
-    { identities: 0, spawn: 0, lookup: 0, provision: 0, executor: 0 });
+  assert.deepEqual({ identities: f.side.identities, spawn: f.side.spawn, fork: f.side.forks, lookup: f.side.lookup, provision: f.side.provision, executor: f.calls.length },
+    { identities: 0, spawn: 0, fork: 0, lookup: 0, provision: 0, executor: 0 });
 };
 
 test('an agent-initiated launch that the SOP policy denies is refused without asking the owner', async (t) => {
@@ -1176,6 +1178,29 @@ test('an unrecorded or unavailable policy outcome never becomes an allow', async
   const long = policyFixture(t, { check: () => ({ ...denial, message: 'x'.repeat(2000) }) , override: async () => { throw new Error('no'); } });
   await long.handler({ ...event, harness: 'codex' }, long.ports);
   assert.ok([...long.reports[0].detail].length <= 512);
+});
+
+// A team start (the agent-initiated route) is covered above; a teammate is
+// always a new soul from a package.
+test('a refused policy leaves no side effect on every owner launch route the handler covers', async (t) => {
+  const declined = async () => { throw new Error('the owner declined at Touch ID'); };
+  const routes = {
+    'existing soul': [event, {}],
+    'package spawn': [packageEvent, {}],
+    'installed-folder relaunch': [packageEvent, { locatePackage: (pkg) => ({ path: pkg, status: 'installed', agentId, soulDir: pkg, copies: [] }) }],
+    'copied-folder fork': [packageEvent, { locatePackage: (pkg) => ({ path: pkg, status: 'copy', agentId, soulDir: '/souls/Bill.soul', message: `${pkg} is a copy` }) }],
+  };
+  for (const [route, [launch, extra]] of Object.entries(routes)) {
+    for (const check of [() => denial, () => { throw new Error('marker unreadable'); }]) {
+      const f = policyFixture(t, { check, override: declined, extra });
+      await f.handler({ ...launch, harness: 'codex' }, f.ports);
+      untouched(f);
+      assert.equal(f.reports[0].status, 'failed', route);
+      assert.match(f.reports[0].code, /^policy-(denied|unavailable)$/, route);
+      assert.equal(f.side.overrides.length, 1, `${route}: a principal's launch asks the owner`);
+      assert.equal(f.side.receipts[0].decision, 'override-declined', route);
+    }
+  }
 });
 
 test('a product refusal comes before the SOP policy, which never turns it into a launch', async (t) => {
