@@ -709,6 +709,7 @@ export async function sandboxCommand(argv, {
   readStdin = () => readFileSync(0, 'utf8'),
   write = (text) => process.stdout.write(text),
   gate = (action, { principal }) => assertOwnerAction(action, { principal, env, cwd }),
+  verifyExport,
 } = {}) {
   const json = argv.includes('--json');
   const presented = argv.includes('--principal-stdin');
@@ -776,7 +777,7 @@ export async function sandboxCommand(argv, {
       try { principal = JSON.parse(readStdin()); }
       catch { throw new Error('--principal-stdin needs the principal credential as JSON on stdin'); }
     }
-    const result = await runSandboxRemoval(inventory, { gate, exec, principal, env, home, cwd });
+    const result = await runSandboxRemoval(inventory, { gate, exec, principal, env, home, cwd, verify: verifyExport });
     return out(result, formatSandboxRemovalResult(result));
   }
   if (verb === 'resolve' && rest.length === 1) {

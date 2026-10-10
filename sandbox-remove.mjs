@@ -16,6 +16,7 @@
 // gone is not revoked twice.
 import { homedir } from 'node:os';
 import { appendAuditReceipt } from './agent-principals.mjs';
+import { populationFile, showSoul } from './agent-population.mjs';
 import { verifySandboxExport } from './sandbox-export.mjs';
 
 function fail(code, message, action = null) { throw Object.assign(new Error(message), { code, action }); }
@@ -36,37 +37,84 @@ function pairingsOf(exec, account) {
  * what each category got; throws, with the rerun as its action, on a refusal
  * or a failure.
  */
-export async function runSandboxRemoval(inventory, { gate, exec, principal = null, env = process.env, home = homedir(), cwd = process.cwd(),
+export async function runSandboxRemoval(inventory, options = {}) {
+  const { env = process.env, home = homedir(), now = () => new Date() } = options;
+  try { return await removal(inventory, options); }
+  catch (error) {
+    // Every stop leaves a receipt: a refusal before anything changed, the
+    // owner declining, or a failure part way.
+    const decision = error.stage === 'gate' ? 'declined' : error.stage === 'revoke' ? 'failed' : 'refused';
+    appendAuditReceipt({ event: 'sandbox-remove', operation: 'remove', decision, detail: `${inventory?.account ?? '?'}: ${error.code ?? 'error'}: ${error.message}` }, { env, home, now });
+    throw error;
+  }
+}
+
+const EXPORTED = ['souls', 'workspaces', 'transcripts'];
+
+async function removal(inventory, { gate, exec, principal = null, env = process.env, home = homedir(), cwd = process.cwd(),
   now = () => new Date(), verify = verifySandboxExport } = {}) {
   const { account, owner } = inventory;
   const rerun = `agent-bot sandbox remove ${account}`;
   const receipt = (decision, detail) => appendAuditReceipt({ event: 'sandbox-remove', operation: 'remove', decision, detail }, { env, home, now });
+  const again = `in ${account}, run agent-bot sandbox export --for ${owner}, copy it over and verify it`;
   if (!inventory.supported) fail('sandbox-remove-unsupported', 'persona accounts need macOS; there is nothing to remove');
   const category = (id) => inventory.categories.find((entry) => entry.id === id);
   const census = category('census');
-  if (!census?.known) fail('sandbox-remove-broker-unreadable', 'the broker\'s census could not be read, so the export cannot be checked against it', 'start the broker, then run this again');
+  const souls = category('souls');
+  // The souls to account for come from this (owner's) side: the local census
+  // rows that run as the account, and the broker's rows joined from it.
+  if (!census?.known || !souls?.known) fail('sandbox-remove-census-unreadable', 'the local or broker census could not be read, so the export cannot be checked against it', 'start the broker, then run this again');
 
-  // The export: verified again now, every category done, every joined soul in it.
+  // The persona account wrote the manifest, so its claims are checked here
+  // against what the owner's side can see, never taken as proof.
   const verified = await verify(account, { env, home, cwd, owner, now });
-  const skipped = Object.entries(verified.categories).filter(([, state]) => state?.state === 'skipped').map(([name]) => name);
-  if (skipped.length) {
-    fail('sandbox-remove-export-incomplete', `the verified export left out ${skipped.join(', ')}`, `in ${account}, run agent-bot sandbox export --for ${owner} without --skip, copy it over and verify it`);
+  const required = souls.items.map((row) => row.agentId).filter(Boolean);
+  const broker = new Map(census.items.filter((row) => row.agentId).map((row) => [row.agentId, row]));
+  const file = populationFile({ env, home });
+  const local = (id) => { try { return showSoul(id, { file }); } catch { return null; } };
+  const unconfirmed = [];
+  for (const name of EXPORTED) {
+    const state = verified.categories?.[name]?.state;
+    if (state === 'exported') continue;
+    if (state !== 'empty') fail('sandbox-remove-export-incomplete', `the verified export has ${name} ${state ?? 'missing'}`, `${again}, without --skip`);
+    if (name === 'souls' && required.length) fail('sandbox-remove-export-incomplete', `the export says souls is empty, but ${required.length} soul(s) run as ${account}`, again);
+    // Another account's home is unreadable from here: an empty workspaces
+    // or transcripts is confirmed only when its default paths read absent.
+    const items = category(name)?.items ?? [];
+    if (name !== 'souls' && !(items.length && items.every((item) => item.state === 'absent'))) unconfirmed.push(name);
   }
-  const exported = new Set([...verified.souls, ...verified.unexported]);
-  const missing = census.items.map((row) => row.agentId).filter((id) => id && !exported.has(id));
-  if (missing.length) {
-    fail('sandbox-remove-soul-not-exported', `the verified export does not hold ${missing.join(', ')}, joined from ${account}`, `in ${account}, export again, copy it over and verify it`);
+  const archived = new Set(verified.souls);
+  const claimed = new Set(verified.unexported);
+  for (const id of required) {
+    if (archived.has(id)) continue;
+    // "Never ran" is believed only when nothing here saw the soul run: the
+    // broker has no row for it and the local census never sighted it.
+    if (!claimed.has(id)) fail('sandbox-remove-soul-not-exported', `the verified export does not hold ${id}, which runs as ${account}`, again);
+    if (broker.has(id) || local(id)?.lastSightedAt) fail('sandbox-remove-soul-not-exported', `the export lists ${id} as never run, but it has run`, again);
   }
+  // Freshness: a soul live now, or sighted after the export finished, may
+  // have changed since, so that export no longer holds its life.
+  const completed = Date.parse(verified.completedAt ?? '');
+  if (!Number.isFinite(completed)) fail('sandbox-remove-export-incomplete', 'the verified export has no completion time', again);
+  const live = [...broker.values()].filter((row) => row.presence === 'joined' || row.presence === 'watching').map((row) => row.agentId);
+  if (live.length) fail('sandbox-remove-export-stale', `${live.join(', ')} ${live.length === 1 ? 'is' : 'are'} running as ${account} now`, `stop ${live.length === 1 ? 'it' : 'them'}, then ${again}`);
+  const later = required.filter((id) => Date.parse(local(id)?.lastSightedAt ?? '') > completed);
+  if (later.length) fail('sandbox-remove-export-stale', `${later.join(', ')} ran after the export finished at ${verified.completedAt}`, again);
 
-  const result = { account, owner, export: verified.dir, categories: [] };
+  const result = { account, owner, export: verified.dir, completedAt: verified.completedAt, categories: [] };
   const done = (id, state, extra = {}) => result.categories.push({ id, state, ...extra });
-  for (const id of ['souls', 'workspaces', 'transcripts']) done(id, 'exported', { verified: verified.dir });
+  for (const id of EXPORTED) done(id, verified.categories[id].state, { verified: verified.dir });
 
   // Pairings: the only removal. Read afresh, so a rerun skips what is gone.
   const pairings = pairingsOf(exec, account);
   if (pairings.length === 0) done('pairings', 'already-removed');
   else {
-    await gate(`revoke ${account}'s broker pairing${pairings.some((row) => row.kind === 'daemon') ? ' and its daemon pairing' : ''}, after the export verified in ${verified.dir}`, { principal, env, cwd });
+    const age = Math.max(0, Math.round((now().getTime() - completed) / 60_000));
+    const daemon = pairings.some((row) => row.kind === 'daemon');
+    const action = `revoke ${account}'s broker pairing${daemon ? ' and its daemon pairing' : ''}, after the export verified in ${verified.dir} (finished ${age} minute(s) ago)`
+      + (unconfirmed.length ? `; the export says ${unconfirmed.join(' and ')} ${unconfirmed.length === 1 ? 'is' : 'are'} empty, which cannot be checked from this account` : '');
+    try { await gate(action, { principal, env, cwd }); }
+    catch (error) { throw Object.assign(error, { stage: 'gate' }); }
     try {
       // `account revoke` drops the account pairing and its daemon pairing together.
       if (pairings.some((row) => row.kind === 'account')) exec('agent-comms', ['account', 'revoke', account]);
@@ -74,8 +122,7 @@ export async function runSandboxRemoval(inventory, { gate, exec, principal = nul
       const left = pairingsOf(exec, account);
       if (left.length) fail('sandbox-remove-pairing-kept', `the broker still lists ${left.length} pairing(s) for ${account}`);
     } catch (error) {
-      receipt('failed', `pairings: ${error.code ?? 'error'}: ${error.message}`);
-      throw Object.assign(error, { code: error.code ?? 'sandbox-remove-failed', action: error.action ?? `run ${rerun} again; nothing else was changed` });
+      throw Object.assign(error, { stage: 'revoke', code: error.code ?? 'sandbox-remove-failed', action: error.action ?? `run ${rerun} again; nothing else was changed` });
     }
     done('pairings', 'removed', { count: pairings.length });
   }

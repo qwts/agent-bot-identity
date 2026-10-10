@@ -139,15 +139,26 @@ macOS there is nothing to list.
 ### Removing
 
 `sandbox remove [ACCOUNT]`, without `--dry-run`, runs in the owner's account
-after the export has been copied there and verified. Before anything is
-changed it:
+after the export has been copied there and verified. The persona account
+wrote that export's manifest, so its claims are checked against what the
+owner's side can see. Before anything is changed it:
 
 - verifies the newest export for ACCOUNT again, reading every file back
   (`sandbox export --verify`), and refuses if none is verified;
-- refuses an export that skipped a category (`sandbox-remove-export-incomplete`);
-- refuses if the broker's census has a soul joined from ACCOUNT that the
-  export holds neither as an archive nor as never-run
-  (`sandbox-remove-soul-not-exported`), or if the broker cannot be read.
+- requires `souls`, `workspaces` and `transcripts` each to be `exported` or
+  `empty` (`sandbox-remove-export-incomplete`). `souls` may be empty only
+  when no soul runs as ACCOUNT. An empty `workspaces` or `transcripts` that
+  cannot be confirmed here, because the account's home is unreadable, is
+  named in the owner gate's prompt;
+- requires every soul that runs as ACCOUNT, in the local census or joined
+  from it in the broker's, to have an archive in the export
+  (`sandbox-remove-soul-not-exported`). A soul the export lists as never run
+  is believed only when the broker has no row for it and the local census
+  never sighted it;
+- refuses a stale export (`sandbox-remove-export-stale`): a soul of the
+  account running now, or sighted after the export finished. The gate
+  prompt gives the export's age;
+- refuses if the local or broker census cannot be read.
 
 Then, category by category:
 
@@ -159,8 +170,9 @@ Then, category by category:
 | `harness-sign-ins` | listed |
 | `macos-account` | printed: `sudo /usr/sbin/sysadminctl -deleteUser ACCOUNT -keepHome`, which agent-bot never runs |
 
-Nothing else is deleted. A failure stops with an audit receipt. Running the
-command again reads the broker afresh, so a pairing already gone is reported
+Nothing else is deleted. Every stop leaves a `sandbox-remove` audit receipt:
+`refused` before anything changed, `declined` at the gate, `failed` part
+way. Running the command again reads the broker afresh, so a pairing already gone is reported
 `already-removed` and not revoked twice.
 
 
