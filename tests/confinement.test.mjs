@@ -115,6 +115,23 @@ test('binding files are never territory, even inside the bound checkout', async 
   await setConfinementMode(id, 'deny', { ...opts, gate: owner });
   assert.equal(confinementCheck(envelope(path.join(soul, 'agent-binding.json')), opts).decision, 'deny');
 });
+test('the SOP policy state is never a file tool target, even with confinement off (#677)', async (t) => {
+  const { home, opts, envelope } = fixture(t);
+  const policy = path.join(opts.env.AGENT_BOT_STATE_HOME, 'sop-policy');
+  mkdirSync(path.join(policy, 'records'), { recursive: true });
+  const targets = [path.join(policy, 'state.json'), path.join(policy, 'records', `${'a'.repeat(64)}.json`), policy];
+  for (const target of targets) assert.equal(checkWrite(id, target, opts).inside, false);
+  await setConfinementMode(id, 'off', { ...opts, gate: owner });
+  for (const target of targets) {
+    const result = confinementCheck(envelope(target), opts);
+    assert.equal(result.decision, 'deny');
+    assert.match(result.reason, /SOP policy state/);
+  }
+  // Through a link into the state, too; neighbours stay ordinary writes.
+  symlinkSync(policy, path.join(home, 'policy-link'));
+  assert.equal(confinementCheck(envelope(path.join(home, 'policy-link', 'state.json')), opts).decision, 'deny');
+  assert.deepEqual(confinementCheck(envelope(path.join(opts.env.AGENT_BOT_STATE_HOME, 'sop-policy-notes')), opts), { decision: 'allow' });
+});
 test('bound checkout must match the recorded worktree when present', (t) => {
   const { home, opts } = fixture(t);
   const bound = path.join(home, 'bound'); mkdirSync(bound);

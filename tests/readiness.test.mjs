@@ -990,6 +990,9 @@ test('machine readiness reports the resolved spaces root and census agreement', 
     ...machineDependencies(home),
   });
   const root = ready.machine.checks.find(({ id }) => id === 'spaces.root');
+  // Read-only: a fresh home has no SOP policy and doctor writes none (#677).
+  assert.deepEqual(ready.machine.checks.find(({ id }) => id === 'sop.policy'),
+    { id: 'sop.policy', status: 'ready', code: null, message: 'no SOP policy is active', action: null, evidence: { state: 'none' } });
   const agreement = ready.machine.checks.find(({ id }) => id === 'spaces.home');
   assert.equal(root.status, 'ready');
   assert.equal(root.evidence.source, 'default');

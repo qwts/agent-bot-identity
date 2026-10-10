@@ -28,6 +28,7 @@ import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
 import { daemonStatus } from './agent-daemon.mjs';
 import { readBindToken, readBinding } from './agent-binding.mjs';
 import { readAgentIdentity, stateDirectory } from './agent-identity.mjs';
+import { readSopPolicyState } from './sop.mjs';
 import { isSoulBound } from './git-credential-bot.mjs';
 import { inspectSupervisor, supervisorSkipLoad } from './daemon-supervisor.mjs';
 import { embeddingAppBundle, homebrewRuntimeRoot, inspectExecutableLink, installationPaths, isManagedExecutable } from './install.mjs';
@@ -325,6 +326,40 @@ function pathIsInside(root, candidate) {
   const from = resolve(root);
   const target = resolve(candidate);
   return target === from || target.startsWith(`${from}/`) || target.startsWith(`${from}\\`);
+}
+
+// The owner-activated SOP launch policy (#677), read offline exactly as the
+// daemon's launch check reads it, so the owner can see whether one is in force.
+// Never activates, repairs or removes anything.
+export function sopPolicyCheck({ home, env, read = readSopPolicyState }) {
+  const current = read({ home, env });
+  const evidence = { state: current.state };
+  if (current.sop) Object.assign(evidence, { sop: current.sop, digest: current.digest, activated: current.changedAt });
+  if (current.state === 'active') {
+    return readinessCheck({
+      id: 'sop.policy',
+      status: 'ready',
+      message: `SOP policy active: ${current.sop.repository}@${current.sop.commit} (${current.policy.rules.length} rule${current.policy.rules.length === 1 ? '' : 's'})`,
+      evidence: { ...evidence, rules: current.policy.rules.length },
+    });
+  }
+  if (current.state === 'none' || current.state === 'inactive') {
+    return readinessCheck({
+      id: 'sop.policy',
+      status: 'ready',
+      message: current.state === 'none' ? 'no SOP policy is active' : `SOP policy deactivated by the owner at ${current.changedAt}`,
+      evidence: current.state === 'inactive' ? { ...evidence, changedAt: current.changedAt } : evidence,
+    });
+  }
+  // Launches are refused (or need the owner's override) while this holds.
+  return readinessCheck({
+    id: 'sop.policy',
+    status: 'warning',
+    code: 'sop-policy-unavailable',
+    message: current.message ?? 'the active SOP policy is unavailable',
+    action: 'run agent-bot sop policy show, then reactivate with agent-bot sop policy activate or turn it off with agent-bot sop policy deactivate',
+    evidence,
+  });
 }
 
 function spacesRootCheck({ home, env, config }) {
@@ -2401,6 +2436,7 @@ export async function collectReadiness({
     });
     machineChecks.push(app ? appServiceAction(daemonHealth, app) : daemonHealth);
     machineChecks.push(spacesRootCheck({ home, env, config }));
+    machineChecks.push(sopPolicyCheck({ home, env }));
     machineChecks.push(spacesHomeCheck({ home, env, config, inspectCutover }));
     const unreferencedSouls = unreferencedSoulsCheck({ home, env, git });
     if (unreferencedSouls) machineChecks.push(unreferencedSouls);

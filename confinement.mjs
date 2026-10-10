@@ -149,10 +149,19 @@ function libraryMetadata(target, opts) {
   return parts.length === 1 || ['manifest.json', '.snapshots', '.checks', '.check.lock', '.updates', '.pending-update.json'].includes(parts[1]);
 }
 
+// The owner's SOP policy marker and records (#677): removing them reads as
+// "never configured" and turns the policy off, so no file tool may write
+// there, even with confinement off. Same root as sop.mjs's state.
+function sopPolicyState(target, opts) {
+  const env = opts.env ?? process.env;
+  const dir = path.join(opts.stateDir ?? stateDirectory({ env, home: opts.home ?? homedir() }), 'sop-policy');
+  return contains(dir, target) || contains(canonicalPath(dir), target);
+}
+
 export function checkWrite(agentId, targetPath, opts = {}) {
   const roots = allowedRoots(agentId, opts);
   const target = canonicalPath(targetPath, opts.cwd);
-  if (libraryMetadata(target, opts) || isBindingFile(target, opts.env ?? process.env)) return { inside: false, path: target, roots };
+  if (libraryMetadata(target, opts) || sopPolicyState(target, opts) || isBindingFile(target, opts.env ?? process.env)) return { inside: false, path: target, roots };
   // The soul's key store is inside its directory but never its territory.
   if (contains(path.join(roots[0], '.soul-state', 'credentials'), target)) return { inside: false, path: target, roots };
   return { inside: roots.some((root) => contains(root, target)), path: target, roots };
@@ -250,6 +259,11 @@ export function confinementCheck(envelope, opts = {}) {
         return { decision: 'deny', reason: 'skill library snapshots and receipts are read-only; use soul skill import or check' };
       }
     } catch { return { decision: 'deny', reason: 'skill library path check failed; write refused' }; }
+    try {
+      if (envelope.file_path && sopPolicyState(canonicalPath(envelope.file_path, envelope.cwd ?? opts.cwd), opts)) {
+        return { decision: 'deny', reason: "the SOP policy state is the owner's; use agent-bot sop policy" };
+      }
+    } catch { return { decision: 'deny', reason: 'SOP policy path check failed; write refused' }; }
     mode = confinementMode(agentId, opts);
     if (mode === 'off') return allow;
     if (!envelope.file_path) throw new Error('file tool has no path');

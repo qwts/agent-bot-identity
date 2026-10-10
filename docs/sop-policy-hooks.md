@@ -5,8 +5,12 @@ the six required boundaries from the implementation. Shipped: the pure
 parser/evaluator in `sop-policy.mjs`; `agent-bot sop policy
 show|activate|deactivate` with the `sop-policy/` state in `sop.mjs`; and
 before-launch enforcement in `createLaunchHandler`, wired by the daemon,
-with the owner override below. Not yet shipped: confinement protection of
-the state directory, readiness/doctor reporting, and every other boundary.
+with the owner override below; confinement refusing recognized soul file
+tool writes into `sop-policy/` (even with confinement off); and the
+`sop.policy` doctor check, which reports the state (`none`, `inactive`,
+`active` with its pinned commit, or `unavailable`) read-only. Not yet shipped:
+every other boundary. Like all confinement, the write refusal is cooperative:
+it does not stop a shell command run with the account's own authority.
 ADR-0274 keeps product authorization authoritative; ADR-0645
 keeps policy parsing independent of process hosts. Existing installed hooks and
 persona enforcement continue to use their current contracts.
@@ -174,7 +178,7 @@ implementation for active policy fails closed.
 
 If a runtime upgrade removes a canonical harness key named by an active policy,
 validation fails closed even when that rule would not match the current launch.
-The planned `show` and doctor integrations must flag that the active policy
+`show` and the doctor `sop.policy` check flag that the active policy
 names a harness this runtime does not know. The bounded launch diagnostic must
 direct the owner to reactivate a compatible policy or explicitly deactivate it;
 silently deleting a rule or remapping an identity alias is not a repair.

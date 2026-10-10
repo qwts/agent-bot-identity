@@ -1,0 +1,1 @@
+- A soul's file tools can no longer write the owner's SOP policy state (`sop-policy/`), even with confinement off, and `agent-bot doctor` now reports whether an SOP policy is active, at which pinned commit, or why it is unavailable (#677).
