@@ -55,8 +55,7 @@ backstop, a stated bot may not skip them, even in its bound worktree:
 `include.path` that could set it) and a `git config` write of
 `core.hooksPath` (or removing or renaming the section holding it) are
 denied. A checkout pin is a stated identity, so a bypass that reaches a
-pinned checkout is denied even from the delegate. Git run indirectly, from a script file or
-`make`, is not seen by this check; the hooks cover it. Neither is a command
+pinned checkout is denied even from the delegate. Script files, stdin-fed shells, language interpreters and common task runners are opaque to the scanner; a session with a stated bot identity denies these commands rather than assuming they cannot publish. This is a conservative pre-command policy and may block legitimate scripts until they run in an appropriately isolated bot environment. It is not a sandbox: enforcement still requires removing human GitHub credentials from bot processes and applying server-side repository rules. Neither is a command
 that relocates the global config (`GIT_CONFIG_GLOBAL`, `HOME`); a bound
 worktree keeps its `core.hooksPath` in worktree config, and an unbound
 checkout is refused by the bound-target check.
