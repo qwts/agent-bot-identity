@@ -47,6 +47,10 @@ export const KEYD_AUDIENCE = 'agent-bot-keyd';
 export const KEYD_GRANT_META = 'agent-bot/grant';
 export const KEYD_LABEL = 'dev.qwts.agent-bot.keyd';
 export const KEYD_LABEL_VARIABLE = 'AGENT_BOT_KEYD_SERVICE_LABEL';
+// The agent-bot-keyd this release is built and tested with: keyd/Cargo.toml's
+// version, which a test keeps equal (#767). A host bundles exactly this
+// version; any other is reported, never quietly accepted.
+export const KEYD_PINNED_VERSION = '0.2.0';
 const GRANT_TTL_SECONDS = 60;
 const REQUEST_TIMEOUT_MS = 30_000;
 // Owner operations wait for a person at the Mac.
@@ -242,14 +246,25 @@ export function keydPolicyRules() {
   return KEYD_TOOL_NAMES.map((tool) => ({ tool: `mcp__${KEYD_SERVER_NAME}__${tool}`, outcome: 'allow' }));
 }
 
+// `versionMatches` compares the running keyd with KEYD_PINNED_VERSION: true,
+// false, or null when no keyd answered with a version.
 export async function keydStatus({ env = process.env, home = homedir(), request = keydRequest } = {}) {
   const record = readKeydRecord({ env, home });
+  const pin = { expectedVersion: KEYD_PINNED_VERSION };
   try {
     const status = await request(keydPaths({ env, home }).ownerSocket, 'owner/status', {}, { timeoutMs: 5_000 });
-    return { running: true, bin: record?.bin ?? null, pinned: Boolean(status?.pinned), version: status?.version ?? null };
+    const version = typeof status?.version === 'string' && status.version !== '' ? status.version : null;
+    return { running: true, bin: record?.bin ?? null, pinned: Boolean(status?.pinned), version, ...pin, versionMatches: version === null ? null : version === KEYD_PINNED_VERSION };
   } catch {
-    return { running: false, bin: record?.bin ?? null, pinned: null, version: null };
+    return { running: false, bin: record?.bin ?? null, pinned: null, version: null, ...pin, versionMatches: null };
   }
+}
+
+// What the owner does about a keyd that is not the pinned version (#767).
+export function keydVersionAction(status) {
+  return status.version === null
+    ? 'it did not report a version; update the app that ships keyd'
+    : `update the app that ships keyd to one bundling ${status.expectedVersion}, or run: agent-bot keyd install --bin PATH with a ${status.expectedVersion} build`;
 }
 
 // Supervising keyd under launchd (`agent-bot keyd install|uninstall|status`)
