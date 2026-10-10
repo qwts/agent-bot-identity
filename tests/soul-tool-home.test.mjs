@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -123,7 +123,6 @@ test('a soul proves itself by its live binding: a stated Agent ID is not enough,
 test('the binding proof is resolved by the daemon, not taken from the binding file', async (t) => {
   const f = fixture(t);
   const binding = { v: 1, secret: 'A'.repeat(43), account: 'test', daemon: 'http://127.0.0.1:1/', agentId: ID, parent: null };
-  const { writeFileSync } = await import('node:fs');
   const file = path.join(f.home, 'agent-binding.json');
   writeFileSync(file, JSON.stringify(binding), { mode: 0o600 });
   const presented = [];
@@ -213,6 +212,17 @@ test('--fresh-session with global is one owner prompt for both; a refusal change
   assert.deepEqual(done.freshSession, { retired: true, store: 'soul' });
   assert.deepEqual(f.asks, Array(2).fill(`soul tool-home ${ID} codex global --fresh-session`));
   assert.equal(sessions.get(ID, 'codex'), null);
+});
+
+test('--fresh-session on a damaged record names it as damaged, never as a store it does not say', async (t) => {
+  const f = fixture(t);
+  const file = wakeSessionsFile({ env: f.env, home: f.home });
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ schemaVersion: 1, sessions: { [ID]: { harness: 'codex', sessionId: 'x', store: null } } }));
+  const done = await f.run(['codex', '--soul', ID, '--fresh-session']);
+  assert.deepEqual(done.freshSession, { retired: true, store: null });
+  assert.match(f.out.at(-1), /the old one is kept in a damaged record\n$/);
+  assert.equal(f.receipts().at(-1).detail, 'codex: resume session in a damaged record set aside by owner (presence)');
 });
 
 test('the owner prompt for --fresh-session says the old session is kept', () => {

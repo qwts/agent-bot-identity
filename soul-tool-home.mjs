@@ -57,6 +57,10 @@ function parse(argv) {
   return { harness, choice, target, json, presented, fresh };
 }
 
+// Where a set-aside session was recorded; a damaged record's store is
+// named as such, never as one it does not say.
+const storeLabel = (store) => (store === 'host' || store === 'soul' ? `the ${store} store` : 'a damaged record');
+
 // The census row and the soul's folder, as `soul env` resolves them.
 async function resolveSoul(target, { env, home }) {
   const { populationFile, showSoul, showSoulByName, soulDirectory } = await import('./agent-population.mjs');
@@ -148,7 +152,7 @@ export async function soulToolHomeCommand(argv, {
       result.freshSession = retired ? { retired: true, store: retired.store } : { retired: false };
       if (retired) {
         appendAuditReceipt({ event: 'tool-home', agentId: soul.id, operation: 'fresh-session', decision: 'fresh-session',
-          detail: `${row.harness}: resume session in the ${retired.store} store set aside by ${caller} (${method})` }, { env, home, now });
+          detail: `${row.harness}: resume session in ${storeLabel(retired.store)} set aside by ${caller} (${method})` }, { env, home, now });
       }
     }
     Object.assign(result, { caller, authorization: method });
@@ -156,7 +160,7 @@ export async function soulToolHomeCommand(argv, {
   const lines = [`${row.harness}: ${result.choice ?? 'unset (current setup)'}${result.changed ? ` (was ${result.previous ?? 'unset'})` : ''}`];
   if (result.freshSession) {
     lines.push(result.freshSession.retired
-      ? `${row.harness}: the next resume wake starts a new session; the old one is kept in the ${result.freshSession.store} store`
+      ? `${row.harness}: the next resume wake starts a new session; the old one is kept in ${storeLabel(result.freshSession.store)}`
       : `${row.harness}: no recorded resume session; the next resume wake starts a new one`);
   }
   write(json ? `${JSON.stringify(result)}\n` : `${lines.join('\n')}\n`);

@@ -328,6 +328,13 @@ test('a fresh session after a store move starts in the new store; a damaged reco
   await assert.rejects(turn(), (error) => error.code === 'wake-session-record-invalid' && /--fresh-session/.test(error.message));
   assert.equal(sessions.retire(ID, 'codex').store, 'other', 'kept as written');
   await turn();
+  // Explicit invalid values, null included, are kept as written; only a
+  // missing store (before #617) is the host's.
+  for (const [written, kept] of [[null, null], ['other', 'other'], [7, 7], ['', ''], [undefined, 'host']]) {
+    writeFileSync(file, JSON.stringify({ schemaVersion: 1, sessions: { [ID]: { harness: 'codex', sessionId: 'x', ...(written === undefined ? {} : { store: written }) } } }));
+    assert.equal(sessions.retire(ID, 'codex').store, kept, JSON.stringify(written));
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).sessions[ID].retired.at(-1).store, kept, `persisted ${JSON.stringify(written)}`);
+  }
 }));
 
 test('runProcess feeds stdin, captures output, and reports the exit code', async () => {

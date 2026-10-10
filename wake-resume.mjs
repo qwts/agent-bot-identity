@@ -215,15 +215,15 @@ export function createWakeSessions({ file }) {
     // The next resume turn starts a new session (#617, `soul tool-home
     // --fresh-session`): the recorded one moves to the entry's `retired`
     // list with the store it lives in, so its id is kept and its transcript
-    // stays in that store, never deleted. A damaged store is retired as
-    // written. Returns the retired session, or null when none was recorded.
+    // stays in that store, never deleted. A damaged store, null included,
+    // is retired as written; only a missing one (before #617) is the host's. Returns the retired session, or null when none was recorded.
     retire(agentId, harness, { now = () => new Date() } = {}) {
       const id = validateAgentId(agentId);
       return update((sessions) => {
         const entry = sessions[id];
         if (entry?.harness !== harness || typeof entry.sessionId !== 'string') return undefined;
         const retired = { harness, sessionId: entry.sessionId, ...(entry.policy ? { policy: entry.policy } : {}),
-          store: entry.store ?? 'host', retiredAt: now().toISOString() };
+          store: entry.store === undefined ? 'host' : entry.store, retiredAt: now().toISOString() };
         sessions[id] = { retired: [...(keptRetired(entry).retired ?? []), retired] };
         return retired;
       });
