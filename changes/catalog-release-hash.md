@@ -1,1 +1,1 @@
-- The runtime pin catalog now has a release identity: `catalogReleaseHash()` is the SHA-256 of the catalog's pins, URLs and digests. Install receipts will record it so a soul can keep the exact runtime it was installed with (#617).
+- The runtime pin catalog now has a release identity: `catalogReleaseHash()` is the SHA-256 of the catalog's pins, URLs and digests. Nothing records it yet. Recording it with the exact resolved version in install receipts, and reusing them on reinstall, comes in a later slice (#617).

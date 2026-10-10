@@ -94,9 +94,10 @@ const canonical = (value) => {
 /**
  * The catalog release (#617, owner decision "Pin per install"): the SHA-256
  * of `{ version, catalog }` in canonical JSON. Any change to a pin, URL,
- * digest or the schema version changes it; key order does not. An install
- * receipt records it beside the exact version resolved, so a later engine
- * with a different catalog can tell the receipt came from another release.
+ * digest or the schema version changes it; key order does not. Nothing
+ * records it yet: install receipts will carry it beside the exact version
+ * resolved in a later #617 slice, and until then no catalog provenance is
+ * checked or enforced.
  */
 export function catalogReleaseHash({ catalog = RUNTIME_CATALOG, version = RUNTIME_CATALOG_VERSION } = {}) {
   return createHash('sha256').update(canonical({ version, catalog })).digest('hex');
