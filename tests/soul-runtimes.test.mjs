@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn as spawnChild, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -72,6 +72,19 @@ function doubles({ archives, fail = {} } = {}) {
       const dir = args[args.indexOf('--install-dir') + 1];
       if (options.env?.UV_FAIL) throw Object.assign(new Error('uv failed'), { stderr: 'error: No download found for request' });
       put(path.join(dir, `cpython-${args[2]}-macos-aarch64-none`, 'bin', 'python3'), '#!/bin/sh\n');
+      return { stdout: '', stderr: '' };
+    }
+    if (args[0] === 'venv') {
+      if (options.env?.UV_TOOL_DIR || options.env?.UV_TOOL_BIN_DIR) throw new Error('a locked venv must not inherit the uv tool dirs');
+      put(path.join(args.at(-1), 'bin', 'python'), '#!/bin/sh\n');
+      return { stdout: '', stderr: '' };
+    }
+    if (args[0] === 'pip' && args[1] === 'install') {
+      const lock = readFileSync(args[args.indexOf('-r') + 1], 'utf8');
+      if (lock.includes('broken')) throw Object.assign(new Error('uv failed'), { stderr: 'error: In `--require-hashes` mode, all requirements must have a hash' });
+      const venv = path.dirname(path.dirname(args[args.indexOf('--python') + 1]));
+      if (!lock.includes('nobin')) put(path.join(venv, 'bin', 'goose'), '#!/bin/sh\n');
+      put(path.join(venv, 'bin', 'pip'), '#!/bin/sh\n');
       return { stdout: '', stderr: '' };
     }
     if (args[0] === 'tool' && args[1] === 'install') {
@@ -433,6 +446,38 @@ test('non-npm harnesses install from a pinned archive or as a uv tool into .soul
   assert.equal(routed.routing['harness:muse'].source, 'soul');
   assert.equal(routed.routing.node.source, 'host-bundled');
   assert.equal(runtimeLaunchEnv(inspectSoulRuntimes(f.dir, f.options), { env: {}, harness: 'opencode', node: null }).env.UV_TOOL_DIR, path.join(f.runtimes, 'uv', 'tools'));
+});
+
+test('a locked uv tool installs into its own venv with uv pip --require-hashes and links only its executable (#617)', async (t) => {
+  const A = 'a'.repeat(64), B = 'b'.repeat(64);
+  const lock = [{ name: 'goose-ai', version: '1.9.0', sha256: [A, B] }, { name: 'requests', version: '2.32.3', sha256: [B] }];
+  const f = fixture(t, { manifest: { runtimes: { python: '3.12' }, harnesses: { muse: { install: { kind: 'uv-tool', package: 'goose-ai', version: '1.9.0', bin: 'goose', lock } } } } });
+  const d = doubles({ archives: f.archives });
+  const before = inspectSoulRuntimes(f.dir, f.options).harnesses.find((h) => h.name === 'muse');
+  assert.deepEqual(before.lock, lock, 'the inspection carries the lock to the installer');
+  const result = await installSoulRuntimes(f.dir, { ...f.options, fetchFn: d.fetchFn, runImpl: d.runImpl });
+  const muse = result.harnesses.find((h) => h.name === 'muse');
+  assert.deepEqual([muse.status, muse.bin], ['installed', 'bin']);
+  assert.equal(d.commands.some((c) => c.args[0] === 'tool'), false, 'uv tool install cannot require hashes, so it is never used for a locked tool');
+  const venv = d.commands.find((c) => c.args[0] === 'venv'), pip = d.commands.find((c) => c.args[0] === 'pip');
+  assert.deepEqual(venv.args, ['venv', path.join(muse.path, 'venv')]);
+  assert.deepEqual(pip.args, ['pip', 'install', '--python', path.join(muse.path, 'venv', 'bin', 'python'), '--require-hashes', '-r', path.join(muse.path, 'requirements.lock.txt')]);
+  assert.equal(pip.env.UV_PYTHON_PREFERENCE, 'only-managed');
+  assert.equal(readFileSync(path.join(muse.path, 'requirements.lock.txt'), 'utf8'), `goose-ai==1.9.0 --hash=sha256:${A} --hash=sha256:${B}\nrequests==2.32.3 --hash=sha256:${B}\n`);
+  assert.deepEqual(readdirSync(path.join(muse.path, 'bin')), ['goose'], 'only the declared executable is linked; pip and python stay in the venv');
+  assert.equal(readlinkSync(path.join(muse.path, 'bin', 'goose')), path.join('..', 'venv', 'bin', 'goose'));
+  assert.ok(!existsSync(`${muse.path}.installing`));
+  // A failed hash-checked install, or one with no declared executable, leaves nothing behind.
+  for (const [name, message] of [['broken', /from its lock .*all requirements must have a hash/], ['nobin', /installed no goose executable/]]) {
+    f.writeManifest((m) => { m.harnesses.muse.install.version = '2.0.0'; m.harnesses.muse.install.lock = [{ name: 'goose-ai', version: '2.0.0', sha256: [A] }, { name, version: '1.0', sha256: [B] }]; });
+    const error = await installSoulRuntimes(f.dir, { ...f.options, only: 'muse', fetchFn: d.fetchFn, runImpl: d.runImpl }).then(() => null, (e) => e);
+    assert.equal(error?.code, 'runtime-install-failed', name);
+    assert.match(error.message, message);
+    assert.ok(!existsSync(path.join(f.runtimes, 'harnesses', 'muse', '2.0.0')), name);
+  }
+  // Windows has no verified launcher for a linked venv executable yet, so a locked tool is unsupported there, never installed unlocked.
+  const win = inspectSoulRuntimes(f.dir, { ...f.options, platform: 'win32-x64' }).harnesses.find((h) => h.name === 'muse');
+  assert.deepEqual([win.status, win.reason], ['unsupported', 'muse 2.0.0 is a locked uv tool, which is not supported on Windows yet']);
 });
 
 test('the launch env follows the override order: per-agent option, the soul install, the host-bundled node, then PATH', async (t) => {

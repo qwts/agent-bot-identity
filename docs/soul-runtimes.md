@@ -36,7 +36,10 @@ implemented slice and its limits.
   `{version}` and `{platform}`, or a per-platform map), `sha256` per
   platform, and `bin` (the executable inside the archive; defaults to the
   harness command). `uv-tool` takes a PyPI `package`, exact `version` and
-  the `bin` it installs, and needs `runtimes.python`. The adapter harnesses
+  the `bin` it installs, and needs `runtimes.python`. It may add `lock`:
+  every package the tool installs, itself included, as
+  `{ "name", "version", "sha256": ["<hex>", ...] }` with each entry's
+  digests sorted ascending (#617). The adapter harnesses
   (`claude`, `codex`) are pinned in `package.json` and refuse `install`.
 - Validation is strict: unknown keys, bad digests, non-https URLs and
   unknown platforms are refused by every package reader, and a declaration
@@ -162,9 +165,14 @@ Every completed install directory carries `.agent-bot-install.json`: the name,
 kind, version, platform, URL, `sha256`, `bin` and `installedAt`. Archive stamps
 record the digest verified by agent-bot. `uv-python` and `uv-tool` stamps instead
 record `url: null` and `sha256: null`; they do not attest that agent-bot verified
-every downloaded dependency byte. Python acquisition is delegated to uv, and
-uv tools currently use `package==version` without a dependency lock/hash input.
-That missing integrity contract is tracked in #617. The stamp is what
+every downloaded dependency byte. Python acquisition is delegated to uv. A uv
+tool without a `lock` installs `package==version` with no dependency hashes. A
+locked tool installs into its own `venv/` with `uv pip install --require-hashes
+-r requirements.lock.txt`, so uv refuses any artifact or dependency the lock
+does not hash, and only its `bin` is linked into the install's `bin/`. Locked
+tools are unsupported on Windows until a launcher for the linked executable
+is verified. Recording that evidence in the stamp, and refusing unlocked
+installs under an integrity policy, are tracked in #617. The stamp is what
 `soul runtimes` and `soul env` inspect; absence or an incomplete-install marker
 must not be presented as a completed installation. Readiness compares the
 receipt's schema, runtime/harness name, kind, exact version and platform with
@@ -199,8 +207,8 @@ removes its staging directory and leaves a previous version available for
 recovery. A launch requiring the failed newer resolution still refuses; retaining
 node 24.21.0 does not automatically select it as a fallback. Python installs the
 same way through `uv python install` with
-`UV_PYTHON_INSTALL_DIR` in the staging directory; a uv tool installs in
-place (its virtualenv holds absolute paths) with an `.installing` marker
+`UV_PYTHON_INSTALL_DIR` in the staging directory; a uv tool, locked or not,
+installs in place (its virtualenv holds absolute paths) with an `.installing` marker
 beside it, and is reinstalled when the marker is left behind. Nothing writes
 to `~/.local`, `~/.cache/uv`, `~/go` or the login shell's PATH through these
 provisioning paths. The overall multi-artifact operation is not a transaction:

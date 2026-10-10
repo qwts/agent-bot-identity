@@ -1,0 +1,1 @@
+- A `uv-tool` harness that declares a `lock` now installs into its own venv with `uv pip install --require-hashes`, so uv refuses any package or dependency the lock doesn't hash. Only the declared executable is linked onto the soul's PATH. Locked tools aren't supported on Windows yet (#617).

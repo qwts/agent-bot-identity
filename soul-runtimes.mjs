@@ -29,7 +29,7 @@ import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { withLock } from './agent-identity.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
-import { PROVIDER_NAMES, RUNTIME_NAMES, harnessInstallSource, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, resolveCatalogPin, supportedMajors } from './runtime-catalog.mjs';
+import { PROVIDER_NAMES, RUNTIME_NAMES, harnessInstallSource, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, resolveCatalogPin, supportedMajors, uvToolRequirements } from './runtime-catalog.mjs';
 
 export const RUNTIMES_SCHEMA_VERSION = 1;
 // Stable failure codes (ADR-0322 decision 5): each names the declared
@@ -447,15 +447,20 @@ export function inspectSoulRuntimes(soulDir, { manifest = readSoulManifest(soulD
     const directory = path.join(root, 'harnesses', name, install.version);
     const stamp = readStamp(directory);
     const archive = install.kind === 'archive' ? harnessInstallSource(install, platform) : null;
+    const lock = install.kind === 'uv-tool' ? install.lock ?? null : null;
+    // A locked tool links one executable out of its venv; Windows needs a
+    // launcher for that which isn't specified or verified yet (#617).
+    const unsupported = install.kind === 'archive' && !archive ? `${name} ${install.version} has no sha256 for ${platform ?? 'this platform'}`
+      : lock && platform?.startsWith('win32-') ? `${name} ${install.version} is a locked uv tool, which is not supported on Windows yet` : null;
     const problem = receiptProblem(stamp, { name, kind: install.kind, version: install.version, platform, archive });
     const installed = stamp && !problem && !existsSync(`${directory}.installing`) && containedExecutable(soulDir, directory, stamp.bin, install.bin, platform);
     const last = lastInstall(path.join(root, 'harnesses', name));
     const entry = { name, kind: install.kind, package: install.kind === 'uv-tool' ? install.package : null, version: install.version, executable: install.bin,
-      status: install.kind === 'archive' && !archive ? 'unsupported' : installed ? 'installed' : 'missing',
-      reason: install.kind === 'archive' && !archive ? `${name} ${install.version} has no sha256 for ${platform ?? 'this platform'}` : problem,
+      status: unsupported ? 'unsupported' : installed ? 'installed' : 'missing',
+      reason: unsupported ?? problem,
       path: installed ? directory : null, bin: installed ? stamp.bin : null,
       lastError: !installed && last?.status === 'failed' && last.version === install.version ? { code: last.code ?? 'runtime-install-failed', message: last.message ?? '', at: last.at ?? null } : null,
-      archive };
+      archive, lock };
     if (entry.status !== 'installed') result.ready = false;
     result.harnesses.push(entry);
   }
@@ -691,7 +696,11 @@ async function installPython({ version }, target, uvBin, { root, runImpl, label,
 
 // A uv tool's venv carries absolute paths, so it is installed in place
 // with an `.installing` marker beside it: a marked directory is incomplete
-// and is redone; other versions are never touched.
+// and is redone; other versions are never touched. A locked tool (#617,
+// owner decision "venv + pip --require-hashes") gets its own venv, filled
+// only from the lock with `uv pip install --require-hashes`, and exactly one
+// executable linked out of it into `bin`; `uv tool install` can't require
+// hashes.
 async function installUvTool({ name, install }, target, uvBin, { root, pythonDir, pythonExecutable = null, runImpl, label, action, now, platform }) {
   mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   const marker = `${target}.installing`;
@@ -701,9 +710,13 @@ async function installUvTool({ name, install }, target, uvBin, { root, pythonDir
     mkdirSync(target, { recursive: true, mode: 0o700 });
     const env = { ...minimalChildEnv(process.env), UV_CACHE_DIR: path.join(root, 'uv', 'cache'), UV_TOOL_DIR: path.join(target, 'tools'), UV_TOOL_BIN_DIR: path.join(target, 'bin'),
       UV_PYTHON_INSTALL_DIR: pythonDir, UV_PYTHON_PREFERENCE: 'only-managed', UV_NO_PROGRESS: '1' };
-    const args = ['tool', 'install', ...(pythonExecutable ? ['--python', pythonExecutable, '--no-python-downloads'] : []), `${install.package}==${install.version}`];
-    try { await runImpl(uvBin, args, { env, timeout: INSTALL_TIMEOUT_MS }); }
-    catch (error) { fail('runtime-install-failed', `${label}: uv could not install ${install.package}==${install.version} (${String(error.stderr ?? error.message).trim().split('\n').pop()}); check the network and retry`, { runtime: label, action }); }
+    const uvFailed = (error) => fail('runtime-install-failed', `${label}: uv could not install ${install.package}==${install.version}${install.lock ? ' from its lock' : ''} (${String(error.stderr ?? error.message).trim().split('\n').pop()}); check the network${install.lock ? ' and the lock' : ''} and retry`, { runtime: label, action });
+    const python = pythonExecutable ? ['--python', pythonExecutable, '--no-python-downloads'] : [];
+    if (install.lock) await installLockedUvTool(install, target, uvBin, { env, python, runImpl, uvFailed, label, action });
+    else {
+      try { await runImpl(uvBin, ['tool', 'install', ...python, `${install.package}==${install.version}`], { env, timeout: INSTALL_TIMEOUT_MS }); }
+      catch (error) { uvFailed(error); }
+    }
     if (!hasExecutable(path.join(target, 'bin'), install.bin, platform)) fail('runtime-install-failed', `${label}: ${install.package} installed no ${install.bin} executable`, { runtime: label, action });
     writeFileSync(path.join(target, INSTALL_STAMP), `${JSON.stringify({ schemaVersion: RUNTIMES_SCHEMA_VERSION, name, kind: 'uv-tool', version: install.version, platform, url: null, sha256: null, bin: 'bin', installedAt: now().toISOString() })}\n`, { mode: 0o600 });
     rmSync(marker, { force: true });
@@ -712,6 +725,21 @@ async function installUvTool({ name, install }, target, uvBin, { root, pythonDir
     rmSync(marker, { force: true });
     throw error;
   }
+}
+
+async function installLockedUvTool(install, target, uvBin, { env, python, runImpl, uvFailed, label, action }) {
+  const { UV_TOOL_DIR, UV_TOOL_BIN_DIR, ...venvEnv } = env;
+  const venv = path.join(target, 'venv');
+  const lockFile = path.join(target, 'requirements.lock.txt');
+  writeFileSync(lockFile, uvToolRequirements(install), { mode: 0o600 });
+  try {
+    await runImpl(uvBin, ['venv', ...python, venv], { env: venvEnv, timeout: INSTALL_TIMEOUT_MS });
+    await runImpl(uvBin, ['pip', 'install', '--python', path.join(venv, 'bin', 'python'), '--require-hashes', '-r', lockFile], { env: venvEnv, timeout: INSTALL_TIMEOUT_MS });
+  } catch (error) { uvFailed(error); }
+  const source = path.join(venv, 'bin', install.bin);
+  if (!executableFile(source)) fail('runtime-install-failed', `${label}: ${install.package} installed no ${install.bin} executable`, { runtime: label, action });
+  mkdirSync(path.join(target, 'bin'), { recursive: true, mode: 0o700 });
+  symlinkSync(path.join('..', 'venv', 'bin', install.bin), path.join(target, 'bin', install.bin));
 }
 
 const installing = new Map();
@@ -787,7 +815,8 @@ export async function installSoulRuntimes(soulDir, { only = null, agentId = null
     if (only && only !== entry.name) continue;
     const action = installCommand(who, entry.name);
     if (entry.status === 'installed') { skipped.push(entry.name); continue; }
-    if (entry.status === 'unsupported') fail('runtime-unsupported-platform', `${who}: ${entry.reason}`, { runtime: entry.name, action: `declare harnesses.${entry.name}.install.sha256 for ${platform ?? 'this platform'} in a revision` });
+    if (entry.status === 'unsupported') fail('runtime-unsupported-platform', `${who}: ${entry.reason}`, { runtime: entry.name, action: entry.kind === 'uv-tool'
+      ? `run ${entry.name} on macOS or Linux, or remove harnesses.${entry.name}.install.lock in a revision` : `declare harnesses.${entry.name}.install.sha256 for ${platform ?? 'this platform'} in a revision` });
     const target = path.join(root, 'harnesses', entry.name, entry.version);
     log(`installing harness ${entry.name} ${entry.version} into ${target}`);
     await guard(target, () => attempt(entry, path.join(root, 'harnesses', entry.name), async () => {
@@ -801,7 +830,7 @@ export async function installSoulRuntimes(soulDir, { only = null, agentId = null
         const pythonExecutable = overrideState.overrides.python3?.executable ?? null;
         const uv = overrideState.overrides.uv?.executable ?? (managed ? path.join(managed.path, managed.bin, 'uv') : null);
         if (!uv) fail('runtime-install-failed', `${who}: uv is not installed, so ${entry.name} cannot be`, { runtime: entry.name, action });
-        await installUvTool({ name: entry.name, install: { package: entry.package, version: entry.version, bin: entry.executable } }, target, uv,
+        await installUvTool({ name: entry.name, install: { kind: 'uv-tool', package: entry.package, version: entry.version, bin: entry.executable, lock: entry.lock } }, target, uv,
           { root, pythonDir: python?.path ?? path.join(root, 'python', 'uv-managed'), pythonExecutable, runImpl, label: `${who} ${entry.name}`, action, now, platform, log });
       }
     }));
