@@ -25,6 +25,7 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 import { validateAgentId, withLock } from './agent-identity.mjs';
+import { assertOwnerAction } from './owner-action.mjs';
 import { interactionHome } from './state-paths.mjs';
 
 const SCHEMA_VERSION = 1;
@@ -561,6 +562,7 @@ function parseCli(argv) {
       continue;
     }
     if (token === '--json') { flags.set('json', true); continue; }
+    if (token === '--principal-stdin') { if (flags.has('principal-stdin')) throw new Error('duplicate --principal-stdin'); flags.set('principal-stdin', true); continue; }
     if (token === '--all-souls') { flags.set('all-souls', true); continue; }
     if (token === '--clear-default') { flags.set('clear-default', true); continue; }
     if (['--soul', '--operation'].includes(token)) {
@@ -601,10 +603,22 @@ const USAGE = 'usage: agent-bot principal list [--json]\n'
   + '       agent-bot principal bind <principal-id> --transport <slug> --provider-id <id>\n'
   + '       agent-bot principal allow <principal-id> [--soul <agent-id>]... [--all-souls]\n'
   + '                                 [--operation <op>]... [--default-soul <agent-id>] [--clear-default]\n'
-  + '       agent-bot principal revoke <principal-id>\n';
+  + '       agent-bot principal revoke <principal-id>\n'
+  + '       mutating commands accept --principal-stdin for explicit owner credential JSON\n';
 
 async function main() {
   const args = parseCli(process.argv);
+  // Only a presented stdin credential may stand in for interactive owner consent.
+  // Never discover owner secrets in environment variables or on disk.
+  let ownerPrincipal = null;
+  if (args.flags.has('principal-stdin')) {
+    if (!['enroll', 'bind', 'allow', 'revoke'].includes(args.command)) {
+      throw new Error('--principal-stdin is only valid for principal mutations');
+    }
+    try { ownerPrincipal = JSON.parse(readFileSync(0, 'utf8')); }
+    catch { throw new Error('--principal-stdin needs the principal credential as JSON on stdin'); }
+  }
+  const gateMutation = (action) => assertOwnerAction(action, { principal: ownerPrincipal });
   switch (args.command) {
     case 'list': {
       if (args.positional.length > 0) throw new Error('principal list does not accept arguments');
@@ -620,12 +634,14 @@ async function main() {
     }
     case 'enroll': {
       if (args.positional.length > 0) throw new Error('principal enroll does not accept arguments');
+      await gateMutation('enroll remote principal');
       const principal = enrollPrincipal({ label: args.flags.get('label') });
       process.stdout.write(`${JSON.stringify(principal, null, 2)}\n`);
       break;
     }
     case 'bind': {
       if (args.positional.length !== 1) throw new Error('principal bind requires one principal ID');
+      await gateMutation('bind remote principal transport identity');
       const principal = bindTransport(args.positional[0], {
         transport: args.flags.get('transport'),
         providerId: args.flags.get('provider-id'),
@@ -642,6 +658,7 @@ async function main() {
       const operations = args.multi.get('operation');
       // All requested facets are validated together and applied as one store
       // mutation; a request that is invalid anywhere changes nothing.
+      await gateMutation('change remote principal authorizations');
       const principal = applyAuthorizationChanges(args.positional[0], {
         ...(args.flags.has('all-souls') ? { souls: ['*'] } : {}),
         ...(!args.flags.has('all-souls') && souls.length > 0 ? { souls } : {}),
@@ -656,6 +673,7 @@ async function main() {
     }
     case 'revoke': {
       if (args.positional.length !== 1) throw new Error('principal revoke requires one principal ID');
+      await gateMutation('revoke remote principal');
       process.stdout.write(`${JSON.stringify(revokePrincipal(args.positional[0]), null, 2)}\n`);
       break;
     }
