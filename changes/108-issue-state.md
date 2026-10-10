@@ -1,0 +1,1 @@
+- An `issue-state` delegation grant now closes or reopens the issue or pull request as the owner's account. Before, it could be granted but refused with `grant-unsupported` when spent (#108).
