@@ -2,13 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  MAX_OWNER_KEYS, SSHSIG_NAMESPACE, STATEMENT_AUDIENCE, armorStatement, encodePayload, ed25519KeyLine, extractToken,
-  ownerCommand, ownerKeysPath, parseSshPublicKey, readOwnerKeys, sshFingerprint, verifyStatement, writeOwnerKeys,
+  MAX_INPUT_BYTES, MAX_OWNER_KEYS, SSHSIG_NAMESPACE, STATEMENT_AUDIENCE, armorStatement, encodePayload, ed25519KeyLine, extractToken,
+  ownerCommand, ownerKeysPath, parseSshPublicKey, readOwnerKeys, readStatementFile, sshFingerprint, verifyStatement, writeOwnerKeys,
 } from '../owner-statement.mjs';
 
 const CLI = join(dirname(dirname(fileURLToPath(import.meta.url))), 'agent-bot.mjs');
@@ -296,4 +296,60 @@ test('the agent-bot owner command verifies offline and exits non-zero on a refus
   assert.match(spawnSync(process.execPath, [CLI, '--help'], { encoding: 'utf8' }).stdout, /^  owner +Owner-signed statements/m);
   assert.equal(extractToken(armorStatement(token)), token);
   assert.equal(readFileSync(ownerKeysPath({ env }), 'utf8').includes(key.fingerprint), true);
+});
+
+test('pins are changed under a lock, re-read after the owner answers', async (t) => {
+  const ctx = command(t);
+  const disk = skOnDisk(ctx.dir);
+  const other = pinFor(securityKey(), { name: 'phone' });
+  const enroll = (name, gate) => ownerCommand(['enroll', '--store', 'ssh', '--key', disk.file, '--name', name], {
+    env: ctx.env, home: ctx.dir, now: () => NOW, write: () => {}, writeErr: () => {}, gate,
+    receipt: (fields) => ctx.receipts.push(fields), sign: disk.sign, host: () => 'mac' });
+  // Another command pins a key while this one waits on the owner: both stay.
+  await enroll('yubikey', async () => { writeOwnerKeys([other], { env: ctx.env }); });
+  assert.deepEqual(readOwnerKeys({ env: ctx.env }).map((p) => p.name), ['phone', 'yubikey']);
+  assert.deepEqual(readdirSync(dirname(ownerKeysPath({ env: ctx.env }))).sort(), ['keys.json']);
+
+  // The same key pinned meanwhile under another name: refused under the lock.
+  writeOwnerKeys([other], { env: ctx.env });
+  await assert.rejects(enroll('laptop', async () => {
+    writeOwnerKeys([other, pinFor(disk.key, { name: 'sneaky' })], { env: ctx.env });
+  }), { code: 'owner-key-exists' });
+  assert.equal(ctx.receipts.at(-1).decision, 'failed');
+
+  // A removal keeps a key added while it waited, and does not resurrect.
+  writeOwnerKeys([pinFor(disk.key)], { env: ctx.env });
+  await ownerCommand(['remove', 'yubikey'], { env: ctx.env, home: ctx.dir, write: () => {}, receipt: () => {},
+    gate: async () => { writeOwnerKeys([pinFor(disk.key), other], { env: ctx.env }); } });
+  assert.deepEqual(readOwnerKeys({ env: ctx.env }).map((p) => p.name), ['phone']);
+  await assert.rejects(ownerCommand(['remove', 'phone'], { env: ctx.env, home: ctx.dir, write: () => {}, receipt: () => {},
+    gate: async () => { writeOwnerKeys([], { env: ctx.env }); } }), { code: 'owner-key-missing' });
+});
+
+test('every enrolment refusal leaves a receipt, a policy refusal included', async (t) => {
+  const ctx = command(t);
+  const file = join(ctx.dir, 'id_ed25519');
+  writeFileSync(`${file}.pub`, `${keydKey().line} owner@laptop\n`);
+  await assert.rejects(ctx.run(['enroll', '--store', 'ssh', '--key', file]), { code: 'owner-key-software' });
+  await assert.rejects(ctx.run(['remove', 'nothing']), { code: 'owner-key-missing' });
+  assert.deepEqual(ctx.receipts.map((r) => [r.operation, r.decision]), [['enroll', 'refused'], ['remove', 'refused']]);
+  assert.match(ctx.receipts[0].detail, /owner-key-software/);
+});
+
+test('verify reads only a bounded regular file', (t) => {
+  const { dir } = home(t);
+  const block = armorStatement(skToken(securityKey()));
+  const file = join(dir, 'statement.md');
+  writeFileSync(file, block);
+  assert.equal(readStatementFile(file), block);
+  const link = join(dir, 'link.md');
+  symlinkSync(file, link);
+  assert.throws(() => readStatementFile(link), { code: 'statement-invalid' });
+  assert.throws(() => readStatementFile(dir), /not a regular file/);
+  const big = join(dir, 'big.md');
+  writeFileSync(big, 'x'.repeat(MAX_INPUT_BYTES + 1));
+  assert.throws(() => readStatementFile(big), /larger than/);
+  if (process.platform !== 'win32' && spawnSync('mkfifo', [join(dir, 'fifo')]).status === 0) {
+    assert.throws(() => readStatementFile(join(dir, 'fifo')), /not a regular file/);
+  }
 });

@@ -58,7 +58,9 @@ agent-bot owner remove NAME
 **verify** finds the one statement block in a token, a file or stdin, checks
 it against the pinned keys, and prints the verified text, scope, key and
 expiry. With `--repo` and `--issue` it also checks the scope. It needs no
-secret, no network and no daemon. A refusal exits 1 with one code:
+secret, no network and no daemon. A file must be a regular file, not a
+symbolic link, FIFO or device, and a file or stdin is read up to 1 MiB.
+A refusal exits 1 with one code:
 
 | Code | Meaning |
 |---|---|
@@ -84,7 +86,10 @@ or the administrator dialog where keyd cannot ask), then asks the new key to
 sign an enrolment challenge and pins it only if that verifies. At most four
 keys are pinned, each under its own name.
 
-**remove** unpins one key, also through the owner gate. Removing a key is
+**remove** unpins one key, also through the owner gate. Both change the
+pins under a lock, re-reading them after the owner answers, so concurrent
+commands neither lose an enrolment nor bring back a removed key; the owner
+is never asked while the lock is held. Removing a key is
 local to this host: a lost key must be removed on every host that pinned it.
 
 Every enroll and remove attempt leaves an `owner-key` audit receipt

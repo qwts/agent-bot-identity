@@ -25,11 +25,15 @@
 // fallback in the owner gate and pins from the organization profile follow.
 
 import { execFileSync } from 'node:child_process';
-import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash, createPublicKey, randomBytes, randomUUID, verify } from 'node:crypto';
+import {
+  chmodSync, closeSync, constants, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, renameSync, rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir, hostname, tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { withLock } from './agent-identity.mjs';
 import { vouchStateDir } from './vouch.mjs';
 
 export const STATEMENT_AUDIENCE = 'agent-bot-owner-statement';
@@ -39,6 +43,9 @@ export const MAX_TEXT_BYTES = 500;
 export const STATEMENT_LIFETIME = Object.freeze({ default: 7 * 86_400, max: 30 * 86_400 });
 export const CHALLENGE_LIFETIME = Object.freeze({ default: 600, max: 900 });
 const CLOCK_SKEW_SECONDS = 30;
+// The most `owner verify` reads from a file or stdin: a pasted thread with one
+// block in it, never a device or an endless stream.
+export const MAX_INPUT_BYTES = 1024 * 1024;
 const BEGIN = '-----BEGIN AGENT-BOT OWNER STATEMENT-----';
 const END = '-----END AGENT-BOT OWNER STATEMENT-----';
 const PAYLOAD_FIELDS = ['action', 'aud', 'alg', 'exp', 'iat', 'key', 'kind', 'nonce', 'scope', 'text', 'v'].sort();
@@ -300,10 +307,34 @@ export function writeOwnerKeys(keys, { env = process.env, home = env.HOME || hom
   if (keys.length > MAX_OWNER_KEYS) throw statementError('owner-keys-full', `at most ${MAX_OWNER_KEYS} owner keys can be pinned`);
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   chmodSync(path.dirname(file), 0o700);
-  const temp = `${file}.${process.pid}.tmp`;
-  writeFileSync(temp, `${JSON.stringify({ v: 1, keys }, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(temp, 0o600);
-  renameSync(temp, file);
+  const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temp, `${JSON.stringify({ v: 1, keys }, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    renameSync(temp, file);
+  } finally {
+    rmSync(temp, { force: true });
+  }
+}
+
+// Re-reads the pins under the store's lock, applies `mutation` (which
+// returns the new list or throws) and writes the result. Callers ask the
+// owner before this, never while holding the lock.
+export function mutateOwnerKeys(mutation, { env = process.env, home = env.HOME || homedir(), file = ownerKeysPath({ env, home }) } = {}) {
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  chmodSync(path.dirname(file), 0o700);
+  return withLock(`${file}.lock`, 'owner key store', () => {
+    const next = mutation(readOwnerKeys({ file }));
+    writeOwnerKeys(next, { file });
+    return next;
+  });
+}
+
+function enrolmentConflict(keys, name, fingerprint) {
+  const conflict = keys.find((pin) => pin.name === name || pin.fingerprint === fingerprint);
+  if (conflict) {
+    return statementError('owner-key-exists', conflict.fingerprint === fingerprint ? `this key is already pinned as ${conflict.name}` : `a key named ${name} is already pinned; remove it first`);
+  }
+  return keys.length >= MAX_OWNER_KEYS ? statementError('owner-keys-full', `${MAX_OWNER_KEYS} owner keys are already pinned; remove one first`) : null;
 }
 
 // --- Verify ----------------------------------------------------------------
@@ -439,6 +470,47 @@ function scopeFlags(values, { required }) {
   return { repo, number: Number(issue) };
 }
 
+function tooLarge() {
+  return invalid(`the input is larger than ${MAX_INPUT_BYTES} bytes`);
+}
+
+// Reads at most MAX_INPUT_BYTES from an open descriptor.
+function readBounded(fd) {
+  const chunks = [];
+  let total = 0;
+  const buffer = Buffer.alloc(64 * 1024);
+  for (;;) {
+    let count;
+    try { count = readSync(fd, buffer, 0, buffer.length, null); } catch (error) {
+      if (error.code === 'EAGAIN') continue;
+      if (error.code === 'EOF') break;
+      throw error;
+    }
+    if (count === 0) break;
+    total += count;
+    if (total > MAX_INPUT_BYTES) throw tooLarge();
+    chunks.push(Buffer.from(buffer.subarray(0, count)));
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+// A statement file: a regular file, not a symlink, a FIFO or a device, and
+// no larger than MAX_INPUT_BYTES.
+export function readStatementFile(file) {
+  let fd;
+  try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); } catch (error) {
+    throw invalid(`cannot open ${file}: ${error.code === 'ELOOP' ? 'it is a symbolic link' : error.message}`);
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw invalid(`${file} is not a regular file`);
+    if (stat.size > MAX_INPUT_BYTES) throw tooLarge();
+    return readBounded(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function verifyInput(source, { readStdin, readFile }) {
   if (source === '-') return readStdin();
   if (!source.startsWith('s1.') && !source.includes(BEGIN) && existsSync(source)) return readFile(source);
@@ -456,8 +528,8 @@ export async function ownerCommand(argv, {
   now = () => Date.now(),
   write = (text) => process.stdout.write(text),
   writeErr = (text) => process.stderr.write(text),
-  readStdin = () => readFileSync(0, 'utf8'),
-  readFile = (file) => readFileSync(file, 'utf8'),
+  readStdin = () => readBounded(0),
+  readFile = readStatementFile,
   gate = noGate,
   markers = () => [],
   receipt = () => {},
@@ -530,25 +602,24 @@ export async function ownerCommand(argv, {
       if (!KEY_NAME.test(name)) throw usage('--name is 1 to 32 lowercase letters, digits and dashes');
       const key = sshKeyFor(values.key);
       const softwareKey = key.type === SSH_ED25519;
-      if (softwareKey && !values['allow-software-key']) {
-        throw statementError('owner-key-software',
-          `${values.key} is a plain ssh-ed25519 key, readable by any agent in your account. Use a security key (sk-ssh-ed25519), or pass --allow-software-key to pin it anyway.`);
-      }
-      if (softwareKey && values['verify-required']) throw usage('--verify-required applies only to a security key');
       const fingerprint = sshFingerprint(key.blob);
       const action = `owner enroll ${name} ${fingerprint}`;
       const record = (decision, detail) => {
         try { receipt({ event: 'owner-key', operation: 'enroll', decision, detail }, { env, home }); } catch { /* the outcome stands without its receipt */ }
       };
-      const keys = readOwnerKeys(store);
-      const conflict = keys.find((pin) => pin.name === name || pin.fingerprint === fingerprint);
-      if (conflict || keys.length >= MAX_OWNER_KEYS) {
-        const error = conflict
-          ? statementError('owner-key-exists', conflict.fingerprint === fingerprint ? `this key is already pinned as ${conflict.name}` : `a key named ${name} is already pinned; remove it first`)
-          : statementError('owner-keys-full', `${MAX_OWNER_KEYS} owner keys are already pinned; remove one first`);
+      const refuse = (error) => {
         record('refused', `${name} ${fingerprint}: ${error.code}`);
         throw error;
+      };
+      if (softwareKey && !values['allow-software-key']) {
+        refuse(statementError('owner-key-software',
+          `${values.key} is a plain ssh-ed25519 key, readable by any agent in your account. Use a security key (sk-ssh-ed25519), or pass --allow-software-key to pin it anyway.`));
       }
+      if (softwareKey && values['verify-required']) refuse(usage('--verify-required applies only to a security key'));
+      // Checked now so a doomed enrolment asks nobody, and again under the
+      // lock when the pin is written.
+      const early = enrolmentConflict(readOwnerKeys(store), name, fingerprint);
+      if (early) refuse(early);
       try {
         await gate(action, { env, cwd });
       } catch (error) {
@@ -565,7 +636,11 @@ export async function ownerCommand(argv, {
           scope: { host: host() }, action: createHash('sha256').update(action, 'utf8').digest('hex'), lifetime: CHALLENGE_LIFETIME.default },
         { keyPath: values.key, sign, now: now() });
         verifyStatement(token, { keys: [pin], now: now() });
-        writeOwnerKeys([...keys, pin], store);
+        mutateOwnerKeys((keys) => {
+          const conflict = enrolmentConflict(keys, name, fingerprint);
+          if (conflict) throw conflict;
+          return [...keys, pin];
+        }, store);
       } catch (error) {
         record('failed', `${name} ${fingerprint}: ${error.code ?? 'error'}`);
         throw error;
@@ -587,12 +662,15 @@ export async function ownerCommand(argv, {
     case 'remove': {
       const { positionals } = parse({});
       if (positionals.length !== 1) throw usage('owner remove takes one key name');
-      const keys = readOwnerKeys(store);
-      const pin = keys.find((candidate) => candidate.name === positionals[0]);
-      if (!pin) throw statementError('owner-key-missing', `no owner key named ${positionals[0]} is pinned`);
       const record = (decision, detail) => {
         try { receipt({ event: 'owner-key', operation: 'remove', decision, detail }, { env, home }); } catch { /* the outcome stands without its receipt */ }
       };
+      const missing = () => statementError('owner-key-missing', `no owner key named ${positionals[0]} is pinned`);
+      const pin = KEY_NAME.test(positionals[0]) ? readOwnerKeys(store).find((candidate) => candidate.name === positionals[0]) : null;
+      if (!pin) {
+        record('refused', `${positionals[0].slice(0, 32)}: owner-key-missing`);
+        throw missing();
+      }
       try {
         await gate(`owner remove ${pin.name} ${pin.fingerprint}`, { env, cwd });
       } catch (error) {
@@ -600,7 +678,12 @@ export async function ownerCommand(argv, {
         throw error;
       }
       try {
-        writeOwnerKeys(readOwnerKeys(store).filter((candidate) => candidate.fingerprint !== pin.fingerprint), store);
+        // The owner approved removing this key, by fingerprint: a key
+        // re-pinned under the same name meanwhile is not it.
+        mutateOwnerKeys((keys) => {
+          if (!keys.some((candidate) => candidate.fingerprint === pin.fingerprint)) throw missing();
+          return keys.filter((candidate) => candidate.fingerprint !== pin.fingerprint);
+        }, store);
       } catch (error) {
         record('failed', `${pin.name} ${pin.fingerprint}: ${error.code ?? 'error'}`);
         throw error;
