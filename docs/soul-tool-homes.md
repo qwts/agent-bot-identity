@@ -146,7 +146,10 @@ without that flag does not establish setter support.
   If the session commit fails, the original choice is restored (including
   an absent record), and neither success receipt is written. If restoration
   itself fails, `tool-home-update-partial` asks the caller to inspect both
-  records before retrying. This is rollback for reported write failures,
+  records before retrying. The backup of the previous choice is kept and its
+  path is in the error (with no previous record, the error says to remove the
+  new one), and a `tool-home` receipt with decision `partial` names both
+  records. This is rollback for reported write failures,
   not a crash-atomic transaction across two files.
 - An unroutable harness is `tool-home-unsupported`; an unknown soul is
   `soul-not-found`.

@@ -202,7 +202,7 @@ export function createWakeSessions({ file, rename = renameSync }) {
           try { rollback?.(); }
           catch (cause) {
             throw Object.assign(new Error('The resume session was not reset and the tool-home choice could not be restored; inspect both records before retrying.'),
-              { code: 'tool-home-update-partial', cause });
+              { code: 'tool-home-update-partial', sessions: file, cause });
           }
           throw error;
         }
