@@ -808,6 +808,28 @@ test('an unsafe override shim directory refuses set and clear before the record 
   assert.equal(readFileSync(auditFile({ env: f.env, home: f.home }), 'utf8'), receiptsBefore, 'nothing changed, so nothing is receipted');
 
   rmSync(stray);
+
+  // A failure after the record is written puts the previous record back:
+  // an absent one stays absent, and an existing selection keeps its bytes.
+  const failing = () => { throw Object.assign(new Error('shim preparation failed'), { code: 'runtime-override-invalid' }); };
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'node', externalNode], { ...options, gate, write, prepareShims: failing }), /shim preparation failed/);
+  assert.ok(!existsSync(path.join(overrides, 'node.json')), 'a failed set restores the absent record');
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'npm', '--clear'], { ...options, gate, write, prepareShims: failing }), /shim preparation failed/);
+  assert.deepEqual(readFileSync(path.join(overrides, 'npm.json')), npmRecord, 'a failed clear restores the selection');
+  const otherNpm = path.join(f.home, 'other', 'npm');
+  put(otherNpm, '#!/bin/sh\nexit 0\n');
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'npm', otherNpm], { ...options, gate, write, prepareShims: failing }), /shim preparation failed/);
+  assert.deepEqual(readFileSync(path.join(overrides, 'npm.json')), npmRecord, 'a failed replacement restores the earlier selection');
+  assert.deepEqual(readdirSync(path.join(overrides, 'bin')), ['npm'], 'the shims follow the restored records');
+  assert.equal(readFileSync(auditFile({ env: f.env, home: f.home }), 'utf8'), receiptsBefore, 'a rolled-back change writes no receipt');
+  assert.ok(!existsSync(path.join(overrides, '.lock')), 'the store lock is released');
+
+  const audit = auditFile({ env: f.env, home: f.home });
+  chmodSync(audit, 0o400);
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'node', externalNode], { ...options, gate, write }), (error) => error.code === 'EACCES');
+  chmodSync(audit, 0o600);
+  assert.ok(!existsSync(path.join(overrides, 'node.json')), 'an unwritable receipt rolls the selection back');
+
   await soulRuntimesCommand(['override', ID, 'npm', '--clear'], { ...options, gate, write });
   assert.ok(!existsSync(path.join(overrides, 'npm.json')));
 });
