@@ -315,7 +315,13 @@ messages and grant format.
   migration. A key keyd already holds for an App this machine has no record
   of is never imported over. A `store: keyd` App rotates through
   `owner/app-import` (after GitHub accepted the new key) or fails; it never
-  leaves keyd. `remove` refuses a keyd-held App for now.
+  leaves keyd. `remove` refuses a keyd-held App for now. Each operation holds
+  a per-App lock from the keyd probe to the config record, so two never race
+  keyd's import; a second refuses (`identity-app-busy`), and the record is
+  re-read under the lock.
+- **Readers without keyd.** `readManagedAppCredential` refuses a keyd record
+  with `managed-app-keyd-held`, so `ensurePrivateKey` and migration fail
+  closed instead of reaching an older key.
 - **Minting.** `resolveAppCredential` resolves a `store: keyd` App to
   `source: 'keyd'`, `keyScope: 'app'` and the minting soul's Agent ID,
   unless the soul's own soul.json declares keyd (its own key wins). The
@@ -402,6 +408,7 @@ Tests named here are `node:test` titles, or Rust test functions under
 | keyd is verified for App keys only when it answers, is pinned and knows `owner/app-status`; `-32601` reads as an older keyd | `appKeydAvailability` | keyd owner channel | `tests/keyd.test.mjs`: "keyd is verified for App keys only when it runs, is pinned and knows owner/app-status" |
 | A `store: keyd` App mints through the daemon with an App-scope grant naming the bound soul | `resolveAppCredential`, `mint`, `mintViaKeyd` | keyd `credential` | `tests/keyd.test.mjs`: "a soul whose App keyd holds App-level mints with an App-scope grant naming the soul" |
 | create, connect and rotate-key use keyd when verified, fall back with a stated reason when not or on `-32601`, fail on any other refusal, and never move or replace an existing key | `identityAppOperation` | keyd `owner/app-import` | `tests/identity-apps.test.mjs`: "with keyd verified, connect keeps the key in keyd, …", "with keyd not verified, …", "an older keyd (-32601) falls back …", "existing App keys are untouched: …", "a keyd-held App rotates in keyd, …", "create keeps the one-time key in keyd …" |
+| One App operation at a time; readers that cannot mint through keyd fail closed on a keyd record | `withAppOperationLock`, `readManagedAppCredential` | — | `tests/identity-apps.test.mjs`: "one operation per App at a time: …", "readers that cannot mint through keyd fail closed on a keyd-held App" |
 | Souls are denied `vouch-key.pem` and keyd's sockets in every tool | — | confinement hook | `tests/soul-credentials.test.mjs`: "confinement denies a soul its key store, the legacy folder and secret-store CLIs in every tool" |
 | `action` in an assertion is SHA-256 hex, matching keyd | keyd | `actionDigest` | `tests/owner-presence.test.mjs`: "the action digest matches keyd (sha256 hex)" |
 | An assertion verifies only for its key, action, nonce, audience and prefix | keyd | `verifyPresence` | `tests/owner-presence.test.mjs`: "an assertion verifies only for its key, action, nonce and time" |

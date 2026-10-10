@@ -17,7 +17,7 @@ import { credentialNamespace, itemTitle, managedAppItem } from './credential-nam
 import { createProtonPassCredentialProvider, validateIssuer, validatePrivateKey } from './ensure-private-key.mjs';
 import { buildAppJwt, pickInstallation } from './mint-token.mjs';
 import { KEYD_METHOD_NOT_FOUND, appKeydAvailability, importAppIntoKeyd } from './keyd-client.mjs';
-import { MINT_CODES, appStoreTarget, forgetAppDoctorRow, readAppDoctorCache, readAppMetadata, updateAppConfig, validAppSlug } from './identity-app-store.mjs';
+import { MINT_CODES, appStoreTarget, forgetAppDoctorRow, readAppDoctorCache, readAppMetadata, updateAppConfig, validAppSlug, withAppOperationLock } from './identity-app-store.mjs';
 
 export class IdentityAppError extends Error {
   constructor(code, message, statusCode = 409) { super(message); Object.assign(this, { code, statusCode }); }
@@ -172,7 +172,15 @@ async function importIntoKeydStore(app, credential, placement, options, { oneTim
     fail('identity-app-keyd-refused', `${why}; nothing was changed.`);
   }
 }
-async function persist(app, credential, cachedInstallations, options, { replace = false, previousFingerprint = null, metadata = {}, oneTime = false } = {}) {
+async function persist(app, credential, cachedInstallations, options, settings = {}) {
+  // The keyd probe, import and record are one step per App (#110).
+  const held = await withAppOperationLock(app, options, () => persistLocked(app, credential, cachedInstallations, options, settings));
+  if (!held) fail('identity-app-busy', `Another create, connect or rotate-key for App ${app} is in progress; retry when it finishes.`);
+  return held.value;
+}
+async function persistLocked(app, credential, cachedInstallations, options, { replace = false, previousFingerprint = null, metadata = {}, oneTime = false } = {}) {
+  // Re-read under the operation lock: a finished rotation changed the record.
+  options = { ...options, config: loadConfig({ env: options.env, home: options.home }) };
   active(app, options.config);
   const keyFingerprint = fingerprint(credential.privateKeyPem);
   // Checked before keyd is asked, and again under the config lock.

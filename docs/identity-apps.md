@@ -111,7 +111,8 @@ file store and `storeReason` says why. Any other keyd refusal fails the
 operation and stores nothing, except create's one-time key, which falls back
 with the reason. An App already in Keychain or the file store keeps it,
 rotation included; a key keyd already holds for an App with no record here is
-not replaced. `remove` refuses a keyd-held App for now. Details are in
+not replaced. `remove` refuses a keyd-held App for now. One create, connect or
+rotate-key runs per App at a time; another refuses with `identity-app-busy`. Details are in
 [keyd-protocol.md](keyd-protocol.md#app-level-keys-110). Managed credentials precede
 legacy readable stores. A soul's existing `keyd` declaration remains
 helper-owned: connecting/rotating over it or assigning that soul through this
@@ -168,7 +169,7 @@ CLI failures are `{error:{code,message}}` with exit 1. Daemon failures are
 404 unknown App/job, 429 full job queue, otherwise 409. Codes start with
 `identity-app-`; common suffixes are `disabled`, `invalid`, `owner-required`,
 `exists`, `not-found`, `assigned`, `store`, `key-unavailable`, `key-invalid`, `key-unchanged`,
-`keyd-held`, `keyd-unavailable`, `keyd-refused`, `github`, `installation`, `conflict`, `timeout`, and `cancelled`.
+`keyd-held`, `keyd-unavailable`, `keyd-refused`, `busy`, `github`, `installation`, `conflict`, `timeout`, and `cancelled`.
 Upstream error bodies and provider output are never reflected.
 
 References: [GitHub manifest flow](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest),

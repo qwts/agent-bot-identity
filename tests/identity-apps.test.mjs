@@ -637,3 +637,26 @@ test('create keeps the one-time key in keyd when verified, and never loses it to
   assert.match(refused.result.storeReason, /owner declined\); the key is kept in the file store instead/);
   assert.ok(readManagedAppCredential('fixture-app', refused.f.options).privateKeyPem === KEY);
 });
+test('one operation per App at a time: a second refuses while the first waits for keyd, and the next one runs', async (t) => {
+  const f = fixture(t); await github(t, f);
+  let release, entered;
+  const inside = new Promise((yes) => { entered = yes; });
+  const gate = new Promise((yes) => { release = yes; });
+  const keyd = fakeKeyd();
+  f.options.keyd = { ...keyd, importApp: async (items) => { entered(); await gate; return keyd.importApp(items); } };
+  const first = connect(f);
+  await inside;
+  await assert.rejects(connect(f), { code: 'identity-app-busy' });
+  release(); assert.equal((await first).store, 'keyd');
+  f.options.keyd = keyd;
+  const rotated = identityAppOperation('rotate-key', { slug: 'fixture-app', keyFile: f.newKeyFile }, f.options);
+  assert.equal((await rotated).store, 'keyd');
+  assert.equal(keyd.imports.length, 2);
+});
+test('readers that cannot mint through keyd fail closed on a keyd-held App', async (t) => {
+  const f = fixture(t); await github(t, f);
+  f.options.keyd = fakeKeyd(); await connect(f);
+  assert.throws(() => readManagedAppCredential('fixture-app', f.options), { code: 'managed-app-keyd-held' });
+  const { ensurePrivateKey } = await import('../ensure-private-key.mjs');
+  assert.throws(() => ensurePrivateKey({ slug: 'fixture-app', home: f.home, env: f.env, stores: f.options.stores }), (error) => error.code === 'keyd-held');
+});

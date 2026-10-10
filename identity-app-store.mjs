@@ -17,6 +17,10 @@ export function appStoreTarget(slug, options = {}) {
 export function readManagedAppCredential(slug, { env = process.env, home = homedir(), config = loadConfig({ env, home }), stores = credentialStores({ env }) } = {}) {
   const declaration = config.identityApps?.[slug];
   if (!declaration?.store) return null; // metadata alone does not declare a managed key
+  // An App-level keyd key (#110) is never readable here; callers that can
+  // mint through keyd check the record first (resolveAppCredential). Others
+  // fail closed on this code instead of falling through to an older key.
+  if (declaration.store === 'keyd') throw Object.assign(new Error(`the ${slug} App key is held by agent-bot-keyd`), { code: 'managed-app-keyd-held' });
   if (!['file', 'keychain'].includes(declaration.store)) throw new Error('unsupported App credential store');
   const credential = stores[declaration.store].read(appStoreTarget(slug, { env, home }));
   if (!credential) throw new Error('managed App credential is missing; reconnect the App');
@@ -40,6 +44,24 @@ export function updateAppConfig(update, { env = process.env, home = homedir(), r
     try { atomicJson(file, config); } catch (error) { rollback?.(); throw error; }
     return result;
   });
+}
+// One create, connect or rotate-key per App at a time (#110). keyd's import
+// happens outside the config lock (it waits for the owner), so the whole
+// operation holds this one: a second refuses rather than racing it. A lock
+// older than the owner's keyd timeout plus margin is a crashed holder's.
+const APP_OPERATION_STALE_MS = 10 * 60_000;
+export async function withAppOperationLock(slug, options, operation) {
+  if (!validAppSlug(slug)) throw new Error('invalid App slug');
+  const lock = path.join(stateDirectory(options), 'identity-apps', `${slug}.operation.lock`);
+  mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+  const take = () => { try { mkdirSync(lock, { mode: 0o700 }); return true; } catch (error) { if (error.code === 'EEXIST') return false; throw error; } };
+  if (!take()) {
+    let stale = false;
+    try { stale = Date.now() - lstatSync(lock).mtimeMs > APP_OPERATION_STALE_MS; } catch { stale = true; }
+    if (stale) rmSync(lock, { recursive: true, force: true });
+    if (!stale || !take()) return null;
+  }
+  try { return { value: await operation() }; } finally { rmSync(lock, { recursive: true, force: true }); }
 }
 export const MINT_CODES = ['credential-mismatch', 'app-not-installed', 'ambiguous-installation', 'live-verification-failed'];
 const cacheFile = (options) => path.join(stateDirectory(options), 'identity-apps', 'doctor.json');
