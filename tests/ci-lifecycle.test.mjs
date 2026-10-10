@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 const ci = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const codeql = readFileSync(new URL('../.github/workflows/codeql.yml', import.meta.url), 'utf8');
 const linuxBundleRelease = readFileSync(new URL('../.github/workflows/linux-bundle-release.yml', import.meta.url), 'utf8');
+const changelog = readFileSync(new URL('../.github/workflows/changelog.yml', import.meta.url), 'utf8');
 
 test('lifecycle workflow has governed triggers, actor fields, and draft skipping', () => {
   assert.match(ci, /^  pull_request:\n/m);
@@ -60,8 +61,9 @@ test('the Linux bundle lane builds and installs an archive on both platforms', (
   // Each lane's runner is a repo variable with the hosted label as the
   // default, so a hosted-runner outage is survived by setting LINUX_RUNNER
   // and LINUX_ARM_RUNNER to a self-hosted label, with no workflow change.
-  assert.match(ci, /runner: \$\{\{ vars\.LINUX_RUNNER \|\| 'ubuntu-latest' \}\}\n\s+target: linux-x64/);
-  assert.match(ci, /runner: \$\{\{ vars\.LINUX_ARM_RUNNER \|\| 'ubuntu-24\.04-arm' \}\}\n\s+target: linux-arm64/);
+  // A fork pull request always gets the hosted label (#752).
+  assert.match(ci, /runner: \$\{\{ github\.event\.pull_request\.head\.repo\.fork && 'ubuntu-latest' \|\| vars\.LINUX_RUNNER \|\| 'ubuntu-latest' \}\}\n\s+target: linux-x64/);
+  assert.match(ci, /runner: \$\{\{ github\.event\.pull_request\.head\.repo\.fork && 'ubuntu-24\.04-arm' \|\| vars\.LINUX_ARM_RUNNER \|\| 'ubuntu-24\.04-arm' \}\}\n\s+target: linux-arm64/);
   assert.doesNotMatch(ci, /runs-on: ubuntu-latest/);
   assert.match(ci, /timeout-minutes: 25/);
   // The build is a plain node invocation; the archive is what CI tests, not a
@@ -101,7 +103,7 @@ test('advanced CodeQL is callable only through governed CI for both languages', 
 });
 
 test('every third-party action reference is immutable', () => {
-  for (const source of [ci, codeql, linuxBundleRelease]) {
+  for (const source of [ci, codeql, linuxBundleRelease, changelog]) {
     for (const match of source.matchAll(/uses:\s+[^\s@]+@([^\s]+)/g)) {
       assert.match(match[1], /^[0-9a-f]{40}$/);
     }
@@ -120,4 +122,30 @@ test('the keyd lane builds and tests unsigned on a hosted macOS runner', () => {
   assert.doesNotMatch(lane, /runs-on:.*(?:vars\.|self-hosted)/);
   assert.doesNotMatch(lane, /\$\{\{\s*secrets\./);
   assert.match(ci, /test "\$KEYD" = success/);
+});
+
+// #752: a runner variable may name a self-hosted runner, so every runner that
+// reads one first sends a fork pull request to a literal GitHub-hosted label.
+// Fork code then never reaches a self-hosted runner, and no workflow reads a
+// secret or runs on pull_request_target, so a fork run holds nothing to leak.
+test('fork pull requests run only on GitHub-hosted runners with no secrets', () => {
+  const hosted = new Set(['ubuntu-latest', 'ubuntu-24.04-arm', 'macos-latest']);
+  const workflows = { 'ci.yml': ci, 'codeql.yml': codeql, 'changelog.yml': changelog, 'linux-bundle-release.yml': linuxBundleRelease };
+  let guarded = 0;
+  for (const [name, source] of Object.entries(workflows)) {
+    assert.doesNotMatch(source, /\$\{\{\s*secrets\./, `${name} reads a secret`);
+    assert.doesNotMatch(source, /pull_request_target/, `${name} uses pull_request_target`);
+    for (const [, value] of source.matchAll(/^\s*(?:-\s+)?(?:runs-on|runner):\s*(.+)$/gm)) {
+      if (value === '${{ matrix.platform.runner }}') continue;
+      if (hosted.has(value)) continue;
+      const fork = value.match(/^\$\{\{ github\.event\.pull_request\.head\.repo\.fork && '([^']+)' \|\| vars\.[A-Z_]+ \|\| '([^']+)' \}\}$/);
+      assert.ok(fork, `${name}: runner ${value} is not fork-guarded`);
+      assert.ok(hosted.has(fork[1]), `${name}: fork runner ${fork[1]} is not GitHub-hosted`);
+      assert.ok(hosted.has(fork[2]), `${name}: default runner ${fork[2]} is not GitHub-hosted`);
+      guarded += 1;
+    }
+  }
+  // policy, merge-evidence, preflight-evidence, complete, workflow-runtime,
+  // skill-gate, two linux-bundle platforms, gate, changelog and CodeQL.
+  assert.equal(guarded, 11);
 });

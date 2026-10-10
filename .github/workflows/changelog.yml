@@ -15,10 +15,13 @@ concurrency:
   group: changelog-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Runner variables may name a self-hosted runner. A pull request from a fork
+# always gets the GitHub-hosted label instead, so outside code never reaches a
+# self-hosted runner, and no job here reads a secret (#752).
 jobs:
   fragment:
     name: Changelog fragment
-    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
