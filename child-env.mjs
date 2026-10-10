@@ -22,11 +22,14 @@ const CHILD_KEYS = new Set([
 ]);
 
 // agent-bot's own host configuration (the tool path, npm, service label,
-// credential names, binding) reaches the reach server, keyd's relay and
-// agent-comms through the turn env, so the namespace passes; a secret kept
-// under it (AGENT_BOT_TELEGRAM_TOKEN) does not.
+// binding) reaches the reach server, keyd's relay and agent-comms through
+// the turn env, so the namespace passes; a secret-shaped name under it
+// (AGENT_BOT_TELEGRAM_TOKEN, …_AUTH, …_API_KEY_FILE) does not. The pattern
+// is soul-builder's secret-name rule plus a trailing KEY. The credential
+// namespace and vault are names, not secrets, and pass by name (#676).
 const OWN_PREFIX = /^(AGENT_BOT|QWTS)_/;
-const SECRET_NAME = /(TOKEN|SECRET|KEY|PASSWORD)$/;
+const SECRET_NAME = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE_KEY|API_KEY|APIKEY|CREDENTIALS?|AUTH)(?:_|$)|KEY$/;
+const OWN_NAMES = new Set(['AGENT_BOT_CREDENTIAL_NAMESPACE', 'AGENT_BOT_CREDENTIAL_VAULT']);
 
 // Windows names are case-insensitive and enumerate as `Path`, `SystemRoot`,
 // `windir`: there a kept name is matched without case and written in the
@@ -41,7 +44,7 @@ export function minimalChildEnv(source = {}, { platform = process.platform } = {
     const own = platform === 'win32' ? upper : name;
     if (CHILD_KEYS.has(name)) kept[name] = value;
     else if (platform === 'win32' && BY_UPPER.has(upper)) kept[BY_UPPER.get(upper)] = value;
-    else if (OWN_PREFIX.test(own) && !SECRET_NAME.test(own)) kept[platform === 'win32' ? upper : name] = value;
+    else if (OWN_NAMES.has(own) || (OWN_PREFIX.test(own) && !SECRET_NAME.test(own))) kept[platform === 'win32' ? upper : name] = value;
   }
   return kept;
 }

@@ -14,14 +14,15 @@ test('child boundary drops ambient secrets and execution injection variables', (
     SSH_AUTH_SOCK: '/tmp/agent.sock',
     NODE_OPTIONS: '--require /tmp/injected.js',
     NPM_CONFIG_USERCONFIG: '/tmp/owner/.npmrc',
-    AGENT_BOT_TELEGRAM_TOKEN: 'bot-token',
+    AGENT_BOT_TELEGRAM_TOKEN: 'bot-token', AGENT_BOT_AUTH: 'a', AGENT_BOT_CREDENTIALS: 'c', AGENT_BOT_API_KEY_FILE: '/tmp/k',
   };
   assert.deepEqual(minimalChildEnv(source), {
     PATH: '/usr/bin', HOME: '/tmp/owner', LANG: 'en_US.UTF-8',
   });
   const harness = soulEnvironment(source, { home: '/tmp/owner' });
   for (const name of ['AWS_SECRET_ACCESS_KEY', 'GITHUB_TOKEN', 'OPENAI_API_KEY',
-    'SSH_AUTH_SOCK', 'NODE_OPTIONS', 'NPM_CONFIG_USERCONFIG', 'AGENT_BOT_TELEGRAM_TOKEN']) {
+    'SSH_AUTH_SOCK', 'NODE_OPTIONS', 'NPM_CONFIG_USERCONFIG', 'AGENT_BOT_TELEGRAM_TOKEN',
+    'AGENT_BOT_AUTH', 'AGENT_BOT_CREDENTIALS', 'AGENT_BOT_API_KEY_FILE']) {
     assert.equal(Object.hasOwn(harness, name), false, name);
   }
 });
@@ -32,7 +33,7 @@ test('child boundary keeps the network, locale and agent-bot host configuration'
     HTTPS_PROXY: 'http://proxy.test:3128', https_proxy: 'http://proxy.test:3128', NO_PROXY: 'localhost',
     SSL_CERT_FILE: '/tmp/ca.pem', NODE_EXTRA_CA_CERTS: '/tmp/ca.pem',
     AGENT_BOT_TOOL_PATH: '/tmp/tools', AGENT_BOT_NPM: '/tmp/npm-cli.js', AGENT_BOT_SERVICE_LABEL: 'test.label',
-    AGENT_BOT_CREDENTIAL_NAMESPACE: 'test', AGENT_BOT_KEYD_TEAM_ID: 'TEAMID', QWTS_AGENT_TEAM: 'red',
+    AGENT_BOT_CREDENTIAL_NAMESPACE: 'test', AGENT_BOT_CREDENTIAL_VAULT: 'vault', AGENT_BOT_KEYD_TEAM_ID: 'TEAMID', QWTS_AGENT_TEAM: 'red',
   };
   assert.deepEqual(minimalChildEnv(kept), kept);
   const harness = soulEnvironment(kept, { home: '/tmp/owner' });
