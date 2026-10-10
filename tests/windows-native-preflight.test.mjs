@@ -256,7 +256,14 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       'impersonation-level marker',
       'native named-pipe server did not report client impersonation level',
     );
-    assert.ok(['LEVEL=Anonymous', 'LEVEL=Identification'].includes(levelMarker), 'native named-pipe server may not impersonate the client');
+    const levelMatch = /^LEVEL=(Anonymous|Identification|Impersonation|Delegation|None)$/.exec(levelMarker);
+    const failureMatch = /^FAILED=(json-preflight|server-create|connect|stream-setup|hello-read|impersonation-level|broker-proof|request)$/.exec(levelMarker);
+    if (failureMatch) throw new Error(`native named-pipe fixture failed during ${failureMatch[1]}`);
+    assert.ok(levelMatch, 'native named-pipe fixture returned an unexpected impersonation marker');
+    assert.ok(
+      ['Anonymous', 'Identification'].includes(levelMatch[1]),
+      `native named-pipe fixture observed level ${levelMatch[1]}; expected Anonymous or Identification`,
+    );
     const challenge = await beforeDeadline(serverOutput(), 'native named-pipe server did not report a handshake challenge');
     const challengeMatch = /^CHALLENGE=([0-9a-f]{64})$/.exec(challenge);
     assert.ok(challengeMatch, 'native named-pipe server returned an invalid challenge marker');
