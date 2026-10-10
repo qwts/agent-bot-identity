@@ -20,7 +20,7 @@ async function sign(body) {
 }
 
 function delivery(body, signature = null) {
-  return new Request('https://gh-app-hook.qwts.org/github/qwts-grok-agent', {
+  return new Request('https://gh-app-hook.example.invalid/github/qwts-grok-agent', {
     method: 'POST',
     headers: signature ? { 'x-hub-signature-256': signature } : {},
     body,
@@ -40,7 +40,7 @@ async function take(mailbox, repo, { token = TOKEN, app = 'qwts-grok-agent' } = 
   const headers = {};
   if (token != null) headers.authorization = `Bearer ${token}`;
   const request = new Request(
-    `https://gh-app-hook.qwts.org/inbox?app=${encodeURIComponent(app)}&repo=${encodeURIComponent(repo)}`,
+    `https://gh-app-hook.example.invalid/inbox?app=${encodeURIComponent(app)}&repo=${encodeURIComponent(repo)}`,
     { method: 'POST', headers },
   );
   return handleHookRequest(request, mailbox, secrets);

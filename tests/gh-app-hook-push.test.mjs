@@ -439,7 +439,7 @@ test('the deadletter route is bearer-protected and returns redacted dead records
     },
   };
   const request = (headers = {}) => new Request(
-    'https://gh-app-hook.qwts.org/deadletter?app=qwts-grok-agent',
+    'https://gh-app-hook.example.invalid/deadletter?app=qwts-grok-agent',
     { method: 'GET', headers },
   );
 

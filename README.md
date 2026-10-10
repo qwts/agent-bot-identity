@@ -1994,14 +1994,15 @@ npm test
 
 Zero dependencies; Node's built-in test runner only.
 
-## Deprecated migration aliases
+## Compatibility and deprecated migration aliases
 
 New writes use `agentBot.app`, `agentBot.agentId`,
-`agentBot.chainedHooksPath`, and `AGENT_BOT_*`. Compatibility reads remain for
-`qwts.*`, `QWTS_AGENT_*`, `PLAYBOOK_HOME`, and
-`~/.config/agent-bot/playbook-home` so existing worktrees and harness startup
-configuration migrate safely. These aliases remain throughout `0.x` and are
-scheduled for removal in `1.0`; no new configuration should write them.
+`agentBot.chainedHooksPath`, and `AGENT_BOT_*`. Read-only `QWTS_*` environment
+aliases remain recognised indefinitely so existing installations keep
+working (#752). The other read-only migration aliases—`qwts.*`,
+`PLAYBOOK_HOME`, and `~/.config/agent-bot/playbook-home`—remain through `0.x`
+and are scheduled for removal in `1.0`. No new configuration should write
+these aliases.
 
 ## License
 

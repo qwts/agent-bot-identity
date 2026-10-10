@@ -216,7 +216,7 @@ export async function appKeydAvailability(app, { env = process.env, home = homed
     if (held.pinned !== true) return { available: false, reason: "agent-bot-keyd has not pinned this daemon's key yet" };
     return { available: true, held: held.held };
   } catch (error) {
-    if (error?.rpcCode === KEYD_METHOD_NOT_FOUND) return { available: false, reason: 'this agent-bot-keyd predates App-level keys (#110); update GeniusBar to keep App keys in keyd' };
+    if (error?.rpcCode === KEYD_METHOD_NOT_FOUND) return { available: false, reason: 'this agent-bot-keyd predates App-level keys (#110); update the host app that ships agent-bot-keyd to keep App keys in keyd' };
     return { available: false, reason: 'agent-bot-keyd could not report App-level key status' };
   }
 }
