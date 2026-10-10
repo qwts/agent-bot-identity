@@ -20,6 +20,8 @@ export const HEALTH_TIMEOUT_MS = 1_500;
 // so it needs a network-scale budget — the health-probe timeout would abort
 // legitimate mints on any slow round trip.
 const CREDENTIAL_TIMEOUT_MS = 30_000;
+// A spend reads pass-cli, then makes two GitHub calls of up to 15s each.
+const GRANT_SPEND_TIMEOUT_MS = 45_000;
 // A take waits on pass-cli and then the broker's own 10 s limit.
 const INBOX_TAKE_TIMEOUT_MS = 30_000;
 // Longer than keyd's presence prompt, so the owner has time to answer.
@@ -127,6 +129,10 @@ export function daemonClient({
       // shows as is.
       typeof payload.code === 'string' && /^inbox-[a-z][a-z-]{0,63}$/.test(payload.code)
         ? { code: payload.code, detail: String(payload.error ?? '') } : {},
+      // So does a delegation grant's (#108).
+      typeof payload.code === 'string' && (/^(grant|human)-[a-z][a-z-]{0,63}$/.test(payload.code)
+        || ['owner-declined', 'presence-required', 'presence-invalid', 'keyd-signer-unverified'].includes(payload.code))
+        ? { code: payload.code, detail: String(payload.error ?? '') } : {},
       method === 'POST' && pathname.startsWith('/v0/soul/dream/') && payload.audit?.status === 'unconfirmed'
         && payload.audit?.code === 'dream-control-audit-unconfirmed'
         ? { audit: { status: 'unconfirmed', code: 'dream-control-audit-unconfirmed' } } : {});
@@ -211,6 +217,14 @@ export function daemonClient({
     // App and repository from this binding; the caller sends neither.
     async takeInbox(secret) {
       return request('POST', '/v0/inbox/take', {}, { 'x-agent-binding': secret }, INBOX_TAKE_TIMEOUT_MS);
+    },
+    // Delegation grants (#108). The request waits on the owner's presence
+    // prompt, as an owner decision does; the spend on GitHub.
+    async requestGrant(secret, operation) {
+      return request('POST', '/v0/grants/request', { operation }, { 'x-agent-binding': secret }, OWNER_DECISION_TIMEOUT_MS);
+    },
+    async spendGrant(secret, proposalId, operation) {
+      return request('POST', '/v0/grants/spend', { proposalId, operation }, { 'x-agent-binding': secret }, GRANT_SPEND_TIMEOUT_MS);
     },
     // v1 interaction contract (#55). Adapters authenticate their provider
     // identity and pass the normalized pair on every call; the daemon owns

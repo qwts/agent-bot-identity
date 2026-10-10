@@ -132,6 +132,9 @@ export function supervisorEnvironment({ env = process.env, home = homedir() } = 
     ...(env.AGENT_BOT_TOOL_PATH && isAbsolute(env.AGENT_BOT_TOOL_PATH) ? { AGENT_BOT_TOOL_PATH: env.AGENT_BOT_TOOL_PATH } : {}),
     // The gh-app-hook broker the daemon takes from for take_inbox (#229).
     ...(inboxUrlForUnit(env.GH_APP_HOOK_INBOX_URL) ? { GH_APP_HOOK_INBOX_URL: env.GH_APP_HOOK_INBOX_URL } : {}),
+    // The owner's GitHub login, whose token spends delegation grants (#108).
+    ...(typeof env.AGENT_BOT_HUMAN_LOGIN === 'string' && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(env.AGENT_BOT_HUMAN_LOGIN)
+      ? { AGENT_BOT_HUMAN_LOGIN: env.AGENT_BOT_HUMAN_LOGIN } : {}),
   };
 }
 

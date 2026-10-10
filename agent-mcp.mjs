@@ -112,6 +112,43 @@ const TOOLS = [
       + 'come from the binding, not from the caller. Requires bind.',
     inputSchema: { type: 'object', properties: {} },
   },
+  {
+    name: 'request_grant',
+    description:
+      'Ask the owner for one named write as their GitHub account (#108): an '
+      + 'issue or pull request comment, or a review request. The owner '
+      + 'approves this exact operation at a Touch ID prompt, which this call '
+      + 'waits on. Returns the approved grant; spend it with spend_grant and '
+      + 'the same operation. Approving or merging is never grantable. '
+      + 'Requires bind.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        operation: {
+          type: 'object',
+          description: '{ operation: "issue-comment", repo: "owner/name", number, body } or '
+            + '{ operation: "review-request", repo: "owner/name", number, reviewers: [logins] }',
+        },
+      },
+      required: ['operation'],
+    },
+  },
+  {
+    name: 'spend_grant',
+    description:
+      'Perform an approved grant once, as the owner\'s account. Pass the '
+      + 'grant\'s proposal_id and the operation exactly as requested. A '
+      + 'refusal before the write (for example no stored token) leaves the '
+      + 'grant approved, so it can be spent again once fixed. Requires bind.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        proposal_id: { type: 'string' },
+        operation: { type: 'object' },
+      },
+      required: ['proposal_id', 'operation'],
+    },
+  },
 ];
 
 export function createMcpState({
@@ -345,6 +382,19 @@ async function callTool(state, name, args = {}) {
     }
     case 'take_inbox':
       return takeInbox(state, args);
+    case 'request_grant':
+    case 'spend_grant': {
+      if (!state.secret) throw new Error('not bound — call the bind tool first');
+      try {
+        return name === 'request_grant'
+          ? await state.client.requestGrant(state.secret, args.operation)
+          : await state.client.spendGrant(state.secret, args.proposal_id, args.operation);
+      } catch (error) {
+        // The daemon's sentence and code; neither carries a credential.
+        if (typeof error?.code === 'string' && error.detail) throw new Error(`${error.detail} [${error.code}]`);
+        throw error;
+      }
+    }
     default:
       throw new Error(`unknown tool: ${name}`);
   }

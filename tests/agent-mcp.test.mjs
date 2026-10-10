@@ -81,7 +81,7 @@ test('initialize advertises tools and instructs the agent to bind first', async 
   const list = await handleMcpMessage(state, request(2, 'tools/list'));
   assert.deepEqual(
     list.result.tools.map((tool) => tool.name),
-    ['bind', 'whoami', 'population', 'space_path', 'credential', 'take_inbox'],
+    ['bind', 'whoami', 'population', 'space_path', 'credential', 'take_inbox', 'request_grant', 'spend_grant'],
   );
 });
 

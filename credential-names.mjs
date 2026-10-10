@@ -10,6 +10,8 @@
 //   `github-app/<slug>`
 // - the gh-app-hook inbox bearer the daemon presents for take_inbox (#229):
 //   service `agent-bot.inbox`, account `gh-app-hook-inbox-token`
+// - the owner's narrow GitHub token for delegation grants (#108): service
+//   `agent-bot.human`, account `<login>-github-token`
 // - pass-cli: one note in the `Agent Identities` vault, titled
 //   `<service>/<account>`
 //
@@ -101,4 +103,13 @@ export function inboxBearerItem() {
 // A pass-cli note joins the Keychain service and account into one title.
 export function itemTitle({ service, account }) {
   return `${service}/${account}`;
+}
+
+// The human account's narrow GitHub token for delegation grants (#108): a
+// fine-grained token with Issues and Pull requests write, which only the
+// daemon reads to perform an owner-approved grant. Service
+// `<namespace>.human`, account `<login>-github-token`.
+export function humanTokenItem(login, { namespace = credentialNamespace() } = {}) {
+  if (typeof login !== 'string' || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(login)) throw new Error('invalid GitHub login');
+  return { service: `${namespace}.human`, account: `${login}-github-token` };
 }
