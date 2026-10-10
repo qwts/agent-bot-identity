@@ -49,8 +49,8 @@ load --global places it in the harness's user-level skills folder
 (~/.claude/skills/<name>/, or $CLAUDE_CONFIG_DIR/skills/), where every session
 sees it: opt-in, with a recorded --reason, and only after the owner approves
 (the owner gate; Touch ID through keyd when a soul asks for itself). unload
---global removes it when unchanged, only for the soul the owner's record names;
-a soul's own unload asks the owner the same way.
+--global removes it when unchanged, only for the soul the owner's record names,
+after the owner approves the same way.
 Other repository adapters remain unimplemented.
 check never replaces accepted snapshots or local edits. update previews a recorded
 check; applying requires reviewed digests and preserves prior material. learn supplies guidance;
@@ -182,12 +182,13 @@ async function loadMain(verb, args, json, { stdout, stderr, markers = soulMarker
             { code: error.code === 'owner-credential-required' ? error.code : 'skill-global-owner-not-approved', cause: error });
         }
       };
-      // A soul shares the owner's account, so it could write the owner-side
-      // record itself: its unload needs the owner too, and its record paths
+      // A soul shares the owner's account: it could write the owner-side
+      // record and clear the markers that tell it from the owner. So unload
+      // needs the owner too, whoever runs it, and a soul's record paths
       // ignore the variables that relocate the owner's state.
       const recordEnv = caller === 'soul' ? ownerStateEnv(options.env ?? process.env) : null;
       result = verb === 'unload'
-        ? await unloadGlobalSkill(name, values.agentId, { ...options, ...harness, recordEnv, authorize: caller === 'soul' ? authorize : null })
+        ? await unloadGlobalSkill(name, values.agentId, { ...options, ...harness, recordEnv, authorize })
         : await loadGlobalSkill(name, values.agentId, { ...options, ...harness, reason: values.reason, recordEnv, authorize });
     }
     stdout.write(report(result, json));

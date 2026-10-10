@@ -438,7 +438,8 @@ Every check (reason, harness, installed skill, nothing at the destination)
 runs before the prompt, and a refusal writes nothing.
 
 Only Claude Code is supported: `$CLAUDE_CONFIG_DIR/skills/<name>/` when that
-variable is an absolute path, else `~/.claude/skills/<name>/`. A relative
+variable is an absolute path, else `~/.claude/skills/<name>/`, where `~` is the
+account's home folder, not `$HOME`. A relative
 `CLAUDE_CONFIG_DIR` and a missing config folder are refused rather than
 guessed. A linked config folder (dotfiles) is followed; a link at `skills/` or
 anything already at the destination is refused. Other harnesses are refused
@@ -451,10 +452,12 @@ the soul's: `skill-globals/<harness>/<name>.json` under the interaction home
 (the soul, destination, reason, file modes, sizes and SHA-256, and how it was
 authorized). Each load and unload appends a `skill-global` audit receipt.
 `unload NAME --soul AGENT_ID --global` removes nothing without the owner-side
-record naming that soul. The owner can run it for any soul without a prompt.
-A soul runs it only for its own Agent ID, and because a soul shares the
-owner's account and could write that record itself, its unload asks the owner
-through keyd like its load does; a refusal removes nothing. For a soul caller
+record naming that soul, and only after the owner approves a prompt naming
+the folder: through the owner gate when the owner runs it (for any soul), and
+through keyd like a load when a soul runs it for its own Agent ID. A soul
+shares the owner's account, so it could write that record itself and clear the
+markers that tell it from the owner; the prompt is what stops it. A refusal,
+or keyd unable to ask, removes nothing and appends a `refused` receipt. For a soul caller
 the record and receipt paths also ignore `AGENT_BOT_INTERACTION_HOME` and
 `XDG_STATE_HOME`, so it cannot relocate the owner's state to a folder it owns. It resolves the destination again
 rather than trusting the record, and removes the copy only while it matches

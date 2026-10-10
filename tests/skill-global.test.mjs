@@ -66,7 +66,8 @@ test('the owner loads a skill globally after the gate, with the reason recorded,
   assert.equal(unloaded.json.removed, true);
   assert.equal(existsSync(f.destination), false);
   assert.equal(existsSync(globalRecordPath('claude', 'demo', { env: f.env, home: f.home })), false);
-  assert.equal(f.gates.length, 1, 'the owner\'s own unload is not gated');
+  assert.equal(f.gates.length, 2, 'the owner approves the unload too');
+  assert.match(f.gates[1].action, new RegExp(`soul skill unload demo --soul ${f.id} --global \\(removes ${f.destination}\\)`));
   assert.deepEqual(f.receipts().map(r => r.operation), ['load', 'unload']);
 });
 
@@ -213,5 +214,25 @@ test('a soul\'s global unload needs the owner even with a record it forged', asy
   assert.equal(f.asks.length, 1, 'the owner was asked');
   assert.equal(readFileSync(path.join(owned, 'SKILL.md'), 'utf8'), 'owner wrote this\n');
   assert.equal(existsSync(globalRecordPath('claude', 'owners-skill', { env: f.env, home: f.home })), true);
-  assert.deepEqual(f.receipts(), []);
+  assert.deepEqual(f.receipts().map(r => [r.operation, r.decision]), [['unload', 'refused']]);
+});
+
+test('an unload that looks like the owner\'s still needs the owner: a no keeps the skill and is receipted', async t => {
+  const f = fixture(t);
+  // A soul writes a record naming itself into the owner's state, clears its
+  // markers and runs unload from a neutral folder.
+  const owned = path.join(f.home, '.claude/skills/owners-skill');
+  put(path.join(owned, 'SKILL.md'), 'owner wrote this\n');
+  const bytes = readFileSync(path.join(owned, 'SKILL.md'));
+  const record = globalRecordPath('claude', 'owners-skill', { env: f.env, home: f.home });
+  put(record, JSON.stringify({ schemaVersion: 1, name: 'owners-skill', harness: 'claude', agentId: f.id, destination: owned, reason: 'x',
+    files: { 'SKILL.md': { mode: '100644', size: bytes.length, sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}` } } }));
+  const result = await f.run(['unload', 'owners-skill', '--soul', f.id, '--global', '--json'], { markers: [], approve: false });
+  assert.equal(result.code, 1);
+  assert.equal(result.json.error.code, 'skill-global-owner-not-approved');
+  assert.equal(f.gates.length, 1, 'the owner was asked');
+  assert.match(f.gates[0].action, /removes .*owners-skill/);
+  assert.equal(readFileSync(path.join(owned, 'SKILL.md'), 'utf8'), 'owner wrote this\n');
+  assert.equal(existsSync(record), true);
+  assert.deepEqual(f.receipts().map(r => [r.operation, r.decision]), [['unload', 'refused']]);
 });
