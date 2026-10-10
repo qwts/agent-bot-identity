@@ -101,8 +101,15 @@ export function loadSkill(name, agentId, { now = () => new Date(), ...options } 
   if (exists(recordFile)) fail('skill-load-exists', `${name} is already loaded in worktrees/${target.workspace}; unload it first`);
   safeParents(target.root, target.relative);
   if (exists(target.destination)) fail('skill-load-exists', `${target.relative} already exists in worktrees/${target.workspace}`);
-  let ignored = false;
-  try { git(['check-ignore', '-q', '--no-index', `${target.relative}/SKILL.md`], target.root); ignored = true; } catch { /* not ignored */ }
+  // Already ignored only when git ignores every file the copy places; a rule
+  // that matches SKILL.md (or *.md) alone would leave the rest committable.
+  const paths = files.map(file => `${target.relative}/${file.path}`);
+  let ignored;
+  try {
+    const listed = execFileSync('git', ['check-ignore', '--no-index', '--stdin', '-z'], { cwd: target.root, env: { PATH: process.env.PATH }, input: paths.join('\0'), stdio: ['pipe', 'pipe', 'ignore'] });
+    const matched = new Set(listed.toString('utf8').split('\0').filter(Boolean));
+    ignored = paths.every(item => matched.has(item));
+  } catch { ignored = false; /* exit 1: nothing ignored */ }
   // Stage beside the destination, then rename, so a harness never sees half a skill.
   const parent = path.dirname(target.destination);
   mkdirSync(parent, { recursive: true, mode: 0o755 });

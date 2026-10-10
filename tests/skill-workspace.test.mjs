@@ -100,6 +100,15 @@ test('a folder git already ignores is left to the repository', t => {
   assert.equal(readFileSync(f.exclude, 'utf8'), before);
 });
 
+test('a rule that ignores only some of the files still gets the exclude line', t => {
+  const f = fixture(t);
+  put(path.join(f.repo, '.gitignore'), '*.md\n');
+  git(['add', '.gitignore'], f.repo);
+  assert.equal(loadSkill('demo', f.id, { ...f.options, workspace: 'repo' }).excluded, 'added');
+  assert.match(readFileSync(f.exclude, 'utf8'), /\/\.claude\/skills\/demo\/\n$/);
+  assert.equal(f.status(), 'A  .gitignore\n', 'scripts/run is not committable');
+});
+
 test('the harness picks the skills folder; one without skills is refused', t => {
   const f = fixture(t);
   assert.equal(loadSkill('demo', f.id, { ...f.options, workspace: 'repo', harness: 'gemini' }).destination, '.gemini/skills/demo');
