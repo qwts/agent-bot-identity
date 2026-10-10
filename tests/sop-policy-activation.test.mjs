@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { assertSopGitCommand, checkSopLaunchPolicy, createRunGit, main, policyStateFile, readSopPolicyState } from '../sop.mjs';
+import { sopPolicyCheck } from '../readiness.mjs';
 
 const runLocal = createRunGit({ allowProtocols: 'file' });
 const rule = (id, harnesses) => ({ id, event: 'before-launch', decision: 'deny', when: { harnesses }, reason: `No ${harnesses.join(', ')} launches here.` });
@@ -225,4 +226,32 @@ test('the marker and record are read safely and validated completely before enfo
   rmSync(file);
   writeFileSync(file, ' '.repeat(32 * 1024));
   assert.equal(checkSopLaunchPolicy('codex', f.options).code, 'policy-unavailable');
+});
+
+test('doctor reports the SOP policy state read-only: none, active at its pinned commit, unavailable, deactivated', async (t) => {
+  const f = fixture(t);
+  const doctor = () => sopPolicyCheck({ home: f.home, env: {}, read: (o) => readSopPolicyState(offline({ ...f.options, ...o })) });
+  const none = doctor();
+  assert.deepEqual([none.status, none.evidence], ['ready', { state: 'none' }]);
+  assert.equal(existsSync(join(f.home, 'state', 'sop-policy')), false, 'doctor writes nothing');
+
+  assert.equal((await cli(['policy', 'activate'], { ...f.options, assertOwner: approve([]) })).code, 0);
+  const active = doctor();
+  assert.equal(active.status, 'ready');
+  assert.equal(active.message, `SOP policy active: local/sop@${f.first} (1 rule)`);
+  assert.deepEqual({ state: active.evidence.state, sop: active.evidence.sop, rules: active.evidence.rules },
+    { state: 'active', sop: { repository: 'local/sop', commit: f.first }, rules: 1 });
+
+  const marker = readFileSync(policyStateFile(f.options), 'utf8');
+  writeFileSync(policyStateFile(f.options), '{ corrupt');
+  const unavailable = doctor();
+  assert.deepEqual([unavailable.status, unavailable.code, unavailable.evidence.state], ['warning', 'sop-policy-unavailable', 'unavailable']);
+  assert.match(unavailable.action, /agent-bot sop policy (activate|deactivate)/);
+  assert.equal(readFileSync(policyStateFile(f.options), 'utf8'), '{ corrupt', 'doctor never repairs the marker');
+  writeFileSync(policyStateFile(f.options), marker);
+
+  assert.equal((await cli(['policy', 'deactivate'], { ...f.options, assertOwner: approve([]) })).code, 0);
+  const inactive = doctor();
+  assert.deepEqual([inactive.status, inactive.evidence.state], ['ready', 'inactive']);
+  assert.match(inactive.message, /deactivated by the owner at 2026-10-09T12:00:00\.000Z/);
 });
