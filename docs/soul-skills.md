@@ -410,11 +410,15 @@ a skill the repository tracks, and when a folder on the way is a link.
 
 The soul records what it placed in `.soul-state/skill-loads/WORKTREE/<name>.json`
 (file modes, sizes and SHA-256). `unload` removes the copy only when it still
-matches that record; a copy edited in the workspace is refused
+matches that record, bytes and executable bit; a copy edited in the workspace
+is refused
 (`skill-load-modified`) so the edit is not lost. Keep the change in the soul's
 skill through a revision, or move the folder aside, then unload. The exclude
 line goes when no other worktree of the same repository still has the folder
-loaded, and only a line load added. Load and unload do not change the soul
+loaded, and only the line load added (the last one under its note). Loads and
+unloads in one repository take a lock beside its exclude list and rewrite it
+through a rename, so concurrent ones keep each other's lines. A load that fails
+after placing the copy takes the copy and its line back out. Load and unload do not change the soul
 package, so they record no revision. The owner can run them for any soul; a
 soul only for its own Agent ID.
 
