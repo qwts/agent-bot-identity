@@ -31,6 +31,7 @@ import {
 } from './hook-dialects.mjs';
 
 import { readBinding } from './agent-binding.mjs';
+import { minimalChildEnv } from './child-env.mjs';
 import { confinementCheck } from './confinement.mjs';
 import { hookBypassReason, statedBotSlug, unboundBotReason, unboundBotSlug, unprovableBotReason } from './resolve-agent.mjs';
 import { expandAlias, scanGitPublish } from './git-publish-scan.mjs';
@@ -425,8 +426,13 @@ export function runHooks({ dialectKey, event, payload, dir, env = process.env })
 // The comms CLI owns account pairing and refuses an unpaired join. Do not
 // inspect its private state or initiate pairing here. Keep this asynchronous:
 // join may call back into this daemon for the sibling vouch operation.
+// The daemon calls this with its own environment, and the hooks may be the
+// soul's checkout's own agent-hooks/, so both children get the child
+// boundary (#785); the timeout setting only ever tightens and passes.
 export async function runSpawnHooks({ agentId, parent, binding, name, harness, cwd, env = process.env }) {
-  const childEnv = { ...env, AGENT_BOT_BINDING: binding, AGENT_BOT_ID: agentId,
+  const childEnv = { ...minimalChildEnv(env),
+    ...(typeof env.AGENT_HOOK_TIMEOUT_MS === 'string' ? { AGENT_HOOK_TIMEOUT_MS: env.AGENT_HOOK_TIMEOUT_MS } : {}),
+    AGENT_BOT_BINDING: binding, AGENT_BOT_ID: agentId,
     QWTS_AGENT_ID: agentId, AGENT_BOT_PARENT_ID: parent, QWTS_AGENT_PARENT_ID: parent };
   const warnings = [];
   await new Promise((resolve) => {

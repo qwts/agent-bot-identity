@@ -404,11 +404,12 @@ test('npm runs with the soul\'s own node and npm cache when runtimes.node is pro
   writeFileSync(path.join(soulDir, '.soul-state', 'runtimes', 'node', version, INSTALL_STAMP), JSON.stringify(nodeReceipt(version)));
   writeFileSync(path.join(soulDir, 'soul.json'), JSON.stringify({ runtimes: { node: '24' } }));
   rmSync(path.join(soulDir, '.soul-state', 'runtimes', 'harnesses'), { recursive: true, force: true });
-  await installSoulHarnesses(agentId, source, { ...options, env: { PATH: '/usr/bin', KEEP: 'me', AGENT_BOT_NPM: '/host/npm-cli.js' }, harness: 'claude', install });
+  await installSoulHarnesses(agentId, source, { ...options, env: { PATH: '/usr/bin', LANG: 'C', KEEP: 'me', GITHUB_TOKEN: 'made-up-owner-token', AGENT_BOT_DAEMON_STATE_PATH: '/tmp/made-up/daemon.json', AGENT_BOT_NPM: '/host/npm-cli.js' }, harness: 'claude', install });
   assert.equal(seen[1].node, path.join(bin, 'node'));
   assert.equal(seen[1].env.PATH.split(path.delimiter)[0], bin);
   assert.equal(seen[1].env.npm_config_cache, path.join(soulDir, '.soul-state', 'runtimes', 'node', 'npm-cache'));
-  assert.equal(seen[1].env.KEEP, 'me', 'the caller\'s env is kept underneath');
+  assert.equal(seen[1].env.LANG, 'C', 'the child boundary\'s names are kept underneath');
+  for (const name of ['KEEP', 'GITHUB_TOKEN', 'AGENT_BOT_DAEMON_STATE_PATH']) assert.equal(seen[1].env[name], undefined, `npm never sees ${name} (#785)`);
   assert.equal(seen[1].env.AGENT_BOT_NPM, npm, 'the host npm override cannot replace the declared distribution');
 });
 
@@ -437,10 +438,11 @@ for (const managedHome of [false, true]) for (const platform of ['linux-x64', 'w
     assert.equal(command, node);
     assert.equal(args[0], npm);
     assert.equal(processOptions.env.PATH.split(path.delimiter)[0], bin);
-    assert.equal(processOptions.env.KEEP, 'yes');
+    assert.equal(processOptions.env.LANG, 'C');
+    assert.equal(processOptions.env.KEEP, undefined, 'npm gets the child boundary (#785)');
     fakeBin(dir, 'claude-code-acp');
   } });
-  const operation = { ...options, platform, env: { PATH: '/host/bin', AGENT_BOT_NPM: '/host/npm-cli.js', KEEP: 'yes' }, install, provisionRuntimes };
+  const operation = { ...options, platform, env: { PATH: '/host/bin', AGENT_BOT_NPM: '/host/npm-cli.js', LANG: 'C', KEEP: 'yes' }, install, provisionRuntimes };
   if (managedHome) await createSoulHomes({ ...operation, bindings: fakeBindings() })({ agentId, harness: 'claude', packagePath: source });
   else {
     const soulDir = path.dirname(path.dirname(soulHomePath(agentId, options)));
