@@ -34,7 +34,9 @@ before #617 are `host`. A recorded session in the other store than this turn's
 would not be found there, so the turn is refused before any process with
 `resume-session-store-moved`. The error's `action` is the
 `agent-bot soul tool-home <harness> global|soul --soul <id>` command that
-switches the soul back, and the recorded session is kept. The store is
+switches the soul back, and the recorded session is kept. To stay in the new
+store instead, `agent-bot soul tool-home <harness> --soul <id> --fresh-session`
+sets the recorded session aside, kept, and the next wake starts a new one. The store is
 checked whatever the session's policy, so a policy change cannot start fresh
 over it. A recorded store that is neither `host` nor `soul` is a damaged
 record, refused with `wake-session-record-invalid` and no guessed fix. Both

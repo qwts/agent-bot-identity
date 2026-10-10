@@ -103,6 +103,10 @@ export function ownerActionSummary(action, { souls = null, listSouls = null } = 
     summary = `${id} a revision of ${label(rest[0])}`;
   } else if (first === 'soul' && second === 'tool-home' && rest[1] === 'global' && rest.length === 2) {
     summary = `let ${label(id)} use this Mac's shared ${rest[0]} sign-in and sessions instead of its own`;
+  } else if (first === 'soul' && second === 'tool-home' && rest[1] === 'global' && rest[2] === '--fresh-session' && rest.length === 3) {
+    summary = `let ${label(id)} use this Mac's shared ${rest[0]} sign-in and sessions instead of its own, and start a new ${rest[0]} session there (the old one is kept)`;
+  } else if (first === 'soul' && second === 'tool-home' && rest.at(-1) === '--fresh-session' && (rest.length === 2 || (rest.length === 3 && rest[1] === 'soul'))) {
+    summary = `${rest.length === 3 ? `keep ${label(id)}'s ${rest[0]} in its own tool home and ` : ''}start a new ${rest[0]} session for ${label(id)} (the old one is kept)`;
   } else if (first === 'identity' && second === 'migrate-credentials') {
     const to = rest[0] === '--to' && rest[1] ? ` to ${rest[1] === 'keyd' ? 'agent-bot-keyd' : rest[1]}` : '';
     // #676: a copy under this host's credential names; nothing is moved. A

@@ -1,0 +1,1 @@
+- `agent-bot soul tool-home <harness> --soul ID --fresh-session` starts a new resume session in the store a soul's harness uses now, after a tool-home move. The old session is set aside, kept with its store and transcript, never deleted. The soul can run it for itself and the owner for any soul (#617).

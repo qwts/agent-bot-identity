@@ -15,6 +15,13 @@
 // shared sign-in and sessions, so it waits for the owner's presence (Touch
 // ID, the login password, else the administrator dialog). A "no" changes
 // nothing. Every change writes an audit receipt; showing and a no-op do not.
+//
+// `--fresh-session` (#617) sets aside the soul's recorded resume session for
+// the harness, so its next resume wake starts a new one in the store it uses
+// now: the way on after a tool-home move, instead of switching back. The old
+// session's id stays in the wake sessions record and its transcript in its
+// store; nothing is deleted. It never widens what the soul reaches, so the
+// soul's binding is enough for its own soul; the owner runs it for any soul.
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import process from 'node:process';
@@ -26,27 +33,33 @@ import { daemonClient } from './daemon-client.mjs';
 import { assertOwnerAction, presenceOrConsent, soulMarkers } from './owner-action.mjs';
 import { readToolHomeRecord, setToolHomeChoice, toolHomeRecordPath } from './soul-tool-home-record.mjs';
 import { TOOL_HOME_CHOICES, toolHomeFor } from './soul-tool-homes.mjs';
+import { createWakeSessions, wakeSessionsFile } from './wake-resume.mjs';
 
-export const TOOL_HOME_USAGE = 'usage: agent-bot soul tool-home <harness> [soul|global] --soul <agentId|name> [--json] [--principal-stdin]';
+export const TOOL_HOME_USAGE = 'usage: agent-bot soul tool-home <harness> [soul|global] --soul <agentId|name> [--fresh-session] [--json] [--principal-stdin]';
 
 const fail = (code, message, statusCode = 400) => { throw Object.assign(new Error(message), { code, statusCode }); };
 
 function parse(argv) {
   const positional = [];
-  let target = null, json = false, presented = false;
+  let target = null, json = false, presented = false, fresh = false;
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === '--json' && !json) json = true;
     else if (arg === '--principal-stdin' && !presented) presented = true;
+    else if (arg === '--fresh-session' && !fresh) fresh = true;
     else if (arg === '--soul' && target === null && argv[index + 1] && !argv[index + 1].startsWith('--')) target = argv[++index];
     else if (!arg.startsWith('--')) positional.push(arg);
     else fail('usage', TOOL_HOME_USAGE);
   }
   const [harness, choice = null, ...rest] = positional;
   if (!harness || !target || rest.length || (choice !== null && !TOOL_HOME_CHOICES.includes(choice))
-    || (choice === null && presented)) fail('usage', TOOL_HOME_USAGE);
-  return { harness, choice, target, json, presented };
+    || (choice === null && !fresh && presented)) fail('usage', TOOL_HOME_USAGE);
+  return { harness, choice, target, json, presented, fresh };
 }
+
+// Where a set-aside session was recorded; a damaged record's store is
+// named as such, never as one it does not say.
+const storeLabel = (store) => (store === 'host' || store === 'soul' ? `the ${store} store` : 'a damaged record');
 
 // The census row and the soul's folder, as `soul env` resolves them.
 async function resolveSoul(target, { env, home }) {
@@ -89,14 +102,16 @@ export async function soulToolHomeCommand(argv, {
   cwd = process.cwd(),
   now = () => new Date(),
   client = daemonClient({ env, home, cwd }),
+  sessions = createWakeSessions({ file: wakeSessionsFile({ env, home }) }),
 } = {}) {
-  const { harness: name, choice, target, json, presented } = parse(argv);
+  const { harness: name, choice, target, json, presented, fresh } = parse(argv);
   const row = toolHomeFor(name);
   if (!row.routable) fail('tool-home-unsupported', `${row.harness} has no tool home to choose: ${row.reason}`);
   const soul = await resolveSoul(target, { env, home });
   const current = readToolHomeRecord(soul.soulDir)?.harnesses[row.harness] ?? null;
   const result = { agentId: soul.id, harness: row.harness, choice: current, changed: false };
-  if (choice !== null && choice !== current) {
+  const setting = choice !== null && choice !== current;
+  if (setting || fresh) {
     const found = markers({ env, cwd });
     const caller = found.length ? 'soul' : 'owner';
     if (caller === 'soul') {
@@ -110,9 +125,9 @@ export async function soulToolHomeCommand(argv, {
       try { principal = JSON.parse(readStdin()); }
       catch { fail('tool-home-principal-invalid', '--principal-stdin needs the principal credential as JSON on stdin'); }
     }
-    const action = `soul tool-home ${soul.id} ${row.harness} ${choice}`;
+    const action = [`soul tool-home ${soul.id} ${row.harness}`, setting ? choice : null, fresh ? '--fresh-session' : null].filter(Boolean).join(' ');
     let authorization = { method: 'binding' };
-    if (caller === 'owner' || choice === 'global') {
+    if (caller === 'owner' || (setting && choice === 'global')) {
       try {
         authorization = caller === 'owner'
           ? await ownerGate(action, { principal, env, cwd })
@@ -122,15 +137,33 @@ export async function soulToolHomeCommand(argv, {
           { code: error.code === 'owner-credential-required' ? error.code : 'tool-home-owner-not-approved', statusCode: 403, cause: error });
       }
     }
-    // The record has no other writer after a soul's birth, but two of these
-    // commands may race; the read-modify-write stays under one lock.
-    withLock(`${toolHomeRecordPath(soul.soulDir)}.lock`, 'soul tool-homes record',
-      () => setToolHomeChoice(soul.soulDir, row.harness, choice));
-    appendAuditReceipt({ event: 'tool-home', agentId: soul.id, operation: 'set', decision: choice,
-      detail: `${row.harness}: ${current ?? 'unset'} -> ${choice} by ${caller} (${authorization?.method ?? 'none'})` }, { env, home, now });
-    Object.assign(result, { choice, changed: true, previous: current, caller, authorization: authorization?.method ?? 'none' });
+    const method = authorization?.method ?? 'none';
+    if (setting) {
+      // The record has no other writer after a soul's birth, but two of these
+      // commands may race; the read-modify-write stays under one lock.
+      withLock(`${toolHomeRecordPath(soul.soulDir)}.lock`, 'soul tool-homes record',
+        () => setToolHomeChoice(soul.soulDir, row.harness, choice));
+      appendAuditReceipt({ event: 'tool-home', agentId: soul.id, operation: 'set', decision: choice,
+        detail: `${row.harness}: ${current ?? 'unset'} -> ${choice} by ${caller} (${method})` }, { env, home, now });
+      Object.assign(result, { choice, changed: true, previous: current });
+    }
+    if (fresh) {
+      const retired = sessions.retire(soul.id, row.harness, { now });
+      result.freshSession = retired ? { retired: true, store: retired.store } : { retired: false };
+      if (retired) {
+        appendAuditReceipt({ event: 'tool-home', agentId: soul.id, operation: 'fresh-session', decision: 'fresh-session',
+          detail: `${row.harness}: resume session in ${storeLabel(retired.store)} set aside by ${caller} (${method})` }, { env, home, now });
+      }
+    }
+    Object.assign(result, { caller, authorization: method });
   }
-  write(json ? `${JSON.stringify(result)}\n` : `${row.harness}: ${result.choice ?? 'unset (current setup)'}${result.changed ? ` (was ${result.previous ?? 'unset'})` : ''}\n`);
+  const lines = [`${row.harness}: ${result.choice ?? 'unset (current setup)'}${result.changed ? ` (was ${result.previous ?? 'unset'})` : ''}`];
+  if (result.freshSession) {
+    lines.push(result.freshSession.retired
+      ? `${row.harness}: the next resume wake starts a new session; the old one is kept in ${storeLabel(result.freshSession.store)}`
+      : `${row.harness}: no recorded resume session; the next resume wake starts a new one`);
+  }
+  write(json ? `${JSON.stringify(result)}\n` : `${lines.join('\n')}\n`);
   return result;
 }
 

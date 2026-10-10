@@ -100,6 +100,7 @@ another runs Codex against a different one. The choice is recorded in
 ```sh
 agent-bot soul tool-home <harness> --soul <agentId|name> [--json]                                  # show
 agent-bot soul tool-home <harness> soul|global --soul <agentId|name> [--json] [--principal-stdin]   # set
+agent-bot soul tool-home <harness> [soul|global] --soul <agentId|name> --fresh-session [--json] [--principal-stdin]
 ```
 
 The engine advertises `tool-homes` for the existing inspection and adoption
@@ -130,6 +131,17 @@ without that flag does not establish setter support.
   receipt. Every change writes a `tool-home` audit receipt naming the
   harness, the old and new entry, who asked (owner or soul) and how it was
   authorized. Writes hold the record's lock.
+- **`--fresh-session`** sets aside the soul's recorded resume session for
+  the harness, so its next resume wake starts a new one in the store it uses
+  now. It is the way on after a tool-home move, when the resume lane refuses
+  the old session (`resume-session-store-moved`) or the record is damaged
+  (`wake-session-record-invalid`). The old session moves to the entry's
+  `retired` list in the wake sessions record, with its store; its transcript
+  stays in that store. Nothing is deleted. It never widens what the soul
+  reaches, so a soul's binding is enough for its own soul; the owner passes
+  the owner gate. With `global` it is one prompt for both. With no recorded
+  session it changes nothing and writes no receipt; otherwise it writes a
+  `tool-home` receipt with operation `fresh-session` and the store.
 - An unroutable harness is `tool-home-unsupported`; an unknown soul is
   `soul-not-found`.
 
