@@ -132,6 +132,70 @@ test('the SOP policy state is never a file tool target, even with confinement of
   assert.equal(confinementCheck(envelope(path.join(home, 'policy-link', 'state.json')), opts).decision, 'deny');
   assert.deepEqual(confinementCheck(envelope(path.join(opts.env.AGENT_BOT_STATE_HOME, 'sop-policy-notes')), opts), { decision: 'allow' });
 });
+
+test('owner runtime overrides and their shims stay protected in every confinement mode', async (t) => {
+  const f = fixture(t);
+  const runtimes = path.join(f.soul, '.soul-state', 'runtimes');
+  const overrideRoot = path.join(runtimes, 'overrides');
+  const bin = path.join(overrideRoot, 'bin');
+  mkdirSync(bin, { recursive: true });
+  const record = path.join(overrideRoot, 'node.json');
+  const shim = path.join(bin, 'node');
+  const executable = path.join(f.soul, 'external-bin', 'node');
+  mkdirSync(path.dirname(executable));
+  writeFileSync(record, '{"schemaVersion":1,"executable":"/external/node"}\n');
+  writeFileSync(executable, '#!/bin/sh\n', { mode: 0o700 });
+  symlinkSync(executable, shim);
+  const alias = path.join(f.soul, 'override-alias');
+  symlinkSync(overrideRoot, alias);
+  const otherSoul = path.join(f.home, 'migrated-souls', 'other.soul');
+  const otherOverrideRoot = path.join(otherSoul, '.soul-state', 'runtimes', 'overrides');
+  const otherBin = path.join(otherOverrideRoot, 'bin');
+  mkdirSync(otherBin, { recursive: true });
+  const otherId = 'agent_44444444-4444-4444-8444-444444444444';
+  writeFileSync(path.join(otherSoul, '.soul-state', 'agent-id'), otherId);
+  upsertSoul({ id: otherId, name: 'other', status: 'active', spacePath: path.join(f.home, 'other-space') }, f.opts);
+  registerSoulDir(otherId, otherSoul, f.opts);
+  const otherRecord = path.join(otherOverrideRoot, 'node.json');
+  const otherShim = path.join(otherBin, 'node');
+  writeFileSync(otherRecord, '{"schemaVersion":1,"executable":"/external/node"}\n');
+  symlinkSync(executable, otherShim);
+  const otherAlias = path.join(f.home, 'other-override-alias');
+  symlinkSync(otherOverrideRoot, otherAlias);
+  const protectedTargets = [
+    overrideRoot, record, bin, shim,
+    runtimes, path.join(f.soul, '.soul-state'),
+    path.join(alias, 'node.json'), path.join(alias, 'bin', 'node'),
+    otherOverrideRoot, otherRecord, otherBin, otherShim,
+    path.join(otherSoul, '.soul-state', 'runtimes'), path.join(otherSoul, '.soul-state'),
+    path.join(otherAlias, 'node.json'), path.join(otherAlias, 'bin', 'node'),
+  ];
+  const sibling = path.join(runtimes, 'overrides-backup', 'note.json');
+  const managedCache = path.join(runtimes, 'node', 'npm-cache', 'index');
+  const shell = normalizeEnvelope({ dialectKey: 'claude', event: 'pre-tool-use', payload: {
+    cwd: f.home, tool_name: 'Bash', tool_input: { command: `printf changed > '${record}'` },
+  } });
+  const siblingShell = normalizeEnvelope({ dialectKey: 'claude', event: 'pre-tool-use', payload: {
+    cwd: f.home, tool_name: 'Bash', tool_input: { command: `printf safe > '${sibling}'` },
+  } });
+
+  for (const mode of ['warn', 'off', 'deny']) {
+    await setConfinementMode(id, mode, { ...f.opts, gate: owner });
+    for (const target of protectedTargets) {
+      assert.equal(checkWrite(id, target, f.opts).inside, false, `${mode}: ${target} is not soul territory`);
+      assert.equal(confinementCheck(f.envelope(target), f.opts).decision, 'deny', `${mode}: ${target} is blocked`);
+    }
+    for (const target of [sibling, managedCache]) {
+      assert.equal(checkWrite(id, target, f.opts).inside, true, `${mode}: ${target} remains soul territory`);
+      assert.equal(confinementCheck(f.envelope(target), f.opts).decision, 'allow', `${mode}: ${target} remains writable`);
+    }
+    assert.equal(checkWrite(id, executable, f.opts).inside, true, `${mode}: selected external executable remains ordinary soul territory`);
+    assert.equal(confinementCheck(f.envelope(executable), f.opts).decision, 'allow', `${mode}: selected external executable remains writable`);
+    assert.equal(confinementCheck(f.envelope(record, 'Read'), f.opts).decision, 'allow', `${mode}: read-only inspection is unchanged`);
+    assert.equal(confinementCheck(shell, f.opts).decision, 'deny', `${mode}: a direct shell write naming owner state is refused`);
+    assert.equal(confinementCheck(siblingShell, f.opts).decision, 'allow', `${mode}: a direct shell write to the prefix sibling is not misclassified`);
+  }
+});
 test('bound checkout must match the recorded worktree when present', (t) => {
   const { home, opts } = fixture(t);
   const bound = path.join(home, 'bound'); mkdirSync(bound);

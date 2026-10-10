@@ -158,10 +158,46 @@ function sopPolicyState(target, opts) {
   return contains(dir, target) || contains(canonicalPath(dir), target);
 }
 
+// Per-soul executable selections are owner state, even though their durable
+// records and launch shims live inside the soul's runtime tree. Protect the
+// subtree and its ancestors from supported file tools, including path aliases.
+function runtimeOverrideState(targetPath, agentId, opts) {
+  const soul = realpathSync(soulDirectory(agentId, opts));
+  const raw = path.join(soul, '.soul-state', 'runtimes', 'overrides');
+  const canonical = canonicalPath(raw, opts.cwd);
+  const targets = [
+    path.resolve(opts.cwd ?? process.cwd(), targetPath),
+    path.join(canonicalPath(path.dirname(targetPath), opts.cwd), path.basename(targetPath)),
+    canonicalPath(targetPath, opts.cwd),
+  ];
+  const roots = [raw, canonical];
+  const ancestors = roots.flatMap((root) => [path.dirname(root), path.dirname(path.dirname(root))]);
+  if (roots.some((root) => targets.some((target) => contains(root, target)))
+    || ancestors.some((ancestor) => targets.includes(ancestor))) return true;
+
+  // Overrides are owner state for every soul, including registered souls
+  // moved outside the configured souls root. Match the reserved path shape
+  // directly rather than scanning the population on every tool call.
+  for (const target of targets) {
+    const parts = path.resolve(target).split(path.sep).filter(Boolean);
+    for (let index = 0; index < parts.length; index += 1) {
+      if (parts[index] !== '.soul-state') continue;
+      if (parts[index + 1] === 'runtimes'
+        && (parts[index + 2] === 'overrides' || index + 2 === parts.length)) return true;
+      if (index + 1 === parts.length) {
+        try { lstatSync(path.join(target, 'runtimes', 'overrides')); return true; }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+      }
+    }
+  }
+  return false;
+}
+
 export function checkWrite(agentId, targetPath, opts = {}) {
   const roots = allowedRoots(agentId, opts);
   const target = canonicalPath(targetPath, opts.cwd);
-  if (libraryMetadata(target, opts) || sopPolicyState(target, opts) || isBindingFile(target, opts.env ?? process.env)) return { inside: false, path: target, roots };
+  if (libraryMetadata(target, opts) || sopPolicyState(target, opts) || runtimeOverrideState(targetPath, agentId, opts)
+    || isBindingFile(target, opts.env ?? process.env)) return { inside: false, path: target, roots };
   // The soul's key store is inside its directory but never its territory.
   if (contains(path.join(roots[0], '.soul-state', 'credentials'), target)) return { inside: false, path: target, roots };
   return { inside: roots.some((root) => contains(root, target)), path: target, roots };
@@ -219,6 +255,9 @@ export function credentialGuard(envelope, agentId, opts = {}) {
   if (command) {
     if (SECRET_CLI.test(command)) return deny('a secret-store CLI (security, pass-cli)');
     if (command.includes('.soul-state/credentials')) return deny('a soul key store');
+    if (/(?:^|[/'"\s])(?:[^'"\s;|&<>]*\/)?\.soul-state\/runtimes\/overrides(?:\/|(?=$|[\s"'=;|&<>]))/.test(command.replaceAll('\\', '/'))) {
+      return { decision: 'deny', reason: 'runtime override state is owner-managed; use agent-bot soul runtimes override' };
+    }
     if (command.includes('private-key.pem')) return deny('an App private key');
     if (command.includes('vouch-key.pem')) return deny("the daemon's signing key");
     if (/(?:^|[/\s'"])(?:keyd|owner)\.sock\b|agent-bot\/keyd(?:\/|\b)/.test(command)) return deny('agent-bot-keyd');
@@ -264,6 +303,11 @@ export function confinementCheck(envelope, opts = {}) {
         return { decision: 'deny', reason: "the SOP policy state is the owner's; use agent-bot sop policy" };
       }
     } catch { return { decision: 'deny', reason: 'SOP policy path check failed; write refused' }; }
+    try {
+      if (envelope.file_path && runtimeOverrideState(envelope.file_path, agentId, { ...opts, cwd: envelope.cwd ?? opts.cwd })) {
+        return { decision: 'deny', reason: 'runtime override state is owner-managed; use agent-bot soul runtimes override' };
+      }
+    } catch { return { decision: 'deny', reason: 'runtime override state check failed; write refused' }; }
     mode = confinementMode(agentId, opts);
     if (mode === 'off') return allow;
     if (!envelope.file_path) throw new Error('file tool has no path');

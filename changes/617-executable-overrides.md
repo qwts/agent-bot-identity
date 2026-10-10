@@ -1,0 +1,3 @@
+- `agent-bot soul runtimes override` lets an owner select or clear a host-local executable for one soul without exposing sibling tools or treating the path as a managed pin (#617).
+- Correct the runtime audit's stale host-only resume description to reflect the tool-home and recorded-session-store routing merged in #818; keep explicit fresh starts tracked separately in #827.
+- Recover malformed override directories with `--clear` without following symlinks, and identify the affected soul in unsafe override-store diagnostics.

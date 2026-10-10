@@ -22,7 +22,7 @@ import { npmHarnessInstalls } from './soul-home.mjs';
 import { inspectSoulSpace, spaceMigrateCommand } from './soul-memory.mjs';
 import { STEP_FINAL_STATUSES } from './soul-migration-journal.mjs';
 import { secretSetCommand } from './soul-providers.mjs';
-import { inspectSoulRuntimes, runtimeLaunchEnv } from './soul-runtimes.mjs';
+import { inspectRuntimeOverrides, inspectSoulRuntimes, runtimeLaunchEnv } from './soul-runtimes.mjs';
 import { inspectSoulSecrets } from './soul-secrets.mjs';
 import { adoptCommand, adoptStepId } from './soul-tool-homes.mjs';
 import { soulsHome } from './souls-root.mjs';
@@ -176,7 +176,7 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
     components: [],
     classification: classificationContract(),
     harnesses: { selected: null, declared: [], installed: [], launchable: null },
-    runtimes: { declared: {}, installed: [], missing: [], unsupported: [] },
+    runtimes: { declared: {}, installed: [], missing: [], unsupported: [], overrides: [] },
     providers: { declared: [], secrets: [], invalid: [] },
     launch: { supported: null, lane: null, cwd: null, routing: { HOME: 'host', PATH: 'host', TMPDIR: 'host', toolHome: null, runtimes: {}, env: [] }, limitations: [] },
     readiness: { ready: false, problems: [] },
@@ -477,9 +477,25 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
     }
   }
   if (provisioned) {
-    const routed = runtimeLaunchEnv(provisioned, { env, harness: selected, node: process.execPath });
+    const overrideState = inspectRuntimeOverrides(root, { agentId: soul.id, platform: options.platform ?? process.platform });
+    result.runtimes.overrides = overrideState.rows;
+    for (const row of overrideState.errors) problem(row.code, 'error', 'runtimes', row.reason, row.action);
+    const selectedRuntimes = new Set(overrideState.rows.filter((entry) => entry.status === 'selected').map((entry) => entry.runtime).filter(Boolean));
+    const runtimeProblem = (message, name) => message.startsWith(`${name} `) || message.startsWith(`${name}:`);
+    for (const row of overrideState.rows.filter((entry) => entry.status === 'selected' && entry.runtime)) {
+      result.readiness.problems = result.readiness.problems.filter((entry) => !(entry.component === 'runtimes'
+        && ['runtime-missing', 'runtime-unsupported-platform'].includes(entry.code) && runtimeProblem(entry.message, row.runtime)));
+      problem('runtime-override-unverified', 'warning', 'runtimes', `${row.runtime} launches use the selected external ${row.name} executable; it is not verified by the managed runtime pins.`, `agent-bot soul runtimes override ${soul.id} ${row.name} --clear`);
+    }
+    const uv = provisioned.runtimes.find((entry) => entry.name === 'uv');
+    if (uv && (selectedRuntimes.has('uv') || (uv.requiredBy.length > 0 && uv.requiredBy.every((name) => selectedRuntimes.has(name))))) {
+      result.readiness.problems = result.readiness.problems.filter((entry) => !(entry.component === 'runtimes'
+        && ['runtime-missing', 'runtime-unsupported-platform'].includes(entry.code) && runtimeProblem(entry.message, 'uv')));
+    }
+    const routed = runtimeLaunchEnv(provisioned, { env, harness: selected, node: process.execPath,
+      overrides: overrideState.overrides, overrideErrors: overrideState.errors });
     result.launch.routing.runtimes = routed.routing;
-    result.launch.routing.env = [...new Set([...result.launch.routing.env, ...Object.keys(routed.env).filter((name) => name !== 'PATH')])].sort();
+    result.launch.routing.env = [...new Set([...result.launch.routing.env, ...Object.keys(routed.env).filter((name) => name !== 'PATH' && routed.env[name] !== undefined)])].sort();
     result.launch.routing.PATH = Object.values(routed.routing).some((entry) => entry.source === 'soul' || entry.source === 'override') ? 'soul-runtimes'
       : routed.env.PATH ? 'host-bundled' : 'host';
   }
@@ -542,6 +558,7 @@ export function formatSoulEnvironment(result) {
     `harnesses installed: ${result.harnesses.installed.map((h) => `${h.name}@${h.version ?? '?'} (${h.location})`).join(', ') || '-'}`,
     `runtimes declared: ${Object.keys(result.runtimes.declared).join(', ') || '-'}`,
     `runtimes installed: ${result.runtimes.installed.map((r) => `${r.name}@${r.version}`).join(', ') || '-'}`,
+    `runtime overrides: ${result.runtimes.overrides.map((r) => `${r.name}=${cleanLine(r.executable ?? r.status)} (${r.verification})`).join(', ') || '-'}`,
     `providers: ${result.providers.declared.map((p) => `${p.harness}=${p.id} (${p.status})`).join(', ') || '-'}`,
     `secrets: ${result.providers.secrets.map((s) => `${s.name} ${s.status} (${s.store})`).join(', ') || '-'}`,
     `migration: ${result.migration.status}${result.migration.steps.length ? ` (${result.migration.steps.map((s) => s.id).join(', ')})` : ''}`];

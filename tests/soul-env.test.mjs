@@ -152,7 +152,7 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
     installed: [{ name: 'codex', kind: 'npm', package: '@agentclientprotocol/codex-acp', version: '2.1.1', location: '.soul-state/home',
       bin: path.join(f.dir, '.soul-state', 'home', 'node_modules', '.bin', 'codex-acp'), status: 'ok' }] });
   assert.deepEqual(result.runtimes, { declared: { node: '24' }, installed: [],
-    missing: [{ name: 'node', version: NODE_PIN, declared: '24', requiredBy: [], reason: 'not provisioned' }], unsupported: [] });
+    missing: [{ name: 'node', version: NODE_PIN, declared: '24', requiredBy: [], reason: 'not provisioned' }], unsupported: [], overrides: [] });
   assert.deepEqual(result.providers, { declared: [], secrets: [], invalid: [] });
   assert.equal(result.launch.supported, true);
   assert.equal(result.launch.lane, 'acp');
@@ -175,6 +175,59 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
   assert.deepEqual(result.errors, []);
   assert.deepEqual(readSoulEnvironment('billy', f.options), result, 'a census name resolves like an Agent ID');
   assert.deepEqual(readSoulEnvironment('Billy - Starter', f.options), result, 'so does the display name');
+});
+
+test('the read-only environment descriptor identifies an external override without treating it as a managed pin', (t) => {
+  const f = fixture(t);
+  const executable = path.join(f.home, 'external-tools', 'node');
+  put(executable, '#!/bin/sh\nexit 0\n', 0o755);
+  const canonical = realpathSync(executable);
+  const overrideDir = path.join(f.dir, '.soul-state', 'runtimes', 'overrides');
+  put(path.join(overrideDir, 'node.json'), `${JSON.stringify({ schemaVersion: 1, executable: canonical })}\n`, 0o600);
+  const before = snapshot(f.home);
+  const result = readSoulEnvironment(ID, f.options);
+  assert.deepEqual(snapshot(f.home), before, 'the read-only descriptor does not create runtime shim state');
+  assert.deepEqual(result.runtimes.overrides, [{ name: 'node', runtime: 'node', status: 'selected', executable: canonical,
+    verification: 'unverified-external', code: null, action: null }]);
+  assert.equal(result.runtimes.missing[0].name, 'node', 'managed installation status remains visible');
+  assert.equal(result.launch.routing.PATH, 'soul-runtimes');
+  assert.deepEqual(result.launch.routing.runtimes.node, { source: 'override', version: null,
+    bin: path.join(f.dir, '.soul-state', 'runtimes', 'overrides', 'bin'), executable: canonical, verification: 'unverified-external' });
+  assert.ok(result.readiness.problems.some((entry) => entry.code === 'runtime-override-unverified' && /not verified by the managed runtime pins/.test(entry.message)));
+  assert.ok(!result.readiness.problems.some((entry) => entry.code === 'runtime-missing'), 'an active override prevents a false next-launch-install warning');
+});
+
+test('a Python override keeps managed status visible without claiming unused implicit uv work', (t) => {
+  const f = fixture(t);
+  const manifest = JSON.parse(readFileSync(path.join(f.dir, 'soul.json'), 'utf8'));
+  manifest.runtimes = { python: '3.12' };
+  writeFileSync(path.join(f.dir, 'soul.json'), JSON.stringify(manifest));
+  const executable = path.join(f.home, 'external-python');
+  put(executable, '#!/bin/sh\nexit 0\n', 0o755);
+  const overrideDir = path.join(f.dir, '.soul-state', 'runtimes', 'overrides');
+  put(path.join(overrideDir, 'python3.json'), JSON.stringify({ schemaVersion: 1, executable: realpathSync(executable) }), 0o600);
+  const before = snapshot(f.home);
+  const result = readSoulEnvironment(ID, f.options);
+  assert.deepEqual(snapshot(f.home), before);
+  assert.ok(result.runtimes.missing.some((entry) => entry.name === 'python'));
+  assert.ok(result.runtimes.missing.some((entry) => entry.name === 'uv'), 'managed absence remains visible');
+  assert.ok(!result.readiness.problems.some((entry) => entry.code === 'runtime-missing' && entry.message.startsWith('python ')));
+  assert.ok(!result.readiness.problems.some((entry) => entry.code === 'runtime-missing' && entry.message.startsWith('uv ')), 'unused implicit uv is not claimed as pending work');
+  assert.ok(result.readiness.problems.some((entry) => entry.code === 'runtime-override-unverified'));
+});
+
+test('a valid external runtime route clears only its managed unsupported launch error', (t) => {
+  const f = fixture(t);
+  const manifest = JSON.parse(readFileSync(path.join(f.dir, 'soul.json'), 'utf8'));
+  manifest.runtimes = { node: { version: '24.21.0', sources: { 'linux-x64': { url: 'https://example.test/node.tgz', sha256: 'a'.repeat(64) } } } };
+  writeFileSync(path.join(f.dir, 'soul.json'), JSON.stringify(manifest));
+  const executable = path.join(f.home, 'external-node');
+  put(executable, '#!/bin/sh\nexit 0\n', 0o755);
+  put(path.join(f.dir, '.soul-state', 'runtimes', 'overrides', 'node.json'), JSON.stringify({ schemaVersion: 1, executable: realpathSync(executable) }), 0o600);
+  const result = readSoulEnvironment(ID, f.options);
+  assert.ok(result.runtimes.unsupported.some((entry) => entry.name === 'node'), 'the managed catalog limitation remains visible');
+  assert.ok(!result.readiness.problems.some((entry) => entry.code === 'runtime-unsupported-platform' && entry.component === 'runtimes' && entry.message.startsWith('node:')));
+  assert.ok(result.readiness.problems.some((entry) => entry.code === 'runtime-override-unverified'));
 });
 
 test('dream capabilities describe supported interfaces even when no daemon is configured', (t) => {
@@ -201,7 +254,7 @@ test('a fresh census row gains no directory, link or registry entry from a read'
   assert.equal(component(result, 'memory').contained, false);
   assert.deepEqual(result.migration, { status: 'none', journal: '.soul-state/migration.json', steps: [] });
   assert.deepEqual(result.harnesses, { selected: 'codex', declared: [], installed: [], launchable: false });
-  assert.deepEqual(result.runtimes, { declared: {}, installed: [], missing: [], unsupported: [] });
+  assert.deepEqual(result.runtimes, { declared: {}, installed: [], missing: [], unsupported: [], overrides: [] });
   assert.deepEqual(result.readiness.problems.map((p) => [p.code, p.severity]), [['home-missing', 'warning']]);
   assert.equal(result.readiness.ready, true, 'a soul that has not launched yet is not broken');
   assert.deepEqual(result.identity.revision, null);

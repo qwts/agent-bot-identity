@@ -34,6 +34,12 @@ the binding names the soul whose mode applies.
 The soul's key store, `<soul>/.soul-state/credentials/`, is never territory
 either, although it sits inside the soul directory.
 
+Owner-managed runtime override records and launch shims under
+`<soul>/.soul-state/runtimes/overrides/` are also protected from recognized
+file-write tools in every confinement mode, including `off`. The owner changes
+them through `agent-bot soul runtimes override`; direct shell commands naming
+that state are refused as well.
+
 ## Credentials stay behind the daemon
 
 A soul gets GitHub tokens from the daemon and the credential helper, never
@@ -107,12 +113,12 @@ and Devin Desktop's legacy `pre_write_code` path. For dialects exposing
 `pre-file-write`. Unsupported or missing paths cannot be evaluated; in warn
 they allow, and in explicit deny they refuse recognized file tools.
 
-Apart from the credential guard above, shell commands, shell redirections,
-arbitrary patch commands, MCP tools, unknown tool names and reads are not
-covered. Shell write reporting is a
-follow-up; this change does not parse arbitrary commands. Hook bypasses and
-filesystem races remain possible. The log and mode settings are cooperative
-account-local files, not an OS security boundary.
+Apart from the credential and literal owner-state path guards above, shell
+commands, shell redirections, arbitrary patch commands, MCP tools, unknown
+tool names and reads are not covered. Shell write reporting is a follow-up;
+this change does not parse arbitrary commands. A script or obfuscated command
+can bypass the hook, and filesystem races remain possible. These cooperative
+account-local checks are not an OS security boundary.
 
 The daemon already uses harness OS sandboxes on resume wake through
 `wake-resume.mjs`: Codex uses `sandbox_mode`, Devin uses `--sandbox` for workspace

@@ -411,6 +411,27 @@ test('npm runs with the soul\'s own node and npm cache when runtimes.node is pro
   assert.equal(seen[1].env.LANG, 'C', 'the child boundary\'s names are kept underneath');
   for (const name of ['KEEP', 'GITHUB_TOKEN', 'AGENT_BOT_DAEMON_STATE_PATH']) assert.equal(seen[1].env[name], undefined, `npm never sees ${name} (#785)`);
   assert.equal(seen[1].env.AGENT_BOT_NPM, npm, 'the host npm override cannot replace the declared distribution');
+
+  // A host-local node selection uses its one-name shim for npm's Node process.
+  const externalDir = path.join(root, 'external-node');
+  const externalNode = path.join(externalDir, 'node');
+  mkdirSync(externalDir, { recursive: true });
+  writeFileSync(externalNode, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const overrides = path.join(soulDir, '.soul-state', 'runtimes', 'overrides');
+  mkdirSync(overrides, { recursive: true });
+  writeFileSync(path.join(overrides, 'node.json'), JSON.stringify({ schemaVersion: 1, executable: realpathSync(externalNode) }));
+  await installSoulHarnesses(agentId, source, { ...options, env: { PATH: '/usr/bin' }, harness: 'claude', install });
+  const shim = path.join(soulDir, '.soul-state', 'runtimes', 'overrides', 'bin');
+  assert.equal(seen[2].node, path.join(shim, 'node'));
+  assert.equal(seen[2].env.PATH.split(path.delimiter)[0], shim);
+  assert.ok(!seen[2].env.PATH.split(path.delimiter).includes(externalDir), 'the external target directory and its siblings stay out of PATH');
+  assert.equal(seen[2].env.AGENT_BOT_NPM, npm, 'the managed npm CLI can run under the selected Node');
+  const externalNpm = path.join(externalDir, 'npm');
+  writeFileSync(externalNpm, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(path.join(overrides, 'npm.json'), JSON.stringify({ schemaVersion: 1, executable: realpathSync(externalNpm) }));
+  await installSoulHarnesses(agentId, source, { ...options, env: { PATH: '/usr/bin', AGENT_BOT_NPM: '/host/npm-cli.js' }, harness: 'claude', install });
+  assert.deepEqual(npmCommand(seen[3].env, seen[3].node), { command: realpathSync(externalNpm), args: [] });
+  assert.ok(!seen[3].env.PATH.split(path.delimiter).includes(externalDir), 'npm is selected through its own shim, not its parent directory');
 });
 
 for (const managedHome of [false, true]) for (const platform of ['linux-x64', 'win32-x64']) test(`${managedHome ? 'managed home' : 'joined adapter'} provisions declared Node before npm and uses its exact npm CLI on ${platform} (#617)`, async (t) => {
@@ -469,8 +490,44 @@ test('missing declared Node or npm refuses before npm, even with a host override
   writeFileSync(path.join(runtime, 'bin', 'node'), '', { mode: 0o755 });
   writeFileSync(path.join(runtime, INSTALL_STAMP), JSON.stringify(nodeReceipt(version)));
   await assert.rejects(installSoulHarnesses(agentId, source, operation), error => error.code === 'runtime-install-failed' && error.runtime === 'node' && /npm/.test(error.message));
+  const externalNpm = path.join(root, 'external-npm');
+  writeFileSync(externalNpm, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const overrides = path.join(soulDir, '.soul-state', 'runtimes', 'overrides');
+  mkdirSync(overrides, { recursive: true });
+  writeFileSync(path.join(overrides, 'npm.json'), JSON.stringify({ schemaVersion: 1, executable: realpathSync(externalNpm) }));
+  let usedOverride = null;
+  await installSoulHarnesses(agentId, source, { ...operation, install: async (dir, opts) => { usedOverride = opts; fakeBin(dir, 'claude-code-acp'); } });
+  assert.equal(usedOverride.env.AGENT_BOT_NPM, '');
+  assert.equal(usedOverride.env.AGENT_BOT_NPM_EXECUTABLE, realpathSync(externalNpm));
+  assert.equal(usedOverride.node, path.join(runtime, 'bin', 'node'));
   const failure = Object.assign(new Error('archive did not verify'), { code: 'runtime-checksum-mismatch' });
   await assert.rejects(installSoulHarnesses(agentId, source, { ...operation, provisionRuntimes: async () => { throw failure; } }), error => error === failure);
+});
+
+test('missing managed Node can run npm provisioning only when both exact node and npm overrides are selected', async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'soul-npm-paired-overrides-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const options = census(root);
+  const source = pinnedPackage(path.join(root, 'pkg'));
+  const soulDir = path.dirname(path.dirname(soulHomePath(agentId, options)));
+  mkdirSync(soulDir, { recursive: true });
+  writeFileSync(path.join(soulDir, 'soul.json'), JSON.stringify({ runtimes: { node: '24' } }));
+  const runtimeState = path.join(soulDir, '.soul-state', 'runtimes');
+  const overrides = path.join(runtimeState, 'overrides');
+  mkdirSync(overrides, { recursive: true });
+  const node = path.join(root, 'external-node'), npm = path.join(root, 'external-npm');
+  writeFileSync(node, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(npm, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(path.join(overrides, 'node.json'), JSON.stringify({ schemaVersion: 1, executable: realpathSync(node) }));
+  const operation = { ...options, harness: 'claude', env: { PATH: '/host/bin' }, provisionRuntimes: async () => {}, install: async () => assert.fail('node-only override must not use host npm') };
+  await assert.rejects(installSoulHarnesses(agentId, source, operation), (error) => error.code === 'runtime-install-failed'
+    && /npm CLI/.test(error.message) && error.action.includes(`override ${agentId} npm /absolute/path/to/npm`) && !error.action.includes('null'));
+
+  writeFileSync(path.join(overrides, 'npm.json'), JSON.stringify({ schemaVersion: 1, executable: realpathSync(npm) }));
+  let used;
+  await installSoulHarnesses(agentId, source, { ...operation, install: async (dir, opts) => { used = opts; fakeBin(dir, 'claude-code-acp'); } });
+  assert.equal(used.node, path.join(overrides, 'bin', 'node'));
+  assert.equal(used.env.AGENT_BOT_NPM_EXECUTABLE, realpathSync(npm));
 });
 
 test('soulNpmHarnessDirs lists stamped npm installs newest first, then the legacy directory', async (t) => {

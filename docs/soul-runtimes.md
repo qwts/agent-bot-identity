@@ -70,6 +70,8 @@ Owner-visible upgrade and retained-resolution guarantees remain #617.
 ```sh
 agent-bot soul runtimes <agentId|name> [--json]
 agent-bot soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin]
+agent-bot soul runtimes override <agentId|name> <node|npm|npx|go|gofmt|python3|uv|uvx> /absolute/path/to/executable [--json] [--principal-stdin]
+agent-bot soul runtimes override <agentId|name> <node|npm|npx|go|gofmt|python3|uv|uvx> --clear [--json] [--principal-stdin]
 ```
 
 `soul runtimes` is read-only and prints what is declared, resolved and
@@ -95,13 +97,56 @@ instead of starting the harness.
   that version, `null` otherwise.
 - `harnesses[]`: `{ name, kind, package, version, executable, status,
   reason, path, bin, lastError }` for each `harnesses.<name>.install`.
+- `overrides[]`: `{ name, runtime, status, executable, verification, code,
+  action, reason }` for each owner-selected executable. A selected external
+  path is reported as `verification: "unverified-external"`; its bytes and
+  provenance are not covered by the managed archive pins.
 - `invalid[]`: `{ path, message }` for declarations the package refuses.
 - `install` adds `installed[]`, `skipped[]` (already there).
+
+`override` is an owner-gated, host-local selection for one executable name.
+It accepts only an absolute path that resolves to a regular executable with
+execute permission; the canonical real path is recorded. Names are closed to
+`node`, `npm`, `npx`, `go`, `gofmt`, `python3`, `uv`, and `uvx`. `--clear`
+removes one selection, and every set or clear appends a `soul-runtimes`
+receipt. The command does not alter `soul.json` or claim a managed install.
+
+At launch, agent-bot puts one-name symlinks under
+`.soul-state/runtimes/overrides/bin` at the front of `PATH`. It never adds the
+selected executable's parent directory, so selecting `node` does not also
+select a sibling `npm` or `npx`. A node override leaves installed managed
+`npm` and `npx` bins behind its shim; harness bins then precede managed runtime
+bins. A selected `uv` supplies the `uv` command for Python and uv-tool
+provisioning, but does not select `python3` or `uvx`. A Python override makes
+the implicit `uv` runtime unnecessary unless a uv-tool harness is declared;
+uv-tool installs use the selected Python path explicitly and refuse to
+download a substitute. `install` reports selected external executables and
+skips only those exact names; clear a selection before provisioning its
+managed copy. Runtime variables owned by a selected executable are removed
+from the child environment. A declared managed runtime may still show as
+missing in status while its launch route uses the external selection, so
+managed readiness stays honest while pending launch requirements reflect
+usable selections. If a stored path becomes invalid, launch refuses with
+`runtime-override-invalid`, shows the recorded path and names the `--clear`
+command. Overrides are
+unsupported on Windows, where a carried selection can still be cleared.
+They live below `.soul-state/runtimes`, which is
+host-local runtime state and is excluded from export/import.
+
+Override records and their one-name shim directory are owner-managed state.
+Recognized soul file-write tools cannot edit them in any confinement mode,
+including `off`; direct shell commands naming the state are refused too. Set
+or clear selections with the owner-gated command above. This is a cooperative
+hook guardrail: records are not signed, and it does not stop arbitrary code
+running as the same OS user from bypassing the hooks. It adds no OS-level
+custody boundary or different record format/location.
 
 ## Layout
 
 ```
 <soul>/.soul-state/runtimes/
+  overrides/<name>.json   one canonical external executable selection
+  overrides/bin/<name>    one-name launch symlink; no target siblings
   node/24.21.0/            the tarball's tree; bin/node, bin/npm
   node/npm-cache/
   node/last-install.json   { version, status: ok | failed, code, message, at }
@@ -164,22 +209,20 @@ uv-tool marker recovery is not an atomic directory swap.
 
 ## Launch routing
 
-The runtime environment helper routes the soul's installs in this order per
-runtime ([ADR-0322](decisions/ADR-0322-souls-carry-their-runtimes-and-non-npm-harnesses.md)
-decision 4): a supplied override, the soul's install, the node bundled with
-the host (GeniusBar's, for an undeclared node only), then the host PATH. The
-managed daemon turn path supplies the soul environment, but does not wire a
-per-agent override request into this helper. A durable per-soul override CLI,
-exact override executable validation and remaining resume evidence stay in #617; the helper
-argument is not evidence that these user-facing paths exist.
+At launch, an owner-managed per-soul selection takes precedence for that exact
+executable name, then harness bins, managed runtime bins, GeniusBar's bundled
+Node for an undeclared Node, and the host PATH. Selecting `node` does not
+select `npm` or `npx`. The owner CLI and exact executable validation are
+implemented above; a per-launch override request remains deferred and is not
+wired through the daemon. Remaining resume evidence stays in #617.
 The harness installs come before the runtimes on PATH, and a declared
-runtime that is not installed is installed at launch or fails the launch; it
-never falls through to a host copy. Every daemon ACP turn rechecks declared
-runtime readiness before creating an executor, including ACP cold wakes and
-ACP session restoration on `/v1`. The owner-selected `resume <policy>` wake lane
+runtime without a matching valid per-soul override is installed at launch or
+fails the launch; it never falls through to a host copy. Every daemon ACP turn
+rechecks declared runtime readiness before creating an executor, including ACP
+cold wakes and session restoration on `/v1`. The owner-selected `resume <policy>` wake lane
 (`createResumeExecutor`) composes the same runtime and provider env and refuses
-the same way (#707); its tool-home store is not routed yet and stays open in
-#617. Missing selected installations, unsupported declarations,
+the same way (#707). Tool-home routing and recorded session-store checks are
+implemented separately by #818. Missing selected installations, unsupported declarations,
 invalid runtime declarations, an unreadable existing manifest, or a runtime
 lookup error refuse the turn. A surviving install stamp and bin directory do
 not count as ready when the runtime executable is missing or has lost its
@@ -209,12 +252,12 @@ is created. It does not complete the remaining integrity or override contracts.
 | --- | --- | --- |
 | Managed launch | `daemon-launch.mjs` provisions pending runtimes, then calls `acpExecutorFor` | Existing launch tests cover installation refusal; runtime/factory fixtures cover rejection of stale or invalid readiness. |
 | ACP cold wake | `coldTurnExecutor` calls the same `acpExecutorFor` for each turn | Runtime/factory fixtures remove an executable after a successful turn and verify refusal before another executor is created. |
-| Resume wake lane (`resume <policy>`) | `createResumeExecutor` composes the turn env through `runtimeEnvFor`/`providerEnvFor`, then resolves the harness CLI on that PATH (#707) | Fixtures run a declared runtime from the soul and refuse a removed or mismatched one with no run recorded. The tool-home store still uses the host location; the owner's choice is open in #617. |
+| Resume wake lane (`resume <policy>`) | `createResumeExecutor` composes the turn env through `runtimeEnvFor`/`toolHomeEnvFor`/`providerEnvFor`, then resolves the harness CLI on that PATH (#707, #818) | Runtime fixtures refuse a removed or mismatched declared runtime with no run recorded. Separately merged #818 records the host or soul session store and refuses a moved store as `resume-session-store-moved`; `tests/wake-resume.test.mjs` covers recorded and legacy stores and refusal before spawning. An owner who changes a tool home can retire the recorded session with `soul tool-home <harness> soul\|global --soul <agentId\|name> --fresh-session` (#827); the old transcript is kept. |
 | Native `/v1` turns, including resumed sessions | `agent-daemon.mjs` calls the same factory before the ACP engine loads or creates a session | The same readiness check applies before session restoration or spawning. |
 | Declared environment | `soulRuntimeEnv` inspects the current manifest and selected installation | Runtime/factory fixtures cover missing/unsupported declarations, invalid manifests, missing selected harnesses and missing runtime executables; undeclared runtimes retain the host routes. |
 | npm provisioning | Both managed homes and joined adapters prepare declared runtimes through `soulInstallEnv` before npm | Fixtures verify the selected distribution's exact Node and npm CLI, reject a host npm override, and refuse missing files or failed provisioning before npm. Undeclared Node retains the host route. |
 | Archive and Python integrity | `fetchArchive`, installation stamps, uv installers | Archive checksum refusal exists; complete dependency lock/hash provenance and installed-byte verification remain open. |
-| Overrides | Helper argument in `runtimeLaunchEnv` | Owner-managed override interface, exact executable validation and policy precedence remain open. |
+| Per-soul executable overrides | `soulRuntimesCommand` owner-gates set/clear; `inspectRuntimeOverrides` and `ensureOverrideShims` feed `runtimeLaunchEnv` | Set/clear selects one exact executable name, revalidates its absolute executable path at use, and routes it through a one-name shim ahead of managed and host paths without inferring sibling tools. Managed companion bins remain available when installed. External paths are marked `unverified-external`; overrides are unsupported on Windows. Per-launch wire overrides remain deferred. |
 | Catalog and transfer | Inspection resolves against the supplied catalog | Retained resolution and owner-visible upgrade semantics remain open. |
 | Migration / platforms | #583 lifecycle paths; deterministic runtime fixtures; `whichOnPath` resolves `name.exe` on Windows for every turn lane, the sign-in probe and harness defaults | Migration evidence is tracked separately. Injected-platform fixtures do not establish live Windows support. npm `.cmd` shims are not executed, because `spawn()` refuses them without a shell, so a harness installed only as a shim is reported missing. |
 
@@ -244,13 +287,17 @@ once `node_modules/.bin/<adapter>` exists, so an interrupted one is a
 `soul env clean` candidate and a finished one never is; when two installs of
 one version race, the first to land stands. Both joined adapters and managed
 homes provision declared runtimes before invoking npm. With `runtimes.node`,
-the selected distribution supplies Node and its bundled npm CLI
+an exact owner-selected `node` or `npm` is used for that executable only;
+otherwise the managed Node distribution supplies Node and its bundled npm CLI
 (`lib/node_modules/npm/bin/npm-cli.js` on Unix, `node_modules/npm/bin/npm-cli.js`
-on Windows); a host `AGENT_BOT_NPM` cannot override it. Missing files or failed
-provisioning refuse installation. Without a Node declaration, the host route
-and its npm override remain available. The soul's npm cache stays contained.
+on Windows). A host `AGENT_BOT_NPM` cannot replace this declared-runtime
+route, and selecting `node` never selects `npm` or `npx` by implication.
+Missing files or failed provisioning refuse installation. Without a Node
+declaration, the host route and its npm override remain available. The soul's
+npm cache stays contained.
 Windows layout fixtures verify selection; they do not establish live Windows
-execution. Installed-byte integrity and owner-managed overrides remain in #617.
+execution. Installed-byte integrity and deferred per-launch override requests
+remain in #617.
 
 A launch resolves the adapter in order: the checkout's own `node_modules`,
 the runtimes installs newest version first, then the legacy

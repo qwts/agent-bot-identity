@@ -12,7 +12,7 @@ import { upsertSoul } from '../agent-population.mjs';
 import { initAgentSpace } from '../agent-space.mjs';
 import { RUNTIME_CATALOG, RUNTIME_NAMES, RUNTIME_PLATFORMS, SHA256_HEX, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, resolveCatalogPin, versionMatches } from '../runtime-catalog.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, validateRuntimesDeclaration, validateSoulPackage } from '../soul-package.mjs';
-import { INSTALL_STAMP, RUNTIME_ERROR_CODES, downloadCacheDir, fetchArchive, inspectSoulRuntimes, installSoulRuntimes, pendingSoulRuntimes, runtimeLaunchEnv, soulRuntimeEnv, soulRuntimesCommand } from '../soul-runtimes.mjs';
+import { INSTALL_STAMP, RUNTIME_ERROR_CODES, downloadCacheDir, fetchArchive, inspectRuntimeOverrides, inspectSoulRuntimes, installSoulRuntimes, pendingSoulRuntimes, runtimeLaunchEnv, soulRuntimeEnv, soulRuntimesCommand } from '../soul-runtimes.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
 import { createLaunchHandler } from '../daemon-launch.mjs';
 import { acpExecutorFor, coldTurnExecutor } from '../wake-plane.mjs';
@@ -337,7 +337,7 @@ test('a failed install keeps the previous one and records its coded error; check
   const invalid = await installSoulRuntimes(f.dir, { ...f.options, fetchFn: d.fetchFn, runImpl: d.runImpl }).then(() => null, (e) => e);
   assert.equal(invalid.code, 'runtime-install-failed');
   assert.match(invalid.message, /runtimes\.node must be a version or range/);
-  assert.deepEqual(RUNTIME_ERROR_CODES, ['runtime-download-failed', 'runtime-checksum-mismatch', 'runtime-unsupported-platform', 'runtime-install-failed']);
+  assert.deepEqual(RUNTIME_ERROR_CODES, ['runtime-download-failed', 'runtime-checksum-mismatch', 'runtime-unsupported-platform', 'runtime-install-failed', 'runtime-override-invalid', 'runtime-override-unsupported-platform']);
   // A soul without .soul-state cannot hold an install.
   rmSync(path.join(f.dir, '.soul-state'), { recursive: true });
   await assert.rejects(installSoulRuntimes(f.dir, { ...f.options, fetchFn: d.fetchFn, runImpl: d.runImpl }), (e) => e.code === 'soul-state-missing');
@@ -454,11 +454,12 @@ test('the launch env follows the override order: per-agent option, the soul inst
   // A per-agent override wins and is used as-is, without the soul's env for it.
   const own = mkdtempSync(path.join(f.home, 'my-go-'));
   put(path.join(own, 'bin', 'go'), '');
-  const overridden = runtimeLaunchEnv(state, { env: { PATH: '/usr/bin' }, overrides: { go: path.join(own, 'bin', 'go'), node: '/relative/no' }, node: '/host/node/bin/node' });
-  assert.deepEqual(overridden.routing.go, { source: 'override', version: null, bin: path.join(own, 'bin') });
-  assert.equal(overridden.routing.node.source, 'soul', 'a relative override is ignored');
-  assert.ok(!('GOROOT' in overridden.env));
-  assert.equal(overridden.env.PATH.split(path.delimiter)[1], path.join(own, 'bin'));
+  const externalGo = realpathSync(path.join(own, 'bin', 'go'));
+  const overridden = runtimeLaunchEnv(state, { env: { PATH: '/usr/bin' }, overrides: { go: { executable: externalGo }, npm: { executable: '/opt/external/npm' } }, node: '/host/node/bin/node' });
+  assert.deepEqual(overridden.routing.go, { source: 'override', version: null, bin: path.join(f.runtimes, 'overrides', 'bin'), executable: externalGo, verification: 'unverified-external' });
+  assert.deepEqual(overridden.routing['executable:npm'], { source: 'override', version: null, bin: path.join(f.runtimes, 'overrides', 'bin'), executable: '/opt/external/npm', verification: 'unverified-external' });
+  assert.equal(overridden.env.GOROOT, undefined, 'runtime variables are omitted for the external tool');
+  assert.equal(overridden.env.PATH.split(path.delimiter)[0], path.join(f.runtimes, 'overrides', 'bin'));
   // Undeclared: the host's bundled node before PATH; python and go from PATH.
   f.writeManifest((m) => { delete m.runtimes; });
   const host = runtimeLaunchEnv(inspectSoulRuntimes(f.dir, f.options), { env: { PATH: '/usr/bin' }, node: '/Applications/GeniusBar.app/Contents/node' });
@@ -647,9 +648,10 @@ test('soul runtimes and soul runtimes install report by Agent ID or name with --
   const write = (value) => { out += value; };
   const status = await soulRuntimesCommand(['billy', '--json'], { ...options, write });
   assert.deepEqual(JSON.parse(out), status);
-  assert.deepEqual(Object.keys(status), ['schemaVersion', 'agentId', 'soulDir', 'platform', 'root', 'cache', 'runtimes', 'harnesses', 'invalid', 'ready']);
+  assert.deepEqual(Object.keys(status), ['schemaVersion', 'agentId', 'soulDir', 'platform', 'root', 'cache', 'runtimes', 'harnesses', 'overrides', 'invalid', 'ready']);
   assert.deepEqual(status.runtimes, [{ name: 'node', declared: '24', requiredBy: [], version: NODE.version, source: 'catalog', status: 'missing', reason: null, path: null, bin: null, lastError: null, via: null }]);
   assert.deepEqual([status.agentId, status.soulDir, status.platform, status.root, status.cache, status.ready], [ID, f.dir, PLATFORM, f.runtimes, f.cache, false]);
+  assert.deepEqual(status.overrides, []);
   assert.deepEqual(gates, [], 'reading is not an owner action');
   assert.deepEqual(pendingSoulRuntimes(ID, options), ['node']);
   out = '';
@@ -686,6 +688,237 @@ test('soul runtimes and soul runtimes install report by Agent ID or name with --
   assert.ok(RUNTIME_NAMES.every((name) => help.stdout.includes(name)));
 });
 
+test('owner-managed executable overrides use one-name shims, satisfy only the selected runtime, and fail closed when stale', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { node: '24' } }, census: true });
+  const options = { ...f.options, file: f.env.AGENT_BOT_POPULATION_PATH, cwd: f.home };
+  const gates = [], output = [];
+  const gate = async (action, { principal }) => { gates.push([action, principal]); };
+  const write = (value) => output.push(value);
+  const external = path.join(f.home, 'external-node');
+  const externalNode = path.join(external, 'node'), externalNpm = path.join(external, 'npm');
+  put(externalNode, '#!/bin/sh\nexit 0\n');
+  put(externalNpm, '#!/bin/sh\nexit 0\n');
+  put(path.join(external, 'npx'), '#!/bin/sh\nexit 0\n');
+
+  const setNode = await soulRuntimesCommand(['override', ID, 'node', externalNode, '--json', '--principal-stdin'], {
+    ...options, gate, write, readStdin: () => '{"principalId":"p1"}',
+  });
+  assert.deepEqual(setNode, { schemaVersion: 1, agentId: ID, name: 'node', status: 'selected', executable: realpathSync(externalNode), verification: 'unverified-external' });
+  const shim = path.join(f.runtimes, 'overrides', 'bin');
+  assert.deepEqual(readdirSync(shim), ['node'], 'the external directory’s npm and npx siblings never enter PATH');
+  assert.equal(realpathSync(path.join(shim, 'node')), realpathSync(externalNode));
+  const provisioned = await installSoulRuntimes(f.dir, { ...f.options, fetchFn: async () => assert.fail('an active runtime override prevents managed installation'), runImpl: async () => assert.fail('an active runtime override prevents managed installation') });
+  assert.deepEqual(provisioned.installed, []);
+  assert.deepEqual(provisioned.skipped, ['override:node']);
+  assert.deepEqual(pendingSoulRuntimes(ID, options), [], 'a selected node override satisfies only the matching runtime');
+  const launch = soulRuntimeEnv(ID, { ...options, env: { PATH: '/host/bin', npm_config_cache: '/host/npm-cache', NODE_PATH: '/host/node-modules' } });
+  assert.equal(launch.PATH.split(path.delimiter)[0], shim);
+  assert.ok(!launch.PATH.split(path.delimiter).includes(external));
+  assert.equal(launch.npm_config_cache, undefined);
+  assert.equal(launch.NODE_PATH, undefined);
+  const unexpected = path.join(shim, 'claude');
+  symlinkSync(externalNode, unexpected);
+  assert.throws(() => soulRuntimeEnv(ID, { ...options, env: { PATH: '/host/bin' } }), (error) => error.code === 'runtime-override-invalid' && /remove that host-local entry/.test(error.message));
+  rmSync(unexpected);
+  rmSync(shim, { recursive: true });
+  put(shim, 'unexpected regular file');
+  assert.throws(() => soulRuntimeEnv(ID, options), (error) => error.code === 'runtime-override-invalid', 'a non-directory shim refuses with the stable code');
+  rmSync(shim);
+  symlinkSync(path.join(f.home, 'missing-shim-target'), shim);
+  assert.throws(() => soulRuntimeEnv(ID, options), (error) => error.code === 'runtime-override-invalid', 'a dangling shim-directory link refuses with the stable code');
+  rmSync(shim);
+  soulRuntimeEnv(ID, options);
+
+  await soulRuntimesCommand(['override', ID, 'npm', externalNpm, '--json'], { ...options, gate, write });
+  assert.deepEqual(readdirSync(shim).sort(), ['node', 'npm']);
+  let status = inspectRuntimeOverrides(f.dir, { agentId: ID, platform: PLATFORM });
+  assert.deepEqual(status.rows.map((row) => [row.name, row.runtime, row.status, row.verification]), [
+    ['node', 'node', 'selected', 'unverified-external'], ['npm', null, 'selected', 'unverified-external'],
+  ]);
+
+  await soulRuntimesCommand(['override', ID, 'node', '--clear', '--json'], { ...options, gate, write });
+  assert.deepEqual(readdirSync(shim), ['npm']);
+  assert.deepEqual(pendingSoulRuntimes(ID, options), ['node'], 'an npm override does not satisfy a missing node runtime');
+  assert.throws(() => soulRuntimeEnv(ID, { ...options, env: { PATH: '/host/bin' } }), (error) => error.code === 'runtime-install-failed' && error.runtime === 'node');
+  await soulRuntimesCommand(['override', ID, 'npm', '--clear'], { ...options, gate, write });
+  assert.deepEqual(readdirSync(shim), []);
+  assert.equal(gates.length, 4);
+  assert.equal(gates[0][0], `set ${ID}'s node executable override`);
+  assert.deepEqual(gates[0][1], { principalId: 'p1' });
+  const receipts = readFileSync(auditFile({ env: f.env, home: f.home }), 'utf8');
+  assert.match(receipts, /"operation":"override","decision":"selected"/);
+  assert.match(receipts, /"operation":"override-clear","decision":"cleared"/);
+
+  await soulRuntimesCommand(['override', ID, 'node', externalNode, '--json'], { ...options, gate, write });
+  rmSync(externalNode);
+  status = await soulRuntimesCommand([ID, '--json'], { ...options, write });
+  assert.equal(status.overrides[0].status, 'invalid');
+  assert.equal(status.overrides[0].code, 'runtime-override-invalid');
+  assert.ok(status.overrides[0].reason.includes(setNode.executable), 'the stale-path error names the recorded executable');
+  assert.match(status.overrides[0].action, /--clear/);
+  assert.throws(() => soulRuntimeEnv(ID, { ...options, env: { PATH: '/host/bin' } }), (error) => error.code === 'runtime-override-invalid' && /--clear/.test(error.action));
+  await soulRuntimesCommand(['override', ID, 'node', '--clear'], { ...options, gate, write });
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'node', externalNpm], { ...options, gate, write, platform: 'win32-x64' }), (error) => error.code === 'runtime-override-unsupported-platform');
+
+  for (const candidate of ['relative/path', external, path.join(f.home, 'non-executable')]) {
+    if (candidate.endsWith('non-executable')) { put(candidate, 'no execute bit'); chmodSync(candidate, 0o644); }
+    await assert.rejects(soulRuntimesCommand(['override', ID, 'node', candidate], { ...options, gate, write }),
+      (error) => error.code === 'runtime-override-invalid', candidate);
+  }
+  const rejected = async () => { throw new Error('owner gate refused'); };
+  const stateBefore = existsSync(path.join(f.runtimes, 'overrides', 'node.json'));
+  const receiptsBefore = readFileSync(auditFile({ env: f.env, home: f.home }), 'utf8');
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'node', externalNpm], { ...options, gate: rejected, write }), /owner gate refused/);
+  assert.equal(existsSync(path.join(f.runtimes, 'overrides', 'node.json')), stateBefore);
+  assert.equal(readFileSync(auditFile({ env: f.env, home: f.home }), 'utf8'), receiptsBefore);
+
+  const malformedFile = path.join(f.runtimes, 'overrides', 'node.json');
+  put(malformedFile, '{broken');
+  assert.equal(inspectRuntimeOverrides(f.dir, { agentId: ID, platform: PLATFORM }).rows[0].status, 'invalid');
+  rmSync(malformedFile);
+  const outside = path.join(f.home, 'outside-state');
+  put(path.join(outside, 'runtimes', 'overrides', 'node.json'), 'sentinel');
+  rmSync(path.join(f.dir, '.soul-state'), { recursive: true, force: true });
+  symlinkSync(outside, path.join(f.dir, '.soul-state'));
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'node', '--clear'], { ...options, gate, write }),
+    (error) => error.code === 'runtime-override-invalid');
+  assert.equal(readFileSync(path.join(outside, 'runtimes', 'overrides', 'node.json'), 'utf8'), 'sentinel');
+});
+
+
+test('override clear recovers a malformed directory without following links or removing other selections', async (t) => {
+  const f = fixture(t, { census: true });
+  const options = { ...f.options, file: f.env.AGENT_BOT_POPULATION_PATH, cwd: f.home, gate: async () => {}, write: () => {} };
+  const external = path.join(f.home, 'external-npm');
+  put(external, '#!/bin/sh\nexit 0\n');
+  await soulRuntimesCommand(['override', ID, 'npm', external], options);
+  const directory = path.join(f.runtimes, 'overrides');
+  const malformed = path.join(directory, 'node.json');
+  const sentinel = path.join(f.home, 'outside-record', 'sentinel');
+  put(sentinel, 'keep outside data');
+  put(path.join(malformed, 'nested', 'bad-record'), 'malformed');
+  symlinkSync(path.dirname(sentinel), path.join(malformed, 'outside-link'));
+  const npmBefore = readFileSync(path.join(directory, 'npm.json'), 'utf8');
+  const invalid = inspectRuntimeOverrides(f.dir, { agentId: ID, platform: PLATFORM }).errors[0];
+  assert.equal(invalid.code, 'runtime-override-invalid');
+  assert.equal(invalid.action, `agent-bot soul runtimes override ${ID} node --clear`);
+
+  const result = await soulRuntimesCommand(['override', ID, 'node', '--clear'], options);
+  assert.equal(result.status, 'cleared');
+  assert.equal(existsSync(malformed), false);
+  assert.equal(readFileSync(sentinel, 'utf8'), 'keep outside data');
+  assert.equal(readFileSync(path.join(directory, 'npm.json'), 'utf8'), npmBefore);
+  assert.equal(realpathSync(path.join(directory, 'bin', 'npm')), realpathSync(external));
+  assert.equal(inspectRuntimeOverrides(f.dir, { agentId: ID, platform: PLATFORM }).errors.length, 0);
+
+  symlinkSync(path.dirname(sentinel), malformed);
+  await soulRuntimesCommand(['override', ID, 'node', '--clear'], options);
+  assert.ok(!readdirSync(directory).includes('node.json'));
+  assert.equal(readFileSync(sentinel, 'utf8'), 'keep outside data');
+});
+
+test('setting an override identifies the soul when its store is unsafe', async (t) => {
+  const f = fixture(t, { census: true });
+  const external = path.join(f.home, 'external-node');
+  put(external, '#!/bin/sh\nexit 0\n');
+  const outside = path.join(f.home, 'outside-store');
+  put(path.join(outside, 'sentinel'), 'keep outside data');
+  mkdirSync(f.runtimes, { recursive: true });
+  symlinkSync(outside, path.join(f.runtimes, 'overrides'));
+  const options = { ...f.options, file: f.env.AGENT_BOT_POPULATION_PATH, cwd: f.home, gate: async () => {}, write: () => {} };
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'node', external], options), (error) => {
+    assert.equal(error.code, 'runtime-override-invalid');
+    assert.ok(error.message.startsWith(`${ID}: `), error.message);
+    return true;
+  });
+  assert.deepEqual(readdirSync(outside), ['sentinel']);
+  assert.equal(readFileSync(path.join(outside, 'sentinel'), 'utf8'), 'keep outside data');
+  assert.equal(existsSync(auditFile({ env: f.env, home: f.home })), false);
+});
+
+test('external runtime overrides preserve exact PATH identity and clear variables in the spawned environment', (t) => {
+  const f = fixture(t, { manifest: { runtimes: { node: '24', python: '3.12', go: '1.x' } } });
+  const inspection = inspectSoulRuntimes(f.dir, f.options);
+  const managedBin = path.join(f.runtimes, 'node', NODE.version, 'bin');
+  const harnessBin = path.join(f.runtimes, 'harnesses', 'muse', 'bin');
+  const state = { ...inspection,
+    runtimes: inspection.runtimes.map((row) => row.name === 'node' ? { ...row, status: 'installed', path: path.dirname(managedBin), bin: 'bin' } : row),
+    harnesses: [{ name: 'muse', status: 'installed', path: path.dirname(harnessBin), bin: 'bin', version: '1' }] };
+  const routed = runtimeLaunchEnv(state, { env: { PATH: '/host/bin' }, overrides: { node: { executable: '/external/node' } }, node: process.execPath });
+  assert.deepEqual(routed.env.PATH.split(path.delimiter).slice(0, 4), [path.join(f.runtimes, 'overrides', 'bin'), harnessBin, managedBin, '/host/bin']);
+  assert.equal(routed.routing.node.executable, '/external/node');
+  assert.equal(routed.routing['executable:npm'], undefined);
+  assert.equal(routed.routing['executable:npx'], undefined);
+
+  const base = { PATH: '/host/bin', npm_config_cache: 'host', NODE_PATH: 'host', GOROOT: 'host', GOPATH: 'host', GOMODCACHE: 'host', GOCACHE: 'host', GOTOOLCHAIN: 'auto',
+    UV_PYTHON_INSTALL_DIR: 'host', UV_PYTHON_PREFERENCE: 'system', PYTHONHOME: 'host', VIRTUAL_ENV: 'host', UV_CACHE_DIR: 'host', UV_TOOL_DIR: 'host', UV_TOOL_BIN_DIR: 'host', KEEP_ME: 'retained' };
+  const selections = Object.fromEntries(['node', 'npm', 'npx', 'go', 'gofmt', 'python3', 'uv', 'uvx'].map((name) => [name, { executable: `/external/${name}` }]));
+  const patch = runtimeLaunchEnv(inspection, { env: base, overrides: selections }).env;
+  const keys = ['npm_config_cache', 'NODE_PATH', 'GOROOT', 'GOPATH', 'GOMODCACHE', 'GOCACHE', 'GOTOOLCHAIN', 'UV_PYTHON_INSTALL_DIR',
+    'UV_PYTHON_PREFERENCE', 'PYTHONHOME', 'VIRTUAL_ENV', 'UV_CACHE_DIR', 'UV_TOOL_DIR', 'UV_TOOL_BIN_DIR'];
+  const child = spawnSync(process.execPath, ['-e', `console.log(JSON.stringify(process.env))`], { env: { ...base, ...patch }, encoding: 'utf8' });
+  assert.equal(child.status, 0, child.stderr);
+  const observed = JSON.parse(child.stdout);
+  for (const key of keys) assert.equal(Object.hasOwn(observed, key), false, `${key} is absent in the actual spawned environment`);
+  assert.equal(observed.KEEP_ME, 'retained');
+});
+
+test('runtime status reads an override without creating its shim directory', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { node: '24' } }, census: true });
+  const external = path.join(f.home, 'external-node');
+  put(external, '#!/bin/sh\n');
+  put(path.join(f.runtimes, 'overrides', 'node.json'), JSON.stringify({ schemaVersion: 1, executable: realpathSync(external) }));
+  const before = tree(f.dir);
+  const status = await soulRuntimesCommand([ID, '--json'], { ...f.options, write: () => {} });
+  assert.equal(status.overrides[0].status, 'selected');
+  assert.deepEqual(tree(f.dir), before, 'status does not create or repair one-name shims');
+  assert.equal(existsSync(path.join(f.runtimes, 'overrides', 'bin')), false);
+});
+
+test('Python and uv-tool provisioning honor explicit uv without downloading managed uv, while Python-only selection drops unused uv', async (t) => {
+  const pythonOnly = fixture(t, { manifest: { runtimes: { python: '3.12' } }, census: true });
+  const pythonExe = path.join(pythonOnly.home, 'external-python');
+  put(pythonExe, '#!/bin/sh\n');
+  put(path.join(pythonOnly.runtimes, 'overrides', 'python3.json'), JSON.stringify({ schemaVersion: 1, executable: realpathSync(pythonExe) }));
+  const skipped = await installSoulRuntimes(pythonOnly.dir, { ...pythonOnly.options, fetchFn: async () => assert.fail('a Python override needs no implicit uv when no uv-tool harness uses it') });
+  assert.deepEqual(skipped.skipped, ['override:python']);
+  assert.deepEqual(pendingSoulRuntimes(ID, { ...pythonOnly.options, file: pythonOnly.env.AGENT_BOT_POPULATION_PATH }), []);
+  assert.equal(skipped.runtimes.find((row) => row.name === 'python').status, 'missing', 'managed status remains honest');
+  const pythonLaunch = soulRuntimeEnv(ID, { ...pythonOnly.options, file: pythonOnly.env.AGENT_BOT_POPULATION_PATH, env: { PATH: '/host/bin' } });
+  assert.ok(pythonLaunch.PATH.includes(path.join(pythonOnly.runtimes, 'overrides', 'bin')));
+
+  const pythonTool = fixture(t, { manifest: { runtimes: { python: '3.12' }, harnesses: { muse: { install: { kind: 'uv-tool', package: 'goose-ai', version: '1.9.0', bin: 'goose' } } } }, census: true });
+  const selectedPython = path.join(pythonTool.home, 'selected-python');
+  put(selectedPython, '#!/bin/sh\n');
+  put(path.join(pythonTool.runtimes, 'overrides', 'python3.json'), JSON.stringify({ schemaVersion: 1, executable: realpathSync(selectedPython) }));
+  const pythonToolDoubles = doubles({ archives: pythonTool.archives });
+  await installSoulRuntimes(pythonTool.dir, { ...pythonTool.options, ...pythonToolDoubles });
+  const uvToolCall = pythonToolDoubles.commands.find((entry) => entry.args[0] === 'tool' && entry.args[1] === 'install');
+  assert.ok(uvToolCall.args.includes('--python'));
+  assert.equal(uvToolCall.args[uvToolCall.args.indexOf('--python') + 1], realpathSync(selectedPython));
+  assert.ok(uvToolCall.args.includes('--no-python-downloads'), 'an unavailable exact override cannot fall back to a downloaded interpreter');
+  assert.equal(uvToolCall.env.UV_PYTHON_INSTALL_DIR, path.join(pythonTool.runtimes, 'python', 'uv-managed'));
+  assert.equal(uvToolCall.env.UV_PYTHON_PREFERENCE, 'only-managed');
+
+  const cases = [
+    { runtimes: { python: '3.12' } },
+    { runtimes: { python: '3.12' }, harnesses: { muse: { install: { kind: 'uv-tool', package: 'goose-ai', version: '1.9.0', bin: 'goose' } } } },
+    { harnesses: { muse: { install: { kind: 'uv-tool', package: 'goose-ai', version: '1.9.0', bin: 'goose' } } } },
+  ];
+  for (const manifest of cases) {
+    const f = fixture(t, { manifest, census: true });
+    const uv = path.join(f.home, 'external-uv');
+    put(uv, '#!/bin/sh\n');
+    put(path.join(f.runtimes, 'overrides', 'uv.json'), JSON.stringify({ schemaVersion: 1, executable: realpathSync(uv) }));
+    const d = doubles({ archives: f.archives });
+    const result = await installSoulRuntimes(f.dir, { ...f.options, ...d });
+    assert.ok(!result.installed.includes('uv'));
+    assert.ok(!d.fetched.some((url) => url.includes('/uv-')), 'the external uv selection avoids a managed uv archive');
+    assert.ok(d.commands.filter((entry) => ['python', 'tool'].includes(entry.args[0])).every((entry) => entry.command === 'external-uv'), 'dependent provisioning invokes the selected uv executable');
+    if (manifest.runtimes?.python) assert.ok(result.installed.includes('python'), 'uv does not override the Python executable');
+    if (manifest.harnesses?.muse) assert.ok(result.installed.includes('muse'), 'the selected uv can provision its uv-tool harness');
+  }
+});
 
 test('readiness rejects mismatched receipts and never routes their executable (#617)', async (t) => {
   const f = fixture(t, { manifest: { runtimes: { node: '24' } }, census: true });

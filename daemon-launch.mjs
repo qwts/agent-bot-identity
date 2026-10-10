@@ -87,7 +87,7 @@ const LAUNCHABLE = new Set(['package', 'installed']);
 // a client that reads only the broker's detail still sees which one it was.
 const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other-account',
   'persona-policy-unavailable', 'persona-policy-stale', 'persona-policy-requires-addon',
-  'runtime-download-failed', 'runtime-checksum-mismatch', 'runtime-unsupported-platform', 'runtime-install-failed',
+  'runtime-download-failed', 'runtime-checksum-mismatch', 'runtime-unsupported-platform', 'runtime-install-failed', 'runtime-override-invalid', 'runtime-override-unsupported-platform',
   'tool-home-unwritable', 'tool-home-record-invalid',
   'provider-secret-missing', 'provider-secret-unreadable', 'provider-declaration-invalid',
   'harness-signed-out', 'harness-unknown', 'harness-disabled', 'harness-tool-missing',
