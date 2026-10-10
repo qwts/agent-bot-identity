@@ -1,1 +1,0 @@
-- `inbox-take` receipts now record `bearerSource: pass-cli` when reading the pass-cli bearer fails, and a rejected `GH_APP_HOOK_INBOX_TOKEN` tells you to restart the daemon after changing it (#229).

@@ -1,1 +1,0 @@
-- ADR-0645 (owned modules and contracts first, then identity becomes its own repository) and ADR-0753 (owner-signed statements) are accepted (#645, #753).

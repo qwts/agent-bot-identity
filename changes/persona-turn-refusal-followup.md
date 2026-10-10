@@ -1,1 +1,0 @@
-- A principal's turn whose persona policy cannot be checked at all (for example, the runtime config became unreadable) now leaves a `turn-refused` event like any other refusal. `agent-bot doctor` reports a recorded but invalid `persona.toml` as unavailable, with the fix, rather than ready (#613).

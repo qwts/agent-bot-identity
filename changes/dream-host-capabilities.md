@@ -1,1 +1,0 @@
-- The soul environment descriptor advertises dream status and notice acknowledgement capabilities so clients can discover supported interfaces without conflating them with current daemon health (qwts/GeniusBar#341).

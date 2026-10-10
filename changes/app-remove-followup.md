@@ -1,1 +1,0 @@
-- `agent-bot identity app assign` now refuses with `identity-app-busy` while a create, connect, rotate-key or remove of the same App is running, so nothing is assigned to an App while its removal waits for keyd; a keyd-held App's webhook-secret item is put back when the config write fails; and `identity app remove` names the real `.dpapi` files on Windows (#110).

@@ -1,1 +1,0 @@
-- New managed souls keep Codex's config, sign-in and sessions in their own tool home (`CODEX_HOME`), so two souls can run Codex against different providers. A per-soul `.soul-state/tool-homes.json` entry (`soul` or `global`) overrides this per harness. Existing souls keep their current setup and nothing is moved (#617).

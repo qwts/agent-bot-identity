@@ -1,1 +1,0 @@
-- A test now pins that a soul woken cold after a daemon restart still sees its conversation with the same person, and that another soul or another person never does (#596).

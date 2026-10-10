@@ -1,1 +1,0 @@
-- Identity reads which soul declares a GitHub App through a read-only soul contract, `soul-app-declarations.mjs`, listed under `contracts` in the module map. The ADR-0645 boundary baseline is now empty (#645).

@@ -1,1 +1,0 @@
-- The installed harness hook adapter always runs the agent-bot hook runner, so the built-in identity and confinement checks apply even when a repository has no hook for the event. A missing or non-executable runner now fails the hook instead of allowing it (Codex Security finding `project-hook-fast-path-skips-builtins`).
