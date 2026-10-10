@@ -14,6 +14,7 @@ import { ENV_CAPABILITIES, readSoulEnvironment, soulEnvCommand } from '../soul-e
 import { computePackageRevision, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS } from '../soul-package.mjs';
 import { hostPlatform, resolveCatalogPin } from '../runtime-catalog.mjs';
 import { INSTALL_STAMP } from '../soul-runtimes.mjs';
+import { parseDreamArgs } from '../cli/soul-dream.mjs';
 
 const ID = 'agent_12345678-1234-4234-8234-123456789abc';
 const OTHER = 'agent_12345678-1234-4234-8234-123456789def';
@@ -93,7 +94,7 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
     'runtimes', 'providers', 'launch', 'readiness', 'migration', 'retention', 'errors']);
   assert.equal(result.schemaVersion, 1);
   assert.deepEqual(result.engine, { version: JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version, contractVersion: 1, capabilities: [...ENV_CAPABILITIES] });
-  assert.deepEqual(result.engine.capabilities, ['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes', 'memory', 'history', 'template-name', 'template-refresh', 'launch-parent', 'migrate-complete', 'env-clean', 'env-export', 'env-import', 'harnesses-into-runtimes', 'env-history']);
+  assert.deepEqual(result.engine.capabilities, ['env', 'revision-prepare', 'runtimes', 'providers', 'tool-homes', 'memory', 'history', 'template-name', 'template-refresh', 'launch-parent', 'migrate-complete', 'env-clean', 'env-export', 'env-import', 'harnesses-into-runtimes', 'env-history', 'dream-status', 'dream-ack-notice']);
   assert.deepEqual(result.identity, { agentId: ID, name: 'billy', displayName: 'Billy - Starter', status: 'active', harness: 'codex',
     genesis: { revision: null, parentSoul: null }, revision: f.manifest.revision, parentRevision: null, template: false, formatVersion: 2 });
   assert.deepEqual(result.root, { soulDir: f.dir, soulsRoot: f.env.AGENT_BOT_SOULS_HOME, source: 'environment', registered: true, marker: 'ok',
@@ -174,6 +175,15 @@ test('the descriptor has the complete schema v1 shape for a launched soul and re
   assert.deepEqual(result.errors, []);
   assert.deepEqual(readSoulEnvironment('billy', f.options), result, 'a census name resolves like an Agent ID');
   assert.deepEqual(readSoulEnvironment('Billy - Starter', f.options), result, 'so does the display name');
+});
+
+test('dream capabilities describe supported interfaces even when no daemon is configured', (t) => {
+  const f = fixture(t);
+  const capabilities = readSoulEnvironment(ID, f.options).engine.capabilities;
+  assert.ok(capabilities.includes('dream-status'));
+  assert.ok(capabilities.includes('dream-ack-notice'));
+  assert.equal(parseDreamArgs(['--soul', ID, '--status']).action, 'status');
+  assert.equal(parseDreamArgs(['--soul', ID, '--ack-notice', `ntc_${'a'.repeat(24)}`]).action, 'ack-notice');
 });
 
 test('a fresh census row gains no directory, link or registry entry from a read', (t) => {
