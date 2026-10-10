@@ -163,9 +163,12 @@ export async function soulToolHomeCommand(argv, {
       // Receipt details are capped at 200 characters, so they name the files;
       // the error carries the full paths.
       const kept = staged.backup ? `backup ${path.basename(staged.backup)}` : 'no previous record';
-      appendAuditReceipt({ event: 'tool-home', agentId: soul.id, operation: 'set', decision: 'partial',
-        detail: `${row.harness}: ${current ?? 'unset'} -> ${choice} in ${path.basename(staged.file)}; ${path.basename(error.sessions)} not reset; rollback failed; ${kept} (${caller}, ${method})` }, { env, home, now });
-      throw Object.assign(error, { message: `${error.message} ${restore[0].toUpperCase()}${restore.slice(1)}.`, backup: staged.backup });
+      let unrecorded = '';
+      try {
+        appendAuditReceipt({ event: 'tool-home', agentId: soul.id, operation: 'set', decision: 'partial',
+          detail: `${row.harness}: ${current ?? 'unset'} -> ${choice} in ${path.basename(staged.file)}; ${path.basename(error.sessions)} not reset; rollback failed; ${kept} (${caller}, ${method})` }, { env, home, now });
+      } catch (audit) { unrecorded = ` Its audit receipt could not be written either: ${audit.message}.`; error.audit = audit; }
+      throw Object.assign(error, { message: `${error.message} ${restore[0].toUpperCase()}${restore.slice(1)}.${unrecorded}`, backup: staged.backup });
     }
     if (setting) {
       appendAuditReceipt({ event: 'tool-home', agentId: soul.id, operation: 'set', decision: choice,
