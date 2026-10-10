@@ -1,0 +1,1 @@
+- When `agent-bot sandbox export --resume` refuses a `--skip`, the suggested new export now keeps every `--skip` you gave, not just the first one (#750).
