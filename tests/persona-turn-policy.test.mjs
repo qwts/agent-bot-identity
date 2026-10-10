@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { upsertSoul } from '../agent-population.mjs';
@@ -162,4 +162,42 @@ test('a principal turn whose policy cannot be evaluated at all is still recorded
   const refused = broken.events.find((event) => event.type === 'turn-refused');
   assert.equal(refused.data.code, 'persona-policy-unavailable');
   assert.match(refused.data.action, /agent-bot doctor/);
+});
+
+test('an event-store failure after the owner verifies is not relabeled as a policy refusal (#613)', async (t) => {
+  const f = fixture(t);
+  const { selection: _legacy, ...legacy } = JSON.parse(readFileSync(f.record, 'utf8'));
+  writeFileSync(f.record, JSON.stringify(legacy));
+  const options = { file: f.env.AGENT_BOT_PRINCIPALS_PATH, env: f.env, home: f.home };
+  const enrolled = enrollPrincipal({ label: 'owner' }, options);
+  bindTransport(enrolled.principalId, { transport: 'web', providerId: 'owner-subject-store' }, options);
+  authorizeSouls(enrolled.principalId, [ID], options);
+  const principal = setOperations(enrolled.principalId, ['message', 'observe'], options);
+  const events = path.join(f.env.AGENT_BOT_INTERACTION_HOME, 'events');
+  const logs = [];
+  const ran = [];
+  // Verified, but the event log turns corrupt before `owner-verified` is written: a codeless store error.
+  const interaction = createInteractionService({ env: f.env, home: f.home, config: {}, turns: f.turns, log: (line) => logs.push(line),
+    executor: async ({ invocation }) => { ran.push(invocation.invocationId); },
+    verifyOwner: async () => {
+      for (const name of readdirSync(events)) appendFileSync(path.join(events, name), 'not json\n');
+      return { method: 'presence' };
+    } });
+  const { session } = interaction.createOrContinueSession({ principal, transport: 'web', agentId: ID });
+  const { invocation } = interaction.submitMessage({ principal, transport: 'web', sessionId: session.sessionId, message: 'hi', idempotencyKey: 'turn-store' });
+  const storeOptions = { env: f.env, home: f.home };
+  let settled;
+  for (let tries = 0; tries < 200; tries += 1) {
+    settled = getInvocation(invocation.invocationId, storeOptions);
+    if (settled.status === 'failed') break;
+    await new Promise((resolve) => { setTimeout(resolve, 10); });
+  }
+  assert.equal(settled.status, 'failed');
+  assert.deepEqual(ran, []);
+  const failure = logs.find((line) => line.includes(`invocation ${invocation.invocationId} failed`));
+  assert.match(failure, /event log is corrupt/);
+  assert.doesNotMatch(failure, /persona policy could not be checked/);
+  const file = path.join(events, `${invocation.invocationId}.jsonl`);
+  writeFileSync(file, readFileSync(file, 'utf8').split('\n').filter((line) => line !== 'not json').join('\n'));
+  assert.equal(readEvents(invocation.invocationId, {}, storeOptions).some((event) => event.data?.code === 'persona-policy-unavailable'), false);
 });
