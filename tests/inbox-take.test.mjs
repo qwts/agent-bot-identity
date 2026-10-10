@@ -16,6 +16,7 @@ import {
   INBOX_BEARER_TITLE,
   createInboxTaker,
   readInboxBearer,
+  resolveInboxBearer,
   takeFromBroker,
 } from '../inbox-take.mjs';
 
@@ -151,6 +152,56 @@ test('a missing, empty or unreadable bearer is refused with a stable code and no
   });
 });
 
+test('an explicit GH_APP_HOOK_INBOX_TOKEN in the daemon env wins over the pass-cli note (#229)', () => {
+  let noteReads = 0;
+  const readNote = () => { noteReads += 1; return 'from-the-note'; };
+  assert.deepEqual(resolveInboxBearer({ env: { GH_APP_HOOK_INBOX_TOKEN: ` ${BEARER}\n` }, readNote }),
+    { token: BEARER, source: 'env' });
+  assert.equal(noteReads, 0);
+  // Unset or blank falls through to the note.
+  assert.deepEqual(resolveInboxBearer({ env: {}, readNote }), { token: 'from-the-note', source: 'pass-cli' });
+  assert.deepEqual(resolveInboxBearer({ env: { GH_APP_HOOK_INBOX_TOKEN: '  ' }, readNote }), { token: 'from-the-note', source: 'pass-cli' });
+  assert.equal(noteReads, 2);
+});
+
+test('/v0/inbox/take uses the env bearer, receipts its source and never the value', async () => {
+  const fixture = scratch();
+  const env = { ...fixture.env, GH_APP_HOOK_INBOX_TOKEN: BEARER };
+  const broker = racyBroker([{ app: 'you-codex-agent', repo: 'qwts/example1', kind: 'mention' }]);
+  const missing = Object.assign(new Error('pass-cli item not found'), { code: 'missing-item' });
+  const inboxTake = createInboxTaker({
+    env,
+    readBearer: () => resolveInboxBearer({ env, readNote: () => readInboxBearer({ store: bearerStore(missing) }) }),
+    fetchImpl: broker.fetchImpl,
+  });
+  await withServer(env, { inboxTake }, async ({ call }) => {
+    const bound = await bind(call, { ...fixture, env });
+    const res = await call('/v0/inbox/take', {
+      method: 'POST', token: null, body: {}, headers: { 'x-agent-binding': bound.secret },
+    });
+    assert.equal(res.status, 200);
+    assert.doesNotMatch(await res.text(), new RegExp(BEARER));
+  });
+  assert.equal(broker.seen[0].authorization, `Bearer ${BEARER}`);
+  const [receipt] = receipts(env);
+  assert.deepEqual([receipt.decision, receipt.reason, receipt.bearerSource], ['taken', 'event', 'env']);
+  assert.doesNotMatch(readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8'), new RegExp(BEARER));
+});
+
+test('a rejected env bearer names the env variable, not the note, and receipts the source', async () => {
+  const take = createInboxTaker({
+    env: { GH_APP_HOOK_INBOX_URL: 'https://gh-app-hook.example.invalid', GH_APP_HOOK_INBOX_TOKEN: BEARER },
+    fetchImpl: async () => new Response('{}', { status: 401 }),
+  });
+  await assert.rejects(take({ app: 'you-codex-agent', repo: 'qwts/example1' }), (error) => {
+    assert.equal(error.code, 'inbox-auth-expired');
+    assert.equal(error.bearerSource, 'env');
+    assert.match(error.message, /GH_APP_HOOK_INBOX_TOKEN/);
+    assert.doesNotMatch(error.message, new RegExp(BEARER));
+    return true;
+  });
+});
+
 test('/v0/inbox/take refuses a caller with no live binding and receipts it', async () => {
   const { env } = scratch();
   let takes = 0;
@@ -194,8 +245,8 @@ test('/v0/inbox/take takes for the bound soul\'s App and worktree, never the req
   assert.equal(broker.seen[0].url.searchParams.get('repo'), 'qwts/example1');
   assert.equal(broker.seen[0].authorization, `Bearer ${BEARER}`);
   const [receipt] = receipts(env);
-  assert.deepEqual([receipt.decision, receipt.agentId, receipt.appSlug, receipt.reason],
-    ['taken', AGENT_ID, 'you-codex-agent', 'event']);
+  assert.deepEqual([receipt.decision, receipt.agentId, receipt.appSlug, receipt.reason, receipt.bearerSource],
+    ['taken', AGENT_ID, 'you-codex-agent', 'event', 'pass-cli']);
   assert.doesNotMatch(readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8'), new RegExp(BEARER));
 });
 

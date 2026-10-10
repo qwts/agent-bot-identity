@@ -248,6 +248,10 @@ function requirePrincipal(principals, principalId) {
 // provider tokens, display names, or message bodies. A credential mint also
 // names the App it minted for (`appSlug`) and a fixed reason code for its
 // outcome (`reason`, #107); both are optional, so older readers ignore them.
+// An inbox take names where its bearer came from (`bearerSource`, #229), as
+// one of a fixed set of labels — the bearer itself is never recorded.
+const BEARER_SOURCES = new Set(['env', 'pass-cli']);
+
 export function auditFile({ env = process.env, home = homedir() } = {}) {
   return path.join(interactionHome({ env, home }), 'audit.jsonl');
 }
@@ -260,9 +264,10 @@ function receiptDetail(value) {
 }
 
 export function appendAuditReceipt(
-  { event, principalId = null, transport = null, agentId = null, operation = null, decision = null, detail = null, appSlug = null, reason = null },
+  { event, principalId = null, transport = null, agentId = null, operation = null, decision = null, detail = null, appSlug = null, reason = null, bearerSource = null },
   { env = process.env, home = homedir(), now = () => new Date() } = {},
 ) {
+  if (bearerSource !== null && !BEARER_SOURCES.has(bearerSource)) throw new Error('audit receipt bearerSource must be env or pass-cli');
   const receipt = {
     at: now().toISOString(),
     event: printableText('event', event, { max: 40 }),
@@ -274,6 +279,7 @@ export function appendAuditReceipt(
     ...(detail === null ? {} : { detail: receiptDetail(detail) }),
     ...(appSlug === null ? {} : { appSlug: printableText('appSlug', appSlug, { max: 100 }) }),
     ...(reason === null ? {} : { reason: printableText('reason', reason, { max: 40 }) }),
+    ...(bearerSource === null ? {} : { bearerSource }),
   };
   const file = auditFile({ env, home });
   ensurePrivateDirectory(path.dirname(file));

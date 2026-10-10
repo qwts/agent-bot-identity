@@ -1,0 +1,1 @@
+- An explicit `GH_APP_HOOK_INBOX_TOKEN` in the daemon's own environment wins over the pass-cli inbox note again; `inbox-take` receipts record `bearerSource` (`env` or `pass-cli`), never the bearer (#229).
