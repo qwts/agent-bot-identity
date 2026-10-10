@@ -647,6 +647,17 @@ test('the agent-bot owner command verifies offline and exits non-zero on a refus
   assert.equal(readFileSync(ownerKeysPath({ env }), 'utf8').includes(key.fingerprint), true);
 });
 
+test('a soul cannot enrol or remove an owner key, and keyd is never asked', async (t) => {
+  const disk = skOnDisk(home(t).dir);
+  const ctx = command(t, { markers: () => ['Agent ID'], sign: disk.sign,
+    attest: async () => assert.fail('keyd is not asked for a soul') });
+  await assert.rejects(ctx.run(['enroll', '--store', 'ssh', '--key', disk.file]), { code: 'owner-credential-required', message: /owner only; this caller has a soul's Agent ID/ });
+  writeOwnerKeys([pinFor(disk.key)], { env: ctx.env });
+  await assert.rejects(ctx.run(['remove', 'yubikey']), { code: 'owner-credential-required' });
+  assert.deepEqual(readOwnerKeys({ env: ctx.env }).map((p) => p.name), ['yubikey']);
+  assert.deepEqual(ctx.receipts.map((r) => [r.operation, r.decision]), [['enroll', 'refused'], ['remove', 'refused']]);
+});
+
 test('pins are written under a lock, only if they are still the set keyd was shown', async (t) => {
   const ctx = command(t);
   const disk = skOnDisk(ctx.dir);

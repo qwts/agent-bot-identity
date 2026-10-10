@@ -128,11 +128,14 @@ public key in `<state>/owner/keys.json` (mode 0600), with its name, store,
   keyd's `owner/pins-attest`, which shows the owner the whole new key set and
   records it; there is no administrator-dialog path. See
   [owner statements](../owner-statements.md).
-- **The owner proves possession.** After presence, enrolment asks the new key
-  to sign an enrolment challenge and pins it only if that verifies.
+- **The owner proves possession.** Enrolment asks the new key to sign an
+  enrolment challenge and pins it only if that verifies. *Since "keyd signs
+  pins":* this comes first, and keyd is asked to record the new key set only
+  after it verifies.
 - **A statement never enrols, rotates or removes a key**, not even one signed
   by an enrolled key. Otherwise the fallback could bootstrap itself.
-  `owner remove <name>` needs presence as well.
+  `owner remove <name>` needs presence as well (since "keyd signs pins",
+  keyd recording the remaining set).
 - Every attempt leaves an audit receipt (`event: owner-key`,
   `operation: enroll|remove`, `decision: approved|refused|failed`,
   fingerprint), whether it changed the pins or not, as `keyd-signer` pins do.

@@ -175,7 +175,9 @@ when they approve with Touch ID or the login password. Only then is the key
 pinned. At most four keys are pinned, each under its own name.
 
 **remove** unpins one key, also by having keyd record the remaining set.
-Neither falls back to the administrator dialog: with no keyd that can ask
+A caller carrying a soul's Agent ID, binding or App identity is refused
+before keyd is asked, as the owner gate refuses it. Neither falls back to
+the administrator dialog: with no keyd that can ask
 (none installed, none running, a keyd too old for `owner/pins-attest`, or
 no GUI session) the pins do not change. Both write the pins under a lock,
 only if the file still holds the set keyd was shown; a change made while
