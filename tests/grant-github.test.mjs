@@ -16,7 +16,7 @@ import { ensureAgentIdentity, stateDirectory } from '../agent-identity.mjs';
 import { mintBindToken } from '../agent-binding.mjs';
 import { humanTokenItem, itemTitle } from '../credential-names.mjs';
 import { createGrantLedger } from '../delegation-grants.mjs';
-import { createGrantActor, humanTokenTitle, readHumanToken } from '../grant-github.mjs';
+import { GRANT_ACTS, createGrantActor, humanTokenTitle, readHumanToken } from '../grant-github.mjs';
 import { supervisorEnvironment } from '../daemon-supervisor.mjs';
 
 const AGENT_ID = 'agent_dddddddd-dddd-4ddd-8ddd-dddddddddddd';
@@ -350,8 +350,12 @@ test('the MCP grant tools need a binding and show the daemon\'s sentence and cod
   };
   const state = createMcpState({ env: {}, home: '/nonexistent', cwd: '/nonexistent', client });
   const tool = async (name, args) => (await handleMcpMessage(state, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } })).result;
-  const listed = (await handleMcpMessage(state, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).result.tools.map((entry) => entry.name);
+  const tools = (await handleMcpMessage(state, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).result.tools;
+  const listed = tools.map((entry) => entry.name);
   assert.ok(listed.includes('request_grant') && listed.includes('spend_grant'));
+  // Every operation the daemon performs is discoverable from the tool schema.
+  const shapes = tools.find((entry) => entry.name === 'request_grant').inputSchema.properties.operation.description;
+  for (const operation of GRANT_ACTS) assert.match(shapes, new RegExp(`"${operation}"`));
 
   const unbound = await tool('request_grant', { operation: COMMENT });
   assert.equal(unbound.isError, true);

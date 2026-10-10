@@ -116,7 +116,8 @@ const TOOLS = [
     name: 'request_grant',
     description:
       'Ask the owner for one named write as their GitHub account (#108): an '
-      + 'issue or pull request comment, or a review request. The owner '
+      + 'issue or pull request comment, closing or reopening one, or a review '
+      + 'request. The owner '
       + 'approves this exact operation at a Touch ID prompt, which this call '
       + 'waits on. Returns the approved grant; spend it with spend_grant and '
       + 'the same operation. Approving or merging is never grantable. '
@@ -126,7 +127,8 @@ const TOOLS = [
       properties: {
         operation: {
           type: 'object',
-          description: '{ operation: "issue-comment", repo: "owner/name", number, body } or '
+          description: '{ operation: "issue-comment", repo: "owner/name", number, body }, '
+            + '{ operation: "issue-state", repo: "owner/name", number, state: "open" | "closed" } or '
             + '{ operation: "review-request", repo: "owner/name", number, reviewers: [logins] }',
         },
       },
