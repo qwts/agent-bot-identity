@@ -11,7 +11,7 @@ import {
 } from '../organization-profile.mjs';
 import {
   PRESENCE_AUDIENCE, PRESENCE_UNAVAILABLE_RPC, actionDigest, developerIdRequirement, keydPresence,
-  pinnedPresenceKey, presencePinPath, presenceSignerPath, verifyPresence,
+  pinSetDigest, pinnedPresenceKey, presencePinPath, presenceSignerPath, verifyPinsAttestation, verifyPresence,
 } from '../owner-presence.mjs';
 
 const ID = 'agent_121b5b35-0000-4000-8000-000000000000';
@@ -24,13 +24,15 @@ const TEAM = 'ABCDE12345';
 function presenceKey() {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   const raw = Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url').toString('base64');
-  const assert_ = (payload) => {
+  const signed = (prefix, payload) => {
     const segment = Buffer.from(JSON.stringify(payload)).toString('base64url');
-    return `p1.${segment}.${sign(null, Buffer.from(segment), privateKey).toString('base64url')}`;
+    return `${prefix}.${segment}.${sign(null, Buffer.from(segment), privateKey).toString('base64url')}`;
   };
-  const assertion = (action, overrides = {}) => assert_({ v: 1, aud: 'agent-bot-owner', kind: 'presence',
+  const assertion = (action, overrides = {}) => signed('p1', { v: 1, aud: 'agent-bot-owner', kind: 'presence',
     action: actionDigest(action), nonce: NONCE, iat: SECONDS, exp: SECONDS + 60, ...overrides });
-  return { raw, assertion };
+  const pins = (overrides = {}) => signed('k1', { v: 1, aud: 'agent-bot-owner', kind: 'pins',
+    digest: 'c'.repeat(64), generation: 2, nonce: NONCE, iat: SECONDS, exp: SECONDS + 60, ...overrides });
+  return { raw, assertion, pins, signed };
 }
 
 function home(t) {
@@ -84,6 +86,45 @@ test('an assertion is accepted for up to 120 s of lifetime and 30 s of skew, and
   refuses({ v: 2 });
   refuses({ iat: SECONDS + 0.5 });
   refuses({ exp: String(SECONDS + 60) });
+});
+
+// The same vectors as keyd/src/pins.rs digests_the_canonical_key_set.
+test('the owner key set digest matches keyd', () => {
+  const pin = (name, fingerprint, more = {}) => ({ name, store: 'ssh', alg: 'sshsig', publicKey: 'ignored', fingerprint,
+    verifyRequired: false, softwareKey: false, pinnedAt: '2026-10-10T00:00:00.000Z', ...more });
+  const A = `SHA256:${'A'.repeat(43)}`;
+  const B = `SHA256:${'B'.repeat(43)}`;
+  assert.equal(pinSetDigest([pin('yubikey', A), pin('mac', B, { store: 'keyd', alg: 'ed25519', verifyRequired: true })]),
+    'cb09d44b2df51fd95cbea3002bb477ac8c209f824089eaebda5c66d502325def');
+  assert.equal(pinSetDigest([]), '84685a46b42aa9f320b192a3a3843fdaece0ef8613a76b7ba10660504ca772c4');
+});
+
+test('an owner key record verifies only for its key, nonce and time, and is never a presence assertion', () => {
+  const key = presenceKey();
+  const ok = { key: key.raw, nonce: NONCE, now: NOW };
+  assert.deepEqual(verifyPinsAttestation(key.pins(), ok), { digest: 'c'.repeat(64), generation: 2 });
+  assert.deepEqual(verifyPinsAttestation(key.pins({ digest: null, generation: 0 }), ok), { digest: null, generation: 0 });
+  const refuse = (token, over = {}) => assert.throws(() => verifyPinsAttestation(token, { ...ok, ...over }), { code: 'pins-invalid' });
+  refuse(key.pins(), { nonce: 'zyxwvutsrqponmlkjihgfedc' });
+  refuse(key.pins(), { key: presenceKey().raw });
+  refuse(key.pins(), { now: NOW + 120_000 });
+  refuse(key.pins({ exp: SECONDS + 121 }));
+  refuse(key.pins({ aud: 'agent-bot-keyd' }));
+  refuse(key.pins({ digest: null, generation: 1 }));
+  refuse(key.pins({ generation: 0 }));
+  refuse(key.pins({ generation: -1 }));
+  refuse(key.pins({ generation: '2' }));
+  refuse(key.pins({ digest: 'C'.repeat(64) }));
+  refuse(key.pins({ digest: 'c'.repeat(63) }));
+  refuse(undefined);
+  // Each kind under its own prefix: neither token passes for the other.
+  refuse(key.pins().replace(/^k1/, 'p1'));
+  refuse(key.signed('k1', { v: 1, aud: 'agent-bot-owner', kind: 'presence', action: actionDigest('x'), digest: 'c'.repeat(64),
+    generation: 2, nonce: NONCE, iat: SECONDS, exp: SECONDS + 60 }));
+  refuse(key.assertion('x'));
+  assert.throws(() => verifyPresence(key.pins(), { ...ok, action: 'x' }), { code: 'presence-invalid' });
+  assert.throws(() => verifyPresence(key.signed('p1', { v: 1, aud: 'agent-bot-owner', kind: 'pins', action: actionDigest('x'),
+    nonce: NONCE, iat: SECONDS, exp: SECONDS + 60 }), { ...ok, action: 'x' }), { code: 'presence-invalid' });
 });
 
 test('the presence contract constants keyd and agent-bot share', () => {
