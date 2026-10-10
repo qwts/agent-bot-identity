@@ -24,6 +24,7 @@
 // soul's binding is enough for its own soul; the owner runs it for any soul.
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { appendAuditReceipt } from './agent-principals.mjs';
@@ -31,7 +32,7 @@ import { readBinding } from './agent-binding.mjs';
 import { validateAgentId, withLock } from './agent-identity.mjs';
 import { daemonClient } from './daemon-client.mjs';
 import { assertOwnerAction, presenceOrConsent, soulMarkers } from './owner-action.mjs';
-import { readToolHomeRecord, setToolHomeChoice, toolHomeRecordPath } from './soul-tool-home-record.mjs';
+import { prepareToolHomeChoice, readToolHomeRecord, setToolHomeChoice, toolHomeRecordPath } from './soul-tool-home-record.mjs';
 import { TOOL_HOME_CHOICES, toolHomeFor } from './soul-tool-homes.mjs';
 import { createWakeSessions, wakeSessionsFile } from './wake-resume.mjs';
 
@@ -138,17 +139,43 @@ export async function soulToolHomeCommand(argv, {
       }
     }
     const method = authorization?.method ?? 'none';
+    let retired = null, staged = null;
+    // Hold both writers' locks through the combined operation. Both files
+    // are staged before the choice changes; a failed session commit restores
+    // the exact old choice (including an absent record). Receipts follow success,
+    // or a partial update whose rollback failed too.
+    try {
+      withLock(`${toolHomeRecordPath(soul.soulDir)}.lock`, 'soul tool-homes record', () => {
+        if (setting && fresh) {
+          staged = prepareToolHomeChoice(soul.soulDir, row.harness, choice);
+          try {
+            retired = sessions.retire(soul.id, row.harness, { now,
+              beforeCommit: () => { staged.commit(); return () => staged.rollback(); } });
+          } finally { staged.cleanup(); }
+        } else if (setting) setToolHomeChoice(soul.soulDir, row.harness, choice);
+        else if (fresh) retired = sessions.retire(soul.id, row.harness, { now });
+      });
+    } catch (error) {
+      if (error.code !== 'tool-home-update-partial' || staged === null) throw error;
+      const restore = staged.backup
+        ? `the previous choice is kept in ${staged.backup}; move it to ${staged.file} to restore it`
+        : `there was no previous choice; remove ${staged.file} to restore that`;
+      // Receipt details are capped at 200 characters, so they name the files;
+      // the error carries the full paths.
+      const kept = staged.backup ? `backup ${path.basename(staged.backup)}` : 'no previous record';
+      let unrecorded = '';
+      try {
+        appendAuditReceipt({ event: 'tool-home', agentId: soul.id, operation: 'set', decision: 'partial',
+          detail: `${row.harness}: ${staged.previous ?? 'unset'} -> ${choice} in ${path.basename(staged.file)}; ${path.basename(error.sessions)} not reset; rollback failed; ${kept} (${caller}, ${method})` }, { env, home, now });
+      } catch (audit) { unrecorded = ` Its audit receipt could not be written either: ${audit.message}.`; error.audit = audit; }
+      throw Object.assign(error, { message: `${error.message} ${restore[0].toUpperCase()}${restore.slice(1)}.${unrecorded}`, backup: staged.backup });
+    }
     if (setting) {
-      // The record has no other writer after a soul's birth, but two of these
-      // commands may race; the read-modify-write stays under one lock.
-      withLock(`${toolHomeRecordPath(soul.soulDir)}.lock`, 'soul tool-homes record',
-        () => setToolHomeChoice(soul.soulDir, row.harness, choice));
       appendAuditReceipt({ event: 'tool-home', agentId: soul.id, operation: 'set', decision: choice,
         detail: `${row.harness}: ${current ?? 'unset'} -> ${choice} by ${caller} (${method})` }, { env, home, now });
       Object.assign(result, { choice, changed: true, previous: current });
     }
     if (fresh) {
-      const retired = sessions.retire(soul.id, row.harness, { now });
       result.freshSession = retired ? { retired: true, store: retired.store } : { retired: false };
       if (retired) {
         appendAuditReceipt({ event: 'tool-home', agentId: soul.id, operation: 'fresh-session', decision: 'fresh-session',

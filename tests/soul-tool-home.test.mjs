@@ -2,14 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { populationFile, upsertSoul } from '../agent-population.mjs';
 import { auditFile } from '../agent-principals.mjs';
 import { ownerActionSummary } from '../owner-gate.mjs';
-import { readToolHomeRecord, setToolHomeChoice } from '../soul-tool-home-record.mjs';
+import { readToolHomeRecord, setToolHomeChoice, toolHomeRecordPath } from '../soul-tool-home-record.mjs';
 import { soulToolHomeCommand } from '../soul-tool-home.mjs';
 import { createWakeSessions, wakeSessionsFile } from '../wake-resume.mjs';
 
@@ -32,7 +32,8 @@ function fixture(t) {
   const out = [], gates = [], asks = [];
   // The soul marker check is injected; `markers` decides who the caller is.
   // `proven` is the Agent ID the daemon resolves the caller's binding to.
-  const run = (argv, { markers = [], caller = env, approve = true, stdin = '', proven = null } = {}) => soulToolHomeCommand(argv, {
+  const run = (argv, { markers = [], caller = env, approve = true, stdin = '', proven = null, sessions } = {}) => soulToolHomeCommand(argv, {
+    ...(sessions ? { sessions } : {}),
     env: caller, home, cwd: home, now: () => new Date(AT), write: (text) => out.push(text),
     markers: () => markers, readStdin: () => stdin, provenSoul: async () => proven,
     client: { binding: async () => assert.fail('the proof is injected') },
@@ -212,6 +213,125 @@ test('--fresh-session with global is one owner prompt for both; a refusal change
   assert.deepEqual(done.freshSession, { retired: true, store: 'soul' });
   assert.deepEqual(f.asks, Array(2).fill(`soul tool-home ${ID} codex global --fresh-session`));
   assert.equal(sessions.get(ID, 'codex'), null);
+});
+
+test('a combined choice and reset refuses malformed sessions without changing the choice or emitting receipts', async (t) => {
+  const f = fixture(t);
+  setToolHomeChoice(f.soulDir, 'codex', 'soul');
+  const before = readFileSync(toolHomeRecordPath(f.soulDir), 'utf8');
+  const file = wakeSessionsFile({ env: f.env, home: f.home });
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, '{broken');
+  await assert.rejects(f.run(['codex', 'global', '--soul', ID, '--fresh-session']), /wake sessions could not be read/);
+  assert.equal(readFileSync(toolHomeRecordPath(f.soulDir), 'utf8'), before);
+  assert.equal(readFileSync(file, 'utf8'), '{broken');
+  assert.deepEqual(f.receipts(), []);
+  assert.deepEqual(readdirSync(path.dirname(toolHomeRecordPath(f.soulDir))), ['tool-homes.json']);
+});
+
+for (const existing of [false, true]) test(`a failed session commit restores the ${existing ? 'exact existing' : 'absent'} tool-home record`, async (t) => {
+  const f = fixture(t);
+  const choiceFile = toolHomeRecordPath(f.soulDir);
+  if (existing) {
+    setToolHomeChoice(f.soulDir, 'codex', 'soul');
+    setToolHomeChoice(f.soulDir, 'claude', 'global');
+  }
+  const before = existing ? readFileSync(choiceFile, 'utf8') : null;
+  const file = wakeSessionsFile({ env: f.env, home: f.home });
+  createWakeSessions({ file }).set(ID, 'codex', 'thread-kept', 'workspace', 'soul');
+  const sessionBefore = readFileSync(file, 'utf8');
+  const sessions = createWakeSessions({ file, rename: () => {
+    assert.equal(readToolHomeRecord(f.soulDir).harnesses.codex, 'global', 'failure happens after the choice commit');
+    throw Object.assign(new Error('session commit refused'), { code: 'EACCES' });
+  } });
+  await assert.rejects(f.run(['codex', 'global', '--soul', ID, '--fresh-session'], { sessions }), { code: 'EACCES' });
+  assert.equal(existing ? readFileSync(choiceFile, 'utf8') : (existsSync(choiceFile) ? 'unexpected record' : null), before);
+  assert.equal(readFileSync(file, 'utf8'), sessionBefore);
+  assert.deepEqual(f.receipts(), []);
+  assert.deepEqual(readdirSync(path.dirname(choiceFile)), existing ? ['tool-homes.json'] : []);
+  assert.deepEqual(readdirSync(path.dirname(file)), ['wake-sessions.json']);
+});
+
+for (const existing of [false, true]) test(`a failed rollback keeps the ${existing ? 'previous choice' : 'absent record'} recoverable and receipts the partial update`, async (t) => {
+  const f = fixture(t);
+  const choiceFile = toolHomeRecordPath(f.soulDir);
+  if (existing) setToolHomeChoice(f.soulDir, 'codex', 'soul');
+  const before = existing ? readFileSync(choiceFile, 'utf8') : null;
+  const file = wakeSessionsFile({ env: f.env, home: f.home });
+  createWakeSessions({ file }).set(ID, 'codex', 'thread-kept', 'workspace', 'soul');
+  // The session commit fails, and a folder left at the record's path makes
+  // the tool-home restore fail too.
+  const sessions = createWakeSessions({ file, rename: () => {
+    rmSync(choiceFile);
+    mkdirSync(choiceFile);
+    writeFileSync(path.join(choiceFile, 'in-the-way'), '');
+    throw Object.assign(new Error('session commit refused'), { code: 'EACCES' });
+  } });
+  const error = await f.run(['codex', 'global', '--soul', ID, '--fresh-session'], { sessions }).then(() => assert.fail('expected a partial update'), (e) => e);
+  assert.equal(error.code, 'tool-home-update-partial');
+  assert.equal(error.cause.message, 'session commit refused', 'the session failure stays the cause');
+  assert.ok(error.restore, 'the restore failure is kept too');
+  if (existing) {
+    assert.ok(error.backup && error.message.includes(error.backup));
+    assert.equal(readFileSync(error.backup, 'utf8'), before, 'the backup is the exact previous record');
+  } else {
+    assert.equal(error.backup, null);
+    assert.match(error.message, /there was no previous choice; remove .*tool-homes\.json/i);
+  }
+  assert.equal(f.receipts().length, 1);
+  const [receipt] = f.receipts();
+  assert.equal(receipt.decision, 'partial');
+  assert.ok(receipt.detail.includes('tool-homes.json') && receipt.detail.includes('wake-sessions.json'), 'the receipt names both records');
+  if (existing) assert.ok(receipt.detail.includes(path.basename(error.backup)) && !receipt.detail.endsWith('…'), receipt.detail);
+  assert.ok(error.message.includes(choiceFile));
+});
+
+test('the rollback backup keeps the record byte for byte, invalid UTF-8 included', async (t) => {
+  const f = fixture(t);
+  const choiceFile = toolHomeRecordPath(f.soulDir);
+  const bytes = Buffer.concat([Buffer.from('{"schemaVersion":1,"harnesses":{"codex":"soul"},"note":"'), Buffer.from([0xff]), Buffer.from('"}\n')]);
+  writeFileSync(choiceFile, bytes);
+  const file = wakeSessionsFile({ env: f.env, home: f.home });
+  createWakeSessions({ file }).set(ID, 'codex', 'thread-kept', 'workspace', 'soul');
+  const sessions = createWakeSessions({ file, rename: () => {
+    rmSync(choiceFile);
+    mkdirSync(choiceFile);
+    writeFileSync(path.join(choiceFile, 'in-the-way'), '');
+    throw Object.assign(new Error('session commit refused'), { code: 'EACCES' });
+  } });
+  const error = await f.run(['codex', 'global', '--soul', ID, '--fresh-session'], { sessions }).then(() => assert.fail('expected a partial update'), (e) => e);
+  assert.ok(readFileSync(error.backup).equals(bytes));
+  assert.match(f.receipts()[0].detail, /^codex: soul -> global /);
+});
+
+test('a partial update still reports its backup when the receipt cannot be written', async (t) => {
+  const f = fixture(t);
+  const choiceFile = toolHomeRecordPath(f.soulDir);
+  setToolHomeChoice(f.soulDir, 'codex', 'soul');
+  const before = readFileSync(choiceFile, 'utf8');
+  const file = wakeSessionsFile({ env: f.env, home: f.home });
+  createWakeSessions({ file }).set(ID, 'codex', 'thread-kept', 'workspace', 'soul');
+  mkdirSync(auditFile({ env: f.env, home: f.home }), { recursive: true });
+  const sessions = createWakeSessions({ file, rename: () => {
+    rmSync(choiceFile);
+    mkdirSync(choiceFile);
+    writeFileSync(path.join(choiceFile, 'in-the-way'), '');
+    throw Object.assign(new Error('session commit refused'), { code: 'EACCES' });
+  } });
+  const error = await f.run(['codex', 'global', '--soul', ID, '--fresh-session'], { sessions }).then(() => assert.fail('expected a partial update'), (e) => e);
+  assert.equal(error.code, 'tool-home-update-partial');
+  assert.ok(error.message.includes(error.backup) && /audit receipt could not be written/.test(error.message));
+  assert.ok(error.audit);
+  assert.equal(readFileSync(error.backup, 'utf8'), before);
+});
+
+test('a combined choice and reset with no recorded session still commits the choice once', async (t) => {
+  const f = fixture(t);
+  const done = await f.run(['codex', 'global', '--soul', ID, '--fresh-session']);
+  assert.equal(done.choice, 'global');
+  assert.deepEqual(done.freshSession, { retired: false });
+  assert.deepEqual(f.receipts().map(({ operation }) => operation), ['set']);
+  assert.equal(f.gates.length, 1);
 });
 
 test('--fresh-session on a damaged record names it as damaged, never as a store it does not say', async (t) => {

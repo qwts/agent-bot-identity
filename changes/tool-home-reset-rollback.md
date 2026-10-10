@@ -1,0 +1,1 @@
+- A combined `soul tool-home` choice and `--fresh-session` stages both records before changing either and restores the exact original choice if the session commit fails. Success receipts follow both commits; an unsuccessful rollback reports an explicit partial state, keeps the backup of the previous choice and writes a `partial` receipt (#617, review of #827).
