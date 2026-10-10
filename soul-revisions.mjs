@@ -533,22 +533,28 @@ export function discardRevisionStaging(stagingPath) {
   return { discarded: staging };
 }
 
+// The owner gate revisionCommand applies to adopt, edit, approve and reject.
+// Exported so a command built on an owner edit (soul skill uninstall --trash)
+// can run the same gate before an effect outside the revision.
+export function revisionOwnerGate(action, { principal, presence, env, cwd } = {}) {
+  return assertOwnerAction(action, {
+    principal, env, cwd,
+    consent: (action, context) => presenceOrConsent(action, { ...context, presence,
+      consent: (action, context) => {
+        if (!process.stdin.isTTY || !process.stderr.isTTY) {
+          throw ownerCredentialRequired('owner consent requires an interactive terminal; --yes cannot approve');
+        }
+        return consentOwner(action, context);
+      },
+    }),
+  });
+}
 export async function revisionCommand(args, { assertSoulTarget = (id) => {
   // The caller must be the bound soul itself; an unbound process is not one.
   if (currentAgentId() !== id) {
     throw new Error('a soul may propose changes only to its own package; bind an Agent ID first');
   }
-}, assertUser = (action, { principal }) => assertOwnerAction(action, {
-  principal, env: options.env, cwd: options.cwd,
-  consent: (action, context) => presenceOrConsent(action, { ...context, presence,
-    consent: (action, context) => {
-      if (!process.stdin.isTTY || !process.stderr.isTTY) {
-        throw ownerCredentialRequired('owner consent requires an interactive terminal; --yes cannot approve');
-      }
-      return consentOwner(action, context);
-    },
-  }),
-}),
+}, assertUser = (action, { principal }) => revisionOwnerGate(action, { principal, presence, env: options.env, cwd: options.cwd }),
 // The owner's principal credential, when the caller presents one; it is
 // passed only to assertUser and never stored.
 principal = null, presence, ...options } = {}) {

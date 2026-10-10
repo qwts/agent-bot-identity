@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 // Library operations are separate from application-skill disclosure.
+import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { importSkill, listSkills, showSkill, verifySkill, checkSkill, planSkillUpdate, applySkillUpdate, recoverSkillUpdate } from '../skill-library.mjs';
 import { skillLearningPacket, proposeSkillLearning, readLearningOutcome } from '../skill-learning.mjs';
 import { checkSoulSkillSource, proposeSoulSkillCandidate } from '../skill-source-check.mjs';
 import { NOT_CAPTURED } from '../skill-references.mjs';
 import { currentAgentId } from '../agent-identity.mjs';
-import { revisionCommand } from '../soul-revisions.mjs';
+import { discardRevisionStaging, revisionCommand, revisionOwnerGate } from '../soul-revisions.mjs';
+import { liveSkillDirectory, moveToTrash, stageSkillInstall, stageSkillUninstall } from '../skill-install.mjs';
+import { soulMarkers } from '../owner-action.mjs';
 import { soulDreamCommand } from './soul-dream.mjs';
 
 export const USAGE = `usage: agent-bot soul skill import PATH_OR_HTTPS_DOCUMENT [--json]
@@ -21,12 +24,19 @@ export const USAGE = `usage: agent-bot soul skill import PATH_OR_HTTPS_DOCUMENT 
        agent-bot soul skill learn UUID --soul AGENT_ID [--json]
        agent-bot soul skill learn UUID --soul AGENT_ID --package STAGING --outcome FILE --reason TEXT [--json]
        agent-bot soul skill learn UUID --soul AGENT_ID --candidate DIGEST --package STAGING --outcome FILE --reason TEXT [--json]
+       agent-bot soul skill install UUID|NAME --soul AGENT_ID [--json] [--principal-stdin]
+       agent-bot soul skill uninstall NAME --soul AGENT_ID [--trash] [--json] [--principal-stdin]
        agent-bot soul skill dream --soul ID|NAME --schedule PT<N>H|--run-now|--pause|--unschedule|--cancel RUN_ID|--ack-notice NOTICE_ID|--status|--history [--json]
 
 Local import preserves the selected directory; HTTPS import captures a skill
 document and supported inline instruction links. Public GitHub tree URLs preserve
 the selected directory at one resolved commit. Neither executes content.
-Harness installation and other repository adapters remain unimplemented.
+install copies the library's editable copy into the soul's skills/<name>/ with
+a file-hash record; uninstall archives it to archive/skills/<name>/ in the soul,
+or with --trash (owner only) moves it to the OS trash. The owner's install or
+uninstall applies as an owner-approved revision edit; a soul's is a proposal
+under its revision policy. Global harness skill folders are never written.
+Other repository adapters remain unimplemented.
 check never replaces accepted snapshots or local edits. update previews a recorded
 check; applying requires reviewed digests and preserves prior material. learn supplies guidance;
 recording outcomes proposes reviewed adaptations through the soul revision policy.
@@ -107,6 +117,58 @@ function updateMain(args, json, { stdout, stderr, ...options }) {
     return 1;
   }
 }
+// install/uninstall (#603) record through the existing revision path: an
+// owner (no soul marker) applies an owner-gated edit; a soul proposes.
+async function installMain(verb, args, json, { stdout, stderr, markers = soulMarkers, readStdin = () => readFileSync(0, 'utf8'),
+  assertSoulTarget = id => { if (currentAgentId() !== id) throw new Error('a soul may change only its own skills; bind an Agent ID first'); },
+  assertUser, trashOptions = {}, ...options }) {
+  const [target, ...rest] = args, flags = new Set();
+  let agentId;
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === '--soul' && agentId === undefined && rest[i + 1] && !rest[i + 1].startsWith('--')) agentId = rest[++i];
+    else if ((rest[i] === '--principal-stdin' || (verb === 'uninstall' && rest[i] === '--trash')) && !flags.has(rest[i])) flags.add(rest[i]);
+    else { stderr.write(USAGE); return 2; }
+  }
+  if (!target || target.startsWith('--') || !agentId) { stderr.write(USAGE); return 2; }
+  const trash = flags.has('--trash');
+  let staging;
+  try {
+    const owner = markers({ env: options.env, cwd: options.cwd }).length === 0;
+    if (trash && !owner) throw Object.assign(new Error('soul skill uninstall --trash is owner only; a soul can archive instead'), { code: 'owner-credential-required' });
+    const principal = flags.has('--principal-stdin') ? (() => {
+      try { return JSON.parse(readStdin()); }
+      catch { throw Object.assign(new Error('--principal-stdin needs the principal credential as JSON on stdin'), { code: 'skill-principal-invalid' }); }
+    })() : null;
+    const stage = verb === 'install' ? stageSkillInstall(target, agentId, options) : stageSkillUninstall(target, agentId, { ...options, trash });
+    staging = stage.staging;
+    const reason = verb === 'install' ? `Install skill ${stage.name}` : `${trash ? 'Trash' : 'Archive'} skill ${stage.name}`;
+    const live = trash ? liveSkillDirectory(stage.name, agentId, options) : null;
+    let trashed = null;
+    const gate = assertUser ?? ((action, context) => revisionOwnerGate(action, { ...context, presence: options.presence, env: options.env, cwd: options.cwd }));
+    // The trash move happens only once the owner gate has passed, and before
+    // the edit is applied, so the applied edit never deletes the skill's bytes.
+    const ownerGate = async (action, context) => {
+      const authorization = await gate(action, context);
+      if (live) trashed = moveToTrash(live, { now: options.now, ...trashOptions });
+      return authorization;
+    };
+    const revision = owner
+      ? await revisionCommand(['edit', agentId, staging, reason, '--apply'], { ...options, principal, assertUser: ownerGate })
+      : await revisionCommand(['propose', agentId, staging, reason], { ...options, assertSoulTarget });
+    const { staging: _, parentRevision: __, ...summary } = stage;
+    const result = { ...summary, ...(trashed ? { trashedTo: trashed } : {}), outcome: owner ? 'applied' : revision.status,
+      ...(owner ? { revision: revision.revision, changed: revision.changed } : { proposal: { proposalId: revision.proposalId, status: revision.status, revision: revision.revision } }) };
+    stdout.write(report(result, json));
+    return result.outcome === 'rejected' ? 1 : 0;
+  } catch (error) {
+    const failure = { code: error.code ?? `skill-${verb}-failed`, message: error.message };
+    if (json) stdout.write(`${JSON.stringify({ error: failure })}\n`);
+    else stderr.write(`agent-bot soul skill: ${failure.code}: ${failure.message}\n`);
+    return 1;
+  } finally {
+    if (staging) try { discardRevisionStaging(staging); } catch { /* already gone */ }
+  }
+}
 export function main(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, ...options } = {}) {
   if (argv.length === 1 && ['--help', '-h'].includes(argv[0])) { stdout.write(USAGE); return 0; }
   if (argv[0] === 'dream') return soulDreamCommand(argv.slice(1), { stdout, stderr, ...options });
@@ -114,6 +176,7 @@ export function main(argv = process.argv.slice(2), { stdout = process.stdout, st
   const args = argv.filter(arg => arg !== '--json');
   const [verb, value, ...extra] = args;
   if (verb === 'update' && flags.length <= 1) return updateMain(args.slice(1), flags.length, { stdout, stderr, ...options });
+  if ((verb === 'install' || verb === 'uninstall') && flags.length <= 1) return installMain(verb, args.slice(1), flags.length, { stdout, stderr, ...options });
   if (verb === 'learn' && flags.length <= 1) return learningMain(args.slice(1), flags.length, { stdout, stderr, ...options });
   if (verb === 'check' && extra.length && flags.length <= 1) return portableCheckMain(args.slice(1), flags.length, { stdout, stderr, ...options });
   const operations = { import: importSkill, show: showSkill, verify: verifySkill, check: checkSkill };

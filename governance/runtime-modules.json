@@ -184,6 +184,7 @@
     "skill-dream-service.mjs": "host",
     "skill-dream-store.mjs": "soul",
     "skill-learning.mjs": "soul",
+    "skill-install.mjs": "soul",
     "skill-source-provenance.mjs": "soul",
     "skill-source-check.mjs": "soul",
     "skill-references.mjs": "soul",

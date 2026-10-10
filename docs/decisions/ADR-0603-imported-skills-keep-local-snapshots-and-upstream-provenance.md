@@ -176,6 +176,17 @@ not amend those accepted decisions.
    shortcut: the soul path is agent-guided learning through its revision
    policy. Apply the selected organization's installation restrictions.
 
+   **Amendment, 2026-10-09 (owner direction on #603):** install places a
+   skill in the soul's own `<soul>/skills` and records its file hashes; the
+   agent discloses it progressively and adds it to a workspace only while it
+   is needed. Global targets (`~/.agent/skills`, `~/.<harness>/.../skills`)
+   are opt-in and only for a skill with a clear reason to always load. Skills
+   no longer relevant are archived to a folder in the soul, or moved to the
+   trash by the user. A repo's harness config folders are generally
+   gitignored. `soul skill install <skill> --soul <soul>` therefore exists;
+   it still records through the soul revision path (owner edit or soul
+   proposal). See [soul-skills.md](../soul-skills.md#install-into-a-soul).
+
 10. **Learn instructs an agent; it is not an ingestion pipeline.**
     `agent-bot soul skill learn <skill> --soul <soul>` supplies the entrypoint,
     provenance, previous learning outcomes, and guidance for progressive

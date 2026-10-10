@@ -25,6 +25,8 @@ agent-bot soul skill show UUID --json
 agent-bot soul skill verify UUID --json
 agent-bot soul skill check UUID --json
 agent-bot soul skill learn UUID --soul AGENT_ID --json
+agent-bot soul skill install UUID|NAME --soul AGENT_ID --json
+agent-bot soul skill uninstall NAME --soul AGENT_ID [--trash] --json
 agent-bot soul skill dream --soul AGENT_ID --status --json
 ```
 
@@ -332,6 +334,48 @@ the explicit HTTPS-document and public GitHub-directory adapters perform the
 bounded remote capture described above. No permission is inferred from a
 reference. Other repository adapters and harness installation remain open;
 harness retrieval is out of scope, as the next section states.
+
+## Install into a soul
+
+`install UUID|NAME --soul AGENT_ID` copies the library's editable copy of one
+import (`<root>/<uuid>/<name>/`) into the soul's own `skills/<name>/`. A name
+selects the import only when exactly one import has it. The soul's skill
+folder, not a global harness folder, is the default home (owner direction on
+#603, 2026-10-09): the agent discloses it progressively and should place it in
+a workspace only while it is needed. Global targets (`~/.agent/skills`,
+`~/.<harness>/.../skills`) are opt-in and not implemented yet; a skill belongs
+there only with a clear reason it must always load.
+
+Install also writes `provenance/skill-installs/<name>.json` in the package. It
+records the import UUID, the installed `files` manifest (path to `mode`,
+`size`, `sha256`) and its canonical `digest`, exactly as an import records its
+local baseline, plus the accepted snapshot digest, the portable source
+provenance and any excluded paths. No host path is recorded. Install refuses
+when `skills/<name>/` or the record already exists.
+
+`uninstall NAME --soul AGENT_ID` moves `skills/<name>/` to
+`archive/skills/<name>/<UTC stamp>/skill/` and its install record (if any) to
+`install.json` beside it. Archives sit outside `skills/`, so `soul build`
+renders nothing for them, and nothing is deleted. Any skill directory can be
+archived, installed or authored. `--trash` instead moves the live
+`skills/<name>/` to the OS trash (`~/.Trash` on macOS, the freedesktop.org
+trash elsewhere; refused on Windows and across volumes) and removes the
+record. It is owner only. The move happens after the owner gate passes and
+before the edit is applied, so the applied edit never deletes the bytes.
+
+Both commands stage a `soul revision prepare` copy and record it through the
+existing revision path; the soul needs an adopted revision. A caller with no
+soul marker is the owner: the change is an owner-gated `soul revision edit
+--apply` (Touch ID through keyd, the consent dialog, or `--principal-stdin`)
+and is live at once. A soul caller may target only its own Agent ID and
+produces a proposal under its `policy.json` (`ask`, `auto` or `never`); the
+live package changes only when that revision is applied. The staging is
+discarded either way. Prior bytes also stay in the revision history.
+
+Installed skills are ordinary package skills, so `soul build` still renders
+them for the soul's harnesses like an authored skill. Progressive workspace
+materialization, global opt-in targets and `.gitignore` handling of repo
+harness folders are later slices of #603.
 
 ## What is not captured
 
