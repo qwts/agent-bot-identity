@@ -19,7 +19,16 @@ function quoteForPowerShell(value) {
   return `'${text.replace(/'/g, "''")}'`;
 }
 
-export function createWindowsAccountCustody({ run = spawnSync } = {}) {
+// A Node intermediary inherits PowerShell 7 module paths, which Windows
+// PowerShell cannot load. Let the legacy shell construct its own module path.
+// https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_psmodulepath#starting-windows-powershell-from-powershell-7
+function legacyPowerShellEnv(env) {
+  return Object.fromEntries(
+    Object.entries(env).filter(([name]) => name.toLowerCase() !== 'psmodulepath'),
+  );
+}
+
+export function createWindowsAccountCustody({ run = spawnSync, env = process.env } = {}) {
   let cachedSid = null;
 
   function currentSid() {
@@ -37,16 +46,36 @@ export function createWindowsAccountCustody({ run = spawnSync } = {}) {
     const script = [
       "$ErrorActionPreference = 'Stop'",
       `$p = ${quoteForPowerShell(file)}`,
-      "try { $i = Get-Item -LiteralPath $p -Force; $o = (Get-Acl -LiteralPath $p).GetOwner([System.Security.Principal.SecurityIdentifier]).Value; $k = if ($i.PSIsContainer) { 'directory' } else { 'file' }; $r = if ([int]($i.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { 'link' } else { 'real' }; [Console]::Out.Write(($o, $k, $r) -join '|') } catch { [Console]::Out.Write('missing') }",
+      "$phase = 'get-item'",
+      'try {',
+      '  $i = Get-Item -LiteralPath $p -Force',
+      "  $phase = 'get-acl'",
+      '  $acl = Get-Acl -LiteralPath $p',
+      "  $phase = 'get-owner'",
+      '  $o = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value',
+      "  $phase = 'metadata'",
+      "  $k = if ($i.PSIsContainer) { 'directory' } else { 'file' }",
+      "  $r = if ([int]($i.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { 'link' } else { 'real' }",
+      "  [Console]::Out.Write(($o, $k, $r) -join '|')",
+      '} catch {',
+      "  switch ($phase) {",
+      "    'get-item' { [Console]::Out.Write('failed|get-item') }",
+      "    'get-acl' { [Console]::Out.Write('failed|get-acl') }",
+      "    'get-owner' { [Console]::Out.Write('failed|get-owner') }",
+      "    default { [Console]::Out.Write('failed|metadata') }",
+      '  }',
+      '}',
       '',
       '',
     ].join('\n');
     const result = run('powershell.exe', POWERSHELL_ARGS, {
-      input: script, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+      input: script, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], env: legacyPowerShellEnv(env),
     });
     if (result?.status !== 0) throw new Error('Windows custody could not inspect the path');
     const answer = String(result.stdout ?? '').trim();
     if (answer === 'missing') throw new Error('Windows custody path is missing or cannot be inspected');
+    const failure = /^failed\|(get-item|get-acl|get-owner|metadata)$/.exec(answer);
+    if (failure) throw new Error(`Windows custody inspection failed at ${failure[1]}`);
     const match = ENTRY.exec(answer);
     if (!match) throw new Error('Windows custody returned an invalid ownership record');
     return { owner: match[1], kind: match[2], link: match[3] === 'link' };
@@ -105,7 +134,7 @@ export function createWindowsAccountCustody({ run = spawnSync } = {}) {
       '',
     ].join('\n');
     const verified = run('powershell.exe', POWERSHELL_ARGS, {
-      input: script, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+      input: script, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], env: legacyPowerShellEnv(env),
     });
     if (verified?.status !== 0 || String(verified.stdout ?? '').trim() !== 'owner-only') {
       throw new Error('Windows private-file access could not be verified');

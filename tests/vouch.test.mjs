@@ -97,17 +97,18 @@ const WINDOWS_SID = 'S-1-5-21-1111111111-2222222222-3333333333-1001';
 const FOREIGN_SID = 'S-1-5-21-1111111111-2222222222-3333333333-1002';
 
 function fakeWindowsCustody({ sid = WINDOWS_SID, owners = new Map(), reparse = new Set(), malformed = null, failRestrict = false,
-  foreignAllow = false, aclAnswer = null, failAcl = false } = {}) {
+  foreignAllow = false, aclAnswer = null, failAcl = false, inspectFailure = null, env = process.env } = {}) {
   const calls = [];
   const unquote = (text) => text.replace(/''/g, "'");
   const run = (file, args, options = {}) => {
-    calls.push({ file, args, input: options.input ?? null });
+    calls.push({ file, args, input: options.input ?? null, env: options.env ?? null });
     if (file === 'whoami.exe') return { status: 0, stdout: `"DESK\\owner","${sid}"\r\n`, stderr: '' };
     if (file === 'icacls.exe') return { status: failRestrict ? 1 : 0, stdout: 'private path', stderr: 'private detail' };
     assert.equal(file, 'powershell.exe');
     if (options.input.includes('GetAccessRules')) {
       return { status: failAcl ? 1 : 0, stdout: aclAnswer ?? (foreignAllow ? 'refused' : 'owner-only'), stderr: 'private detail' };
     }
+    if (inspectFailure !== null) return { status: 0, stdout: `failed|${inspectFailure}`, stderr: 'private detail' };
     if (malformed !== null) return { status: 0, stdout: malformed, stderr: '' };
     const pathLiteral = /\$p = '((?:[^']|'')*)'/.exec(options.input)?.[1];
     assert.ok(pathLiteral, 'Get-Acl path is passed as a quoted literal');
@@ -119,7 +120,7 @@ function fakeWindowsCustody({ sid = WINDOWS_SID, owners = new Map(), reparse = n
     const link = reparse.has(target) || info.isSymbolicLink();
     return { status: 0, stdout: `${owner}|${kind}|${link ? 'link' : 'real'}\r\n`, stderr: '' };
   };
-  return { custody: createWindowsAccountCustody({ run }), calls, owners, reparse };
+  return { custody: createWindowsAccountCustody({ run, env }), calls, owners, reparse };
 }
 
 test('Windows SID custody identifies one account and validates its strict SID form', () => {
@@ -129,6 +130,54 @@ test('Windows SID custody identifies one account and validates its strict SID fo
   assert.equal(calls.length, 1, 'the account SID is resolved once per process');
   assert.ok(isWindowsSid(WINDOWS_SID));
   for (const invalid of ['S-1-5', 'S-1-5-abc', null, 1]) assert.equal(isWindowsSid(invalid), false);
+});
+
+test('Windows custody reports only a fixed inspection stage or a bounded refusal', () => {
+  for (const stage of ['get-item', 'get-acl', 'get-owner', 'metadata']) {
+    const { custody } = fakeWindowsCustody({ inspectFailure: stage });
+    assert.throws(
+      () => custody.assertOwnedDirectory('/private/path', WINDOWS_SID),
+      (error) => {
+        assert.equal(error.message, `Windows custody inspection failed at ${stage}`);
+        assert.doesNotMatch(error.message, /private path|private detail|S-1-5/);
+        return true;
+      },
+    );
+  }
+
+  const { custody } = fakeWindowsCustody({ malformed: 'private path; private detail; S-1-5-secret' });
+  assert.throws(
+    () => custody.assertOwnedDirectory('/private/path', WINDOWS_SID),
+    (error) => {
+      assert.equal(error.message, 'Windows custody returned an invalid ownership record');
+      assert.doesNotMatch(error.message, /private path|private detail|S-1-5-secret/);
+      return true;
+    },
+  );
+});
+
+test('Windows PowerShell child drops inherited PSModulePath variants without mutating caller env', () => {
+  const callerEnv = {
+    PSModulePath: 'C:\\pwsh7\\Modules',
+    pSmOdUlEpAtH: 'C:\\second-pwsh7\\Modules',
+    Path: 'C:\\Windows\\System32',
+    KEEP_FOR_CHILD: 'preserved',
+  };
+  const originalEnv = { ...callerEnv };
+  const dir = scratchDir();
+  const { custody, calls } = fakeWindowsCustody({ env: callerEnv });
+  loadOrCreateVouchKey(dir, { platform: 'win32', custody });
+
+  const powershellCalls = calls.filter((call) => call.file === 'powershell.exe');
+  assert.ok(powershellCalls.some((call) => call.input.includes('GetOwner(')), 'inspection invokes PowerShell');
+  assert.ok(powershellCalls.some((call) => call.input.includes('GetAccessRules')), 'ACL verification invokes PowerShell');
+  for (const call of powershellCalls) {
+    assert.ok(call.env, 'PowerShell receives an explicit child environment');
+    assert.equal(Object.keys(call.env).some((name) => name.toLowerCase() === 'psmodulepath'), false);
+    assert.equal(call.env.Path, callerEnv.Path);
+    assert.equal(call.env.KEEP_FOR_CHILD, 'preserved');
+  }
+  assert.deepEqual(callerEnv, originalEnv, 'the caller environment stays unchanged');
 });
 
 test('Windows vouch key preserves PKCS#8 bytes and identity, restricting the real file to its account', () => {
