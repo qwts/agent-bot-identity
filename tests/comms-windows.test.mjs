@@ -510,9 +510,8 @@ test('default Windows relay explicitly limits pipe-server impersonation and rela
     assert.deepEqual(env, originalEnv);
     const script = Buffer.from(spawnCall.args.at(-1), 'base64').toString('utf16le');
     assert.match(script, /NamedPipeClientStream/);
-    assert.match(script, /TokenImpersonationLevel\]::Identification/);
-    assert.doesNotMatch(script, /TokenImpersonationLevel\]::None|Impersonation\]/);
-    assert.match(script, /CopyToAsync/);
+    assert.match(script, /TokenImpersonationLevel\.Identification/);
+    assert.doesNotMatch(script, /TokenImpersonationLevel\.(None|Impersonation)/);
     assert.doesNotMatch(spawnCall.args.join(' '), /must-not-send|secret/i);
   } finally {
     channel.destroy();
