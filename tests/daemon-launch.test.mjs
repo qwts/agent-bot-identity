@@ -1177,3 +1177,14 @@ test('an unrecorded or unavailable policy outcome never becomes an allow', async
   await long.handler({ ...event, harness: 'codex' }, long.ports);
   assert.ok([...long.reports[0].detail].length <= 512);
 });
+
+test('a product refusal comes before the SOP policy, which never turns it into a launch', async (t) => {
+  for (const check of [() => null, () => denial]) {
+    const f = policyFixture(t, { check });
+    const refusing = createLaunchHandler({ ...f.options, harnessProblem: () => ({ code: 'harness-disabled', message: 'disabled here' }) });
+    await refusing({ ...event, harness: 'codex' }, f.ports);
+    untouched(f);
+    assert.equal(f.reports[0].code, 'harness-disabled');
+    assert.deepEqual([f.side.overrides, f.side.receipts], [[], []], 'the policy was not consulted');
+  }
+});
