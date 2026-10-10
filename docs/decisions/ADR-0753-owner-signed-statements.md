@@ -24,12 +24,16 @@ with a key agent-bot pins from the code-signed binary. It has two limits:
   and the gate falls back to the administrator dialog, which those contexts
   cannot show either.
 
-The owner's direction (issue body and
-[comment](https://github.com/qwts/agent-bot-identity/issues/753), 2026-10-09):
-the owner's key lives in a store agents cannot read, the owner signs
-statements with it, and a signed challenge is also the fallback when presence
-is unavailable. The owner signs wherever the key is (another Mac, a phone, a
-hardware key); the agent's machine holds only the pinned public key.
+The direction this record designs to was given in chat on 2026-10-09 and
+written into the issue body and
+[comment](https://github.com/qwts/agent-bot-identity/issues/753) by
+qwts-claude-agent: the owner's key lives in a store agents cannot read, the
+owner signs statements with it, and a signed challenge is also the fallback
+when presence is unavailable. The owner signs wherever the key is (another
+Mac, a phone, a hardware key); the agent's machine holds only the pinned
+public key. Because a bot wrote those down, they are not themselves verified
+owner decisions, which is the gap this record is about. The record is a
+proposal until the owner accepts it.
 
 The governing principle of 2026-10-09 applies: an authenticated owner is not
 refused. When authorization is needed and presence is unavailable, the agent
@@ -64,9 +68,12 @@ payload: { v: 1, aud: "agent-bot-owner-statement", kind, alg, key,
 - `text` is the decision in the owner's words: UTF-8, one paragraph, at most
   500 bytes, no control or bidirectional-override characters. The limit
   keeps the whole text inside the signing prompt.
-- `scope` names where the statement applies: `{ repo, number }` (a GitHub
-  `owner/name` and an issue or PR number), or `{ host }` for a challenge
-  answered for one machine. At least one is required.
+- `scope` names where the statement applies. Exactly three shapes are
+  valid: `{ repo, number }` (a GitHub `owner/name` and an issue or PR
+  number), `{ host }` (one machine), and `{ host, repo, number }`. `repo`
+  and `number` always appear together. A `statement` uses `{ repo, number }`;
+  a `challenge` always has `host`, plus `repo` and `number` when its
+  action has them. Any other shape is refused.
 - `action` is `hex(sha256(action))` for a challenge, the same `actionDigest`
   presence uses, and `null` for a statement.
 - `nonce` is 16 to 64 base64url characters. For a challenge the agent
@@ -77,8 +84,8 @@ payload: { v: 1, aud: "agent-bot-owner-statement", kind, alg, key,
 
 - **`agent-bot owner sign "<text>" --repo R --issue N [--expires 7d]`** builds
   the payload, shows the exact text and scope, and asks the configured store
-  to sign. The store's own prompt shows the text again, so the owner never
-  signs blind. It prints the token inside a block agents recognise:
+  to sign. keyd builds its own prompt from the payload, so the owner never
+  signs blind; the ssh store has no such display (section 5). It prints the token inside a block agents recognise:
 
   ```text
   -----BEGIN AGENT-BOT OWNER STATEMENT-----
@@ -117,8 +124,9 @@ public key in `<state>/owner/keys.json` (mode 0600), with its name, store,
 - **A statement never enrols, rotates or removes a key**, not even one signed
   by an enrolled key. Otherwise the fallback could bootstrap itself.
   `owner remove <name>` needs presence as well.
-- Each change leaves an audit receipt (`event: owner-key`,
-  `operation: enroll|remove`, `decision`, fingerprint).
+- Every attempt leaves an audit receipt (`event: owner-key`,
+  `operation: enroll|remove`, `decision: approved|refused|failed`,
+  fingerprint), whether it changed the pins or not, as `keyd-signer` pins do.
 - For the keyd store, `--pub` is not taken from the caller: agent-bot asks
   keyd for the statement key's public half on `owner.sock` only after
   presence verifies with the presence key, which is pinned from the signed
@@ -151,8 +159,12 @@ inbox, or on the daemon's decision routes (`POST /v0/approvals/decide`,
 `POST /v1/proposals/<id>/decision`) as a `statement` field.
 
 The gate accepts the reply only when it verifies under an enrolled key and
-its `action` and `nonce` equal the pending request's, exactly as
-`verifyPresence` checks an assertion. Who carried the reply does not matter:
+every request-bound field equals the pending challenge the gate itself
+recorded: `kind`, `text`, `scope`, `action` and `nonce`, with `exp` no
+later than the challenge's. `text` is the action summary whose digest is
+`action`, so the words the owner saw are the words of the pending request.
+The template is unsigned while it travels, so a relay that edits any field
+gets a reply the gate refuses. Who carried the reply does not matter:
 a subagent, an SSH session or a CI log can relay it, but none can forge it.
 A challenge-bound reply is the same authority as a presence assertion: it
 satisfies `confirmOwnerPresence` and `assertOwnerAction`, never more.
@@ -163,9 +175,11 @@ A store has two operations: return its public key, and sign a payload segment
 after showing the text to the owner. The runtime ships the protocol, the
 verifier and these stores; a host app provides only UI (#752).
 
-- **keyd (macOS).** A new keyd RPC, `owner/sign { text, payload }`, shows the
-  text in the Touch ID prompt and signs with a separate Keychain seed, the
-  owner statement key, not the presence seed. Keeping them apart means a
+- **keyd (macOS).** A new keyd RPC, `owner/sign { payload }`, takes only
+  the payload segment. keyd parses and validates it, builds the Touch ID
+  prompt from that payload's `text` and `scope`, and signs exactly those
+  bytes, so no caller can show one text and sign another. It signs with a
+  separate Keychain seed, the owner statement key, not the presence seed. Keeping them apart means a
   presence assertion can never be a statement and either key rotates on its
   own. This is GeniusBar-side and is reviewed there; this repository owns the
   contract and records it in [keyd-protocol.md](../keyd-protocol.md) when
@@ -176,6 +190,16 @@ verifier and these stores; a host app provides only UI (#752).
   with `verify-required`. A plain `ssh-ed25519` key file lives where an
   agent in the owner's account can read it, so the ssh store accepts one
   only with `--allow-software-key`, which `owner enroll` names as weaker.
+
+  **This store has no trusted display.** A security key proves a touch or a
+  PIN, not what was signed: an agent that controls the terminal can run
+  `ssh-keygen` itself with other bytes and ask for a touch. So the ssh store
+  keeps the no-blind-signing rule only when `owner sign` runs on a machine
+  where no agent runs in the owner's account, such as the owner's own laptop
+  or phone, never on an agent host. `owner enroll --store ssh` records that
+  condition and says so, and `owner sign` with the ssh store refuses a
+  caller with soul markers or a harness environment. Where a trusted display
+  is needed on an agent host, use keyd.
 
 A phone store (passkey) can be added later on the same interface.
 
@@ -213,10 +237,19 @@ not approval, and the agent says so instead of acting.
   Presenting the same decision for the same issue twice is the same decision.
   Scope stops it being carried to another repository or issue; `exp` stops
   it outliving the work.
-- **Conflicts.** For one scope, the verified statement with the latest `iat`
-  wins.
-- **Revocation** is removing the key (section 3). There is no per-statement
-  revocation list.
+- **Conflicts cannot be ordered offline.** A verifier given one token cannot
+  know a newer one exists, so an older approval stays valid until its `exp`
+  if the newer one is withheld. Agents read the issue or PR the scope names,
+  where statements are posted, and act on the latest verified one they find;
+  that is best effort, and the real bound is the short lifetime. To withdraw
+  an approval sooner, the owner signs a statement in the same scope saying so
+  and, if it matters more than that, removes the key.
+- **Removing a key is local.** `owner remove` changes only that host's pins,
+  and offline verification never asks anyone else. A lost key must be removed
+  on every host that pinned it. Hosts and CI that pin from one shared source
+  (open question 3) re-read it at least daily and drop keys that are gone
+  from it without asking, since dropping a key only tightens; adding a key
+  still needs presence. There is no per-statement revocation list.
 
 ## Consequences
 
@@ -250,8 +283,9 @@ not approval, and the agent says so instead of acting.
    gets a new statement.
 3. **Where do hosts without a GUI, and CI, get the owner's key?**
    Recommended: from the owner's GitHub account's SSH signing keys, for the
-   login the organization profile names, pinned on first use and changed only
-   by presence on a trusted machine. Agents cannot add keys to the owner's
+   login the organization profile names, re-read at least daily. A key dropped
+   there is dropped from the pins; a new key is pinned only after presence on
+   a trusted machine. Agents cannot add keys to the owner's
    GitHub account. Macs enrol locally through presence.
 4. **One owner key or several?** Recommended: several named keys (for
    example a Mac's keyd and a hardware key), at most four, each enrolled by
