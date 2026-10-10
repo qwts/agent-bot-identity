@@ -3,18 +3,21 @@
 // the daemon reads it from pass-cli for each take and presents it to the
 // broker's existing `POST /inbox`, for the App and repository the caller's
 // binding already is. An explicit GH_APP_HOOK_INBOX_TOKEN in the daemon's own
-// environment wins over the note: the owner's declaration is final.
+// environment wins over the audited pass-cli field: the owner's declaration is final.
 //
 // Secret-free by construction on the way out: every message is built from
 // the host, the status and a cause scrubbed of the bearer, never from the
 // URL's query or userinfo, and never the bearer itself.
 import { execFileSync } from 'node:child_process';
 
-import { inboxBearerItem, itemTitle } from './credential-names.mjs';
-import { createPassCredentialStore } from './secret-providers/pass-cli-credentials.mjs';
+import { credentialVault, inboxBearerItem, itemTitle } from './credential-names.mjs';
+import { createProtonPassAdapter } from './secret-providers/proton-pass.mjs';
+import { createSecretProviderRegistry, getSecret } from './secret-store.mjs';
 
 export const INBOX_TIMEOUT_MS = 10_000;
 export const INBOX_BEARER_TITLE = itemTitle(inboxBearerItem());
+export const INBOX_BEARER_FIELD = 'password';
+export const INBOX_BEARER_ACCESS_REASON = 'Read the shared gh-app-hook bearer for an authenticated inbox take';
 
 // Stable take_inbox codes (#299), carried on error.code and in the daemon's
 // JSON answer so the MCP surface can name them.
@@ -51,23 +54,33 @@ export function describeFetchCause(error) {
   return { kind: 'network', code, message };
 }
 
-// The bearer, read fresh for each take so a rotated note takes effect without
-// a daemon restart. pass-cli errors are already redacted (pass-cli.mjs).
-export function readInboxBearer({ env = process.env, store = createPassCredentialStore({ env }) } = {}) {
+// Read the exact shared bearer from the configured host vault for every take.
+// The provider receives an audited reason, and no caller or environment other
+// than the daemon's configured vault selects the credential.
+export function readInboxBearer({
+  env = process.env,
+  registry = createSecretProviderRegistry([createProtonPassAdapter({ env })]),
+} = {}) {
   let value;
   try {
-    value = store.read(INBOX_BEARER_TITLE);
+    value = getSecret({
+      provider: 'proton-pass',
+      collection: credentialVault(env),
+      item: INBOX_BEARER_TITLE,
+      field: INBOX_BEARER_FIELD,
+      reason: INBOX_BEARER_ACCESS_REASON,
+    }, { registry });
   } catch (error) {
-    if (error?.code === 'missing-item') {
+    if (['COLLECTION_NOT_FOUND', 'ITEM_NOT_FOUND', 'FIELD_NOT_FOUND', 'EMPTY_FIELD'].includes(error?.code)) {
       throw inboxError(
         'inbox-credential-missing',
-        `take_inbox failed: the inbox bearer is not stored; add a pass-cli note titled ${INBOX_BEARER_TITLE} in the Agent Identities vault holding INBOX_TOKEN, then retry`,
+        `take_inbox failed: the inbox bearer password field is not stored; add an active password field to ${INBOX_BEARER_TITLE} in the configured ${credentialVault(env)} vault, then retry`,
         { statusCode: 503 },
       );
     }
     throw inboxError(
       'inbox-credential-unavailable',
-      `take_inbox failed: the daemon could not read the inbox bearer (${sanitizeInboxDetail(error?.message ?? 'pass-cli failed')}); check \`pass-cli\` is signed in for the daemon's account, then retry`,
+      'take_inbox failed: the daemon could not read the inbox bearer; check the pass-cli session and configured vault, then retry',
       { statusCode: 503 },
     );
   }
@@ -75,7 +88,7 @@ export function readInboxBearer({ env = process.env, store = createPassCredentia
   if (token === '') {
     throw inboxError(
       'inbox-credential-missing',
-      `take_inbox failed: the pass-cli note ${INBOX_BEARER_TITLE} is empty; store INBOX_TOKEN in it, then retry`,
+      `take_inbox failed: the password field on ${INBOX_BEARER_TITLE} is empty; store INBOX_TOKEN in the configured vault, then retry`,
       { statusCode: 503 },
     );
   }
@@ -83,15 +96,15 @@ export function readInboxBearer({ env = process.env, store = createPassCredentia
 }
 
 // The bearer and where it came from. An explicit GH_APP_HOOK_INBOX_TOKEN in
-// the daemon's own environment wins; otherwise the pass-cli note. Only the
+// the daemon's own environment wins; otherwise the audited pass-cli field. Only the
 // source ('env' or 'pass-cli') is ever recorded, never the value.
-export function resolveInboxBearer({ env = process.env, readNote = () => readInboxBearer({ env }) } = {}) {
+export function resolveInboxBearer({ env = process.env, readSecret = () => readInboxBearer({ env }) } = {}) {
   const explicit = typeof env.GH_APP_HOOK_INBOX_TOKEN === 'string' ? env.GH_APP_HOOK_INBOX_TOKEN.trim() : '';
   if (explicit !== '') return { token: explicit, source: 'env' };
-  // A failed note read still names its source, so the refusal is receipted
+  // A failed secret read still names its source, so the refusal is receipted
   // with it.
   try {
-    return { token: readNote(), source: 'pass-cli' };
+    return { token: readSecret(), source: 'pass-cli' };
   } catch (error) {
     throw Object.assign(error, { bearerSource: 'pass-cli' });
   }
@@ -154,8 +167,8 @@ export async function takeFromBroker({ inboxUrl, token, bearerSource = 'pass-cli
     throw inboxError(
       'inbox-auth-expired',
       bearerSource === 'env'
-        ? `take_inbox failed: inbox at ${host} rejected the bearer (HTTP 401); update GH_APP_HOOK_INBOX_TOKEN in the daemon's environment to the current INBOX_TOKEN, or unset it to use the pass-cli note, then restart the daemon from that environment so it takes effect, and retry`
-        : `take_inbox failed: inbox at ${host} rejected the bearer (HTTP 401); update the pass-cli note ${INBOX_BEARER_TITLE} to the current INBOX_TOKEN, then retry`,
+        ? `take_inbox failed: inbox at ${host} rejected the bearer (HTTP 401); update GH_APP_HOOK_INBOX_TOKEN in the daemon's environment to the current INBOX_TOKEN, or unset it to use the pass-cli password field ${INBOX_BEARER_TITLE}, then restart the daemon from that environment so it takes effect, and retry`
+        : `take_inbox failed: inbox at ${host} rejected the bearer (HTTP 401); update the pass-cli password field ${INBOX_BEARER_TITLE} to the current INBOX_TOKEN, then retry`,
     );
   }
   if (response.status === 400) {
