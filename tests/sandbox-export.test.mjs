@@ -293,3 +293,17 @@ test('a real soul goes through soul env export to the path the drop names, and v
   f.copy(result.dropFolder);
   assert.equal((await verifySandboxExport('geniusbar-agent', f.ownerOptions)).verified, true);
 });
+
+test('an account whose souls all never ran exports and verifies with no soul archive', async (t) => {
+  const f = fixture(t);
+  const exportSoul = async (agentId) => { throw Object.assign(new Error(`${agentId} has no .soul-state`), { code: 'soul-state-missing' }); };
+  const { dropFolder, manifest } = await runSandboxExport({ ...f.options, owner: 'owner', exportSoul });
+  assert.deepEqual(manifest.categories.souls, { state: 'exported', count: 3 });
+  assert.equal(manifest.unexported.length, 3);
+  assert.ok(!manifest.files.some((entry) => entry.category === 'souls'));
+  f.copy(dropFolder);
+  const verified = await verifySandboxExport('geniusbar-agent', f.ownerOptions);
+  assert.equal(verified.verified, true);
+  assert.deepEqual(verified.souls, []);
+  assert.equal(verified.unexported.length, 3);
+});

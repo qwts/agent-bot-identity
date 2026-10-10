@@ -379,7 +379,8 @@ async function verifyExport(account, { dir = null, env = process.env, home = hom
   for (const name of EXPORT_CATEGORIES) {
     const claim = manifest.categories?.[name];
     const expected = name === 'souls' ? read[name] + neverRan : read[name];
-    const fits = claim?.state === 'exported' ? claim.count === expected && read[name] > 0
+    // A souls category of only never-run souls is exported with no archive.
+    const fits = claim?.state === 'exported' ? claim.count === expected && expected > 0
       : ['empty', 'skipped'].includes(claim?.state) ? claim.count === 0 && read[name] === 0 && (name !== 'souls' || neverRan === 0)
         : false;
     if (!fits) problems.push({ path: name, problem: `category ${claim?.state ?? 'missing'} ${claim?.count ?? '?'} but ${read[name]} file(s) read` });
