@@ -198,7 +198,7 @@ function nestedSettings(value, key, path) {
 // Separate TOML statements without treating apparent keys/headers inside
 // multiline strings, arrays or inline tables as configuration. This is a
 // lexical merge, not a general TOML parser; unrelated bytes stay in order.
-function tomlStatements(content) {
+export function tomlStatements(content) {
   const statements = [];
   let start = 0, quote = '', depth = 0, comment = false;
   for (let i = 0; i < content.length; i++) {

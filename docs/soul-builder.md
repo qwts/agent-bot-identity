@@ -454,19 +454,25 @@ Codex. Under the daemon, Codex turns also stay in the ACP session mode
 every Codex approval reaches the daemon.
 
 For the model on a daemon-run turn (`resolveSoulModel` in `soul-model.mjs`,
-read once per turn):
+read once per turn), the first layer that names one is sent as
+`session/set_model`:
 
-- The owner's `soul model` pick (GeniusBar's model picker) is sent as
-  `session/set_model` and wins over every layer below.
-- Otherwise, if the repo's own file names a model, nothing is sent and the
-  harness keeps it: Claude's `model` in `.claude/settings.local.json`, then
-  `.claude/settings.json`; Codex's root `model` in `.codex/config.toml`. The
-  repo files are read the same guarded way as for the mode.
-- Otherwise the package's declared `model` for that harness is sent, so a
-  soul working in a repo keeps its own model. In the soul's own home nothing
-  is sent: the harness reads the package's rendering there, as a direct open
-  does.
-- Otherwise the harness uses its own default.
+- The owner's `soul model` pick (GeniusBar's model picker).
+- The repo's own file in the turn's working directory: Claude's `model` in
+  `.claude/settings.local.json`, then `.claude/settings.json`; Codex's root
+  `model` in `.codex/config.toml` (bare or quoted key, basic or literal
+  string); Gemini's in `.gemini/settings.json`; OpenCode's in
+  `opencode.json`. They are read the same guarded way as for the mode, opened
+  once without following a link or blocking.
+- The package's declared `model` for that harness, so a soul working in a
+  repo keeps its own model. In the soul's own home it is also what a direct
+  open reads from the rendering.
+- Otherwise nothing is sent and the harness uses its own default.
+
+Sending the resolved model on every turn, not only the pick, means a resumed
+native session follows the order too: clearing a pick returns it to the repo's
+or the package's model. Where no layer names a model, a resumed session keeps
+the model it last ran until a new session starts.
 
 The model is not a permission, so no layer needs the owner's decision to
 change it. A model id the harness does not offer is logged and the turn

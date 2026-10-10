@@ -1698,8 +1698,8 @@ export function daemonModeFor({
 }
 
 // The model a daemon turn sends, in the owner's settings order (#379): the
-// owner's pick, else nothing when the repo's own file names one (the harness
-// reads it), else the soul package's declared model. Read once per turn.
+// owner's pick, else the repo's own file's model, else the soul package's
+// declared model. Read once per turn.
 export function daemonModelFor({ env = process.env, home = homedir(), config } = {}) {
   return (agentId, { harness = null, cwd = null } = {}) => {
     let soulDir = null;

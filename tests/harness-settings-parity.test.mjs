@@ -7,6 +7,7 @@
 // mode with LOOSENING_NEEDS_OWNER when nobody can be asked.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -196,16 +197,16 @@ async function modelTurn({ harness, cwd, env, home }) {
 for (const harness of ['claude', 'codex']) {
   test(`${harness}: the model follows the settings order on both paths`, async (t) => {
     const { root, env, home, soulDir } = fixture(t, 'safe', { model: 'soul-model' });
-    // In the soul's home both paths read the rendering; the daemon sends nothing.
+    // In the soul's home a direct open reads the rendering; the daemon sends the same model.
     assert.equal(directModel(soulDir, harness), 'soul-model');
     assert.equal(packageModel(soulDir, harness), 'soul-model');
-    assert.deepEqual(resolveSoulModel(ID, { harness, cwd: soulDir, soulDir, env, home }), { model: null, source: 'soul' });
-    assert.deepEqual(await modelTurn({ harness, cwd: soulDir, env, home }), { sent: null, running: null });
+    assert.deepEqual(resolveSoulModel(ID, { harness, cwd: soulDir, soulDir, env, home }), { model: 'soul-model', source: 'soul' });
+    assert.deepEqual(await modelTurn({ harness, cwd: soulDir, env, home }), { sent: 'soul-model', running: 'soul-model' });
     // In a repo that names no model, the package's model still applies.
     const repo = path.join(root, 'repo');
     mkdirSync(repo);
     assert.deepEqual(await modelTurn({ harness, cwd: repo, env, home }), { sent: 'soul-model', running: 'soul-model' });
-    // A repo that names one outranks the package: the harness reads it itself.
+    // A repo that names one outranks the package, and is sent so a resumed session follows it too.
     if (harness === 'claude') {
       mkdirSync(path.join(repo, '.claude'));
       writeFileSync(path.join(repo, '.claude/settings.json'), JSON.stringify({ model: 'repo-model' }));
@@ -214,13 +215,25 @@ for (const harness of ['claude', 'codex']) {
       writeFileSync(path.join(repo, '.codex/config.toml'), 'model = "repo-model"\n');
     }
     assert.equal(repoModel(repo, harness), 'repo-model');
-    assert.deepEqual(resolveSoulModel(ID, { harness, cwd: repo, soulDir, env, home }), { model: null, source: 'repo' });
-    assert.deepEqual(await modelTurn({ harness, cwd: repo, env, home }), { sent: null, running: null });
+    assert.deepEqual(resolveSoulModel(ID, { harness, cwd: repo, soulDir, env, home }), { model: 'repo-model', source: 'repo' });
+    assert.deepEqual(await modelTurn({ harness, cwd: repo, env, home }), { sent: 'repo-model', running: 'repo-model' });
     // The owner's pick (`soul model`, GeniusBar's picker) wins over the repo.
     setSoulModel(ID, 'owner-model', { env, home });
     assert.deepEqual(await modelTurn({ harness, cwd: repo, env, home }), { sent: 'owner-model', running: 'owner-model' });
+    // Clearing the pick goes back to the repo's model, and nothing is sent where no layer names one.
+    setSoulModel(ID, null, { env, home });
+    assert.deepEqual(await modelTurn({ harness, cwd: repo, env, home }), { sent: 'repo-model', running: 'repo-model' });
+    writeFileSync(path.join(soulDir, 'soul.json'), JSON.stringify({ ...JSON.parse(readFileSync(path.join(soulDir, 'soul.json'), 'utf8')), harness: { permissionMode: 'safe' } }));
+    assert.deepEqual(await modelTurn({ harness, cwd: path.join(root, 'state'), env, home }), { sent: null, running: null });
   });
 }
+
+test('a package model is any nonempty string the package contract accepts', (t) => {
+  const long = `provider/${'m'.repeat(200)}`;
+  const { soulDir } = fixture(t, 'safe', { model: long });
+  assert.equal(packageModel(soulDir, 'claude'), long);
+  assert.equal(directModel(soulDir, 'claude'), long);
+});
 
 test('a repo model is read only from the files and keys the harness uses for it', (t) => {
   const { root, env, home } = fixture(t, 'safe');
@@ -237,15 +250,33 @@ test('a repo model is read only from the files and keys the harness uses for it'
   rmSync(path.join(repo, '.claude/settings.local.json'));
   symlinkSync(path.join(root, 'linked.json'), path.join(repo, '.claude/settings.json'));
   assert.equal(repoModel(repo, 'claude'), null);
-  // Codex: root keys only, so a profile's model is not the repo's.
+  // Nor is a FIFO, which would otherwise block the read.
+  rmSync(path.join(repo, '.claude/settings.json'));
+  assert.equal(spawnSync('mkfifo', [path.join(repo, '.claude/settings.json')]).status, 0);
+  assert.equal(repoModel(repo, 'claude'), null);
+  // Codex: root keys only, so a profile's model is not the repo's; quoted
+  // keys and literal strings count, as TOML reads them.
   mkdirSync(path.join(repo, '.codex'));
   writeFileSync(path.join(repo, '.codex/config.toml'), '[profiles.x]\nmodel = "profile"\n');
   assert.equal(repoModel(repo, 'codex'), null);
+  writeFileSync(path.join(repo, '.codex/config.toml'), "approval_policy = 'never'\n'model' = 'literal' # repo\n[profiles.x]\nmodel = \"profile\"\n");
+  assert.equal(repoModel(repo, 'codex'), 'literal');
+  writeFileSync(path.join(repo, '.codex/config.toml'), '"model" = "quoted \\"one\\""\n');
+  assert.equal(repoModel(repo, 'codex'), 'quoted "one"');
+  // Gemini and OpenCode read their own project files.
   assert.equal(repoModel(repo, 'gemini'), null);
+  mkdirSync(path.join(repo, '.gemini'));
+  writeFileSync(path.join(repo, '.gemini/settings.json'), JSON.stringify({ model: 'gemini-repo' }));
+  assert.equal(repoModel(repo, 'gemini'), 'gemini-repo');
+  writeFileSync(path.join(repo, 'opencode.json'), JSON.stringify({ model: 'provider/opencode-repo' }));
+  assert.equal(repoModel(repo, 'opencode'), 'provider/opencode-repo');
+  assert.equal(repoModel(repo, 'devin'), null);
   // No census row: no package layer, so nothing is sent.
   const other = 'agent_77777777-7777-4777-8777-777777777777';
-  assert.deepEqual(resolveSoulModel(other, { harness: 'codex', cwd: repo, env, home }), { model: null, source: 'default' });
-  assert.equal(daemonModelFor({ env, home, config: {} })(other, { harness: 'codex', cwd: repo }), null);
+  const bare = path.join(root, 'bare');
+  mkdirSync(bare);
+  assert.deepEqual(resolveSoulModel(other, { harness: 'codex', cwd: bare, env, home }), { model: null, source: 'default' });
+  assert.equal(daemonModelFor({ env, home, config: {} })(other, { harness: 'codex', cwd: bare }), null);
 });
 
 // The owner's answers kept for a soul, and its loosening receipts.
