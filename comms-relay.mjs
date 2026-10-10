@@ -5,6 +5,8 @@
 import { execFile } from 'node:child_process';
 import process from 'node:process';
 
+import { minimalChildEnv } from './child-env.mjs';
+
 // The address a reply goes to: a principal by name, a soul by account/agent.
 export function senderAddress(from) {
   if (typeof from?.principal === 'string') return from.principal;
@@ -19,10 +21,16 @@ export const FINAL_REPLY_ERRORS = new Set(['reply-depth-exceeded', 'unknown-reci
 // Runs `agent-comms` as one soul: in its worktree, presenting only that
 // soul's binding (never one the caller inherited), resolving to the parsed
 // JSON result. The daemon relay and the reach-back MCP server (#146) share it,
-// so both speak to the broker as the soul and nobody else.
+// so both speak to the broker as the soul and nobody else. The broker client
+// resolves from PATH, so it gets the child-env boundary (#785): the reach
+// server would otherwise hand it a desktop harness's whole environment. The
+// broker's own location settings are paths and a label, and cross by name.
+const COMMS_CONFIG = ['AGENT_COMMS_SHARED_DIR', 'AGENT_COMMS_SERVICE_LABEL', 'AGENT_COMMS_BROKER_STATE_DIR'];
+
 export function agentCommsAsSoul({ env = process.env, run = execFile } = {}) {
   return ({ agentId, binding }, args) => new Promise((resolve, reject) => {
-    const { AGENT_BOT_BINDING: _inherited, ...hostEnv } = env;
+    const config = Object.fromEntries(COMMS_CONFIG.filter((name) => typeof env[name] === 'string').map((name) => [name, env[name]]));
+    const { AGENT_BOT_BINDING: _inherited, ...hostEnv } = { ...minimalChildEnv(env), ...config };
     // The daemon's own mailbox reads are not deliveries: agent-comms reports
     // what `inbox read` printed to this daemon (agent-comms#100), and a read
     // made for the relay or the delivered route must not come back as one.
