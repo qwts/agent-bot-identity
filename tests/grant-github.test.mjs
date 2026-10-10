@@ -16,7 +16,7 @@ import { ensureAgentIdentity, stateDirectory } from '../agent-identity.mjs';
 import { mintBindToken } from '../agent-binding.mjs';
 import { humanTokenItem, itemTitle } from '../credential-names.mjs';
 import { createGrantLedger } from '../delegation-grants.mjs';
-import { createGrantActor, humanTokenTitle, readHumanToken } from '../grant-github.mjs';
+import { GRANT_ACTS, createGrantActor, humanTokenTitle, readHumanToken } from '../grant-github.mjs';
 import { supervisorEnvironment } from '../daemon-supervisor.mjs';
 
 const AGENT_ID = 'agent_dddddddd-dddd-4ddd-8ddd-dddddddddddd';
@@ -141,7 +141,7 @@ test('a missing note refuses with human-token-missing and leaves the grant to sp
   assert.doesNotMatch(auditText(env), new RegExp(TOKEN));
 });
 
-test('a token for another account, an unset login or an unwired operation refuses without spending', async () => {
+test('a token for another account or an unset login refuses without spending', async () => {
   const { env } = scratch();
   const { ledger } = ledgerFor(env);
   const store = noteStore({ 'agent-bot.human/qwts-github-token': TOKEN });
@@ -169,14 +169,34 @@ test('a token for another account, an unset login or an unwired operation refuse
   const spent = await spend(createGrantActor({ env, store, fetchImpl: cased.fetchImpl }));
   assert.match(spent.receipt.detail, / as QWTS$/);
 
-  const state = { operation: 'issue-state', repo: 'qwts/agent-bot-identity', number: 108, state: 'closed' };
-  const closing = await approved(ledger, state);
-  const github = fakeGitHub();
-  const actor = createGrantActor({ env, store, fetchImpl: github.fetchImpl });
-  await assert.rejects(ledger.spend(closing.proposalId, { agentId: AGENT_ID, operation: state }, actor.perform, { prepare: actor.prepare }),
-    { code: 'grant-unsupported' });
-  assert.equal(github.calls.length, 0);
   assert.doesNotMatch(auditText(env), new RegExp(TOKEN));
+});
+
+test('an issue-state grant closes or reopens the issue as the owner', async () => {
+  const { env } = scratch();
+  const { ledger } = ledgerFor(env);
+  const store = noteStore({ 'agent-bot.human/qwts-github-token': TOKEN });
+  const github = fakeGitHub({ writeStatus: 200 });
+  const actor = createGrantActor({ env, store, fetchImpl: github.fetchImpl });
+  for (const state of ['closed', 'open']) {
+    const operation = { operation: 'issue-state', repo: 'qwts/agent-bot-identity', number: 108, state };
+    const grant = await approved(ledger, operation);
+    const spent = await ledger.spend(grant.proposalId, { agentId: AGENT_ID, operation }, actor.perform, { prepare: actor.prepare });
+    assert.match(spent.receipt.detail, / as qwts$/);
+    assert.deepEqual(github.calls.at(-1), {
+      method: 'PATCH', path: '/repos/qwts/agent-bot-identity/issues/108', authorization: `Bearer ${TOKEN}`, body: { state },
+    });
+  }
+  assert.doesNotMatch(auditText(env), new RegExp(TOKEN));
+});
+
+test('an operation the actor does not perform refuses before anything is read', async () => {
+  const github = fakeGitHub();
+  const store = noteStore({ 'agent-bot.human/qwts-github-token': TOKEN });
+  const actor = createGrantActor({ env: scratch().env, store, fetchImpl: github.fetchImpl });
+  await assert.rejects(actor.prepare({ operation: 'pr-approve', repo: 'qwts/x', number: 1 }), { code: 'grant-unsupported' });
+  assert.equal(github.calls.length, 0);
+  assert.equal(store.reads.length, 0);
 });
 
 test('a review request posts the reviewers; a failed write spends the grant and leaks nothing', async () => {
@@ -330,8 +350,12 @@ test('the MCP grant tools need a binding and show the daemon\'s sentence and cod
   };
   const state = createMcpState({ env: {}, home: '/nonexistent', cwd: '/nonexistent', client });
   const tool = async (name, args) => (await handleMcpMessage(state, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } })).result;
-  const listed = (await handleMcpMessage(state, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).result.tools.map((entry) => entry.name);
+  const tools = (await handleMcpMessage(state, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).result.tools;
+  const listed = tools.map((entry) => entry.name);
   assert.ok(listed.includes('request_grant') && listed.includes('spend_grant'));
+  // Every operation the daemon performs is discoverable from the tool schema.
+  const shapes = tools.find((entry) => entry.name === 'request_grant').inputSchema.properties.operation.description;
+  for (const operation of GRANT_ACTS) assert.match(shapes, new RegExp(`"${operation}"`));
 
   const unbound = await tool('request_grant', { operation: COMMENT });
   assert.equal(unbound.isError, true);

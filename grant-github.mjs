@@ -22,9 +22,9 @@ import { credentialNamespace, humanTokenItem, itemTitle } from './credential-nam
 import { createPassCredentialStore } from './secret-providers/pass-cli-credentials.mjs';
 
 export const HUMAN_LOGIN_VARIABLE = 'AGENT_BOT_HUMAN_LOGIN';
-// The granted writes this module performs. issue-state is grantable but not
-// wired yet, so it refuses before the grant is spent.
-export const GRANT_ACTS = Object.freeze(['issue-comment', 'review-request']);
+// The granted writes this module performs. Anything else refuses before the
+// grant is spent.
+export const GRANT_ACTS = Object.freeze(['issue-comment', 'issue-state', 'review-request']);
 export const GITHUB_API = 'https://api.github.com';
 export const GITHUB_TIMEOUT_MS = 15_000;
 
@@ -101,7 +101,7 @@ export function createGrantActor({
 } = {}) {
   async function prepare(operation) {
     if (!GRANT_ACTS.includes(operation.operation)) {
-      throw grantError('grant-unsupported', `${operation.operation} grants are not wired yet; nothing was spent`);
+      throw grantError('grant-unsupported', `${operation.operation} grants are not performed by this daemon; nothing was spent`);
     }
     const login = humanLogin(env);
     const call = { fetchImpl, apiUrl, timeoutMs, token: readHumanToken({ env, login, store }) };
@@ -123,6 +123,10 @@ export function createGrantActor({
     const repo = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
     if (operation.operation === 'issue-comment') {
       await github(call, 'POST', `${repo}/issues/${operation.number}/comments`, { body: operation.body });
+      return;
+    }
+    if (operation.operation === 'issue-state') {
+      await github(call, 'PATCH', `${repo}/issues/${operation.number}`, { state: operation.state });
       return;
     }
     await github(call, 'POST', `${repo}/pulls/${operation.number}/requested_reviewers`, { reviewers: operation.reviewers });

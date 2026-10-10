@@ -8,9 +8,8 @@ token. The soul never holds the token.
 The writes that can be granted are:
 
 - `issue-comment`: comment on an issue or pull request;
-- `review-request`: request review on a pull request;
-- `issue-state`: can be granted, but cannot yet be spent; it refuses with
-  `grant-unsupported`.
+- `issue-state`: close or reopen an issue or pull request;
+- `review-request`: request review on a pull request.
 
 Approving or merging a pull request is never grantable.
 
