@@ -25,15 +25,22 @@ export const populationSouls = (env = process.env) => () => listSouls({ file: po
 function sharedGateOptions(options) {
   const env = options.env ?? process.env;
   const list = populationSouls(env);
-  const allowChallenge = options.allowChallenge !== false;
+  // The terminal's signed-challenge fallback (#822) trusts the owner pin
+  // file, which anything running as the owner can write: a soul could pin a
+  // software-made "security key" and sign its own challenge. It stays off
+  // until pins are integrity-protected (#753); only `signedChallenges: true`
+  // turns it on, and nothing does yet. Without it the gate asks keyd, then
+  // the administrator dialog, and never reads the pins.
+  const allowChallenge = options.signedChallenges === true && options.allowChallenge !== false;
   return {
     ...options,
     env,
     presence: options.presence,
     consent: options.fallbackConsent ?? gate.consentOwner,
     listSouls: options.listSouls ?? list,
-    // A daemon decision route brings its own challenge hook (a ledger's), so
-    // it never prompts on the daemon's terminal.
+    // A daemon decision route brings its own challenge hook (a ledger's,
+    // behind the daemon's own default-off guard), so it never prompts on the
+    // daemon's terminal.
     challenge: typeof options.challenge === 'function' ? options.challenge : allowChallenge ? async (pendingAction, { summary }) => {
       const keys = readOwnerKeys({ env });
       if (keys.length === 0) return null;

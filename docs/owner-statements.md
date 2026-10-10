@@ -8,12 +8,11 @@ any agent, CI job or subagent can check offline. The design is
 contract as built.
 
 **Built so far:** the `s1.` format, `agent-bot owner verify`, pinned keys,
-the ssh store, and a CLI-only signed-challenge fallback for existing local SSH
-pins. When local presence is unavailable, an interactive owner gate can show a
-fresh challenge; the owner signs it on a trusted terminal and pastes the reply
-back. The daemon's decision routes have the same flow built but switched
-off until owner pins are integrity-protected (see below). There is no inbox
-delivery yet. **Not yet:**
+the ssh store, and signed-challenge fallbacks for the owner gate: a terminal
+prompt (#822) and the daemon's decision routes. Both are built and switched
+off until owner pins are integrity-protected (see below), so today the owner
+gate is answered only by keyd presence or the administrator dialog. There is
+no inbox delivery yet. **Not yet:**
 the keyd store (keyd's `owner/sign` RPC) and pins from the organization
 profile. Until then `owner enroll --store keyd` answers
 `owner-store-unavailable`.
@@ -86,6 +85,20 @@ its text, scope and expiry, and asks `ssh-keygen -Y sign` to sign it with the
 key at `--key` (its public half is read from `PATH.pub`). It refuses a caller
 with soul markers or an agent harness's environment (`CLAUDECODE`,
 `CODEX_*`, `CURSOR_AGENT`, and the others `detect-harness.mjs` keys on).
+
+**Why the challenge fallbacks are off.** `<state>/owner/keys.json` is
+writable by anything running as the owner, a soul included, and a security
+key made in software (`sk-ssh-ed25519` carries no attestation) looks the
+same as hardware. A soul that clears its markers could pin its own key and
+sign its own challenge. So until the pins are integrity-protected (for
+example MAC'd or signed by keyd), no owner gate trusts the pin file: the
+terminal fallback needs the gate option `signedChallenges: true` and the
+daemon routes need `signedChallengeRoutes`, and nothing sets either. With
+them off the gate never reads the pins, so a missing or malformed pin file
+never blocks the owner. This closes a gap in the terminal fallback as
+merged in #822. `owner enroll`, `sign` and `verify` are unchanged.
+
+When the terminal fallback is on, it works as follows.
 
 **sign --challenge** accepts the JSON challenge shown by the waiting owner gate.
 Run it on a trusted terminal with the matching SSH key, inspect the displayed

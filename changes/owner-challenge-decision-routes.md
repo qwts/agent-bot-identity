@@ -1,1 +1,1 @@
-- The audit receipt for a soul's tool-call decision now says how you authorized it (Touch ID, the admin dialog, or a signed statement), and those decisions are answered only by Touch ID or the admin dialog, even when the owner key file is missing or malformed (#753).
+- Owner approvals, including a soul's tool-call decisions, are answered only by Touch ID or the admin dialog until owner keys are tamper-protected, even when the owner key file is missing or malformed. Each tool-call decision's audit receipt now says how you authorized it (#753).

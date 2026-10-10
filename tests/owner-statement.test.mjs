@@ -245,7 +245,7 @@ test('the challenge gate reaches the terminal reply flow only after unavailable 
   const proof = await assertOwnerAction(action, {
     env: ctx.env, cwd: ctx.dir, markers: () => [], challengeNow: now, challengeHost: () => 'remote-host',
     presence: async () => { asked += 1; throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); },
-    challengePrompt: async (challenges) => {
+    signedChallenges: true, challengePrompt: async (challenges) => {
       promptCount += 1;
       const summary = challenges[0].payload.text;
       assert.equal(summary, ownerActionSummary(action, { env: ctx.env }));
@@ -263,6 +263,36 @@ test('the challenge gate reaches the terminal reply flow only after unavailable 
   assert.equal(promptCount, 1);
 });
 
+// The pin file is writable by anything running as the owner (#753): a soul
+// that clears its markers can pin a software-made "security key" and sign
+// its own challenge. Until pins are integrity-protected the terminal gate
+// never reads them, and keyd or the administrator dialog decides.
+test('by default the owner gate ignores a forged pin and its signed reply, and asks the dialog', async (t) => {
+  const ctx = command(t);
+  const forged = securityKey();
+  writeOwnerKeys([pinFor(forged, { name: 'forged' })], { env: ctx.env });
+  const action = 'owner remove yubikey';
+  const sign = (challenges) => {
+    const segment = encodePayload(challenges[0].payload);
+    return armorStatement(`s1.${segment}.${forged.sshsig(Buffer.from(segment)).toString('base64url')}`);
+  };
+  const dialog = [];
+  const options = {
+    env: ctx.env, cwd: ctx.dir, markers: () => [],
+    presence: async () => { throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); },
+    challengePrompt: async (challenges) => sign(challenges),
+    fallbackConsent: async (asked) => { dialog.push(asked); return { method: 'consent' }; },
+  };
+  assert.deepEqual(await assertOwnerAction(action, options), { method: 'consent' });
+  assert.deepEqual(await presenceOrConsent(action, options), { method: 'consent' });
+  assert.deepEqual(dialog, [action, action]);
+  // Turned on, the same forgery would answer: the guard is what stops it.
+  assert.equal((await assertOwnerAction(action, { ...options, signedChallenges: true })).method, 'statement');
+  // A pin file that cannot be read never blocks the dialog either.
+  writeFileSync(ownerKeysPath({ env: ctx.env }), '{ not json');
+  assert.deepEqual(await assertOwnerAction(action, options), { method: 'consent' });
+});
+
 test('the owner-action presence wrapper checks presence once before the challenge flow', async (t) => {
   const ctx = command(t);
   const key = securityKey();
@@ -275,7 +305,7 @@ test('the owner-action presence wrapper checks presence once before the challeng
   const options = {
     env: ctx.env, cwd: ctx.dir, markers: () => [], challengeNow: () => NOW, challengeHost: () => 'remote-host',
     presence: async () => { presenceCalls += 1; throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); },
-    challengePrompt: async ([challenge]) => {
+    signedChallenges: true, challengePrompt: async ([challenge]) => {
       challengeCalls += 1;
       if (signedReply) return signedReply;
       const payload = { ...challenge.payload, iat: challenge.payload.iat + 1 };
@@ -302,7 +332,7 @@ test('challenge refusal, cancellation, and disabled challenge paths never approv
   const unavailable = async () => { throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); };
   await assert.rejects(assertOwnerAction(action, {
     env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable,
-    challengePrompt: async (challenges) => {
+    signedChallenges: true, challengePrompt: async (challenges) => {
       const altered = { ...challenges[0].payload, text: 'different action' };
       const segment = encodePayload(altered);
       return armorStatement(`s1.${segment}.${key.sshsig(Buffer.from(segment)).toString('base64url')}`);
@@ -313,7 +343,7 @@ test('challenge refusal, cancellation, and disabled challenge paths never approv
 
   const disabled = await assertOwnerAction(action, {
     env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable, allowChallenge: false,
-    challengePrompt: () => assert.fail('enrollment and removal never use the signed fallback'),
+    signedChallenges: true, challengePrompt: () => assert.fail('enrollment and removal never use the signed fallback'),
     fallbackConsent: async () => { fallback += 1; return { method: 'consent' }; },
   });
   assert.deepEqual(disabled, { method: 'consent' });
@@ -321,7 +351,7 @@ test('challenge refusal, cancellation, and disabled challenge paths never approv
 
   await assert.rejects(assertOwnerAction(action, {
     env: ctx.env, cwd: ctx.dir, markers: () => [], presence: async () => { throw Object.assign(new Error('declined'), { code: 'owner-declined' }); },
-    challengePrompt: () => assert.fail('owner-declined is final'),
+    signedChallenges: true, challengePrompt: () => assert.fail('owner-declined is final'),
     fallbackConsent: () => assert.fail('owner-declined never reaches consent'),
   }), { code: 'owner-declined' });
 });
@@ -332,7 +362,7 @@ test('hosts with no enrolled owner keys retain the existing administrator fallba
   const proof = await assertOwnerAction('owner action without enrolled pins', {
     env: ctx.env, cwd: ctx.dir, markers: () => [],
     presence: async () => { throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); },
-    challengePrompt: () => assert.fail('an empty pin store does not produce a challenge'),
+    signedChallenges: true, challengePrompt: () => assert.fail('an empty pin store does not produce a challenge'),
     fallbackConsent: async () => { fallback += 1; return { method: 'consent' }; },
   });
   assert.deepEqual(proof, { method: 'consent' });
@@ -349,7 +379,7 @@ test('owner challenge refuses keyd-only pins and rechecks SSH pins after waiting
   writeOwnerKeys([pinFor(keydKey(), { store: 'keyd', name: 'local-keyd' })], { env: ctx.env });
   await assert.rejects(assertOwnerAction(action, {
     env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable,
-    challengePrompt: () => assert.fail('keyd pins are not supported by this CLI challenge flow'),
+    signedChallenges: true, challengePrompt: () => assert.fail('keyd pins are not supported by this CLI challenge flow'),
     fallbackConsent: () => { fallback += 1; return { method: 'consent' }; },
   }), { code: 'owner-unreachable' });
   assert.equal(fallback, 0, 'any enrolled key disables administrator fallback');
@@ -358,7 +388,7 @@ test('owner challenge refuses keyd-only pins and rechecks SSH pins after waiting
   writeOwnerKeys([pin], { env: ctx.env });
   await assert.rejects(assertOwnerAction(action, {
     env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable,
-    challengePrompt: async ([challenge]) => {
+    signedChallenges: true, challengePrompt: async ([challenge]) => {
       // Removing the key while the owner signs must invalidate the pending reply.
       writeOwnerKeys([], { env: ctx.env });
       const payload = { ...challenge.payload, iat: challenge.payload.iat + 1 };
@@ -373,7 +403,7 @@ test('owner challenge refuses keyd-only pins and rechecks SSH pins after waiting
   writeOwnerKeys([pin], { env: ctx.env });
   await assert.rejects(assertOwnerAction(action, {
     env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable,
-    challengePrompt: async ([challenge]) => {
+    signedChallenges: true, challengePrompt: async ([challenge]) => {
       writeOwnerKeys([replacement], { env: ctx.env });
       const payload = { ...challenge.payload, iat: challenge.payload.iat + 1 };
       const segment = encodePayload(payload);
