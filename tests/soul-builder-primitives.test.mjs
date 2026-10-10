@@ -248,3 +248,62 @@ test('Qwen Code parses the rendered agent front matter and system prompt (#378)'
     'tools: ["grep_search", "read_file", "run_shell_command"]']);
   assert.equal(prompt, `${MARKER}\nReview the code.\n`);
 });
+
+test('Codex receives a command as the skill its own command importer writes (#378)', () => {
+  const output = buildHarnessFiles([entry('AGENTS.md', '# Soul'), entry('commands/ship.md', '---\ndescription: "Ship: \\"it\\""\n---\n\nRun the release.\n'),
+    entry('commands/bare.md', ' \n')]);
+  const ship = output.get('.agents/skills/source-command-ship/SKILL.md').toString();
+  assert.equal(ship, `---\nname: "source-command-ship"\ndescription: "Ship: \\"it\\""\n---\n${MARKER}\n\n# source-command-ship\n\n`
+    + 'Use this skill when the user asks to run the migrated source command `ship`.\n\n## Command Template\n\nRun the release.\n');
+  // Codex's SKILL.md parser at rust-v0.157.0: a `---` line, the YAML, a `---` line.
+  const [first, ...rest] = ship.split('\n');
+  assert.equal(first, '---');
+  const yaml = rest.slice(0, rest.indexOf('---'));
+  assert.deepEqual(Object.fromEntries(yaml.map((line) => [line.slice(0, line.indexOf(':')), JSON.parse(line.slice(line.indexOf(':') + 2))])),
+    { name: 'source-command-ship', description: 'Ship: "it"' });
+  assert.equal(output.get('.agents/skills/source-command-bare/SKILL.md').toString(), `---\nname: "source-command-bare"\n`
+    + `description: "Migrated source command \`bare\`"\n---\n${MARKER}\n\n# source-command-bare\n\n`
+    + 'Use this skill when the user asks to run the migrated source command `bare`.\n\n## Command Template\n\nNo command template body was found.\n');
+  const report = harnessReport(output).codex;
+  assert.deepEqual(report.commands, { received: ['bare', 'ship'], rendered: ['bare', 'ship'] });
+  assert.deepEqual(report.unsupported.commands, []);
+  assert.ok(report.files.includes('.agents/skills/source-command-ship/SKILL.md'));
+  for (const path of output.keys()) if (path.startsWith('.agents/')) assert.ok(isGeneratedPath(path), path);
+});
+
+test('Codex reports a command its importer would skip as unsupported, never cut down (#378)', () => {
+  const skipped = { arguments: 'Review $ARGUMENTS', numbered: 'Review $1', braces: 'Review {{args}}', shell: 'Status: !`git status`',
+    'spaced-shell': 'Status: ! `git status`', include: 'Read @src/index.js', [`a${'b'.repeat(49)}`]: 'Fifty characters' };
+  const kept = { email: 'Mail me@example.com', at: 'Reply @ once', [`a${'b'.repeat(48)}`]: 'Forty-nine characters' };
+  const output = buildHarnessFiles([entry('AGENTS.md', '# Soul'),
+    ...Object.entries({ ...skipped, ...kept }).map(([name, body]) => entry(`commands/${name}.md`, body))]);
+  const report = harnessReport(output).codex;
+  assert.deepEqual(report.unsupported.commands, Object.keys(skipped).sort());
+  assert.deepEqual(report.commands.rendered, Object.keys(kept).sort());
+  for (const name of Object.keys(skipped)) assert.equal(output.has(`.agents/skills/source-command-${name}/SKILL.md`), false, name);
+  assert.ok(output.get('.qwen/commands/arguments.md'), 'other harnesses still render it');
+});
+
+test('Codex command skills touch only marked files in the shared .agents/skills/ (#378)', (t) => {
+  const root = fixture(t);
+  put(root, 'commands/ship.md', 'Run the release.\n');
+  // Other tools and people keep skills in `.agents/skills/` too.
+  const own = ['.agents/skills/mine/SKILL.md', '.agents/skills/source-command-other/SKILL.md', '.agents/README.md'];
+  for (const path of own) put(root, path, 'authored\n');
+  const revision = computePackageRevision(root);
+  buildSoulDirectory(root);
+  assert.ok(readFileSync(join(root, '.agents/skills/source-command-ship/SKILL.md'), 'utf8').includes(`---\n${MARKER}\n`));
+  assert.equal(computePackageRevision(root), revision);
+  const rebuilt = buildSoulDirectory(root);
+  assert.deepEqual([rebuilt.writes, rebuilt.removals], [[], []]);
+  rmSync(join(root, 'commands/ship.md'));
+  buildSoulDirectory(root);
+  assert.equal(existsSync(join(root, '.agents/skills/source-command-ship')), false);
+  for (const path of own) assert.equal(readFileSync(join(root, path), 'utf8'), 'authored\n', path);
+  // An unmarked skill where a command would render is never overwritten.
+  put(root, 'commands/other.md', 'Other.\n');
+  for (const check of [true, false]) {
+    assert.throws(() => buildSoulDirectory(root, { check }), /unmarked generated path conflict: .*\.agents\/skills\/source-command-other\/SKILL\.md/);
+  }
+  for (const path of own) assert.equal(readFileSync(join(root, path), 'utf8'), 'authored\n', path);
+});

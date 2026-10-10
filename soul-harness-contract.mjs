@@ -10,8 +10,9 @@
 // #247 appends Qwen Code's settings file, never `.qwen/` as a whole, and the
 // Qwen commands slice (#378) appends its project commands folder, the
 // Qwen agents slice its project agents folder, and the Qwen skills slice its
-// project skills folder, where Qwen also keeps skills of its own: an unmarked
-// file there is never the builder's.
+// project skills folder, where Qwen also keeps skills of its own, and the
+// Codex commands slice the shared `.agents/skills/`, where other tools and
+// people keep skills too: an unmarked file in either is never the builder's.
 // Array order is part of the canonical format-2 ignore list, so entries are
 // only ever appended or deliberately reordered.
 export const GENERATED_HARNESS_PATHS = Object.freeze([
@@ -23,6 +24,7 @@ export const GENERATED_HARNESS_PATHS = Object.freeze([
   '.qwen/commands/',
   '.qwen/agents/',
   '.qwen/skills/',
+  '.agents/skills/',
 ]);
 export const GENERATED_HARNESS_MARKER = '<!-- agent-bot soul-builder: generated -->';
 // Format 2's fixed contract. Generated paths are eligible only for exact-byte
@@ -39,11 +41,26 @@ export const PACKAGE_IGNORE_LIST = Object.freeze({
 // Kiro's agent folders and Kiro's MCP file; #247 appended Qwen Code's
 // settings file; the Qwen commands slice appended `.qwen/commands/`; the Qwen
 // agents slice appended `.qwen/agents/`; the Qwen skills slice appended
-// `.qwen/skills/`). A newer agent-bot
+// `.qwen/skills/`; the Codex commands slice appended `.agents/skills/`). A
+// newer agent-bot
 // still reads a soul carrying one of these: the generated paths it adds are
 // its own renderer's, so the package hashes the same. An unknown list stays
 // refused, so an older agent-bot never guesses at a newer soul.
 export const PRIOR_PACKAGE_IGNORE_LISTS = Object.freeze([
+  Object.freeze({
+    directories: PACKAGE_IGNORE_LIST.directories,
+    generatedPaths: Object.freeze([
+      '.claude/', '.codex/', '.cursor/', '.opencode/', '.devin/', '.gemini/',
+      '.github/copilot-instructions.md', '.mcp.json', 'CLAUDE.md', 'GEMINI.md', 'opencode.json',
+      '.github/hooks/agent-bot-soul.json',
+      '.github/agents/', '.kiro/agents/', '.kiro/settings/mcp.json',
+      '.qwen/settings.json',
+      '.qwen/commands/',
+      '.qwen/agents/',
+      '.qwen/skills/',
+    ]),
+    generatedMarker: GENERATED_HARNESS_MARKER,
+  }),
   Object.freeze({
     directories: PACKAGE_IGNORE_LIST.directories,
     generatedPaths: Object.freeze([
