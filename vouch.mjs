@@ -21,9 +21,10 @@ import {
   sign,
   verify,
 } from 'node:crypto';
-import { chmodSync, closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { createWindowsAccountCustody } from './windows-account-custody.mjs';
 
 export const SOUL_TOKEN_TTL_SECONDS = 300;
 export const SOUL_TOKEN_AUDIENCE = 'agent-comms';
@@ -55,7 +56,27 @@ function tightenKeyMode(file) {
 
 // A key that is not Ed25519 PKCS#8 is refused and left in place. Replacing it
 // would silently rotate the public key the broker has already approved.
-function readVouchKey(file) {
+function readVouchKey(file, { platform, custody, sid }) {
+  if (platform === 'win32') {
+    try {
+      // `lstat` distinguishes a missing first-run key from an untrusted one;
+      // the Windows seam then checks owner, file type and reparse status.
+      lstatSync(file);
+    } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      throw new Error('vouch key file could not be inspected');
+    }
+    let pem;
+    try {
+      custody.assertOwnedFile(file, sid);
+      custody.restrictPrivateFile(file, sid);
+      pem = readFileSync(file, 'utf8');
+    } catch {
+      throw new Error('vouch key file custody or private access could not be verified');
+    }
+    return parseVouchKey(pem);
+  }
+
   // O_NOFOLLOW and an owner check, like the binding reader: a symlink or a
   // foreign file is refused rather than read and chmodded through.
   let pem;
@@ -71,11 +92,13 @@ function readVouchKey(file) {
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
+  return parseVouchKey(pem);
+}
+
+function parseVouchKey(pem) {
   try {
     const privateKey = createPrivateKey(pem);
-    if (privateKey.asymmetricKeyType !== 'ed25519') {
-      throw new Error('not ed25519');
-    }
+    if (privateKey.asymmetricKeyType !== 'ed25519') throw new Error('not ed25519');
     return privateKey;
   } catch {
     throw new Error('vouch key file is not an Ed25519 PKCS#8 key');
@@ -93,9 +116,42 @@ function describeKey(file, privateKey, created) {
   };
 }
 
-export function loadOrCreateVouchKey(stateDir) {
+export function loadOrCreateVouchKey(stateDir, {
+  platform = process.platform, custody = null, openKeyFile = openSync, writeKeyFile = writeFileSync,
+} = {}) {
   const file = vouchKeyPath(stateDir);
-  const existing = readVouchKey(file);
+  if (platform === 'win32') {
+    custody ??= createWindowsAccountCustody();
+    const sid = custody.currentSid();
+    mkdirSync(path.dirname(file), { recursive: true });
+    custody.assertOwnedDirectory(path.dirname(file), sid);
+    const existing = readVouchKey(file, { platform, custody, sid });
+    if (existing) return describeKey(file, existing, false);
+
+    const { privateKey } = generateKeyPairSync('ed25519');
+    const pem = privateKey.export({ type: 'pkcs8', format: 'pem' });
+    let fd;
+    try {
+      fd = openKeyFile(file, 'wx');
+      // Restrict the new empty file before writing private key bytes.
+      custody.assertOwnedFile(file, sid);
+      custody.restrictPrivateFile(file, sid);
+      writeFileSync(fd, pem, { encoding: 'utf8' });
+      custody.assertOwnedFile(file, sid);
+      return describeKey(file, privateKey, true);
+    } catch (error) {
+      if (error.code === 'EEXIST') {
+        const raced = readVouchKey(file, { platform, custody, sid });
+        if (!raced) throw new Error('vouch key could not be read');
+        return describeKey(file, raced, false);
+      }
+      throw error;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
+  }
+
+  const existing = readVouchKey(file, { platform });
   if (existing) {
     tightenKeyMode(file);
     return describeKey(file, existing, false);
@@ -104,10 +160,10 @@ export function loadOrCreateVouchKey(stateDir) {
   const pem = privateKey.export({ type: 'pkcs8', format: 'pem' });
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   try {
-    writeFileSync(file, pem, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    writeKeyFile(file, pem, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
   } catch (error) {
     if (error.code !== 'EEXIST') throw new Error('vouch key could not be created');
-    const raced = readVouchKey(file);
+    const raced = readVouchKey(file, { platform });
     if (!raced) throw new Error('vouch key could not be read');
     tightenKeyMode(file);
     return describeKey(file, raced, false);

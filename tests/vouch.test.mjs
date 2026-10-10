@@ -2,7 +2,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,7 @@ import {
   vouchKeyPath,
   vouchStateDir,
 } from '../vouch.mjs';
+import { createWindowsAccountCustody, isWindowsSid } from '../windows-account-custody.mjs';
 
 const AGENT_ID = 'agent_33333333-3333-4333-8333-333333333333';
 const PARENT_ID = 'agent_22222222-2222-4222-8222-222222222222';
@@ -71,6 +72,169 @@ test('loadOrCreateVouchKey writes one Ed25519 PKCS#8 key, mode 0600 (#254)', () 
   assert.equal(second.publicKeyPem, first.publicKeyPem);
   assert.equal(readFileSync(second.file, 'utf8'), pem);
   assert.equal(statSync(second.file).mode & 0o777, 0o600);
+});
+
+test('POSIX vouch key race loads the exclusive-create winner without replacing it', () => {
+  const dir = scratchDir();
+  const file = vouchKeyPath(dir);
+  const { privateKey } = generateKeyPairSync('ed25519');
+  const winnerPem = privateKey.export({ type: 'pkcs8', format: 'pem' });
+  let raced = false;
+  const writeKeyFile = (target, pem, options) => {
+    if (!raced) {
+      raced = true;
+      writeFileSync(target, winnerPem, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    }
+    return writeFileSync(target, pem, options);
+  };
+  const loaded = loadOrCreateVouchKey(dir, { platform: 'linux', writeKeyFile });
+  assert.equal(loaded.created, false);
+  assert.equal(loaded.publicKeyPem, createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }));
+  assert.equal(readFileSync(file, 'utf8'), winnerPem);
+});
+
+const WINDOWS_SID = 'S-1-5-21-1111111111-2222222222-3333333333-1001';
+const FOREIGN_SID = 'S-1-5-21-1111111111-2222222222-3333333333-1002';
+
+function fakeWindowsCustody({ sid = WINDOWS_SID, owners = new Map(), reparse = new Set(), malformed = null, failRestrict = false,
+  foreignAllow = false, aclAnswer = null, failAcl = false } = {}) {
+  const calls = [];
+  const unquote = (text) => text.replace(/''/g, "'");
+  const run = (file, args, options = {}) => {
+    calls.push({ file, args, input: options.input ?? null });
+    if (file === 'whoami.exe') return { status: 0, stdout: `"DESK\\owner","${sid}"\r\n`, stderr: '' };
+    if (file === 'icacls.exe') return { status: failRestrict ? 1 : 0, stdout: 'private path', stderr: 'private detail' };
+    assert.equal(file, 'powershell.exe');
+    if (options.input.includes('GetAccessRules')) {
+      return { status: failAcl ? 1 : 0, stdout: aclAnswer ?? (foreignAllow ? 'refused' : 'owner-only'), stderr: 'private detail' };
+    }
+    if (malformed !== null) return { status: 0, stdout: malformed, stderr: '' };
+    const pathLiteral = /\$p = '((?:[^']|'')*)'/.exec(options.input)?.[1];
+    assert.ok(pathLiteral, 'Get-Acl path is passed as a quoted literal');
+    const target = unquote(pathLiteral);
+    let info;
+    try { info = lstatSync(target); } catch { return { status: 0, stdout: 'missing', stderr: '' }; }
+    const owner = owners.get(target) ?? sid;
+    const kind = info.isDirectory() ? 'directory' : 'file';
+    const link = reparse.has(target) || info.isSymbolicLink();
+    return { status: 0, stdout: `${owner}|${kind}|${link ? 'link' : 'real'}\r\n`, stderr: '' };
+  };
+  return { custody: createWindowsAccountCustody({ run }), calls, owners, reparse };
+}
+
+test('Windows SID custody identifies one account and validates its strict SID form', () => {
+  const { custody, calls } = fakeWindowsCustody();
+  assert.equal(custody.currentSid(), WINDOWS_SID);
+  assert.equal(custody.currentSid(), WINDOWS_SID);
+  assert.equal(calls.length, 1, 'the account SID is resolved once per process');
+  assert.ok(isWindowsSid(WINDOWS_SID));
+  for (const invalid of ['S-1-5', 'S-1-5-abc', null, 1]) assert.equal(isWindowsSid(invalid), false);
+});
+
+test('Windows vouch key preserves PKCS#8 bytes and identity, restricting the real file to its account', () => {
+  const dir = scratchDir();
+  const { custody, calls } = fakeWindowsCustody();
+  const first = loadOrCreateVouchKey(dir, { platform: 'win32', custody });
+  assert.equal(first.created, true);
+  assert.equal(first.file, vouchKeyPath(dir));
+  const pem = readFileSync(first.file, 'utf8');
+  assert.match(pem, /^-----BEGIN PRIVATE KEY-----/);
+  assert.equal(createPrivateKey(pem).asymmetricKeyType, 'ed25519');
+  assert.equal(calls.filter((call) => call.file === 'icacls.exe').length, 1);
+  assert.deepEqual(calls.find((call) => call.file === 'icacls.exe').args, [
+    first.file, '/inheritance:r', '/grant:r', `*${WINDOWS_SID}:F`,
+  ]);
+
+  const second = loadOrCreateVouchKey(dir, { platform: 'win32', custody });
+  assert.equal(second.created, false);
+  assert.equal(second.publicKeyPem, first.publicKeyPem);
+  assert.equal(readFileSync(second.file, 'utf8'), pem);
+  assert.equal(calls.filter((call) => call.file === 'icacls.exe').length, 2);
+});
+
+test('Windows vouch key adopts a raced exclusive-create winner without rotating it', () => {
+  const dir = scratchDir();
+  const file = vouchKeyPath(dir);
+  const { privateKey } = generateKeyPairSync('ed25519');
+  const winnerPem = privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const { custody } = fakeWindowsCustody();
+  let raced = false;
+  const openKeyFile = (target, flags) => {
+    if (!raced && flags === 'wx') {
+      raced = true;
+      writeFileSync(target, winnerPem, { flag: 'wx' });
+    }
+    return openSync(target, flags);
+  };
+  const loaded = loadOrCreateVouchKey(dir, { platform: 'win32', custody, openKeyFile });
+  assert.equal(loaded.created, false);
+  assert.equal(loaded.publicKeyPem, createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }));
+  assert.equal(readFileSync(file, 'utf8'), winnerPem);
+});
+
+test('Windows vouch key refuses a foreign or reparse-point file before reading it', () => {
+  const dir = scratchDir();
+  const file = vouchKeyPath(dir);
+  const { privateKey } = generateKeyPairSync('ed25519');
+  const pem = privateKey.export({ type: 'pkcs8', format: 'pem' });
+  writeFileSync(file, pem, { flag: 'wx' });
+
+  const foreign = fakeWindowsCustody({ owners: new Map([[file, FOREIGN_SID]]) });
+  assert.throws(() => loadOrCreateVouchKey(dir, { platform: 'win32', custody: foreign.custody }), /vouch key file custody or private access could not be verified/);
+
+  const linked = fakeWindowsCustody({ reparse: new Set([file]) });
+  assert.throws(() => loadOrCreateVouchKey(dir, { platform: 'win32', custody: linked.custody }), /vouch key file custody or private access could not be verified/);
+  assert.equal(readFileSync(file, 'utf8'), pem, 'refusal leaves the existing file unchanged');
+});
+
+test('Windows vouch key refuses foreign, reparse, malformed, and unrestrictable custody', () => {
+  const foreignDir = scratchDir();
+  const foreign = fakeWindowsCustody({ owners: new Map([[foreignDir, FOREIGN_SID]]) });
+  assert.throws(() => loadOrCreateVouchKey(foreignDir, { platform: 'win32', custody: foreign.custody }), /vouch key directory|Windows custody directory/);
+
+  const linkedDir = scratchDir();
+  const realDir = path.join(linkedDir, 'real');
+  const aliasDir = path.join(linkedDir, 'alias');
+  mkdirSync(realDir);
+  symlinkSync(realDir, aliasDir);
+  const linked = fakeWindowsCustody();
+  assert.throws(() => loadOrCreateVouchKey(aliasDir, { platform: 'win32', custody: linked.custody }), /real directory/);
+
+  const malformedDir = scratchDir();
+  const malformed = fakeWindowsCustody({ malformed: 'owner|directory|real' });
+  assert.throws(() => loadOrCreateVouchKey(malformedDir, { platform: 'win32', custody: malformed.custody }), /invalid ownership record/);
+
+  const restrictedDir = scratchDir();
+  const failRestrict = fakeWindowsCustody({ failRestrict: true });
+  assert.throws(
+    () => loadOrCreateVouchKey(restrictedDir, { platform: 'win32', custody: failRestrict.custody }),
+    (error) => {
+      assert.match(error.message, /vouch key file|Windows private-file access/);
+      assert.doesNotMatch(error.message, /private path|private detail|BEGIN PRIVATE KEY/);
+      return true;
+    },
+  );
+  const failedFile = vouchKeyPath(restrictedDir);
+  assert.equal(statSync(failedFile).size, 0, 'private key bytes are not written when restriction fails');
+
+  const foreignAclDir = scratchDir();
+  const foreignAcl = fakeWindowsCustody({ foreignAllow: true });
+  assert.throws(() => loadOrCreateVouchKey(foreignAclDir, { platform: 'win32', custody: foreignAcl.custody }), /Windows private-file access could not be verified/);
+  assert.equal(statSync(vouchKeyPath(foreignAclDir)).size, 0, 'a foreign allow ACE prevents private bytes from being written');
+
+  for (const failure of [{ aclAnswer: '' }, { failAcl: true }]) {
+    const aclFailureDir = scratchDir();
+    const aclFailure = fakeWindowsCustody(failure);
+    assert.throws(
+      () => loadOrCreateVouchKey(aclFailureDir, { platform: 'win32', custody: aclFailure.custody }),
+      (error) => {
+        assert.match(error.message, /Windows private-file access could not be verified/);
+        assert.doesNotMatch(error.message, /private detail|BEGIN PRIVATE KEY/);
+        return true;
+      },
+    );
+    assert.equal(statSync(vouchKeyPath(aclFailureDir)).size, 0, 'missing or failed ACL data prevents private bytes from being written');
+  }
 });
 
 test('a corrupt vouch key is not replaced (#254)', () => {

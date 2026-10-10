@@ -44,13 +44,14 @@ test('stable CI gate covers manual, PR, and main fallback lanes', () => {
   assert.match(ci, /test "\$CODEQL" = success/);
   assert.match(ci, /test "\$WORKFLOW_RUNTIME" = success/);
   assert.match(ci, /test "\$SKILL_GATE" = success/);
+  assert.match(ci, /test "\$WINDOWS_NATIVE" = success/);
 });
 
 test('the ENG-0055 skill gate checks the packaged tree in every lane', () => {
   assert.match(ci, /cli-skill-gate@[0-9a-f]{40}/);
   assert.match(ci, /git archive HEAD \| tar -x/);
   assert.match(ci, /skill-workflows\.test\.mjs/);
-  assert.match(ci, /needs: \[policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime, skill-gate, linux-bundle, keyd\]/);
+  assert.match(ci, /needs: \[policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime, skill-gate, linux-bundle, keyd, windows-native\]/);
 });
 
 // ADR-0332 decision 1 makes the headless-Linux archives a release artifact, so
@@ -124,12 +125,25 @@ test('the keyd lane builds and tests unsigned on a hosted macOS runner', () => {
   assert.match(ci, /test "\$KEYD" = success/);
 });
 
+// #813: run the platform-specific custody and pipe preflight on a native,
+// hosted Windows runner without installer state or credentials.
+test('the Windows native preflight uses a hosted runner and the stable gate', () => {
+  const lane = ci.slice(ci.indexOf('\n  windows-native:\n'), ci.indexOf('\n  codeql:\n'));
+  assert.match(lane, /runs-on: windows-latest\n/);
+  assert.match(lane, /needs: policy\n/);
+  assert.match(lane, /node --test tests\/windows-native-preflight\.test\.mjs/);
+  assert.match(lane, /persist-credentials: false/);
+  assert.doesNotMatch(lane, /runs-on:.*(?:vars\.|self-hosted)/);
+  assert.doesNotMatch(lane, /\$\{\{\s*secrets\./);
+  assert.match(ci, /WINDOWS_NATIVE: \$\{\{ needs\.windows-native\.result \}\}/);
+});
+
 // #752: a runner variable may name a self-hosted runner, so every runner that
 // reads one first sends a fork pull request to a literal GitHub-hosted label.
 // Fork code then never reaches a self-hosted runner, and no workflow reads a
 // secret or runs on pull_request_target, so a fork run holds nothing to leak.
 test('fork pull requests run only on GitHub-hosted runners with no secrets', () => {
-  const hosted = new Set(['ubuntu-latest', 'ubuntu-24.04-arm', 'macos-latest']);
+  const hosted = new Set(['ubuntu-latest', 'ubuntu-24.04-arm', 'macos-latest', 'windows-latest']);
   const workflows = { 'ci.yml': ci, 'codeql.yml': codeql, 'changelog.yml': changelog, 'linux-bundle-release.yml': linuxBundleRelease };
   let guarded = 0;
   for (const [name, source] of Object.entries(workflows)) {
