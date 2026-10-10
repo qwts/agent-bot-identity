@@ -34,3 +34,4 @@ supersede them instead.
 | [ADR-0583](ADR-0583-the-soul-root-owns-the-environment.md) | The soul root owns the environment | Accepted |
 | [ADR-0603](ADR-0603-imported-skills-keep-local-snapshots-and-upstream-provenance.md) | Soul skills have distinct import, install, learn, and dream operations | Accepted |
 | [ADR-0645](ADR-0645-one-runtime-repository-four-owned-modules.md) | Owned modules and contracts first, then identity becomes its own repository | Proposed |
+| [ADR-0753](ADR-0753-owner-signed-statements.md) | Owner-signed statements | Proposed |

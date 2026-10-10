@@ -1,0 +1,1 @@
+- ADR-0753 (Proposed) designs owner-signed statements: `agent-bot owner sign` and `owner verify`, a key enrolled through owner presence, and a signed challenge as the fallback when presence is unavailable over SSH, remote hosts, CI and subagents (#753).
