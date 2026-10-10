@@ -88,6 +88,7 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
   timeout: 60_000,
 }, async () => {
   const root = mkdtempSync(path.join(tmpdir(), 'agent-bot-windows-native-'));
+  const previousRelayDiagnostics = process.env.AGENT_BOT_WINDOWS_RELAY_DIAGNOSTICS;
   let pipeServer = null;
   let serverClosePromise = null;
   let serverOutput = null;
@@ -211,6 +212,7 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
       timeoutMs: 10_000,
       handshakeTimeoutMs: 10_000,
     });
+    process.env.AGENT_BOT_WINDOWS_RELAY_DIAGNOSTICS = '1';
     const pendingRequest = client.request({ op: 'preflight' });
     await expectMarkerBeforeProof(serverOutput, pendingRequest, 'CONNECTED', 'native server did not accept the pipe connection');
     await expectMarkerBeforeProof(serverOutput, pendingRequest, 'HELLO', 'native server did not read the client hello');
@@ -233,6 +235,8 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
     assert.equal(reply.accepted, 'preflight');
     assert.equal(await beforeDeadline(serverOutput(), 'native named-pipe fixture did not complete the request'), 'REQUEST_OK');
   } finally {
+    if (previousRelayDiagnostics === undefined) delete process.env.AGENT_BOT_WINDOWS_RELAY_DIAGNOSTICS;
+    else process.env.AGENT_BOT_WINDOWS_RELAY_DIAGNOSTICS = previousRelayDiagnostics;
     if (pipeServer && !pipeServer.closed) {
       if (pipeServer.pid) pipeServer.kill();
       await serverClosePromise;

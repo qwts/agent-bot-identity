@@ -569,6 +569,9 @@ test('Windows relay forwards only grammar-validated fixed failure metadata', asy
   assert.equal(invalid.message.includes('private'), false);
   assert.equal(isWindowsRelayFailure({ stage: 'pipe-connect', exception: 'IOException', hresult: 'not-hex' }), false);
   assert.equal(isWindowsRelayFailure({ stage: 'compile', code: ['CS0246'] }), false);
+  for (const stage of ['stdin-read', 'pipe-write', 'pipe-flush', 'pipe-read', 'stdout-write', 'stdout-flush']) {
+    assert.equal(isWindowsRelayFailure({ stage, exception: 'IOException', hresult: '80070006' }), true);
+  }
 
   const compile = new EventEmitter();
   compile.stdin = new PassThrough();
@@ -588,6 +591,83 @@ test('Windows relay forwards only grammar-validated fixed failure metadata', asy
   assert.equal(compileError.code, 'broker-unreachable');
   assert.deepEqual(compileError.relayFailure, { stage: 'compile', code: 'CS0246' });
   assert.equal(compileError.message, 'cannot reach the broker: broker-unreachable');
+});
+
+test('Windows relay reports only opted-in fixed milestones and parses worker failures after ready', async () => {
+  const w = world();
+  const k = keys();
+  writeIdentity(w, k.brokerKey);
+  const originalWrite = process.stderr.write;
+  let tapOutput = '';
+  const capture = function capture(chunk, ...args) {
+    tapOutput += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+    const callback = args.find((value) => typeof value === 'function');
+    if (callback) callback();
+    return true;
+  };
+  for (const diagnosticsEnabled of [false, true]) {
+    tapOutput = '';
+    process.stderr.write = capture;
+    try {
+      const child = new EventEmitter();
+      child.stdin = new PassThrough();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.exitCode = null;
+      child.signalCode = null;
+      child.kill = () => true;
+      const channel = createWindowsCommsTransport({
+        label: w.paths.serviceLabel, brokerStateDir: w.brokerState, brokerUid: SID, brokerKey: k.brokerKey,
+        custody: fakeCustody(), env: diagnosticsEnabled ? { AGENT_BOT_WINDOWS_RELAY_DIAGNOSTICS: '1' } : {},
+        spawnProcess: () => {
+          process.nextTick(() => {
+            child.stderr.write('AGENT_COMMS_PIPE_READY\n');
+            child.stderr.write('AGENT_COMMS_PIPE_DIAG:stdin-read-enter\n');
+            child.stderr.end('AGENT_COMMS_PIPE_FAILURE:pipe-write:IOException:80070006\nAGENT_COMMS_PIPE_FAILED\n');
+          });
+          return child;
+        },
+      });
+      const error = await new Promise((resolve) => channel.once('error', resolve));
+      assert.equal(error.code, 'broker-unreachable');
+      assert.deepEqual(error.relayFailure, { stage: 'pipe-write', exception: 'IOException', hresult: '80070006' });
+      assert.equal(error.message, 'cannot reach the broker: broker-unreachable');
+      assert.equal(tapOutput, diagnosticsEnabled ? '# windows-relay stdin-read-enter\n' : '');
+      assert.doesNotMatch(tapOutput, /secret|80070006|private/i);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+  }
+
+  tapOutput = '';
+  process.stderr.write = capture;
+  try {
+    const child = new EventEmitter();
+    child.stdin = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = () => true;
+    const channel = createWindowsCommsTransport({
+      label: w.paths.serviceLabel, brokerStateDir: w.brokerState, brokerUid: SID, brokerKey: k.brokerKey,
+      custody: fakeCustody(), env: { AGENT_BOT_WINDOWS_RELAY_DIAGNOSTICS: '1' },
+      spawnProcess: () => {
+        process.nextTick(() => {
+          child.stderr.write('AGENT_COMMS_PIPE_READY\n');
+          child.stderr.end('private C:\\credential\\path token=hidden\n');
+        });
+        return child;
+      },
+    });
+    const error = await new Promise((resolve) => channel.once('error', resolve));
+    assert.equal(error.code, 'broker-unreachable');
+    assert.deepEqual(error.relayFailure, { stage: 'host-stderr', format: 'other', reason: 'unexpected' });
+    assert.equal(tapOutput, '');
+    assert.doesNotMatch(error.message + JSON.stringify(error) + tapOutput, /credential|path|hidden|token/i);
+  } finally {
+    process.stderr.write = originalWrite;
+  }
 });
 
 test('Windows relay bounds and redacts unknown host stderr and process failures', async () => {

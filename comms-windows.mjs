@@ -18,6 +18,12 @@ const RELAY_FAILURE_PREFIX = 'AGENT_COMMS_PIPE_FAILURE';
 const COMPILE_FAILURE_PREFIX = 'AGENT_COMMS_PIPE_COMPILE_FAILURE';
 const RELAY_FAILURE_STAGES = new Set([
   'pipe-construction', 'pipe-connect', 'stdin-open', 'stdout-open', 'worker-start',
+  'stdin-read', 'pipe-write', 'pipe-flush', 'pipe-read', 'stdout-write', 'stdout-flush',
+]);
+const RELAY_DIAGNOSTIC_PREFIX = 'AGENT_COMMS_PIPE_DIAG';
+const RELAY_DIAGNOSTICS = new Set([
+  'stdin-read-enter', 'stdin-read-complete', 'pipe-write-complete',
+  'output-read-enter', 'output-read-complete', 'stdout-write-complete',
 ]);
 const RELAY_EXCEPTION = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
 const RELAY_HRESULT = /^[0-9A-F]{8}$/;
@@ -73,6 +79,11 @@ function parseRelayFailure(line) {
   }
   const compile = /^AGENT_COMMS_PIPE_COMPILE_FAILURE:(CS[0-9]{4}|unknown)$/.exec(line);
   return compile ? { stage: 'compile', code: compile[1] } : null;
+}
+
+function parseRelayDiagnostic(line) {
+  const match = /^AGENT_COMMS_PIPE_DIAG:([a-z-]+)$/.exec(line);
+  return match && RELAY_DIAGNOSTICS.has(match[1]) ? match[1] : null;
 }
 
 export const windowsPipeName = (label, sid) => `${WINDOWS_PIPE_PREFIX}${label}.${sid}`;
@@ -152,6 +163,7 @@ function powershellRelayScript(pipe, connectTimeoutMs) {
     `  private const string FAILED = "${FAILED_MARKER}";`,
     `  private const string TIMEOUT = "${TIMEOUT_MARKER}";`,
     `  private const string FAILURE = "${RELAY_FAILURE_PREFIX}";`,
+    `  private const string DIAGNOSTIC = "${RELAY_DIAGNOSTIC_PREFIX}";`,
     '  [DllImport("kernel32.dll", SetLastError = true)]',
     '  private static extern IntPtr GetStdHandle(int nStdHandle);',
     '  private static string ExceptionTypeName(Exception error) {',
@@ -167,9 +179,15 @@ function powershellRelayScript(pipe, connectTimeoutMs) {
     '    uint hresult = unchecked((uint)error.HResult);',
     '    Console.Error.WriteLine(FAILURE + ":" + stage + ":" + ExceptionTypeName(error) + ":" + hresult.ToString("X8"));',
     '  }',
+    '  private static void WriteDiagnostic(string milestone, bool enabled) {',
+    '    if (enabled) Console.Error.WriteLine(DIAGNOSTIC + ":" + milestone);',
+    '  }',
     '  private sealed class CopyState {',
     '    public Stream Source;',
     '    public Stream Destination;',
+    '    public bool IsInput;',
+    '    public bool Diagnostics;',
+    '    public string Stage;',
     '    public ManualResetEvent Completed = new ManualResetEvent(false);',
     '    public int Failed;',
     '  }',
@@ -184,20 +202,40 @@ function powershellRelayScript(pipe, connectTimeoutMs) {
     '    try {',
     '      byte[] buffer = new byte[81920];',
     '      int count;',
-    '      while ((count = state.Source.Read(buffer, 0, buffer.Length)) != 0) {',
+    '      bool firstRead = true;',
+    '      bool firstWrite = true;',
+    '      while (true) {',
+    '        state.Stage = state.IsInput ? "stdin-read" : "pipe-read";',
+    '        if (firstRead) WriteDiagnostic(state.IsInput ? "stdin-read-enter" : "output-read-enter", state.Diagnostics);',
+    '        count = state.Source.Read(buffer, 0, buffer.Length);',
+    '        if (firstRead) {',
+    '          firstRead = false;',
+    '          if (count > 0) WriteDiagnostic(state.IsInput ? "stdin-read-complete" : "output-read-complete", state.Diagnostics);',
+    '        }',
+    '        if (count == 0) break;',
+    '        state.Stage = state.IsInput ? "pipe-write" : "stdout-write";',
     '        state.Destination.Write(buffer, 0, count);',
+    '        state.Stage = state.IsInput ? "pipe-flush" : "stdout-flush";',
     '        state.Destination.Flush();',
+    '        if (firstWrite) {',
+    '          firstWrite = false;',
+    '          WriteDiagnostic(state.IsInput ? "pipe-write-complete" : "stdout-write-complete", state.Diagnostics);',
+    '        }',
     '      }',
-    '    } catch {',
+    '    } catch (Exception error) {',
+    '      WriteFailure(state.Stage, error);',
     '      Interlocked.Exchange(ref state.Failed, 1);',
     '    } finally {',
     '      state.Completed.Set();',
     '    }',
     '  }',
-    '  private static Thread StartCopy(Stream source, Stream destination, out CopyState state) {',
+    '  private static Thread StartCopy(Stream source, Stream destination, bool isInput, bool diagnostics, out CopyState state) {',
     '    state = new CopyState();',
     '    state.Source = source;',
     '    state.Destination = destination;',
+    '    state.IsInput = isInput;',
+    '    state.Diagnostics = diagnostics;',
+    '    state.Stage = isInput ? "stdin-read" : "pipe-read";',
     '    Thread worker = new Thread(Copy);',
     '    worker.IsBackground = true;',
     '    worker.Start(state);',
@@ -219,8 +257,9 @@ function powershellRelayScript(pipe, connectTimeoutMs) {
     '      CopyState inputState;',
     '      CopyState outputState;',
     '      stage = "worker-start";',
-    '      StartCopy(input, pipe, out inputState);',
-    '      StartCopy(pipe, output, out outputState);',
+    '      bool diagnostics = Environment.GetEnvironmentVariable("AGENT_BOT_WINDOWS_RELAY_DIAGNOSTICS") == "1";',
+    '      StartCopy(input, pipe, true, diagnostics, out inputState);',
+    '      StartCopy(pipe, output, false, diagnostics, out outputState);',
     '      Console.Error.WriteLine(READY);',
     '      WaitHandle.WaitAny(new WaitHandle[] { inputState.Completed, outputState.Completed });',
     '      pipe.Dispose();',
@@ -300,6 +339,10 @@ function createPowerShellPipeConnection(pipe, {
   let pendingRelayFailure = null;
   let pendingOutput = [];
   let pendingOutputBytes = 0;
+  const diagnosticsEnabled = env?.AGENT_BOT_WINDOWS_RELAY_DIAGNOSTICS === '1';
+  const reportDiagnostic = (milestone) => {
+    if (diagnosticsEnabled && RELAY_DIAGNOSTICS.has(milestone)) process.stderr.write(`# windows-relay ${milestone}\n`);
+  };
   const relay = new Duplex({
     allowHalfOpen: false,
     read() { child.stdout.resume(); },
@@ -342,7 +385,7 @@ function createPowerShellPipeConnection(pipe, {
     if (!done && ready) relay.push(null);
   });
   child.stderr.on('data', (chunk) => {
-    if (done || ready) return;
+    if (done) return;
     stderr = Buffer.concat([stderr, chunk]);
     if (stderr.length > 1024) return fail('broker-unreachable', pendingRelayFailure ?? hostStderrFailure(stderr, 'limit'));
     let newline;
@@ -352,16 +395,22 @@ function createPowerShellPipeConnection(pipe, {
       stderr = stderr.subarray(newline + 1);
       const relayFailure = parseRelayFailure(marker);
       if (relayFailure) {
-        if (relayFailure.stage === 'compile') {
+        if (relayFailure.stage === 'compile' || ready) {
           fail('broker-unreachable', relayFailure);
           return;
         }
         pendingRelayFailure = relayFailure;
         continue;
       }
+      const diagnostic = parseRelayDiagnostic(marker);
+      if (diagnostic) {
+        reportDiagnostic(diagnostic);
+        continue;
+      }
       if (marker === READY_MARKER) {
+        if (ready) return fail('broker-unreachable', hostStderrFailure(rawMarker, 'unexpected'));
+        if (pendingRelayFailure) return fail('broker-unreachable', pendingRelayFailure);
         ready = true;
-        stderr = Buffer.alloc(0);
         relay.emit('connect');
         let backpressured = false;
         for (const output of pendingOutput) {
@@ -375,10 +424,11 @@ function createPowerShellPipeConnection(pipe, {
         fail('broker-timeout', pendingRelayFailure);
       } else if (marker === FAILED_MARKER) {
         fail('broker-unreachable', pendingRelayFailure);
+        return;
       } else {
         fail('broker-unreachable', pendingRelayFailure ?? hostStderrFailure(rawMarker, 'unexpected'));
+        return;
       }
-      return;
     }
   });
   child.stderr.once('end', () => {
