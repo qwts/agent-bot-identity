@@ -2,22 +2,25 @@
 // 4, #753): where presence is unavailable and an SSH security key is pinned,
 // the daemon issues challenges, records them, and accepts each signed reply
 // once, for that decision only. A software SSH key, which a soul in the
-// owner's account could read, never answers a decision route.
+// owner's account could read, never answers a decision route. The daemon
+// keeps all of this off by default (`signedChallengeRoutes`) until owner
+// pins are integrity-protected; these tests turn it on through
+// decisionOwnerGate with a ledger, and check the default stays on the dialog.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { approvalsCommand } from '../agent-approvals.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
-import { confirmOwnerPresence, createChallengeLedger } from '../owner-action.mjs';
+import { createChallengeLedger, decisionOwnerGate } from '../owner-action.mjs';
 import { authorizeSouls, bindTransport, enrollPrincipal, setOperations } from '../agent-principals.mjs';
 import { upsertSoul } from '../agent-population.mjs';
 import {
-  SSHSIG_NAMESPACE, armorStatement, createOwnerChallenges, parseSshPublicKey, signChallenge, sshFingerprint, writeOwnerKeys,
+  SSHSIG_NAMESPACE, armorStatement, createOwnerChallenges, ownerKeysPath, parseSshPublicKey, signChallenge, sshFingerprint, writeOwnerKeys,
 } from '../owner-statement.mjs';
 
 const AGENT_ID = 'agent_11111111-1111-4111-8111-111111111111';
@@ -204,14 +207,12 @@ test('the ledger holds a bounded number of pending decisions', async () => {
   assert.equal(ledger.size, 3);
 });
 
-async function daemonFor(env) {
-  const ledger = createChallengeLedger({ env });
-  // keyd cannot ask and the dialog must never be reached while a key is pinned.
-  const ownerGate = (action, { principal, request = null, statement = null }) => confirmOwnerPresence(action, {
-    env, principal,
+// keyd cannot ask, and the dialog refuses unless a test lets it answer.
+async function daemonFor(env, { challenges = createChallengeLedger({ env }), dialog = async () => { throw new Error('the dialog was reached'); } } = {}) {
+  const ownerGate = decisionOwnerGate({
+    env, challenges,
     presence: async () => { throw Object.assign(new Error('keyd is not running'), { code: 'presence-unavailable' }); },
-    fallbackConsent: async () => { throw new Error('the dialog was reached'); },
-    ...(request === null ? {} : { challenge: ledger.hook({ request, statement }) }),
+    fallbackConsent: dialog,
   });
   const server = createDaemonServer({ env, home: '/nonexistent', config: {}, ownerGate });
   await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
@@ -346,6 +347,60 @@ test('a soul holding the daemon token and a software key cannot approve its own 
     await assert.rejects(Promise.race([waiting, new Promise((_, reject) => { setTimeout(() => reject(new Error('not settled')), 50); })]), /not settled/);
   } finally {
     await close();
+  }
+});
+
+// The default: no ledger. A pin the soul wrote into the pin file itself, a
+// security key made in software, signs a reply; the route never reads it
+// and asks the dialog.
+test('with signed challenges off, a decision route asks only keyd or the dialog', async () => {
+  const { root, env } = scratch();
+  const forged = ownerKey(root, env, 'forged');
+  writeOwnerKeys([forged.pin], { env });
+  const asked = [];
+  const { server, call, close } = await daemonFor(env, { challenges: null, dialog: async (action) => { asked.push(action); return { method: 'consent' }; } });
+  try {
+    const waiting = server.interaction.requestTurnApproval({ agentId: AGENT_ID, operation: OPERATION, summary: 'push', tool: 'Bash' });
+    const [row] = (await (await call('/v0/approvals')).json()).proposals;
+    const action = `approve Bash for ${AGENT_ID}: push`;
+    const [challenge] = createOwnerChallenges(action, action, [forged.pin]);
+    const response = await call('/v0/approvals/decide', {
+      method: 'POST', body: { proposalId: row.proposalId, decision: 'approve', digest: row.operationDigest, statement: signed(challenge.payload, forged) },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(asked.length, 1);
+    assert.deepEqual(await waiting, { decision: 'approve' });
+    const [receipt] = audits(env).filter((entry) => entry.event === 'approval-decision' && entry.decision === 'approved');
+    assert.equal(receipt.detail, 'risk: external; authorized: consent');
+    assert.equal(audits(env).some((entry) => entry.decision === 'owner-challenged'), false);
+  } finally {
+    await close();
+  }
+});
+
+test('a malformed pin file never blocks a decision: the dialog asks', async () => {
+  for (const challenges of [null, 'ledger']) {
+    const { env } = scratch();
+    const file = ownerKeysPath({ env });
+    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    writeFileSync(file, '{ not json', { mode: 0o600 });
+    const asked = [];
+    const { server, call, close } = await daemonFor(env, {
+      challenges: challenges && createChallengeLedger({ env }),
+      dialog: async (action) => { asked.push(action); return { method: 'consent' }; },
+    });
+    try {
+      const waiting = server.interaction.requestTurnApproval({ agentId: AGENT_ID, operation: OPERATION, summary: 'push', tool: 'Bash' });
+      const [row] = (await (await call('/v0/approvals')).json()).proposals;
+      const response = await call('/v0/approvals/decide', {
+        method: 'POST', body: { proposalId: row.proposalId, decision: 'deny', digest: row.operationDigest },
+      });
+      assert.equal(response.status, 200, String(challenges));
+      assert.equal(asked.length, 1);
+      assert.deepEqual(await waiting, { decision: 'deny' });
+    } finally {
+      await close();
+    }
   }
 });
 

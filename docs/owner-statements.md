@@ -11,9 +11,9 @@ contract as built.
 the ssh store, and a CLI-only signed-challenge fallback for existing local SSH
 pins. When local presence is unavailable, an interactive owner gate can show a
 fresh challenge; the owner signs it on a trusted terminal and pastes the reply
-back. The daemon's decision routes answer the same way: the challenge comes
-back in the refusal and the signed reply goes in the decision's `statement`
-field (see below). There is no inbox delivery yet. **Not yet:**
+back. The daemon's decision routes have the same flow built but switched
+off until owner pins are integrity-protected (see below). There is no inbox
+delivery yet. **Not yet:**
 the keyd store (keyd's `owner/sign` RPC) and pins from the organization
 profile. Until then `owner enroll --store keyd` answers
 `owner-store-unavailable`.
@@ -102,8 +102,21 @@ cannot use a signed challenge.
 
 **On a decision route.** Deciding a soul's waiting tool request through
 `POST /v0/approvals/decide` (`agent-bot approvals approve|deny`) or
-`POST /v1/proposals/<id>/decision` never prompts on the daemon's terminal.
-When keyd cannot ask and an SSH security key (`sk-ssh-ed25519` or
+`POST /v1/proposals/<id>/decision` never prompts on the daemon's terminal,
+and today it is answered only by keyd presence or the administrator dialog.
+The receipt of each decision records how it was authorized (`authorized:
+presence`, `consent`, or `statement <key>`). The daemon does not read the
+owner pins for these routes at all, so a missing or malformed pin file never
+blocks a decision.
+
+Signed challenges on these routes are built but off (`createDaemonServer`'s
+`signedChallengeRoutes`, default false, with no flag or environment switch).
+They stay off until the pins are integrity-protected, for example MAC'd or
+signed by keyd: `<state>/owner/keys.json` is writable by anything running as
+the owner, a soul included, and a security key made in software
+(`sk-ssh-ed25519` carries no attestation) looks the same as hardware, so a
+soul could pin its own key and sign its own approval. When the guard is on:
+when keyd cannot ask and an SSH security key (`sk-ssh-ed25519` or
 `sk-ecdsa`) is pinned, the route decides nothing and answers 409 with
 `code: "owner-challenge-required"` and `challenges: [{ name, fingerprint,
 payload }]`, one per security-key pin; the audit log records
@@ -115,13 +128,11 @@ memory, for that exact decision (approve or deny, and the scope). Any reply
 spends them, verified or not; a new request without a statement replaces
 them; a restart drops them. A reply for another proposal or decision, a
 replay, an expired challenge or a key no longer pinned is refused with 403.
-The receipt of a decision records how it was authorized (`authorized:
-statement <key>`, `presence` or `consent`).
-
 A software key pinned with `--allow-software-key` never answers a decision
 route: a soul runs in the owner's account and could read it. With no
 security key pinned, the route uses the administrator dialog, as it does
-with no owner key at all. Anything holding the daemon token can ask for a
+with no owner key at all, and so does a pin file that cannot be read.
+Anything holding the daemon token can ask for a
 fresh challenge or send a bad reply, which replaces or spends the pending
 one for that proposal; that can only make the owner sign again, never
 decide.

@@ -35,13 +35,12 @@ keyd's Touch ID or login-password prompt naming the soul and tool, or the
 administrator dialog when keyd cannot ask. The daemon token alone never
 decides, and a --principal-stdin credential is checked as well, not instead.
 
-Where keyd cannot ask and an SSH security key is enrolled (agent-bot owner
-enroll), the daemon answers with signed challenges instead of the dialog;
-a software key never answers.
-Sign one with \`agent-bot owner sign --challenge '<JSON>' --key PATH\` on a
-trusted machine within ten minutes, then repeat the same decision with
---statement and the signed statement. A challenge answers only that decision,
-once, and a daemon restart drops it.
+Signed owner challenges on this route are off until owner pins are
+integrity-protected. A daemon with them on answers a decision keyd cannot
+confirm with challenges for an enrolled SSH security key: sign one with
+\`agent-bot owner sign --challenge '<JSON>' --key PATH\` on a trusted machine
+within ten minutes, then repeat the same decision with --statement and the
+signed statement. A challenge answers only that decision, once.
 
 Approval scope defaults to once, which also allows the same tool for the
 rest of the current turn. --scope session allows the exact tool for that

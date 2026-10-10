@@ -90,8 +90,26 @@ export function ownerActionSummary(action, options = {}) {
   return gate.ownerActionSummary(action, { listSouls: populationSouls(options.env ?? process.env), ...options });
 }
 
+// The owner gate the daemon's decision routes use (#438, #753). A route call
+// names its `request` (a proposal ID); other daemon callers pass none and
+// keep the default gate. A route never answers through a terminal prompt.
+// Without `challenges` it asks keyd, then the administrator dialog, and
+// reads no owner pins: the pin file is writable by anything running as the
+// owner, a soul included, so nothing in it may stand in for the owner until
+// pins are integrity-protected. With a ledger from createChallengeLedger,
+// a security-key pin may answer instead; the daemon passes one only when
+// its default-off `signedChallengeRoutes` guard is on.
+export function decisionOwnerGate({ env = process.env, challenges = null, ...gateOptions } = {}) {
+  return (action, { principal = null, request = null, statement = null } = {}) => {
+    const route = request === null ? {}
+      : challenges ? { challenge: challenges.hook({ request, statement }) } : { allowChallenge: false };
+    return confirmOwnerPresence(action, { ...gateOptions, env, principal, ...route });
+  };
+}
+
 // Signed challenges for the daemon's decision routes (ADR-0753 section 4,
-// #753). Where presence is unavailable and a security-key owner pin exists,
+// #753), off until owner pins are integrity-protected (see
+// decisionOwnerGate). Where presence is unavailable and a security-key owner pin exists,
 // a decision without a reply is refused with `owner-challenge-required` and
 // the unsigned challenges, which the gate records here. The owner signs one
 // with `owner sign --challenge` wherever the key is, and the caller repeats
@@ -118,7 +136,9 @@ export function createChallengeLedger({ env = process.env, now = Date.now, host 
     // `statement` is the caller's signed reply, if any.
     hook({ request, statement = null } = {}) {
       return async (action, { summary }) => {
-        const keys = readOwnerKeys({ env });
+        let keys;
+        // A pin file that cannot be read never blocks a decision: the dialog asks.
+        try { keys = readOwnerKeys({ env }); } catch { return null; }
         if (keys.length === 0) return null;
         const securityKeys = keys.filter(securityKeyPin);
         if (securityKeys.length === 0) {
@@ -143,7 +163,8 @@ export function createChallengeLedger({ env = process.env, now = Date.now, host 
           throw statementError('statement-scope-mismatch', 'no owner challenge is pending for this decision; repeat it without a statement for a new one');
         }
         // Checked against the pins as they are now, not when the challenge was made.
-        const currentKeys = readOwnerKeys({ env }).filter(securityKeyPin);
+        let currentKeys;
+        try { currentKeys = readOwnerKeys({ env }).filter(securityKeyPin); } catch { currentKeys = []; }
         if (!currentKeys.some((pin) => entry.challenges.some(({ fingerprint }) => fingerprint === pin.fingerprint))) {
           throw statementError('owner-unreachable', 'the challenged owner key is no longer enrolled; nothing was changed');
         }

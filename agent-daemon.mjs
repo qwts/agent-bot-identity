@@ -82,7 +82,7 @@ import { isComputerUse } from './permission-risk.mjs';
 import { appendAuditReceipt, assertAuthorized, principalsFile, resolvePrincipal } from './agent-principals.mjs';
 import { validateApprovalScope } from './session-approvals.mjs';
 import { approvalAction, shown } from './approval-action.mjs';
-import { confirmOwnerPresence, createChallengeLedger, ownerCredentialRequired, presenceOrConsent, verifyPrincipalOwner } from './owner-action.mjs';
+import { confirmOwnerPresence, createChallengeLedger, decisionOwnerGate, ownerCredentialRequired, presenceOrConsent, verifyPrincipalOwner } from './owner-action.mjs';
 import { runSpawnHooks } from './agent-hook.mjs';
 import { createWebLayer } from './agent-web.mjs';
 import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs';
@@ -412,14 +412,13 @@ export function createDaemonServer({
   teamStarter = null,
   // Deciding a soul's tool request asks for the owner's presence (#438):
   // (action, { principal, request, statement }) => proof, throwing when the
-  // owner does not confirm. Tests pass a fake; the default asks keyd, then,
-  // with an SSH owner key pinned, a signed challenge answered on the decision
-  // route itself (#753), else the dialog.
-  challenges = createChallengeLedger({ env }),
-  // Only a decision route names its request; other callers keep the default.
-  ownerGate = (action, { principal, request = null, statement = null }) => confirmOwnerPresence(action, {
-    env, principal, ...(request === null ? {} : { challenge: challenges.hook({ request, statement }) }),
-  }),
+  // owner does not confirm. Tests pass a fake; the default asks keyd, then
+  // the dialog. Signed challenges on the decision routes (#753) stay off
+  // until owner pins are integrity-protected: today a soul running as the
+  // owner can write the pin file and pin a key it made itself. Leave
+  // `signedChallengeRoutes` false until then.
+  signedChallengeRoutes = false,
+  ownerGate = decisionOwnerGate({ env, challenges: signedChallengeRoutes ? createChallengeLedger({ env }) : null }),
   // Settings accept a verified principal instead of presence, like soul mode.
   settingGate = (action, { principal }) => soulSettingOwnerGate(action, { principal, env, cwd: home }),
   revisionPrincipal = (credential) => verifyPrincipalOwner(credential, { env }),
