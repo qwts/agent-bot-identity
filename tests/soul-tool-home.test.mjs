@@ -269,6 +269,8 @@ for (const existing of [false, true]) test(`a failed rollback keeps the ${existi
   } });
   const error = await f.run(['codex', 'global', '--soul', ID, '--fresh-session'], { sessions }).then(() => assert.fail('expected a partial update'), (e) => e);
   assert.equal(error.code, 'tool-home-update-partial');
+  assert.equal(error.cause.message, 'session commit refused', 'the session failure stays the cause');
+  assert.ok(error.restore, 'the restore failure is kept too');
   if (existing) {
     assert.ok(error.backup && error.message.includes(error.backup));
     assert.equal(readFileSync(error.backup, 'utf8'), before, 'the backup is the exact previous record');
@@ -282,6 +284,24 @@ for (const existing of [false, true]) test(`a failed rollback keeps the ${existi
   assert.ok(receipt.detail.includes('tool-homes.json') && receipt.detail.includes('wake-sessions.json'), 'the receipt names both records');
   if (existing) assert.ok(receipt.detail.includes(path.basename(error.backup)) && !receipt.detail.endsWith('…'), receipt.detail);
   assert.ok(error.message.includes(choiceFile));
+});
+
+test('the rollback backup keeps the record byte for byte, invalid UTF-8 included', async (t) => {
+  const f = fixture(t);
+  const choiceFile = toolHomeRecordPath(f.soulDir);
+  const bytes = Buffer.concat([Buffer.from('{"schemaVersion":1,"harnesses":{"codex":"soul"},"note":"'), Buffer.from([0xff]), Buffer.from('"}\n')]);
+  writeFileSync(choiceFile, bytes);
+  const file = wakeSessionsFile({ env: f.env, home: f.home });
+  createWakeSessions({ file }).set(ID, 'codex', 'thread-kept', 'workspace', 'soul');
+  const sessions = createWakeSessions({ file, rename: () => {
+    rmSync(choiceFile);
+    mkdirSync(choiceFile);
+    writeFileSync(path.join(choiceFile, 'in-the-way'), '');
+    throw Object.assign(new Error('session commit refused'), { code: 'EACCES' });
+  } });
+  const error = await f.run(['codex', 'global', '--soul', ID, '--fresh-session'], { sessions }).then(() => assert.fail('expected a partial update'), (e) => e);
+  assert.ok(readFileSync(error.backup).equals(bytes));
+  assert.match(f.receipts()[0].detail, /^codex: soul -> global /);
 });
 
 test('a partial update still reports its backup when the receipt cannot be written', async (t) => {
