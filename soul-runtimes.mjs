@@ -950,25 +950,32 @@ async function soulRuntimeOverrideCommand(argv, { gate, readStdin, write, env, h
   const soul = resolveSoul(id, options);
   await gate(`${clear ? 'clear' : 'set'} ${soul.id}'s ${name} executable override`, { principal, env, cwd });
   const soulDir = soulRoot(soul, options);
-  if (clear) validateOverrideStore(soulDir, soul.id);
-  // An unsafe shim directory refuses before the record changes, so a failed
-  // command never leaves a selection behind.
-  ensureOverrideShims(soulDir, inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host }).overrides, { agentId: soul.id });
-  const file = overrideRecordFile(soulDir, name);
-  const previous = readPreviousOverrideRecord(file);
-  if (clear) rmSync(file, { recursive: true, force: true });
-  else writeOverrideRecord(soulDir, soul.id, name, executable);
-  try {
-    const status = inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host });
-    ensureOverrideShims(soulDir, status.overrides, { agentId: soul.id });
-    const selected = status.rows.find((row) => row.name === name);
-    if (!clear && selected?.status !== 'selected') throw Object.assign(new Error(selected?.reason ?? `could not select ${name} override`), { code: selected?.code ?? 'runtime-override-invalid', runtime: name, action: selected?.action });
-  } catch (error) {
-    restoreOverrideRecord(soulDir, soul.id, file, previous);
-    throw error;
-  }
-  appendAuditReceipt({ event: 'soul-runtimes', agentId: soul.id, operation: clear ? 'override-clear' : 'override', decision: clear ? 'cleared' : 'selected',
-    detail: clear ? `${name} override cleared` : `${name} override selected at ${executable}; verification: unverified-external` }, { env, home, now });
+  validateOverrideStore(soulDir, soul.id, { create: true });
+  // One writer at a time: the check, the record change, the shims and the
+  // receipt succeed together, or the previous record is put back.
+  withLock(path.join(overrideDirectory(soulDir), '.lock'), 'runtime override store', () => {
+    // An unsafe shim directory refuses before the record changes.
+    ensureOverrideShims(soulDir, inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host }).overrides, { agentId: soul.id });
+    const file = overrideRecordFile(soulDir, name);
+    const previous = readPreviousOverrideRecord(file);
+    if (clear) rmSync(file, { recursive: true, force: true });
+    else writeOverrideRecord(soulDir, soul.id, name, executable);
+    try {
+      const status = inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host });
+      (rest.prepareShims ?? ensureOverrideShims)(soulDir, status.overrides, { agentId: soul.id });
+      const selected = status.rows.find((row) => row.name === name);
+      if (!clear && selected?.status !== 'selected') throw Object.assign(new Error(selected?.reason ?? `could not select ${name} override`), { code: selected?.code ?? 'runtime-override-invalid', runtime: name, action: selected?.action });
+      appendAuditReceipt({ event: 'soul-runtimes', agentId: soul.id, operation: clear ? 'override-clear' : 'override', decision: clear ? 'cleared' : 'selected',
+        detail: clear ? `${name} override cleared` : `${name} override selected at ${executable}; verification: unverified-external` }, { env, home, now });
+    } catch (error) {
+      restoreOverrideRecord(soulDir, soul.id, file, previous);
+      // Best effort: bring the shims back in line with the restored record.
+      // Launch revalidates them anyway, and the original error is the one to report.
+      try { ensureOverrideShims(soulDir, inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host }).overrides, { agentId: soul.id }); }
+      catch { /* launch refuses unsafe shims on its own */ }
+      throw error;
+    }
+  });
   const result = { schemaVersion: RUNTIMES_SCHEMA_VERSION, agentId: soul.id, name, status: clear ? 'cleared' : 'selected', executable, verification: clear ? null : 'unverified-external' };
   write(json ? `${JSON.stringify(result)}\n` : `${soul.id}: ${name} override ${clear ? 'cleared' : `selected at ${executable} (unverified external)`}\n`);
   return result;
