@@ -150,3 +150,16 @@ test('a principal turn on a legacy persona record asks the owner, runs once veri
   assert.equal(unwired.status, 'failed');
   assert.deepEqual(unwired.ran, []);
 });
+
+test('a principal turn whose policy cannot be evaluated at all is still recorded as refused (#613)', async (t) => {
+  const f = fixture(t);
+  // The runtime config turned unreadable after startup: the check throws without a code.
+  f.turns = createTurnRegistry({ policy: (check) => { f.checks.push(check); throw new Error('config.json is not valid JSON'); } });
+  const broken = await interactiveTurn(f, { verifyOwner: () => ({ method: 'presence' }) });
+  assert.equal(broken.status, 'failed');
+  assert.deepEqual(broken.ran, []);
+  assert.deepEqual(broken.asked, [], 'an unevaluated policy is refused, not offered to the owner');
+  const refused = broken.events.find((event) => event.type === 'turn-refused');
+  assert.equal(refused.data.code, 'persona-policy-unavailable');
+  assert.match(refused.data.action, /agent-bot doctor/);
+});

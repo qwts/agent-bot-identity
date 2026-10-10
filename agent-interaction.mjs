@@ -438,6 +438,8 @@ export function createInteractionService({
     catch (error) { log(`task invocation ${invocation.invocationId} ${phase} report failed: ${error?.message ?? String(error)}`); }
   }
 
+  const POLICY_UNCHECKED_ACTION = 'fix the runtime config or SOP record (see `agent-bot doctor`), then retry';
+
   // The persona policy is checked at the start of every interactive turn
   // (#613), as the turn registry checks every turn it runs. A principal
   // drives this turn, so one refused only because the persona record is
@@ -470,11 +472,15 @@ export function createInteractionService({
         await turns.check({ agentId, kind: 'interactive', ownerVerified: refused.digest });
       }
     } catch (error) {
-      if (typeof error?.code === 'string') {
-        try { appendEvent(id, 'turn-refused', { code: error.code, action: typeof error.action === 'string' ? error.action : null }, storeOptions); }
-        catch { /* the failure below still records the outcome */ }
-      }
-      throw error;
+      // A policy that cannot be evaluated at all (the runtime config turned
+      // unreadable after startup, say) throws without a code. It is still a
+      // refusal, so it is recorded as one with its repair.
+      const refusal = typeof error?.code === 'string' ? error
+        : Object.assign(new Error(`the persona policy could not be checked (${String(error?.message ?? error).slice(0, 160)}); ${POLICY_UNCHECKED_ACTION}`),
+          { code: 'persona-policy-unavailable', action: POLICY_UNCHECKED_ACTION, cause: error });
+      try { appendEvent(id, 'turn-refused', { code: refusal.code, action: typeof refusal.action === 'string' ? refusal.action : null }, storeOptions); }
+      catch { /* the failure below still records the outcome */ }
+      throw refusal;
     }
   }
 
