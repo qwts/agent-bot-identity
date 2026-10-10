@@ -1,0 +1,1 @@
+- `agent-bot soul build` now renders a soul's `agents/*.md` as Codex agent roles in `.codex/agents/<name>.toml` when the subagent declares no `tools`, checked against openai/codex `rust-v0.157.0`. A subagent with declared tools, a blank prompt or a built-in Codex role name is reported under `unsupported.subagents` for Codex (#378).

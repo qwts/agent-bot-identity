@@ -44,7 +44,7 @@ A native consumer receives no duplicate configuration folder.
 | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code | Marked `CLAUDE.md` with `@AGENTS.md` | `.claude/skills/<name>/` | `.mcp.json` | `.claude/agents/<name>.md` | `.claude/commands/<name>.md` | `.claude/settings.json` `hooks` |
 | Gemini CLI | Marked `GEMINI.md` with `@AGENTS.md` | `.gemini/skills/<name>/` | `.gemini/settings.json` | Unsupported | `.gemini/commands/<name>.toml` | Unsupported |
-| Codex | Native `AGENTS.md` | Native skills; no duplicate output | `.codex/config.toml` | Unsupported | Unsupported | `.codex/hooks.json` |
+| Codex | Native `AGENTS.md` | Native skills; no duplicate output | `.codex/config.toml` | `.codex/agents/<name>.toml` (agents without `tools`) | Unsupported | `.codex/hooks.json` |
 | OpenCode | Native `AGENTS.md` | Uses shared `.claude/skills/` | `opencode.json` | `.opencode/agent/<name>.md` | `.opencode/command/<name>.md` | Unsupported |
 | Cursor | Native `AGENTS.md` | Uses shared `.claude/skills/`; no duplicate skills | `.cursor/mcp.json` | `.cursor/agents/<name>.md` | Unsupported (replaced by skills) | `.cursor/hooks.json` |
 | Copilot CLI | Native instruction support | Uses shared `.claude/skills/`; `.github/` only for hooks and agents | Shared `.mcp.json` | `.github/agents/<name>.agent.md` | Shared `.claude/commands/<name>.md` | `.github/hooks/agent-bot-soul.json` |
@@ -114,6 +114,24 @@ Adapter evidence (official docs read 2026-10-07):
   [permissions](https://docs.devin.ai/cli/reference/permissions) and the
   [skill `allowed-tools` reference](https://docs.devin.ai/cli/extensibility/skills/creating-skills)
   (checked 2026-10-09).
+- Codex: agent roles (#378), checked against openai/codex source at release
+  tag `rust-v0.157.0` (the newest stable release at least two weeks old on
+  2026-10-10). The in-repo docs at that tag do not describe role files, so the
+  evidence is the source: `codex-rs/agent-roles` loads every `*.toml` under each
+  config layer's `agents/` folder (the project layer's is `.codex/agents/`,
+  which Codex reads only for a trusted project), with `name`, a required
+  nonblank `description` and `developer_instructions`, and the rest of the
+  table as that role's config layer (`model` among it); unknown keys are
+  refused. The `multi_agent` feature is `Stable` and on by default there.
+  Codex's own Claude-subagent importer (`external-agent-migration`) writes
+  the same shape to `.codex/agents/<name>.toml` and drops `tools`, because a
+  role has no per-tool allowlist. So the builder renders only a subagent
+  without `tools`: a declared list (even empty), a blank prompt, or the name
+  of a built-in role (`default`, `explorer`, `worker`, which a project role
+  would replace) is unsupported for Codex. The file starts with a `#` marker
+  comment, then JSON-quoted TOML basic strings; `model` is passed verbatim, so
+  a Claude model alias only works there if Codex's provider serves it. No
+  live Codex run was checked.
 - Gemini CLI: [subagents](https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md)
   are documented in `.gemini/agents/*.md`, but their only switch is
   `experimental.enableAgents`, so they are not documented as stable and stay
@@ -738,8 +756,9 @@ close that gap.
 
 ## Follow-ups
 
-Not yet covered: Muse (MCP, subagents, commands, hooks); subagents for Codex
-and for Gemini CLI (until `.gemini/agents/` is documented as stable); commands
+Not yet covered: Muse (MCP, subagents, commands, hooks); Codex subagents
+that declare `tools` (no per-role allowlist); subagents for Gemini CLI (until
+`.gemini/agents/` is documented as stable); commands
 for Codex, Cursor (replaced by skills) and Kiro (`.kiro/prompts/` file format
 undocumented); hooks for Gemini CLI, OpenCode (plugins), Muse and Kiro; and a
 signed-in check that Cursor and Kiro accept the `_comment` marker key. Qwen Code
