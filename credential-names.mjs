@@ -61,13 +61,28 @@ export function slugOrThrow(slug) {
   return slug;
 }
 
+// The store kinds a credential may be declared in, by name only (#383):
+// soul.json's `credentials.github.store` and a managed App's `store`. `keyd`
+// is agent-bot-keyd's Keychain, which only that signed binary reads (#397).
+// soul-package.mjs validates declarations against this list (#645).
+export const CREDENTIAL_STORES = Object.freeze(['keychain', 'file', 'keyd', 'pass-cli']);
+
+// A provider secret's name (#583 slice 4): the `secret/<name>` account and
+// the file store's `secret-<name>` file. soul-providers.mjs re-exports it.
+export const SECRET_NAME = /^[a-z][a-z0-9-]{0,63}$/;
+
+export function secretNameOrThrow(value, label = 'secret name') {
+  if (typeof value !== 'string' || !SECRET_NAME.test(value)) throw new Error(`${label} must use lowercase letters, digits and single hyphens (1-64 characters)`);
+  return value;
+}
+
 // Each builder takes the namespace a store resolved from its own
 // environment; without one it resolves this process's.
 export function soulAppItem(agentId, slug, { namespace = credentialNamespace() } = {}) {
   return { service: `${namespace}.soul.${validateAgentId(agentId)}`, account: `github-app/${slugOrThrow(slug)}` };
 }
 
-// `name` is a secret name its caller already validated (soul-providers).
+// `name` is a secret name its caller already validated (secretNameOrThrow).
 export function soulSecretItem(agentId, name, { namespace = credentialNamespace() } = {}) {
   if (typeof name !== 'string' || !name || name.includes('/')) throw new Error('invalid secret name');
   return { service: `${namespace}.soul.${validateAgentId(agentId)}`, account: `secret/${name}` };

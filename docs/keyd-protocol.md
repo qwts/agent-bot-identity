@@ -135,12 +135,12 @@ once per state directory.
 ### Daemon-key pinning on first import
 
 `identity migrate-credentials --to keyd` (`migrateToKeyd` in
-[soul-credentials.mjs](../soul-credentials.mjs)) collects every movable
-soul's key and calls `importIntoKeyd` once, so keyd asks the owner once. That
-sends one `owner/import` on `owner.sock` with all the keys as `items` and
-`daemonKey`: the vouch key's raw 32-byte Ed25519 public key, base64. The
-daemon key is sent on every import. If the call fails, every soul in it is
-reported `failed` and no `soul.json` is changed.
+[soul-credential-migration.mjs](../soul-credential-migration.mjs)) collects
+every movable soul's key and calls `importIntoKeyd` once, so keyd asks the
+owner once. That sends one `owner/import` on `owner.sock` with all the keys
+as `items` and `daemonKey`: the vouch key's raw 32-byte Ed25519 public key,
+base64. The daemon key is sent on every import. If the call fails, every
+soul in it is reported `failed` and no `soul.json` is changed.
 
 **keyd-side** ([server.rs](https://github.com/qwts/GeniusBar/blob/363f52c590efe5df8cb75490ca81667e74425cf8/keyd/src/server.rs#L378-L462)): `items` must hold 1 to
 64 keys, otherwise the whole import is refused. Since agent-bot does not split

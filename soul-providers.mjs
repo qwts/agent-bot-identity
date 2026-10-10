@@ -1,6 +1,7 @@
 // Providers per harness (#583 slice 4, ADR-0583 decision 7). Pure data and
 // validation, no I/O: the package reader validates with it, the builder
-// renders with it, the descriptor and the launch read it.
+// renders with it, the descriptor and the launch read it. The secret-name
+// rule is identity's (credential-names.mjs), re-exported here (#645).
 //
 // A soul says, per harness, which model provider that harness talks to:
 //
@@ -16,11 +17,14 @@
 // stores it in the soul's own store and the launch injects it into that
 // one harness process (soul-secrets.mjs, wake-plane.mjs).
 
+import { SECRET_NAME, secretNameOrThrow } from './credential-names.mjs';
+
+export { SECRET_NAME, secretNameOrThrow };
+
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 export const PROVIDERS_SCHEMA_VERSION = 1;
 export const ENV_KEY = /^[A-Z][A-Z0-9_]*$/;
-export const SECRET_NAME = /^[a-z][a-z0-9-]{0,63}$/;
 export const PROVIDER_KEYS = Object.freeze(['id', 'baseUrl', 'envKey', 'wireApi', 'credential']);
 // Where a provider secret may live: the readable per-soul stores. keyd never
 // returns a value, and a harness needs the value in its environment.
@@ -86,11 +90,6 @@ export function envKeyOrThrow(value, label) {
   if (RESERVED_ENV.includes(value) || RESERVED_PREFIXES.some((prefix) => value.startsWith(prefix))) {
     throw new Error(`${label} ${value} is reserved for the launch itself`);
   }
-  return value;
-}
-
-export function secretNameOrThrow(value, label = 'secret name') {
-  if (typeof value !== 'string' || !SECRET_NAME.test(value)) throw new Error(`${label} must use lowercase letters, digits and single hyphens (1-64 characters)`);
   return value;
 }
 

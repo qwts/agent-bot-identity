@@ -99,6 +99,7 @@ import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms
 import { attachWakeEndpoint } from './agent-wake.mjs';
 import { resolveSoulMode } from './soul-mode.mjs';
 import { createIdentityAppJobs, identityAppOperation, identityAppFailure, listIdentityApps } from './identity-apps.mjs';
+import { identityAppSouls } from './identity-app-souls.mjs';
 import { readSoulProfile } from './soul-profile.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
 import { launchSandbox, readSandboxStatus, turnSandboxProblem, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount } from './sandbox.mjs';
@@ -348,7 +349,7 @@ export function createDaemonServer({
   settingGate = (action, { principal }) => soulSettingOwnerGate(action, { principal, env, cwd: home }),
   revisionPrincipal = (credential) => verifyPrincipalOwner(credential, { env }),
 } = {}) {
-  const appOptions = { env, home, gate: settingGate };
+  const appOptions = { env, home, gate: settingGate, souls: identityAppSouls };
   const appJobs = createIdentityAppJobs(appOptions);
   // One interaction service per server so in-flight executions and their
   // cancellation controllers live exactly as long as the daemon.

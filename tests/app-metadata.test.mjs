@@ -12,7 +12,8 @@ import { botUid } from '../setup-worktree.mjs';
 import { cachedBotAvatarUrl } from '../gh-pr-view-json.mjs';
 import { appConfig } from '../mint-token.mjs';
 import { inspectLocalAppCredential } from '../credential-reconciler.mjs';
-import { credentialStores, migrateCredentialsCommand } from '../soul-credentials.mjs';
+import { credentialStores } from '../soul-credentials.mjs';
+import { migrateCredentialsCommand } from '../soul-credential-migration.mjs';
 import { main as doctor } from '../doctor.mjs';
 import { buildReadinessReport, readinessCheck } from '../readiness.mjs';
 
