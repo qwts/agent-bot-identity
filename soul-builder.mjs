@@ -889,9 +889,10 @@ function translatedAgents(name, { description, model, tools, body }) {
     agents.push([`.qwen/agents/${name}.md`, [...common, ...(tools ? [`tools: ${yamlList(qwen)}`] : [])]]);
   }
   // Codex role files carry no per-tool allowlist, so a declared `tools`
-  // (even empty) cannot be honoured there; it also refuses blank
-  // `developer_instructions`, and a built-in role name would replace Codex's.
-  if (!tools && body.trim() && !CODEX_BUILTIN_ROLES.includes(name)) {
+  // (even empty) cannot be honoured there; it also refuses a blank
+  // `description` or `developer_instructions`, and a built-in role name would
+  // replace Codex's.
+  if (!tools && description.trim() && body.trim() && !CODEX_BUILTIN_ROLES.includes(name)) {
     agents.push([`.codex/agents/${name}.toml`, [`# ${MARKER}`, `name = ${quotedString(name)}`,
       `description = ${quotedString(description)}`, ...(model === undefined ? [] : [`model = ${quotedString(model)}`]),
       `developer_instructions = ${quotedString(body)}`]]);
