@@ -122,6 +122,7 @@
     "daemon-mcp.mjs": "host",
     "daemon-status.mjs": "comms",
     "daemon-supervisor.mjs": "host",
+    "delegation-grants.mjs": "host",
     "detect-harness.mjs": "harness",
     "doctor.mjs": "cli",
     "ensure-private-key.mjs": "identity",
