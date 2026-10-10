@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,9 +39,9 @@ function setup(t) {
   const owner = principal();
   // The fake agent's switches are not host variables a turn inherits, so
   // they ride the turn's own env, as the daemon's binding does.
-  const makeFactory = ({ patch = {}, model = null } = {}) => {
+  const makeFactory = ({ patch = {}, model = null, effort = null } = {}) => {
     const factory = acpExecutorFor({ identities: () => ({}), baseEnv: env, interactionStore: store,
-      policy: { version: 1, rules: [], fallback: 'deny' }, modelFor: () => model,
+      policy: { version: 1, rules: [], fallback: 'deny' }, modelFor: () => model, reasoningEffortFor: () => effort,
       createExecutor: (opts) => createAcpExecutor({ ...opts, registry }),
     });
     return (request) => factory({ ...request, env: { FAKE_ACP_HISTORY_DIR: history, ...patch, ...request.env } });
@@ -175,4 +175,52 @@ test('a completed turn without a native binding cannot be silently skipped', asy
   assert.equal(refused.job.status, 'failed');
   assert.deepEqual(refused.events.find((e) => e.type === 'continuity')?.data,
     { status: 'unavailable', reason: 'binding-unavailable' });
+});
+
+// #379, owner's choice A: a loaded native session keeps the model and effort
+// it last ran, so clearing the last setting starts a new session on the
+// harness default. The prior session stays recorded and on disk, unresumed.
+const MODELS = { FAKE_ACP_MODELS: JSON.stringify({ currentModelId: 'default-model',
+  availableModels: [{ modelId: 'picked-model', name: 'Picked' }, { modelId: 'other-model', name: 'Other' }] }) };
+for (const [setting, options] of [
+  ['model', { model: 'picked-model', patch: MODELS }],
+  ['reasoning effort', { effort: { effort: 'high', source: 'repo' } }],
+]) test(`clearing the last ${setting} starts a new session and says so, keeping the old one`, async (t) => {
+  const x = setup(t);
+  const sid = x.session();
+  const first = await x.run(x.makeService(options), sid, 'remember:cerulean-596');
+  assert.equal(first.job.status, 'completed');
+  const cleared = await x.run(x.makeService({ patch: MODELS }), sid, 'ping');
+  assert.equal(cleared.job.status, 'completed');
+  assert.equal(binding(cleared).mode, 'new');
+  assert.notEqual(binding(cleared).harnessSessionId, binding(first).harnessSessionId);
+  assert.deepEqual(cleared.events.find((e) => e.type === 'continuity')?.data, {
+    status: 'fresh', reason: 'setting-cleared', previousHarnessSessionId: binding(first).harnessSessionId,
+  });
+  assert.match(text(cleared), /^pong: \[agent-bot\] Your previous session in this conversation was kept but not resumed: .*harness default\.\n\nping$/);
+  // The old binding is still in its turn's log; the new session carries on.
+  assert.equal(binding({ events: x.events(first.job.invocationId) }).harnessSessionId, binding(first).harnessSessionId);
+  assert.ok(existsSync(path.join(x.home, 'native', binding(first).harnessSessionId)), 'the old native history is not deleted');
+  const next = await x.run(x.makeService({ patch: MODELS }), sid, 'recall');
+  assert.equal(next.events.some((e) => e.type === 'continuity'), false);
+  assert.equal(binding(next).mode, 'resume');
+  assert.equal(binding(next).harnessSessionId, binding(cleared).harnessSessionId);
+  assert.equal(text(next), 'no prior facts');
+});
+
+test('a changed setting, or one never set, still resumes the same session', async (t) => {
+  const x = setup(t);
+  const sid = x.session();
+  const first = await x.run(x.makeService({ model: 'picked-model', patch: MODELS }), sid, 'remember:cerulean-596');
+  const changed = await x.run(x.makeService({ model: 'other-model', patch: MODELS }), sid, 'recall');
+  assert.equal(binding(changed).mode, 'resume');
+  assert.equal(text(changed), 'cerulean-596');
+  const probe = await x.run(x.makeService({ model: 'other-model', patch: MODELS }), sid, 'model-probe');
+  assert.equal(JSON.parse(text(probe)).model, 'other-model');
+  assert.equal(binding(probe).harnessSessionId, binding(first).harnessSessionId);
+  const unset = x.session();
+  await x.run(x.service, unset, 'remember:never set');
+  const again = await x.run(x.service, unset, 'recall');
+  assert.equal(binding(again).mode, 'resume');
+  assert.equal(text(again), 'never set');
 });

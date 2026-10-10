@@ -10,7 +10,7 @@
 import path from 'node:path';
 import { createTurnRegistry } from './turn-registry.mjs';
 
-import { createAcpExecutor } from './acp-engine.mjs';
+import { createAcpExecutor, HARNESS_SETTINGS_EVENT } from './acp-engine.mjs';
 import { getInvocation, getSession, listInvocations, readEvents, TERMINAL_STATUSES, validateInvocationId } from './agent-jobs.mjs';
 import { createColdWaker } from './cold-wake.mjs';
 import { reachMcpServerEntry, reachPolicyRules } from './daemon-mcp.mjs';
@@ -149,7 +149,8 @@ function interactionHarnessSession(invocation, { agentId, harness, store }) {
   // before the executor actually stops can corrupt history or fork it.
   if (prior.some((record) => !TERMINAL_STATUSES.includes(record.status))) unavailable('session-busy');
   for (const record of prior.reverse()) {
-    const event = readEvents(record.invocationId, {}, store).findLast((item) => item.type === HARNESS_SESSION_EVENT);
+    const recorded = readEvents(record.invocationId, {}, store);
+    const event = recorded.findLast((item) => item.type === HARNESS_SESSION_EVENT);
     if (!event) {
       // A rejected turn never replaced the previous binding. A successful
       // non-ACP turn, however, cannot silently disappear from the context.
@@ -158,7 +159,12 @@ function interactionHarnessSession(invocation, { agentId, harness, store }) {
     }
     const binding = validateHarnessBinding(event.data);
     if (binding.harness !== harness) unavailable('harness-changed');
-    return { harnessSessionId: binding.harnessSessionId };
+    // The settings that turn ran with (#379); a turn from before they were
+    // recorded reads as unknown, so it resumes as it always did.
+    const ran = recorded.findLast((item) => item.type === HARNESS_SETTINGS_EVENT)?.data;
+    const named = (value) => value === null || typeof value === 'string';
+    const settings = ran && named(ran.model) && named(ran.effort) ? { model: ran.model, effort: ran.effort } : null;
+    return { harnessSessionId: binding.harnessSessionId, settings };
   }
   return null;
 }

@@ -50,6 +50,27 @@ Model selection is applied to a loaded session using the existing engine
 model-selection contract. Changing the harness is a different operation
 and is explicitly unsupported within an existing interaction session.
 
+## Clearing the last setting starts a new session
+
+Each ACP turn records the model and reasoning effort it ran with in a
+secret-free `harness-settings` event next to its binding. A loaded native
+session keeps the model and effort it last ran, and nothing can be sent that
+returns it to the harness default. So when the prior turn ran with a model or
+effort and this turn has none, because the owner cleared the last setting
+that named one, the turn starts a new native session on the harness default
+instead of loading the old one (#379, the owner's choice). It is announced,
+never silent: the turn records
+
+```json
+{"status":"fresh","reason":"setting-cleared","previousHarnessSessionId":"…"}
+```
+
+and its prompt begins with a line telling the agent its previous session was
+kept but not resumed. The old session is kept: its binding stays in its own
+turn's event log and its native history is not deleted. Later turns resume the
+new session. Changing a setting to another value, or a turn recorded before
+settings were kept, resumes as before.
+
 ## Evidence and limits
 
 `tests/interaction-continuity.test.mjs` drives the production factory and
