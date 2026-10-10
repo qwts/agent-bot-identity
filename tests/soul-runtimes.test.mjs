@@ -785,6 +785,55 @@ test('owner-managed executable overrides use one-name shims, satisfy only the se
   assert.equal(readFileSync(path.join(outside, 'runtimes', 'overrides', 'node.json'), 'utf8'), 'sentinel');
 });
 
+test('an unsafe override shim directory refuses set and clear before the record changes', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { node: '24' } }, census: true });
+  const options = { ...f.options, file: f.env.AGENT_BOT_POPULATION_PATH, cwd: f.home };
+  const gate = async () => {}, write = () => {};
+  const externalNpm = path.join(f.home, 'external', 'npm'), externalNode = path.join(f.home, 'external', 'node');
+  put(externalNpm, '#!/bin/sh\nexit 0\n');
+  put(externalNode, '#!/bin/sh\nexit 0\n');
+  await soulRuntimesCommand(['override', ID, 'npm', externalNpm], { ...options, gate, write });
+  const overrides = path.join(f.runtimes, 'overrides');
+  const npmRecord = readFileSync(path.join(overrides, 'npm.json'));
+  const stray = path.join(overrides, 'bin', 'gofmt');
+  put(stray, 'unexpected regular file');
+  const receiptsBefore = readFileSync(auditFile({ env: f.env, home: f.home }), 'utf8');
+
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'node', externalNode], { ...options, gate, write }),
+    (error) => error.code === 'runtime-override-invalid' && /remove that host-local entry/.test(error.message));
+  assert.ok(!existsSync(path.join(overrides, 'node.json')), 'a refused set leaves no selection behind');
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'npm', '--clear'], { ...options, gate, write }),
+    (error) => error.code === 'runtime-override-invalid');
+  assert.deepEqual(readFileSync(path.join(overrides, 'npm.json')), npmRecord, 'a refused clear keeps the selection');
+  assert.equal(readFileSync(auditFile({ env: f.env, home: f.home }), 'utf8'), receiptsBefore, 'nothing changed, so nothing is receipted');
+
+  rmSync(stray);
+
+  // A failure after the record is written puts the previous record back:
+  // an absent one stays absent, and an existing selection keeps its bytes.
+  const failing = () => { throw Object.assign(new Error('shim preparation failed'), { code: 'runtime-override-invalid' }); };
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'node', externalNode], { ...options, gate, write, prepareShims: failing }), /shim preparation failed/);
+  assert.ok(!existsSync(path.join(overrides, 'node.json')), 'a failed set restores the absent record');
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'npm', '--clear'], { ...options, gate, write, prepareShims: failing }), /shim preparation failed/);
+  assert.deepEqual(readFileSync(path.join(overrides, 'npm.json')), npmRecord, 'a failed clear restores the selection');
+  const otherNpm = path.join(f.home, 'other', 'npm');
+  put(otherNpm, '#!/bin/sh\nexit 0\n');
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'npm', otherNpm], { ...options, gate, write, prepareShims: failing }), /shim preparation failed/);
+  assert.deepEqual(readFileSync(path.join(overrides, 'npm.json')), npmRecord, 'a failed replacement restores the earlier selection');
+  assert.deepEqual(readdirSync(path.join(overrides, 'bin')), ['npm'], 'the shims follow the restored records');
+  assert.equal(readFileSync(auditFile({ env: f.env, home: f.home }), 'utf8'), receiptsBefore, 'a rolled-back change writes no receipt');
+  assert.ok(!existsSync(path.join(overrides, '.lock')), 'the store lock is released');
+
+  const audit = auditFile({ env: f.env, home: f.home });
+  chmodSync(audit, 0o400);
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'node', externalNode], { ...options, gate, write }), (error) => error.code === 'EACCES');
+  chmodSync(audit, 0o600);
+  assert.ok(!existsSync(path.join(overrides, 'node.json')), 'an unwritable receipt rolls the selection back');
+
+  await soulRuntimesCommand(['override', ID, 'npm', '--clear'], { ...options, gate, write });
+  assert.ok(!existsSync(path.join(overrides, 'npm.json')));
+});
+
 
 test('override clear recovers a malformed directory without following links or removing other selections', async (t) => {
   const f = fixture(t, { census: true });
