@@ -435,7 +435,8 @@ What ships today for `permissionMode` on a daemon-run turn
     store (`proposals.json`, tool `permission-mode:autopilot`) whose digest
     binds the soul, the layer, the file path and the file's sha256, and gets a
     `soul-mode` audit receipt (`operation: loosen`, `decision: approved` or
-    `declined`). Later turns, including after a daemon restart, use the kept
+    `declined`), written first: an answer that cannot be receipted is
+    neither applied nor kept, so the turn runs safe. Later turns, including after a daemon restart, use the kept
     answer without asking. Any change to the file is a new digest, so the
     owner is asked again.
   - **keyd cannot ask** (headless, no GeniusBar, an unsigned keyd): the turn runs

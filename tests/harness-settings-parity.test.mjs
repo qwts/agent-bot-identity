@@ -279,3 +279,14 @@ test('the daemon asks through keyd alone: no administrator dialog, so nothing bl
   assert.match(prompts[0], /run in Auto-Pilot, as its soul package asks \(.*soul\.json, sha256:[0-9a-f]{12}\)$/);
   assert.deepEqual(answers(env, home).map(({ status }) => status), ['denied', 'approved']);
 });
+
+test('an answer that cannot be receipted is neither applied nor kept', async (t) => {
+  const { env, home, soulDir } = fixture(t, 'autopilot');
+  // The audit log's path is a directory: the append fails.
+  mkdirSync(auditFile({ env, home }), { recursive: true });
+  const log = [];
+  const modeFor = daemonModeFor({ env, home, config: {}, ask: async () => ({ method: 'presence' }), log: (line) => log.push(line) });
+  assert.equal(await modeFor(ID, { harness: 'claude', cwd: soulDir }), 'safe');
+  assert.match(log[0], /could not be receipted; running safe/);
+  assert.deepEqual(answers(env, home), []);
+});

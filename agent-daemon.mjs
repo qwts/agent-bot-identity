@@ -1479,14 +1479,19 @@ export function daemonModeFor({
       }
       decision = 'denied';
     }
+    // The receipt comes first: an answer that cannot be receipted is neither
+    // kept nor applied, so the turn runs safe and the next turn asks again.
+    try {
+      appendAuditReceipt({ event: 'soul-mode', agentId, operation: 'loosen', decision: decision === 'approved' ? 'approved' : 'declined',
+        detail: `${resolved.source} sha256:${resolved.digest}`, ...(proof?.method ? { reason: proof.method } : {}) }, { env, home, now });
+    } catch (error) {
+      log(`agent-bot daemon: ${resolved.code}: ${agentId}: the owner's answer could not be receipted; running ${resolved.mode}, the next turn asks again (${error.message})`);
+      return resolved.mode;
+    }
     try {
       const proposal = createProposal({ agentId, tool: LOOSENING_TOOL, operationDigest: operation, summary: `run ${agentId} in autopilot as its ${resolved.source} declares` }, { env, home, now });
       decideProposal(proposal.proposalId, { decision, decidedBy: OWNER_DECIDER }, { env, home, now });
     } catch (error) { log(`agent-bot daemon: ${agentId}: the owner's answer on autopilot could not be kept; the next turn asks again (${error.message})`); }
-    try {
-      appendAuditReceipt({ event: 'soul-mode', agentId, operation: 'loosen', decision: decision === 'approved' ? 'approved' : 'declined',
-        detail: `${resolved.source} sha256:${resolved.digest}`, ...(proof?.method ? { reason: proof.method } : {}) }, { env, home, now });
-    } catch { /* the receipt must not undo the owner's answer */ }
     return decision === 'approved' ? resolved.declared : resolved.mode;
   };
   return (agentId, { harness = null, cwd = null } = {}) => {
