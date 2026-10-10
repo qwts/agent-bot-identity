@@ -20,9 +20,9 @@
 // network, no daemon, no secret.
 //
 // This slice ships the format, the verifier (Ed25519 and SSHSIG, including
-// FIDO `sk-ssh-ed25519@openssh.com` keys and their presence flags), the pins
-// and the ssh store. The keyd store's `owner/sign` RPC, the challenge
-// fallback in the owner gate and pins from the organization profile follow.
+// FIDO `sk-ssh-ed25519@openssh.com` keys and their presence flags), the pins,
+// ssh store and CLI-only signed challenge fallback. The keyd store's
+// `owner/sign` RPC and pins from the organization profile follow.
 
 import { execFileSync } from 'node:child_process';
 import { createHash, createPublicKey, randomBytes, randomUUID, verify } from 'node:crypto';
@@ -31,6 +31,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir, hostname, tmpdir } from 'node:os';
+import { createInterface } from 'node:readline';
 import path from 'node:path';
 import process from 'node:process';
 import { withLock } from './agent-identity.mjs';
@@ -421,6 +422,146 @@ export function newNonce() {
   return randomBytes(18).toString('base64url');
 }
 
+// One unsigned challenge per enrolled SSH key lets an owner sign with whichever
+// key they hold on the trusted machine. The challenge itself contains no key
+// material; the signer proves that its public key matches the named pin.
+export function createOwnerChallenges(text, keys, { host = localHost(), now = Date.now() } = {}) {
+  const textProblemResult = textProblem(text);
+  if (textProblemResult) throw statementError('statement-invalid', textProblemResult);
+  const iat = Math.floor(now / 1000);
+  const scope = { host };
+  return keys.filter((pin) => pin.store === 'ssh').map((pin) => {
+    const payload = {
+      v: 1,
+      aud: STATEMENT_AUDIENCE,
+      kind: 'challenge',
+      alg: 'sshsig',
+      key: pin.fingerprint,
+      text,
+      scope,
+      // ADR-0753 binds this digest to the exact summary shown to the owner.
+      action: createHash('sha256').update(text, 'utf8').digest('hex'),
+      nonce: newNonce(),
+      iat,
+      exp: iat + CHALLENGE_LIFETIME.default,
+    };
+    const problem = challengeTemplateProblem(payload, { now });
+    if (problem) throw statementError('statement-invalid', problem);
+    return {
+      name: pin.name,
+      fingerprint: pin.fingerprint,
+      payload,
+    };
+  });
+}
+
+function challengeTemplateProblem(payload, { now = Date.now() } = {}) {
+  const problem = payloadProblem(payload);
+  if (problem) return problem;
+  if (payload.kind !== 'challenge' || payload.alg !== 'sshsig') return 'the challenge is not for the ssh store';
+  if (payload.action !== createHash('sha256').update(payload.text, 'utf8').digest('hex')) {
+    return 'the challenge action digest does not match its displayed text';
+  }
+  const seconds = Math.floor(now / 1000);
+  if (payload.iat > seconds + CLOCK_SKEW_SECONDS) return 'the challenge is issued in the future';
+  if (seconds > payload.exp + CLOCK_SKEW_SECONDS) return 'the challenge has expired';
+  return null;
+}
+
+// Signs only a well-formed, unexpired challenge for the public key beside
+// `keyPath`. The response preserves the request binding and can only shorten
+// its lifetime.
+export function signChallenge(payload, keyPath, { sign = sshSign, now = Date.now() } = {}) {
+  const problem = challengeTemplateProblem(payload, { now });
+  if (problem) throw statementError(problem === 'the challenge has expired' ? 'statement-expired' : 'statement-invalid', problem);
+  const key = sshKeyFor(keyPath);
+  if (sshFingerprint(key.blob) !== payload.key) {
+    throw statementError('owner-key-mismatch', 'the challenge names a different owner key');
+  }
+  // Keep the request's issuance time. A signer clock may be slightly behind
+  // the requester; the normal verifier already applies the documented skew.
+  const signed = { ...payload, exp: Math.min(payload.exp, payload.iat + CHALLENGE_LIFETIME.default) };
+  const segment = encodePayload(signed);
+  return { token: `s1.${segment}.${sign(segment, keyPath).toString('base64url')}`, payload: signed, key };
+}
+
+// A signed reply must be the answer to one of these exact pending challenges.
+// A different action, display text, scope, key, nonce or later expiry refuses.
+export function verifyOwnerChallenge(input, { challenges, keys, now = Date.now() } = {}) {
+  const verified = verifyStatement(input, { keys, now });
+  const match = challenges.find(({ payload }) => payload.key === verified.payload.key
+    && payload.text === verified.payload.text
+    && JSON.stringify(payload.scope) === JSON.stringify(verified.payload.scope)
+    && payload.action === verified.payload.action
+    && payload.nonce === verified.payload.nonce
+    && verified.payload.iat >= payload.iat
+    && verified.payload.exp <= payload.exp);
+  if (!match) throw statementError('statement-scope-mismatch', 'the signed statement does not answer this pending owner challenge');
+  return { method: 'statement', via: 'ssh', key: verified.pin.name, fingerprint: verified.pin.fingerprint };
+}
+
+// The waiting gate reads only an interactive terminal. It never consumes a
+// pipe or other command's stdin, and the finite timeout/cancel path refuses.
+export async function promptOwnerChallenge(challenges, {
+  input = process.stdin,
+  output = process.stderr,
+  timeoutMs = CHALLENGE_LIFETIME.default * 1000,
+} = {}) {
+  if (!input.isTTY || !output.isTTY) {
+    throw statementError('owner-unreachable', 'signed owner approval needs an interactive terminal; nothing was changed');
+  }
+  output.write('Owner presence is unavailable. Sign one challenge on a trusted machine, then paste its signed statement below.\n');
+  for (const { name, fingerprint, payload } of challenges) {
+    output.write(`Key ${name} (${fingerprint}); sign with its matching SSH key:\n${JSON.stringify(payload)}\n`);
+  }
+  const rl = createInterface({ input, output, terminal: true });
+  const lines = [];
+  let byteLength = 0;
+  let settled = false;
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      rl.removeListener('line', onLine);
+      rl.removeListener('SIGINT', onInterrupt);
+      rl.removeListener('close', onClose);
+      input.removeListener('data', onData);
+      rl.close();
+    };
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error); else resolve(value);
+    };
+    const onLine = (line) => {
+      const trimmed = line.trim();
+      if (lines.length === 0 && !trimmed) {
+        finish(statementError('owner-challenge-cancelled', 'the owner challenge was cancelled; nothing was changed'));
+        return;
+      }
+      lines.push(line);
+      if (trimmed === END || (lines.length === 1 && trimmed.startsWith('s1.')) || !trimmed) {
+        finish(null, lines.join('\n').trim());
+      }
+    };
+    const onData = (chunk) => {
+      byteLength += Buffer.byteLength(typeof chunk === 'string' ? chunk : Buffer.from(chunk));
+      if (byteLength > MAX_INPUT_BYTES) {
+        finish(statementError('statement-invalid', 'the signed owner reply is too large'));
+      }
+    };
+    const onInterrupt = () => finish(statementError('owner-challenge-cancelled', 'the owner challenge was cancelled; nothing was changed'));
+    const onClose = () => finish(statementError('owner-challenge-cancelled', 'the owner challenge ended without a reply; nothing was changed'));
+    const timer = setTimeout(() => finish(statementError('owner-unreachable', 'the owner challenge timed out; nothing was changed')), timeoutMs);
+    rl.on('line', onLine);
+    rl.once('SIGINT', onInterrupt);
+    rl.once('close', onClose);
+    input.prependListener('data', onData);
+    output.write('Paste the signed owner statement (blank cancels): ');
+    rl.prompt();
+  });
+}
+
 export function localHost() {
   const name = hostname().replace(/\.local$/u, '');
   return HOST.test(name) ? name : 'localhost';
@@ -449,7 +590,7 @@ export function signPayload(fields, { keyPath, sign = sshSign, now = Date.now() 
 
 // --- Command ---------------------------------------------------------------
 
-export const OWNER_USAGE = 'usage: agent-bot owner verify <token|file|-> [--repo OWNER/NAME --issue N] [--json] | owner sign "<text>" --repo OWNER/NAME --issue N --key PATH [--expires 7d] | owner enroll --store ssh --key PATH [--name NAME] [--verify-required] [--allow-software-key] | owner keys [--json] | owner remove NAME';
+export const OWNER_USAGE = 'usage: agent-bot owner verify <token|file|-> [--repo OWNER/NAME --issue N] [--json] | owner sign "<text>" --repo OWNER/NAME --issue N --key PATH [--expires 7d] | owner sign --challenge <JSON> --key PATH | owner enroll --store ssh --key PATH [--name NAME] [--verify-required] [--allow-software-key] | owner keys [--json] | owner remove NAME';
 
 const usage = (message) => statementError('owner-usage', `${message}\n${OWNER_USAGE}`);
 
@@ -570,7 +711,25 @@ export async function ownerCommand(argv, {
     case 'sign': {
       const { values, positionals } = parse({ repo: { type: 'string' }, issue: { type: 'string' }, key: { type: 'string' },
         expires: { type: 'string' }, challenge: { type: 'string' } });
-      if (values.challenge !== undefined) throw usage('owner sign --challenge comes with the challenge fallback, which is not built yet (#753)');
+      if (values.challenge !== undefined) {
+        if (positionals.length || values.repo !== undefined || values.issue !== undefined || values.expires !== undefined) {
+          throw usage('owner sign --challenge takes only the challenge and --key');
+        }
+        if (!values.key) throw usage('owner sign --challenge needs --key PATH, the SSH key matching the challenge');
+        let challenge;
+        try { challenge = JSON.parse(values.challenge); } catch { throw statementError('statement-invalid', 'the owner challenge is not JSON'); }
+        const problem = challengeTemplateProblem(challenge, { now: now() });
+        if (problem) throw statementError(problem === 'the challenge has expired' ? 'statement-expired' : 'statement-invalid', problem);
+        const found = [...markers({ env, cwd }), ...harnessMarkers(env)];
+        if (found.length) {
+          throw statementError('owner-credential-required',
+            `owner sign runs only where no agent runs; this caller has ${found.join(', ')}. The ssh store cannot show you what it signs, so sign on a machine or terminal no agent controls.`);
+        }
+        writeErr(`Signing the pending owner request for ${describeScope(challenge.scope)} until ${new Date(challenge.exp * 1000).toISOString()}:\n  ${challenge.text}\nThe ssh store has no trusted display; confirm this is the request you intend to approve.\n`);
+        const { token } = signChallenge(challenge, values.key, { sign, now: now() });
+        write(armorStatement(token));
+        return { token };
+      }
       if (positionals.length !== 1) throw usage('owner sign takes the statement text as one argument');
       if (!values.key) throw usage('owner sign needs --key PATH, the ssh key to sign with');
       const scope = scopeFlags(values, { required: true });
@@ -632,8 +791,9 @@ export async function ownerCommand(argv, {
         // Possession: the new key signs a challenge for this enrolment, and
         // the pin is written only if that verifies under the pin itself.
         writeErr(`Proving you hold ${name} (${fingerprint}): touch the security key or enter its PIN if asked.\n`);
-        const { token } = signPayload({ kind: 'challenge', text: `Enrol owner key ${name} (${fingerprint}) on ${host()}`,
-          scope: { host: host() }, action: createHash('sha256').update(action, 'utf8').digest('hex'), lifetime: CHALLENGE_LIFETIME.default },
+        const text = `Enrol owner key ${name} (${fingerprint}) on ${host()}`;
+        const { token } = signPayload({ kind: 'challenge', text,
+          scope: { host: host() }, action: createHash('sha256').update(text, 'utf8').digest('hex'), lifetime: CHALLENGE_LIFETIME.default },
         { keyPath: values.key, sign, now: now() });
         verifyStatement(token, { keys: [pin], now: now() });
         mutateOwnerKeys((keys) => {

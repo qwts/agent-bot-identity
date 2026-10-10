@@ -4,12 +4,15 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { PassThrough } from 'node:stream';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  MAX_INPUT_BYTES, MAX_OWNER_KEYS, SSHSIG_NAMESPACE, STATEMENT_AUDIENCE, armorStatement, encodePayload, ed25519KeyLine, extractToken,
-  ownerCommand, ownerKeysPath, parseSshPublicKey, readOwnerKeys, readStatementFile, sshFingerprint, verifyStatement, writeOwnerKeys,
+  CHALLENGE_LIFETIME, MAX_INPUT_BYTES, MAX_OWNER_KEYS, SSHSIG_NAMESPACE, STATEMENT_AUDIENCE, armorStatement, createOwnerChallenges,
+  encodePayload, ed25519KeyLine, extractToken, ownerCommand, ownerKeysPath, parseSshPublicKey, promptOwnerChallenge, readOwnerKeys,
+  readStatementFile, signChallenge, sshFingerprint, verifyOwnerChallenge, verifyStatement, writeOwnerKeys,
 } from '../owner-statement.mjs';
+import { assertOwnerAction, ownerActionSummary, presenceOrConsent } from '../owner-action.mjs';
 
 const CLI = join(dirname(dirname(fileURLToPath(import.meta.url))), 'agent-bot.mjs');
 const NOW = Date.parse('2026-10-09T22:00:00Z');
@@ -141,6 +144,281 @@ test('a keyd pin verifies raw Ed25519 statements and nothing signed for presence
   const presence = Buffer.from(JSON.stringify({ v: 1, aud: 'agent-bot-owner', kind: 'presence', action: 'a'.repeat(64), nonce: NONCE, iat: SECONDS, exp: SECONDS + 60 })).toString('base64url');
   assert.throws(() => verifyStatement(`s1.${presence}.${key.sign(presence).toString('base64url')}`, { keys, now: NOW }), { code: 'statement-invalid' });
   assert.throws(() => verifyStatement(`p1.${presence}.${key.sign(presence).toString('base64url')}`, { keys, now: NOW }), { code: 'statement-invalid' });
+});
+
+test('an owner challenge binds the displayed action summary and can be answered once by an enrolled SSH key', () => {
+  const key = securityKey();
+  const pin = pinFor(key);
+  const text = 'approve the pending soul revision';
+  const challenges = createOwnerChallenges(text, [pin], { host: 'remote-host', now: NOW });
+  assert.equal(challenges.length, 1);
+  const challenge = challenges[0].payload;
+  assert.equal(challenge.action, createHash('sha256').update(text).digest('hex'));
+  assert.equal(challenge.text, text);
+  assert.deepEqual(challenge.scope, { host: 'remote-host' });
+  assert.equal(challenge.exp - challenge.iat, CHALLENGE_LIFETIME.default);
+  assert.throws(() => createOwnerChallenges('😀'.repeat(126), [pin], { now: NOW }), { code: 'statement-invalid' });
+
+  const signedPayload = { ...challenge, iat: challenge.iat + 1 };
+  const segment = encodePayload(signedPayload);
+  const reply = armorStatement(`s1.${segment}.${key.sshsig(Buffer.from(segment)).toString('base64url')}`);
+  assert.deepEqual(verifyOwnerChallenge(reply, { challenges, keys: [pin], now: NOW + 1000 }), {
+    method: 'statement', via: 'ssh', key: 'yubikey', fingerprint: key.fingerprint,
+  });
+  assert.throws(() => verifyOwnerChallenge(reply, {
+    challenges: createOwnerChallenges(`${text} changed`, [pin], { host: 'remote-host', now: NOW }), keys: [pin], now: NOW + 1000,
+  }), { code: 'statement-scope-mismatch' });
+
+  for (const changed of [
+    { ...challenge, action: `${challenge.action[0] === '0' ? '1' : '0'}${challenge.action.slice(1)}` },
+    { ...challenge, scope: { host: 'another-host' } },
+    { ...challenge, nonce: `${challenge.nonce.slice(0, -1)}${challenge.nonce.endsWith('a') ? 'b' : 'a'}` },
+  ]) {
+    const changedSegment = encodePayload(changed);
+    const changedReply = armorStatement(`s1.${changedSegment}.${key.sshsig(Buffer.from(changedSegment)).toString('base64url')}`);
+    assert.throws(() => verifyOwnerChallenge(changedReply, { challenges, keys: [pin], now: NOW + 1000 }), { code: 'statement-scope-mismatch' });
+  }
+
+  const longer = { ...challenge, iat: challenge.iat + 1, exp: challenge.exp + 1 };
+  const longerSegment = encodePayload(longer);
+  const longerReply = armorStatement(`s1.${longerSegment}.${key.sshsig(Buffer.from(longerSegment)).toString('base64url')}`);
+  assert.throws(() => verifyOwnerChallenge(longerReply, { challenges, keys: [pin], now: NOW + 1000 }), { code: 'statement-scope-mismatch' });
+});
+
+test('a signer clock behind by less than the allowed skew can answer the original challenge', (t) => {
+  const ctx = command(t);
+  const key = securityKey();
+  const keyPath = join(ctx.dir, 'owner-key');
+  writeFileSync(`${keyPath}.pub`, `${key.line}\n`);
+  const pin = pinFor(key);
+  const [challenge] = createOwnerChallenges('approve revision p2', [pin], { host: 'remote-host', now: NOW });
+  const { token, payload } = signChallenge(challenge.payload, keyPath, {
+    now: NOW - 20_000,
+    sign: (segment) => key.sshsig(Buffer.from(segment)),
+  });
+  assert.equal(payload.iat, challenge.payload.iat, 'the signer preserves the request issuance time');
+  assert.deepEqual(verifyOwnerChallenge(armorStatement(token), { challenges: [challenge], keys: [pin], now: NOW + 5_000 }).via, 'ssh');
+  const mismatchedAction = `${challenge.payload.action[0] === '0' ? '1' : '0'}${challenge.payload.action.slice(1)}`;
+  assert.throws(() => signChallenge({ ...challenge.payload, action: mismatchedAction }, keyPath, {
+    now: NOW, sign: () => assert.fail('a mismatched challenge template must be rejected before signing'),
+  }), { code: 'statement-invalid' });
+});
+
+test('the owner CLI signs the challenge JSON and emits only the armored reply on stdout', async (t) => {
+  if (!HAS_SSH_KEYGEN) return t.skip('ssh-keygen is not installed');
+  const ctx = command(t);
+  const keyPath = join(ctx.dir, 'id_ed25519');
+  execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', keyPath], { stdio: 'ignore' });
+  const line = readFileSync(`${keyPath}.pub`, 'utf8').trim();
+  const key = parseSshPublicKey(line);
+  const pin = { ...pinFor({ line, fingerprint: sshFingerprint(key.blob) }), softwareKey: true };
+  const challengeNow = Date.now();
+  const [challenge] = createOwnerChallenges('approve the pending revision', [pin], { host: 'remote-host', now: challengeNow });
+  const result = spawnSync(process.execPath, [CLI, 'owner', 'sign', '--challenge', JSON.stringify(challenge.payload), '--key', keyPath], {
+    cwd: ctx.dir, env: { HOME: ctx.dir, PATH: process.env.PATH }, encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^-----BEGIN AGENT-BOT OWNER STATEMENT-----\ns1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\n-----END AGENT-BOT OWNER STATEMENT-----\n$/);
+  assert.match(result.stderr, /approve the pending revision/);
+  const verified = verifyStatement(result.stdout, { keys: [pin], now: Date.now() });
+  assert.equal(verified.payload.action, challenge.payload.action);
+  assert.equal(verified.payload.nonce, challenge.payload.nonce);
+  assert.equal(verified.payload.exp, challenge.payload.exp);
+});
+
+test('the challenge gate reaches the terminal reply flow only after unavailable presence and local SSH pins', async (t) => {
+  const ctx = command(t);
+  const key = securityKey();
+  const pin = pinFor(key);
+  writeOwnerKeys([pin], { env: ctx.env });
+  const action = 'soul revision approve agent_12345678-1234-4123-8123-123456789abc proposal_1';
+  let asked = 0;
+  let promptCount = 0;
+  const now = () => NOW;
+  const proof = await assertOwnerAction(action, {
+    env: ctx.env, cwd: ctx.dir, markers: () => [], challengeNow: now, challengeHost: () => 'remote-host',
+    presence: async () => { asked += 1; throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); },
+    challengePrompt: async (challenges) => {
+      promptCount += 1;
+      const summary = challenges[0].payload.text;
+      assert.equal(summary, ownerActionSummary(action, { env: ctx.env }));
+      assert.equal(challenges[0].payload.action, createHash('sha256').update(summary).digest('hex'));
+      const payload = { ...challenges[0].payload, iat: SECONDS + 1 };
+      const segment = encodePayload(payload);
+      return armorStatement(`s1.${segment}.${key.sshsig(Buffer.from(segment)).toString('base64url')}`);
+    },
+    fallbackConsent: () => assert.fail('an enrolled key uses the challenge path, not administrator fallback'),
+  });
+  assert.deepEqual(proof, { method: 'statement', via: 'ssh', key: pin.name, fingerprint: pin.fingerprint });
+  assert.equal(asked, 1);
+  assert.equal(promptCount, 1);
+});
+
+test('the owner-action presence wrapper checks presence once before the challenge flow', async (t) => {
+  const ctx = command(t);
+  const key = securityKey();
+  const pin = pinFor(key);
+  writeOwnerKeys([pin], { env: ctx.env });
+  const action = 'soul revision approve agent_12345678-1234-4123-8123-123456789abc proposal_1';
+  let presenceCalls = 0;
+  let signedReply;
+  let challengeCalls = 0;
+  const options = {
+    env: ctx.env, cwd: ctx.dir, markers: () => [], challengeNow: () => NOW, challengeHost: () => 'remote-host',
+    presence: async () => { presenceCalls += 1; throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); },
+    challengePrompt: async ([challenge]) => {
+      challengeCalls += 1;
+      if (signedReply) return signedReply;
+      const payload = { ...challenge.payload, iat: challenge.payload.iat + 1 };
+      const segment = encodePayload(payload);
+      signedReply = armorStatement(`s1.${segment}.${key.sshsig(Buffer.from(segment)).toString('base64url')}`);
+      return signedReply;
+    },
+    consent: () => assert.fail('a valid challenge should not reach the existing consent seam'),
+  };
+  const proof = await presenceOrConsent(action, options);
+  assert.equal(proof.via, 'ssh');
+  assert.equal(presenceCalls, 1);
+  await assert.rejects(presenceOrConsent(action, options), { code: 'statement-scope-mismatch' });
+  assert.equal(presenceCalls, 2);
+  assert.equal(challengeCalls, 2);
+});
+
+test('challenge refusal, cancellation, and disabled challenge paths never approve or fall through', async (t) => {
+  const ctx = command(t);
+  const key = securityKey();
+  writeOwnerKeys([pinFor(key)], { env: ctx.env });
+  const action = 'owner remove yubikey fingerprint';
+  let fallback = 0;
+  const unavailable = async () => { throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); };
+  await assert.rejects(assertOwnerAction(action, {
+    env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable,
+    challengePrompt: async (challenges) => {
+      const altered = { ...challenges[0].payload, text: 'different action' };
+      const segment = encodePayload(altered);
+      return armorStatement(`s1.${segment}.${key.sshsig(Buffer.from(segment)).toString('base64url')}`);
+    },
+    fallbackConsent: () => { fallback += 1; return { method: 'consent' }; },
+  }), { code: 'statement-scope-mismatch' });
+  assert.equal(fallback, 0, 'an invalid reply is final');
+
+  const disabled = await assertOwnerAction(action, {
+    env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable, allowChallenge: false,
+    challengePrompt: () => assert.fail('enrollment and removal never use the signed fallback'),
+    fallbackConsent: async () => { fallback += 1; return { method: 'consent' }; },
+  });
+  assert.deepEqual(disabled, { method: 'consent' });
+  assert.equal(fallback, 1, 'disabling challenge retains the old consent path');
+
+  await assert.rejects(assertOwnerAction(action, {
+    env: ctx.env, cwd: ctx.dir, markers: () => [], presence: async () => { throw Object.assign(new Error('declined'), { code: 'owner-declined' }); },
+    challengePrompt: () => assert.fail('owner-declined is final'),
+    fallbackConsent: () => assert.fail('owner-declined never reaches consent'),
+  }), { code: 'owner-declined' });
+});
+
+test('hosts with no enrolled owner keys retain the existing administrator fallback', async (t) => {
+  const ctx = command(t);
+  let fallback = 0;
+  const proof = await assertOwnerAction('owner action without enrolled pins', {
+    env: ctx.env, cwd: ctx.dir, markers: () => [],
+    presence: async () => { throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); },
+    challengePrompt: () => assert.fail('an empty pin store does not produce a challenge'),
+    fallbackConsent: async () => { fallback += 1; return { method: 'consent' }; },
+  });
+  assert.deepEqual(proof, { method: 'consent' });
+  assert.equal(fallback, 1);
+});
+
+test('owner challenge refuses keyd-only pins and rechecks SSH pins after waiting', async (t) => {
+  const ctx = command(t);
+  const key = securityKey();
+  const action = 'soul revision approve agent_12345678-1234-4123-8123-123456789abc proposal_1';
+  const unavailable = async () => { throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); };
+  let fallback = 0;
+
+  writeOwnerKeys([pinFor(keydKey(), { store: 'keyd', name: 'local-keyd' })], { env: ctx.env });
+  await assert.rejects(assertOwnerAction(action, {
+    env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable,
+    challengePrompt: () => assert.fail('keyd pins are not supported by this CLI challenge flow'),
+    fallbackConsent: () => { fallback += 1; return { method: 'consent' }; },
+  }), { code: 'owner-unreachable' });
+  assert.equal(fallback, 0, 'any enrolled key disables administrator fallback');
+
+  const pin = pinFor(key);
+  writeOwnerKeys([pin], { env: ctx.env });
+  await assert.rejects(assertOwnerAction(action, {
+    env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable,
+    challengePrompt: async ([challenge]) => {
+      // Removing the key while the owner signs must invalidate the pending reply.
+      writeOwnerKeys([], { env: ctx.env });
+      const payload = { ...challenge.payload, iat: challenge.payload.iat + 1 };
+      const segment = encodePayload(payload);
+      return armorStatement(`s1.${segment}.${key.sshsig(Buffer.from(segment)).toString('base64url')}`);
+    },
+    fallbackConsent: () => { fallback += 1; return { method: 'consent' }; },
+  }), { code: 'owner-unreachable' });
+  assert.equal(fallback, 0, 'a revoked pin cannot authorize from a stale challenge');
+
+  const replacement = pinFor(securityKey(), { name: pin.name });
+  writeOwnerKeys([pin], { env: ctx.env });
+  await assert.rejects(assertOwnerAction(action, {
+    env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable,
+    challengePrompt: async ([challenge]) => {
+      writeOwnerKeys([replacement], { env: ctx.env });
+      const payload = { ...challenge.payload, iat: challenge.payload.iat + 1 };
+      const segment = encodePayload(payload);
+      return armorStatement(`s1.${segment}.${key.sshsig(Buffer.from(segment)).toString('base64url')}`);
+    },
+    fallbackConsent: () => { fallback += 1; return { method: 'consent' }; },
+  }), { code: 'owner-unreachable' });
+  assert.equal(fallback, 0, 'a replacement key cannot inherit an old challenge');
+});
+
+test('owner challenge prompt refuses noninteractive input and has a finite wait', async () => {
+  const output = { isTTY: false, write: () => assert.fail('noninteractive prompt must not write or read') };
+  await assert.rejects(promptOwnerChallenge([], { input: { isTTY: false }, output }), { code: 'owner-unreachable' });
+
+  const input = new PassThrough(); input.isTTY = true;
+  const terminal = new PassThrough(); terminal.isTTY = true;
+  await assert.rejects(promptOwnerChallenge([], { input, output: terminal, timeoutMs: 10 }), { code: 'owner-unreachable' });
+  input.destroy(); terminal.destroy();
+
+  const cancelInput = new PassThrough(); cancelInput.isTTY = true;
+  const cancelOutput = new PassThrough(); cancelOutput.isTTY = true;
+  const cancelled = promptOwnerChallenge([], { input: cancelInput, output: cancelOutput, timeoutMs: 60_000 });
+  cancelInput.write('\n');
+  await assert.rejects(cancelled, { code: 'owner-challenge-cancelled' });
+  cancelInput.destroy(); cancelOutput.destroy();
+});
+
+test('the terminal prompt accepts and verifies one armored signed owner reply', async () => {
+  const key = securityKey();
+  const pin = pinFor(key);
+  const challenges = createOwnerChallenges('approve pending change', [pin], { host: 'remote-host', now: NOW });
+  const payload = challenges[0].payload;
+  const segment = encodePayload(payload);
+  const reply = armorStatement(`s1.${segment}.${key.sshsig(Buffer.from(segment)).toString('base64url')}`);
+  const input = new PassThrough(); input.isTTY = true;
+  const output = new PassThrough(); output.isTTY = true;
+  const pending = promptOwnerChallenge(challenges, { input, output, timeoutMs: 60_000 });
+  input.write(reply);
+  const returned = await pending;
+  assert.equal(returned, reply.trim());
+  assert.deepEqual(verifyOwnerChallenge(returned, { challenges, keys: [pin], now: NOW + 1000 }), {
+    method: 'statement', via: 'ssh', key: pin.name, fingerprint: pin.fingerprint,
+  });
+  input.destroy(); output.destroy();
+});
+
+test('owner challenge prompt bounds an unterminated terminal reply as bytes arrive', async () => {
+  const input = new PassThrough(); input.isTTY = true;
+  const output = new PassThrough(); output.isTTY = true;
+  const pending = promptOwnerChallenge([], { input, output, timeoutMs: 60_000 });
+  input.write(`s1.fake\n${'x'.repeat(MAX_INPUT_BYTES + 1)}`);
+  await assert.rejects(pending, { code: 'statement-invalid' });
+  assert.equal(input.destroyed, false, 'refusal does not destroy command stdin');
+  input.destroy(); output.destroy();
 });
 
 test('the pin file is private, bounded and refused when damaged', (t) => {

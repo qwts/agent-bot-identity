@@ -10,7 +10,9 @@ import { ownerCommand } from '../owner-statement.mjs';
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   ownerCommand(process.argv.slice(2), {
-    gate: (action) => assertOwnerAction(action),
+    // Enrolment and removal change the trust roots and always need local
+    // presence or the existing administrator consent flow.
+    gate: (action) => assertOwnerAction(action, { allowChallenge: false }),
     markers: ({ env, cwd }) => soulMarkers({ env, cwd }),
     receipt: (fields, options) => appendAuditReceipt(fields, options),
   }).then((result) => {
