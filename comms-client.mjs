@@ -29,6 +29,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
+  closeSync,
+  openSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -42,6 +44,15 @@ import { homedir, userInfo } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { loadOrCreateVouchKey, vouchStateDir } from './vouch.mjs';
+import {
+  createWindowsCommsTransport,
+  createWindowsTransportCustody,
+  assertWindowsBrokerCustody,
+  isWindowsBrokerKey,
+  isWindowsRelayFailure,
+  isWindowsSid,
+  readWindowsBrokerPin,
+} from './comms-windows.mjs';
 
 export const COMMS_PROTOCOL_VERSION = 1;
 export const COMMS_MAX_LINE_BYTES = 128 * 1024;
@@ -63,11 +74,14 @@ function fail(code, message) {
 
 // --- paths ---
 
-export function commsPaths({ env = process.env } = {}) {
+export function commsPaths({ env = process.env, home = homedir() } = {}) {
   const shared = env.AGENT_COMMS_SHARED_DIR || '/Users/Shared/Public/agent-comms';
+  const stateHome = env.XDG_STATE_HOME ? path.resolve(env.XDG_STATE_HOME) : path.join(home, '.local', 'state');
   return {
     shared,
     socket: path.join(shared, 'broker.sock'),
+    serviceLabel: env.AGENT_COMMS_SERVICE_LABEL || 'dev.qwts.agent-comms.broker',
+    brokerState: path.resolve(env.AGENT_COMMS_BROKER_STATE_DIR || path.join(stateHome, 'agent-comms-broker')),
     // Group brokers use a sticky 1777 proof directory; private brokers use
     // 0700. In both modes the kernel stamps the proof owner.
     proofs: path.join(shared, 'pairing'),
@@ -96,7 +110,8 @@ function checkCredentialShape(value) {
     !value || typeof value !== 'object' || Array.isArray(value)
     || typeof value.account !== 'string' || value.account === ''
     || typeof value.secret !== 'string' || value.secret === ''
-    || !Number.isInteger(value.brokerUid)
+    || !(Number.isInteger(value.brokerUid) || isWindowsSid(value.brokerUid))
+    || (value.brokerKey !== undefined && !isWindowsBrokerKey(value.brokerKey))
     || (value.mode !== undefined && !['single-account', 'group'].includes(value.mode))
     || typeof value.pairedAt !== 'string'
   ) {
@@ -105,10 +120,25 @@ function checkCredentialShape(value) {
   return value;
 }
 
-export function loadCommsCredential({ env = process.env, home = homedir() } = {}) {
+export function loadCommsCredential({ env = process.env, home = homedir(), platform = process.platform,
+  windowsCustody = null } = {}) {
   const file = commsCredentialFile({ env, home });
   let raw;
+  if (platform === 'win32') {
+    try {
+      lstatSync(file);
+    } catch (error) {
+      if (error?.code === 'ENOENT') return null;
+      fail('unpaired', 'the saved comms credential could not be read; pair again');
+    }
+  }
   try {
+    if (platform === 'win32') {
+      const custody = windowsCustody ?? createWindowsTransportCustody();
+      const sid = custody.currentSid();
+      custody.assertOwnedDirectory(path.dirname(file), sid);
+      custody.assertOwnedFile(file, sid);
+    }
     raw = readFileSync(file, 'utf8');
   } catch (error) {
     if (error?.code === 'ENOENT') return null;
@@ -122,26 +152,65 @@ export function loadCommsCredential({ env = process.env, home = homedir() } = {}
   }
 }
 
-export function saveCommsCredential(credential, { env = process.env, home = homedir() } = {}) {
+export function saveCommsCredential(credential, { env = process.env, home = homedir(), platform = process.platform,
+  windowsCustody = null } = {}) {
   const file = commsCredentialFile({ env, home });
   checkCredentialShape({ ...credential, pairedAt: credential.pairedAt ?? new Date().toISOString() });
   const shaped = {
     account: credential.account,
     secret: credential.secret,
     brokerUid: credential.brokerUid,
+    ...(credential.brokerKey === undefined ? {} : { brokerKey: credential.brokerKey }),
     mode: credential.mode ?? 'group',
     pairedAt: credential.pairedAt ?? new Date().toISOString(),
   };
-  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  if (platform === 'win32') {
+    const custody = windowsCustody ?? createWindowsTransportCustody();
+    let sid;
+    try { sid = custody.currentSid(); } catch {
+      fail('unpaired', 'the Windows account SID could not be verified');
+    }
+    if (shaped.brokerUid !== sid || shaped.mode !== 'single-account' || !shaped.brokerKey) {
+      fail('broker-untrusted', 'Windows comms credentials require this account, a pinned broker key, and single-account mode');
+    }
+    try {
+      custody.createOwnedDirectory(path.dirname(file), sid);
+      custody.assertOwnedDirectory(path.dirname(file), sid);
+    } catch {
+      fail('broker-untrusted', 'the Windows comms credential directory is not owned by this account');
+    }
+  } else {
+    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  }
   // A unique exclusive temp per call: two pairings in one process (or one
   // PID reused) never write through each other's half-finished file.
   const temporary = `${file}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
+  let temporaryCreated = false;
   try {
-    writeFileSync(temporary, `${JSON.stringify(shaped, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
-    chmodSync(temporary, 0o600);
+    if (platform === 'win32') {
+      const custody = windowsCustody ?? createWindowsTransportCustody();
+      const sid = custody.currentSid();
+      custody.createPrivateFile(temporary, sid);
+      temporaryCreated = true;
+      try {
+        custody.assertOwnedFile(temporary, sid);
+      } catch {
+        fail('unpaired', 'the Windows comms credential could not be secured');
+      }
+      const fd = openSync(temporary, 'r+');
+      try {
+        writeFileSync(fd, `${JSON.stringify(shaped, null, 2)}\n`);
+      } finally {
+        closeSync(fd);
+      }
+    } else {
+      writeFileSync(temporary, `${JSON.stringify(shaped, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+      temporaryCreated = true;
+      chmodSync(temporary, 0o600);
+    }
     renameSync(temporary, file);
   } finally {
-    rmSync(temporary, { force: true });
+    if (temporaryCreated) rmSync(temporary, { force: true });
   }
   return shaped;
 }
@@ -218,7 +287,25 @@ export function assertCommsBrokerSocket(file, ownerUid) {
 // pinned broker account. Pairing pins this account for a private broker, or
 // the named --broker account for group mode. Later calls use the saved mode
 // and uid; credentials predating single-account mode remain group mode.
-export function checkBrokerCustody(paths, brokerUid, mode = 'group') {
+export function checkBrokerCustody(paths, brokerUid, mode = 'group', {
+  platform = process.platform, windowsCustody = null,
+} = {}) {
+  if (platform === 'win32') {
+    if (mode !== 'single-account') fail('platform-not-implemented', 'group broker mode is not supported on Windows');
+    if (!isWindowsSid(brokerUid)) fail('broker-untrusted', 'no broker account SID is pinned for this client');
+    try {
+      assertWindowsBrokerCustody({
+        brokerStateDir: paths.brokerState,
+        brokerUid,
+        mode,
+        custody: windowsCustody ?? createWindowsTransportCustody(),
+      });
+    } catch (error) {
+      if (error?.code === 'platform-not-implemented') throw new CommsError(error.code, error.message);
+      fail('broker-untrusted', 'the Windows broker identity is not owned by this account');
+    }
+    return;
+  }
   if (!['single-account', 'group'].includes(mode)) {
     fail('broker-untrusted', 'unknown broker mode');
   }
@@ -306,6 +393,21 @@ function sleepMs(ms, signal) {
   });
 }
 
+function clientOptions(paths, pair, { platform = process.platform, windowsCustody = null,
+  windowsCreateConnection = null } = {}) {
+  return {
+    socketPath: paths.socket,
+    brokerUid: pair.brokerUid,
+    brokerKey: pair.brokerKey,
+    mode: pair.mode ?? 'group',
+    serviceLabel: paths.serviceLabel,
+    brokerStateDir: paths.brokerState,
+    platform,
+    windowsCustody,
+    windowsCreateConnection,
+  };
+}
+
 // Capped exponential backoff for the account watch: 1 s, 2 s, 4 s, … to 30 s.
 export function nextCommsBackoffMs(currentMs) {
   return Math.min(
@@ -314,12 +416,13 @@ export function nextCommsBackoffMs(currentMs) {
   );
 }
 
-function openCommsConnection(socketPath, fields, { onEvent, signal, timeoutMs = COMMS_REQUEST_TIMEOUT_MS } = {}) {
+function openCommsConnection(socketPath, fields, { onEvent, signal, timeoutMs = COMMS_REQUEST_TIMEOUT_MS,
+  connectionFactory = net.createConnection } = {}) {
   if (!onEvent && (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647)) {
     fail('usage', 'request timeout must be a positive integer of at most 2147483647 milliseconds');
   }
   return new Promise((resolve, reject) => {
-    const socket = net.createConnection(socketPath);
+    let socket;
     let settled = false;
     let timer;
     const finish = (error, value) => {
@@ -327,7 +430,7 @@ function openCommsConnection(socketPath, fields, { onEvent, signal, timeoutMs = 
       settled = true;
       clearTimeout(timer);
       signal?.removeEventListener('abort', cancel);
-      socket.destroy();
+      socket?.destroy();
       if (error) reject(error);
       else resolve(value);
     };
@@ -339,9 +442,29 @@ function openCommsConnection(socketPath, fields, { onEvent, signal, timeoutMs = 
         timeoutMs,
       );
     }
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) cancel();
+    if (settled) return;
+    try {
+      socket = connectionFactory(socketPath);
+    } catch (error) {
+      finish(error);
+      return;
+    }
     socket.on('connect', () => writeCommsLine(socket, { v: COMMS_PROTOCOL_VERSION, ...fields }));
     socket.on('error', (error) => {
-      finish(new CommsError('broker-unreachable', `cannot reach the broker: ${error.code ?? error.message}`));
+      const code = ['broker-untrusted', 'broker-timeout', 'bad-response'].includes(error?.code)
+        ? error.code
+        : 'broker-unreachable';
+      const wrapped = new CommsError(code, code === 'broker-unreachable'
+        ? `cannot reach the broker: ${error.code ?? error.message}`
+        : error.message);
+      if (isWindowsRelayFailure(error?.relayFailure)) {
+        Object.defineProperty(wrapped, 'relayFailure', {
+          value: Object.freeze({ ...error.relayFailure }), enumerable: false,
+        });
+      }
+      finish(wrapped);
     });
     socket.on('close', () => finish(new CommsError('broker-unreachable', 'the broker closed the connection')));
     commsLineReader(socket, (line) => {
@@ -358,8 +481,6 @@ function openCommsConnection(socketPath, fields, { onEvent, signal, timeoutMs = 
       // A bare `{ ok: true }` on a stream carries no event; the watch stays
       // open for the event lines that follow.
     }, finish);
-    signal?.addEventListener('abort', cancel, { once: true });
-    if (signal?.aborted) cancel();
   });
 }
 
@@ -368,16 +489,52 @@ function newRequestId() {
 }
 
 export class CommsClient {
-  constructor({ socketPath, brokerUid, mode = 'group', timeoutMs = COMMS_REQUEST_TIMEOUT_MS } = {}) {
+  constructor({ socketPath, brokerUid, brokerKey, mode = 'group', timeoutMs = COMMS_REQUEST_TIMEOUT_MS,
+    serviceLabel = 'dev.qwts.agent-comms.broker', brokerStateDir = null,
+    platform = process.platform, windowsCustody = null, windowsCreateConnection = null,
+    handshakeTimeoutMs = COMMS_REQUEST_TIMEOUT_MS } = {}) {
     if (typeof socketPath !== 'string' || socketPath === '') fail('usage', 'a broker socket path is required');
     this.socketPath = socketPath;
     this.brokerUid = brokerUid;
+    this.brokerKey = brokerKey;
     this.mode = mode;
     this.timeoutMs = timeoutMs;
+    this.platform = platform;
+    this.serviceLabel = serviceLabel;
+    this.brokerStateDir = brokerStateDir;
+    this.windowsCustody = windowsCustody;
+    this.windowsCreateConnection = windowsCreateConnection;
+    this.handshakeTimeoutMs = handshakeTimeoutMs;
   }
 
   checkCustody(paths = commsPaths()) {
+    if (this.platform === 'win32') {
+      const effectivePaths = this.brokerStateDir ? { ...paths, brokerState: this.brokerStateDir } : paths;
+      checkBrokerCustody(effectivePaths, this.brokerUid, this.mode, {
+        platform: this.platform,
+        windowsCustody: this.windowsCustody,
+      });
+      if (!isWindowsBrokerKey(this.brokerKey)) {
+        fail('broker-untrusted', 'the saved broker identity is not trusted; pair again');
+      }
+      return;
+    }
     checkBrokerCustody(paths, this.brokerUid, this.mode);
+  }
+
+  connectionFactory(paths) {
+    if (this.platform !== 'win32') return net.createConnection;
+    const custody = this.windowsCustody ?? createWindowsTransportCustody();
+    const brokerStateDir = this.brokerStateDir ?? paths.brokerState;
+    return () => createWindowsCommsTransport({
+      label: this.serviceLabel,
+      brokerStateDir,
+      brokerUid: this.brokerUid,
+      brokerKey: this.brokerKey,
+      custody,
+      createConnection: this.windowsCreateConnection,
+      handshakeTimeoutMs: this.handshakeTimeoutMs,
+    });
   }
 
   // One request line, one reply line. Resolves with `result`; refuses with
@@ -388,7 +545,7 @@ export class CommsClient {
     // The broker answers `{ ok: true, ...result }`: the result's fields sit
     // beside `ok`, not under a `result` key.
     const { ok: _ok, v: _v, id: _id, ...result } = await openCommsConnection(
-      this.socketPath, { id: newRequestId(), ...fields }, { timeoutMs });
+      this.socketPath, { id: newRequestId(), ...fields }, { timeoutMs, connectionFactory: this.connectionFactory(paths) });
     return result;
   }
 
@@ -398,7 +555,9 @@ export class CommsClient {
   async stream(fields, onEvent, { paths = commsPaths(), signal } = {}) {
     if (typeof onEvent !== 'function') fail('usage', 'a watch event handler is required');
     this.checkCustody(paths);
-    await openCommsConnection(this.socketPath, { id: newRequestId(), ...fields }, { onEvent, signal });
+    await openCommsConnection(this.socketPath, { id: newRequestId(), ...fields }, {
+      onEvent, signal, connectionFactory: this.connectionFactory(paths),
+    });
   }
 }
 
@@ -434,18 +593,40 @@ export async function pairDaemonComms({
   account = userInfo().username,
   publicKey = null,
   keyPairProvider = null,
-  paths = commsPaths({ env }),
+  paths = commsPaths({ env, home }),
   clientFactory = (options) => new CommsClient(options),
   uidOfImpl = uidOfAccount,
   now = () => new Date(),
+  platform = process.platform,
+  windowsCustody = null,
+  windowsCreateConnection = null,
 } = {}) {
   if (typeof account !== 'string' || account === '') fail('usage', 'a daemon account name is required');
   // Same selection rule as agent-comms: naming an account opts into group
   // mode. Persist it for reconnects; never infer mode from agent-bot gates.
   const mode = brokerAccount ? 'group' : 'single-account';
-  const brokerUid = brokerAccount ? uidOfImpl(brokerAccount) : process.getuid();
-  checkBrokerCustody(paths, brokerUid, mode);
-  assertCommsOwnedDir(paths.proofs, brokerUid, { mode: mode === 'group' ? 0o1777 : 0o700 });
+  let brokerUid;
+  let brokerKey;
+  if (platform === 'win32') {
+    if (brokerAccount) fail('platform-not-implemented', 'group broker mode is not supported on Windows');
+    if (!env.AGENT_COMMS_SHARED_DIR) {
+      fail('usage', 'AGENT_COMMS_SHARED_DIR must match the Windows broker host configuration');
+    }
+    const custody = windowsCustody ?? createWindowsTransportCustody();
+    try {
+      brokerUid = custody.currentSid();
+      if (!isWindowsSid(brokerUid)) throw new Error('sid');
+      custody.assertOwnedDirectory(paths.shared, brokerUid);
+      custody.assertOwnedDirectory(paths.proofs, brokerUid);
+    } catch {
+      fail('broker-untrusted', 'the Windows broker directories are not owned by this account');
+    }
+    brokerKey = readWindowsBrokerPin({ brokerStateDir: paths.brokerState, brokerUid, custody });
+  } else {
+    brokerUid = brokerAccount ? uidOfImpl(brokerAccount) : process.getuid();
+    checkBrokerCustody(paths, brokerUid, mode);
+    assertCommsOwnedDir(paths.proofs, brokerUid, { mode: mode === 'group' ? 0o1777 : 0o700 });
+  }
   const resolvedPublicKey = publicKey ?? (keyPairProvider
     ? await keyPairProvider({ env, home })
     : ensureDaemonKeyPair({ env, home }).publicKeyPem);
@@ -456,26 +637,42 @@ export async function pairDaemonComms({
   const secretHash = createHash('sha256').update(secret).digest('hex');
   const proof = `${randomBytes(16).toString('hex')}.proof`;
   const proofFile = path.join(paths.proofs, proof);
-  writeFileSync(proofFile, secretHash, { mode: 0o644, flag: 'wx' });
+  let proofCreated = false;
   try {
-    // The create mode passes through the umask; the broker account must be
-    // able to read the proof, so set 0644 explicitly.
-    chmodSync(proofFile, 0o644);
-    const client = clientFactory({ socketPath: paths.socket, brokerUid, mode });
+    if (platform === 'win32') {
+      const custody = windowsCustody ?? createWindowsTransportCustody();
+      // Restrict the empty file before writing its proof material. The
+      // broker runs as this same account in Windows single-account mode.
+      custody.createPrivateFile(proofFile, brokerUid);
+      proofCreated = true;
+      custody.assertOwnedFile(proofFile, brokerUid);
+      writeFileSync(proofFile, secretHash);
+    } else {
+      // The create mode passes through the umask; group brokers must be able
+      // to read the proof, so set 0644 explicitly.
+      writeFileSync(proofFile, secretHash, { mode: 0o644, flag: 'wx' });
+      proofCreated = true;
+      chmodSync(proofFile, 0o644);
+    }
+    const client = clientFactory(clientOptions(paths, { brokerUid, brokerKey, mode }, {
+      platform, windowsCustody, windowsCreateConnection,
+    }));
     const result = await client.request(
       { op: 'daemon-pair-request', account, secretHash, proof, publicKey: resolvedPublicKey },
       { paths },
     );
-    saveCommsCredential({ account, secret, brokerUid, mode, pairedAt: now().toISOString() }, { env, home });
+    saveCommsCredential({ account, secret, brokerUid, brokerKey, mode, pairedAt: now().toISOString() }, {
+      env, home, platform, windowsCustody,
+    });
     return { account, brokerUid, code: result?.code, state: result?.state };
   } finally {
-    rmSync(proofFile, { force: true });
+    if (proofCreated) rmSync(proofFile, { force: true });
   }
 }
 
-function resolvePairCredential(credential, { env, home }) {
+function resolvePairCredential(credential, { env, home, platform = process.platform, windowsCustody = null }) {
   if (credential) return checkCredentialShape(credential);
-  const loaded = loadCommsCredential({ env, home });
+  const loaded = loadCommsCredential({ env, home, platform, windowsCustody });
   if (!loaded) fail('unpaired', 'this daemon is not paired; run `agent-bot daemon pair-comms [--broker ACCOUNT]`');
   return loaded;
 }
@@ -500,13 +697,16 @@ export async function reportCommsWake(
     credential = null,
     env = process.env,
     home = homedir(),
-    paths = commsPaths({ env }),
+    paths = commsPaths({ env, home }),
     clientFactory = (options) => new CommsClient(options),
+    platform = process.platform,
+    windowsCustody = null,
+    windowsCreateConnection = null,
   } = {},
 ) {
   checkWakeReport({ agentId, messageIds, outcome, detail });
-  const pair = resolvePairCredential(credential, { env, home });
-  const client = clientFactory({ socketPath: paths.socket, brokerUid: pair.brokerUid, mode: pair.mode ?? 'group' });
+  const pair = resolvePairCredential(credential, { env, home, platform, windowsCustody });
+  const client = clientFactory(clientOptions(paths, pair, { platform, windowsCustody, windowsCreateConnection }));
   return client.request({
     op: 'wake-report',
     auth: { daemon: pair.account, secret: pair.secret },
@@ -520,8 +720,9 @@ export async function reportCommsWake(
 // Launch results use a fresh connection authenticated with the daemon pair.
 export async function reportCommsLaunch(
   { requestId, status, agentId = null, detail, code },
-  { credential = null, env = process.env, home = homedir(), paths = commsPaths({ env }),
-    clientFactory = (options) => new CommsClient(options) } = {},
+  { credential = null, env = process.env, home = homedir(), paths = commsPaths({ env, home }),
+    clientFactory = (options) => new CommsClient(options), platform = process.platform,
+    windowsCustody = null, windowsCreateConnection = null } = {},
 ) {
   if (typeof requestId !== 'string' || !requestId
     || !['launched', 'failed'].includes(status)
@@ -529,8 +730,8 @@ export async function reportCommsLaunch(
     || (status === 'failed' && agentId !== null)
     || (detail !== undefined && typeof detail !== 'string')
     || (code !== undefined && (typeof code !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(code)))) fail('usage', 'invalid launch result');
-  const pair = resolvePairCredential(credential, { env, home });
-  const client = clientFactory({ socketPath: paths.socket, brokerUid: pair.brokerUid, mode: pair.mode ?? 'group' });
+  const pair = resolvePairCredential(credential, { env, home, platform, windowsCustody });
+  const client = clientFactory(clientOptions(paths, pair, { platform, windowsCustody, windowsCreateConnection }));
   return client.request({ op: 'launch-result', auth: { daemon: pair.account, secret: pair.secret },
     requestId, status, agentId, ...(detail === undefined ? {} : { detail }), ...(code === undefined ? {} : { code }) }, { paths });
 }
@@ -545,12 +746,13 @@ export const LAUNCH_STAGES = Object.freeze([
 ]);
 export async function reportCommsLaunchProgress(
   { requestId, stage },
-  { credential = null, env = process.env, home = homedir(), paths = commsPaths({ env }),
-    clientFactory = (options) => new CommsClient(options) } = {},
+  { credential = null, env = process.env, home = homedir(), paths = commsPaths({ env, home }),
+    clientFactory = (options) => new CommsClient(options), platform = process.platform,
+    windowsCustody = null, windowsCreateConnection = null } = {},
 ) {
   if (typeof requestId !== 'string' || !requestId || !LAUNCH_STAGES.includes(stage)) fail('usage', 'invalid launch progress');
-  const pair = resolvePairCredential(credential, { env, home });
-  const client = clientFactory({ socketPath: paths.socket, brokerUid: pair.brokerUid, mode: pair.mode ?? 'group' });
+  const pair = resolvePairCredential(credential, { env, home, platform, windowsCustody });
+  const client = clientFactory(clientOptions(paths, pair, { platform, windowsCustody, windowsCreateConnection }));
   return client.request({ op: 'launch-progress', auth: { daemon: pair.account, secret: pair.secret }, requestId, stage }, { paths });
 }
 
@@ -573,12 +775,15 @@ export function createCommsSupervisor({
   env = process.env,
   home = homedir(),
   credential = null,
-  paths = commsPaths({ env }),
+  paths = commsPaths({ env, home }),
   clientFactory = (options) => new CommsClient(options),
   onWake = null,
   onLaunch = null,
   sleepImpl = sleepMs,
   now = () => new Date(),
+  platform = process.platform,
+  windowsCustody = null,
+  windowsCreateConnection = null,
 } = {}) {
   const state = {
     connected: false,
@@ -591,11 +796,18 @@ export function createCommsSupervisor({
   let backoffMs = COMMS_WATCH_MIN_BACKOFF_MS;
   const stopController = new AbortController();
 
-  const reportFor = (pair) => (fields) => reportCommsWake(fields, { credential: pair, env, home, paths, clientFactory });
+  const windowsOptions = { platform, windowsCustody, windowsCreateConnection };
+  const reportFor = (pair) => (fields) => reportCommsWake(fields, {
+    credential: pair, env, home, paths, clientFactory, ...windowsOptions,
+  });
 
   const launchPorts = (pair) => ({ account: pair.account,
-    report: (fields) => reportCommsLaunch(fields, { credential: pair, env, home, paths, clientFactory }),
-    progress: (fields) => reportCommsLaunchProgress(fields, { credential: pair, env, home, paths, clientFactory }) });
+    report: (fields) => reportCommsLaunch(fields, {
+      credential: pair, env, home, paths, clientFactory, ...windowsOptions,
+    }),
+    progress: (fields) => reportCommsLaunchProgress(fields, {
+      credential: pair, env, home, paths, clientFactory, ...windowsOptions,
+    }) });
 
   const handleWake = onWake ?? (async (wake, { report }) => {
     await report({ agentId: wake.agentId, messageIds: wake.messageIds, outcome: 'waiting', detail: 'cold wake is not enabled' });
@@ -608,7 +820,7 @@ export function createCommsSupervisor({
   }
 
   async function watchOnce(pair, signal) {
-    const client = clientFactory({ socketPath: paths.socket, brokerUid: pair.brokerUid, mode: pair.mode ?? 'group' });
+    const client = clientFactory(clientOptions(paths, pair, windowsOptions));
     await client.stream(
       { op: 'account-watch', auth: { daemon: pair.account, secret: pair.secret } },
       (event) => {
@@ -654,7 +866,7 @@ export function createCommsSupervisor({
       let pair = credential;
       if (!pair) {
         try {
-          pair = loadCommsCredential({ env, home });
+          pair = loadCommsCredential({ env, home, platform, windowsCustody });
         } catch (error) {
           noteError(error);
         }

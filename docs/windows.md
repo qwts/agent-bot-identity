@@ -2,12 +2,12 @@
 
 What agent-bot does on `win32`, per GeniusBar
 [ADR-0046](https://github.com/qwts/GeniusBar/blob/main/docs/decisions/ADR-0046-windows-pipe-transport-dpapi-store-and-logon-tasks.md)
-(qwts/GeniusBar#46). Two things run on Windows today: the identity daemon as
-a per-user scheduled task, and the file credential store as a DPAPI-protected
-file. Each is a `win32` branch of the module that already branches on the
-platform, and every external call goes through an injected runner, so the
-suite exercises both on every platform with fakes for `schtasks.exe` and
-`powershell.exe`.
+(qwts/GeniusBar#46). Windows support currently covers the identity daemon as
+a per-user scheduled task, the DPAPI-protected file credential store,
+identity-owned vouch-key custody, and the daemon's single-account comms
+client over a named pipe. Cross-platform tests use fakes for Windows account
+and ACL calls; a separate Windows CI preflight exercises native custody and
+pipe primitives with disposable state.
 
 ## The daemon as a scheduled task
 
@@ -66,6 +66,56 @@ credential's bytes is `dpapi-malformed`, and a failed Protect writes
 nothing (`dpapi-protect-failed`); none of them quotes PowerShell's output.
 See [soul credentials](soul-credentials.md).
 
+## The daemon vouch key
+
+`vouch-key.pem` remains the per-account PKCS#8 Ed25519 key at the existing
+`XDG_STATE_HOME/agent-bot` path (or `%USERPROFILE%\.local\state\agent-bot`),
+with the existing create-once and no-silent-rotation behavior. On Windows,
+the identity module resolves the current account SID with `whoami`, checks
+that the state directory and key are real objects owned by that SID, and
+creates new directories and empty private files with that SID as owner and
+a protected owner-only access list. Existing directories are checked without
+changing their owner or access list. Existing keys are restricted with
+`icacls`, then verified to have no foreign account allow entry. Exclusive
+creation never overwrites an existing key. The PEM bytes and path do not
+change; only this account may retain access to the private key. These
+`whoami`, `Get-Acl` and `icacls` calls are exercised through fakes in the
+cross-platform suite. A live Windows daemon run is still pending.
+
+## The daemon comms client
+
+Windows pairing and reconnects use the implemented
+[agent-comms Windows local-channel contract](https://github.com/qwts/agent-comms/blob/main/docs/windows.md#local-channel).
+The daemon connects to `\\.\pipe\<service-label>.<account-SID>`; set
+`AGENT_COMMS_SERVICE_LABEL` to the same label used by the broker. Set
+`AGENT_COMMS_SHARED_DIR` to the broker's shared directory and
+`AGENT_COMMS_BROKER_STATE_DIR` to its state directory when the broker uses
+non-default locations. The client fails closed if the shared directory is
+not explicitly configured to match the Windows host. It checks that the
+shared and pairing-proof directories, broker state directory, and
+`identity.json` belong to the current SID. The broker's SPKI Ed25519 key is
+read from that custody-checked identity file and saved with the SID in the
+existing daemon credential record.
+
+Each pipe connection uses Windows PowerShell's .NET `NamedPipeClientStream`
+with explicit `TokenImpersonationLevel.Identification`. This restricts the
+server to identifying the client; it cannot act as the daemon account before
+the application handshake finishes. There is no fallback to Node's default
+pipe connector. The relay carries protocol bytes on binary stdin/stdout,
+with no credentials on its command line. The client then sends a nonce and
+waits for the broker's signature over the pipe name and nonce before sending
+the pairing request or any daemon request. The saved credential keeps its existing JSON file path
+and override behavior. Windows single-account credential storage creates empty files with a
+protected account-only ACL and verifies custody before writing the secret. Group broker mode is
+unsupported on Windows.
+
+The Windows native CI preflight uses the real `whoami`, `Get-Acl` and
+`icacls` commands with a disposable vouch key, then creates a unique signed
+named pipe and checks the wire handshake. It verifies these local custody
+and pipe primitives; it does not install or exercise a packaged broker,
+daemon, or scheduled service. Live end-to-end acceptance remains pending for
+GeniusBar #46, agent-comms #127, and agent-bot #813.
+
 ## Not on Windows
 
 - `keyd`, `keychain` and the persona accounts: a Windows soul's App key
@@ -73,5 +123,3 @@ See [soul credentials](soul-credentials.md).
 - `agent-bot install` (the hooks, the `~/.local/bin` launcher, the PATH
   block) and soul homes as symlinks: the GeniusBar slice of ADR-0046
   (`.cmd` shims, copies in place of links, bundled MinGit).
-- A Windows machine has not run the daemon end to end; the branches are
-  complete and tested with fakes, and the first real run is the next step.
