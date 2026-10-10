@@ -208,13 +208,15 @@ test('Qwen Code agents spell its tool names, or are unsupported where it cannot 
     entry(`agents/${name}.md`, `---\nname: ${name}\ndescription: D\n${tools === undefined ? '' : `tools: ${tools}\n`}---\nP\n`)]);
   // An absent `tools` inherits every tool there, as in Claude.
   assert.equal(build('review').get('.qwen/agents/review.md').toString(), `---\nname: "review"\ndescription: "D"\n---\n${MARKER}\nP\n`);
-  assert.match(build('review', 'Edit, MultiEdit, Task, mcp__docs__search').get('.qwen/agents/review.md').toString(),
-    /\ntools: \["agent", "edit", "mcp__docs__search"\]\n/);
-  // A tool Qwen has no name for, an MCP name it would hash, or an agent name
-  // it refuses leaves the agent unsupported there rather than cut down.
+  assert.match(build('review', 'Edit, MultiEdit, Skill, mcp__docs__search').get('.qwen/agents/review.md').toString(),
+    /\ntools: \["edit", "mcp__docs__search", "skill"\]\n/);
+  // A tool Qwen has no name for or withholds from subagents, an MCP name it
+  // would hash, an empty list (every tool there) or an agent name it refuses
+  // leaves the agent unsupported there rather than widened or cut down.
   const long = `mcp__docs__${'x'.repeat(60)}`;
-  for (const [name, tools] of [['review', 'Read, BashOutput'], ['review', long], ['x', 'Read'], ['main', 'Read'],
-    ['a'.repeat(51), 'Read']]) {
+  for (const [name, tools] of [['review', 'Read, BashOutput'], ['review', 'Read, Task'], ['review', 'TodoWrite'],
+    ['review', 'AskUserQuestion'], ['review', 'ExitPlanMode'], ['review', '[]'], ['review', long], ['x', 'Read'],
+    ['main', 'Read'], ['a'.repeat(51), 'Read']]) {
     const output = build(name, tools);
     assert.equal(output.has(`.qwen/agents/${name}.md`), false, `${name}: ${tools}`);
     assert.ok(output.has(`.claude/agents/${name}.md`));

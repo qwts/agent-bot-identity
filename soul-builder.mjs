@@ -811,10 +811,11 @@ const DEVIN_TOOLS = Object.freeze({ Read: 'read', Edit: 'edit', MultiEdit: 'edit
 // Qwen Code 0.25.0's canonical tool names, from its own converter for Claude
 // agents (which drops BashOutput and KillShell; here they make the agent
 // unsupported instead). MultiEdit uses its `edit`, as for Devin and Kiro.
+// Tools Qwen withholds from subagents (`agent`, `todo_write`, plan mode,
+// `ask_user_question`) are left out, so declaring one is unsupported too.
 const QWEN_TOOLS = Object.freeze({ Read: 'read_file', Write: 'write_file', Edit: 'edit', MultiEdit: 'edit',
   Grep: 'grep_search', Glob: 'glob', LS: 'list_directory', Bash: 'run_shell_command', WebFetch: 'web_fetch',
-  WebSearch: 'web_search', TodoWrite: 'todo_write', Task: 'agent', NotebookEdit: 'notebook_edit', Skill: 'skill',
-  AskUserQuestion: 'ask_user_question', ExitPlanMode: 'exit_plan_mode' });
+  WebSearch: 'web_search', NotebookEdit: 'notebook_edit', Skill: 'skill' });
 // Qwen keeps an MCP tool's `mcp__<server>__<tool>` name only up to 63
 // characters (longer ones get a hashed suffix), and refuses agent names
 // shorter than 2 or longer than 50 characters, or reserved ones.
@@ -835,6 +836,8 @@ function nativeTools(map, names, { mcp = false } = {}) {
   return [...new Set(names.map(spelled))].sort(compare);
 }
 function qwenNativeTools(names) {
+  // Qwen reads an empty `tools` list as every tool, not none.
+  if (!names.length) return null;
   const spelled = (name) => Object.hasOwn(QWEN_TOOLS, name) ? QWEN_TOOLS[name]
     : MCP_TOOL.test(name) && name.length <= QWEN_MCP_TOOL_MAX ? name : null;
   if (names.some((name) => spelled(name) === null)) return null;
