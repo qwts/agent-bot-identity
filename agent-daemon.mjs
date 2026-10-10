@@ -75,6 +75,8 @@ import { mint } from './mint-token.mjs';
 import { KEYD_TOOL_NAMES, grantTarget, keydRequest, mintViaKeyd, readKeydRecord, signKeydGrant } from './keyd-client.mjs';
 import { OWNER_DECIDER, createProposal, decideProposal, listProposals, operationDigest, recoverInteractionStore } from './agent-jobs.mjs';
 import { boundRepository, createInboxTaker, inboxError } from './inbox-take.mjs';
+import { createGrantLedger } from './delegation-grants.mjs';
+import { createGrantActor } from './grant-github.mjs';
 import { createComputerUseActivity } from './computer-use-activity.mjs';
 import { isComputerUse } from './permission-risk.mjs';
 import { appendAuditReceipt, assertAuthorized, principalsFile, resolvePrincipal } from './agent-principals.mjs';
@@ -311,6 +313,43 @@ function requireAgentId(value) {
 // The store modules already keep their error messages secret-free (they never
 // quote file contents), so their messages are safe to return verbatim; only
 // the status code is decided here.
+// What a soul learns about its grant: no presence proof, no decider detail.
+function grantView(grant) {
+  return {
+    proposalId: grant.proposalId,
+    status: grant.status,
+    summary: grant.summary,
+    operationDigest: grant.operationDigest,
+    expiresAt: grant.expiresAt,
+  };
+}
+
+// The presence refusals a grant approval passes through (delegation-grants.mjs).
+const GRANT_PRESENCE_CODES = Object.freeze(['owner-declined', 'presence-required', 'presence-invalid', 'keyd-signer-unverified']);
+
+const GRANT_STATUS = Object.freeze({
+  'grant-refused': 400,
+  'grant-unknown': 404,
+  'grant-unavailable': 404,
+  'grant-mismatch': 409,
+  'grant-closed': 409,
+  'grant-expired': 410,
+  'grant-unsupported': 501,
+  'grant-act-failed': 502,
+  'presence-required': 503,
+  'owner-declined': 403,
+  'human-login-unconfigured': 503,
+  'human-token-missing': 503,
+  'human-token-unavailable': 503,
+  'human-check-failed': 502,
+  'human-login-mismatch': 409,
+});
+
+function grantFailure(error) {
+  if (Number.isSafeInteger(error.statusCode)) return error;
+  return Object.assign(error, { statusCode: GRANT_STATUS[error.code] ?? 409 });
+}
+
 function operationError(error) {
   if (Number.isSafeInteger(error.statusCode)) return error;
   return Object.assign(new Error(error.message), { statusCode: 409 });
@@ -332,6 +371,11 @@ export function createDaemonServer({
   inboxTake = createInboxTaker({ env }),
   spawnHook = runSpawnHooks,
   now = () => new Date(),
+  // Delegation grants (#108): one ledger per daemon, since approved grants
+  // live in its memory, and the act that spends them with the owner's
+  // narrow token. Tests pass fakes for keyd, pass-cli and GitHub.
+  grantLedger = createGrantLedger({ env, home, now }),
+  grantActor = createGrantActor({ env }),
   computerUse = createComputerUseActivity({ now }),
   // #253 replaces this with its persistent lookup. The default reads the
   // in-memory registry and does not change how bindings are stored.
@@ -418,6 +462,13 @@ export function createDaemonServer({
   // peer check; it authenticates browsers with its own pairing-code cookie
   // sessions instead of the bearer token, which never reaches page script.
   const web = createWebLayer({ env, home, config, interaction, daemonToken: token, now });
+  // A grant route's caller is a live binding; anyone else is receipted.
+  const grantBinding = (req, operation) => {
+    try { return requireBinding(req, bindings); } catch (error) {
+      appendAuditReceipt({ event: 'delegation-grant', operation, decision: 'denied', reason: 'no-live-binding' }, { env, home, now });
+      throw error;
+    }
+  };
   let warmPool;
   const server = createServer(async (req, res) => {
     try {
@@ -452,7 +503,7 @@ export function createDaemonServer({
         appendAuditReceipt({ event: 'dream-control', operation: dreamAction, decision: 'owner-credential-required' }, { env, home, now });
         throw ownerCredentialRequired('a soul binding cannot authorize dream controls');
       }
-      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/binding/app', 'POST /v0/credential', 'POST /v0/inbox/take', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start', 'POST /v0/asides/delivered'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
+      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/binding/app', 'POST /v0/credential', 'POST /v0/inbox/take', 'POST /v0/grants/request', 'POST /v0/grants/spend', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start', 'POST /v0/asides/delivered'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
         sendJson(res, 401, { error: 'missing or invalid daemon token' });
         return;
       }
@@ -871,6 +922,37 @@ export function createDaemonServer({
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, event: result.event ?? null });
           return;
         }
+        // Delegation grants (#108). A soul asks for one named write; the
+        // owner approves that exact write at keyd's presence prompt, which
+        // this request raises and waits on. The soul is the binding's, never
+        // a request parameter.
+        case 'POST /v0/grants/request': {
+          const binding = grantBinding(req, 'request');
+          const body = parseJsonBody(await readBody(req));
+          try {
+            const grant = grantLedger.request({ agentId: binding.agentId, operation: body.operation });
+            const decided = await grantLedger.approve(grant.proposalId, { digest: grant.operationDigest });
+            sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, grant: grantView(decided) });
+          } catch (error) {
+            throw grantFailure(error);
+          }
+          return;
+        }
+        // Spends an approved grant once, as the owner's account. A refusal
+        // before the act (no stored token, the wrong account) leaves the
+        // grant approved.
+        case 'POST /v0/grants/spend': {
+          const binding = grantBinding(req, 'spend');
+          const body = parseJsonBody(await readBody(req));
+          try {
+            const spent = await grantLedger.spend(body.proposalId, { agentId: binding.agentId, operation: body.operation },
+              grantActor.perform, { prepare: grantActor.prepare });
+            sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, proposalId: spent.proposalId, status: spent.status, receipt: spent.receipt });
+          } catch (error) {
+            throw grantFailure(error);
+          }
+          return;
+        }
         // agent-bot-keyd grants (#397): a soul's `agent-bot-keyd mcp` relay
         // asks here, on the soul's binding, before each keyd tool call. The
         // daemon keeps the policy — binding, add-on gate, the soul's own App,
@@ -1093,10 +1175,10 @@ export function createDaemonServer({
       }
     } catch (error) {
       const failure = operationError(error);
-      // Dream and inbox codes are fixed identifiers, so clients can act on them.
+      // Dream, inbox and grant codes are fixed identifiers, so clients can act on them.
       sendJson(res, failure.statusCode, { error: failure.message,
-        ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable'].includes(error.code)
-          || typeof error.code === 'string' && /^(dream|inbox)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}) });
+        ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable', ...GRANT_PRESENCE_CODES].includes(error.code)
+          || typeof error.code === 'string' && /^(dream|inbox|grant|human)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}) });
     }
   });
   server.once('close', () => appJobs.close());

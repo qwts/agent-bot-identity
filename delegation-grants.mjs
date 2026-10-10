@@ -22,8 +22,9 @@
 //   first is still in flight. A daemon restart forgets approved grants too:
 //   they fail closed, and the owner approves again.
 //
-// The act itself is the caller's `perform(operation)`. The agent gets back
-// the grant's status and a secret-free receipt, never a credential.
+// The act itself is the caller's `perform(operation)`, after an optional
+// `prepare(operation)` that can refuse without spending the grant. The agent
+// gets back the grant's status and a secret-free receipt, never a credential.
 
 import { timingSafeEqual } from 'node:crypto';
 import process from 'node:process';
@@ -61,6 +62,12 @@ function digestsMatch(expected, presented) {
   const left = Buffer.from(expected, 'utf8');
   const right = Buffer.from(typeof presented === 'string' ? presented : '', 'utf8');
   return left.length === right.length && timingSafeEqual(left, right);
+}
+
+// A receipt carries an error's code only when it is a plain code.
+function receiptCode(error, fallback) {
+  const code = error?.code;
+  return typeof code === 'string' && /^[a-z][a-z0-9-]{0,39}$/.test(code) ? code : fallback;
 }
 
 function printable(text) {
@@ -201,7 +208,14 @@ export function createGrantLedger({
 
   // The soul's spend. The grant is forgotten before `perform` runs, so it is
   // spent at most once whatever the act does.
-  async function spend(proposalId, { agentId, operation }, perform) {
+  //
+  // `prepare(operation)`, when given, runs first and may refuse: whatever
+  // the act needs that could be missing (a stored credential, the account it
+  // names) is checked there, and a refusal leaves the grant approved and
+  // unspent. Its error's code reaches the receipt; its message is the
+  // caller's own and must be secret-free. What it returns is handed to
+  // `perform`, and its `account`, when set, is named in the receipt.
+  async function spend(proposalId, { agentId, operation }, perform, { prepare = null } = {}) {
     const soul = validateAgentId(agentId);
     const id = validateProposalId(proposalId);
     // Receipts carry the refusal's code, never its message: messages can
@@ -211,28 +225,45 @@ export function createGrantLedger({
       return failure(code, message);
     };
     const grant = grantOf(getProposal(id, storeOptions));
-    if (!grant || grant.agentId !== soul || approved.get(id) !== soul || grant.status !== 'approved') {
-      throw refuse('grant-unavailable', 'no approved, unspent grant for this soul');
-    }
-    if (now().getTime() > new Date(grant.expiresAt).getTime()) {
-      approved.delete(id);
-      throw refuse('grant-expired', 'grant has expired');
-    }
+    const available = () => {
+      if (!grant || grant.agentId !== soul || approved.get(id) !== soul || grant.status !== 'approved') {
+        throw refuse('grant-unavailable', 'no approved, unspent grant for this soul');
+      }
+      if (now().getTime() > new Date(grant.expiresAt).getTime()) {
+        approved.delete(id);
+        throw refuse('grant-expired', 'grant has expired');
+      }
+    };
+    available();
     let shaped;
     try { shaped = grantOperation(operation); } catch (error) { throw refuse(error.code, error.message); }
     if (`${TOOL_PREFIX}${shaped.operation}` !== grant.tool || !digestsMatch(grant.operationDigest, operationDigest(shaped))) {
       throw refuse('grant-mismatch', 'operation does not match the grant');
     }
+    let context;
+    if (prepare) {
+      try {
+        context = await prepare(shaped);
+      } catch (error) {
+        throw refuse(receiptCode(error, 'grant-unprepared'), error.message);
+      }
+      // A concurrent spend may have taken the grant while this one waited.
+      available();
+    }
     approved.delete(id);
+    const as = typeof context?.account === 'string' && LOGIN.test(context.account) ? ` as ${context.account}` : '';
     try {
-      await perform(shaped);
+      await perform(shaped, context);
     } catch (error) {
       // The act's error may quote what the agent must not see, so neither
-      // the receipt nor the error returned carries it; \`perform\` logs its own.
-      record({ agentId: soul, operation: 'spend', decision: 'failed', detail: `${id} ${grant.tool}` });
+      // the receipt nor the error returned carries its message; only a code.
+      record({
+        agentId: soul, operation: 'spend', decision: 'failed', detail: `${id} ${grant.tool}${as}`,
+        reason: receiptCode(error, null),
+      });
       throw Object.assign(new Error(`the granted ${shaped.operation} failed; the grant is spent`), { code: 'grant-act-failed' });
     }
-    const spent = record({ agentId: soul, operation: 'spend', decision: 'spent', detail: `${id} ${grant.tool} ${grant.operationDigest}` });
+    const spent = record({ agentId: soul, operation: 'spend', decision: 'spent', detail: `${id} ${grant.tool} ${grant.operationDigest}${as}` });
     return { proposalId: id, status: 'spent', receipt: spent };
   }
 

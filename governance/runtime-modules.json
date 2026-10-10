@@ -135,6 +135,7 @@
     "git-credential-bot.mjs": "identity",
     "git-hooks.mjs": "identity",
     "git-publish-scan.mjs": "identity",
+    "grant-github.mjs": "host",
     "harness-auth.mjs": "soul",
     "hook-dialects.mjs": "harness",
     "identity-app-store.mjs": "identity",
