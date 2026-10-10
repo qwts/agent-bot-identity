@@ -1,1 +1,0 @@
-- agent-bot now pins the agent-bot-keyd version it is built with (0.2.0): `agent-bot keyd status` and `agent-bot doctor` (`keyd.version`) warn with the update to make when the running keyd is another version (#767).

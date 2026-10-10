@@ -1,1 +1,0 @@
-- When a new soul's first turn finds its harness signed out, the reply now includes the exact `agent-bot harness auth login HARNESS --soul ID` command when that harness has a supported sign-in flow (qwts/agent-bot-identity#536).

@@ -1,1 +1,0 @@
-- The SOP launch policy's daemon wiring is now one tested port, and tests prove a refused policy launches nothing on every route the handler covers: an existing soul, a package spawn, an installed-folder relaunch and a copied-folder fork (#677).

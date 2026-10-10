@@ -1,1 +1,0 @@
-- The Codex desktop app's Pull Requests UI now leaves a secret-free `credential-mint` receipt (operation `codex-desktop-gh`) for each GitHub App token it mints. The mint still runs locally with no prompt, since that UI is the owner's own delegate surface and not an agent session (#107).
