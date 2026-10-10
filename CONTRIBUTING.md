@@ -4,6 +4,9 @@ Contributions are welcome from anyone. You need a GitHub account, git and
 Node.js 20 or newer. You do not need any of the maintainers' bot Apps,
 credentials or machine setup.
 
+Everyone taking part in this project follows the
+[Code of Conduct](CODE_OF_CONDUCT.md), the Contributor Covenant 2.1.
+
 ## Outside contributors
 
 1. Fork the repository and create a branch in your fork.

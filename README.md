@@ -2013,6 +2013,12 @@ working (#752). The other read-only migration aliases—`qwts.*`,
 and are scheduled for removal in `1.0`. No new configuration should write
 these aliases.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Everyone taking part follows the
+[Code of Conduct](CODE_OF_CONDUCT.md); report security issues as
+[SECURITY.md](SECURITY.md) describes.
+
 ## License
 
 MIT

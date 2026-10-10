@@ -1,0 +1,1 @@
+- The repository adopts the Contributor Covenant 2.1 as its code of conduct (`CODE_OF_CONDUCT.md`), with conduct reports going privately through the same GitHub form as security reports, and CONTRIBUTING and the README link to it (#752).
