@@ -1561,7 +1561,7 @@ regardless of preference; preference does not start or stop the daemon.
 
 This config is policy, not a secret store: never put tokens, credentials, or
 private keys in it. Agent Space lifetime and path ownership remain defined by
-[ENG-0172](https://github.com/qwts/playbook-engineering/blob/main/docs/decisions/ENG-0172-agent-space-is-durable-per-soul-storage.md).
+[ENG-0172](https://github.com/qwts/agent-sop/blob/main/docs/decisions/ENG-0172-agent-space-is-durable-per-soul-storage.md).
 
 #### Agent Space export packs, gist handoff, and retirement
 

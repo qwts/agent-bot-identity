@@ -48,11 +48,11 @@ inside `keyd/`, as CI does.
 The maintainers' own workflow is not required of contributors. Maintainer
 agents commit and open pull requests as the project's GitHub App bots, use
 `agent-bot signed-commit` and the soul worktree workflow, and follow the
-[qwts/playbook-engineering](https://github.com/qwts/playbook-engineering)
+[qwts/agent-sop](https://github.com/qwts/agent-sop)
 SOPs, including the
-[branch, PR, and review SOP](https://github.com/qwts/playbook-engineering/blob/main/docs/sop/branch-pr-review.md)
+[branch, PR, and review SOP](https://github.com/qwts/agent-sop/blob/main/docs/sop/branch-pr-review.md)
 and the
-[feature-lifecycle SOP](https://github.com/qwts/playbook-engineering/blob/main/docs/sop/feature-lifecycle.md).
+[feature-lifecycle SOP](https://github.com/qwts/agent-sop/blob/main/docs/sop/feature-lifecycle.md).
 Repo-specific gates and deltas, if any, are listed in this repo's `AGENTS.md`.
 
 ### Homebrew formula

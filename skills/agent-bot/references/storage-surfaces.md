@@ -21,7 +21,7 @@ file, because both disappear.
 
 The canonical lifetime, path-policy, territory, and ownership rules are
 defined by
-[ENG-0172](https://github.com/qwts/playbook-engineering/blob/main/docs/decisions/ENG-0172-agent-space-is-durable-per-soul-storage.md).
+[ENG-0172](https://github.com/qwts/agent-sop/blob/main/docs/decisions/ENG-0172-agent-space-is-durable-per-soul-storage.md).
 Link that contract; do not restate or fork its rules here or in harness docs.
 
 ## Resolve the space through the runtime

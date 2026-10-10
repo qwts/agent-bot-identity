@@ -8,7 +8,7 @@ body:
     attributes:
       value: |
         This is the shared **feature** form. It captures the open-time spec of the
-        [ENG-0007 feature lifecycle](https://github.com/qwts/playbook-engineering/blob/main/docs/decisions/ENG-0007-feature-lifecycle-convention.md):
+        [ENG-0007 feature lifecycle](https://github.com/qwts/agent-sop/blob/main/docs/decisions/ENG-0007-feature-lifecycle-convention.md):
         four sections, in order, filled in **before** the code exists.
 
         - This binds features (stories, epics, feature-labelled work). Bugs use the bug
@@ -17,7 +17,7 @@ body:
         - A repo may **add** fields to this form; it may **not drop** a section.
         - At close, the feature records **section 5 — the closeout** (solution as built,
           patterns actually used, deltas). See the
-          [feature-lifecycle SOP](https://github.com/qwts/playbook-engineering/blob/main/docs/sop/feature-lifecycle.md).
+          [feature-lifecycle SOP](https://github.com/qwts/agent-sop/blob/main/docs/sop/feature-lifecycle.md).
   - type: textarea
     id: problem
     attributes:

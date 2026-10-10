@@ -1,0 +1,1 @@
+- The contributor docs, the feature issue form and the agent skills link to `qwts/agent-sop`, the current name of the renamed `qwts/playbook-engineering` SOP repository, instead of relying on GitHub's redirect (#752).
