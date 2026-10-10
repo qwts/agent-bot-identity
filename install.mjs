@@ -25,6 +25,7 @@ import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { ensureDaemonSupervisor } from './daemon-supervisor.mjs';
 import { ensureSpacesCutover } from './spaces-cutover.mjs';
 import { ensureClaudeWorktreeAdapter, syncHooks } from './sync-hooks.mjs';
+import { personaBlockNotice } from './sandbox.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const ENTRYPOINT = join(ROOT, 'agent-bot');
@@ -407,6 +408,10 @@ export async function main(argv = process.argv.slice(2)) {
   if (argv.includes('--with-gh-shim')) {
     execFileSync(result.executable, ['install-gh-shim'], { stdio: 'inherit' });
   }
+  // An upgrade can be the first release that refuses on an unrecorded SOP
+  // persona mapping (#613); name the repair before the first launch fails.
+  const personaNotice = personaBlockNotice();
+  if (personaNotice) process.stderr.write(`${personaNotice}\n`);
   return result;
 }
 

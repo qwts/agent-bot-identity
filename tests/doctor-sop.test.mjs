@@ -4,10 +4,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { stateDirectory } from '../agent-identity.mjs';
-import { sopPersonaCheck } from '../readiness.mjs';
+import { buildReadinessReport, sopPersonaCheck } from '../readiness.mjs';
+import { personaBlockNotice } from '../sandbox.mjs';
 
 // Doctor's SOP section (#613): a legacy or stale persona record gets the
-// `agent-bot sop persona` hint. Scratch HOME and state only.
+// `agent-bot sop persona` hint; one that refuses every launch fails doctor.
+// Scratch HOME and state only.
 const COMMIT = 'b'.repeat(40);
 
 function fixture(t) {
@@ -46,7 +48,8 @@ test('doctor hints agent-bot sop persona for a legacy, stale or missing persona 
   const f = fixture(t);
   f.select('local/sop@main');
   const unrecorded = sopPersonaCheck({ home: f.home, env: f.env });
-  assert.equal(unrecorded.status, 'warning');
+  assert.equal(unrecorded.status, 'failed');
+  assert.match(unrecorded.message, /every soul launch, wake, task and turn is refused/);
   assert.equal(unrecorded.code, 'sop-persona-unrecorded');
   assert.equal(unrecorded.action, 'run: agent-bot sop persona');
 
@@ -59,12 +62,14 @@ test('doctor hints agent-bot sop persona for a legacy, stale or missing persona 
   f.write({ selection: { org: 'local/org@main', sop: 'local/sop@main' } });
   f.select('local/sop@release');
   const stale = sopPersonaCheck({ home: f.home, env: f.env });
+  assert.equal(stale.status, 'warning');
   assert.equal(stale.code, 'sop-persona-stale');
   assert.equal(stale.action, 'run: agent-bot sop persona');
   assert.equal(stale.evidence.state, 'stale');
 
   writeFileSync(path.join(stateDirectory({ env: f.env, home: f.home }), 'sop-persona.json'), '{ not json');
   const broken = sopPersonaCheck({ home: f.home, env: f.env });
+  assert.equal(broken.status, 'failed');
   assert.equal(broken.code, 'sop-persona-unavailable');
   assert.match(broken.action, /agent-bot sop persona/);
 });
@@ -74,9 +79,34 @@ test('doctor reports a recorded but invalid persona.toml as unavailable, as laun
   f.select('local/sop@main');
   f.write({ selection: { org: 'local/org@main', sop: 'local/sop@main' }, persona: 'schema_version = 1\n[persona]\nsandbox = "bogus"\n' });
   const invalid = sopPersonaCheck({ home: f.home, env: f.env });
-  assert.equal(invalid.status, 'warning');
+  assert.equal(invalid.status, 'failed');
   assert.equal(invalid.code, 'sop-persona-unavailable');
   assert.match(invalid.message, /persona\.toml.*invalid/);
   assert.equal(invalid.action, 'fix persona.toml in the SOP, then run: agent-bot sop persona');
   assert.equal(invalid.evidence.state, 'recorded');
+});
+
+test('an unrecorded persona mapping makes doctor not ready and leads with the repair (#613)', (t) => {
+  const f = fixture(t);
+  f.select('local/sop@main');
+  const report = buildReadinessReport({ command: 'doctor', scope: 'machine', machineChecks: [sopPersonaCheck({ home: f.home, env: f.env })] });
+  assert.equal(report.ready, false);
+  assert.equal(report.machine.status, 'not_ready');
+  assert.equal(report.first_actionable_failure.check_id, 'sop.persona');
+  assert.equal(report.first_actionable_failure.code, 'sop-persona-unrecorded');
+  assert.equal(report.first_actionable_failure.action, 'run: agent-bot sop persona');
+});
+
+test('the daemon start and install notice names a persona policy that refuses every launch (#613)', (t) => {
+  const f = fixture(t);
+  assert.equal(personaBlockNotice({ home: f.home, env: f.env }), null, 'no SOP selected');
+  f.select('local/sop@main');
+  assert.equal(personaBlockNotice({ home: f.home, env: f.env }),
+    'agent-bot: persona-policy-unavailable: every soul launch, wake, task and turn is refused because the selected SOP\'s persona mapping is not recorded; run `agent-bot sop persona` to record the selected SOP\'s mapping');
+  f.write({ selection: { org: 'local/org@main', sop: 'local/sop@main' }, persona: 'schema_version = 1\n[persona]\nsandbox = "bogus"\n' });
+  assert.match(personaBlockNotice({ home: f.home, env: f.env }), /^agent-bot: persona-policy-unavailable: .*; fix persona\.toml in the SOP, then run `agent-bot sop persona`$/);
+  f.write({ selection: { org: 'local/org@main', sop: 'local/sop@main' } });
+  assert.equal(personaBlockNotice({ home: f.home, env: f.env }), null, 'recorded');
+  f.select('local/sop@release');
+  assert.equal(personaBlockNotice({ home: f.home, env: f.env }), null, 'stale asks the owner instead of refusing');
 });

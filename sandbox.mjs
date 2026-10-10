@@ -313,6 +313,20 @@ const PERSONA_REFUSALS = Object.freeze({
   stale: { code: 'persona-policy-stale', action: 'run `agent-bot sop persona` to record the selected SOP\'s mapping' },
 });
 
+// One line for the daemon's start and `agent-bot install`/`update` (#613):
+// the persona states that refuse every launch and turn, whoever asks, with
+// the repair, or null. Stale is left out: the owner's own launches ask
+// instead. It reads the local record only and never throws.
+export function personaBlockNotice({ env = process.env, home = homedir() } = {}) {
+  let persona;
+  try { persona = loadPersona({ env, home }); } catch { return null; }
+  if (persona.state === 'stale') return null;
+  const refusal = PERSONA_REFUSALS[persona.state];
+  if (!refusal) return null;
+  const reason = persona.state === 'unrecorded' ? 'the selected SOP\'s persona mapping is not recorded' : persona.message;
+  return `agent-bot: ${refusal.code}: every soul launch, wake, task and turn is refused because ${reason}; ${refusal.action}`;
+}
+
 function personaRefusal(persona, wanted) {
   if (!persona) return null;
   const source = persona.repository ? { repository: persona.repository, commit: persona.commit } : null;
