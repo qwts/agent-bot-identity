@@ -1,0 +1,1 @@
+- `agent-bot sandbox remove [ACCOUNT] --dry-run` lists what removing a persona account would touch, with the action each category gets under the keep-by-default plan: export, remove after export, mark retired, list only or a manual step. It changes nothing (#750).

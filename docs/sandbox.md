@@ -18,6 +18,7 @@ agent-bot sandbox on|off [--json] [--principal-stdin]
 agent-bot sandbox account NAME [--json] [--principal-stdin]
 agent-bot sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin]
 agent-bot sandbox resolve <agentId|name> [--json]
+agent-bot sandbox remove [ACCOUNT] --dry-run [--json]
 ```
 
 ## Status
@@ -86,6 +87,46 @@ the soul gets: the pack's decision when it has one, else the override when
 one is set, else the global switch, and the account it runs as. The daemon's
 launch path consults the same resolution when it starts a soul (see [At
 launch](#at-launch)).
+
+## Removing a persona account
+
+`sandbox off` stops using the account; it does not delete it. Removing one
+follows the owner's decision on #750 (2026-10-10): keep by default and remove
+only what is named.
+
+- Souls, workspaces and transcripts are exported to the owner's account, and
+  the export is verified before anything that depends on it is removed.
+- Broker pairings are removed only after the export is verified. Each
+  retained soul keeps its census row, marked retired, so it stays
+  identifiable and recoverable.
+- Harness sign-ins are listed only; agent-bot never removes one.
+- Deleting the macOS account is a guided step the owner does by hand.
+  agent-bot never runs privileged deletion.
+- Each category has its own owner-gated confirm. A partial failure stops,
+  leaves everything in place, and can be resumed.
+
+`sandbox remove [ACCOUNT] --dry-run` is the first step, and the only one built
+so far. It lists what the account has and what would happen to each
+category, and changes nothing: it runs only the reads `status` runs, asks no
+owner gate, and refuses without `--dry-run`. ACCOUNT defaults to
+`sandbox.account`, and the account agent-bot itself runs as is refused
+(`sandbox-remove-self`). Each category carries an `id`, an `action`, whether
+it could be read (`known`), its `items` and a note:
+
+| Category | Action | Items |
+| --- | --- | --- |
+| `souls` | `export` | souls the local census sends to the account, and souls the broker's census has joined from it |
+| `workspaces` | `export` | the souls' folder in the account's home |
+| `transcripts` | `export` | the harness session stores in the account's home |
+| `pairings` | `remove-after-export` | the account's broker pairings: account, uid and state only |
+| `census` | `mark-retired` | the broker's census rows for the account |
+| `harness-sign-ins` | `list-only` | the harness homes in the account's home |
+| `macos-account` | `manual` | the account and its home, when it exists |
+
+Another account's home is usually unreadable from the owner's, so each path
+is reported as `present`, `absent` or `unreadable`, never guessed at. Off
+macOS there is nothing to list. The export and the gated removal steps come
+in later slices.
 
 ## At launch
 

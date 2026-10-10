@@ -326,6 +326,7 @@ agent-bot sandbox status|plan [--json]
 agent-bot sandbox on|off|account NAME [--json] [--principal-stdin]
 agent-bot sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin]
 agent-bot sandbox resolve <agentId|name> [--json]
+agent-bot sandbox remove [ACCOUNT] --dry-run [--json]
 agent-bot daemon <run|start|status|stop|disable|vouch-key|pair-comms> [--json]
 agent-bot mcp
 agent-bot web open [--principal <principal-id>] [--no-browser] [--json]
