@@ -312,7 +312,9 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
         try { refusal = await policy.check({ harness, soul: soul ?? null, package: packagePath ?? null }); }
         catch (error) { refusal = { code: 'policy-unavailable', message: `the SOP policy could not be checked: ${error.message}` }; }
         if (refusal) {
-          await step('policy');
+          // Journal only: the broker's launch-progress vocabulary is agent-comms'
+          // (comms-client LAUNCH_STAGES), and it has no policy stage.
+          row.stage = 'policy';
           const code = refusal.code === 'policy-denied' ? 'policy-denied' : 'policy-unavailable';
           row.policy = { code, ...(refusal.ruleId ? { ruleId: refusal.ruleId } : {}), ...(refusal.sop ? { commit: refusal.sop.commit } : {}) };
           let decision = 'denied';

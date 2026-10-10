@@ -17,7 +17,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, openSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir, homedir, userInfo } from 'node:os';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { currentAgentId, stateDirectory, withLock } from './agent-identity.mjs';
@@ -921,9 +921,18 @@ function writeAtomic(dir, file, text) {
   } finally { rmSync(temp, { recursive: true, force: true }); }
 }
 
-function readPrivateJson(file, what) {
-  if (lstatSync(file).isSymbolicLink()) fail('policy-unavailable', `${what} must not be a symlink`);
-  return JSON.parse(readFileSync(file, 'utf8'));
+// One open, never through a link, and never blocking on a FIFO: the launch
+// path reads these on every launch, so a replaced file must not stall the
+// daemon or exhaust its memory. ENOENT stays distinguishable.
+const POLICY_MARKER_MAX = 16 * 1024;
+const POLICY_RECORD_MAX = 256 * 1024;
+function readPrivateJson(file, what, limit) {
+  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > limit) fail('policy-unavailable', `${what} must be a regular file of at most ${limit} bytes`);
+    return JSON.parse(readFileSync(fd, 'utf8'));
+  } finally { closeSync(fd); }
 }
 
 // Online: resolve the user's SOP (never a soul's), read policy-hooks.json at
@@ -995,26 +1004,38 @@ export function readSopPolicyState(options = {}) {
   const readFile = options.readFile ?? ((path) => readFileSync(path, 'utf8'));
   const unavailable = (why) => ({ state: 'unavailable', message: `the active SOP policy is unavailable: ${why}; ${POLICY_REPAIR}` });
   let marker;
-  try { marker = readPrivateJson(policyStateFile(options), 'the SOP policy marker'); }
+  try { marker = readPrivateJson(policyStateFile(options), 'the SOP policy marker', POLICY_MARKER_MAX); }
   catch (error) {
-    if (error.code === 'ENOENT') return { state: 'none', message: 'No SOP policy is active.' };
-    return unavailable('its marker is unreadable');
+    if (error.code !== 'ENOENT') return unavailable('its marker is unreadable');
+    // Never configured only when nothing was ever written: a policy
+    // directory without its marker is an interrupted activation.
+    try { lstatSync(policyDir(options)); }
+    catch (dirError) { if (dirError.code === 'ENOENT') return { state: 'none', message: 'No SOP policy is active.' }; }
+    return unavailable('its marker is missing (an interrupted activation)');
   }
   try {
     const sane = isObject(marker) && marker.schemaVersion === SCHEMA_VERSION && typeof marker.active === 'boolean'
-      && Object.keys(marker).every((key) => POLICY_STATE_FIELDS.includes(key)) && typeof marker.changedAt === 'string';
+      && Object.keys(marker).length === POLICY_STATE_FIELDS.length && POLICY_STATE_FIELDS.every((key) => Object.hasOwn(marker, key))
+      && typeof marker.changedAt === 'string' && typeof marker.authorization === 'string' && typeof marker.account === 'string';
     if (!sane) return unavailable('its marker is invalid');
-    if (!marker.active) return { state: 'inactive', changedAt: marker.changedAt, message: 'The SOP policy was deactivated by the owner.' };
+    if (marker.account !== currentAccount(options)) return unavailable('it was changed for another account');
+    if (!marker.active) {
+      // Turning enforcement off needs the complete deactivation receipt.
+      if (['digest', 'org', 'sop', 'selection'].some((key) => marker[key] !== null)) return unavailable('its marker is invalid');
+      return { state: 'inactive', changedAt: marker.changedAt, message: 'The SOP policy was deactivated by the owner.' };
+    }
     const pinned = isObject(marker.org) && isObject(marker.sop) && DIGEST.test(marker.digest ?? '') && DIGEST.test(marker.selection ?? '')
       && OWNER_NAME.test(marker.sop.repository ?? '') && COMMIT_SHA.test(marker.sop.commit ?? '')
       && OWNER_NAME.test(marker.org.repository ?? '') && COMMIT_SHA.test(marker.org.commit ?? '');
     if (!pinned) return unavailable('its marker is invalid');
     const where = { digest: marker.digest, org: marker.org, sop: marker.sop, changedAt: marker.changedAt };
-    if (marker.account !== currentAccount(options)) return { ...unavailable('it was activated for another account'), ...where };
     let record;
-    try { record = readPrivateJson(policyRecordFile(options, marker.digest), 'the SOP policy record'); }
+    try { record = readPrivateJson(policyRecordFile(options, marker.digest), 'the SOP policy record', POLICY_RECORD_MAX); }
     catch { return { ...unavailable('its record is missing or unreadable'), ...where }; }
-    if (!isObject(record) || record.digest !== marker.digest || typeof record.policy !== 'string' || sha256(record.policy) !== marker.digest) {
+    const envelope = isObject(record) && record.schemaVersion === SCHEMA_VERSION && Object.keys(record).length === 3
+      && ['schemaVersion', 'digest', 'policy'].every((key) => Object.hasOwn(record, key));
+    if (!envelope) return { ...unavailable('its record has an unsupported format'), ...where };
+    if (record.digest !== marker.digest || typeof record.policy !== 'string' || sha256(record.policy) !== marker.digest) {
       return { ...unavailable('its record does not match the activated digest'), ...where };
     }
     const userText = readConfigText(configPath, readFile);

@@ -184,3 +184,45 @@ test('sop policy takes only the user selection and its own flags', async () => {
     assert.equal(result.code, 2, argv.join(' '));
   }
 });
+
+test('the marker and record are read safely and validated completely before enforcement turns off', async (t) => {
+  const f = fixture(t);
+  const file = policyStateFile(f.options);
+  const records = join(f.options.stateDir, 'sop-policy', 'records');
+
+  // An interrupted first activation (record published, marker never swapped) is not "never configured".
+  mkdirSync(records, { recursive: true });
+  assert.equal(checkSopLaunchPolicy('codex', f.options).code, 'policy-unavailable');
+  assert.match(readSopPolicyState(f.options).message, /interrupted activation/);
+  rmSync(join(f.options.stateDir, 'sop-policy'), { recursive: true });
+  assert.equal(readSopPolicyState(f.options).state, 'none');
+
+  assert.equal((await cli(['policy', 'activate'], { ...f.options, assertOwner: approve([]) })).code, 0);
+  const marker = JSON.parse(readFileSync(file, 'utf8'));
+  const [record] = readdirSync(records);
+  const envelope = JSON.parse(readFileSync(join(records, record), 'utf8'));
+
+  // A partial or inconsistent deactivation never turns the policy off.
+  for (const forged of [{ schemaVersion: 1, active: false, changedAt: 'x' },
+    { ...marker, active: false }, { ...marker, active: false, digest: null, org: null, sop: null, selection: null, account: 'someone-else' }]) {
+    writeFileSync(file, JSON.stringify(forged));
+    assert.equal(readSopPolicyState(f.options).state, 'unavailable', JSON.stringify(forged));
+  }
+  writeFileSync(file, JSON.stringify(marker));
+  assert.equal(readSopPolicyState(f.options).state, 'active');
+
+  // The record envelope's schema and fields are checked before the policy is parsed.
+  for (const forged of [{ ...envelope, schemaVersion: 2 }, { digest: envelope.digest, policy: envelope.policy }, { ...envelope, run: 'x' }]) {
+    writeFileSync(join(records, record), JSON.stringify(forged));
+    assert.match(readSopPolicyState(f.options).message, /unsupported format/);
+  }
+  writeFileSync(join(records, record), JSON.stringify(envelope));
+
+  // A FIFO never blocks the launch path, and an oversized file is not read.
+  rmSync(file);
+  assert.equal(spawnSync('mkfifo', [file]).status, 0);
+  assert.equal(checkSopLaunchPolicy('codex', f.options).code, 'policy-unavailable');
+  rmSync(file);
+  writeFileSync(file, ' '.repeat(32 * 1024));
+  assert.equal(checkSopLaunchPolicy('codex', f.options).code, 'policy-unavailable');
+});
