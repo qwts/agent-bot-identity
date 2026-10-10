@@ -109,9 +109,12 @@ readable copy is written, and souls acting as the App mint through keyd. When
 keyd is not verified, or is older than #110, the key goes to Keychain or the
 file store and `storeReason` says why. A keyd with no daemon key pinned yet
 pins this daemon's key with that first App import: keyd's own owner prompt
-names both, and the result says `daemonKeyPinned: true`. Any other keyd refusal fails the
-operation and stores nothing, except create's one-time key, which falls back
-with the reason. An App already in Keychain or the file store keeps it,
+names both, and the result says `daemonKeyPinned: true`. An owner decline
+occurs before keyd writes a first pin or App key; after consent, keyd pins
+when needed and then writes and reads back the App key, so a later error may leave
+keyd state behind. A non-version `connect` import refusal does not fall back
+locally; `create` keeps its one-time key in Keychain or the file store with
+the reason. An App already in Keychain or the file store keeps it,
 rotation included; a key keyd already holds for an App with no record here is
 not replaced. A manifest's webhook secret for a keyd-held App is kept in its
 own item in the store a new key would fall back to: Keychain service
