@@ -9,6 +9,7 @@ import { NOT_CAPTURED } from '../skill-references.mjs';
 import { currentAgentId } from '../agent-identity.mjs';
 import { discardRevisionStaging, revisionCommand, revisionOwnerGate } from '../soul-revisions.mjs';
 import { stageSkillInstall, stageSkillUninstall, trashSoulSkill } from '../skill-install.mjs';
+import { loadSkill, unloadSkill } from '../skill-workspace.mjs';
 import { soulMarkers } from '../owner-action.mjs';
 import { soulDreamCommand } from './soul-dream.mjs';
 
@@ -26,6 +27,8 @@ export const USAGE = `usage: agent-bot soul skill import PATH_OR_HTTPS_DOCUMENT 
        agent-bot soul skill learn UUID --soul AGENT_ID --candidate DIGEST --package STAGING --outcome FILE --reason TEXT [--json]
        agent-bot soul skill install UUID|NAME --soul AGENT_ID [--json] [--principal-stdin]
        agent-bot soul skill uninstall NAME --soul AGENT_ID [--trash] [--json] [--principal-stdin]
+       agent-bot soul skill load NAME --soul AGENT_ID --workspace WORKTREE [--harness HARNESS] [--json]
+       agent-bot soul skill unload NAME --soul AGENT_ID --workspace WORKTREE [--harness HARNESS] [--json]
        agent-bot soul skill dream --soul ID|NAME --schedule PT<N>H|--run-now|--pause|--unschedule|--cancel RUN_ID|--ack-notice NOTICE_ID|--status|--history [--json]
 
 Local import preserves the selected directory; HTTPS import captures a skill
@@ -36,6 +39,10 @@ a file-hash record; uninstall archives it to archive/skills/<name>/ in the soul,
 or with --trash (owner only) moves it to the OS trash. The owner's install or
 uninstall applies as an owner-approved revision edit; a soul's is a proposal
 under its revision policy. Global harness skill folders are never written.
+load copies an installed skill into one of the soul's worktrees at the
+harness's skills folder (.claude/skills/<name>/ by default) while the work
+needs it, keeping it out of commits through the repository's local
+info/exclude; unload removes that copy, refusing if it was edited there.
 Other repository adapters remain unimplemented.
 check never replaces accepted snapshots or local edits. update previews a recorded
 check; applying requires reviewed digests and preserves prior material. learn supplies guidance;
@@ -117,6 +124,31 @@ function updateMain(args, json, { stdout, stderr, ...options }) {
     return 1;
   }
 }
+// load/unload (#603) place an installed skill in one of the soul's own
+// worktrees and take it out again. The package is unchanged, so there is no
+// revision; a soul may do this only for itself.
+function loadMain(verb, args, json, { stdout, stderr, markers = soulMarkers,
+  assertSoulTarget = id => { if (currentAgentId() !== id) throw new Error('a soul may load skills only into its own worktrees; bind an Agent ID first'); }, ...options }) {
+  const [name, ...rest] = args, values = {};
+  for (let i = 0; i < rest.length; i++) {
+    const key = { '--soul': 'agentId', '--workspace': 'workspace', '--harness': 'harness' }[rest[i]];
+    if (key && values[key] === undefined && rest[i + 1] && !rest[i + 1].startsWith('--')) values[key] = rest[++i];
+    else { stderr.write(USAGE); return 2; }
+  }
+  if (!name || name.startsWith('--') || !values.agentId || !values.workspace) { stderr.write(USAGE); return 2; }
+  try {
+    if (markers({ env: options.env, cwd: options.cwd }).length) assertSoulTarget(values.agentId);
+    const operation = verb === 'load' ? loadSkill : unloadSkill;
+    const result = operation(name, values.agentId, { ...options, workspace: values.workspace, ...(values.harness ? { harness: values.harness } : {}) });
+    stdout.write(report(result, json));
+    return 0;
+  } catch (error) {
+    const failure = { code: error.code ?? `skill-${verb}-failed`, message: error.message };
+    if (json) stdout.write(`${JSON.stringify({ error: failure })}\n`);
+    else stderr.write(`agent-bot soul skill: ${failure.code}: ${failure.message}\n`);
+    return 1;
+  }
+}
 // install/uninstall (#603) record through the existing revision path: an
 // owner (no soul marker) applies an owner-gated edit; a soul proposes.
 async function installMain(verb, args, json, { stdout, stderr, markers = soulMarkers, readStdin = () => readFileSync(0, 'utf8'),
@@ -178,6 +210,7 @@ export function main(argv = process.argv.slice(2), { stdout = process.stdout, st
   const [verb, value, ...extra] = args;
   if (verb === 'update' && flags.length <= 1) return updateMain(args.slice(1), flags.length, { stdout, stderr, ...options });
   if ((verb === 'install' || verb === 'uninstall') && flags.length <= 1) return installMain(verb, args.slice(1), flags.length, { stdout, stderr, ...options });
+  if ((verb === 'load' || verb === 'unload') && flags.length <= 1) return loadMain(verb, args.slice(1), flags.length, { stdout, stderr, ...options });
   if (verb === 'learn' && flags.length <= 1) return learningMain(args.slice(1), flags.length, { stdout, stderr, ...options });
   if (verb === 'check' && extra.length && flags.length <= 1) return portableCheckMain(args.slice(1), flags.length, { stdout, stderr, ...options });
   const operations = { import: importSkill, show: showSkill, verify: verifySkill, check: checkSkill };

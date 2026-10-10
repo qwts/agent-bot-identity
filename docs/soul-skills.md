@@ -27,6 +27,8 @@ agent-bot soul skill check UUID --json
 agent-bot soul skill learn UUID --soul AGENT_ID --json
 agent-bot soul skill install UUID|NAME --soul AGENT_ID --json
 agent-bot soul skill uninstall NAME --soul AGENT_ID [--trash] --json
+agent-bot soul skill load NAME --soul AGENT_ID --workspace WORKTREE [--harness HARNESS] --json
+agent-bot soul skill unload NAME --soul AGENT_ID --workspace WORKTREE [--harness HARNESS] --json
 agent-bot soul skill dream --soul AGENT_ID --status --json
 ```
 
@@ -384,9 +386,41 @@ live package changes only when that revision is applied. The staging is
 discarded either way. Prior bytes also stay in the revision history.
 
 Installed skills are ordinary package skills, so `soul build` still renders
-them for the soul's harnesses like an authored skill. Progressive workspace
-materialization, global opt-in targets and `.gitignore` handling of repo
-harness folders are later slices of #603.
+them for the soul's harnesses like an authored skill. Global opt-in targets
+are a later slice of #603.
+
+## Load into a workspace
+
+`load NAME --soul AGENT_ID --workspace WORKTREE` copies the soul's installed
+`skills/<name>/` into one of its own worktrees (`<soul>/worktrees/WORKTREE`,
+the top of a git checkout) at the harness's skills folder:
+`.claude/skills/<name>/` by default, which Claude Code, Cursor, Copilot, Devin
+and Kiro read, or the folder `--harness` names (`gemini` reads
+`.gemini/skills/`). A harness with no skills folder (`codex`, `opencode`,
+`qwen`, `muse`) is refused. The agent loads a skill while the work needs it and
+unloads it after, rather than keeping every skill in the workspace (owner
+direction on #603, 2026-10-09).
+
+The copy stays out of commits. Unless git already ignores the folder, load
+adds `/<folder>/<name>/` under a `# agent-bot soul skill load` note to the
+repository's local `info/exclude`. It never writes the tracked `.gitignore`;
+adding a skill to a repository stays a deliberate commit for an overwhelming
+reason. Load refuses when anything already sits at the destination, including
+a skill the repository tracks, and when a folder on the way is a link.
+
+The soul records what it placed in `.soul-state/skill-loads/WORKTREE/<name>.json`
+(file modes, sizes and SHA-256). `unload` removes the copy only when it still
+matches that record, bytes and executable bit; a copy edited in the workspace
+is refused
+(`skill-load-modified`) so the edit is not lost. Keep the change in the soul's
+skill through a revision, or move the folder aside, then unload. The exclude
+line goes when no other worktree of the same repository still has the folder
+loaded, and only the line load added (the last one under its note). Loads and
+unloads in one repository take a lock beside its exclude list and rewrite it
+through a rename, so concurrent ones keep each other's lines. A load that fails
+after placing the copy takes the copy and its line back out. Load and unload do not change the soul
+package, so they record no revision. The owner can run them for any soul; a
+soul only for its own Agent ID.
 
 ## What is not captured
 
