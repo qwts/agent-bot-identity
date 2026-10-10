@@ -1,1 +1,0 @@
-- `agent-bot soul skill learn UUID --soul AGENT_ID --candidate DIGEST ...` applies a reviewed portable source-check candidate: it refetches the source, requires the reviewed digest, and proposes the update through the existing soul revision policy (#312).

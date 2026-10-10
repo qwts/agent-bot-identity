@@ -1,1 +1,0 @@
-- Comments and the soul-builder follow-up list no longer describe the reach server as `agent-bot` or Devin MCP tool mapping as open (#378).

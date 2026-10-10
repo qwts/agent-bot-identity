@@ -1,1 +1,0 @@
-- When a repo or soul package asks a daemon-run soul for Auto-Pilot and you have not picked a mode, the daemon now asks you once with Touch ID or your password (no administrator dialog, so the daemon never blocks), remembers your answer for that exact file, and asks again only when the file changes; when keyd can't ask, the turn stays in Safe (#379).

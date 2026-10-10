@@ -1,1 +1,0 @@
-- ADR-0645 (Proposed) is revised to the direction chosen on 2026-10-09: identity is extracted into its own repository, `agent-identity`, after its contract is reviewed; soul, harness and workflows stay here; agent-comms is not imported. The `agent-bot` command, labels and state paths stay (#645).

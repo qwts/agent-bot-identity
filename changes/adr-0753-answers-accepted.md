@@ -1,1 +1,0 @@
-- ADR-0753's Answers section now notes the record was accepted, and that the relayed answers and acceptance are still not verified owner statements (#753).

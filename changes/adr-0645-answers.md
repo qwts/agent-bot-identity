@@ -1,1 +1,0 @@
-- ADR-0645 records the owner's answers: amend ENG-0128, consume identity only over the daemon, ship agent-identity inside agent-bot (and so inside GeniusBar), and keep `claude`/`qwen` as canonical harness keys (#645).

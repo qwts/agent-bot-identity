@@ -105,7 +105,7 @@ Before a package launch mints a soul, the launch is refused when the daemon can'
 | `harness-disabled` | The registry row is disabled. |
 | `harness-tool-missing` | The row's command isn't an executable regular file on the daemon's PATH, or, for an absolute command, at its path, and no soul install provides it. A directory or non-executable file of that name doesn't count. The detail lists the PATH and the row's install hint. |
 
-The agent-comms broker forwards `detail` only, so a launcher sees the code as the detail's prefix until the broker forwards `code`.
+Agent-bot sends the stable `code` with `detail`. Brokers implementing the newer launch-result contract (agent-comms #130) forward both; older brokers may forward only `detail`, where agent-bot also puts the code at the start so a consumer can use an anchored prefix fallback. Check the installed agent-comms pin before assuming a deployed pair forwards the structured field.
 
 ### Sign-in at launch
 
@@ -128,9 +128,11 @@ report is unchanged.
 | `signed-out`, new soul | Continues and is recorded. A new soul's ID is discarded on rollback, so the login command could not be run; and a routed new soul's tool home starts empty, so a refusal would block every first launch. The first turn raises the sign-in notice above. |
 | `unknown` (or the probe failed) | Continues and is recorded. It is never treated as signed in. |
 
-Like `runtimes`, `tool-home` and `provider`, the `sign-in` stage is kept in
-the launch journal. The agent-comms broker's progress stages do not include
-it yet.
+The broker can report conditional setup stages as the launch passes through
+`runtimes`, `tool-home`, `provider`, and `sign-in`, followed by `joining`;
+stages that do not apply are omitted. Progress is best-effort for older
+brokers without the progress operation. The exact installed agent-comms pin
+determines which fields and stages a deployed pair can expose.
 
 ## Copied soul folders
 

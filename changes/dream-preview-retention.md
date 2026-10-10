@@ -1,1 +1,0 @@
-- Dream report previews now live in a private per-soul store outside the dream journal, which keeps only their digest, and only the newest 20 per soul are kept. Older journal records keep their inline previews unchanged (#603).

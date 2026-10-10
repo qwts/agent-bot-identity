@@ -1,1 +1,0 @@
-- Identity code no longer imports soul internals for managed Apps, the secret-name check or `identity migrate-credentials`: the census reaches `identity apps` through a port its command line and the daemon wire, and the migrate command moves to a soul module. Commands, output and stored formats are unchanged; two crossings remain until the identity contract is decided (#645).

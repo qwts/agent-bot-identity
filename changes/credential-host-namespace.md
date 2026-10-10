@@ -1,1 +1,0 @@
-- A host can rename its credential items and pass-cli vault with `AGENT_BOT_CREDENTIAL_NAMESPACE` and `AGENT_BOT_CREDENTIAL_VAULT` in the daemon's service unit; every Keychain, pass-cli and import path follows them, a miss never falls back to the default names, and unset keeps today's names (#676).

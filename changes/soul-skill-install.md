@@ -1,1 +1,0 @@
-- `agent-bot soul skill install UUID|NAME --soul ID` copies a library skill into the soul's own `skills/` with a file-hash record, and `soul skill uninstall NAME --soul ID` archives it inside the soul (`--trash` moves it to the OS trash, owner only), so skills load from the soul instead of global harness folders (#603).

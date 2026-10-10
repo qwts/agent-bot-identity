@@ -1,1 +1,0 @@
-- The identity service can hold narrow delegation grants: a soul asks for one named write (an issue comment, an issue's state, or a review request), the owner approves that exact write with Touch ID through agent-bot-keyd, and the grant is spent once with a receipt. Approve and merge can never be granted (#108).

@@ -1,1 +1,0 @@
-- Daemon turns now resolve the permission mode in the owner's settings order (GeniusBar or `soul mode` pick, then the repo's harness file, then the soul package), and a loosening nobody picked stays in safe mode with the code `permission-mode-loosening-needs-owner`; `docs/soul-builder.md` documents the order (#379).
