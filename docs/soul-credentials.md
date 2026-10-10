@@ -247,11 +247,12 @@ error text. Besides `at`, `event`, `agentId` (daemon only), `operation` and
 | `mint-token`, `signed-commit`, `gist-handoff` | `approved` | `owner-presence`, `owner-consent` |
 | `mint-token`, `signed-commit`, `gist-handoff` | `denied` | `owner-gate-refused` |
 
-A soul checkout (#775) — one with a binding or an Agent ID — that asks
-`mint-token`, `signed-commit` or the gist handoff for another App, sets a
-`GH_AGENT_APP` override, or passes `--permissions` goes through the owner gate
+A caller with a soul marker (#775) — a binding, an Agent ID, or a stated App
+(`GH_AGENT_APP`, the checkout pin, an agent account) — that asks `mint-token`,
+`signed-commit` or the gist handoff for another App, sets a `GH_AGENT_APP`
+override, or passes `--permissions` goes through the owner gate
 (Touch ID through agent-bot-keyd, else the administrator dialog) first. The
-gate's answer is receipted with the soul's `agentId` as `approved` or
+gate's answer is receipted (with the soul's `agentId` when it has one) as `approved` or
 `denied`; a decline or a headless run mints nothing. A bound checkout's own App
 always comes from the daemon.
 

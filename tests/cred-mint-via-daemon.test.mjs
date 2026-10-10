@@ -304,7 +304,7 @@ test('another App from a bound checkout asks the owner gate, receipts it, then m
   assert.equal(result.token, 'ghs_local');
   assert.equal(calls.daemon, 0);
   assert.equal(calls.gate.length, 1);
-  assert.match(calls.gate[0], /other-app\[bot\].*checkout of agent_/);
+  assert.match(calls.gate[0], /other-app\[bot\].*stated as agent_/);
   assert.deepEqual(calls.local.map((request) => request.slug), ['other-app']);
   calls.local[0].selected({ appSlug: 'other-app', reason: 'explicit-app' });
   assert.deepEqual(calls.selected, [{ appSlug: 'other-app', reason: 'owner-approved' }]);
@@ -363,4 +363,17 @@ test('a soul checkout whose binding is gone still asks the owner for another App
   assert.equal(calls.daemon, 0);
   // Its own App resolves as before, so the receipt keeps the ambient selector.
   assert.deepEqual(calls.local.map((request) => request.slug), ['other-app', null]);
+});
+
+test('a stated App with no Agent ID (GH_AGENT_APP or the pin) asks the owner for a different App only', async (t) => {
+  const { cwd, calls, options } = callerFixture(t, { bound: false });
+  await mintForCaller({ ...options, env: { ...process.env, GH_AGENT_APP: slug } });
+  assert.deepEqual(calls.gate, [], 'its stated App mints as before');
+  await mintForCaller({ ...options, env: { ...process.env, GH_AGENT_APP: slug }, slug: 'other-app' });
+  execFileSync('git', ['config', 'agentBot.app', slug], { cwd });
+  await mintForCaller({ ...options, slug: 'other-app' });
+  assert.equal(calls.gate.length, 2);
+  assert.match(calls.gate[1], /other-app\[bot\].*stated as test-codex-agent/);
+  assert.deepEqual(calls.receipts.map((fields) => [fields.agentId, fields.decision]), [[null, 'approved'], [null, 'approved']]);
+  assert.equal(calls.daemon, 0);
 });

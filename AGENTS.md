@@ -102,7 +102,8 @@ current harness:
   (no pin, `GH_AGENT_APP`, agent account, or harness-resolving markers) must
   be confirmed through the macOS authorization dialog — the owner-approval
   gate in `owner-approval.mjs` (ENG-0353 direction). Stated identities mint
-  as before, except that a soul checkout (a binding or an Agent ID) asking
+  as before, except that a caller with a soul marker (a binding, an Agent ID
+  or a stated App) asking
   `mint-token`, `signed-commit` or the gist handoff for another App, a
   `GH_AGENT_APP` override or `--permissions` goes through the owner gate
   (`mintForCaller` in `git-credential-bot.mjs`, #775); a bound checkout's own
