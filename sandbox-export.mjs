@@ -355,7 +355,9 @@ async function verifyExport(account, { dir = null, env = process.env, home = hom
     }
     bytes += read.bytes;
   }
-  const result = { account, dir: target, files: manifest.files.length, bytes, categories: manifest.categories ?? {}, problems, verified: problems.length === 0 };
+  const souls = manifest.files.filter((entry) => entry?.category === 'souls' && typeof entry.agentId === 'string').map((entry) => entry.agentId);
+  const unexported = Array.isArray(manifest.unexported) ? manifest.unexported.map((row) => row?.agentId).filter((id) => typeof id === 'string') : [];
+  const result = { account, dir: target, files: manifest.files.length, bytes, categories: manifest.categories ?? {}, souls, unexported, problems, verified: problems.length === 0 };
   appendAuditReceipt({ event: 'sandbox-export', operation: 'verify', decision: result.verified ? 'verified' : 'refused',
     detail: result.verified ? `${result.files} file(s), ${bytes} byte(s) in ${target}` : `${problems.length} problem(s) in ${target}` }, { env, home, now });
   if (!result.verified) {
