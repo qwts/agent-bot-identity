@@ -19,6 +19,8 @@ agent-bot sandbox account NAME [--json] [--principal-stdin]
 agent-bot sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin]
 agent-bot sandbox resolve <agentId|name> [--json]
 agent-bot sandbox remove [ACCOUNT] --dry-run [--json]
+agent-bot sandbox export --for OWNER [--skip CATEGORY]... [--resume DIR] [--json] [--principal-stdin]
+agent-bot sandbox export --verify ACCOUNT [--dir DIR] [--json]
 ```
 
 ## Status
@@ -130,8 +132,55 @@ paths are the default locations: the account may set `AGENT_BOT_SOULS_HOME`,
 so `workspaces`, `transcripts` and `harness-sign-ins` are always `known:
 false`. `souls` is `known` only when both the local census and the broker's
 were read. Off
-macOS there is nothing to list. The export and the gated removal steps come
-in later slices.
+macOS there is nothing to list. The gated removal steps come in a later
+slice.
+
+### Exporting
+
+The export follows the owner's second decision on #750 (2026-10-10): a
+private drop and a guided copy. It runs in two halves, because one account
+cannot write into another's home and agent-bot never runs `sudo`.
+
+In the persona account, `sandbox export --for OWNER` writes the drop under
+`~/.agent-bot/exports/outgoing/<timestamp>/`, every folder 0700 and every file
+0600:
+
+| Category | What | File |
+| --- | --- | --- |
+| `souls` | each soul in the account's census, as `soul env export` writes it | `souls/<agentId>.soul.tgz` |
+| `workspaces` | spaces no soul in the census owns (a soul's own space travels in its archive) | `workspaces/<name>.tgz` |
+| `transcripts` | `$CLAUDE_CONFIG_DIR/projects` (default `~/.claude/projects`) and `$CODEX_HOME/sessions` (default `~/.codex/sessions`) | `transcripts/claude-projects.tgz`, `transcripts/codex-sessions.tgz` |
+
+Each category asks the owner gate once, naming what is left of it, before
+any of it is written; `--skip CATEGORY` leaves one out. Each file is hashed
+back from disk as it is written, and a soul's archive must name that soul.
+A census row whose soul never ran has no life to export and is listed under
+`unexported`. Only when every category is done is `manifest.json` written,
+with each file's path, bytes and SHA-256.
+
+A failure, or a declined gate, stops there and leaves the drop as it is,
+with no manifest. Its error names the resume: `--resume DIR` hashes again
+what was already written, refuses if any of it changed
+(`sandbox-export-changed`), and carries on. Nothing in the account is
+removed.
+
+The command then prints the copy for the owner to run from their own
+account:
+
+```
+mkdir -p -m 700 ~/.agent-bot/exports ~/.agent-bot/exports/<account>
+sudo /usr/bin/ditto '<drop>' ~/.agent-bot/exports/<account>/<timestamp>
+sudo /usr/sbin/chown -R <owner> ~/.agent-bot/exports/<account>/<timestamp>
+chmod -R go-rwx ~/.agent-bot/exports/<account>/<timestamp>
+agent-bot sandbox export --verify <account> --dir ~/.agent-bot/exports/<account>/<timestamp>
+```
+
+In the owner's account, `sandbox export --verify ACCOUNT` (the newest export
+for ACCOUNT, or `--dir`) refuses a folder the owner does not own or that
+others can read, a manifest made for someone else, and any file that is
+missing, extra to its path, not private, or whose size or SHA-256 differs.
+Every file is read back; only when all match does it write `verified.json`
+and report success. Both halves leave an audit receipt.
 
 ## At launch
 
