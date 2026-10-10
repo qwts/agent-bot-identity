@@ -840,6 +840,13 @@ test('an unsafe override shim directory refuses set and clear before the record 
   assert.ok(lstatSync(path.join(overrides, 'npm.json')).isSymbolicLink(), 'the refused set leaves the entry for --clear');
   await soulRuntimesCommand(['override', ID, 'npm', '--clear'], { ...options, gate, write });
   assert.ok(!existsSync(path.join(overrides, 'npm.json')));
+
+  // Launch reconciles the shims under the same store lock as set and clear.
+  mkdirSync(path.join(overrides, '.lock'));
+  writeFileSync(path.join(overrides, '.lock', 'owner'), 'another writer');
+  assert.throws(() => soulRuntimeEnv(ID, options), /timed out waiting for runtime override store/);
+  rmSync(path.join(overrides, '.lock'), { recursive: true });
+  assert.throws(() => soulRuntimeEnv(ID, options), (error) => error.code === 'runtime-install-failed', 'with the lock free, launch gets past it to the missing managed node');
 });
 
 

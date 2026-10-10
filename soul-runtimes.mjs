@@ -47,6 +47,7 @@ const OVERRIDE_RUNTIME_ENV = Object.freeze({
   uv: ['UV_CACHE_DIR', 'UV_TOOL_DIR', 'UV_TOOL_BIN_DIR'], uvx: ['UV_CACHE_DIR', 'UV_TOOL_DIR', 'UV_TOOL_BIN_DIR'],
 });
 const OVERRIDES_DIR = 'overrides';
+const OVERRIDE_LOCK = '.lock';
 const OVERRIDE_SCHEMA_VERSION = 1;
 const OVERRIDE_RECORD_MAX_BYTES = 16 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
@@ -163,6 +164,23 @@ function ensureOverrideShims(soulDir, overrides, { agentId } = {}) {
     if (error.code === 'runtime-override-invalid') throw error;
     throw unsafeOverrideState(agentId, 'override shims could not be prepared or validated');
   }
+}
+
+// Reads the override records and brings their shims in line under the same
+// store lock as `soul runtimes override`, so a launch working from an older
+// read can never undo a set or clear that has already succeeded. With any
+// invalid record the shims are left alone and the caller refuses.
+function syncOverrideShims(soulDir, { agentId, platform }) {
+  const read = () => {
+    const state = inspectRuntimeOverrides(soulDir, { agentId, platform });
+    if (!state.errors.length && state.rows.length) ensureOverrideShims(soulDir, state.overrides, { agentId });
+    return state;
+  };
+  let info = null;
+  try { info = lstatSync(overrideDirectory(soulDir)); } catch { /* no override store yet */ }
+  // Only a real directory holds the lock; anything else is refused by the read.
+  if (!info?.isDirectory() || info.isSymbolicLink()) return read();
+  return withLock(path.join(overrideDirectory(soulDir), OVERRIDE_LOCK), 'runtime override store', read);
 }
 
 function prepareOverrideShims(soulDir, overrides, { agentId } = {}) {
@@ -704,12 +722,11 @@ export async function installSoulRuntimes(soulDir, { only = null, agentId = null
   const inspect = () => inspectSoulRuntimes(soulDir, { platform, catalog, env, home, registry });
   let state = inspect();
   const who = agentId ?? path.basename(soulDir);
-  const overrideState = inspectRuntimeOverrides(soulDir, { agentId: who, platform });
+  const overrideState = syncOverrideShims(soulDir, { agentId: who, platform });
   if (overrideState.errors.length) {
     const error = overrideState.errors[0];
     throw Object.assign(new Error(error.reason), { code: error.code, runtime: error.name, action: error.action });
   }
-  if (overrideState.rows.length) ensureOverrideShims(soulDir, overrideState.overrides, { agentId: who });
   const overriddenRuntimes = new Set(overrideState.rows.filter((row) => row.status === 'selected' && row.runtime).map((row) => row.runtime));
   const invalid = state.invalid.find((entry) => !only || entry.path.includes(only));
   if (invalid) fail('runtime-install-failed', `${who}: ${invalid.message}`, { runtime: invalid.path, action: `fix soul.json ${invalid.path} in a revision` });
@@ -852,12 +869,11 @@ export function soulRuntimeEnv(id, { env = process.env, home = env.HOME ?? homed
   const inspection = inspectSoulRuntimes(soulDir, { ...rest, env, home, manifest });
   const invalid = inspection.invalid[0];
   if (invalid) fail('runtime-install-failed', `${soul.id}: ${invalid.message}`, { runtime: invalid.path, action: `fix soul.json ${invalid.path} in a revision` });
-  const overrideState = inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: inspection.platform ?? process.platform });
+  const overrideState = syncOverrideShims(soulDir, { agentId: soul.id, platform: inspection.platform ?? process.platform });
   if (overrideState.errors.length) {
     const error = overrideState.errors[0];
     throw Object.assign(new Error(error.reason ?? error.message), { code: error.code, runtime: error.name, action: error.action });
   }
-  if (overrideState.rows.length) ensureOverrideShims(soulDir, overrideState.overrides, { agentId: soul.id });
   const routed = runtimeLaunchEnv(inspection, { env, overrides: overrideState.overrides, harness, node });
   for (const name of routed.missing) {
     const isHarness = name.startsWith('harness:');
@@ -953,7 +969,7 @@ async function soulRuntimeOverrideCommand(argv, { gate, readStdin, write, env, h
   validateOverrideStore(soulDir, soul.id, { create: true });
   // One writer at a time: the check, the record change, the shims and the
   // receipt succeed together, or the previous record is put back.
-  withLock(path.join(overrideDirectory(soulDir), '.lock'), 'runtime override store', () => {
+  withLock(path.join(overrideDirectory(soulDir), OVERRIDE_LOCK), 'runtime override store', () => {
     // An unsafe shim directory refuses before the record changes.
     ensureOverrideShims(soulDir, inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host }).overrides, { agentId: soul.id });
     const file = overrideRecordFile(soulDir, name);
