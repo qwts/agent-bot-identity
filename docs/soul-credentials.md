@@ -239,11 +239,22 @@ error text. Besides `at`, `event`, `agentId` (daemon only), `operation` and
 | `operation` | `decision` | `reason` |
 | --- | --- | --- |
 | `tier1-app-token` | `granted` | `bound-soul-own-app` |
-| `tier1-app-token` | `denied` | `no-live-binding`, `github-identity-off`, `no-github-app` |
+| `tier1-app-token` | `denied` | `no-live-binding`, `soul-retired`, `github-identity-off`, `no-github-app` |
 | `tier1-app-token` | `failed` | `identity-unreadable`, `mint-failed` |
-| `mint-token` | `granted` | `owner-approved`, or the selector: `explicit-app`, `env-app`, `env-credential`, `ambient-app` (checkout pin, the soul's managed App from `AGENT_BOT_ID` or the worktree's Agent ID, account, or harness) |
+| `mint-token` | `granted` | `owner-approved`, `bound-soul-own-app` (a bound checkout's own App, through the daemon), or the selector: `explicit-app`, `env-app`, `env-credential`, `ambient-app` (checkout pin, the soul's managed App from `AGENT_BOT_ID` or the worktree's Agent ID, account, or harness) |
 | `mint-token` | `denied` | `owner-approval-refused` |
 | `mint-token` | `failed` | `no-app-selected`, `mint-failed` |
+| `mint-token`, `signed-commit`, `gist-handoff` | `approved` | `owner-presence`, `owner-consent` |
+| `mint-token`, `signed-commit`, `gist-handoff` | `denied` | `owner-gate-refused` |
+
+A caller with a soul marker (#775) — a binding, an Agent ID, or a stated App
+(`GH_AGENT_APP`, the checkout pin, an agent account) — that asks `mint-token`,
+`signed-commit` or the gist handoff for another App, sets a `GH_AGENT_APP`
+override, or passes `--permissions` goes through the owner gate
+(Touch ID through agent-bot-keyd, else the administrator dialog) first. The
+gate's answer is receipted (with the soul's `agentId` when it has one) as `approved` or
+`denied`; a decline or a headless run mints nothing. A bound checkout's own App
+always comes from the daemon.
 
 A `mint-token` receipt is best effort: if it can't be written, the command
 warns on stderr and the mint goes ahead as before. A `mint-token` run for a

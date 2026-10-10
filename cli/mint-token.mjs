@@ -4,8 +4,10 @@
 // mint-token.mjs keeps the library every other module imports (#645).
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { readBinding } from '../agent-binding.mjs';
 import { appendAuditReceipt } from '../agent-principals.mjs';
-import { MINT_USAGE, mint, parseMintArgs, selectionReason } from '../mint-token.mjs';
+import { mintForCaller } from '../git-credential-bot.mjs';
+import { MINT_USAGE, parseMintArgs, selectionReason } from '../mint-token.mjs';
 import { explicitAppArg, ownerApprovalRequired, requireOwnerApproval } from '../owner-approval.mjs';
 import { formatMintGrant } from './mint-output.mjs';
 
@@ -18,8 +20,11 @@ async function main() {
   // An unmarked explicit mint in the owner's account is a credential release
   // with no stated identity — it carries the owner-approval ceremony. Stated
   // identities (pin, GH_AGENT_APP, harness markers, agent account) mint as
-  // before.
-  const approvalRequired = ownerApprovalRequired({ argv: process.argv });
+  // before. A bound checkout is mintForCaller's to decide (#775): the soul's
+  // own App through the daemon, anything else through the owner gate.
+  let bound;
+  try { bound = readBinding() !== null; } catch { bound = true; }
+  const approvalRequired = !bound && ownerApprovalRequired({ argv: process.argv });
   if (approvalRequired) {
     const slug = explicitAppArg(process.argv);
     try {
@@ -34,7 +39,9 @@ async function main() {
   let selection = null;
   let grant;
   try {
-    grant = await mint({ permissions: options.permissions, selected: (chosen) => { selection = chosen; } });
+    grant = await mintForCaller({
+      slug: options.app, permissions: options.permissions, selected: (chosen) => { selection = chosen; },
+    });
   } catch (error) {
     operatorReceipt({ decision: 'failed', appSlug: selection?.appSlug, reason: selection ? 'mint-failed' : 'no-app-selected' });
     throw error;

@@ -21,7 +21,7 @@ import process from 'node:process';
 
 import { validateAgentId } from './agent-identity.mjs';
 import { apiBase, loadConfig } from './config.mjs';
-import { mint } from './mint-token.mjs';
+import { mintForCaller } from './git-credential-bot.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 
 export const PACK_SCHEMA_VERSION = 1;
@@ -280,8 +280,9 @@ export function parseGistReference(text) {
 }
 
 // Mint through the bound App with the shared resolver's slug — the same
-// resolution setup-worktree and worktree-token use — so mint() is always
-// called with an explicitly resolved slug.
+// resolution setup-worktree and worktree-token use — so the mint is always
+// asked for an explicitly resolved slug. A bound checkout gets its own App
+// from the daemon; another App asks the owner (#775).
 async function mintGistToken({ env, cwd, config, mintToken }) {
   const slug = resolveAgentSlug({ env, cwd, config });
   if (!slug) {
@@ -290,7 +291,7 @@ async function mintGistToken({ env, cwd, config, mintToken }) {
     );
   }
   try {
-    const grant = await mintToken({ slug, env });
+    const grant = await mintToken({ slug, env, cwd, operation: 'gist-handoff' });
     return { slug, token: grant.token };
   } catch (error) {
     throw new Error(`gist handoff could not mint a token for ${slug}: ${error.message}`);
@@ -311,7 +312,7 @@ export async function uploadPackToGist(pack, {
   cwd = process.cwd(),
   config,
   fetchImpl = fetch,
-  mintToken = mint,
+  mintToken = mintForCaller,
 } = {}) {
   const cfg = config ?? loadConfig({ env });
   const { token } = await mintGistToken({ env, cwd, config: cfg, mintToken });
@@ -349,7 +350,7 @@ export async function downloadPackFromGist(gistId, {
   cwd = process.cwd(),
   config,
   fetchImpl = fetch,
-  mintToken = mint,
+  mintToken = mintForCaller,
 } = {}) {
   if (!GIST_ID_PATTERN.test(gistId)) throw new Error('invalid gist reference');
   const cfg = config ?? loadConfig({ env });

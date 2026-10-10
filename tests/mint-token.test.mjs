@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
-import { generateKeyPairSync, createVerify } from 'node:crypto';
+import { generateKeyPairSync, createVerify, randomBytes } from 'node:crypto';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -462,7 +462,9 @@ test('selectionReason follows appConfig\'s selector order (#107)', () => {
 
 // The CLI is the operator path: each run that reaches a mint leaves a
 // credential-mint receipt naming the App and a reason, never the token (#107).
-function runMintCli(env, args = [], { nodeArgs = [], cwd } = {}) {
+// Each run gets an unbound scratch cwd unless it names one, so a test run from
+// a bound agent worktree never reaches that worktree's live daemon (#775).
+function runMintCli(env, args = [], { nodeArgs = [], cwd = mkdtempSync(join(tmpdir(), 'agent-bot-mint-cli-')) } = {}) {
   return new Promise((resolve) => {
     execFile(process.execPath, [...nodeArgs, join(import.meta.dirname, '..', 'cli', 'mint-token.mjs'), ...args], { env, encoding: 'utf8', cwd },
       (error, stdout, stderr) => resolve({ code: error ? error.code : 0, stdout, stderr }));
@@ -551,6 +553,36 @@ test('an owner-approval refusal receipts the explicit App as denied and mints no
     const receipts = mintReceipts(env);
     assert.deepEqual(receipts.map(({ operation, decision, appSlug, reason }) => ({ operation, decision, appSlug, reason })), [
       { operation: 'mint-token', decision: 'denied', appSlug: 'you-claude-agent', reason: 'owner-approval-refused' },
+    ]);
+  } finally {
+    await github.close();
+  }
+});
+
+test('a bound checkout asking mint-token for another App goes through the owner gate and a headless refusal mints nothing (#775)', async () => {
+  const github = await installationServer([ORG]);
+  try {
+    const env = operatorEnv(github.apiBase);
+    delete env.GH_AGENT_APP;
+    const cwd = mkdtempSync(join(tmpdir(), 'agent-bot-bound-'));
+    execFileSync('git', ['init', '-q', cwd]);
+    const agentId = 'agent_00000000-0000-4000-8000-0000000000aa';
+    writeFileSync(join(cwd, '.git', 'agent-binding.json'), JSON.stringify({
+      v: 1, agentId, secret: randomBytes(32).toString('base64url'), daemon: 'http://127.0.0.1:1/', account: 'test', parent: null,
+    }), { mode: 0o600 });
+    // No keyd and a non-macOS platform: the gate cannot ask anyone, so it refuses.
+    const refused = await runMintCli(env, ['--app', 'you-claude-agent'], {
+      cwd,
+      nodeArgs: ['--import', 'data:text/javascript,Object.defineProperty(process,"platform",{value:"linux"})'],
+    });
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.stderr, /owner approval needs the macOS authorization dialog/);
+    assert.equal(refused.stdout, '');
+    assert.equal(github.requests.length, 0);
+    const receipts = mintReceipts(env);
+    assert.deepEqual(receipts.map(({ agentId: id, operation, decision, appSlug, reason }) => ({ id, operation, decision, appSlug, reason })), [
+      { id: agentId, operation: 'mint-token', decision: 'denied', appSlug: 'you-claude-agent', reason: 'owner-gate-refused' },
+      { id: undefined, operation: 'mint-token', decision: 'failed', appSlug: undefined, reason: 'no-app-selected' },
     ]);
   } finally {
     await github.close();

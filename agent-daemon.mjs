@@ -726,6 +726,19 @@ export function createDaemonServer({
             }, { env, home, now });
             throw error;
           }
+          // A retired soul's binding proof is not authority to mint (#775):
+          // retirement ends its App use even before its bindings are swept.
+          if (identity.status === 'retired') {
+            appendAuditReceipt({
+              event: 'credential-mint',
+              agentId: binding.agentId,
+              operation: 'tier1-app-token',
+              decision: 'denied',
+              ...(identity.github?.appSlug ? { appSlug: identity.github.appSlug } : {}),
+              reason: 'soul-retired',
+            }, { env, home, now });
+            throw Object.assign(new Error('this soul is retired'), { statusCode: 409 });
+          }
           // The add-on gate decides, not the record: a soul that carries a
           // github field gets no App token while github-identity is off.
           const githubOn = isGateEnabled('github-identity', { env, home, config });

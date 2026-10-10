@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isSoulBound, mintCredential } from '../git-credential-bot.mjs';
+import { isSoulBound, mintCredential, mintForCaller } from '../git-credential-bot.mjs';
 import { buildGhShim } from '../gh-shim.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'cred-mint-via-daemon-'));
@@ -263,3 +263,117 @@ for (const desktop of [false, true]) {
     assert.match(down.stderr, /daemon.*could not provide/);
   });
 }
+
+// #775: mint-token, signed-commit and the gist handoff mint in the caller's
+// process. In a bound checkout the soul's own App comes from the daemon;
+// another App, a GH_AGENT_APP override or --permissions goes through the
+// owner gate, receipted either way. Each case uses this file's scratch HOME
+// and a fake daemon client, so no test reaches a live daemon.
+function callerFixture(t, { bound = true, gate = async () => ({ method: 'presence', via: 'agent-bot-keyd' }) } = {}) {
+  const cwd = checkout(t);
+  if (bound) bind(cwd);
+  const calls = { daemon: 0, local: [], gate: [], receipts: [], selected: [] };
+  const options = {
+    cwd,
+    env: process.env,
+    readIdentityImpl: (id) => { assert.equal(id, agentId); return { id, status: 'active', github: { appSlug: slug } }; },
+    clientFactory: () => ({ credential: async () => { calls.daemon++; return grant; } }),
+    mintImpl: async (request) => { calls.local.push(request); return { token: 'ghs_local', expires_at: grant.expires_at }; },
+    approve: async (action, opts) => { calls.gate.push(action); return gate(action, opts); },
+    receipt: (fields) => calls.receipts.push(fields),
+    selected: (chosen) => calls.selected.push(chosen),
+  };
+  return { cwd, calls, options };
+}
+
+test('a bound soul\'s own App comes from the daemon with no gate and no local mint', async (t) => {
+  const { calls, options } = callerFixture(t);
+  for (const slugAsked of [null, slug]) {
+    const result = await mintForCaller({ ...options, slug: slugAsked });
+    assert.ok(result.token === token);
+  }
+  assert.equal(calls.daemon, 2);
+  assert.deepEqual(calls.local, []);
+  assert.deepEqual(calls.gate, []);
+  assert.deepEqual(calls.selected.map((chosen) => chosen.reason), ['bound-soul-own-app', 'bound-soul-own-app']);
+});
+
+test('another App from a bound checkout asks the owner gate, receipts it, then mints that App', async (t) => {
+  const { calls, options } = callerFixture(t);
+  const result = await mintForCaller({ ...options, slug: 'other-app', operation: 'signed-commit' });
+  assert.equal(result.token, 'ghs_local');
+  assert.equal(calls.daemon, 0);
+  assert.equal(calls.gate.length, 1);
+  assert.match(calls.gate[0], /other-app\[bot\].*stated as agent_/);
+  assert.deepEqual(calls.local.map((request) => request.slug), ['other-app']);
+  calls.local[0].selected({ appSlug: 'other-app', reason: 'explicit-app' });
+  assert.deepEqual(calls.selected, [{ appSlug: 'other-app', reason: 'owner-approved' }]);
+  assert.deepEqual(calls.receipts, [{
+    event: 'credential-mint', agentId, operation: 'signed-commit', decision: 'approved', appSlug: 'other-app', reason: 'owner-presence',
+  }]);
+});
+
+test('a declined or headless owner gate refuses, mints nothing and receipts the refusal', async (t) => {
+  const { calls, options } = callerFixture(t, {
+    gate: async () => { throw new Error('owner approval needs the macOS authorization dialog — refusing on this platform'); },
+  });
+  await assert.rejects(mintForCaller({ ...options, slug: 'other-app' }), /refusing on this platform/);
+  assert.equal(calls.daemon, 0);
+  assert.deepEqual(calls.local, []);
+  assert.deepEqual(calls.receipts.map((fields) => [fields.decision, fields.reason, fields.appSlug]), [['denied', 'owner-gate-refused', 'other-app']]);
+});
+
+test('GH_AGENT_APP and --permissions overrides in a bound checkout go through the owner gate', async (t) => {
+  const { calls, options } = callerFixture(t);
+  await mintForCaller({ ...options, env: { ...process.env, GH_AGENT_APP: 'other-app' } });
+  await mintForCaller({ ...options, slug, permissions: { contents: 'read' } });
+  assert.equal(calls.daemon, 0);
+  assert.equal(calls.gate.length, 2);
+  assert.match(calls.gate[1], /limited to contents=read/);
+  assert.deepEqual(calls.local.map((request) => [request.slug, request.permissions]), [['other-app', null], [slug, { contents: 'read' }]]);
+});
+
+test('an unbound caller mints as before, without the gate or the daemon', async (t) => {
+  const { calls, options } = callerFixture(t, { bound: false });
+  const result = await mintForCaller({ ...options, slug: 'other-app', permissions: { contents: 'read' } });
+  assert.equal(result.token, 'ghs_local');
+  assert.equal(calls.daemon, 0);
+  assert.deepEqual(calls.gate, []);
+  assert.deepEqual(calls.local.map((request) => [request.slug, request.permissions]), [['other-app', { contents: 'read' }]]);
+});
+
+test('an unreadable binding refuses before any mint or gate', async (t) => {
+  const { calls, options } = callerFixture(t, { bound: false });
+  await assert.rejects(mintForCaller({ ...options, readBindingImpl: () => { throw new Error(secret); } }), (error) => {
+    assert.match(error.message, /soul binding in this checkout is unreadable/);
+    assert.ok(!error.message.includes(secret));
+    return true;
+  });
+  assert.deepEqual([calls.daemon, calls.local.length, calls.gate.length], [0, 0, 0]);
+});
+
+test('a soul checkout whose binding is gone still asks the owner for another App, and mints its own as before', async (t) => {
+  const { cwd, calls, options } = callerFixture(t, { bound: false });
+  execFileSync('git', ['config', 'agentBot.agentId', agentId], { cwd });
+  await mintForCaller({ ...options, slug: 'other-app' });
+  assert.equal(calls.gate.length, 1);
+  assert.deepEqual(calls.receipts.map((fields) => [fields.agentId, fields.decision]), [[agentId, 'approved']]);
+  await mintForCaller({ ...options });
+  assert.equal(calls.gate.length, 1, 'its own App needs no gate');
+  assert.equal(calls.daemon, 0);
+  // Its own App resolves as before, so the receipt keeps the ambient selector.
+  assert.deepEqual(calls.local.map((request) => request.slug), ['other-app', null]);
+});
+
+test('a stated App with no Agent ID (GH_AGENT_APP or the pin) asks the owner for a different App only', async (t) => {
+  const { cwd, calls, options } = callerFixture(t, { bound: false });
+  await mintForCaller({ ...options, env: { ...process.env, GH_AGENT_APP: slug } });
+  assert.deepEqual(calls.gate, [], 'its stated App mints as before');
+  await mintForCaller({ ...options, env: { ...process.env, GH_AGENT_APP: slug }, slug: 'other-app' });
+  execFileSync('git', ['config', 'agentBot.app', slug], { cwd });
+  await mintForCaller({ ...options, slug: 'other-app' });
+  assert.equal(calls.gate.length, 2);
+  assert.match(calls.gate[1], /other-app\[bot\].*stated as test-codex-agent/);
+  assert.deepEqual(calls.receipts.map((fields) => [fields.agentId, fields.decision]), [[null, 'approved'], [null, 'approved']]);
+  assert.equal(calls.daemon, 0);
+});
