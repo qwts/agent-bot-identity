@@ -1,0 +1,1 @@
+- Agent-bot accepts the `junie` and `commandcode` organization-profile harness keys and resolves their active App identities from the rostered account name, without adding environment detectors (qwts/qwts-agent-org#39). Deploy a compatible runtime before publishing these profile keys, and provision/install both GitHub Apps separately.

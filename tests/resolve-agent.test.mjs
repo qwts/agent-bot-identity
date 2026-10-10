@@ -81,6 +81,33 @@ test('a Muse pin and a Muse account both bind the Muse App by the slug pattern',
   );
 });
 
+test('Junie and Command Code roster accounts resolve from profile defaults without env markers', () => {
+  const config = organizationProfileToConfig({
+    schema_version: 1,
+    organization: 'example-engineering',
+    account_owner: 'example',
+    minimum_runtime_interface_version: 1,
+    defaults: {
+      commandcode: 'example-commandcode-agent',
+      junie: 'example-junie-agent',
+    },
+    identities: [
+      { slug: 'example-commandcode-agent', harness: 'commandcode', status: 'active' },
+      { slug: 'example-junie-agent', harness: 'junie', status: 'active' },
+    ],
+  });
+  const cwd = repo('rostered-harness-accounts');
+
+  assert.equal(
+    resolveAgentSlug({ env: {}, cwd, config, account: 'example-junie-agent' }),
+    'example-junie-agent',
+  );
+  assert.equal(
+    resolveAgentSlug({ env: {}, cwd, config, account: 'example-commandcode-agent' }),
+    'example-commandcode-agent',
+  );
+});
+
 test('Claude launcher identities and explicit model Apps are honored as stated', () => {
   const worktree = repo('.claude/worktrees/model/repo', 'you-claude-fable-agent');
   assert.equal(

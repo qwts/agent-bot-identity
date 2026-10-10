@@ -94,6 +94,34 @@ test('a grok identity validates and an unknown harness fails the profile closed'
   assert.throws(() => validateOrganizationProfile(unknown), /unsupported harness/);
 });
 
+test('Junie and Command Code defaults and active identities validate into runtime App mappings', () => {
+  const base = completeProfile();
+  const profile = completeProfile({
+    defaults: {
+      ...base.defaults,
+      commandcode: 'example-commandcode-agent',
+      junie: 'example-junie-agent',
+    },
+    identities: [
+      ...base.identities,
+      { slug: 'example-commandcode-agent', harness: 'commandcode', status: 'active' },
+      { slug: 'example-junie-agent', harness: 'junie', status: 'active' },
+    ],
+  });
+
+  const config = organizationProfileToConfig(parseOrganizationProfile(JSON.stringify(profile)));
+  assert.equal(config.apps.commandcode, 'example-commandcode-agent');
+  assert.equal(config.apps.junie, 'example-junie-agent');
+  assert.deepEqual(
+    runtimeProfileInfo(config).active.filter(({ harness }) => ['commandcode', 'junie'].includes(harness))
+      .map(({ harness, slug }) => ({ harness, slug })),
+    [
+      { harness: 'commandcode', slug: 'example-commandcode-agent' },
+      { harness: 'junie', slug: 'example-junie-agent' },
+    ],
+  );
+});
+
 test('profile v1 normalizes complete defaults, model mappings, and lifecycle state', () => {
   const profile = validateOrganizationProfile(completeProfile());
   assert.deepEqual(Object.keys(profile.defaults), ['claude', 'codex']);
