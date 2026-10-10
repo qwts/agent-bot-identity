@@ -130,9 +130,11 @@ Two things help a host that changes its names:
   ones this environment resolves. Each copy is read back from its new name and
   compared; a different value already under the new name is reported, never
   overwritten; the old items are never deleted. Only Keychain and pass-cli
-  items are named by namespace; file and keyd stores are skipped. The pass-cli
-  vault is the one this environment resolves. `--dry-run` lists what would be
-  copied, and the output names items, never values.
+  items are named by namespace; file and keyd stores are skipped.
+  `--from-vault OLD` does the same for pass-cli notes kept in an old vault,
+  alone or with `--from-namespace`; only pass-cli is named by vault, so other
+  stores are skipped. `--dry-run` lists what would be copied, and the output
+  names items, never values.
 
 ### What the Keychain access list can and cannot enforce
 

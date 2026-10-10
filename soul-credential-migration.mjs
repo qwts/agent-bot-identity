@@ -16,7 +16,7 @@ import { listSouls, populationFile, showSoul, showSoulByName, soulDirectory } fr
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { loadConfig } from './config.mjs';
 import { appStoreTarget, legacyAppFolderStatus, migrateAppMetadata, readManagedAppCredential } from './identity-app-store.mjs';
-import { NAMESPACE_VARIABLE, credentialNamespace, itemTitle, managedAppItem, soulAppItem, soulSecretItem } from './credential-names.mjs';
+import { NAMESPACE_VARIABLE, VAULT_VARIABLE, credentialNamespace, credentialVault, itemTitle, managedAppItem, soulAppItem, soulSecretItem } from './credential-names.mjs';
 import { profileAppSlugs } from './organization-profile.mjs';
 import { assertOwnerAction, soulMarkers } from './owner-gate.mjs';
 import {
@@ -36,10 +36,10 @@ import { readSoulManifest } from './soul-runtimes.mjs';
 import { soulCredentialsDeclaration, writeSoulCredentialsDeclaration } from './soul-package.mjs';
 import { editSoulRevision, revisionHistory } from './soul-revisions.mjs';
 
-const USAGE = 'usage: agent-bot identity migrate-credentials [--soul AGENT_ID|NAME | --all] [--to keyd|pass-cli | --from-namespace OLD] [--dry-run] [--json] [--principal-stdin]';
+const USAGE = 'usage: agent-bot identity migrate-credentials [--soul AGENT_ID|NAME | --all] [--to keyd|pass-cli | --from-namespace OLD [--from-vault OLD] | --from-vault OLD] [--dry-run] [--json] [--principal-stdin]';
 
 function parseArgs(argv) {
-  const options = { soul: null, all: false, dryRun: false, json: false, principal: false, to: null, fromNamespace: null };
+  const options = { soul: null, all: false, dryRun: false, json: false, principal: false, to: null, fromNamespace: null, fromVault: null };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === '--all') options.all = true;
@@ -49,10 +49,11 @@ function parseArgs(argv) {
     else if (arg === '--soul' && argv[index + 1] && !argv[index + 1].startsWith('--')) options.soul = argv[++index];
     else if (arg === '--to' && ['keyd', 'pass-cli'].includes(argv[index + 1])) options.to = argv[++index];
     else if (arg === '--from-namespace' && argv[index + 1] !== undefined && options.fromNamespace === null) options.fromNamespace = argv[++index];
+    else if (arg === '--from-vault' && argv[index + 1] !== undefined && options.fromVault === null) options.fromVault = argv[++index];
     else throw new Error(USAGE);
   }
   if (options.all === Boolean(options.soul)) throw new Error(USAGE);
-  if (options.fromNamespace !== null && options.to) throw new Error(USAGE);
+  if ((options.fromNamespace !== null || options.fromVault !== null) && options.to) throw new Error(USAGE);
   return options;
 }
 
@@ -80,21 +81,33 @@ export async function migrateCredentialsCommand(argv, {
   assertOwner = assertOwnerAction,
   gate = (action, { principal }) => assertOwner(action, { principal, env, cwd }),
   stores = credentialStores({ env }),
+  // The stores under the old names (--from-namespace/--from-vault).
+  sourceStoresFor = (sourceEnv) => credentialStores({ env: sourceEnv }),
   verify = (credential) => verifyAppCredential(credential, { env }),
   revisions = { history: revisionHistory, edit: editSoulRevision },
   now = () => new Date(),
   keyd = null,
 } = {}) {
   const options = parseArgs(argv);
-  // The old namespace is checked like the host's own, before any store call;
-  // copying a namespace onto itself is a mistake, not a no-op.
+  // The old namespace and vault are checked like the host's own, before any
+  // store call; copying names onto themselves is a mistake, not a no-op. An
+  // old name not given is this host's.
   let names = null;
-  if (options.fromNamespace !== null) {
+  if (options.fromNamespace !== null || options.fromVault !== null) {
     if (options.fromNamespace === '') throw Object.assign(new Error(`usage: --from-namespace needs the old ${NAMESPACE_VARIABLE} value`), { code: 'usage' });
-    names = { from: credentialNamespace({ [NAMESPACE_VARIABLE]: options.fromNamespace }), to: credentialNamespace(env) };
-    if (names.from === names.to) {
-      throw Object.assign(new Error(`usage: --from-namespace ${names.from} is already this host's credential namespace`), { code: 'usage' });
+    if (options.fromVault === '') throw Object.assign(new Error(`usage: --from-vault needs the old ${VAULT_VARIABLE} value`), { code: 'usage' });
+    const to = { namespace: credentialNamespace(env), vault: credentialVault(env) };
+    const from = {
+      namespace: options.fromNamespace === null ? to.namespace : credentialNamespace({ [NAMESPACE_VARIABLE]: options.fromNamespace }),
+      vault: options.fromVault === null ? to.vault : credentialVault({ [VAULT_VARIABLE]: options.fromVault }),
+    };
+    if (options.fromNamespace !== null && from.namespace === to.namespace) {
+      throw Object.assign(new Error(`usage: --from-namespace ${from.namespace} is already this host's credential namespace`), { code: 'usage' });
     }
+    if (options.fromVault !== null && from.vault === to.vault) {
+      throw Object.assign(new Error(`usage: --from-vault ${from.vault} is already this host's credential vault`), { code: 'usage' });
+    }
+    names = { from: from.namespace, to: to.namespace, fromVault: from.vault, vault: to.vault };
   }
   // A soul is refused before anything is read, dry run included: listing
   // which stores hold which keys is already the owner's business.
@@ -110,10 +123,10 @@ export async function migrateCredentialsCommand(argv, {
   const file = populationFile({ env, home });
   const souls = options.all ? listSouls({ file }).filter((soul) => soul.status !== 'retired') : [resolveSoul(options.soul, file)];
   const authorization = options.dryRun ? null
-    : await gate(`identity migrate-credentials ${options.all ? '--all' : souls[0].id}${options.to ? ` --to ${options.to}` : ''}${names ? ` --from-namespace ${names.from}` : ''}`, { principal });
+    : await gate(`identity migrate-credentials ${options.all ? '--all' : souls[0].id}${options.to ? ` --to ${options.to}` : ''}${options.fromNamespace !== null ? ` --from-namespace ${names.from}` : ''}${options.fromVault !== null ? ` --from-vault ${names.fromVault}` : ''}`, { principal });
   if (names) {
     return migrateFromNamespace(souls, { file, env, home, platform, stores, verify, options, names, now, write,
-      sourceStores: credentialStores({ env: { ...env, [NAMESPACE_VARIABLE]: names.from } }) });
+      sourceStores: sourceStoresFor({ ...env, [NAMESPACE_VARIABLE]: names.from, [VAULT_VARIABLE]: names.fromVault }) });
   }
   const stateDir = stateDirectory({ env, home });
   const declare = async (soul, soulDir, github) => {
@@ -346,42 +359,47 @@ function finishMigration(results, { options, env, home, now, write, stores }) {
   return report;
 }
 
-// --from-namespace OLD (#676): copies what a host stored under its old
-// credential namespace into the one its environment resolves now. Only the
-// Keychain and pass-cli name items by namespace; a file or keyd store is
-// skipped. Each copy is read back from the new name and compared before it
+// --from-namespace OLD and --from-vault OLD (#676): copies what a host
+// stored under its old credential namespace or pass-cli vault into the ones
+// its environment resolves now. Only the Keychain and pass-cli name items by
+// namespace, and only pass-cli by vault; any other store is skipped. Each copy is read back from the new name and compared before it
 // counts, a different value already there is never overwritten, and the old
 // items are never deleted. The store kind does not change, so soul.json is
 // not edited. Output names items, never values.
 async function migrateFromNamespace(souls, { file, env, home, platform, stores, sourceStores, verify, options, names, now, write }) {
-  const NAMESPACED = ['keychain', 'pass-cli'];
+  const renamed = names.from !== names.to;
+  const moved = names.fromVault !== names.vault;
+  const NAMED = renamed ? ['keychain', 'pass-cli'] : ['pass-cli'];
+  const changed = [renamed ? `namespace ${names.from} -> ${names.to}` : null, moved ? `vault ${names.fromVault} -> ${names.vault}` : null].filter(Boolean).join(', ');
+  const source = [renamed ? names.from : null, moved ? `${names.fromVault} vault` : null].filter(Boolean).join(' / ');
   const absent = (read) => {
     try { return read(); } catch (error) { if (error.code === 'missing-item') return null; throw error; }
   };
   const equal = (left, right) => JSON.stringify(left) === JSON.stringify(right);
   // One item: read the old, compare with the new, copy, read back.
   const copy = async (row, { read, writeTo, check = async () => {} }) => {
-    if (!NAMESPACED.includes(row.store)) { Object.assign(row, { status: 'skipped', detail: `the ${row.store} store is not named by namespace` }); return; }
+    if (!NAMED.includes(row.store)) { Object.assign(row, { status: 'skipped', detail: `the ${row.store} store is not named by ${renamed ? 'namespace' : 'vault'}` }); return; }
     try {
       const old = absent(() => read(sourceStores));
-      if (old === null || old === undefined) { Object.assign(row, { status: 'skipped', detail: `nothing stored under ${names.from}` }); return; }
+      if (old === null || old === undefined) { Object.assign(row, { status: 'skipped', detail: `nothing stored under ${source}` }); return; }
       const current = absent(() => read(stores));
       if (current !== null && current !== undefined) {
         Object.assign(row, equal(current, old) ? { status: 'already-migrated' }
-          : { status: 'failed', detail: `${names.to} already holds a different value; nothing was overwritten` });
+          : { status: 'failed', detail: 'the new name already holds a different value; nothing was overwritten' });
         return;
       }
       if (options.dryRun) { Object.assign(row, { status: 'would-migrate' }); return; }
       await check(old);
       writeTo(stores, old);
       if (!equal(absent(() => read(stores)), old)) throw new Error('readback');
-      Object.assign(row, { status: 'migrated', detail: `the ${names.from} copy was kept` });
+      Object.assign(row, { status: 'migrated', detail: `the ${source} copy was kept` });
     } catch {
       // Neither provider nor verifier errors may reflect the credential.
-      Object.assign(row, { status: 'failed', detail: `could not verify, copy or read back the credential; the ${names.from} copy was kept` });
+      Object.assign(row, { status: 'failed', detail: `could not verify, copy or read back the credential; the ${source} copy was kept` });
     }
   };
-  const title = (item) => itemTitle(item);
+  // A pass-cli note moving vaults keeps its title, so its vault is named.
+  const title = (item, store, vault) => (moved && store === 'pass-cli' ? `${vault}/${itemTitle(item)}` : itemTitle(item));
   const results = [];
   for (const soul of souls) {
     let soulDir;
@@ -398,10 +416,10 @@ async function migrateFromNamespace(souls, { file, env, home, platform, stores, 
     }
     if (declaration) {
       const target = { agentId: soul.id, soulDir, declaration };
-      const row = { kind: 'github-app', agentId: soul.id, name: soul.name ?? null, app: declaration.app,
-        store: declaration.store ?? defaultCredentialStore(platform),
-        from: title(soulAppItem(soul.id, declaration.app, { namespace: names.from })),
-        to: title(soulAppItem(soul.id, declaration.app, { namespace: names.to })), status: null, detail: null };
+      const store = declaration.store ?? defaultCredentialStore(platform);
+      const row = { kind: 'github-app', agentId: soul.id, name: soul.name ?? null, app: declaration.app, store,
+        from: title(soulAppItem(soul.id, declaration.app, { namespace: names.from }), store, names.fromVault),
+        to: title(soulAppItem(soul.id, declaration.app, { namespace: names.to }), store, names.vault), status: null, detail: null };
       results.push(row);
       await copy(row, {
         read: (set) => readSoulCredential(target, { stores: set, platform }),
@@ -411,10 +429,10 @@ async function migrateFromNamespace(souls, { file, env, home, platform, stores, 
     }
     for (const [secret, secretDeclaration] of Object.entries(secrets)) {
       const target = { agentId: soul.id, soulDir, name: secret, declaration: secretDeclaration };
-      const row = { kind: 'secret', agentId: soul.id, name: soul.name ?? null, secret,
-        store: secretDeclaration.store ?? defaultCredentialStore(platform),
-        from: title(soulSecretItem(soul.id, secret, { namespace: names.from })),
-        to: title(soulSecretItem(soul.id, secret, { namespace: names.to })), status: null, detail: null };
+      const store = secretDeclaration.store ?? defaultCredentialStore(platform);
+      const row = { kind: 'secret', agentId: soul.id, name: soul.name ?? null, secret, store,
+        from: title(soulSecretItem(soul.id, secret, { namespace: names.from }), store, names.fromVault),
+        to: title(soulSecretItem(soul.id, secret, { namespace: names.to }), store, names.vault), status: null, detail: null };
       results.push(row);
       await copy(row, {
         read: (set) => readSoulSecret(target, { stores: set, platform }),
@@ -430,7 +448,8 @@ async function migrateFromNamespace(souls, { file, env, home, platform, stores, 
     for (const [slug, declaration] of Object.entries(config.identityApps ?? {})) {
       if (!declaration?.store) continue;
       const row = { kind: 'managed-app', app: slug, store: declaration.store,
-        from: title(managedAppItem(slug, { namespace: names.from })), to: title(managedAppItem(slug, { namespace: names.to })),
+        from: title(managedAppItem(slug, { namespace: names.from }), declaration.store, names.fromVault),
+        to: title(managedAppItem(slug, { namespace: names.to }), declaration.store, names.vault),
         status: null, detail: null };
       apps.push(row);
       const target = appStoreTarget(slug, { env, home });
@@ -445,17 +464,18 @@ async function migrateFromNamespace(souls, { file, env, home, platform, stores, 
     for (const row of [...results, ...apps].filter((entry) => entry.status === 'migrated' || entry.status === 'failed')) {
       appendAuditReceipt({ event: 'credential-migrate', agentId: row.agentId ?? null,
         operation: `${row.kind} ${row.store} namespace-copy`, decision: row.status,
-        detail: `namespace ${names.from} -> ${names.to}`, ...(row.app ? { appSlug: row.app } : {}) }, { env, home, now });
+        detail: changed, ...(row.app ? { appSlug: row.app } : {}) }, { env, home, now });
     }
   }
-  const report = { schemaVersion: 1, dryRun: options.dryRun, fromNamespace: names.from, namespace: names.to, souls: results, apps, deleted: [] };
+  const report = { schemaVersion: 1, dryRun: options.dryRun, fromNamespace: names.from, namespace: names.to,
+    fromVault: names.fromVault, vault: names.vault, souls: results, apps, deleted: [] };
   if (options.json) write(`${JSON.stringify(report)}\n`);
   else {
     for (const row of [...results, ...apps]) {
       const subject = row.kind === 'managed-app' ? row.app : `${row.agentId} ${row.kind === 'secret' ? `secret ${row.secret}` : row.app ?? '-'}`;
       write(`${subject} ${row.store ?? '-'} ${row.status}${row.from ? ` (${row.from} -> ${row.to})` : ''}${row.detail ? ` (${row.detail})` : ''}\n`);
     }
-    write(`nothing was deleted; the ${names.from} items stay until the owner removes them\n`);
+    write(`nothing was deleted; the ${source} items stay until the owner removes them\n`);
   }
   return report;
 }

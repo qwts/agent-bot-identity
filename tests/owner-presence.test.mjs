@@ -342,6 +342,10 @@ test('prompts name the soul by name and Agent ID, and the change', () => {
     "copy every soul's credentials from the agent-bot credential names to this host's");
   assert.equal(say(`identity migrate-credentials ${ID} --from-namespace agent-bot`),
     `copy the credentials of ${bill} from the agent-bot credential names to this host's`);
+  assert.equal(say('identity migrate-credentials --all --from-vault Old Vault'),
+    "copy every soul's credentials from the Old Vault pass-cli vault to this host's");
+  assert.equal(say(`identity migrate-credentials ${ID} --from-namespace old.host --from-vault Old Vault`),
+    `copy the credentials of ${bill} from the old.host credential names and the Old Vault pass-cli vault to this host's`);
   assert.equal(say(`soul remove ${ID}`), `remove ${bill} from this Mac (its folders are archived, not deleted)`);
   assert.equal(say(`soul remove ${ID} --scope team`), `remove ${bill} and every soul it leads from this Mac (their folders are archived, not deleted)`);
   const digest = 'ab'.repeat(32);
