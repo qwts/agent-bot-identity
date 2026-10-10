@@ -281,7 +281,7 @@ test('--check --json reports every harness and never leaves a primitive unreport
   assert.deepEqual(report.merged, []);
   assert.deepEqual(report.harnesses.claude, {
     rendered: ['instructions', 'mcp'], files: ['.mcp.json', 'CLAUDE.md'],
-    subagents: { received: [], rendered: [] }, commands: { received: [], rendered: [] },
+    subagents: { received: [], rendered: [] }, commands: { received: [], rendered: [] }, duplicates: { commands: [] },
     settings: { received: [], rendered: [] }, hooks: { received: [], rendered: [] },
     unsupported: { subagents: [], commands: [], settings: [], permissions: [], hooks: [] },
   });
