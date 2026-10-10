@@ -166,9 +166,9 @@ test('the new files build, rebuild byte for byte, and leave the revision alone',
   rmSync(join(root, 'agents'), { recursive: true });
   reseal(root);
   assert.deepEqual(buildSoulDirectory(root, { check: true }).removals.filter((path) => /agents?\//.test(path)),
-    ['.claude/agents/review.md', '.cursor/agents/review.md', '.devin/agents/review.md', '.github/agents/review.agent.md', '.kiro/agents/review.md', '.opencode/agent/review.md']);
+    ['.claude/agents/review.md', '.cursor/agents/review.md', '.devin/agents/review.md', '.github/agents/review.agent.md', '.kiro/agents/review.md', '.opencode/agent/review.md', '.qwen/agents/review.md']);
   buildSoulDirectory(root);
-  for (const folder of ['.github/agents', '.kiro/agents', '.cursor/agents', '.devin']) assert.equal(existsSync(join(root, folder)), false, folder);
+  for (const folder of ['.github/agents', '.kiro/agents', '.cursor/agents', '.devin', '.qwen/agents']) assert.equal(existsSync(join(root, folder)), false, folder);
   assert.ok(existsSync(join(root, '.kiro/settings/mcp.json')), 'the MCP file stays');
 });
 
@@ -197,9 +197,9 @@ test('a soul\'s other files in .github/ and .kiro/ stay its own', (t) => {
 
 test('the ignore list only grows by the adapters\' paths; every list before it still validates and builds', (t) => {
   // #247 appended Qwen Code's settings file after this slice's list, then
-  // the Qwen commands slice appended its commands folder.
-  const adapters = PRIOR_PACKAGE_IGNORE_LISTS[1].generatedPaths;
-  const prior = PRIOR_PACKAGE_IGNORE_LISTS[2].generatedPaths;
+  // the Qwen commands and agents slices appended their folders.
+  const adapters = PRIOR_PACKAGE_IGNORE_LISTS[2].generatedPaths;
+  const prior = PRIOR_PACKAGE_IGNORE_LISTS[3].generatedPaths;
   assert.deepEqual(PACKAGE_IGNORE_LIST.generatedPaths.slice(0, adapters.length), adapters);
   assert.deepEqual(adapters.slice(0, prior.length), prior);
   assert.deepEqual(adapters.slice(prior.length), ['.github/agents/', '.kiro/agents/', '.kiro/settings/mcp.json']);

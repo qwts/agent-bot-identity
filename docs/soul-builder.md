@@ -31,8 +31,8 @@ importing the disk/CLI layer. `.mcp.json` and `opencode.json` joined the list in
 the `.codex/` and `.gemini/` prefixes. The harness adapters slice appended
 `.github/agents/`, `.kiro/agents/` and `.kiro/settings/mcp.json` (Cursor's and
 Devin's files sit under the existing `.cursor/` and `.devin/` prefixes), and
-#247 appended `.qwen/settings.json`, and the Qwen commands slice (#378) appended
-`.qwen/commands/`.
+#247 appended `.qwen/settings.json`, and the Qwen commands and agents slices
+(#378) appended `.qwen/commands/` and then `.qwen/agents/`.
 
 ## Harness output
 
@@ -51,7 +51,7 @@ A native consumer receives no duplicate configuration folder.
 | Devin CLI | Claude-compatible consumer | Shared Claude skills; `.devin/` only for agents | Shared `.mcp.json` | `.devin/agents/<name>.md` | Shared `.claude/commands/<name>.md` (imported as skills) | Shared `.claude/settings.json` |
 | Muse | No verified definition adapter in this repo | No dedicated output; follow-up | None yet | Unsupported | Unsupported | Unsupported |
 | Kiro | Native `AGENTS.md` | Uses shared `.claude/skills/` | `.kiro/settings/mcp.json` | `.kiro/agents/<name>.md` | Unsupported (format undocumented) | Unsupported |
-| Qwen Code | Native `AGENTS.md` | None yet (`.qwen/skills/`) | `.qwen/settings.json` | None yet (`.qwen/agents/`) | `.qwen/commands/<name>.md` | Unsupported |
+| Qwen Code | Native `AGENTS.md` | None yet (`.qwen/skills/`) | `.qwen/settings.json` | `.qwen/agents/<name>.md` | `.qwen/commands/<name>.md` | Unsupported |
 
 "None yet" and "Unsupported" describe adapters in this slice, not a claim
 that a harness lacks the capability. Subagents and commands without adapters
@@ -124,8 +124,8 @@ Adapter evidence (official docs read 2026-10-07):
   project scope `.qwen/settings.json` with `mcpServers`, the same stdio
   `command`/`args` entry; [memory](https://github.com/QwenLM/qwen-code/blob/main/docs/users/features/memory.md) —
   reads `QWEN.md` and an existing `AGENTS.md`. Its project skills
-  (`.qwen/skills/`) and agents (`.qwen/agents/`) are documented but not
-  rendered yet (#247 is MCP only). The settings file
+  (`.qwen/skills/`) are documented but not rendered yet; Qwen also installs
+  and curates its own skills there. The settings file
   also carries the soul's own Qwen settings, so only `mcpServers.agent-reach` is
   the builder's and every other key is merged through. Checked with Qwen Code
   0.25.0: `qwen mcp list` in a directory holding the rendered file, `_comment`
@@ -142,6 +142,13 @@ Adapter evidence (official docs read 2026-10-07):
   rendered `description`, and a file without front matter is all prompt, so
   the marker line on a description-less command becomes part of the prompt,
   as it does for the other Markdown command targets.
+  [Subagents](https://github.com/QwenLM/qwen-code/blob/main/docs/users/features/sub-agents.md)
+  (#378) are Markdown in `.qwen/agents/<name>.md` with `name`, `description`,
+  optional `tools` and `model`, and the body as the system prompt; see the
+  subagent table below. Checked against the Qwen Code 0.25.0 loader: its
+  pattern `^---\n([\s\S]*?)\n---\n([\s\S]*)$` reads the rendered front matter,
+  an absent or empty `tools` inherits every tool, and declared tools resolve
+  by exact registry name.
 
 **Unverified:** Cursor and Kiro were not run (both CLIs need a sign-in), so
 whether they tolerate the leading `_comment` marker key in `.cursor/mcp.json` and
@@ -222,7 +229,7 @@ translated YAML constructs, and malformed front matter fail the build. Other
 Claude-specific fields remain in Claude's copy; they are not translated.
 These adapters remain dependency-free and do not implement general YAML.
 
-### Native subagent files for Cursor, Copilot CLI, Kiro and Devin CLI
+### Native subagent files for Cursor, Copilot CLI, Kiro, Devin CLI and Qwen Code
 
 Each receives `name`, `description` and, when declared, `model` (verbatim) as
 JSON-quoted YAML strings, then the marker and the prompt. Only `tools` differs:
@@ -233,8 +240,10 @@ JSON-quoted YAML strings, then the marker and the prompt. Only `tools` differs:
 | Copilot CLI | `tools:` the Claude names verbatim (documented aliases; unknown names are ignored, which narrows) | Omitted (all tools) |
 | Kiro | `tools:` category tags: `Read`/`Grep`/`Glob`/`LS`/`NotebookRead` → `read`, `Edit`/`MultiEdit`/`Write`/`NotebookEdit` → `write`, `Bash` → `shell`, `WebFetch`/`WebSearch` → `web`, `Task` → `subagent`, `TodoWrite` → `todo_list`; MCP `mcp__<server>__<tool>` → exact `@server/tool`, with `includeMcpJson: true` | `tools: ["*"]` (the default is undocumented) |
 | Devin CLI | `allowed-tools:` `Read` → `read`, `Edit`/`MultiEdit`/`Write` → `edit` (Devin has no `write` tool; `edit` covers file writes), `Grep` → `grep`, `Glob` → `glob`, `Bash` → `exec`; an MCP tool `mcp__<server>__<tool>` keeps its exact name | Omitted (all tools) |
+| Qwen Code | `tools:` Qwen's tool names, as its own Claude-agent converter maps them: `Read` → `read_file`, `Write` → `write_file`, `Edit`/`MultiEdit` → `edit`, `Grep` → `grep_search`, `Glob` → `glob`, `LS` → `list_directory`, `Bash` → `run_shell_command`, `WebFetch` → `web_fetch`, `WebSearch` → `web_search`, `NotebookEdit` → `notebook_edit`, `Skill` → `skill`; an MCP tool keeps its exact `mcp__<server>__<tool>` name up to 63 characters. Tools Qwen withholds from subagents (`Task`, `TodoWrite`, `AskUserQuestion`, `ExitPlanMode`) and an empty list, which Qwen reads as every tool, are unsupported | Omitted (all tools) |
 
-A declared tool Kiro or Devin cannot name (for example `WebFetch` for Devin)
+A declared tool Kiro, Devin or Qwen Code cannot name (for example `WebFetch`
+for Devin, or `BashOutput`, which Qwen's own converter drops, for Qwen)
 means that subagent is not rendered for that harness and is listed under its
 `unsupported.subagents`, never widened or cut down. Kiro spells a declared MCP
 tool as the exact `@server/tool` selector. When such a tool is listed, the
@@ -252,6 +261,12 @@ Kiro's built-in tags are categories, so `Read` grants Kiro's whole read
 category (reading, listing, searching). Devin labels custom subagents
 experimental, and none of these Devin files was verified in a live Devin
 session. Kiro marker tolerance also remains unverified in a signed-in session.
+Qwen Code also refuses agent names shorter than 2 or longer than 50
+characters and the reserved names `self`, `system`, `user`, `model`, `tool`,
+`config`, `default` and `main`, and renames an MCP tool longer than 63
+characters with a hash, so those subagents are unsupported there too. Qwen
+passes `model` to its configured providers, so a Claude model alias only works
+there if a provider serves it; no live Qwen subagent run was checked.
 Devin's subagents default to its subagent model rather than the parent's when
 `model` is omitted. Cursor and Copilot CLI also read the Claude copy in
 `.claude/agents/`; the native file has the same name and wins.
@@ -704,9 +719,9 @@ daemon's stderr and the launch proceeds. A format-2 soul carrying an ignore list
 an earlier release wrote (before `.mcp.json` and `opencode.json`, 0.10.25,
 before Copilot's soul hook file, or before the adapters slice's
 `.github/agents/`, `.kiro/agents/` and `.kiro/settings/mcp.json`, or before
-#247's `.qwen/settings.json`, or before `.qwen/commands/`) still validates; only an unknown list is refused. The list names only those folders,
+#247's `.qwen/settings.json`, or before `.qwen/commands/` or `.qwen/agents/`) still validates; only an unknown list is refused. The list names only those folders,
 so a soul's other files in `.github/`, `.kiro/` or `.qwen/` (workflows,
-steering, Qwen skills) stay its own; files it authors in `.github/agents/`, `.kiro/agents/` or `.qwen/commands/` are kept on
+steering, Qwen skills) stay its own; files it authors in `.github/agents/`, `.kiro/agents/`, `.qwen/commands/` or `.qwen/agents/` are kept on
 build, but, like `.claude/`, are not copied out of a template.
 
 Format 2 ignores only exact expected bytes. Editing a marked generated file
@@ -728,7 +743,7 @@ and for Gemini CLI (until `.gemini/agents/` is documented as stable); commands
 for Codex, Cursor (replaced by skills) and Kiro (`.kiro/prompts/` file format
 undocumented); hooks for Gemini CLI, OpenCode (plugins), Muse and Kiro; and a
 signed-in check that Cursor and Kiro accept the `_comment` marker key. Qwen Code
-skills and subagents also remain unsupported.
+skills also remain unsupported.
 
 The renderer, injected entry and `reachPolicyRules()` now share the
 `agent-reach` name through `reach-contract.mjs`. Rebuilds remove the old
