@@ -212,7 +212,7 @@ test behind each invariant, is in [keyd protocol](keyd-protocol.md).
 
 ```sh
 agent-bot keyd install --bin PATH [--json]   # GeniusBar runs this at setup
-agent-bot keyd status [--json]
+agent-bot keyd status [--json]              # and whether keyd is the pinned version (#767)
 agent-bot keyd uninstall [--json]            # the Keychain items stay
 ```
 

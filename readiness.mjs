@@ -28,6 +28,7 @@ import { inspectClaudeWorktreeAdapter } from './sync-hooks.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
 import { daemonStatus } from './agent-daemon.mjs';
+import { keydStatus, keydVersionAction } from './keyd-client.mjs';
 import { readBindToken, readBinding } from './agent-binding.mjs';
 import { readAgentIdentity, stateDirectory } from './agent-identity.mjs';
 import { readSopPolicyState } from './sop.mjs';
@@ -429,6 +430,39 @@ async function daemonHealthCheck({ home, env, probe, skipLoad }) {
     message: 'identity daemon is not running',
     action: 'run: agent-bot install',
     evidence: { running: false },
+  });
+}
+
+// keyd against the version this release pins (#767). Only a keyd that is
+// installed or answering is checked; without one, keys stay in the #395 stores.
+export async function keydVersionCheck({ home, env, probe = keydStatus }) {
+  const status = await probe({ home, env });
+  const evidence = { running: status.running, bin: status.bin, version: status.version, expected_version: status.expectedVersion };
+  if (!status.running && !status.bin) {
+    return readinessCheck({ id: 'keyd.version', status: 'not_applicable', message: 'agent-bot-keyd is not installed', evidence });
+  }
+  if (!status.running) {
+    return readinessCheck({
+      id: 'keyd.version',
+      status: 'warning',
+      code: 'keyd-not-running',
+      message: 'agent-bot-keyd is installed but did not answer, so its version is unknown',
+      action: `run: agent-bot keyd install --bin ${status.bin}`,
+      evidence,
+    });
+  }
+  if (status.versionMatches === true) {
+    return readinessCheck({ id: 'keyd.version', status: 'ready', message: `agent-bot-keyd ${status.version} is the pinned version`, evidence });
+  }
+  return readinessCheck({
+    id: 'keyd.version',
+    status: 'warning',
+    code: 'keyd-version-mismatch',
+    message: status.version === null
+      ? `agent-bot-keyd did not report a version; this agent-bot is pinned to ${status.expectedVersion}`
+      : `agent-bot-keyd ${status.version} is running; this agent-bot is pinned to ${status.expectedVersion}`,
+    action: keydVersionAction(status),
+    evidence,
   });
 }
 
@@ -2435,6 +2469,7 @@ export async function collectReadiness({
   inspectShellGh = inspectShellGhShim,
   inspectCodexDesktopGh = inspectConfiguredCodexDesktopGh,
   probeDaemon = daemonStatus,
+  probeKeyd = keydStatus,
   isSoulBoundImpl = isSoulBound,
   readBindingImpl = readBinding,
   probeSecretStore = defaultProbeSecretStore,
@@ -2550,6 +2585,7 @@ export async function collectReadiness({
       skipLoad: supervisorSkipLoad(serviceEnv),
     });
     machineChecks.push(app ? appServiceAction(daemonHealth, app) : daemonHealth);
+    machineChecks.push(await keydVersionCheck({ home, env, probe: probeKeyd }));
     machineChecks.push(spacesRootCheck({ home, env, config }));
     machineChecks.push(sopPolicyCheck({ home, env }));
     machineChecks.push(spacesHomeCheck({ home, env, config, inspectCutover }));

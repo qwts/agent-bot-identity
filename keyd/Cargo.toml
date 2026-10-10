@@ -1,6 +1,6 @@
 [package]
 name = "agent-bot-keyd"
-version = "0.1.0"
+version = "0.2.0"
 description = "Holds each soul's GitHub App key in the Keychain and serves short-lived tokens over MCP (agent-bot-identity #397)"
 edition = "2021"
 publish = false
