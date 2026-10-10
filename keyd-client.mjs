@@ -188,6 +188,12 @@ export async function importAppIntoKeyd(items, { env = process.env, home = homed
   }, { timeoutMs: OWNER_TIMEOUT_MS });
 }
 
+// Deletes `app`'s App-level key; keyd asks the owner first. `{ removed }`
+// says whether it held one.
+export async function removeAppFromKeyd(app, { env = process.env, home = homedir(), request = keydRequest } = {}) {
+  return request(keydPaths({ env, home }).ownerSocket, 'owner/app-remove', { app }, { timeoutMs: OWNER_TIMEOUT_MS });
+}
+
 // A keyd from before #110 answers the App-level methods with this.
 export const KEYD_METHOD_NOT_FOUND = -32601;
 

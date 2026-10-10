@@ -34,7 +34,7 @@ function fixture(t, { gate = true, platform = 'linux' } = {}) {
   const keyFile = path.join(home, 'incoming.pem'); writeFileSync(keyFile, KEY, { mode: 0o600 });
   const newKeyFile = path.join(home, 'new.pem'); writeFileSync(newKeyFile, NEW_KEY, { mode: 0o600 });
   // A fake keyd (#110) that is not there: no test here reaches a socket.
-  const keyd = { availability: async () => ({ available: false, reason: 'agent-bot-keyd is not installed' }), importApp: async () => assert.fail('keyd is not there') };
+  const keyd = { availability: async () => ({ available: false, reason: 'agent-bot-keyd is not installed' }), importApp: async () => assert.fail('keyd is not there'), removeApp: async () => assert.fail('keyd is not there') };
   const options = { env, home, cwd: home, platform, gate: async () => ({ method: 'test' }), stores: credentialStores({ env }), souls: identityAppSouls, keyd };
   t.after(() => rmSync(home, { recursive: true, force: true }));
   return { env, home, keyFile, newKeyFile, options };
@@ -533,12 +533,14 @@ test('daemon remove and addon routes need the bearer and the owner, and return p
 // App-level keys in agent-bot-keyd (#110 slice 2). `keyd` is a fake of the
 // owner channel: availability (status, pin, owner/app-status) and
 // owner/app-import. No test reaches a real keyd or daemon.
-function fakeKeyd({ available = true, held = false, reason = 'agent-bot-keyd is not running', importError = null } = {}) {
-  const imports = [];
+function fakeKeyd({ available = true, held = false, reason = 'agent-bot-keyd is not running', importError = null, removeError = null } = {}) {
+  const imports = [], removals = [];
   return {
-    imports,
-    availability: async (app) => { assert.equal(app, 'fixture-app'); return available ? { available: true, held } : { available: false, reason }; },
+    imports, removals,
+    // Holds what it imported, or `held` before any import.
+    availability: async (app) => { assert.equal(app, 'fixture-app'); return available ? { available: true, held: held || imports.length > removals.length } : { available: false, reason }; },
     importApp: async (items) => { if (importError) throw importError; imports.push(items); return { stored: items.length, pinned: false }; },
+    removeApp: async (app) => { if (removeError) throw removeError; removals.push(app); return { removed: true }; },
   };
 }
 const fileItem = (f) => path.join(appStoreTarget('fixture-app', f.options).soulDir, '.soul-state/credentials/github-app-fixture-app.json');
@@ -562,8 +564,6 @@ test('with keyd verified, connect keeps the key in keyd, records store keyd, and
     'doctor does not call a keyd-held App unreadable');
   await assert.rejects(connect(f), { code: 'identity-app-exists' });
   assert.equal(keyd.imports.length, 1, 'a second connect never writes over the keyd key');
-  await assert.rejects(identityAppOperation('remove', { slug: 'fixture-app' }, f.options), { code: 'identity-app-keyd-held' });
-  assert.equal(loadConfig(f.options).identityApps['fixture-app'].store, 'keyd');
 });
 test('with keyd not verified, connect uses the file or Keychain store and says why', async (t) => {
   for (const reason of ['agent-bot-keyd is not running', "agent-bot-keyd has not pinned this daemon's key yet"]) {
@@ -631,7 +631,7 @@ test('create keeps the one-time key in keyd when verified, and never loses it to
     return { f, result: await flow.completion };
   };
   const kept = await run(fakeKeyd()); noSecrets(kept.result);
-  assert.equal(kept.result.store, 'keyd'); assert.equal(kept.result.webhookSecretKept, false);
+  assert.equal(kept.result.store, 'keyd'); assert.equal(kept.result.webhookSecretKept, true);
   const refused = await run(fakeKeyd({ importError: Object.assign(new Error('the owner declined'), { rpcCode: -32000 }) }));
   assert.equal(refused.result.store, 'file');
   assert.match(refused.result.storeReason, /owner declined\); the key is kept in the file store instead/);
@@ -659,4 +659,85 @@ test('readers that cannot mint through keyd fail closed on a keyd-held App', asy
   assert.throws(() => readManagedAppCredential('fixture-app', f.options), { code: 'managed-app-keyd-held' });
   const { ensurePrivateKey } = await import('../ensure-private-key.mjs');
   assert.throws(() => ensurePrivateKey({ slug: 'fixture-app', home: f.home, env: f.env, stores: f.options.stores }), (error) => error.code === 'keyd-held');
+});
+
+// #110 slice 3: a keyd-held App's webhook secret, and removing keyd-held and
+// orphaned App keys. Still fakes only.
+async function createInto(t, keyd, platform = 'linux') {
+  const f = fixture(t, { platform }); await github(t, f);
+  f.options.keyd = keyd;
+  const flow = await identityAppOperation('create', { manifest: true }, f.options);
+  t.after(flow.cancel);
+  const { manifest, state } = await page(flow);
+  assert.equal((await callback(manifest, state)).status, 200);
+  return { f, result: await flow.completion };
+}
+const webhookFile = (f) => path.join(appStoreTarget('fixture-app', f.options).soulDir, '.soul-state/credentials/github-app-fixture-app.webhook.json');
+const webhookTarget = (f) => ({ ...appStoreTarget('fixture-app', f.options), name: 'webhook' });
+for (const platform of ['linux', 'darwin']) test(`create into keyd keeps the webhook secret in its own ${platform === 'darwin' ? 'Keychain item' : 'file'}, and no key item is written`, async (t) => {
+  const keyd = fakeKeyd();
+  const { f, result } = await createInto(t, keyd, platform); noSecrets(result);
+  assert.deepEqual([result.store, result.webhookSecretKept], ['keyd', true]);
+  assert.equal(keyd.imports.length, 1);
+  const kind = platform === 'darwin' ? 'keychain' : 'file';
+  const store = f.options.stores[kind];
+  assert.equal(store.readSecret(webhookTarget(f)), 'fixture-webhook-value');
+  assert.equal(store.read(appStoreTarget('fixture-app', f.options)), null, 'no key item: keyd holds the key');
+  if (platform === 'darwin') {
+    const services = JSON.stringify(JSON.parse(readFileSync(f.env.FAKE_KEYCHAIN, 'utf8')));
+    assert.match(services, /agent-bot\.app\.fixture-app\.webhook/);
+  } else assert.equal(existsSync(webhookFile(f)), true);
+  assert.equal(loadConfig(f.options).identityApps['fixture-app'].store, 'keyd');
+  assert.throws(() => readManagedAppCredential('fixture-app', f.options), { code: 'managed-app-keyd-held' });
+  // Rotating in keyd leaves the webhook secret where it is.
+  await identityAppOperation('rotate-key', { slug: 'fixture-app', keyFile: f.newKeyFile }, f.options);
+  assert.equal(store.readSecret(webhookTarget(f)), 'fixture-webhook-value');
+});
+test('remove sends owner/app-remove for a keyd-held App, then drops its webhook secret and record', async (t) => {
+  const keyd = fakeKeyd();
+  const { f } = await createInto(t, keyd);
+  const result = await identityAppOperation('remove', { slug: 'fixture-app' }, f.options); noSecrets(result);
+  assert.deepEqual(result, { slug: 'fixture-app', id: '123', removed: { storeItem: null, configRecord: true, keydKey: true, webhookSecretItem: { store: 'file', name: webhookFile(f), existed: true } } });
+  assert.deepEqual(keyd.removals, ['fixture-app']);
+  assert.equal(existsSync(webhookFile(f)), false);
+  assert.equal(existsSync(appStoreTarget('fixture-app', f.options).soulDir), false, 'empty App store directories are removed');
+  assert.equal(loadConfig(f.options).identityApps, undefined);
+  // A key keyd no longer holds leaves only the record to drop.
+  const gone = fixture(t); await github(t, gone);
+  const lost = gone.options.keyd = fakeKeyd(); await connect(gone);
+  lost.removals.push('fixture-app');
+  const dropped = await identityAppOperation('remove', { slug: 'fixture-app' }, gone.options);
+  assert.equal(dropped.removed.keydKey, false); assert.equal(dropped.removed.configRecord, true);
+  assert.equal(dropped.removed.webhookSecretItem.existed, false);
+  assert.equal(lost.removals.length, 1, 'keyd was not asked to remove a key it does not hold');
+});
+test('removing a keyd-held App removes nothing when keyd is unavailable, older than #110 or refuses', async (t) => {
+  const f = fixture(t); await github(t, f);
+  const keyd = f.options.keyd = fakeKeyd(); await connect(f);
+  const remove = () => identityAppOperation('remove', { slug: 'fixture-app' }, f.options);
+  for (const [fake, code] of [
+    [fakeKeyd({ available: false }), 'identity-app-keyd-unavailable'],
+    [{ ...keyd, removeApp: async () => { throw Object.assign(new Error('method not found'), { rpcCode: -32601 }); } }, 'identity-app-keyd-unavailable'],
+    [{ ...keyd, removeApp: async () => { throw Object.assign(new Error('the owner declined'), { rpcCode: -32000 }); } }, 'identity-app-keyd-refused'],
+  ]) {
+    f.options.keyd = fake;
+    await assert.rejects(remove(), (error) => error.code === code && /nothing was removed/.test(error.message));
+    assert.equal(loadConfig(f.options).identityApps['fixture-app'].store, 'keyd');
+  }
+  assert.equal(keyd.removals.length, 0);
+});
+test('an orphaned keyd key is removed only when named, after the owner gate and keyd\'s prompt, and the result says so', async (t) => {
+  const f = fixture(t);
+  const keyd = f.options.keyd = fakeKeyd({ held: true });
+  const denied = { ...f.options, gate: async () => { throw new Error('declined'); } };
+  await assert.rejects(identityAppOperation('remove', { slug: 'fixture-app' }, denied), { code: 'identity-app-owner-required' });
+  assert.equal(keyd.removals.length, 0, 'no owner, no removal');
+  const result = await identityAppOperation('remove', { slug: 'fixture-app' }, f.options);
+  assert.deepEqual(result, { slug: 'fixture-app', id: null, removed: { storeItem: null, configRecord: false, keydKey: true, orphan: true } });
+  assert.deepEqual(keyd.removals, ['fixture-app']);
+  for (const fake of [fakeKeyd(), fakeKeyd({ available: false })]) {
+    f.options.keyd = fake;
+    await assert.rejects(identityAppOperation('remove', { slug: 'fixture-app' }, f.options), { code: 'identity-app-not-found' });
+    assert.equal(fake.removals.length, 0);
+  }
 });

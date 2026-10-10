@@ -54,7 +54,7 @@ import { appDeclarations, appUsers } from './soul-app-declarations.mjs';
 import { readManagedAppCredential, readAppMetadata } from './identity-app-store.mjs';
 import { loadConfig } from './config.mjs';
 import { createPassCredentialStore } from './secret-providers/pass-cli-credentials.mjs';
-import { CREDENTIAL_STORES, credentialNamespace, itemTitle, managedAppItem, secretNameOrThrow, slugOrThrow, soulAppItem, soulSecretItem } from './credential-names.mjs';
+import { CREDENTIAL_STORES, credentialNamespace, itemTitle, managedAppItem, managedAppWebhookFile, managedAppWebhookItem, secretNameOrThrow, slugOrThrow, soulAppItem, soulSecretItem } from './credential-names.mjs';
 
 const SECURITY = '/usr/bin/security';
 // `security` exits 44 when no item matches.
@@ -102,7 +102,8 @@ export function passCliStore({ env = process.env, cwd = process.cwd(), passRun }
     }
   };
   const item = ({ agentId, slug }) => { ownerOnly(); return passCliItem(agentId, slug, names); };
-  const secret = ({ agentId, name }) => { ownerOnly(); return passCliSecretItem(agentId, name, names); };
+  // An App-scoped secret target is a keyd-held App's webhook secret (#110).
+  const secret = ({ agentId, name, appScoped = false, slug }) => { ownerOnly(); return appScoped ? itemTitle(managedAppWebhookItem(slug, names)) : passCliSecretItem(agentId, name, names); };
   // A missing note is an absent secret, not a failure; every other
   // provider failure stays what it was (redacted).
   const absent = (error) => { if (error?.code === 'missing-item') return null; throw error; };
@@ -183,6 +184,10 @@ export function keychainStore({ env = process.env, run = spawnSync } = {}) {
   const appItem = ({ agentId, slug, appScoped = false }) => (appScoped
     ? managedAppItem(slug, names)
     : keychainItem(agentId, slug, names));
+  // An App-scoped secret target is a keyd-held App's webhook secret (#110).
+  const secretTarget = ({ agentId, name, appScoped = false, slug }) => (appScoped
+    ? managedAppWebhookItem(slug, names)
+    : secretItem(agentId, name, names));
   return {
     kind: 'keychain',
     read(target) {
@@ -191,12 +196,12 @@ export function keychainStore({ env = process.env, run = spawnSync } = {}) {
     },
     write(target, credential) { add(appItem(target), encode(credential)); },
     delete(target) { return remove(appItem(target)); },
-    readSecret({ agentId, name }) {
-      const stored = find(secretItem(agentId, name, names));
+    readSecret(target) {
+      const stored = find(secretTarget(target));
       return stored === null ? null : decodeSecret(stored);
     },
-    writeSecret({ agentId, name }, value) { add(secretItem(agentId, name, names), encodeSecret(value)); },
-    deleteSecret({ agentId, name }) { return remove(secretItem(agentId, name, names)); },
+    writeSecret(target, value) { add(secretTarget(target), encodeSecret(value)); },
+    deleteSecret(target) { return remove(secretTarget(target)); },
   };
 }
 
@@ -212,7 +217,8 @@ export function fileStore({ platform = process.platform, uid, run = spawnSync } 
   if (platform === 'win32') return dpapiFileStore({ run });
   uid ??= process.getuid();
   const fileFor = (soulDir, slug) => path.join(credentialsDirectory(soulDir), `github-app-${slugOrThrow(slug)}.json`);
-  const secretFor = (soulDir, name) => path.join(credentialsDirectory(soulDir), `secret-${secretNameOrThrow(name)}.json`);
+  // An App-scoped secret target is a keyd-held App's webhook secret (#110).
+  const secretFor = (soulDir, name, { appScoped = false, slug } = {}) => path.join(credentialsDirectory(soulDir), appScoped ? managedAppWebhookFile(slug) : `secret-${secretNameOrThrow(name)}.json`);
   const readPrivate = (soulDir, target) => {
     const directory = credentialsDirectory(soulDir);
     let stat;
@@ -259,12 +265,12 @@ export function fileStore({ platform = process.platform, uid, run = spawnSync } 
     },
     write({ soulDir, slug }, credential) { writePrivate(soulDir, fileFor(soulDir, slug), encode(credential)); },
     delete({ soulDir, slug }) { return unlink(fileFor(soulDir, slug)); },
-    readSecret({ soulDir, name }) {
-      const text = readPrivate(soulDir, secretFor(soulDir, name));
+    readSecret(target) {
+      const text = readPrivate(target.soulDir, secretFor(target.soulDir, target.name, target));
       return text === null ? null : decodeSecret(text);
     },
-    writeSecret({ soulDir, name }, value) { writePrivate(soulDir, secretFor(soulDir, name), `${encodeSecret(value)}\n`); },
-    deleteSecret({ soulDir, name }) { return unlink(secretFor(soulDir, name)); },
+    writeSecret(target, value) { writePrivate(target.soulDir, secretFor(target.soulDir, target.name, target), `${encodeSecret(value)}\n`); },
+    deleteSecret(target) { return unlink(secretFor(target.soulDir, target.name, target)); },
   };
 }
 
@@ -303,7 +309,7 @@ function dpapiFileStore({ run }) {
   ]);
   const powershell = (text) => run(POWERSHELL, POWERSHELL_ARGS, { input: text, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
   const refuse = (code, message) => { throw Object.assign(new Error(message), { code }); };
-  const secretFor = (soulDir, name) => path.join(credentialsDirectory(soulDir), `secret-${secretNameOrThrow(name)}.dpapi`);
+  const secretFor = (soulDir, name, { appScoped = false, slug } = {}) => path.join(credentialsDirectory(soulDir), appScoped ? managedAppWebhookFile(slug, 'dpapi') : `secret-${secretNameOrThrow(name)}.dpapi`);
   // Reads a protected file back to the base64 it was written from, or null.
   const readProtected = (target) => {
     let stored;
@@ -346,12 +352,12 @@ function dpapiFileStore({ run }) {
     },
     write({ soulDir, slug }, credential) { writeProtected(soulDir, fileFor(soulDir, slug), encode(credential)); },
     delete({ soulDir, slug }) { return unlink(fileFor(soulDir, slug)); },
-    readSecret({ soulDir, name }) {
-      const base64 = readProtected(secretFor(soulDir, name));
+    readSecret(target) {
+      const base64 = readProtected(secretFor(target.soulDir, target.name, target));
       return base64 === null ? null : decodeSecret(base64);
     },
-    writeSecret({ soulDir, name }, value) { writeProtected(soulDir, secretFor(soulDir, name), encodeSecret(value)); },
-    deleteSecret({ soulDir, name }) { return unlink(secretFor(soulDir, name)); },
+    writeSecret(target, value) { writeProtected(target.soulDir, secretFor(target.soulDir, target.name, target), encodeSecret(value)); },
+    deleteSecret(target) { return unlink(secretFor(target.soulDir, target.name, target)); },
   };
 }
 

@@ -13,10 +13,10 @@ import { PROFILE_HARNESSES, profileAppSlugs } from './organization-profile.mjs';
 import { assertOwnerAction } from './owner-gate.mjs';
 import { assignAgentApp, readAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
 import { credentialStores, defaultCredentialStore, resolveAppCredential } from './soul-credentials.mjs';
-import { credentialNamespace, itemTitle, managedAppItem } from './credential-names.mjs';
+import { credentialNamespace, itemTitle, managedAppItem, managedAppWebhookFile, managedAppWebhookItem } from './credential-names.mjs';
 import { createProtonPassCredentialProvider, validateIssuer, validatePrivateKey } from './ensure-private-key.mjs';
 import { buildAppJwt, pickInstallation } from './mint-token.mjs';
-import { KEYD_METHOD_NOT_FOUND, appKeydAvailability, importAppIntoKeyd } from './keyd-client.mjs';
+import { KEYD_METHOD_NOT_FOUND, appKeydAvailability, importAppIntoKeyd, removeAppFromKeyd } from './keyd-client.mjs';
 import { MINT_CODES, appStoreTarget, forgetAppDoctorRow, readAppDoctorCache, readAppMetadata, updateAppConfig, validAppSlug, withAppOperationLock } from './identity-app-store.mjs';
 
 export class IdentityAppError extends Error {
@@ -41,6 +41,7 @@ const UNWIRED_SOULS = Object.freeze({ list: unwired, show: unwired, directory: u
 const keydPort = ({ env, home }) => ({
   availability: (app) => appKeydAvailability(app, { env, home }),
   importApp: (items) => importAppIntoKeyd(items, { env, home }),
+  removeApp: (app) => removeAppFromKeyd(app, { env, home }),
 });
 function settings(options) {
   const env = options.env ?? process.env, home = options.home ?? homedir();
@@ -172,6 +173,10 @@ async function importIntoKeydStore(app, credential, placement, options, { oneTim
     fail('identity-app-keyd-refused', `${why}; nothing was changed.`);
   }
 }
+// Where a keyd-held App's webhook secret is kept: the store a new key would
+// fall back to on this platform.
+const webhookSecretStore = (options) => defaultCredentialStore(options.platform);
+const webhookTarget = (app, options) => ({ ...appStoreTarget(app, options), name: 'webhook' });
 async function persist(app, credential, cachedInstallations, options, settings = {}) {
   // The keyd probe, import and record are one step per App (#110).
   const held = await withAppOperationLock(app, options, () => persistLocked(app, credential, cachedInstallations, options, settings));
@@ -220,13 +225,16 @@ async function persistLocked(app, credential, cachedInstallations, options, { re
       }
       options.stores[kind].write(appStoreTarget(app, options), credential);
     }
+    // keyd keeps an App ID and key only (#110), so a manifest's webhook
+    // secret goes to its own item in the file or Keychain store
+    // (`agent-bot.app.SLUG.webhook`). A keyd rotation has no webhook secret
+    // in hand and leaves that item alone.
+    const webhookKept = kind === 'keyd' && Boolean(credential.webhookSecret);
+    if (webhookKept) options.stores[webhookSecretStore(options)].writeSecret(webhookTarget(app, options), credential.webhookSecret);
     config.identityApps ??= {};
     const keyUpdatedAt = (options.now ?? (() => new Date()))().toISOString();
     config.identityApps[app] = { ...previous, ...metadata, id: String(credential.appId), store: kind, keyFingerprint, keyUpdatedAt, installations: cachedInstallations };
-    // keyd keeps an App ID and key only (#110), so a manifest's webhook
-    // secret is not kept with it; create makes the App's webhook inactive.
-    const dropped = kind === 'keyd' && credential.webhookSecret ? { webhookSecretKept: false } : {};
-    return { id: String(credential.appId), slug: app, installUrl: installUrl(app), store: kind, ...(placement.reason ? { storeReason: placement.reason } : {}), ...dropped };
+    return { id: String(credential.appId), slug: app, installUrl: installUrl(app), store: kind, ...(placement.reason ? { storeReason: placement.reason } : {}), ...(webhookKept ? { webhookSecretKept: true } : {}) };
   }, { ...options, rollback: () => rollback?.() });
 }
 // Harness → App mappings as list reports them: explicit `apps` overrides and
@@ -352,6 +360,10 @@ function assign(body, options) {
 // itself and its keys on github.com are untouched, as is any legacy
 // ~/.config/<slug> folder (agent-bot never deletes those). The result names
 // what was removed, never what it held.
+function webhookItemName(app, kind, options) {
+  return kind === 'keychain' ? itemTitle(managedAppWebhookItem(app, { namespace: credentialNamespace(options.env) }))
+    : path.join(appStoreTarget(app, options).soulDir, '.soul-state', 'credentials', managedAppWebhookFile(app));
+}
 function storeItemName(app, kind, options) {
   const target = appStoreTarget(app, options);
   return kind === 'keychain' ? itemTitle(managedAppItem(app, { namespace: credentialNamespace(options.env) }))
@@ -365,8 +377,32 @@ function managedSlug(value, config) {
   const byId = Object.keys(records).filter((app) => records[app]?.id === value);
   return byId.length === 1 ? byId[0] : value;
 }
-function remove(body, options) {
+async function remove(body, options) {
   const app = managedSlug(body.slug, options.config);
+  // keyd asks the owner itself, outside the config lock, so the keyd step
+  // and the record are one step per App, as for create (#110).
+  const held = await withAppOperationLock(app, options, () => removeLocked(app, options));
+  if (!held) fail('identity-app-busy', `Another operation on App ${app} is in progress; retry when it finishes.`);
+  return held.value;
+}
+// Whether keyd answers and holds `app`'s App-level key; a probe that throws
+// reads as unavailable, so a removal stops with nothing removed.
+async function keydProbe(app, options) {
+  let probe;
+  try { probe = await options.keyd.availability(app); }
+  catch { probe = { available: false, reason: 'agent-bot-keyd could not be checked' }; }
+  return probe;
+}
+async function removeFromKeyd(app, options) {
+  try { return (await options.keyd.removeApp(app))?.removed === true; }
+  catch (error) {
+    if (error?.rpcCode === KEYD_METHOD_NOT_FOUND) fail('identity-app-keyd-unavailable', `this agent-bot-keyd predates App-level keys (#110) and cannot remove App ${app}'s key; nothing was removed.`);
+    fail('identity-app-keyd-refused', `agent-bot-keyd did not remove App ${app}'s key (${typeof error?.message === 'string' ? error.message : 'refused'}); nothing was removed.`);
+  }
+}
+async function removeLocked(app, options) {
+  // Re-read under the operation lock: a finished operation changed the record.
+  options = { ...options, config: loadConfig({ env: options.env, home: options.home }) };
   const blockers = (config) => {
     const harnesses = harnessMappings(config).filter((row) => row.slug === app).map((row) => row.harness);
     const souls = options.souls.list(options).filter((soul) => soul.appSlug === app && soul.status !== 'retired').map((soul) => soul.id);
@@ -375,17 +411,46 @@ function remove(body, options) {
       fail('identity-app-assigned', `App ${app} is still assigned to ${named}; assign them another App first.`);
     }
   };
-  if (!options.config.identityApps?.[app]) fail('identity-app-not-found', `App ${app} is not managed on this machine.`, 404);
+  const recorded = options.config.identityApps?.[app];
+  if (!recorded) {
+    // A key keyd holds for an App with no record here (a create whose
+    // record was never written) is removed only by name, after the owner
+    // gate, and keyd asks the owner again; the result says it was.
+    const probe = await keydProbe(app, options);
+    if (!probe.available || !probe.held) fail('identity-app-not-found', `App ${app} is not managed on this machine.`, 404);
+    blockers(options.config);
+    const removed = await removeFromKeyd(app, options);
+    return { slug: app, id: null, removed: { storeItem: null, configRecord: false, keydKey: removed, orphan: true } };
+  }
   blockers(options.config);
+  let keydKey = null;
+  if (recorded.store === 'keyd') {
+    const probe = await keydProbe(app, options);
+    if (!probe.available) fail('identity-app-keyd-unavailable', `App ${app}'s key is held by agent-bot-keyd, which cannot remove it now (${probe.reason}); nothing was removed.`);
+    // A key keyd no longer holds is already gone; only the record is left.
+    keydKey = probe.held ? await removeFromKeyd(app, options) : false;
+  }
   let rollback = null;
   return updateAppConfig((config) => {
     const record = config.identityApps?.[app];
     if (!record) fail('identity-app-not-found', `App ${app} is not managed on this machine.`, 404);
+    if (record.store !== recorded.store) fail('identity-app-conflict', `App ${app} changed; retry removal.`);
     blockers(config);
-    const kind = record.store ?? null;
+    // A keyd-held App has no key item here, only its webhook secret's (#110).
+    let webhook = null;
+    if (record.store === 'keyd') {
+      const store = webhookSecretStore(options), target = webhookTarget(app, options);
+      let before;
+      try { before = options.stores[store].readSecret(target); }
+      catch { fail('identity-app-store', `Could not read App ${app}'s webhook secret; unlock the store and retry. Nothing ${keydKey ? 'else ' : ''}was removed.`); }
+      try { options.stores[store].deleteSecret(target); }
+      catch { fail('identity-app-store', `Could not remove App ${app}'s webhook secret; nothing ${keydKey ? 'else ' : ''}was removed.`); }
+      if (before !== null) rollback = () => options.stores[store].writeSecret(target, before);
+      webhook = { store, name: webhookItemName(app, store, options), existed: before !== null };
+    }
+    const kind = record.store === 'keyd' ? null : record.store ?? null;
     let item = null;
     if (kind) {
-      if (kind === 'keyd') fail('identity-app-keyd-held', `App ${app}'s key is held by agent-bot-keyd; removing an App-level keyd key is not available yet. Nothing was removed.`);
       if (!['file', 'keychain'].includes(kind)) fail('identity-app-store', 'This App uses an unsupported store; nothing was removed.');
       const target = appStoreTarget(app, options);
       let before;
@@ -398,7 +463,7 @@ function remove(body, options) {
     }
     delete config.identityApps[app];
     if (!Object.keys(config.identityApps).length) delete config.identityApps;
-    return { slug: app, id: typeof record.id === 'string' ? record.id : null, removed: { storeItem: item, configRecord: true } };
+    return { slug: app, id: typeof record.id === 'string' ? record.id : null, removed: { storeItem: item, configRecord: true, ...(keydKey === null ? {} : { keydKey, webhookSecretItem: webhook }) } };
   }, { ...options, rollback: () => rollback?.() });
 }
 function finishRemove(result, options) {
@@ -508,7 +573,7 @@ export async function identityAppOperation(action, body = {}, options = {}) {
     if (action === 'create') return await startAppManifest(body, opts);
     if (action === 'connect') return await connect(body, opts);
     if (action === 'rotate-key') return await rotate(body, opts);
-    if (action === 'remove') return finishRemove(remove(body, opts), opts);
+    if (action === 'remove') return finishRemove(await remove(body, opts), opts);
     if (action === 'addon') return setAddon(body, opts);
     return assign(body, opts);
   } catch (error) {

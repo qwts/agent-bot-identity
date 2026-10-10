@@ -14,7 +14,7 @@ import { registerSoulDir, upsertSoul } from '../agent-population.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
 import {
   KEYD_GRANT_META, appKeydAvailability, daemonGrantPublicKey, importAppIntoKeyd, importIntoKeyd, keydMcpServerEntry, keydPaths, keydPolicyRules,
-  keydRequest, keydStatus, mintViaKeyd, readKeydRecord, signKeydGrant,
+  keydRequest, keydStatus, mintViaKeyd, readKeydRecord, removeAppFromKeyd, signKeydGrant,
 } from '../keyd-client.mjs';
 import { installKeyd, uninstallKeyd } from '../keyd-supervisor.mjs';
 import { appConfig, mint } from '../mint-token.mjs';
@@ -470,6 +470,8 @@ test('keyd is verified for App keys only when it runs, is pinned and knows owner
   await importAppIntoKeyd([{ app: SLUG, appId: '12345', privateKeyPem: PEM }], { env, home, request: async (...args) => { calls.push(args); return { stored: 1 }; } });
   assert.deepEqual([calls[0][0], calls[0][1]], [keydPaths({ env, home }).ownerSocket, 'owner/app-import']);
   assert.equal(calls[0][2].daemonKey, daemonGrantPublicKey({ env, home }));
+  await removeAppFromKeyd(SLUG, { env, home, request: async (...args) => { calls.push(args); return { removed: true }; } });
+  assert.deepEqual(calls[1].slice(0, 3), [keydPaths({ env, home }).ownerSocket, 'owner/app-remove', { app: SLUG }]);
 });
 
 test('a soul whose App keyd holds App-level mints with an App-scope grant naming the soul', async (t) => {
