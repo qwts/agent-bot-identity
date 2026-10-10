@@ -74,12 +74,18 @@ scalars `null`, collections `[]`), in this order:
 
 - `schemaVersion` 1; `engine` `{ version, contractVersion, capabilities }`.
   `capabilities` is `["env", "revision-prepare", "runtimes", "providers",
-  "tool-homes", "memory", "history", "template-name", "template-refresh",
-  "launch-parent", "migrate-complete", "env-clean", "env-export",
-  "env-import", "harnesses-into-runtimes", "env-history"]` today; a client gates each later slice on it
+  "tool-homes", "tool-home-set", "memory", "history", "template-name",
+  "template-refresh", "launch-parent", "migrate-complete", "env-clean",
+  "env-export", "env-import", "harnesses-into-runtimes",
+  "env-history", "dream-status", "dream-ack-notice"]` today; a client gates
+  each later slice on it
   (`template-name` is the `soul env migrate --template-name` rename and the
   `templateName` / `nameSource` provenance, `template-refresh` the
   `soul template refresh` command, see [soul-templates.md](soul-templates.md);
+  `tool-homes` advertises tool-home inspection and adoption,
+  while `tool-home-set` advertises the setter documented in
+  [soul-tool-homes.md](soul-tool-homes.md). Hosts must treat a missing
+  `tool-home-set` flag as unsupported, even if `tool-homes` is present;
   `launch-parent`: a principal launch may name the new soul's parent,
   GeniusBar#261; `migrate-complete` the `soul env migrate --complete` verb
   and `env-clean` the `soul env clean` command, both below; `env-export`
@@ -87,7 +93,7 @@ scalars `null`, collections `[]`), in this order:
   `harnesses-into-runtimes` the npm adapter install under the runtimes and
   the `soul env migrate --harnesses-into-runtimes` verb, below;
   `env-history` the `soul env history` read of the history mirror, see
-  [soul-memory-history.md](soul-memory-history.md#reading-the-mirror)).
+  [soul-memory-history.md](soul-memory-history.md#reading-the-fact-mirror)).
 - `identity`: `agentId`, `name`, `displayName`, `status`, `harness`,
   `genesis { revision, parentSoul }`, the manifest's `revision`,
   `parentRevision`, `template`, `formatVersion`.

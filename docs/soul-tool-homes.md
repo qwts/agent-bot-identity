@@ -102,6 +102,11 @@ agent-bot soul tool-home <harness> --soul <agentId|name> [--json]               
 agent-bot soul tool-home <harness> soul|global --soul <agentId|name> [--json] [--principal-stdin]   # set
 ```
 
+The engine advertises `tool-homes` for the existing inspection and adoption
+interface, and advertises `tool-home-set` separately when it supports this
+setter. A host must gate the setter on `tool-home-set`; an older descriptor
+without that flag does not establish setter support.
+
 - With no choice it shows the recorded entry, or `unset (current setup)`.
 - **Who may set it:** the owner, for any soul, and the soul itself, for its
   own soul only.
