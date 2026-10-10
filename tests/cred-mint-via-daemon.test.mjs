@@ -342,6 +342,54 @@ test('an unbound caller mints as before, without the gate or the daemon', async 
   assert.deepEqual(calls.local.map((request) => [request.slug, request.permissions]), [['other-app', { contents: 'read' }]]);
 });
 
+// #107 slice C: the Codex desktop UI is the owner's delegate surface. Its
+// configured App mints locally with no gate, as before, and is receipted.
+test('the owner\'s delegate surface mints its App with no gate and leaves a receipt', async (t) => {
+  const { calls, options } = callerFixture(t, { bound: false });
+  const result = await mintForCaller({ ...options, slug: 'codex-app', operation: 'codex-desktop-gh', delegate: true });
+  assert.equal(result.token, 'ghs_local');
+  assert.equal(calls.daemon, 0);
+  assert.deepEqual(calls.gate, []);
+  assert.deepEqual(calls.local.map((request) => request.slug), ['codex-app']);
+  assert.deepEqual(calls.receipts, [{
+    event: 'credential-mint', agentId: null, operation: 'codex-desktop-gh', decision: 'granted',
+    appSlug: 'codex-app', reason: 'owner-delegate-surface',
+  }]);
+  assert.ok(!JSON.stringify(calls.receipts).includes('ghs_'), 'the receipt carries no token');
+});
+
+test('a failed delegate-surface mint is receipted and still fails', async (t) => {
+  const { calls, options } = callerFixture(t, { bound: false });
+  await assert.rejects(mintForCaller({
+    ...options, slug: 'codex-app', operation: 'codex-desktop-gh', delegate: true,
+    mintImpl: async () => { throw new Error('GitHub refused the installation token'); },
+  }), /GitHub refused/);
+  assert.deepEqual(calls.gate, []);
+  assert.deepEqual(calls.receipts.map((fields) => [fields.decision, fields.reason, fields.appSlug]), [['failed', 'mint-failed', 'codex-app']]);
+});
+
+test('a receipt that cannot be written does not stop a delegate-surface mint', async (t) => {
+  const { options } = callerFixture(t, { bound: false });
+  const result = await mintForCaller({
+    ...options, slug: 'codex-app', operation: 'codex-desktop-gh', delegate: true,
+    receipt: () => { throw new Error('audit log is read-only'); },
+  });
+  assert.equal(result.token, 'ghs_local');
+});
+
+test('the delegate flag changes nothing for a marked caller or an ordinary unmarked mint', async (t) => {
+  const bound = callerFixture(t);
+  await mintForCaller({ ...bound.options, delegate: true });
+  await mintForCaller({ ...bound.options, slug: 'other-app', delegate: true });
+  assert.equal(bound.calls.daemon, 1, 'a bound soul\'s own App still comes from the daemon');
+  assert.equal(bound.calls.gate.length, 1, 'another App still asks the owner');
+  assert.deepEqual(bound.calls.receipts.map((fields) => [fields.decision, fields.reason]), [['approved', 'owner-presence']]);
+
+  const plain = callerFixture(t, { bound: false });
+  await mintForCaller({ ...plain.options, slug: 'other-app' });
+  assert.deepEqual(plain.calls.receipts, [], 'without the flag an unmarked mint writes no receipt here, as before');
+});
+
 test('an unreadable binding refuses before any mint or gate', async (t) => {
   const { calls, options } = callerFixture(t, { bound: false });
   await assert.rejects(mintForCaller({ ...options, readBindingImpl: () => { throw new Error(secret); } }), (error) => {

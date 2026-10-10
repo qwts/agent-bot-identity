@@ -1673,7 +1673,11 @@ The explicitly selected path is recorded without credentials so
 replaced, recursive, legacy, or unrecoverable Codex-desktop coverage.
 
 When a direct Codex desktop call is detected, the shim mints the configured
-Codex App token and adapts only the observed native request shapes:
+Codex App token and adapts only the observed native request shapes. The
+desktop UI is the owner's own delegate surface, not an agent session, so the
+mint runs locally with no prompt. Each mint, or failed mint, leaves a
+secret-free `credential-mint` receipt with operation `codex-desktop-gh` in
+the audit log (#107).
 
 - REST `/user` falls back to the App's real `<slug>[bot]` user object because
   installation tokens cannot use the authenticated-user endpoint.
