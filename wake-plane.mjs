@@ -190,7 +190,7 @@ export function acpExecutorFor({
   identities, policy, baseEnv, onHarnessSession = null, createExecutor = createAcpExecutor,
   interactionStore = { env: baseEnv },
   identityFor = null,
-  commsFor = () => true, modeFor = () => 'safe', modelFor = () => null, onModels = null, reachEnv = {}, keydFor = () => null, harnessDirsFor = () => [], runtimeEnvFor = null, toolHomeEnvFor = null, providerEnvFor = null, log = null,
+  commsFor = () => true, modeFor = () => 'safe', modelFor = () => null, reasoningEffortFor = () => null, onModels = null, reachEnv = {}, keydFor = () => null, harnessDirsFor = () => [], runtimeEnvFor = null, toolHomeEnvFor = null, providerEnvFor = null, log = null,
 }) {
   return ({ agentId, harness, cwd, env }) => {
     const identity = identities(agentId);
@@ -222,6 +222,7 @@ export function acpExecutorFor({
         identity: { app, agentId },
         mode,
         model: modelFor(agentId, { harness, cwd }),
+        reasoningEffort: reasoningEffortFor(agentId, { harness, cwd }),
         identityFor,
         getHarnessSession: (invocation) => interactionHarnessSession(invocation, { agentId, harness, store: interactionStore }),
         onModels: (models) => onModels?.(agentId, models),

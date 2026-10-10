@@ -337,6 +337,7 @@ export function createAcpExecutor({
   // The soul's Safe / Auto-Pilot mode, read by the daemon at turn start.
   mode = 'safe',
   model = null,
+  reasoningEffort = null,
   onModels = null,
   // Public soul identity, looked up only for a new session's first prompt.
   identityFor = null,
@@ -555,6 +556,20 @@ export function createAcpExecutor({
       });
 
       let sessionModels = null;
+      let configOptions = null;
+      const effortValue = typeof reasoningEffort === 'string' ? reasoningEffort : reasoningEffort?.effort ?? null;
+      const effortSource = typeof reasoningEffort === 'object' ? reasoningEffort?.source ?? null : null;
+      const claudeEffort = ['low', 'medium', 'high', 'max'].includes(effortValue) ? effortValue : null;
+      if (harness === 'claude' && effortValue !== null && claudeEffort === null) {
+        log('acp engine: explicit reasoning effort is unsupported by the pinned Claude adapter; continuing with the harness setting');
+      }
+      const sessionParams = {
+        cwd,
+        mcpServers: [...turnMcpServers],
+        ...(harness === 'claude' && claudeEffort !== null
+          ? { _meta: { claudeCode: { options: { effort: claudeEffort } } } }
+          : {}),
+      };
       let promptMessage = message;
       if (prior && typeof prior.harnessSessionId === 'string') {
         if (initialized?.agentCapabilities?.loadSession !== true) {
@@ -564,8 +579,9 @@ export function createAcpExecutor({
         sessionId = prior.harnessSessionId;
         replaying = true;
         try {
-          const loaded = await rpc.request('session/load', { sessionId, cwd, mcpServers: [...turnMcpServers] });
+          const loaded = await rpc.request('session/load', { ...sessionParams, sessionId });
           sessionModels = loaded?.models ?? null;
+          configOptions = loaded?.configOptions ?? null;
         } catch (error) {
           unavailable('native-resume-failed');
           throw error;
@@ -574,12 +590,13 @@ export function createAcpExecutor({
         }
         bindHarnessSession({ mode: 'resume', harnessSessionId: sessionId });
       } else {
-        const created = await rpc.request('session/new', { cwd, mcpServers: [...turnMcpServers] });
+        const created = await rpc.request('session/new', sessionParams);
         if (typeof created?.sessionId !== 'string' || created.sessionId.length === 0) {
           failEngine('agent returned no sessionId for session/new');
         }
         sessionId = created.sessionId;
         sessionModels = created.models ?? null;
+        configOptions = created.configOptions ?? null;
         bindHarnessSession({ mode: 'new', harnessSessionId: sessionId });
         // Best effort: an unreadable population never fails the turn.
         let soul = null;
@@ -597,9 +614,42 @@ export function createAcpExecutor({
         try { await onModels({ availableModels: sessionModels.availableModels, currentModelId: sessionModels.currentModelId }); }
         catch { /* Model discovery must never fail a turn. */ }
       }
+      let modelChangedWithoutFreshOptions = false;
       if (model !== null && model !== sessionModels?.currentModelId) {
-        try { await rpc.request('session/set_model', { sessionId, modelId: model }); }
-        catch (error) { log(`acp engine: session/set_model failed; continuing with the harness model: ${error.message}`); }
+        const mayUseFreshModelOptions = harness === 'codex' && typeof effortValue === 'string' && effortSource !== 'pick';
+        const modelOption = mayUseFreshModelOptions && Array.isArray(configOptions)
+          ? configOptions.find((option) => option?.id === 'model' && option.type === 'select') : null;
+        const supportsModel = Array.isArray(modelOption?.options)
+          && modelOption.options.some((option) => option?.value === model);
+        if (supportsModel) {
+          try {
+            const changed = await rpc.request('session/set_config_option', { sessionId, configId: 'model', value: model });
+            configOptions = changed?.configOptions ?? null;
+          } catch {
+            modelChangedWithoutFreshOptions = true;
+            try { await rpc.request('session/set_model', { sessionId, modelId: model }); }
+            catch (error) { log(`acp engine: session/set_model failed; continuing with the harness model: ${error.message}`); }
+          }
+        } else {
+          modelChangedWithoutFreshOptions = true;
+          try { await rpc.request('session/set_model', { sessionId, modelId: model }); }
+          catch (error) { log(`acp engine: session/set_model failed; continuing with the harness model: ${error.message}`); }
+        }
+      }
+      if (harness === 'codex' && typeof effortValue === 'string' && effortSource !== 'pick') {
+        const effortOption = modelChangedWithoutFreshOptions ? null
+          : Array.isArray(configOptions) ? configOptions.find((option) => option?.id === 'reasoning_effort' && option.type === 'select') : null;
+        const supportsEffort = Array.isArray(effortOption?.options)
+          && effortOption.options.some((option) => option?.value === effortValue);
+        if (supportsEffort) {
+          try {
+            await rpc.request('session/set_config_option', { sessionId, configId: 'reasoning_effort', value: effortValue });
+          } catch {
+            log('acp engine: explicit reasoning effort was not accepted; continuing with the harness setting');
+          }
+        } else {
+          log('acp engine: explicit reasoning effort is unsupported by fresh advertised options; continuing with the harness setting');
+        }
       }
       // A row whose adapter defaults to approving calls itself names the ACP
       // session mode that routes approvals to this client (#384), so the

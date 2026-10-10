@@ -51,7 +51,8 @@ async function handlePrompt({ sessionId, prompt }) {
   }
 
   if (text === 'model-probe') {
-    chunk(sessionId, JSON.stringify({ model: session.model ?? models?.currentModelId ?? null, requests: session.modelRequests ?? [] }));
+    chunk(sessionId, JSON.stringify({ model: session.model ?? models?.currentModelId ?? null, requests: session.modelRequests ?? [],
+      configRequests: session.configRequests ?? [], sessionMeta: session.sessionMeta ?? null, effort: session.effort ?? null }));
     return { stopReason: 'end_turn' };
   }
 
@@ -270,18 +271,18 @@ async function handle(method, params) {
   if (method === 'session/new') {
     sessionCounter += 1;
     const sessionId = `fake-ses-${process.env.FAKE_ACP_HISTORY_DIR ? randomUUID() : sessionCounter}`;
-    sessions.set(sessionId, { cwd: params.cwd, mcpServers: params.mcpServers, loaded: false });
+    sessions.set(sessionId, { cwd: params.cwd, mcpServers: params.mcpServers, loaded: false, sessionMeta: params._meta ?? null });
     if (process.env.FAKE_ACP_HISTORY_DIR) writeFileSync(path.join(process.env.FAKE_ACP_HISTORY_DIR, sessionId), '{}');
-    return { sessionId, ...(models ? { models } : {}) };
+    return { sessionId, ...(models ? { models } : {}), ...(process.env.FAKE_ACP_CONFIG_OPTIONS ? { configOptions: JSON.parse(process.env.FAKE_ACP_CONFIG_OPTIONS) } : {}) };
   }
   if (method === 'session/load') {
     if (process.env.FAKE_ACP_LOAD_ERROR) throw new Error('private provider error that must not reach public events');
     const stored = process.env.FAKE_ACP_HISTORY_DIR
       ? JSON.parse(readFileSync(path.join(process.env.FAKE_ACP_HISTORY_DIR, params.sessionId), 'utf8')) : {};
-    sessions.set(params.sessionId, { ...stored, cwd: params.cwd, mcpServers: params.mcpServers, loaded: true });
+    sessions.set(params.sessionId, { ...stored, cwd: params.cwd, mcpServers: params.mcpServers, loaded: true, sessionMeta: params._meta ?? null });
     // History replay: the engine must NOT re-record this as a fresh event.
     chunk(params.sessionId, 'replayed-history-line');
-    return models ? { models } : {};
+    return { ...(models ? { models } : {}), ...(process.env.FAKE_ACP_CONFIG_OPTIONS ? { configOptions: JSON.parse(process.env.FAKE_ACP_CONFIG_OPTIONS) } : {}) };
   }
   if (method === 'session/set_model') {
     const session = sessions.get(params.sessionId);
@@ -290,6 +291,18 @@ async function handle(method, params) {
     if (process.env.FAKE_ACP_MODEL_ERROR) throw new Error('model unavailable');
     session.model = params.modelId;
     return {};
+  }
+  if (method === 'session/set_config_option') {
+    const session = sessions.get(params.sessionId);
+    if (!session) throw new Error(`unknown session ${params.sessionId}`);
+    (session.configRequests ??= []).push(params);
+    if (process.env.FAKE_ACP_CONFIG_ERROR) throw new Error('private option rejection');
+    if (params.configId === 'model') {
+      session.model = params.value;
+      if (process.env.FAKE_ACP_CONFIG_OPTIONS_AFTER_MODEL) return { configOptions: JSON.parse(process.env.FAKE_ACP_CONFIG_OPTIONS_AFTER_MODEL) };
+    }
+    if (params.configId === 'reasoning_effort') session.effort = params.value;
+    return process.env.FAKE_ACP_CONFIG_OPTIONS ? { configOptions: JSON.parse(process.env.FAKE_ACP_CONFIG_OPTIONS) } : {};
   }
   if (method === 'session/set_mode') {
     const session = sessions.get(params.sessionId);

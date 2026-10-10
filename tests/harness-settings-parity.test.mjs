@@ -16,12 +16,12 @@ import { fileURLToPath } from 'node:url';
 
 import { ACP_SPAWN_REGISTRY } from '../acp-registry.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
-import { daemonModeFor, daemonModelFor, LOOSENING_TOOL } from '../agent-daemon.mjs';
+import { daemonModeFor, daemonModelFor, daemonReasoningEffortFor, LOOSENING_TOOL } from '../agent-daemon.mjs';
 import { listProposals } from '../agent-jobs.mjs';
 import { auditFile } from '../agent-principals.mjs';
 import { populationFile, upsertSoul } from '../agent-population.mjs';
 import { buildSoulDirectory } from '../soul-build.mjs';
-import { packageModel, repoModel, resolveSoulModel, setSoulModel } from '../soul-model.mjs';
+import { packageModel, packageReasoningEffort, repoModel, repoReasoningEffort, resolveSoulModel, resolveSoulReasoningEffort, setSoulModel } from '../soul-model.mjs';
 import { LOOSENING_NEEDS_OWNER, packagePermissionMode, repoPermissionMode, resolveSoulMode, setSoulMode } from '../soul-mode.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
 import { acpExecutorFor } from '../wake-plane.mjs';
@@ -180,18 +180,26 @@ function directModel(soulDir, harness) {
 
 // One daemon turn with the daemon's own modelFor: the model it sends, and the
 // model the fixture agent then reports running (null when nothing was sent).
-async function modelTurn({ harness, cwd, env, home }) {
+async function modelTurn({ harness, cwd, env, home, prior = null, acpEnv = {}, capture = false }) {
   let sent;
+  const logs = [];
   const chunks = [];
   const executor = acpExecutorFor({
-    identities: () => ({}), baseEnv: { ...process.env, HOME: home }, policy: { version: 1, rules: [], fallback: 'approval' },
+    identities: () => ({}), baseEnv: { ...process.env, HOME: home, ...acpEnv }, policy: { version: 1, rules: [], fallback: 'approval' },
     modeFor: () => 'safe', modelFor: daemonModelFor({ env, home, config: {} }),
-    createExecutor: (options) => { sent = options.model; return createAcpExecutor({ ...options, registry: REGISTRY }); },
+    reasoningEffortFor: daemonReasoningEffortFor({ env, home, config: {} }),
+    log: (line) => logs.push(line),
+    createExecutor: (options) => {
+      sent = options.model;
+      const registry = { ...REGISTRY, [harness]: { ...REGISTRY[harness], setEnv: { ...REGISTRY[harness].setEnv, ...acpEnv } } };
+      return createAcpExecutor({ ...options, getHarnessSession: prior ? async () => ({ harnessSessionId: prior }) : options.getHarnessSession, registry });
+    },
   })({ agentId: ID, harness, cwd, env: {} });
   await executor({ invocation: { agentId: ID }, message: 'model-probe', attachments: [],
     appendEvent: (_type, data) => { if (data?.content?.text) chunks.push(data.content.text); return {}; },
     addArtifact: () => ({}), signal: new AbortController().signal, requestApproval: async () => ({ decision: 'deny' }) });
-  return { sent, running: JSON.parse(chunks.at(-1)).model };
+  const observed = JSON.parse(chunks.at(-1));
+  return { sent, running: observed.model, ...(capture ? { observed, logs } : {}) };
 }
 
 for (const harness of ['claude', 'codex']) {
@@ -277,6 +285,155 @@ test('a repo model is read only from the files and keys the harness uses for it'
   mkdirSync(bare);
   assert.deepEqual(resolveSoulModel(other, { harness: 'codex', cwd: bare, env, home }), { model: null, source: 'default' });
   assert.equal(daemonModelFor({ env, home, config: {} })(other, { harness: 'codex', cwd: bare }), null);
+});
+
+test('reasoning effort follows repo then package declarations without inventing an owner picker', (t) => {
+  const { root, env, home, soulDir } = fixture(t, 'safe', { reasoningEffort: 'low' });
+  const repo = path.join(root, 'repo');
+  mkdirSync(path.join(repo, '.codex'), { recursive: true });
+  writeFileSync(path.join(repo, '.codex/config.toml'), 'model_reasoning_effort = "xhigh"\n');
+  assert.equal(packageReasoningEffort(soulDir, 'codex'), 'low');
+  assert.equal(repoReasoningEffort(repo, 'codex'), 'xhigh');
+  assert.deepEqual(resolveSoulReasoningEffort({ harness: 'codex', cwd: repo, soulDir }), { effort: 'xhigh', source: 'repo' });
+  assert.deepEqual(resolveSoulReasoningEffort({ harness: 'codex', cwd: soulDir, soulDir }), { effort: 'low', source: 'soul' });
+  assert.deepEqual(resolveSoulReasoningEffort({ harness: 'codex', cwd: repo, soulDir, ownerModel: 'gpt-5.2[high]' }), { effort: 'high', source: 'pick' });
+  assert.deepEqual(resolveSoulReasoningEffort({ harness: 'codex', cwd: repo, soulDir, ownerModel: 'gpt-5.2' }), { effort: 'xhigh', source: 'repo' });
+  assert.deepEqual(resolveSoulReasoningEffort({ harness: 'codex', cwd: path.join(root, 'bare') }), { effort: null, source: 'default' });
+  assert.deepEqual(daemonReasoningEffortFor({ env, home, config: {} })(ID, { harness: 'codex', cwd: repo }), { effort: 'xhigh', source: 'repo' });
+  const claudeRepo = path.join(root, 'claude-repo');
+  mkdirSync(path.join(claudeRepo, '.claude'), { recursive: true });
+  writeFileSync(path.join(claudeRepo, '.claude/settings.json'), JSON.stringify({ effortLevel: 'medium' }));
+  writeFileSync(path.join(claudeRepo, '.claude/settings.local.json'), JSON.stringify({ effortLevel: 'high' }));
+  assert.equal(repoReasoningEffort(claudeRepo, 'claude'), 'high');
+  writeFileSync(path.join(claudeRepo, '.claude/settings.local.json'), '{ broken');
+  assert.equal(repoReasoningEffort(claudeRepo, 'claude'), 'medium');
+});
+
+test('Claude effort is sent only when declared, on both new and resumed sessions', async (t) => {
+  const { env, home, soulDir } = fixture(t, 'safe', { reasoningEffort: 'high' });
+  const created = await modelTurn({ harness: 'claude', cwd: soulDir, env, home, capture: true });
+  assert.deepEqual(created.observed.sessionMeta, { claudeCode: { options: { effort: 'high' } } });
+  const resumed = await modelTurn({ harness: 'claude', cwd: soulDir, env, home, prior: 'fake-ses-prior', capture: true });
+  assert.deepEqual(resumed.observed.sessionMeta, { claudeCode: { options: { effort: 'high' } } });
+  const empty = fixture(t, 'safe');
+  const absent = await modelTurn({ harness: 'claude', cwd: empty.root, env: empty.env, home: empty.home, capture: true });
+  assert.equal(absent.observed.sessionMeta, null);
+});
+
+test('Codex refreshes advertised effort choices after a supported model change', async (t) => {
+  const { root, env, home, soulDir } = fixture(t, 'safe', { reasoningEffort: 'high', model: 'gpt-new' });
+  const repo = path.join(root, 'repo');
+  mkdirSync(path.join(repo, '.codex'), { recursive: true });
+  writeFileSync(path.join(repo, '.codex/config.toml'), 'model = "gpt-new"\nmodel_reasoning_effort = "high"\n');
+  const initial = [
+    { id: 'model', name: 'Model', type: 'select', currentValue: 'gpt-old', options: [{ name: 'old', value: 'gpt-old' }, { name: 'new', value: 'gpt-new' }] },
+    { id: 'reasoning_effort', name: 'Reasoning effort', type: 'select', currentValue: 'low', options: [{ name: 'low', value: 'low' }] },
+  ];
+  const refreshed = [
+    { id: 'model', name: 'Model', type: 'select', currentValue: 'gpt-new', options: [{ name: 'new', value: 'gpt-new' }] },
+    { id: 'reasoning_effort', name: 'Reasoning effort', type: 'select', currentValue: 'medium', options: [{ name: 'high', value: 'high' }] },
+  ];
+  const turn = await modelTurn({ harness: 'codex', cwd: repo, env, home, acpEnv: {
+    FAKE_ACP_MODELS: JSON.stringify({ currentModelId: 'gpt-old[low]' }),
+    FAKE_ACP_CONFIG_OPTIONS: JSON.stringify(initial),
+    FAKE_ACP_CONFIG_OPTIONS_AFTER_MODEL: JSON.stringify(refreshed),
+  }, capture: true });
+  assert.deepEqual(turn.observed.configRequests.map(({ configId, value }) => ({ configId, value })), [
+    { configId: 'model', value: 'gpt-new' }, { configId: 'reasoning_effort', value: 'high' },
+  ]);
+  assert.deepEqual(turn.observed.requests, []);
+});
+
+test('Codex omits unsupported or undeclared effort and preserves a composite owner model pick', async (t) => {
+  const { root, env, home, soulDir } = fixture(t, 'safe', { reasoningEffort: 'low' });
+  const repo = path.join(root, 'repo');
+  mkdirSync(path.join(repo, '.codex'), { recursive: true });
+  writeFileSync(path.join(repo, '.codex/config.toml'), 'model_reasoning_effort = "xhigh"\n');
+  const options = [{ id: 'reasoning_effort', name: 'Reasoning effort', type: 'select', currentValue: 'high', options: [{ name: 'high', value: 'high' }] }];
+  const unsupported = await modelTurn({ harness: 'codex', cwd: repo, env, home, acpEnv: { FAKE_ACP_CONFIG_OPTIONS: JSON.stringify(options) }, capture: true });
+  assert.deepEqual(unsupported.observed.configRequests, []);
+  assert.match(unsupported.logs.join('\n'), /explicit reasoning effort is unsupported by fresh advertised options/);
+  const empty = fixture(t, 'safe');
+  const absent = await modelTurn({ harness: 'codex', cwd: empty.root, env: empty.env, home: empty.home, acpEnv: { FAKE_ACP_CONFIG_OPTIONS: JSON.stringify(options) }, capture: true });
+  assert.deepEqual(absent.observed.configRequests, []);
+  setSoulModel(ID, 'gpt-5.2[high]', { env, home });
+  const selected = await modelTurn({ harness: 'codex', cwd: repo, env, home, acpEnv: {
+    FAKE_ACP_MODELS: JSON.stringify({ currentModelId: 'gpt-other' }),
+    FAKE_ACP_CONFIG_OPTIONS: JSON.stringify(options),
+  }, capture: true });
+  assert.equal(selected.sent, 'gpt-5.2[high]');
+  assert.deepEqual(selected.observed.configRequests, []);
+  assert.deepEqual(selected.observed.requests.map(({ modelId }) => modelId), ['gpt-5.2[high]']);
+  const alreadySelected = await modelTurn({ harness: 'codex', cwd: repo, env, home, acpEnv: {
+    FAKE_ACP_MODELS: JSON.stringify({ currentModelId: 'gpt-5.2[high]' }),
+    FAKE_ACP_CONFIG_OPTIONS: JSON.stringify(options),
+  }, capture: true });
+  assert.deepEqual(alreadySelected.observed.configRequests, []);
+  assert.deepEqual(alreadySelected.observed.requests, []);
+  assert.equal(repoReasoningEffort(repo, 'codex'), 'xhigh');
+  assert.equal(packageReasoningEffort(soulDir, 'codex'), 'low');
+});
+
+test('Codex does not reuse effort choices after a legacy model change', async (t) => {
+  const { root, env, home } = fixture(t, 'safe', { reasoningEffort: 'high' });
+  const repo = path.join(root, 'repo');
+  mkdirSync(path.join(repo, '.codex'), { recursive: true });
+  writeFileSync(path.join(repo, '.codex/config.toml'), 'model = "gpt-new"\nmodel_reasoning_effort = "high"\n');
+  const stale = [{ id: 'reasoning_effort', name: 'Reasoning effort', type: 'select', currentValue: 'low', options: [{ name: 'high', value: 'high' }] }];
+  const turn = await modelTurn({ harness: 'codex', cwd: repo, env, home, capture: true, acpEnv: {
+    FAKE_ACP_MODELS: JSON.stringify({ currentModelId: 'gpt-old[low]' }),
+    FAKE_ACP_CONFIG_OPTIONS: JSON.stringify(stale),
+  } });
+  assert.deepEqual(turn.observed.configRequests, []);
+  assert.deepEqual(turn.observed.requests.map(({ modelId }) => modelId), ['gpt-new']);
+  assert.match(turn.logs.join('\n'), /fresh advertised options/);
+});
+
+test('a model-only Codex turn keeps using session/set_model unchanged', async (t) => {
+  const { root, env, home } = fixture(t, 'safe');
+  const repo = path.join(root, 'repo');
+  mkdirSync(path.join(repo, '.codex'), { recursive: true });
+  writeFileSync(path.join(repo, '.codex/config.toml'), 'model = "gpt-new"\n');
+  const options = [{ id: 'model', name: 'Model', type: 'select', currentValue: 'gpt-old', options: [{ name: 'new', value: 'gpt-new' }] }];
+  const turn = await modelTurn({ harness: 'codex', cwd: repo, env, home, capture: true, acpEnv: {
+    FAKE_ACP_MODELS: JSON.stringify({ currentModelId: 'gpt-old[low]' }),
+    FAKE_ACP_CONFIG_OPTIONS: JSON.stringify(options),
+  } });
+  assert.deepEqual(turn.observed.configRequests, []);
+  assert.deepEqual(turn.observed.requests.map(({ modelId }) => modelId), ['gpt-new']);
+});
+
+test('Codex applies a supported explicit effort on session/load', async (t) => {
+  const { env, home, soulDir } = fixture(t, 'safe', { reasoningEffort: 'high' });
+  const options = [{ id: 'reasoning_effort', name: 'Reasoning effort', type: 'select', currentValue: 'low', options: [{ name: 'high', value: 'high' }] }];
+  const turn = await modelTurn({ harness: 'codex', cwd: soulDir, env, home, prior: 'fake-ses-resumed', capture: true, acpEnv: {
+    FAKE_ACP_MODELS: JSON.stringify({ currentModelId: 'gpt-5.2[low]' }),
+    FAKE_ACP_CONFIG_OPTIONS: JSON.stringify(options),
+  } });
+  assert.deepEqual(turn.observed.configRequests.map(({ configId, value }) => ({ configId, value })), [
+    { configId: 'reasoning_effort', value: 'high' },
+  ]);
+});
+
+test('Codex config lookup tolerates malformed options and hides setter rejection details', async (t) => {
+  const { env, home, soulDir } = fixture(t, 'safe', { reasoningEffort: 'high' });
+  const malformed = await modelTurn({ harness: 'codex', cwd: soulDir, env, home, capture: true, acpEnv: {
+    FAKE_ACP_CONFIG_OPTIONS: JSON.stringify({ id: 'reasoning_effort', options: [{ value: 'high' }] }),
+  } });
+  assert.deepEqual(malformed.observed.configRequests, []);
+  assert.match(malformed.logs.join('\n'), /unsupported by fresh advertised options/);
+  const nonSelect = await modelTurn({ harness: 'codex', cwd: soulDir, env, home, capture: true, acpEnv: {
+    FAKE_ACP_CONFIG_OPTIONS: JSON.stringify([{ id: 'reasoning_effort', name: 'Reasoning effort', type: 'boolean', currentValue: 'high', options: [{ name: 'high', value: 'high' }] }]),
+  } });
+  assert.deepEqual(nonSelect.observed.configRequests, []);
+  assert.match(nonSelect.logs.join('\n'), /unsupported by fresh advertised options/);
+  const refusal = [{ id: 'reasoning_effort', name: 'Reasoning effort', type: 'select', currentValue: 'low', options: [{ name: 'high', value: 'high' }] }];
+  const rejected = await modelTurn({ harness: 'codex', cwd: soulDir, env, home, capture: true, acpEnv: {
+    FAKE_ACP_CONFIG_OPTIONS: JSON.stringify(refusal), FAKE_ACP_CONFIG_ERROR: '1',
+  } });
+  assert.equal(rejected.observed.configRequests.length, 1);
+  assert.match(rejected.logs.join('\n'), /explicit reasoning effort was not accepted/);
+  assert.doesNotMatch(rejected.logs.join('\n'), /private option rejection/);
 });
 
 // The owner's answers kept for a soul, and its loosening receipts.

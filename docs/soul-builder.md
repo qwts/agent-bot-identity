@@ -478,11 +478,21 @@ The model is not a permission, so no layer needs the owner's decision to
 change it. A model id the harness does not offer is logged and the turn
 continues on the harness's model, as for a pick.
 
-Reasoning effort follows the files the harness reads in the turn's working
-directory: the repo's, or in the soul's home the package's rendering. The
-pinned adapters take no effort setting over ACP, so a soul working in a repo
-that sets no effort gets the harness default rather than the package's
-`reasoningEffort`. Carrying it there is a later slice.
+Reasoning effort on a daemon turn (#379) follows the repo's native declaration
+first, then the soul package's `reasoningEffort`; an owner model pick remains
+higher priority when the pinned Codex adapter represents it as a composite
+`model[effort]` ID ([`ModelId`](https://github.com/agentclientprotocol/codex-acp/blob/68d7d2d5ddfc0ed5746f9f6130892dda685e65dd/src/ModelId.ts#L5-L40)).
+The pinned adapter builds its model choices with their efforts
+([`createModelState`](https://github.com/agentclientprotocol/codex-acp/blob/68d7d2d5ddfc0ed5746f9f6130892dda685e65dd/src/CodexAcpServer.ts#L1937-L1948)).
+Codex receives an effort only when its current advertised `reasoning_effort`
+option includes that exact value. If a model change uses the advertised model
+option, the daemon checks the refreshed options before applying effort; if it
+must use the legacy model setter, it does not reuse stale choices. Claude
+receives the declared effort in `_meta.claudeCode.options.effort` on
+`session/new` and `session/load` ([pinned adapter](https://github.com/zed-industries/claude-code-acp/blob/e5b836820bcc1350699d53c488bd1a1a7223d86c/src/acp-agent.ts)).
+With no explicit declaration, the daemon sends no effort mutation, leaving the
+harness's default or resumed-session state in place. There is no owner effort
+picker or effort reset setting today.
 
 ## The soul's MCP entry (#378)
 
