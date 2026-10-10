@@ -136,9 +136,6 @@ harness. These are the next slices of #617:
   souls, each with its own end-to-end fixture;
 - clearing an entry from the command (back to "current setup"). Only the
   module function can clear one today;
-- the resume lane (`wake-resume`), which still runs on the host store.
-  It needs the store each recorded session lives in, and a coded refusal
-  when that store has moved, before it can follow a soul's tool home;
 - per-soul harness installs (the "global install" half of the choice for
   the executable, not just the store) and the unroutable harnesses (Kiro,
   Muse, Gemini, Copilot).
@@ -276,8 +273,12 @@ harness the soul did not set to `global`.
 
 - Routing covers the ACP lane (`acpExecutorFor`) and the launch handler. A
   soul joined from the user's own session (`agent-bot join`) runs in that
-  session's HOME with the shared store; the resume lane (`wake-resume`) is
-  outside this slice.
+  session's HOME with the shared store.
+- The resume lane (`wake-resume`) follows the tool home too. It records
+  which store each session was made in (`host` or `soul`), and refuses a
+  recorded session in the other store with `resume-session-store-moved`
+  and the `soul tool-home` command that switches back, never starting
+  fresh. Sessions recorded before this count as the host store's.
 - A contained harness no longer sees the host's user-level settings
   (`~/.claude/settings.json`, `~/.codex/config.toml`, the user
   `opencode.json`): its tool home starts empty apart from what is adopted,

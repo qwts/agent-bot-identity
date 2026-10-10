@@ -162,26 +162,35 @@ export function wakeSessionsFile({ env = process.env, home = homedir() } = {}) {
   return path.join(base, 'agent-bot', 'wake-sessions.json');
 }
 
+const SESSION_STORES = Object.freeze(['host', 'soul']);
+
 export function createWakeSessions({ file }) {
   const read = () => {
     try { return JSON.parse(readFileSync(file, 'utf8'))?.sessions ?? {}; }
     catch (error) { if (error.code === 'ENOENT') return {}; throw new Error('wake sessions could not be read'); }
   };
+  // A session belongs to one harness: a soul moved to another harness
+  // starts fresh rather than handing a foreign id to the new one. Given a
+  // policy, it must also be the policy the session was started under.
+  // `store` is where the harness keeps it (#617): 'host' for the host's own
+  // store, 'soul' for the soul's tool home. Entries from before #617 were
+  // all made on the host store.
+  const recorded = (agentId, harness, policy) => {
+    const entry = read()[validateAgentId(agentId)];
+    if (entry?.harness !== harness || typeof entry.sessionId !== 'string') return null;
+    if (policy !== undefined && entry.policy !== policy) return null;
+    return { sessionId: entry.sessionId, store: entry.store ?? 'host' };
+  };
   return {
-    // A session belongs to one harness: a soul moved to another harness
-    // starts fresh rather than handing a foreign id to the new one. Given a
-    // policy, it must also be the policy the session was started under.
-    get(agentId, harness, policy) {
-      const entry = read()[validateAgentId(agentId)];
-      if (entry?.harness !== harness || typeof entry.sessionId !== 'string') return null;
-      return policy === undefined || entry.policy === policy ? entry.sessionId : null;
-    },
-    set(agentId, harness, sessionId, policy) {
+    recorded,
+    get: (agentId, harness, policy) => recorded(agentId, harness, policy)?.sessionId ?? null,
+    set(agentId, harness, sessionId, policy, store = 'host') {
       const id = validateAgentId(agentId);
+      if (!SESSION_STORES.includes(store)) throw new Error(`wake session store must be one of ${SESSION_STORES.join(', ')}`);
       mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
       withLock(`${file}.lock`, 'wake sessions', () => {
         const sessions = read();
-        sessions[id] = { harness, sessionId, ...(policy ? { policy } : {}) };
+        sessions[id] = { harness, sessionId, ...(policy ? { policy } : {}), store };
         const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
         try { writeFileSync(temp, `${JSON.stringify({ schemaVersion: 1, sessions }, null, 2)}\n`, { flag: 'wx', mode: 0o600 }); renameSync(temp, file); chmodSync(file, 0o600); }
         finally { rmSync(temp, { force: true }); }
@@ -224,6 +233,17 @@ export function resumePath(env, home) {
   return [...new Set(dirs.filter(Boolean))].join(path.delimiter);
 }
 
+// `resume-session-store-moved`: the soul's recorded session lives in the
+// store its tool home no longer routes to. Switching the tool home back
+// reaches it again; the session itself is left where it is.
+function storeMoved({ agentId, harness, prior, store }) {
+  const back = prior === 'host' ? 'global' : 'soul';
+  const where = (name) => (name === 'host' ? 'the host\'s store' : 'the soul\'s own tool home');
+  const action = `agent-bot soul tool-home ${harness} ${back} --soul ${agentId}`;
+  return Object.assign(new Error(`resume wake: ${agentId}'s recorded ${harness} session is in ${where(prior)}, but its ${harness} now uses ${where(store)}; switch it back with \`${action}\``),
+    { code: 'resume-session-store-moved', action });
+}
+
 function lastLine(text) {
   return String(text).trim().split('\n').pop()?.slice(0, 300) || '';
 }
@@ -250,14 +270,21 @@ export function createResumeExecutor({ sessions, baseEnv = process.env, home = h
     // cannot be met throws here, before any harness process (Devin's
     // session listing included) starts, so the message stays unacked and the
     // recorded session is kept. Undeclared tools keep the host PATH.
-    const { harnessEnv } = composeTurnEnv({ agentId, harness, env,
+    const { harnessEnv, routed } = composeTurnEnv({ agentId, harness, env,
       baseEnv: { ...hostEnv, HOME: baseEnv.HOME || home, PATH: resumePath(baseEnv, home) },
       runtimeEnvFor, toolHomeEnvFor, providerEnvFor });
     // The harness CLI the composed PATH selects, so a soul-installed one
     // wins over the host's; none is a refusal, never another lookup.
     const command = whichOnPath(row.command, harnessEnv);
     if (!command) throw Object.assign(new Error(`resume wake: ${row.command} is not on ${agentId}'s PATH`), { code: 'harness-tool-missing' });
-    const sessionId = sessions.get(agentId, harness, row.policyFixedAtStart ? policy : undefined);
+    // The store this turn's harness reads (#617): the soul's tool home when
+    // one is routed, the host's otherwise. A recorded session in the other
+    // store would not be found there, so it is refused with the fix rather
+    // than started fresh or resumed against the wrong store.
+    const store = routed.length ? 'soul' : 'host';
+    const prior = sessions.recorded(agentId, harness, row.policyFixedAtStart ? policy : undefined);
+    if (prior && prior.store !== store) throw storeMoved({ agentId, harness, prior: prior.store, store });
+    const sessionId = prior?.sessionId ?? null;
     const plan = row.plan({ sessionId, prompt: message, policy });
     // A relayed turn's thread key (#392) reaches the harness's own reach
     // server through its environment, so send_message and start_soul's brief
@@ -288,7 +315,7 @@ export function createResumeExecutor({ sessions, baseEnv = process.env, home = h
       const created = (await listIds())?.filter((id) => !before.includes(id)) ?? [];
       if (created.length === 1) nextSession = created[0];
     }
-    if (nextSession && nextSession !== sessionId) sessions.set(agentId, harness, nextSession, policy);
+    if (nextSession && nextSession !== sessionId) sessions.set(agentId, harness, nextSession, policy, store);
     return { reply: parsed.reply };
   };
 }

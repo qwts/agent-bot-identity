@@ -1,7 +1,7 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -225,6 +225,49 @@ test('devin records only the one session its fresh turn created in the worktree'
   assert.equal(sessions.get(ID, 'devin'), null);
   await turn(make(['human-session', 'visual-continent']));
   assert.equal(sessions.get(ID, 'devin'), 'visual-continent');
+}));
+
+// #617: the resume lane routes the soul's tool home, and records which
+// store each session was made in. A session recorded in the other store is
+// refused with the switch-back command, before any harness process.
+test('a resume session records its store, and one in the other store is refused with the fix', () => withState(async ({ env, root }) => {
+  const sessions = createWakeSessions({ file: wakeSessionsFile({ env }) });
+  const codexHome = path.join(root, 'soul', 'tool-homes', 'codex');
+  let routed = true;
+  const calls = [];
+  const run = async (command, args, options) => { calls.push({ args, env: options.env }); return { code: 0, stdout: CODEX_OUTPUT, stderr: '' }; };
+  const execute = createResumeExecutor({ sessions, baseEnv: stubbed({}), home: root, run,
+    toolHomeEnvFor: () => (routed ? { CODEX_HOME: codexHome } : {}) });
+  const turn = () => execute({ invocation: { agentId: ID, harness: 'codex', cwd: root }, message: 'm', env: {}, policy: 'read-only' });
+  await turn();
+  assert.equal(calls[0].env.CODEX_HOME, codexHome, 'the soul\'s tool home reaches the harness');
+  assert.deepEqual(sessions.recorded(ID, 'codex'), { sessionId: '01a0fe81-0f35-73a2-9d5f-d48c92029d1c', store: 'soul' });
+  await turn();
+  assert.deepEqual(calls[1].args.slice(0, 3), ['exec', 'resume', '01a0fe81-0f35-73a2-9d5f-d48c92029d1c']);
+  // Switched to the host store: refused, nothing runs, the session is kept.
+  routed = false;
+  await assert.rejects(turn(), (error) => error.code === 'resume-session-store-moved'
+    && error.action === `agent-bot soul tool-home codex soul --soul ${ID}` && /the soul's own tool home/.test(error.message));
+  assert.equal(calls.length, 2);
+  assert.deepEqual(sessions.recorded(ID, 'codex'), { sessionId: '01a0fe81-0f35-73a2-9d5f-d48c92029d1c', store: 'soul' });
+}));
+
+test('a session recorded before #617 is the host store\'s: kept on the host, refused once the soul routes its own', () => withState(async ({ env, root }) => {
+  const file = wakeSessionsFile({ env });
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ schemaVersion: 1, sessions: { [ID]: { harness: 'opencode', sessionId: 'ses_old', policy: 'read-only' } } }));
+  const sessions = createWakeSessions({ file });
+  assert.deepEqual(sessions.recorded(ID, 'opencode'), { sessionId: 'ses_old', store: 'host' });
+  const calls = [];
+  const run = async (_command, args) => { calls.push(args); return { code: 0, stdout: OPENCODE_OUTPUT, stderr: '' }; };
+  const turn = (patch) => createResumeExecutor({ sessions, baseEnv: stubbed({}), home: root, run, toolHomeEnvFor: () => patch })(
+    { invocation: { agentId: ID, harness: 'opencode', cwd: root }, message: 'm', env: {}, policy: 'read-only' });
+  await turn({});
+  assert.ok(calls[0].includes('ses_old'), 'the host store still resumes it');
+  await assert.rejects(turn({ XDG_DATA_HOME: path.join(root, 'soul', 'data') }),
+    (error) => error.code === 'resume-session-store-moved' && error.action === `agent-bot soul tool-home opencode global --soul ${ID}`);
+  assert.equal(calls.length, 1, 'no process for the refused turn');
+  assert.throws(() => sessions.set(ID, 'opencode', 'x', 'read-only', 'elsewhere'), /must be one of host, soul/);
 }));
 
 test('runProcess feeds stdin, captures output, and reports the exit code', async () => {

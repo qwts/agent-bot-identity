@@ -109,7 +109,7 @@ test('stop on the resume lane forwards abort to the harness process', async (t) 
   const bin = path.join(f.home, 'stub-bin');
   mkdirSync(bin, { recursive: true });
   writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\n', { mode: 0o755 });
-  const resumeExecutor = createResumeExecutor({ baseEnv: { ...f.env, PATH: `${bin}${path.delimiter}${f.env.PATH ?? ''}` }, home: f.home, sessions: { get: () => 'session-id' },
+  const resumeExecutor = createResumeExecutor({ baseEnv: { ...f.env, PATH: `${bin}${path.delimiter}${f.env.PATH ?? ''}` }, home: f.home, sessions: { recorded: () => ({ sessionId: 'session-id', store: 'host' }) },
     run: (_command, _args, options) => runProcess(process.execPath, ['-e',
       `require("node:fs").writeFileSync(${JSON.stringify(f.env.FAKE_CANCEL_FILE)}, "ready"); setInterval(() => {}, 1000);`], options) });
   const plane = createWakePlane({ turns: f.turns, pool: { has: () => false, send: () => 0 },

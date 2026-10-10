@@ -27,9 +27,14 @@ with a coded error when:
 
 The wake stays unacked and the recorded session is kept.
 
-Tool-home routing (`CODEX_HOME`, OpenCode's XDG bases) is not applied on this
-lane yet. Its recorded sessions live in the host store, and moving the store
-would strand them. That stays open on #617.
+The soul's tool home (`CODEX_HOME`, OpenCode's XDG bases) is routed on this
+lane as on ACP turns (#617). Each recorded session notes the store it was made
+in: `soul` when a tool home was routed, `host` otherwise; sessions recorded
+before #617 are `host`. A recorded session in the other store than this turn's
+would not be found there, so the turn is refused before any process with
+`resume-session-store-moved`. The error's `action` is the
+`agent-bot soul tool-home <harness> global|soul --soul <id>` command that
+switches the soul back, and the recorded session is kept.
 
 The harness name is the row's key, so it must name the client that answers.
 `grok` is Grok Build, the `grok` CLI. Grok Bot, the desktop app, has no

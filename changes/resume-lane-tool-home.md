@@ -1,0 +1,1 @@
+- The resume wake lane now runs a soul's harness in its own tool home, as ACP turns do. Each recorded session notes the store it was made in, and a session in the other store is refused with `resume-session-store-moved` and the `soul tool-home` command that switches back, instead of silently starting fresh (#617).
