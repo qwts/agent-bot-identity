@@ -40,7 +40,7 @@ const UNWIRED_SOULS = Object.freeze({ list: unwired, show: unwired, directory: u
 // agent-bot-keyd's App-level owner calls (#110); tests pass a fake `keyd`.
 const keydPort = ({ env, home }) => ({
   availability: (app) => appKeydAvailability(app, { env, home }),
-  importApp: (items) => importAppIntoKeyd(items, { env, home }),
+  importApp: (items, { createOnly = false } = {}) => importAppIntoKeyd(items, { env, home, createOnly }),
   removeApp: (app) => removeAppFromKeyd(app, { env, home }),
 });
 function settings(options) {
@@ -437,12 +437,12 @@ async function migrateKeyLocked(app, body, options) {
   }
 
   try {
-    const imported = await options.keyd.importApp([{ app, appId: String(recorded.id), privateKeyPem: credential.privateKeyPem }]);
+    const imported = await options.keyd.importApp([{ app, appId: String(recorded.id), privateKeyPem: credential.privateKeyPem }], { createOnly: true });
     if (imported?.stored !== 1) migrationPartial(app);
   } catch (error) {
     if (error instanceof IdentityAppError) throw error;
     if (error?.rpcCode === KEYD_METHOD_NOT_FOUND) {
-      fail('identity-app-keyd-refused', `agent-bot-keyd refused App ${app}'s key; the source credential was not changed.`);
+      fail('identity-app-keyd-refused', `agent-bot-keyd does not support create-only App imports; update keyd before migrating App ${app}. The source credential was not changed.`);
     }
     // A lost response can follow a successful keyd write. Probe again so an
     // ambiguous acknowledgement is reported as partial, never as a clean
@@ -468,6 +468,14 @@ async function migrateKeyLocked(app, body, options) {
       const current = config.identityApps?.[app];
       if (!sameMigrationRecord(current, expected)) {
         fail('identity-app-conflict', `App ${app} changed before its keyd migration could be recorded.`);
+      }
+      // The source can be changed outside our App lock while keyd asks the
+      // owner. Never declare the imported snapshot current after that change.
+      const sourceNow = readManagedAppCredential(app, { ...options, config });
+      if (!sourceNow || String(sourceNow.appId) !== String(recorded.id)
+        || fingerprint(sourceNow.privateKeyPem) !== keyFingerprint
+        || (sourceNow.webhookSecret ?? null) !== (credential.webhookSecret ?? null)) {
+        fail('identity-app-conflict', `App ${app}'s source credential changed during keyd migration.`);
       }
       // Re-read after the keyd owner prompt. A secret may change while that
       // prompt is open, including when it matched before the prompt.

@@ -266,13 +266,18 @@ impl Keyd {
             "owner/presence" => return Some(self.owner_presence(&id, &params, now)),
             "owner/status" => self.owner_status(&params),
             "owner/app-status" => self.owner_app_status(&params),
-            "owner/import" | "owner/remove" | "owner/pin" | "owner/app-import"
+            "owner/import"
+            | "owner/remove"
+            | "owner/pin"
+            | "owner/app-import"
+            | "owner/app-import-new"
             | "owner/app-remove" => {
                 let _one_prompt_at_a_time = self.owner_lock.lock().unwrap();
                 let result = match method {
                     "owner/import" => self.owner_import(&params),
                     "owner/remove" => self.owner_remove(&params),
-                    "owner/app-import" => self.owner_app_import(&params),
+                    "owner/app-import" => self.owner_app_import(&params, false),
+                    "owner/app-import-new" => self.owner_app_import(&params, true),
                     "owner/app-remove" => self.owner_app_remove(&params),
                     _ => self.owner_pin(&params),
                 };
@@ -533,7 +538,7 @@ impl Keyd {
 
     /// App-level keys (#110): one key per App slug, for every soul that acts
     /// as it. Same limits, checks, pin and single consent as `owner/import`.
-    fn owner_app_import(&self, params: &Value) -> Result<Value, String> {
+    fn owner_app_import(&self, params: &Value, create_only: bool) -> Result<Value, String> {
         let entries = Self::import_entries(params)?;
         let mut keys: Vec<(String, Credential)> = Vec::with_capacity(entries.len());
         for entry in &entries {
@@ -542,6 +547,9 @@ impl Keyd {
                 return Err("an App appears more than once".into());
             }
             let credential = self.import_credential(entry)?;
+            if create_only && self.store.app_credential(&app)?.is_some() {
+                return Err("the App-level key already exists; it was not replaced".into());
+            }
             keys.push((app, credential));
         }
         let pin = self.import_pin(params)?;
@@ -556,7 +564,13 @@ impl Keyd {
         for (app, credential) in &keys {
             Self::store_verified(
                 credential,
-                || self.store.put_app_credential(app, credential),
+                || {
+                    if create_only {
+                        self.store.insert_app_credential(app, credential)
+                    } else {
+                        self.store.put_app_credential(app, credential)
+                    }
+                },
                 || self.store.app_credential(app),
             )?;
             self.audit.record(
@@ -1272,6 +1286,72 @@ mod tests {
             .handle_soul(&json!({ "jsonrpc": "2.0", "id": 1, "method": "owner/app-status", "params": { "app": "qwts-claude-agent" } }))
             .unwrap();
         assert_eq!(soul["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn create_only_app_import_refuses_an_item_added_during_consent() {
+        use crate::store::{encode, Items, APP_SERVICE};
+        struct AddDuringConsent(Memory);
+        impl Consent for AddDuringConsent {
+            fn ask(&self, _reason: &str) -> Result<(), Refusal> {
+                self.0
+                    .write(
+                        APP_SERVICE,
+                        "github-app/test-app",
+                        encode(&Credential {
+                            app_id: "99".into(),
+                            private_key_pem: "late-key".into(),
+                        })
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                Ok(())
+            }
+        }
+        let items = Memory::default();
+        let mut keyd = keyd(true);
+        keyd.store = Store::new(Box::new(items.clone()));
+        keyd.consent = Box::new(AddDuringConsent(items));
+        let (pem, _) = test_key_pem();
+        let result = owner(
+            &keyd,
+            "owner/app-import-new",
+            json!({
+                "app": "test-app", "appId": "42", "privateKeyPem": pem, "daemonKey": daemon_key()
+            }),
+        );
+        assert_eq!(
+            result["error"]["message"],
+            "the App-level key already exists; it was not replaced"
+        );
+        let kept = keyd.store.app_credential("test-app").unwrap().unwrap();
+        assert_eq!(
+            (kept.app_id.as_str(), kept.private_key_pem.as_str()),
+            ("99", "late-key")
+        );
+    }
+
+    #[test]
+    fn create_only_app_import_adds_once_and_never_rotates() {
+        let keyd = keyd(true);
+        let (pem, _) = test_key_pem();
+        let params = json!({ "app": "test-app", "appId": "42", "privateKeyPem": pem, "daemonKey": daemon_key() });
+        assert_eq!(
+            owner(&keyd, "owner/app-import-new", params.clone())["result"],
+            json!({ "stored": 1, "pinned": true })
+        );
+        assert_eq!(
+            owner(&keyd, "owner/app-import-new", params)["error"]["message"],
+            "the App-level key already exists; it was not replaced"
+        );
+        assert_eq!(
+            keyd.store
+                .app_credential("test-app")
+                .unwrap()
+                .unwrap()
+                .private_key_pem,
+            pem
+        );
     }
 
     fn other_daemon_key() -> String {
