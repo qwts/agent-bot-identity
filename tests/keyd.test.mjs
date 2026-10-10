@@ -18,7 +18,8 @@ import {
 } from '../keyd-client.mjs';
 import { installKeyd, uninstallKeyd } from '../keyd-supervisor.mjs';
 import { appConfig, mint } from '../mint-token.mjs';
-import { credentialStores, migrateCredentialsCommand, resolveAppCredential } from '../soul-credentials.mjs';
+import { credentialStores, resolveAppCredential } from '../soul-credentials.mjs';
+import { migrateCredentialsCommand } from '../soul-credential-migration.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, soulCredentialsDeclaration } from '../soul-package.mjs';
 import { acpExecutorFor, withReachRules } from '../wake-plane.mjs';
 import { vouchStateDir } from '../vouch.mjs';

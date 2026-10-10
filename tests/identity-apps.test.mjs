@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createIdentityAppJobs, identityAppOperation, identityAppsCommand, listIdentityApps } from '../identity-apps.mjs';
+import { identityAppSouls } from '../identity-app-souls.mjs';
 import { appStoreTarget, cacheAppDoctorRows, readManagedAppCredential } from '../identity-app-store.mjs';
 import { credentialStores, resolveAppCredential } from '../soul-credentials.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
@@ -32,7 +33,7 @@ function fixture(t, { gate = true, platform = 'linux' } = {}) {
   writeFileSync(env.AGENT_BOT_CONFIG, JSON.stringify({ features: { 'github-identity': gate } }));
   const keyFile = path.join(home, 'incoming.pem'); writeFileSync(keyFile, KEY, { mode: 0o600 });
   const newKeyFile = path.join(home, 'new.pem'); writeFileSync(newKeyFile, NEW_KEY, { mode: 0o600 });
-  const options = { env, home, cwd: home, platform, gate: async () => ({ method: 'test' }), stores: credentialStores({ env }) };
+  const options = { env, home, cwd: home, platform, gate: async () => ({ method: 'test' }), stores: credentialStores({ env }), souls: identityAppSouls };
   t.after(() => rmSync(home, { recursive: true, force: true }));
   return { env, home, keyFile, newKeyFile, options };
 }
@@ -71,6 +72,13 @@ async function page(flow) {
 async function callback(manifest, state) {
   return fetch(manifest.redirect_url, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ code: 'fixture-code', state }) });
 }
+
+test('without the census port, an App operation that needs a soul is refused, not answered as soulless', async (t) => {
+  const f = fixture(t);
+  const { souls, ...unwired } = f.options;
+  assert.equal(souls, identityAppSouls);
+  assert.throws(() => listIdentityApps(unwired), { code: 'identity-app-census' });
+});
 
 test('gate off lists nothing without touching store or network; mutations fail closed', async (t) => {
   const f = fixture(t, { gate: false });

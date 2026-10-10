@@ -12,7 +12,7 @@ import * as gate from '../owner-gate.mjs';
 import * as action from '../owner-action.mjs';
 import { verifyPrincipalOwner } from '../owner-principal.mjs';
 import { identityAppOperation } from '../identity-apps.mjs';
-import { migrateCredentialsCommand } from '../soul-credentials.mjs';
+import { migrateCredentialsCommand } from '../soul-credential-migration.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const ID = 'agent_11111111-1111-4111-8111-111111111111';

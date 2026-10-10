@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 
 import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
 import { canonicalJson } from './canonical-json.mjs';
+import { CREDENTIAL_STORES } from './credential-names.mjs';
 import { RUNTIME_NAMES, normalizeHarnessInstall, normalizeRuntimeDeclaration } from './runtime-catalog.mjs';
 import { buildHarnessFiles, envProblem, PERMISSION_RULE } from './soul-builder.mjs';
 import { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS, isGeneratedPath } from './soul-harness-contract.mjs';
@@ -35,7 +36,8 @@ export { canonicalJson };
 // `keyd` is agent-bot-keyd's Keychain, which only that signed binary reads
 // (#397). `secrets` (#583 slice 4) names provider secrets the same way:
 // `{ <name>: { store } }`, each set with `soul secret`, never written here.
-export const CREDENTIAL_STORES = Object.freeze(['keychain', 'file', 'keyd', 'pass-cli']);
+// The store kinds are identity's (credential-names.mjs, #645).
+export { CREDENTIAL_STORES };
 const APP_SLUG = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?$/;
 export function validateCredentialsDeclaration(credentials) {
   if (!object(credentials)) throw new Error('soul.json credentials must be an object');

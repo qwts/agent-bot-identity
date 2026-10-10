@@ -12,8 +12,6 @@ import { apiBase, isGateEnabled, loadConfig, slugForHarness, appLifecycleStatus 
 import { PROFILE_HARNESSES, profileAppSlugs } from './organization-profile.mjs';
 import { assertOwnerAction } from './owner-gate.mjs';
 import { assignAgentApp, readAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
-import { listSouls, populationFile, showSoul, setSoulApp, soulDirectory } from './agent-population.mjs';
-import { soulCredentialsDeclaration } from './soul-package.mjs';
 import { credentialStores, defaultCredentialStore, resolveAppCredential } from './soul-credentials.mjs';
 import { credentialNamespace, itemTitle, managedAppItem } from './credential-names.mjs';
 import { createProtonPassCredentialProvider, validateIssuer, validatePrivateKey } from './ensure-private-key.mjs';
@@ -32,9 +30,15 @@ function slug(value) {
   if (!validAppSlug(value)) fail('identity-app-invalid', 'A valid App slug is required.', 400);
   return value;
 }
+// The census and soul.json declarations are the soul's; identity may not
+// read them itself (#645). The composition roots pass identity-app-souls.mjs
+// as `souls`. A library caller without it is refused when an operation needs
+// a soul, never answered as if there were none.
+const unwired = () => fail('identity-app-census', 'App management needs the soul census; run it through agent-bot identity apps or the daemon.');
+const UNWIRED_SOULS = Object.freeze({ list: unwired, show: unwired, directory: unwired, declaration: unwired, assignApp: unwired });
 function settings(options) {
   const env = options.env ?? process.env, home = options.home ?? homedir();
-  return { ...options, env, home, config: loadConfig({ env, home }), stores: options.stores ?? credentialStores({ env }), platform: options.platform ?? process.platform };
+  return { ...options, env, home, config: loadConfig({ env, home }), stores: options.stores ?? credentialStores({ env }), platform: options.platform ?? process.platform, souls: options.souls ?? UNWIRED_SOULS };
 }
 function enabled(config) {
   if (!isGateEnabled('github-identity', { config })) fail('identity-app-disabled', 'Enable the github-identity add-on before managing Apps.');
@@ -138,10 +142,10 @@ function persist(app, credential, cachedInstallations, options, { replace = fals
     if (replace && previous?.keyFingerprint !== previousFingerprint) fail('identity-app-conflict', `App ${app} changed; retry rotation.`);
     // A managed App must not shadow a signed-helper credential. The keyd
     // owner/import lifecycle remains with migrate-credentials.
-    for (const soul of listSouls({ file: populationFile(options) })) {
+    for (const soul of options.souls.list(options)) {
       let directory;
-      try { directory = soulDirectory(soul.id, { ...options, file: populationFile(options), readOnly: true }); } catch { fail('identity-app-store', 'Could not inspect soul credential declarations; repair the census before managing Apps.'); }
-      const declaration = soulCredentialsDeclaration(directory);
+      try { directory = options.souls.directory(soul.id, { ...options, readOnly: true }); } catch { fail('identity-app-store', 'Could not inspect soul credential declarations; repair the census before managing Apps.'); }
+      const declaration = options.souls.declaration(directory);
       if (declaration?.app === app && declaration.store === 'keyd') fail('identity-app-keyd-held', `App ${app} is held by keyd; manage its keys through the keyd owner workflow.`);
     }
     if (previous?.store) {
@@ -169,7 +173,7 @@ export function listIdentityApps(options = {}) {
   const opts = settings(options), { config, env, home } = opts;
   const addons = addonStatus(config);
   if (!addons['github-identity']) return { schemaVersion: 1, addons, apps: [] };
-  const souls = listSouls({ file: populationFile({ env, home }) });
+  const souls = opts.souls.list(opts);
   const mapped = harnessMappings(config);
   const apps = new Set([...Object.keys(config.identityApps ?? {}), ...profileAppSlugs(config), ...mapped.map((r) => r.slug), ...souls.map((s) => s.appSlug)].filter(Boolean));
   const cache = readAppDoctorCache(opts);
@@ -254,14 +258,14 @@ function assign(body, options) {
   }
   let id;
   try { id = validateAgentId(body.soul); } catch { fail('identity-app-invalid', 'A valid soul Agent ID is required.', 400); }
-  const file = populationFile(options), stateDir = stateDirectory(options);
-  const soul = showSoul(id, { file });
+  const stateDir = stateDirectory(options);
+  const soul = options.souls.show(id, options);
   if (soul.status === 'retired') fail('identity-app-retired', 'Cannot assign a retired soul.');
   readAgentIdentity(id, { stateDir });
   let directory;
-  try { directory = soulDirectory(id, { ...options, file }); } catch { /* census-only soul */ }
-  if (directory && soulCredentialsDeclaration(directory)?.store === 'keyd') fail('identity-app-keyd-held', 'This soul uses keyd; change its identity through the keyd owner workflow.');
-  assignAgentApp(id, app, { stateDir, afterWrite: () => setSoulApp(id, app, { file }) });
+  try { directory = options.souls.directory(id, options); } catch { /* census-only soul */ }
+  if (directory && options.souls.declaration(directory)?.store === 'keyd') fail('identity-app-keyd-held', 'This soul uses keyd; change its identity through the keyd owner workflow.');
+  assignAgentApp(id, app, { stateDir, afterWrite: () => options.souls.assignApp(id, app, options) });
   return { slug: app, soul: id };
 }
 // Forget a managed App on this machine: its App-scoped store item, its
@@ -288,7 +292,7 @@ function remove(body, options) {
   const app = managedSlug(body.slug, options.config);
   const blockers = (config) => {
     const harnesses = harnessMappings(config).filter((row) => row.slug === app).map((row) => row.harness);
-    const souls = listSouls({ file: populationFile(options) }).filter((soul) => soul.appSlug === app && soul.status !== 'retired').map((soul) => soul.id);
+    const souls = options.souls.list(options).filter((soul) => soul.appSlug === app && soul.status !== 'retired').map((soul) => soul.id);
     if (harnesses.length || souls.length) {
       const named = [...harnesses.map((h) => `harness ${h}`), ...souls.map((id) => `soul ${id}`)].join(', ');
       fail('identity-app-assigned', `App ${app} is still assigned to ${named}; assign them another App first.`);
@@ -515,8 +519,8 @@ export async function identityAppsCommand(argv, { write = (value) => process.std
   return result;
 }
 // The command line is cli/identity-apps.mjs, which wires the owner gate's
-// principal check and census (owner-action.mjs, #645). Run directly, this
-// file only points there.
+// principal check (owner-action.mjs) and the census (identity-app-souls.mjs,
+// #645). Run directly, this file only points there.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   process.stderr.write('identity-apps: run agent-bot identity apps\n');
   process.exitCode = 1;

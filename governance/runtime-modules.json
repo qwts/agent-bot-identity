@@ -95,7 +95,6 @@
     "cli/dispatch.mjs": "cli",
     "cli/identity-apps.mjs": "cli",
     "cli/identity.mjs": "cli",
-    "cli/soul-env-transfer.mjs": "The `soul env export|import` process entry: composes the soul module's life archive with the host interaction store (#583), which soul may not import.",
     "cli/migrate-credentials.mjs": "cli",
     "cli/mint-output.mjs": "cli",
     "cli/mint-token.mjs": "cli",
@@ -137,6 +136,7 @@
     "harness-auth.mjs": "soul",
     "hook-dialects.mjs": "harness",
     "identity-app-store.mjs": "identity",
+    "identity-app-souls.mjs": "soul",
     "identity-apps.mjs": "identity",
     "inbox-probe.mjs": "identity",
     "inbox-take.mjs": "identity",
@@ -197,6 +197,7 @@
     "soul-builder.mjs": "soul",
     "soul-comms.mjs": "soul",
     "soul-computer-use.mjs": "soul",
+    "soul-credential-migration.mjs": "soul",
     "soul-credentials.mjs": "identity",
     "soul-dir.mjs": "soul",
     "soul-env-clean.mjs": "soul",
@@ -258,10 +259,12 @@
     "approval-action.mjs": "Names a waiting proposal's soul from the population for the owner's prompt; soul, shared by the daemon host and the approvals command.",
     "canonical-json.mjs": "The canonical byte form behind soul revisions and genesis IDs; shared so identity can derive IDs without importing soul. soul-package re-exports it.",
     "cli/identity.mjs": "`agent-bot identity`: composes identity with soul (a local `spawn --package` hashes the package) and the census (`finalize`). agent-identity.mjs keeps the library and the git hooks' entry (current, show, record).",
+    "cli/soul-env-transfer.mjs": "The `soul env export|import` process entry: composes the soul module's life archive with the host interaction store (#583), which soul may not import.",
     "comms-membership.mjs": "Joins and leaves agent-comms as a launched soul; split from the daemon host so soul lifecycle commands need not import it.",
     "daemon-log.mjs": "Logging helper used by several modules; shared, not host.",
     "daemon-status.mjs": "Daemon status for callers outside the host; in comms because it folds in agent-comms status (readCommsStatus), which identity may not import.",
     "detect-harness.mjs": "Reads its harness vocabulary from organization-profile-schema (PROFILE_HARNESSES); one of the duplicated harness key tables.",
+    "identity-app-souls.mjs": "The census and soul.json declarations identity-apps.mjs needs, passed in as its `souls` port by cli/identity-apps.mjs and the daemon (#645); identity never reads them itself.",
     "metrics.mjs": "Host: records harness sessions from the session-start hook and is read by the daemon; the `metrics` command in cli composes it. Keeps the composition roots acyclic (cli may import host, never the reverse).",
     "organization-profile-schema.mjs": "The profile schema, validator and runtime-config projection. config.json embeds a validated profile snapshot, so config (shared) and detect-harness (harness) read it here; organization-profile (org) keeps external acquisition and re-exports this.",
     "runtime-catalog.mjs": "Reviewed pin catalogue bundled with each release (ADR-0322 decision 8); stays in soul, never sourced from harness-docs.",
@@ -269,18 +272,15 @@
     "setup-worktree.mjs": "Places a checkout in the soul work area and asks identity for its attribution.",
     "sop.mjs": "Per-soul SOP selection is soul policy (ADR-0332). Its pinned-source resolution is the org resolver to extract into org.",
     "soul-builder.mjs": "Generation stays in soul; its per-harness file tables are harness knowledge to be read from agent-harness.",
-    "soul-credentials.mjs": "Named for souls but holds GitHub App credential custody (resolveAppCredential); identity-owned. Rename only with a compatibility plan.",
+    "soul-credential-migration.mjs": "`identity migrate-credentials`: copies keys through identity's stores, then records the store in soul.json as a revision edit, which is soul state (#645).",
+    "soul-credentials.mjs": "Named for souls but holds GitHub App credential custody (resolveAppCredential); identity-owned. Rename only with a compatibility plan. Its two baseline crossings are declaringSouls: finding which soul declares an App needs the census and soul.json, and the git credential helper and signed-commit mint in-process with no composition root to wire them, so removing them waits on the identity contract (ADR-0645 §5).",
     "soul-genesis.mjs": "Derives a soul's Agent ID from its genesis (revision, parent, nonce); identity owns ID minting, so it is identity even though the revision it hashes comes from soul.",
     "soul-tool-homes.mjs": "Tool-home routes are generated per soul (ADR-0583). Routability facts are harness knowledge.",
     "wake-plane.mjs": "Daemon side of the agent-comms wake plane (agent-comms ADR-0008): launches souls on wakes, so it composes soul and comms."
   },
   "computed_imports": {},
   "baseline": [
-    "identity-apps.mjs -> agent-population.mjs",
-    "identity-apps.mjs -> soul-package.mjs",
     "soul-credentials.mjs -> agent-population.mjs",
-    "soul-credentials.mjs -> soul-package.mjs",
-    "soul-credentials.mjs -> soul-providers.mjs",
-    "soul-credentials.mjs -> soul-revisions.mjs"
+    "soul-credentials.mjs -> soul-package.mjs"
   ]
 }

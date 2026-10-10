@@ -22,8 +22,9 @@ import { fakePassCli } from './fixtures/fake-pass-cli.mjs';
 import { runPass } from '../secret-providers/pass-cli.mjs';
 import { createProtonPassCredentialProvider, ensurePrivateKey } from '../ensure-private-key.mjs';
 import { inspectLocalAppCredential } from '../credential-reconciler.mjs';
-import { appKeyStores, credentialStores, passCliItem, passCliStore, fileStore, keychainItem, keychainStore, migrateCredentialsCommand,
+import { appKeyStores, credentialStores, passCliItem, passCliStore, fileStore, keychainItem, keychainStore,
   resolveAppCredential } from '../soul-credentials.mjs';
+import { migrateCredentialsCommand } from '../soul-credential-migration.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const FAKE_SECURITY = path.join(ROOT, 'tests', 'fixtures', 'fake-security.mjs');
