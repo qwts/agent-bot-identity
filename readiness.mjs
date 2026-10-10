@@ -29,7 +29,8 @@ import { daemonStatus } from './agent-daemon.mjs';
 import { readBindToken, readBinding } from './agent-binding.mjs';
 import { readAgentIdentity, stateDirectory } from './agent-identity.mjs';
 import { isSoulBound } from './git-credential-bot.mjs';
-import { inspectSupervisor, supervisorSkipLoad } from './daemon-supervisor.mjs';
+import { inspectSupervisor, supervisorSkipLoad, supervisorUnitCredentialNames } from './daemon-supervisor.mjs';
+import { NAMESPACE_VARIABLE, VAULT_VARIABLE, credentialNamespace, credentialVault } from './credential-names.mjs';
 import { embeddingAppBundle, homebrewRuntimeRoot, inspectExecutableLink, installationPaths, isManagedExecutable } from './install.mjs';
 import { inspectConfiguredCodexDesktopGh, inspectShellGhShim } from './install-gh-shim.mjs';
 import {
@@ -283,6 +284,54 @@ function supervisorCheck({ home, env, inspect }) {
       applied: true,
       loaded: true,
     },
+  });
+}
+
+// The shell's credential names against the daemon unit's (#676). The CLI
+// and the daemon each read only the names their own environment resolves,
+// so a difference means one looks where the other never wrote. Resolved
+// values are compared, so unset and the default agree. Null without a unit.
+function credentialNamesCheck({ home, env, serviceEnv, read }) {
+  let unit;
+  try { unit = read({ home, env: serviceEnv }); } catch { return null; }
+  if (!unit) return null;
+  const resolve = (source) => {
+    try { return { namespace: credentialNamespace(source), vault: credentialVault(source) }; }
+    catch { return null; }
+  };
+  const shell = resolve(env);
+  const daemon = resolve(unit);
+  const evidence = { shell, daemon };
+  if (!shell || !daemon) {
+    return readinessCheck({
+      id: 'credential.names',
+      status: 'warning',
+      code: 'credential-names-invalid',
+      message: `${!shell ? 'this shell' : 'the daemon unit'} sets a malformed ${NAMESPACE_VARIABLE} or ${VAULT_VARIABLE}`,
+      action: !shell ? `unset or correct ${NAMESPACE_VARIABLE} and ${VAULT_VARIABLE} in this shell`
+        : 'reinstall the daemon from the host that owns it (agent-bot daemon install)',
+      evidence,
+    });
+  }
+  const differ = [
+    ...(shell.namespace !== daemon.namespace ? [NAMESPACE_VARIABLE] : []),
+    ...(shell.vault !== daemon.vault ? [VAULT_VARIABLE] : []),
+  ];
+  if (differ.length) {
+    return readinessCheck({
+      id: 'credential.names',
+      status: 'warning',
+      code: 'credential-names-mismatch',
+      message: `this shell's ${differ.join(' and ')} differ${differ.length === 1 ? 's' : ''} from the daemon unit's (shell ${shell.namespace} / ${shell.vault}, daemon ${daemon.namespace} / ${daemon.vault}); the CLI and the daemon look for credentials under different names`,
+      action: `set ${differ.join(' and ')} in this shell to the daemon unit's value${differ.length === 1 ? '' : 's'}`,
+      evidence,
+    });
+  }
+  return readinessCheck({
+    id: 'credential.names',
+    status: 'ready',
+    message: `this shell and the daemon unit use the same credential names (${shell.namespace} / ${shell.vault})`,
+    evidence,
   });
 }
 
@@ -2284,6 +2333,7 @@ export async function collectReadiness({
   inspectKeyStores = appKeyStores,
   inspectSpace = inspectSoulSpace,
   inspectDaemonSupervisor = inspectSupervisor,
+  readUnitCredentialNames = supervisorUnitCredentialNames,
   inspectCutover = inspectSpacesCutover,
   inspectShellGh = inspectShellGhShim,
   inspectCodexDesktopGh = inspectConfiguredCodexDesktopGh,
@@ -2393,6 +2443,8 @@ export async function collectReadiness({
     const serviceEnv = app ? appServiceEnv(app, env) : env;
     const supervisor = supervisorCheck({ home, env: serviceEnv, inspect: inspectDaemonSupervisor });
     machineChecks.push(app ? appServiceAction(supervisor, app) : supervisor);
+    const credentialNames = credentialNamesCheck({ home, env, serviceEnv, read: readUnitCredentialNames });
+    if (credentialNames) machineChecks.push(credentialNames);
     const daemonHealth = await daemonHealthCheck({
       home,
       env: serviceEnv,

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +26,7 @@ import {
   stableHomebrewPath,
   supervisorEnvironment,
   supervisorPaths,
+  supervisorUnitCredentialNames,
   WINDOWS_STATE_DIRECTORY,
 } from '../daemon-supervisor.mjs';
 
@@ -775,4 +776,27 @@ test('win32 schtasks refusals are typed errors carrying its reason; a task never
   const typo = fakeSchtasks();
   typo.exec('schtasks.exe', ['/Create', '/XML', unitPath, '/TN', 'other.task', '/F']);
   assert.equal(inspectSupervisor({ home, env, platform: 'win32', exists: () => true, exec: typo.exec }).loaded, false);
+});
+
+// #676: doctor compares the shell's credential names with the ones the unit
+// pins, so each unit kind must read back what its renderer wrote.
+test('the credential names a unit pins read back from every unit kind', (t) => {
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    const home = mkdtempSync(join(tmpdir(), 'agent-bot-unit-names-'));
+    t.after(() => rmSync(home, { recursive: true, force: true }));
+    const env = { HOME: home, LOCALAPPDATA: join(home, 'AppData', 'Local') };
+    assert.equal(supervisorUnitCredentialNames({ home, env, platform }), null, `${platform}: no unit, no names`);
+    const paths = supervisorPaths(home, platform, env);
+    const write = (environment) => {
+      const body = renderSupervisorUnit({ kind: paths.kind, executable: '/opt/agent-bot/bin/agent-bot', environment,
+        label: paths.label, logPath: paths.logPath ?? join(home, 'daemon.log'), userId: 'HOST\\owner' });
+      mkdirSync(dirname(paths.unitPath), { recursive: true });
+      writeFileSync(paths.unitPath, paths.kind === 'schtasks' ? scheduledTaskBytes(body) : body);
+    };
+    write({ AGENT_BOT_DAEMON_STATE_PATH: join(home, 'state.json') });
+    assert.deepEqual(supervisorUnitCredentialNames({ home, env, platform }), {}, `${platform}: unset names stay unset`);
+    const names = { AGENT_BOT_CREDENTIAL_NAMESPACE: 'app.geniusbar', AGENT_BOT_CREDENTIAL_VAULT: 'GeniusBar & Co Identities' };
+    write({ AGENT_BOT_DAEMON_STATE_PATH: join(home, 'state.json'), ...names });
+    assert.deepEqual(supervisorUnitCredentialNames({ home, env, platform }), names, `${platform}: names read back`);
+  }
 });

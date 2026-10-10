@@ -1,0 +1,1 @@
+- `agent-bot doctor` warns when this shell's `AGENT_BOT_CREDENTIAL_NAMESPACE` or `AGENT_BOT_CREDENTIAL_VAULT` differs from the daemon unit's, and `agent-bot identity migrate-credentials --from-namespace OLD` copies App keys, provider secrets and managed App keys from an old credential namespace to the current one, reading each copy back and never deleting the old items (#676).

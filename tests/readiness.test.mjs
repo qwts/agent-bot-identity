@@ -2646,3 +2646,34 @@ test('credential.key_store marks only the App with an unknown managed store unre
   assert.ok(!check.message.includes('clipboard'));
   assert.equal(report.ready, true);
 });
+
+// #676: the CLI and the daemon each read only the credential names their own
+// environment resolves, so doctor warns when this shell's differ from the
+// daemon unit's.
+test('doctor warns when the shell credential names differ from the daemon unit', async () => {
+  const home = tempRoot();
+  const check = async (env, unit) => {
+    const report = await collectReadiness({ ...machineDependencies(home), env: { HOME: home, ...env }, scope: 'machine',
+      readUnitCredentialNames: () => unit });
+    return report.machine.checks.find((entry) => entry.id === 'credential.names');
+  };
+  assert.equal(await check({}, null), undefined, 'no unit, no check');
+  const same = await check({}, {});
+  assert.equal(same.status, 'ready');
+  assert.deepEqual(same.evidence, { shell: { namespace: 'agent-bot', vault: 'Agent Identities' }, daemon: { namespace: 'agent-bot', vault: 'Agent Identities' } });
+  assert.equal((await check({ AGENT_BOT_CREDENTIAL_NAMESPACE: 'agent-bot' }, {})).status, 'ready', 'the default spelled out agrees with unset');
+  const namespace = await check({}, { AGENT_BOT_CREDENTIAL_NAMESPACE: 'app.geniusbar' });
+  assert.equal(namespace.status, 'warning');
+  assert.equal(namespace.code, 'credential-names-mismatch');
+  assert.match(namespace.message, /AGENT_BOT_CREDENTIAL_NAMESPACE differs from the daemon unit's/);
+  assert.match(namespace.action, /AGENT_BOT_CREDENTIAL_NAMESPACE/);
+  const vault = await check({ AGENT_BOT_CREDENTIAL_NAMESPACE: 'app.geniusbar', AGENT_BOT_CREDENTIAL_VAULT: 'Mine' },
+    { AGENT_BOT_CREDENTIAL_NAMESPACE: 'app.geniusbar' });
+  assert.equal(vault.code, 'credential-names-mismatch');
+  assert.match(vault.message, /AGENT_BOT_CREDENTIAL_VAULT differs/);
+  assert.doesNotMatch(vault.message, /NAMESPACE/);
+  const malformed = await check({ AGENT_BOT_CREDENTIAL_NAMESPACE: 'bad/name' }, {});
+  assert.equal(malformed.status, 'warning');
+  assert.equal(malformed.code, 'credential-names-invalid');
+  assert.match(malformed.message, /this shell/);
+});

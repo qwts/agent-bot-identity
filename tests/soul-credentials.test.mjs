@@ -313,6 +313,113 @@ test('migrate-credentials copies into the store, verifies, reports removable key
   assertNoSecret(audit, 'audit');
 });
 
+// #676: a host that changes its credential namespace copies what it stored
+// under the old one. Hermetic: the fake `security` keeps every item in
+// FAKE_KEYCHAIN under the scratch HOME.
+function namespaceFixture(t) {
+  const f = fixture(t, { legacy: false });
+  const manifest = JSON.parse(readFileSync(path.join(f.soul, 'soul.json'), 'utf8'));
+  manifest.credentials.secrets = { 'model-key': { store: 'keychain' } };
+  writeFileSync(path.join(f.soul, 'soul.json'), JSON.stringify(manifest));
+  writeFileSync(f.env.AGENT_BOT_CONFIG, JSON.stringify({ identityApps: { 'org-app': { id: '777', store: 'keychain' } } }));
+  const old = credentialStores({ env: { ...f.env, AGENT_BOT_CREDENTIAL_NAMESPACE: 'old.host' } });
+  old.keychain.write({ agentId: id, slug: SLUG }, { appId: '12345', privateKeyPem: PEM });
+  old.keychain.writeSecret({ agentId: id, name: 'model-key' }, 'sk-canary-secret');
+  old.keychain.write({ appScoped: true, slug: 'org-app' }, { appId: '777', privateKeyPem: PEM });
+  const keychain = () => JSON.parse(readFileSync(f.env.FAKE_KEYCHAIN, 'utf8'));
+  return { ...f, old, keychain };
+}
+
+test('migrate-credentials --from-namespace copies keys and secrets, reads them back and keeps the old items', async (t) => {
+  const { env, home, stores, old, keychain } = namespaceFixture(t);
+  const before = keychain();
+  const out = [];
+  const common = { env, home, cwd: home, stores, platform: 'darwin', markers: () => [], write: (text) => out.push(text) };
+  const first = await migrateCredentialsCommand(['--all', '--from-namespace', 'old.host'], { ...common,
+    gate: async () => ({ method: 'consent' }), verify: async () => true });
+  assert.deepEqual([...first.souls, ...first.apps].map((row) => row.status), ['migrated', 'migrated', 'migrated']);
+  const preview = await migrateCredentialsCommand(['--all', '--from-namespace', 'old.host', '--dry-run'], { ...common,
+    gate: async () => { throw new Error('a dry run needs no approval'); }, verify: async () => { throw new Error('not in a dry run'); } });
+  assert.deepEqual(preview.souls.map((row) => row.status), ['already-migrated', 'already-migrated'], 'the first run already copied');
+  for (const key of Object.keys(before)) assert.ok(key in keychain(), 'old items are kept');
+  assert.deepEqual(stores.keychain.read({ agentId: id, slug: SLUG }), { appId: '12345', privateKeyPem: PEM });
+  assert.equal(stores.keychain.readSecret({ agentId: id, name: 'model-key' }), 'sk-canary-secret');
+  assert.deepEqual(stores.keychain.read({ appScoped: true, slug: 'org-app' }), { appId: '777', privateKeyPem: PEM });
+  assert.deepEqual(old.keychain.read({ agentId: id, slug: SLUG }), { appId: '12345', privateKeyPem: PEM }, 'the old copy is untouched');
+  assert.deepEqual(Object.keys(keychain()).sort(), [
+    `agent-bot.app.org-app\u0000github-app/org-app`,
+    `agent-bot.soul.${id}\u0000github-app/${SLUG}`,
+    `agent-bot.soul.${id}\u0000secret/model-key`,
+    `old.host.app.org-app\u0000github-app/org-app`,
+    `old.host.soul.${id}\u0000github-app/${SLUG}`,
+    `old.host.soul.${id}\u0000secret/model-key`,
+  ]);
+  const text = out.join('');
+  assertNoSecret(text, 'stdout');
+  assert.ok(!text.includes('sk-canary-secret'), 'stdout leaked the secret');
+  const audit = readFileSync(auditFile({ env, home }), 'utf8');
+  assert.match(audit, /namespace old\.host -> agent-bot/);
+  assertNoSecret(audit, 'audit');
+  assert.ok(!audit.includes('sk-canary-secret'));
+});
+
+test('migrate-credentials --from-namespace is gated, verified, and names items in its report', async (t) => {
+  const { env, home, stores, keychain } = namespaceFixture(t);
+  const common = { env, home, cwd: home, stores, platform: 'darwin', markers: () => [], write: () => {} };
+  const preview = await migrateCredentialsCommand(['--all', '--from-namespace', 'old.host', '--dry-run', '--json'], { ...common,
+    gate: async () => { throw new Error('a dry run needs no approval'); }, verify: async () => { throw new Error('not in a dry run'); } });
+  assert.deepEqual([...preview.souls, ...preview.apps].map((row) => row.status), ['would-migrate', 'would-migrate', 'would-migrate']);
+  assert.equal(Object.keys(keychain()).filter((key) => key.startsWith('agent-bot.')).length, 0, 'a dry run writes nothing');
+  const gated = [];
+  const verified = [];
+  const report = await migrateCredentialsCommand(['--soul', 'ted', '--from-namespace', 'old.host', '--json'], { ...common,
+    gate: async (action) => { gated.push(action); return { method: 'consent' }; },
+    verify: async (credential) => { verified.push(credential.appId); return true; } });
+  assert.deepEqual(gated, [`identity migrate-credentials ${id} --from-namespace old.host`]);
+  assert.deepEqual(verified, ['12345']);
+  assert.equal(report.fromNamespace, 'old.host');
+  assert.equal(report.namespace, 'agent-bot');
+  assert.deepEqual(report.deleted, []);
+  assert.deepEqual(report.apps, [], 'a managed App key moves only with --all');
+  assert.deepEqual(report.souls.map(({ kind, from, to, status }) => ({ kind, from, to, status })), [
+    { kind: 'github-app', from: `old.host.soul.${id}/github-app/${SLUG}`, to: `agent-bot.soul.${id}/github-app/${SLUG}`, status: 'migrated' },
+    { kind: 'secret', from: `old.host.soul.${id}/secret/model-key`, to: `agent-bot.soul.${id}/secret/model-key`, status: 'migrated' },
+  ]);
+});
+
+test('migrate-credentials --from-namespace never overwrites a different value and keeps the source on a failed check', async (t) => {
+  const { env, home, stores, old } = namespaceFixture(t);
+  stores.keychain.writeSecret({ agentId: id, name: 'model-key' }, 'a-newer-value');
+  const report = await migrateCredentialsCommand(['--all', '--from-namespace', 'old.host', '--json'], { env, home, cwd: home, stores,
+    platform: 'darwin', markers: () => [], write: () => {}, gate: async () => ({ method: 'consent' }),
+    verify: async () => { throw new Error('GitHub refused the stored key (GET /app -> 401)'); } });
+  const [app, secret] = report.souls;
+  assert.equal(app.status, 'failed');
+  assert.doesNotMatch(app.detail, /401/, 'the verifier error is not reflected');
+  assert.equal(stores.keychain.read({ agentId: id, slug: SLUG }), null, 'nothing copied without a live check');
+  assert.equal(secret.status, 'failed');
+  assert.match(secret.detail, /nothing was overwritten/);
+  assert.equal(stores.keychain.readSecret({ agentId: id, name: 'model-key' }), 'a-newer-value');
+  assert.equal(old.keychain.readSecret({ agentId: id, name: 'model-key' }), 'sk-canary-secret');
+  assert.equal(report.apps[0].status, 'failed');
+});
+
+test('migrate-credentials --from-namespace refuses a bad, same or combined namespace before any store call', async (t) => {
+  const { env, home, stores } = namespaceFixture(t);
+  const log = () => readFileSync(env.FAKE_KEYCHAIN_LOG, 'utf8');
+  const calls = log();
+  const run = (argv, extra = {}) => migrateCredentialsCommand(argv, { env, home, cwd: home, stores, platform: 'darwin',
+    markers: () => [], write: () => {}, gate: async () => assert.fail('never asked'), verify: async () => true, ...extra });
+  await assert.rejects(run(['--all', '--from-namespace', 'bad/name']), /AGENT_BOT_CREDENTIAL_NAMESPACE must/);
+  await assert.rejects(run(['--all', '--from-namespace', '']), /needs the old/);
+  await assert.rejects(run(['--all', '--from-namespace', 'agent-bot']), /already this host's credential namespace/);
+  await assert.rejects(run(['--all', '--from-namespace', 'old.host', '--to', 'keyd']), /^Error: usage/);
+  await assert.rejects(run(['--all', '--from-namespace']), /^Error: usage/);
+  await assert.rejects(run(['--all', '--from-namespace', 'old.host'], { env: { ...env, AGENT_BOT_ID: id }, markers: undefined }),
+    /owner only/);
+  assert.equal(log(), calls, 'no store was called');
+});
+
 test('a failed live check reports the soul as failed and keeps the legacy key', async (t) => {
   const { env, home, stores } = fixture(t);
   const report = await migrateCredentialsCommand(['--all', '--json'], { env, home, cwd: home, stores, platform: 'darwin',
