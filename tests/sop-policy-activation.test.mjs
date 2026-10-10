@@ -311,5 +311,7 @@ test('runDaemon composes its only launch handler with the SOP launch policy port
   assert.equal(handlers.length, 1, 'one launch handler');
   const body = source.slice(handlers[0].index, source.indexOf('\n  });', handlers[0].index));
   assert.match(body, /\n    policy: sopLaunchPolicy\(\{ env, home, now \}\),\n/);
+  assert.match(source, /const onLaunch = createLaunchHandler\(\{/, 'the handler is onLaunch');
+  assert.match(source, /createCommsSupervisor\(\{[^}]*\bonLaunch\b[^}]*\}\)/, 'broker launches and relaunches go through the same handler');
   assert.match(source, /onLaunch\(request, \{ account, parent,/, 'a team start goes through the same handler');
 });
