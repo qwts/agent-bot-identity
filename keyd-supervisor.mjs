@@ -94,7 +94,7 @@ export async function keydCommand(argv, { env = process.env, home = homedir(), w
   } else if (action === 'status' && args.length === 0) {
     result = await keydStatus({ env, home });
     if (!json) {
-      write(result.running ? `agent-bot-keyd ${result.version} running; daemon key ${result.pinned ? 'pinned' : 'not pinned'}\n` : 'agent-bot-keyd is not running\n');
+      write(result.running ? `agent-bot-keyd ${result.version ?? 'unknown version'} running; daemon key ${result.pinned ? 'pinned' : 'not pinned'}\n` : 'agent-bot-keyd is not running\n');
       if (result.running && result.versionMatches !== true) write(`this agent-bot is pinned to agent-bot-keyd ${result.expectedVersion}; ${keydVersionAction(result)}\n`);
     }
   } else {

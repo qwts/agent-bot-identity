@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { KEYD_PINNED_VERSION, keydStatus } from '../keyd-client.mjs';
+import { KEYD_PINNED_VERSION, keydPaths, keydStatus } from '../keyd-client.mjs';
+import { keydCommand } from '../keyd-supervisor.mjs';
 import { keydVersionCheck } from '../readiness.mjs';
 
 // #767 step 3: an agent-bot release pins the agent-bot-keyd it is built and
@@ -34,6 +36,27 @@ test('keyd status reports the pin and whether the running keyd matches it', asyn
   assert.equal((await at(undefined)).versionMatches, null);
   const down = await keydStatus({ home, env, request: async () => { throw new Error('down'); } });
   assert.deepEqual([down.running, down.expectedVersion, down.versionMatches], [false, KEYD_PINNED_VERSION, null]);
+});
+
+test('keyd status text names a running keyd that reports no version', async (t) => {
+  const { home, env } = fixture(t);
+  const { ownerSocket } = keydPaths({ env, home });
+  mkdirSync(path.dirname(ownerSocket), { recursive: true });
+  const server = createServer((connection) => connection.once('data', (chunk) => {
+    const request = JSON.parse(String(chunk));
+    connection.end(`${JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { pinned: true } })}\n`);
+  }));
+  await new Promise((resolve) => server.listen(ownerSocket, resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  let text = '';
+  await keydCommand(['status'], { env, home, write: (chunk) => { text += chunk; } });
+  assert.match(text, /^agent-bot-keyd unknown version running; daemon key pinned\n/);
+  assert.match(text, /did not report a version/);
+  assert.doesNotMatch(text, /null/);
+  let json = '';
+  const result = await keydCommand(['status', '--json'], { env, home, write: (chunk) => { json += chunk; } });
+  assert.deepEqual(JSON.parse(json), result);
+  assert.deepEqual([result.version, result.versionMatches], [null, null]);
 });
 
 const probe = (status) => async () => ({ bin: null, pinned: true, expectedVersion: KEYD_PINNED_VERSION, ...status });
