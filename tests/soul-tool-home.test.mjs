@@ -252,6 +252,38 @@ for (const existing of [false, true]) test(`a failed session commit restores the
   assert.deepEqual(readdirSync(path.dirname(file)), ['wake-sessions.json']);
 });
 
+for (const existing of [false, true]) test(`a failed rollback keeps the ${existing ? 'previous choice' : 'absent record'} recoverable and receipts the partial update`, async (t) => {
+  const f = fixture(t);
+  const choiceFile = toolHomeRecordPath(f.soulDir);
+  if (existing) setToolHomeChoice(f.soulDir, 'codex', 'soul');
+  const before = existing ? readFileSync(choiceFile, 'utf8') : null;
+  const file = wakeSessionsFile({ env: f.env, home: f.home });
+  createWakeSessions({ file }).set(ID, 'codex', 'thread-kept', 'workspace', 'soul');
+  // The session commit fails, and a folder left at the record's path makes
+  // the tool-home restore fail too.
+  const sessions = createWakeSessions({ file, rename: () => {
+    rmSync(choiceFile);
+    mkdirSync(choiceFile);
+    writeFileSync(path.join(choiceFile, 'in-the-way'), '');
+    throw Object.assign(new Error('session commit refused'), { code: 'EACCES' });
+  } });
+  const error = await f.run(['codex', 'global', '--soul', ID, '--fresh-session'], { sessions }).then(() => assert.fail('expected a partial update'), (e) => e);
+  assert.equal(error.code, 'tool-home-update-partial');
+  if (existing) {
+    assert.ok(error.backup && error.message.includes(error.backup));
+    assert.equal(readFileSync(error.backup, 'utf8'), before, 'the backup is the exact previous record');
+  } else {
+    assert.equal(error.backup, null);
+    assert.match(error.message, /there was no previous choice; remove .*tool-homes\.json/i);
+  }
+  assert.equal(f.receipts().length, 1);
+  const [receipt] = f.receipts();
+  assert.equal(receipt.decision, 'partial');
+  assert.ok(receipt.detail.includes('tool-homes.json') && receipt.detail.includes('wake-sessions.json'), 'the receipt names both records');
+  if (existing) assert.ok(receipt.detail.includes(path.basename(error.backup)) && !receipt.detail.endsWith('…'), receipt.detail);
+  assert.ok(error.message.includes(choiceFile));
+});
+
 test('a combined choice and reset with no recorded session still commits the choice once', async (t) => {
   const f = fixture(t);
   const done = await f.run(['codex', 'global', '--soul', ID, '--fresh-session']);

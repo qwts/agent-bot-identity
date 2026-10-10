@@ -81,18 +81,24 @@ export function prepareToolHomeChoice(soulDir, harness, choice) {
   const file = toolHomeRecordPath(soulDir);
   const pending = `${file}.${process.pid}.${randomUUID()}`;
   const backup = `${pending}.rollback`;
-  const cleanup = () => { rmSync(pending, { force: true }); rmSync(backup, { force: true }); };
+  // A rollback that fails strands the backup: it is the only copy of the
+  // previous choice, so cleanup keeps it for the owner to restore by hand.
+  let committed = false, stranded = false;
+  const cleanup = () => { rmSync(pending, { force: true }); if (!stranded) rmSync(backup, { force: true }); };
   try {
     writeFileSync(pending, serialize(record), { flag: 'wx', mode: 0o600 });
     if (original !== null) writeFileSync(backup, readFileSync(file), { flag: 'wx', mode: 0o600 });
   } catch (error) { cleanup(); throw error; }
-  let committed = false;
   return {
+    file,
+    backup: original === null ? null : backup,
     commit() { renameSync(pending, file); committed = true; return normalizeToolHomeRecord(record); },
     rollback() {
       if (!committed) return;
-      if (original === null) rmSync(file);
-      else renameSync(backup, file);
+      try {
+        if (original === null) rmSync(file);
+        else renameSync(backup, file);
+      } catch (error) { stranded = true; throw error; }
       committed = false;
     },
     cleanup,
