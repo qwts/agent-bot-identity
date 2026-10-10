@@ -17,7 +17,7 @@ import { buildSoulDirectory } from './soul-build.mjs';
 import { minimalChildEnv } from './child-env.mjs';
 import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { stampNewSoulToolHomes } from './soul-tool-home-record.mjs';
-import { INSTALL_STAMP, RUNTIMES_SCHEMA_VERSION, inspectSoulRuntimes, installSoulRuntimes, publishInstall, readInstallStamp, soulRuntimeEnv, runtimesRoot } from './soul-runtimes.mjs';
+import { INSTALL_STAMP, RUNTIMES_SCHEMA_VERSION, inspectRuntimeOverrides, inspectSoulRuntimes, installSoulRuntimes, publishInstall, readInstallStamp, soulRuntimeEnv, runtimesRoot } from './soul-runtimes.mjs';
 
 const run = promisify(execFile);
 export const INSTALL_TIMEOUT_MS = 10 * 60_000;
@@ -163,17 +163,32 @@ async function soulInstallEnv(agentId, harness, options) {
   // declarations even if a provisioner returned without satisfying them.
   const patch = soulRuntimeEnv(agentId, { ...options, env, harness });
   const state = inspectSoulRuntimes(directory, { ...options, env, home: options.home ?? env.HOME });
+  const overrideState = inspectRuntimeOverrides(directory, { agentId, platform: options.platform ?? process.platform });
+  if (overrideState.errors.length) {
+    const error = overrideState.errors[0];
+    throw Object.assign(new Error(error.reason), { code: error.code, runtime: error.name, action: error.action });
+  }
+  const nodeOverride = overrideState.overrides.node;
+  const npmOverride = overrideState.overrides.npm;
   const selected = state.runtimes.find(row => row.name === 'node');
-  if (!selected) return { env: { ...childEnv, ...patch }, node: process.execPath };
+  const shimNode = nodeOverride ? path.join(runtimesRoot(directory), 'overrides', 'bin', 'node') : null;
+  if (!selected) return { env: { ...childEnv, ...patch,
+    ...(npmOverride ? { AGENT_BOT_NPM: '', AGENT_BOT_NPM_EXECUTABLE: npmOverride.executable } : { AGENT_BOT_NPM_EXECUTABLE: '' }) }, node: shimNode ?? process.execPath };
   const windows = state.platform?.startsWith('win32-');
-  const node = path.join(selected.path, selected.bin, windows ? 'node.exe' : 'node');
-  const npm = path.join(selected.path, ...(windows ? [] : ['lib']), 'node_modules', 'npm', 'bin', 'npm-cli.js');
-  let npmPresent = false;
-  try { npmPresent = statSync(npm).isFile(); } catch { /* report the missing selected npm below */ }
-  if (!npmPresent) throw Object.assign(new Error(`declared Node ${selected.version} has no bundled npm CLI at ${npm}; refusing host npm`), {
-    code: 'runtime-install-failed', runtime: 'node', action: `repair the npm files in ${selected.path}, or select a complete Node distribution in a soul revision`,
+  const node = shimNode ?? (selected.status === 'installed' ? path.join(selected.path, selected.bin, windows ? 'node.exe' : 'node') : null);
+  if (!node) throw Object.assign(new Error(`declared Node ${selected.version} is not installed and no valid Node override is selected`), {
+    code: 'runtime-install-failed', runtime: 'node', action: `agent-bot soul runtimes install ${agentId} --runtime node`,
   });
-  return { env: { ...childEnv, ...patch, AGENT_BOT_NPM: npm }, node };
+  const npm = selected.status === 'installed' ? path.join(selected.path, ...(windows ? [] : ['lib']), 'node_modules', 'npm', 'bin', 'npm-cli.js') : null;
+  let npmPresent = false;
+  try { npmPresent = npm !== null && statSync(npm).isFile(); } catch { /* report the missing selected npm below */ }
+  if (!npmPresent && !npmOverride) throw Object.assign(new Error(`declared Node ${selected.version} has no bundled npm CLI${npm ? ` at ${npm}` : ''}; refusing host npm`), {
+    code: 'runtime-install-failed', runtime: 'node', action: selected.path
+      ? `repair the npm files in ${selected.path}, or select a complete Node distribution in a soul revision`
+      : `select an exact npm executable with agent-bot soul runtimes override ${agentId} npm /absolute/path/to/npm, or clear the node override and install the managed Node distribution`,
+  });
+  return { env: { ...childEnv, ...patch,
+    ...(npmOverride ? { AGENT_BOT_NPM: '', AGENT_BOT_NPM_EXECUTABLE: npmOverride.executable } : { AGENT_BOT_NPM: npm, AGENT_BOT_NPM_EXECUTABLE: '' }) }, node };
 }
 
 function recordedHarness(agentId, options) {
@@ -313,6 +328,7 @@ export function ensureSoulDirectory(agentId, packagePath = null, options = {}) {
  * (an npm-cli.js run with this Node), else `npm` from PATH.
  */
 export function npmCommand(env = process.env, node = process.execPath) {
+  if (env.AGENT_BOT_NPM_EXECUTABLE) return { command: env.AGENT_BOT_NPM_EXECUTABLE, args: [] };
   return env.AGENT_BOT_NPM ? { command: node, args: [env.AGENT_BOT_NPM] } : { command: 'npm', args: [] };
 }
 

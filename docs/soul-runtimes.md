@@ -70,6 +70,8 @@ Owner-visible upgrade and retained-resolution guarantees remain #617.
 ```sh
 agent-bot soul runtimes <agentId|name> [--json]
 agent-bot soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin]
+agent-bot soul runtimes override <agentId|name> <node|npm|npx|go|gofmt|python3|uv|uvx> /absolute/path/to/executable [--json] [--principal-stdin]
+agent-bot soul runtimes override <agentId|name> <node|npm|npx|go|gofmt|python3|uv|uvx> --clear [--json] [--principal-stdin]
 ```
 
 `soul runtimes` is read-only and prints what is declared, resolved and
@@ -95,13 +97,48 @@ instead of starting the harness.
   that version, `null` otherwise.
 - `harnesses[]`: `{ name, kind, package, version, executable, status,
   reason, path, bin, lastError }` for each `harnesses.<name>.install`.
+- `overrides[]`: `{ name, runtime, status, executable, verification, code,
+  action, reason }` for each owner-selected executable. A selected external
+  path is reported as `verification: "unverified-external"`; its bytes and
+  provenance are not covered by the managed archive pins.
 - `invalid[]`: `{ path, message }` for declarations the package refuses.
 - `install` adds `installed[]`, `skipped[]` (already there).
+
+`override` is an owner-gated, host-local selection for one executable name.
+It accepts only an absolute path that resolves to a regular executable with
+execute permission; the canonical real path is recorded. Names are closed to
+`node`, `npm`, `npx`, `go`, `gofmt`, `python3`, `uv`, and `uvx`. `--clear`
+removes one selection, and every set or clear appends a `soul-runtimes`
+receipt. The command does not alter `soul.json` or claim a managed install.
+
+At launch, agent-bot puts one-name symlinks under
+`.soul-state/runtimes/overrides/bin` at the front of `PATH`. It never adds the
+selected executable's parent directory, so selecting `node` does not also
+select a sibling `npm` or `npx`. A node override leaves installed managed
+`npm` and `npx` bins behind its shim; harness bins then precede managed runtime
+bins. A selected `uv` supplies the `uv` command for Python and uv-tool
+provisioning, but does not select `python3` or `uvx`. A Python override makes
+the implicit `uv` runtime unnecessary unless a uv-tool harness is declared;
+uv-tool installs use the selected Python path explicitly and refuse to
+download a substitute. `install` reports selected external executables and
+skips only those exact names; clear a selection before provisioning its
+managed copy. Runtime variables owned by a selected executable are removed
+from the child environment. A declared managed runtime may still show as
+missing in status while its launch route uses the external selection, so
+managed readiness stays honest while pending launch requirements reflect
+usable selections. If a stored path becomes invalid, launch refuses with
+`runtime-override-invalid`, shows the recorded path and names the `--clear`
+command. Overrides are
+unsupported on Windows, where a carried selection can still be cleared.
+They live below `.soul-state/runtimes`, which is
+host-local runtime state and is excluded from export/import.
 
 ## Layout
 
 ```
 <soul>/.soul-state/runtimes/
+  overrides/<name>.json   one canonical external executable selection
+  overrides/bin/<name>    one-name launch symlink; no target siblings
   node/24.21.0/            the tarball's tree; bin/node, bin/npm
   node/npm-cache/
   node/last-install.json   { version, status: ok | failed, code, message, at }

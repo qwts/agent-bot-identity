@@ -17,7 +17,7 @@
 import { minimalChildEnv } from './child-env.mjs';
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { accessSync, constants as fsConstants, createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, constants as fsConstants, createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
@@ -34,14 +34,25 @@ import { PROVIDER_NAMES, RUNTIME_NAMES, harnessInstallSource, hostPlatform, newe
 export const RUNTIMES_SCHEMA_VERSION = 1;
 // Stable failure codes (ADR-0322 decision 5): each names the declared
 // runtime or harness, the cause, and the command that would fix it.
-export const RUNTIME_ERROR_CODES = Object.freeze(['runtime-download-failed', 'runtime-checksum-mismatch', 'runtime-unsupported-platform', 'runtime-install-failed']);
+export const RUNTIME_ERROR_CODES = Object.freeze(['runtime-download-failed', 'runtime-checksum-mismatch', 'runtime-unsupported-platform', 'runtime-install-failed', 'runtime-override-invalid', 'runtime-override-unsupported-platform']);
 export const INSTALL_STAMP = '.agent-bot-install.json';
 const LAST_INSTALL = 'last-install.json';
 const STATE = '.soul-state';
+const OVERRIDE_RUNTIME_NAMES = Object.freeze({ node: 'node', npm: null, npx: null, go: 'go', gofmt: null, python3: 'python', uv: 'uv', uvx: null });
+const OVERRIDE_NAMES = Object.freeze(Object.fromEntries(Object.keys(OVERRIDE_RUNTIME_NAMES).map((name) => [name, name])));
+const OVERRIDE_RUNTIME_ENV = Object.freeze({
+  node: ['npm_config_cache', 'NODE_PATH'], npm: ['npm_config_cache', 'NODE_PATH'], npx: ['npm_config_cache', 'NODE_PATH'],
+  go: ['GOROOT', 'GOPATH', 'GOMODCACHE', 'GOCACHE', 'GOTOOLCHAIN'], gofmt: ['GOROOT', 'GOPATH', 'GOMODCACHE', 'GOCACHE', 'GOTOOLCHAIN'],
+  python3: ['UV_PYTHON_INSTALL_DIR', 'UV_PYTHON_PREFERENCE', 'PYTHONHOME', 'VIRTUAL_ENV'],
+  uv: ['UV_CACHE_DIR', 'UV_TOOL_DIR', 'UV_TOOL_BIN_DIR'], uvx: ['UV_CACHE_DIR', 'UV_TOOL_DIR', 'UV_TOOL_BIN_DIR'],
+});
+const OVERRIDES_DIR = 'overrides';
+const OVERRIDE_SCHEMA_VERSION = 1;
+const OVERRIDE_RECORD_MAX_BYTES = 16 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 const INSTALL_TIMEOUT_MS = 15 * 60_000;
 const ORDER = Object.freeze(['node', 'uv', 'python', 'go']);
-const USAGE = 'usage: agent-bot soul runtimes <agentId|name> [--json] | soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin]';
+const USAGE = 'usage: agent-bot soul runtimes <agentId|name> [--json] | soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin] | soul runtimes override <agentId|name> <node|npm|npx|go|gofmt|python3|uv|uvx> <absolute-executable> [--json] [--principal-stdin] | soul runtimes override <agentId|name> <name> --clear [--json] [--principal-stdin]';
 const run = promisify(execFile);
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = (value) => typeof value === 'string' && value.trim() ? value : null;
@@ -52,6 +63,146 @@ function fail(code, message, { runtime = null, action = null } = {}) {
 
 export function runtimesRoot(soulDir) {
   return path.join(soulDir, STATE, 'runtimes');
+}
+
+function overrideDirectory(soulDir) { return path.join(runtimesRoot(soulDir), OVERRIDES_DIR); }
+function overrideRecordFile(soulDir, name) { return path.join(overrideDirectory(soulDir), `${name}.json`); }
+function overrideShimDirectory(soulDir) { return path.join(overrideDirectory(soulDir), 'bin'); }
+
+function invalidOverride(agentId, name, message, action = null) {
+  return Object.assign(new Error(`${agentId}: ${message}`), { code: 'runtime-override-invalid', runtime: name, action });
+}
+
+function safeOverridePath(value) {
+  return String(value ?? '').replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').slice(0, 1024);
+}
+
+function unsafeOverrideState(agentId, message) {
+  return invalidOverride(agentId, null, `${message}; restore the soul's .soul-state/runtimes/overrides directory from a trusted backup or remove the unsafe host-local override state, then retry`);
+}
+
+function validateOverrideStore(soulDir, agentId, { create = false } = {}) {
+  let soulRoot;
+  try { soulRoot = realpathSync(soulDir); } catch { throw invalidOverride(agentId, null, 'soul directory is unavailable for executable overrides'); }
+  for (const directory of [path.join(soulDir, STATE), runtimesRoot(soulDir), overrideDirectory(soulDir)]) {
+    let info;
+    try { info = lstatSync(directory); }
+    catch (error) {
+      if (error.code !== 'ENOENT' || !create) {
+        if (error.code === 'ENOENT') return;
+        throw unsafeOverrideState(agentId, 'override state cannot be inspected');
+      }
+      try { mkdirSync(directory, { mode: 0o700 }); info = lstatSync(directory); }
+      catch { throw unsafeOverrideState(agentId, 'override state could not be created'); }
+    }
+    if (!info.isDirectory() || info.isSymbolicLink()) throw unsafeOverrideState(agentId, 'override state must use real directories inside the soul');
+    try { if (!within(soulRoot, realpathSync(directory))) throw new Error('outside'); }
+    catch { throw unsafeOverrideState(agentId, 'override state must stay inside the soul directory'); }
+  }
+}
+
+function executableRealpath(file) {
+  if (typeof file !== 'string' || !path.isAbsolute(file) || /[\x00-\x1f\x7f]/.test(file)) return null;
+  try {
+    const resolved = realpathSync(file);
+    if (/[\x00-\x1f\x7f]/.test(resolved) || !statSync(resolved).isFile()) return null;
+    accessSync(resolved, fsConstants.X_OK);
+    return resolved;
+  } catch { return null; }
+}
+
+function readOverrideRecord(soulDir, name, { agentId, platform = process.platform } = {}) {
+  const file = overrideRecordFile(soulDir, name);
+  let info;
+  try { info = lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  validateOverrideStore(soulDir, agentId);
+  const clearAction = `agent-bot soul runtimes override ${agentId} ${name} --clear`;
+  if (platform === 'win32' || (typeof platform === 'string' && platform.startsWith('win32-'))) {
+    throw Object.assign(new Error(`${agentId}: runtime overrides are unsupported on Windows`), { code: 'runtime-override-unsupported-platform', runtime: name, action: clearAction });
+  }
+  if (!info.isFile() || info.size > OVERRIDE_RECORD_MAX_BYTES) throw invalidOverride(agentId, name, `override record for ${name} is not a small regular file`, clearAction);
+  let record;
+  try { record = JSON.parse(readFileSync(file, 'utf8')); } catch { throw invalidOverride(agentId, name, `override record for ${name} is unreadable`, clearAction); }
+  if (!record || Array.isArray(record) || typeof record !== 'object' || record.schemaVersion !== OVERRIDE_SCHEMA_VERSION
+    || Object.keys(record).some((key) => !['schemaVersion', 'executable'].includes(key)) || typeof record.executable !== 'string' || !path.isAbsolute(record.executable)) {
+    throw invalidOverride(agentId, name, `override record for ${name} is malformed`, clearAction);
+  }
+  const executable = executableRealpath(record.executable);
+  if (!executable || executable !== record.executable) throw invalidOverride(agentId, name, `override ${name} at ${safeOverridePath(record.executable)} no longer resolves to a regular executable; clear it with ${clearAction}`, clearAction);
+  return { executable, verification: 'unverified-external' };
+}
+
+export function inspectRuntimeOverrides(soulDir, { agentId, platform = process.platform } = {}) {
+  const overrides = {}, rows = [], errors = [];
+  for (const name of Object.keys(OVERRIDE_NAMES)) {
+    let present = false;
+    try { lstatSync(overrideRecordFile(soulDir, name)); present = true; } catch (error) {
+      if (error.code !== 'ENOENT') {
+        const row = { name, runtime: OVERRIDE_RUNTIME_NAMES[name], status: 'invalid', executable: null, verification: 'unverified-external', code: 'runtime-override-invalid', reason: `override record for ${name} cannot be inspected`, action: `agent-bot soul runtimes override ${agentId} ${name} --clear` };
+        rows.push(row); errors.push(row);
+      }
+    }
+    if (!present) continue;
+    try {
+      const record = readOverrideRecord(soulDir, name, { agentId, platform });
+      overrides[name] = record;
+      rows.push({ name, runtime: OVERRIDE_RUNTIME_NAMES[name], status: 'selected', executable: record.executable, verification: record.verification, code: null, action: null });
+    } catch (error) {
+      const status = error.code === 'runtime-override-unsupported-platform' ? 'unsupported' : 'invalid';
+      const row = { name, runtime: OVERRIDE_RUNTIME_NAMES[name], status, executable: null, verification: 'unverified-external', code: error.code ?? 'runtime-override-invalid', action: error.action ?? `agent-bot soul runtimes override ${agentId} ${name} --clear`, reason: error.message };
+      rows.push(row);
+      errors.push(row);
+    }
+  }
+  return { overrides, rows, errors };
+}
+
+function ensureOverrideShims(soulDir, overrides, { agentId } = {}) {
+  try { return prepareOverrideShims(soulDir, overrides, { agentId }); }
+  catch (error) {
+    if (error.code === 'runtime-override-invalid') throw error;
+    throw unsafeOverrideState(agentId, 'override shims could not be prepared or validated');
+  }
+}
+
+function prepareOverrideShims(soulDir, overrides, { agentId } = {}) {
+  const directory = overrideDirectory(soulDir), bin = overrideShimDirectory(soulDir);
+  validateOverrideStore(soulDir, agentId, { create: true });
+  const dirInfo = lstatSync(directory);
+  if (!dirInfo.isDirectory() || dirInfo.isSymbolicLink()) throw unsafeOverrideState(agentId, 'override directory is not a real directory');
+  mkdirSync(bin, { recursive: true, mode: 0o700 });
+  const binInfo = lstatSync(bin);
+  if (!binInfo.isDirectory() || binInfo.isSymbolicLink()) throw unsafeOverrideState(agentId, 'override shim directory is not a real directory');
+  const names = Object.keys(overrides);
+  for (const entry of readdirSync(bin)) {
+    if (!Object.hasOwn(OVERRIDE_NAMES, entry)) throw unsafeOverrideState(agentId, `unexpected entry ${safeOverridePath(entry)} in the override shim directory; remove that host-local entry`);
+    if (names.includes(entry)) continue;
+    const link = path.join(bin, entry), info = lstatSync(link);
+    if (!info.isSymbolicLink()) throw unsafeOverrideState(agentId, `unexpected file ${safeOverridePath(path.join(bin, entry))} in the override shim directory; remove that host-local entry`);
+    rmSync(link);
+  }
+  for (const name of names) {
+    const link = path.join(bin, name), expected = overrides[name].executable;
+    let linked = false;
+    try {
+      const info = lstatSync(link);
+      linked = info.isSymbolicLink() && realpathSync(link) === expected;
+      if (!linked && !info.isSymbolicLink()) throw unsafeOverrideState(agentId, `unexpected file ${safeOverridePath(link)} in the override shim directory; remove that host-local entry`);
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (!linked) {
+      rmSync(link, { force: true });
+      symlinkSync(expected, link);
+    }
+  }
+  return bin;
+}
+
+function writeOverrideRecord(soulDir, name, executable) {
+  const directory = overrideDirectory(soulDir);
+  validateOverrideStore(soulDir, name, { create: true });
+  const file = overrideRecordFile(soulDir, name), temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try { writeFileSync(temporary, `${JSON.stringify({ schemaVersion: OVERRIDE_SCHEMA_VERSION, executable })}\n`, { flag: 'wx', mode: 0o600 }); renameSync(temporary, file); }
+  finally { rmSync(temporary, { force: true }); }
 }
 
 /** Where verified archives are shared: AGENT_BOT_CACHE_HOME, else XDG, else ~/.cache. */
@@ -266,12 +417,6 @@ export function inspectSoulRuntimes(soulDir, { manifest = readSoulManifest(soulD
   return result;
 }
 
-// Where an override points: a directory as given, an executable's directory.
-function overrideDir(value) {
-  if (typeof value !== 'string' || !path.isAbsolute(value)) return null;
-  try { return statSync(value).isDirectory() ? value : path.dirname(value); } catch { return null; }
-}
-
 /**
  * The env a launch adds for this soul (ADR-0322 decision 4 order: the
  * per-agent override, the soul's install, the host's bundled node, PATH).
@@ -280,16 +425,33 @@ function overrideDir(value) {
  * where it comes from, `missing` names declared runtimes a launch must
  * install first. Pure over an inspection.
  */
-export function runtimeLaunchEnv(inspection, { env = process.env, overrides = {}, harness = null, node = process.execPath } = {}) {
+export function runtimeLaunchEnv(inspection, { env = process.env, overrides = {}, overrideErrors = [], harness = null, node = process.execPath } = {}) {
   const root = inspection.root;
-  const bins = [], patch = {}, routing = {}, missing = [];
+  const bins = [], harnessBins = [], patch = {}, routing = {}, missing = [];
+  const overrideNames = Object.keys(overrides);
+  const selectedRuntimes = new Set(overrideNames.map((name) => OVERRIDE_RUNTIME_NAMES[name]).filter(Boolean));
+  const errorsByName = Object.fromEntries(overrideErrors.map((entry) => [entry.name, entry]));
+  const overrideBin = overrideNames.length ? path.join(root, OVERRIDES_DIR, 'bin') : null;
+  if (overrideBin) bins.push(overrideBin);
   const byName = Object.fromEntries(inspection.runtimes.map((row) => [row.name, row]));
   for (const name of ORDER) {
     const row = byName[name];
-    const override = overrideDir(overrides[name]);
-    if (override) { bins.push(override); routing[name] = { source: 'override', version: null, bin: override }; continue; }
+    const selectedName = overrideNames.find((entry) => OVERRIDE_RUNTIME_NAMES[entry] === name);
+    const override = selectedName ? overrides[selectedName] : null;
+    if (override) {
+      routing[name] = { source: 'override', version: null, bin: overrideBin, executable: override.executable, verification: 'unverified-external' };
+      if (row?.status === 'installed') bins.push(path.join(row.path, row.bin));
+      continue;
+    }
+    const failedName = Object.keys(errorsByName).find((entry) => OVERRIDE_RUNTIME_NAMES[entry] === name);
+    if (failedName) { const error = errorsByName[failedName]; routing[name] = { source: 'override', version: null, bin: null, executable: null, verification: 'unverified-external', status: error.status, code: error.code, action: error.action }; missing.push(`runtime-override:${name}`); continue; }
     if (!row) continue;
-    if (row.status !== 'installed') { routing[name] = { source: row.status, version: row.version, bin: null }; missing.push(name); continue; }
+    if (row.status !== 'installed') {
+      routing[name] = { source: row.status, version: row.version, bin: null };
+      const unusedImplicitUv = name === 'uv' && row.requiredBy.length > 0 && row.requiredBy.every((neededBy) => selectedRuntimes.has(neededBy));
+      if (!unusedImplicitUv) missing.push(name);
+      continue;
+    }
     const bin = path.join(row.path, row.bin);
     bins.push(bin);
     routing[name] = { source: 'soul', version: row.version, bin };
@@ -308,15 +470,23 @@ export function runtimeLaunchEnv(inspection, { env = process.env, overrides = {}
       patch.UV_TOOL_BIN_DIR = tool ? path.join(tool.path, 'bin') : path.join(root, 'uv', 'tools', 'bin');
     }
   }
-  if (!byName.node && !overrides.node && typeof node === 'string' && path.isAbsolute(node)) {
+  for (const name of overrideNames) for (const key of OVERRIDE_RUNTIME_ENV[name] ?? []) patch[key] = undefined;
+  for (const name of overrideNames) {
+    routing[`executable:${name}`] = { source: 'override', version: null, bin: overrideBin, executable: overrides[name].executable, verification: 'unverified-external' };
+  }
+  for (const [name, error] of Object.entries(errorsByName)) {
+    routing[`executable:${name}`] = { source: 'override', version: null, bin: null, executable: null, verification: 'unverified-external', status: error.status, code: error.code, action: error.action };
+  }
+  if (!byName.node && !overrides.node && !errorsByName.node && typeof node === 'string' && path.isAbsolute(node)) {
     bins.push(path.dirname(node));
     routing.node = { source: 'host-bundled', version: null, bin: path.dirname(node) };
   }
   for (const name of RUNTIME_NAMES) routing[name] ??= { source: 'host', version: null, bin: null };
   for (const entry of inspection.harnesses) {
-    if (entry.status === 'installed') { const bin = path.join(entry.path, entry.bin); bins.unshift(bin); routing[`harness:${entry.name}`] = { source: 'soul', version: entry.version, bin }; }
+    if (entry.status === 'installed') { const bin = path.join(entry.path, entry.bin); if (overrideBin) harnessBins.push(bin); else bins.unshift(bin); routing[`harness:${entry.name}`] = { source: 'soul', version: entry.version, bin }; }
     else { routing[`harness:${entry.name}`] = { source: entry.status, version: entry.version, bin: null }; if (entry.name === harness) missing.push(`harness:${entry.name}`); }
   }
+  if (overrideBin) bins.splice(1, 0, ...harnessBins);
   if (bins.length) {
     const rest = (env.PATH ?? '').split(path.delimiter).filter((dir) => dir && !bins.includes(dir));
     patch.PATH = [...new Set([...bins, ...rest])].join(path.delimiter);
@@ -476,7 +646,7 @@ async function installPython({ version }, target, uvBin, { root, runImpl, label,
 // A uv tool's venv carries absolute paths, so it is installed in place
 // with an `.installing` marker beside it: a marked directory is incomplete
 // and is redone; other versions are never touched.
-async function installUvTool({ name, install }, target, uvBin, { root, pythonDir, runImpl, label, action, now, platform }) {
+async function installUvTool({ name, install }, target, uvBin, { root, pythonDir, pythonExecutable = null, runImpl, label, action, now, platform }) {
   mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   const marker = `${target}.installing`;
   if (existsSync(marker)) rmSync(target, { recursive: true, force: true });
@@ -485,7 +655,8 @@ async function installUvTool({ name, install }, target, uvBin, { root, pythonDir
     mkdirSync(target, { recursive: true, mode: 0o700 });
     const env = { ...minimalChildEnv(process.env), UV_CACHE_DIR: path.join(root, 'uv', 'cache'), UV_TOOL_DIR: path.join(target, 'tools'), UV_TOOL_BIN_DIR: path.join(target, 'bin'),
       UV_PYTHON_INSTALL_DIR: pythonDir, UV_PYTHON_PREFERENCE: 'only-managed', UV_NO_PROGRESS: '1' };
-    try { await runImpl(uvBin, ['tool', 'install', `${install.package}==${install.version}`], { env, timeout: INSTALL_TIMEOUT_MS }); }
+    const args = ['tool', 'install', ...(pythonExecutable ? ['--python', pythonExecutable, '--no-python-downloads'] : []), `${install.package}==${install.version}`];
+    try { await runImpl(uvBin, args, { env, timeout: INSTALL_TIMEOUT_MS }); }
     catch (error) { fail('runtime-install-failed', `${label}: uv could not install ${install.package}==${install.version} (${String(error.stderr ?? error.message).trim().split('\n').pop()}); check the network and retry`, { runtime: label, action }); }
     if (!hasExecutable(path.join(target, 'bin'), install.bin, platform)) fail('runtime-install-failed', `${label}: ${install.package} installed no ${install.bin} executable`, { runtime: label, action });
     writeFileSync(path.join(target, INSTALL_STAMP), `${JSON.stringify({ schemaVersion: RUNTIMES_SCHEMA_VERSION, name, kind: 'uv-tool', version: install.version, platform, url: null, sha256: null, bin: 'bin', installedAt: now().toISOString() })}\n`, { mode: 0o600 });
@@ -514,6 +685,13 @@ export async function installSoulRuntimes(soulDir, { only = null, agentId = null
   const inspect = () => inspectSoulRuntimes(soulDir, { platform, catalog, env, home, registry });
   let state = inspect();
   const who = agentId ?? path.basename(soulDir);
+  const overrideState = inspectRuntimeOverrides(soulDir, { agentId: who, platform });
+  if (overrideState.errors.length) {
+    const error = overrideState.errors[0];
+    throw Object.assign(new Error(error.reason), { code: error.code, runtime: error.name, action: error.action });
+  }
+  if (overrideState.rows.length) ensureOverrideShims(soulDir, overrideState.overrides, { agentId: who });
+  const overriddenRuntimes = new Set(overrideState.rows.filter((row) => row.status === 'selected' && row.runtime).map((row) => row.runtime));
   const invalid = state.invalid.find((entry) => !only || entry.path.includes(only));
   if (invalid) fail('runtime-install-failed', `${who}: ${invalid.message}`, { runtime: invalid.path, action: `fix soul.json ${invalid.path} in a revision` });
   const installed = [], skipped = [];
@@ -536,18 +714,22 @@ export async function installSoulRuntimes(soulDir, { only = null, agentId = null
     }
   };
   for (const row of state.runtimes) {
-    const wanted = !only || only === row.name || (row.name === 'uv' && row.requiredBy.includes(only));
+    const activeNeeders = (row.requiredBy ?? []).filter((name) => !overriddenRuntimes.has(name));
+    const wanted = only ? only === row.name || (row.name === 'uv' && row.requiredBy.includes(only) && !overriddenRuntimes.has(only))
+      : !row.requiredBy?.length || activeNeeders.length > 0;
     if (!wanted) continue;
     const action = installCommand(who, row.name === 'uv' ? null : row.name);
+    if (overriddenRuntimes.has(row.name)) { skipped.push(`override:${row.name}`); continue; }
     if (row.status === 'installed') { skipped.push(row.name); continue; }
     if (row.status === 'unsupported') fail('runtime-unsupported-platform', `${who}: ${row.reason}`, { runtime: row.name, action: `declare runtimes.${row.name} sources for ${platform ?? 'this platform'} in a revision` });
     const target = path.join(root, row.name, row.version);
     log(`installing ${row.name} ${row.version} into ${target}`);
     await guard(target, () => attempt(row, path.join(root, row.name), async () => {
       if (row.name === 'python') {
-        const uv = inspect().runtimes.find((entry) => entry.name === 'uv');
-        if (!uv || uv.status !== 'installed') fail('runtime-install-failed', `${who}: uv is not installed, so python cannot be`, { runtime: 'python', action });
-        await installPython(row, target, path.join(uv.path, uv.bin, 'uv'), { root, runImpl, label: `${who} python`, action, now, platform, log });
+        const managed = inspect().runtimes.find((entry) => entry.name === 'uv' && entry.status === 'installed');
+        const uv = overrideState.overrides.uv?.executable ?? (managed ? path.join(managed.path, managed.bin, 'uv') : null);
+        if (!uv) fail('runtime-install-failed', `${who}: uv is not installed, so python cannot be`, { runtime: 'python', action });
+        await installPython(row, target, uv, { root, runImpl, label: `${who} python`, action, now, platform, log });
       } else {
         await installArchive({ name: row.name, version: row.version, archive: row.archive, kind: 'archive', executable: row.name }, target,
           { cache, fetchFn, runImpl, label: `${who} ${row.name}`, action, now, platform, log });
@@ -569,11 +751,13 @@ export async function installSoulRuntimes(soulDir, { only = null, agentId = null
           { cache, fetchFn, runImpl, label: `${who} ${entry.name}`, action, now, platform, log });
       } else {
         const current = inspect();
-        const uv = current.runtimes.find((row) => row.name === 'uv');
-        const python = current.runtimes.find((row) => row.name === 'python');
-        if (!uv || uv.status !== 'installed') fail('runtime-install-failed', `${who}: uv is not installed, so ${entry.name} cannot be`, { runtime: entry.name, action });
-        await installUvTool({ name: entry.name, install: { package: entry.package, version: entry.version, bin: entry.executable } }, target, path.join(uv.path, uv.bin, 'uv'),
-          { root, pythonDir: python?.path ?? path.join(root, 'python', 'uv-managed'), runImpl, label: `${who} ${entry.name}`, action, now, platform, log });
+        const managed = current.runtimes.find((row) => row.name === 'uv' && row.status === 'installed');
+        const python = current.runtimes.find((row) => row.name === 'python' && row.status === 'installed');
+        const pythonExecutable = overrideState.overrides.python3?.executable ?? null;
+        const uv = overrideState.overrides.uv?.executable ?? (managed ? path.join(managed.path, managed.bin, 'uv') : null);
+        if (!uv) fail('runtime-install-failed', `${who}: uv is not installed, so ${entry.name} cannot be`, { runtime: entry.name, action });
+        await installUvTool({ name: entry.name, install: { package: entry.package, version: entry.version, bin: entry.executable } }, target, uv,
+          { root, pythonDir: python?.path ?? path.join(root, 'python', 'uv-managed'), pythonExecutable, runImpl, label: `${who} ${entry.name}`, action, now, platform, log });
       }
     }));
     installed.push(entry.name);
@@ -596,8 +780,8 @@ function soulRoot(soul, options) {
 }
 
 const strip = ({ archive: _archive, ...rest }) => rest;
-const report = (soul, soulDir, state) => ({ schemaVersion: RUNTIMES_SCHEMA_VERSION, agentId: soul.id, soulDir, platform: state.platform, root: state.root, cache: state.cache,
-  runtimes: state.runtimes.map(strip), harnesses: state.harnesses.map(strip), invalid: state.invalid, ready: state.ready,
+const report = (soul, soulDir, state, overrides = []) => ({ schemaVersion: RUNTIMES_SCHEMA_VERSION, agentId: soul.id, soulDir, platform: state.platform, root: state.root, cache: state.cache,
+  runtimes: state.runtimes.map(strip), harnesses: state.harnesses.map(strip), overrides, invalid: state.invalid, ready: state.ready,
   ...(state.installed ? { installed: state.installed, skipped: state.skipped } : {}) });
 
 /** The status of a soul's runtimes by Agent ID or name (read-only). */
@@ -605,7 +789,9 @@ export function soulRuntimesStatus(id, { env = process.env, home = env.HOME ?? h
   const options = { env, home, ...rest };
   const soul = resolveSoul(id, options);
   const soulDir = soulRoot(soul, options);
-  return report(soul, soulDir, inspectSoulRuntimes(soulDir, { env, home, platform: rest.platform, catalog: rest.catalog }));
+  const state = inspectSoulRuntimes(soulDir, { env, home, platform: rest.platform, catalog: rest.catalog });
+  const overrides = inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: state.platform ?? process.platform });
+  return report(soul, soulDir, state, overrides.rows);
 }
 
 /** Installs a soul's missing runtimes and harness installs; the daemon calls it at launch. */
@@ -613,25 +799,33 @@ export async function provisionSoulRuntimes(id, { env = process.env, home = env.
   const options = { env, home, ...rest };
   const soul = resolveSoul(id, options);
   const soulDir = soulRoot(soul, options);
-  return report(soul, soulDir, await installSoulRuntimes(soulDir, { ...rest, only, agentId: soul.id, env, home }));
+  const state = await installSoulRuntimes(soulDir, { ...rest, only, agentId: soul.id, env, home });
+  const overrides = inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: state.platform ?? process.platform });
+  return report(soul, soulDir, state, overrides.rows);
 }
 
 /** The names a launch of this soul still has to install, or [] (never throws). */
 export function pendingSoulRuntimes(id, options = {}) {
   try {
     const state = soulRuntimesStatus(id, options);
-    return [...state.runtimes.filter((row) => row.status !== 'installed').map((row) => row.name),
+    const overridden = new Set(state.overrides.filter((row) => row.status === 'selected').map((row) => row.runtime).filter(Boolean));
+    const missingRuntimes = state.runtimes.filter((row) => {
+      if (row.status === 'installed') return false;
+      if (overridden.has(row.name)) return false;
+      return !(row.name === 'uv' && (row.requiredBy ?? []).every((name) => overridden.has(name)));
+    }).map((row) => row.name);
+    return [...missingRuntimes,
       ...state.harnesses.filter((row) => row.status !== 'installed').map((row) => `harness:${row.name}`),
       ...state.invalid.map((entry) => entry.path)];
   } catch { return []; }
 }
 
 /** The env patch a soul's turn gets, refusing unavailable declarations. */
-export function soulRuntimeEnv(id, { env = process.env, home = env.HOME ?? homedir(), harness = null, overrides = {}, node = process.execPath, ...rest } = {}) {
+export function soulRuntimeEnv(id, { env = process.env, home = env.HOME ?? homedir(), harness = null, node = process.execPath, ...rest } = {}) {
   const options = { env, home, ...rest };
   const soul = resolveSoul(id, options);
   const soulDir = soulRoot(soul, options);
-  if (!existsSync(soulDir)) return runtimeLaunchEnv({ root: runtimesRoot(soulDir), runtimes: [], harnesses: [] }, { env, overrides, harness, node }).env;
+  if (!existsSync(soulDir)) return runtimeLaunchEnv({ root: runtimesRoot(soulDir), runtimes: [], harnesses: [] }, { env, harness, node }).env;
   const manifest = readSoulManifest(soulDir);
   if (!manifest && existsSync(path.join(soulDir, 'soul.json'))) {
     fail('runtime-install-failed', `${soul.id}: soul.json cannot be read as an object`, { runtime: 'soul.json', action: 'repair soul.json in a revision' });
@@ -639,7 +833,13 @@ export function soulRuntimeEnv(id, { env = process.env, home = env.HOME ?? homed
   const inspection = inspectSoulRuntimes(soulDir, { ...rest, env, home, manifest });
   const invalid = inspection.invalid[0];
   if (invalid) fail('runtime-install-failed', `${soul.id}: ${invalid.message}`, { runtime: invalid.path, action: `fix soul.json ${invalid.path} in a revision` });
-  const routed = runtimeLaunchEnv(inspection, { env, overrides, harness, node });
+  const overrideState = inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: inspection.platform ?? process.platform });
+  if (overrideState.errors.length) {
+    const error = overrideState.errors[0];
+    throw Object.assign(new Error(error.reason ?? error.message), { code: error.code, runtime: error.name, action: error.action });
+  }
+  if (overrideState.rows.length) ensureOverrideShims(soulDir, overrideState.overrides, { agentId: soul.id });
+  const routed = runtimeLaunchEnv(inspection, { env, overrides: overrideState.overrides, harness, node });
   for (const name of routed.missing) {
     const isHarness = name.startsWith('harness:');
     const label = isHarness ? name.slice('harness:'.length) : name;
@@ -660,14 +860,16 @@ export function formatRuntimes(result) {
   for (const row of result.harnesses) {
     lines.push(`harness ${row.name}: ${row.status} ${row.version} (${row.kind}${row.package ? ` ${row.package}` : ''})${row.path ? ` ${row.path}` : ''}${row.reason ? ` - ${row.reason}` : ''}${row.lastError ? ` - last install: ${row.lastError.code}` : ''}`);
   }
+  for (const row of result.overrides ?? []) lines.push(`override ${row.name}: ${row.status}${row.executable ? ` ${row.executable}` : ''}${row.status === 'selected' ? ' (unverified-external)' : row.reason ? ` - ${row.reason}` : ''}${row.code ? ` [${row.code}]` : ''}${row.action ? ` -> ${row.action}` : ''}`);
   for (const entry of result.invalid) lines.push(`invalid ${entry.path}: ${entry.message}`);
-  if (!result.runtimes.length && !result.harnesses.length && !result.invalid.length) lines.push('nothing declared');
+  if (!result.runtimes.length && !result.harnesses.length && !(result.overrides ?? []).length && !result.invalid.length) lines.push('nothing declared');
   if (result.installed) lines.push('', `installed: ${result.installed.join(', ') || '-'}`, `skipped: ${result.skipped.join(', ') || '-'}`);
   return `${lines.join('\n')}\n`;
 }
 
 export async function soulRuntimesCommand(argv, { gate = ownerGate, readStdin = () => readFileSync(0, 'utf8'), write = (value) => process.stdout.write(value),
   env = process.env, home = env.HOME ?? homedir(), cwd = process.cwd(), now = () => new Date(), ...rest } = {}) {
+  if (argv[0] === 'override') return soulRuntimeOverrideCommand(argv.slice(1), { gate, readStdin, write, env, home, cwd, now, ...rest });
   let install = false, id = null, json = false, presented = false, only = null;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -694,9 +896,53 @@ export async function soulRuntimesCommand(argv, { gate = ownerGate, readStdin = 
   const soul = resolveSoul(id, options);
   await gate(`install ${soul.id}'s declared runtimes${only ? ` (${only})` : ''} into its soul folder`, { principal, env, cwd });
   const result = await provisionSoulRuntimes(soul.id, { ...options, only });
-  appendAuditReceipt({ event: 'soul-runtimes', agentId: soul.id, operation: 'install', decision: result.installed.length ? 'installed' : 'up-to-date',
+  appendAuditReceipt({ event: 'soul-runtimes', agentId: soul.id, operation: 'install', decision: result.installed.length ? 'installed' : result.skipped.some((name) => name.startsWith('override:')) ? 'override-active' : 'up-to-date',
     detail: `installed: ${result.installed.join(', ') || '-'}` }, { env, home, now });
   write(json ? `${JSON.stringify(result)}\n` : formatRuntimes(result));
+  return result;
+}
+
+async function soulRuntimeOverrideCommand(argv, { gate, readStdin, write, env, home, cwd, now, ...rest }) {
+  let json = false, presented = false;
+  const args = [];
+  for (const arg of argv) {
+    if (arg === '--json' && !json) json = true;
+    else if (arg === '--principal-stdin' && !presented) presented = true;
+    else if (arg === '--clear') args.push(arg);
+    else if (!arg.startsWith('-')) args.push(arg);
+    else throw new Error(USAGE);
+  }
+  const [id, name, selection] = args;
+  if (args.length !== 3 || !id || !name || !selection || !Object.hasOwn(OVERRIDE_NAMES, name)) throw new Error(USAGE);
+  const clear = selection === '--clear';
+  if (!clear && !path.isAbsolute(selection)) throw invalidOverride(id, name, `${name} override must be an absolute executable path`, `agent-bot soul runtimes override ${id} ${name} --clear`);
+  const host = rest.platform ?? process.platform;
+  if (!clear && (host === 'win32' || (typeof host === 'string' && host.startsWith('win32-')))) {
+    throw Object.assign(new Error(`${id}: executable overrides are unsupported on Windows`), { code: 'runtime-override-unsupported-platform', runtime: name, action: `agent-bot soul runtimes override ${id} ${name} --clear` });
+  }
+  const executable = clear ? null : executableRealpath(selection);
+  if (!clear && !executable) throw invalidOverride(id, name, `${name} override must resolve to an absolute regular executable with execute permission: ${safeOverridePath(selection)}`, `agent-bot soul runtimes override ${id} ${name} --clear`);
+  let principal = null;
+  if (presented) {
+    try { principal = JSON.parse(readStdin()); }
+    catch { throw new Error('--principal-stdin needs the principal credential as JSON on stdin'); }
+  }
+  const options = { env, home, ...rest };
+  const soul = resolveSoul(id, options);
+  await gate(`${clear ? 'clear' : 'set'} ${soul.id}'s ${name} executable override`, { principal, env, cwd });
+  const soulDir = soulRoot(soul, options);
+  if (clear) validateOverrideStore(soulDir, soul.id);
+  const file = overrideRecordFile(soulDir, name);
+  if (clear) rmSync(file, { force: true });
+  else writeOverrideRecord(soulDir, name, executable);
+  const status = inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host });
+  ensureOverrideShims(soulDir, status.overrides, { agentId: soul.id });
+  const selected = status.rows.find((row) => row.name === name);
+  if (!clear && selected?.status !== 'selected') throw Object.assign(new Error(selected?.reason ?? `could not select ${name} override`), { code: selected?.code ?? 'runtime-override-invalid', runtime: name, action: selected?.action });
+  appendAuditReceipt({ event: 'soul-runtimes', agentId: soul.id, operation: clear ? 'override-clear' : 'override', decision: clear ? 'cleared' : 'selected',
+    detail: clear ? `${name} override cleared` : `${name} override selected at ${executable}; verification: unverified-external` }, { env, home, now });
+  const result = { schemaVersion: RUNTIMES_SCHEMA_VERSION, agentId: soul.id, name, status: clear ? 'cleared' : 'selected', executable, verification: clear ? null : 'unverified-external' };
+  write(json ? `${JSON.stringify(result)}\n` : `${soul.id}: ${name} override ${clear ? 'cleared' : `selected at ${executable} (unverified external)`}\n`);
   return result;
 }
 

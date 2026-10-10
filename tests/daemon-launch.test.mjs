@@ -804,6 +804,15 @@ test('a declared runtime missing from the soul is installed at launch as its own
   assert.deepEqual(h.reports[0], { requestId: 'r3', status: 'failed', agentId: null, detail: `runtime-checksum-mismatch: ${error.message}`, code: 'runtime-checksum-mismatch' });
   assert.equal(JSON.parse(readFileSync(h.options.file)).find((row) => row.requestId === 'r3').code, 'runtime-checksum-mismatch');
   assert.deepEqual(h.calls, [], 'no turn ran');
+  for (const code of ['runtime-override-invalid', 'runtime-override-unsupported-platform']) {
+    const failure = Object.assign(new Error('runtime override cannot be used'), { code });
+    const launch = fixture(t, { joinSoul: async () => { throw new Error('joined before runtime validation'); },
+      runtimes: { pending: async () => ['node'], install: async () => { throw failure; } } });
+    await launch.handler({ ...event, requestId: code }, launch.ports);
+    assert.equal(launch.reports[0].code, code, `${code} survives the launch result`);
+    assert.ok(launch.reports[0].detail.startsWith(`${code}: `));
+    assert.equal(JSON.parse(readFileSync(launch.options.file)).find((row) => row.requestId === code).code, code);
+  }
 });
 
 // Sandbox resolution at launch (#376). `sandboxFor` stands in for

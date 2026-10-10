@@ -1,0 +1,1 @@
+- `agent-bot soul runtimes override` lets an owner select or clear a host-local executable for one soul without exposing sibling tools or treating the path as a managed pin (#617).
