@@ -88,7 +88,13 @@ export function readInboxBearer({ env = process.env, store = createPassCredentia
 export function resolveInboxBearer({ env = process.env, readNote = () => readInboxBearer({ env }) } = {}) {
   const explicit = typeof env.GH_APP_HOOK_INBOX_TOKEN === 'string' ? env.GH_APP_HOOK_INBOX_TOKEN.trim() : '';
   if (explicit !== '') return { token: explicit, source: 'env' };
-  return { token: readNote(), source: 'pass-cli' };
+  // A failed note read still names its source, so the refusal is receipted
+  // with it.
+  try {
+    return { token: readNote(), source: 'pass-cli' };
+  } catch (error) {
+    throw Object.assign(error, { bearerSource: 'pass-cli' });
+  }
 }
 
 function bearerOf(value) {
@@ -148,7 +154,7 @@ export async function takeFromBroker({ inboxUrl, token, bearerSource = 'pass-cli
     throw inboxError(
       'inbox-auth-expired',
       bearerSource === 'env'
-        ? `take_inbox failed: inbox at ${host} rejected the bearer (HTTP 401); update GH_APP_HOOK_INBOX_TOKEN in the daemon's environment to the current INBOX_TOKEN, or unset it to use the pass-cli note, then retry`
+        ? `take_inbox failed: inbox at ${host} rejected the bearer (HTTP 401); update GH_APP_HOOK_INBOX_TOKEN in the daemon's environment to the current INBOX_TOKEN, or unset it to use the pass-cli note, then restart the daemon from that environment so it takes effect, and retry`
         : `take_inbox failed: inbox at ${host} rejected the bearer (HTTP 401); update the pass-cli note ${INBOX_BEARER_TITLE} to the current INBOX_TOKEN, then retry`,
     );
   }

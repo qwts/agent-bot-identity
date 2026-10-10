@@ -109,8 +109,13 @@ receipt in the audit log naming the soul, App and outcome, never the bearer.
 `GH_APP_HOOK_INBOX_TOKEN` in a session's environment is not read. If you set
 it in the daemon's own environment, it wins over the pass-cli note: your
 explicit choice is final. The daemon unit never stores it (`daemon install`
-strips it), and harnesses never inherit it. Each `inbox-take` receipt records
-`bearerSource` as `env` or `pass-cli`, never the bearer.
+strips it), and harnesses never inherit it, so after changing or unsetting it
+restart the daemon from that environment; a running daemon keeps the value it
+started with. Once the daemon has
+picked a bearer, the `inbox-take` receipt records `bearerSource` as `env` or
+`pass-cli`, never the bearer, including when the pass-cli read itself fails.
+Attempts refused before that (no binding, no App, no or invalid inbox URL)
+carry no `bearerSource`.
 
 ## 5. Verify
 
