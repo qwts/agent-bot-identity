@@ -32,19 +32,22 @@ the `.codex/` and `.gemini/` prefixes. The harness adapters slice appended
 `.github/agents/`, `.kiro/agents/` and `.kiro/settings/mcp.json` (Cursor's and
 Devin's files sit under the existing `.cursor/` and `.devin/` prefixes), and
 #247 appended `.qwen/settings.json`, and the Qwen commands and agents slices
-(#378) appended `.qwen/commands/` and then `.qwen/agents/`.
+(#378) appended `.qwen/commands/` and then `.qwen/agents/`, and the Codex
+commands slice the shared `.agents/skills/`.
 
 ## Harness output
 
 Outputs are built for all supported consumers, independently of
-`preferredHarnesses` (which is launch preference, not a build allowlist).
+`preferredHarnesses` (which is launch preference, not a build allowlist),
+with one exception: Codex command skills, below, which other harnesses would
+also read.
 A native consumer receives no duplicate configuration folder.
 
 | Harness | Instructions | Skills / generated folder | MCP (#378) | Subagents | Commands | Hooks |
 | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code | Marked `CLAUDE.md` with `@AGENTS.md` | `.claude/skills/<name>/` | `.mcp.json` | `.claude/agents/<name>.md` | `.claude/commands/<name>.md` | `.claude/settings.json` `hooks` |
 | Gemini CLI | Marked `GEMINI.md` with `@AGENTS.md` | `.gemini/skills/<name>/` | `.gemini/settings.json` | Unsupported | `.gemini/commands/<name>.toml` | Unsupported |
-| Codex | Native `AGENTS.md` | Native skills; no duplicate output | `.codex/config.toml` | `.codex/agents/<name>.toml` (agents without `tools`) | Unsupported | `.codex/hooks.json` |
+| Codex | Native `AGENTS.md` | None yet (Codex reads `.codex/skills/` and `.agents/skills/`, not `.claude/skills/`) | `.codex/config.toml` | `.codex/agents/<name>.toml` (agents without `tools`) | `.agents/skills/source-command-<name>/SKILL.md` (commands without arguments, shell or `@` includes; only when the soul targets Codex) | `.codex/hooks.json` |
 | OpenCode | Native `AGENTS.md` | Uses shared `.claude/skills/` | `opencode.json` | `.opencode/agent/<name>.md` | `.opencode/command/<name>.md` | Unsupported |
 | Cursor | Native `AGENTS.md` | Uses shared `.claude/skills/`; no duplicate skills | `.cursor/mcp.json` | `.cursor/agents/<name>.md` | Unsupported (replaced by skills) | `.cursor/hooks.json` |
 | Copilot CLI | Native instruction support | Uses shared `.claude/skills/`; `.github/` only for hooks and agents | Shared `.mcp.json` | `.github/agents/<name>.agent.md` | Shared `.claude/commands/<name>.md` | `.github/hooks/agent-bot-soul.json` |
@@ -137,6 +140,36 @@ Adapter evidence (official docs read 2026-10-07):
   comment, then JSON-quoted TOML basic strings; `model` is passed verbatim, so
   a Claude model alias only works there if Codex's provider serves it. No
   live Codex run was checked.
+  Commands (#378), at the same tag: Codex has no project command files, and
+  its own command importer (`core-plugins` `command_migration.rs`) turns a
+  Claude command into a skill. The builder writes each command in the same
+  shape to `.agents/skills/source-command-<name>/SKILL.md`: the same
+  front-matter keys, `name` and the command's `description` (or
+  `` Migrated source command `<name>` ``), then the marker as the first body
+  line, then the importer's heading, sentence and `## Command Template` with
+  the trimmed body (or `No command template body was found.`). Front-matter
+  values are JSON-quoted, which is valid YAML; the importer's own quoting
+  gives the same text for single-line ASCII and the same value once Codex
+  folds the description to one line. Unlike the importer, the builder does
+  not rewrite Claude's terms in the text. The importer skips a command whose template uses `$ARGUMENTS`,
+  `$<digit>`, `{{`…`}}`, `` !` `` or `` ! ` ``, or a token starting with `@`,
+  or whose skill name is over 64 characters, since a skill has no arguments,
+  shell or file includes; those commands are unsupported for Codex. Codex's
+  skill loader reads `.agents/skills/` in each folder from the project root
+  down to the working directory, needs a `---` front-matter block with a
+  nonblank `description`, and folds it to one line. By owner decision on
+  #378, the builder touches only marked files in `.agents/skills/`: another
+  tool's or person's skill there is never changed or removed, and an
+  unmarked file where a command skill would render is a conflict.
+  Qwen Code 0.25.0 and OpenCode `v1.18.32` read `.agents/skills/` too, where
+  a command skill would sit beside the native command. So command skills
+  render only when the soul targets Codex: its `preferredHarnesses` names
+  `codex` or is empty (no preference, so every harness). Otherwise Codex
+  lists the commands under `unsupported.commands`. When command skills
+  render, Qwen Code and OpenCode see each one twice if launched in that
+  home, as its native command and as a `source-command-<name>` skill
+  (`preferredHarnesses` does not stop them): a known effect, and the build
+  report names those commands under that harness's `duplicates.commands`.
 - Gemini CLI: [subagents](https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md)
   are documented in `.gemini/agents/*.md`, but their only switch is
   `experimental.enableAgents`, so they are not documented as stable and stay
@@ -733,7 +766,7 @@ package validation. `--check` never writes and exits 1 for drift/conflicts;
 clean checks exit 0. Without `--json` the command prints a short human summary
 (counts, each merge, and the primitives every harness received); `--json`
 prints `{drift, writes, removals, merged, warnings, harnesses}`, where `harnesses` maps
-each known harness to `{rendered, files, subagents, commands, settings, hooks, unsupported}`
+each known harness to `{rendered, files, subagents, commands, duplicates, settings, hooks, unsupported}`
 as described above. New package homes build after copying, before dependency
 installation and git initialization; a failed build removes the half-created home.
 An existing home is rebuilt before each launch, so a soul made by an earlier
@@ -742,9 +775,10 @@ daemon's stderr and the launch proceeds. A format-2 soul carrying an ignore list
 an earlier release wrote (before `.mcp.json` and `opencode.json`, 0.10.25,
 before Copilot's soul hook file, or before the adapters slice's
 `.github/agents/`, `.kiro/agents/` and `.kiro/settings/mcp.json`, or before
-#247's `.qwen/settings.json`, or before `.qwen/commands/` or `.qwen/agents/`) still validates; only an unknown list is refused. The list names only those folders,
-so a soul's other files in `.github/`, `.kiro/` or `.qwen/` (workflows,
-steering, Qwen skills) stay its own; files it authors in `.github/agents/`, `.kiro/agents/`, `.qwen/commands/` or `.qwen/agents/` are kept on
+#247's `.qwen/settings.json`, or before `.qwen/commands/`, `.qwen/agents/` or
+`.agents/skills/`) still validates; only an unknown list is refused. The list names only those folders,
+so a soul's other files in `.github/`, `.kiro/`, `.qwen/` or `.agents/` (workflows,
+steering, Qwen skills) stay its own; files it authors in `.github/agents/`, `.kiro/agents/`, `.qwen/commands/`, `.qwen/agents/` or `.agents/skills/` are kept on
 build, but, like `.claude/`, are not copied out of a template.
 
 Format 2 ignores only exact expected bytes. Editing a marked generated file
@@ -763,11 +797,13 @@ close that gap.
 
 Not yet covered: Muse (MCP, subagents, commands, hooks); Codex subagents
 that declare `tools` (no per-role allowlist); subagents for Gemini CLI (until
-`.gemini/agents/` is documented as stable); commands
-for Codex, Cursor (replaced by skills) and Kiro (`.kiro/prompts/` file format
+`.gemini/agents/` is documented as stable); Codex commands that take
+arguments, run shell or include files; commands for Cursor (replaced by
+skills) and Kiro (`.kiro/prompts/` file format
 undocumented); hooks for Gemini CLI, OpenCode (plugins), Muse and Kiro; and a
 signed-in check that Cursor and Kiro accept the `_comment` marker key. Qwen Code
-skills also remain unsupported.
+skills also remain unsupported. Soul skills do not reach Codex yet: it reads
+`.codex/skills/` and `.agents/skills/`, not `.claude/skills/`.
 
 The renderer, injected entry and `reachPolicyRules()` now share the
 `agent-reach` name through `reach-contract.mjs`. Rebuilds remove the old

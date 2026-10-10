@@ -58,12 +58,15 @@ export const MCP_TARGETS = Object.freeze([
 // adapter in this slice; a later slice adds one rather than leaving a declared
 // primitive silently dropped. A path another harness owns (`.mcp.json`,
 // `.claude/commands/`) is one this harness documents reading natively.
+const CODEX_COMMAND_SKILL = 'source-command-';
 const HARNESS_FILES = Object.freeze({
   claude: Object.freeze({ instructions: 'CLAUDE.md', skills: '.claude/skills/', mcp: '.mcp.json', subagents: '.claude/agents/', commands: '.claude/commands/' }),
   gemini: Object.freeze({ instructions: 'GEMINI.md', skills: '.gemini/skills/', mcp: '.gemini/settings.json', commands: '.gemini/commands/' }),
   // Codex agent roles (#378) are TOML in the project layer's `.codex/agents/`,
   // checked against openai/codex `rust-v0.157.0`, where `multi_agent` is stable.
-  codex: Object.freeze({ instructions: null, skills: null, mcp: '.codex/config.toml', subagents: '.codex/agents/' }),
+  // Codex has no project commands; a command becomes the skill its own
+  // command importer writes, `.agents/skills/source-command-<name>/SKILL.md`.
+  codex: Object.freeze({ instructions: null, skills: null, mcp: '.codex/config.toml', subagents: '.codex/agents/', commands: `.agents/skills/${CODEX_COMMAND_SKILL}` }),
   opencode: Object.freeze({ instructions: null, skills: null, mcp: 'opencode.json', subagents: '.opencode/agent/', commands: '.opencode/command/' }),
   cursor: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: '.cursor/mcp.json', subagents: '.cursor/agents/' }),
   copilot: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: '.mcp.json', subagents: '.github/agents/', commands: '.claude/commands/' }),
@@ -370,6 +373,20 @@ export function soulCommsDeclared(source) {
 // soul.json `skills.disabled` switches skills off without deleting them
 // (GeniusBar#64): their `skills/<name>/` stays in the package and no harness
 // gets a rendered copy. Read like the comms flag, straight from the bytes.
+// Codex command skills go to the shared `.agents/skills/`, which Qwen Code
+// and OpenCode read too, so they render only for a soul whose
+// `preferredHarnesses` names Codex or is empty (no preference: every harness).
+export const AGENTS_SKILLS_READERS = Object.freeze(['qwen', 'opencode']);
+export function soulTargets(manifest, harness) {
+  const preferred = manifest?.preferredHarnesses;
+  return !Array.isArray(preferred) || preferred.length === 0 || preferred.includes(harness);
+}
+function soulManifest(source) {
+  const bytes = source.get('soul.json');
+  if (!bytes) return {};
+  try { return JSON.parse(text(bytes)) ?? {}; } catch { return {}; } // the package reader validates it
+}
+
 export function soulSkillsDisabled(source) {
   const bytes = source.get('soul.json');
   if (!bytes) return new Set();
@@ -646,7 +663,7 @@ function renderHooks(events, output, authored) {
 export function harnessReport(output, { comms = true, manifest = {}, hooks = [] } = {}) {
   const skills = [...output.keys()].some((path) => Object.values(HARNESS_FILES).some((files) => files.skills && path.startsWith(files.skills)));
   const names = (prefix) => prefix ? [...output.keys()].filter((path) => path.startsWith(prefix))
-    .map((path) => path.slice(prefix.length).replace(/(?:\.agent)?\.(md|toml)$/, '')).sort(compare) : [];
+    .map((path) => path.slice(prefix.length).replace(/(?:\/SKILL\.md|(?:\.agent)?\.(md|toml))$/, '')).sort(compare) : [];
   const received = { subagents: names(HARNESS_FILES.claude.subagents), commands: names(HARNESS_FILES.claude.commands) };
   const report = {};
   for (const [harness, files] of Object.entries(HARNESS_FILES)) {
@@ -689,7 +706,12 @@ export function harnessReport(output, { comms = true, manifest = {}, hooks = [] 
       .filter(({ rule }) => !rulesRendered || (harness === 'opencode' && !opencodeRule(rule)));
     unsupported.hooks = hooks.filter((name) => !deliveredHooks.includes(name));
     if (deliveredHooks.length) rendered.push('hooks');
-    report[harness] = { rendered, files: paths, ...primitives,
+    // A Codex command skill is also a skill to the other `.agents/skills/`
+    // readers, beside their native command: a known effect, reported by name
+    // whenever both are on disk (launch preference does not stop either).
+    const duplicates = { commands: AGENTS_SKILLS_READERS.includes(harness)
+      ? names(HARNESS_FILES.codex.commands).filter((name) => primitives.commands.rendered.includes(name)) : [] };
+    report[harness] = { rendered, files: paths, ...primitives, duplicates,
       settings: { received: settingKeys, rendered: deliveredSettings },
       hooks: { received: [...hooks], rendered: deliveredHooks }, unsupported };
   }
@@ -908,7 +930,23 @@ const mappedDeclaration = (header, body) => `---\n${header.join('\n')}\n---\n${M
 // explicit escape for TOML. Escaping newlines avoids triple-quote collisions.
 const quotedString = (value) => JSON.stringify(value).replace(/\x7f/g, '\\u007f');
 
-function renderPrimitives(source, output) {
+// The skill Codex's own command importer renders (openai/codex
+// `rust-v0.157.0`, core-plugins command_migration.rs), plus the marker, or
+// null where the importer skips the command: a skill has no arguments, shell
+// or file-include syntax, so `$ARGUMENTS`, `$1`, `{{…}}`, `!\``/`! \`` and
+// `@path` templates stay unsupported, as does a name over 64 characters.
+// Unlike the importer, the text is not rewritten from Claude's terms.
+function codexCommandSkill(name, description, body) {
+  const skill = `${CODEX_COMMAND_SKILL}${name}`;
+  if (skill.length > 64 || /\$ARGUMENTS|\$\d|!`|! `/.test(body) || (body.includes('{{') && body.includes('}}'))
+    || body.split(/\s+/).some((token) => token.length > 1 && token.startsWith('@'))) return null;
+  const header = [`name: ${quotedString(skill)}`, `description: ${quotedString(description ?? `Migrated source command \`${name}\``)}`];
+  return [`.agents/skills/${skill}/SKILL.md`, mappedDeclaration(header, `\n# ${skill}\n\n`
+    + `Use this skill when the user asks to run the migrated source command \`${name}\`.\n\n`
+    + `## Command Template\n\n${body.trim() || 'No command template body was found.'}\n`)];
+}
+
+function renderPrimitives(source, output, { codexCommands = true } = {}) {
   for (const [path, bytes] of source) {
     if (!/^(agents|commands)\/.*\.md$/.test(path)) continue;
     const [directory, ...parts] = path.split('/');
@@ -938,6 +976,8 @@ function renderPrimitives(source, output) {
       // Gemini it injects arguments at `{{args}}`, not `$ARGUMENTS`.
       const qwenBody = parsed.body.replaceAll('$ARGUMENTS', '{{args}}');
       output.set(`.qwen/commands/${name}.md`, Buffer.from(header.length ? mappedDeclaration(header, qwenBody) : `${MARKER}\n${qwenBody}`));
+      const codex = codexCommands && codexCommandSkill(name, description, parsed.body);
+      if (codex) output.set(codex[0], Buffer.from(codex[1]));
     }
     output.set(`.claude/${directory}/${name}.md`, Buffer.from(markedDeclaration(parsed)));
   }
@@ -983,7 +1023,7 @@ export function buildHarnessFiles(packageEntries, { authored = new Map() } = {})
   for (const [path, bytes] of [...output]) {
     if (path.startsWith('.claude/skills/')) output.set(path.replace(/^\.claude\//, '.gemini/'), Buffer.from(bytes));
   }
-  renderPrimitives(source, output);
+  renderPrimitives(source, output, { codexCommands: soulTargets(soulManifest(source), 'codex') });
   // The soul's MCP entry (#378), unless its soul.json turned comms off. A soul
   // that already ships one of these files keeps its own servers: the disk
   // layer hands those bytes over as an explicit input, so rendering stays pure
