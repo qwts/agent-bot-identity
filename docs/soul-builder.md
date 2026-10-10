@@ -422,12 +422,29 @@ What ships today for `permissionMode` on a daemon-run turn
   is autopilot) and Codex's root `approval_policy` (`on-request` or
   `untrusted` is safe, `never` is autopilot). Any other value, another
   harness, or an unreadable file is a layer that declares nothing.
-- A declared autopilot that nobody picked is a loosening. The daemon has no
-  prompt of its own, so it keeps the turn in safe mode, where every tool call
-  goes to the owner's approval queue, and logs
-  `permission-mode-loosening-needs-owner` with the soul and the layer. The
-  owner answers by picking a mode. A one-time Touch ID or password prompt for
-  the loosening itself is the next slice.
+- A declared autopilot that nobody picked is a loosening. The daemon asks the
+  owner through keyd's Touch ID or login password prompt, naming the soul, the
+  layer, the declaring file and the sha256 of its text. There is no macOS
+  administrator-dialog fallback, as with delegation grants: that dialog runs
+  synchronously and would stall the whole daemon while it waits. The turn waits for the answer; turns of the same
+  soul that start meanwhile share the one question.
+  - **Approved:** the turn runs in autopilot.
+  - **Declined** (keyd's refusal): the turn runs in
+    safe, where every tool call goes to the owner's approval queue.
+  - Either answer is kept as an owner-decided proposal in the interaction
+    store (`proposals.json`, tool `permission-mode:autopilot`) whose digest
+    binds the soul, the layer, the file path and the file's sha256, and gets a
+    `soul-mode` audit receipt (`operation: loosen`, `decision: approved` or
+    `declined`), written first: an answer that cannot be receipted is
+    neither applied nor kept, so the turn runs safe. Later turns, including after a daemon restart, use the kept
+    answer without asking. Any change to the file is a new digest, so the
+    owner is asked again.
+  - **keyd cannot ask** (headless, no GeniusBar, an unsigned keyd): the turn runs
+    in safe, nothing is kept, the daemon logs
+    `permission-mode-loosening-needs-owner` with the soul and the layer, and
+    the next turn asks again.
+  - An owner pick (`agent-bot soul mode`, GeniusBar's picker) still wins over
+    a kept answer in either direction.
 
 A harness the owner opens directly in the soul's home reads the rendered
 files as they are: the same declared mode, without the daemon's check.

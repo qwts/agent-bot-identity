@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -41,11 +41,12 @@ export function soulMode(agentId, options = {}) {
 // the owner gate) wins. Otherwise the repo's own harness file, then the soul
 // package's declared `permissionMode`, then the `safe` default; user and
 // global layers are not consulted. A layer may tighten freely, but a mode
-// looser than the stricter layers below it needs the owner's decision: a
-// daemon turn has no prompt, so it keeps the stricter mode and reports
-// `LOOSENING_NEEDS_OWNER`. Safe mode then sends each tool call to the owner's
-// approval queue, which is the ask. Only values the builder renders are read
-// from native files; anything else is a layer that does not declare a mode.
+// looser than the stricter layers below it needs the owner's decision: this
+// resolution keeps the stricter mode, reports `LOOSENING_NEEDS_OWNER`, and
+// names the declaring file and the sha256 of its text, so the daemon can ask
+// the owner once for that exact file (daemonModeFor in agent-daemon.mjs).
+// Only values the builder renders are read from native files; anything else
+// is a layer that does not declare a mode.
 export const LOOSENING_NEEDS_OWNER = 'permission-mode-loosening-needs-owner';
 
 // The repo may be an untrusted clone: only a small regular file is read, never
@@ -57,50 +58,72 @@ const readText = (file) => {
     return stat.isFile() && stat.size <= SETTINGS_FILE_MAX ? readFileSync(file, 'utf8') : null;
   } catch { return null; }
 };
-const readJson = (file) => { try { return JSON.parse(readText(file)); } catch { return null; } };
+
+// A layer's declaration: its mode (or null), the file it was read from, and
+// the sha256 of the text the mode came from.
+const layer = (file, text, mode) => ({ mode, file, digest: text === null ? null : createHash('sha256').update(text, 'utf8').digest('hex') });
+
+function repoLayer(directory, harness) {
+  if (harness === 'claude') {
+    const file = path.join(directory, '.claude', 'settings.json');
+    const text = readText(file);
+    let mode = null;
+    try { mode = JSON.parse(text)?.permissions?.defaultMode; } catch { /* declares nothing */ }
+    return layer(file, text, { default: 'safe', plan: 'safe', bypassPermissions: 'autopilot' }[mode] ?? null);
+  }
+  if (harness === 'codex') {
+    const file = path.join(directory, '.codex', 'config.toml');
+    const text = readText(file);
+    // Root keys only: everything before the first table header.
+    const root = (text ?? '').split(/^\s*\[/m)[0];
+    const policy = root.match(/^\s*approval_policy\s*=\s*"([^"]*)"\s*(?:#.*)?$/m)?.[1];
+    return layer(file, text, { 'on-request': 'safe', untrusted: 'safe', never: 'autopilot' }[policy] ?? null);
+  }
+  return layer(null, null, null);
+}
+
+function packageLayer(directory, harness) {
+  const file = path.join(directory, 'soul.json');
+  const text = readText(file);
+  let manifest = null;
+  try { manifest = JSON.parse(text); } catch { /* declares nothing */ }
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) return layer(file, text, null);
+  const mode = (harness ? harnessSettings(manifest, harness) : manifest.harness ?? {})?.permissionMode;
+  return layer(file, text, SOUL_MODES.includes(mode) ? mode : null);
+}
 
 // The mode a repo's own native harness file declares, or null.
 export function repoPermissionMode(directory, harness) {
-  if (harness === 'claude') {
-    const mode = readJson(path.join(directory, '.claude', 'settings.json'))?.permissions?.defaultMode;
-    return { default: 'safe', plan: 'safe', bypassPermissions: 'autopilot' }[mode] ?? null;
-  }
-  if (harness === 'codex') {
-    // Root keys only: everything before the first table header.
-    const root = (readText(path.join(directory, '.codex', 'config.toml')) ?? '').split(/^\s*\[/m)[0];
-    const policy = root.match(/^\s*approval_policy\s*=\s*"([^"]*)"\s*(?:#.*)?$/m)?.[1];
-    return { 'on-request': 'safe', untrusted: 'safe', never: 'autopilot' }[policy] ?? null;
-  }
-  return null;
+  return repoLayer(directory, harness).mode;
 }
 
 // The mode a soul package declares for this harness, or null.
 export function packagePermissionMode(directory, harness) {
-  const manifest = readJson(path.join(directory, 'soul.json'));
-  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) return null;
-  const mode = (harness ? harnessSettings(manifest, harness) : manifest.harness ?? {})?.permissionMode;
-  return SOUL_MODES.includes(mode) ? mode : null;
+  return packageLayer(directory, harness).mode;
 }
 
 // `{ mode, source, declared, code }` for one turn. `source` is `pick`, `repo`,
 // `soul` or `default`; `declared` is the winning layer's mode, and `mode`
-// differs from it only when a loosening was refused (`code` set). The repo
-// layer is the turn's working directory unless that is the soul's own home,
-// whose native files are the package's rendering.
+// differs from it only when a loosening was refused (`code` set). A refused
+// loosening also carries `file` and `digest`, the declaring file and the
+// sha256 of its text. The repo layer is the turn's working directory unless
+// that is the soul's own home, whose native files are the package's
+// rendering.
 export function resolveSoulMode(agentId, { harness = null, cwd = null, soulDir = null, env = process.env, home = homedir() } = {}) {
   const pick = readSoulModes({ env, home })[validateAgentId(agentId)];
   if (pick) return { mode: pick, source: 'pick', declared: pick, code: null };
   const real = (dir) => { try { return realpathSync(dir); } catch { return path.resolve(dir); } };
   const sameDir = cwd && soulDir && real(cwd) === real(soulDir);
+  const none = layer(null, null, null);
   const layers = [
-    ['repo', cwd && path.isAbsolute(cwd) && !sameDir ? repoPermissionMode(cwd, harness) : null],
-    ['soul', soulDir && path.isAbsolute(soulDir) ? packagePermissionMode(soulDir, harness) : null],
-    ['default', 'safe'],
+    ['repo', cwd && path.isAbsolute(cwd) && !sameDir ? repoLayer(cwd, harness) : none],
+    ['soul', soulDir && path.isAbsolute(soulDir) ? packageLayer(soulDir, harness) : none],
+    ['default', layer(null, null, 'safe')],
   ];
-  const index = layers.findIndex(([, mode]) => mode !== null);
-  const [source, declared] = layers[index];
-  const stricter = layers.slice(index + 1).some(([, mode]) => mode === 'safe');
-  if (declared === 'autopilot' && stricter) return { mode: 'safe', source, declared, code: LOOSENING_NEEDS_OWNER };
+  const index = layers.findIndex(([, { mode }]) => mode !== null);
+  const [source, { mode: declared, file, digest }] = layers[index];
+  const stricter = layers.slice(index + 1).some(([, { mode }]) => mode === 'safe');
+  if (declared === 'autopilot' && stricter) return { mode: 'safe', source, declared, code: LOOSENING_NEEDS_OWNER, file, digest };
   return { mode: declared, source, declared, code: null };
 }
 

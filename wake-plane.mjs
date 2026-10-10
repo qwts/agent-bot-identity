@@ -215,34 +215,41 @@ export function acpExecutorFor({
       strip: stripped,
       forward: routed,
     }), ...(keyd ? [keydMcpServerEntry({ bin: keyd, binding, env: mcpEnv, forward: routed })] : [])];
-    const executor = createExecutor({
-      harness,
-      identity: { app, agentId },
-      // Read once per turn: a mode change applies to the next turn. The turn's
-      // harness and cwd select the repo and package layers (#379).
-      mode: modeFor(agentId, { harness, cwd }),
-      model: modelFor(agentId),
-      identityFor,
-      getHarnessSession: (invocation) => interactionHarnessSession(invocation, { agentId, harness, store: interactionStore }),
-      onModels: (models) => onModels?.(agentId, models),
-      policy: withReachRules(policy, { keyd: Boolean(keyd) }),
-      cwd,
-      // Where the soul's own harness install lives when its checkout has none (#417).
-      harnessDirs: (() => { try { return harnessDirsFor(agentId) ?? []; } catch { return []; } })(),
-      mcpServers,
-      env: harnessEnv,
-      ...(typeof log === 'function' ? { log } : {}),
-    });
-    if (typeof onHarnessSession !== 'function') return executor;
-    return (input) => executor({
-      ...input,
-      appendEvent: (type, data) => {
-        if (type === HARNESS_SESSION_EVENT) {
-          try { onHarnessSession({ agentId, harness, harnessSessionId: data?.harnessSessionId }); } catch { /* best effort */ }
-        }
-        return input.appendEvent(type, data);
-      },
-    });
+    // The turn's executor in the mode this turn runs in.
+    const build = (mode) => {
+      const executor = createExecutor({
+        harness,
+        identity: { app, agentId },
+        mode,
+        model: modelFor(agentId),
+        identityFor,
+        getHarnessSession: (invocation) => interactionHarnessSession(invocation, { agentId, harness, store: interactionStore }),
+        onModels: (models) => onModels?.(agentId, models),
+        policy: withReachRules(policy, { keyd: Boolean(keyd) }),
+        cwd,
+        // Where the soul's own harness install lives when its checkout has none (#417).
+        harnessDirs: (() => { try { return harnessDirsFor(agentId) ?? []; } catch { return []; } })(),
+        mcpServers,
+        env: harnessEnv,
+        ...(typeof log === 'function' ? { log } : {}),
+      });
+      if (typeof onHarnessSession !== 'function') return executor;
+      return (input) => executor({
+        ...input,
+        appendEvent: (type, data) => {
+          if (type === HARNESS_SESSION_EVENT) {
+            try { onHarnessSession({ agentId, harness, harnessSessionId: data?.harnessSessionId }); } catch { /* best effort */ }
+          }
+          return input.appendEvent(type, data);
+        },
+      });
+    };
+    // Read once per turn: a mode change applies to the next turn. The turn's
+    // harness and cwd select the repo and package layers (#379). A loosening
+    // the owner is asked about resolves later; the turn waits for the answer.
+    const mode = modeFor(agentId, { harness, cwd });
+    if (typeof mode?.then !== 'function') return build(mode);
+    return async (input) => build(await mode)(input);
   };
 }
 

@@ -73,14 +73,14 @@ import {
 import { createInteractionService } from './agent-interaction.mjs';
 import { mint } from './mint-token.mjs';
 import { KEYD_TOOL_NAMES, grantTarget, keydRequest, mintViaKeyd, readKeydRecord, signKeydGrant } from './keyd-client.mjs';
-import { recoverInteractionStore } from './agent-jobs.mjs';
+import { OWNER_DECIDER, createProposal, decideProposal, listProposals, operationDigest, recoverInteractionStore } from './agent-jobs.mjs';
 import { boundRepository, createInboxTaker, inboxError } from './inbox-take.mjs';
 import { createComputerUseActivity } from './computer-use-activity.mjs';
 import { isComputerUse } from './permission-risk.mjs';
 import { appendAuditReceipt, assertAuthorized, principalsFile, resolvePrincipal } from './agent-principals.mjs';
 import { validateApprovalScope } from './session-approvals.mjs';
 import { approvalAction, shown } from './approval-action.mjs';
-import { confirmOwnerPresence, ownerCredentialRequired, verifyPrincipalOwner } from './owner-action.mjs';
+import { confirmOwnerPresence, ownerCredentialRequired, presenceOrConsent, verifyPrincipalOwner } from './owner-action.mjs';
 import { runSpawnHooks } from './agent-hook.mjs';
 import { createWebLayer } from './agent-web.mjs';
 import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs';
@@ -1528,25 +1528,90 @@ function populationOverride(env, home) {
   return path.join(stateHome, 'agent-bot', 'population.json');
 }
 
+// The daemon's per-turn permission mode, under the settings precedence
+// (#379): the owner's pick, then the repo, then the soul package. A loosening
+// nobody picked asks the owner through keyd's Touch ID or password prompt,
+// once per soul and declaring file: the action line carries the file's sha256, so a changed
+// file is a new question. The answer is kept as an ordinary owner-decided
+// proposal (agent-jobs.mjs) for the soul with that digest, and gets a
+// `soul-mode` receipt. Approved runs the turn in autopilot; declined runs it
+// in safe. There is no administrator-dialog fallback, as with delegation
+// grants (#108): osascript runs synchronously and would stall every turn of
+// the daemon while it waits. When keyd cannot ask (headless, no GeniusBar),
+// the turn runs safe, nothing is remembered, and the next turn asks again.
+// An owner pick still wins over a remembered answer in either direction.
+export const LOOSENING_TOOL = 'permission-mode:autopilot';
+
+const loosenedOperation = (agentId, { source, file, digest }) => operationDigest({ change: 'permission-mode', mode: 'autopilot', agentId, source, file, sha256: digest });
+
+// The owner's remembered answer for this exact loosening, or null.
+function rememberedLoosening(agentId, operation, { env, home }) {
+  const answers = listProposals({}, { env, home }).filter((proposal) => proposal.agentId === agentId && proposal.tool === LOOSENING_TOOL
+    && proposal.operationDigest === operation && proposal.decidedBy === OWNER_DECIDER && ['approved', 'denied'].includes(proposal.status));
+  return answers.at(-1)?.status ?? null;
+}
+
+// Where keyd cannot ask, a loosening gets no administrator dialog.
+const noLooseningDialog = async () => { throw Object.assign(new Error('agent-bot-keyd could not ask, and a loosening has no administrator-dialog fallback'), { code: 'presence-unavailable' }); };
+
+// A person's no through keyd.
+const ownerDeclined = (error) => error?.code === 'owner-declined';
+
+export function daemonModeFor({
+  env = process.env, home = homedir(), config, now = () => new Date(),
+  presence = undefined,
+  ask = (action) => confirmOwnerPresence(action, { env, consent: (act, options) => presenceOrConsent(act, { ...options, presence, consent: noLooseningDialog }) }),
+  log = (line) => process.stderr.write(`${line}\n`),
+} = {}) {
+  // One question per soul and digest at a time, however many turns start.
+  const asking = new Map();
+  const loosen = async (agentId, resolved) => {
+    const operation = loosenedOperation(agentId, resolved);
+    let remembered = null;
+    try { remembered = rememberedLoosening(agentId, operation, { env, home }); } catch { /* unreadable store: ask */ }
+    if (remembered) return remembered === 'approved' ? resolved.declared : resolved.mode;
+    const action = `soul mode ${agentId} autopilot ${resolved.source} sha256:${resolved.digest} ${resolved.file}`;
+    let decision;
+    let proof = null;
+    try { proof = await ask(action); decision = 'approved'; }
+    catch (error) {
+      if (!ownerDeclined(error)) {
+        log(`agent-bot daemon: ${resolved.code}: ${agentId}: the ${resolved.source} declares ${resolved.declared}; running ${resolved.mode}, the owner could not be asked (${error.message})`);
+        return resolved.mode;
+      }
+      decision = 'denied';
+    }
+    // The receipt comes first: an answer that cannot be receipted is neither
+    // kept nor applied, so the turn runs safe and the next turn asks again.
+    try {
+      appendAuditReceipt({ event: 'soul-mode', agentId, operation: 'loosen', decision: decision === 'approved' ? 'approved' : 'declined',
+        detail: `${resolved.source} sha256:${resolved.digest}`, ...(proof?.method ? { reason: proof.method } : {}) }, { env, home, now });
+    } catch (error) {
+      log(`agent-bot daemon: ${resolved.code}: ${agentId}: the owner's answer could not be receipted; running ${resolved.mode}, the next turn asks again (${error.message})`);
+      return resolved.mode;
+    }
+    try {
+      const proposal = createProposal({ agentId, tool: LOOSENING_TOOL, operationDigest: operation, summary: `run ${agentId} in autopilot as its ${resolved.source} declares` }, { env, home, now });
+      decideProposal(proposal.proposalId, { decision, decidedBy: OWNER_DECIDER }, { env, home, now });
+    } catch (error) { log(`agent-bot daemon: ${agentId}: the owner's answer on autopilot could not be kept; the next turn asks again (${error.message})`); }
+    return decision === 'approved' ? resolved.declared : resolved.mode;
+  };
+  return (agentId, { harness = null, cwd = null } = {}) => {
+    let soulDir = null;
+    try { soulDir = soulDirectory(agentId, { env, home, config, file: populationFile({ env, home }), readOnly: true }); } catch { /* no census row: no package layer */ }
+    const resolved = resolveSoulMode(agentId, { harness, cwd, soulDir, env, home });
+    if (!resolved.code) return resolved.mode;
+    const key = `${agentId} ${resolved.source} ${resolved.file} ${resolved.digest}`;
+    if (!asking.has(key)) asking.set(key, loosen(agentId, resolved).catch(() => resolved.mode).finally(() => asking.delete(key)));
+    return asking.get(key);
+  };
+}
+
 // Records a launch in the census before the first turn (#380). The principal
 // may have chosen comms before start (#381): it becomes the soul's own
 // setting, recorded as an edit when the soul has a revision chain. The
 // revision history cannot be unwritten, so it is appended last; an earlier
 // failure restores soul.json and the census comms.
-// The daemon's per-turn permission mode, under the settings precedence
-// (#379): the owner's pick, then the repo, then the soul package. A loosening
-// nobody picked keeps the stricter mode; its code goes to the daemon log, and
-// safe mode asks the owner for each tool call.
-export function daemonModeFor({ env = process.env, home = homedir(), config, log = (line) => process.stderr.write(`${line}\n`) } = {}) {
-  return (agentId, { harness = null, cwd = null } = {}) => {
-    let soulDir = null;
-    try { soulDir = soulDirectory(agentId, { env, home, config, file: populationFile({ env, home }), readOnly: true }); } catch { /* no census row: no package layer */ }
-    const resolved = resolveSoulMode(agentId, { harness, cwd, soulDir, env, home });
-    if (resolved.code) log(`agent-bot daemon: ${resolved.code}: ${agentId}: the ${resolved.source} declares ${resolved.declared}; running ${resolved.mode} until the owner picks a mode (agent-bot soul mode)`);
-    return resolved.mode;
-  };
-}
-
 export async function recordLaunchComms({ agentId, package: packagePath, comms, brief, principal = null }, {
   env, home, config, revisions = { history: revisionHistory, edit: editSoulRevision },
 } = {}) {
