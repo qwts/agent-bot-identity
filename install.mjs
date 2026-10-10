@@ -252,48 +252,14 @@ function hookWrapper(name) {
 
 export function agentHookFastPath() {
   return `#!/bin/sh
-# Managed by agent-bot install. Avoid Node when this repo has no hook for the
-# requested event; generated harness adapters call this path unconditionally.
-EVENT=""
-DIALECT=""
-PREV=""
-for ARG in "$@"; do
-  case "$PREV" in
-    --dialect) DIALECT=$ARG ;;
-    --event) EVENT=$ARG ;;
-  esac
-  PREV=$ARG
-done
-allow() {
-  # Cursor rejects empty stdout when failClosed is enabled. An empty JSON
-  # object is its neutral response and leaves the normal permission path intact.
-  [ "$DIALECT" = "cursor" ] && printf '%s' '{}'
-  exit 0
-}
-[ -n "$EVENT" ] || allow
+# Managed by agent-bot install.
+# Always invoke the runner: built-in identity and confinement guards must run
+# even when the checkout has no executable project-specific hooks.
 RUNNER=\${AGENT_BOT_BIN:-"$HOME/.local/bin/agent-bot"}
-[ -x "$RUNNER" ] || allow
-DIR=\${AGENT_BOT_HOOKS_DIR:-}
-if [ -z "$DIR" ]; then
-  ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
-  if [ -n "$ROOT" ] && [ -d "$ROOT/agent-hooks" ]; then
-    DIR="$ROOT/agent-hooks"
-  else
-    TARGET=$(readlink "$RUNNER" 2>/dev/null || true)
-    [ -n "$TARGET" ] || TARGET=$RUNNER
-    case "$TARGET" in
-      /*) ;;
-      *) TARGET=$(dirname "$RUNNER")/$TARGET ;;
-    esac
-    DIR=$(dirname "$TARGET")/agent-hooks
-  fi
+if [ ! -x "$RUNNER" ]; then
+  printf '%s\\n' "agent-bot: security hook runner is missing or not executable" >&2
+  exit 1
 fi
-[ -d "$DIR/$EVENT" ] || allow
-FOUND=""
-for FILE in "$DIR/$EVENT"/*; do
-  [ -f "$FILE" ] && [ -x "$FILE" ] && { FOUND=1; break; }
-done
-[ -n "$FOUND" ] || allow
 exec "$RUNNER" agent-hook "$@"
 `;
 }

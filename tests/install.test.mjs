@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -417,14 +417,17 @@ test('hook wrappers dispatch through the stable executable', () => {
   assert.match(readFileSync(join(hooks, 'pre-commit'), 'utf8'), /agent-bot.*hook pre-commit/);
 });
 
-test('the agent-hook fast path skips Node until an executable hook exists', () => {
+test('installed adapter always invokes mandatory guards even without executable project hooks', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-fast-hook-'));
   const repo = mkdtempSync(join(tmpdir(), 'agent-bot-fast-repo-'));
   const hooks = join(repo, 'agent-hooks', 'pre-command');
   const calls = join(home, 'calls');
   const runner = join(home, 'runner');
   mkdirSync(hooks, { recursive: true });
-  writeFileSync(runner, `#!/bin/sh\nprintf '%s\\n' "$*" >"${calls}"\n`, { mode: 0o755 });
+  writeFileSync(runner, `#!/bin/sh
+printf '%s\\n' "$*" >"${calls}"
+exit 42
+`, { mode: 0o755 });
   const fast = installAgentHook({ home });
   const env = {
     ...process.env,
@@ -433,17 +436,34 @@ test('the agent-hook fast path skips Node until an executable hook exists', () =
     HOME: home,
   };
 
+  // A nonexecutable project hook must not suppress mandatory runner checks.
+  writeFileSync(join(hooks, '50-disabled'), '#!/bin/sh\\nexit 0\\n', { mode: 0o644 });
   const cursor = spawnSync(fast, ['--dialect', 'cursor', '--event', 'pre-command'], {
     env,
     encoding: 'utf8',
   });
-  assert.equal(cursor.status, 0);
-  assert.equal(cursor.stdout, '{}');
-  assert.throws(() => readFileSync(calls), /ENOENT/);
+  assert.equal(cursor.status, 42);
+  assert.equal(readFileSync(calls, 'utf8').trim(), 'agent-hook --dialect cursor --event pre-command');
 
-  writeFileSync(join(hooks, '50-live'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  assert.equal(spawnSync(fast, ['--dialect', 'claude', '--event', 'pre-command'], { env }).status, 0);
+  // No project hook directory at all must take the same guarded path.
+  rmSync(join(repo, 'agent-hooks'), { recursive: true, force: true });
+  const claude = spawnSync(fast, ['--dialect', 'claude', '--event', 'pre-command'], {
+    env, encoding: 'utf8',
+  });
+  assert.equal(claude.status, 42);
   assert.equal(readFileSync(calls, 'utf8').trim(), 'agent-hook --dialect claude --event pre-command');
+});
+
+test('installed adapter fails closed when the mandatory runner is unavailable', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-fast-missing-'));
+  const fast = installAgentHook({ home });
+  const missing = join(home, 'missing-runner');
+  const result = spawnSync(fast, ['--dialect', 'cursor', '--event', 'pre-command'], {
+    env: { ...process.env, HOME: home, AGENT_BOT_BIN: missing },
+    encoding: 'utf8',
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /security hook runner is missing/);
 });
 
 test('the agent-hook fast path falls back to toolkit hooks in a consumer repo', () => {
