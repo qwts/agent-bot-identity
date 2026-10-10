@@ -20,6 +20,7 @@
 //   agent-bot sandbox account NAME [--json] [--principal-stdin]
 //   agent-bot sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin]
 //   agent-bot sandbox resolve <agentId|name> [--json]
+//   agent-bot sandbox remove [ACCOUNT] --dry-run [--json]
 //
 // Everything printed is secret-free: account names, booleans and commands.
 
@@ -41,7 +42,7 @@ export const PERSONA_SANDBOX = Object.freeze(['sandboxed', 'unrestricted']);
 export const PERSONA_MATCHERS = Object.freeze(['soul', 'role']);
 export const PERSONA_STATES = Object.freeze(['none', 'unrecorded', 'stale', 'absent', 'error', 'invalid', 'ok']);
 const GATE = 'persona-accounts';
-const USAGE = 'usage: agent-bot sandbox status [--json] | sandbox plan [--json] | sandbox on|off [--json] [--principal-stdin] | sandbox account NAME [--json] [--principal-stdin] | sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin] | sandbox resolve <agentId|name> [--json]';
+const USAGE = 'usage: agent-bot sandbox status [--json] | sandbox plan [--json] | sandbox on|off [--json] [--principal-stdin] | sandbox account NAME [--json] [--principal-stdin] | sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin] | sandbox resolve <agentId|name> [--json] | sandbox remove [ACCOUNT] --dry-run [--json]';
 // What sysadminctl and dscl accept as a short name; it lands in argv, never a shell.
 const ACCOUNT_NAME = /^[a-z_][a-z0-9_-]{0,30}$/;
 
@@ -542,6 +543,104 @@ export function formatSandboxPlan(steps) {
     ...step.commands.map((command) => `    ${command}`), ...(step.note ? [`    ${step.note}`] : [])].join('\n')).join('\n')}\n`;
 }
 
+// --- removal inventory (#750) -----------------------------------------------
+// The owner's decision (2026-10-10): removing a persona account keeps by
+// default and removes only what is named. Souls, workspaces and transcripts
+// are exported to the owner's account and the export verified first; broker
+// pairings go only after that; each retained soul keeps its census row,
+// marked retired; harness sign-ins are listed, never removed; deleting the
+// macOS account is a guided step the owner does by hand. Every category has
+// its own owner-gated confirm, and a partial failure stops with everything
+// left in place.
+//
+// This slice is the dry run: what is there and what would happen to it. It
+// reads and runs nothing that changes anything. Another account's home is
+// usually unreadable from here, so a path is reported present, absent or
+// unreadable, never guessed at.
+
+// The account's own environment cannot be read from here, so the paths in its
+// home are the defaults, and a category built from them is never complete.
+const ELSEWHERE = 'the account may set AGENT_BOT_SOULS_HOME, CLAUDE_CONFIG_DIR or CODEX_HOME elsewhere, which cannot be read from here';
+
+export const REMOVAL_CATEGORIES = Object.freeze(['souls', 'workspaces', 'transcripts', 'pairings', 'census', 'harness-sign-ins', 'macos-account']);
+
+function inspectPath(path) {
+  try { statSync(path); return 'present'; }
+  catch (error) { return error?.code === 'ENOENT' || error?.code === 'ENOTDIR' ? 'absent' : 'unreadable'; }
+}
+
+export function sandboxRemovalInventory(account, { env = process.env, home = homedir(), platform = process.platform, exec = defaultExec, fileExists = existsSync, inspect = inspectPath, owner = userInfo().username } = {}) {
+  validateSandboxAccount(account);
+  if (account === owner) throw fail('sandbox-remove-self', `${account} is the account agent-bot runs as; only a persona account can be removed`);
+  const checks = probeSandboxAccount(account, { platform, exec, fileExists });
+  const base = { account, owner, dryRun: true, supported: checks.supported, exists: checks.exists, home: checks.home?.path ?? null };
+  if (!checks.supported) return { ...base, categories: [] };
+  // Only the fields the plan needs: a pairing row can carry a secret.
+  const pairings = jsonOf(tryExec(exec, 'agent-comms', ['account', 'pairings']).output);
+  const census = jsonOf(tryExec(exec, 'agent-comms', ['census']).output);
+  const pairingRows = Array.isArray(pairings?.pairings)
+    ? pairings.pairings.filter((row) => row?.account === account).map((row) => ({ account: row.account, uid: row.uid ?? null, state: row.state ?? null }))
+    : null;
+  const censusRows = Array.isArray(census?.souls)
+    ? census.souls.filter((row) => row?.account === account).map((row) => ({ agentId: row.agentId ?? null, presence: row.presence ?? null }))
+    : null;
+  // Souls this machine's own census sends to the account.
+  let local = [];
+  try {
+    const settings = sandboxSettings(loadConfig({ env, home }));
+    const persona = loadPersona({ env, home });
+    local = listSouls({ file: populationFile({ env, home }) })
+      .map((soul) => resolveSandbox(soul, settings, { owner, persona }))
+      .filter((soul) => soul.sandboxed && soul.runsAs === account)
+      .map((soul) => ({ agentId: soul.agentId, name: soul.name }));
+  } catch { local = null; }
+  const souls = new Map();
+  for (const row of local ?? []) souls.set(row.agentId, { agentId: row.agentId, name: row.name, presence: null });
+  for (const row of censusRows ?? []) {
+    if (!row.agentId) continue;
+    souls.set(row.agentId, { name: null, ...souls.get(row.agentId), agentId: row.agentId, presence: row.presence });
+  }
+  const at = (path) => ({ path, state: checks.home ? inspect(path) : 'absent' });
+  const under = (...parts) => (checks.home ? join(checks.home.path, ...parts) : null);
+  const category = (id, action, items, note, known = true) => ({ id, action, known, items, note });
+  return {
+    ...base,
+    categories: [
+      category('souls', 'export', [...souls.values()],
+        'exported to your account and verified before anything that depends on it is removed', local !== null && censusRows !== null),
+      category('workspaces', 'export', checks.home ? [at(under('.agent-bot', 'souls'))] : [],
+        `the souls' folders, worktrees and state at the default location; ${ELSEWHERE}`, false),
+      category('transcripts', 'export', checks.home ? [at(under('.claude', 'projects')), at(under('.codex', 'sessions'))] : [],
+        `harness session stores at the default locations; ${ELSEWHERE}`, false),
+      category('pairings', 'remove-after-export', pairingRows ?? [],
+        'removed from the broker only after the export is verified', pairingRows !== null),
+      category('census', 'mark-retired', censusRows ?? [],
+        'each retained soul keeps its row, marked retired, so it stays identifiable and recoverable', censusRows !== null),
+      category('harness-sign-ins', 'list-only', checks.home ? [at(under('.claude')), at(under('.codex'))] : [],
+        `listed only: agent-bot never removes a harness sign-in. Default locations; ${ELSEWHERE}`, false),
+      category('macos-account', 'manual', checks.exists ? [{ account, home: checks.home?.path ?? null }] : [],
+        'deleting the account is a guided step you do by hand after the export; agent-bot never runs it'),
+    ],
+  };
+}
+
+export function formatSandboxRemoval(result) {
+  const lines = [`dry run: removing persona account ${result.account} (nothing is changed)`];
+  if (!result.supported) return `${lines[0]}\npersona accounts need macOS; there is nothing to list\n`;
+  if (!result.exists) lines.push(`${result.account} does not exist on this Mac`);
+  for (const category of result.categories) {
+    lines.push(`${category.id}: ${category.action}${category.known ? '' : ' (may be incomplete)'}`);
+    for (const item of category.items) {
+      if (item.path) lines.push(`  ${item.path} (${item.state})`);
+      else if (item.agentId) lines.push(`  ${item.agentId}${item.name ? ` ${item.name}` : ''}${item.presence ? ` (${item.presence})` : ''}`);
+      else if (item.uid !== undefined) lines.push(`  pairing uid ${item.uid ?? '?'} (${item.state ?? '?'})`);
+      else lines.push(`  ${item.account}${item.home ? ` (home ${item.home})` : ''}`);
+    }
+    lines.push(`  ${category.note}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 // --- writes -----------------------------------------------------------------
 
 export function setSandboxEnabled(enabled, { env = process.env, home = homedir() } = {}) {
@@ -645,6 +744,15 @@ export async function sandboxCommand(argv, {
     const result = setSandboxOverride(soul.id, action, { env, home });
     const runsAs = result.sandboxed ? result.runsAs : owner;
     return out({ ...result, runsAs }, `${result.agentId} sandbox ${result.override}, runs as ${runsAs} (${result.source})\n`);
+  }
+  if (verb === 'remove') {
+    // Only the dry run exists so far (#750): removal itself comes with the
+    // verified export and a confirm per category.
+    const named = rest.filter((arg) => arg !== '--dry-run');
+    if (presented || !rest.includes('--dry-run') || named.length > 1 || named.some((arg) => arg.startsWith('-'))) throw new Error(USAGE);
+    const account = named[0] ?? sandboxSettings(loadConfig({ env, home })).account;
+    const result = sandboxRemovalInventory(account, { env, home, platform, exec, owner });
+    return out(result, formatSandboxRemoval(result));
   }
   if (verb === 'resolve' && rest.length === 1) {
     if (presented) throw new Error(USAGE);
