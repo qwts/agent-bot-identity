@@ -420,6 +420,89 @@ test('migrate-credentials --from-namespace refuses a bad, same or combined names
   assert.equal(log(), calls, 'no store was called');
 });
 
+// #676: a host that changes its pass-cli vault copies its notes from the old
+// vault. The fake pass-cli holds both vaults; only pass-cli is named by vault.
+function vaultFixture(t) {
+  const f = fixture(t, { declare: { app: SLUG, store: 'pass-cli' }, legacy: false });
+  const manifest = JSON.parse(readFileSync(path.join(f.soul, 'soul.json'), 'utf8'));
+  manifest.credentials.secrets = { 'model-key': { store: 'pass-cli' }, 'other-key': { store: 'keychain' } };
+  writeFileSync(path.join(f.soul, 'soul.json'), JSON.stringify(manifest));
+  const pass = fakePassCli({ vaults: ['Agent Identities', 'Old Vault'] });
+  const passFor = (env) => ({ ...credentialStores({ env }), 'pass-cli': passCliStore({ env, cwd: f.home, passRun: pass.run }) });
+  const old = passFor({ ...f.env, AGENT_BOT_CREDENTIAL_VAULT: 'Old Vault' });
+  old['pass-cli'].write({ agentId: id, slug: SLUG }, { appId: '12345', privateKeyPem: PEM });
+  old['pass-cli'].writeSecret({ agentId: id, name: 'model-key' }, 'sk-canary-secret');
+  const stores = passFor(f.env);
+  const vault = (share) => [...pass.items.values()].filter((item) => item.share_id === share).map((item) => item.content.title).sort();
+  return { ...f, pass, passFor, old, stores, vault };
+}
+
+test('migrate-credentials --from-vault copies pass-cli notes into this host\'s vault and keeps the old ones', async (t) => {
+  const { env, home, stores, passFor, old, vault } = vaultFixture(t);
+  const out = [];
+  const gated = [];
+  const common = { env, home, cwd: home, stores, sourceStoresFor: passFor, platform: 'darwin', markers: () => [], write: (text) => out.push(text) };
+  const report = await migrateCredentialsCommand(['--all', '--from-vault', 'Old Vault'], { ...common,
+    gate: async (action) => { gated.push(action); return { method: 'consent' }; }, verify: async () => true });
+  assert.deepEqual(gated, ['identity migrate-credentials --all --from-vault Old Vault']);
+  assert.deepEqual(report.souls.map(({ kind, store, from, to, status }) => ({ kind, store, from, to, status })), [
+    { kind: 'github-app', store: 'pass-cli', from: `Old Vault/agent-bot.soul.${id}/github-app/${SLUG}`,
+      to: `Agent Identities/agent-bot.soul.${id}/github-app/${SLUG}`, status: 'migrated' },
+    { kind: 'secret', store: 'pass-cli', from: `Old Vault/agent-bot.soul.${id}/secret/model-key`,
+      to: `Agent Identities/agent-bot.soul.${id}/secret/model-key`, status: 'migrated' },
+    { kind: 'secret', store: 'keychain', from: `agent-bot.soul.${id}/secret/other-key`, to: `agent-bot.soul.${id}/secret/other-key`, status: 'skipped' },
+  ]);
+  assert.equal(report.souls[2].detail, 'the keychain store is not named by vault');
+  assert.deepEqual([report.fromVault, report.vault, report.fromNamespace, report.namespace], ['Old Vault', 'Agent Identities', 'agent-bot', 'agent-bot']);
+  assert.deepEqual(stores['pass-cli'].read({ agentId: id, slug: SLUG }), { appId: '12345', privateKeyPem: PEM });
+  assert.equal(stores['pass-cli'].readSecret({ agentId: id, name: 'model-key' }), 'sk-canary-secret');
+  assert.deepEqual(old['pass-cli'].read({ agentId: id, slug: SLUG }), { appId: '12345', privateKeyPem: PEM }, 'the old note is kept');
+  assert.deepEqual(vault('test-vault'), vault('test-vault-2'), 'the same titles, one copy in each vault');
+  const again = await migrateCredentialsCommand(['--all', '--from-vault', 'Old Vault', '--dry-run'], { ...common,
+    gate: async () => assert.fail('a dry run needs no approval'), verify: async () => assert.fail('not in a dry run') });
+  assert.deepEqual(again.souls.map((row) => row.status), ['already-migrated', 'already-migrated', 'skipped']);
+  const text = out.join('');
+  assertNoSecret(text, 'stdout');
+  assert.ok(!text.includes('sk-canary-secret'));
+  assert.match(text, /nothing was deleted; the Old Vault vault items stay/);
+  const audit = readFileSync(auditFile({ env, home }), 'utf8');
+  assert.match(audit, /vault Old Vault -> Agent Identities/);
+  assert.doesNotMatch(audit, /namespace agent-bot -> agent-bot/);
+  assert.ok(!audit.includes('sk-canary-secret'));
+});
+
+test('migrate-credentials takes an old namespace and an old vault together', async (t) => {
+  const { env, home, pass, passFor } = vaultFixture(t);
+  const old = passFor({ ...env, AGENT_BOT_CREDENTIAL_NAMESPACE: 'old.host', AGENT_BOT_CREDENTIAL_VAULT: 'Old Vault' });
+  old['pass-cli'].writeSecret({ agentId: id, name: 'model-key' }, 'sk-moved-twice');
+  const stores = passFor({ ...env, AGENT_BOT_CREDENTIAL_VAULT: 'Agent Identities' });
+  const gated = [];
+  const report = await migrateCredentialsCommand(['--soul', 'ted', '--from-namespace', 'old.host', '--from-vault', 'Old Vault', '--json'], {
+    env, home, cwd: home, stores, sourceStoresFor: passFor, platform: 'darwin', markers: () => [], write: () => {},
+    gate: async (action) => { gated.push(action); return { method: 'consent' }; }, verify: async () => true });
+  assert.deepEqual(gated, [`identity migrate-credentials ${id} --from-namespace old.host --from-vault Old Vault`]);
+  const secret = report.souls.find((row) => row.secret === 'model-key');
+  assert.deepEqual({ from: secret.from, to: secret.to, status: secret.status },
+    { from: `Old Vault/old.host.soul.${id}/secret/model-key`, to: `Agent Identities/agent-bot.soul.${id}/secret/model-key`, status: 'migrated' });
+  assert.equal(stores['pass-cli'].readSecret({ agentId: id, name: 'model-key' }), 'sk-moved-twice');
+  assert.ok(pass.items.size >= 2);
+});
+
+test('migrate-credentials --from-vault refuses a bad, same or combined vault before any store call', async (t) => {
+  const { env, home, stores, pass } = vaultFixture(t);
+  const calls = pass.calls.length;
+  const run = (argv, extra = {}) => migrateCredentialsCommand(argv, { env, home, cwd: home, stores, platform: 'darwin',
+    sourceStoresFor: () => assert.fail('no source store is built'),
+    markers: () => [], write: () => {}, gate: async () => assert.fail('never asked'), verify: async () => true, ...extra });
+  await assert.rejects(run(['--all', '--from-vault', 'bad/vault']), /AGENT_BOT_CREDENTIAL_VAULT must/);
+  await assert.rejects(run(['--all', '--from-vault', '']), /needs the old/);
+  await assert.rejects(run(['--all', '--from-vault', 'Agent Identities']), /already this host's credential vault/);
+  await assert.rejects(run(['--all', '--from-vault', 'Old Vault', '--to', 'pass-cli']), /^Error: usage/);
+  await assert.rejects(run(['--all', '--from-vault', 'Old Vault', '--from-vault', 'Other']), /^Error: usage/);
+  await assert.rejects(run(['--all', '--from-vault', 'Old Vault'], { env: { ...env, AGENT_BOT_ID: id }, markers: undefined }), /owner only/);
+  assert.equal(pass.calls.length, calls, 'pass-cli was not called');
+});
+
 test('a failed live check reports the soul as failed and keeps the legacy key', async (t) => {
   const { env, home, stores } = fixture(t);
   const report = await migrateCredentialsCommand(['--all', '--json'], { env, home, cwd: home, stores, platform: 'darwin',

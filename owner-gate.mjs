@@ -105,10 +105,15 @@ export function ownerActionSummary(action, { souls = null, listSouls = null } = 
     summary = `let ${label(id)} use this Mac's shared ${rest[0]} sign-in and sessions instead of its own`;
   } else if (first === 'identity' && second === 'migrate-credentials') {
     const to = rest[0] === '--to' && rest[1] ? ` to ${rest[1] === 'keyd' ? 'agent-bot-keyd' : rest[1]}` : '';
-    if (rest[0] === '--from-namespace' && rest[1] && rest.length === 2) {
-      // #676: a copy under this host's credential names; nothing is moved.
-      summary = id === '--all' ? `copy every soul's credentials from the ${rest[1]} credential names to this host's`
-        : `copy the credentials of ${label(id)} from the ${rest[1]} credential names to this host's`;
+    // #676: a copy under this host's credential names; nothing is moved. A
+    // vault name may hold spaces, so it runs to the end of the action.
+    const vaultAt = rest.indexOf('--from-vault');
+    const namespace = rest[0] === '--from-namespace' && rest[1] && (rest.length === 2 || vaultAt === 2) ? rest[1] : null;
+    const vault = vaultAt === (namespace ? 2 : 0) && rest.length > vaultAt + 1 ? rest.slice(vaultAt + 1).join(' ') : null;
+    if (namespace && (vault || rest.length === 2) || vault) {
+      const from = [namespace ? `the ${namespace} credential names` : null, vault ? `the ${vault} pass-cli vault` : null].filter(Boolean).join(' and ');
+      summary = id === '--all' ? `copy every soul's credentials from ${from} to this host's`
+        : `copy the credentials of ${label(id)} from ${from} to this host's`;
     } else summary = id === '--all' ? `move every soul's GitHub App key${to}` : `move the GitHub App key of ${label(id)}${to}`;
   }
   summary ??= action.replace(AGENT_ID, label);
