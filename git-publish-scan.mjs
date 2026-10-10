@@ -24,15 +24,15 @@
 // invocation (`-c`, `--config-env`, GIT_CONFIG_PARAMETERS, GIT_CONFIG_KEY_n,
 // or an `include.path` that could set it), or a `git config` write of
 // `core.hooksPath`. Values the scan cannot read (`git commit $FLAGS`),
-// relocated global config (GIT_CONFIG_GLOBAL, HOME) and indirect git (a
-// script file, make) are not seen; the git hooks still cover the last.
+// relocated global config (GIT_CONFIG_GLOBAL, HOME) remain additional
+// deployment concerns. Opaque interpreters are rejected for stated bots.
 
 import { dirname, isAbsolute, resolve } from 'node:path';
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'yash', 'busybox']);
- // Code loaded through a script, stdin, or task runner is not visible to this
- // lexical scanner. Treat it as opaque, never as evidence that no Git ran.
+// Code loaded through a script, stdin, or task runner is not visible to this
+// lexical scanner. Treat it as opaque, never as evidence that no Git ran.
 const OPAQUE_EXECUTORS = new Set(['node', 'nodejs', 'python', 'python2', 'python3',
   'perl', 'ruby', 'php', 'lua', 'make', 'gmake', 'just', 'npm', 'npx', 'pnpm',
   'yarn', 'bun', 'deno', 'tsx', 'ts-node', 'gradle', 'mvn', 'ant', 'rake']);
