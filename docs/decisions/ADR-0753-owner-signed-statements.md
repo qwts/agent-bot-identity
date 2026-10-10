@@ -85,7 +85,8 @@ payload: { v: 1, aud: "agent-bot-owner-statement", kind, alg, key,
 - **`agent-bot owner sign "<text>" --repo R --issue N [--expires 7d]`** builds
   the payload, shows the exact text and scope, and asks the configured store
   to sign. keyd builds its own prompt from the payload, so the owner never
-  signs blind; the ssh store has no such display (section 5). It prints the token inside a block agents recognise:
+  signs blind; the ssh store has no such display (section 5). It prints
+  the token inside a block agents recognise:
 
   ```text
   -----BEGIN AGENT-BOT OWNER STATEMENT-----
@@ -285,8 +286,7 @@ not approval, and the agent says so instead of acting.
    Recommended: from the owner's GitHub account's SSH signing keys, for the
    login the organization profile names, re-read at least daily. A key dropped
    there is dropped from the pins; a new key is pinned only after presence on
-   a trusted machine. Agents cannot add keys to the owner's
-   GitHub account. Macs enrol locally through presence.
+   a trusted machine. Agents cannot add keys to the owner's GitHub account. Macs enrol locally through presence.
 4. **One owner key or several?** Recommended: several named keys (for
    example a Mac's keyd and a hardware key), at most four, each enrolled by
    presence. Any one of them can sign, and losing a device means removing
