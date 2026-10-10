@@ -357,7 +357,10 @@ async function verifyExport(account, { dir = null, env = process.env, home = hom
   }
   const souls = manifest.files.filter((entry) => entry?.category === 'souls' && typeof entry.agentId === 'string').map((entry) => entry.agentId);
   const unexported = Array.isArray(manifest.unexported) ? manifest.unexported.map((row) => row?.agentId).filter((id) => typeof id === 'string') : [];
-  const result = { account, dir: target, files: manifest.files.length, bytes, categories: manifest.categories ?? {}, completedAt: typeof manifest.completedAt === 'string' ? manifest.completedAt : null, souls, unexported, problems, verified: problems.length === 0 };
+  const result = { account, dir: target, files: manifest.files.length, bytes, categories: manifest.categories ?? {}, completedAt: typeof manifest.completedAt === 'string' ? manifest.completedAt : null,
+    // When the copy changed hands on this side: the folder's ctime, which
+    // the persona account cannot set (the owner's chown and chmod move it).
+    copiedAt: new Date(lstat(target).ctimeMs).toISOString(), souls, unexported, problems, verified: problems.length === 0 };
   appendAuditReceipt({ event: 'sandbox-export', operation: 'verify', decision: result.verified ? 'verified' : 'refused',
     detail: result.verified ? `${result.files} file(s), ${bytes} byte(s) in ${target}` : `${problems.length} problem(s) in ${target}` }, { env, home, now });
   if (!result.verified) {

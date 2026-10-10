@@ -94,12 +94,20 @@ async function removal(inventory, { gate, exec, principal = null, env = process.
   }
   // Freshness: a soul live now, or sighted after the export finished, may
   // have changed since, so that export no longer holds its life.
-  const completed = Date.parse(verified.completedAt ?? '');
-  if (!Number.isFinite(completed)) fail('sandbox-remove-export-incomplete', 'the verified export has no completion time', again);
+  // The persona account wrote completedAt, so it is capped by when the copy
+  // reached this side, and one in the future is refused, never clamped.
+  const claimedAt = Date.parse(verified.completedAt ?? '');
+  const copiedAt = Date.parse(verified.copiedAt ?? '');
+  if (!Number.isFinite(claimedAt)) fail('sandbox-remove-export-incomplete', 'the verified export has no completion time', again);
+  if (!Number.isFinite(copiedAt)) fail('sandbox-remove-export-incomplete', 'when the export was copied here cannot be read', again);
+  const completed = Math.min(claimedAt, copiedAt);
+  if (claimedAt > now().getTime() || completed > now().getTime()) {
+    fail('sandbox-remove-export-future', `the export says it finished at ${verified.completedAt}, which is later than now`, again);
+  }
   const live = [...broker.values()].filter((row) => row.presence === 'joined' || row.presence === 'watching').map((row) => row.agentId);
   if (live.length) fail('sandbox-remove-export-stale', `${live.join(', ')} ${live.length === 1 ? 'is' : 'are'} running as ${account} now`, `stop ${live.length === 1 ? 'it' : 'them'}, then ${again}`);
   const later = required.filter((id) => Date.parse(local(id)?.lastSightedAt ?? '') > completed);
-  if (later.length) fail('sandbox-remove-export-stale', `${later.join(', ')} ran after the export finished at ${verified.completedAt}`, again);
+  if (later.length) fail('sandbox-remove-export-stale', `${later.join(', ')} ran after the export finished at ${new Date(completed).toISOString()}`, again);
 
   const result = { account, owner, export: verified.dir, completedAt: verified.completedAt, categories: [] };
   const done = (id, state, extra = {}) => result.categories.push({ id, state, ...extra });
@@ -109,7 +117,7 @@ async function removal(inventory, { gate, exec, principal = null, env = process.
   const pairings = pairingsOf(exec, account);
   if (pairings.length === 0) done('pairings', 'already-removed');
   else {
-    const age = Math.max(0, Math.round((now().getTime() - completed) / 60_000));
+    const age = Math.round((now().getTime() - completed) / 60_000);
     const daemon = pairings.some((row) => row.kind === 'daemon');
     const action = `revoke ${account}'s broker pairing${daemon ? ' and its daemon pairing' : ''}, after the export verified in ${verified.dir} (finished ${age} minute(s) ago)`
       + (unconfirmed.length ? `; the export says ${unconfirmed.join(' and ')} ${unconfirmed.length === 1 ? 'is' : 'are'} empty, which cannot be checked from this account` : '');

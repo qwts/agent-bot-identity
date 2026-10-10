@@ -118,6 +118,7 @@ test('verify reads every copied file back against the manifest and records it on
   const copied = f.copy(dropFolder);
   const result = await verifySandboxExport('geniusbar-agent', f.ownerOptions);
   assert.deepEqual({ verified: result.verified, files: result.files, dir: result.dir }, { verified: true, files: 4, dir: copied });
+  assert.ok(Math.abs(Date.parse(result.copiedAt) - Date.now()) < 60_000, 'copiedAt is the copy\'s ctime on this side');
   const verified = JSON.parse(readFileSync(path.join(copied, 'verified.json'), 'utf8'));
   assert.equal(verified.files, 4);
   assert.equal(f.receipts(f.ownerHome).at(-1).decision, 'verified');

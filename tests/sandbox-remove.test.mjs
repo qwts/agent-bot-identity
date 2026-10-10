@@ -54,7 +54,7 @@ function fixture(t, { failRevoke = false, presence = 'left', daemonOnly = false,
   };
   const exported = { account: 'geniusbar-agent', dir: path.join(home, '.agent-bot', 'exports', 'geniusbar-agent', '2026-10-10T17-00-00Z'),
     categories: { souls: { state: 'exported', count: 2 }, workspaces: { state: 'empty', count: 0 }, transcripts: { state: 'exported', count: 1 } },
-    completedAt: DONE, souls: [JOINED, LOCAL], unexported: [], verified: true, files: 3, bytes: 10, problems: [] };
+    completedAt: DONE, copiedAt: '2026-10-10T18:10:00.000Z', souls: [JOINED, LOCAL], unexported: [], verified: true, files: 3, bytes: 10, problems: [] };
   const gates = [];
   // Another account's home reads unreadable, as on a real Mac, unless the test says it is gone.
   const inspect = (p) => (absentHome ? 'absent' : p.startsWith('/Users/geniusbar-agent') ? 'unreadable' : 'absent');
@@ -178,4 +178,20 @@ test('sandbox remove without --dry-run is owner only: a caller with a soul\'s ma
   await sandboxCommand(['remove', 'geniusbar-agent', '--dry-run'], { ...f.options, write });
   assert.match(out, /census: keep/);
   assert.deepEqual(f.revokes(), []);
+});
+
+test('the persona\'s completedAt is capped by when the copy reached the owner, and one in the future is refused', async (t) => {
+  const f = fixture(t);
+  recordSoulSighting(LOCAL, { file: f.file, now: () => new Date('2026-10-10T18:30:00Z') });
+  await f.refuses(f.exported, 'sandbox-remove-export-stale');
+  // The security review's proof: a completedAt in 2099 hid the run after the export.
+  await f.refuses({ ...f.exported, completedAt: '2099-01-01T00:00:00.000Z' }, 'sandbox-remove-export-future', /later than now/);
+  // A claim before now but after the copy appeared here is capped at the copy.
+  await f.refuses({ ...f.exported, completedAt: '2026-10-10T18:45:00.000Z' }, 'sandbox-remove-export-stale', /finished at 2026-10-10T18:10:00.000Z/);
+  await f.refuses({ ...f.exported, copiedAt: null }, 'sandbox-remove-export-incomplete', /copied here/);
+  assert.deepEqual(f.revokes(), []);
+  // An honest export older than the copy shows its own age at the gate.
+  const g = fixture(t);
+  await g.remove({ ...g.exported, completedAt: '2026-10-10T18:20:00.000Z' });
+  assert.match(g.gates[0], /\(finished 50 minute\(s\) ago\)/);
 });
