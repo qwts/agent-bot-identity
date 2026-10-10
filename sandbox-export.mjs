@@ -61,7 +61,7 @@ function lstat(file) {
 // never blocking on a FIFO, and only when it is the owner's own private
 // regular file of a bounded size.
 const MANIFEST_LIMIT = 4 * 1024 * 1024;
-function readPrivateJson(file, { uid }) {
+export function readPrivateJson(file, { uid }) {
   let fd;
   try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch { fail('sandbox-export-invalid', `${file} is missing or is a link; the copy may be incomplete`); }
@@ -220,7 +220,7 @@ export async function runSandboxExport({ owner, skip = [], resume = null, princi
         // A resumed export already holding this category cannot also leave
         // it out: the manifest would carry what --skip promised to omit.
         if (progress.files.some((entry) => entry.category === category)) {
-          fail('sandbox-export-skip-recorded', `${dir} already holds ${category}; it cannot be skipped on resume`, { action: `agent-bot sandbox export --for ${owner} --skip ${category} (a new export)` });
+          fail('sandbox-export-skip-recorded', `${dir} already holds ${category}; it cannot be skipped on resume`, { action: `agent-bot sandbox export --for ${owner}${skip.map((name) => ` --skip ${name}`).join('')} (a new export)` });
         }
         progress.categories[category] = { state: 'skipped', count: 0 };
         continue;

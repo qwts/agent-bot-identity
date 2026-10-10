@@ -9,7 +9,7 @@ import { upsertSoul } from '../agent-population.mjs';
 import { auditFile } from '../agent-principals.mjs';
 import { soulEnvExportCommand } from '../soul-env-export.mjs';
 import { PACKAGE_IGNORE_LIST, computePackageRevision } from '../soul-package.mjs';
-import { EXPORT_CATEGORIES, incomingRoot, outgoingRoot, runSandboxExport, sandboxExportCommand, verifySandboxExport } from '../sandbox-export.mjs';
+import { EXPORT_CATEGORIES, incomingRoot, outgoingRoot, readPrivateJson, runSandboxExport, sandboxExportCommand, verifySandboxExport } from '../sandbox-export.mjs';
 
 const A = 'agent_12345678-1234-4234-8234-123456789abc';
 const B = 'agent_12345678-1234-4234-8234-123456789def';
@@ -150,9 +150,23 @@ test('verify refuses a copy others can read, one made for someone else, and one 
   rmSync(manifest);
   symlinkSync(real, manifest);
   await assert.rejects(verifySandboxExport('geniusbar-agent', { ...f.ownerOptions, dir: copied }), { code: 'sandbox-export-invalid' });
+  // Not a regular file, too large, or not the owner's: each refused.
+  rmSync(manifest);
+  mkdirSync(manifest);
+  await assert.rejects(verifySandboxExport('geniusbar-agent', { ...f.ownerOptions, dir: copied }), { code: 'sandbox-export-invalid' });
+  rmSync(manifest, { recursive: true });
+  writeFileSync(manifest, Buffer.alloc(4 * 1024 * 1024 + 1, 0x20), { mode: 0o600 });
+  await assert.rejects(verifySandboxExport('geniusbar-agent', { ...f.ownerOptions, dir: copied }), { code: 'sandbox-export-invalid' });
+  rmSync(manifest);
+  cpSync(real, manifest);
+  chmodSync(manifest, 0o600);
+  // The folders are checked first, so a manifest some other uid owns is
+  // reached by reading it with that uid directly.
+  assert.throws(() => readPrivateJson(manifest, { uid: process.getuid() + 1 }), { code: 'sandbox-export-not-owned' });
+  assert.equal(readPrivateJson(manifest, { uid: process.getuid() }).account, 'geniusbar-agent');
   // Every refusal past usage leaves a receipt.
   const refused = f.receipts(f.ownerHome).filter((receipt) => receipt.decision === 'refused').map((receipt) => receipt.detail.split(':')[0]);
-  assert.deepEqual(refused, ['sandbox-export-not-private', 'sandbox-export-wrong-owner', 'sandbox-export-not-private', 'sandbox-export-invalid']);
+  assert.deepEqual(refused, ['sandbox-export-not-private', 'sandbox-export-wrong-owner', 'sandbox-export-not-private', 'sandbox-export-invalid', 'sandbox-export-invalid', 'sandbox-export-invalid']);
   await assert.rejects(verifySandboxExport('geniusbar-agent', { ...f.ownerOptions, dir: dropFolder }), { code: 'usage' });
   await assert.rejects(verifySandboxExport('other-account', f.ownerOptions), { code: 'sandbox-export-not-found' });
   await assert.rejects(verifySandboxExport('../etc', f.ownerOptions), { code: 'usage' });
@@ -178,7 +192,8 @@ test('a failure stops where it is, leaves everything in place, and --resume carr
   f.exported.length = 0;
   const later = { ...f.options, now: () => new Date('2026-10-10T18:00:00Z') };
   // A category already in the drop cannot be skipped on resume.
-  await assert.rejects(runSandboxExport({ ...later, owner: 'owner', resume: drop, skip: ['souls'] }), { code: 'sandbox-export-skip-recorded' });
+  await assert.rejects(runSandboxExport({ ...later, owner: 'owner', resume: drop, skip: ['souls', 'transcripts'] }),
+    { code: 'sandbox-export-skip-recorded', action: 'agent-bot sandbox export --for owner --skip souls --skip transcripts (a new export)' });
   const resumed = await runSandboxExport({ ...later, owner: 'owner', resume: drop });
   assert.equal(resumed.dropFolder, drop);
   assert.deepEqual(f.exported, [B], 'A is not exported twice');
