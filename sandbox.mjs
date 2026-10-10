@@ -20,7 +20,7 @@
 //   agent-bot sandbox account NAME [--json] [--principal-stdin]
 //   agent-bot sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin]
 //   agent-bot sandbox resolve <agentId|name> [--json]
-//   agent-bot sandbox remove [ACCOUNT] --dry-run [--json]
+//   agent-bot sandbox remove [ACCOUNT] [--dry-run] [--json] [--principal-stdin]
 //   agent-bot sandbox export ...  (sandbox-export.mjs, #750)
 //
 // Everything printed is secret-free: account names, booleans and commands.
@@ -35,6 +35,7 @@ import { validateAgentId } from './agent-identity.mjs';
 import { SANDBOX_OVERRIDES, listSouls, populationFile, setSoulSandbox, showSoul, showSoulByName, soulShownName } from './agent-population.mjs';
 import { assertOwnerAction } from './owner-action.mjs';
 import { PERSONA_FILE, parseTomlSubset, readSopPersonaRecord } from './sop.mjs';
+import { formatSandboxRemovalResult, refuseSoulCaller, runSandboxRemoval } from './sandbox-remove.mjs';
 
 export const SANDBOX_PROVIDER = 'standard_macos_account';
 export const DEFAULT_SANDBOX_ACCOUNT = 'geniusbar-agent';
@@ -43,7 +44,7 @@ export const PERSONA_SANDBOX = Object.freeze(['sandboxed', 'unrestricted']);
 export const PERSONA_MATCHERS = Object.freeze(['soul', 'role']);
 export const PERSONA_STATES = Object.freeze(['none', 'unrecorded', 'stale', 'absent', 'error', 'invalid', 'ok']);
 const GATE = 'persona-accounts';
-const USAGE = 'usage: agent-bot sandbox status [--json] | sandbox plan [--json] | sandbox on|off [--json] [--principal-stdin] | sandbox account NAME [--json] [--principal-stdin] | sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin] | sandbox resolve <agentId|name> [--json] | sandbox remove [ACCOUNT] --dry-run [--json] | sandbox export --for OWNER [--skip CATEGORY]... [--resume DIR] [--json] [--principal-stdin] | sandbox export --verify ACCOUNT [--dir DIR] [--json]';
+const USAGE = 'usage: agent-bot sandbox status [--json] | sandbox plan [--json] | sandbox on|off [--json] [--principal-stdin] | sandbox account NAME [--json] [--principal-stdin] | sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin] | sandbox resolve <agentId|name> [--json] | sandbox remove [ACCOUNT] [--dry-run] [--json] [--principal-stdin] | sandbox export --for OWNER [--skip CATEGORY]... [--resume DIR] [--json] [--principal-stdin] | sandbox export --verify ACCOUNT [--dir DIR] [--json]';
 // What sysadminctl and dscl accept as a short name; it lands in argv, never a shell.
 const ACCOUNT_NAME = /^[a-z_][a-z0-9_-]{0,30}$/;
 
@@ -562,8 +563,9 @@ export function formatSandboxPlan(steps) {
 // The owner's decision (2026-10-10): removing a persona account keeps by
 // default and removes only what is named. Souls, workspaces and transcripts
 // are exported to the owner's account and the export verified first; broker
-// pairings go only after that; each retained soul keeps its census row,
-// marked retired; harness sign-ins are listed, never removed; deleting the
+// pairings go only after that; each retained soul keeps its census row as
+// it is (the reading recorded on #750: a retired row is a tombstone, which
+// would stop the soul coming back as itself); harness sign-ins are listed, never removed; deleting the
 // macOS account is a guided step the owner does by hand. Every category has
 // its own owner-gated confirm, and a partial failure stops with everything
 // left in place.
@@ -629,8 +631,8 @@ export function sandboxRemovalInventory(account, { env = process.env, home = hom
         `harness session stores at the default locations; ${ELSEWHERE}`, false),
       category('pairings', 'remove-after-export', pairingRows ?? [],
         'removed from the broker only after the export is verified', pairingRows !== null),
-      category('census', 'mark-retired', censusRows ?? [],
-        'each retained soul keeps its row, marked retired, so it stays identifiable and recoverable', censusRows !== null),
+      category('census', 'keep', censusRows ?? [],
+        'each soul keeps its row as it is, so it stays identifiable and comes back under its own ID; the broker shows it left once the pairing is gone', censusRows !== null),
       category('harness-sign-ins', 'list-only', checks.home ? [at(under('.claude')), at(under('.codex'))] : [],
         `listed only: agent-bot never removes a harness sign-in. Default locations; ${ELSEWHERE}`, false),
       category('macos-account', 'manual', checks.exists ? [{ account, home: checks.home?.path ?? null }] : [],
@@ -707,6 +709,7 @@ export async function sandboxCommand(argv, {
   readStdin = () => readFileSync(0, 'utf8'),
   write = (text) => process.stdout.write(text),
   gate = (action, { principal }) => assertOwnerAction(action, { principal, env, cwd }),
+  verifyExport,
 } = {}) {
   const json = argv.includes('--json');
   const presented = argv.includes('--principal-stdin');
@@ -761,13 +764,23 @@ export async function sandboxCommand(argv, {
     return out({ ...result, runsAs }, `${result.agentId} sandbox ${result.override}, runs as ${runsAs} (${result.source})\n`);
   }
   if (verb === 'remove') {
-    // Only the dry run exists so far (#750): removal itself comes with the
-    // verified export and a confirm per category.
+    // The dry run changes nothing; without it, the gated removal
+    // (sandbox-remove.mjs, #750) checks the verified export first.
+    const dryRun = rest.includes('--dry-run');
     const named = rest.filter((arg) => arg !== '--dry-run');
-    if (presented || !rest.includes('--dry-run') || named.length > 1 || named.some((arg) => arg.startsWith('-'))) throw new Error(USAGE);
+    if ((dryRun && presented) || named.length > 1 || named.some((arg) => arg.startsWith('-'))) throw new Error(USAGE);
     const account = named[0] ?? sandboxSettings(loadConfig({ env, home })).account;
-    const result = sandboxRemovalInventory(account, { env, home, platform, exec, owner });
-    return out(result, formatSandboxRemoval(result));
+    if (!dryRun) refuseSoulCaller(account, { env, home, cwd });
+    const read = () => sandboxRemovalInventory(account, { env, home, platform, exec, owner });
+    const inventory = read();
+    if (dryRun) return out(inventory, formatSandboxRemoval(inventory));
+    let principal = null;
+    if (presented) {
+      try { principal = JSON.parse(readStdin()); }
+      catch { throw new Error('--principal-stdin needs the principal credential as JSON on stdin'); }
+    }
+    const result = await runSandboxRemoval(inventory, { gate, exec, principal, env, home, cwd, verify: verifyExport, reread: read });
+    return out(result, formatSandboxRemovalResult(result));
   }
   if (verb === 'resolve' && rest.length === 1) {
     if (presented) throw new Error(USAGE);

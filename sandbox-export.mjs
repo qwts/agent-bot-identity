@@ -315,6 +315,20 @@ export async function verifySandboxExport(account, options = {}) {
   }
 }
 
+// When the copy changed hands on this side: manifest.json's ctime, which the
+// owner's chown and chmod set, which verify never rewrites, and which the
+// persona account cannot touch. (The folder's own ctime moves with every
+// verified.json written into it.) The first verify's copiedAt is kept in
+// verified.json, and the earlier of the two wins.
+function copiedAtOf(target, { uid }) {
+  let at = lstat(path.join(target, MANIFEST)).ctimeMs;
+  try {
+    const first = Date.parse(readPrivateJson(path.join(target, VERIFIED), { uid })?.copiedAt ?? '');
+    if (Number.isFinite(first)) at = Math.min(at, first);
+  } catch { /* no earlier verify */ }
+  return new Date(at).toISOString();
+}
+
 async function verifyExport(account, { dir = null, env = process.env, home = homedir(), cwd = process.cwd(), owner = userInfo().username,
   uid = process.getuid?.() ?? null, now = () => new Date() } = {}) {
   if (!ACCOUNT_NAME.test(account ?? '')) fail('usage', EXPORT_USAGE);
@@ -355,14 +369,33 @@ async function verifyExport(account, { dir = null, env = process.env, home = hom
     }
     bytes += read.bytes;
   }
-  const result = { account, dir: target, files: manifest.files.length, bytes, categories: manifest.categories ?? {}, problems, verified: problems.length === 0 };
+  // The persona account wrote each category's state and count: they must
+  // match the files read back here (a soul that never ran counts with no file).
+  const read = Object.fromEntries(EXPORT_CATEGORIES.map((name) => [name, manifest.files.filter((entry) => safeEntry(entry?.path) && entry.path.startsWith(`${name}/`)).length]));
+  for (const entry of manifest.files) {
+    if (safeEntry(entry?.path) && entry.category !== entry.path.split('/')[0]) problems.push({ path: entry.path, problem: 'wrong-category' });
+  }
+  const neverRan = Array.isArray(manifest.unexported) ? manifest.unexported.length : 0;
+  for (const name of EXPORT_CATEGORIES) {
+    const claim = manifest.categories?.[name];
+    const expected = name === 'souls' ? read[name] + neverRan : read[name];
+    // A souls category of only never-run souls is exported with no archive.
+    const fits = claim?.state === 'exported' ? claim.count === expected && expected > 0
+      : ['empty', 'skipped'].includes(claim?.state) ? claim.count === 0 && read[name] === 0 && (name !== 'souls' || neverRan === 0)
+        : false;
+    if (!fits) problems.push({ path: name, problem: `category ${claim?.state ?? 'missing'} ${claim?.count ?? '?'} but ${read[name]} file(s) read` });
+  }
+  const souls = manifest.files.filter((entry) => entry?.category === 'souls' && typeof entry.agentId === 'string').map((entry) => entry.agentId);
+  const unexported = Array.isArray(manifest.unexported) ? manifest.unexported.map((row) => row?.agentId).filter((id) => typeof id === 'string') : [];
+  const result = { account, dir: target, files: manifest.files.length, bytes, categories: manifest.categories ?? {}, completedAt: typeof manifest.completedAt === 'string' ? manifest.completedAt : null,
+    copiedAt: copiedAtOf(target, { uid }), souls, unexported, problems, verified: problems.length === 0 };
   appendAuditReceipt({ event: 'sandbox-export', operation: 'verify', decision: result.verified ? 'verified' : 'refused',
     detail: result.verified ? `${result.files} file(s), ${bytes} byte(s) in ${target}` : `${problems.length} problem(s) in ${target}` }, { env, home, now });
   if (!result.verified) {
     fail('sandbox-export-unverified', `${problems.length} of ${manifest.files.length} file(s) do not match the manifest: ${problems.map((p) => `${p.path} (${p.problem})`).join(', ')}`,
       { action: 'copy the drop folder again with the printed commands, then verify again; the persona account still has it' });
   }
-  writeJson(path.join(target, VERIFIED), { schemaVersion: SANDBOX_EXPORT_SCHEMA, account, verifiedAt: now().toISOString(), files: result.files, bytes });
+  writeJson(path.join(target, VERIFIED), { schemaVersion: SANDBOX_EXPORT_SCHEMA, account, verifiedAt: now().toISOString(), copiedAt: result.copiedAt, files: result.files, bytes });
   return result;
 }
 

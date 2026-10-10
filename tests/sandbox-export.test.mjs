@@ -118,6 +118,12 @@ test('verify reads every copied file back against the manifest and records it on
   const copied = f.copy(dropFolder);
   const result = await verifySandboxExport('geniusbar-agent', f.ownerOptions);
   assert.deepEqual({ verified: result.verified, files: result.files, dir: result.dir }, { verified: true, files: 4, dir: copied });
+  assert.equal(result.copiedAt, new Date(statSync(path.join(copied, 'manifest.json')).ctimeMs).toISOString(), 'copiedAt is the manifest\'s ctime on this side');
+  // A later verify moves the folder's ctime (verified.json lands in it) but not copiedAt.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const again = await verifySandboxExport('geniusbar-agent', f.ownerOptions);
+  assert.equal(again.copiedAt, result.copiedAt);
+  assert.ok(statSync(copied).ctimeMs > Date.parse(result.copiedAt));
   const verified = JSON.parse(readFileSync(path.join(copied, 'verified.json'), 'utf8'));
   assert.equal(verified.files, 4);
   assert.equal(f.receipts(f.ownerHome).at(-1).decision, 'verified');
@@ -128,6 +134,20 @@ test('verify reads every copied file back against the manifest and records it on
   chmodSync(path.join(copied, 'souls', `${A}.soul.tgz`), 0o600);
   await assert.rejects(verifySandboxExport('geniusbar-agent', { ...f.ownerOptions, dir: copied }), (error) => error.code === 'sandbox-export-unverified' && error.message.includes('(changed)'));
   assert.ok(!existsSync(path.join(copied, 'verified.json')));
+  // Categories the manifest claims must match what is read back.
+  writeFileSync(path.join(copied, 'souls', `${A}.soul.tgz`), readFileSync(path.join(dropFolder, 'souls', `${A}.soul.tgz`)));
+  const manifestFile = path.join(copied, 'manifest.json');
+  const honest = readFileSync(manifestFile, 'utf8');
+  const claim = (categories) => { writeFileSync(manifestFile, JSON.stringify({ ...JSON.parse(honest), categories: { ...JSON.parse(honest).categories, ...categories } })); chmodSync(manifestFile, 0o600); };
+  claim({ workspaces: { state: 'exported', count: 2 } });
+  await assert.rejects(verifySandboxExport('geniusbar-agent', { ...f.ownerOptions, dir: copied }), (error) => error.code === 'sandbox-export-unverified' && /workspaces \(category exported 2 but 1 file\(s\) read\)/.test(error.message));
+  claim({ transcripts: { state: 'empty', count: 0 } });
+  await assert.rejects(verifySandboxExport('geniusbar-agent', { ...f.ownerOptions, dir: copied }), (error) => /transcripts \(category empty 0 but 1 file\(s\) read\)/.test(error.message));
+  const noArchive = JSON.parse(honest);
+  noArchive.files = noArchive.files.filter((entry) => !entry.path.startsWith('workspaces/'));
+  writeFileSync(manifestFile, JSON.stringify(noArchive));
+  await assert.rejects(verifySandboxExport('geniusbar-agent', { ...f.ownerOptions, dir: copied }), (error) => /workspaces \(category exported 1 but 0 file\(s\) read\)/.test(error.message));
+  writeFileSync(manifestFile, honest);
   rmSync(path.join(copied, 'transcripts', 'claude-projects.tgz'));
   await assert.rejects(verifySandboxExport('geniusbar-agent', { ...f.ownerOptions, dir: copied }), (error) => /\(missing\)/.test(error.message));
 });
@@ -272,4 +292,18 @@ test('a real soul goes through soul env export to the path the drop names, and v
   assert.deepEqual(result.manifest.files.map((entry) => entry.path), [`souls/${A}.soul.tgz`]);
   f.copy(result.dropFolder);
   assert.equal((await verifySandboxExport('geniusbar-agent', f.ownerOptions)).verified, true);
+});
+
+test('an account whose souls all never ran exports and verifies with no soul archive', async (t) => {
+  const f = fixture(t);
+  const exportSoul = async (agentId) => { throw Object.assign(new Error(`${agentId} has no .soul-state`), { code: 'soul-state-missing' }); };
+  const { dropFolder, manifest } = await runSandboxExport({ ...f.options, owner: 'owner', exportSoul });
+  assert.deepEqual(manifest.categories.souls, { state: 'exported', count: 3 });
+  assert.equal(manifest.unexported.length, 3);
+  assert.ok(!manifest.files.some((entry) => entry.category === 'souls'));
+  f.copy(dropFolder);
+  const verified = await verifySandboxExport('geniusbar-agent', f.ownerOptions);
+  assert.equal(verified.verified, true);
+  assert.deepEqual(verified.souls, []);
+  assert.equal(verified.unexported.length, 3);
 });

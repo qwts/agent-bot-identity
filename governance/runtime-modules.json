@@ -171,6 +171,7 @@
     "runtime-catalog.mjs": "soul",
     "sandbox.mjs": "soul",
     "sandbox-export.mjs": "soul",
+    "sandbox-remove.mjs": "soul",
     "secret-providers/pass-cli-credentials.mjs": "identity",
     "secret-providers/pass-cli.mjs": "identity",
     "secret-providers/proton-pass.mjs": "identity",

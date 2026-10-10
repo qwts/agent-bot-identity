@@ -18,7 +18,7 @@ agent-bot sandbox on|off [--json] [--principal-stdin]
 agent-bot sandbox account NAME [--json] [--principal-stdin]
 agent-bot sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin]
 agent-bot sandbox resolve <agentId|name> [--json]
-agent-bot sandbox remove [ACCOUNT] --dry-run [--json]
+agent-bot sandbox remove [ACCOUNT] [--dry-run] [--json] [--principal-stdin]
 agent-bot sandbox export --for OWNER [--skip CATEGORY]... [--resume DIR] [--json] [--principal-stdin]
 agent-bot sandbox export --verify ACCOUNT [--dir DIR] [--json]
 ```
@@ -99,18 +99,28 @@ only what is named.
 - Souls, workspaces and transcripts are exported to the owner's account, and
   the export is verified before anything that depends on it is removed.
 - Broker pairings are removed only after the export is verified. Each
-  retained soul keeps its census row, marked retired, so it stays
-  identifiable and recoverable.
+  retained soul keeps its census row, so it stays identifiable and
+  recoverable. The row is kept as it is, not marked `retired`: in the local
+  census a retired row is a tombstone, which would let the soul come back
+  only as a fork with a new ID (the reading recorded on #750; the owner can
+  override it).
 - Harness sign-ins are listed only; agent-bot never removes one.
 - Deleting the macOS account is a guided step the owner does by hand.
   agent-bot never runs privileged deletion.
-- Each category has its own owner-gated confirm. A partial failure stops,
-  leaves everything in place, and can be resumed.
+- Each step that changes something has its own owner-gated confirm: the
+  export, once per category, in the persona account; then, in the owner's
+  account, the revoke, which is the only removal. Census rows, harness
+  sign-ins and the macOS account change nothing in agent-bot, so they ask no
+  gate. Removal is owner only: a caller with a soul's markers is refused
+  before anything is read.
+- A failure stops and can be resumed. Before the revoke nothing has
+  changed; if the broker cannot confirm the pairing is gone after the
+  revoke, it may already be removed, and running the command again reads
+  the broker afresh and reports it `already-removed`.
 
-`sandbox remove [ACCOUNT] --dry-run` is the first step, and the only one built
-so far. It lists what the account has and what would happen to each
-category, and changes nothing: it runs only the reads `status` runs, asks no
-owner gate, and refuses without `--dry-run`. ACCOUNT defaults to
+`sandbox remove [ACCOUNT] --dry-run` lists what the account has and what
+would happen to each category, and changes nothing: it runs only the reads
+`status` runs and asks no owner gate. ACCOUNT defaults to
 `sandbox.account`, and the account agent-bot itself runs as is refused
 (`sandbox-remove-self`). Each category carries an `id`, an `action`, whether
 it could be read (`known`), its `items` and a note:
@@ -121,7 +131,7 @@ it could be read (`known`), its `items` and a note:
 | `workspaces` | `export` | the souls' folder in the account's home |
 | `transcripts` | `export` | the harness session stores in the account's home |
 | `pairings` | `remove-after-export` | the account's broker pairings: account, uid and state only |
-| `census` | `mark-retired` | the broker's census rows for the account |
+| `census` | `keep` | the broker's census rows for the account |
 | `harness-sign-ins` | `list-only` | the harness homes in the account's home |
 | `macos-account` | `manual` | the account and its home, when it exists |
 
@@ -132,8 +142,58 @@ paths are the default locations: the account may set `AGENT_BOT_SOULS_HOME`,
 so `workspaces`, `transcripts` and `harness-sign-ins` are always `known:
 false`. `souls` is `known` only when both the local census and the broker's
 were read. Off
-macOS there is nothing to list. The gated removal steps come in a later
-slice.
+macOS there is nothing to list.
+
+### Removing
+
+`sandbox remove [ACCOUNT]`, without `--dry-run`, runs in the owner's account
+after the export has been copied there and verified. The persona account
+wrote that export's manifest, so its claims are checked against what the
+owner's side can see. Before anything is changed it:
+
+- verifies the newest export for ACCOUNT again, reading every file back
+  (`sandbox export --verify`, which also requires each category's state and
+  count to match the files it read), and refuses if none is verified;
+- requires `souls`, `workspaces` and `transcripts` each to be `exported` or
+  `empty` (`sandbox-remove-export-incomplete`). `souls` may be empty only
+  when no soul runs as ACCOUNT. An empty `workspaces` or `transcripts` that
+  cannot be confirmed here, because the account's home is unreadable, is
+  named in the owner gate's prompt;
+- requires every soul that runs as ACCOUNT, in the local census or joined
+  from it in the broker's, to have an archive in the export
+  (`sandbox-remove-soul-not-exported`). A soul the export lists as never run
+  is believed only when the broker has no row for it and the local census
+  never sighted it;
+- refuses a stale export (`sandbox-remove-export-stale`): a soul of the
+  account running now, or sighted after the export finished. The export's
+  time is the earlier of the manifest's `completedAt`, which the persona
+  account wrote, and when the copy reached the owner's side: the copied
+  `manifest.json`'s ctime, which verify never rewrites, kept from the first
+  verify in `verified.json`. A `completedAt` later than now is refused
+  (`sandbox-remove-export-future`). The gate prompt gives the export's age.
+  The broker's census carries no activity times, so a soul known only to
+  the broker is checked by whether it is running now;
+- refuses if the local or broker census cannot be read.
+
+After the owner confirms, the censuses and pairings are read again and
+these checks repeated right before the revoke, so a soul started or newly
+assigned while the owner was asked stops it.
+
+Then, category by category:
+
+| Category | What happens |
+| --- | --- |
+| `souls`, `workspaces`, `transcripts` | already exported; the verified folder is named |
+| `pairings` | its own owner gate, then `agent-comms account revoke ACCOUNT`, which drops the account pairing and its daemon pairing; the broker is read again to confirm they are gone |
+| `census` | kept as it is; the broker shows the rows `left` |
+| `harness-sign-ins` | listed |
+| `macos-account` | printed: `sudo /usr/sbin/sysadminctl -deleteUser ACCOUNT -keepHome`, which agent-bot never runs |
+
+Nothing else is deleted. Every stop leaves a `sandbox-remove` audit receipt:
+`refused` before anything changed, `declined` at the gate, `failed` part
+way. Running the command again reads the broker afresh, so a pairing already gone is reported
+`already-removed` and not revoked twice.
+
 
 ### Exporting
 

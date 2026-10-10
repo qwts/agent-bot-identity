@@ -57,7 +57,7 @@ test('the removal dry run lists every category with the owner\'s decided action,
   const by = Object.fromEntries(result.categories.map((category) => [category.id, category]));
   assert.deepEqual(Object.fromEntries(result.categories.map((category) => [category.id, category.action])), {
     souls: 'export', workspaces: 'export', transcripts: 'export', pairings: 'remove-after-export',
-    census: 'mark-retired', 'harness-sign-ins': 'list-only', 'macos-account': 'manual',
+    census: 'keep', 'harness-sign-ins': 'list-only', 'macos-account': 'manual',
   });
   // The local soul sandboxed into the account, and the one the broker's census has joined there.
   assert.deepEqual(by.souls.items.map((soul) => soul.agentId).sort(), [ID, OTHER].sort());
@@ -94,15 +94,13 @@ test('the dry run refuses the owner\'s own account and a bad name, and lists lit
   assert.deepEqual({ supported: linux.supported, categories: linux.categories }, { supported: false, categories: [] });
 });
 
-test('sandbox remove needs --dry-run, takes no principal, and defaults to the configured account', async (t) => {
+test('sandbox remove --dry-run takes no principal, and defaults to the configured account', async (t) => {
   const f = fixture(t);
   const m = machine();
   let out = '';
   const gated = [];
   const run = (argv) => { out = ''; return sandboxCommand(argv, { ...f.options, platform: 'darwin', exec: m.exec, owner: 'owner',
     gate: async (action) => { gated.push(action); }, write: (text) => { out += text; } }); };
-  await assert.rejects(run(['remove']), /usage: agent-bot sandbox/);
-  await assert.rejects(run(['remove', 'geniusbar-agent']), /usage: agent-bot sandbox/);
   await assert.rejects(run(['remove', '--dry-run', '--principal-stdin']), /usage: agent-bot sandbox/);
   await assert.rejects(run(['remove', 'a', 'b', '--dry-run']), /usage: agent-bot sandbox/);
   const result = await run(['remove', '--dry-run', '--json']);
