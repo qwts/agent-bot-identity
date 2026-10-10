@@ -425,7 +425,7 @@ test('installed adapter always invokes mandatory guards even without executable 
   const runner = join(home, 'runner');
   mkdirSync(hooks, { recursive: true });
   writeFileSync(runner, `#!/bin/sh
-printf '%s\\\\n' "$*" >"${calls}"
+printf '%s\\n' "$*" >"${calls}"
 exit 42
 `, { mode: 0o755 });
   const fast = installAgentHook({ home });
