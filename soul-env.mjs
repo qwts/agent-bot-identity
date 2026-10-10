@@ -496,7 +496,7 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
       overrides: overrideState.overrides, overrideErrors: overrideState.errors });
     result.launch.routing.runtimes = routed.routing;
     result.launch.routing.env = [...new Set([...result.launch.routing.env, ...Object.keys(routed.env).filter((name) => name !== 'PATH' && routed.env[name] !== undefined)])].sort();
-    result.launch.routing.PATH = Object.values(routed.routing).some((entry) => entry.source === 'soul' || entry.source === 'override') ? 'soul-runtimes'
+    result.launch.routing.PATH = Object.values(routed.routing).some((entry) => entry.source === 'soul' || (entry.source === 'override' && entry.bin)) ? 'soul-runtimes'
       : routed.env.PATH ? 'host-bundled' : 'host';
   }
   // Providers per harness and the secrets they name (#583 slice 4): the

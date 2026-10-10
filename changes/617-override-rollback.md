@@ -1,0 +1,1 @@
+- `soul runtimes override` now leaves the recorded selection unchanged when the override shim directory is unsafe, and `soul env` reports PATH as soul-routed only for an active override (#617).

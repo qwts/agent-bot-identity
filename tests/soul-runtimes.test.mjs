@@ -785,6 +785,33 @@ test('owner-managed executable overrides use one-name shims, satisfy only the se
   assert.equal(readFileSync(path.join(outside, 'runtimes', 'overrides', 'node.json'), 'utf8'), 'sentinel');
 });
 
+test('an unsafe override shim directory refuses set and clear before the record changes', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { node: '24' } }, census: true });
+  const options = { ...f.options, file: f.env.AGENT_BOT_POPULATION_PATH, cwd: f.home };
+  const gate = async () => {}, write = () => {};
+  const externalNpm = path.join(f.home, 'external', 'npm'), externalNode = path.join(f.home, 'external', 'node');
+  put(externalNpm, '#!/bin/sh\nexit 0\n');
+  put(externalNode, '#!/bin/sh\nexit 0\n');
+  await soulRuntimesCommand(['override', ID, 'npm', externalNpm], { ...options, gate, write });
+  const overrides = path.join(f.runtimes, 'overrides');
+  const npmRecord = readFileSync(path.join(overrides, 'npm.json'));
+  const stray = path.join(overrides, 'bin', 'gofmt');
+  put(stray, 'unexpected regular file');
+  const receiptsBefore = readFileSync(auditFile({ env: f.env, home: f.home }), 'utf8');
+
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'node', externalNode], { ...options, gate, write }),
+    (error) => error.code === 'runtime-override-invalid' && /remove that host-local entry/.test(error.message));
+  assert.ok(!existsSync(path.join(overrides, 'node.json')), 'a refused set leaves no selection behind');
+  await assert.rejects(soulRuntimesCommand(['override', ID, 'npm', '--clear'], { ...options, gate, write }),
+    (error) => error.code === 'runtime-override-invalid');
+  assert.deepEqual(readFileSync(path.join(overrides, 'npm.json')), npmRecord, 'a refused clear keeps the selection');
+  assert.equal(readFileSync(auditFile({ env: f.env, home: f.home }), 'utf8'), receiptsBefore, 'nothing changed, so nothing is receipted');
+
+  rmSync(stray);
+  await soulRuntimesCommand(['override', ID, 'npm', '--clear'], { ...options, gate, write });
+  assert.ok(!existsSync(path.join(overrides, 'npm.json')));
+});
+
 
 test('override clear recovers a malformed directory without following links or removing other selections', async (t) => {
   const f = fixture(t, { census: true });

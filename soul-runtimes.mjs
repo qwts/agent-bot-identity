@@ -205,6 +205,25 @@ function writeOverrideRecord(soulDir, agentId, name, executable) {
   finally { rmSync(temporary, { force: true }); }
 }
 
+// The record as it was before a set or clear, so a failure after the write
+// can put it back. A record that is not a small regular file is already
+// broken; only `--clear` gets that far, and it stays removed.
+function readPreviousOverrideRecord(file) {
+  let info;
+  try { info = lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return { absent: true }; throw error; }
+  if (!info.isFile() || info.size > OVERRIDE_RECORD_MAX_BYTES) return { unrestorable: true };
+  return { bytes: readFileSync(file) };
+}
+
+function restoreOverrideRecord(soulDir, agentId, file, previous) {
+  if (previous.unrestorable) return;
+  if (previous.absent) { rmSync(file, { recursive: true, force: true }); return; }
+  validateOverrideStore(soulDir, agentId, { create: true });
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try { writeFileSync(temporary, previous.bytes, { flag: 'wx', mode: 0o600 }); renameSync(temporary, file); }
+  finally { rmSync(temporary, { force: true }); }
+}
+
 /** Where verified archives are shared: AGENT_BOT_CACHE_HOME, else XDG, else ~/.cache. */
 export function downloadCacheDir({ env = process.env, home = env.HOME ?? homedir() } = {}) {
   const base = env.AGENT_BOT_CACHE_HOME ? path.resolve(env.AGENT_BOT_CACHE_HOME)
@@ -932,13 +951,22 @@ async function soulRuntimeOverrideCommand(argv, { gate, readStdin, write, env, h
   await gate(`${clear ? 'clear' : 'set'} ${soul.id}'s ${name} executable override`, { principal, env, cwd });
   const soulDir = soulRoot(soul, options);
   if (clear) validateOverrideStore(soulDir, soul.id);
+  // An unsafe shim directory refuses before the record changes, so a failed
+  // command never leaves a selection behind.
+  ensureOverrideShims(soulDir, inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host }).overrides, { agentId: soul.id });
   const file = overrideRecordFile(soulDir, name);
+  const previous = readPreviousOverrideRecord(file);
   if (clear) rmSync(file, { recursive: true, force: true });
   else writeOverrideRecord(soulDir, soul.id, name, executable);
-  const status = inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host });
-  ensureOverrideShims(soulDir, status.overrides, { agentId: soul.id });
-  const selected = status.rows.find((row) => row.name === name);
-  if (!clear && selected?.status !== 'selected') throw Object.assign(new Error(selected?.reason ?? `could not select ${name} override`), { code: selected?.code ?? 'runtime-override-invalid', runtime: name, action: selected?.action });
+  try {
+    const status = inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: host });
+    ensureOverrideShims(soulDir, status.overrides, { agentId: soul.id });
+    const selected = status.rows.find((row) => row.name === name);
+    if (!clear && selected?.status !== 'selected') throw Object.assign(new Error(selected?.reason ?? `could not select ${name} override`), { code: selected?.code ?? 'runtime-override-invalid', runtime: name, action: selected?.action });
+  } catch (error) {
+    restoreOverrideRecord(soulDir, soul.id, file, previous);
+    throw error;
+  }
   appendAuditReceipt({ event: 'soul-runtimes', agentId: soul.id, operation: clear ? 'override-clear' : 'override', decision: clear ? 'cleared' : 'selected',
     detail: clear ? `${name} override cleared` : `${name} override selected at ${executable}; verification: unverified-external` }, { env, home, now });
   const result = { schemaVersion: RUNTIMES_SCHEMA_VERSION, agentId: soul.id, name, status: clear ? 'cleared' : 'selected', executable, verification: clear ? null : 'unverified-external' };
