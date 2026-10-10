@@ -1,0 +1,1 @@
+- `agent-bot owner enroll` and `owner remove` change the owner's statement keys only through agent-bot-keyd: keyd shows the owner the whole new key set and records it on their approval. With no keyd that can ask they change nothing; the administrator dialog no longer enrols or removes a key (#753).

@@ -125,8 +125,8 @@ input or a bad signature refuses the action. If any owner key is enrolled but
 no enrolled SSH key can answer, a challenge-eligible action refuses instead
 of falling back to administrator consent. The older administrator fallback
 remains for those actions on hosts with no enrolled owner keys. Enrolment and
-removal always continue through local presence or administrator consent and
-cannot use a signed challenge.
+removal go through keyd's owner key record (below) and cannot use a signed
+challenge.
 
 **On a decision route.** Deciding a soul's waiting tool request through
 `POST /v0/approvals/decide` (`agent-bot approvals approve|deny`) or
@@ -167,16 +167,22 @@ decide.
 
 **enroll** pins a public key in `<state>/owner/keys.json` (0600, in a 0700
 directory; `<state>` is `$XDG_STATE_HOME/agent-bot` or
-`~/.local/state/agent-bot`). It goes through the owner gate (keyd presence,
-or the administrator dialog where keyd cannot ask), then asks the new key to
-sign an enrolment challenge and pins it only if that verifies. At most four
-keys are pinned, each under its own name.
+`~/.local/state/agent-bot`). It asks the new key to sign an enrolment
+challenge, then asks agent-bot-keyd to record the whole new key set
+(`owner/pins-attest`, #753): keyd shows the owner every key the set holds,
+by name and fingerprint, those already pinned included, and records it only
+when they approve with Touch ID or the login password. Only then is the key
+pinned. At most four keys are pinned, each under its own name.
 
-**remove** unpins one key, also through the owner gate. Both change the
-pins under a lock, re-reading them after the owner answers, so concurrent
-commands neither lose an enrolment nor bring back a removed key; the owner
-is never asked while the lock is held. Removing a key is
-local to this host: a lost key must be removed on every host that pinned it.
+**remove** unpins one key, also by having keyd record the remaining set.
+Neither falls back to the administrator dialog: with no keyd that can ask
+(none installed, none running, a keyd too old for `owner/pins-attest`, or
+no GUI session) the pins do not change. Both write the pins under a lock,
+only if the file still holds the set keyd was shown; a change made while
+the owner was asked refuses with `owner-keys-changed`, and running the
+command again asks afresh. The owner is never asked while the lock is held.
+Removing a key is local to this host: a lost key must be removed on every
+host that pinned it.
 
 Every enroll and remove attempt leaves an `owner-key` audit receipt
 (`operation: enroll|remove`, `decision: approved|refused|failed`, the key's

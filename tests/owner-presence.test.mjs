@@ -10,7 +10,7 @@ import {
   ORGANIZATION_PROFILE_SCHEMA_VERSION, isProjectedRuntimeConfig, organizationProfileToConfig, validateOrganizationProfile,
 } from '../organization-profile.mjs';
 import {
-  PRESENCE_AUDIENCE, PRESENCE_UNAVAILABLE_RPC, actionDigest, developerIdRequirement, keydPresence,
+  PRESENCE_AUDIENCE, PRESENCE_UNAVAILABLE_RPC, actionDigest, developerIdRequirement, keydAttestPins, keydPresence,
   pinSetDigest, pinnedPresenceKey, presencePinPath, presenceSignerPath, verifyPinsAttestation, verifyPresence,
 } from '../owner-presence.mjs';
 
@@ -338,6 +338,43 @@ test('keydPresence tells "nobody can be asked" apart from "the owner said no"', 
   await assert.rejects(keydPresence('x', failing(Object.assign(new Error('the owner did not approve (-2)'), { code: 'keyd-refused', rpcCode: -32000 }))),
     { code: 'owner-declined' });
   await assert.rejects(keydPresence('x', failing(Object.assign(new Error('agent-bot-keyd did not answer in time'), { code: 'keyd-timeout' }))),
+    { code: 'owner-declined' });
+});
+
+test('keydAttestPins asks keyd to record the whole key set and checks the record is that set', async (t) => {
+  const { env } = home(t);
+  const key = presenceKey();
+  const pins = [{ name: 'yubikey', store: 'ssh', alg: 'sshsig', publicKey: 'sk-ssh-ed25519@openssh.com AAAA', fingerprint: `SHA256:${'A'.repeat(43)}`,
+    verifyRequired: false, softwareKey: false, pinnedAt: '2026-10-10T00:00:00.000Z' }];
+  const calls = [];
+  const recording = (digest = pinSetDigest(pins)) => async (socket, method, params, options) => {
+    calls.push({ socket, method, params, options });
+    return { attestation: key.pins({ digest, generation: 4, nonce: params.nonce }) };
+  };
+  const seams = { env, pinned: () => key.raw, request: recording(), now: () => NOW, nonce: () => NONCE };
+  assert.deepEqual(await keydAttestPins(pins, seams), { digest: pinSetDigest(pins), generation: 4 });
+  assert.equal(calls[0].method, 'owner/pins-attest');
+  assert.match(calls[0].socket, /keyd\/owner\.sock$/);
+  assert.deepEqual(calls[0].params, { pins, nonce: NONCE });
+  assert.equal(calls[0].options.timeoutMs, 150_000);
+
+  // keyd recorded some other set, or something without keyd's key answered.
+  await assert.rejects(keydAttestPins(pins, { ...seams, request: recording(pinSetDigest([])) }), { code: 'pins-invalid' });
+  await assert.rejects(keydAttestPins(pins, { ...seams, pinned: () => presenceKey().raw }), { code: 'pins-invalid' });
+  // A presence assertion is not a record of the owner's keys.
+  await assert.rejects(keydAttestPins(pins, { ...seams, request: async (s, m, params) => ({ attestation: key.assertion('x', { nonce: params.nonce }) }) }),
+    { code: 'pins-invalid' });
+
+  const failing = (error) => ({ ...seams, request: async () => { throw error; } });
+  await assert.rejects(keydAttestPins(pins, { env, pinned: () => null }), { code: 'presence-unavailable' });
+  await assert.rejects(keydAttestPins(pins, failing(Object.assign(new Error('agent-bot-keyd is not running'), { code: 'keyd-unavailable' }))),
+    { code: 'presence-unavailable' });
+  await assert.rejects(keydAttestPins(pins, failing(Object.assign(new Error('the owner cannot be asked here'), { code: 'keyd-refused', rpcCode: -32001 }))),
+    { code: 'presence-unavailable' });
+  // A keyd from before #753 does not know the method: nobody could be asked.
+  await assert.rejects(keydAttestPins(pins, failing(Object.assign(new Error('method not found'), { code: 'keyd-refused', rpcCode: -32601 }))),
+    { code: 'presence-unavailable', message: /cannot record owner keys/ });
+  await assert.rejects(keydAttestPins(pins, failing(Object.assign(new Error('the owner did not approve (-2)'), { code: 'keyd-refused', rpcCode: -32000 }))),
     { code: 'owner-declined' });
 });
 
