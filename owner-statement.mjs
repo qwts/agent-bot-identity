@@ -599,6 +599,14 @@ export const OWNER_USAGE = 'usage: agent-bot owner verify <token|file|-> [--repo
 
 const usage = (message) => statementError('owner-usage', `${message}\n${OWNER_USAGE}`);
 
+// Enrolment and removal are the owner's: a caller carrying a soul's Agent ID,
+// binding or App identity is refused before keyd is asked, as the owner gate
+// refuses it, so a soul cannot put the owner key prompt in front of them.
+function soulRefusal(markers, action, { env, cwd }) {
+  const found = markers({ env, cwd });
+  return found.length ? statementError('owner-credential-required', `${action} is owner only; this caller has a soul's ${found.join(', ')}`) : null;
+}
+
 function noAttest() {
   throw statementError('owner-credential-required', 'no agent-bot-keyd is wired to record owner keys for this command');
 }
@@ -797,6 +805,8 @@ export async function ownerCommand(argv, {
         record('refused', `${name} ${fingerprint}: ${error.code}`);
         throw error;
       };
+      const soul = soulRefusal(markers, `owner enroll ${name} ${fingerprint}`, { env, cwd });
+      if (soul) refuse(soul);
       if (softwareKey && !values['allow-software-key']) {
         refuse(statementError('owner-key-software',
           `${values.key} is a plain ssh-ed25519 key, readable by any agent in your account. Use a security key (sk-ssh-ed25519), or pass --allow-software-key to pin it anyway.`));
@@ -856,6 +866,11 @@ export async function ownerCommand(argv, {
         try { receipt({ event: 'owner-key', operation: 'remove', decision, detail }, { env, home }); } catch { /* the outcome stands without its receipt */ }
       };
       const missing = () => statementError('owner-key-missing', `no owner key named ${positionals[0]} is pinned`);
+      const soul = soulRefusal(markers, `owner remove ${positionals[0].slice(0, 32)}`, { env, cwd });
+      if (soul) {
+        record('refused', `${positionals[0].slice(0, 32)}: ${soul.code}`);
+        throw soul;
+      }
       const current = readOwnerKeys(store);
       const pin = KEY_NAME.test(positionals[0]) ? current.find((candidate) => candidate.name === positionals[0]) : null;
       if (!pin) {
