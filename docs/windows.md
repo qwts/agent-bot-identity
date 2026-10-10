@@ -73,8 +73,11 @@ See [soul credentials](soul-credentials.md).
 with the existing create-once and no-silent-rotation behavior. On Windows,
 the identity module resolves the current account SID with `whoami`, checks
 that the state directory and key are real objects owned by that SID, and
-restricts the key file's access list with `icacls`. It then verifies that no
-foreign account still has an allow entry. The PEM bytes and path do not
+creates new directories and empty private files with that SID as owner and
+a protected owner-only access list. Existing directories are checked without
+changing their owner or access list. Existing keys are restricted with
+`icacls`, then verified to have no foreign account allow entry. Exclusive
+creation never overwrites an existing key. The PEM bytes and path do not
 change; only this account may retain access to the private key. These
 `whoami`, `Get-Acl` and `icacls` calls are exercised through fakes in the
 cross-platform suite. A live Windows daemon run is still pending.
@@ -94,11 +97,16 @@ shared and pairing-proof directories, broker state directory, and
 read from that custody-checked identity file and saved with the SID in the
 existing daemon credential record.
 
-On each connection, the client sends a nonce and waits for the broker's
-signature over the pipe name and nonce before sending the pairing request or
-any daemon request. The saved credential keeps its existing JSON file path
-and override behavior. Windows single-account credential storage restricts
-and verifies the file ACL before writing the secret. Group broker mode is
+Each pipe connection uses Windows PowerShell's .NET `NamedPipeClientStream`
+with explicit `TokenImpersonationLevel.Identification`. This restricts the
+server to identifying the client; it cannot act as the daemon account before
+the application handshake finishes. There is no fallback to Node's default
+pipe connector. The relay carries protocol bytes on binary stdin/stdout,
+with no credentials on its command line. The client then sends a nonce and
+waits for the broker's signature over the pipe name and nonce before sending
+the pairing request or any daemon request. The saved credential keeps its existing JSON file path
+and override behavior. Windows single-account credential storage creates empty files with a
+protected account-only ACL and verifies custody before writing the secret. Group broker mode is
 unsupported on Windows.
 
 The Windows native CI preflight uses the real `whoami`, `Get-Acl` and

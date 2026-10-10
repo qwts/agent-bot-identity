@@ -22,7 +22,7 @@ function quoteForPowerShell(value) {
 // A Node intermediary inherits PowerShell 7 module paths, which Windows
 // PowerShell cannot load. Let the legacy shell construct its own module path.
 // https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_psmodulepath#starting-windows-powershell-from-powershell-7
-function legacyPowerShellEnv(env) {
+export function legacyPowerShellEnv(env = process.env) {
   return Object.fromEntries(
     Object.entries(env).filter(([name]) => name.toLowerCase() !== 'psmodulepath'),
   );
@@ -97,21 +97,16 @@ export function createWindowsAccountCustody({ run = spawnSync, env = process.env
     return entry;
   }
 
-  function restrictPrivateFile(file, sid) {
-    if (!isWindowsSid(sid)) throw new Error('expected account SID is invalid');
-    assertOwnedFile(file, sid);
-    const result = run('icacls.exe', [file, '/inheritance:r', '/grant:r', `*${sid}:F`], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    if (result?.status !== 0) throw new Error('Windows private-file access could not be restricted');
-    assertOwnedFile(file, sid);
+  function verifyPrivateAcl(file, sid, kind) {
     const script = [
       "$ErrorActionPreference = 'Stop'",
       `$p = ${quoteForPowerShell(file)}`,
       `$owner = '${sid}'`,
+      `$expectedKind = '${kind}'`,
       'try {',
       '  $item = Get-Item -LiteralPath $p -Force',
-      '  if (-not $item -or $item.PSIsContainer -or [int]($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw \'file\' }',
+      '  $actualKind = if ($item.PSIsContainer) { \'directory\' } else { \'file\' }',
+      '  if (-not $item -or $actualKind -ne $expectedKind -or [int]($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw \'object\' }',
       '  $acl = Get-Acl -LiteralPath $p',
       '  if (-not $acl -or -not $acl.AreAccessRulesProtected) { throw \'inheritance\' }',
       '  $rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])',
@@ -141,5 +136,93 @@ export function createWindowsAccountCustody({ run = spawnSync, env = process.env
     }
   }
 
-  return Object.freeze({ currentSid, assertOwnedDirectory, assertOwnedFile, restrictPrivateFile });
+  function createOwnedDirectory(file, sid) {
+    if (!isWindowsSid(sid)) throw new Error('expected account SID is invalid');
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      `$p = ${quoteForPowerShell(file)}`,
+      `$sid = '${sid}'`,
+      'try {',
+      '  if ([System.IO.Directory]::Exists($p)) { [Console]::Out.Write(\'existing\'); return }',
+      '  $identity = [System.Security.Principal.SecurityIdentifier]::new($sid)',
+      '  $security = [System.Security.AccessControl.DirectorySecurity]::new()',
+      '  $security.SetOwner($identity)',
+      '  $security.SetAccessRuleProtection($true, $false)',
+      '  $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($identity, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)',
+      '  $security.AddAccessRule($rule)',
+      '  [System.IO.Directory]::CreateDirectory($p, $security) | Out-Null',
+      "  [Console]::Out.Write('created')",
+      '} catch {',
+      "  [Console]::Out.Write('refused')",
+      '}',
+      '',
+      '',
+    ].join('\n');
+    const result = run('powershell.exe', POWERSHELL_ARGS, {
+      input: script, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], env: legacyPowerShellEnv(env),
+    });
+    const answer = String(result?.stdout ?? '').trim();
+    if (result?.status !== 0 || (answer !== 'created' && answer !== 'existing')) {
+      throw new Error('Windows custody directory could not be created safely');
+    }
+    assertOwnedDirectory(file, sid);
+    if (answer === 'created') verifyPrivateAcl(file, sid, 'directory');
+  }
+
+  function createPrivateFile(file, sid) {
+    if (!isWindowsSid(sid)) throw new Error('expected account SID is invalid');
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      `$p = ${quoteForPowerShell(file)}`,
+      `$sid = '${sid}'`,
+      'try {',
+      '  $identity = [System.Security.Principal.SecurityIdentifier]::new($sid)',
+      '  $security = [System.Security.AccessControl.FileSecurity]::new()',
+      '  $security.SetOwner($identity)',
+      '  $security.SetAccessRuleProtection($true, $false)',
+      '  $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($identity, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)',
+      '  $security.AddAccessRule($rule)',
+      '  $stream = [System.IO.FileStream]::new($p, [System.IO.FileMode]::CreateNew, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.IO.FileShare]::None, 4096, [System.IO.FileOptions]::None, $security)',
+      '  $stream.Dispose()',
+      "  [Console]::Out.Write('created')",
+      '} catch {',
+      '  $collision = $false',
+      '  $exception = $_.Exception',
+      '  $depth = 0',
+      '  while ($null -ne $exception -and $depth -lt 8) {',
+      '    if ($exception -is [System.IO.IOException]) {',
+      '      $nativeCode = $exception.HResult -band 65535',
+      '      if ($nativeCode -eq 80 -or $nativeCode -eq 183) { $collision = $true; break }',
+      '    }',
+      '    $exception = $exception.InnerException',
+      '    $depth++',
+      '  }',
+      "  if ($collision) { [Console]::Out.Write('exists') } else { [Console]::Out.Write('refused') }",
+      '}',
+      '',
+      '',
+    ].join('\n');
+    const result = run('powershell.exe', POWERSHELL_ARGS, {
+      input: script, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], env: legacyPowerShellEnv(env),
+    });
+    const answer = String(result?.stdout ?? '').trim();
+    if (result?.status !== 0) throw new Error('Windows private file could not be created safely');
+    if (answer === 'exists') throw Object.assign(new Error('Windows private file already exists'), { code: 'EEXIST' });
+    if (answer !== 'created') throw new Error('Windows private file could not be created safely');
+    assertOwnedFile(file, sid);
+    verifyPrivateAcl(file, sid, 'file');
+  }
+
+  function restrictPrivateFile(file, sid) {
+    if (!isWindowsSid(sid)) throw new Error('expected account SID is invalid');
+    assertOwnedFile(file, sid);
+    const result = run('icacls.exe', [file, '/inheritance:r', '/grant:r', `*${sid}:F`], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (result?.status !== 0) throw new Error('Windows private-file access could not be restricted');
+    assertOwnedFile(file, sid);
+    verifyPrivateAcl(file, sid, 'file');
+  }
+
+  return Object.freeze({ currentSid, assertOwnedDirectory, assertOwnedFile, createOwnedDirectory, createPrivateFile, restrictPrivateFile });
 }

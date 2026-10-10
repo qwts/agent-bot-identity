@@ -1,10 +1,12 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import {
-  mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync,
+  existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import net from 'node:net';
+import { PassThrough } from 'node:stream';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
 import {
@@ -44,18 +46,31 @@ function keys() {
   };
 }
 
-function fakeCustody() {
+function fakeCustody({ foreignDirectories = [], failPrivateCreation = false, onPrivateCreateFailure = null } = {}) {
   const checked = [];
+  const foreign = new Set(foreignDirectories);
   return {
     checked,
     currentSid: () => SID,
     assertOwnedDirectory(file, sid) { assert.equal(sid, SID); assert.ok(statSync(file).isDirectory()); checked.push(['directory', file]); },
     assertOwnedFile(file, sid) { assert.equal(sid, SID); assert.ok(statSync(file).isFile()); checked.push(['file', file]); },
-    restrictPrivateFile(file, sid) {
+    createOwnedDirectory(file, sid) {
       assert.equal(sid, SID);
+      if (foreign.has(file)) throw new Error('refuse existing foreign directory');
+      if (!existsSync(file)) mkdirSync(file);
+      assert.ok(statSync(file).isDirectory());
+      checked.push(['owned-directory', file]);
+    },
+    createPrivateFile(file, sid) {
+      assert.equal(sid, SID);
+      if (failPrivateCreation) {
+        onPrivateCreateFailure?.(file);
+        throw Object.assign(new Error('refuse private file creation'), { code: 'EEXIST' });
+      }
+      writeFileSync(file, '', { flag: 'wx' });
       assert.ok(statSync(file).isFile());
-      assert.equal(readFileSync(file, 'utf8'), '', 'private file must be empty until its ACL is restricted');
-      checked.push(['restrict', file]);
+      assert.equal(readFileSync(file, 'utf8'), '', 'private file must be empty until creation returns');
+      checked.push(['private-file', file]);
     },
   };
 }
@@ -148,7 +163,7 @@ test('Windows pairing pins identity.json key and persists the SID/key for later 
       windowsCreateConnection: broker.createConnection,
     });
     assert.deepEqual(broker.requests.map(({ op }) => op), ['daemon-pair-request', 'wake-report']);
-    assert.ok(custody.checked.some(([kind]) => kind === 'restrict'));
+    assert.ok(custody.checked.some(([kind]) => kind === 'private-file'));
   } finally {
     await broker.close();
   }
@@ -161,6 +176,50 @@ test('Windows pairing requires the broker host shared-directory override', async
   await assert.rejects(pairDaemonComms({ env: missingShared, home: w.root, platform: 'win32',
     windowsCustody: fakeCustody(), publicKey: keys().vouchPublicKey }),
   { code: 'usage' });
+});
+
+test('Windows credential save refuses an existing foreign state directory without adopting it', () => {
+  const w = world();
+  const foreignDir = path.join(w.root, 'foreign-state');
+  mkdirSync(foreignDir);
+  const marker = path.join(foreignDir, 'keep.txt');
+  writeFileSync(marker, 'foreign owner data');
+  const env = { ...w.env, AGENT_BOT_COMMS_DAEMON_PATH: path.join(foreignDir, 'daemon.json') };
+  const custody = fakeCustody({ foreignDirectories: [foreignDir] });
+  const credential = { account: 'worker', secret: 'must-not-write', brokerUid: SID,
+    brokerKey: keys().brokerKey, mode: 'single-account', pairedAt: '2026-10-10T00:00:00Z' };
+  assert.throws(() => saveCommsCredential(credential, { env, home: w.root, platform: 'win32', windowsCustody: custody }),
+    { code: 'broker-untrusted' });
+  assert.equal(readFileSync(marker, 'utf8'), 'foreign owner data');
+  assert.deepEqual(readdirSync(foreignDir), ['keep.txt']);
+  assert.ok(!readFileSync(marker, 'utf8').includes(credential.secret));
+});
+
+test('Windows credential and proof creation failures write no secret and preserve collisions', async () => {
+  const w = world();
+  const k = keys();
+  writeIdentity(w, k.brokerKey);
+  const credential = { account: 'worker', secret: 'must-not-write', brokerUid: SID,
+    brokerKey: k.brokerKey, mode: 'single-account', pairedAt: '2026-10-10T00:00:00Z' };
+  const credentialCustody = fakeCustody({ failPrivateCreation: true });
+  assert.throws(() => saveCommsCredential(credential, {
+    env: w.env, home: w.root, platform: 'win32', windowsCustody: credentialCustody,
+  }), { code: 'EEXIST' });
+  assert.deepEqual(readdirSync(w.root).sort(), ['broker-state', 'shared']);
+
+  const proofCustody = fakeCustody({
+    failPrivateCreation: true,
+    onPrivateCreateFailure(file) { writeFileSync(file, 'existing collision', { flag: 'wx' }); },
+  });
+  await assert.rejects(pairDaemonComms({
+    env: w.env, home: w.root, account: 'worker', publicKey: k.vouchPublicKey,
+    paths: w.paths, platform: 'win32', windowsCustody: proofCustody,
+    windowsCreateConnection() { throw new Error('must not connect'); },
+  }), { code: 'EEXIST' });
+  const proofFiles = readdirSync(w.proofs);
+  assert.equal(proofFiles.length, 1);
+  assert.equal(readFileSync(path.join(w.proofs, proofFiles[0]), 'utf8'), 'existing collision');
+  assert.ok(!readFileSync(path.join(w.proofs, proofFiles[0]), 'utf8').includes(credential.secret));
 });
 
 test('saved Windows credentials drive wake and launch operations through the same pinned handshake', async () => {
@@ -315,6 +374,26 @@ test('verified watch remains open beyond its handshake deadline', async () => {
   }
 });
 
+test('verified watch observes broker EOF and can reconnect without an abort', async () => {
+  const w = world();
+  const k = keys();
+  writeIdentity(w, k.brokerKey);
+  const broker = await brokerHarness(k.privateKey, {
+    onRequest(_line, socket) {
+      socket.write(`${JSON.stringify({ ok: true })}\n`);
+      setTimeout(() => socket.end(), 10);
+    },
+  });
+  try {
+    const client = new CommsClient({ socketPath: w.paths.socket, brokerUid: SID, brokerKey: k.brokerKey,
+      mode: 'single-account', platform: 'win32', serviceLabel: w.paths.serviceLabel,
+      brokerStateDir: w.brokerState, windowsCustody: fakeCustody(), windowsCreateConnection: broker.createConnection });
+    await assert.rejects(client.stream({ op: 'account-watch' }, () => {}), { code: 'broker-unreachable' });
+  } finally {
+    await broker.close();
+  }
+});
+
 test('constructor brokerStateDir is used for custody and connection without per-request paths', async () => {
   const w = world();
   const k = keys();
@@ -366,6 +445,129 @@ test('verified transport preserves bytes coalesced after the proof and flushes q
     channel.destroy();
     await broker.close();
   }
+});
+
+test('default Windows relay explicitly limits pipe-server impersonation and relays bytes', async () => {
+  const w = world();
+  const k = keys();
+  writeIdentity(w, k.brokerKey);
+  const custody = fakeCustody();
+  const child = new EventEmitter();
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.exitCode = null;
+  child.signalCode = null;
+  let spawnCall;
+  let seen = '';
+  let handshaken = false;
+  let request;
+  child.stdin.on('data', (chunk) => {
+    seen += chunk.toString('utf8');
+    let newline;
+    while ((newline = seen.indexOf('\n')) !== -1) {
+      const line = JSON.parse(seen.slice(0, newline));
+      seen = seen.slice(newline + 1);
+      if (!handshaken) {
+        handshaken = true;
+        child.stdout.write(`${JSON.stringify({ v: 1, proof: sign(
+          null, windowsHandshakeMessage(windowsPipeName(w.paths.serviceLabel, SID), line.hello), k.privateKey,
+        ).toString('base64') })}\n`);
+      } else {
+        request = line;
+        child.stdout.end(`${JSON.stringify({ v: 1, id: line.id, ok: true, accepted: line.op })}\n`);
+        process.nextTick(() => { child.exitCode = 0; child.emit('exit', 0, null); });
+      }
+    }
+  });
+  child.kill = () => { child.signalCode = 'SIGTERM'; child.emit('exit', null, 'SIGTERM'); return true; };
+  const env = { PATH: 'C:\\Windows\\System32', PSModulePath: 'C:\\pwsh7\\Modules', pSmOdUlEpAtH: 'C:\\other' };
+  const originalEnv = { ...env };
+  const channel = createWindowsCommsTransport({
+    label: w.paths.serviceLabel, brokerStateDir: w.brokerState, brokerUid: SID, brokerKey: k.brokerKey,
+    custody, handshakeTimeoutMs: 500, env,
+    spawnProcess(file, args, options) {
+      spawnCall = { file, args, options };
+      process.nextTick(() => child.stderr.write('AGENT_COMMS_PIPE_READY\n'));
+      return child;
+    },
+  });
+  const result = new Promise((resolve, reject) => {
+    channel.on('error', reject);
+    channel.on('data', (chunk) => {
+      const line = JSON.parse(chunk.toString('utf8'));
+      if (line.accepted) resolve(line);
+    });
+    channel.once('connect', () => channel.write(`${JSON.stringify({ v: 1, id: 'relay-test', op: 'wake-report' })}\n`));
+  });
+  try {
+    assert.deepEqual(await result, { v: 1, id: 'relay-test', ok: true, accepted: 'wake-report' });
+    assert.equal(request.op, 'wake-report');
+    assert.equal(spawnCall.file, 'powershell.exe');
+    assert.deepEqual(spawnCall.options.stdio, ['pipe', 'pipe', 'pipe']);
+    assert.equal(spawnCall.options.env.PSModulePath, undefined);
+    assert.equal(Object.keys(spawnCall.options.env).some((name) => name.toLowerCase() === 'psmodulepath'), false);
+    assert.deepEqual(env, originalEnv);
+    const script = Buffer.from(spawnCall.args.at(-1), 'base64').toString('utf16le');
+    assert.match(script, /NamedPipeClientStream/);
+    assert.match(script, /TokenImpersonationLevel\]::Identification/);
+    assert.doesNotMatch(script, /TokenImpersonationLevel\]::None|Impersonation\]/);
+    assert.match(script, /CopyToAsync/);
+    assert.doesNotMatch(spawnCall.args.join(' '), /must-not-send|secret/i);
+  } finally {
+    channel.destroy();
+    assert.equal(child.exitCode, 0);
+  }
+});
+
+test('silent Windows relay startup is bounded and kills its child', async () => {
+  const w = world();
+  const k = keys();
+  writeIdentity(w, k.brokerKey);
+  const child = new EventEmitter();
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = () => { child.signalCode = 'SIGTERM'; child.emit('exit', null, 'SIGTERM'); return true; };
+  const channel = createWindowsCommsTransport({
+    label: w.paths.serviceLabel, brokerStateDir: w.brokerState, brokerUid: SID, brokerKey: k.brokerKey,
+    custody: fakeCustody(), handshakeTimeoutMs: 20, spawnProcess: () => child,
+  });
+  await assert.rejects(new Promise((resolve, reject) => {
+    channel.once('connect', resolve);
+    channel.once('error', reject);
+  }), { code: 'broker-timeout' });
+  assert.equal(child.signalCode, 'SIGTERM');
+});
+
+test('Windows relay treats child stdin EPIPE as a bounded connection failure', async () => {
+  const w = world();
+  const k = keys();
+  writeIdentity(w, k.brokerKey);
+  const child = new EventEmitter();
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = () => { child.signalCode = 'SIGTERM'; child.emit('exit', null, 'SIGTERM'); return true; };
+  child.stdin.once('data', () => child.stdin.destroy(Object.assign(new Error('EPIPE'), { code: 'EPIPE' })));
+  const channel = createWindowsCommsTransport({
+    label: w.paths.serviceLabel, brokerStateDir: w.brokerState, brokerUid: SID, brokerKey: k.brokerKey,
+    custody: fakeCustody(), handshakeTimeoutMs: 500,
+    spawnProcess: () => {
+      process.nextTick(() => child.stderr.write('AGENT_COMMS_PIPE_READY\n'));
+      return child;
+    },
+  });
+  const failure = new Promise((resolve, reject) => {
+    channel.once('error', resolve);
+    setTimeout(() => reject(new Error('relay did not report stdin failure')), 500).unref();
+  });
+  assert.equal((await failure).code, 'broker-unreachable');
+  assert.equal(child.signalCode, 'SIGTERM');
 });
 
 test('wrong broker proof, missing pin, invalid SID, and group mode fail before credentials', async () => {

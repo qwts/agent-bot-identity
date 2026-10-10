@@ -123,8 +123,7 @@ export function loadOrCreateVouchKey(stateDir, {
   if (platform === 'win32') {
     custody ??= createWindowsAccountCustody();
     const sid = custody.currentSid();
-    mkdirSync(path.dirname(file), { recursive: true });
-    custody.assertOwnedDirectory(path.dirname(file), sid);
+    custody.createOwnedDirectory(path.dirname(file), sid);
     const existing = readVouchKey(file, { platform, custody, sid });
     if (existing) return describeKey(file, existing, false);
 
@@ -132,11 +131,15 @@ export function loadOrCreateVouchKey(stateDir, {
     const pem = privateKey.export({ type: 'pkcs8', format: 'pem' });
     let fd;
     try {
-      fd = openKeyFile(file, 'wx');
-      // Restrict the new empty file before writing private key bytes.
+      // The Windows helper creates an empty file exclusively with its owner
+      // and protected ACL already applied; existing paths are never opened
+      // for writing or have their security changed here.
+      custody.createPrivateFile(file, sid);
+      fd = openKeyFile(file, 'r+');
       custody.assertOwnedFile(file, sid);
-      custody.restrictPrivateFile(file, sid);
-      writeFileSync(fd, pem, { encoding: 'utf8' });
+      const created = fstatSync(fd);
+      if (!created.isFile() || created.size !== 0) throw new Error('new vouch key file is not empty');
+      writeKeyFile(fd, pem, { encoding: 'utf8' });
       custody.assertOwnedFile(file, sid);
       return describeKey(file, privateKey, true);
     } catch (error) {

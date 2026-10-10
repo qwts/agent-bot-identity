@@ -172,8 +172,8 @@ export function saveCommsCredential(credential, { env = process.env, home = home
     if (shaped.brokerUid !== sid || shaped.mode !== 'single-account' || !shaped.brokerKey) {
       fail('broker-untrusted', 'Windows comms credentials require this account, a pinned broker key, and single-account mode');
     }
-    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     try {
+      custody.createOwnedDirectory(path.dirname(file), sid);
       custody.assertOwnedDirectory(path.dirname(file), sid);
     } catch {
       fail('broker-untrusted', 'the Windows comms credential directory is not owned by this account');
@@ -184,13 +184,15 @@ export function saveCommsCredential(credential, { env = process.env, home = home
   // A unique exclusive temp per call: two pairings in one process (or one
   // PID reused) never write through each other's half-finished file.
   const temporary = `${file}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
+  let temporaryCreated = false;
   try {
     if (platform === 'win32') {
       const custody = windowsCustody ?? createWindowsTransportCustody();
       const sid = custody.currentSid();
-      writeFileSync(temporary, '', { mode: 0o600, flag: 'wx' });
+      custody.createPrivateFile(temporary, sid);
+      temporaryCreated = true;
       try {
-        custody.restrictPrivateFile(temporary, sid);
+        custody.assertOwnedFile(temporary, sid);
       } catch {
         fail('unpaired', 'the Windows comms credential could not be secured');
       }
@@ -202,11 +204,12 @@ export function saveCommsCredential(credential, { env = process.env, home = home
       }
     } else {
       writeFileSync(temporary, `${JSON.stringify(shaped, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+      temporaryCreated = true;
       chmodSync(temporary, 0o600);
     }
     renameSync(temporary, file);
   } finally {
-    rmSync(temporary, { force: true });
+    if (temporaryCreated) rmSync(temporary, { force: true });
   }
   return shaped;
 }
@@ -522,7 +525,7 @@ export class CommsClient {
       brokerUid: this.brokerUid,
       brokerKey: this.brokerKey,
       custody,
-      createConnection: this.windowsCreateConnection ?? net.createConnection,
+      createConnection: this.windowsCreateConnection,
       handshakeTimeoutMs: this.handshakeTimeoutMs,
     });
   }
@@ -627,18 +630,21 @@ export async function pairDaemonComms({
   const secretHash = createHash('sha256').update(secret).digest('hex');
   const proof = `${randomBytes(16).toString('hex')}.proof`;
   const proofFile = path.join(paths.proofs, proof);
+  let proofCreated = false;
   try {
     if (platform === 'win32') {
       const custody = windowsCustody ?? createWindowsTransportCustody();
       // Restrict the empty file before writing its proof material. The
       // broker runs as this same account in Windows single-account mode.
-      writeFileSync(proofFile, '', { flag: 'wx' });
-      custody.restrictPrivateFile(proofFile, brokerUid);
+      custody.createPrivateFile(proofFile, brokerUid);
+      proofCreated = true;
+      custody.assertOwnedFile(proofFile, brokerUid);
       writeFileSync(proofFile, secretHash);
     } else {
       // The create mode passes through the umask; group brokers must be able
       // to read the proof, so set 0644 explicitly.
       writeFileSync(proofFile, secretHash, { mode: 0o644, flag: 'wx' });
+      proofCreated = true;
       chmodSync(proofFile, 0o644);
     }
     const client = clientFactory(clientOptions(paths, { brokerUid, brokerKey, mode }, {
@@ -653,7 +659,7 @@ export async function pairDaemonComms({
     });
     return { account, brokerUid, code: result?.code, state: result?.state };
   } finally {
-    rmSync(proofFile, { force: true });
+    if (proofCreated) rmSync(proofFile, { force: true });
   }
 }
 

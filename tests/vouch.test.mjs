@@ -2,7 +2,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -97,7 +97,9 @@ const WINDOWS_SID = 'S-1-5-21-1111111111-2222222222-3333333333-1001';
 const FOREIGN_SID = 'S-1-5-21-1111111111-2222222222-3333333333-1002';
 
 function fakeWindowsCustody({ sid = WINDOWS_SID, owners = new Map(), reparse = new Set(), malformed = null, failRestrict = false,
-  foreignAllow = false, aclAnswer = null, failAcl = false, inspectFailure = null, env = process.env } = {}) {
+  foreignAllow = false, aclAnswer = null, failAcl = false, inspectFailure = null, env = process.env,
+  failDirectoryCreate = false, directoryCreateAnswer = null, failPrivateFileCreate = false,
+  privateFileCreateAnswer = null, racePrivateFilePem = null } = {}) {
   const calls = [];
   const unquote = (text) => text.replace(/''/g, "'");
   const run = (file, args, options = {}) => {
@@ -108,9 +110,41 @@ function fakeWindowsCustody({ sid = WINDOWS_SID, owners = new Map(), reparse = n
     if (options.input.includes('GetAccessRules')) {
       return { status: failAcl ? 1 : 0, stdout: aclAnswer ?? (foreignAllow ? 'refused' : 'owner-only'), stderr: 'private detail' };
     }
+    const pathLiteral = /\$p = '((?:[^']|'')*)'/.exec(options.input)?.[1];
+    if (options.input.includes('[System.IO.Directory]::CreateDirectory')) {
+      if (directoryCreateAnswer !== null) return { status: failDirectoryCreate ? 1 : 0, stdout: directoryCreateAnswer, stderr: 'private detail' };
+      if (failDirectoryCreate) return { status: 1, stdout: '', stderr: 'private detail' };
+      assert.ok(pathLiteral, 'new directory path is passed as a quoted literal');
+      const target = unquote(pathLiteral);
+      try {
+        if (statSync(target).isDirectory()) return { status: 0, stdout: 'existing', stderr: '' };
+        return { status: 0, stdout: 'refused', stderr: 'private detail' };
+      } catch {}
+      mkdirSync(target, { recursive: true });
+      owners.set(target, sid);
+      return { status: 0, stdout: 'created', stderr: '' };
+    }
+    if (options.input.includes('[System.IO.FileStream]::new')) {
+      if (privateFileCreateAnswer !== null) return { status: failPrivateFileCreate ? 1 : 0, stdout: privateFileCreateAnswer, stderr: 'private detail' };
+      if (failPrivateFileCreate) return { status: 1, stdout: '', stderr: 'private detail' };
+      assert.ok(pathLiteral, 'new private file path is passed as a quoted literal');
+      const target = unquote(pathLiteral);
+      if (racePrivateFilePem !== null) {
+        writeFileSync(target, racePrivateFilePem, { encoding: 'utf8', flag: 'wx' });
+        owners.set(target, sid);
+        return { status: 0, stdout: 'exists', stderr: '' };
+      }
+      try {
+        const fd = openSync(target, 'wx');
+        closeSync(fd);
+        owners.set(target, sid);
+        return { status: 0, stdout: 'created', stderr: '' };
+      } catch (error) {
+        return { status: 0, stdout: error.code === 'EEXIST' ? 'exists' : 'refused', stderr: 'private detail' };
+      }
+    }
     if (inspectFailure !== null) return { status: 0, stdout: `failed|${inspectFailure}`, stderr: 'private detail' };
     if (malformed !== null) return { status: 0, stdout: malformed, stderr: '' };
-    const pathLiteral = /\$p = '((?:[^']|'')*)'/.exec(options.input)?.[1];
     assert.ok(pathLiteral, 'Get-Acl path is passed as a quoted literal');
     const target = unquote(pathLiteral);
     let info;
@@ -180,6 +214,91 @@ test('Windows PowerShell child drops inherited PSModulePath variants without mut
   assert.deepEqual(callerEnv, originalEnv, 'the caller environment stays unchanged');
 });
 
+test('Windows directory creation secures only new paths and checks existing custody without rewriting ACLs', () => {
+  const root = scratchDir();
+  const newDirectory = path.join(root, 'state', 'agent-bot');
+  const created = fakeWindowsCustody();
+  created.custody.createOwnedDirectory(newDirectory, WINDOWS_SID);
+  assert.equal(lstatSync(newDirectory).isDirectory(), true);
+  assert.equal(created.owners.get(newDirectory), WINDOWS_SID);
+  const creation = created.calls.find((call) => call.input?.includes('[System.IO.Directory]::CreateDirectory'));
+  assert.ok(creation);
+  assert.match(creation.input, /DirectorySecurity\]::new\(\)/);
+  assert.match(creation.input, /SetOwner\(\$identity\)/);
+  assert.match(creation.input, /SetAccessRuleProtection\(\$true, \$false\)/);
+  assert.match(creation.input, /FileSystemAccessRule\]::new\(\$identity, .*FullControl/);
+  assert.match(creation.input, /CreateDirectory\(\$p, \$security\)/);
+  assert.equal(created.calls.some((call) => call.file === 'icacls.exe'), false);
+
+  const existing = path.join(root, 'existing');
+  mkdirSync(existing);
+  const owners = new Map([[existing, WINDOWS_SID]]);
+  const existingCustody = fakeWindowsCustody({ owners });
+  existingCustody.custody.createOwnedDirectory(existing, WINDOWS_SID);
+  assert.equal(owners.get(existing), WINDOWS_SID);
+  assert.equal(existingCustody.calls.some((call) => call.file === 'icacls.exe'), false);
+  assert.equal(existingCustody.calls.some((call) => call.input?.includes('Set-Acl')), false);
+
+  const foreignDirectory = path.join(root, 'foreign');
+  mkdirSync(foreignDirectory);
+  const foreign = fakeWindowsCustody({ owners: new Map([[foreignDirectory, FOREIGN_SID]]) });
+  assert.throws(() => foreign.custody.createOwnedDirectory(foreignDirectory, WINDOWS_SID), /owned by another account/);
+});
+
+test('Windows private file creation is exclusive, empty, SID-owned, and protected at creation', () => {
+  const root = scratchDir();
+  const file = path.join(root, 'vouch-key.pem');
+  const { custody, calls, owners } = fakeWindowsCustody();
+  custody.createPrivateFile(file, WINDOWS_SID);
+  assert.equal(lstatSync(file).isFile(), true);
+  assert.equal(statSync(file).size, 0);
+  assert.equal(owners.get(file), WINDOWS_SID);
+  const creation = calls.find((call) => call.input?.includes('[System.IO.FileStream]::new'));
+  assert.ok(creation);
+  assert.match(creation.input, /FileMode\]::CreateNew/);
+  assert.match(creation.input, /FileSecurity\]::new\(\)/);
+  assert.match(creation.input, /SetOwner\(\$identity\)/);
+  assert.match(creation.input, /SetAccessRuleProtection\(\$true, \$false\)/);
+  assert.match(creation.input, /FileSystemAccessRule\]::new\(\$identity, .*FullControl/);
+  assert.match(creation.input, /FileShare\]::None/);
+  assert.doesNotMatch(creation.input, /FileMode\]::Create,/);
+  assert.match(creation.input, /\$depth -lt 8/);
+  assert.match(creation.input, /\[System\.IO\.IOException\]/);
+  assert.match(creation.input, /\$nativeCode -eq 80 -or \$nativeCode -eq 183/);
+
+  writeFileSync(file, 'existing bytes');
+  assert.throws(
+    () => custody.createPrivateFile(file, WINDOWS_SID),
+    (error) => error.code === 'EEXIST' && error.message === 'Windows private file already exists',
+  );
+  assert.equal(readFileSync(file, 'utf8'), 'existing bytes', 'exclusive collision never truncates the target');
+});
+
+test('Windows secure creation rejects malformed or unexpected fixed status markers', () => {
+  const root = scratchDir();
+  const directory = path.join(root, 'new-directory');
+  const badDirectory = fakeWindowsCustody({ directoryCreateAnswer: 'private path and detail' });
+  assert.throws(
+    () => badDirectory.custody.createOwnedDirectory(directory, WINDOWS_SID),
+    (error) => error.message === 'Windows custody directory could not be created safely'
+      && !error.message.includes('private path'),
+  );
+
+  const file = path.join(root, 'new-file');
+  const badFile = fakeWindowsCustody({ privateFileCreateAnswer: 'private path and detail' });
+  assert.throws(
+    () => badFile.custody.createPrivateFile(file, WINDOWS_SID),
+    (error) => error.message === 'Windows private file could not be created safely'
+      && !error.message.includes('private path'),
+  );
+
+  const deniedFile = fakeWindowsCustody({ privateFileCreateAnswer: 'refused' });
+  assert.throws(
+    () => deniedFile.custody.createPrivateFile(path.join(root, 'denied-file'), WINDOWS_SID),
+    (error) => error.code !== 'EEXIST' && error.message === 'Windows private file could not be created safely',
+  );
+});
+
 test('Windows vouch key preserves PKCS#8 bytes and identity, restricting the real file to its account', () => {
   const dir = scratchDir();
   const { custody, calls } = fakeWindowsCustody();
@@ -189,16 +308,13 @@ test('Windows vouch key preserves PKCS#8 bytes and identity, restricting the rea
   const pem = readFileSync(first.file, 'utf8');
   assert.match(pem, /^-----BEGIN PRIVATE KEY-----/);
   assert.equal(createPrivateKey(pem).asymmetricKeyType, 'ed25519');
-  assert.equal(calls.filter((call) => call.file === 'icacls.exe').length, 1);
-  assert.deepEqual(calls.find((call) => call.file === 'icacls.exe').args, [
-    first.file, '/inheritance:r', '/grant:r', `*${WINDOWS_SID}:F`,
-  ]);
+  assert.equal(calls.filter((call) => call.file === 'icacls.exe').length, 0, 'new private ACL is set atomically at file creation');
 
   const second = loadOrCreateVouchKey(dir, { platform: 'win32', custody });
   assert.equal(second.created, false);
   assert.equal(second.publicKeyPem, first.publicKeyPem);
   assert.equal(readFileSync(second.file, 'utf8'), pem);
-  assert.equal(calls.filter((call) => call.file === 'icacls.exe').length, 2);
+  assert.equal(calls.filter((call) => call.file === 'icacls.exe').length, 1, 'existing keys are verified through the compatibility path');
 });
 
 test('Windows vouch key adopts a raced exclusive-create winner without rotating it', () => {
@@ -206,16 +322,8 @@ test('Windows vouch key adopts a raced exclusive-create winner without rotating 
   const file = vouchKeyPath(dir);
   const { privateKey } = generateKeyPairSync('ed25519');
   const winnerPem = privateKey.export({ type: 'pkcs8', format: 'pem' });
-  const { custody } = fakeWindowsCustody();
-  let raced = false;
-  const openKeyFile = (target, flags) => {
-    if (!raced && flags === 'wx') {
-      raced = true;
-      writeFileSync(target, winnerPem, { flag: 'wx' });
-    }
-    return openSync(target, flags);
-  };
-  const loaded = loadOrCreateVouchKey(dir, { platform: 'win32', custody, openKeyFile });
+  const { custody } = fakeWindowsCustody({ racePrivateFilePem: winnerPem });
+  const loaded = loadOrCreateVouchKey(dir, { platform: 'win32', custody });
   assert.equal(loaded.created, false);
   assert.equal(loaded.publicKeyPem, createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }));
   assert.equal(readFileSync(file, 'utf8'), winnerPem);
@@ -254,17 +362,16 @@ test('Windows vouch key refuses foreign, reparse, malformed, and unrestrictable 
   assert.throws(() => loadOrCreateVouchKey(malformedDir, { platform: 'win32', custody: malformed.custody }), /invalid ownership record/);
 
   const restrictedDir = scratchDir();
+  const restrictedFile = vouchKeyPath(restrictedDir);
+  const { privateKey: existingPrivateKey } = generateKeyPairSync('ed25519');
+  const existingPem = existingPrivateKey.export({ type: 'pkcs8', format: 'pem' });
+  writeFileSync(restrictedFile, existingPem, { flag: 'wx' });
   const failRestrict = fakeWindowsCustody({ failRestrict: true });
   assert.throws(
     () => loadOrCreateVouchKey(restrictedDir, { platform: 'win32', custody: failRestrict.custody }),
-    (error) => {
-      assert.match(error.message, /vouch key file|Windows private-file access/);
-      assert.doesNotMatch(error.message, /private path|private detail|BEGIN PRIVATE KEY/);
-      return true;
-    },
+    /vouch key file custody or private access could not be verified/,
   );
-  const failedFile = vouchKeyPath(restrictedDir);
-  assert.equal(statSync(failedFile).size, 0, 'private key bytes are not written when restriction fails');
+  assert.equal(readFileSync(restrictedFile, 'utf8'), existingPem, 'failed compatibility restriction never changes existing key bytes');
 
   const foreignAclDir = scratchDir();
   const foreignAcl = fakeWindowsCustody({ foreignAllow: true });

@@ -1,16 +1,19 @@
 // Windows local transport for the agent-comms v1 broker wire contract.
 // Keep this bot-owned adapter independent of the agent-comms checkout.
 import { createPublicKey, randomBytes, verify } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import net from 'node:net';
 import path from 'node:path';
 import { Duplex } from 'node:stream';
-import { createWindowsAccountCustody, isWindowsSid } from './windows-account-custody.mjs';
+import { createWindowsAccountCustody, isWindowsSid, legacyPowerShellEnv } from './windows-account-custody.mjs';
 
 export const WINDOWS_PIPE_PREFIX = '\\\\.\\pipe\\';
 export const WINDOWS_HANDSHAKE_TIMEOUT_MS = 10_000;
 const MAX_LINE_BYTES = 128 * 1024;
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const READY_MARKER = 'AGENT_COMMS_PIPE_READY';
+const FAILED_MARKER = 'AGENT_COMMS_PIPE_FAILED';
+const TIMEOUT_MARKER = 'AGENT_COMMS_PIPE_TIMEOUT';
 
 export const windowsPipeName = (label, sid) => `${WINDOWS_PIPE_PREFIX}${label}.${sid}`;
 export const windowsHandshakeMessage = (pipe, nonce) => Buffer.from(
@@ -65,6 +68,145 @@ function frameLine(value) {
   return `${JSON.stringify(value)}\n`;
 }
 
+function powershellRelayScript(pipe, connectTimeoutMs) {
+  if (typeof pipe !== 'string' || !pipe.startsWith(WINDOWS_PIPE_PREFIX)) throw new Error('invalid Windows pipe path');
+  const pipeName = pipe.slice(WINDOWS_PIPE_PREFIX.length);
+  // The only interpolated string is a generated label + validated SID. Keep
+  // the script non-generic so an arbitrary pipe name cannot become PS code.
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]*\.S-1-\d+(?:-\d+)+$/.test(pipeName)) throw new Error('invalid Windows pipe name');
+  const timeout = Number.isInteger(connectTimeoutMs) && connectTimeoutMs > 0
+    ? Math.min(connectTimeoutMs, 2_147_483_647)
+    : WINDOWS_HANDSHAKE_TIMEOUT_MS;
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    '$pipe = $null',
+    'try {',
+    `  $pipe = [System.IO.Pipes.NamedPipeClientStream]::new('.', '${pipeName}', [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::Asynchronous, [System.Security.Principal.TokenImpersonationLevel]::Identification)`,
+    `  $pipe.Connect(${timeout})`,
+    `  [Console]::Error.WriteLine('${READY_MARKER}')`,
+    '  $inputStream = [Console]::OpenStandardInput()',
+    '  $outputStream = [Console]::OpenStandardOutput()',
+    '  $toPipe = $inputStream.CopyToAsync($pipe)',
+    '  $fromPipe = $pipe.CopyToAsync($outputStream)',
+    '  [System.Threading.Tasks.Task]::WaitAny([System.Threading.Tasks.Task[]]@($toPipe, $fromPipe)) | Out-Null',
+    '  $pipe.Dispose()',
+    '  exit 0',
+    '} catch [System.TimeoutException] {',
+    `  [Console]::Error.WriteLine('${TIMEOUT_MARKER}')`,
+    '  exit 2',
+    '} catch {',
+    `  [Console]::Error.WriteLine('${FAILED_MARKER}')`,
+    '  exit 1',
+    '} finally {',
+    '  if ($null -ne $pipe) { $pipe.Dispose() }',
+    '}',
+  ].join('\n');
+}
+
+function encodePowerShell(script) {
+  return Buffer.from(script, 'utf16le').toString('base64');
+}
+
+// PowerShell/.NET exposes the Windows named-pipe client impersonation level,
+// while Node's libuv CreateFileW path does not. Framework Connect explicitly
+// sets SECURITY_SQOS_PRESENT for Identification (None omits that flag):
+// https://github.com/microsoft/referencesource/blob/main/System.Core/System/IO/Pipes/Pipe.cs
+// Bridge raw bytes over stdio;
+// the broker's signed hello remains the application authentication layer.
+function createPowerShellPipeConnection(pipe, {
+  spawnProcess = spawn,
+  env = process.env,
+  connectTimeoutMs = WINDOWS_HANDSHAKE_TIMEOUT_MS,
+} = {}) {
+  const script = powershellRelayScript(pipe, connectTimeoutMs);
+  const child = spawnProcess('powershell.exe', [
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShell(script),
+  ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: legacyPowerShellEnv(env) });
+  let ready = false;
+  let done = false;
+  let stdoutEnded = false;
+  let stderr = Buffer.alloc(0);
+  let pendingOutput = [];
+  let pendingOutputBytes = 0;
+  const relay = new Duplex({
+    allowHalfOpen: false,
+    read() { child.stdout.resume(); },
+    write(chunk, encoding, callback) {
+      if (done || child.stdin.destroyed) return callback(new Error('Windows pipe relay is closed'));
+      child.stdin.write(chunk, encoding, callback);
+    },
+    final(callback) {
+      child.stdin.end(callback);
+    },
+    destroy(error, callback) {
+      done = true;
+      pendingOutput = [];
+      pendingOutputBytes = 0;
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+      callback(error);
+    },
+  });
+  const fail = (code) => {
+    if (done) return;
+    relay.destroy(Object.assign(new Error(
+      code === 'broker-timeout' ? 'Windows broker pipe connection timed out' : 'Windows broker pipe connection failed',
+    ), { code }));
+  };
+  child.stdout.on('data', (chunk) => {
+    if (done) return;
+    if (!ready) {
+      pendingOutputBytes += chunk.length;
+      if (pendingOutputBytes > MAX_LINE_BYTES) return fail('broker-untrusted');
+      pendingOutput.push(Buffer.from(chunk));
+      return;
+    }
+    if (!relay.push(chunk)) child.stdout.pause();
+  });
+  child.stdout.on('end', () => {
+    stdoutEnded = true;
+    if (!done && ready) relay.push(null);
+  });
+  child.stderr.on('data', (chunk) => {
+    if (done || ready) return;
+    stderr = Buffer.concat([stderr, chunk]);
+    if (stderr.length > 1024) return fail('broker-unreachable');
+    const newline = stderr.indexOf(0x0a);
+    if (newline === -1) return;
+    const marker = stderr.subarray(0, newline).toString('ascii').replace(/\r$/, '');
+    if (marker === READY_MARKER) {
+      ready = true;
+      stderr = Buffer.alloc(0);
+      relay.emit('connect');
+      let backpressured = false;
+      for (const output of pendingOutput) {
+        if (!relay.push(output)) backpressured = true;
+      }
+      if (backpressured) child.stdout.pause();
+      pendingOutput = [];
+      pendingOutputBytes = 0;
+      if (stdoutEnded) relay.push(null);
+    } else if (marker === TIMEOUT_MARKER) {
+      fail('broker-timeout');
+    } else {
+      fail('broker-unreachable');
+    }
+  });
+  child.stderr.once('end', () => {
+    if (!done && !ready) fail(child.exitCode === 2 ? 'broker-timeout' : 'broker-unreachable');
+  });
+  child.once('error', () => fail('broker-unreachable'));
+  child.stdin.on('error', () => fail('broker-unreachable'));
+  child.stdout.on('error', () => fail('broker-unreachable'));
+  child.stderr.on('error', () => fail('broker-unreachable'));
+  child.once('exit', () => {
+    if (!done && !ready && child.stderr.readableEnded) fail('broker-unreachable');
+  });
+  return relay;
+}
+
 // Returns a socket-like Duplex that reports connect only after validating the
 // broker's proof. Any writes made before proof are queued and never reach the
 // pipe unless the pinned key proves the exact pipe and nonce.
@@ -74,7 +216,9 @@ export function createWindowsCommsTransport({
   brokerUid,
   brokerKey,
   custody = createWindowsAccountCustody(),
-  createConnection = net.createConnection,
+  createConnection = null,
+  spawnProcess = spawn,
+  env = process.env,
   randomNonce = () => randomBytes(32).toString('hex'),
   handshakeTimeoutMs = WINDOWS_HANDSHAKE_TIMEOUT_MS,
 } = {}) {
@@ -108,7 +252,9 @@ export function createWindowsCommsTransport({
 
   let raw;
   try {
-    raw = createConnection(pipe);
+    raw = createConnection
+      ? createConnection(pipe)
+      : createPowerShellPipeConnection(pipe, { spawnProcess, env, connectTimeoutMs: handshakeTimeoutMs });
   } catch (error) {
     throw Object.assign(new Error(`cannot reach the broker: ${error?.code ?? error?.message ?? 'pipe connection failed'}`), {
       code: 'broker-unreachable',
@@ -121,7 +267,8 @@ export function createWindowsCommsTransport({
   let head = Buffer.alloc(0);
   const queued = [];
   channel = new Duplex({
-    read() {},
+    allowHalfOpen: false,
+    read() { raw.resume?.(); },
     write(chunk, encoding, callback) {
       if (verified) raw.write(chunk, encoding, callback);
       else queued.push([chunk, encoding, callback]);
@@ -173,7 +320,9 @@ export function createWindowsCommsTransport({
     verified = true;
     clearTimeout(timer);
     raw.removeListener('data', onProof);
-    raw.on('data', (data) => channel.push(data));
+    raw.on('data', (data) => {
+      if (!channel.push(data)) raw.pause?.();
+    });
     const remainder = head.subarray(newline + 1);
     if (remainder.length) channel.push(remainder);
     for (const [queuedChunk, encoding, callback] of queued.splice(0)) raw.write(queuedChunk, encoding, callback);
@@ -188,7 +337,11 @@ export function createWindowsCommsTransport({
   timer = setTimeout(() => reject(Object.assign(new Error('broker handshake timed out'), { code: 'broker-timeout' })), handshakeTimeoutMs);
   raw.on('connect', () => raw.write(frameLine({ v: 1, hello: nonce })));
   raw.on('data', onProof);
-  raw.on('error', (error) => reject(Object.assign(new Error(`cannot reach the broker: ${error.code ?? error.message}`), { code: 'broker-unreachable' })));
+  raw.on('error', (error) => reject(Object.assign(new Error(
+    error.code === 'broker-timeout'
+      ? 'broker handshake timed out'
+      : `cannot reach the broker: ${error.code ?? error.message}`,
+  ), { code: ['broker-timeout', 'broker-untrusted', 'bad-response'].includes(error.code) ? error.code : 'broker-unreachable' })));
   raw.on('end', ended);
   raw.on('close', ended);
   return channel;
