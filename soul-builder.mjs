@@ -61,7 +61,9 @@ export const MCP_TARGETS = Object.freeze([
 const HARNESS_FILES = Object.freeze({
   claude: Object.freeze({ instructions: 'CLAUDE.md', skills: '.claude/skills/', mcp: '.mcp.json', subagents: '.claude/agents/', commands: '.claude/commands/' }),
   gemini: Object.freeze({ instructions: 'GEMINI.md', skills: '.gemini/skills/', mcp: '.gemini/settings.json', commands: '.gemini/commands/' }),
-  codex: Object.freeze({ instructions: null, skills: null, mcp: '.codex/config.toml' }),
+  // Codex agent roles (#378) are TOML in the project layer's `.codex/agents/`,
+  // checked against openai/codex `rust-v0.157.0`, where `multi_agent` is stable.
+  codex: Object.freeze({ instructions: null, skills: null, mcp: '.codex/config.toml', subagents: '.codex/agents/' }),
   opencode: Object.freeze({ instructions: null, skills: null, mcp: 'opencode.json', subagents: '.opencode/agent/', commands: '.opencode/command/' }),
   cursor: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: '.cursor/mcp.json', subagents: '.cursor/agents/' }),
   copilot: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: '.mcp.json', subagents: '.github/agents/', commands: '.claude/commands/' }),
@@ -852,12 +854,15 @@ function kiroNativeTools(names) {
   if (names.some((name) => spelled(name) === null)) return null;
   return [...new Set(names.map(spelled))].sort(compare);
 }
+// Codex's built-in roles; a project role of the same name replaces it, and
+// `default` is the role every unnamed spawn uses.
+const CODEX_BUILTIN_ROLES = Object.freeze(['default', 'explorer', 'worker']);
 const yamlList = (values) => `[${values.map(quotedString).join(', ')}]`;
 
 // One subagent declaration in each adapter's own front matter. Returns the
 // `[path, header]` pairs it can spell; a harness missing from the result is
 // reported under `unsupported.subagents`.
-function translatedAgents(name, { description, model, tools }) {
+function translatedAgents(name, { description, model, tools, body }) {
   const common = [`name: ${quotedString(name)}`, `description: ${quotedString(description)}`,
     ...(model === undefined ? [] : [`model: ${quotedString(model)}`])];
   const agents = [];
@@ -882,6 +887,14 @@ function translatedAgents(name, { description, model, tools }) {
   const qwen = tools ? qwenNativeTools(tools) : [];
   if (qwen && name.length >= 2 && name.length <= 50 && !QWEN_RESERVED_AGENTS.includes(name)) {
     agents.push([`.qwen/agents/${name}.md`, [...common, ...(tools ? [`tools: ${yamlList(qwen)}`] : [])]]);
+  }
+  // Codex role files carry no per-tool allowlist, so a declared `tools`
+  // (even empty) cannot be honoured there; it also refuses blank
+  // `developer_instructions`, and a built-in role name would replace Codex's.
+  if (!tools && body.trim() && !CODEX_BUILTIN_ROLES.includes(name)) {
+    agents.push([`.codex/agents/${name}.toml`, [`# ${MARKER}`, `name = ${quotedString(name)}`,
+      `description = ${quotedString(description)}`, ...(model === undefined ? [] : [`model = ${quotedString(model)}`]),
+      `developer_instructions = ${quotedString(body)}`]]);
   }
   return agents;
 }
@@ -912,8 +925,8 @@ function renderPrimitives(source, output) {
       const tools = agentToolNames(parsed.fields, path);
       if (tools) header.push('tools:', '  "*": false', ...opencodeTools(tools).map((tool) => `  ${quotedString(tool)}: true`));
       output.set(`.opencode/agent/${name}.md`, Buffer.from(mappedDeclaration(header, parsed.body)));
-      for (const [target, native] of translatedAgents(name, { description, model, tools })) {
-        output.set(target, Buffer.from(mappedDeclaration(native, parsed.body)));
+      for (const [target, native] of translatedAgents(name, { description, model, tools, body: parsed.body })) {
+        output.set(target, Buffer.from(target.endsWith('.toml') ? `${native.join('\n')}\n` : mappedDeclaration(native, parsed.body)));
       }
     } else {
       output.set(`.opencode/command/${name}.md`, Buffer.from(header.length ? mappedDeclaration(header, parsed.body) : `${MARKER}\n${parsed.body}`));

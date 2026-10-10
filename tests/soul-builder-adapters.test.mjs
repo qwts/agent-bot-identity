@@ -20,7 +20,8 @@ const entry = (path, content) => ({ path, mode: '100644', bytes: Buffer.from(con
 const declare = (name, tools) => `---\nname: ${name}\ndescription: Review code\n${tools === undefined ? '' : `tools: ${tools}\n`}model: provider/model\n---\nReview the code.\n`;
 const source = (agents = { review: 'Read, Grep, Bash' }) => [entry('AGENTS.md', '# Soul\n'),
   ...Object.entries(agents).map(([name, tools]) => entry(`agents/${name}.md`, declare(name, tools)))];
-const AGENT_PATHS = (name) => [`.cursor/agents/${name}.md`, `.devin/agents/${name}.md`, `.github/agents/${name}.agent.md`, `.kiro/agents/${name}.md`];
+const AGENT_PATHS = (name) => [`.cursor/agents/${name}.md`, `.devin/agents/${name}.md`, `.github/agents/${name}.agent.md`, `.kiro/agents/${name}.md`,
+  `.qwen/agents/${name}.md`];
 const NEW_PATHS = [...AGENT_PATHS('review'), '.cursor/mcp.json', '.kiro/settings/mcp.json'];
 
 function put(root, path, content) {
@@ -231,4 +232,32 @@ test('soul build --check --json and the plain summary name what each adapter cou
   assert.match(plain.stdout, /^cursor: instructions, mcp, subagents$/m);
   assert.match(plain.stdout, /^copilot: instructions, mcp, subagents$/m);
   assert.equal(run('--check').status, 0);
+});
+
+test('Codex agent roles: a subagent without tools renders as TOML, rebuilds byte for byte and conflicts when unmarked (#378)', (t) => {
+  const path = '.codex/agents/open.toml';
+  const expected = `# ${MARKER}\nname = "open"\ndescription = "Review code"\nmodel = "provider/model"\ndeveloper_instructions = "Review the code.\\n"\n`;
+  assert.equal(buildHarnessFiles(source({ open: undefined })).get(path).toString(), expected);
+  assert.ok(isGeneratedPath(path));
+  const root = fixture(t, { agents: { open: undefined } });
+  const revision = computePackageRevision(root);
+  assert.ok(buildSoulDirectory(root).writes.includes(path));
+  assert.equal(readFileSync(join(root, path), 'utf8'), expected);
+  assert.equal(computePackageRevision(root), revision);
+  assert.deepEqual(buildSoulDirectory(root, { check: true }).drift, []);
+  const conflicted = fixture(t, { agents: { open: undefined } });
+  put(conflicted, path, 'name = "mine"\n');
+  for (const check of [true, false]) assert.throws(() => buildSoulDirectory(conflicted, { check }), /unmarked generated path conflict/);
+  assert.equal(readFileSync(join(conflicted, path), 'utf8'), 'name = "mine"\n');
+});
+
+test('Codex agent roles: declared tools, a blank prompt or a built-in role name stay unsupported there (#378)', () => {
+  const blank = entry('agents/blank.md', '---\nname: blank\ndescription: Blank\n---\n \n');
+  const output = buildHarnessFiles([...source({ open: undefined, reader: 'Read', none: '[]', default: undefined,
+    explorer: undefined, worker: undefined }), blank]);
+  assert.deepEqual([...output.keys()].filter((path) => path.startsWith('.codex/agents/')), ['.codex/agents/open.toml']);
+  const codex = harnessReport(new Map(output)).codex;
+  assert.deepEqual(codex.subagents.rendered, ['open']);
+  assert.deepEqual(codex.unsupported.subagents, ['blank', 'default', 'explorer', 'none', 'reader', 'worker']);
+  assert.ok(codex.rendered.includes('subagents'));
 });

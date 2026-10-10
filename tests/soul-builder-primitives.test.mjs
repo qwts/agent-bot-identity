@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildHarnessFiles, harnessReport } from '../soul-builder.mjs';
+import { buildHarnessFiles, harnessReport, tomlStatements } from '../soul-builder.mjs';
 import { buildSoulDirectory } from '../soul-build.mjs';
 import { computePackageRevision, expectedGeneratedFiles, readSoulPackageEntries, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
 import { GENERATED_HARNESS_MARKER as MARKER, isGeneratedPath } from '../soul-harness-contract.mjs';
@@ -81,6 +81,22 @@ test('optional command front matter and optional agent tools/model can be absent
   assert.equal(output.get('.gemini/commands/review.toml').toString(), `# ${MARKER}\nprompt = "Run {{args}}"\n`);
   assert.equal(output.get('.qwen/commands/review.md').toString(), `${MARKER}\nRun {{args}}`);
   assert.equal(output.get('.opencode/agent/review.md').toString(), `---\ndescription: "Review"\nmode: subagent\n---\n${MARKER}\nPrompt`);
+  assert.equal(output.get('.codex/agents/review.toml').toString(),
+    `# ${MARKER}\nname = "review"\ndescription = "Review"\ndeveloper_instructions = "Prompt"\n`);
+});
+
+test('Codex reads the rendered role as one TOML table of basic strings (#378)', () => {
+  // Multiline and quoted text stays one escaped basic string per key.
+  const prompt = 'Line "one"\n\tLine two \\ end\n';
+  const output = buildHarnessFiles([entry('AGENTS.md', '# Soul'),
+    entry('agents/review.md', `---\nname: review\ndescription: |\n  Two\n  lines\n---\n${prompt}`)]);
+  const statements = tomlStatements(output.get('.codex/agents/review.toml').toString());
+  assert.equal(statements[0], `# ${MARKER}\n`);
+  const fields = Object.fromEntries(statements.slice(1).map((line) => {
+    const [, key, value] = line.match(/^([a-z_]+) = (".*")\n$/);
+    return [key, JSON.parse(value)];
+  }));
+  assert.deepEqual(fields, { name: 'review', description: 'Two\nlines\n', developer_instructions: prompt });
 });
 
 test('empty command front matter rebuilds cleanly and Claude-only argument hints stay opaque', (t) => {
