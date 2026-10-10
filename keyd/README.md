@@ -5,7 +5,8 @@ A native MCP server that holds souls' GitHub App keys
 GeniusBar bundles it next to `node` and signs it with the app's Developer ID.
 Its source lives here in agent-bot-identity (#767), imported from GeniusBar at
 `9433009`; this repository builds and tests it unsigned, and GeniusBar's
-release job signs it. The agent-bot side of the protocol is in
+release job signs it. Each agent-bot release pins this crate's version
+(`KEYD_PINNED_VERSION`), and a host bundles exactly that build. The agent-bot side of the protocol is in
 [docs/keyd-protocol.md](../docs/keyd-protocol.md).
 agent-bot installs it as a launchd agent (`app.geniusbar.keyd`) during setup.
 

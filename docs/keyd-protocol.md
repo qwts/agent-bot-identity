@@ -393,6 +393,26 @@ item. Choosing the scope is policy, so it stays with the daemon that signs
 the grant. A keyd from before #110 refuses a grant that names `keyScope`,
 since unknown payload fields are refused.
 
+## Version pin (#767)
+
+Each agent-bot release pins the agent-bot-keyd it is built and tested with:
+`KEYD_PINNED_VERSION` in `keyd-client.mjs`, which a test keeps equal to
+`keyd/Cargo.toml`. A host app bundles exactly that version, the way it pins
+the agent-bot component. keyd reports its version in `owner/status`.
+
+- `agent-bot keyd status --json` adds `expectedVersion` (the pin, also when
+  keyd is down) and `versionMatches` (`true`, `false`, or `null` when no keyd
+  reported a version). The text form prints the update to make on a mismatch.
+- `agent-bot doctor` reports `keyd.version`: `ready` on the pin,
+  `keyd-version-mismatch` (warning) on any other or a missing version, and
+  `keyd-not-running` (warning) when keyd is installed but silent. Without
+  keyd the check is `not_applicable`.
+
+A mismatch is reported, not refused: a keyd that lacks a method refuses that
+call itself (for example a keyd from before #110 and App-level keys), so
+nothing falls back silently. 0.2.0 is the first pinned version, the keyd with
+App-level keys; GeniusBar's keyd from before the move reports 0.1.0.
+
 ## Conformance matrix
 
 Tests named here are `node:test` titles, or Rust test functions under

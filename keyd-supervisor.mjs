@@ -13,7 +13,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { renderLaunchdPlist, supervisorSkipLoad } from './daemon-supervisor.mjs';
-import { KEYD_LABEL, KEYD_LABEL_VARIABLE, keydPaths, keydStatus, readKeydRecord } from './keyd-client.mjs';
+import { KEYD_LABEL, KEYD_LABEL_VARIABLE, keydPaths, keydStatus, keydVersionAction, readKeydRecord } from './keyd-client.mjs';
 import { vouchStateDir } from './vouch.mjs';
 
 export function keydLabel(env = process.env) {
@@ -93,7 +93,10 @@ export async function keydCommand(argv, { env = process.env, home = homedir(), w
     if (!json) write(result.unloaded ? 'agent-bot-keyd unloaded; its Keychain items stay\n' : 'agent-bot-keyd was not installed\n');
   } else if (action === 'status' && args.length === 0) {
     result = await keydStatus({ env, home });
-    if (!json) write(result.running ? `agent-bot-keyd ${result.version} running; daemon key ${result.pinned ? 'pinned' : 'not pinned'}\n` : 'agent-bot-keyd is not running\n');
+    if (!json) {
+      write(result.running ? `agent-bot-keyd ${result.version} running; daemon key ${result.pinned ? 'pinned' : 'not pinned'}\n` : 'agent-bot-keyd is not running\n');
+      if (result.running && result.versionMatches !== true) write(`this agent-bot is pinned to agent-bot-keyd ${result.expectedVersion}; ${keydVersionAction(result)}\n`);
+    }
   } else {
     throw new Error(USAGE);
   }

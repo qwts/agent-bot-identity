@@ -13,7 +13,7 @@ import { auditFile } from '../agent-principals.mjs';
 import { registerSoulDir, upsertSoul } from '../agent-population.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
 import {
-  KEYD_GRANT_META, appKeydAvailability, daemonGrantPublicKey, importAppIntoKeyd, importIntoKeyd, keydMcpServerEntry, keydPaths, keydPolicyRules,
+  KEYD_GRANT_META, KEYD_PINNED_VERSION, appKeydAvailability, daemonGrantPublicKey, importAppIntoKeyd, importIntoKeyd, keydMcpServerEntry, keydPaths, keydPolicyRules,
   keydRequest, keydStatus, mintViaKeyd, readKeydRecord, removeAppFromKeyd, signKeydGrant,
 } from '../keyd-client.mjs';
 import { installKeyd, uninstallKeyd } from '../keyd-supervisor.mjs';
@@ -232,7 +232,7 @@ test('a bound keyd soul\'s mint through the daemon keeps the installation id', a
 test('status says whether keyd answers and whether the daemon key is pinned', async (t) => {
   const { env, home } = fixture(t);
   assert.deepEqual(await keydStatus({ env, home, request: async () => ({ pinned: true, version: '0.1.0' }) }),
-    { running: true, bin: null, pinned: true, version: '0.1.0' });
+    { running: true, bin: null, pinned: true, version: '0.1.0', expectedVersion: KEYD_PINNED_VERSION, versionMatches: false });
   assert.equal((await keydStatus({ env, home, request: async () => { throw new Error('down'); } })).running, false);
 });
 
