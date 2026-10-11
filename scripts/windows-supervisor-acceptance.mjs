@@ -1,7 +1,7 @@
 // Optional signed-in desktop acceptance for #934. Real adapters and tasks;
 // no platform/transport/process runner is injected. Use a disposable account.
 import assert from 'node:assert/strict';
-import { hasDaemonWakeReport, taskQueryProvesAbsence } from './windows-supervisor-evidence.mjs';
+import { hasDaemonWakeReport, taskQueryProvesAbsence, acceptanceFailureEvidence } from './windows-supervisor-evidence.mjs';
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -50,6 +50,8 @@ const result = { node: process.version, platform: process.platform, cases: [],
   untested: ['CLI default-home installation', 'packaged host update', 'actual logoff/logon', 'full harness launch'] };
 let failed = false;
 let supervisor;
+let substage;
+const phase = name => { substage = name; };
 const bin = path.join(options.comms, 'bin', 'agent-comms.mjs');
 const hash = file => createHash('sha256').update(readFileSync(file)).digest('hex');
 async function command(file, args) {
@@ -57,6 +59,7 @@ async function command(file, args) {
   catch (error) { return { exit: typeof error.code === 'number' ? error.code : -1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }; }
 }
 async function cli(args) {
+  phase(`comms-${args.slice(0, 2).join('-')}`);
   const response = await command(process.execPath, [bin, ...args]);
   let body;
   try { body = JSON.parse(response.stdout); } catch { /* report only safe error classification */ }
@@ -64,6 +67,7 @@ async function cli(args) {
   return body;
 }
 async function until(check, code) {
+  phase(code);
   const deadline = Date.now() + 40000;
   while (Date.now() < deadline) {
     if (await check()) return;
@@ -72,8 +76,9 @@ async function until(check, code) {
   throw Object.assign(new Error(code), { code });
 }
 async function record(name, run) {
+  phase('start-case');
   try { result.cases.push({ name, status: 'passed', ...await run() }); process.stdout.write(`PASS ${name}\n`); }
-  catch (error) { result.cases.push({ name, status: 'failed', code: safeCode(error.code) ?? 'assertion-failed' }); result.failureStage = name; throw error; }
+  catch (error) { result.cases.push({ name, status: 'failed', ...acceptanceFailureEvidence(error, substage) }); result.failureStage = name; throw error; }
 }
 function safeCode(code) { return typeof code === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(code) ? code : null; }
 try {
@@ -102,20 +107,30 @@ try {
   await record('real namespaced broker and normal native daemon pairing', async () => {
     await cli(['broker', 'install', '--single-account']);
     await until(async () => (await command(process.execPath, [bin, 'broker', 'pairings'])).exit === 0, 'broker-start-timeout');
-    const pairing = await pairDaemonComms({ env, home });
+    phase('native-vouch-public-key');
+    // Match the production daemon CLI composition after #645/F11: the comms
+    // module receives only the native provider's public half.
+    const publicKey = vouch.vouchPublicKeyPem({ env, home });
+    phase('native-daemon-pair');
+    const pairing = await pairDaemonComms({ env, home, publicKey });
     await cli(['broker', 'approve', pairing.code]);
     daemonAccount = pairing.account;
     const pairedAccount = await cli(['account', 'pair']);
     await cli(['broker', 'approve', pairedAccount.code]);
+    phase('load-account-credential');
     account = client.loadCredential(pathsModule.clientPaths(env));
     assert.equal(account.account, daemonAccount);
     const pairedPrincipal = await cli(['principal', 'pair', '--name', 'Disposable supervised daemon acceptance']);
     await cli(['admin', 'principal-approve', pairedPrincipal.code]);
+    phase('create-principal-client');
     principal = principalModule.createPrincipalClient({ env });
+    phase('hash-daemon-credential-and-vouch-key');
     credentialHash = hash(commsCredentialFile({ env, home }));
     keyHash = hash(daemonVouchKeyFile({ env, home }));
+    phase('reload-native-vouch-key');
     const key = vouch.loadOrCreateVouchKey(vouch.vouchStateDir({ env, home }));
     const soulToken = vouch.signSoulToken({ account: account.account, agentId: soul, parent: null }, key.privateKey);
+    phase('join-acceptance-soul');
     await client.call(paths, account, { op: 'join', agentId: soul, soulToken, name: 'supervised acceptance', harness: 'acceptance' });
     return { providerInjected: false };
   });
@@ -124,6 +139,7 @@ try {
   const status = () => daemon.daemonStatus({ env, home });
   const connected = async () => { const state = await status(); return state.running && state.comms?.connected ? state : null; };
   await record('production supervisor installer starts the actual daemon with custom namespace', async () => {
+    phase('install-native-daemon-supervisor');
     const installed = await services.ensureDaemonSupervisor({ env, home, programArguments: [process.execPath, bootstrap], reloadUnchanged: false });
     assert.equal(installed.loaded, true);
     await until(async () => { const state = await connected(); firstPid = state?.pid; return !!state; }, 'daemon-watch-start-timeout');
@@ -132,6 +148,7 @@ try {
     return { pid: firstPid };
   });
   async function freshWakeAndReport(stage) {
+    phase(`send-fresh-message-${stage}`);
     const sent = await principal.send({ to: `${account.account}/${soul}`, body: `native supervised wake ${stage}`, key: randomUUID() });
     await until(async () => (await status()).comms?.lastWake?.messageIds?.includes(sent.messageId), `daemon-receive-${stage}-timeout`);
     await until(async () => {
@@ -144,11 +161,13 @@ try {
   }
   await record('actual daemon receives and reports wake before task restart', () => freshWakeAndReport('before-restart'));
   await record('Task Scheduler stop removes daemon tree and restart reconnects with unchanged credentials', async () => {
+    phase('task-end');
     assert.equal((await command('schtasks.exe', ['/End', '/TN', label])).exit, 0);
     await until(async () => {
       if ((await status()).running) return false;
       try { process.kill(firstPid, 0); return false; } catch (error) { return error.code === 'ESRCH'; }
     }, 'daemon-task-stop-timeout');
+    phase('task-run');
     assert.equal((await command('schtasks.exe', ['/Run', '/TN', label])).exit, 0);
     await until(async () => { const state = await connected(); restartedPid = state?.pid; return !!state && state.pid !== firstPid; }, 'daemon-task-restart-timeout');
     assert.equal(hash(commsCredentialFile({ env, home })), credentialHash);
@@ -169,7 +188,7 @@ try {
   });
 } catch (error) {
   failed = true;
-  result.failure = { code: safeCode(error.code) ?? 'assertion-failed' };
+  result.failure = acceptanceFailureEvidence(error, substage);
 } finally {
   const cleanupErrors = [];
   const note = (operation, error) => cleanupErrors.push({ operation, code: safeCode(error?.code) ?? 'cleanup-failed' });

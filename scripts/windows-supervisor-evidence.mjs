@@ -12,3 +12,11 @@ export function taskQueryProvesAbsence(response) {
   return response.exit > 0 && /^\s*ERROR:\s*The system cannot find the file specified\.\s*$/i
     .test(response.stderr);
 }
+
+// Only fixed phase names and short error codes enter the report; OS errors
+// can carry command lines, credentials, stdout and stderr on other fields.
+export function acceptanceFailureEvidence(error, substage) {
+  const safe = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(value) ? value : null;
+  return { code: safe(error?.code) ?? 'assertion-failed',
+    ...(safe(substage) ? { substage } : {}) };
+}

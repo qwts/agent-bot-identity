@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { hasDaemonWakeReport, taskQueryProvesAbsence } from '../scripts/windows-supervisor-evidence.mjs';
+import { hasDaemonWakeReport, taskQueryProvesAbsence, acceptanceFailureEvidence } from '../scripts/windows-supervisor-evidence.mjs';
 
 test('wake acceptance requires a daemon report for the exact fresh message, account and soul', () => {
   const expected = { account: 'owner', agentId: 'agent_test', messageId: 'msg_fresh' };
@@ -20,4 +20,12 @@ test('task query proves absence only for the specific missing-task response', ()
     { exit: 1, stderr: 'ERROR: Unknown task scheduler failure.' },
     { exit: 1, stderr: 'ERROR: Access is denied.\nERROR: The system cannot find the file specified.' },
   ]) assert.equal(taskQueryProvesAbsence(response), false);
+});
+
+
+test('substage diagnostics retain a fixed phase without copying sensitive error fields', () => {
+  const error = Object.assign(new Error('private message'), { code: 'usage', stdout: 'private stdout',
+    stderr: 'private stderr', command: 'private command', credential: 'private credential' });
+  assert.deepEqual(acceptanceFailureEvidence(error, 'native-daemon-pair'), { code: 'usage', substage: 'native-daemon-pair' });
+  assert.deepEqual(acceptanceFailureEvidence({ code: 'secret with spaces' }, 'arbitrary output with spaces'), { code: 'assertion-failed' });
 });
