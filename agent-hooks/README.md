@@ -96,7 +96,8 @@ covers Devin Desktop's weak channel and Devin cloud's absent one.
 the Claude, Codex, Cursor, Copilot, and Devin Desktop adapters into the harness
 user directory (`~/.claude`, `~/.codex`, `~/.cursor`, `~/.copilot/hooks`,
 `~/.windsurf`). Devin CLI consumes the Claude adapter natively; generating a
-second Devin CLI file would fire each hook twice. The adapters are not
+second Devin CLI file would fire each hook twice. The OpenCode and Qwen Code
+rows have no user-level adapter (#378). The adapters are not
 committed in a repository. A project copy can outrank the user hook.
 
 Generated entries are marker-scoped. Regeneration replaces entries containing
@@ -119,7 +120,7 @@ Your script gets these, so a five-line `sh` hook never parses JSON:
 | Variable | Notes |
 |---|---|
 | `AGENT_HOOK_EVENT` | canonical event name |
-| `AGENT_HOOK_HARNESS` | `claude`, `codex`, `cursor`, `copilot`, `devin-desktop`, `opencode`, `git` |
+| `AGENT_HOOK_HARNESS` | `claude`, `codex`, `cursor`, `copilot`, `devin-desktop`, `opencode`, `qwen`, `git` |
 | `AGENT_HOOK_BLOCKING` | `1` when a denial will actually stop the action |
 | `AGENT_HOOK_SESSION_ID` | normalized across `session_id` / `conversation_id` / `trajectory_id` |
 | `AGENT_HOOK_CWD` | |

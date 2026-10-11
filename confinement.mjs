@@ -305,7 +305,7 @@ export function applyPatchTargets(text) {
   if (!targets.length) throw new Error('empty apply_patch: it names no file');
   return [...new Set(targets)];
 }
-const FILE_TOOL = /^(Write|Edit|MultiEdit|NotebookEdit|create|edit|create_file|edit_file|write_file|replace_string_in_file|multi_replace_string_in_file)$/i;
+const FILE_TOOL = /^(Write|Edit|MultiEdit|NotebookEdit|create|edit|create_file|edit_file|write_file|replace_string_in_file|multi_replace_string_in_file|notebook_edit)$/i;
 const PATCH_TOOL = /^apply_patch$/i;
 // Codex sends the patch as tool_input.command; OpenCode as args.patchText.
 function patchText(envelope) {

@@ -464,3 +464,84 @@ test('opencode answers in exit codes, and an ask on a blocking event closes', ()
   assert.equal(encodeDecision({ dialectKey: 'opencode', event: 'post-tool-use', decision: 'ask' }).exitCode, 0);
   assert.equal(budgetMs('opencode', 'pre-command', 10000), 10000);
 });
+
+// Qwen Code v0.24.6 (QwenLM/qwen-code@753bd075): Claude-shaped hooks in
+// `.qwen/settings.json`, matched on the runtime tool id (#378).
+const QWEN_DIR = '/work/soul';
+
+test('qwen maps Claude-shaped events, with plain matchers on its runtime tool ids', () => {
+  assert.deepEqual(vendorEvent('qwen', 'pre-tool-use'), { event: 'PreToolUse', matcher: null });
+  assert.deepEqual(vendorEvent('qwen', 'pre-command'), { event: 'PreToolUse', matcher: 'run_shell_command' });
+  assert.deepEqual(vendorEvent('qwen', 'pre-file-write'), { event: 'PreToolUse', matcher: 'write_file|edit' });
+  assert.deepEqual(vendorEvent('qwen', 'prompt-submit'), { event: 'UserPromptSubmit', matcher: null });
+  assert.deepEqual(vendorEvent('qwen', 'agent-stop'), { event: 'Stop', matcher: null });
+  for (const event of ['session-start', 'session-end', 'post-tool-use']) assert.ok(vendorEvent('qwen', event), event);
+  for (const event of ['spawn', 'pre-commit', 'pre-push']) assert.equal(vendorEvent('qwen', event), null, event);
+  // Qwen reads a matcher starting with `^` or `(` as a regex, otherwise a
+  // plain `|` list compared exactly, so neither may be an anchored regex.
+  for (const event of ['pre-command', 'pre-file-write']) assert.doesNotMatch(vendorEvent('qwen', event).matcher, /^[\^(]/);
+  const row = DIALECTS.find((candidate) => candidate.key === 'qwen');
+  assert.equal(row.file, '.qwen/settings.json');
+  // No user-level adapter: sync-hooks only writes rows with a homeFile.
+  assert.equal(row.homeFile, undefined);
+  assert.deepEqual(nativeHookEntry('qwen', 'pre-command', 'run'), {
+    vendorEvent: 'PreToolUse',
+    entry: { matcher: 'run_shell_command', hooks: [{ type: 'command', command: 'run', timeout: 60 }] },
+  });
+  assert.equal(supportsContext('qwen', 'session-start'), true);
+  assert.equal(supportsContext('qwen', 'pre-tool-use'), false);
+});
+
+test('qwen payloads translate through the generic fields, and the shell runs in its directory', () => {
+  const bash = normalizeEnvelope({
+    dialectKey: 'qwen', event: 'pre-tool-use',
+    payload: { session_id: 'q1', cwd: QWEN_DIR, hook_event_name: 'PreToolUse', tool_name: 'run_shell_command',
+      tool_input: { command: 'git push', is_background: false }, tool_use_id: 't1' },
+  });
+  assert.deepEqual([bash.harness, bash.vendor_event, bash.session_id, bash.tool_name, bash.command, bash.cwd, bash.blocking],
+    ['qwen', 'PreToolUse', 'q1', 'run_shell_command', 'git push', QWEN_DIR, true]);
+  const cwd = (tool_input, tool_name = 'run_shell_command') => normalizeEnvelope({
+    dialectKey: 'qwen', event: 'pre-command', payload: { cwd: QWEN_DIR, tool_name, tool_input },
+  }).cwd;
+  assert.equal(cwd({ command: 'ls', directory: '/other/repo' }), '/other/repo');
+  assert.equal(cwd({ command: 'ls' }), QWEN_DIR);
+  assert.equal(cwd({ file_path: '/a', directory: '/other' }, 'write_file'), QWEN_DIR);
+  const write = normalizeEnvelope({
+    dialectKey: 'qwen', event: 'pre-tool-use', payload: { cwd: QWEN_DIR, tool_name: 'write_file', tool_input: { file_path: '/work/soul/a.txt', content: 'x' } },
+  });
+  assert.equal(write.file_path, '/work/soul/a.txt');
+  const notebook = normalizeEnvelope({
+    dialectKey: 'qwen', event: 'pre-tool-use', payload: { cwd: QWEN_DIR, tool_name: 'notebook_edit', tool_input: { notebook_path: '/work/soul/n.ipynb' } },
+  });
+  assert.equal(notebook.file_path, '/work/soul/n.ipynb');
+  const prompt = normalizeEnvelope({ dialectKey: 'qwen', event: 'prompt-submit', payload: { session_id: 'q1', cwd: QWEN_DIR, prompt: 'fix it' } });
+  assert.deepEqual([prompt.prompt, prompt.blocking], ['fix it', true]);
+  const start = normalizeEnvelope({ dialectKey: 'qwen', event: 'session-start', payload: { session_id: 'q2', cwd: QWEN_DIR, source: 'startup', model: 'qwen3-coder' } });
+  assert.deepEqual([start.session_id, start.model, start.blocking], ['q2', 'qwen3-coder', false]);
+});
+
+test('qwen scans its shell on the generic event and confines file tools there', () => {
+  const env = (event, tool) => ({ event, harness: 'qwen', tool_name: tool });
+  assert.equal(scansCommand(env('pre-tool-use', 'run_shell_command')), true);
+  assert.equal(scansCommand(env('pre-command', 'run_shell_command')), true);
+  assert.equal(scansCommand(env('pre-tool-use', 'write_file')), false);
+  assert.deepEqual(confinementEvents('qwen'), ['pre-tool-use']);
+});
+
+// Qwen honours a JSON permissionDecision on PreToolUse only; exit 2 blocks a
+// tool call, a prompt and a stop alike, so it is the one channel used.
+test('qwen answers in exit codes, an ask on a blocking event closes, and the runner answers inside its timer', () => {
+  for (const event of ['pre-tool-use', 'pre-command', 'pre-file-write', 'prompt-submit', 'agent-stop']) {
+    assert.deepEqual(encodeDecision({ dialectKey: 'qwen', event, decision: 'deny', reason: 'no' }), { stdout: '', stderr: 'no', exitCode: 2 }, event);
+    assert.equal(encodeDecision({ dialectKey: 'qwen', event, decision: 'ask', reason: 'r' }).exitCode, 2, event);
+  }
+  assert.equal(encodeDecision({ dialectKey: 'qwen', event: 'post-tool-use', decision: 'ask' }).exitCode, 0);
+  assert.deepEqual(encodeDecision({ dialectKey: 'qwen', event: 'pre-tool-use', decision: 'allow' }), { stdout: '', stderr: '', exitCode: 0 });
+  assert.deepEqual(JSON.parse(encodeContext({ dialectKey: 'qwen', event: 'session-start', contexts: ['arm'] }).stdout),
+    { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'arm' } });
+  // Qwen fails open on its own timeout, so the runner's budget stays under it.
+  const row = DIALECTS.find((candidate) => candidate.key === 'qwen');
+  assert.deepEqual([row.nativeFailMode, row.timeoutFailMode], ['open', 'open']);
+  assert.ok(budgetMs('qwen', 'pre-tool-use', 120000) < 60000);
+  assert.equal(hookCoverage(new Date('2026-10-11T00:00:00Z')).find((entry) => entry.key === 'qwen').covered, 8);
+});

@@ -217,6 +217,20 @@ Adapter evidence (official docs read 2026-10-07):
   owner decision on #378, the builder touches only marked files there: an
   unmarked skill is never changed or removed, and an unmarked file where a
   soul skill would render is a conflict. No live Qwen session was run.
+  [Hooks](https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/docs/users/features/hooks.md#L352-L409)
+  (#378), checked at Qwen Code v0.24.6 (`753bd075`, the newest stable
+  release at least two weeks old on 2026-10-11): Claude-shaped entries under
+  `hooks` in `.qwen/settings.json`, on by default, with Claude's PascalCase
+  events and stdin fields. Matchers compare the runtime tool id
+  (`run_shell_command`, `write_file`, `edit`) exactly unless they start with
+  `^` or `(`. Exit 2 blocks a tool call, a prompt and a stop alike, with
+  stderr as the reason, but every other failure (a crash, any other exit, a
+  timeout) lets the call proceed. The `qwen` row in `hook-dialects.mjs` and
+  its translation in `agent-hook` speak this dialect; the runner scans
+  `run_shell_command` on `pre-tool-use` and judges a push by the command's
+  `directory`. Rendering soul hooks and the runner's guards into the soul's
+  `.qwen/settings.json` is a later slice, so hooks stay unsupported for Qwen
+  in the build report until then.
 
 **Unverified:** Cursor and Kiro were not run (both CLIs need a sign-in), so
 whether they tolerate the leading `_comment` marker key in `.cursor/mcp.json` and
