@@ -39,11 +39,6 @@ const ORGANIZATION_VALUES = [
 // edit this test; any other use of the value, in these files or elsewhere,
 // fails.
 const STILL_COMPILED = [
-  // Unmanaged-author fallback until organization profiles carry the list
-  // (#675; removal held in #713).
-  { file: 'config.mjs', name: 'the qwts owner account', expression: "LEGACY_UNMANAGED_AUTHORS = Object.freeze(['ai9d']);" },
-  { file: 'sync-hooks.mjs', name: 'the qwts owner account', expression: '${AGENT_BOT_UNMANAGED_AUTHORS-ai9d}' },
-  { file: 'hooks/agent-context', name: 'the qwts owner account', expression: "printf '%s' ai9d" },
   // The sandbox account already created on machines, and the display name
   // that creates it, stay as they are (#752).
   { file: 'sandbox.mjs', name: 'the GeniusBar or Dudles host app', expression: "DEFAULT_SANDBOX_ACCOUNT = 'geniusbar-agent';" },
@@ -342,12 +337,16 @@ test('the guard scans keyd Rust source and Cargo metadata while ignoring their c
 });
 
 test('a still-compiled value is exempt only as its exact expression', () => {
-  assert.deepEqual(organizationValues('hooks/agent-context', "    printf '%s' ai9d"), []);
-  assert.deepEqual(organizationValues('config.mjs', "export const LEGACY_UNMANAGED_AUTHORS = Object.freeze(['ai9d']);"), []);
+  assert.deepEqual(organizationValues('sandbox.mjs', "export const DEFAULT_SANDBOX_ACCOUNT = 'geniusbar-agent';"), []);
   const owner = (file, line) => [{ file, line, name: 'the qwts owner account' }];
+  // The unmanaged-author default is gone (#675), so its old expressions are
+  // no longer exempt anywhere.
+  assert.deepEqual(organizationValues('hooks/agent-context', "    printf '%s' ai9d"), owner('hooks/agent-context', 1));
+  assert.deepEqual(organizationValues('config.mjs', "export const LEGACY_UNMANAGED_AUTHORS = Object.freeze(['ai9d']);"), owner('config.mjs', 1));
   assert.deepEqual(organizationValues('hooks/agent-context', "[ \"$USER\" = ai9d ] && exit 0"), owner('hooks/agent-context', 1));
   assert.deepEqual(organizationValues('config.mjs', "if (login === 'ai9d') return true;"), owner('config.mjs', 1));
-  assert.deepEqual(organizationValues('hooks/agent-context', "printf '%s' ai9d; echo ai9d"), owner('hooks/agent-context', 1));
+  assert.deepEqual(organizationValues('sandbox.mjs', "const a = 'geniusbar-agent'; DEFAULT_SANDBOX_ACCOUNT = 'geniusbar-agent';"),
+    [{ file: 'sandbox.mjs', line: 1, name: 'the GeniusBar or Dudles host app' }]);
   assert.deepEqual(organizationValues('x.mjs', "const help = 'update Dudles or GeniusBar';"),
     [{ file: 'x.mjs', line: 1, name: 'the GeniusBar or Dudles host app' }]);
   assert.deepEqual(organizationValues('sandbox.mjs', "const hint = 'approve it in GeniusBar';"),
