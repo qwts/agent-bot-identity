@@ -37,7 +37,6 @@ import { stateDirectory } from './state-paths.mjs';
 import { readSopPolicyState } from './sop.mjs';
 import { isSoulBound } from './git-credential-bot.mjs';
 import { inspectSupervisor, supervisorSkipLoad, supervisorUnitCredentialNames } from './daemon-supervisor.mjs';
-import { NAMESPACE_VARIABLE, VAULT_VARIABLE, credentialNamespace, credentialVault } from './credential-names.mjs';
 import { embeddingAppBundle, homebrewRuntimeRoot, inspectExecutableLink, installationPaths, isManagedExecutable } from './install.mjs';
 import { inspectConfiguredCodexDesktopGh, inspectShellGhShim } from './install-gh-shim.mjs';
 import {
@@ -52,7 +51,7 @@ import {
   resolveAgentSlug,
   territoryHarness,
 } from './resolve-agent.mjs';
-import { AGENT_ID_KEYS, GIT_HOOK_NAMES, PIN_KEYS } from './identity-format.mjs';
+import { AGENT_ID_KEYS, credentialNamespace, credentialVault, GIT_HOOK_NAMES, NAMESPACE_VARIABLE, PIN_KEYS, VAULT_VARIABLE } from './identity-format.mjs';
 import { credentialHelperCommand } from './setup-worktree.mjs';
 import { BUILTIN_SECRET_PROVIDERS } from './secret.mjs';
 import { createSecretProviderRegistry, probeSecretStore } from './secret-store.mjs';

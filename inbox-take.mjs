@@ -10,7 +10,7 @@
 // URL's query or userinfo, and never the bearer itself.
 import { execFileSync } from 'node:child_process';
 
-import { credentialVault, inboxBearerItem, itemTitle } from './credential-names.mjs';
+import { credentialVault, inboxBearerItem, itemTitle } from './identity-format.mjs';
 import { createProtonPassAdapter } from './secret-providers/proton-pass.mjs';
 import { createSecretProviderRegistry, getSecret } from './secret-store.mjs';
 

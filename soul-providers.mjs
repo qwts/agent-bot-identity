@@ -1,7 +1,7 @@
 // Providers per harness (#583 slice 4, ADR-0583 decision 7). Pure data and
 // validation, no I/O: the package reader validates with it, the builder
 // renders with it, the descriptor and the launch read it. The secret-name
-// rule is identity's (credential-names.mjs), re-exported here (#645).
+// rule is identity's (identity-format.mjs), re-exported here (#645).
 //
 // A soul says, per harness, which model provider that harness talks to:
 //
@@ -17,7 +17,7 @@
 // stores it in the soul's own store and the launch injects it into that
 // one harness process (soul-secrets.mjs, wake-plane.mjs).
 
-import { SECRET_NAME, secretNameOrThrow } from './credential-names.mjs';
+import { SECRET_NAME, secretNameOrThrow } from './identity-format.mjs';
 
 export { SECRET_NAME, secretNameOrThrow };
 

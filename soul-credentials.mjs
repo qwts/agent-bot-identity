@@ -13,7 +13,7 @@
 // - pass-cli (opt-in): one note in Agent Identities, title
 //   `agent-bot.soul.<agentId>/github-app/<slug>`, created via stdin.
 //   A host may rename both: `agent-bot` and the vault come from the store's
-//   own environment through credential-names.mjs (#676).
+//   own environment through identity-format.mjs (#676).
 // - file (elsewhere, or by choice): `<soul>/.soul-state/credentials/`,
 //   directory 0700, one file per App, 0600. `.soul-state/` is never packaged,
 //   exported or hashed into a revision. On Windows the same store keeps a
@@ -55,7 +55,7 @@ import { appDeclarations, appUsers } from './soul-app-declarations.mjs';
 import { readManagedAppCredential, readAppMetadata } from './identity-app-store.mjs';
 import { loadConfig } from './config.mjs';
 import { createPassCredentialStore } from './secret-providers/pass-cli-credentials.mjs';
-import { CREDENTIAL_STORES, credentialNamespace, itemTitle, managedAppItem, managedAppWebhookFile, managedAppWebhookItem, secretNameOrThrow, slugOrThrow, soulAppItem, soulSecretItem } from './credential-names.mjs';
+import { CREDENTIAL_STORES, credentialNamespace, itemTitle, managedAppItem, managedAppWebhookFile, managedAppWebhookItem, secretNameOrThrow, slugOrThrow, soulAppItem, soulSecretItem } from './identity-format.mjs';
 
 const SECURITY = '/usr/bin/security';
 // `security` exits 44 when no item matches.
@@ -65,7 +65,7 @@ export function defaultCredentialStore(platform = process.platform) {
   return platform === 'darwin' ? 'keychain' : 'file';
 }
 
-// `names` carries a store's resolved `{ namespace }`; see credential-names.mjs.
+// `names` carries a store's resolved `{ namespace }`; see identity-format.mjs.
 export function keychainItem(agentId, slug, names) {
   return soulAppItem(agentId, slug, names);
 }

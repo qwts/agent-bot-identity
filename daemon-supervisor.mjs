@@ -34,7 +34,7 @@ import process from 'node:process';
 import { daemonStateFile, daemonStatus, stopDaemon } from './agent-daemon.mjs';
 import { keydSignerEnvironment } from './config.mjs';
 import { daemonLogMaxBytes, daemonLogPath } from './daemon-log.mjs';
-import { NAMESPACE_VARIABLE, VAULT_VARIABLE, credentialNamespace, credentialVault } from './credential-names.mjs';
+import { NAMESPACE_VARIABLE, VAULT_VARIABLE, credentialNamespace, credentialVault } from './identity-format.mjs';
 
 export const LAUNCHD_LABEL = 'dev.qwts.agent-bot.daemon';
 export const SYSTEMD_UNIT = 'agent-bot-daemon.service';
