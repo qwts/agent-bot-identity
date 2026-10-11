@@ -1986,6 +1986,100 @@ function ghShimCheck({ home, required, inspect }) {
   });
 }
 
+// The gh login a person (and `gh api` in a documented step) uses (#975).
+// `gh auth status` asks GitHub whether the stored token still works and
+// prints a masked token at most; only the host, the account name, where the
+// token came from and the outcome are kept, never a line of its output. gh is
+// whatever PATH names, so a managed gh shim keeps deciding whose login an
+// agent context sees.
+//
+// A failure is two different things. gh keeps its token in the login
+// Keychain, which a session with no GUI login (SSH) cannot read; gh then
+// reports the account from its config with the token source "default" and
+// calls it invalid, while the same login works in the desktop terminal. That
+// is "unreadable here". Only a token gh actually read (keyring, oauth_token,
+// GH_TOKEN, …) that GitHub refused is "invalid", and only that one needs
+// `gh auth login`.
+const GH_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+const GH_PROBE_TIMEOUT_MS = 15_000;
+
+export function parseGhAuthStatus(text, host = 'github.com') {
+  const entries = [];
+  for (const line of String(text).split('\n')) {
+    const entry = /(Logged in to|Failed to log in to) (\S+) (?:account|as) (\S+)(?: \(([A-Za-z_]+)\))?/.exec(line);
+    if (entry) {
+      entries.push({ ok: entry[1] === 'Logged in to', host: entry[2], account: entry[3], source: entry[4] ?? null, active: false });
+    } else if (entries.length > 0 && /Active account: true/.test(line)) {
+      entries.at(-1).active = true;
+    }
+  }
+  const forHost = entries.filter((entry) => entry.host === host);
+  const current = forHost.find((entry) => entry.active) ?? (forHost.length === 1 ? forHost[0] : null);
+  if (!current) {
+    return /not logged in/i.test(text) ? { state: 'logged-out', host, account: null } : { state: 'unknown', host, account: null };
+  }
+  const account = GH_LOGIN.test(current.account) ? current.account : null;
+  if (current.ok) return { state: 'ok', host, account };
+  return { state: current.source === 'default' ? 'unreadable' : 'invalid', host, account };
+}
+
+export function probeGhLogin({ env = process.env, spawn = spawnSync, host = 'github.com' } = {}) {
+  const result = spawn('gh', ['auth', 'status', '--hostname', host], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env,
+    timeout: GH_PROBE_TIMEOUT_MS,
+  });
+  if (result?.error?.code === 'ENOENT') return { state: 'missing', host, account: null };
+  if (result?.error) return { state: 'unknown', host, account: null };
+  return parseGhAuthStatus(`${result?.stdout ?? ''}\n${result?.stderr ?? ''}`, host);
+}
+
+export function ghLoginCheck({ probe }) {
+  let login;
+  try {
+    login = probe();
+  } catch {
+    login = { state: 'unknown', host: 'github.com', account: null };
+  }
+  const host = login?.host ?? 'github.com';
+  const who = login?.account ? `account ${login.account}` : 'the active account';
+  const evidence = { host, account: login?.account ?? null };
+  if (login?.state === 'ok') {
+    return readinessCheck({ id: 'gh.login', status: 'ready', message: `gh is logged in to ${host} as ${who}`, evidence });
+  }
+  if (login?.state === 'invalid') {
+    return readinessCheck({
+      id: 'gh.login',
+      status: 'warning',
+      code: 'gh-login-invalid',
+      message: `GitHub rejected gh's token for ${who} on ${host} (invalid or expired)`,
+      action: `run: gh auth login -h ${host}`,
+      evidence: { ...evidence, token: 'rejected' },
+    });
+  }
+  if (login?.state === 'unreadable') {
+    return readinessCheck({
+      id: 'gh.login',
+      status: 'warning',
+      code: 'gh-login-unreadable',
+      message: `gh cannot read its token for ${who} on ${host} in this session (no GUI or Keychain session, such as SSH); the login itself may be fine`,
+      action: 'run gh from a terminal in the logged-in desktop session, or give this session a GH_TOKEN',
+      evidence: { ...evidence, token: 'unreadable' },
+    });
+  }
+  const messages = {
+    missing: 'gh is not installed',
+    'logged-out': `gh is not logged in to ${host}`,
+  };
+  return readinessCheck({
+    id: 'gh.login',
+    status: 'not_applicable',
+    message: messages[login?.state] ?? 'gh login could not be checked',
+    evidence,
+  });
+}
+
 function codexDesktopGhCheck({ home, inspect }) {
   const result = inspect({ home });
   if (result.status === 'ready') {
@@ -2642,6 +2736,7 @@ export async function collectReadiness({
   // network call to the inbox.
   probeInbox = null,
   inspectSopPersona = sopPersonaCheck,
+  probeGh = probeGhLogin,
   embeddingApp = embeddingAppBundle(ROOT),
 } = {}) {
   const machineChecks = [];
@@ -2797,6 +2892,9 @@ export async function collectReadiness({
     }
     machineChecks.push(ghShimCheck({ home, required: expectedGhShim, inspect: inspectShellGh }));
     machineChecks.push(codexDesktopGhCheck({ home, inspect: inspectCodexDesktopGh }));
+    // Doctor only: a bootstrap reaches no gh (bootstrap-hermetic), and names
+    // an expired login itself when a profile fetch fails over it.
+    if (command === 'doctor') machineChecks.push(ghLoginCheck({ probe: () => probeGh({ env }) }));
     machineChecks.push(runtimeSkillCheck({ home, lstat, readlink, access, embeddedRoot: app ? ROOT : null, app }));
   } else {
     try {

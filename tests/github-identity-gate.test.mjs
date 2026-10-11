@@ -298,6 +298,7 @@ function doctorOptions(home) {
     appResults: { results: [] },
     probeSecretStore: () => [],
     probeSessionContext: () => [],
+    probeGh: () => ({ state: 'missing', host: 'github.com', account: null }),
     listHarnessMcpServers: () => [],
   };
 }

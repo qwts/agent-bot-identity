@@ -1104,3 +1104,71 @@ test('bootstrap --repair reports the pinned source, and a refusal stops every ma
   assert.equal(overridden.ready, true);
   assert.deepEqual(calls.slice(-2), [['profile', '-'], 'runtime']);
 });
+
+// #975: a failed `gh api … > file` left an empty profile, and bootstrap
+// reported only that it could not read it. gh failing because GitHub rejected
+// its token differs from gh unable to read its Keychain token in this session
+// (no GUI or Keychain session, such as SSH); only the first needs a new login.
+test('bootstrap names a missing or empty --profile file and gh\'s login behind a failed fetch (#975)', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-profile-file-'));
+  const ghCalls = [];
+  const rejected = { state: 'invalid', host: 'github.com', account: 'example-owner' };
+  const unreadable = { state: 'unreadable', host: 'github.com', account: 'example-owner' };
+  const dependencies = (login, extra = {}) => ({
+    home,
+    env: { HOME: home },
+    gate: () => false,
+    installRuntime: () => assert.fail('a profile failure stops every machine mutation'),
+    run: () => assert.fail('no worktree is bound'),
+    probeGh: ({ env }) => { ghCalls.push(env.HOME); return login; },
+    collect: ({ operationFailure, scope }) => ({
+      ...readyReport(scope),
+      ready: false,
+      machine: { status: 'not_ready', checks: [operationFailure.check], apps: [] },
+      first_actionable_failure: { ...operationFailure.check, check_id: operationFailure.check.id },
+    }),
+    ...extra,
+  });
+  const failure = async (args, login, extra) => (await bootstrap(parseBootstrapArgs(args), dependencies(login, extra))).first_actionable_failure;
+
+  const missing = await failure(['--profile', join(home, 'nope.json'), '--machine-only'], rejected);
+  assert.equal(missing.code, 'profile-file-missing');
+  assert.match(missing.message, /does not exist/);
+  // A missing file is not blamed on gh: nothing was fetched into it.
+  assert.deepEqual(ghCalls, []);
+
+  const empty = join(home, 'org-profile.json');
+  writeFileSync(empty, '');
+  const emptyFailure = await failure(['--profile', empty, '--machine-only'], rejected);
+  assert.equal(emptyFailure.code, 'profile-file-empty');
+  assert.match(emptyFailure.message, /is empty/);
+  assert.match(emptyFailure.action, /^run gh auth login -h github\.com \(GitHub rejected gh's token for example-owner\), fetch/);
+  const emptySsh = await failure(['--profile', empty, '--machine-only'], unreadable);
+  assert.equal(emptySsh.code, 'profile-file-empty');
+  assert.match(emptySsh.action, /^gh cannot read its token in this session \(no GUI or Keychain session, such as SSH\)/);
+  assert.doesNotMatch(emptySsh.action, /gh auth login/);
+  assert.deepEqual(ghCalls, [home, home]);
+  writeFileSync(empty, ' \n');
+  const emptyOk = await failure(['--profile', empty, '--machine-only'], { state: 'ok', host: 'github.com', account: 'example-owner' });
+  assert.equal(emptyOk.code, 'profile-file-empty');
+  assert.match(emptyOk.action, /^check gh auth status, fetch/);
+
+  const selectionUnreadable = () => { throw new OrganizationProfileError('profile-selection-unreadable', 'the selected organization could not be read'); };
+  const auth = await failure(['--repair'], rejected, { repairProfile: selectionUnreadable });
+  assert.equal(auth.code, 'profile-fetch-auth');
+  assert.match(auth.message, /^GitHub rejected gh's token \(invalid or expired\)/);
+  assert.match(auth.action, /^run gh auth login -h github\.com .*then retry bootstrap --repair$/);
+  // Without an invalid gh login the refusal stays what it was.
+  // A token this session cannot read is not a rejected login.
+  const ssh = await failure(['--repair'], unreadable, { repairProfile: selectionUnreadable });
+  assert.equal(ssh.code, 'profile-selection-unreadable');
+  assert.match(ssh.action, /^gh cannot read its token in this session/);
+  assert.doesNotMatch(ssh.action, /gh auth login/);
+  for (const state of ['ok', 'logged-out', 'missing', 'unknown']) {
+    const other = await failure(['--repair'], { state, host: 'github.com', account: null }, { repairProfile: selectionUnreadable });
+    assert.equal(other.code, 'profile-selection-unreadable', state);
+    assert.match(other.action, /^run agent-bot sop/, state);
+  }
+  const throwing = await failure(['--repair'], null, { repairProfile: selectionUnreadable, probeGh: () => { throw new Error('gh exploded'); } });
+  assert.equal(throwing.code, 'profile-selection-unreadable');
+});

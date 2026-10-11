@@ -30,6 +30,7 @@ import {
   buildReadinessReport,
   collectReadiness,
   configuredAppSlugs,
+  probeGhLogin,
   readinessCheck,
   renderReadinessJson,
   renderReadinessReport,
@@ -450,12 +451,23 @@ function runInstalled(executable, args, { env = process.env } = {}) {
   });
 }
 
+function safeGhLogin(probe, env) {
+  try {
+    return probe({ env });
+  } catch {
+    return null;
+  }
+}
+
 function safeProfileFailure(error) {
-  const code = error instanceof OrganizationProfileError
+  const code = error instanceof OrganizationProfileError || error?.code === 'profile-fetch-auth'
     ? error.code
     : 'profile-apply-failed';
   const messages = {
     'profile-read-failed': 'bootstrap could not read the organization profile',
+    'profile-file-missing': 'the --profile file does not exist',
+    'profile-file-empty': 'the --profile file is empty',
+    'profile-fetch-auth': 'GitHub rejected gh\'s token (invalid or expired) — bootstrap --repair could not fetch the organization profile',
     'profile-invalid': 'bootstrap rejected an invalid or incomplete organization profile',
     'profile-schema-unsupported': 'bootstrap does not support the organization profile schema version',
     'profile-runtime-incompatible': 'the organization profile requires a newer runtime interface',
@@ -486,6 +498,7 @@ export async function bootstrap(options, {
   verifyInstalled = assertInstalledRuntime,
   run = runInstalled,
   collect = collectReadiness,
+  probeGh = probeGhLogin,
 } = {}) {
   if (options.help) {
     return { help: true, phase: options.phase };
@@ -543,6 +556,20 @@ export async function bootstrap(options, {
     } catch (error) {
       if (options.profilePath || options.repair) {
         const profileFailure = safeProfileFailure(error);
+        // An unreadable or empty profile is most often a fetch that gh's
+        // login broke (#975); say which way when gh shows it. Only a token
+        // GitHub rejected needs a new login: one this session cannot read
+        // (no GUI or Keychain session, such as SSH) works from the desktop.
+        const fetchSuspect = ['profile-selection-unreadable', 'profile-file-empty'].includes(profileFailure.code);
+        const ghLogin = fetchSuspect ? safeGhLogin(probeGh, env) : null;
+        if (ghLogin?.state === 'invalid' && profileFailure.code === 'profile-selection-unreadable') {
+          Object.assign(profileFailure, safeProfileFailure({ code: 'profile-fetch-auth' }));
+        }
+        const ghAction = ghLogin?.state === 'invalid'
+          ? `run gh auth login -h ${ghLogin.host}${ghLogin.account ? ` (GitHub rejected gh's token for ${ghLogin.account})` : ''}, `
+          : ghLogin?.state === 'unreadable'
+            ? 'gh cannot read its token in this session (no GUI or Keychain session, such as SSH): run from the desktop terminal or set GH_TOKEN, '
+            : '';
         fail(
           'machine',
           'bootstrap.profile',
@@ -555,11 +582,17 @@ export async function bootstrap(options, {
               : profileFailure.code === 'profile-selection-missing'
                 ? 'select the organization in ~/.config/agent-sop/config.toml ([repos] org), or pass --profile'
                 : profileFailure.code === 'profile-selection-unreadable'
-                  ? 'run agent-bot sop to check the organization selection and its org.json, or pass --profile'
+                  ? `${ghAction}run agent-bot sop to check the organization selection and its org.json, or pass --profile`
                   : profileFailure.code === 'profile-account-unresolved'
                     ? 'run --repair from the agent account, pass --scope-app, or pass --profile'
                     : profileFailure.code === 'profile-config-override'
                       ? 'restore the file AGENT_BOT_CONFIG names, or unset AGENT_BOT_CONFIG, then retry bootstrap --repair'
+                      : profileFailure.code === 'profile-fetch-auth'
+                        ? `${ghAction}then retry bootstrap --repair`
+                        : profileFailure.code === 'profile-file-missing'
+                          ? 'check the --profile path, or fetch the organization profile again, then retry bootstrap'
+                          : profileFailure.code === 'profile-file-empty'
+                            ? `${ghAction || 'check gh auth status, '}fetch the organization profile again, then retry bootstrap`
                     : 'obtain a complete compatible secret-free organization profile, then retry bootstrap',
         );
       } else {

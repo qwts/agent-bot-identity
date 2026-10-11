@@ -277,6 +277,18 @@ refused, timeout and HTTP status apart; any answer below 500 (a 401/403 is
 expected without a bearer) is reachable. It is advisory: a failed probe is a
 warning and never makes a ready machine not ready.
 
+`gh.login` runs `gh auth status --hostname github.com` (the `gh` on PATH, so a
+managed gh shim still decides whose login an agent context sees) and keeps only
+the host, the account name, the token's source and the outcome; the token,
+masked or not, is never printed. It tells two failures apart. gh keeps its
+token in the login Keychain, which a session without a GUI login (SSH) cannot
+read: gh then reports the token source `default` as invalid although the login
+works in the desktop terminal. That is `gh-login-unreadable`, a warning that
+points at the desktop session or a `GH_TOKEN`, with no `gh auth login` advice.
+A token gh did read and GitHub rejected is `gh-login-invalid`, a warning that
+names the account and says `gh auth login -h github.com`. gh missing or logged
+out is not applicable. Bootstrap's own report leaves gh alone.
+
 `credential.key_store` names, for each configured App, the key store kinds
 its records point to (`keychain`, `file`, `pass-cli`, `keyd`, from soul
 declarations and the managed App record) and whether a legacy
@@ -1423,8 +1435,15 @@ It never guesses: no selection (`profile-selection-missing`), a selection,
 `org.json` or profile that cannot be read (`profile-selection-unreadable`), an
 account that resolves no active App (`profile-account-unresolved`), an
 `AGENT_BOT_CONFIG` naming a missing file (`profile-config-override`), or a
-conflicting config stop before any machine mutation. `--profile` remains the
-explicit override.
+conflicting config stop before any machine mutation. When the selection
+cannot be read and `gh auth status` shows GitHub rejected gh's token, the
+refusal is `profile-fetch-auth`, with `gh auth login` as the action; when gh
+only cannot read its Keychain token in this session (SSH), the refusal stays
+`profile-selection-unreadable` and its action says so instead. `--profile`
+remains the explicit override; a path that does not exist is
+`profile-file-missing`, and an empty file (what a failed `gh api … > file`
+leaves behind) is `profile-file-empty`, whose action names either gh
+failure.
 
 ```bash
 rm -rf ~/.config/agent-bot      # lost
