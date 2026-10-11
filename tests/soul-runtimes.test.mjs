@@ -479,7 +479,8 @@ test('the pins file records what each runtime installed as; reinstall and a newe
   assert.deepEqual(readdirSync(path.join(f.dir, '.soul-state')).filter((name) => name.startsWith('runtime-pins')), ['runtime-pins.json'], 'no staging remains');
   // A corrupt file is reported and blocks every install, --runtime included, and is left as it is.
   for (const contents of ['{"schemaVersion":2,"runtimes":{},"harnesses":{}}', '{"schemaVersion":1,"runtimes":{"node":{"version":"24; rm -rf /","catalogRelease":null}},"harnesses":{}}', 'not json',
-    '{"schemaVersion":1}', '{"schemaVersion":1,"runtimes":null,"harnesses":{}}', '{"schemaVersion":1,"runtimes":{"node":{"version":"24foo","catalogRelease":null}},"harnesses":{}}']) {
+    '{"schemaVersion":1}', '{"schemaVersion":1,"runtimes":null,"harnesses":{}}', '{"schemaVersion":1,"runtimes":{"node":{"version":"24foo","catalogRelease":null}},"harnesses":{}}',
+    `{"schemaVersion":1,"runtimes":{},"harnesses":{"opencode":{"version":"1.2.3","catalogRelease":"${'a'.repeat(64)}"}}}`, '{"schemaVersion":1,"runtimes":{},"harnesses":{"__proto__":{"version":"1.2.3","catalogRelease":null}}}']) {
     writeFileSync(pinsPath, contents);
     const state = inspectSoulRuntimes(f.dir, { ...f.options, catalog: bumped });
     assert.equal(state.invalid.at(-1).path, '.soul-state/runtime-pins.json');

@@ -314,11 +314,13 @@ export function readRuntimePins(soulDir) {
     const entries = record[area];
     if (!object(entries)) return bad(`has a missing or malformed ${area} map`);
     for (const [name, entry] of Object.entries(entries)) {
-      const known = area === 'runtimes' ? [...RUNTIME_NAMES, ...PROVIDER_NAMES].includes(name) : PIN_NAME.test(name);
+      // `__proto__` would hit the prototype setter instead of becoming an entry, and be lost on the next write.
+      const known = area === 'runtimes' ? [...RUNTIME_NAMES, ...PROVIDER_NAMES].includes(name) : PIN_NAME.test(name) && name !== '__proto__';
       // A runtime version must be one the catalog could pin, or resolution would skip it and move the runtime.
       const versionOk = typeof entry?.version === 'string' && (area === 'runtimes' ? isExactVersion(entry.version) : PIN_VERSION.test(entry.version));
       if (!known || !object(entry) || Object.keys(entry).some((key) => !['version', 'catalogRelease'].includes(key)) || !versionOk
-        || !(entry.catalogRelease === null || (typeof entry.catalogRelease === 'string' && SHA256_HEX.test(entry.catalogRelease)))) return bad(`has a malformed ${area}.${name} entry`);
+        // Harness installs never come from the catalog, so their release is always null.
+        || !(entry.catalogRelease === null || (area === 'runtimes' && typeof entry.catalogRelease === 'string' && SHA256_HEX.test(entry.catalogRelease)))) return bad(`has a malformed ${area}.${name} entry`);
       pins[area][name] = { version: entry.version, catalogRelease: entry.catalogRelease };
     }
   }
