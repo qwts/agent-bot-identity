@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { validateAgentId } from './agent-identity.mjs';
+import { validateAgentId } from './identity-format.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { populationFile, setSoulComms, showSoul, showSoulByName, soulDirectory, soulShownName } from './agent-population.mjs';
 import { daemonStatus } from './daemon-status.mjs';

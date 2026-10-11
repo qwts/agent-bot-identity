@@ -3,7 +3,7 @@
 import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { isAgentId } from './agent-identity.mjs';
+import { isAgentId } from './identity-format.mjs';
 import { createDreamScheduler, DREAM_TIMEOUT_MS, parseDreamSchedule } from './skill-dream-scheduler.mjs';
 import { createDreamFileStore } from './skill-dream-store.mjs';
 import { createDreamPreviewStore } from './skill-dream-previews.mjs';

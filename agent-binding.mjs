@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import process from 'node:process';
 
-import { validateAgentId } from './agent-identity.mjs';
+import { validateAgentId } from './identity-format.mjs';
 import { PROOF_HEADER, PROOF_WINDOW_MS, bindingKeyId, checkBindingProof, parseBindingProof, signBindingProof } from './binding-proof.mjs';
 
 const SCHEMA_VERSION = 1;

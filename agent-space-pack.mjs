@@ -19,7 +19,7 @@ import { lstatSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
-import { validateAgentId } from './agent-identity.mjs';
+import { validateAgentId } from './identity-format.mjs';
 import { apiBase, loadConfig } from './config.mjs';
 import { mintForCaller } from './git-credential-bot.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';

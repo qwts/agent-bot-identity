@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { validateAgentId } from './agent-identity.mjs';
+import { validateAgentId } from './identity-format.mjs';
 import { withLock } from './file-lock.mjs';
 import { REACH_CORRELATION_ENV } from './reach-env.mjs';
 import { whichOnPath } from './acp-registry.mjs';

@@ -5,8 +5,15 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { deriveSoulId, spawnNonce } from '../soul-genesis.mjs';
 import { computePackageRevision } from '../soul-package.mjs';
-import { mintAgentIdentity, readAgentIdentity, recordAgentPackageRevision, ensureAgentIdentity,
-  bindAgentLineage, validateIdentity, isAgentId, validateAgentId } from '../agent-identity.mjs';
+import {
+  mintAgentIdentity,
+  readAgentIdentity,
+  recordAgentPackageRevision,
+  ensureAgentIdentity,
+  bindAgentLineage,
+  validateIdentity,
+} from '../agent-identity.mjs';
+import { isAgentId, validateAgentId } from '../identity-format.mjs';
 import { scanTranscriptStores } from '../agent-backfill.mjs';
 
 const revision = `sha256:${'0'.repeat(64)}`;

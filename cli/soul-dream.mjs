@@ -3,7 +3,7 @@
 // is the sole scheduler and verifies the owner for every control.
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { validateAgentId } from '../agent-identity.mjs';
+import { validateAgentId } from '../identity-format.mjs';
 import { daemonClient } from '../daemon-client.mjs';
 import { soulMarkers } from '../owner-gate.mjs';
 import { parseDreamSchedule } from '../skill-dream-scheduler.mjs';

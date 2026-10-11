@@ -34,7 +34,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import { isAgentId, validateAgentId } from './agent-identity.mjs';
+import { isAgentId, validateAgentId } from './identity-format.mjs';
 import { withLock } from './file-lock.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { listSouls, populationFile, showSoul, showSoulByName } from './agent-population.mjs';

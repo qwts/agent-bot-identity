@@ -30,11 +30,10 @@ import { pathToFileURL } from 'node:url';
 
 import {
   finalizeAgentIdentity,
-  isAgentId,
   readAgentIdentity,
   retireAgentIdentity,
-  validateAgentId,
 } from './agent-identity.mjs';
+import { isAgentId, validateAgentId } from './identity-format.mjs';
 import { withLock } from './file-lock.mjs';
 import { stateDirectory } from './state-paths.mjs';
 

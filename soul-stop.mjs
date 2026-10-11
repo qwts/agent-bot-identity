@@ -3,7 +3,7 @@
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { daemonClient } from './daemon-client.mjs';
-import { validateAgentId } from './agent-identity.mjs';
+import { validateAgentId } from './identity-format.mjs';
 import { populationFile, showSoul, showSoulByName } from './agent-population.mjs';
 import { soulMarkers } from './owner-gate.mjs';
 

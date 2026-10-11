@@ -6,7 +6,7 @@
 // Dream maintenance lives in the daemon; `soul skill dream --status` reports it.
 // An installed skill's record and its folder are compared as uninstall does.
 import path from 'node:path';
-import { validateAgentId } from './agent-identity.mjs';
+import { validateAgentId } from './identity-format.mjs';
 import { soulDirectory } from './agent-population.mjs';
 import { readSoulPackageEntries } from './soul-package.mjs';
 import { installDrift, installRecordPath } from './skill-install.mjs';

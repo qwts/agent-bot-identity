@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { isAgentId } from './agent-identity.mjs';
+import { isAgentId } from './identity-format.mjs';
 import { ACP_SPAWN_REGISTRY, harnessProcessEnv, resolveSpawn, whichOnPath } from './acp-registry.mjs';
 import { populationFile, recordHarnessAuth } from './agent-population.mjs';
 import { soulToolHomeEnv } from './soul-env-migrate.mjs';

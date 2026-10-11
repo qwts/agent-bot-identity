@@ -12,7 +12,7 @@
 // quotes a line of the file it cites; this adapter infers nothing.
 import { createHash } from 'node:crypto';
 import { loadConfig, skillSearchAdapterSetting } from './config.mjs';
-import { validateAgentId } from './agent-identity.mjs';
+import { validateAgentId } from './identity-format.mjs';
 import { soulDirectory } from './agent-population.mjs';
 import { computePackageRevisionFromEntries, readSoulPackageEntries } from './soul-package.mjs';
 import { kindOf } from './soul-profile.mjs';

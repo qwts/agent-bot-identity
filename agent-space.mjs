@@ -25,7 +25,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import { currentAgentId, validateAgentId } from './agent-identity.mjs';
+import { currentAgentId } from './agent-identity.mjs';
+import { validateAgentId } from './identity-format.mjs';
 import { withLock } from './file-lock.mjs';
 import {
   buildSpacePack,
