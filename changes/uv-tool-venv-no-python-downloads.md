@@ -1,1 +1,1 @@
-- A locked `uv-tool` harness now creates its venv with `--no-python-downloads`, so it always runs on the soul's own digest-pinned Python and uv never downloads a different interpreter for it (#617).
+- A locked `uv-tool` harness now creates its venv with `--no-python-downloads`, so it runs on the soul's own managed Python (or the owner's Python override) and fails rather than let uv download a different interpreter for it (#617).

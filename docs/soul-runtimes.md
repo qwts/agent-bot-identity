@@ -195,9 +195,11 @@ tool without a `lock` installs `package==version` with no dependency hashes. A
 locked tool installs into its own `venv/` with `uv pip install --require-hashes
 -r requirements.lock.txt`, so uv refuses any artifact or dependency the lock
 does not hash, and only its `bin` is linked into the install's `bin/`. Its
-venv is created with `--no-python-downloads`, so it uses the soul's installed,
-digest-pinned Python (or the owner's Python override) and uv never fetches an
-interpreter of its own. A
+venv is created with `--no-python-downloads`, so it uses the soul's managed
+Python (or the owner's Python override) and fails rather than fetch an
+interpreter of its own. That Python is digest-pinned unless it is a receipt
+from before #617, which is labelled `unverified` (and reinstalled when the
+soul requires integrity). A
 uv-tool stamp records `lockSha256`, the SHA-256 of the requirements text it
 was filled from (`null` when unlocked). Readiness requires it to match the
 declaration, so adding or changing a lock rebuilds that version. Locked
