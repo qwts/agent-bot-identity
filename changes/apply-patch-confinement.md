@@ -1,0 +1,1 @@
+- Soul write confinement now checks `apply_patch`, which Codex uses for file edits and which was previously not checked at all. Every file the patch adds, updates, deletes or moves to must be inside the soul's territory, and a patch that can't be parsed is refused in deny mode (#378).

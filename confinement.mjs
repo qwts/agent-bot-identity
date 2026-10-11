@@ -269,6 +269,49 @@ export function credentialGuard(envelope, agentId, opts = {}) {
   return null;
 }
 
+// apply_patch (Codex, OpenCode) names its files inside the patch text, not in
+// a path field. Every Add, Update, Delete and Move to path is a write target.
+// Recognition mirrors the Codex parser: a line that is content for the current
+// file (an Add's `+` lines, an Update's ` `, `+`, `-`, `@@` lines) is never a
+// header, and any other line must be one. Anything else is not a patch.
+const PATCH_HEADER = /^\*\*\* (Add File|Update File|Delete File|Move to): (.*)$/;
+export function applyPatchTargets(text) {
+  if (typeof text !== 'string') throw new Error('apply_patch has no patch text');
+  let lines = text.split(/\r\n|\r|\n/);
+  while (lines.length && lines.at(-1).trim() === '') lines.pop();
+  // Codex also accepts the patch wrapped in a heredoc.
+  if (lines.length > 2 && /^(?:apply_patch\s+)?<<(['"]?)EOF\1$/.test(lines[0].trim()) && lines.at(-1).trim() === 'EOF') lines = lines.slice(1, -1);
+  if (lines[0]?.trim() !== '*** Begin Patch' || lines.length < 2 || lines.at(-1).trim() !== '*** End Patch') throw new Error('malformed apply_patch');
+  const targets = [];
+  let section = null;
+  let movable = false;
+  for (const line of lines.slice(1, -1)) {
+    if (section === 'Add File' && line.startsWith('+')) continue;
+    if (section === 'Update File' && /^(?:[ +-]|@@|\*\*\* End of File\s*$)/.test(line)) { movable = false; continue; }
+    if (line.trim() === '') continue;
+    const header = PATCH_HEADER.exec(line.trim());
+    if (!header || !header[2].trim()) throw new Error('malformed apply_patch');
+    if (header[1] === 'Move to') {
+      if (!movable) throw new Error('malformed apply_patch');
+      movable = false;
+    } else {
+      section = header[1];
+      movable = section === 'Update File';
+    }
+    targets.push(header[2].trim());
+  }
+  if (!targets.length) throw new Error('empty apply_patch');
+  return [...new Set(targets)];
+}
+const FILE_TOOL = /^(Write|Edit|MultiEdit|NotebookEdit|create|edit|create_file|edit_file|write_file|replace_string_in_file|multi_replace_string_in_file)$/i;
+const PATCH_TOOL = /^apply_patch$/i;
+// Codex sends the patch as tool_input.command; OpenCode as args.patchText.
+function patchText(envelope) {
+  if (envelope.command) return envelope.command;
+  const text = envelope.raw?.args?.patchText;
+  return typeof text === 'string' ? text : undefined;
+}
+
 // Recognized file tools for writes; every tool for the credential guard.
 export function confinementCheck(envelope, opts = {}) {
   const allow = { decision: 'allow' };
@@ -276,53 +319,70 @@ export function confinementCheck(envelope, opts = {}) {
   // The generated adapters may invoke both events for the same file tool.
   // Prefer the generic event, and use the file event for legacy dialects.
   if (envelope.event !== (preTool ? 'pre-tool-use' : 'pre-file-write')) return allow;
+  const patch = Boolean(preTool) && PATCH_TOOL.test(envelope.tool_name ?? '');
+  // An unparseable patch names no target, which the checks below treat like
+  // a file tool with no path: refused in deny, allowed in warn and off.
+  let targets = [];
+  if (patch) { try { targets = applyPatchTargets(patchText(envelope)); } catch { /* no targets */ } }
+  else if (envelope.file_path) targets = [envelope.file_path];
   try {
     const agentId = opts.binding?.agentId ?? currentAgentId({ env: opts.env ?? process.env, cwd: envelope.cwd ?? opts.cwd });
     if (agentId) {
       const denied = credentialGuard(envelope, agentId, opts);
       if (denied) return denied;
+      for (const target of patch ? targets : []) {
+        const deniedTarget = credentialGuard({ ...envelope, file_path: target, command: null }, agentId, opts);
+        if (deniedTarget) return deniedTarget;
+      }
     }
   } catch {
     // A soul whose credential check cannot run is refused, in every mode.
     return { decision: 'deny', reason: 'credential check failed; tool call refused' };
   }
-  if (preTool && !/^(Write|Edit|MultiEdit|NotebookEdit|create|edit|create_file|edit_file|write_file|replace_string_in_file|multi_replace_string_in_file)$/i.test(envelope.tool_name ?? '')) return allow;
+  if (preTool && !patch && !FILE_TOOL.test(envelope.tool_name ?? '')) return allow;
   let mode = 'warn';
   try {
     const agentId = opts.binding?.agentId ?? currentAgentId({ env: opts.env ?? process.env, cwd: envelope.cwd ?? opts.cwd });
     if (!agentId) return allow;
-    // Library receipts are never editable payload, even with confinement off.
-    // This only guards recognized file tools, not arbitrary shell commands.
-    try {
-      if (envelope.file_path && libraryMetadata(canonicalPath(envelope.file_path, envelope.cwd ?? opts.cwd), opts)) {
-        return { decision: 'deny', reason: 'skill library snapshots and receipts are read-only; use soul skill import or check' };
-      }
-    } catch { return { decision: 'deny', reason: 'skill library path check failed; write refused' }; }
-    try {
-      if (envelope.file_path && sopPolicyState(canonicalPath(envelope.file_path, envelope.cwd ?? opts.cwd), opts)) {
-        return { decision: 'deny', reason: "the SOP policy state is the owner's; use agent-bot sop policy" };
-      }
-    } catch { return { decision: 'deny', reason: 'SOP policy path check failed; write refused' }; }
-    try {
-      if (envelope.file_path && runtimeOverrideState(envelope.file_path, agentId, { ...opts, cwd: envelope.cwd ?? opts.cwd })) {
-        return { decision: 'deny', reason: 'runtime override state is owner-managed; use agent-bot soul runtimes override' };
-      }
-    } catch { return { decision: 'deny', reason: 'runtime override state check failed; write refused' }; }
+    const cwd = envelope.cwd ?? opts.cwd;
+    for (const target of targets) {
+      // Library receipts are never editable payload, even with confinement off.
+      // This only guards recognized file tools, not arbitrary shell commands.
+      try {
+        if (libraryMetadata(canonicalPath(target, cwd), opts)) {
+          return { decision: 'deny', reason: 'skill library snapshots and receipts are read-only; use soul skill import or check' };
+        }
+      } catch { return { decision: 'deny', reason: 'skill library path check failed; write refused' }; }
+      try {
+        if (sopPolicyState(canonicalPath(target, cwd), opts)) {
+          return { decision: 'deny', reason: "the SOP policy state is the owner's; use agent-bot sop policy" };
+        }
+      } catch { return { decision: 'deny', reason: 'SOP policy path check failed; write refused' }; }
+      try {
+        if (runtimeOverrideState(target, agentId, { ...opts, cwd })) {
+          return { decision: 'deny', reason: 'runtime override state is owner-managed; use agent-bot soul runtimes override' };
+        }
+      } catch { return { decision: 'deny', reason: 'runtime override state check failed; write refused' }; }
+    }
     mode = confinementMode(agentId, opts);
     if (mode === 'off') return allow;
-    if (!envelope.file_path) throw new Error('file tool has no path');
-    const result = checkWrite(agentId, envelope.file_path, { ...opts, cwd: envelope.cwd ?? opts.cwd });
-    if (result.inside) return allow;
-    if (mode === 'deny') return { decision: 'deny', reason: `write outside soul territory: ${result.path}` };
+    if (!targets.length) throw new Error('file tool has no path');
+    const outside = [];
+    for (const target of targets) {
+      const result = checkWrite(agentId, target, { ...opts, cwd });
+      if (!result.inside) outside.push(result);
+    }
+    if (!outside.length) return allow;
+    if (mode === 'deny') return { decision: 'deny', reason: `write outside soul territory: ${outside[0].path}` };
     const log = path.join(soulDirectory(agentId, opts), '.soul-state', 'confinement.log');
     mkdirSync(path.dirname(log), { recursive: true, mode: 0o700 });
     const fd = openSync(log, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
     try {
       fchmodSync(fd, 0o600);
-      writeFileSync(fd, `${JSON.stringify({ ts: new Date().toISOString(), agentId, harness: envelope.harness, tool: envelope.tool_name, path: result.path, roots: result.roots })}\n`);
+      writeFileSync(fd, outside.map((result) => `${JSON.stringify({ ts: new Date().toISOString(), agentId, harness: envelope.harness, tool: envelope.tool_name, path: result.path, roots: result.roots })}\n`).join(''));
     } finally { closeSync(fd); }
     return supportsContext(envelope.harness, envelope.event)
-      ? { ...allow, context: `Confinement warning: write outside soul territory: ${result.path}` } : allow;
+      ? { ...allow, context: `Confinement warning: write outside soul territory: ${outside.map((result) => result.path).join(', ')}` } : allow;
   } catch {
     // Never reflect parser errors, file contents, or credentials to a model.
     return mode === 'deny' ? { decision: 'deny', reason: 'confinement check failed; write refused' } : allow;
