@@ -262,7 +262,7 @@
     "uninstalled-identity-hook.mjs": "identity",
     "update.mjs": "cli",
     "vouch.mjs": "identity",
-    "windows-account-custody.mjs": "identity",
+    "windows-account-custody.mjs": "shared",
     "wake-dispatch.mjs": "comms",
     "wake-listen.mjs": "comms",
     "wake-plane.mjs": "host",
@@ -298,7 +298,8 @@
     "soul-credentials.mjs": "Named for souls but holds GitHub App credential custody (resolveAppCredential); identity-owned. Rename only with a compatibility plan. It learns which soul declares an App through soul's read-only contract soul-app-declarations.mjs (#645).",
     "soul-genesis.mjs": "Derives a soul's Agent ID from its genesis (revision, parent, nonce); identity owns ID minting, so it is identity even though the revision it hashes comes from soul.",
     "soul-tool-homes.mjs": "Tool-home routes are generated per soul (ADR-0583). Routability facts are harness knowledge.",
-    "wake-plane.mjs": "Daemon side of the agent-comms wake plane (agent-comms ADR-0008): launches souls on wakes, so it composes soul and comms."
+    "wake-plane.mjs": "Daemon side of the agent-comms wake plane (agent-comms ADR-0008): launches souls on wakes, so it composes soul and comms.",
+    "windows-account-custody.mjs": "Shared (owner decision on #645, F11, 2026-10-11): Windows SID and ACL checks used by identity (vouch.mjs) and comms (comms-windows.mjs). It reads ownership and attributes, never a file's contents, so it holds no credential."
   },
   "computed_imports": {},
   "contracts": {
