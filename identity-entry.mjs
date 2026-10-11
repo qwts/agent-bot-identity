@@ -53,7 +53,9 @@ function stateDirOption(stateDir) {
 function nowOption(now) {
   if (now === undefined) return {};
   const at = new Date(text('now', now));
-  if (Number.isNaN(at.getTime())) throw invalid('now must be an ISO timestamp');
+  // Only the canonical form, so the wire cannot carry a time the caller did
+  // not mean (a bare date, a local time).
+  if (Number.isNaN(at.getTime()) || at.toISOString() !== now) throw invalid('now must be an ISO timestamp (toISOString form)');
   return { now: () => new Date(at) };
 }
 
@@ -102,6 +104,9 @@ export const IDENTITY_OPS = Object.freeze({
   },
   mint(input) {
     only(input, [...MINT_FIELDS, 'stateDir', 'now', 'id']);
+    // A genesis-derived ID comes from the package revision, so a fixed id
+    // would be ignored; refuse the pair rather than drop one silently.
+    if (input.id !== undefined && input.packageRevision != null) throw invalid('id and packageRevision cannot both be given');
     return mintAgentIdentity({
       ...fields(input, MINT_FIELDS),
       ...stateDirOption(input.stateDir),
@@ -149,7 +154,7 @@ function main() {
   try {
     let input;
     try {
-      input = JSON.parse(readFileSync(0, 'utf8') || '{}');
+      input = JSON.parse(readFileSync(0, 'utf8'));
     } catch {
       throw invalid('stdin must be one JSON object');
     }

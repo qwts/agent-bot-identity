@@ -8,6 +8,8 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 import { identityOp } from '../daemon-client.mjs';
 import { runIdentityOp } from '../identity-entry.mjs';
@@ -101,9 +103,18 @@ test('failures carry the entry error code and message', (t) => {
   assert.throws(() => identityOp('read', { id: agentId(), extra: 1 }, { env }), { code: 'invalid-input', message: /unexpected input: extra/ });
   assert.throws(() => identityOp('read', { id: agentId(), stateDir: 'relative' }, { env }), { code: 'invalid-input' });
   assert.throws(() => identityOp('mint', { appSlug: null, useGithub: false, now: 'not a date', stateDir }, { env }), { code: 'invalid-input' });
+  assert.throws(() => identityOp('mint', { appSlug: null, useGithub: false, now: '2026-10-11', stateDir }, { env }), { code: 'invalid-input' });
+  assert.throws(() => identityOp('mint', { appSlug: null, useGithub: false, id: agentId(), packageRevision: 'a'.repeat(64), stateDir }, { env }),
+    { code: 'invalid-input', message: /cannot both be given/ });
   assert.throws(() => identityOp('read', { id: agentId(), stateDir }, { env }), { code: 'operation-failed', message: /could not read Agent ID/ });
   assert.throws(() => identityOp('mint-bind-token', { gitDir: stateDir, worktree: 'relative', agentId: agentId() }, { env }),
     { code: 'operation-failed', statusCode: 400 });
+});
+
+test('an empty stdin is invalid input, not an empty request', () => {
+  const run = spawnSync(process.execPath, [fileURLToPath(new URL('../identity-entry.mjs', import.meta.url)), 'current'], { input: '', encoding: 'utf8' });
+  assert.equal(run.status, 1);
+  assert.equal(JSON.parse(run.stdout).error.code, 'invalid-input');
 });
 
 test('a child that writes no result is a plain failure', () => {
