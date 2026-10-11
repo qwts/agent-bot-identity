@@ -617,10 +617,12 @@ export function soulHookCommand(dialectKey, event) {
   const prefix = `D="${root}"; B=agent-bot; command -v "$B" >/dev/null 2>&1 || { echo "agent-bot is not on PATH; soul ${event} hooks did not run" >&2; exit ${isBlocking(event) ? 2 : 0}; }; `;
   const run = `AGENT_BOT_HOOKS_DIR="$D/hooks" "$B" agent-hook --event ${event} --dialect ${dialectKey}`;
   if (dialectKey === 'qwen' && isBlocking(event)) {
-    // The runner keeps the hook's stdin (an async command otherwise reads
-    // /dev/null); the watchdog holds no stdio, so a leftover sleep never keeps
-    // Qwen waiting on the pipes.
-    return `${prefix}${run} 0<&0 & p=$!; (sleep ${QWEN_RUNNER_DEADLINE_SECONDS}; kill $p) </dev/null >/dev/null 2>&1 & w=$!; wait $p; s=$?; kill $w 2>/dev/null; `
+    // The runner keeps the hook's stdin through fd 3: a shell without job
+    // control gives an async command /dev/null first, and dash then reads
+    // `0<&0` as that /dev/null, so the payload must come from a saved copy.
+    // The watchdog holds no stdio, so a leftover sleep never keeps Qwen
+    // waiting on the pipes.
+    return `${prefix}exec 3<&0; ${run} <&3 3<&- & p=$!; (sleep ${QWEN_RUNNER_DEADLINE_SECONDS}; kill $p) </dev/null >/dev/null 2>&1 3<&- & w=$!; exec 3<&-; wait $p; s=$?; kill $w 2>/dev/null; `
       + `[ $s -eq 0 ] || [ $s -eq 2 ] || { echo "agent-bot soul ${event} hooks failed closed (runner exit $s)" >&2; exit 2; }; exit $s # ${SOUL_HOOK_MARKER}`;
   }
   return `${prefix}AGENT_BOT_HOOKS_DIR="$D/hooks" exec "$B" agent-hook --event ${event} --dialect ${dialectKey} # ${SOUL_HOOK_MARKER}`;

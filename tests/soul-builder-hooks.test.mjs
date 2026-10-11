@@ -346,7 +346,9 @@ test('a Qwen entry runs the soul hook through the real runner and denies on a cr
   const command = qwenHooks(buildHarnessFiles(hooked())).PreToolUse[1].hooks[0].command;
   const env = (bin) => ({ PATH: `${join(root, bin)}:/usr/bin:/bin`, HOME: root, AGENT_BOT_CONFINEMENT: 'off' });
   const payload = (cmd) => JSON.stringify({ session_id: 'q', cwd: soul, hook_event_name: 'PreToolUse', tool_name: 'run_shell_command', tool_input: { command: cmd } });
-  const shells = ['/bin/sh', ...(existsSync('/bin/bash') ? ['/bin/bash'] : [])];
+  // dash gives an async command /dev/null before its own redirections, so it
+  // is the shell that proves the payload still reaches the runner.
+  const shells = ['/bin/sh', ...['/bin/bash', '/bin/dash', '/bin/ksh'].filter((shell) => existsSync(shell))];
   for (const shell of shells) {
     const run = (cmd, bin, text = command) => spawnSync(shell, ['-c', text], { input: payload(cmd), encoding: 'utf8', env: env(bin), cwd: soul });
     // The runner reads the payload on stdin, so the soul hook sees the command.
