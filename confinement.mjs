@@ -321,7 +321,9 @@ export function confinementCheck(envelope, opts = {}) {
   // The generated adapters may invoke both events for the same file tool.
   // Prefer the generic event, and use the file event for legacy dialects.
   if (envelope.event !== (preTool ? 'pre-tool-use' : 'pre-file-write')) return allow;
-  const patch = Boolean(preTool) && PATCH_TOOL.test(envelope.tool_name ?? '');
+  // Recognized on whichever event was selected, so a dialect that only routes
+  // apply_patch through pre-file-write is parsed the same way.
+  const patch = PATCH_TOOL.test(envelope.tool_name ?? '');
   // A patch that cannot be read cannot have its files checked, so a soul's
   // unparseable or empty patch is refused in every mode, off included.
   let targets = [];

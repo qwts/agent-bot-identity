@@ -474,3 +474,13 @@ test('an OpenCode-shaped apply_patch (args.patchText) is read the same way', asy
   assert.equal(confinementCheck(envelope(patchOf('*** Add File: ../../x.txt', '+x')), opts).decision, 'deny');
   assert.equal(confinementCheck(envelope(undefined), opts).decision, 'deny');
 });
+test('apply_patch arriving on a pre-file-write-only dialect is parsed, not treated as pathless', async (t) => {
+  const { home, soul, opts } = fixture(t);
+  const legacy = (text) => normalizeEnvelope({ dialectKey: 'devin-desktop', event: 'pre-file-write', payload: { cwd: soul, tool_name: 'apply_patch', tool_input: { command: text } } });
+  await setConfinementMode(id, 'off', { ...opts, gate: owner });
+  assert.equal(confinementCheck(legacy(patchOf('*** Delete File: .soul-state/runtimes')), opts).decision, 'deny');
+  assert.match(confinementCheck(legacy('garbage'), opts).reason, /malformed apply_patch/);
+  await setConfinementMode(id, 'deny', { ...opts, gate: owner });
+  assert.equal(confinementCheck(legacy(patchOf('*** Add File: in.txt', '+x')), opts).decision, 'allow');
+  assert.equal(confinementCheck(legacy(patchOf('*** Add File: ../../x.txt', '+x')), opts).decision, 'deny');
+});
