@@ -26,6 +26,14 @@ prepared, and can credit you in the published advisory if you wish.
 Fixes land on `main` and ship in the next release. Only the latest release is
 supported; please confirm an issue against it or `main` before reporting.
 
+## CI and outside pull requests
+
+Self-hosted runners run only for pushes to this repository, manual runs by
+maintainers, and pull requests whose branch lives in this repository. A pull
+request from a fork always runs on GitHub-hosted runners, receives no secrets,
+and no workflow uses `pull_request_target`. Workflows from outside
+contributors wait until a maintainer approves them.
+
 ## Scope
 
 In scope: this repository's runtime (the `agent-bot` CLI, daemon, hooks, gh
