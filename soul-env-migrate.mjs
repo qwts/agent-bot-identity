@@ -20,7 +20,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
-import { readAgentIdentity } from './agent-identity.mjs';
+import { identityOp } from './daemon-client.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
 import { appendAuditReceipt } from './identity-format.mjs';
@@ -425,7 +425,7 @@ async function spaceIntoSoul({ soul, soulDir, principal, json, gate, running, wr
 
 // The soul's execution identity's harness, or null without a record.
 function recordedHarness(soul, options) {
-  try { return text(readAgentIdentity(soul.id, { stateDir: options.stateDir ?? stateDirectory(options) }).harness); } catch { return null; }
+  try { return text(identityOp('read', { id: soul.id, stateDir: options.stateDir ?? stateDirectory(options) }).harness); } catch { return null; }
 }
 
 // `--harnesses-into-runtimes` (#583 slice 8): one soul, owner-gated unless

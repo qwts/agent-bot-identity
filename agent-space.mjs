@@ -25,8 +25,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import { currentAgentId } from './agent-identity.mjs';
 import { validateAgentId } from './identity-format.mjs';
+import { identityOp } from './daemon-client.mjs';
 import { withLock } from './file-lock.mjs';
 import {
   buildSpacePack,
@@ -456,7 +456,7 @@ function resolveTargetId(args) {
   }
   let current;
   try {
-    current = currentAgentId();
+    current = identityOp('current');
   } catch {
     throw new Error('invalid Agent ID in this context');
   }
@@ -470,7 +470,7 @@ function resolveTargetId(args) {
 function resolveEnsureId() {
   let current;
   try {
-    current = currentAgentId();
+    current = identityOp('current');
   } catch {
     throw new Error('invalid Agent ID in this context');
   }

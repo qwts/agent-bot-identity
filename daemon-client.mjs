@@ -336,9 +336,10 @@ export function identityOp(op, input = {}, {
     payload = null;
   }
   if (payload?.error) {
-    const { code, message, statusCode } = payload.error;
+    const { code, message, statusCode, status } = payload.error;
     throw Object.assign(new Error(String(message)), { code: String(code) },
-      Number.isInteger(statusCode) ? { statusCode } : {});
+      Number.isInteger(statusCode) ? { statusCode } : {},
+      Number.isInteger(status) ? { status } : {});
   }
   if (failure || !payload || !Object.hasOwn(payload, 'result')) {
     const detail = String(failure?.stderr ?? '').trim() || failure?.message || 'no result';

@@ -9,7 +9,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
-import { readAgentIdentity } from './agent-identity.mjs';
+import { identityOp } from './daemon-client.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { duplicateSoulDirs, locateSoulDir, populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
 
@@ -188,7 +188,7 @@ export function readSoulEnvironment(id, { env = process.env, home = env.HOME ?? 
   const problem = (code, severity, component, message, action = null) => result.readiness.problems.push({ code, severity, component, message, action });
 
   try {
-    const identity = readAgentIdentity(soul.id, { stateDir });
+    const identity = identityOp('read', { id: soul.id, stateDir });
     result.identity.harness = text(identity.harness);
     result.identity.genesis.revision = text(identity.genesis?.revision);
     if (identity.genesis?.parentSoul) result.identity.genesis.parentSoul = identity.genesis.parentSoul;
