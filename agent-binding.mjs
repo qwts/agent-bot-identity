@@ -4,7 +4,7 @@
 // private git dir holds the secret; the daemon registry persists its hash.
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { closeSync, constants, existsSync, fchmodSync, fstatSync, lstatSync, openSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, fchmodSync, fstatSync, lstatSync, openSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
@@ -146,14 +146,22 @@ function readPrivate(file, uid, options = {}) {
   }
 }
 
-export function assertPrivateGitDir(gitDir, worktree) {
+export function assertPrivateGitDir(gitDir, worktree, { platform = process.platform } = {}) {
   if (typeof gitDir !== 'string' || !path.isAbsolute(gitDir)) throw fail('invalid private git dir');
   let actual;
   try {
     actual = execFileSync('git', ['rev-parse', '--absolute-git-dir'], {
       cwd: worktree, env: { PATH: process.env.PATH }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
-    if (realpathSync(actual) === realpathSync(gitDir)) return;
+    if (platform === 'win32') {
+      // Git and Node can spell the same Windows directory differently
+      // (separators or 8.3 aliases). Compare native object IDs, never fold
+      // case: Windows also supports case-sensitive directories.
+      const found = statSync(actual, { bigint: true });
+      const expected = statSync(gitDir, { bigint: true });
+      if (found.isDirectory() && expected.isDirectory() && found.ino !== 0n
+        && found.dev === expected.dev && found.ino === expected.ino) return;
+    } else if (realpathSync(actual) === realpathSync(gitDir)) return;
   } catch {}
   throw fail('binding path is not the worktree private git dir');
 }

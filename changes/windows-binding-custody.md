@@ -4,3 +4,5 @@
   Windows; Unix ownership, mode and no-follow checks remain in place. Existing
   Git directory ACLs are inspected without alteration, and unsafe parents or
   file replacement cause refusal.
+  Git directory authority checks compare native directory identities on Windows,
+  accepting Git/Node path spelling differences without case-folding paths.

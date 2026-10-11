@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createBindingRegistry, readBinding, revokeBinding } from '../agent-binding.mjs';
+import { assertPrivateGitDir, createBindingRegistry, readBinding, revokeBinding } from '../agent-binding.mjs';
 import { createMcpState, handleMcpMessage } from '../agent-mcp.mjs';
 import { runHooks } from '../agent-hook.mjs';
 import { signBindingProof } from '../binding-proof.mjs';
@@ -221,4 +221,20 @@ test('Windows binding write refuses a replaced temporary pathname before writing
   assert.throws(() => store.bind({ agentId, parent: null, gitDir: path.join(root, '.git'), worktree: root }), /changed during open/);
   assert.equal(readFileSync(displaced).length, 0);
   assert.equal(existsSync(file), false);
+});
+
+
+test('Windows private Git directory comparison accepts the same object and rejects another directory', { skip: process.platform === 'win32' }, (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'binding-git-identity-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  execFileSync('git', ['init', '-q', root]);
+  const gitDir = path.join(root, '.git');
+  const alias = path.join(root, 'git-directory-alias');
+  symlinkSync(gitDir, alias, 'junction');
+  // The git probe returns .git while the claim uses an alias to the same
+  // object. A different real directory must still fail the authority check.
+  assertPrivateGitDir(alias, root, { platform: 'win32' });
+  const other = path.join(root, 'other-directory');
+  mkdirSync(other);
+  assert.throws(() => assertPrivateGitDir(other, root, { platform: 'win32' }), /private git dir/);
 });

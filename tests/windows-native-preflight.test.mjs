@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { createBindingRegistry, readBinding } from '../agent-binding.mjs';
+import { assertPrivateGitDir, createBindingRegistry, readBinding } from '../agent-binding.mjs';
 import { CommsClient } from '../comms-client.mjs';
 import { isWindowsRelayFailure, readWindowsBrokerPin } from '../comms-windows.mjs';
 import { createWindowsAccountCustody } from '../windows-account-custody.mjs';
@@ -338,6 +338,8 @@ test('Windows native binding registry and secret use owner-only custody across r
   try {
     const git = spawnSync('git', ['init', '-q', root]);
     assert.equal(git.status, 0);
+    assertPrivateGitDir(path.join(root, '.git'), root);
+    assert.throws(() => assertPrivateGitDir(root, root), /private git dir/);
     const file = path.join(root, 'bindings.json');
     const store = createBindingRegistry({ file });
     store.rewrite('http://127.0.0.1:1234');
