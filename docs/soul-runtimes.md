@@ -82,7 +82,8 @@ own `sources`. The catalog version is `RUNTIME_CATALOG_VERSION` 1, and
 ### Pins
 
 `.soul-state/runtime-pins.json` records the exact version each runtime and
-harness was installed as, so a newer agent-bot does not move a soul to a newer
+each `harnesses.<name>.install` harness was installed as (npm ACP adapters are
+pinned by their own package lock and are not listed), so a newer agent-bot does not move a soul to a newer
 pin on its own (#617, owner decision "the new pins file"):
 
 ```json

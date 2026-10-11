@@ -442,6 +442,13 @@ test('the pins file records what each runtime installed as; reinstall and a newe
   assert.match(unrecorded.message, /answered 404.*; also could not record \.soul-state\/runtime-pins\.json/);
   assert.ok(unrecorded.pinsError);
   rmSync(`${pinsPath}.lock`, { recursive: true });
+  // A pins file that turns malformed during an install fails it loudly rather than leave the versions unrecorded.
+  f.writeManifest((m) => { m.runtimes = { node: '24.99.0' }; });
+  rmSync(f.runtimes, { recursive: true });
+  const corrupting = async (...args) => { writeFileSync(pinsPath, 'not json'); return d.runImpl(...args); };
+  const lost = await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: d.fetchFn, runImpl: corrupting }).then(() => null, (e) => e);
+  assert.match(lost?.message ?? '', /\.soul-state\/runtime-pins\.json is not a small regular JSON file/);
+  assert.deepEqual(readdirSync(path.join(f.dir, '.soul-state')).filter((name) => name.startsWith('runtime-pins')), ['runtime-pins.json'], 'no staging remains');
   // A corrupt file is reported and blocks every install, --runtime included, and is left as it is.
   for (const contents of ['{"schemaVersion":2,"runtimes":{},"harnesses":{}}', '{"schemaVersion":1,"runtimes":{"node":{"version":"24; rm -rf /","catalogRelease":null}},"harnesses":{}}', 'not json',
     '{"schemaVersion":1}', '{"schemaVersion":1,"runtimes":null,"harnesses":{}}', '{"schemaVersion":1,"runtimes":{"node":{"version":"24foo","catalogRelease":null}},"harnesses":{}}']) {

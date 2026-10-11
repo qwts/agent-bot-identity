@@ -325,7 +325,9 @@ export function readRuntimePins(soulDir) {
   return { pins, problem: null };
 }
 
-// Records what is installed now, under a lock, as one atomic replace. An
+// Records what is installed now, under a lock, as one atomic replace: the
+// runtimes and the `harnesses.<name>.install` entries (npm ACP adapters are
+// pinned by their own package lock). An
 // entry that still matches what is installed (version, and catalog or not)
 // is never changed, even when the catalog release moved: only an explicit
 // upgrade moves a soul to a newer pin. A missing entry, or one for a version
@@ -335,7 +337,8 @@ function recordRuntimePins(soulDir, state, release) {
   const file = pinsFile(soulDir);
   withLock(`${file}.lock`, 'runtime pins', () => {
     const current = readRuntimePins(soulDir);
-    if (current.problem) return;
+    // Malformed since the install began: say the versions were not recorded rather than drop them.
+    if (current.problem) throw new Error(current.problem);
     const next = { schemaVersion: PINS_SCHEMA_VERSION, runtimes: { ...current.pins.runtimes }, harnesses: { ...current.pins.harnesses } };
     let changed = false;
     const keep = (area, row, catalogRelease) => {
@@ -348,8 +351,10 @@ function recordRuntimePins(soulDir, state, release) {
     for (const row of state.harnesses) keep('harnesses', row, null);
     if (!changed) return;
     const staged = `${file}.${randomUUID()}.tmp`;
-    writeFileSync(staged, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-    try { renameSync(staged, file); } catch (error) { rmSync(staged, { force: true }); throw error; }
+    try {
+      writeFileSync(staged, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+      renameSync(staged, file);
+    } finally { rmSync(staged, { force: true }); }
   });
 }
 
@@ -936,7 +941,8 @@ export async function installSoulRuntimes(soulDir, options = {}) {
   try { result = await installDeclared(soulDir, options); }
   catch (error) {
     // The install's error is the one reported; a failure to record what did install rides along with it.
-    try { pinInstalled(); } catch (pinsError) {
+    // Nothing to record when the pins file itself is what refused the install.
+    if (error.runtime !== `${STATE}/${RUNTIME_PINS_FILE}`) try { pinInstalled(); } catch (pinsError) {
       error.message = `${error.message}; also could not record ${STATE}/${RUNTIME_PINS_FILE} (${pinsError.message})`;
       error.pinsError = pinsError;
     }
